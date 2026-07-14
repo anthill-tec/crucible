@@ -13,7 +13,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-002](CR-CRU-002-codec-layer.md) | Codec translation layer | feature | COMPLETED (2026-07-15) | 001 | 1 |
 | [CR-CRU-003](CR-CRU-003-v1-shim.md) | v1 shim + contract tests | feature | COMPLETED (2026-07-15) | 001, 002 | 1 |
 | [CR-CRU-004](CR-CRU-004-v2-api.md) | Clean v2 API + SSE | feature | COMPLETED (2026-07-15) | 003 | 2 |
-| [CR-CRU-005](CR-CRU-005-axi-toon.md) | AXI layer: TOON subset + hints | feature | PENDING | 004 | 2 |
+| [CR-CRU-005](CR-CRU-005-axi-toon.md) | AXI layer: TOON subset + hints | feature | COMPLETED (2026-07-15) | 004 | 2 |
 | [CR-CRU-006](CR-CRU-006-spa-shell.md) | Dashboard shell + navigation | feature | PENDING | 004 | 3 |
 | [CR-CRU-007](CR-CRU-007-timeline-drill-in.md) | Timeline + density drill-in | feature | PENDING | 006 | 3 |
 | [CR-CRU-008](CR-CRU-008-cli-fleet-upgrade.md) | crucible-axi CLI + fleet upgrade | feature | PENDING | 005 | 4 |
