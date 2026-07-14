@@ -8,6 +8,7 @@ import { parseCompile } from "./codecs/compile.ts";
 import { parseJunitPath } from "./codecs/junit.ts";
 import { Store, UUID_RE } from "./store.ts";
 import type { TouchAgentOpts } from "./store.ts";
+import { handleV2 } from "./v2.ts";
 import type { AgentIdentity, Coverage, RunSchema, RunSummary, SuiteNode } from "./types.ts";
 
 const pkg = JSON.parse(
@@ -302,6 +303,58 @@ function handleAgentsList(store: Store, url: URL): Response {
   return json({ ok: true, agents: store.listAgents(projectKey) });
 }
 
+/** CR-CRU-004 §S3 — SSE stream: hello frame, store-change frames, keep-alives. */
+function handleStream(store: Store, req: Request): Response {
+  const encoder = new TextEncoder();
+  let unsubscribe: (() => void) | undefined;
+  let keepAlive: ReturnType<typeof setInterval> | undefined;
+  const cleanup = (): void => {
+    unsubscribe?.();
+    unsubscribe = undefined;
+    if (keepAlive !== undefined) {
+      clearInterval(keepAlive);
+      keepAlive = undefined;
+    }
+  };
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const send = (text: string): void => {
+        try {
+          controller.enqueue(encoder.encode(text));
+        } catch {
+          // Client is gone (enqueue after close/error) — tear everything down.
+          cleanup();
+        }
+      };
+      send(`data: ${JSON.stringify({ type: "hello", version: pkg.version })}\n\n`);
+      unsubscribe = store.onChange((kind, projectKey) => {
+        send(`data: ${JSON.stringify({ type: kind, projectKey })}\n\n`);
+      });
+      keepAlive = setInterval(() => {
+        send(`: keep-alive ${Date.now()}\n\n`);
+      }, 15_000);
+      // reader.cancel() from a fetch client surfaces as request abort here.
+      req.signal.addEventListener("abort", () => {
+        cleanup();
+        try {
+          controller.close();
+        } catch {
+          // Already closed/errored — nothing left to release.
+        }
+      });
+    },
+    cancel() {
+      cleanup();
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+    },
+  });
+}
+
 export function startServer(opts?: StartServerOpts): ServerHandle {
   const dbPath = opts?.dbPath ?? "data/crucible.db";
   if (dbPath !== ":memory:") {
@@ -310,8 +363,24 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
   const store = Store.open(dbPath);
   const startedAt = Date.now();
 
+  // Shared by GET /api/health and GET /api/v2/health (§S1 health parity).
+  const healthPayload = () => ({
+    ok: true,
+    status: "healthy",
+    version: pkg.version,
+    uptime_s: (Date.now() - startedAt) / 1000,
+    counts: {
+      projects: store.listProjects().length,
+      agents: store.listAgents().length,
+      events: store.countEvents(),
+    },
+  });
+
   const server = Bun.serve({
     port: opts?.port ?? Number(process.env.CRUCIBLE_PORT ?? 3849),
+    // §S3 — SSE connections are long-lived and quiet between 15s keep-alives;
+    // Bun's default 10s idleTimeout would reset them mid-stream.
+    idleTimeout: 0,
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
       if (req.method === "POST" && url.pathname === "/api/projects/add") {
@@ -354,17 +423,18 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
         return handleEventsClear(store, req);
       }
       if (req.method === "GET" && url.pathname === "/api/health") {
-        return Response.json({
-          ok: true,
-          status: "healthy",
-          version: pkg.version,
-          uptime_s: (Date.now() - startedAt) / 1000,
-          counts: {
-            projects: store.listProjects().length,
-            agents: store.listAgents().length,
-            events: store.countEvents(),
-          },
-        });
+        return Response.json(healthPayload());
+      }
+      // CR-CRU-004 §S3 — SSE change stream.
+      if (req.method === "GET" && url.pathname === "/api/stream") {
+        return handleStream(store, req);
+      }
+      // CR-CRU-004 §S1 — clean v2 surface, same store instance as the shim.
+      if (url.pathname === "/api/v2" || url.pathname.startsWith("/api/v2/")) {
+        const v2 = handleV2(store, req, url, { version: pkg.version, healthPayload });
+        if (v2 !== null) {
+          return v2;
+        }
       }
       // §S2 — API error paths are always JSON {ok:false, error}.
       if (url.pathname.startsWith("/api/")) {
