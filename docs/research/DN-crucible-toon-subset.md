@@ -65,3 +65,18 @@ help[2]:
 
 Quoting is `JSON.stringify` of the single string value — consumers un-quote with
 `JSON.parse` when a value or cell starts with `"`.
+
+## Measured token-ratio (Risk — CR-CRU-005)
+
+Measured 2026-07-15: 50-event `GET /api/v2/events` listing (live-server probe,
+`ratio-agent` fixture, each event carrying an `id/agentId/kind/tier/timestamp`
+scalar set plus a nested `summary` object) — JSON 9067 bytes, TOON 9516 bytes,
+**TOON = 105.0% of JSON bytes** (TOON was LARGER, not smaller, for this shape).
+Root cause: a per-event `summary` sub-object disqualifies the array from
+Construct 3's uniform-table form (table cells must be scalar), so it falls
+back to Construct 4's per-item nested block, which repeats each key on its
+own indented line — verbose compared to compact single-line JSON objects.
+Flat/uniform payloads (e.g. `agents[]`, `projects[]` with no nested objects)
+are expected to compress well under Construct 3; nested-object listings like
+`events[]` do not, until callers request `?depth=suites`-style flattening or
+the events payload is reshaped to hoist `summary` fields to top-level scalars.

@@ -42,15 +42,15 @@ truncated with a final row `… truncated — full: GET <url>?fmt=json` (and
 `truncated: true` scalar). JSON mode never truncates.
 
 ## Acceptance criteria
-- [ ] `toToon({ok:true, n:3})` === `"ok: true\nn: 3"`.
-- [ ] `toToon({events:[{id:"a",n:1},{id:"b",n:2}]})` === `"events[2]{id,n}:\n  a,1\n  b,2"` (uniform table form).
-- [ ] `toToon({help:["do x","see y"]})` === `"help[2]:\n  do x\n  see y"`; a value containing a comma round-trips JSON-quoted.
-- [ ] `GET /api/v2/events?fmt=toon` → `content-type: text/toon; charset=utf-8` and the body's first line is `ok: true`; the same URL without `fmt` returns JSON.
-- [ ] `GET /api/v2/agents` with header `Accept: text/toon` → TOON body.
-- [ ] Register response JSON contains `help` whose joined text includes `"heartbeat"`; a RED-verdict runs response's `help` includes the substring `"transition"`; a 404 project error's `help` names `POST /api/v2/projects`.
-- [ ] A synthetic 500-event TOON response emits `truncated: true` and a line containing `fmt=json`; the JSON variant of the same call is complete.
-- [ ] `docs/research/DN-crucible-toon-subset.md` exists and contains one example of each of the four constructs (verified by test reading the file).
-- [ ] Integration: every v2 GET handler routes its response through the shared `reply()` (or equivalent) — grep for direct `Response.json(` inside `src/v2.ts` GET handlers returns 0 by VERIFY.
+- [x] `toToon({ok:true, n:3})` === `"ok: true\nn: 3"`.
+- [x] `toToon({events:[{id:"a",n:1},{id:"b",n:2}]})` === `"events[2]{id,n}:\n  a,1\n  b,2"` (uniform table form).
+- [x] `toToon({help:["do x","see y"]})` === `"help[2]:\n  do x\n  see y"`; a value containing a comma round-trips JSON-quoted.
+- [x] `GET /api/v2/events?fmt=toon` → `content-type: text/toon; charset=utf-8` and the body's first line is `ok: true`; the same URL without `fmt` returns JSON.
+- [x] `GET /api/v2/agents` with header `Accept: text/toon` → TOON body.
+- [x] Register response JSON contains `help` whose joined text includes `"heartbeat"`; a RED-verdict runs response's `help` includes the substring `"transition"`; a 404 project error's `help` names `POST /api/v2/projects`.
+- [x] A synthetic 500-event TOON response emits `truncated: true` and a line containing `fmt=json`; the JSON variant of the same call is complete.
+- [x] `docs/research/DN-crucible-toon-subset.md` exists and contains one example of each of the four constructs (verified by test reading the file).
+- [x] Integration: every v2 GET handler routes its response through the shared `reply()` (or equivalent) — grep for direct `Response.json(` inside `src/v2.ts` GET handlers returns 0 by VERIFY.
 
 ## Estimated size
 M.
