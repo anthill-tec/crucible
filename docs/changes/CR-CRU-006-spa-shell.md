@@ -14,6 +14,15 @@ data plumbing. Run cards/drill-in depth is CR-CRU-007.
 
 ## Scope
 
+### §S0 Event-brief reshape (Wave-3-open decision 2026-07-15 — the SPA's data shape)
+v2 event BRIEFS (GET `/api/v2/events` list items, `status.lastTest/lastCompile`,
+project-rollup `lastEvent`) hoist the run numbers to top-level scalars: `{id,
+projectKey, agentId, kind, tier, codec, timestamp, total, passed, failed, pending,
+duration_ms, hasCoverage: boolean}` — NO nested `summary` in briefs. Full detail
+(`GET /api/v2/events/:id`) keeps the nested `summary`/`tree` unchanged. The v1 shim's
+`GET /api/events` shape is UNTOUCHED (contract-locked). Effect: TOON's uniform-table
+form applies to `events[]` (DN §Measured token-ratio addressed).
+
 ### §S1 Stack + theme (`public/`)
 Vendored only: `van-1.5.5.nomodule.min.js`, `van-x-0.6.3.nomodule.min.js`,
 `tailwind-browser-4.2.4.js`, `daisyui-5.5.19.css` (+themes). Forge palette as a
@@ -56,6 +65,8 @@ regions; restart recovers). Each test title cites its frame (`"F1: …"`). E2E r
 are ingested to the dev Crucible instance with `tier: "e2e"` (dog-food).
 
 ## Acceptance criteria
+- [ ] `GET /api/v2/events` list items carry top-level `total`/`passed`/`failed`/`pending`/`duration_ms` numbers and `hasCoverage` boolean, and NO `summary` key; `GET /api/v2/events/:id` still returns nested `summary` + `tree`; v1 `GET /api/events` unchanged (contract suite still green).
+- [ ] `GET /api/v2/events?fmt=toon` on ≥2 briefs emits the uniform-table form (body contains a line matching `/^events\[\d+\]\{/`); measured ratio for a 50-event listing re-recorded in DN-crucible-toon-subset.md ≤ 70% of JSON bytes.
 - [ ] `GET /` serves the SPA; view-source contains NO `http(s)://` script/style URLs (fully vendored).
 - [ ] `document.documentElement.dataset.theme === "forge"`; computed `--color-primary` (or DaisyUI primary var) resolves to `#ff7a1a`.
 - [ ] Navigating `/p/<key>` directly (fresh load) renders that project's workspace — deep link works without visiting `/` first.
