@@ -19,6 +19,8 @@ export interface Project {
   sutRoot: string;
   createdAt: number;
   liveness?: Partial<LivenessConfig>;
+  /** §S4 — per-project raw-event retention cap override (default 100). */
+  retention?: number;
 }
 
 export interface AgentIdentity {

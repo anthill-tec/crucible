@@ -287,8 +287,6 @@ describe("Store — per-project retention override (§S4)", () => {
   test("project with retention: 5 keeps only 5 raw events after 7 inserts, 2 rolled up", () => {
     const store = new Store(":memory:");
     const key = crypto.randomUUID();
-    // @ts-expect-error — retention is not yet declared on Project (spec §S4 per-project
-    // override field, to land as part of GREEN for this cycle).
     store.addProject({ key, name: "small-retention", type: "backend", sutRoot: "/tmp", retention: 5 });
 
     for (let i = 0; i < 7; i++) {
