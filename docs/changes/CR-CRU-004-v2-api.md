@@ -44,15 +44,15 @@ returns that suite's full leaves. Default (no params) = full tree (small runs).
 Every POST/DELETE response carries `changed: true|false` (idempotent re-runs safe).
 
 ## Acceptance criteria
-- [ ] `GET /api/v2` → 200 with `service: "crucible"`, a `projects` array, and a non-empty `help` array.
-- [ ] `POST /api/v2/projects {name:"X"}` (no key) → `{ok:true, changed:true}` and `project.key` matches UUID regex; repeat with that key → `{ok:true, changed:false}` (HTTP 200, unlike the shim's 400).
-- [ ] `POST /api/v2/agents/register` on an unknown project → 404 with `help` array present; on a valid one → `{ok:true, changed:true}`; second register of same agent → `changed:false`.
-- [ ] `POST /api/v2/runs` junit ingest returns `{ok:true, event: "evt-…", verdict}` where `verdict` starts `"RED"` when failed>0 and `"GREEN"` when failed=0.
-- [ ] `POST /api/v2/runs/parsed` with `context {git:{branch:"develop", commit:"abc123"}, wave:"w1", orchestrator:"track-2"}` → `GET /api/v2/events/:id` echoes that context verbatim; the same call with NO context succeeds and the stored event has no `context` key.
-- [ ] `GET /api/v2/events/:id?depth=suites` on a 3-suite run returns 3 suite nodes each WITHOUT `children` but WITH `counts.failed`; `?suite=<name>` returns that suite's leaves including `failure.message` on failed ones.
-- [ ] SSE: connecting client receives the `hello` frame, then an `events`-type frame within 1 s of an ingest; a `: keep-alive` comment arrives within 20 s of silence.
-- [ ] `DELETE /api/v2/events/:id?project=<key>` → `{ok:true, changed:true}`; repeating it → `changed:false` (or 404 with `ok:false` — spec: 404).
-- [ ] Integration: the v1 shim handlers and v2 handlers call the SAME store instance (grep: exactly one `new Store(` in server bootstrap); an event ingested via legacy `/api/ingest` is visible via `GET /api/v2/events`.
+- [x] `GET /api/v2` → 200 with `service: "crucible"`, a `projects` array, and a non-empty `help` array.
+- [x] `POST /api/v2/projects {name:"X"}` (no key) → `{ok:true, changed:true}` and `project.key` matches UUID regex; repeat with that key → `{ok:true, changed:false}` (HTTP 200, unlike the shim's 400).
+- [x] `POST /api/v2/agents/register` on an unknown project → 404 with `help` array present; on a valid one → `{ok:true, changed:true}`; second register of same agent → `changed:false`.
+- [x] `POST /api/v2/runs` junit ingest returns `{ok:true, event: "evt-…", verdict}` where `verdict` starts `"RED"` when failed>0 and `"GREEN"` when failed=0.
+- [x] `POST /api/v2/runs/parsed` with `context {git:{branch:"develop", commit:"abc123"}, wave:"w1", orchestrator:"track-2"}` → `GET /api/v2/events/:id` echoes that context verbatim; the same call with NO context succeeds and the stored event has no `context` key.
+- [x] `GET /api/v2/events/:id?depth=suites` on a 3-suite run returns 3 suite nodes each WITHOUT `children` but WITH `counts.failed`; `?suite=<name>` returns that suite's leaves including `failure.message` on failed ones.
+- [x] SSE: connecting client receives the `hello` frame, then an `events`-type frame within 1 s of an ingest; a `: keep-alive` comment arrives within 20 s of silence.
+- [x] `DELETE /api/v2/events/:id?project=<key>` → `{ok:true, changed:true}`; repeating it → `changed:false` (or 404 with `ok:false` — spec: 404).
+- [x] Integration: the v1 shim handlers and v2 handlers call the SAME store instance (grep: exactly one `new Store(` in server bootstrap); an event ingested via legacy `/api/ingest` is visible via `GET /api/v2/events`.
 
 ## Estimated size
 L.
