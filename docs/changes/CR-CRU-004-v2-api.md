@@ -1,6 +1,6 @@
 # CR-CRU-004 — Clean v2 API + SSE
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-07-15 on develop)
 **Type:** feature
 **Priority:** P0
 **Depends on:** CR-CRU-003
