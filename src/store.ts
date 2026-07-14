@@ -11,7 +11,7 @@ import type {
   Project,
   RunContext,
   RunEvent,
-  RunSummary,
+  RunSchema,
   SuiteNode,
   Tier,
 } from "./types.ts";
@@ -89,11 +89,8 @@ export interface Rollup {
   lastCoverage?: Coverage;
 }
 
-export interface TestRun {
-  summary: RunSummary;
-  tree: SuiteNode[];
-  coverage?: Coverage;
-}
+/** CR-CRU-002 §S1 — recordTestEvent's run param adopts the canonical RunSchema. */
+export type TestRun = RunSchema;
 
 export interface RecordEventMeta {
   tier?: Tier;
