@@ -360,11 +360,41 @@ function handleEventsList(store: Store, url: URL): Response {
   return json({ ok: true, events: store.listEvents(project, limit).map(eventBrief) });
 }
 
+/** §S4 — per-suite counts derived from leaf statuses (no leaves in the reply). */
+function suiteCounts(node: SuiteNode): { passed: number; failed: number; pending: number } {
+  const counts = { passed: 0, failed: 0, pending: 0 };
+  for (const leaf of node.children) {
+    if (leaf.status === "pass") counts.passed += 1;
+    else if (leaf.status === "fail") counts.failed += 1;
+    else counts.pending += 1;
+  }
+  return counts;
+}
+
 /** §S1 — event-specific 404 (distinct from the server's route catch-all). */
-function handleEventGet(store: Store, id: string): Response {
+/** §S4 — progressive detail: ?depth=suites (counts, no children) | ?suite=<name>. */
+function handleEventGet(store: Store, id: string, url: URL): Response {
   const event = store.getEvent(id);
   if (event === null) {
     return fail(404, `event not found: ${id}`);
+  }
+  const suite = url.searchParams.get("suite");
+  if (suite !== null) {
+    const match = (event.tree ?? []).find((node) => node.name === suite);
+    if (match === undefined) {
+      return fail(404, `suite not found in event ${id}: ${suite}`);
+    }
+    // Approved contract: tree becomes a single-element array — just the
+    // requested suite, fully expanded (leaves incl. failure detail).
+    return json({ ok: true, event: { ...event, tree: [match] } });
+  }
+  if (url.searchParams.get("depth") === "suites" && event.tree !== undefined) {
+    const tree = event.tree.map((node) => ({
+      name: node.name,
+      status: node.status,
+      counts: suiteCounts(node),
+    }));
+    return json({ ok: true, event: { ...event, tree } });
   }
   return json({ ok: true, event });
 }
@@ -448,7 +478,7 @@ export function handleV2(
     const id = pathname.slice("/api/v2/events/".length);
     if (id.length > 0 && !id.includes("/")) {
       if (req.method === "GET") {
-        return handleEventGet(store, id);
+        return handleEventGet(store, id, url);
       }
       if (req.method === "DELETE") {
         return handleEventDelete(store, id, url);

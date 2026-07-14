@@ -616,6 +616,11 @@ export class Store {
     };
   }
 
+  /** CR-CRU-004 §S3 — current onChange subscriber count (leak detection). */
+  listenerCount(): number {
+    return this.listeners.size;
+  }
+
   private emit(kind: ChangeKind, projectKey?: string): void {
     for (const listener of this.listeners) {
       listener(kind, projectKey);
