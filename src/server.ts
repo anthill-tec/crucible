@@ -8,7 +8,7 @@ import { parseCompile } from "./codecs/compile.ts";
 import { parseJunitPath } from "./codecs/junit.ts";
 import { Store, UUID_RE } from "./store.ts";
 import type { TouchAgentOpts } from "./store.ts";
-import type { AgentIdentity, RunSchema } from "./types.ts";
+import type { AgentIdentity, Coverage, RunSchema, RunSummary, SuiteNode } from "./types.ts";
 
 const pkg = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -39,6 +39,10 @@ interface IngestBody {
   status?: unknown;
   message?: unknown;
   identity?: unknown;
+  summary?: unknown;
+  tree?: unknown;
+  coverage?: unknown;
+  eventId?: unknown;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -115,6 +119,107 @@ async function handleIngestCompile(store: Store, req: Request): Promise<Response
     ok: true,
     summary: { failed: report.errorCount, pending: report.warningCount },
   });
+}
+
+// ── CR-CRU-003 §S1+§S2 — v1 shim routes: ingest/parsed + events ────────────
+
+async function handleIngestParsed(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return err(400, "malformed JSON body");
+
+  const pk = validateProjectKey(store, body);
+  if ("fail" in pk) return pk.fail;
+
+  if (typeof body.summary !== "object" || body.summary === null) {
+    return err(400, "summary is required");
+  }
+  if (!Array.isArray(body.tree)) {
+    return err(400, "tree is required");
+  }
+
+  const summary = body.summary as RunSummary;
+  const run: RunSchema = {
+    summary,
+    tree: body.tree as SuiteNode[],
+    // §S4 discard-on-fail is applied by the store; pass coverage through.
+    ...(typeof body.coverage === "object" && body.coverage !== null
+      ? { coverage: body.coverage as Coverage }
+      : {}),
+  };
+
+  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  store.recordTestEvent(pk.key, agentId, run, {
+    codec: "parsed",
+    ...(typeof body.name === "string" ? { name: body.name } : {}),
+  });
+  // §S1 — echoes the input summary verbatim.
+  return json({ ok: true, summary });
+}
+
+async function handleIngestClear(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return err(400, "malformed JSON body");
+
+  const pk = validateProjectKey(store, body);
+  if ("fail" in pk) return pk.fail;
+
+  return json({ ok: true, cleared: store.clearEvents(pk.key) });
+}
+
+/** PRD §4.9 — brief of an event for /api/ingest/status. */
+function eventBrief(event: { id: string; agentId: string; timestamp: number }) {
+  return { id: event.id, agentId: event.agentId, timestamp: event.timestamp };
+}
+
+function handleIngestStatus(store: Store, url: URL): Response {
+  const projectKey = url.searchParams.get("projectKey");
+  if (projectKey === null) {
+    return err(400, "projectKey query parameter is required");
+  }
+
+  const events = store.listEvents(projectKey, Number.MAX_SAFE_INTEGER);
+  const lastTest = events.find((e) => e.kind === "test");
+  const lastCompile = events.find((e) => e.kind === "compile");
+  return json({
+    ok: true,
+    status: {
+      hasData: events.length > 0,
+      lastTest: lastTest !== undefined ? eventBrief(lastTest) : null,
+      lastCompile: lastCompile !== undefined ? eventBrief(lastCompile) : null,
+    },
+  });
+}
+
+function handleEventsList(store: Store, url: URL): Response {
+  const projectKey = url.searchParams.get("projectKey") ?? undefined;
+  const rawLimit = Number(url.searchParams.get("limit") ?? "");
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 50;
+  return json({ ok: true, events: store.listEvents(projectKey, limit) });
+}
+
+async function handleEventsDelete(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return err(400, "malformed JSON body");
+
+  const eventId = body.eventId;
+  if (typeof eventId !== "string" || eventId.length === 0) {
+    return err(400, "eventId is required");
+  }
+  const pk = validateProjectKey(store, body);
+  if ("fail" in pk) return pk.fail;
+
+  // §S2 — wrong projectKey (event not in that project) → HTTP 200 {ok:false}.
+  return json({ ok: store.deleteEvent(eventId, pk.key) });
+}
+
+async function handleEventsClear(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return err(400, "malformed JSON body");
+
+  const pk = validateProjectKey(store, body);
+  if ("fail" in pk) return pk.fail;
+
+  return json({ ok: true, cleared: store.clearEvents(pk.key) });
 }
 
 // ── CR-CRU-003 §S1+§S2 — v1 shim routes: projects + agents ─────────────────
@@ -229,6 +334,24 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
       }
       if (req.method === "POST" && url.pathname === "/api/ingest/compile") {
         return handleIngestCompile(store, req);
+      }
+      if (req.method === "POST" && url.pathname === "/api/ingest/parsed") {
+        return handleIngestParsed(store, req);
+      }
+      if (req.method === "POST" && url.pathname === "/api/ingest/clear") {
+        return handleIngestClear(store, req);
+      }
+      if (req.method === "GET" && url.pathname === "/api/ingest/status") {
+        return handleIngestStatus(store, url);
+      }
+      if (req.method === "GET" && url.pathname === "/api/events") {
+        return handleEventsList(store, url);
+      }
+      if (req.method === "POST" && url.pathname === "/api/events/delete") {
+        return handleEventsDelete(store, req);
+      }
+      if (req.method === "POST" && url.pathname === "/api/events/clear") {
+        return handleEventsClear(store, req);
       }
       if (req.method === "GET" && url.pathname === "/api/health") {
         return Response.json({
