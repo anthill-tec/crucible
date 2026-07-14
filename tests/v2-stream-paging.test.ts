@@ -120,6 +120,18 @@ async function nextFrameMatching(
   }
 }
 
+/** Deadline-polls `predicate` instead of a fixed sleep, for async server-side
+ *  effects (e.g. unsubscribe-on-disconnect) whose exact timing isn't fixed. */
+async function pollUntil(predicate: () => boolean, timeoutMs: number, intervalMs = 10): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`condition not met within ${timeoutMs}ms`);
+    }
+    await Bun.sleep(intervalMs);
+  }
+}
+
 // 2-case, all-pass junit fixture — used to trigger a v1-route ingest.
 const JUNIT_ALLPASS = [
   '<testsuite name="Suite1" tests="2">',
@@ -301,12 +313,21 @@ describe("SSE + progressive event paging (CR-CRU-004 §S3+§S4)", () => {
       20000,
     );
 
-    test("disconnect (reader.cancel()) unsubscribes: store.listenerCount() returns to its pre-connection value; a subsequent ingest does not throw server-side", async () => {
+    test("disconnect (AbortController.abort()) unsubscribes: store.listenerCount() returns to its pre-connection value; a subsequent ingest does not throw server-side", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("stream-unsub");
       const baseline = handle.store.listenerCount();
 
-      const res = await fetch(`http://localhost:${handle.server.port}/api/stream`);
+      // Bun 1.3.14's fetch does not propagate reader.cancel() to the server
+      // socket (oven-sh/bun#5039 — confirmed via GREEN's control probes: raw
+      // TCP end() and AbortController.abort() both fire the server-side abort
+      // hook in ~12-100ms, reader.cancel() never does). Disconnect via an
+      // AbortController signal instead — that's what src/server.ts's
+      // `req.signal.addEventListener("abort", ...)` actually observes.
+      const controller = new AbortController();
+      const res = await fetch(`http://localhost:${handle.server.port}/api/stream`, {
+        signal: controller.signal,
+      });
       const reader = res.body!.getReader();
       const sse = new SseReader(reader);
       await nextFrameMatching(sse, (f) => !f.isComment && f.data?.type === "hello", 1000);
@@ -314,10 +335,14 @@ describe("SSE + progressive event paging (CR-CRU-004 §S3+§S4)", () => {
       // Establishing the connection must have registered exactly one listener.
       expect(handle.store.listenerCount()).toBe(baseline + 1);
 
-      await reader.cancel();
-      // Give the server a tick to observe the disconnect and unsubscribe.
-      await Bun.sleep(50);
+      controller.abort();
+      // Best-effort local cleanup alongside the abort signal under test —
+      // the reader may already be errored/closed once the signal fires.
+      await reader.cancel().catch(() => {});
 
+      // The abort → server-side unsubscribe hop is async; deadline-poll
+      // (bounded ≤1s) rather than assuming a fixed settle time.
+      await pollUntil(() => handle!.store.listenerCount() === baseline, 1000);
       expect(handle.store.listenerCount()).toBe(baseline);
 
       // A subsequent ingest must not throw server-side (no dangling/broken listener).
