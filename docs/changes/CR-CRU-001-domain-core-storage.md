@@ -40,8 +40,8 @@ Class `Store` backed by `bun:sqlite`, WAL mode, db path `data/crucible.db`
 projectKey).
 
 ### §S3 Liveness (computed, never stored)
-`livenessOf(agent, now)` → `"online"` (silence < T1) | `"stale"` (T1–T2) |
-`"tombstoned"` (T2–T3) | `"pruned"` (> T3). T1/T2/T3 from project `liveness`
+`livenessOf(agent, now)` → half-open intervals throughout: `"online"` (silence < T1)
+| `"stale"` ([T1, T2)) | `"tombstoned"` ([T2, T3)) | `"pruned"` (≥ T3). T1/T2/T3 from project `liveness`
 override merged over `DEFAULT_LIVENESS`. `listAgents` lazily deletes pruned rows.
 **Implicit heartbeat:** `recordTestEvent`/`recordCompileEvent` call `touchAgent`
 (bump `lastSeen`) for their `agentId`. `touchAgent` upserts; identity fields merge —
