@@ -8,6 +8,7 @@ import { parseCompile } from "./codecs/compile.ts";
 import { parseJunitPath } from "./codecs/junit.ts";
 import { Store, UUID_RE } from "./store.ts";
 import type { TouchAgentOpts } from "./store.ts";
+import { handleV2 } from "./v2.ts";
 import type { AgentIdentity, Coverage, RunSchema, RunSummary, SuiteNode } from "./types.ts";
 
 const pkg = JSON.parse(
@@ -310,6 +311,19 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
   const store = Store.open(dbPath);
   const startedAt = Date.now();
 
+  // Shared by GET /api/health and GET /api/v2/health (§S1 health parity).
+  const healthPayload = () => ({
+    ok: true,
+    status: "healthy",
+    version: pkg.version,
+    uptime_s: (Date.now() - startedAt) / 1000,
+    counts: {
+      projects: store.listProjects().length,
+      agents: store.listAgents().length,
+      events: store.countEvents(),
+    },
+  });
+
   const server = Bun.serve({
     port: opts?.port ?? Number(process.env.CRUCIBLE_PORT ?? 3849),
     async fetch(req: Request): Promise<Response> {
@@ -354,17 +368,14 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
         return handleEventsClear(store, req);
       }
       if (req.method === "GET" && url.pathname === "/api/health") {
-        return Response.json({
-          ok: true,
-          status: "healthy",
-          version: pkg.version,
-          uptime_s: (Date.now() - startedAt) / 1000,
-          counts: {
-            projects: store.listProjects().length,
-            agents: store.listAgents().length,
-            events: store.countEvents(),
-          },
-        });
+        return Response.json(healthPayload());
+      }
+      // CR-CRU-004 §S1 — clean v2 surface, same store instance as the shim.
+      if (url.pathname === "/api/v2" || url.pathname.startsWith("/api/v2/")) {
+        const v2 = handleV2(store, req, url, { version: pkg.version, healthPayload });
+        if (v2 !== null) {
+          return v2;
+        }
       }
       // §S2 — API error paths are always JSON {ok:false, error}.
       if (url.pathname.startsWith("/api/")) {
