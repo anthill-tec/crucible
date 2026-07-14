@@ -283,7 +283,14 @@ describe("AXI negotiation, hints, truncation (CR-CRU-005 §S2+§S3+§S4)", () =>
   describe("TOON truncation with pointer (§S4)", () => {
     test("~500 events: TOON GET truncates its largest array with 'truncated: true' + a 'fmt=json' pointer; JSON GET stays complete", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
-      const key = await createProject("trunc-project");
+      // CR-CRU-001 §S4 pins a default per-project retention of 100 raw
+      // events — a plain POST /api/v2/projects create would prune this
+      // fixture down to ~18KB JSON, well under the 64KB truncation
+      // threshold. Override retention via the store directly (same pattern
+      // as tests/events.test.ts's "per-project retention override" test) so
+      // the fixture actually exercises §S4 truncation.
+      const key = crypto.randomUUID();
+      handle.store.addProject({ key, name: "trunc-project", type: "backend", sutRoot: "/tmp", retention: 600 });
       const EVENT_COUNT = 500;
       for (let i = 0; i < EVENT_COUNT; i++) {
         handle.store.recordTestEvent(key, "trunc-agent", {
