@@ -46,6 +46,15 @@ watchdog — no frame for >20 s AND `GET /api/health` failing → pill flips to
 "backend unreachable", all live regions get the greyed class + "last synced <t>"
 stamp; auto-recover on reconnect. Poll fallback every 5 s when SSE is unavailable.
 
+### §S6 E2E harness seed (storyboard as contract — PRD §5)
+Playwright (headless chromium, devDependency) driving the REAL served SPA against a
+real server instance on an ephemeral port. Seed suite `tests/e2e/shell.e2e.ts`
+covering this CR's storyboard frames: F1 (empty state renders the register prompt),
+F2 (agent registered via API appears in the rail live), F9 (tombstoned agent renders
+greyed with last message), F10 (killing the server flips the health pill + greys
+regions; restart recovers). Each test title cites its frame (`"F1: …"`). E2E results
+are ingested to the dev Crucible instance with `tier: "e2e"` (dog-food).
+
 ## Acceptance criteria
 - [ ] `GET /` serves the SPA; view-source contains NO `http(s)://` script/style URLs (fully vendored).
 - [ ] `document.documentElement.dataset.theme === "forge"`; computed `--color-primary` (or DaisyUI primary var) resolves to `#ff7a1a`.
@@ -57,6 +66,7 @@ stamp; auto-recover on reconnect. Poll fallback every 5 s when SSE is unavailabl
 - [ ] An ingest via the API produces a visible DOM update (timeline/agent rail) within 2 s with no page reload (SSE path).
 - [ ] Esc from `/p/<key>/run/<id>` lands on `/p/<key>` with prior scroll position (state restore).
 - [ ] Integration: UI fetches only `/api/v2/*` + `/api/stream` (grep the SPA source for `"/api/` — no legacy v1 paths).
+- [ ] E2E: `bun run test:e2e` executes the §S6 Playwright suite against a real booted server; F1/F2/F9/F10 tests pass headless, and each test title names its storyboard frame.
 
 ## Estimated size
 L.
