@@ -106,6 +106,10 @@ export type ChangeListener = (kind: ChangeKind, projectKey?: string) => void;
 /** §S4 — default raw-event retention cap per project. */
 const DEFAULT_RETENTION = 100;
 
+/** CR-CRU-002 §S4 — project keys are UUIDs; ingest routes validate against this. */
+export const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export class Store {
   private readonly db: Database;
   /** Monotonic per-store sequence for event ids. */
@@ -386,7 +390,7 @@ export class Store {
     projectKey: string,
     agentId: string,
     compile: unknown,
-    meta?: Pick<RecordEventMeta, "tier" | "stack" | "context">,
+    meta?: Pick<RecordEventMeta, "tier" | "stack" | "context" | "codec">,
   ): RunEvent {
     // §S3 implicit heartbeat — creates the agent row if new, bumps lastSeen.
     this.touchAgent(projectKey, agentId);
@@ -398,6 +402,7 @@ export class Store {
       tier: meta?.tier ?? "unit",
       timestamp: Date.now(),
       compile,
+      ...(meta?.codec !== undefined ? { codec: meta.codec } : {}),
       ...(meta?.stack !== undefined ? { stack: meta.stack } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
     };
