@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crucible v2 — Architectural Ideation &amp; UI Design</title>
+<style>
+  /* ── Crucible v2 proposed design tokens (the real Van UI adopts these) ── */
+  :root {
+    --bg:        #0e1013;   /* forge floor */
+    --bg-1:      #15181d;   /* panel */
+    --bg-2:      #1c2027;   /* raised panel */
+    --line:      #2a2f38;
+    --ink:       #e6e2da;   /* warm off-white */
+    --ink-dim:   #9a958b;
+    --ink-faint: #635f57;
+    --ember:     #ff7a1a;   /* primary — molten */
+    --ember-dim: #b35415;
+    --heat:      #ffb347;   /* secondary highlight */
+    --pass:      #4ade80;
+    --fail:      #f87171;
+    --pend:      #facc15;
+    --stale:     #eab308;
+    --offline:   #6b7280;
+    --info:      #60a5fa;
+    --mono: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    color-scheme: dark;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  :where(.grid, .flex, .cols, .row) > * { min-width: 0; }
+  :where(p, h1, h2, h3, h4, li, td, th, dd, figcaption, .badge) { overflow-wrap: anywhere; }
+  :where(img, svg, video, canvas) { max-width: 100%; height: auto; }
+
+  html { background: var(--bg); }
+  body {
+    margin: 0; color: var(--ink); font-family: var(--sans);
+    font-size: 15px; line-height: 1.55;
+    background:
+      radial-gradient(1200px 500px at 70% -10%, rgba(255,122,26,.07), transparent 60%),
+      var(--bg);
+  }
+  main { max-width: 1080px; margin: 0 auto; padding: 40px 24px 120px; }
+
+  h1 { font-size: 30px; line-height: 1.2; margin: 8px 0 4px; letter-spacing: -.02em; }
+  h2 { font-size: 21px; margin: 0 0 4px; letter-spacing: -.01em; }
+  h3 { font-size: 16px; margin: 0 0 6px; }
+  section { margin-top: 56px; }
+  p  { margin: 8px 0; color: var(--ink); }
+  .dim   { color: var(--ink-dim); }
+  .faint { color: var(--ink-faint); }
+  .kicker {
+    font: 600 11px/1.3 var(--mono); letter-spacing: .18em; text-transform: uppercase;
+    color: var(--ember); margin-bottom: 10px; padding-right: .2em;
+  }
+  .lede { font-size: 16.5px; color: var(--ink-dim); max-width: 70ch; }
+
+  .panel {
+    background: var(--bg-1); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px 20px;
+  }
+  .panel + .panel { margin-top: 14px; }
+
+  .cols { display: grid; gap: 14px; }
+  .cols-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .cols-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  @media (max-width: 860px) { .cols-2, .cols-3 { grid-template-columns: minmax(0,1fr); } }
+
+  .badge {
+    display: inline-block; font: 600 11px/1.6 var(--mono); padding: 2px 9px;
+    border-radius: 999px; border: 1px solid var(--line); color: var(--ink-dim);
+    white-space: nowrap;
+  }
+  .badge.ember  { color: var(--ember); border-color: rgba(255,122,26,.45); background: rgba(255,122,26,.08); }
+  .badge.pass   { color: var(--pass);  border-color: rgba(74,222,128,.4);  background: rgba(74,222,128,.08); }
+  .badge.fail   { color: var(--fail);  border-color: rgba(248,113,113,.4); background: rgba(248,113,113,.08); }
+  .badge.pend   { color: var(--pend);  border-color: rgba(250,204,21,.4);  background: rgba(250,204,21,.08); }
+  .badge.info   { color: var(--info);  border-color: rgba(96,165,250,.4);  background: rgba(96,165,250,.08); }
+
+  code, pre { font-family: var(--mono); }
+  code { font-size: .88em; background: var(--bg-2); border: 1px solid var(--line); padding: 1px 5px; border-radius: 5px; }
+  pre {
+    background: #101318; border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; font-size: 12.5px; line-height: 1.6; overflow-x: auto; margin: 10px 0;
+  }
+  pre code { background: none; border: 0; padding: 0; }
+  pre .c  { color: var(--ink-faint); }           /* comment */
+  pre .k  { color: var(--heat); }                /* key */
+  pre .s  { color: #a5d6a7; }                    /* string */
+  pre .hl { color: var(--ember); font-weight: 600; }
+
+  table.data { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.data th {
+    text-align: left; font: 600 11px/1.4 var(--mono); text-transform: uppercase;
+    letter-spacing: .08em; color: var(--ink-faint); padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  table.data td { padding: 8px 10px; border-bottom: 1px solid rgba(42,47,56,.6); vertical-align: top; }
+  .tablewrap { overflow-x: auto; }
+
+  .mermaid { background: var(--bg-1); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin: 12px 0; }
+  .mermaid:not([data-processed]) { color: var(--ink-faint); font: 12px var(--mono); white-space: pre; overflow-x: auto; }
+
+  /* ── comparison cards ── */
+  .opt { border: 1px solid var(--line); border-radius: 12px; background: var(--bg-1); overflow: hidden; }
+  .opt.rec { border-color: rgba(255,122,26,.55); box-shadow: 0 0 0 1px rgba(255,122,26,.25), 0 8px 30px rgba(255,122,26,.06); }
+  .opt-head { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .opt-body { padding: 12px 16px; }
+  .opt ul { margin: 6px 0; padding-left: 18px; }
+  .opt li { margin: 4px 0; font-size: 13.5px; }
+  .cost { color: var(--fail); }
+  .gain { color: var(--pass); }
+
+  /* ── UI concept mocks (rendered in the proposed design system) ── */
+  .mock {
+    border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
+    overflow: hidden; font-size: 12px; margin-top: 12px;
+  }
+  .mock-chrome { display: flex; align-items: center; gap: 8px; background: var(--bg-2); padding: 7px 12px; border-bottom: 1px solid var(--line); }
+  .mock-chrome .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
+  .mock-chrome .url { font: 10.5px var(--mono); color: var(--ink-faint); margin-left: 8px; }
+  .m-top { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--line); background: var(--bg-1); flex-wrap: wrap; }
+  .m-top .chip, .evt .ico, .evt .ratio { flex-shrink: 0; }
+  .evt .ico { line-height: 1.2; padding-right: 2px; }
+  .m-logo { font: 700 13px var(--sans); color: var(--ember); letter-spacing: .02em; }
+  .m-logo span { color: var(--ink-dim); font-weight: 500; }
+  .chip {
+    font: 600 10.5px/1.7 var(--mono); border: 1px solid var(--line); border-radius: 999px;
+    padding: 1px 9px; color: var(--ink-dim); white-space: nowrap;
+  }
+  .chip.on { color: var(--ember); border-color: rgba(255,122,26,.5); background: rgba(255,122,26,.09); }
+  .dot-live { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+  .dot-live.g { background: var(--pass); box-shadow: 0 0 6px rgba(74,222,128,.7); }
+  .dot-live.y { background: var(--stale); }
+  .dot-live.o { background: var(--offline); }
+  .m-body { display: grid; min-height: 300px; }
+  .m-rail { border-right: 1px solid var(--line); background: var(--bg-1); padding: 10px; }
+  .m-rail-r { border-left: 1px solid var(--line); border-right: 0; }
+  .m-main { padding: 10px 12px; }
+  .m-h { font: 600 10px/1.4 var(--mono); text-transform: uppercase; letter-spacing: .14em; color: var(--ink-faint); margin: 4px 0 8px; padding-right: .2em; }
+  .agent-row { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px; border-radius: 8px; }
+  .agent-row:hover { background: var(--bg-2); }
+  .agent-id { font: 600 11px var(--mono); color: var(--ink); }
+  .agent-msg { color: var(--ink-dim); font-size: 10.5px; }
+  .agent-ts { color: var(--ink-faint); font: 9.5px var(--mono); }
+  .evt {
+    display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--bg-1); margin-bottom: 7px;
+  }
+  .evt .ico { font-size: 14px; line-height: 1.4; }
+  .evt .who { font: 600 11px var(--mono); }
+  .evt .meta { color: var(--ink-faint); font: 9.5px var(--mono); }
+  .ratio { font: 700 11px var(--mono); padding: 1px 8px; border-radius: 6px; margin-left: auto; white-space: nowrap; }
+  .ratio.p { color: var(--pass); background: rgba(74,222,128,.1); }
+  .ratio.f { color: var(--fail); background: rgba(248,113,113,.1); }
+  .ratio.c { color: var(--pend); background: rgba(250,204,21,.1); }
+  .redgreen {
+    display: flex; align-items: center; gap: 8px; font: 600 10px var(--mono);
+    color: var(--pass); padding: 4px 10px; margin: 2px 0 9px;
+    border-left: 3px solid var(--pass); background: rgba(74,222,128,.05); border-radius: 0 8px 8px 0;
+  }
+  .redgreen b.r { color: var(--fail); }
+  .meter { height: 6px; border-radius: 999px; background: var(--bg-2); overflow: hidden; margin-top: 4px; }
+  .meter > i { display: block; height: 100%; background: linear-gradient(90deg, var(--ember-dim), var(--ember)); }
+  .pcard { border: 1px solid var(--line); border-radius: 10px; background: var(--bg-1); padding: 10px 12px; }
+  .pcard .nm { font-weight: 600; font-size: 12.5px; }
+  .m-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); padding: 0 12px; background: var(--bg-1); }
+  .m-tab { font: 600 10.5px var(--mono); padding: 7px 10px; color: var(--ink-faint); border-bottom: 2px solid transparent; }
+  .m-tab.on { color: var(--ember); border-bottom-color: var(--ember); }
+  .annot { font-size: 12.5px; color: var(--ink-dim); margin-top: 10px; }
+  .annot b { color: var(--heat); font-weight: 600; }
+
+  /* concept switcher */
+  .cswitch { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .cbtn {
+    font: 600 12px var(--mono); padding: 7px 14px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg-1); color: var(--ink-dim);
+  }
+  .cbtn.on { color: var(--ember); border-color: rgba(255,122,26,.55); background: rgba(255,122,26,.09); }
+  .concept { display: none; }
+  .concept.on { display: block; }
+
+  /* decision forms */
+  .q { border: 1px solid var(--line); border-radius: 12px; background: var(--bg-1); padding: 16px 18px; margin-top: 14px; }
+  .q h3 { display: flex; gap: 8px; align-items: baseline; }
+  .q .qid { font: 700 11px var(--mono); color: var(--ember); }
+  .q label { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+  .q label:hover { background: var(--bg-2); }
+  .q input[type=radio], .q input[type=checkbox] { accent-color: var(--ember); margin-top: 3px; }
+  .q .ol { font-weight: 600; font-size: 13.5px; }
+  .q .od { font-size: 12.5px; color: var(--ink-dim); }
+  .qbtn {
+    font: 600 12px var(--mono); padding: 8px 16px; border-radius: 8px; cursor: pointer;
+    border: 1px solid rgba(255,122,26,.5); background: rgba(255,122,26,.1); color: var(--ember); margin-top: 8px;
+  }
+  .qbtn:hover { background: rgba(255,122,26,.18); }
+  .qnote { font: 11px var(--mono); color: var(--ink-faint); margin-top: 6px; }
+
+  .toc { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+  .toc a { text-decoration: none; }
+  a { color: var(--heat); }
+  hr.sep { border: 0; border-top: 1px solid var(--line); margin: 40px 0 0; }
+</style>
+</head>
+<body>
+<main>
+
+  <!-- ══════════════════ HEADER ══════════════════ -->
+  <div class="kicker">Crucible v2 · Kickoff design review · 2026-07-14</div>
+  <h1>Architectural Ideation &amp; UI Design</h1>
+  <p class="lede">Crucible v1 — the Bun/TypeScript test-observability dashboard every RED/GREEN/VERIFY agent
+  reported to — was lost to a folder deletion. Its API contract was reconstructed from the surviving client fleet
+  (5 stack scripts, 6 skills, the agent definitions). This review decides <b>how v2 improves on it</b>:
+  the architecture, the agent experience (AXI idioms + TOON), and the dashboard UI.</p>
+  <div class="toc">
+    <a class="badge" href="#arch">1 · Architecture</a>
+    <a class="badge" href="#axi">2 · Agent experience, worked backwards</a>
+    <a class="badge" href="#toon">3 · TOON adoption</a>
+    <a class="badge" href="#ui">4 · UI concepts (A/B/C)</a>
+    <a class="badge" href="#tokens">5 · Design language</a>
+    <a class="badge" href="#risks">6 · Risks</a>
+    <a class="badge ember" href="#decide">7 · Decisions ➜</a>
+  </div>
+
+  <!-- ══════════════════ CURRENT STATE ══════════════════ -->
+  <section>
+    <div class="kicker">Ground truth</div>
+    <h2>What survives, what's committed</h2>
+    <div class="cols cols-3">
+      <div class="panel">
+        <h3>✅ Reconstructed</h3>
+        <p class="dim" style="font-size:13px">13 endpoints on <code>:3849</code>, exact payloads &amp; invariants —
+        cataloged in <code>docs/research/DN-crucible-api-reconstruction.md</code>. UUID project keys, heartbeat-based
+        registration, JUnit/parsed/compile ingest, events, coverage-discard-on-fail.</p>
+      </div>
+      <div class="panel">
+        <h3>🔒 Non-negotiable</h3>
+        <p class="dim" style="font-size:13px">Wire compatibility: <code>rust-</code>/<code>mvn-</code>/<code>python-</code>/<code>bun-</code>/<code>arduino-crucible.py</code>
+        and the <code>crucible-report-*</code> skills must work <b>unmodified, day one</b>. Everything v2 adds is additive.</p>
+      </div>
+      <div class="panel">
+        <h3>🎨 This review</h3>
+        <p class="dim" style="font-size:13px">Design contract lives in <code>docs/research/PRD-crucible-v2.md</code>.
+        Decisions queued from this page flow back into the PRD before the first CR wave opens.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════ ARCHITECTURE ══════════════════ -->
+  <section id="arch">
+    <div class="kicker">Section 1</div>
+    <h2>Architecture — what talks to what?</h2>
+    <p class="dim">One Bun process serves three audiences: the legacy client fleet (JSON, byte-compatible),
+    agent-facing AXI surfaces (TOON + hints), and the human dashboard (VanJS/VanX/VanUI SPA over SSE).</p>
+
+    <div class="mermaid">
+flowchart TB
+  subgraph clients["Agent fleet (unchanged)"]
+    RS["rust-crucible.py"]
+    MV["mvn-crucible.py"]
+    PY["python-crucible.py"]
+    BN["bun-crucible.py"]
+    AR["arduino-crucible.py"]
+    SK["crucible-report-* skills"]
+  end
+  subgraph server["Crucible v2 — single Bun process :3849"]
+    COMPAT["v1 compat API — /api/* JSON<br/>(13 endpoints, byte-compatible)"]
+    AXI["AXI layer — TOON negotiation,<br/>help hints, GET /api dashboard,<br/>register / unregister verbs"]
+    CORE["Domain core<br/>projects · agents · runs · ingest state"]
+    PARSE["Parsers<br/>JUnit XML · rustc · javac · py · tsc"]
+    STORE["Store — in-memory +<br/>data/state.json snapshot"]
+    SSE["SSE /api/stream<br/>+ keep-alive frames"]
+    HEALTH["GET /api/health<br/>uptime · version · counts"]
+  end
+  subgraph ui["Dashboard SPA"]
+    VAN["VanJS + VanX state + VanUI<br/>(vendored, no build step)"]
+  end
+  clients -- "JSON (today)" --> COMPAT
+  clients -. "TOON (opt-in later)" .-> AXI
+  COMPAT --> CORE
+  AXI --> CORE
+  CORE --> PARSE
+  CORE --> STORE
+  CORE --> SSE
+  SSE --> VAN
+  HEALTH --> VAN
+  VAN -- "fetch /api/*" --> COMPAT
+    </div>
+
+    <p class="dim">The agent lifecycle v1 modeled implicitly (registration == first heartbeat) becomes explicit in v2 —
+    <b>register and unregister are first-class verbs</b>, while heartbeat keeps its upsert behavior so old clients lose nothing.
+    Agents that fail to unregister decay through the v1 timeouts and end <b>tombstoned</b> — kept visible (greyed, with last
+    message and time-of-death) so a crashed agent is a diagnosable fact, not a silent disappearance; tombstones are pruned after 1&nbsp;h:</p>
+
+    <div class="mermaid">
+stateDiagram-v2
+  direction LR
+  state "online 🟢" as online
+  state "stale 🟡" as stale
+  state "tombstoned ⚰ (greyed in UI)" as tomb
+  [*] --> online : POST register (or first heartbeat)
+  online --> online : heartbeat &lt; 60s
+  online --> stale : 60s silence
+  stale --> online : heartbeat
+  stale --> tomb : 300s silence
+  tomb --> online : heartbeat (resurrect)
+  tomb --> [*] : pruned after 1h
+  online --> [*] : POST unregister (clean exit)
+  stale --> [*] : POST unregister
+    </div>
+
+    <div class="panel" style="margin-top:12px">
+      <h3>Server health is part of the contract too</h3>
+      <p class="dim" style="font-size:13.5px">v1 monitored the backend itself and the frontend surfaced it. v2 keeps that:
+      <code>GET /api/health</code> (uptime, version, snapshot-write status, project/agent/event counts) plus SSE keep-alive
+      frames every 15&nbsp;s. The SPA pins a status pill in the top bar — <span class="badge pass">● crucible healthy</span> flips to
+      <span class="badge fail">● backend unreachable</span> when keep-alives stop AND a health probe fails, and all "live" data
+      visibly greys rather than silently going stale. Agents get the same signal: every AXI response echoes
+      <code>server: healthy · up 4h12m</code>, and orchestrator scripts can gate on <code>/api/health</code> before dispatching a wave.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════ AXI ══════════════════ -->
+  <section id="axi">
+    <div class="kicker">Section 2</div>
+    <h2>The agent experience, worked backwards</h2>
+    <p class="dim">Today an agent talks to Crucible through copy-pasted urllib helpers and gets <code>{"ok": true}</code>
+    back — no orientation, no guidance, no confirmation of what changed. The <code>*-axi</code> tool family
+    (gh-axi, lavish-axi, chrome-devtools-axi) proved a better idiom set. Applied to Crucible:</p>
+
+    <div class="tablewrap panel" style="padding:0">
+      <table class="data">
+        <thead><tr><th style="width:26%">AXI idiom</th><th>In Crucible v2</th></tr></thead>
+        <tbody>
+          <tr><td><b>Dashboard-first</b></td><td><code>GET /api</code> with no args → orientation: service info, project list, your agent's state, suggested next calls. An agent landing cold knows what to do.</td></tr>
+          <tr><td><b>help[N]: hints</b></td><td>Every response ends with contextual next steps. After <code>register</code> → "ingest your first run". After a failing ingest → "re-run &amp; re-ingest; RED→GREEN must show as two events".</td></tr>
+          <tr><td><b>TOON output</b></td><td>Token-efficient responses for agent readers via content negotiation (<code>Accept: text/toon</code> or <code>?fmt=toon</code>). JSON stays the default — v1 fleet + SPA unaffected. See §3.</td></tr>
+          <tr><td><b>Idempotent mutations that report what changed</b></td><td><code>changed: true|false</code> on every write. Re-running a failed ingest is safe and says so. <code>projects/add</code> on an existing key stops being an ignored 400 — it reports <code>changed: false</code> (v1 path still 400s for compat).</td></tr>
+          <tr><td><b>Explicit verbs</b></td><td><code>POST /api/agents/register</code> and <code>/api/agents/unregister</code> — the lifecycle v1 buried in heartbeat/remove becomes discoverable. Old endpoints remain as aliases forever.</td></tr>
+          <tr><td><b>Token-frugal truncation</b></td><td>Big payloads (compile error walls, 1000-case trees) come back summarized with a <code>full: /api/events/&lt;id&gt;?fmt=json</code> pointer instead of flooding the agent's context.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="margin-top:22px">Before / after — the same RED-phase ingest</h3>
+    <div class="cols cols-2">
+      <div class="opt">
+        <div class="opt-head"><span class="badge">v1 · today</span><span class="dim" style="font-size:12px">JSON, mute</span></div>
+        <div class="opt-body">
+<pre><code><span class="c"># POST /api/ingest  (junit dataPath)</span>
+{<span class="k">"ok"</span>: true,
+ <span class="k">"summary"</span>: {<span class="k">"total"</span>: 5, <span class="k">"passed"</span>: 2,
+             <span class="k">"failed"</span>: 3, <span class="k">"pending"</span>: 0}}</code></pre>
+          <ul>
+            <li class="cost">Agent must know the whole protocol up front (427-line skill doc)</li>
+            <li class="cost">No confirmation of event id / what changed</li>
+            <li class="cost">Wrong-endpoint mistakes (compile vs test) only caught by skill prose</li>
+          </ul>
+        </div>
+      </div>
+      <div class="opt rec">
+        <div class="opt-head"><span class="badge ember">v2 · proposed</span><span class="dim" style="font-size:12px">TOON, guiding</span></div>
+        <div class="opt-body">
+<pre><code><span class="c"># POST /api/ingest?fmt=toon</span>
+<span class="k">ok:</span> true
+<span class="k">changed:</span> true
+<span class="k">event:</span> evt-1783440723001-7
+<span class="k">run{total,passed,failed,pending,duration_ms}:</span>
+  5,2,<span class="hl">3</span>,0,412
+<span class="k">verdict:</span> RED — 3 failing
+<span class="k">help[3]:</span>
+  RED recorded. After GREEN, re-ingest — the dashboard shows the transition
+  suite detail: GET /api/events/evt-1783440723001-7
+  agent status: POST /api/agents/heartbeat {message: "GREEN: implementing…"}</code></pre>
+          <ul>
+            <li class="gain">Self-describing — hints replace skill-doc memorization</li>
+            <li class="gain">Event id returned → agents can reference/verify their own runs</li>
+            <li class="gain">~half the tokens of the JSON equivalent at scale (§3)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <p class="annot"><b>Cost of the AXI layer:</b> a TOON serializer (~150 lines, zero deps), content negotiation,
+    and hint-authoring per endpoint. No new process, no client changes required — legacy JSON is untouched.</p>
+  </section>
+
+  <!-- ══════════════════ TOON ══════════════════ -->
+  <section id="toon">
+    <div class="kicker">Section 3</div>
+    <h2>TOON as the agent wire format</h2>
+    <p class="dim">TOON (<a href="https://toonformat.dev">toonformat.dev</a>) is a token-oriented notation: objects as
+    <code>key: value</code> lines, uniform arrays as <code>name[N]{cols}:</code> tables. It shines exactly where Crucible's
+    reads are heaviest — event lists, agent lists, test trees. The same 3 events:</p>
+    <div class="cols cols-2">
+      <div class="panel">
+        <div class="badge">JSON — 312 tokens*</div>
+<pre><code>{"ok":true,"events":[
+ {"id":"evt-1783440723001-7","agentId":"CR-NAI-042-RED",
+  "kind":"test","tier":"unit","timestamp":1783440723001,
+  "summary":{"total":5,"passed":2,"failed":3,"pending":0}},
+ {"id":"evt-1783440899412-8","agentId":"CR-NAI-042-GREEN",
+  "kind":"test","tier":"unit","timestamp":1783440899412,
+  "summary":{"total":5,"passed":5,"failed":0,"pending":0}},
+ {"id":"evt-1783441002110-9","agentId":"verify-nai-042",
+  "kind":"test","tier":"regression","timestamp":1783441002110,
+  "summary":{"total":214,"passed":214,"failed":0,"pending":0}}]}</code></pre>
+      </div>
+      <div class="panel">
+        <div class="badge ember">TOON — ~140 tokens*</div>
+<pre><code><span class="k">ok:</span> true
+<span class="k">events[3]{id,agent,kind,tier,total,passed,failed}:</span>
+  evt-1783440723001-7,CR-NAI-042-RED,test,unit,5,2,<span class="hl">3</span>
+  evt-1783440899412-8,CR-NAI-042-GREEN,test,unit,5,5,0
+  evt-1783441002110-9,verify-nai-042,test,regression,214,214,0
+<span class="k">help[2]:</span>
+  RED→GREEN transition detected for CR-NAI-042 ✔
+  filter: GET /api/events?agent=CR-NAI-042-*&amp;fmt=toon</code></pre>
+      </div>
+    </div>
+    <p class="annot">*approximate cl100k counts; savings grow with row count — a 50-event poll is where orchestrators feel it.
+    <b>Scope question for you (Q2 below):</b> TOON on all endpoints via negotiation, or only on the agent-facing reads?</p>
+  </section>
+
+  <!-- ══════════════════ UI CONCEPTS ══════════════════ -->
+  <section id="ui">
+    <div class="kicker">Section 4</div>
+    <h2>Dashboard concepts — pick the backbone</h2>
+    <p class="dim">Three layout philosophies, mocked in the proposed Crucible design language (VanJS + VanX + VanUI
+    will render the real thing — these are faithful scaffolds, and every element shown maps to reconstructed data).
+    Click through, annotate anything, answer Q1 when ready.</p>
+
+    <div class="cswitch">
+      <button class="cbtn on" data-c="a">A · Mission Control <span class="badge ember" style="margin-left:6px">recommended</span></button>
+      <button class="cbtn" data-c="b">B · Project Workspaces</button>
+      <button class="cbtn" data-c="c">C · Unified Stream</button>
+    </div>
+
+    <!-- ── Concept A ── -->
+    <div class="concept on" id="c-a">
+      <div class="mock">
+        <div class="mock-chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">localhost:3849 — Crucible</span></div>
+        <div class="m-top">
+          <span class="m-logo">⚒ Crucible <span>v2</span></span>
+          <span class="chip on">All projects</span>
+          <span class="chip"><span class="dot-live g"></span>NAI · rust</span>
+          <span class="chip"><span class="dot-live g"></span>StateStore · quarkus</span>
+          <span class="chip"><span class="dot-live o"></span>office-assistant · py</span>
+          <span class="chip" style="margin-left:auto"><span class="dot-live g"></span>server healthy · live</span>
+        </div>
+        <div class="m-body" style="grid-template-columns: 200px minmax(0,1fr) 210px;">
+          <div class="m-rail">
+            <div class="m-h">Projects</div>
+            <div class="pcard" style="margin-bottom:8px">
+              <div class="nm">NAI <span class="badge" style="font-size:9px">backend</span></div>
+              <div class="agent-ts">3 agents · last run 40s ago</div>
+              <div class="meter"><i style="width:87%"></i></div>
+              <div class="agent-ts">cov 87.3% lines</div>
+            </div>
+            <div class="pcard" style="margin-bottom:8px">
+              <div class="nm">StateStore <span class="badge" style="font-size:9px">backend</span></div>
+              <div class="agent-ts">1 agent · <span style="color:var(--fail)">2 failing</span></div>
+              <div class="meter"><i style="width:74%"></i></div>
+              <div class="agent-ts">cov 74.1% lines</div>
+            </div>
+            <div class="pcard">
+              <div class="nm">codeforge-ui <span class="badge" style="font-size:9px;color:var(--info)">frontend</span></div>
+              <div class="agent-ts">idle · bdd: 12/12 ✓</div>
+            </div>
+          </div>
+          <div class="m-main">
+            <div class="m-h">Run timeline — all projects</div>
+            <div class="redgreen"><b class="r">RED 2/5</b> ➜ <b>GREEN 5/5</b> · CR-NAI-042 · cycle closed in 4m12s</div>
+            <div class="evt"><span class="ico">🧪</span><div><div class="who">verify-nai-042 <span class="badge" style="font-size:9px">regression</span></div><div class="meta">NAI · 40s ago · 8.2s</div><div class="meter" style="width:120px"><i style="width:87%"></i></div></div><span class="ratio p">214/214</span></div>
+            <div class="evt"><span class="ico">🧪</span><div><div class="who">CR-NAI-042-GREEN <span class="badge" style="font-size:9px">unit</span></div><div class="meta">NAI · 4m ago · 412ms</div></div><span class="ratio p">5/5</span></div>
+            <div class="evt"><span class="ico">🛠</span><div><div class="who">CR-SS-011-RED <span class="badge" style="font-size:9px">compile</span></div><div class="meta">StateStore · 6m ago · javac</div><div class="agent-msg" style="font-family:var(--mono);font-size:10px">AgentStreamResource.java:[42,13] cannot find symbol ×3</div></div><span class="ratio c">3 errors</span></div>
+            <div class="evt"><span class="ico">🧪</span><div><div class="who">CR-NAI-042-RED <span class="badge" style="font-size:9px">unit</span></div><div class="meta">NAI · 8m ago · 380ms</div></div><span class="ratio f">2/5</span></div>
+          </div>
+          <div class="m-rail m-rail-r">
+            <div class="m-h">Agents · 4 live</div>
+            <div class="agent-row"><span class="agent-id"><span class="dot-live g"></span>vd-orchestrator</span><span class="agent-msg">wave 3: dispatching CR-NAI-043</span><span class="agent-ts">Vidushi · 12s</span></div>
+            <div class="agent-row"><span class="agent-id"><span class="dot-live g"></span>CR-NAI-043-RED</span><span class="agent-msg">RED: writing parser tests</span><span class="agent-ts">openclaw · 25s</span></div>
+            <div class="agent-row"><span class="agent-id"><span class="dot-live g"></span>verify-nai-042</span><span class="agent-msg">regression green — reporting</span><span class="agent-ts">claude-code · 38s</span></div>
+            <div class="agent-row"><span class="agent-id"><span class="dot-live y"></span>CR-SS-011-RED</span><span class="agent-msg">fixing compile errors</span><span class="agent-ts">stale · 2m</span></div>
+            <div class="agent-row" style="opacity:.5"><span class="agent-id"><span class="dot-live o"></span>CR-OA-009-GREEN ⚰</span><span class="agent-msg">last: "GREEN: wiring store"</span><span class="agent-ts">tombstoned · died 22m ago</span></div>
+          </div>
+        </div>
+      </div>
+      <p class="annot"><b>Philosophy:</b> "who is working right now, everywhere" — the orchestrator's cockpit. Three synchronized zones:
+      project health (left), the cross-project run timeline with <b>RED→GREEN transition markers</b> (center), live agent rail (right).
+      Project chips filter everything in place. <b>Why recommended:</b> it matches how the fleet actually operates — many agents,
+      parallel CRs, one human glancing for anomalies — and v1's single-project filter grew from exactly this need.</p>
+    </div>
+
+    <!-- ── Concept B ── -->
+    <div class="concept" id="c-b">
+      <div class="mock">
+        <div class="mock-chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">localhost:3849 — Crucible / NAI</span></div>
+        <div class="m-top">
+          <span class="m-logo">⚒ Crucible <span>v2</span></span>
+          <span class="chip">← projects</span>
+          <span class="chip on">NAI</span>
+          <span class="chip" style="margin-left:auto"><span class="dot-live g"></span>3 agents</span>
+        </div>
+        <div class="m-tabs">
+          <span class="m-tab on">Runs</span><span class="m-tab">Agents</span><span class="m-tab">Coverage</span><span class="m-tab">Compile</span><span class="m-tab">BDD</span>
+        </div>
+        <div class="m-body" style="grid-template-columns: minmax(0,1fr) 250px;">
+          <div class="m-main">
+            <div class="redgreen"><b class="r">RED 2/5</b> ➜ <b>GREEN 5/5</b> · CR-NAI-042 · unit · 4m12s cycle</div>
+            <div class="evt"><span class="ico">🧪</span><div><div class="who">verify-nai-042 <span class="badge" style="font-size:9px">regression</span></div><div class="meta">40s ago · 8.2s · nai_ast, nai_runtime</div></div><span class="ratio p">214/214</span></div>
+            <div class="evt"><span class="ico">🧪</span><div><div class="who">CR-NAI-042-GREEN <span class="badge" style="font-size:9px">unit</span></div><div class="meta">4m ago · 412ms</div></div><span class="ratio p">5/5</span></div>
+            <div class="evt"><span class="ico">🧪</span><div><div class="who">CR-NAI-042-RED <span class="badge" style="font-size:9px">unit</span></div><div class="meta">8m ago · 380ms · suite: runtime::checkpoint</div></div><span class="ratio f">2/5</span></div>
+          </div>
+          <div class="m-rail m-rail-r">
+            <div class="m-h">Project vitals</div>
+            <div class="pcard" style="margin-bottom:8px"><div class="agent-ts">LATEST GREEN COVERAGE</div><div class="nm">87.3% lines</div><div class="meter"><i style="width:87%"></i></div><div class="agent-ts" style="margin-top:4px">fn 91.0% · br 79.4%</div></div>
+            <div class="pcard" style="margin-bottom:8px"><div class="agent-ts">CYCLE HEALTH (7d)</div><div class="nm">14 RED→GREEN · median 6m</div></div>
+            <div class="pcard"><div class="agent-ts">AGENTS</div><div class="agent-row" style="padding:4px 0"><span class="agent-id"><span class="dot-live g"></span>vd-orchestrator</span></div><div class="agent-row" style="padding:4px 0"><span class="agent-id"><span class="dot-live g"></span>CR-NAI-043-RED</span></div></div>
+          </div>
+        </div>
+      </div>
+      <p class="annot"><b>Philosophy:</b> project-first. A landing grid of project health cards (as in A's left rail, full-width) opens into a
+      per-project workspace with tabs — Runs, Agents, Coverage trend, Compile panel, BDD (frontend projects only, honoring the TDD/BDD split).
+      <b>Strength:</b> depth — coverage trends and per-suite drill-down get room to breathe. <b>Cost:</b> cross-project awareness needs an extra hop;
+      parallel-wave orchestration is less glanceable.</p>
+    </div>
+
+    <!-- ── Concept C ── -->
+    <div class="concept" id="c-c">
+      <div class="mock">
+        <div class="mock-chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">localhost:3849 — Crucible</span></div>
+        <div class="m-top">
+          <span class="m-logo">⚒ Crucible <span>v2</span></span>
+          <span class="chip on">all</span><span class="chip">NAI</span><span class="chip">test</span><span class="chip">compile</span><span class="chip">regression</span><span class="chip">agent: CR-NAI-*</span>
+        </div>
+        <div class="m-body" style="grid-template-columns: minmax(0,1fr) 300px;">
+          <div class="m-main">
+            <div class="m-h">Live stream</div>
+            <div class="evt"><span class="ico">🧪</span><div><div class="who">verify-nai-042</div><div class="meta">NAI · regression · 40s</div></div><span class="ratio p">214/214</span></div>
+            <div class="evt" style="border-color:rgba(255,122,26,.4)"><span class="ico">🧪</span><div><div class="who">CR-NAI-042-GREEN</div><div class="meta">NAI · unit · 4m — selected</div></div><span class="ratio p">5/5</span></div>
+            <div class="evt"><span class="ico">🛠</span><div><div class="who">CR-SS-011-RED</div><div class="meta">StateStore · compile · 6m</div></div><span class="ratio c">3 errors</span></div>
+            <div class="evt"><span class="ico">💓</span><div><div class="who">vd-orchestrator</div><div class="meta">heartbeat · "wave 3: dispatching CR-NAI-043"</div></div></div>
+          </div>
+          <div class="m-rail m-rail-r">
+            <div class="m-h">Inspector — evt…899412-8</div>
+            <div class="pcard">
+              <div class="nm">CR-NAI-042-GREEN · 5/5 <span class="badge pass" style="font-size:9px">GREEN</span></div>
+              <div class="agent-ts" style="margin:6px 0 4px">SUITE TREE</div>
+              <div style="font:10.5px var(--mono); line-height:1.8">
+                ▾ runtime::checkpoint <span style="color:var(--pass)">5 ✓</span><br>
+                &nbsp;&nbsp;✓ commit_persists_state · 84ms<br>
+                &nbsp;&nbsp;✓ rollback_restores · 71ms<br>
+                &nbsp;&nbsp;✓ double_commit_noop · 12ms<br>
+                &nbsp;&nbsp;<span style="color:var(--ink-faint)">…2 more</span>
+              </div>
+              <div class="agent-ts" style="margin:8px 0 4px">PAIRED RED</div>
+              <div style="font:10.5px var(--mono)">evt…723001-7 · 2/5 <span style="color:var(--fail)">3 ✗</span> · 8m ago</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="annot"><b>Philosophy:</b> everything is one filterable live stream (runs, compile events, even heartbeat messages),
+      with a persistent inspector for whatever's selected — suite trees, paired RED/GREEN events, raw payloads.
+      <b>Strength:</b> maximal information density, great for debugging an in-flight wave. <b>Cost:</b> no resting "health at a glance"
+      state; heartbeat noise needs careful defaults.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════ DESIGN LANGUAGE ══════════════════ -->
+  <section id="tokens">
+    <div class="kicker">Section 5</div>
+    <h2>Design language — "forge" tokens</h2>
+    <p class="dim">This page is rendered in the proposed system itself: deep-charcoal surfaces, one molten accent,
+    mono-forward data typography, status colors reserved for status. Ships as ~40 CSS custom properties the Van components consume —
+    no Tailwind, no build step, dark-first with a light theme later.</p>
+    <div class="cols cols-3">
+      <div class="panel"><h3 style="color:var(--ember)">Ember #ff7a1a</h3><p class="dim" style="font-size:12.5px">Primary. Interactive + brand only — never status.</p></div>
+      <div class="panel"><h3><span style="color:var(--pass)">pass</span> · <span style="color:var(--fail)">fail</span> · <span style="color:var(--pend)">pend</span></h3><p class="dim" style="font-size:12.5px">Status trio, backed by icons/shape — never color alone (liveness dots carry position + label).</p></div>
+      <div class="panel"><h3 style="font-family:var(--mono)">mono data</h3><p class="dim" style="font-size:12.5px">Agent ids, event ids, counts, timestamps — everything an agent also reads — set in mono.</p></div>
+    </div>
+  </section>
+
+  <!-- ══════════════════ RISKS ══════════════════ -->
+  <section id="risks">
+    <div class="kicker">Section 6</div>
+    <h2>Risks &amp; open questions</h2>
+    <div class="panel">
+      <ul style="margin:4px 0; padding-left:18px">
+        <li style="margin:6px 0"><b>Compat regressions</b> — the v1 contract has quirks (top-level <code>displayName</code> ignored, 400-on-duplicate <code>projects/add</code>, coverage-discard-on-fail). Mitigation: the compat surface gets contract tests derived line-by-line from the DN before any AXI work starts.</li>
+        <li style="margin:6px 0"><b>TOON drift</b> — hand-rolled serializer vs the evolving spec. Mitigation: vendor the reference TS implementation (zero-dep) or pin our subset (tables + scalars + help lists) and document it.</li>
+        <li style="margin:6px 0"><b>VanUI depth</b> — VanUI covers modals/tabs/toasts but not trees or virtualized lists; suite trees at 1000+ cases need a hand-rolled Van component. Accepted: it's ~100 lines with VanX reactivity.</li>
+        <li style="margin:6px 0"><b>Heartbeat-in-stream noise</b> (Concept C) — heartbeats at 5-min cadence × many agents could drown runs. Default filter: runs only.</li>
+        <li style="margin:6px 0"><b>Open</b> — should upgraded clients send <code>tier</code> (unit/module/e2e/regression) and git branch/commit with each ingest? Legacy clients default to <code>unit</code>/unknown either way.</li>
+      </ul>
+    </div>
+  </section>
+
+  <hr class="sep">
+
+  <!-- ══════════════════ DECISIONS ══════════════════ -->
+  <section id="decide">
+    <div class="kicker">Section 7 · your call</div>
+    <h2>Decisions to queue back</h2>
+    <p class="dim">Pick, then hit <i>Queue answer</i> — selections stay local until you queue them, and nothing sends until you press
+    <i>Send to Agent</i>. Annotate any mock element directly for finer-grained feedback.</p>
+
+    <form class="q" data-lavish-question="ui-concept" onsubmit="return queueAnswer(event, 'ui-concept', 'Adopt UI concept', 'For the Crucible v2 dashboard backbone, build UI concept')">
+      <h3><span class="qid">Q1</span> Dashboard backbone</h3>
+      <label><input type="radio" name="v" value="A — Mission Control (3-zone cockpit)"><span><span class="ol">A · Mission Control <span class="badge ember">recommended</span></span><br><span class="od">Cross-project cockpit: project rail + timeline with RED→GREEN markers + agent rail.</span></span></label>
+      <label><input type="radio" name="v" value="B — Project Workspaces (cards + tabbed drill-in)"><span><span class="ol">B · Project Workspaces</span><br><span class="od">Health-card landing, deep per-project tabs (Runs/Agents/Coverage/Compile/BDD).</span></span></label>
+      <label><input type="radio" name="v" value="C — Unified Stream (filterable feed + inspector)"><span><span class="ol">C · Unified Stream</span><br><span class="od">One live feed of everything + persistent inspector.</span></span></label>
+      <label><input type="radio" name="v" value="A backbone with B's per-project workspace as drill-in"><span><span class="ol">A + B hybrid</span><br><span class="od">Mission Control home; clicking a project opens its workspace.</span></span></label>
+      <button class="qbtn" type="submit">Queue answer ➜</button>
+      <div class="qnote" data-status></div>
+    </form>
+
+    <form class="q" data-lavish-question="toon-scope" onsubmit="return queueAnswer(event, 'toon-scope', 'TOON scope', 'For TOON adoption in the Crucible v2 API, go with')">
+      <h3><span class="qid">Q2</span> TOON scope</h3>
+      <label><input type="radio" name="v" value="TOON on every endpoint via content negotiation (JSON default)"><span><span class="ol">Everywhere, negotiated</span><br><span class="od">Any endpoint honors <code>?fmt=toon</code> / <code>Accept</code>. Most uniform; serializer must cover all shapes.</span></span></label>
+      <label><input type="radio" name="v" value="TOON only on agent-facing reads (GET /api, events, status, agents) first"><span><span class="ol">Agent-facing reads first</span><br><span class="od">Where token savings are real; writes keep terse JSON. Expand later if it earns it.</span></span></label>
+      <label><input type="radio" name="v" value="Skip TOON in v2.0, revisit after the dashboard ships"><span><span class="ol">Not in v2.0</span><br><span class="od">Ship compat + UI first; TOON as a fast-follow.</span></span></label>
+      <button class="qbtn" type="submit">Queue answer ➜</button>
+      <div class="qnote" data-status></div>
+    </form>
+
+    <form class="q" data-lavish-question="axi-surface" onsubmit="return queueAnswer(event, 'axi-surface', 'AXI surface', 'For the AXI agent surface, implement')">
+      <h3><span class="qid">Q3</span> AXI surface</h3>
+      <label><input type="radio" name="v" value="REST-only AXI: help hints + GET /api dashboard + register/unregister verbs"><span><span class="ol">REST-only AXI</span><br><span class="od">Hints, orientation endpoint, explicit lifecycle verbs. Existing scripts adopt gradually.</span></span></label>
+      <label><input type="radio" name="v" value="REST AXI plus a crucible-axi npx CLI wrapping it for agents"><span><span class="ol">REST + <code>crucible-axi</code> CLI</span><br><span class="od">A gh-axi-style CLI (<code>npx -y crucible-axi ingest …</code>) replacing the per-stack urllib plumbing over time. More surface to build and version.</span></span></label>
+      <button class="qbtn" type="submit">Queue answer ➜</button>
+      <div class="qnote" data-status></div>
+    </form>
+
+    <form class="q" data-lavish-question="scaffold-next" onsubmit="return queueAnswer(event, 'scaffold-next', 'Next step', 'As the next implementation step after this review,')">
+      <h3><span class="qid">Q4</span> Next step after this review</h3>
+      <label><input type="radio" name="v" value="build the walking skeleton (compat API + chosen UI shell) on develop, then open the CR queue"><span><span class="ol">Walking skeleton first</span><br><span class="od">Compat API + chosen UI shell live on :3849, then CR wave for hardening.</span></span></label>
+      <label><input type="radio" name="v" value="write the CR wave first (compat contract tests, AXI layer, UI) and dispatch RED/GREEN agents per the orchestration flow"><span><span class="ol">CR queue first</span><br><span class="od">Full TDD ceremony from the start — specs, RED/GREEN dispatch, Crucible dog-fooding itself once alive.</span></span></label>
+      <button class="qbtn" type="submit">Queue answer ➜</button>
+      <div class="qnote" data-status></div>
+    </form>
+  </section>
+
+</main>
+
+<script>
+  // concept switcher
+  document.querySelectorAll('.cbtn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.querySelectorAll('.cbtn').forEach(function (x) { x.classList.remove('on'); });
+      document.querySelectorAll('.concept').forEach(function (x) { x.classList.remove('on'); });
+      b.classList.add('on');
+      document.getElementById('c-' + b.dataset.c).classList.add('on');
+    });
+  });
+
+  // decision forms — local until queued; one prompt per question, replaceable via queueKey
+  function queueAnswer(ev, key, tag, lead) {
+    ev.preventDefault();
+    var form = ev.currentTarget;
+    var v = new FormData(form).get('v');
+    var status = form.querySelector('[data-status]');
+    if (!v) { status.textContent = 'pick an option first'; return false; }
+    if (window.lavish && window.lavish.queuePrompt) {
+      window.lavish.queuePrompt(lead + ': ' + v, {
+        tag: 'choice', text: tag + ': ' + v, element: form,
+        queueKey: key, data: { question: key, answer: v }
+      });
+      status.textContent = 'queued ✓ — press "Send to Agent" when done deciding';
+    } else {
+      status.textContent = 'selected (open via lavish-axi to queue feedback)';
+    }
+    return false;
+  }
+</script>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.esm.min.mjs";
+  // page is dark-fixed (Crucible forge theme) — render mermaid dark once
+  mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict",
+    themeVariables: { primaryColor: "#1c2027", primaryBorderColor: "#2a2f38", primaryTextColor: "#e6e2da",
+      lineColor: "#635f57", clusterBkg: "#15181d", clusterBorder: "#2a2f38", fontFamily: "ui-monospace, monospace", fontSize: "13px" } });
+  mermaid.run({ nodes: [...document.querySelectorAll(".mermaid")] });
+</script>
+</body>
+</html>
