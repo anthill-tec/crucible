@@ -1,6 +1,6 @@
 # CR-CRU-001 — Domain core + SQLite storage
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-07-15 on develop)
 **Type:** feature
 **Priority:** P0
 **Depends on:** —
