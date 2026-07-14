@@ -1,0 +1,90 @@
+// CR-CRU-006 §S3/§S4 — declarations for app-logic.mjs. Sibling .d.mts so the
+// test import (`../public/app-logic.mjs`) typechecks via module resolution:
+// public/ stays outside the tsconfig include set, and the ambient
+// `declare module` in tests/app-logic.d.ts is inert for relative specifiers
+// (TS ignores relative ambient module names). Mirrors that contract exactly.
+
+export interface CrucibleEventBrief {
+  id: string;
+  projectKey: string;
+  agentId: string;
+  kind: string;
+  tier?: string;
+  codec?: string;
+  timestamp: number;
+  total: number;
+  passed: number;
+  failed: number;
+  pending: number;
+  duration_ms: number;
+  hasCoverage: boolean;
+}
+
+export interface EventFilters {
+  projectKey?: string | null;
+  agentId?: string | null;
+}
+
+export interface CrucibleAgentLike {
+  agentId: string;
+  projectKey: string;
+  status?: "online" | "busy";
+  liveness: "online" | "stale" | "tombstoned";
+  lastSeen: number;
+}
+
+export interface LivenessGlyphResult {
+  cls: string;
+  tombstone: boolean;
+  diedAgo?: string;
+}
+
+export interface RouteState {
+  page: "home" | "workspace";
+  projectKey?: string;
+  overlay?: string;
+}
+
+export interface WorkspaceProjectLike {
+  type: "backend" | "frontend";
+}
+
+export interface WorkspaceTab {
+  name: "Runs" | "Agents" | "Coverage" | "Compile" | "BDD";
+  disabled: boolean;
+}
+
+export interface ProjectRollupLike {
+  lastEvent?: {
+    total: number;
+    passed: number;
+    failed: number;
+    timestamp: number;
+  } | null;
+}
+
+export interface EmptyStateInput {
+  projects: unknown[];
+  events: unknown[];
+}
+
+export interface EmptyStateResult {
+  kind: "no-projects" | "no-runs";
+}
+
+export declare function filterEvents(
+  events: CrucibleEventBrief[],
+  filters: EventFilters,
+): CrucibleEventBrief[];
+
+export declare function relativeTime(ts: number, now: number): string;
+
+export declare function livenessGlyph(agent: CrucibleAgentLike): LivenessGlyphResult;
+
+export declare function routeParse(pathname: string): RouteState;
+
+export declare function workspaceTabs(project: WorkspaceProjectLike): WorkspaceTab[];
+
+export declare function projectRollupLabel(project: ProjectRollupLike): string;
+
+export declare function emptyStates(state: EmptyStateInput): EmptyStateResult | null;
