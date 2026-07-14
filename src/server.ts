@@ -363,6 +363,7 @@ const PUBLIC_DIR = path.resolve(fileURLToPath(new URL("../public", import.meta.u
 /** Extensions the static handler serves directly; anything else falls to the SPA. */
 const STATIC_TYPES = new Map<string, string>([
   [".js", "text/javascript; charset=utf-8"],
+  [".mjs", "text/javascript; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
   [".html", "text/html; charset=utf-8"],
 ]);

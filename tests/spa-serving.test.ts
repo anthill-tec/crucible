@@ -201,5 +201,24 @@ describe("SPA shell — static serving (CR-CRU-006 §S1/§S2/§S5)", () => {
       const contentType = res.headers.get("content-type") ?? "";
       expect(contentType).not.toContain("text/html");
     });
+
+    test("GET /app-logic.mjs → 200 javascript module, never the SPA HTML (blank-page defect)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+
+      const res = await fetch(`${base()}/app-logic.mjs`);
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type") ?? "").toContain("javascript");
+      const body = await res.text();
+      expect(body).toContain("CrucibleLogic");
+    });
+
+    test("GET /nope.mjs (missing .mjs file) 404s instead of falling back to the SPA", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+
+      const res = await fetch(`${base()}/nope.mjs`);
+
+      expect(res.status).toBe(404);
+    });
   });
 });
