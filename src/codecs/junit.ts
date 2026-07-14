@@ -158,6 +158,23 @@ function summarize(tree: SuiteNode[]): RunSummary {
   return summary;
 }
 
+/**
+ * CR-CRU-003 — recursive `.//testsuite` semantics (bun `--reporter=junit`
+ * nests suites): a suite node's children are its DIRECT testcases; nested
+ * <testsuite> elements become their own tree nodes; empty wrapper suites
+ * that only hold nested suites are skipped.
+ */
+function collectSuites(testsuite: XmlElement, out: SuiteNode[]): void {
+  const nested = testsuite.children.filter((c) => c.name === "testsuite");
+  const hasDirectCases = testsuite.children.some((c) => c.name === "testcase");
+  if (hasDirectCases || nested.length === 0) {
+    out.push(toSuite(testsuite));
+  }
+  for (const inner of nested) {
+    collectSuites(inner, out);
+  }
+}
+
 export function parseJunit(xml: string): RunSchema {
   const root = parseXml(xml);
   let suites: XmlElement[];
@@ -168,7 +185,10 @@ export function parseJunit(xml: string): RunSchema {
   } else {
     throw new Error(`malformed JUnit XML: unexpected root element <${root.name}>`);
   }
-  const tree = suites.map(toSuite);
+  const tree: SuiteNode[] = [];
+  for (const suite of suites) {
+    collectSuites(suite, tree);
+  }
   return { summary: summarize(tree), tree };
 }
 
