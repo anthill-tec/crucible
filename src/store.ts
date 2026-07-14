@@ -1,7 +1,13 @@
 // CR-CRU-001 §S2 — SQLite store on bun:sqlite (C1: projects + agents)
 
 import { Database } from "bun:sqlite";
-import type { Agent, AgentIdentity, Project } from "./types.ts";
+import { DEFAULT_LIVENESS } from "./types.ts";
+import type { Agent, AgentIdentity, LivenessConfig, Project } from "./types.ts";
+
+export type Liveness = "online" | "stale" | "tombstoned" | "pruned";
+
+/** Agent as surfaced by listAgents — pruned rows are deleted, never returned. */
+export type LiveAgent = Agent & { liveness: Exclude<Liveness, "pruned"> };
 
 interface ProjectRow {
   key: string;
@@ -216,7 +222,7 @@ export class Store {
     }
   }
 
-  listAgents(projectKey?: string): Agent[] {
+  listAgents(projectKey?: string, now: number = Date.now()): LiveAgent[] {
     const rows =
       projectKey === undefined
         ? this.db.query<AgentRow, []>(`SELECT * FROM agents ORDER BY last_seen DESC`).all()
@@ -225,7 +231,37 @@ export class Store {
               `SELECT * FROM agents WHERE project_key = ? ORDER BY last_seen DESC`,
             )
             .all(projectKey);
-    return rows.map(Store.toAgent);
+
+    const live: LiveAgent[] = [];
+    for (const row of rows) {
+      const agent = Store.toAgent(row);
+      const liveness = this.livenessOf(agent, now);
+      if (liveness === "pruned") {
+        // §S3 lazy prune — physically delete the row, exclude from results.
+        this.removeAgent(agent.projectKey, agent.agentId);
+        continue;
+      }
+      live.push({ ...agent, liveness });
+    }
+    return live;
+  }
+
+  // ── Liveness (§S3 — computed, never stored) ───────────────────────────
+
+  livenessConfig(projectKey: string): LivenessConfig {
+    const project = this.getProject(projectKey);
+    return { ...DEFAULT_LIVENESS, ...project?.liveness };
+  }
+
+  livenessOf(agent: Agent, now: number = Date.now()): Liveness {
+    const { staleAfterMs, tombstoneAfterMs, pruneAfterMs } = this.livenessConfig(
+      agent.projectKey,
+    );
+    const silence = now - agent.lastSeen;
+    if (silence >= pruneAfterMs) return "pruned";
+    if (silence >= tombstoneAfterMs) return "tombstoned";
+    if (silence >= staleAfterMs) return "stale";
+    return "online";
   }
 
   private static toAgent(row: AgentRow): Agent {
