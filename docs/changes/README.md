@@ -44,4 +44,11 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   minimal `POST /api/ingest` + `POST /api/ingest/compile` routes move from CR-CRU-003
   into CR-CRU-002 (the codecs' production seam); CR-CRU-003 hardens them to the full
   DN quirk contract + remaining endpoints + contract tests. Deferred register:
-  removeAgent no-op change-event; CLI-bootstrap smoke test.
+  removeAgent no-op change-event (RESOLVED in 003); CLI-bootstrap smoke test (→ 009);
+  dataPath-bypasses-registry (→ BDD wave codec interface); per-branch 400 assertions;
+  dedicated v1→v2 cross-surface regression test.
+- 2026-07-15 (Wave 2 close) — CR-CRU-004 + CR-CRU-005 shipped; 219 tests. WAVE-3-OPEN
+  DECISION POINT (user-directed): reshape `eventBrief` (hoist summary scalars) so
+  TOON's uniform-table form applies to events[] — measured ratio currently 105% of
+  JSON for nested shape (DN-crucible-toon-subset §Measured token-ratio); decide
+  together with the SPA's consumption of the same payload in CR-CRU-006/007.
