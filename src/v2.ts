@@ -5,7 +5,9 @@
 import { codecs } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import { parseJunitPath } from "./codecs/junit.ts";
+import { hints } from "./hints.ts";
 import { Store, UUID_RE } from "./store.ts";
+import { toToon } from "./toon.ts";
 import type { RecordEventMeta, TouchAgentOpts } from "./store.ts";
 import type {
   AgentIdentity,
@@ -50,27 +52,81 @@ interface V2Body {
   context?: unknown;
 }
 
-// Next-step hints (plain JSON here; TOON polish is CR-CRU-005).
-const ORIENTATION_HELP: string[] = [
-  "POST /api/v2/projects {name, key?, type?, sutRoot?} — create a project (key auto-generated when omitted)",
-  "GET /api/v2/projects — projects with rollups (agentsOnline, agentsTotal, lastEvent, latestGreenCoverage)",
-  "POST /api/v2/agents/register {projectKey, agentId} — register an agent",
-  "GET /api/v2/health — service health",
-];
-
-const AGENT_HELP: string[] = [
-  "POST /api/v2/agents/heartbeat {projectKey, agentId, status?, message?} — keep the agent alive",
-  "POST /api/v2/agents/unregister {projectKey, agentId} — remove the agent",
-  "GET /api/v2/agents?project=<key> — list agents with computed liveness",
-];
-
-const UNKNOWN_PROJECT_HELP: string[] = [
-  "GET /api/v2/projects — list registered projects and their keys",
-  "POST /api/v2/projects {name} — register a new project (key auto-generated)",
-];
+// §S3 — all help[] wording lives in src/hints.ts (one reviewable module).
 
 function json(body: unknown, status = 200): Response {
-  return Response.json(body, { status });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json;charset=utf-8" },
+  });
+}
+
+// ── §S2+§S4 (CR-CRU-005) — content negotiation + TOON truncation ────────────
+
+const TOON_MAX_BYTES = 64 * 1024;
+
+/** §S2 — `?fmt=toon` OR an Accept header containing `toon` selects TOON. */
+function wantsToon(req: Request, url: URL): boolean {
+  if (url.searchParams.get("fmt") === "toon") return true;
+  return (req.headers.get("accept") ?? "").includes("toon");
+}
+
+/** §S4 — pointer to the untruncated JSON variant of the same call. */
+function jsonVariantUrl(url: URL): string {
+  const variant = new URL(url);
+  variant.searchParams.set("fmt", "json");
+  return `${variant.pathname}?${variant.searchParams.toString()}`;
+}
+
+/**
+ * §S4 — shrink the payload's largest top-level array (keeping head items,
+ * halving until the TOON body fits 64 KB), marked with a `truncated: true`
+ * scalar and a `full:` pointer at the JSON variant of the same URL.
+ */
+function truncatedToon(payload: Record<string, unknown>, url: URL): string {
+  let largestKey: string | undefined;
+  let largestLen = 0;
+  for (const [key, value] of Object.entries(payload)) {
+    if (Array.isArray(value) && value.length > largestLen) {
+      largestKey = key;
+      largestLen = value.length;
+    }
+  }
+  if (largestKey === undefined) {
+    // Nothing shrinkable — emit oversize rather than drop data silently.
+    return `${toToon(payload)}\n`;
+  }
+  const items = payload[largestKey] as unknown[];
+  let keep = items.length;
+  let text: string;
+  do {
+    keep = Math.floor(keep / 2);
+    text = `${toToon({
+      ...payload,
+      [largestKey]: items.slice(0, keep),
+      truncated: true,
+      full: `GET ${jsonVariantUrl(url)}`,
+    })}\n`;
+  } while (Buffer.byteLength(text, "utf8") > TOON_MAX_BYTES && keep > 0);
+  return text;
+}
+
+/**
+ * §S2 — the shared response gate every v2 GET routes through: TOON when
+ * negotiated (with §S4 truncation), JSON otherwise. JSON never truncates.
+ */
+function reply(req: Request, url: URL, payload: Record<string, unknown>, status = 200): Response {
+  if (req.method === "GET" && wantsToon(req, url)) {
+    let text = `${toToon(payload)}\n`;
+    if (Buffer.byteLength(text, "utf8") > TOON_MAX_BYTES) {
+      text = truncatedToon(payload, url);
+    }
+    return new Response(text, {
+      status,
+      headers: { "content-type": "text/toon; charset=utf-8" },
+    });
+  }
+  return json(payload, status);
 }
 
 function fail(status: number, error: string, extra?: Record<string, unknown>): Response {
@@ -90,21 +146,21 @@ async function readBody(req: Request): Promise<V2Body | null> {
 /** §S1 — projectKey validation: UUID shape (400) then existence (404 + help). */
 function requireProject(store: Store, key: unknown): { key: string } | { fail: Response } {
   if (typeof key !== "string" || !UUID_RE.test(key)) {
-    return { fail: fail(400, "projectKey must be a UUID", { help: UNKNOWN_PROJECT_HELP }) };
+    return { fail: fail(400, "projectKey must be a UUID", { help: hints.unknownProject }) };
   }
   if (store.getProject(key) === null) {
-    return { fail: fail(404, `unknown project: ${key}`, { help: UNKNOWN_PROJECT_HELP }) };
+    return { fail: fail(404, `unknown project: ${key}`, { help: hints.unknownProject }) };
   }
   return { key };
 }
 
-function handleOrientation(store: Store, deps: V2Deps): Response {
-  return json({
+function handleOrientation(store: Store, deps: V2Deps, req: Request, url: URL): Response {
+  return reply(req, url, {
     ok: true,
     service: "crucible",
     version: deps.version,
     projects: store.listProjects(),
-    help: ORIENTATION_HELP,
+    help: hints.orientation,
   });
 }
 
@@ -137,7 +193,7 @@ async function handleProjectCreate(store: Store, req: Request): Promise<Response
 }
 
 /** PRD §4.2 — project rollups. */
-function handleProjectsList(store: Store): Response {
+function handleProjectsList(store: Store, req: Request, url: URL): Response {
   const projects = store.listProjects().map((project) => {
     const agents = store.listAgents(project.key);
     const events = store.listEvents(project.key, Number.MAX_SAFE_INTEGER);
@@ -154,7 +210,7 @@ function handleProjectsList(store: Store): Response {
       latestGreenCoverage: greenCovered?.coverage ?? null,
     };
   });
-  return json({ ok: true, projects });
+  return reply(req, url, { ok: true, projects });
 }
 
 /** §S1 — register and heartbeat share these semantics (upsert via touchAgent). */
@@ -180,7 +236,7 @@ async function handleAgentTouch(store: Store, req: Request): Promise<Response> {
     opts.identity = body.identity as AgentIdentity;
   }
   store.touchAgent(pk.key, agentId, opts);
-  return json({ ok: true, changed: !existed, help: AGENT_HELP });
+  return json({ ok: true, changed: !existed, help: hints.registered });
 }
 
 async function handleAgentUnregister(store: Store, req: Request): Promise<Response> {
@@ -198,9 +254,9 @@ async function handleAgentUnregister(store: Store, req: Request): Promise<Respon
 }
 
 /** §S1 — each agent carries computed liveness; `?project=` filters. */
-function handleAgentsList(store: Store, url: URL): Response {
+function handleAgentsList(store: Store, req: Request, url: URL): Response {
   const project = url.searchParams.get("project") ?? undefined;
-  return json({ ok: true, agents: store.listAgents(project) });
+  return reply(req, url, { ok: true, agents: store.listAgents(project) });
 }
 
 // ── §S1+§S2 — runs: raw codec ingest, parsed ingest, compile ingest ─────────
@@ -267,7 +323,8 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
     codec: codecName,
     ...runMeta(body),
   });
-  return runResponse(event.id, run.summary);
+  // §S3 — a RED ingest carries the transition hint.
+  return runResponse(event.id, run.summary, run.summary.failed > 0 ? hints.afterRed : undefined);
 }
 
 async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
@@ -298,13 +355,14 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     ...(typeof body.name === "string" ? { name: body.name } : {}),
     ...runMeta(body),
   });
-  // Coverage arrived but the store dropped it (failing run) — say so in help.
+  // §S3 — RED transition hint; coverage arrived but the store dropped it
+  // (failing run) — say so in help too.
   const dropped = hasCoverage && event.coverage === undefined;
-  return runResponse(
-    event.id,
-    summary,
-    dropped ? ["coverage DISCARDED — coverage from a failing run is meaningless"] : undefined,
-  );
+  const help = [
+    ...(summary.failed > 0 ? hints.afterRed : []),
+    ...(dropped ? hints.coverageDropped : []),
+  ];
+  return runResponse(event.id, summary, help.length > 0 ? help : undefined);
 }
 
 async function handleRunsCompile(store: Store, req: Request): Promise<Response> {
@@ -335,6 +393,8 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
     errors: report.errorCount,
     warnings: report.warningCount,
     verdict,
+    // §S3 — panel-routing reminder after a compile ingest.
+    help: hints.afterCompile,
   });
 }
 
@@ -352,12 +412,12 @@ function eventBrief(event: RunEvent) {
   };
 }
 
-function handleEventsList(store: Store, url: URL): Response {
+function handleEventsList(store: Store, req: Request, url: URL): Response {
   const project = url.searchParams.get("project") ?? undefined;
   const rawLimit = Number(url.searchParams.get("limit") ?? "");
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 50;
   // store.listEvents is newest-first already.
-  return json({ ok: true, events: store.listEvents(project, limit).map(eventBrief) });
+  return reply(req, url, { ok: true, events: store.listEvents(project, limit).map(eventBrief) });
 }
 
 /** §S4 — per-suite counts derived from leaf statuses (no leaves in the reply). */
@@ -373,7 +433,7 @@ function suiteCounts(node: SuiteNode): { passed: number; failed: number; pending
 
 /** §S1 — event-specific 404 (distinct from the server's route catch-all). */
 /** §S4 — progressive detail: ?depth=suites (counts, no children) | ?suite=<name>. */
-function handleEventGet(store: Store, id: string, url: URL): Response {
+function handleEventGet(store: Store, id: string, req: Request, url: URL): Response {
   const event = store.getEvent(id);
   if (event === null) {
     return fail(404, `event not found: ${id}`);
@@ -386,7 +446,7 @@ function handleEventGet(store: Store, id: string, url: URL): Response {
     }
     // Approved contract: tree becomes a single-element array — just the
     // requested suite, fully expanded (leaves incl. failure detail).
-    return json({ ok: true, event: { ...event, tree: [match] } });
+    return reply(req, url, { ok: true, event: { ...event, tree: [match] } });
   }
   if (url.searchParams.get("depth") === "suites" && event.tree !== undefined) {
     const tree = event.tree.map((node) => ({
@@ -394,9 +454,9 @@ function handleEventGet(store: Store, id: string, url: URL): Response {
       status: node.status,
       counts: suiteCounts(node),
     }));
-    return json({ ok: true, event: { ...event, tree } });
+    return reply(req, url, { ok: true, event: { ...event, tree } });
   }
-  return json({ ok: true, event });
+  return reply(req, url, { ok: true, event });
 }
 
 function handleEventDelete(store: Store, id: string, url: URL): Response {
@@ -409,7 +469,7 @@ function handleEventDelete(store: Store, id: string, url: URL): Response {
   return json({ ok: true, changed: true });
 }
 
-function handleStatus(store: Store, url: URL): Response {
+function handleStatus(store: Store, req: Request, url: URL): Response {
   const project = url.searchParams.get("project");
   if (project === null) {
     return fail(400, "project query parameter is required");
@@ -417,7 +477,7 @@ function handleStatus(store: Store, url: URL): Response {
   const events = store.listEvents(project, Number.MAX_SAFE_INTEGER);
   const lastTest = events.find((e) => e.kind === "test");
   const lastCompile = events.find((e) => e.kind === "compile");
-  return json({
+  return reply(req, url, {
     ok: true,
     status: {
       hasData: events.length > 0,
@@ -439,16 +499,16 @@ export function handleV2(
 ): Promise<Response> | Response | null {
   const { pathname } = url;
   if (req.method === "GET" && pathname === "/api/v2") {
-    return handleOrientation(store, deps);
+    return handleOrientation(store, deps, req, url);
   }
   if (req.method === "GET" && pathname === "/api/v2/health") {
-    return json(deps.healthPayload());
+    return reply(req, url, deps.healthPayload() as Record<string, unknown>);
   }
   if (req.method === "POST" && pathname === "/api/v2/projects") {
     return handleProjectCreate(store, req);
   }
   if (req.method === "GET" && pathname === "/api/v2/projects") {
-    return handleProjectsList(store);
+    return handleProjectsList(store, req, url);
   }
   if (
     req.method === "POST" &&
@@ -460,7 +520,7 @@ export function handleV2(
     return handleAgentUnregister(store, req);
   }
   if (req.method === "GET" && pathname === "/api/v2/agents") {
-    return handleAgentsList(store, url);
+    return handleAgentsList(store, req, url);
   }
   if (req.method === "POST" && pathname === "/api/v2/runs") {
     return handleRuns(store, req);
@@ -472,13 +532,13 @@ export function handleV2(
     return handleRunsCompile(store, req);
   }
   if (req.method === "GET" && pathname === "/api/v2/events") {
-    return handleEventsList(store, url);
+    return handleEventsList(store, req, url);
   }
   if (pathname.startsWith("/api/v2/events/")) {
     const id = pathname.slice("/api/v2/events/".length);
     if (id.length > 0 && !id.includes("/")) {
       if (req.method === "GET") {
-        return handleEventGet(store, id, url);
+        return handleEventGet(store, id, req, url);
       }
       if (req.method === "DELETE") {
         return handleEventDelete(store, id, url);
@@ -486,7 +546,7 @@ export function handleV2(
     }
   }
   if (req.method === "GET" && pathname === "/api/v2/status") {
-    return handleStatus(store, url);
+    return handleStatus(store, req, url);
   }
   return null;
 }
