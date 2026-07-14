@@ -263,7 +263,7 @@
 
     <!-- F4½ — density playbook (answering: thousands of tests, space efficiency is paramount) -->
     <div class="frame" style="border-color: rgba(255,122,26,.4)">
-      <div class="frame-head"><span class="fnum">F4½</span><h3>Density playbook — the same drill-in at 5,000 tests</h3><span class="who">design ideas, as requested</span></div>
+      <div class="frame-head"><span class="fnum">F4½</span><h3>Density playbook — the same drill-in at 5,000 tests</h3><span class="badge pass">approved · filter bar post-0.1.0</span><span class="who">drill-in modes</span></div>
       <div class="frame-body">
         <div class="mock">
           <div class="m-body" style="grid-template-columns: minmax(0,1fr); min-height:0">
@@ -296,6 +296,11 @@
         <b>6 · Filter bar</b> — status chips, free-text, module/crate facet — same controls agents get as query params.
         <b>7 · Density toggle</b> — comfortable / compact / ultra (suite-per-line).
         Annotate the ones you want in the first UI wave.</p>
+        <p class="cap"><b>How this interacts with the drill-in (your question):</b> F4½ is not another view — it IS the F4
+        drill-in at scale. The heat-strip, status chips and density toggle sit at the top of the same slide-over; the tree below
+        them is the same virtualized component whether the run has 5 tests or 5,000. One surface, density-adaptive: small runs
+        open fully expanded, large runs open in failures-float mode with the minimap.
+        <b>Verdict recorded:</b> ideas 1–5 and 7 ship in release 0.1.0; idea 6 (filter bar) approved for a later release.</p>
       </div>
     </div>
 
@@ -314,6 +319,11 @@
         <p class="cap"><b>Agent side:</b> no JUnit XML produced → <code>POST /api/v2/runs/compile {errors, format: rustc}</code>.
         The rustc codec structures per-file diagnostics (code, file, line). <b>Invariant on display:</b> a compile failure is a
         🛠 compile event — it never renders as "0/5 tests". The response's <code>help[]</code> reminds the agent of exactly that.</p>
+        <p class="cap"><b>Link to timeline → drill-down (your question):</b> identical to test runs — the 🛠 card sits on the same
+        timeline, and clicking it opens the SAME drill-in slide-over, just with the compile body instead of the suite tree:
+        diagnostics grouped by file (<code>file:line:col — message</code>, error/warning color), the two inline preview lines you
+        see on the card expand to the full list, and a toggle reveals the raw compiler output. Codec-aware body, same surface,
+        same Esc/back behavior.</p>
       </div>
     </div>
 
@@ -429,7 +439,7 @@
 
     <!-- F11 -->
     <div class="frame">
-      <div class="frame-head"><span class="fnum">F11</span><h3>Frontend project — the BDD harness (later wave)</h3><span class="who">you + crucible itself</span></div>
+      <div class="frame-head"><span class="fnum">F11</span><h3>Frontend project — the BDD harness</h3><span class="badge pass">approved · later wave</span><span class="who">you + crucible itself</span></div>
       <div class="frame-body">
         <div class="mock">
           <div class="m-top"><span class="m-logo">⚒ Crucible <span>v2</span></span><span class="chip">← projects</span><span class="chip on">codeforge-ui <span class="badge info" style="font-size:8.5px">frontend</span></span></div>
@@ -450,6 +460,44 @@
         against the project's SUT root, ingests through the playwright codec (feature → scenario → step, browser badge,
         trace link), and returns the event to the requesting agent. Scoped post-skeleton.</p>
       </div>
+    </div>
+  </section>
+
+  <!-- ══ NAVIGATION MAP ══ -->
+  <section id="nav">
+    <div class="kicker">Navigation overview</div>
+    <h2>Three surfaces, one slide-over</h2>
+    <p class="dim">The whole app is <b>two routed pages plus one overlay</b>. The drill-in is never a page — it slides over
+    whichever surface you're on, so context (scroll position, filters, selected project) survives closing it. Every state is
+    deep-linkable and browser back/forward just works. SSE keeps all surfaces live simultaneously.</p>
+
+    <div class="mermaid">
+flowchart LR
+  HOME["🏠 Mission Control home<br/>route: /<br/>project rail · cross-project timeline · agent rail"]
+  WS["📁 Project workspace<br/>route: /p/&lt;key&gt;<br/>tabs: Runs · Agents · Coverage · Compile · BDD"]
+  DRILL(["🔍 Run drill-in — slide-over overlay<br/>route suffix: …/run/&lt;eventId&gt;<br/>suite tree + failures OR compile diagnostics"])
+  HOME -- "click project card / name" --> WS
+  WS -- "← projects" --> HOME
+  HOME -- "click any run card" --> DRILL
+  WS -- "click run card (Runs / Compile tabs)" --> DRILL
+  DRILL -- "Esc · scrim click · back" --> HOME
+  DRILL -- "Esc · scrim click · back" --> WS
+    </div>
+
+    <div class="panel" style="padding:0">
+      <table class="data">
+        <thead><tr><th style="width:30%">Interaction</th><th>Behavior</th></tr></thead>
+        <tbody>
+          <tr><td>Project chips (top bar, home)</td><td>Filter the home timeline + rails <b>in place</b> — not navigation. "All projects" resets.</td></tr>
+          <tr><td>Project card / project name anywhere</td><td>Navigate to that project's workspace <code>/p/&lt;key&gt;</code>.</td></tr>
+          <tr><td>Run card (any surface)</td><td>Open the drill-in slide-over <b>over the current surface</b>; URL gains <code>/run/&lt;eventId&gt;</code> so it's shareable. Body is codec-aware: suite tree for test runs, per-file diagnostics for compile events.</td></tr>
+          <tr><td>RED→GREEN transition marker</td><td>Opens the drill-in on the GREEN run with the paired RED one hop away.</td></tr>
+          <tr><td>Agent row (agent rail)</td><td>Filters the visible timeline to that agent's runs (in place); its project name navigates.</td></tr>
+          <tr><td>Coverage meter / trend point</td><td>Opens the drill-in of the green regression run that produced that point.</td></tr>
+          <tr><td>Health pill</td><td>Status only — never navigates; backend loss greys surfaces in place (F10).</td></tr>
+          <tr><td>Esc / scrim / browser back</td><td>Closes the slide-over back to the exact surface state it opened from.</td></tr>
+        </tbody>
+      </table>
     </div>
   </section>
 

@@ -228,7 +228,25 @@ present stale data as live. Orchestrators may gate wave dispatch on `/api/health
   coverage shown at project level.
 - Localhost tool aesthetics: fast, dense, dark-friendly, zero build step.
 
-### 4.12 BDD harness for frontend projects (later wave)
+**Navigation model (decided 2026-07-14):** two routed pages + one overlay. Mission
+Control home (`/`), project workspace (`/p/<key>`), and the run drill-in as a
+slide-over overlay (`…/run/<eventId>` suffix) that opens over whichever surface is
+active and closes back to its exact state (Esc / scrim / browser back). Project chips
+filter in place (not navigation); project cards/names navigate; run cards open the
+drill-in with a codec-aware body (suite tree for tests, per-file diagnostics for
+compile); transition markers open the GREEN run with the paired RED one hop away;
+coverage trend points open their producing regression run; the health pill never
+navigates. All states deep-linkable; SSE keeps every surface live.
+
+**Drill-in density (decided 2026-07-14, for release 0.1.0):** one density-adaptive
+drill-in surface — small runs open fully expanded; large runs open in failures-float
+mode. Shipping in 0.1.0: failures-float/green-folds, heat-strip minimap (1 cell =
+1 test, click-to-jump), failure digest (identical assertion messages grouped),
+virtualized tree, progressive payload paging (suite summaries first, leaves on
+expand), density toggle. Deferred post-0.1.0: the filter bar (status chips +
+free-text + module facet).
+
+### 4.12 BDD harness for frontend projects (later wave — approved 2026-07-14)
 BDD-style UI testing applies only to `type:"frontend"` projects — and for those,
 Crucible is not just a sink: it can **harness and execute the BDD suite on the agent's
 behalf** using Playwright (agent asks `POST /api/v2/projects/{key}/bdd/run`; Crucible
@@ -261,9 +279,7 @@ client-fleet upgrade, then the BDD harness (§4.12). Crucible ingests its own ru
 - CodeForge/Velocity integration beyond sharing the agent-protocol conventions.
 
 ## 8 Open questions
-- Which density-playbook techniques (failures-float/green-folds, heat-strip minimap,
-  failure digest, virtualized tree, progressive payload paging, filter bar, density
-  toggle) land in the first UI wave vs later.
+- (none — storyboard review closed all design questions 2026-07-14)
 
 (Resolved 2026-07-14: upgraded clients send `tier` explicitly — §3.3; BDD uses the
 dedicated `playwright` codec with trace links, and Crucible can harness the run —
