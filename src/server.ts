@@ -3,6 +3,7 @@
 
 import { mkdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { codecs } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import { parseJunitPath } from "./codecs/junit.ts";
@@ -355,6 +356,61 @@ function handleStream(store: Store, req: Request): Response {
   });
 }
 
+// ── CR-CRU-006 §S1/§S2 — static SPA serving from public/ ───────────────────
+
+const PUBLIC_DIR = path.resolve(fileURLToPath(new URL("../public", import.meta.url)));
+
+/** Extensions the static handler serves directly; anything else falls to the SPA. */
+const STATIC_TYPES = new Map<string, string>([
+  [".js", "text/javascript; charset=utf-8"],
+  [".css", "text/css; charset=utf-8"],
+  [".html", "text/html; charset=utf-8"],
+]);
+
+/**
+ * §S1 path safety + §S2 SPA fallback:
+ * - percent-decoded traversal escaping public/ → 404;
+ * - known-extension file present → served with its content-type;
+ * - known-extension file MISSING → 404 (never the SPA shell as .js/.css);
+ * - everything else (no extension, unknown extension) → index.html.
+ */
+async function handleStatic(url: URL): Promise<Response> {
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(url.pathname);
+  } catch {
+    return new Response("Not Found", { status: 404 });
+  }
+
+  // Dotfile segments (".env", ".git", residual "..") are never served and
+  // never fall back to the SPA — WHATWG URL normalization already collapses
+  // %2e%2e dot-segments, so what remains here is a hidden-file probe.
+  if (pathname.split("/").some((seg) => seg.startsWith("."))) {
+    return new Response("Not Found", { status: 404 });
+  }
+
+  const resolved = path.resolve(PUBLIC_DIR, `.${pathname}`);
+  if (resolved !== PUBLIC_DIR && !resolved.startsWith(PUBLIC_DIR + path.sep)) {
+    return new Response("Not Found", { status: 404 });
+  }
+
+  const type = STATIC_TYPES.get(path.extname(resolved).toLowerCase());
+  if (type !== undefined) {
+    const file = Bun.file(resolved);
+    if (await file.exists()) {
+      return new Response(file, { headers: { "content-type": type } });
+    }
+    return new Response("Not Found", { status: 404 });
+  }
+
+  // §S2 — deep links (/, /p/<key>, overlay suffixes, extension-less paths)
+  // all serve the shell; the client router takes it from there.
+  const index = Bun.file(path.join(PUBLIC_DIR, "index.html"));
+  return new Response(index, {
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+}
+
 export function startServer(opts?: StartServerOpts): ServerHandle {
   const dbPath = opts?.dbPath ?? "data/crucible.db";
   if (dbPath !== ":memory:") {
@@ -439,6 +495,10 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
       // §S2 — API error paths are always JSON {ok:false, error}.
       if (url.pathname.startsWith("/api/")) {
         return err(404, `unknown route: ${req.method} ${url.pathname}`);
+      }
+      // CR-CRU-006 §S1/§S2 — static SPA shell for every non-API GET.
+      if (req.method === "GET") {
+        return handleStatic(url);
       }
       return new Response("Not Found", { status: 404 });
     },
