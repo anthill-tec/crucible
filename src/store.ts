@@ -1,6 +1,7 @@
 // CR-CRU-001 §S2 — SQLite store on bun:sqlite (C1: projects + agents, C3: events + retention)
 
 import { Database } from "bun:sqlite";
+import { renameSync } from "node:fs";
 import { DEFAULT_LIVENESS } from "./types.ts";
 import type {
   Agent,
@@ -120,6 +121,27 @@ export class Store {
       this.db.exec("PRAGMA journal_mode = WAL;");
     }
     this.createTables();
+  }
+
+  /**
+   * §S5 boot safety — open a store at `path`, surviving a corrupt/unreadable db.
+   * A bad file is renamed aside to `<path>.corrupt-<epoch>` and a fresh db is
+   * opened at the original path. Boot must never fail because of a bad file.
+   */
+  static open(path: string): Store {
+    try {
+      const store = new Store(path);
+      // bun:sqlite may defer failure past open — force it with a trivial query.
+      store.db.query("PRAGMA schema_version").get();
+      return store;
+    } catch (error) {
+      const corruptPath = `${path}.corrupt-${Date.now()}`;
+      console.error(
+        `[crucible] CORRUPT DATABASE at ${path} — moving it aside to ${corruptPath} and starting with a fresh db (${String(error)})`,
+      );
+      renameSync(path, corruptPath);
+      return new Store(path);
+    }
   }
 
   private createTables(): void {
@@ -401,6 +423,20 @@ export class Store {
             )
             .all(projectKey, limit);
     return rows.map(Store.toEvent);
+  }
+
+  /** Cheap SQL count of raw (non-rolled-up) events, optionally scoped to a project. */
+  countEvents(projectKey?: string): number {
+    if (projectKey === undefined) {
+      return this.db
+        .query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM events`)
+        .get()!.n;
+    }
+    return this.db
+      .query<{ n: number }, [string]>(
+        `SELECT COUNT(*) AS n FROM events WHERE project_key = ?`,
+      )
+      .get(projectKey)!.n;
   }
 
   getEvent(id: string): RunEvent | null {
