@@ -172,19 +172,37 @@ describe("Store#listAgents — computed liveness field + lazy prune", () => {
     const store = new Store(":memory:");
     const pk = seedProject(store);
     const oldAgent = store.touchAgent(pk, "old-agent", { message: "old" });
-    const freshAgent = store.touchAgent(pk, "fresh-agent", { message: "fresh" });
+    const oldLastSeen = oldAgent.lastSeen;
 
-    const now = oldAgent.lastSeen + 3_600_001;
+    Bun.sleepSync(5);
+    store.touchAgent(pk, "fresh-agent", { message: "fresh" });
+
+    // Exactly T3 relative to old-agent's lastSeen: pruned (settled boundary,
+    // silence >= pruneAfterMs). fresh-agent's silence at this `now` is
+    // T3 minus the ~5ms sleep — strictly < T3 — so it survives as tombstoned
+    // (silence >= tombstoneAfterMs, well under pruneAfterMs).
+    const now = oldLastSeen + 3_600_000;
     const agents = store.listAgents(pk, now) as LiveAgent[];
 
     expect(agents.find((a) => a.agentId === "old-agent")).toBeUndefined();
+    // Physical delete, not filtering: re-query with a `now` where a surviving
+    // row would compute as "online" (silence 1ms) — it must still be absent.
+    const reQuery = store.listAgents(pk, oldLastSeen + 1) as LiveAgent[];
+    expect(reQuery.find((a) => a.agentId === "old-agent")).toBeUndefined();
+
     const fresh = agents.find((a) => a.agentId === "fresh-agent");
     expect(fresh).toBeDefined();
-    // freshAgent was touched moments after oldAgent, well before pruneNow's
-    // silence window relative to its own lastSeen is much larger than T3 too,
-    // so assert only that it is still present (not asserting its exact state
-    // to avoid coupling to timing between the two touchAgent calls).
-    expect(fresh?.agentId).toBe("fresh-agent");
+    expect(["tombstoned"]).toContain(fresh?.liveness);
+  });
+});
+
+describe("Store#livenessOf — settled exact T3 boundary", () => {
+  test("silence exactly T3 (3_600_000ms) → pruned (closed-open lower bound, silence >= pruneAfterMs)", () => {
+    const store = new Store(":memory:");
+    const pk = seedProject(store);
+    const agent = store.touchAgent(pk, "a1", { message: "hi" });
+
+    expect(store.livenessOf(agent, agent.lastSeen + 3_600_000)).toBe("pruned");
   });
 });
 
