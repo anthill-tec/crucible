@@ -39,3 +39,9 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   (vendor libs kept). **Queue filed (9 CRs, 4 waves) — specs only; Wave 1 dispatch
   awaits user go.** Post-0.1.0 backlog (not yet filed): filter bar, BDD harness +
   playwright/vitest/tap codecs, shim retirement, coverage-trend deep views.
+- 2026-07-15 — Wave 1 executing. CR-CRU-001 shipped (VERIFY CONFIRMED, 12/12 ACs,
+  49 tests, 100% fn / 97.6% ln coverage). Scope move at CR-CRU-002 gap-analysis:
+  minimal `POST /api/ingest` + `POST /api/ingest/compile` routes move from CR-CRU-003
+  into CR-CRU-002 (the codecs' production seam); CR-CRU-003 hardens them to the full
+  DN quirk contract + remaining endpoints + contract tests. Deferred register:
+  removeAgent no-op change-event; CLI-bootstrap smoke test.
