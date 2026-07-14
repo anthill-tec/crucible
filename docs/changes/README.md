@@ -18,6 +18,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-007](CR-CRU-007-timeline-drill-in.md) | Timeline + density drill-in | feature | PENDING | 006 | 3 |
 | [CR-CRU-008](CR-CRU-008-cli-fleet-upgrade.md) | crucible-axi CLI + fleet upgrade | feature | PENDING | 005 | 4 |
 | [CR-CRU-009](CR-CRU-009-release-0.1.0.md) | Release 0.1.0 skill bundle | feature | PENDING | 007, 008 | 4 |
+| [CR-CRU-010](CR-CRU-010-codec-path-interface-hardening.md) | Codec parsePath + shim hardening | maintenance | PENDING | 006 | 3 (after 006, before 007) |
 
 ## Notes
 - 2026-07-14 — Project kickoff: PRD + evidence DN landed. Kickoff design review (lavish)
