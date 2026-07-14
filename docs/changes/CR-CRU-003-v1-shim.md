@@ -59,6 +59,7 @@ migrates.
 - [ ] `GET /api/events?limit=1` returns exactly the newest event; ids match `evt-<ms>-<seq>`; `POST /api/events/delete` with a wrong `projectKey` does not delete.
 - [ ] Every 4xx response body has `ok:false` and a non-empty `error` string.
 - [ ] Contract suite covers all 13 endpoints (each route name appears in ≥ 1 test title) and passes.
+- [ ] `Store.removeAgent` emits an `"agents"` change event ONLY when ≥ 1 row was actually deleted (deferred-register fold-in; no-op remove is silent).
 - [ ] Integration (live smoke, VERIFY runs it): with the dev server up, `python3 ~/.claude/scripts/bun-crucible.py register --agent smoke-cru --project-dir <repo>` against a freshly added project returns ok — an UNMODIFIED legacy client speaks to the shim.
 
 ## Estimated size
