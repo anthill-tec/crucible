@@ -2,9 +2,22 @@
 // project rollups (PRD §4.2), agent lifecycle verbs (PRD §4.3). Every write
 // response carries `changed: true|false` (§S5). Shares the ONE store instance
 // with the v1 shim — src/server.ts wires handleV2 into its dispatcher.
+import { codecs } from "./codecs/index.ts";
+import { parseCompile } from "./codecs/compile.ts";
+import { parseJunitPath } from "./codecs/junit.ts";
 import { Store, UUID_RE } from "./store.ts";
-import type { TouchAgentOpts } from "./store.ts";
-import type { AgentIdentity, Project } from "./types.ts";
+import type { RecordEventMeta, TouchAgentOpts } from "./store.ts";
+import type {
+  AgentIdentity,
+  Coverage,
+  Project,
+  RunContext,
+  RunEvent,
+  RunSchema,
+  RunSummary,
+  SuiteNode,
+  Tier,
+} from "./types.ts";
 
 export interface V2Deps {
   version: string;
@@ -22,6 +35,19 @@ interface V2Body {
   status?: unknown;
   message?: unknown;
   identity?: unknown;
+  // §S1 runs endpoints
+  codec?: unknown;
+  data?: unknown;
+  dataPath?: unknown;
+  summary?: unknown;
+  tree?: unknown;
+  coverage?: unknown;
+  errors?: unknown;
+  format?: unknown;
+  // §S2 run context (graceful)
+  tier?: unknown;
+  stack?: unknown;
+  context?: unknown;
 }
 
 // Next-step hints (plain JSON here; TOON polish is CR-CRU-005).
@@ -177,6 +203,200 @@ function handleAgentsList(store: Store, url: URL): Response {
   return json({ ok: true, agents: store.listAgents(project) });
 }
 
+// ── §S1+§S2 — runs: raw codec ingest, parsed ingest, compile ingest ─────────
+
+const TIERS: ReadonlySet<string> = new Set<Tier>([
+  "unit",
+  "module",
+  "integration",
+  "e2e",
+  "regression",
+  "bdd",
+]);
+
+/** §S2 — pull the optional {tier, stack, context} trio verbatim, never fabricated. */
+function runMeta(body: V2Body): Pick<RecordEventMeta, "tier" | "stack" | "context"> {
+  return {
+    ...(typeof body.tier === "string" && TIERS.has(body.tier) ? { tier: body.tier as Tier } : {}),
+    ...(typeof body.stack === "string" ? { stack: body.stack } : {}),
+    ...(typeof body.context === "object" && body.context !== null
+      ? { context: body.context as RunContext }
+      : {}),
+  };
+}
+
+/** §S1 — one-line run verdict: RED when failed>0, GREEN otherwise. */
+function runVerdict(summary: RunSummary): string {
+  return summary.failed > 0
+    ? `RED — ${summary.failed} failing of ${summary.total}`
+    : `GREEN — ${summary.passed}/${summary.total} passed`;
+}
+
+function runResponse(eventId: string, summary: RunSummary, help?: string[]): Response {
+  return json({
+    ok: true,
+    changed: true,
+    event: eventId,
+    run: summary,
+    verdict: runVerdict(summary),
+    ...(help !== undefined ? { help } : {}),
+  });
+}
+
+async function handleRuns(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  const pk = requireProject(store, body.projectKey);
+  if ("fail" in pk) return pk.fail;
+
+  const codecName = typeof body.codec === "string" ? body.codec : "junit";
+  const codec = codecs.get(codecName);
+  if (codec === undefined) return fail(400, `unknown codec: ${codecName}`);
+
+  let run: RunSchema;
+  if (typeof body.data === "string") {
+    run = await codec.parse(body.data);
+  } else if (typeof body.dataPath === "string") {
+    run = await parseJunitPath(body.dataPath);
+  } else {
+    return fail(400, "either data or dataPath is required");
+  }
+
+  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  const event = store.recordTestEvent(pk.key, agentId, run, {
+    codec: codecName,
+    ...runMeta(body),
+  });
+  return runResponse(event.id, run.summary);
+}
+
+async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  const pk = requireProject(store, body.projectKey);
+  if ("fail" in pk) return pk.fail;
+
+  if (typeof body.summary !== "object" || body.summary === null) {
+    return fail(400, "summary is required");
+  }
+  if (!Array.isArray(body.tree)) {
+    return fail(400, "tree is required");
+  }
+
+  const summary = body.summary as RunSummary;
+  const hasCoverage = typeof body.coverage === "object" && body.coverage !== null;
+  const run: RunSchema = {
+    summary,
+    tree: body.tree as SuiteNode[],
+    // §S4 (CR-CRU-001) discard-on-fail is applied by the store; pass coverage through.
+    ...(hasCoverage ? { coverage: body.coverage as Coverage } : {}),
+  };
+
+  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  const event = store.recordTestEvent(pk.key, agentId, run, {
+    codec: "parsed",
+    ...(typeof body.name === "string" ? { name: body.name } : {}),
+    ...runMeta(body),
+  });
+  // Coverage arrived but the store dropped it (failing run) — say so in help.
+  const dropped = hasCoverage && event.coverage === undefined;
+  return runResponse(
+    event.id,
+    summary,
+    dropped ? ["coverage DISCARDED — coverage from a failing run is meaningless"] : undefined,
+  );
+}
+
+async function handleRunsCompile(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  const pk = requireProject(store, body.projectKey);
+  if ("fail" in pk) return pk.fail;
+
+  if (typeof body.errors !== "string" || body.errors.length === 0) {
+    return fail(400, "errors must be a non-empty string");
+  }
+
+  const format = typeof body.format === "string" ? body.format : undefined;
+  const report = parseCompile(body.errors, format);
+  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  const event = store.recordCompileEvent(pk.key, agentId, report, {
+    codec: report.format,
+    ...runMeta(body),
+  });
+  const verdict =
+    report.errorCount > 0
+      ? `COMPILE FAILED — ${report.errorCount} errors, ${report.warningCount} warnings`
+      : `COMPILE OK — ${report.warningCount} warnings`;
+  return json({
+    ok: true,
+    changed: true,
+    event: event.id,
+    errors: report.errorCount,
+    warnings: report.warningCount,
+    verdict,
+  });
+}
+
+// ── §S1 — events list/get/delete + status ───────────────────────────────────
+
+/** Brief of an event for lists and status (full detail via /events/:id). */
+function eventBrief(event: RunEvent) {
+  return {
+    id: event.id,
+    agentId: event.agentId,
+    kind: event.kind,
+    tier: event.tier,
+    timestamp: event.timestamp,
+    ...(event.summary !== undefined ? { summary: event.summary } : {}),
+  };
+}
+
+function handleEventsList(store: Store, url: URL): Response {
+  const project = url.searchParams.get("project") ?? undefined;
+  const rawLimit = Number(url.searchParams.get("limit") ?? "");
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 50;
+  // store.listEvents is newest-first already.
+  return json({ ok: true, events: store.listEvents(project, limit).map(eventBrief) });
+}
+
+/** §S1 — event-specific 404 (distinct from the server's route catch-all). */
+function handleEventGet(store: Store, id: string): Response {
+  const event = store.getEvent(id);
+  if (event === null) {
+    return fail(404, `event not found: ${id}`);
+  }
+  return json({ ok: true, event });
+}
+
+function handleEventDelete(store: Store, id: string, url: URL): Response {
+  const pk = requireProject(store, url.searchParams.get("project") ?? undefined);
+  if ("fail" in pk) return pk.fail;
+  if (!store.deleteEvent(id, pk.key)) {
+    // §S1 — repeat delete / wrong project → 404, event-specific message.
+    return fail(404, `event not found in project: ${id}`);
+  }
+  return json({ ok: true, changed: true });
+}
+
+function handleStatus(store: Store, url: URL): Response {
+  const project = url.searchParams.get("project");
+  if (project === null) {
+    return fail(400, "project query parameter is required");
+  }
+  const events = store.listEvents(project, Number.MAX_SAFE_INTEGER);
+  const lastTest = events.find((e) => e.kind === "test");
+  const lastCompile = events.find((e) => e.kind === "compile");
+  return json({
+    ok: true,
+    status: {
+      hasData: events.length > 0,
+      lastTest: lastTest !== undefined ? eventBrief(lastTest) : null,
+      lastCompile: lastCompile !== undefined ? eventBrief(lastCompile) : null,
+    },
+  });
+}
+
 /**
  * Dispatch a /api/v2/* request. Returns null when the path/method is not a
  * v2 route handled here (the caller falls through to its catch-all).
@@ -211,6 +431,32 @@ export function handleV2(
   }
   if (req.method === "GET" && pathname === "/api/v2/agents") {
     return handleAgentsList(store, url);
+  }
+  if (req.method === "POST" && pathname === "/api/v2/runs") {
+    return handleRuns(store, req);
+  }
+  if (req.method === "POST" && pathname === "/api/v2/runs/parsed") {
+    return handleRunsParsed(store, req);
+  }
+  if (req.method === "POST" && pathname === "/api/v2/runs/compile") {
+    return handleRunsCompile(store, req);
+  }
+  if (req.method === "GET" && pathname === "/api/v2/events") {
+    return handleEventsList(store, url);
+  }
+  if (pathname.startsWith("/api/v2/events/")) {
+    const id = pathname.slice("/api/v2/events/".length);
+    if (id.length > 0 && !id.includes("/")) {
+      if (req.method === "GET") {
+        return handleEventGet(store, id);
+      }
+      if (req.method === "DELETE") {
+        return handleEventDelete(store, id, url);
+      }
+    }
+  }
+  if (req.method === "GET" && pathname === "/api/v2/status") {
+    return handleStatus(store, url);
   }
   return null;
 }
