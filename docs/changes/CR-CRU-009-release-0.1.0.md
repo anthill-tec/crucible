@@ -37,6 +37,7 @@ updated during the release branch, per house rules.
 ## Acceptance criteria
 - [ ] **Built-artifact AC (packaging rule):** on a scratch dir with only Bun on PATH, `bundle/install.sh --prefix <scratch>` then `bun run <scratch>/crucible/src/server.ts` serves `GET /api/health` → 200 within 5 s; the installed tree contains `skills/crucible/SKILL.md` and 5 `clients/*-crucible.py` files (assert by listing the installed tree, not by reading install.sh).
 - [ ] Fresh-install smoke: `crucible-axi project add --name smoke` + `register` + `ingest <bundled fixture>` against the fresh instance all return `ok: true`.
+- [ ] CLI-bootstrap smoke (deferred-register fold-in, user-approved 2026-07-15): a test spawns `bun run src/server.ts` as a real subprocess (exercising the `import.meta.main` block + file-db mkdir path), polls `GET /api/health` to 200 within 5 s, then kills it — the two coverage-orphaned line ranges get automated contact.
 - [ ] `README.md` quick start contains ≤ 3 shell commands from clone to dashboard, and the stated version matches `package.json` (`0.1.0`).
 - [ ] `git tag 0.1.0` exists on master after the release ceremony; develop contains the back-merge.
 - [ ] Offline check: install + boot + smoke pass with network disabled (no fetch to any external host — assert no outbound connections attempted, e.g. via `strace`/proxy-less env with a canary resolver).
