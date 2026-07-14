@@ -192,7 +192,7 @@ describe("Store#listAgents — computed liveness field + lazy prune", () => {
 
     const fresh = agents.find((a) => a.agentId === "fresh-agent");
     expect(fresh).toBeDefined();
-    expect(["tombstoned"]).toContain(fresh?.liveness);
+    expect(fresh!.liveness).toBe("tombstoned");
   });
 });
 
