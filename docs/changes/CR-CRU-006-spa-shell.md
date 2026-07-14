@@ -35,13 +35,15 @@ overlay suffix `/run/<eventId>` on either. Esc / scrim / browser-back closes the
 overlay restoring the underlying surface's state (scroll, filters). All three states
 deep-linkable (server serves the SPA for any non-/api path).
 
-### §S3 Mission Control home
+### §S3 Mission Control home (layout revised 2026-07-15, user-directed)
 Top bar: logo, project chips (filter in place, "All projects" reset), server-health
-pill. Left rail: project cards (name, type badge, online-agent count, last-run
-status, latest-green coverage meter) — data from `GET /api/v2/projects` rollups.
-Right rail: agents with liveness dots (🟢/🟡 stale/⚰ tombstoned greyed with last
-message + died-ago; pruned disappear), from `GET /api/v2/agents`. Center: timeline
-container (cards in CR-CRU-007). Empty states per storyboard F1.
+pill. **Two-column layout: the timeline occupies the WIDE left column** (more room
+for cards and the future drill-in); the **right rail stacks two sections — Projects
+ABOVE Agents**. Projects section: project cards (name, type badge, online-agent
+count, last-run status, latest-green coverage meter) from `GET /api/v2/projects`
+rollups. Agents section below: liveness dots (🟢/🟡 stale/⚰ tombstoned greyed with
+last message + died-ago; pruned disappear), from `GET /api/v2/agents`. Empty states
+per storyboard F1.
 
 ### §S4 Project workspace
 `/p/<key>`: header (← projects, name, type, agent count), tabs Runs / Agents /
@@ -78,6 +80,7 @@ are ingested to the dev Crucible instance with `tier: "e2e"` (dog-food).
 - [ ] Esc from `/p/<key>/run/<id>` lands on `/p/<key>` with prior scroll position (state restore).
 - [ ] Integration: UI fetches only `/api/v2/*` + `/api/stream` (grep the SPA source for `"/api/` — no legacy v1 paths).
 - [ ] E2E: `bun run test:e2e` executes the §S6 Playwright suite against a real booted server; F1/F2/F9/F10 tests pass headless, and each test title names its storyboard frame.
+- [ ] Layout (revised §S3): the home page's main grid has exactly 2 columns — the timeline column is the widest element; the right rail contains the projects section ABOVE the agents section (E2E asserts DOM order: projects section precedes agents section within the same rail, and no left rail exists).
 
 ## Estimated size
 L.
