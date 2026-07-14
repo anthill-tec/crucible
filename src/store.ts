@@ -320,14 +320,16 @@ export class Store {
   }
 
   removeAgent(projectKey: string | undefined, agentId: string): void {
-    if (projectKey === undefined) {
-      this.db.query(`DELETE FROM agents WHERE agent_id = ?`).run(agentId);
-    } else {
-      this.db
-        .query(`DELETE FROM agents WHERE project_key = ? AND agent_id = ?`)
-        .run(projectKey, agentId);
+    const result =
+      projectKey === undefined
+        ? this.db.query(`DELETE FROM agents WHERE agent_id = ?`).run(agentId)
+        : this.db
+            .query(`DELETE FROM agents WHERE project_key = ? AND agent_id = ?`)
+            .run(projectKey, agentId);
+    // CR-CRU-003 §7 — emit only when the DELETE actually removed ≥ 1 row.
+    if (result.changes > 0) {
+      this.emit("agents", projectKey);
     }
-    this.emit("agents", projectKey);
   }
 
   listAgents(projectKey?: string, now: number = Date.now()): LiveAgent[] {

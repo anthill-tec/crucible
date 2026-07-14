@@ -60,6 +60,7 @@ migrates.
 - [ ] Every 4xx response body has `ok:false` and a non-empty `error` string.
 - [ ] Contract suite covers all 13 endpoints (each route name appears in ≥ 1 test title) and passes.
 - [ ] `Store.removeAgent` emits an `"agents"` change event ONLY when ≥ 1 row was actually deleted (deferred-register fold-in; no-op remove is silent).
+- [ ] `parseJunit` handles NESTED `<testsuite>` elements recursively (DN §3.4 parity — clients use `.//testsuite`; bun's `--reporter=junit` nests suites): a real bun-generated JUnit file with N testcases ingests with `summary.total === N` and non-empty tree (dog-food finding 2026-07-15: current codec returns total 0 for bun output).
 - [ ] Integration (live smoke, VERIFY runs it): with the dev server up, `python3 ~/.claude/scripts/bun-crucible.py register --agent smoke-cru --project-dir <repo>` against a freshly added project returns ok — an UNMODIFIED legacy client speaks to the shim.
 
 ## Estimated size

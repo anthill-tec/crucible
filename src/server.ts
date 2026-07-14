@@ -7,7 +7,8 @@ import { codecs } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import { parseJunitPath } from "./codecs/junit.ts";
 import { Store, UUID_RE } from "./store.ts";
-import type { RunSchema } from "./types.ts";
+import type { TouchAgentOpts } from "./store.ts";
+import type { AgentIdentity, RunSchema } from "./types.ts";
 
 const pkg = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -31,6 +32,13 @@ interface IngestBody {
   dataPath?: unknown;
   agentId?: unknown;
   errors?: unknown;
+  // CR-CRU-003 §S1/§S2 shim fields
+  key?: unknown;
+  name?: unknown;
+  sut_root?: unknown;
+  status?: unknown;
+  message?: unknown;
+  identity?: unknown;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -109,6 +117,86 @@ async function handleIngestCompile(store: Store, req: Request): Promise<Response
   });
 }
 
+// ── CR-CRU-003 §S1+§S2 — v1 shim routes: projects + agents ─────────────────
+
+async function handleProjectAdd(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return err(400, "malformed JSON body");
+
+  const key = body.key;
+  if (typeof key !== "string" || !UUID_RE.test(key)) {
+    return err(400, "key must be a UUID");
+  }
+  // §S2 v1 quirk — duplicate key → 400 {ok:false}.
+  if (store.getProject(key) !== null) {
+    return err(400, `project already registered: ${key}`);
+  }
+
+  const name = typeof body.name === "string" ? body.name : "";
+  // §S2 — sut_root stays snake_case on this path only; stored as sutRoot.
+  const sutRoot = typeof body.sut_root === "string" ? body.sut_root : "";
+  const project = store.addProject({ key, name, type: "backend", sutRoot });
+  return json({ ok: true, project });
+}
+
+function handleProjectsList(store: Store, url: URL): Response {
+  const name = url.searchParams.get("name");
+  let projects = store.listProjects();
+  if (name !== null) {
+    const needle = name.toLowerCase();
+    projects = projects.filter((p) => p.name.toLowerCase().includes(needle));
+  }
+  return json({ ok: true, projects });
+}
+
+async function handleAgentHeartbeat(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return err(400, "malformed JSON body");
+
+  const pk = validateProjectKey(store, body);
+  if ("fail" in pk) return pk.fail;
+
+  const agentId = body.agentId;
+  if (typeof agentId !== "string" || agentId.length === 0) {
+    return err(400, "agentId is required");
+  }
+
+  // §S2 — top-level displayName/source are accepted but IGNORED; only the
+  // identity object is honored (Store.touchAgent merge-preserves it).
+  const opts: TouchAgentOpts = {};
+  if (body.status === "busy" || body.status === "online") {
+    opts.status = body.status;
+  }
+  if (typeof body.message === "string") {
+    opts.message = body.message;
+  }
+  if (typeof body.identity === "object" && body.identity !== null) {
+    opts.identity = body.identity as AgentIdentity;
+  }
+  store.touchAgent(pk.key, agentId, opts);
+  return json({ ok: true });
+}
+
+async function handleAgentRemove(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return err(400, "malformed JSON body");
+
+  const agentId = body.agentId;
+  if (typeof agentId !== "string" || agentId.length === 0) {
+    return err(400, "agentId is required");
+  }
+
+  // DN §3.3 — projectKey omitted removes the agent across ALL projects.
+  const projectKey = typeof body.projectKey === "string" ? body.projectKey : undefined;
+  store.removeAgent(projectKey, agentId);
+  return json({ ok: true });
+}
+
+function handleAgentsList(store: Store, url: URL): Response {
+  const projectKey = url.searchParams.get("projectKey") ?? undefined;
+  return json({ ok: true, agents: store.listAgents(projectKey) });
+}
+
 export function startServer(opts?: StartServerOpts): ServerHandle {
   const dbPath = opts?.dbPath ?? "data/crucible.db";
   if (dbPath !== ":memory:") {
@@ -121,6 +209,21 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
     port: opts?.port ?? Number(process.env.CRUCIBLE_PORT ?? 3849),
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
+      if (req.method === "POST" && url.pathname === "/api/projects/add") {
+        return handleProjectAdd(store, req);
+      }
+      if (req.method === "GET" && url.pathname === "/api/projects") {
+        return handleProjectsList(store, url);
+      }
+      if (req.method === "POST" && url.pathname === "/api/agents/heartbeat") {
+        return handleAgentHeartbeat(store, req);
+      }
+      if (req.method === "POST" && url.pathname === "/api/agents/remove") {
+        return handleAgentRemove(store, req);
+      }
+      if (req.method === "GET" && url.pathname === "/api/agents") {
+        return handleAgentsList(store, url);
+      }
       if (req.method === "POST" && url.pathname === "/api/ingest") {
         return handleIngest(store, req);
       }
@@ -139,6 +242,10 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
             events: store.countEvents(),
           },
         });
+      }
+      // §S2 — API error paths are always JSON {ok:false, error}.
+      if (url.pathname.startsWith("/api/")) {
+        return err(404, `unknown route: ${req.method} ${url.pathname}`);
       }
       return new Response("Not Found", { status: 404 });
     },
