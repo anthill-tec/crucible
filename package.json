@@ -1,0 +1,16 @@
+{
+  "name": "crucible",
+  "version": "2.0.0-alpha.1",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "bun": ">=1.2"
+  },
+  "scripts": {
+    "test": "bun test",
+    "start": "bun run src/server.ts"
+  },
+  "devDependencies": {
+    "bun-types": "^1.3.14"
+  }
+}

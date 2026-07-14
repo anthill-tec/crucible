@@ -1,6 +1,6 @@
 # CR-CRU-001 — Domain core + SQLite storage
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-07-15 on develop)
 **Type:** feature
 **Priority:** P0
 **Depends on:** —
@@ -40,8 +40,8 @@ Class `Store` backed by `bun:sqlite`, WAL mode, db path `data/crucible.db`
 projectKey).
 
 ### §S3 Liveness (computed, never stored)
-`livenessOf(agent, now)` → `"online"` (silence < T1) | `"stale"` (T1–T2) |
-`"tombstoned"` (T2–T3) | `"pruned"` (> T3). T1/T2/T3 from project `liveness`
+`livenessOf(agent, now)` → half-open intervals throughout: `"online"` (silence < T1)
+| `"stale"` ([T1, T2)) | `"tombstoned"` ([T2, T3)) | `"pruned"` (≥ T3). T1/T2/T3 from project `liveness`
 override merged over `DEFAULT_LIVENESS`. `listAgents` lazily deletes pruned rows.
 **Implicit heartbeat:** `recordTestEvent`/`recordCompileEvent` call `touchAgent`
 (bump `lastSeen`) for their `agentId`. `touchAgent` upserts; identity fields merge —
@@ -67,18 +67,18 @@ Project scaffolding (package.json `{name: "crucible", version: "2.0.0-alpha.1",
 engines.bun: ">=1.2"}`, tsconfig) is part of this section.
 
 ## Acceptance criteria
-- [ ] `DEFAULT_LIVENESS` equals `{staleAfterMs: 60000, tombstoneAfterMs: 300000, pruneAfterMs: 3600000}` (exact values).
-- [ ] `new Store(":memory:")` boots; `addProject({key: <uuid>, name: "x", type: "backend", sutRoot: "/tmp"})` then `getProject(key).name === "x"`; `type` defaults to `"backend"` when omitted.
-- [ ] `touchAgent(pk, "a1", {identity: {displayName: "A"}})` then `touchAgent(pk, "a1", {message: "m2"})` → `listAgents(pk)[0].identity.displayName === "A"` and `.message === "m2"` (identity preserved across identity-less heartbeats).
-- [ ] With project override `liveness: {staleAfterMs: 10}`, an agent last seen 20 ms ago reports `liveness === "stale"`; with defaults it reports `"online"`.
-- [ ] Agent with `lastSeen` older than T3 is absent from `listAgents()` after the call (lazy prune) and its row is deleted.
-- [ ] `recordTestEvent(pk, "a1", run)` bumps agent `a1`'s `lastSeen` (implicit heartbeat): `lastSeen` after > `lastSeen` before.
-- [ ] `recordTestEvent` with `run.summary.failed > 0` and `run.coverage` set stores the event with `coverage === null/undefined` (discard-on-fail).
-- [ ] Event ids match `/^evt-\d{13}-\d+$/`; `listEvents(pk, 2)` returns the 2 newest, newest first.
-- [ ] Inserting 105 events with `context.wave: "w1"` on the first 3: project retains exactly 100 raw events; `listRollups(pk)` contains a `"w1"` group with `runs === 3` (wave-aware rollup) — remainder in day buckets.
-- [ ] A garbage file at the db path: `Store.open(path)` succeeds, a sibling `*.corrupt-*` file exists, and the new db is empty.
-- [ ] `GET /api/health` on the booted server → 200 with `counts.projects` reflecting a project added through the Store (integration test drives the REAL server boot, not a hand-wired store).
-- [ ] Caller-existence: grep `new Store(`/`Store.open(` in `src/server.ts` returns ≥ 1 (the production boot constructs the Store).
+- [x] `DEFAULT_LIVENESS` equals `{staleAfterMs: 60000, tombstoneAfterMs: 300000, pruneAfterMs: 3600000}` (exact values).
+- [x] `new Store(":memory:")` boots; `addProject({key: <uuid>, name: "x", type: "backend", sutRoot: "/tmp"})` then `getProject(key).name === "x"`; `type` defaults to `"backend"` when omitted.
+- [x] `touchAgent(pk, "a1", {identity: {displayName: "A"}})` then `touchAgent(pk, "a1", {message: "m2"})` → `listAgents(pk)[0].identity.displayName === "A"` and `.message === "m2"` (identity preserved across identity-less heartbeats).
+- [x] With project override `liveness: {staleAfterMs: 10}`, an agent last seen 20 ms ago reports `liveness === "stale"`; with defaults it reports `"online"`.
+- [x] Agent with `lastSeen` older than T3 is absent from `listAgents()` after the call (lazy prune) and its row is deleted.
+- [x] `recordTestEvent(pk, "a1", run)` bumps agent `a1`'s `lastSeen` (implicit heartbeat): `lastSeen` after > `lastSeen` before.
+- [x] `recordTestEvent` with `run.summary.failed > 0` and `run.coverage` set stores the event with `coverage === null/undefined` (discard-on-fail).
+- [x] Event ids match `/^evt-\d{13}-\d+$/`; `listEvents(pk, 2)` returns the 2 newest, newest first.
+- [x] Inserting 105 events with `context.wave: "w1"` on the first 3: project retains exactly 100 raw events; `listRollups(pk)` contains a `"w1"` group with `runs === 3` (wave-aware rollup) — remainder in day buckets.
+- [x] A garbage file at the db path: `Store.open(path)` succeeds, a sibling `*.corrupt-*` file exists, and the new db is empty.
+- [x] `GET /api/health` on the booted server → 200 with `counts.projects` reflecting a project added through the Store (integration test drives the REAL server boot, not a hand-wired store).
+- [x] Caller-existence: grep `new Store(`/`Store.open(` in `src/server.ts` returns ≥ 1 (the production boot constructs the Store).
 
 ## Estimated size
 M — ~5 modules + test suite.

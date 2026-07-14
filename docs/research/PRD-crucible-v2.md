@@ -254,6 +254,14 @@ runs the suite against the project's `sutRoot`, ingests the result through the
 BDD/Playwright runtime was never fully realized. Scoped to a post-skeleton wave.
 
 ## 5 Quality requirements
+- **E2E POV (user directive 2026-07-15): the design storyboard is the E2E acceptance
+  contract.** Once the server + SPA are alive (Wave 3), a browser-driven E2E suite
+  (Playwright headless against the real `bun run start` instance) derives its
+  scenarios from the storyboard frames — F1 empty state, F2 agent rail, F3 RED card,
+  F4/F4½ drill-in + density, F5 compile card, F6 transition marker, F7 coverage,
+  F8 workspace, F9 tombstone decay, F10 backend-down grey-out — asserting the
+  developed UI matches the storyboarded behavior. Wave-3 UI CRs carry frame-mapped
+  E2E ACs; E2E runs ingest into Crucible itself with `tier: "e2e"`.
 - Full TDD via the project's own tooling: `bun test`, JUnit reporter, lcov coverage,
   ingested to Crucible itself via `bun-crucible.py` / `crucible-report-bun`.
 - Server start < 1 s; ingest of a 1000-case JUnit directory < 500 ms.
