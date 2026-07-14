@@ -16,6 +16,9 @@ codecs. Playwright/vitest/TAP land with the BDD wave.
 ## Scope
 
 ### §S1 JUnit codec (`src/codecs/junit.ts`)
+Define and export `RunSchema {summary: RunSummary, tree: SuiteNode[], coverage?:
+Coverage}` in `src/types.ts` (the canonical normalized-run shape; `Store.recordTestEvent`'s
+run parameter adopts it as a type alias — no behavior change).
 `parseJunit(xml: string): RunSchema` and `parseJunitPath(path: string):
 Promise<RunSchema>`. Semantics (DN §3.4, byte-parity with the client parsers):
 testcase with `<failure>` or `<error>` child → `fail`; `<skipped>` → `pending`; else
@@ -47,6 +50,17 @@ col?, code?, message, level: "error"|"warning"}], raw}`.
 adding a codec never touches core. Events recorded through a codec are stamped
 `codec` (and `stack` when the caller provides it).
 
+### §S4 Minimal ingest routes (the CR's production call path)
+Extend `src/server.ts` with two v1-shaped routes (moved here from CR-CRU-003 so the
+codecs have a real production seam; CR-CRU-003 hardens them to the full DN contract):
+- `POST /api/ingest` `{projectKey, format: "junit", data | dataPath, agentId}` —
+  UUID + known-project validation (400/404 with `{ok:false, error}`), codec looked up
+  via the §S3 registry, result recorded via `Store.recordTestEvent` (codec stamped),
+  response `{ok: true, summary}`.
+- `POST /api/ingest/compile` `{projectKey, agentId, errors, format?}` → `parseCompile`,
+  recorded via `Store.recordCompileEvent`, response `{ok: true, summary: {failed:
+  <errorCount>, pending: <warningCount>}}` (v1 client convention).
+
 ## Acceptance criteria
 - [ ] `parseJunit` on a 3-case suite (1 failure w/ message="boom" type="AssertionError" body "line1\nline2", 1 skipped, 1 pass, times 0.5/0/0.084) → summary `{total: 3, passed: 1, failed: 1, pending: 1, duration_ms: 584}`; failed leaf `.failure` equals `{message: "boom", type: "AssertionError", trace: "line1\nline2"}`.
 - [ ] `parseJunit` accepts a bare `<testsuite>` root (no `<testsuites>`) and yields 1 suite node.
@@ -56,7 +70,8 @@ adding a codec never touches core. Events recorded through a codec are stamped
 - [ ] python fixture with a traceback ending `ImportError: no module named y` → 1 error diagnostic whose `message` is that line and `file`/`line` from the LAST `File "…", line n` frame.
 - [ ] tsc fixture `"src/x.ts(12,5): error TS2304: Cannot find name 'y'."` → `{file: "src/x.ts", line: 12, col: 5, code: "TS2304", level: "error"}`.
 - [ ] `parseCompile("total garbage ✈")` → `{format: "raw", diagnostics: []}` and does not throw; `detectFormat(x, "java") === "javac"`.
-- [ ] Integration: the ingest route handlers (CR-CRU-003/004) call `parseJunit`/`parseJunitPath`/`parseCompile` — grep of non-test src for `parseJunit(`/`parseCompile(` returns ≥ 2 callers by VERIFY.
+- [ ] Integration: `POST /api/ingest` on the booted real server with an inline junit `data` fixture → `{ok: true, summary: {total: 3, passed: 2, failed: 1, …}}` AND the event appears in the store with `codec: "junit"` and preserved `failure.message` (integration test drives `startServer`, not a hand-wired store); `POST /api/ingest/compile` with the rustc fixture → `{ok: true, summary: {failed: 1, pending: 1}}`.
+- [ ] Caller-existence: grep of non-test src (`src/server.ts`) for `parseJunit`/`parseCompile`/registry lookup returns ≥ 2 callers.
 
 ## Estimated size
 M.
