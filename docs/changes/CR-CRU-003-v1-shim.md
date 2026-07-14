@@ -50,18 +50,18 @@ variants). This suite is the permanent regression gate for the shim until the fl
 migrates.
 
 ## Acceptance criteria
-- [ ] `bun run start` serves on 3849; `GET /api/health` → 200 `{ok:true, status:"healthy", version, uptime_s, counts:{projects,agents,events}}`.
-- [ ] `POST /api/projects/add` twice with the same UUID key → first 200 `{ok:true}`, second **400**; with key `"not-a-uuid"` → 400 with error containing `"UUID"`.
-- [ ] Heartbeat with top-level `"displayName":"X"` and no `identity` → subsequent `GET /api/agents?projectKey=` shows that agent with NO displayName `"X"` anywhere; heartbeat with `identity:{displayName:"Y"}` then a later identity-less heartbeat → displayName still `"Y"`.
-- [ ] `POST /api/ingest` with `dataPath` = directory of 2 surefire `TEST-*.xml` fixtures → `{ok:true}` and `summary.total` equals the sum across both files; same endpoint with inline `data` XML string also succeeds.
-- [ ] `POST /api/ingest/parsed` with `summary.failed: 2` + a `coverage` object → stored event has no coverage (verified via `GET /api/events`).
-- [ ] `POST /api/ingest/compile` with the rustc fixture from CR-CRU-002 and NO `format` field → `{ok:true, summary:{failed:1, pending:1}}`.
-- [ ] `GET /api/events?limit=1` returns exactly the newest event; ids match `evt-<ms>-<seq>`; `POST /api/events/delete` with a wrong `projectKey` does not delete.
-- [ ] Every 4xx response body has `ok:false` and a non-empty `error` string.
-- [ ] Contract suite covers all 13 endpoints (each route name appears in ≥ 1 test title) and passes.
-- [ ] `Store.removeAgent` emits an `"agents"` change event ONLY when ≥ 1 row was actually deleted (deferred-register fold-in; no-op remove is silent).
-- [ ] `parseJunit` handles NESTED `<testsuite>` elements recursively (DN §3.4 parity — clients use `.//testsuite`; bun's `--reporter=junit` nests suites): a real bun-generated JUnit file with N testcases ingests with `summary.total === N` and non-empty tree (dog-food finding 2026-07-15: current codec returns total 0 for bun output).
-- [ ] Integration (live smoke, VERIFY runs it): with the dev server up, `python3 ~/.claude/scripts/bun-crucible.py register --agent smoke-cru --project-dir <repo>` against a freshly added project returns ok — an UNMODIFIED legacy client speaks to the shim.
+- [x] `bun run start` serves on 3849; `GET /api/health` → 200 `{ok:true, status:"healthy", version, uptime_s, counts:{projects,agents,events}}`.
+- [x] `POST /api/projects/add` twice with the same UUID key → first 200 `{ok:true}`, second **400**; with key `"not-a-uuid"` → 400 with error containing `"UUID"`.
+- [x] Heartbeat with top-level `"displayName":"X"` and no `identity` → subsequent `GET /api/agents?projectKey=` shows that agent with NO displayName `"X"` anywhere; heartbeat with `identity:{displayName:"Y"}` then a later identity-less heartbeat → displayName still `"Y"`.
+- [x] `POST /api/ingest` with `dataPath` = directory of 2 surefire `TEST-*.xml` fixtures → `{ok:true}` and `summary.total` equals the sum across both files; same endpoint with inline `data` XML string also succeeds.
+- [x] `POST /api/ingest/parsed` with `summary.failed: 2` + a `coverage` object → stored event has no coverage (verified via `GET /api/events`).
+- [x] `POST /api/ingest/compile` with the rustc fixture from CR-CRU-002 and NO `format` field → `{ok:true, summary:{failed:1, pending:1}}`.
+- [x] `GET /api/events?limit=1` returns exactly the newest event; ids match `evt-<ms>-<seq>`; `POST /api/events/delete` with a wrong `projectKey` does not delete.
+- [x] Every 4xx response body has `ok:false` and a non-empty `error` string.
+- [x] Contract suite covers all 13 endpoints (each route name appears in ≥ 1 test title) and passes.
+- [x] `Store.removeAgent` emits an `"agents"` change event ONLY when ≥ 1 row was actually deleted (deferred-register fold-in; no-op remove is silent).
+- [x] `parseJunit` handles NESTED `<testsuite>` elements recursively (DN §3.4 parity — clients use `.//testsuite`; bun's `--reporter=junit` nests suites): a real bun-generated JUnit file with N testcases ingests with `summary.total === N` and non-empty tree (dog-food finding 2026-07-15: current codec returns total 0 for bun output).
+- [x] Integration (live smoke, VERIFY runs it): with the dev server up, `python3 ~/.claude/scripts/bun-crucible.py register --agent smoke-cru --project-dir <repo>` against a freshly added project returns ok — an UNMODIFIED legacy client speaks to the shim.
 
 ## Estimated size
 M/L.
