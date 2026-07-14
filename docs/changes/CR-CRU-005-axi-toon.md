@@ -1,6 +1,6 @@
 # CR-CRU-005 — AXI layer: TOON subset + help hints
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-07-15 on develop)
 **Type:** feature
 **Priority:** P1
 **Depends on:** CR-CRU-004
