@@ -1,6 +1,6 @@
 # CR-CRU-003 — v1 compatibility shim + contract tests
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-07-15 on develop)
 **Type:** feature
 **Priority:** P0
 **Depends on:** CR-CRU-001, CR-CRU-002
