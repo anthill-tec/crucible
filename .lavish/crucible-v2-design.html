@@ -17,7 +17,9 @@
     color-scheme: dark;
   }
   *, *::before, *::after { box-sizing: border-box; }
-  :where(.grid, .flex, .cols, .row, .frame) > * { min-width: 0; }
+  :where(.grid, .flex, .cols, .row, .frame, .evt, .m-top, .frame-head) > * { min-width: 0; }
+  :where([style*="display:flex"], [style*="display: flex"]) > * { min-width: 0; }
+  :where([style*="display:flex"], [style*="display: flex"]) { flex-wrap: wrap; }
   :where(p, h1, h2, h3, h4, li, td, th, dd, figcaption, .badge) { overflow-wrap: anywhere; }
   :where(img, svg, video, canvas) { max-width: 100%; height: auto; }
 
@@ -117,6 +119,11 @@
   .frame-body { padding: 14px 18px 18px; }
   .frame .cap { font-size: 13px; color: var(--ink-dim); margin-top: 10px; }
   .frame .cap b { color: var(--heat); }
+  @media (max-width: 720px) {
+    .m-body { grid-template-columns: minmax(0,1fr) !important; }
+    .m-rail, .m-rail-r { border-left: 0; border-right: 0; border-top: 1px solid var(--line); }
+    .ratio { margin-left: 0; }
+  }
 </style>
 </head>
 <body>
@@ -142,7 +149,8 @@
           <tr><td><b>Ingest</b></td><td>Codec registry → canonical RunSchema (junit, rustc, javac, python, tsc + playwright, vitest, TAP) · failure {message, type, trace} preserved · tier sent by clients (unit/module/integration share tools; e2e distinct; BDD frontend-only)</td></tr>
           <tr><td><b>Liveness</b></td><td>Every agent API call = implicit heartbeat (no dedicated pings) · thresholds T1/T2/T3 configurable (60s/300s/1h defaults, per-project override) · tombstoned agents stay visible, then pruned</td></tr>
           <tr><td><b>Health</b></td><td><code>GET /api/health</code> + SSE keep-alives · UI health pill + grey-out on backend loss</td></tr>
-          <tr><td><b>Storage</b></td><td>Embedded SQLite (<code>bun:sqlite</code>, WAL) — ships inside Bun, right for the skill-bundle target; per-project retention with rollup aggregates; existing MongoDB not a dependency</td></tr>
+          <tr><td><b>Storage</b></td><td>Embedded SQLite (<code>bun:sqlite</code>, WAL) — ships inside Bun, right for the skill-bundle target; retention: last 100 runs full-fidelity, wave-aware rollups beyond; existing MongoDB not a dependency</td></tr>
+          <tr><td><b>Run context</b></td><td>Optional <code>context {git {branch, commit}, wave, orchestrator: mainline|track-N}</code> on every ingest — Model-B regressions/check-runs traceable; ALL fields optional, lightweight projects degrade gracefully</td></tr>
           <tr><td><b>Next</b></td><td><b>CR wave first</b> (re-decided): specs + queue → RED/GREEN/VERIFY dispatch per the orchestration flow — compat contract tests, codec layer, v2 API, UI. No pre-built skeleton; Crucible dog-foods itself as soon as ingest is green.</td></tr>
         </tbody>
       </table>
@@ -194,6 +202,10 @@
         <p class="cap"><b>Agent side:</b> <code>POST /api/v2/agents/register</code> → response carries <code>help[]</code>:
         "ingest your first run…", "every API call counts as a heartbeat". The rail updates live over SSE — no refresh.
         The <code>message</code> field is the agent's live narration ("RED: writing checkpoint tests"), not a generic "working".</p>
+        <p class="cap"><b>Structural invariant (your note):</b> an agent can register only into an <b>already-registered
+        project</b> — unknown key → 404 with the fix in <code>help[]</code>. The dashboard's component hierarchy mirrors that
+        ownership: <b>project is the root container</b>; agents, runs, coverage and compile panels all render as children of a
+        project, never free-floating. "All projects" is an aggregation view over the same tree, not a separate data source.</p>
       </div>
     </div>
 
@@ -246,6 +258,44 @@
         <b>assertion message and stack trace</b> — preserved by the codec as <code>failure {message, type, trace}</code>
         (v1 stored none of this). Same drill-in everywhere: timeline, workspace Runs tab, and
         <code>GET /api/v2/events/&lt;id&gt;</code> for agents.</p>
+      </div>
+    </div>
+
+    <!-- F4½ — density playbook (answering: thousands of tests, space efficiency is paramount) -->
+    <div class="frame" style="border-color: rgba(255,122,26,.4)">
+      <div class="frame-head"><span class="fnum">F4½</span><h3>Density playbook — the same drill-in at 5,000 tests</h3><span class="who">design ideas, as requested</span></div>
+      <div class="frame-body">
+        <div class="mock">
+          <div class="m-body" style="grid-template-columns: minmax(0,1fr); min-height:0">
+            <div class="m-main">
+              <div class="m-h">Run detail · verify-nai-042 · 5,214 tests · 7 ✗</div>
+              <div style="display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap">
+                <span class="chip on">✗ failures 7</span><span class="chip">⏭ pending 12</span><span class="chip">✓ passed 5,195</span><span class="chip">🔎 filter…</span><span class="chip">density: compact ▾</span>
+              </div>
+              <div style="display:flex; flex-wrap:wrap; gap:1px; padding:6px; background:var(--bg-1); border:1px solid var(--line); border-radius:8px; margin-bottom:8px">
+                <i style="width:5px;height:10px;background:var(--fail)"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i><i style="width:5px;height:10px;background:var(--fail)"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i><i style="width:5px;height:10px;background:var(--pend)"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i><i style="width:5px;height:10px;background:var(--fail)"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i><i style="width:5px;height:10px;background:var(--pend)"></i><i style="width:5px;height:10px;background:var(--pass);opacity:.35"></i>
+                <span class="agent-ts" style="margin-left:6px">…heat-strip: 1 cell = 1 test — click a red cell to jump</span>
+              </div>
+              <div style="font:10.5px var(--mono); line-height:1.9">
+                ▸ nai_ast <span style="color:var(--pass)">1,842 ✓</span> <span class="agent-ts">(all green — folded)</span><br>
+                ▸ nai_lexer <span style="color:var(--pass)">977 ✓</span> <span class="agent-ts">(folded)</span><br>
+                ▾ nai_runtime <span style="color:var(--fail)">7 ✗</span> <span style="color:var(--pass)">2,388 ✓</span><br>
+                &nbsp;&nbsp;▾ checkpoint <span style="color:var(--fail)">5 ✗</span> — <span style="color:var(--heat)">4 share one failure:</span> <i>assertion left==right … CheckpointId(7)</i><br>
+                &nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--fail)">✗ commit_persists_state · 71ms</span> <span class="agent-ts">+3 identical ▾</span><br>
+                &nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--fail)">✗ rollback_double_free · 12ms</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="cap"><b>Seven ideas, composable:</b>
+        <b>1 · Failures float, green folds</b> — all-pass suites collapse to one counted row; failing branches auto-expand. 5,214 tests → ~12 visible rows.
+        <b>2 · Heat-strip minimap</b> — one cell per test; the whole run in one glance strip; click jumps.
+        <b>3 · Failure digest</b> — identical assertion messages dedupe into groups ("+3 identical") so one root cause isn't 40 rows.
+        <b>4 · Virtualized tree</b> — only visible rows exist in the DOM (~40 nodes for 10k tests).
+        <b>5 · Progressive payload</b> — <code>GET /api/v2/events/&lt;id&gt;</code> returns suite-level summaries first; leaf pages fetch on expand, so a 10k-test tree never ships whole.
+        <b>6 · Filter bar</b> — status chips, free-text, module/crate facet — same controls agents get as query params.
+        <b>7 · Density toggle</b> — comfortable / compact / ultra (suite-per-line).
+        Annotate the ones you want in the first UI wave.</p>
       </div>
     </div>
 
@@ -306,6 +356,11 @@
         <p class="cap"><b>Agent side:</b> full <code>llvm-cov nextest</code> run → <code>POST /api/v2/runs/parsed</code> with coverage.
         <b>Server invariant:</b> coverage arriving on a failing run is discarded — only a fully green regression publishes it.
         The project card's meters update; this becomes the coverage-trend point in the workspace (F8).</p>
+        <p class="cap"><b>Not a separate view (your question):</b> this frame is the SAME Mission Control home as F3–F6 —
+        the regression is just another event card on the same timeline (with its <code>regression</code> tier badge), and the
+        coverage meters live on the always-present project card. The only distinct surfaces in the whole design are:
+        Mission Control home, the per-project workspace (F8), and the run drill-in slide-over (F4). Everything else is the
+        same components re-filtered.</p>
       </div>
     </div>
 
@@ -486,14 +541,29 @@ stateDiagram-v2
 
   <!-- ══ STILL OPEN ══ -->
   <section id="open">
-    <div class="kicker">Genuinely still open</div>
+    <div class="kicker">Resolved this round + still open</div>
     <h2>Open items</h2>
     <div class="panel">
       <ul style="margin:4px 0; padding-left:18px">
-        <li style="margin:6px 0">Should ingest events carry the SUT's <b>git branch + commit</b>? (Great for the timeline and for tying runs to CRs; needs the upgraded clients to send it — cheap to add during the fleet upgrade.)</li>
-        <li style="margin:6px 0"><b>TOON spec pinning</b> — vendor the reference serializer vs pin our documented subset (tables + scalars + help lists).</li>
-        <li style="margin:6px 0"><b>Retention defaults</b> — last 1000 runs full-fidelity per project + daily rollups; tune per project?</li>
-        <li style="margin:6px 0">Anything this storyboard gets wrong — annotate the frame directly.</li>
+        <li style="margin:6px 0"><b>Run context — DECIDED ✅ with graceful degradation.</b> Ingest events accept an optional
+        <code>context</code> block: <code>git {branch, commit}</code>, <code>wave</code>, <code>orchestrator</code>
+        (<code>mainline | track-N</code>) — so in Model-B projects a track's check-run and Mainline's regression are
+        distinguishable on the same timeline and traceable to the exact commit. <b>Every field is optional</b>: lightweight
+        projects (no waves, no tracks) send nothing and the API and UI degrade gracefully — cards simply omit the badges.
+        The server never requires context it wasn't given.</li>
+        <li style="margin:6px 0"><b>Retention — DECIDED ✅.</b> Default: last <b>100 runs</b> full-fidelity per project; older
+        runs roll up into aggregates. Where <code>wave</code> context exists, rollups are <b>per wave</b> (a wave's cycle history
+        stays reconstructable); without it, daily buckets. Per-project override stays available.</li>
+        <li style="margin:6px 0"><b>TOON pinning — explained.</b> The choice: (a) <i>vendor the reference implementation</i> —
+        the official TypeScript serializer from toonformat.dev, copied into the repo like van.js. Pro: spec-exact as TOON evolves,
+        handles every edge (nested tables, quoting). Con: ~more code than we use, upstream churn to track. (b) <i>pin our subset</i> —
+        implement only what Crucible responses emit (scalars, key:value, uniform tables, help lists), document it as "Crucible TOON",
+        freeze it. Pro: ~150 lines we fully own, zero upstream risk. Con: if an agent-side TOON parser follows the full spec and we
+        drift, mismatch. <b>Recommendation: (b) pin the subset</b> — our consumers are our own upgraded scripts + CLI, so both ends
+        are ours; spec-tracking buys nothing today and the subset is documentable in ten lines. Revisit only if third-party TOON
+        tooling enters the picture.</li>
+        <li style="margin:6px 0"><b>Still open:</b> which density-playbook ideas (F4½) make the first UI wave — annotate them; and
+        anything else the storyboard gets wrong.</li>
       </ul>
     </div>
   </section>

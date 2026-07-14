@@ -115,6 +115,7 @@ One ingest call = one immutable event on the project's timeline.
 | `coverage` | `{lines, functions, branches?}` each `{total, covered, percent}` | only on fully-green runs — server discards otherwise (v1 safety net) |
 | `compile` | `{format, errorCount, warningCount, errors: [{file?, line?, col?, code?, message, level}], raw}` | compile events |
 | `name` | string? | optional run label |
+| `context` | `{git?: {branch, commit}, wave?: string, orchestrator?: "mainline" \| "track-N"}` | v2 (decided 2026-07-14) — ties runs to the exact commit and, in Model-B projects, distinguishes a track's check-run from Mainline's regression on the same timeline. **Every field optional — graceful degradation is a hard requirement**: lightweight projects send no context and the API/UI must never require or fabricate it. |
 
 ### 3.4 Ingest state
 Per (`projectKey`, `type ∈ unit|bdd`): pointer to the latest test event + latest compile
@@ -188,11 +189,13 @@ discipline is hammered into every skill; the server enforces it by `kind`.)
 
 ### 4.7 Events API + retention
 As v1 (list newest-first/limit 50, delete-one, clear-project). Growth is bounded by a
-**per-project retention policy** (2026-07-14): the last N runs (default 1000) keep full
+**per-project retention policy** (revised 2026-07-14): the last **100 runs** keep full
 fidelity (tree + failure detail, compressed blob storage); older runs roll up into
-daily aggregates (pass/fail counts, duration, coverage) that feed trend views; raw
-trees are pruned with the rollup. Events indexed on `(projectKey, timestamp)`. One Bun
-process is the single writer — matching SQLite/WAL's concurrency model by construction.
+aggregates (pass/fail counts, duration, coverage) that feed trend views — **per wave**
+when `context.wave` is present (a wave's cycle history stays reconstructable), daily
+buckets otherwise; raw trees are pruned with the rollup. Per-project override remains.
+Events indexed on `(projectKey, timestamp)`. One Bun process is the single writer —
+matching SQLite/WAL's concurrency model by construction.
 
 ### 4.8 Live updates
 `GET /api/stream` — SSE channel broadcasting `{type: "projects"|"agents"|"events", projectKey}`
@@ -258,8 +261,13 @@ client-fleet upgrade, then the BDD harness (§4.12). Crucible ingests its own ru
 - CodeForge/Velocity integration beyond sharing the agent-protocol conventions.
 
 ## 8 Open questions
-- Should events store the SUT git branch/commit (clients could send it; great for the
-  timeline, needs client updates)?
+- Which density-playbook techniques (failures-float/green-folds, heat-strip minimap,
+  failure digest, virtualized tree, progressive payload paging, filter bar, density
+  toggle) land in the first UI wave vs later.
 
 (Resolved 2026-07-14: upgraded clients send `tier` explicitly — §3.3; BDD uses the
-dedicated `playwright` codec with trace links, and Crucible can harness the run — §4.12.)
+dedicated `playwright` codec with trace links, and Crucible can harness the run —
+§4.12; run `context` {git, wave, orchestrator} decided as all-optional — §3.3;
+retention: 100 full-fidelity runs + wave-aware rollups — §4.7; TOON: pin the
+documented Crucible subset rather than vendoring the reference serializer — both
+producer and consumers are our own fleet.)
