@@ -105,7 +105,6 @@ One ingest call = one immutable event on the project's timeline.
 | `id` | `evt-<epoch-ms>-<seq>` | v1 format preserved |
 | `projectKey`, `agentId` | | who ran it |
 | `kind` | `"test"` \| `"compile"` | strict panel routing (§4.6) |
-| `tier` | `"unit"` \| `"module"` \| `"e2e"` \| `"regression"` \| `"bdd"` | v2, optional on ingest, default `unit` |
 | `timestamp` | epoch ms | |
 | `summary` | `{total, passed, failed, pending, duration_ms}` | test events |
 | `tree` | suite→test nodes (`name`, `status: pass|fail|pending`, `duration_ms`); failed leaves additionally carry `failure: {message, type?, trace?}` (v2 — v1 stored no failure detail; codecs preserve the tool's assertion message + stack trace for the UI run drill-in) | test events |

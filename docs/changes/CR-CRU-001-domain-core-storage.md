@@ -58,6 +58,14 @@ grouped by `context.wave` when present, else by UTC day — accumulating
 Opening a corrupt/unreadable db: rename it to `crucible.db.corrupt-<epoch>`,
 start a fresh db, log one loud line. Boot must never fail because of a bad file.
 
+### §S6 Minimal boot + health (the CR's production call path)
+`src/server.ts`: `Bun.serve` on port 3849 (env `CRUCIBLE_PORT` override) serving
+exactly one route, `GET /api/health` → `{ok: true, status: "healthy", version,
+uptime_s, counts: {projects, agents, events}}` with counts read from the Store.
+Everything else 404s. CR-CRU-003 extends this server with the shim routes.
+Project scaffolding (package.json `{name: "crucible", version: "2.0.0-alpha.1",
+engines.bun: ">=1.2"}`, tsconfig) is part of this section.
+
 ## Acceptance criteria
 - [ ] `DEFAULT_LIVENESS` equals `{staleAfterMs: 60000, tombstoneAfterMs: 300000, pruneAfterMs: 3600000}` (exact values).
 - [ ] `new Store(":memory:")` boots; `addProject({key: <uuid>, name: "x", type: "backend", sutRoot: "/tmp"})` then `getProject(key).name === "x"`; `type` defaults to `"backend"` when omitted.
@@ -69,7 +77,8 @@ start a fresh db, log one loud line. Boot must never fail because of a bad file.
 - [ ] Event ids match `/^evt-\d{13}-\d+$/`; `listEvents(pk, 2)` returns the 2 newest, newest first.
 - [ ] Inserting 105 events with `context.wave: "w1"` on the first 3: project retains exactly 100 raw events; `listRollups(pk)` contains a `"w1"` group with `runs === 3` (wave-aware rollup) — remainder in day buckets.
 - [ ] A garbage file at the db path: `Store.open(path)` succeeds, a sibling `*.corrupt-*` file exists, and the new db is empty.
-- [ ] Integration: `src/server.ts` (CR-CRU-003+) constructs `Store` with `data/crucible.db` — grep `new Store(` in non-test src returns ≥ 1 by VERIFY.
+- [ ] `GET /api/health` on the booted server → 200 with `counts.projects` reflecting a project added through the Store (integration test drives the REAL server boot, not a hand-wired store).
+- [ ] Caller-existence: grep `new Store(`/`Store.open(` in `src/server.ts` returns ≥ 1 (the production boot constructs the Store).
 
 ## Estimated size
 M — ~5 modules + test suite.

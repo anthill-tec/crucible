@@ -18,7 +18,8 @@ runs are ingested into it (dog-food).
 ## Scope
 
 ### §S1 Server + routing (`src/server.ts`, `src/shim.ts`)
-`Bun.serve({port: 3849})` with dispatcher; the 13 v1 routes: POST
+Extends the CR-CRU-001 `src/server.ts` (`Bun.serve` on 3849 + `/api/health` already
+exist) with a dispatcher for the 13 v1 routes: POST
 `/api/projects/add`, GET `/api/projects`, POST `/api/agents/heartbeat`, POST
 `/api/agents/remove`, GET `/api/agents`, POST `/api/ingest`, POST
 `/api/ingest/parsed`, POST `/api/ingest/compile`, POST `/api/ingest/clear`, GET
