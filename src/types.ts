@@ -76,6 +76,13 @@ export interface Coverage {
   branches?: CoverageAxis;
 }
 
+/** CR-CRU-002 §S1 — canonical normalized-run shape produced by every codec. */
+export interface RunSchema {
+  summary: RunSummary;
+  tree: SuiteNode[];
+  coverage?: Coverage;
+}
+
 export interface RunContext {
   git?: {
     branch: string;

@@ -1,6 +1,6 @@
 # CR-CRU-002 — Codec translation layer
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-07-15 on develop)
 **Type:** feature
 **Priority:** P0
 **Depends on:** CR-CRU-001
@@ -62,16 +62,16 @@ codecs have a real production seam; CR-CRU-003 hardens them to the full DN contr
   <errorCount>, pending: <warningCount>}}` (v1 client convention).
 
 ## Acceptance criteria
-- [ ] `parseJunit` on a 3-case suite (1 failure w/ message="boom" type="AssertionError" body "line1\nline2", 1 skipped, 1 pass, times 0.5/0/0.084) → summary `{total: 3, passed: 1, failed: 1, pending: 1, duration_ms: 584}`; failed leaf `.failure` equals `{message: "boom", type: "AssertionError", trace: "line1\nline2"}`.
-- [ ] `parseJunit` accepts a bare `<testsuite>` root (no `<testsuites>`) and yields 1 suite node.
-- [ ] `parseJunitPath(dir)` with `TEST-a.xml` (2 pass) + `TEST-b.xml` (1 fail) → summary `{total: 3, passed: 2, failed: 1}` and 2 suite nodes; with a dir containing no `TEST-*.xml` it throws with a message naming the dir.
-- [ ] rustc fixture `"error[E0308]: mismatched types\n --> src/lib.rs:12:5\nwarning: unused import\n --> src/a.rs:1:1"` → `errorCount 1`, `warningCount 1`, first diagnostic `{code: "E0308", file: "src/lib.rs", line: 12, col: 5, level: "error"}`.
-- [ ] javac fixture `"[ERROR] /x/Foo.java:[42,13] cannot find symbol"` → diagnostic `{file: "/x/Foo.java", line: 42, col: 13, level: "error", message: "cannot find symbol"}`.
-- [ ] python fixture with a traceback ending `ImportError: no module named y` → 1 error diagnostic whose `message` is that line and `file`/`line` from the LAST `File "…", line n` frame.
-- [ ] tsc fixture `"src/x.ts(12,5): error TS2304: Cannot find name 'y'."` → `{file: "src/x.ts", line: 12, col: 5, code: "TS2304", level: "error"}`.
-- [ ] `parseCompile("total garbage ✈")` → `{format: "raw", diagnostics: []}` and does not throw; `detectFormat(x, "java") === "javac"`.
-- [ ] Integration: `POST /api/ingest` on the booted real server with an inline junit `data` fixture → `{ok: true, summary: {total: 3, passed: 2, failed: 1, …}}` AND the event appears in the store with `codec: "junit"` and preserved `failure.message` (integration test drives `startServer`, not a hand-wired store); `POST /api/ingest/compile` with the rustc fixture → `{ok: true, summary: {failed: 1, pending: 1}}`.
-- [ ] Caller-existence: grep of non-test src (`src/server.ts`) for `parseJunit`/`parseCompile`/registry lookup returns ≥ 2 callers.
+- [x] `parseJunit` on a 3-case suite (1 failure w/ message="boom" type="AssertionError" body "line1\nline2", 1 skipped, 1 pass, times 0.5/0/0.084) → summary `{total: 3, passed: 1, failed: 1, pending: 1, duration_ms: 584}`; failed leaf `.failure` equals `{message: "boom", type: "AssertionError", trace: "line1\nline2"}`.
+- [x] `parseJunit` accepts a bare `<testsuite>` root (no `<testsuites>`) and yields 1 suite node.
+- [x] `parseJunitPath(dir)` with `TEST-a.xml` (2 pass) + `TEST-b.xml` (1 fail) → summary `{total: 3, passed: 2, failed: 1}` and 2 suite nodes; with a dir containing no `TEST-*.xml` it throws with a message naming the dir.
+- [x] rustc fixture `"error[E0308]: mismatched types\n --> src/lib.rs:12:5\nwarning: unused import\n --> src/a.rs:1:1"` → `errorCount 1`, `warningCount 1`, first diagnostic `{code: "E0308", file: "src/lib.rs", line: 12, col: 5, level: "error"}`.
+- [x] javac fixture `"[ERROR] /x/Foo.java:[42,13] cannot find symbol"` → diagnostic `{file: "/x/Foo.java", line: 42, col: 13, level: "error", message: "cannot find symbol"}`.
+- [x] python fixture with a traceback ending `ImportError: no module named y` → 1 error diagnostic whose `message` is that line and `file`/`line` from the LAST `File "…", line n` frame.
+- [x] tsc fixture `"src/x.ts(12,5): error TS2304: Cannot find name 'y'."` → `{file: "src/x.ts", line: 12, col: 5, code: "TS2304", level: "error"}`.
+- [x] `parseCompile("total garbage ✈")` → `{format: "raw", diagnostics: []}` and does not throw; `detectFormat(x, "java") === "javac"`.
+- [x] Integration: `POST /api/ingest` on the booted real server with an inline junit `data` fixture → `{ok: true, summary: {total: 3, passed: 2, failed: 1, …}}` AND the event appears in the store with `codec: "junit"` and preserved `failure.message` (integration test drives `startServer`, not a hand-wired store); `POST /api/ingest/compile` with the rustc fixture → `{ok: true, summary: {failed: 1, pending: 1}}`.
+- [x] Caller-existence: grep of non-test src (`src/server.ts`) for `parseJunit`/`parseCompile`/registry lookup returns ≥ 2 callers.
 
 ## Estimated size
 M.
