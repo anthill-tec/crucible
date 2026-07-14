@@ -19,4 +19,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   thin v1 shim on legacy `/api/*` paths + client-fleet upgrade. Plus: codec translation
   layer (canonical RunSchema, failure detail preserved), ingest-as-implicit-heartbeat,
   configurable liveness thresholds, tombstoned agents, server self-health, BDD harness
-  (later wave). CR decomposition is proposed at wave-open after the skeleton lands.
+  (later wave). Persistence: bun:sqlite (skill-bundle portability); retention rollup.
+- 2026-07-14 (later) — Q4 RE-DECIDED during storyboard review: **CR wave first** — no
+  pre-built walking skeleton; implementation starts with specs + RED/GREEN/VERIFY
+  dispatch per the orchestration flow. Wave proposal due at wave-open.

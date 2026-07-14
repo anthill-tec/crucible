@@ -55,8 +55,18 @@ around two commitments:
   the assertion message + stack trace.
 - **TOON (decided 2026-07-14):** agent-facing reads first (`GET /api/v2` orientation,
   events, status, agents) via `?fmt=toon` / `Accept`; JSON default everywhere.
-- Persistence: JSON snapshot on disk (`data/state.json`), debounce-written, loaded at
-  boot. Good enough for a localhost tool; a real DB is out of scope (§7).
+- **Persistence (decided 2026-07-14): embedded SQLite via Bun's built-in
+  `bun:sqlite`** (WAL mode, `data/crucible.db`) — no DB server (§7 holds), zero deps,
+  transactional crash-safety, and real queries (per-project timelines, coverage
+  trends, agent history) that a rewrite-the-file JSON snapshot cannot do. Decisive
+  for the **skill-bundle deployment target** (client scripts + server + skill,
+  installable on any machine with Bun): the DB ships inside the runtime; the user's
+  existing MongoDB is NOT a dependency (a portable bundle cannot assume a running
+  mongod, and a single-user localhost dashboard gains nothing from it). The Store
+  sits behind a storage interface — a mongo driver stays possible if Crucible ever
+  goes hosted/multi-user. The walking skeleton may boot on a JSON snapshot
+  (`data/state.json`) behind the same interface; the SQLite swap is a contained
+  early CR.
 
 ## 3 Domain model
 
@@ -176,9 +186,13 @@ Compile events and test events are separate streams in the UI — a compile fail
 renders as "0/N tests" and an all-fail test run never renders as a compile error. (This
 discipline is hammered into every skill; the server enforces it by `kind`.)
 
-### 4.7 Events API
-As v1 (list newest-first/limit 50, delete-one, clear-project) + retention cap 1000
-events/project (oldest dropped).
+### 4.7 Events API + retention
+As v1 (list newest-first/limit 50, delete-one, clear-project). Growth is bounded by a
+**per-project retention policy** (2026-07-14): the last N runs (default 1000) keep full
+fidelity (tree + failure detail, compressed blob storage); older runs roll up into
+daily aggregates (pass/fail counts, duration, coverage) that feed trend views; raw
+trees are pruned with the rollup. Events indexed on `(projectKey, timestamp)`. One Bun
+process is the single writer — matching SQLite/WAL's concurrency model by construction.
 
 ### 4.8 Live updates
 `GET /api/stream` — SSE channel broadcasting `{type: "projects"|"agents"|"events", projectKey}`
@@ -227,12 +241,14 @@ BDD/Playwright runtime was never fully realized. Scoped to a post-skeleton wave.
   (rename aside, start fresh, log loudly).
 - No external network at runtime; all UI assets vendored.
 
-## 6 Rollout
-1. Walking skeleton (this kickoff): compatible API core + minimal live dashboard, enough
-   to re-point real agent traffic at port 3849.
-2. Hardening waves via the CR queue (`docs/changes/README.md`): parser edge cases,
-   ingest-status/clear semantics, dashboard depth (tree drill-down, RED→GREEN, coverage
-   trends), BDD/Playwright axis for frontend projects.
+## 6 Rollout (re-decided 2026-07-14: CR-first, no pre-built skeleton)
+Implementation proceeds through the CR queue (`docs/changes/README.md`) with
+RED/GREEN/VERIFY dispatch per the orchestration flow from the first line of production
+code. Wave shape is proposed at wave-open; expected coverage: v1-shim contract tests
+(derived line-by-line from the DN), storage (bun:sqlite), codec layer, clean v2
+API + AXI, dashboard shell, then depth (drill-in, transitions, coverage trends), then
+client-fleet upgrade, then the BDD harness (§4.12). Crucible ingests its own runs
+(via `bun-crucible.py` → later `crucible-axi`) as soon as ingest lands.
 
 ## 7 Non-goals (v2.0)
 - Auth/multi-user/remote hosting; Crucible stays a localhost single-developer tool.
