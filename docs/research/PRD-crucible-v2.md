@@ -37,8 +37,24 @@ around two commitments:
 - Single-user, localhost developer tool. No auth, no TLS, no multi-tenant (non-goals §7).
 - Server: Bun + TypeScript, zero runtime framework (Bun.serve router). Tests: `bun test`
   (this project eats its own dog food: it ingests its own runs via `bun-crucible.py`).
-- UI: VanJS 1.5 + VanX 0.6 (vendored, no CDN/build step), single-page, served by the same
-  process.
+- **API strategy (decided 2026-07-14, kickoff review):** the primary contract is a
+  **clean v2 API at `/api/v2/*`** designed with the reconstructed v1 API as reference
+  (not as a frozen byte-contract). A **thin v1 shim** answers the original `/api/*`
+  paths (translating onto the v2 core) so the legacy fleet keeps reporting during
+  migration; the `*-crucible.py` scripts and `crucible-report-*` skills are upgraded
+  to v2 + AXI idioms, and the shim retires once the fleet is migrated. A gh-axi-style
+  **`crucible-axi` npx CLI** wraps the v2 API for agents.
+- **UI stack (decided 2026-07-14):** hybrid — **VanJS 1.5 + VanX 0.6** drive the
+  reactive DOM; **Tailwind 4 browser runtime + DaisyUI 5** supply styling/components
+  (all vendored, no CDN/build step — the same environment lavish-axi uses, verified
+  from its source via opensrc). The forge palette ships as a custom DaisyUI theme.
+  Single page, served by the same process. Dashboard backbone: **A + B hybrid** —
+  Mission Control home (project rail + cross-project timeline + agent rail) with
+  per-project workspace drill-in (tabs: Runs / Agents / Coverage / Compile / BDD);
+  every run card opens a drill-in showing the suite→test tree and, for failures,
+  the assertion message + stack trace.
+- **TOON (decided 2026-07-14):** agent-facing reads first (`GET /api/v2` orientation,
+  events, status, agents) via `?fmt=toon` / `Accept`; JSON default everywhere.
 - Persistence: JSON snapshot on disk (`data/state.json`), debounce-written, loaded at
   boot. Good enough for a localhost tool; a real DB is out of scope (§7).
 
@@ -58,13 +74,18 @@ Keyed by (`projectKey`, `agentId`). Fields: `agentId`, `projectKey`, `status`
 (`online|busy`), `message` (current progress), `identity` (`displayName`, `source`,
 `repoPath` — set once, preserved across heartbeats), `firstSeen`, `lastSeen`.
 
-**Liveness state machine** (computed from `lastSeen` at read time; thresholds are v1
-defaults from the agent-protocol skill and MUST stay configurable):
-`online` (< 60 s) → `stale` (60–300 s) → `tombstoned` (300 s–1 h) → pruned (> 1 h).
-Explicit `/api/agents/remove` (clean unregister) deletes immediately. An agent that
-fails to unregister is NOT silently dropped: it is shown **tombstoned** (greyed, last
-message + time-of-death preserved) so a crashed agent stays diagnosable, then pruned.
-A heartbeat at any point resurrects it.
+**Liveness state machine** (computed from `lastSeen` at read time):
+`online` (< T1) → `stale` (T1–T2) → `tombstoned` (T2–T3) → pruned (> T3).
+Thresholds T1/T2/T3 are configurable — server-wide defaults 60 s / 300 s / 1 h
+(the v1 values from the agent-protocol skill), overridable per project.
+**Every authenticated agent API call is an implicit heartbeat** (kickoff-review
+decision 2026-07-14): ingesting a run, querying status — anything carrying an
+`agentId` bumps `lastSeen`. An agent actively posting runs never needs a dedicated
+ping; explicit heartbeats exist to fill silent stretches and to update `status`/
+`message`. Explicit `/api/agents/remove` (clean unregister) deletes immediately.
+An agent that fails to unregister is NOT silently dropped: it is shown
+**tombstoned** (greyed, last message + time-of-death preserved) so a crashed agent
+stays diagnosable, then pruned. Any activity at any point resurrects it.
 
 ### 3.3 Run event
 One ingest call = one immutable event on the project's timeline.
@@ -77,7 +98,10 @@ One ingest call = one immutable event on the project's timeline.
 | `tier` | `"unit"` \| `"module"` \| `"e2e"` \| `"regression"` \| `"bdd"` | v2, optional on ingest, default `unit` |
 | `timestamp` | epoch ms | |
 | `summary` | `{total, passed, failed, pending, duration_ms}` | test events |
-| `tree` | suite→test nodes (`name`, `status: pass|fail|pending`, `duration_ms`) | test events |
+| `tree` | suite→test nodes (`name`, `status: pass|fail|pending`, `duration_ms`); failed leaves additionally carry `failure: {message, type?, trace?}` (v2 — v1 stored no failure detail; codecs preserve the tool's assertion message + stack trace for the UI run drill-in) | test events |
+| `tier` | `"unit"` \| `"module"` \| `"integration"` \| `"e2e"` \| `"regression"` \| `"bdd"` | v2 — sent by upgraded clients so the UI represents them differently: unit/module/integration share tools per stack; e2e is a different approach; `bdd` only on frontend projects. Legacy default `unit`. |
+| `stack` | `"rust"` \| `"java"` \| `"python"` \| `"ts"` \| `"arduino"` \| … | v2 — which stack produced the run |
+| `codec` | `"junit"` \| `"nextest"` \| `"playwright"` \| `"vitest"` \| `"tap"` \| `"rustc"` \| … | v2 — which codec normalized it; drives stack-aware rendering |
 | `coverage` | `{lines, functions, branches?}` each `{total, covered, percent}` | only on fully-green runs — server discards otherwise (v1 safety net) |
 | `compile` | `{format, errorCount, warningCount, errors: [{file?, line?, col?, code?, message, level}], raw}` | compile events |
 | `name` | string? | optional run label |
@@ -88,7 +112,13 @@ event — what `/api/ingest/status` reports and `/api/ingest/clear` resets.
 
 ## 4 Functional requirements
 
-### 4.1 v1-compatible API (normative — the compatibility contract)
+### 4.1 v1 API surface (DECIDED 2026-07-14: reference, served by a thin shim)
+The endpoint catalog in the DN is the **reference** for the clean v2 API and the
+**contract for the transition shim**: the original `/api/*` paths keep answering with
+v1 shapes (translated onto the v2 core) until the client fleet is migrated to
+`/api/v2/*`, then the shim retires. Shim-served quirks (top-level `displayName`
+ignored, 400-on-duplicate `projects/add`, `sut_root` snake_case) are NOT carried into
+the v2 shapes.
 All 13 endpoints, payloads, response shapes, and behavioral invariants cataloged in
 [DN-crucible-api-reconstruction.md](DN-crucible-api-reconstruction.md) §2–§3 are
 requirements verbatim. Highlights that are easy to get wrong:
@@ -117,12 +147,21 @@ requirements verbatim. Highlights that are easy to get wrong:
 - Liveness computed per §3.2; pruning is lazy (on read) — no background timer needed.
 - `GET /api/agents?projectKey=` returns computed `liveness` alongside stored fields.
 
-### 4.4 Test ingest
-- Raw path: server-side JUnit XML parser with exactly the client parsers' semantics
-  (failure/error → fail, skipped → pending, `time`s → duration_ms, `testsuites` or bare
-  `testsuite` root, file-or-directory `dataPath`, inline `data` alternative).
+### 4.4 Test ingest — codec translation layer (design revision 2026-07-14, from kickoff review)
+v1's ingest was JUnit-spined; tools without JUnit output were shoehorned in awkwardly and
+the BDD/Playwright runtime was never fully realized. v2 replaces "parsers" with a **codec
+registry** translating each tool's native output into one **canonical RunSchema**
+(summary + suite/case tree + coverage + compile diagnostics, tool-agnostic):
+
+- Codecs at parity: `junit` (with exactly the client parsers' semantics — failure/error →
+  fail, skipped → pending, `time`s → duration_ms, `testsuites` or bare `testsuite` root,
+  file-or-directory `dataPath`, inline `data`), `rustc`, `javac`, `python`, `tsc`.
+- New codecs: `playwright` (JSON reporter — feature → scenario → step, browser, trace
+  links), `vitest`, `tap`. Adding a stack = adding a codec; no core changes.
+- Every event is stamped with `stack` + `codec` (+ tool version) so the UI renders
+  stack-aware views (§4.11) and BDD becomes first-class for frontend projects.
 - Parsed path: accept summary/tree/coverage as-is (validate shape, don't recompute).
-- Both record a `kind:"test"` event and return `{ok, summary}`.
+- Both paths record a `kind:"test"` event and return `{ok, summary}`.
 
 ### 4.5 Compile ingest
 - Structured parsers per format: `rustc` (`error[EXXXX]` + `--> file:line:col`), java/
@@ -172,6 +211,14 @@ present stale data as live. Orchestrators may gate wave dispatch on `/api/health
   coverage shown at project level.
 - Localhost tool aesthetics: fast, dense, dark-friendly, zero build step.
 
+### 4.12 BDD harness for frontend projects (later wave)
+BDD-style UI testing applies only to `type:"frontend"` projects — and for those,
+Crucible is not just a sink: it can **harness and execute the BDD suite on the agent's
+behalf** using Playwright (agent asks `POST /api/v2/projects/{key}/bdd/run`; Crucible
+runs the suite against the project's `sutRoot`, ingests the result through the
+`playwright` codec, and returns the event id). This closes the v1 gap where the
+BDD/Playwright runtime was never fully realized. Scoped to a post-skeleton wave.
+
 ## 5 Quality requirements
 - Full TDD via the project's own tooling: `bun test`, JUnit reporter, lcov coverage,
   ingested to Crucible itself via `bun-crucible.py` / `crucible-report-bun`.
@@ -195,10 +242,8 @@ present stale data as live. Orchestrators may gate wave dispatch on `/api/health
 - CodeForge/Velocity integration beyond sharing the agent-protocol conventions.
 
 ## 8 Open questions
-- Should `tier` be inferred from the ingesting script's subcommand (unit/module/e2e/
-  regression) and sent explicitly by upgraded clients? (Legacy clients keep default
-  `unit`.)
-- Frontend-project BDD ingest format: Playwright JUnit XML suffices, or a dedicated
-  `format:"playwright"` with trace links?
 - Should events store the SUT git branch/commit (clients could send it; great for the
   timeline, needs client updates)?
+
+(Resolved 2026-07-14: upgraded clients send `tier` explicitly — §3.3; BDD uses the
+dedicated `playwright` codec with trace links, and Crucible can harness the run — §4.12.)

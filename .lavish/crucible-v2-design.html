@@ -234,9 +234,10 @@
         registration, JUnit/parsed/compile ingest, events, coverage-discard-on-fail.</p>
       </div>
       <div class="panel">
-        <h3>🔒 Non-negotiable</h3>
-        <p class="dim" style="font-size:13px">Wire compatibility: <code>rust-</code>/<code>mvn-</code>/<code>python-</code>/<code>bun-</code>/<code>arduino-crucible.py</code>
-        and the <code>crucible-report-*</code> skills must work <b>unmodified, day one</b>. Everything v2 adds is additive.</p>
+        <h3>🔒 Compatibility <span class="badge pass" style="font-size:9px">DECIDED Q6</span></h3>
+        <p class="dim" style="font-size:13px">The backend ships a <b>clean v2 API</b> (<code>/api/v2/*</code>, old API as reference);
+        the legacy fleet keeps working through a <b>thin v1 shim</b> on the original <code>/api/*</code> paths while the
+        <code>*-crucible.py</code> scripts + skills are upgraded to v2 + AXI. Shim retires when the fleet is migrated.</p>
       </div>
       <div class="panel">
         <h3>🎨 This review</h3>
@@ -267,7 +268,7 @@ flowchart TB
     COMPAT["v1 compat API — /api/* JSON<br/>(13 endpoints, byte-compatible)"]
     AXI["AXI layer — TOON negotiation,<br/>help hints, GET /api dashboard,<br/>register / unregister verbs"]
     CORE["Domain core<br/>projects · agents · runs · ingest state"]
-    PARSE["Parsers<br/>JUnit XML · rustc · javac · py · tsc"]
+    CODEC["Codec registry → canonical RunSchema<br/>junit · rustc · javac · py · tsc ·<br/>playwright · vitest · TAP · custom"]
     STORE["Store — in-memory +<br/>data/state.json snapshot"]
     SSE["SSE /api/stream<br/>+ keep-alive frames"]
     HEALTH["GET /api/health<br/>uptime · version · counts"]
@@ -279,7 +280,7 @@ flowchart TB
   clients -. "TOON (opt-in later)" .-> AXI
   COMPAT --> CORE
   AXI --> CORE
-  CORE --> PARSE
+  CORE --> CODEC
   CORE --> STORE
   CORE --> SSE
   SSE --> VAN
@@ -289,8 +290,11 @@ flowchart TB
 
     <p class="dim">The agent lifecycle v1 modeled implicitly (registration == first heartbeat) becomes explicit in v2 —
     <b>register and unregister are first-class verbs</b>, while heartbeat keeps its upsert behavior so old clients lose nothing.
-    Agents that fail to unregister decay through the v1 timeouts and end <b>tombstoned</b> — kept visible (greyed, with last
-    message and time-of-death) so a crashed agent is a diagnosable fact, not a silent disappearance; tombstones are pruned after 1&nbsp;h:</p>
+    Two refinements from your whiteboard: <b>every agent API call is an implicit heartbeat</b> — an agent busy ingesting runs
+    never needs a dedicated ping; explicit heartbeats only fill silent stretches (long compiles, thinking time). And the decay
+    <b>thresholds are configurable</b> — server-wide defaults (60s/300s/1h), overridable per project. Agents that fail to
+    unregister decay to <b>tombstoned</b> — kept visible (greyed, with last message and time-of-death) so a crashed agent is a
+    diagnosable fact, not a silent disappearance — then pruned:</p>
 
     <div class="mermaid">
 stateDiagram-v2
@@ -299,14 +303,19 @@ stateDiagram-v2
   state "stale 🟡" as stale
   state "tombstoned ⚰ (greyed in UI)" as tomb
   [*] --> online : POST register (or first heartbeat)
-  online --> online : heartbeat &lt; 60s
-  online --> stale : 60s silence
-  stale --> online : heartbeat
-  stale --> tomb : 300s silence
-  tomb --> online : heartbeat (resurrect)
-  tomb --> [*] : pruned after 1h
+  online --> online : activity &lt; T1 (any API call = implicit heartbeat)
+  online --> stale : T1 silence
+  stale --> online : activity
+  stale --> tomb : T2 silence
+  tomb --> online : activity (resurrect)
+  tomb --> [*] : pruned after T3
   online --> [*] : POST unregister (clean exit)
   stale --> [*] : POST unregister
+  note right of tomb
+    T1/T2/T3 configurable —
+    defaults 60s / 300s / 1h,
+    per-project override
+  end note
     </div>
 
     <div class="panel" style="margin-top:12px">
@@ -317,6 +326,21 @@ stateDiagram-v2
       <span class="badge fail">● backend unreachable</span> when keep-alives stop AND a health probe fails, and all "live" data
       visibly greys rather than silently going stale. Agents get the same signal: every AXI response echoes
       <code>server: healthy · up 4h12m</code>, and orchestrator scripts can gate on <code>/api/health</code> before dispatching a wave.</p>
+    </div>
+
+    <div class="panel" style="margin-top:12px; border-color: rgba(255,122,26,.35)">
+      <h3>⚗ Codec translation layer <span class="badge ember">new — from review feedback</span></h3>
+      <p class="dim" style="font-size:13.5px">v1's parsing was JUnit-spined, and it showed: tools that don't speak the JUnit
+      standard were shoehorned in awkwardly, and the BDD/Playwright runtime was never fully realized. v2 inverts this:
+      a <b>codec registry</b> where every test tool gets a first-class codec that translates its native output into one
+      <b>canonical RunSchema</b> — JUnit becomes just one codec among many, not the spine.</p>
+      <ul style="margin:6px 0; padding-left:18px; font-size:13px" class="dim">
+        <li style="margin:4px 0"><b style="color:var(--ink)">Canonical RunSchema</b> — summary + suite/case tree + coverage + compile diagnostics, tool-agnostic. Every event stores it, plus <code>stack</code> (rust/java/py/ts/…), <code>codec</code> (junit/nextest/playwright/…) and tool version.</li>
+        <li style="margin:4px 0"><b style="color:var(--ink)">Failure detail preserved</b> — v1 trees carried only name/status/duration; v2 leaves carry <code>failure: {message, type, trace}</code> from the tool output, so the UI can show the actual assertion message and stack trace of every failed test (see run drill-in, §4).</li>
+        <li style="margin:4px 0"><b style="color:var(--ink)">Codecs, not parsers</b> — <code>junit</code>, <code>rustc</code>, <code>javac</code>, <code>python</code>, <code>tsc</code> (v1 parity) + <code>playwright</code> (JSON reporter: features → scenarios → steps, browser, trace links), <code>vitest</code>, <code>TAP</code>. Adding a stack = adding a codec, no core changes.</li>
+        <li style="margin:4px 0"><b style="color:var(--ink)">Stack-aware UI</b> — the dashboard renders by codec: a nextest run shows crate→suite trees; a Playwright run shows feature→scenario→step with browser badges and trace links; a bare TAP stream still gets a sane generic view. The UI can always tell you <i>what kind</i> of run it's looking at.</li>
+        <li style="margin:4px 0"><b style="color:var(--ink)">BDD finally first-class</b> — frontend projects get the BDD axis as designed (not bolted on): Playwright/Vitest codecs, scenario-level pass/fail, and the unit|bdd ingest-state split v1 only stubbed.</li>
+      </ul>
     </div>
   </section>
 
@@ -382,6 +406,10 @@ stateDiagram-v2
     </div>
     <p class="annot"><b>Cost of the AXI layer:</b> a TOON serializer (~150 lines, zero deps), content negotiation,
     and hint-authoring per endpoint. No new process, no client changes required — legacy JSON is untouched.</p>
+    <p class="annot" style="border-left:3px solid var(--ember); padding-left:10px"><b>Where should AXI live?</b>
+    Your whiteboard note proposes a different split: the backend focuses on a <b>clean v2 API</b> (using the old one as
+    reference, not as a byte-frozen contract), while AXI adherence is implemented in the client python scripts — which are
+    fully ours to upgrade. That trades zero-day compat for a quirk-free API. Now decision <a href="#decide">Q6</a>.</p>
   </section>
 
   <!-- ══════════════════ TOON ══════════════════ -->
@@ -424,10 +452,21 @@ stateDiagram-v2
   <!-- ══════════════════ UI CONCEPTS ══════════════════ -->
   <section id="ui">
     <div class="kicker">Section 4</div>
-    <h2>Dashboard concepts — pick the backbone</h2>
-    <p class="dim">Three layout philosophies, mocked in the proposed Crucible design language (VanJS + VanX + VanUI
-    will render the real thing — these are faithful scaffolds, and every element shown maps to reconstructed data).
-    Click through, annotate anything, answer Q1 when ready.</p>
+    <h2>Dashboard concepts <span class="badge pass">DECIDED Q1: A + B hybrid</span></h2>
+    <p class="dim"><b style="color:var(--ink)">Decided:</b> Mission Control (A) is the home — cross-project cockpit;
+    clicking a project drills into its workspace (B) with tabs for Runs / Agents / Coverage / Compile / BDD.
+    Concept C (a single filterable live feed of every event with a pinned inspector) was the third philosophy — not chosen
+    as the backbone, but its <b>inspector idea survives as the run drill-in</b>:</p>
+    <div class="panel" style="border-color: rgba(74,222,128,.35); margin-bottom:8px">
+      <h3>🔍 Run drill-in — seeing the actual tests and errors</h3>
+      <p class="dim" style="font-size:13px">Every run card opens (click / <code>Enter</code>) into the full run detail:
+      the suite→test tree with per-test status and duration; each <b>failed test expands to its assertion message and
+      stack trace</b> (preserved by the codec via <code>failure: {message, type, trace}</code> — v1 never stored these);
+      compile events show per-file structured errors with the raw output one toggle away. In the A+B hybrid this renders
+      as a slide-over panel on the Mission Control timeline and as the Runs tab's detail view inside a project workspace.</p>
+    </div>
+    <p class="dim">The mocks below are faithful scaffolds — every element maps to reconstructed data. Styling ships as the
+    forge palette expressed as a custom DaisyUI theme (Q5).</p>
 
     <div class="cswitch">
       <button class="cbtn on" data-c="a">A · Mission Control <span class="badge ember" style="margin-left:6px">recommended</span></button>
@@ -569,10 +608,19 @@ stateDiagram-v2
   <!-- ══════════════════ DESIGN LANGUAGE ══════════════════ -->
   <section id="tokens">
     <div class="kicker">Section 5</div>
-    <h2>Design language — "forge" tokens</h2>
+    <h2>Design language — "forge" tokens <span class="badge pass">color scheme approved</span></h2>
     <p class="dim">This page is rendered in the proposed system itself: deep-charcoal surfaces, one molten accent,
-    mono-forward data typography, status colors reserved for status. Ships as ~40 CSS custom properties the Van components consume —
-    no Tailwind, no build step, dark-first with a light theme later.</p>
+    mono-forward data typography, status colors reserved for status. Per Q5, these tokens ship as a <b>custom DaisyUI
+    theme</b> (<code>--color-primary: #ff7a1a</code> etc.), so DaisyUI components arrive pre-skinned in forge.</p>
+    <div class="panel" style="border-color: rgba(96,165,250,.35); margin-bottom:12px">
+      <h3>🔬 What Lavish actually runs on <span class="badge info">examined via opensrc</span></h3>
+      <p class="dim" style="font-size:13px">Pulled <code>kunchenguid/lavish-axi@main</code> and read the source: artifact pages get
+      <b>Tailwind 4 browser runtime + DaisyUI 5</b> (classes compile in-browser — no build step); the editor chrome itself is
+      <b>vanilla JS</b> (<code>chrome-client.js</code>) — React 18 appears only as an Excalidraw dependency for whiteboards; Express 5
+      serves it. Crucible v2 adopts the same environment on Bun: <code>@tailwindcss/browser</code> + <code>daisyui</code> vendored,
+      <b>VanJS + VanX as the reactive layer</b> driving DaisyUI-classed DOM — the decided Q5 hybrid, and philosophically identical
+      to how Lavish itself is built.</p>
+    </div>
     <div class="cols cols-3">
       <div class="panel"><h3 style="color:var(--ember)">Ember #ff7a1a</h3><p class="dim" style="font-size:12.5px">Primary. Interactive + brand only — never status.</p></div>
       <div class="panel"><h3><span style="color:var(--pass)">pass</span> · <span style="color:var(--fail)">fail</span> · <span style="color:var(--pend)">pend</span></h3><p class="dim" style="font-size:12.5px">Status trio, backed by icons/shape — never color alone (liveness dots carry position + label).</p></div>
@@ -588,9 +636,9 @@ stateDiagram-v2
       <ul style="margin:4px 0; padding-left:18px">
         <li style="margin:6px 0"><b>Compat regressions</b> — the v1 contract has quirks (top-level <code>displayName</code> ignored, 400-on-duplicate <code>projects/add</code>, coverage-discard-on-fail). Mitigation: the compat surface gets contract tests derived line-by-line from the DN before any AXI work starts.</li>
         <li style="margin:6px 0"><b>TOON drift</b> — hand-rolled serializer vs the evolving spec. Mitigation: vendor the reference TS implementation (zero-dep) or pin our subset (tables + scalars + help lists) and document it.</li>
-        <li style="margin:6px 0"><b>VanUI depth</b> — VanUI covers modals/tabs/toasts but not trees or virtualized lists; suite trees at 1000+ cases need a hand-rolled Van component. Accepted: it's ~100 lines with VanX reactivity.</li>
-        <li style="margin:6px 0"><b>Heartbeat-in-stream noise</b> (Concept C) — heartbeats at 5-min cadence × many agents could drown runs. Default filter: runs only.</li>
-        <li style="margin:6px 0"><b>Open</b> — should upgraded clients send <code>tier</code> (unit/module/e2e/regression) and git branch/commit with each ingest? Legacy clients default to <code>unit</code>/unknown either way.</li>
+        <li style="margin:6px 0"><b>Component depth</b> — resolved by Q5: DaisyUI supplies the widget library (stats, timelines, badges, drawers); VanJS/VanX renders it. Only the virtualized suite tree stays hand-rolled (~100 lines with VanX reactivity).</li>
+        <li style="margin:6px 0"><b>Liveness without pings</b> — resolved: run/API activity IS the heartbeat (no dedicated ping loop), so there is no heartbeat noise to filter; the stream shows runs, liveness derives from activity.</li>
+        <li style="margin:6px 0"><b>Tiers &amp; test approaches</b> — resolved: upgraded clients send <code>tier</code> so the UI can represent them differently. unit / module / integration share the same tools per stack; <b>e2e is a different approach</b>; <b>BDD applies only to UI applications</b> — and for those, Crucible itself can <i>harness</i> the run (execute Playwright on the agent's behalf), a later-wave capability now in the PRD. Git branch/commit per ingest stays open.</li>
       </ul>
     </div>
   </section>
@@ -600,9 +648,20 @@ stateDiagram-v2
   <!-- ══════════════════ DECISIONS ══════════════════ -->
   <section id="decide">
     <div class="kicker">Section 7 · your call</div>
-    <h2>Decisions to queue back</h2>
-    <p class="dim">Pick, then hit <i>Queue answer</i> — selections stay local until you queue them, and nothing sends until you press
-    <i>Send to Agent</i>. Annotate any mock element directly for finer-grained feedback.</p>
+    <h2>Decisions — locked 2026-07-14 ✅</h2>
+    <div class="panel" style="border-color: rgba(74,222,128,.4)">
+      <table class="data">
+        <tbody>
+          <tr><td><b>Q1</b> Backbone</td><td><b>A + B hybrid</b> — Mission Control home, per-project workspace drill-in</td></tr>
+          <tr><td><b>Q2</b> TOON</td><td><b>Agent-facing reads first</b> (GET /api, events, status, agents)</td></tr>
+          <tr><td><b>Q3</b> AXI surface</td><td><b>REST AXI + <code>crucible-axi</code> npx CLI</b></td></tr>
+          <tr><td><b>Q4</b> Next step</td><td><b>Walking skeleton on develop</b>, then open the CR queue</td></tr>
+          <tr><td><b>Q5</b> UI stack</td><td><b>Hybrid</b> — VanJS + VanX reactivity, Tailwind 4 + DaisyUI 5 skin (forge as custom theme)</td></tr>
+          <tr><td><b>Q6</b> API strategy</td><td><b>Clean v2 API</b> (old as reference) + upgraded clients + thin v1 shim on legacy paths</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="dim" style="margin-top:10px">The forms below stay for reference — re-queue any answer to change a decision.</p>
 
     <form class="q" data-lavish-question="ui-concept" onsubmit="return queueAnswer(event, 'ui-concept', 'Adopt UI concept', 'For the Crucible v2 dashboard backbone, build UI concept')">
       <h3><span class="qid">Q1</span> Dashboard backbone</h3>
@@ -635,6 +694,24 @@ stateDiagram-v2
       <h3><span class="qid">Q4</span> Next step after this review</h3>
       <label><input type="radio" name="v" value="build the walking skeleton (compat API + chosen UI shell) on develop, then open the CR queue"><span><span class="ol">Walking skeleton first</span><br><span class="od">Compat API + chosen UI shell live on :3849, then CR wave for hardening.</span></span></label>
       <label><input type="radio" name="v" value="write the CR wave first (compat contract tests, AXI layer, UI) and dispatch RED/GREEN agents per the orchestration flow"><span><span class="ol">CR queue first</span><br><span class="od">Full TDD ceremony from the start — specs, RED/GREEN dispatch, Crucible dog-fooding itself once alive.</span></span></label>
+      <button class="qbtn" type="submit">Queue answer ➜</button>
+      <div class="qnote" data-status></div>
+    </form>
+
+    <form class="q" data-lavish-question="ui-stack" onsubmit="return queueAnswer(event, 'ui-stack', 'UI stack', 'For the dashboard rendering stack, use')">
+      <h3><span class="qid">Q5</span> UI rendering stack <span class="badge info">from your whiteboard</span></h3>
+      <label><input type="radio" name="v" value="VanJS + VanX + VanUI with the forge design tokens (vendored, no CDN)"><span><span class="ol">VanJS + VanX + VanUI</span><br><span class="od">v1 lineage; ~6KB total, fully vendored, hand-rolled forge CSS. Custom components (trees, meters) written in Van.</span></span></label>
+      <label><input type="radio" name="v" value="Lavish stack: Tailwind 4 browser runtime + DaisyUI 5, served by Bun (VanJS optional for reactivity)"><span><span class="ol">Lavish stack — Tailwind 4 + DaisyUI 5</span><br><span class="od">Rich component library out of the box (stats, timelines, badges, drawers), same look-and-feel family as Lavish. Heavier page; CDN or vendored build.</span></span></label>
+      <label><input type="radio" name="v" value="Hybrid: VanJS + VanX for reactive state/DOM, styled with Tailwind 4 + DaisyUI classes"><span><span class="ol">Hybrid — VanX reactivity, DaisyUI skin</span><br><span class="od">DaisyUI is CSS-only, so Van can render its classes: Van/VanX drive the live DOM, DaisyUI supplies the component styling. Best of both; two systems to know.</span></span></label>
+      <button class="qbtn" type="submit">Queue answer ➜</button>
+      <div class="qnote" data-status></div>
+    </form>
+
+    <form class="q" data-lavish-question="api-strategy" onsubmit="return queueAnswer(event, 'api-strategy', 'API strategy', 'For the v2 API strategy, go with')">
+      <h3><span class="qid">Q6</span> API strategy — compat vs clean <span class="badge info">from your whiteboard</span></h3>
+      <label><input type="radio" name="v" value="Byte-compatible v1 API + additive AXI layer in the server; clients unchanged (original proposal)"><span><span class="ol">Byte-compat + additive AXI</span><br><span class="od">Old fleet works day one, v1 quirks frozen forever (identity rules, 400-on-duplicate, snake_case sut_root).</span></span></label>
+      <label><input type="radio" name="v" value="Clean v2 API using the old as reference; AXI adherence implemented in upgraded client scripts; thin v1 shim during migration"><span><span class="ol">Clean v2 API + upgraded clients + transition shim</span><br><span class="od">Your whiteboard proposal. Backend gets a quirk-free API (proper REST verbs, canonical RunSchema, TOON); the *-crucible.py fleet and skills are upgraded to match; a thin /api/v1 shim bridges until the fleet is migrated.</span></span></label>
+      <label><input type="radio" name="v" value="Clean v2 API only, big-bang client fleet upgrade, no shim"><span><span class="ol">Clean v2, no shim</span><br><span class="od">Simplest backend; every script/skill must migrate before anything reports again.</span></span></label>
       <button class="qbtn" type="submit">Queue answer ➜</button>
       <div class="qnote" data-status></div>
     </form>
