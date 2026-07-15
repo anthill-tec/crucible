@@ -22,7 +22,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-011](CR-CRU-011-workflow-lens.md) | Cycle plans + workflow lens + agent runtimes | feature | PENDING | 007 | 4 (before 008) |
 | [CR-CRU-012](CR-CRU-012-projects-manager.md) | Projects manager: add + edit + archive | feature | PENDING | 004, 007 | 4 (before 009) |
 | [CR-CRU-013](CR-CRU-013-gate-events.md) | Workflow events: gates (no-mistakes) + milestones | feature | PENDING | 008, 011 | 4 (before 009) |
-| [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 opener) | 011, 013 | 0.2.0 W1 |
+| [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 opener) | 011, 013 | 5 (0.2.0) |
 
 ## Notes
 - 2026-07-14 — Project kickoff: PRD + evidence DN landed. Kickoff design review (lavish)

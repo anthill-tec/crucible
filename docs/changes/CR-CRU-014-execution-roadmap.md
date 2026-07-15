@@ -6,7 +6,7 @@ backend data structures designed NOW so 0.1.0 → 0.2.0 needs no migration)
 **Priority:** P2
 **Depends on:** CR-CRU-011, CR-CRU-013
 **Labels:** api, workflow, roadmap, ui
-**Phase:** 0.2.0 Wave 1
+**Phase:** Wave 5 — the 0.2.0 opener (waves number continuously across releases; user-corrected)
 **Design reference:** board rounds 23–24; storyboard F14 (roadmap table, drawn
 in the 0.1.0 design iteration for the clear picture)
 
@@ -45,15 +45,27 @@ title, depends-on, wave columns) → POST; `--from-file` override.
 ### §S3 Roadmap slide-over (workspace — placement resolved round 25)
 The workspace Project pane gains a **`roadmap` chip** opening a slide-over at
 `/p/<key>/roadmap` (deep-linkable, `← workspace` back chip, Esc/scrim close —
-the same overlay model as the run drill-in and `/manage`): Wave groups → CR
-rows with depends-on chips + derived status badges, the ACTIVE CR highlighted,
-rows linking into the Workflow tab's live view. Storyboard F14 is the contract.
+the same overlay model as the run drill-in and `/manage`).
+**Design inspiration (user-directed): the lavish review board's CR Queue &
+Status table** — rows in EXECUTION SEQUENCE derived from the depends-on graph
+(topological order), one line per CR, minimal status flags, wave-boundary and
+release-boundary divider rows. Columns: CR · title · wave · depends-on chips ·
+status badge (derived: PENDING / IN_PROGRESS / COMPLETED). A **graph view
+toggle** renders the same depends-on graph as nodes/edges (table is the
+default; graph is the alternate lens over identical data).
+**Live execution overlay (multi-track):** when the project has >1 active
+track, in-progress rows carry a live overlay — the executing track's lane
+badge + current cycle position (e.g. `track-2 ▶ cycle 3/5`), streaming over
+SSE from the open plan; single-track projects show the plain active highlight
+(no lane noise). Rows link into the Workflow tab's live view. Storyboard F14
+is the contract.
 
 ## Acceptance criteria
 - [ ] `POST /queue` with 3 entries → `GET /queue` returns them with derived statuses: a CR with no plan → `PENDING`; after `plan-file` → `IN_PROGRESS`; after plan close with merge → `COMPLETED` (single fixture walks all three).
 - [ ] Queue replace is idempotent and full-replace (POST twice → no duplicates; removing an entry removes it); unknown `dependsOn` target is accepted and flagged in the response.
 - [ ] `queue-file` against this repo's `docs/changes/README.md` registers every row of the CR table with correct wave + dependsOn (spot-assert CR-CRU-009's five dependencies).
-- [ ] Workspace Roadmap renders Wave groups → CR rows with depends-on chips and status badges matching `GET /queue`; the row whose plan is open carries the active highlight; clicking it lands on the Workflow tab.
+- [ ] Workspace Roadmap renders rows in topological (depends-on) execution order — one line per CR: CR · title · wave · depends-on chips · minimal status badge matching `GET /queue`, with wave/release boundary divider rows; a graph-view toggle renders the same data as a depends-on node graph; the row whose plan is open carries the active highlight; clicking it lands on the Workflow tab.
+- [ ] Live overlay: with two open plans on `track-1`/`track-2`, each in-progress row shows its lane badge + live cycle position (`track-N ▶ cycle a/b`, updating over SSE when a cycle activates); a single-track project's active row shows the plain highlight with NO lane badge.
 - [ ] E2E: register queue → file plan for one CR → its roadmap row flips PENDING→IN_PROGRESS live (SSE); close plan with merge → COMPLETED.
 
 ## Estimated size
