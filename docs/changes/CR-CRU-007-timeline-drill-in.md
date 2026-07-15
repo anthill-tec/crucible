@@ -59,23 +59,31 @@ post-0.1.0 register.)
 
 ### §S3 Drill-in slide-over (codec-aware)
 Opens from any run card / marker / coverage point; route suffix `/run/<eventId>`.
-Test body: suite→test tree; failed leaf expands to `failure.message` + `trace`
-(mono, red-accent box). Compile body: diagnostics grouped by file
+Test body — **F4 anatomy is the contract (user-corrected against the live
+render):** header `Run detail · <shortEventId>`; the tree renders as flat mono
+TREE LINES (▾/▸ suite headers with inline per-status counts like `3 ✗ 2 ✓`;
+leaf lines with ✓/✗/⏭ glyph + name + duration) — NOT bordered card boxes;
+**failing suites auto-expand in BOTH modes** (their leaves fetched immediately;
+passing suites stay collapsed rows); a failed leaf shows its `failure.message`
++ `trace` INLINE beneath it (mono, red-accent box, `at file:line` last); footer
+row: `▸ N more failures · toggle raw output` (jumps to the next failure; raw
+toggle reveals the stored raw output). Density (broad tiers) adds the F4½
+header: status chips `✗ failures N · ⏭ pending N · ✓ passed N` above the
+heat-strip. Compile body: diagnostics grouped by file
 (`file:line:col — message`, level-colored) + raw-output toggle.
 
 ### §S4 Density set (release 0.1.0 — approved F4½ verdicts; mode-switch revision 2026-07-15)
-0. **Tier-default mode + manual override (user revision, round 10 — supersedes
-   the round-8 global default)** — the drill-in's DEFAULT mode is contextual by
-   the run's `tier`: `regression` and `e2e` open in `Density`; every other tier
-   (unit/module/integration — the focused RED/GREEN/VERIFY/FIX cycle runs) opens
-   in `Detail`. The header Detail↔Density switch remains as the manual override;
-   the user's explicit choice is remembered per tier group (two localStorage
-   keys: focused / broad), seeded by the tier defaults. There is NO test-count
-   auto-decision anywhere. Compile-event drill-ins render NO mode switch — the
-   diagnostics-by-file body is their single form. `Detail` = the plain suite
-   tree. `Density` applies ideas 1–3 below. Ideas 4–5 (virtualization,
-   progressive payload) are always-on in both modes; idea 6
-   (comfortable/compact/ultra toggle) is independent of the mode.
+0. **Density is REGRESSION-ONLY (user-corrected during execution — supersedes
+   the round-10 everywhere-switch reading):** the Density view exists ONLY for
+   full regression test runs (broad tiers: `regression`, `e2e`). Focused
+   agent-driven runs (unit/module/integration) are ALWAYS `Detail` and render
+   **NO mode switch at all** — there is nothing to switch on a standard unit
+   run. Broad-tier drill-ins open in `Density` with the Detail↔Density switch
+   as the manual override (choice persisted for the broad group). No test-count
+   auto-decision anywhere. Compile-event drill-ins render NO mode switch.
+   `Detail` = the suite tree. `Density` applies ideas 1–3 below. Ideas 4–5
+   (virtualization, progressive payload) are always-on; idea 6
+   (comfortable/compact/ultra toggle) is independent.
 1. **Failures float, green folds** (Density mode) — all-pass suites collapse to one
    counted row; failing suites auto-expand; runs with 0 failures open with suites
    collapsed.
@@ -136,7 +144,8 @@ Test body: suite→test tree; failed leaf expands to `failure.message` + `trace`
 - [ ] A `context`-bearing event's card shows `branch@abc1234` + wave badge; a context-less event's card shows neither (no placeholder text).
 - [ ] Ingesting fail(2/5) then pass(5/5) for agents `CR-X-1-RED` / `CR-X-1-GREEN` renders exactly one marker row whose text matches `RED 2/5 ➜ GREEN 5/5` and includes a duration; pass-then-pass renders none. With `context.cycle: "checkpoint persistence"` on the GREEN run the marker additionally contains `Cycle: "checkpoint persistence"`; without it, no `Cycle:` segment renders.
 - [ ] Clicking a 🛠 card opens the drill-in with a diagnostics list grouped by file and a working raw-output toggle; clicking a 🧪 card shows the suite tree.
-- [ ] The drill-in header renders a Detail↔Density mode switch (data-testid `drillin-mode`); opening a `regression`-tier run defaults it to `Density` and a `unit`-tier run to `Detail`; flipping it on a regression run is remembered for the next regression/e2e open (localStorage) while unit-tier defaults stay untouched; no code path selects the mode from test count; a compile-event drill-in renders no `drillin-mode` element.
+- [ ] Density is regression-only: a `unit`-tier (and `module`/`integration`) drill-in renders NO `drillin-mode` element and is always Detail; a `regression`- or `e2e`-tier drill-in renders the switch defaulting to `Density`, and flipping it is remembered for the next broad-tier open (localStorage); no code path selects the mode from test count; a compile-event drill-in renders no `drillin-mode` element.
+- [ ] F4 anatomy: the test drill-in renders tree LINES (suite header with inline `F ✗ P ✓` counts; leaf lines with status glyph + name + duration — no card-box borders per row); a failing suite's leaves are auto-expanded on open in Detail mode (passing suites collapsed); the failed leaf's failure box (message + trace + `at file:line`) renders inline beneath it without a click; the footer renders `▸ N more failures · toggle raw output`, the jump advances to the next failure, and the raw toggle reveals the stored raw output; Density adds the status-chips row (`✗ … ⏭ … ✓ …`) above the heat-strip.
 - [ ] In Density mode, drill-in of a run with 0 failures opens with every suite collapsed to `name + ✓count` rows; a run with failures opens with ONLY failing suites expanded.
 - [ ] With Density mode ON, a 60-test fixture renders a heat-strip with 60 cells and clicking the first red cell expands that test's failure box (assert `failure.message` text visible); in Detail mode the same fixture renders no heat-strip.
 - [ ] In Density mode, 4 leaves with identical `failure.message` render as 1 row + an expander labeled `+3 identical`.
