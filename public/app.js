@@ -325,14 +325,138 @@
       );
     };
 
+    // ── §S1 (CR-CRU-007) — run card anatomy ─────────────────────────────
+    function fmtDuration(ms) {
+      const n = Math.max(0, Math.floor(ms));
+      if (n < 1000) return `${n}ms`;
+      const s = Math.floor(n / 1000);
+      if (s < 60) return `${s}s`;
+      return `${Math.floor(s / 60)}m ${s % 60}s`;
+    }
+
+    // Ratio pill: `N/N` green / `F ✗ of N` red / `E errors` amber (compile
+    // cards NEVER show a test-ratio shape).
+    const RatioPill = (e) => {
+      if (e.kind === "compile") {
+        return span(
+          { "data-testid": "ratio-pill", class: "app-pill app-ratio-error" },
+          `${e.errors ?? 0} errors`,
+        );
+      }
+      if (e.failed > 0) {
+        return span(
+          { "data-testid": "ratio-pill", class: "app-pill app-ratio-fail" },
+          `${e.failed} ✗ of ${e.total}`,
+        );
+      }
+      return span(
+        { "data-testid": "ratio-pill", class: "app-pill app-ratio-pass" },
+        `${e.passed}/${e.total}`,
+      );
+    };
+
+    // AC1 — context badges (branch@shortcommit + wave) render ONLY when the
+    // event carries a context; a context-less card renders an empty badge
+    // area (no placeholder text).
+    const CardBadges = (e) =>
+      div(
+        { "data-testid": "card-badges", class: "app-card-badges" },
+        e.context?.git !== undefined
+          ? span(
+              { "data-testid": "context-badge", class: "app-pill app-ctx-badge" },
+              `${e.context.git.branch}@${String(e.context.git.commit).slice(0, 7)}`,
+            )
+          : null,
+        e.context?.wave !== undefined && e.context?.wave !== null
+          ? span(
+              { "data-testid": "wave-badge", class: "app-pill app-ctx-badge" },
+              `W${e.context.wave}`,
+            )
+          : null,
+      );
+
+    // Compile cards preview the first 2 diagnostics inline (`file:line — msg`).
+    const DiagPreview = (e) =>
+      e.kind === "compile" && Array.isArray(e.diagnostics) && e.diagnostics.length > 0
+        ? div(
+            { "data-testid": "diag-preview", class: "app-diag-preview" },
+            e.diagnostics
+              .slice(0, 2)
+              .map((d) =>
+                div(
+                  { "data-testid": "diag-line", class: "app-diag-line" },
+                  `${d.file}:${d.line} — ${d.message}`,
+                ),
+              ),
+          )
+        : null;
+
     const EventCard = (e) =>
       div(
-        { class: "app-evt" },
-        span(e.failed > 0 ? "✗" : "✓"),
-        span(
-          `${e.agentId} · ${e.kind}/${e.tier} · ${e.passed}/${e.total} · ${rel(e.timestamp)}`,
+        { "data-testid": "event-card", class: "app-evt" },
+        span({ "data-testid": "card-icon", class: "app-card-icon" }, e.kind === "compile" ? "🛠" : "🧪"),
+        div(
+          { class: "app-evt-body" },
+          div(
+            { class: "app-evt-line" },
+            span({ class: "app-agent-id" }, e.agentId),
+            span({ "data-testid": "tier-badge", class: "app-pill app-tier-badge" }, e.tier),
+            e.codec !== undefined && e.codec !== null
+              ? span({ "data-testid": "codec-badge", class: "app-pill app-codec-badge" }, e.codec)
+              : null,
+            CardBadges(e),
+          ),
+          div(
+            { class: "app-evt-line app-card-meta" },
+            span({ "data-testid": "card-time" }, rel(e.timestamp)),
+            e.kind === "test"
+              ? span({ "data-testid": "card-duration" }, fmtDuration(e.duration_ms ?? 0))
+              : null,
+          ),
+          DiagPreview(e),
         ),
+        RatioPill(e),
       );
+
+    // ── §S2 (CR-CRU-007) — RED→GREEN transition markers (= Cycles) ──────
+    // `RED f/t ➜ GREEN t/t · Cycle: "<label>" · <stem> · <tier> · closed in
+    // <duration>` — the Cycle segment ONLY when the GREEN run's context.cycle
+    // is present. Click opens the GREEN run's drill-in.
+    function markerLabel(m) {
+      const red = m.redEvent;
+      const green = m.greenEvent;
+      const parts = [`RED ${red.failed}/${red.total} ➜ GREEN ${green.passed}/${green.total}`];
+      const cycle = green.context?.cycle;
+      if (typeof cycle === "string" && cycle.length > 0) parts.push(`Cycle: "${cycle}"`);
+      parts.push(m.stem);
+      if (green.tier !== undefined) parts.push(green.tier);
+      parts.push(`closed in ${fmtDuration(green.timestamp - red.timestamp)}`);
+      return parts.join(" · ");
+    }
+
+    const TransitionMarkerRow = (m) =>
+      div(
+        {
+          "data-testid": "transition-marker",
+          class: "app-transition-marker",
+          onclick: () => navigate(`/run/${encodeURIComponent(m.greenEvent.id)}`),
+        },
+        markerLabel(m),
+      );
+
+    // Feed rows: each Cycle's marker renders directly above its pair — i.e.
+    // immediately before the GREEN run's card in the (newest-first) feed.
+    function runFeed(events) {
+      const markers = L.pairTransitions(events);
+      const byGreenId = new Map(markers.map((m) => [m.greenEvent.id, m]));
+      const rows = [];
+      for (const e of events) {
+        const marker = byGreenId.get(e.id);
+        if (marker !== undefined) rows.push(TransitionMarkerRow(marker));
+        rows.push(EventCard(e));
+      }
+      return rows;
+    }
 
     const EmptyState = () => {
       const empty = L.emptyStates({ projects: state.projects, events: state.events });
@@ -357,7 +481,7 @@
         ),
         () =>
           state.backendUp ? span() : span({ class: "app-synced" }, syncedStamp()),
-        () => EmptyState() ?? div(visibleEvents().map(EventCard)),
+        () => EmptyState() ?? div(runFeed(visibleEvents())),
       );
 
     const Home = () => div({ class: "app-main app-home" }, Timeline());
@@ -411,7 +535,7 @@
           const runs = visibleEvents();
           return runs.length === 0
             ? div({ class: "app-empty" }, "no runs yet — ingest a run to light the forge")
-            : div(runs.map(EventCard));
+            : div(runFeed(runs));
         },
       );
 

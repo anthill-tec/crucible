@@ -84,6 +84,23 @@ export interface ProjectRollupLike {
   } | null;
 }
 
+// CR-CRU-007 §S2 — RED→GREEN transition markers (= Cycles), pure pairing.
+export interface TransitionEventLike {
+  id: string;
+  projectKey: string;
+  agentId: string;
+  kind: string;
+  timestamp: number;
+  failed: number;
+}
+
+export interface TransitionMarker<T extends TransitionEventLike = TransitionEventLike> {
+  redEvent: T;
+  greenEvent: T;
+  projectKey: string;
+  stem: string;
+}
+
 export interface EmptyStateInput {
   projects: unknown[];
   events: unknown[];
@@ -117,3 +134,7 @@ export declare function projectActivity(
 export declare function orderProjects<T extends OrderableProjectLike>(projects: T[]): T[];
 
 export declare function emptyStates(state: EmptyStateInput): EmptyStateResult | null;
+
+export declare function pairTransitions<T extends TransitionEventLike>(
+  events: T[],
+): Array<TransitionMarker<T>>;

@@ -115,6 +115,47 @@ export function emptyStates(state) {
   return null;
 }
 
+/**
+ * CR-CRU-007 §S2 — RED→GREEN transition markers (= Cycles), pure pairing.
+ * Same projectKey + same agent stem (agentId with a trailing -RED|-GREEN|-FIX
+ * suffix stripped, case-insensitive): a failing test run followed by a
+ * passing test run within 24h pairs into one marker. Pass-then-pass,
+ * different stems, or >24h apart pair nothing. Input order agnostic; never
+ * mutates the input array.
+ */
+export function pairTransitions(events) {
+  const CYCLE_WINDOW_MS = 24 * 60 * 60 * 1000;
+  const stemRaw = (agentId) => String(agentId).replace(/-(RED|GREEN|FIX)$/i, "");
+  const stemKey = (agentId) => stemRaw(agentId).toLowerCase();
+  const sorted = events
+    .filter((e) => e.kind === "test")
+    .slice()
+    .sort((a, b) => a.timestamp - b.timestamp);
+  const markers = [];
+  const paired = new Set();
+  for (let i = 0; i < sorted.length; i++) {
+    const red = sorted[i];
+    if (!(red.failed > 0)) continue;
+    for (let j = i + 1; j < sorted.length; j++) {
+      const green = sorted[j];
+      if (green.timestamp - red.timestamp > CYCLE_WINDOW_MS) break;
+      if (paired.has(green)) continue;
+      if (green.failed > 0) continue;
+      if (green.projectKey !== red.projectKey) continue;
+      if (stemKey(green.agentId) !== stemKey(red.agentId)) continue;
+      markers.push({
+        redEvent: red,
+        greenEvent: green,
+        projectKey: red.projectKey,
+        stem: stemRaw(red.agentId),
+      });
+      paired.add(green);
+      break;
+    }
+  }
+  return markers;
+}
+
 // Bridge for the nomodule app shell (app.js consumes window.CrucibleLogic).
 if (typeof window !== "undefined") {
   window.CrucibleLogic = {
@@ -127,5 +168,6 @@ if (typeof window !== "undefined") {
     projectActivity,
     orderProjects,
     emptyStates,
+    pairTransitions,
   };
 }

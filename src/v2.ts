@@ -4,6 +4,7 @@
 // with the v1 shim — src/server.ts wires handleV2 into its dispatcher.
 import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
+import type { CompileReport } from "./codecs/compile.ts";
 import { hints } from "./hints.ts";
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
@@ -433,8 +434,12 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
  * /events/:id). §S0 (CR-CRU-006) — run numbers hoisted to top-level scalars,
  * NO nested `summary`; compile events carry uniform numeric 0s so every brief
  * shares one all-scalar shape (TOON's uniform-table form applies).
+ * CR-CRU-007 §S1 (additive) — optional `context` passthrough (verbatim when
+ * stored, key ABSENT when not) + compile-event `errors`/`warnings` counts
+ * (test-event briefs carry neither key).
  */
 function eventBrief(event: RunEvent) {
+  const compile = event.kind === "compile" ? (event.compile as CompileReport | undefined) : undefined;
   return {
     id: event.id,
     projectKey: event.projectKey,
@@ -449,6 +454,10 @@ function eventBrief(event: RunEvent) {
     pending: event.summary?.pending ?? 0,
     duration_ms: event.summary?.duration_ms ?? 0,
     hasCoverage: !!event.coverage,
+    ...(event.context !== undefined ? { context: event.context } : {}),
+    ...(compile !== undefined
+      ? { errors: compile.errorCount, warnings: compile.warningCount }
+      : {}),
   };
 }
 

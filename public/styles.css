@@ -260,6 +260,53 @@ body {
   margin-bottom: 8px;
   font: 11px var(--mono);
 }
+.app-evt-body { flex: 1; min-width: 0; }
+.app-evt-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.app-card-icon { font-size: 13px; line-height: 1; }
+.app-card-badges { display: inline-flex; gap: 4px; }
+
+/* ── Run-card pills + badges (§S1 CR-CRU-007) ───────────────────────────── */
+.app-pill {
+  font: 600 9.5px var(--mono);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 6px;
+  color: var(--ink-dim);
+  background: var(--bg);
+  white-space: nowrap;
+}
+.app-ratio-pass { color: var(--pass); border-color: var(--pass); }
+.app-ratio-fail { color: var(--fail); border-color: var(--fail); }
+.app-ratio-error { color: var(--heat); border-color: var(--heat); }
+.app-ctx-badge { color: var(--ink-faint); }
+
+/* Compile-card diagnostics preview (first 2 lines, file:line — msg). */
+.app-diag-preview { margin-top: 4px; }
+.app-diag-line {
+  color: var(--fail);
+  font: 10px var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── RED→GREEN transition markers = Cycles (§S2 CR-CRU-007) ─────────────── */
+.app-transition-marker {
+  font: 600 10.5px var(--mono);
+  color: var(--heat);
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 4px 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  background: var(--bg);
+}
+
 .app-empty {
   color: var(--ink-faint);
   font: 12px var(--mono);
