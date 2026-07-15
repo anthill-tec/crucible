@@ -169,6 +169,53 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
   });
 
   // -------------------------------------------------------------------
+  // 2b. §S5.2 F8 vitals anatomy (user defect 2026-07-15) — eventBrief gains
+  //     optional `coverageLines` (the stored coverage's lines percent) on
+  //     coverage-bearing events, so the workspace coverage-trend card can
+  //     derive its bar chart from the already-loaded timeline slice without
+  //     a second round-trip. Absent (not null) on events with no coverage.
+  //     No other brief field changes.
+  // -------------------------------------------------------------------
+  test("eventBrief carries optional coverageLines (lines percent) on coverage-bearing events; absent otherwise; no other brief field changes", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const key = await createProject("brief-coverage-lines");
+
+    const withCovRes = await postJson("/api/v2/runs/parsed", {
+      projectKey: key,
+      agentId: "coverage-lines-agent",
+      summary: { total: 4, passed: 4, failed: 0, pending: 0, duration_ms: 90 },
+      tree: [{ name: "s", status: "pass", children: [{ name: "t1", status: "pass", duration_ms: 20 }] }],
+      coverage: { lines: { total: 100, covered: 90, percent: 90 } },
+    });
+    expect(withCovRes.status).toBe(200);
+
+    const noCovRes = await postJson("/api/v2/runs/parsed", {
+      projectKey: key,
+      agentId: "no-coverage-lines-agent",
+      summary: { total: 2, passed: 2, failed: 0, pending: 0, duration_ms: 10 },
+      tree: [{ name: "s", status: "pass", children: [{ name: "t1", status: "pass", duration_ms: 5 }] }],
+    });
+    expect(noCovRes.status).toBe(200);
+
+    const briefs = await listBriefs(key);
+    const withCovItem = briefs.find((e) => e.agentId === "coverage-lines-agent");
+    const noCovItem = briefs.find((e) => e.agentId === "no-coverage-lines-agent");
+    expect(withCovItem).toBeDefined();
+    expect(noCovItem).toBeDefined();
+
+    expect(withCovItem!.coverageLines).toBe(90);
+    expect("coverageLines" in noCovItem!).toBe(false);
+
+    // No other brief field changes — the rest of the coverage-bearing
+    // brief's shape is exactly what CR-CRU-006/007 already established.
+    expect(withCovItem!.hasCoverage).toBe(true);
+    expect(withCovItem!.total).toBe(4);
+    expect(withCovItem!.passed).toBe(4);
+    expect(withCovItem!.failed).toBe(0);
+    expect("summary" in withCovItem!).toBe(false);
+  });
+
+  // -------------------------------------------------------------------
   // 3. Regression guard — the flattened brief still carries NO `summary`
   //    key (CR-CRU-006 §S0 cross-surface contract intact).
   // -------------------------------------------------------------------

@@ -82,6 +82,45 @@ const VAN_X_SRC = readFileSync(
 );
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
+const STYLES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8");
+
+/** Extracts a CSS rule's `{ ... }` body for an EXACT selector text (first
+ * match) — same convention as tests/drill-in.test.ts's F4-anatomy CSS grep
+ * tests. */
+function ruleBodyFor(selector: string): string | undefined {
+  const idx = STYLES_SRC.indexOf(selector);
+  if (idx === -1) return undefined;
+  const braceStart = STYLES_SRC.indexOf("{", idx);
+  const braceEnd = STYLES_SRC.indexOf("}", braceStart);
+  if (braceStart === -1 || braceEnd === -1) return undefined;
+  return STYLES_SRC.slice(braceStart + 1, braceEnd);
+}
+
+function ruleBodyForClass(cls: string): string | undefined {
+  return ruleBodyFor(`.${cls} {`) ?? ruleBodyFor(`.${cls}{`);
+}
+
+/** Finds the FIRST class on `el` whose styles.css rule body satisfies
+ * `predicate` — used when the AC pins a visual property (e.g. "the ember
+ * accent") without pinning the exact class name GREEN will choose. */
+function matchingRuleBody(el: Element, predicate: (body: string) => boolean): string | undefined {
+  const classes = (el.className || "").toString().split(/\s+/).filter(Boolean);
+  for (const cls of classes) {
+    const body = ruleBodyForClass(cls);
+    if (body !== undefined && predicate(body)) return body;
+  }
+  return undefined;
+}
+
+/** Combines an element's inline style with its class rule bodies — used to
+ * find "ember" vs "ember-dim" color evidence regardless of whether GREEN
+ * encodes it via inline style or a CSS class. */
+function colorEvidence(el: Element): string {
+  const inline = el.getAttribute("style") ?? "";
+  const classes = (el.className || "").toString().split(/\s+/).filter(Boolean);
+  const bodies = classes.map((c) => ruleBodyForClass(c) ?? "").join(" ");
+  return `${inline} ${bodies}`;
+}
 
 interface AgentFixture {
   agentId: string;
@@ -106,6 +145,9 @@ interface EventFixture {
   pending: number;
   duration_ms: number;
   hasCoverage: boolean;
+  /** §S5.2 F8 vitals anatomy (user defect 2026-07-15) — the coverage-trend
+   * card's bars derive from this already-loaded field. */
+  coverageLines?: number;
 }
 
 interface ProjectFixture {
@@ -118,6 +160,9 @@ interface ProjectFixture {
   lastActivity?: number;
   lastEvent?: unknown;
   latestGreenCoverage?: unknown;
+  /** §S5 Coverage tab (user defect 2026-07-15) — id of the event backing
+   * `latestGreenCoverage`, same field asserted in tests/coverage-click.test.ts. */
+  latestCoverageEventId?: string;
 }
 
 interface MountOpts {
@@ -816,5 +861,454 @@ describe("§S2 fidelity #7 — streak-based transition markers", () => {
     expect(markers.length).toBe(1);
     expect(markers[0]!.redEvent.id).toBe("edge-r1");
     expect(markers[0]!.greenEvent.id).toBe("edge-r3");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 8. §S5 Coverage tab (user defect 2026-07-15) — the CR-006 placeholder
+//    `<tab> lands in CR-CRU-007` is still the only body behind the Coverage
+//    tab today; this pins the real latest-green-coverage panel.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("§S5 Coverage tab (user defect 2026-07-15)", () => {
+  test("selecting the Coverage tab renders the coverage-panel with both lines and functions metrics, plus a coverage-view-run control that opens the drill-in", async () => {
+    const key = "cov-tab-p1";
+    const eventId = "evt-cov-tab-p1";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        project({
+          key,
+          name: "Cov Tab Project",
+          latestGreenCoverage: {
+            lines: { covered: 1736, total: 1849, percent: 93.9 },
+            functions: { covered: 199, total: 208, percent: 95.7 },
+          },
+          latestCoverageEventId: eventId,
+        }),
+      ],
+    });
+
+    const coverageTab = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((el) => (el.textContent ?? "").includes("Coverage"));
+    expect(coverageTab).toBeDefined();
+    expect(coverageTab!.hasAttribute("disabled")).toBe(false);
+    coverageTab!.click();
+    await settle();
+
+    const panel = document.querySelector('[data-testid="coverage-panel"]');
+    expect(panel).not.toBeNull();
+    const panelText = panel!.textContent ?? "";
+    expect(panelText).toContain("93.9%");
+    expect(panelText).toContain("1736/1849");
+    expect(panelText).toContain("95.7%");
+    expect(panelText).toContain("199/208");
+
+    expect(document.querySelector('[data-testid="run-overlay"]')).toBeNull();
+    const viewRun = panel!.querySelector('[data-testid="coverage-view-run"]') as HTMLElement | null;
+    expect(viewRun).not.toBeNull();
+    viewRun!.click();
+    await settle();
+
+    expect(location.pathname).toBe(`/p/${key}/run/${eventId}`);
+    expect(document.querySelector('[data-testid="run-overlay"]')).not.toBeNull();
+  });
+
+  test("no tab ever renders the stale CR-CRU-007 placeholder text", async () => {
+    const key = "cov-tab-p2";
+    const eventId = "evt-cov-tab-p2";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        project({
+          key,
+          name: "Placeholder Check Project",
+          type: "frontend",
+          latestGreenCoverage: { lines: { covered: 5, total: 10, percent: 50 } },
+          latestCoverageEventId: eventId,
+        }),
+      ],
+    });
+
+    const tabs = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'));
+    expect(tabs.length).toBe(4);
+    for (const tab of tabs) {
+      if (tab.hasAttribute("disabled")) continue;
+      tab.click();
+      await settle();
+      const body = document.querySelector('[data-testid="workspace-body"]');
+      expect(body).not.toBeNull();
+      expect(body!.textContent ?? "").not.toContain("lands in CR-CRU-007");
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 9. §S5 Compile/BDD tab bodies (user defect 2026-07-15) — F5 COMPILE PANEL
+//    + the BDD placeholder naming the real landing CR.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("§S5 Compile/BDD tab bodies (user defect 2026-07-15)", () => {
+  test("selecting the Compile tab renders exactly the compile-kind cards (same card anatomy/testids as Runs)", async () => {
+    const key = "compile-tab-p1";
+    const now = Date.now();
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Compile Tab Project" })],
+      events: [
+        { id: "ct-t1", projectKey: key, agentId: "compile-tab-test-1", kind: "test", tier: "unit", timestamp: now, total: 2, passed: 2, failed: 0, pending: 0, duration_ms: 50, hasCoverage: false },
+        { id: "ct-t2", projectKey: key, agentId: "compile-tab-test-2", kind: "test", tier: "unit", timestamp: now + 100, total: 2, passed: 1, failed: 1, pending: 0, duration_ms: 60, hasCoverage: false },
+        { id: "ct-c1", projectKey: key, agentId: "compile-tab-compile-1", kind: "compile", tier: "unit", timestamp: now + 200, total: 0, passed: 0, failed: 0, pending: 0, duration_ms: 70, hasCoverage: false },
+        { id: "ct-c2", projectKey: key, agentId: "compile-tab-compile-2", kind: "compile", tier: "unit", timestamp: now + 300, total: 0, passed: 0, failed: 0, pending: 0, duration_ms: 80, hasCoverage: false },
+      ],
+    });
+
+    const compileTab = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((el) => (el.textContent ?? "").trim() === "Compile");
+    expect(compileTab).toBeDefined();
+    compileTab!.click();
+    await settle();
+
+    const body = document.querySelector('[data-testid="workspace-body"]')!;
+    const cards = body.querySelectorAll('[data-testid="event-card"]');
+    expect(cards.length).toBe(2);
+    for (const card of Array.from(cards)) {
+      const iconGlyph = card.querySelector('[data-testid="icon-glyph"]');
+      expect(iconGlyph).not.toBeNull();
+      expect(iconGlyph!.getAttribute("data-kind")).toBe("compile");
+      expect(card.querySelector('[data-testid="ratio-pill"]')).not.toBeNull();
+    }
+  });
+
+  test("Compile tab with 0 compile events renders 'no compile events yet'", async () => {
+    const key = "compile-tab-p2";
+    const now = Date.now();
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Empty Compile Tab Project" })],
+      events: [
+        { id: "ect-t1", projectKey: key, agentId: "empty-compile-test-1", kind: "test", tier: "unit", timestamp: now, total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 10, hasCoverage: false },
+      ],
+    });
+
+    const compileTab = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((el) => (el.textContent ?? "").trim() === "Compile");
+    expect(compileTab).toBeDefined();
+    compileTab!.click();
+    await settle();
+
+    const body = document.querySelector('[data-testid="workspace-body"]')!;
+    expect(body.querySelectorAll('[data-testid="event-card"]').length).toBe(0);
+    expect(body.textContent ?? "").toContain("no compile events yet");
+  });
+
+  test("BDD tab body text names the real landing CR (CR-CRU-015) and never CR-CRU-007", async () => {
+    const key = "bdd-tab-p1";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "BDD Tab Project", type: "frontend" })],
+    });
+
+    const bddTab = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((el) => (el.textContent ?? "").trim() === "BDD");
+    expect(bddTab).toBeDefined();
+    expect(bddTab!.hasAttribute("disabled")).toBe(false);
+    bddTab!.click();
+    await settle();
+
+    const body = document.querySelector('[data-testid="workspace-body"]')!;
+    expect(body.textContent ?? "").toContain("CR-CRU-015");
+    expect(body.textContent ?? "").not.toContain("CR-CRU-007");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 10. §S5.2 F7/F8 fidelity contract (user defect 2026-07-15, "coverage meter
+//     too thin… doesn't look distinct… color scheme uninspiring") — pane
+//     section titles, the F8 mock's ember `.meter`, the dual coverage
+//     caption, vitals card anatomy, and the universal status palette.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("§S5 fidelity #5b — F7/F8 Project pane visual fidelity: section titles + ember coverage meter + dual caption", () => {
+  test("renders exactly two pane-section-title elements ('Project' above the card, 'Vitals' above the vitals cards), each styled with the ember accent + wide letter-spacing", async () => {
+    const key = "f7f8-p1";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        project({
+          key,
+          name: "F7F8 Project",
+          latestGreenCoverage: {
+            lines: { covered: 1736, total: 1849, percent: 93.9 },
+            functions: { covered: 199, total: 208, percent: 95.7 },
+          },
+        }),
+      ],
+    });
+
+    const pane = document.querySelector('[data-testid="project-pane"]');
+    expect(pane).not.toBeNull();
+    const titles = pane!.querySelectorAll('[data-testid="pane-section-title"]');
+    expect(titles.length).toBe(2);
+    const texts = Array.from(titles).map((t) => (t.textContent ?? "").trim());
+    expect(texts).toContain("Project");
+    expect(texts).toContain("Vitals");
+
+    for (const title of Array.from(titles)) {
+      const body = matchingRuleBody(title, (b) => /color:\s*var\(--ember\)/.test(b));
+      expect(body).toBeDefined();
+      const lsMatch = /letter-spacing:\s*([\d.]+)em/.exec(body ?? "");
+      expect(lsMatch).not.toBeNull();
+      expect(parseFloat(lsMatch![1]!)).toBeGreaterThanOrEqual(0.14);
+    }
+
+    const projectTitle = Array.from(titles).find((t) => (t.textContent ?? "").trim() === "Project")!;
+    const vitalsTitle = Array.from(titles).find((t) => (t.textContent ?? "").trim() === "Vitals")!;
+    const card = pane!.querySelector(".app-pane-card");
+    expect(card).not.toBeNull();
+    expect((projectTitle.compareDocumentPosition(card!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(
+      true,
+    );
+    const cycleCard = document.querySelector('[data-testid="cycle-health-card"]');
+    expect(cycleCard).not.toBeNull();
+    expect(
+      (vitalsTitle.compareDocumentPosition(cycleCard!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true);
+  });
+
+  test("coverage meter is 6px tall, fully rounded, borderless, with an ember-gradient fill; the project-card caption carries both metrics ('cov 93.9% lines · fn 95.7%')", async () => {
+    const key = "f7f8-p2";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        project({
+          key,
+          name: "F7F8 Meter Project",
+          latestGreenCoverage: {
+            lines: { covered: 1736, total: 1849, percent: 93.9 },
+            functions: { covered: 199, total: 208, percent: 95.7 },
+          },
+        }),
+      ],
+    });
+
+    const pane = document.querySelector('[data-testid="project-pane"]')!;
+    const meter = pane.querySelector('[data-testid="coverage-meter"]') as HTMLElement | null;
+    expect(meter).not.toBeNull();
+
+    // Direct, spec-literal check against the KNOWN production class names
+    // (`.app-meter` / `.app-meter-fill`) — the AC quotes these verbatim.
+    const meterRule = ruleBodyFor(".app-meter {") ?? ruleBodyFor(".app-meter{");
+    expect(meterRule).toBeDefined();
+    expect(meterRule).toMatch(/height:\s*6px/);
+    expect(meterRule).toMatch(/border-radius:\s*999px/);
+    expect(meterRule).not.toMatch(/\bborder\b/);
+
+    const fillRule = ruleBodyFor(".app-meter-fill {") ?? ruleBodyFor(".app-meter-fill{");
+    expect(fillRule).toBeDefined();
+    expect(fillRule).toMatch(/linear-gradient\(90deg,\s*var\(--ember-dim\),\s*var\(--ember\)\)/);
+
+    const fill = meter!.querySelector(".app-meter-fill") as HTMLElement | null;
+    expect(fill).not.toBeNull();
+    expect(fill!.getAttribute("style") ?? "").toMatch(/width:\s*93\.9%/);
+
+    const card = pane.querySelector(".app-pane-card")!;
+    expect(card.textContent ?? "").toContain("cov 93.9% lines · fn 95.7%");
+  });
+});
+
+describe("§S5 fidelity #5c — F8 Vitals card anatomy: coverage-trend bars + label-over-value hierarchy", () => {
+  test("coverage-trend renders 'COVERAGE TREND (green regressions)' + one bar per green-coverage point (oldest→newest, latest bright ember, earlier ember-dim) + the first→latest caption", async () => {
+    const key = "f8-vitals-p1";
+    const t0 = Date.now() - 40_000;
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        project({
+          key,
+          name: "F8 Vitals Trend Project",
+          latestGreenCoverage: { lines: { covered: 873, total: 1000, percent: 87.3 } },
+        }),
+      ],
+      events: [
+        { id: "trend-1", projectKey: key, agentId: "trend-agent-1", kind: "test", tier: "regression", timestamp: t0, total: 10, passed: 10, failed: 0, pending: 0, duration_ms: 500, hasCoverage: true, coverageLines: 82.1 },
+        { id: "trend-2", projectKey: key, agentId: "trend-agent-2", kind: "test", tier: "regression", timestamp: t0 + 1000, total: 10, passed: 10, failed: 0, pending: 0, duration_ms: 500, hasCoverage: true, coverageLines: 84.0 },
+        { id: "trend-3", projectKey: key, agentId: "trend-agent-3", kind: "test", tier: "regression", timestamp: t0 + 2000, total: 10, passed: 10, failed: 0, pending: 0, duration_ms: 500, hasCoverage: true, coverageLines: 86.2 },
+        { id: "trend-4", projectKey: key, agentId: "trend-agent-4", kind: "test", tier: "regression", timestamp: t0 + 3000, total: 10, passed: 10, failed: 0, pending: 0, duration_ms: 500, hasCoverage: true, coverageLines: 87.3 },
+      ],
+    });
+
+    const trendCard = document.querySelector('[data-testid="coverage-trend-card"]');
+    expect(trendCard).not.toBeNull();
+    expect(trendCard!.textContent ?? "").toContain("COVERAGE TREND (green regressions)");
+
+    const bars = trendCard!.querySelectorAll('[data-testid="coverage-trend-bar"]');
+    expect(bars.length).toBe(4);
+
+    const heights = Array.from(bars).map((b) => {
+      const style = (b as HTMLElement).getAttribute("style") ?? "";
+      const m = /(\d+(?:\.\d+)?)%/.exec(style);
+      expect(m).not.toBeNull();
+      return parseFloat(m![1]!);
+    });
+    for (let i = 1; i < heights.length; i++) {
+      expect(heights[i]).toBeGreaterThan(heights[i - 1]!);
+    }
+
+    const lastBar = bars[bars.length - 1] as HTMLElement;
+    const earlierBars = Array.from(bars).slice(0, -1) as HTMLElement[];
+    const lastEvidence = colorEvidence(lastBar);
+    expect(lastEvidence).toContain("var(--ember)");
+    expect(lastEvidence).not.toContain("var(--ember-dim)");
+    for (const bar of earlierBars) {
+      expect(colorEvidence(bar)).toContain("var(--ember-dim)");
+    }
+
+    expect(trendCard!.textContent ?? "").toContain("82.1 → 87.3% lines");
+  });
+
+  test("coverage-trend caption falls back to 'latest green coverage <p>%' with exactly 1 point", async () => {
+    const key = "f8-vitals-p2";
+    const now = Date.now();
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        project({
+          key,
+          name: "F8 Vitals Single Point",
+          latestGreenCoverage: { lines: { covered: 7, total: 10, percent: 70 } },
+        }),
+      ],
+      events: [
+        { id: "single-trend-1", projectKey: key, agentId: "single-trend-agent", kind: "test", tier: "regression", timestamp: now, total: 10, passed: 10, failed: 0, pending: 0, duration_ms: 400, hasCoverage: true, coverageLines: 70 },
+      ],
+    });
+
+    const trendCard = document.querySelector('[data-testid="coverage-trend-card"]');
+    expect(trendCard).not.toBeNull();
+    // The F8 dim-uppercase label is present regardless of point count — this
+    // is the real RED signal (today's card just says "coverage trend").
+    expect(trendCard!.textContent ?? "").toContain("COVERAGE TREND (green regressions)");
+    expect(trendCard!.textContent ?? "").toContain("latest green coverage 70%");
+    // Bound: with exactly 1 point, no bar chart renders — just the caption.
+    expect(trendCard!.querySelectorAll('[data-testid="coverage-trend-bar"]').length).toBe(0);
+  });
+
+  test("label-over-value hierarchy on BOTH vitals cards: dim uppercase label ABOVE a bright/600 value line", async () => {
+    const key = "f8-vitals-p3";
+    const t0 = Date.now() - 10_000;
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        project({
+          key,
+          name: "F8 Label Over Value Project",
+          latestGreenCoverage: { lines: { covered: 7, total: 10, percent: 70 } },
+        }),
+      ],
+      events: [
+        { id: "lov-red", projectKey: key, agentId: "LOV-STEM-RED", kind: "test", tier: "unit", timestamp: t0, total: 5, passed: 3, failed: 2, pending: 0, duration_ms: 40, hasCoverage: false },
+        { id: "lov-green", projectKey: key, agentId: "LOV-STEM-GREEN", kind: "test", tier: "unit", timestamp: t0 + 1000, total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 60, hasCoverage: true, coverageLines: 70 },
+      ],
+    });
+
+    for (const testid of ["cycle-health-card", "coverage-trend-card"]) {
+      const card = document.querySelector(`[data-testid="${testid}"]`);
+      expect(card).not.toBeNull();
+      const label = card!.querySelector('[data-testid="vitals-card-label"]') as HTMLElement | null;
+      const value = card!.querySelector('[data-testid="vitals-card-value"]') as HTMLElement | null;
+      expect(label).not.toBeNull();
+      expect(value).not.toBeNull();
+      expect((label!.compareDocumentPosition(value!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(
+        true,
+      );
+    }
+
+    const cycleLabel = document.querySelector(
+      '[data-testid="cycle-health-card"] [data-testid="vitals-card-label"]',
+    );
+    expect((cycleLabel!.textContent ?? "").trim()).toBe("CYCLE HEALTH (7d)");
+    const cycleValue = document.querySelector(
+      '[data-testid="cycle-health-card"] [data-testid="vitals-card-value"]',
+    ) as HTMLElement;
+    expect((cycleValue!.textContent ?? "")).toMatch(/^\d+ RED→GREEN · median .+$/);
+    const valueWeightBody = matchingRuleBody(cycleValue, (b) => /font-weight:\s*600/.test(b));
+    expect(valueWeightBody).toBeDefined();
+
+    const trendLabel = document.querySelector(
+      '[data-testid="coverage-trend-card"] [data-testid="vitals-card-label"]',
+    );
+    expect((trendLabel!.textContent ?? "").trim()).toBe("COVERAGE TREND (green regressions)");
+  });
+});
+
+describe("§S5 fidelity #5d — F8 pane status palette (pass-green / fail-red, never neutral)", () => {
+  test("the project card's latest-run status line carries the pass-green class when the latest run passes, and the fail-red class on a failing-latest fixture", async () => {
+    const passKey = "palette-pass-1";
+    const now = Date.now();
+    await mountApp({
+      pathname: `/p/${passKey}`,
+      projects: [
+        project({
+          key: passKey,
+          name: "Palette Pass Project",
+          lastEvent: { total: 446, passed: 446, failed: 0, timestamp: now },
+        }),
+      ],
+    });
+    const passLine = document.querySelector('[data-testid="project-status-line"]');
+    expect(passLine).not.toBeNull();
+    expect((passLine!.textContent ?? "")).toContain("✓ green · 446/446");
+    expect(passLine!.className).toContain("app-ratio-pass");
+    expect(passLine!.className).not.toContain("app-ratio-fail");
+
+    const failKey = "palette-fail-1";
+    await mountApp({
+      pathname: `/p/${failKey}`,
+      projects: [
+        project({
+          key: failKey,
+          name: "Palette Fail Project",
+          lastEvent: { total: 10, passed: 7, failed: 3, timestamp: now },
+        }),
+      ],
+    });
+    const failLine = document.querySelector('[data-testid="project-status-line"]');
+    expect(failLine).not.toBeNull();
+    expect((failLine!.textContent ?? "")).toContain("✗ 3 failed of 10");
+    expect(failLine!.className).toContain("app-ratio-fail");
+    expect(failLine!.className).not.toContain("app-ratio-pass");
+  });
+
+  test("cycle-health value's RED token carries the fail-red class and the GREEN token the pass-green class — the same status classes the timeline uses", async () => {
+    const key = "palette-cycle-1";
+    const t0 = Date.now() - 10_000;
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Palette Cycle Project", latestGreenCoverage: null })],
+      events: [
+        { id: "pc-red", projectKey: key, agentId: "PC-STEM-RED", kind: "test", tier: "unit", timestamp: t0, total: 5, passed: 3, failed: 2, pending: 0, duration_ms: 40, hasCoverage: false },
+        { id: "pc-green", projectKey: key, agentId: "PC-STEM-GREEN", kind: "test", tier: "unit", timestamp: t0 + 1000, total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 60, hasCoverage: false },
+      ],
+    });
+
+    const value = document.querySelector(
+      '[data-testid="cycle-health-card"] [data-testid="vitals-card-value"]',
+    );
+    expect(value).not.toBeNull();
+    const redToken = Array.from(value!.querySelectorAll("span")).find(
+      (s) => (s.textContent ?? "").trim() === "RED",
+    );
+    const greenToken = Array.from(value!.querySelectorAll("span")).find(
+      (s) => (s.textContent ?? "").trim() === "GREEN",
+    );
+    expect(redToken).toBeDefined();
+    expect(greenToken).toBeDefined();
+    expect(redToken!.className).toContain("app-ratio-fail");
+    expect(greenToken!.className).toContain("app-ratio-pass");
   });
 });

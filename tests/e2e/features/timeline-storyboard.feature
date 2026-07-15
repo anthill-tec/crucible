@@ -69,7 +69,7 @@ Feature: CR-CRU-007 timeline — storyboard frames F2-F8
     Then the project pane contains "50%"
     When a second green regression run with 90% coverage is ingested for agent "agent-f7"
     Then the project pane contains "90%" within 2 seconds
-    And the project pane no longer contains "coverage 50%"
+    And the project pane no longer contains "cov 50%"
 
   Scenario: F8 clicking a projects-row badge lands on the workspace: no Agents tab, right Project pane with ⌁ agents, ← projects breadcrumb present
     Given a project named "F8 Project" is registered with an online agent "agent-f8" (message "workspace-bound agent")

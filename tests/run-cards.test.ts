@@ -1,8 +1,11 @@
 // CR-CRU-007 §S1 — run card anatomy: kind icon, agentId, tier+codec badges,
 // context badges (branch@shortcommit + wave, omitted when absent), relative
 // time, duration, ratio pill (`N/N` green / `F ✗ of N` red / `E errors`
-// amber for compile), and the compile-card diagnostics preview (first 2
-// lines, `file:line — message`).
+// pass-green when E=0 else fail-red for compile — RECONCILED 2026-07-15,
+// user defect: the original amber `app-ratio-error` compile pill predated
+// the UNIVERSAL status palette rule, see docs/changes/CR-CRU-007-timeline-drill-in.md
+// §S1), and the compile-card diagnostics preview (first 2 lines,
+// `file:line — message`).
 //
 // Drives the REAL production public/app.js shell inside a happy-dom window
 // — same harness pattern as tests/shell-final-form.test.ts (idempotent
@@ -243,7 +246,7 @@ describe("§S1 run card anatomy", () => {
     expect(pill!.className).toContain("app-ratio-fail");
   });
 
-  test("compile-event card renders 🛠 icon, an amber error-count pill (never a test ratio), and the first 2 diagnostics inline (file:line — message)", async () => {
+  test("compile-event card renders 🛠 icon, a fail-red error-count pill when errors>0 (never a test ratio), and the first 2 diagnostics inline (file:line — message)", async () => {
     const now = Date.now();
     await mountApp({
       pathname: "/",
@@ -297,7 +300,12 @@ describe("§S1 run card anatomy", () => {
     expect(pill).not.toBeNull();
     const pillText = (pill!.textContent ?? "").trim();
     expect(pillText).toBe("3 errors");
-    expect(pill!.className).toContain("app-ratio-error");
+    // RECONCILED (2026-07-15, user defect — pill palette): errors>0 is
+    // fail-red (SAME class a failing N/N test pill carries), never the
+    // retired amber `app-ratio-error` class — was:
+    // `expect(pill!.className).toContain("app-ratio-error")`.
+    expect(pill!.className).toContain("app-ratio-fail");
+    expect(pill!.className).not.toContain("app-ratio-error");
     // bound: never a test-ratio shape (no "/" fraction, no "✗").
     expect(pillText).not.toContain("/");
     expect(pillText).not.toContain("✗");
@@ -309,6 +317,63 @@ describe("§S1 run card anatomy", () => {
     expect((lines[0]!.textContent ?? "").trim()).toBe("src/lib.rs:12 — mismatched types");
     expect((lines[1]!.textContent ?? "").trim()).toBe("src/a.rs:1 — unused import");
     expect(diagPreview!.textContent ?? "").not.toContain("third diagnostic");
+  });
+});
+
+// CR-CRU-007 §S1 (user defect 2026-07-15) — compile card pill palette: a
+// compile card with `errors:0` renders its `0 errors` pill with the SAME
+// pass-green class as an N/N test pill; with `errors:3` the `3 errors` pill
+// carries the fail-red class (covered above); no amber compile pill exists
+// anywhere (class-level assertion, both DOM-rendered instances AND a
+// source-level grep — the retired `app-ratio-error` class string must not
+// appear in public/app.js at all once GREEN removes it).
+describe("§S1 — compile card pill palette (user defect 2026-07-15)", () => {
+  test("compile-event card with errors:0 renders a pass-green '0 errors' pill — the SAME class as an all-pass N/N test pill", async () => {
+    const now = Date.now();
+    await mountApp({
+      pathname: "/",
+      projects: [
+        {
+          key: "proj-cards-pill-0",
+          name: "Cards Pill 0",
+          type: "backend",
+          agentsOnline: 0,
+          agentsTotal: 0,
+          active: true,
+          lastActivity: now,
+        },
+      ],
+      events: [
+        {
+          id: "evt-compile-pill-0",
+          projectKey: "proj-cards-pill-0",
+          agentId: "compile-pill-0-agent",
+          kind: "compile",
+          tier: "unit",
+          codec: "tsc",
+          timestamp: now,
+          hasCoverage: false,
+          errors: 0,
+          warnings: 0,
+        },
+      ],
+    });
+
+    const card = document.querySelector('[data-testid="event-card"]');
+    expect(card).not.toBeNull();
+
+    const pill = card!.querySelector('[data-testid="ratio-pill"]');
+    expect(pill).not.toBeNull();
+    expect((pill!.textContent ?? "").trim()).toBe("0 errors");
+    // SAME pass-green class an N/N test pill carries (see the all-pass test
+    // above: `expect(pill!.className).toContain("app-ratio-pass")`).
+    expect(pill!.className).toContain("app-ratio-pass");
+    expect(pill!.className).not.toContain("app-ratio-error");
+    expect(pill!.className).not.toContain("app-ratio-fail");
+  });
+
+  test("no amber compile pill exists anywhere — the retired 'app-ratio-error' class string is never referenced by public/app.js", () => {
+    expect(APP_JS_SRC).not.toContain("app-ratio-error");
   });
 });
 

@@ -82,7 +82,10 @@ const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
 interface FailureFixture {
-  message: string;
+  // §S3 failure-box degradation (user defect 2026-07-15) — `message` is now
+  // OPTIONAL: a bare `<failure type="AssertionError"/>` (no message) or an
+  // entirely empty `{}` (neither message nor type) are both legal fixtures.
+  message?: string;
   type?: string;
   trace?: string;
 }
@@ -502,6 +505,173 @@ describe("§S3 — compile drill-in body (diagnostics by file + raw toggle)", ()
     rawToggle!.click();
     await settle();
     expect(overlay!.querySelector('[data-testid="raw-output"]')).toBeNull();
+  });
+});
+
+// ── Compile drill-in status line (user defect 2026-07-15) — a clean tsc
+// drill-in rendered a fully EMPTY pane; a status line must ALWAYS render
+// first: `<format> · N errors · M warnings`, pass-green when errorCount is
+// 0, fail-red otherwise, then diagnostics (or the empty-state line when
+// none); the raw-output toggle renders ONLY when a non-empty `raw` is
+// stored. ───────────────────────────────────────────────────────────────
+describe("Compile drill-in status line (user defect 2026-07-15)", () => {
+  test("a clean compile (0 errors, 0 warnings, no diagnostics) renders a pass-green compile-status line + the empty-state line; no raw-output toggle when raw is empty", async () => {
+    const now = Date.now();
+    const eventId = "evt-compile-status-clean";
+    const projectKey = "proj-compile-status-1";
+    await mountApp({
+      pathname: "/",
+      projects: [
+        {
+          key: projectKey,
+          name: "Compile Status Clean",
+          type: "backend",
+          agentsOnline: 0,
+          agentsTotal: 0,
+          active: true,
+          lastActivity: now,
+        },
+      ],
+      events: [
+        {
+          id: eventId,
+          projectKey,
+          agentId: "compile-status-clean-agent",
+          kind: "compile",
+          tier: "unit",
+          codec: "tsc",
+          timestamp: now,
+          hasCoverage: false,
+          errors: 0,
+          warnings: 0,
+        },
+      ],
+      eventDetails: {
+        [eventId]: {
+          id: eventId,
+          projectKey,
+          agentId: "compile-status-clean-agent",
+          kind: "compile",
+          tier: "unit",
+          codec: "tsc",
+          timestamp: now,
+          compile: {
+            format: "tsc",
+            errorCount: 0,
+            warningCount: 0,
+            diagnostics: [],
+            raw: "",
+          },
+        },
+      },
+    });
+
+    const card = document.querySelector('[data-testid="event-card"]') as HTMLElement | null;
+    expect(card).not.toBeNull();
+    card!.click();
+    await settle();
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay).not.toBeNull();
+
+    const status = overlay.querySelector('[data-testid="compile-status"]');
+    expect(status).not.toBeNull();
+    expect((status!.textContent ?? "").trim()).toBe("tsc · 0 errors · 0 warnings");
+    expect(status!.className).toContain("app-ratio-pass");
+    expect(status!.className).not.toContain("app-ratio-fail");
+    expect(status!.className).not.toContain("app-ratio-error");
+
+    const overlayText = overlay.textContent ?? "";
+    expect(overlayText).toContain("clean compile — no diagnostics");
+    // The status line precedes the empty-state text in document order.
+    expect(overlayText.indexOf("tsc · 0 errors · 0 warnings")).toBeLessThan(
+      overlayText.indexOf("clean compile — no diagnostics"),
+    );
+
+    expect(overlay.querySelector('[data-testid="diag-group"]')).toBeNull();
+    expect(overlay.querySelector('[data-testid="raw-toggle"]')).toBeNull();
+  });
+
+  test("2 error diagnostics render a fail-red compile-status line + the diagnostics list; the raw-output toggle is present and reveals the stored raw output", async () => {
+    const now = Date.now();
+    const eventId = "evt-compile-status-errors";
+    const projectKey = "proj-compile-status-2";
+    const rawOutput = "tsc raw output — 2 errors fixture";
+    await mountApp({
+      pathname: "/",
+      projects: [
+        {
+          key: projectKey,
+          name: "Compile Status Errors",
+          type: "backend",
+          agentsOnline: 0,
+          agentsTotal: 0,
+          active: true,
+          lastActivity: now,
+        },
+      ],
+      events: [
+        {
+          id: eventId,
+          projectKey,
+          agentId: "compile-status-errors-agent",
+          kind: "compile",
+          tier: "unit",
+          codec: "tsc",
+          timestamp: now,
+          hasCoverage: false,
+          errors: 2,
+          warnings: 0,
+        },
+      ],
+      eventDetails: {
+        [eventId]: {
+          id: eventId,
+          projectKey,
+          agentId: "compile-status-errors-agent",
+          kind: "compile",
+          tier: "unit",
+          codec: "tsc",
+          timestamp: now,
+          compile: {
+            format: "tsc",
+            errorCount: 2,
+            warningCount: 0,
+            diagnostics: [
+              { file: "src/a.ts", line: 3, col: 1, message: "type mismatch", level: "error" },
+              { file: "src/b.ts", line: 9, col: 4, message: "missing property", level: "error" },
+            ],
+            raw: rawOutput,
+          },
+        },
+      },
+    });
+
+    const card = document.querySelector('[data-testid="event-card"]') as HTMLElement | null;
+    expect(card).not.toBeNull();
+    card!.click();
+    await settle();
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay).not.toBeNull();
+
+    const status = overlay.querySelector('[data-testid="compile-status"]');
+    expect(status).not.toBeNull();
+    expect((status!.textContent ?? "").trim()).toBe("tsc · 2 errors · 0 warnings");
+    expect(status!.className).toContain("app-ratio-fail");
+    expect(status!.className).not.toContain("app-ratio-pass");
+    expect(status!.className).not.toContain("app-ratio-error");
+
+    const groups = overlay.querySelectorAll('[data-testid="diag-group"]');
+    expect(groups.length).toBe(2);
+    expect(overlay.textContent ?? "").not.toContain("clean compile — no diagnostics");
+
+    const rawToggle = overlay.querySelector('[data-testid="raw-toggle"]') as HTMLElement | null;
+    expect(rawToggle).not.toBeNull();
+    expect(overlay.querySelector('[data-testid="raw-output"]')).toBeNull();
+    rawToggle!.click();
+    await settle();
+    const rawOutputEl = overlay.querySelector('[data-testid="raw-output"]');
+    expect(rawOutputEl).not.toBeNull();
+    expect((rawOutputEl!.textContent ?? "")).toContain(rawOutput);
   });
 });
 
@@ -1365,15 +1535,20 @@ describe("F4 anatomy — tree lines, ▾/▸ affordance, fail-first counts", () 
     const traceLines = (failureBox!.textContent ?? "").trim().split("\n");
     expect(traceLines[traceLines.length - 1]).toMatch(/^at /);
 
-    // Graceful degradation (user note, bun-crucible.py failure-fidelity
-    // hotfix): a failed leaf with NO failure object still renders its ✗
-    // line, but produces NO failure box and no "undefined" text anywhere.
+    // RECONCILED (2026-07-15, user defect — failure-box degradation,
+    // CR-CRU-007 §S3 AC): a failed leaf with NO failure object now renders a
+    // DEGRADED failure box (`test failed` + the reporter note) instead of no
+    // box at all — was: "produces NO failure box ... afterSilentFail must
+    // NOT be a failure-box". The box's text is never empty and never says
+    // "undefined".
     const silentFailRow = findByText(overlay, '[data-testid="leaf-row"]', "silentFail");
     expect(silentFailRow).toBeDefined();
     expect(silentFailRow!.className).toMatch(/\bapp-tree-line\b/);
     expect(silentFailRow!.textContent ?? "").toContain("✗");
     const afterSilentFail = silentFailRow!.nextElementSibling;
-    expect(afterSilentFail?.getAttribute("data-testid")).not.toBe("failure-box");
+    expect(afterSilentFail?.getAttribute("data-testid")).toBe("failure-box");
+    expect((afterSilentFail?.textContent ?? "")).toContain("test failed");
+    expect((afterSilentFail?.textContent ?? "")).toContain("no failure detail captured by the reporter");
     expect(overlay.textContent ?? "").not.toContain("undefined");
   });
 });
@@ -1430,6 +1605,120 @@ describe("F4 anatomy — no border/outline highlight on tree rows (styles.css)",
     const body = ruleBody(".app-failure-box {") ?? ruleBody(".app-failure-box{");
     expect(body).toBeDefined();
     expect(body ?? "").toMatch(/\bborder\b/);
+  });
+});
+
+// ── Failure-box degradation (user defect 2026-07-15) — the box NEVER
+// renders empty. bun's JUnit reporter emits bare `<failure type="AssertionError"/>`
+// (no message attribute, no text) — a failing leaf whose `failure` is
+// exactly `{type:"AssertionError"}` must still render a non-empty box
+// (type as the message line + a dim reporter note); a failing leaf with NO
+// failure object at all, or one with neither message nor type, degrades
+// further to "test failed" + the same note. No `.app-failure-trace` node
+// renders when `trace` is absent. ────────────────────────────────────────
+describe("Failure-box degradation (user defect 2026-07-15)", () => {
+  test("failure={type only} renders type + reporter note; NO failure object (or {} with neither) renders 'test failed' + the same note; no .app-failure-trace when trace is absent", async () => {
+    const now = Date.now();
+    const eventId = "evt-degrade-1";
+    const projectKey = "proj-degrade-1";
+    await mountApp({
+      pathname: "/",
+      projects: [
+        {
+          key: projectKey,
+          name: "Degrade",
+          type: "backend",
+          agentsOnline: 0,
+          agentsTotal: 0,
+          active: true,
+          lastActivity: now,
+        },
+      ],
+      events: [
+        {
+          id: eventId,
+          projectKey,
+          agentId: "degrade-agent",
+          kind: "test",
+          tier: "unit",
+          codec: "junit",
+          timestamp: now,
+          total: 3,
+          passed: 0,
+          failed: 3,
+          pending: 0,
+          duration_ms: 30,
+          hasCoverage: false,
+        },
+      ],
+      eventDetails: {
+        [eventId]: {
+          id: eventId,
+          projectKey,
+          agentId: "degrade-agent",
+          kind: "test",
+          tier: "unit",
+          codec: "junit",
+          timestamp: now,
+          summary: { total: 3, passed: 0, failed: 3, pending: 0, duration_ms: 30 },
+          tree: [
+            {
+              name: "DegradeSuite",
+              status: "fail",
+              children: [
+                { name: "typeOnlyFail", status: "fail", duration_ms: 5, failure: { type: "AssertionError" } },
+                { name: "noFailureObjFail", status: "fail", duration_ms: 5 },
+                { name: "emptyFailureFail", status: "fail", duration_ms: 5, failure: {} },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const card = document.querySelector('[data-testid="event-card"]') as HTMLElement | null;
+    expect(card).not.toBeNull();
+    card!.click();
+    await settle();
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay).not.toBeNull();
+
+    // 1. failure = {type:"AssertionError"} (no message) — box text contains
+    //    "AssertionError" AND the reporter note; never empty; no trace node
+    //    (trace absent).
+    const typeOnlyRow = findByText(overlay, '[data-testid="leaf-row"]', "typeOnlyFail");
+    expect(typeOnlyRow).toBeDefined();
+    const typeOnlyBox = typeOnlyRow!.nextElementSibling;
+    expect(typeOnlyBox?.getAttribute("data-testid")).toBe("failure-box");
+    const typeOnlyText = (typeOnlyBox?.textContent ?? "").trim();
+    expect(typeOnlyText.length).toBeGreaterThan(0);
+    expect(typeOnlyText).toContain("AssertionError");
+    expect(typeOnlyText).toContain("no failure detail captured by the reporter");
+    expect(typeOnlyBox!.querySelector(".app-failure-trace")).toBeNull();
+
+    // 2. NO failure object at all — box renders "test failed" + the same
+    //    note; never empty.
+    const noFailureRow = findByText(overlay, '[data-testid="leaf-row"]', "noFailureObjFail");
+    expect(noFailureRow).toBeDefined();
+    const noFailureBox = noFailureRow!.nextElementSibling;
+    expect(noFailureBox?.getAttribute("data-testid")).toBe("failure-box");
+    const noFailureText = (noFailureBox?.textContent ?? "").trim();
+    expect(noFailureText.length).toBeGreaterThan(0);
+    expect(noFailureText).toContain("test failed");
+    expect(noFailureText).toContain("no failure detail captured by the reporter");
+    expect(noFailureBox!.querySelector(".app-failure-trace")).toBeNull();
+
+    // 3. failure = {} (neither message nor type) — same "test failed" + note.
+    const emptyFailureRow = findByText(overlay, '[data-testid="leaf-row"]', "emptyFailureFail");
+    expect(emptyFailureRow).toBeDefined();
+    const emptyFailureBox = emptyFailureRow!.nextElementSibling;
+    expect(emptyFailureBox?.getAttribute("data-testid")).toBe("failure-box");
+    const emptyFailureText = (emptyFailureBox?.textContent ?? "").trim();
+    expect(emptyFailureText.length).toBeGreaterThan(0);
+    expect(emptyFailureText).toContain("test failed");
+    expect(emptyFailureText).toContain("no failure detail captured by the reporter");
+
+    expect(overlay.textContent ?? "").not.toContain("undefined");
   });
 });
 
