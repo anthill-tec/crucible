@@ -11,7 +11,7 @@
   "use strict";
 
   function main(L) {
-    const { a, button, div, option, select, span } = van.tags;
+    const { a, button, div, option, pre, select, span } = van.tags;
 
     // ── State ───────────────────────────────────────────────────────────
     const state = vanX.reactive({
@@ -391,9 +391,23 @@
           )
         : null;
 
+    // §S3 — a run card opens its drill-in: /run/<id> from home,
+    // /p/<key>/run/<id> from the workspace (the overlay route suffix).
+    function openDrillin(eventId) {
+      const prefix =
+        state.route.page === "workspace"
+          ? `/p/${encodeURIComponent(state.route.projectKey)}`
+          : "";
+      navigate(`${prefix}/run/${encodeURIComponent(eventId)}`);
+    }
+
     const EventCard = (e) =>
       div(
-        { "data-testid": "event-card", class: "app-evt" },
+        {
+          "data-testid": "event-card",
+          class: "app-evt",
+          onclick: () => openDrillin(e.id),
+        },
         span({ "data-testid": "card-icon", class: "app-card-icon" }, e.kind === "compile" ? "🛠" : "🧪"),
         div(
           { class: "app-evt-body" },
@@ -608,12 +622,209 @@
         ProjectPane(),
       );
 
-    // AC 10b(c) — the overlay sits on a scrim: a fixed full-viewport backdrop
-    // whose outside-the-panel surface is a click target that closes the
-    // overlay the same way Escape does. Styles are inline — the placeholder
-    // panel had no positioning of its own to inherit.
-    const RunOverlay = () =>
-      div(
+    // ── §S3 (CR-CRU-007) — codec-aware drill-in slide-over ──────────────
+    // Test body: suite→test tree, suites-first (§S4.5 progressive payload —
+    // ?depth=suites first, ?suite=<name> on expand; the server side landed
+    // in CR-CRU-004 §S4, consumed here). Failed leaf expands to
+    // failure.message + trace in a mono red-accent box. Compile body:
+    // diagnostics grouped by file + raw-output toggle, NO mode switch.
+    // §S4.0 — the Detail↔Density switch defaults per L.drillinDefaultMode
+    // (tier), overrides persist per tier group (L.drillinModeStorageKey).
+    function drillinLeafGlyph(status) {
+      if (status === "fail") return "✗";
+      if (status === "pending") return "…";
+      return "✓";
+    }
+
+    function drillinSuiteCounts(suite) {
+      const c = suite.counts;
+      if (c === undefined || c === null) return "";
+      const parts = [`✓${c.passed}`];
+      if (c.failed > 0) parts.push(`✗${c.failed}`);
+      if (c.pending > 0) parts.push(`…${c.pending}`);
+      return parts.join(" ");
+    }
+
+    const RunOverlay = () => {
+      const eventId = state.route.overlay;
+      const detail = van.state(null); // suites-depth event detail
+      const loadError = van.state(null);
+      const mode = van.state("Detail"); // §S4.0 — test events only
+      const suiteLeaves = van.state({}); // suiteName -> that suite's leaves
+      const openFailures = van.state({}); // "suite::leaf" -> true
+      const showRaw = van.state(false);
+
+      // §S4.5 — the FIRST fetch is ?depth=suites (never the full leaf tree).
+      (async () => {
+        try {
+          const res = await fetch(
+            `/api/v2/events/${encodeURIComponent(eventId)}?depth=suites`,
+          );
+          const body = await res.json();
+          const ev =
+            body !== null && typeof body === "object" ? body.event : undefined;
+          if (ev === undefined || ev === null) {
+            loadError.val = "run detail unavailable";
+            return;
+          }
+          if (ev.kind === "test") {
+            // §S4.0 — remembered per-tier-group override wins, else tier default.
+            const stored = window.localStorage.getItem(
+              L.drillinModeStorageKey(ev.tier),
+            );
+            mode.val =
+              stored === "Detail" || stored === "Density"
+                ? stored
+                : L.drillinDefaultMode(ev.tier);
+          }
+          detail.val = ev;
+        } catch (err) {
+          loadError.val = `run detail failed to load — ${String(err)}`;
+        }
+      })();
+
+      async function toggleSuite(name) {
+        const current = suiteLeaves.val;
+        if (current[name] !== undefined) {
+          const next = { ...current };
+          delete next[name];
+          suiteLeaves.val = next;
+          return;
+        }
+        try {
+          const res = await fetch(
+            `/api/v2/events/${encodeURIComponent(eventId)}?suite=${encodeURIComponent(name)}`,
+          );
+          const body = await res.json();
+          const match = (body?.event?.tree ?? []).find((s) => s.name === name);
+          suiteLeaves.val = { ...suiteLeaves.val, [name]: match?.children ?? [] };
+        } catch (err) {
+          loadError.val = `suite "${name}" failed to load — ${String(err)}`;
+        }
+      }
+
+      function toggleFailure(key) {
+        const next = { ...openFailures.val };
+        if (next[key] === true) delete next[key];
+        else next[key] = true;
+        openFailures.val = next;
+      }
+
+      // One leaf row (+ its failure box when a failed leaf is expanded).
+      const LeafRows = (suiteName, leaf, open) => {
+        const key = `${suiteName}::${leaf.name}`;
+        const failed = leaf.status === "fail";
+        const nodes = [
+          div(
+            {
+              "data-testid": "leaf-row",
+              class: `app-leaf-row ${leaf.status}`,
+              onclick: () => {
+                if (failed) toggleFailure(key);
+              },
+            },
+            span(
+              { class: "app-leaf-name" },
+              `${drillinLeafGlyph(leaf.status)} ${leaf.name}`,
+            ),
+            span({ class: "app-card-meta" }, fmtDuration(leaf.duration_ms ?? 0)),
+          ),
+        ];
+        if (failed && open[key] === true && leaf.failure !== undefined) {
+          nodes.push(
+            div(
+              { "data-testid": "failure-box", class: "app-failure-box" },
+              div({ class: "app-failure-message" }, leaf.failure.message),
+              leaf.failure.trace !== undefined && leaf.failure.trace !== null
+                ? div({ class: "app-failure-trace" }, leaf.failure.trace)
+                : null,
+            ),
+          );
+        }
+        return nodes;
+      };
+
+      // Suite tree — §S4.0: Detail renders the plain tree regardless of run
+      // size; Density renders the same tree this cycle (ideas 1–3 land in C4).
+      const TestBody = (d) => {
+        const leavesMap = suiteLeaves.val;
+        const open = openFailures.val;
+        return div(
+          { class: "app-drillin-tree" },
+          (d.tree ?? []).map((suite) => {
+            const leaves = leavesMap[suite.name];
+            return div(
+              { class: "app-suite-group" },
+              div(
+                {
+                  "data-testid": "suite-row",
+                  class: `app-suite-row ${suite.status}`,
+                  onclick: () => toggleSuite(suite.name),
+                },
+                span({ class: "app-suite-name" }, suite.name),
+                span({ class: "app-card-meta" }, drillinSuiteCounts(suite)),
+              ),
+              leaves === undefined
+                ? null
+                : div(
+                    { class: "app-leaf-list" },
+                    leaves.map((leaf) => LeafRows(suite.name, leaf, open)),
+                  ),
+            );
+          }),
+        );
+      };
+
+      // Compile body — diagnostics grouped by file, level-colored lines,
+      // raw-output toggle. No mode switch renders for compile events.
+      const CompileBody = (d) => {
+        const compile = d.compile ?? {};
+        const groups = new Map();
+        for (const diag of compile.diagnostics ?? []) {
+          const file = diag.file ?? "(unknown file)";
+          if (!groups.has(file)) groups.set(file, []);
+          groups.get(file).push(diag);
+        }
+        return div(
+          { class: "app-drillin-diags" },
+          [...groups.entries()].map(([file, lines]) =>
+            div(
+              { "data-testid": "diag-group", class: "app-diag-group" },
+              div({ class: "app-diag-file" }, file),
+              lines.map((diag) =>
+                div(
+                  {
+                    "data-testid": "diag-line",
+                    class: `app-diag-line app-diag-${diag.level}`,
+                  },
+                  `${file}:${diag.line}:${diag.col} — ${diag.message}`,
+                ),
+              ),
+            ),
+          ),
+          button(
+            {
+              "data-testid": "raw-toggle",
+              class: "app-chip app-raw-toggle",
+              onclick: () => {
+                showRaw.val = !showRaw.val;
+              },
+            },
+            showRaw.val ? "hide raw output" : "show raw output",
+          ),
+          showRaw.val
+            ? pre(
+                { "data-testid": "raw-output", class: "app-raw-output" },
+                compile.raw ?? "",
+              )
+            : null,
+        );
+      };
+
+      // AC 10b(c) — the overlay sits on a scrim: a fixed full-viewport
+      // backdrop whose outside-the-panel surface closes the overlay the
+      // same way Escape does.
+      return div(
         {
           "data-testid": "run-overlay-scrim",
           class: "app-overlay-scrim",
@@ -627,13 +838,52 @@
         div(
           {
             "data-testid": "run-overlay",
-            class: "app-rail",
+            class: "app-rail app-drillin",
             style: "min-width:320px;max-width:70vw;",
           },
-          div({ class: "app-rail-title" }, () => `run · ${state.route.overlay}`),
-          div({ class: "app-empty" }, "run detail lands in CR-CRU-007"),
+          // §S5.3 — '← timeline' back chip: closes exactly like Escape
+          // (same closeOverlay — same route/scroll restore).
+          () => {
+            const d = detail.val;
+            return div(
+              { class: "app-drillin-head" },
+              button(
+                { class: "app-chip", onclick: () => closeOverlay() },
+                "← timeline",
+              ),
+              span({ class: "app-rail-title" }, `run · ${eventId}`),
+              d !== null && d.kind === "test"
+                ? button(
+                    {
+                      "data-testid": "drillin-mode",
+                      "data-mode": mode.val,
+                      class: "app-chip app-drillin-mode",
+                      onclick: () => {
+                        const next =
+                          mode.val === "Density" ? "Detail" : "Density";
+                        mode.val = next;
+                        window.localStorage.setItem(
+                          L.drillinModeStorageKey(d.tier),
+                          next,
+                        );
+                      },
+                    },
+                    `mode: ${mode.val}`,
+                  )
+                : null,
+            );
+          },
+          () => {
+            if (loadError.val !== null)
+              return div({ class: "app-empty" }, loadError.val);
+            const d = detail.val;
+            if (d === null)
+              return div({ class: "app-empty" }, "loading run detail…");
+            return d.kind === "compile" ? CompileBody(d) : TestBody(d);
+          },
         ),
       );
+    };
 
     // §S5.1/§S5.3 — home chrome is title bar + projects row; the workspace
     // swaps in its own top bar (← projects + project chip + Health Pill).

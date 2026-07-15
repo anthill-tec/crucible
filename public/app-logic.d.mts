@@ -138,3 +138,10 @@ export declare function emptyStates(state: EmptyStateInput): EmptyStateResult | 
 export declare function pairTransitions<T extends TransitionEventLike>(
   events: T[],
 ): Array<TransitionMarker<T>>;
+
+// CR-CRU-007 §S4.0 — tier-default drill-in mode + per-tier-group persistence.
+export type DrillinMode = "Detail" | "Density";
+
+export declare function drillinDefaultMode(tier: string): DrillinMode;
+
+export declare function drillinModeStorageKey(tier: string): string;

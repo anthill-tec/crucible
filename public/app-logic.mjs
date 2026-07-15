@@ -156,6 +156,27 @@ export function pairTransitions(events) {
   return markers;
 }
 
+// CR-CRU-007 §S4.0 (round-10 revision) — tier-default drill-in mode.
+// The BROAD tier group (regression, e2e) opens in Density; every other tier
+// (unit / module / integration — the focused cycle runs) opens in Detail.
+// Single-argument on purpose: NO code path selects the mode from test count.
+const BROAD_TIERS = new Set(["regression", "e2e"]);
+
+/** §S4.0 — contextual default: "Density" for broad tiers, else "Detail". */
+export function drillinDefaultMode(tier) {
+  return BROAD_TIERS.has(tier) ? "Density" : "Detail";
+}
+
+/**
+ * §S4.0 — the user's manual override is remembered per tier GROUP (two
+ * localStorage keys: broad vs focused), seeded by the tier defaults.
+ */
+export function drillinModeStorageKey(tier) {
+  return BROAD_TIERS.has(tier)
+    ? "crucible.drillin.mode.broad"
+    : "crucible.drillin.mode.focused";
+}
+
 // Bridge for the nomodule app shell (app.js consumes window.CrucibleLogic).
 if (typeof window !== "undefined") {
   window.CrucibleLogic = {
@@ -169,5 +190,7 @@ if (typeof window !== "undefined") {
     orderProjects,
     emptyStates,
     pairTransitions,
+    drillinDefaultMode,
+    drillinModeStorageKey,
   };
 }

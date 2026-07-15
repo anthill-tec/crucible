@@ -315,5 +315,82 @@ body {
 }
 
 /* ── Live-region degradation (§S5) ──────────────────────────────────────── */
+/* ── CR-CRU-007 §S3/§S4 — drill-in slide-over ─────────────────────────── */
+.app-drillin { overflow-y: auto; max-height: 85vh; }
+.app-drillin-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.app-drillin-mode { color: var(--ink-dim); }
+.app-drillin-mode[data-mode="Density"] { color: var(--heat); border-color: var(--heat); }
+
+.app-suite-group { margin-bottom: 4px; }
+.app-suite-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: 600 11px var(--mono);
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  cursor: pointer;
+}
+.app-suite-row.fail { border-color: var(--fail); }
+.app-leaf-list { margin: 2px 0 4px 14px; }
+.app-leaf-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: 10.5px var(--mono);
+  color: var(--ink-dim);
+  padding: 2px 8px;
+}
+.app-leaf-row.fail { color: var(--fail); cursor: pointer; }
+.app-leaf-row.pending { color: var(--heat); }
+
+/* Failed leaf expansion — failure.message + trace, mono red-accent box. */
+.app-failure-box {
+  font: 10.5px var(--mono);
+  color: var(--fail);
+  border: 1px solid var(--fail);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 6px 10px;
+  margin: 2px 0 6px 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.app-failure-trace { color: var(--ink-faint); margin-top: 4px; }
+
+/* Compile drill-in — diagnostics grouped by file + raw-output toggle. */
+.app-diag-group {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  padding: 6px 10px;
+  margin-bottom: 6px;
+}
+.app-diag-file { font: 600 11px var(--mono); color: var(--ink); margin-bottom: 2px; }
+.app-diag-error { color: var(--fail); }
+.app-diag-warning { color: var(--heat); }
+.app-raw-toggle { margin: 4px 0; }
+.app-raw-output {
+  font: 10px var(--mono);
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 4px 0 0;
+}
+
 .greyed { opacity: 0.45; filter: grayscale(0.6); }
 .app-synced { color: var(--ink-faint); font: 9.5px var(--mono); }
