@@ -16,7 +16,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-005](CR-CRU-005-axi-toon.md) | AXI layer: TOON subset + hints | feature | COMPLETED (2026-07-15) | 004 | 2 |
 | [CR-CRU-006](CR-CRU-006-spa-shell.md) | Dashboard shell + navigation | feature | COMPLETED (2026-07-15) | 004 | 3 |
 | [CR-CRU-007](CR-CRU-007-timeline-drill-in.md) | Timeline + density drill-in | feature | PENDING | 006 | 3 |
-| [CR-CRU-008](CR-CRU-008-cli-fleet-upgrade.md) | crucible-axi CLI + fleet upgrade | feature | PENDING | 005 | 4 |
+| [CR-CRU-008](CR-CRU-008-cli-fleet-upgrade.md) | crucible-axi CLI + fleet upgrade | feature | PENDING | 005, 007 | 4 |
 | [CR-CRU-009](CR-CRU-009-release-0.1.0.md) | Release 0.1.0 skill bundle | feature | PENDING | 007, 008, 011 | 4 |
 | [CR-CRU-010](CR-CRU-010-codec-path-interface-hardening.md) | Codec parsePath + shim hardening | maintenance | COMPLETED (2026-07-15) | 006 | 3 (after 006, before 007) |
 | [CR-CRU-011](CR-CRU-011-workflow-lens.md) | Workflow lens: Wave→CR→Cycle + agent runtimes | feature | PENDING | 007, 008 | 4 (before 009) |

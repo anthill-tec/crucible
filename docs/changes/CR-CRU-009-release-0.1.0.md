@@ -3,7 +3,7 @@
 **Status:** PENDING
 **Type:** feature
 **Priority:** P2
-**Depends on:** CR-CRU-007, CR-CRU-008
+**Depends on:** CR-CRU-007, CR-CRU-008, CR-CRU-011
 **Labels:** release, packaging, skill-bundle
 **Phase:** Wave 4
 **Design reference:** PRD §2 (skill-bundle deployment target), §6 (rollout)
