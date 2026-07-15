@@ -22,17 +22,48 @@
       workspaceTab: "Runs",
       backendUp: true,
       lastSynced: null,
+      savedScrollY: 0, // §S2/AC 10b — scroll position under the run overlay
     });
 
     // ── Routing (§S2 — hash-free History routing, parse in app-logic) ───
     function navigate(pathname) {
+      const next = L.routeParse(pathname);
+      // AC 10b(a) — opening the run overlay: remember where the underlying
+      // surface was scrolled so closing can restore it.
+      if (next.overlay !== undefined && state.route.overlay === undefined) {
+        state.savedScrollY = window.scrollY;
+      }
       history.pushState(null, "", pathname);
-      state.route = L.routeParse(pathname);
+      state.route = next;
       state.workspaceTab = "Runs";
     }
 
+    function restoreScroll() {
+      const y = state.savedScrollY;
+      // After the reactive re-render (VanJS applies state-derived DOM this
+      // frame), put the underlying surface back where it was.
+      requestAnimationFrame(() => window.scrollTo(0, y));
+    }
+
+    // AC 10b(b/c) — close the overlay back to the underlying surface path
+    // (strip the /run/<id> suffix) and restore the saved scroll position.
+    function closeOverlay() {
+      if (state.route.overlay === undefined) return;
+      const base = location.pathname.replace(/\/run\/[^/]+\/?$/, "") || "/";
+      history.pushState(null, "", base);
+      state.route = L.routeParse(base);
+      restoreScroll();
+    }
+
     window.addEventListener("popstate", () => {
+      // AC 10b(d) — browser-back out of the overlay restores scroll too.
+      const hadOverlay = state.route.overlay !== undefined;
       state.route = L.routeParse(location.pathname);
+      if (hadOverlay && state.route.overlay === undefined) restoreScroll();
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && state.route.overlay !== undefined) closeOverlay();
     });
 
     // ── Data plumbing (§S5 — v2 surface only) ───────────────────────────
@@ -63,7 +94,7 @@
 
     // SSE client with keep-alive watchdog (§S5): any frame (data OR comment
     // keep-alive) proves liveness via onmessage/readyState; silence >20s AND a
-    // failing /api/health flips the pill. Poll fallback every 5s when SSE is
+    // failing /api/v2/health flips the pill. Poll fallback every 5s when SSE is
     // unavailable.
     let lastFrameAt = Date.now();
     let sse = null;
@@ -109,7 +140,7 @@
     async function watchdogTick() {
       if (Date.now() - lastFrameAt <= 20000) return;
       try {
-        const res = await fetch("/api/health");
+        const res = await fetch("/api/v2/health");
         if (res.ok) {
           lastFrameAt = Date.now();
           if (!state.backendUp) {
@@ -403,11 +434,31 @@
         div(AgentsRail(), VitalsRail()),
       );
 
+    // AC 10b(c) — the overlay sits on a scrim: a fixed full-viewport backdrop
+    // whose outside-the-panel surface is a click target that closes the
+    // overlay the same way Escape does. Styles are inline — the placeholder
+    // panel had no positioning of its own to inherit.
     const RunOverlay = () =>
       div(
-        { "data-testid": "run-overlay", class: "app-rail" },
-        div({ class: "app-rail-title" }, () => `run · ${state.route.overlay}`),
-        div({ class: "app-empty" }, "run detail lands in CR-CRU-007"),
+        {
+          "data-testid": "run-overlay-scrim",
+          class: "app-overlay-scrim",
+          style:
+            "position:fixed;inset:0;background:rgba(0,0,0,0.45);" +
+            "display:flex;align-items:center;justify-content:center;z-index:20;",
+          onclick: (e) => {
+            if (e.target === e.currentTarget) closeOverlay();
+          },
+        },
+        div(
+          {
+            "data-testid": "run-overlay",
+            class: "app-rail",
+            style: "min-width:320px;max-width:70vw;",
+          },
+          div({ class: "app-rail-title" }, () => `run · ${state.route.overlay}`),
+          div({ class: "app-empty" }, "run detail lands in CR-CRU-007"),
+        ),
       );
 
     const App = () =>

@@ -201,6 +201,65 @@ test.describe("CR-CRU-006 shell — storyboard frames", () => {
     const sectionTitles = await rails.locator(".app-rail-title").allTextContents();
     expect(sectionTitles).toEqual(["projects", "agents"]);
   });
+
+  test("F2b: SSE pushes a new agent into the rail without reload", async ({
+    page,
+    request,
+  }) => {
+    // Load the shell FIRST — everything after must arrive over the live SSE
+    // stream (AC: change frames repaint within 2s; no reload, no navigation).
+    await page.goto("/");
+    await expect(page.getByTestId("health-pill")).toBeVisible();
+
+    const projectKey = await seedProject(request, "F2b Project");
+    // NB: id must not prefix-collide with F2's "agent-f2" — hasText is a
+    // substring match over the row ("agent-f2" + "building…" contains
+    // "agent-f2b"), so a distinct stem keeps the locator strict-mode clean.
+    await registerAgent(request, projectKey, "sse-agent", "hot off the stream");
+
+    // The 2s budget starts once the register write has been acknowledged.
+    const agentRow = page.getByTestId("agent-row").filter({ hasText: "sse-agent" });
+    await expect(agentRow).toBeVisible({ timeout: 2_000 });
+    await expect(agentRow).toContainText("hot off the stream");
+  });
+
+  test("nav: Esc closes the run overlay and restores scroll", async ({
+    page,
+    request,
+  }) => {
+    const projectKey = await seedProject(request, "Esc Project");
+    // The overlay route needs a real event id — seed one via parsed ingest.
+    const res = await request.post("/api/v2/runs/parsed", {
+      data: {
+        projectKey,
+        agentId: "agent-esc",
+        summary: { total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 5 },
+        tree: [],
+        tier: "unit",
+      },
+    });
+    expect(res.ok()).toBe(true);
+    const eventId = (await res.json() as { event: string }).event;
+
+    await page.goto(`/p/${projectKey}/run/${eventId}`);
+    const overlay = page.getByTestId("run-overlay");
+    await expect(overlay).toBeVisible();
+    await expect(overlay).toContainText(eventId);
+
+    await page.keyboard.press("Escape");
+
+    // AC 10b — Esc strips the /run/<id> suffix (underlying surface path) and
+    // dismisses the overlay + scrim.
+    await expect(overlay).toHaveCount(0);
+    await expect(page.getByTestId("run-overlay-scrim")).toHaveCount(0);
+    expect(new URL(page.url()).pathname).toBe(`/p/${projectKey}`);
+    await expect(page.getByTestId("workspace")).toBeVisible();
+
+    // Direct-load open means the saved underlying scrollY was 0 — the restore
+    // lands the surface back at the top (trivial but real: scrollTo(0, 0) ran).
+    const scrollY = await page.evaluate(() => (globalThis as any).scrollY as number);
+    expect(scrollY).toBe(0);
+  });
 });
 
 test.describe("CR-CRU-006 shell — backend liveness (own server process)", () => {
