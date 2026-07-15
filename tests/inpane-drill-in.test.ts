@@ -924,6 +924,104 @@ describe("§S1 tabs-hide + tab-in-header — workspace-tabs ABSENT while a detai
     expect((backChip!.textContent ?? "").trim()).toBe("← runs");
   });
 
+  // CR-CRU-016 §S1 AC (C5 red addendum, coordinator note 2026-07-16) — the
+  // §S1 AC explicitly lists "transition marker" among the tabs-hide entry
+  // points. On the WORKSPACE, clicking a marker must open the GREEN run's
+  // detail IN-PANE ON THE WORKSPACE (route `/p/<key>/run/<greenId>`, tabs
+  // ABSENT, chip `← runs`) — not bounce to the bare home-style `/run/<id>`
+  // route. (Home markers keep their existing `/run/<id>` behavior — already
+  // covered by tests/transition-markers.test.ts, not duplicated here.)
+  //
+  // RED phase: expected to fail on the route assertion — `TransitionMarkerRow`
+  // (public/app.js ~529-538) calls `navigate(`/run/${greenEvent.id}`)`
+  // directly, bypassing `openDrillin`'s workspace-prefix logic (public/app.js
+  // ~455-462), so clicking a marker on the workspace ALWAYS lands on the
+  // bare `/run/<id>` route (home surface) regardless of where it was
+  // clicked from.
+  test("workspace: clicking a transition-marker row opens the GREEN run's detail IN-PANE ON THE WORKSPACE (route /p/<key>/run/<greenId>, tabs ABSENT, chip '← runs'); closing restores the Runs tab + feed", async () => {
+    const now = Date.now();
+    const projectKey = "proj-tabshide-marker-1";
+    const redId = "evt-tabshide-marker-red-1";
+    const greenId = "evt-tabshide-marker-green-1";
+
+    const redBrief: EventBriefFixture = {
+      id: redId,
+      projectKey,
+      agentId: "CR-TABSHIDE-1-RED",
+      kind: "test",
+      tier: "unit",
+      timestamp: now - 45_000,
+      total: 5,
+      passed: 3,
+      failed: 2,
+      pending: 0,
+      duration_ms: 1000,
+      hasCoverage: false,
+    };
+    const greenBrief: EventBriefFixture = {
+      id: greenId,
+      projectKey,
+      agentId: "CR-TABSHIDE-1-GREEN",
+      kind: "test",
+      tier: "unit",
+      timestamp: now,
+      total: 5,
+      passed: 5,
+      failed: 0,
+      pending: 0,
+      duration_ms: 1200,
+      hasCoverage: false,
+    };
+    const greenDetail: EventDetailFixture = {
+      id: greenId,
+      projectKey,
+      agentId: "CR-TABSHIDE-1-GREEN",
+      kind: "test",
+      tier: "unit",
+      codec: "junit",
+      timestamp: now,
+      summary: { total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 1200 },
+      tree: [{ name: "SuiteOnly", status: "pass", children: [{ name: "t1", status: "pass", duration_ms: 5 }] }],
+    };
+
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [project({ key: projectKey, name: "Tabs-hide Marker Project" })],
+      events: [redBrief, greenBrief],
+      eventDetails: { [greenId]: greenDetail },
+    });
+
+    const marker = document.querySelector('[data-testid="transition-marker"]') as HTMLElement | null;
+    expect(marker).not.toBeNull();
+
+    const runsPaneBefore = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement;
+    runsPaneBefore.scrollTop = 90;
+
+    marker!.click();
+    await settle();
+
+    // The bug this pins: today this lands on the bare `/run/<id>` route
+    // (home surface), not the workspace-prefixed one.
+    expect(location.pathname).toBe(`/p/${projectKey}/run/${greenId}`);
+    expect(document.querySelector('[data-testid="workspace-tabs"]')).toBeNull();
+    const backChip = findByText(document, "button, a", "← runs");
+    expect(backChip).toBeDefined();
+    expect((backChip!.textContent ?? "").trim()).toBe("← runs");
+    expect(document.querySelector('[data-testid="workspace"]')).not.toBeNull();
+
+    backChip!.click();
+    await settle();
+
+    expect(location.pathname).toBe(`/p/${projectKey}`);
+    const tabsRow = document.querySelector('[data-testid="workspace-tabs"]');
+    expect(tabsRow).not.toBeNull();
+    const runsTab = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+    expect(runsTab).toBeDefined();
+    expect(runsTab!.classList.contains("on")).toBe(true);
+    const runsPaneAfter = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement;
+    expect(runsPaneAfter.scrollTop).toBe(90);
+  });
+
   test("home is unaffected: opening a detail on home keeps the back chip reading '← timeline' (workspace-tabs never exists on home)", async () => {
     const now = Date.now();
     const eventId = "evt-tabshide-home-1";
