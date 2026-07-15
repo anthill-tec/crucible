@@ -1,6 +1,6 @@
 # CR-CRU-016 — In-pane drill-in: run detail inside the Run Timeline pane
 
-**Status:** COMPLETED (2026-07-16 — C0 design (board-approved in-pane F4/F4½) + C1/C2 merged batch + C3 PASS-ALREADY pins + C4 BDD; VERIFY: READY FOR CLOSE-OUT, zero blocking; final gates 482/482 unit · tsc 0 · 19/19 BDD · coverage 94.4% lines / 96.6% functions; awaiting merge gate)
+**Status:** IN_PROGRESS (2026-07-16 — reopened at the merge gate: user review filed §S4 regression-run differentiation; C0–C4 + VERIFY complete, fix round running)
 **Type:** feature
 **Priority:** P1
 **Depends on:** CR-CRU-007
@@ -68,6 +68,8 @@ table + PRD §4.11 synced.
 - [x] Context rules in-pane: a `unit`-tier detail renders NO `drillin-mode`; a `regression`-tier detail opens in Density with the chips row + heat-strip; the F4 anatomy assertions (tree lines, inline failure box, footer) pass against the in-pane container (re-targeted from the CR-007 slide-over tests — the approved-modification list is part of this CR's RED report).
 - [x] SSE liveness: with the detail open, a new run ingested for the project updates the Project pane's agent row (visible beside the detail) without closing the detail.
 - [x] BDD E2E: a `drill-in.feature` scenario set covering open-from-card, back-restores-scroll, cold-load, and project-pane-stays-visible; results ingested `tier:"e2e"`.
+- [ ] §S4 tier passthrough (user defect 2026-07-16): `POST /api/ingest/parsed` with `tier:"regression"` stores an event whose `tier` is `regression` (asserted via the events listing); `tier:"banana"` → 400 whose error names `tier`; omitting `tier` keeps the `unit` default (existing ingest tests unchanged).
+- [ ] §S4 F7 card differentiation (user defect 2026-07-16): an event with tier `regression` and brief `coverageLines: 94.4` renders its card with the `regression` tier badge, codec badge text `parsed+lcov`, and `data-testid="card-coverage-meter"` (`.app-meter` anatomy, `.app-meter-fill` inline width `94.4%`) inline on the card; a `regression` event WITHOUT coverage renders the tier badge, codec `parsed`, and NO card meter; a `unit` event renders no card meter and codec `parsed` (class-level assertions).
 
 ## Gap analysis (2026-07-16, pre-design)
 What exists (CR-007 final tree, develop 895fce0) vs what this CR changes:
@@ -122,6 +124,26 @@ M.
 ## Risk
 Scroll restoration + virtualized tree interplay; mitigated by the existing
 windowing contract (tree-scroll) and explicit scrollTop ACs.
+
+### §S4 Regression-run differentiation (user defect, filed during the merge-gate review 2026-07-16)
+The user's live review: "There is no real differentiation of the regression
+run" — the close-out regression card rendered `unit · parsed · 482/482`,
+indistinguishable from a unit run, while storyboard F7 shows a regression
+card with the `regression` tier badge, a `+lcov` codec, and an INLINE
+coverage meter on the card. Three layers:
+(a) **Server (additive):** `POST /api/ingest/parsed` accepts an optional
+`tier` — validated against the known tier set (`unit`, `module`,
+`integration`, `regression`, `e2e`, `bdd`); invalid → 400 naming `tier`;
+omitted → the existing `unit` default.
+(b) **Client (hotfix now, formalized in CR-CRU-008):** `bun-crucible.py
+regression` sends `tier:"regression"`; focused `test` runs stay `unit`.
+(c) **UI (F7 card anatomy):** a `regression`-tier card renders its tier badge
+(automatic once tier is right); when the brief carries `coverageLines` the
+codec badge reads `parsed+lcov` and the card renders an inline mini coverage
+meter (the F7 card meter — `.app-meter` anatomy, fill width = lines percent).
+Failing regressions (coverage discarded) render the badge only. Drill-in
+differentiation already exists (regression tier → Density) and needs no
+change.
 
 ## VERIFY seams (deferred, non-blocking — filed 2026-07-16)
 1. **E2E inter-feature DB-ordering fragility** — `navigation.steps.ts`'s
