@@ -306,6 +306,15 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   its live runs) beside the **no-mistakes gate pane**; the Wave → [Track] → CR →
   Cycle history lens below. Wave states: `running → lanes complete · awaiting
   review → gated → superseded`. (CR-CRU-011 + CR-CRU-013.)
+  **Milestones (locked round 24):** gap-analysis / design-review / stage-flip
+  entries are workflow events on the **project workspace timeline ONLY** — the
+  home collective feed stays a cross-project run feed (a compact gate entry is
+  the one exception). **Execution roadmap (locked round 24):** the Wave → CR
+  sequence table with depends-on and DERIVED statuses (PENDING = no plan,
+  IN_PROGRESS = open plan, COMPLETED = closed + merge) ships in **0.2.0**
+  (CR-CRU-014, schema designed now — storyboard F14); binding forward-compat on
+  0.1.0: `plans.cr` is the verbatim stable join key, the queue table is purely
+  additive.
   All in v0.1.0: plan API + lens in CR-CRU-011, fleet plan verbs
   (plan-file / cycle-activate / cycle-done / cr-close + `CRUCIBLE_CYCLE_ID`) in
   CR-CRU-008.

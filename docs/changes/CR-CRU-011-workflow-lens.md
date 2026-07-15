@@ -64,6 +64,9 @@ encodes the plan verbs in the python/fleet clients for the agentic backend.
 - Plan mutations emit an SSE change event; plan state is queryable via
   `GET …/plans` (+ `?cr=`, `?track=`) and flows through retention as plan
   records, not test-run events (excluded from run rollups).
+- **Forward-compat (round 24, binding):** `plans.cr` is stored VERBATIM — it is
+  the stable join key for the 0.2.0 execution-roadmap queue table (CR-CRU-014).
+  Nothing in this CR may treat "CRs with plans" as "the full CR list".
 
 ### §S1 Agent lifecycle events (server, additive)
 Registration and unregistration append **lifecycle events** to the project's

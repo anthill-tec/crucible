@@ -21,7 +21,8 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-010](CR-CRU-010-codec-path-interface-hardening.md) | Codec parsePath + shim hardening | maintenance | COMPLETED (2026-07-15) | 006 | 3 (after 006, before 007) |
 | [CR-CRU-011](CR-CRU-011-workflow-lens.md) | Cycle plans + workflow lens + agent runtimes | feature | PENDING | 007 | 4 (before 008) |
 | [CR-CRU-012](CR-CRU-012-projects-manager.md) | Projects manager: add + edit + archive | feature | PENDING | 004, 007 | 4 (before 009) |
-| [CR-CRU-013](CR-CRU-013-gate-events.md) | Gate events: no-mistakes ingestion + gate pane | feature | PENDING | 008, 011 | 4 (before 009) |
+| [CR-CRU-013](CR-CRU-013-gate-events.md) | Workflow events: gates (no-mistakes) + milestones | feature | PENDING | 008, 011 | 4 (before 009) |
+| [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 opener) | 011, 013 | 0.2.0 W1 |
 
 ## Notes
 - 2026-07-14 — Project kickoff: PRD + evidence DN landed. Kickoff design review (lavish)
@@ -73,6 +74,15 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   before 009; 009 now depends on 011). Backwards audit of the agent API found the
   lifecycle gap (unregister hard-deletes firstSeen/lastSeen → runtime lost) — closed
   by CR-011 §S1 lifecycle events.
+- 2026-07-15 (design iteration rounds 23–24) — milestones folded into CR-013
+  (renamed "Workflow events: gates + milestones"): gap-analysis / design-review /
+  stage-flip entries on the PROJECT WORKSPACE timeline only (home stays a
+  cross-project run feed; compact gate entry is the exception). Execution roadmap
+  (Wave→CR table, derived statuses PENDING/IN_PROGRESS/COMPLETED) user-scheduled
+  to 0.2.0 → CR-CRU-014 filed now with the schema + a BINDING forward-compat
+  contract on 0.1.0 (plans.cr = verbatim stable join key; queue table additive).
+  Storyboard gained F13 (Workflow tab) + F14 (roadmap, 0.2.0-badged); F8/F11 tab
+  rows show the Workflow tab.
 - 2026-07-15 (design iteration rounds 16–22) — cycle kinds (verify/fix identical
   rules); tracks = numbered lanes, CR always within a track (plan `track`, auto from
   `CRUCIBLE_ORCHESTRATOR`); containment hierarchy locked (Project → mainline
