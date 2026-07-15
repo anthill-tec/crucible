@@ -219,26 +219,25 @@ every surface (home + workspace top bars) — green dot + `server healthy · liv
 red dot + `server unreachable · retrying…`; it never shows version or event counts.
 
 ### 4.11 Dashboard (v2 UX)
-- **Project switcher (final — design iteration approved 2026-07-15 via review
-  board)** — the Projects pane lists projects with per-project health at a glance
-  (type badge, online-agent count, last-run pass/fail, latest coverage) and their
-  agents nested beneath. Clicking a pane row **drills down** into that project's
-  workspace (`/p/<key>`) — pane rows navigate, they never filter. Home-timeline
-  filtering is a **"filter by" pulldown in the top title bar** (default "All
-  projects", resets): one compact control that scales with any project count. The
-  home top bar carries NO project chips/breadcrumbs: logo + a one-liner slogan +
-  the filter pulldown + health pill. The `← projects` breadcrumb exists only on
-  the workspace view.
-- **Agents — nested under their project (revised 2026-07-15, user-locked via review
-  board)** — agents are NEVER a flat standalone section: everywhere they appear, live
-  agents (and tombstones) render as sub-nodes of their owning project's card/container,
-  with liveness dot (🟢 online / 🟡 stale / ⚪ offline), display name, current `message`,
-  relative last-seen. Nested agent rows carry a distinct glyph + tint (storyboard: `⌁`
-  in heat-amber) so they read as agents, not sub-projects (user note 2026-07-15).
-  The "who is working right now" view is read per-project.
-  Consequence: the workspace **Agents tab is dropped** (no flat agents view exists
-  anywhere); in the workspace, the project's agents sit ⌁-marked in the right
-  (vitals) rail. Implementation lands in CR-CRU-007.
+- **Mission Control home (final form — round 6, 2026-07-15, user-locked via review
+  board)** — top bar: logo + one-liner slogan + one **project chip per registered
+  project** (canonical format everywhere: **name + type badge**, with liveness
+  dot; **click = drill down** to `/p/<key>`, never filter) + a **"filter by"
+  pulldown** (default "All projects", filters the home timeline in place) + the
+  Health Pill. The home body is the **collective all-projects timeline**
+  (newest-first, each project contributing up to its retention limit) — no
+  Projects pane and no agent rows on home. Three levels with a consistent `←`
+  back chip: home → workspace (`← projects`) → run drill-in (`← timeline`);
+  the back chip behaves exactly like Esc / scrim / browser back.
+- **Agents — nested under their project, workspace-only (final form — round 6,
+  2026-07-15)** — agents are NEVER a flat standalone section. They render in exactly
+  one place: the workspace's right-side **Project pane** — project card (name + type
+  badge, agent rollup, coverage meters) with the project's live agents and tombstones
+  as `⌁`-marked (heat-amber) indented sub-rows beneath it, then the Vitals cards.
+  Each sub-row: liveness dot (🟢 online / 🟡 stale / ⚪ offline), display name, current
+  `message`, relative last-seen. The home shows no agents — project chips carry the
+  liveness dot. The workspace **Agents tab is dropped**. Agent sub-row click filters
+  the visible timeline to that agent (in place). Implementation lands in CR-CRU-007.
 - **Run timeline** — newest-first event cards: agent, tier, pass ratio (`34/34` green /
   `3 failed of 5` red / pending count), duration, expandable suite→test tree with per-test
   status; compile cards show error/warning counts and per-file structured errors.
@@ -251,10 +250,11 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
 **Navigation model (decided 2026-07-14):** two routed pages + one overlay. Mission
 Control home (`/`), project workspace (`/p/<key>`), and the run drill-in as a
 slide-over overlay (`…/run/<eventId>` suffix) that opens over whichever surface is
-active and closes back to its exact state (Esc / scrim / browser back). Projects-pane
-rows drill down to the workspace (revised final round 2026-07-15 — the top-bar
-filter-by pulldown filters the home timeline in place); project cards/names also
-navigate; agent sub-rows filter the visible timeline to that agent; run cards open the
+active and closes back to its exact state (Esc / scrim / browser back, and the
+consistent `←` back chip at every level — round 6). Top-bar project chips drill down
+to the workspace; the filter-by pulldown filters the collective home timeline in
+place; project cards/names also navigate; workspace agent sub-rows filter the
+visible timeline to that agent; run cards open the
 drill-in with a codec-aware body (suite tree for tests, per-file diagnostics for
 compile); transition markers open the GREEN run with the paired RED one hop away;
 coverage trend points open their producing regression run; the health pill never
