@@ -67,20 +67,20 @@ regions; restart recovers). Each test title cites its frame (`"F1: …"`). E2E r
 are ingested to the dev Crucible instance with `tier: "e2e"` (dog-food).
 
 ## Acceptance criteria
-- [ ] `GET /api/v2/events` list items carry top-level `total`/`passed`/`failed`/`pending`/`duration_ms` numbers and `hasCoverage` boolean, and NO `summary` key; `GET /api/v2/events/:id` still returns nested `summary` + `tree`; v1 `GET /api/events` unchanged (contract suite still green).
-- [ ] `GET /api/v2/events?fmt=toon` on ≥2 briefs emits the uniform-table form (body contains a line matching `/^events\[\d+\]\{/`); measured ratio for a 50-event listing re-recorded in DN-crucible-toon-subset.md ≤ 70% of JSON bytes.
-- [ ] `GET /` serves the SPA; view-source contains NO `http(s)://` script/style URLs (fully vendored).
-- [ ] `document.documentElement.dataset.theme === "forge"`; computed `--color-primary` (or DaisyUI primary var) resolves to `#ff7a1a`.
-- [ ] Navigating `/p/<key>` directly (fresh load) renders that project's workspace — deep link works without visiting `/` first.
-- [ ] With a `backend` project the BDD tab element carries `disabled`/aria-disabled; with a `frontend` project it does not.
-- [ ] Project chips filter the DOM in place: after clicking chip NAI, agent rail shows only NAI agents and `location.pathname` is still `/`.
-- [ ] A tombstoned agent (lastSeen between T2 and T3) renders with the ⚰ marker, reduced opacity, its last `message`, and a "died … ago" timestamp.
-- [ ] Killing the server: within 25 s the pill text contains "unreachable" and the timeline container has the greyed class + a "last synced" stamp; restarting the server restores the pill within 10 s without a manual reload.
+- [x] `GET /api/v2/events` list items carry top-level `total`/`passed`/`failed`/`pending`/`duration_ms` numbers and `hasCoverage` boolean, and NO `summary` key; `GET /api/v2/events/:id` still returns nested `summary` + `tree`; v1 `GET /api/events` unchanged (contract suite still green).
+- [x] `GET /api/v2/events?fmt=toon` on ≥2 briefs emits the uniform-table form (body contains a line matching `/^events\[\d+\]\{/`); measured ratio for a 50-event listing re-recorded in DN-crucible-toon-subset.md ≤ 70% of JSON bytes.
+- [x] `GET /` serves the SPA; view-source contains NO `http(s)://` script/style URLs (fully vendored).
+- [x] `document.documentElement.dataset.theme === "forge"`; computed `--color-primary` (or DaisyUI primary var) resolves to `#ff7a1a`.
+- [x] Navigating `/p/<key>` directly (fresh load) renders that project's workspace — deep link works without visiting `/` first.
+- [x] With a `backend` project the BDD tab element carries `disabled`/aria-disabled; with a `frontend` project it does not.
+- [x] Project chips filter the DOM in place: after clicking chip NAI, agent rail shows only NAI agents and `location.pathname` is still `/`.
+- [x] A tombstoned agent (lastSeen between T2 and T3) renders with the ⚰ marker, reduced opacity, its last `message`, and a "died … ago" timestamp.
+- [x] Killing the server: within 25 s the pill text contains "unreachable" and the timeline container has the greyed class + a "last synced" stamp; restarting the server restores the pill within 10 s without a manual reload.
 - [ ] An ingest via the API produces a visible DOM update (timeline/agent rail) within 2 s with no page reload (SSE path).
 - [ ] Esc from `/p/<key>/run/<id>` lands on `/p/<key>` with prior scroll position (state restore).
 - [ ] Integration: UI fetches only `/api/v2/*` + `/api/stream` (grep the SPA source for `"/api/` — no legacy v1 paths).
-- [ ] E2E: `bun run test:e2e` executes the §S6 Playwright suite against a real booted server; F1/F2/F9/F10 tests pass headless, and each test title names its storyboard frame.
-- [ ] Layout (revised §S3): the home page's main grid has exactly 2 columns — the timeline column is the widest element; the right rail contains the projects section ABOVE the agents section (E2E asserts DOM order: projects section precedes agents section within the same rail, and no left rail exists).
+- [x] E2E: `bun run test:e2e` executes the §S6 Playwright suite against a real booted server; F1/F2/F9/F10 tests pass headless, and each test title names its storyboard frame.
+- [x] Layout (revised §S3): the home page's main grid has exactly 2 columns — the timeline column is the widest element; the right rail contains the projects section ABOVE the agents section (E2E asserts DOM order: projects section precedes agents section within the same rail, and no left rail exists).
 
 ## Estimated size
 L.
