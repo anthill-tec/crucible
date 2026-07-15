@@ -49,16 +49,10 @@
       requestAnimationFrame(() => window.scrollTo(0, y));
     }
 
-    // §S3 F4 (re-baseline) — whether the CURRENT overlay was opened by an
-    // in-app card/marker click (auto-expands failing suites in Detail too)
-    // as opposed to a cold deep-link mount (renders collapsed in Detail).
-    let overlayViaNavigate = false;
-
     // AC 10b(b/c) — close the overlay back to the underlying surface path
     // (strip the /run/<id> suffix) and restore the saved scroll position.
     function closeOverlay() {
       if (state.route.overlay === undefined) return;
-      overlayViaNavigate = false;
       const base = location.pathname.replace(/\/run\/[^/]+\/?$/, "") || "/";
       history.pushState(null, "", base);
       state.route = L.routeParse(base);
@@ -70,7 +64,6 @@
       const hadOverlay = state.route.overlay !== undefined;
       state.route = L.routeParse(location.pathname);
       if (hadOverlay && state.route.overlay === undefined) {
-        overlayViaNavigate = false;
         restoreScroll();
       }
     });
@@ -447,7 +440,6 @@
         state.route.page === "workspace"
           ? `/p/${encodeURIComponent(state.route.projectKey)}`
           : "";
-      overlayViaNavigate = true;
       navigate(`${prefix}/run/${encodeURIComponent(eventId)}`);
     }
 
@@ -460,15 +452,23 @@
         },
         // §S1 — the kind icon is tinted by the agent's phase role (RED red /
         // GREEN green / VERIFY purple / FIX yellow); roleless stays neutral.
+        // Tintable-icon contract: the wrapper carries the role color; the
+        // glyph is a monochrome CSS-mask child painted `currentColor` —
+        // never color-emoji text, which CSS `color` cannot tint.
         span(
           {
             "data-testid": "card-icon",
+            "data-icon-tintable": "true",
             class: (() => {
               const role = L.phaseRole(e.agentId);
               return `app-card-icon${role !== null ? ` app-role-${role}` : ""}`;
             })(),
           },
-          e.kind === "compile" ? "🛠" : "🧪",
+          span({
+            "data-testid": "icon-glyph",
+            class: "app-icon-mask",
+            "data-kind": e.kind === "compile" ? "compile" : "test",
+          }),
         ),
         div(
           { class: "app-evt-body" },
@@ -801,11 +801,6 @@
 
     const RunOverlay = () => {
       const eventId = state.route.overlay;
-      // Captured once per overlay open: card/marker clicks auto-expand
-      // failing suites in BOTH presentations; cold deep-links render the
-      // Detail tree collapsed (Density always auto-expands).
-      const openedInApp = overlayViaNavigate;
-      overlayViaNavigate = false;
       const detail = van.state(null); // suites-depth event detail
       const loadError = van.state(null);
       const suiteLeaves = van.state({}); // suiteName -> that suite's leaves
@@ -835,12 +830,12 @@
             return;
           }
           detail.val = ev;
-          // §S4.1/F4 — failures float: auto-expand ONLY the failing suites
-          // (fetch their leaves); all-pass suites stay folded and are never
-          // fetched until clicked. Density always; Detail on in-app opens.
-          if (presentationOf(ev) === "Density" || openedInApp) {
-            autoExpandFailing(ev);
-          }
+          // §S4.1/F4 (§S3: no cold-load carve-out) — failures float:
+          // auto-expand ONLY the failing suites (fetch their leaves) on
+          // EVERY open — in-app clicks AND cold deep-link mounts, both
+          // presentations; all-pass suites stay folded and are never
+          // fetched until clicked.
+          autoExpandFailing(ev);
         } catch (err) {
           loadError.val = `run detail failed to load — ${String(err)}`;
         }
