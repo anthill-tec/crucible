@@ -52,7 +52,8 @@ around two commitments:
   from its source via opensrc). The forge palette ships as a custom DaisyUI theme.
   Single page, served by the same process. Dashboard backbone: **A + B hybrid** —
   Mission Control home (project rail + cross-project timeline + agent rail) with
-  per-project workspace drill-in (tabs: Runs / Agents / Coverage / Compile / BDD);
+  per-project workspace drill-in (tabs: Runs / Coverage / Compile / BDD — Agents tab
+  dropped 2026-07-15: agents nest under their project everywhere, §4.11);
   every run card opens a drill-in showing the suite→test tree and, for failures,
   the assertion message + stack trace.
 - **TOON (decided 2026-07-14):** agent-facing reads first (`GET /api/v2` orientation,
@@ -217,9 +218,13 @@ present stale data as live. Orchestrators may gate wave dispatch on `/api/health
 ### 4.11 Dashboard (v2 UX)
 - **Project switcher** — chips/rail with per-project health at a glance (type badge,
   online-agent count, last-run pass/fail, latest coverage). "All projects" default.
-- **Agent rail** — live agents with liveness dot (🟢 online / 🟡 stale / ⚪ offline),
-  display name, current `message`, relative last-seen. This is the "who is working right
-  now" view.
+- **Agents — nested under their project (revised 2026-07-15, user-locked via review
+  board)** — agents are NEVER a flat standalone section: everywhere they appear, live
+  agents (and tombstones) render as sub-nodes of their owning project's card/container,
+  with liveness dot (🟢 online / 🟡 stale / ⚪ offline), display name, current `message`,
+  relative last-seen. The "who is working right now" view is read per-project.
+  Consequence: the workspace **Agents tab is dropped** (no flat agents view exists
+  anywhere); implementation lands in CR-CRU-007.
 - **Run timeline** — newest-first event cards: agent, tier, pass ratio (`34/34` green /
   `3 failed of 5` red / pending count), duration, expandable suite→test tree with per-test
   status; compile cards show error/warning counts and per-file structured errors.
