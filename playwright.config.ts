@@ -33,7 +33,7 @@ const testDir = defineBddConfig({
 
 export default defineConfig({
   testDir,
-  // Single logical suite (3 features / 15 scenarios), run serially: F1
+  // Single logical suite (4 features / 19 scenarios), run serially: F1
   // asserts a truly empty DB and MUST observe it before F2/F9/layout
   // scenarios seed projects/agents into the same shared webServer instance.
   fullyParallel: false,
@@ -47,7 +47,31 @@ export default defineConfig({
     baseURL: process.env.CRUCIBLE_E2E_BASE_URL ?? `http://localhost:${PORT}`,
     trace: "retain-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  // CR-CRU-016 C4 — `drill-in.feature` sorts alphabetically before
+  // `shell-storyboard.feature` ("d" < "s"), but shell-storyboard.feature's
+  // FIRST scenario (F1) asserts a truly empty DB — a precondition that MUST
+  // hold before ANY scenario in the shared webServer/DB seeds a project.
+  // playwright-bdd's file resolver (tinyglobby) always returns results in
+  // alphabetical order regardless of pattern order passed to `features`
+  // (verified: reordering the `features` array above had no effect), so
+  // ordering must be enforced at the Playwright project level instead:
+  // Playwright's documented "project dependencies" guarantee a dependency
+  // project completes before its dependent starts, independent of file
+  // discovery order. `chromium` covers everything except drill-in.feature;
+  // `chromium-drill-in` depends on it and runs strictly after.
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      testIgnore: /drill-in\.feature\.spec\.js$/,
+    },
+    {
+      name: "chromium-drill-in",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: /drill-in\.feature\.spec\.js$/,
+      dependencies: ["chromium"],
+    },
+  ],
   webServer: {
     command: `bun run ${SERVER_ENTRY}`,
     cwd: SCRATCH_CWD,

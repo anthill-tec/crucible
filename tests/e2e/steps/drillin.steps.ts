@@ -152,3 +152,36 @@ Step("I click the first failing heat cell", async ({ page }) => {
   await expect(firstFailCell).toBeVisible();
   await firstFailCell.click();
 });
+
+// CR-CRU-016 C4 (BDD layer, drill-in.feature) — "open-from-card" scenario:
+// the workspace Runs pane's own feed content (event cards) is gone once the
+// pane swaps to the detail (paneSwap in public/app.js unmounts the feed —
+// the pane CONTAINER stays mounted, only its content swaps).
+Step("the workspace Runs pane shows no event cards", async ({ page }) => {
+  await expect(page.getByTestId("workspace-runs").getByTestId("event-card")).toHaveCount(0);
+});
+
+Step("the workspace tabs row is visible", async ({ page }) => {
+  await expect(page.getByTestId("workspace-tabs")).toBeVisible();
+});
+
+// AC4 — the slide-over container, its scrim, and `app-slideover-right` are
+// RETIRED for run detail; no such element exists anywhere while the detail
+// is open (/manage and /roadmap overlays are unaffected and out of scope
+// here).
+Step("there is no run-overlay-scrim element anywhere", async ({ page }) => {
+  await expect(page.getByTestId("run-overlay-scrim")).toHaveCount(0);
+});
+
+Step("there is no app-slideover-right element anywhere", async ({ page }) => {
+  await expect(page.locator(".app-slideover-right")).toHaveCount(0);
+});
+
+// CR-CRU-016 C4 — "back-restores-scroll" scenario, the OTHER restore path:
+// the `← timeline` back chip (public/app.js: `button({...onclick: () =>
+// closeDetail()}, "← timeline")`) calls the SAME closeDetail() as Escape,
+// so it deserves its own BDD coverage of the pane-scroll-restore contract
+// (Escape already lives in shell-storyboard.feature).
+Step('I click the "← timeline" chip', async ({ page }) => {
+  await overlayOf(page).getByRole("button", { name: "← timeline" }).click();
+});
