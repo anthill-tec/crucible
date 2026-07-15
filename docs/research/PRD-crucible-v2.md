@@ -219,16 +219,19 @@ every surface (home + workspace top bars) — green dot + `server healthy · liv
 red dot + `server unreachable · retrying…`; it never shows version or event counts.
 
 ### 4.11 Dashboard (v2 UX)
-- **Mission Control home (final form — round 6, 2026-07-15, user-locked via review
-  board)** — top bar: logo + one-liner slogan + one **project chip per registered
-  project** (canonical format everywhere: **name + type badge**, with liveness
-  dot; **click = drill down** to `/p/<key>`, never filter) + a **"filter by"
-  pulldown** (default "All projects", filters the home timeline in place) + the
-  Health Pill. The home body is the **collective all-projects timeline**
-  (newest-first, each project contributing up to its retention limit) — no
-  Projects pane and no agent rows on home. Three levels with a consistent `←`
-  back chip: home → workspace (`← projects`) → run drill-in (`← timeline`);
-  the back chip behaves exactly like Esc / scrim / browser back.
+- **Mission Control home (final form — round 7, 2026-07-15, user-locked via review
+  board)** — title bar: logo + one-liner slogan + the Health Pill. Below it, the
+  **projects row**: a second-row header pane, **flow (wrapping) layout** scaling to
+  any project count, one badge per registered project in the canonical format
+  (**name + type badge**), ordered **most-recently-active first, inactive last**;
+  badge display state is binary **active / inactive** (zero live agents ⇒
+  inactive). **Clicking a badge drills down** to `/p/<key>` — never filters. The
+  home body is the **collective all-projects timeline** (newest-first, each
+  project contributing up to its retention limit) whose **filter pulldown lives in
+  the timeline pane header** (default "All projects", filters only the timeline,
+  in place). No Projects pane and no agent rows on home. Three levels with a
+  consistent `←` back chip: home → workspace (`← projects`) → run drill-in
+  (`← timeline`); the back chip behaves exactly like Esc / scrim / browser back.
 - **Agents — nested under their project, workspace-only (final form — round 6,
   2026-07-15)** — agents are NEVER a flat standalone section. They render in exactly
   one place: the workspace's right-side **Project pane** — project card (name + type
