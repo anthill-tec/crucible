@@ -167,7 +167,21 @@ non-empty `raw` is stored.
    (`← projects`) → level 3 run drill-in (`← timeline`). The `←` back chip renders
    at every level ≥ 2 and behaves exactly like Esc / scrim / browser back. The
    navigation FLOW (user-approved diagram) is unchanged from CR-006.
-4. **Health pill fidelity (user note 2026-07-15, post-approval addendum).** The
+5. **Workspace tab bodies — 0.1.0 final set (user defect report 2026-07-15:
+   the Coverage tab showed no data despite a stored coverage run — the CR-006
+   placeholder `<tab> lands in CR-CRU-007` was still the only body behind
+   every non-Runs tab).** `Coverage` renders the latest-green-coverage panel:
+   pane heading, a lines meter row (`lines <covered>/<total> · <percent>%`),
+   a functions row (`functions <covered>/<total> · <percent>%`), and a
+   `view run` control opening `latestCoverageEventId`'s drill-in (same wiring
+   as the §nav coverage-meter click); the no-coverage gating/disabled state is
+   unchanged. `Compile` renders the F5 COMPILE PANEL: the workspace timeline
+   filtered to `kind === "compile"` events, identical card anatomy, with
+   empty-state `no compile events yet`. `BDD` keeps a placeholder body whose
+   text names the REAL landing CR (`CR-CRU-015`, 0.2.0) and notes BDD run
+   results already stream into the Runs timeline — the string
+   `lands in CR-CRU-007` must not render anywhere.
+6. **Health pill fidelity (user note 2026-07-15, post-approval addendum).** The
    pill is the SAME server-liveness badge on home AND workspace top bars: green
    dot + `server healthy · live` (or `· up <uptime>`), red dot +
    `server unreachable · retrying…`. It never shows version/event counts, and the
@@ -188,6 +202,8 @@ non-empty `raw` is stored.
 - [ ] Failure-box degradation (user defect 2026-07-15): a failing leaf whose `failure` is exactly `{type:"AssertionError"}` renders a failure box whose visible text contains `AssertionError` AND `no failure detail captured by the reporter` — the box's text content is never empty; a failing leaf with NO failure object (or one with neither message nor type) renders `test failed` + the same note; no `.app-failure-trace` node renders when `trace` is absent.
 - [ ] Compile drill-in status line (user defect 2026-07-15): a compile event with `errorCount:0, warningCount:0, diagnostics:[]` renders `data-testid="compile-status"` with text `tsc · 0 errors · 0 warnings` carrying the pass-green class, followed by the empty-state `clean compile — no diagnostics`; the same event with 2 error diagnostics renders the status line fail-red with the diagnostics list; the raw-output toggle is ABSENT when `raw` is empty/absent and present when non-empty.
 - [ ] Compile card pill palette (user defect 2026-07-15): a compile card with `errors:0` renders its `0 errors` pill with the SAME pass-green class as an `N/N` test pill; with `errors:3` the `3 errors` pill carries the fail-red class; no amber compile pill exists anywhere (class-level assertion).
+- [ ] §S5 Coverage tab (user defect 2026-07-15): with `latestGreenCoverage {lines:{covered:1736,total:1849,percent:93.9}, functions:{covered:199,total:208,percent:95.7}}` and a `latestCoverageEventId`, selecting the Coverage tab renders `data-testid="coverage-panel"` containing `93.9%`, `1736/1849`, `95.7%`, and `199/208`, plus a `data-testid="coverage-view-run"` control whose click opens the drill-in route `/p/<key>/run/<latestCoverageEventId>`; the string `lands in CR-CRU-007` renders on NO tab.
+- [ ] §S5 Compile tab (F5 COMPILE PANEL): with a fixture of 2 test + 2 compile events, selecting the Compile tab renders exactly the 2 compile-kind cards (same card anatomy/testids as Runs); with 0 compile events it renders `no compile events yet`; the BDD tab body text contains `CR-CRU-015` and not `CR-CRU-007`.
 - [ ] Integration: coverage meter click on a project card opens the drill-in of the event whose id equals the project's latest-green-coverage event (wired per §nav table).
 - [ ] §S5: workspace Project pane — on `/p/<key>` for a project with 2 online agents + 1 tombstoned, `data-testid="project-pane"` renders the project card (name + type badge + coverage meter) followed by exactly 3 `⌁`-marked agent sub-rows, with the Vitals cards beneath; the home page (`/`) renders 0 agent rows anywhere.
 - [ ] §S5: `L.workspaceTabs({type:"backend"})` returns exactly `["Runs","Coverage","Compile","BDD"(disabled)]` and `L.workspaceTabs({type:"frontend"})` the same with BDD enabled — no `Agents` entry in either.
