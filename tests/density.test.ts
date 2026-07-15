@@ -1,0 +1,821 @@
+// CR-CRU-007 §S4 items 1, 2, 3, 4, 6 (density set, release 0.1.0) —
+// Density-mode drill-in behaviors. Drives the REAL production public/app.js
+// shell inside a happy-dom window — same harness pattern as
+// tests/drill-in.test.ts / tests/run-cards.test.ts: real VanJS/VanX vendor
+// bundles, real public/app-logic.mjs, real public/app.js; `fetch` is
+// scripted.
+//
+// RED phase: expected to fail against the CURRENT public/app.js RunOverlay
+// (from C3), which renders the SAME plain suite tree in both Detail and
+// Density mode and has none of: data-testid="heat-strip", "heat-cell",
+// "digest-row", "digest-expander", "tree-scroll", "density-toggle", or a
+// `data-leaf-key` attribute on leaf-row elements.
+//
+// Contract this file defines for GREEN (identifiers verbatim):
+//   §S4 item 1 (failures float, green folds — Density mode only):
+//     - a 0-failure run opens with every `[data-testid="suite-row"]`
+//       collapsed (no `[data-testid="leaf-row"]` anywhere) showing
+//       `name + ✓count` text.
+//     - a run WITH failures auto-expands ONLY the failing suite(s) (their
+//       leaves render without a click, and the suite is auto-fetched via
+//       `?suite=<name>`); all-pass suites stay collapsed to their counted
+//       row and are NEVER auto-fetched.
+//     - Detail mode renders the plain tree — nothing auto-expands.
+//   §S4 item 2 (heat-strip minimap — Density mode only):
+//     - `[data-testid="heat-strip"]` renders one `[data-testid="heat-cell"]`
+//       per leaf in the run, any run size (no count threshold). A failing
+//       leaf's cell class contains "app-heat-fail", a pending leaf's cell
+//       class contains "app-heat-pending", a passing leaf's cell class
+//       contains "app-heat-pass".
+//     - clicking the first fail-classed cell expands that leaf's
+//       `[data-testid="failure-box"]` (its `failure.message` text becomes
+//       visible).
+//     - Detail mode renders NO heat-strip for the same fixture.
+//   §S4 item 3 (failure digest — Density mode only):
+//     - leaves within one suite sharing an identical `failure.message`
+//       collapse into one `[data-testid="digest-row"]` containing the
+//       shared message and a `[data-testid="digest-expander"]` labeled
+//       `+N identical` (N = group size - 1); clicking the expander reveals
+//       the individual `[data-testid="leaf-row"]`s for the grouped leaves.
+//     - leaves with DIFFERENT failure messages never group (render as
+//       plain leaf-rows).
+//     - Detail mode never digests — identical-message leaves all render as
+//       individual leaf-rows even after a manual suite expand.
+//   §S4 item 4 (virtualized tree — ALWAYS ON, both modes):
+//     - a 10 000-leaf synthetic run keeps mounted tree-row DOM nodes
+//       (`suite-row` + `leaf-row` combined) under 200 after expanding the
+//       largest suite, in BOTH Detail and Density mode.
+//     - the initial drill-in fetch is `?depth=suites` and contains no leaf
+//       entries, holding at 10k scale (already true from C3's suites-first
+//       paging).
+//     - a virtualized suite's leaf list renders inside a
+//       `[data-testid="tree-scroll"]` scroll container; each mounted
+//       `[data-testid="leaf-row"]` carries a `data-leaf-key` identity
+//       attribute (`"<suiteName>::<leafName>"`); scrolling that container
+//       changes WHICH leaf-row identities are mounted while the mounted
+//       count stays under 200.
+//   §S4 item 6 (density toggle — independent of Detail/Density):
+//     - `[data-testid="density-toggle"]` exposes its current mode via a
+//       `data-density` attribute, cycling "comfortable" -> "compact" ->
+//       "ultra" -> "comfortable" on click, and applies a matching root
+//       class (`app-density-<mode>`) to `document.documentElement`.
+//     - the choice persists to `localStorage` under the key
+//       `"crucible.density.mode"` and is honored as the default on the
+//       next cold mount.
+//     - flipping the density toggle never changes `[data-testid=
+//       "drillin-mode"]`'s `data-mode`, and flipping the drillin-mode
+//       switch never changes the density toggle's `data-density`.
+import { describe, test, expect, afterEach } from "bun:test";
+import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const VAN_SRC = readFileSync(
+  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
+  "utf8",
+);
+const VAN_X_SRC = readFileSync(
+  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
+  "utf8",
+);
+const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
+const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
+
+interface FailureFixture {
+  message: string;
+  type?: string;
+  trace?: string;
+}
+interface LeafFixture {
+  name: string;
+  status: "pass" | "fail" | "pending";
+  duration_ms: number;
+  failure?: FailureFixture;
+}
+interface SuiteFixture {
+  name: string;
+  status: "pass" | "fail" | "pending";
+  children: LeafFixture[];
+}
+interface EventDetailFixture {
+  id: string;
+  projectKey: string;
+  agentId: string;
+  kind: "test" | "compile";
+  tier: string;
+  codec?: string;
+  timestamp: number;
+  summary?: { total: number; passed: number; failed: number; pending: number; duration_ms: number };
+  tree?: SuiteFixture[];
+}
+interface EventBriefFixture {
+  id: string;
+  projectKey: string;
+  agentId: string;
+  kind: "test" | "compile";
+  tier: string;
+  codec?: string;
+  timestamp: number;
+  total?: number;
+  passed?: number;
+  failed?: number;
+  pending?: number;
+  duration_ms?: number;
+  hasCoverage?: boolean;
+}
+interface ProjectFixture {
+  key: string;
+  name: string;
+  type: "backend" | "frontend";
+  agentsOnline: number;
+  agentsTotal: number;
+  active?: boolean;
+  lastActivity?: number;
+}
+interface MountOpts {
+  pathname?: string;
+  projects?: ProjectFixture[];
+  events?: EventBriefFixture[];
+  eventDetails?: Record<string, EventDetailFixture>;
+  localStorageSeed?: Record<string, string>;
+}
+
+let cacheBust = 0;
+let fetchLog: string[] = [];
+
+function suiteCounts(children: LeafFixture[]): { passed: number; failed: number; pending: number } {
+  const counts = { passed: 0, failed: 0, pending: 0 };
+  for (const leaf of children) {
+    if (leaf.status === "pass") counts.passed += 1;
+    else if (leaf.status === "fail") counts.failed += 1;
+    else counts.pending += 1;
+  }
+  return counts;
+}
+
+/** Same mountApp harness pattern as tests/drill-in.test.ts. */
+async function mountApp(opts: MountOpts): Promise<void> {
+  const pathname = opts.pathname ?? "/";
+  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
+  document.body.innerHTML = '<div id="app"></div>';
+  fetchLog = [];
+
+  if (opts.localStorageSeed !== undefined) {
+    for (const [key, value] of Object.entries(opts.localStorageSeed)) {
+      window.localStorage.setItem(key, value);
+    }
+  }
+
+  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+    fetchLog.push(url);
+    let body: unknown;
+    const eventMatch = /\/api\/v2\/events\/([^/?]+)/.exec(url);
+    const isListEndpoint = url.includes("/api/v2/events?") || url.endsWith("/api/v2/events");
+    if (eventMatch !== null && !isListEndpoint) {
+      const id = decodeURIComponent(eventMatch[1]!);
+      const detail = opts.eventDetails?.[id];
+      if (detail === undefined) {
+        throw new Error(`density.test.ts mountApp: no eventDetails fixture for id ${id} (url ${url})`);
+      }
+      const parsed = new URL(url, "http://localhost");
+      const suiteParam = parsed.searchParams.get("suite");
+      const depthParam = parsed.searchParams.get("depth");
+      if (suiteParam !== null) {
+        const match = (detail.tree ?? []).find((n) => n.name === suiteParam);
+        body = { ok: true, event: { ...detail, tree: match !== undefined ? [match] : [] } };
+      } else if (depthParam === "suites") {
+        const tree = (detail.tree ?? []).map((n) => ({
+          name: n.name,
+          status: n.status,
+          counts: suiteCounts(n.children),
+        }));
+        body = { ok: true, event: { ...detail, tree } };
+      } else {
+        body = { ok: true, event: detail };
+      }
+    } else if (url.includes("/api/v2/projects")) {
+      body = { ok: true, projects: opts.projects ?? [] };
+    } else if (url.includes("/api/v2/agents")) {
+      body = { ok: true, agents: [] };
+    } else if (url.includes("/api/v2/events")) {
+      body = { ok: true, events: opts.events ?? [] };
+    } else if (url.includes("/api/v2/health")) {
+      body = { ok: true, version: "2.0.0-test", counts: { events: 0 } };
+    } else {
+      throw new Error(`density.test.ts mountApp: unexpected fetch url ${url}`);
+    }
+    return { ok: true, status: 200, json: async () => body } as Response;
+  }) as typeof fetch;
+
+  (0, eval)(VAN_SRC);
+  (0, eval)(VAN_X_SRC);
+
+  cacheBust += 1;
+  await import(`${APP_LOGIC_PATH}?density=${cacheBust}`);
+
+  (0, eval)(APP_JS_SRC);
+
+  await settle();
+}
+
+async function settle(ticks = 6): Promise<void> {
+  for (let i = 0; i < ticks; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+afterEach(async () => {
+  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+});
+
+function findByText(root: ParentNode, selector: string, text: string): HTMLElement | undefined {
+  return Array.from(root.querySelectorAll(selector)).find((el) =>
+    (el.textContent ?? "").includes(text),
+  ) as HTMLElement | undefined;
+}
+
+function mountedTreeRowCount(overlay: Element): number {
+  return overlay.querySelectorAll('[data-testid="suite-row"], [data-testid="leaf-row"]').length;
+}
+
+async function mountAtRunCold(
+  eventId: string,
+  tier: string,
+  detail: EventDetailFixture,
+  brief: EventBriefFixture,
+  localStorageSeed?: Record<string, string>,
+): Promise<void> {
+  await mountApp({
+    pathname: `/run/${eventId}`,
+    projects: [],
+    events: [brief],
+    eventDetails: { [eventId]: detail },
+    localStorageSeed,
+  });
+}
+
+// ── §S4 item 1 — failures float, green folds ───────────────────────────────
+
+describe("§S4.1 — failures float, green folds (Density mode)", () => {
+  test("a run with 0 failures opens with every suite collapsed to 'name + ✓count' rows", async () => {
+    const now = Date.now();
+    const eventId = "evt-fold-zero-fail";
+    const detail: EventDetailFixture = {
+      id: eventId,
+      projectKey: "proj-fold",
+      agentId: "fold-agent",
+      kind: "test",
+      tier: "regression",
+      codec: "junit",
+      timestamp: now,
+      summary: { total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 800 },
+      tree: [
+        { name: "SuiteP1", status: "pass", children: [{ name: "p1", status: "pass", duration_ms: 5 }, { name: "p2", status: "pass", duration_ms: 5 }, { name: "p3", status: "pass", duration_ms: 5 }] },
+        { name: "SuiteP2", status: "pass", children: [{ name: "p4", status: "pass", duration_ms: 5 }, { name: "p5", status: "pass", duration_ms: 5 }] },
+      ],
+    };
+    const brief: EventBriefFixture = { id: eventId, projectKey: "proj-fold", agentId: "fold-agent", kind: "test", tier: "regression", codec: "junit", timestamp: now, total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 800, hasCoverage: false };
+    await mountAtRunCold(eventId, "regression", detail, brief);
+
+    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Density");
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay.querySelectorAll('[data-testid="suite-row"]').length).toBe(2);
+    expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+
+    const suiteP1 = findByText(overlay, '[data-testid="suite-row"]', "SuiteP1");
+    expect(suiteP1).toBeDefined();
+    expect(suiteP1!.textContent ?? "").toContain("✓3");
+    const suiteP2 = findByText(overlay, '[data-testid="suite-row"]', "SuiteP2");
+    expect(suiteP2).toBeDefined();
+    expect(suiteP2!.textContent ?? "").toContain("✓2");
+
+    // bound: nothing was auto-fetched since every suite folded.
+    expect(fetchLog.some((u) => u.includes("suite="))).toBe(false);
+  });
+
+  test("a run with failures opens with ONLY failing suites auto-expanded; all-pass suites stay collapsed and never auto-fetch", async () => {
+    const now = Date.now();
+    const eventId = "evt-fold-with-fail";
+    const detail: EventDetailFixture = {
+      id: eventId,
+      projectKey: "proj-fold",
+      agentId: "fold-agent-2",
+      kind: "test",
+      tier: "regression",
+      codec: "junit",
+      timestamp: now,
+      summary: { total: 4, passed: 3, failed: 1, pending: 0, duration_ms: 800 },
+      tree: [
+        {
+          name: "SuiteFailing",
+          status: "fail",
+          children: [
+            { name: "okLeaf", status: "pass", duration_ms: 5 },
+            { name: "badLeaf", status: "fail", duration_ms: 5, failure: { message: "boom" } },
+          ],
+        },
+        {
+          name: "SuitePassing",
+          status: "pass",
+          children: [
+            { name: "p1", status: "pass", duration_ms: 5 },
+            { name: "p2", status: "pass", duration_ms: 5 },
+          ],
+        },
+      ],
+    };
+    const brief: EventBriefFixture = { id: eventId, projectKey: "proj-fold", agentId: "fold-agent-2", kind: "test", tier: "regression", codec: "junit", timestamp: now, total: 4, passed: 3, failed: 1, pending: 0, duration_ms: 800, hasCoverage: false };
+    await mountAtRunCold(eventId, "regression", detail, brief);
+
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+
+    // SuiteFailing's leaves are visible without any click.
+    expect(fetchLog.some((u) => u.includes(`/api/v2/events/${eventId}`) && u.includes("suite=SuiteFailing"))).toBe(true);
+    const leafRows = overlay.querySelectorAll('[data-testid="leaf-row"]');
+    expect(leafRows.length).toBe(2);
+    expect(Array.from(leafRows).some((r) => (r.textContent ?? "").includes("okLeaf"))).toBe(true);
+    expect(Array.from(leafRows).some((r) => (r.textContent ?? "").includes("badLeaf"))).toBe(true);
+
+    // SuitePassing stays collapsed to its counted row and was never fetched.
+    expect(fetchLog.some((u) => u.includes("suite=SuitePassing"))).toBe(false);
+    const suitePassingRow = findByText(overlay, '[data-testid="suite-row"]', "SuitePassing");
+    expect(suitePassingRow).toBeDefined();
+    expect(suitePassingRow!.textContent ?? "").toContain("✓2");
+  });
+
+  test("Detail mode bound: the same failing fixture renders the plain tree — nothing auto-expands", async () => {
+    const now = Date.now();
+    const eventId = "evt-fold-detail-bound";
+    const detail: EventDetailFixture = {
+      id: eventId,
+      projectKey: "proj-fold",
+      agentId: "fold-agent-3",
+      kind: "test",
+      tier: "unit",
+      codec: "junit",
+      timestamp: now,
+      summary: { total: 2, passed: 1, failed: 1, pending: 0, duration_ms: 100 },
+      tree: [
+        {
+          name: "SuiteFailingDetail",
+          status: "fail",
+          children: [
+            { name: "okLeaf", status: "pass", duration_ms: 5 },
+            { name: "badLeaf", status: "fail", duration_ms: 5, failure: { message: "boom detail" } },
+          ],
+        },
+      ],
+    };
+    const brief: EventBriefFixture = { id: eventId, projectKey: "proj-fold", agentId: "fold-agent-3", kind: "test", tier: "unit", codec: "junit", timestamp: now, total: 2, passed: 1, failed: 1, pending: 0, duration_ms: 100, hasCoverage: false };
+    await mountAtRunCold(eventId, "unit", detail, brief);
+
+    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Detail");
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+    expect(fetchLog.some((u) => u.includes("suite="))).toBe(false);
+  });
+});
+
+// ── §S4 item 2 — heat-strip minimap ─────────────────────────────────────────
+
+function buildHeatFixture(eventId: string, tier: string, now: number, total: number, failIndices: number[], pendingIndices: number[]) {
+  const children: LeafFixture[] = [];
+  for (let i = 0; i < total; i++) {
+    if (failIndices.includes(i)) {
+      children.push({ name: `t${i}`, status: "fail", duration_ms: 5, failure: { message: i === failIndices[0] ? "first failure" : `failure at ${i}` } });
+    } else if (pendingIndices.includes(i)) {
+      children.push({ name: `t${i}`, status: "pending", duration_ms: 5 });
+    } else {
+      children.push({ name: `t${i}`, status: "pass", duration_ms: 5 });
+    }
+  }
+  const failed = failIndices.length;
+  const pending = pendingIndices.length;
+  const passed = total - failed - pending;
+  const detail: EventDetailFixture = {
+    id: eventId,
+    projectKey: "proj-heat",
+    agentId: "heat-agent",
+    kind: "test",
+    tier,
+    codec: "junit",
+    timestamp: now,
+    summary: { total, passed, failed, pending, duration_ms: 500 },
+    tree: [{ name: "SuiteHeat", status: failed > 0 ? "fail" : "pass", children }],
+  };
+  const brief: EventBriefFixture = { id: eventId, projectKey: "proj-heat", agentId: "heat-agent", kind: "test", tier, codec: "junit", timestamp: now, total, passed, failed, pending, duration_ms: 500, hasCoverage: false };
+  return { detail, brief };
+}
+
+describe("§S4.2 — heat-strip minimap (Density mode)", () => {
+  test("a 60-test fixture renders exactly 60 heat cells, classed fail/pending/pass", async () => {
+    const now = Date.now();
+    const eventId = "evt-heat-60";
+    const { detail, brief } = buildHeatFixture(eventId, "regression", now, 60, [10, 40], [5]);
+    await mountAtRunCold(eventId, "regression", detail, brief);
+
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    const heatStrip = overlay.querySelector('[data-testid="heat-strip"]');
+    expect(heatStrip).not.toBeNull();
+    const cells = heatStrip!.querySelectorAll('[data-testid="heat-cell"]');
+    expect(cells.length).toBe(60);
+
+    const failCells = Array.from(cells).filter((c) => c.className.includes("app-heat-fail"));
+    const pendingCells = Array.from(cells).filter((c) => c.className.includes("app-heat-pending"));
+    const passCells = Array.from(cells).filter((c) => c.className.includes("app-heat-pass"));
+    expect(failCells.length).toBe(2);
+    expect(pendingCells.length).toBe(1);
+    expect(passCells.length).toBe(57);
+  });
+
+  test("an 8-test Density run renders exactly 8 heat cells (no count threshold)", async () => {
+    const now = Date.now();
+    const eventId = "evt-heat-8";
+    const { detail, brief } = buildHeatFixture(eventId, "regression", now, 8, [], []);
+    await mountAtRunCold(eventId, "regression", detail, brief);
+
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    const heatStrip = overlay.querySelector('[data-testid="heat-strip"]');
+    expect(heatStrip).not.toBeNull();
+    expect(heatStrip!.querySelectorAll('[data-testid="heat-cell"]').length).toBe(8);
+  });
+
+  test("clicking the first red cell expands that test's failure box (failure.message becomes visible)", async () => {
+    const now = Date.now();
+    const eventId = "evt-heat-click";
+    const { detail, brief } = buildHeatFixture(eventId, "regression", now, 60, [10, 40], [5]);
+    await mountAtRunCold(eventId, "regression", detail, brief);
+
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    const heatStrip = overlay.querySelector('[data-testid="heat-strip"]')!;
+    const cells = heatStrip.querySelectorAll('[data-testid="heat-cell"]');
+    const firstRedCell = Array.from(cells).find((c) => c.className.includes("app-heat-fail")) as HTMLElement | undefined;
+    expect(firstRedCell).toBeDefined();
+
+    expect(overlay.querySelector('[data-testid="failure-box"]')).toBeNull();
+    firstRedCell!.click();
+    await settle();
+
+    const failureBox = overlay.querySelector('[data-testid="failure-box"]');
+    expect(failureBox).not.toBeNull();
+    expect((failureBox!.textContent ?? "")).toContain("first failure");
+  });
+
+  test("Detail mode bound: the same 60-test fixture renders NO heat-strip", async () => {
+    const now = Date.now();
+    const eventId = "evt-heat-detail-bound";
+    const { detail, brief } = buildHeatFixture(eventId, "unit", now, 60, [10, 40], [5]);
+    await mountAtRunCold(eventId, "unit", detail, brief);
+
+    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Detail");
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay.querySelector('[data-testid="heat-strip"]')).toBeNull();
+  });
+});
+
+// ── §S4 item 3 — failure digest ─────────────────────────────────────────────
+
+describe("§S4.3 — failure digest (Density mode)", () => {
+  test("4 leaves with identical failure.message render as 1 digest row + '+3 identical' expander; expanding reveals the individual leaves", async () => {
+    const now = Date.now();
+    const eventId = "evt-digest-group";
+    const detail: EventDetailFixture = {
+      id: eventId,
+      projectKey: "proj-digest",
+      agentId: "digest-agent",
+      kind: "test",
+      tier: "regression",
+      codec: "junit",
+      timestamp: now,
+      summary: { total: 4, passed: 0, failed: 4, pending: 0, duration_ms: 200 },
+      tree: [
+        {
+          name: "SuiteDigest",
+          status: "fail",
+          children: [
+            { name: "d1", status: "fail", duration_ms: 5, failure: { message: "identical boom" } },
+            { name: "d2", status: "fail", duration_ms: 5, failure: { message: "identical boom" } },
+            { name: "d3", status: "fail", duration_ms: 5, failure: { message: "identical boom" } },
+            { name: "d4", status: "fail", duration_ms: 5, failure: { message: "identical boom" } },
+          ],
+        },
+      ],
+    };
+    const brief: EventBriefFixture = { id: eventId, projectKey: "proj-digest", agentId: "digest-agent", kind: "test", tier: "regression", codec: "junit", timestamp: now, total: 4, passed: 0, failed: 4, pending: 0, duration_ms: 200, hasCoverage: false };
+    await mountAtRunCold(eventId, "regression", detail, brief);
+
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    // SuiteDigest is the only (failing) suite — auto-expanded per §S4.1.
+    const digestRows = overlay.querySelectorAll('[data-testid="digest-row"]');
+    expect(digestRows.length).toBe(1);
+    expect((digestRows[0]!.textContent ?? "")).toContain("identical boom");
+
+    const expander = digestRows[0]!.querySelector('[data-testid="digest-expander"]');
+    expect(expander).not.toBeNull();
+    expect((expander!.textContent ?? "").trim()).toBe("+3 identical");
+
+    // Collapsed: none of the 4 grouped leaves render as individual leaf-rows yet.
+    expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+
+    (expander as HTMLElement).click();
+    await settle();
+
+    const leafRows = overlay.querySelectorAll('[data-testid="leaf-row"]');
+    expect(leafRows.length).toBe(4);
+    for (const name of ["d1", "d2", "d3", "d4"]) {
+      expect(Array.from(leafRows).some((r) => (r.textContent ?? "").includes(name))).toBe(true);
+    }
+  });
+
+  test("leaves with DIFFERENT failure messages don't group — each renders its own leaf-row", async () => {
+    const now = Date.now();
+    const eventId = "evt-digest-nogroup";
+    const detail: EventDetailFixture = {
+      id: eventId,
+      projectKey: "proj-digest",
+      agentId: "digest-agent-2",
+      kind: "test",
+      tier: "regression",
+      codec: "junit",
+      timestamp: now,
+      summary: { total: 3, passed: 0, failed: 3, pending: 0, duration_ms: 200 },
+      tree: [
+        {
+          name: "SuiteDigestDiff",
+          status: "fail",
+          children: [
+            { name: "e1", status: "fail", duration_ms: 5, failure: { message: "message A" } },
+            { name: "e2", status: "fail", duration_ms: 5, failure: { message: "message B" } },
+            { name: "e3", status: "fail", duration_ms: 5, failure: { message: "message C" } },
+          ],
+        },
+      ],
+    };
+    const brief: EventBriefFixture = { id: eventId, projectKey: "proj-digest", agentId: "digest-agent-2", kind: "test", tier: "regression", codec: "junit", timestamp: now, total: 3, passed: 0, failed: 3, pending: 0, duration_ms: 200, hasCoverage: false };
+    await mountAtRunCold(eventId, "regression", detail, brief);
+
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay.querySelectorAll('[data-testid="digest-row"]').length).toBe(0);
+    const leafRows = overlay.querySelectorAll('[data-testid="leaf-row"]');
+    expect(leafRows.length).toBe(3);
+  });
+
+  test("Detail mode bound: identical-message leaves never digest, even after a manual suite expand", async () => {
+    const now = Date.now();
+    const eventId = "evt-digest-detail-bound";
+    const detail: EventDetailFixture = {
+      id: eventId,
+      projectKey: "proj-digest",
+      agentId: "digest-agent-3",
+      kind: "test",
+      tier: "unit",
+      codec: "junit",
+      timestamp: now,
+      summary: { total: 4, passed: 0, failed: 4, pending: 0, duration_ms: 200 },
+      tree: [
+        {
+          name: "SuiteDigestDetail",
+          status: "fail",
+          children: [
+            { name: "f1", status: "fail", duration_ms: 5, failure: { message: "identical boom detail" } },
+            { name: "f2", status: "fail", duration_ms: 5, failure: { message: "identical boom detail" } },
+            { name: "f3", status: "fail", duration_ms: 5, failure: { message: "identical boom detail" } },
+            { name: "f4", status: "fail", duration_ms: 5, failure: { message: "identical boom detail" } },
+          ],
+        },
+      ],
+    };
+    const brief: EventBriefFixture = { id: eventId, projectKey: "proj-digest", agentId: "digest-agent-3", kind: "test", tier: "unit", codec: "junit", timestamp: now, total: 4, passed: 0, failed: 4, pending: 0, duration_ms: 200, hasCoverage: false };
+    await mountAtRunCold(eventId, "unit", detail, brief);
+
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    const suiteRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteDigestDetail");
+    expect(suiteRow).toBeDefined();
+    suiteRow!.click();
+    await settle();
+
+    expect(overlay.querySelectorAll('[data-testid="digest-row"]').length).toBe(0);
+    expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(4);
+  });
+});
+
+// ── §S4 item 4 — virtualized tree (always-on, both modes) ──────────────────
+
+/**
+ * Builds a 10 000-leaf synthetic run: one clearly-largest suite ("SuiteBig",
+ * 300 leaves — including 1 fail + 1 pending so it also exercises §S4.1's
+ * auto-expand in Density mode) plus enough 200-leaf "SuiteOtherN" suites to
+ * reach exactly 10 000 leaves total. Keeping every OTHER suite well under
+ * SuiteBig's size makes "the largest suite" unambiguous while keeping
+ * fixture construction and (pre-virtualization) worst-case DOM mounting
+ * cheap enough to run without a custom test timeout.
+ */
+function manyLeavesFixture(eventId: string, tier: string, now: number) {
+  const BIG_SIZE = 300;
+  const OTHER_SIZE = 200;
+  const TOTAL = 10_000;
+
+  const bigLeaves: LeafFixture[] = [];
+  for (let i = 0; i < BIG_SIZE; i++) {
+    if (i === 50) bigLeaves.push({ name: `big-${i}`, status: "fail", duration_ms: 5, failure: { message: "big-fail" } });
+    else if (i === 200) bigLeaves.push({ name: `big-${i}`, status: "pending", duration_ms: 5 });
+    else bigLeaves.push({ name: `big-${i}`, status: "pass", duration_ms: 5 });
+  }
+  const suites: SuiteFixture[] = [{ name: "SuiteBig", status: "fail", children: bigLeaves }];
+
+  let remaining = TOTAL - BIG_SIZE;
+  let suiteIdx = 0;
+  while (remaining > 0) {
+    const size = Math.min(OTHER_SIZE, remaining);
+    const leaves: LeafFixture[] = [];
+    for (let i = 0; i < size; i++) leaves.push({ name: `o${suiteIdx}-${i}`, status: "pass", duration_ms: 5 });
+    suites.push({ name: `SuiteOther${suiteIdx}`, status: "pass", children: leaves });
+    remaining -= size;
+    suiteIdx += 1;
+  }
+
+  const total = suites.reduce((sum, s) => sum + s.children.length, 0);
+  const failed = suites.reduce((sum, s) => sum + s.children.filter((l) => l.status === "fail").length, 0);
+  const pending = suites.reduce((sum, s) => sum + s.children.filter((l) => l.status === "pending").length, 0);
+  const passed = total - failed - pending;
+
+  const detail: EventDetailFixture = {
+    id: eventId,
+    projectKey: "proj-virt",
+    agentId: "virt-agent",
+    kind: "test",
+    tier,
+    codec: "junit",
+    timestamp: now,
+    summary: { total, passed, failed, pending, duration_ms: 5000 },
+    tree: suites,
+  };
+  const brief: EventBriefFixture = { id: eventId, projectKey: "proj-virt", agentId: "virt-agent", kind: "test", tier, codec: "junit", timestamp: now, total, passed, failed, pending, duration_ms: 5000, hasCoverage: false };
+  return { detail, brief, total };
+}
+
+describe("§S4.4 — virtualized tree (always-on, both modes)", () => {
+  test(
+    "Detail mode: expanding the largest suite of a 10 000-leaf run keeps mounted tree-row nodes under 200, and scrolling changes which rows are mounted",
+    async () => {
+      const now = Date.now();
+      const eventId = "evt-virt-detail";
+      const { detail, brief, total } = manyLeavesFixture(eventId, "unit", now);
+      expect(total).toBe(10_000);
+      await mountAtRunCold(eventId, "unit", detail, brief);
+
+      const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+      const bigSuiteRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteBig");
+      expect(bigSuiteRow).toBeDefined();
+      bigSuiteRow!.click();
+      await settle();
+
+      expect(fetchLog.some((u) => u.includes("suite=SuiteBig"))).toBe(true);
+      expect(mountedTreeRowCount(overlay)).toBeLessThan(200);
+
+      const scrollContainer = overlay.querySelector('[data-testid="tree-scroll"]') as HTMLElement | null;
+      expect(scrollContainer).not.toBeNull();
+      Object.defineProperty(scrollContainer, "clientHeight", { value: 400, configurable: true });
+      Object.defineProperty(scrollContainer, "scrollHeight", { value: 300 * 28, configurable: true });
+
+      const beforeKeys = new Set(
+        Array.from(overlay.querySelectorAll('[data-testid="leaf-row"]')).map((el) => el.getAttribute("data-leaf-key")),
+      );
+      expect(beforeKeys.size).toBeGreaterThan(0);
+
+      scrollContainer!.scrollTop = 300 * 28 - 500;
+      scrollContainer!.dispatchEvent(new Event("scroll"));
+      await settle();
+
+      const afterKeys = new Set(
+        Array.from(overlay.querySelectorAll('[data-testid="leaf-row"]')).map((el) => el.getAttribute("data-leaf-key")),
+      );
+      expect(afterKeys.size).toBeLessThan(200);
+      const overlap = [...beforeKeys].filter((k) => afterKeys.has(k));
+      expect(overlap.length).toBeLessThan(beforeKeys.size);
+    },
+    20_000,
+  );
+
+  test(
+    "Density mode: a 10 000-leaf run's largest (failing) suite auto-expands and still keeps mounted tree-row nodes under 200",
+    async () => {
+      const now = Date.now();
+      const eventId = "evt-virt-density";
+      const { detail, brief, total } = manyLeavesFixture(eventId, "regression", now);
+      expect(total).toBe(10_000);
+      await mountAtRunCold(eventId, "regression", detail, brief);
+
+      const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+      expect(fetchLog.some((u) => u.includes("suite=SuiteBig"))).toBe(true);
+      expect(fetchLog.some((u) => u.includes("suite=SuiteOther0"))).toBe(false);
+      expect(mountedTreeRowCount(overlay)).toBeLessThan(200);
+    },
+    20_000,
+  );
+
+  test("the initial drill-in payload for a 10 000-leaf run contains no leaf entries (suites-first paging holds at 10k scale)", async () => {
+    const now = Date.now();
+    const eventId = "evt-virt-payload";
+    const { detail, brief, total } = manyLeavesFixture(eventId, "unit", now);
+    expect(total).toBe(10_000);
+    await mountAtRunCold(eventId, "unit", detail, brief);
+
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    const eventFetches = fetchLog.filter((u) => u.includes(`/api/v2/events/${eventId}`));
+    expect(eventFetches.length).toBeGreaterThan(0);
+    expect(eventFetches[0]).toContain("depth=suites");
+    expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+  });
+});
+
+// ── §S4 item 6 — density toggle (independent of Detail/Density) ────────────
+
+const DENSITY_STORAGE_KEY = "crucible.density.mode";
+
+describe("§S4.6 — density toggle (comfortable / compact / ultra)", () => {
+  test("cycles comfortable -> compact -> ultra -> comfortable and applies a matching root class", async () => {
+    const now = Date.now();
+    await mountApp({ pathname: "/", projects: [], events: [] });
+    void now;
+
+    const toggle = document.querySelector('[data-testid="density-toggle"]') as HTMLElement | null;
+    expect(toggle).not.toBeNull();
+    expect(toggle!.getAttribute("data-density")).toBe("comfortable");
+    expect(document.documentElement.classList.contains("app-density-comfortable")).toBe(true);
+
+    toggle!.click();
+    await settle();
+    expect(document.querySelector('[data-testid="density-toggle"]')!.getAttribute("data-density")).toBe("compact");
+    expect(document.documentElement.classList.contains("app-density-compact")).toBe(true);
+    expect(document.documentElement.classList.contains("app-density-comfortable")).toBe(false);
+
+    document.querySelector('[data-testid="density-toggle"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await settle();
+    expect(document.querySelector('[data-testid="density-toggle"]')!.getAttribute("data-density")).toBe("ultra");
+    expect(document.documentElement.classList.contains("app-density-ultra")).toBe(true);
+
+    document.querySelector('[data-testid="density-toggle"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await settle();
+    expect(document.querySelector('[data-testid="density-toggle"]')!.getAttribute("data-density")).toBe("comfortable");
+    expect(document.documentElement.classList.contains("app-density-comfortable")).toBe(true);
+  });
+
+  test("the chosen mode persists to localStorage and is honored on the next cold mount", async () => {
+    await mountApp({ pathname: "/", projects: [], events: [] });
+    const toggle = document.querySelector('[data-testid="density-toggle"]') as HTMLElement | null;
+    expect(toggle).not.toBeNull();
+
+    toggle!.click(); // -> compact
+    await settle();
+    toggle!.click(); // -> ultra
+    await settle();
+    expect(window.localStorage.getItem(DENSITY_STORAGE_KEY)).toBe("ultra");
+
+    // Simulate reload: fresh mount (fresh Storage per GlobalRegistrator.register)
+    // seeded with the persisted value.
+    await mountApp({ pathname: "/", projects: [], events: [], localStorageSeed: { [DENSITY_STORAGE_KEY]: "ultra" } });
+    const reloaded = document.querySelector('[data-testid="density-toggle"]') as HTMLElement | null;
+    expect(reloaded).not.toBeNull();
+    expect(reloaded!.getAttribute("data-density")).toBe("ultra");
+    expect(document.documentElement.classList.contains("app-density-ultra")).toBe(true);
+  });
+
+  test("is independent of drillin-mode: flipping density never changes drillin-mode's data-mode, and vice versa", async () => {
+    const now = Date.now();
+    const eventId = "evt-density-independence";
+    const detail: EventDetailFixture = {
+      id: eventId,
+      projectKey: "proj-independence",
+      agentId: "independence-agent",
+      kind: "test",
+      tier: "regression",
+      codec: "junit",
+      timestamp: now,
+      summary: { total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 5 },
+      tree: [{ name: "SuiteIndep", status: "pass", children: [{ name: "i1", status: "pass", duration_ms: 5 }] }],
+    };
+    const brief: EventBriefFixture = { id: eventId, projectKey: "proj-independence", agentId: "independence-agent", kind: "test", tier: "regression", codec: "junit", timestamp: now, total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 5, hasCoverage: false };
+    await mountAtRunCold(eventId, "regression", detail, brief);
+
+    const densityToggle = document.querySelector('[data-testid="density-toggle"]') as HTMLElement | null;
+    const drillinMode = document.querySelector('[data-testid="drillin-mode"]') as HTMLElement | null;
+    expect(densityToggle).not.toBeNull();
+    expect(drillinMode).not.toBeNull();
+    expect(densityToggle!.getAttribute("data-density")).toBe("comfortable");
+    expect(drillinMode!.getAttribute("data-mode")).toBe("Density");
+
+    densityToggle!.click(); // comfortable -> compact
+    await settle();
+    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Density");
+    expect(document.querySelector('[data-testid="density-toggle"]')!.getAttribute("data-density")).toBe("compact");
+
+    document.querySelector('[data-testid="drillin-mode"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await settle();
+    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Detail");
+    expect(document.querySelector('[data-testid="density-toggle"]')!.getAttribute("data-density")).toBe("compact");
+  });
+});
