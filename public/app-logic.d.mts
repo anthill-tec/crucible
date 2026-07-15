@@ -148,12 +148,11 @@ export declare function pairTransitions<T extends TransitionEventLike>(
   events: T[],
 ): Array<TransitionMarker<T>>;
 
-// CR-CRU-007 §S4.0 — tier-default drill-in mode + per-tier-group persistence.
+// CR-CRU-007 §S4.0 (FINAL re-baseline) — purely tier-contextual presentation;
+// the storage-key helper is gone with the removed mode switch.
 export type DrillinMode = "Detail" | "Density";
 
 export declare function drillinDefaultMode(tier: string): DrillinMode;
-
-export declare function drillinModeStorageKey(tier: string): string;
 
 // CR-CRU-007 §S4 items 1 & 3 — Density-mode pure helpers.
 export interface FoldSuiteLike {
@@ -191,10 +190,7 @@ export declare function digestFailures<T extends DigestLeafLike>(
   leaves: T[],
 ): Array<DigestEntry<T>>;
 
-// CR-CRU-007 §S1 — phase-role icon tinting (pure). RED-phase declaration
-// only (mirrors this file's own convention for every prior §S4/§S2 addition
-// above) — public/app-logic.mjs does not export `phaseRole` yet; GREEN adds
-// the real implementation and it must satisfy this signature.
+// CR-CRU-007 §S1 — phase-role icon tinting (pure).
 export type PhaseRole = "red" | "green" | "verify" | "fix" | null;
 
 export declare function phaseRole(agentId: string): PhaseRole;

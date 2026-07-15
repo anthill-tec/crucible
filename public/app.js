@@ -49,10 +49,16 @@
       requestAnimationFrame(() => window.scrollTo(0, y));
     }
 
+    // §S3 F4 (re-baseline) — whether the CURRENT overlay was opened by an
+    // in-app card/marker click (auto-expands failing suites in Detail too)
+    // as opposed to a cold deep-link mount (renders collapsed in Detail).
+    let overlayViaNavigate = false;
+
     // AC 10b(b/c) — close the overlay back to the underlying surface path
     // (strip the /run/<id> suffix) and restore the saved scroll position.
     function closeOverlay() {
       if (state.route.overlay === undefined) return;
+      overlayViaNavigate = false;
       const base = location.pathname.replace(/\/run\/[^/]+\/?$/, "") || "/";
       history.pushState(null, "", base);
       state.route = L.routeParse(base);
@@ -63,7 +69,10 @@
       // AC 10b(d) — browser-back out of the overlay restores scroll too.
       const hadOverlay = state.route.overlay !== undefined;
       state.route = L.routeParse(location.pathname);
-      if (hadOverlay && state.route.overlay === undefined) restoreScroll();
+      if (hadOverlay && state.route.overlay === undefined) {
+        overlayViaNavigate = false;
+        restoreScroll();
+      }
     });
 
     document.addEventListener("keydown", (e) => {
@@ -438,6 +447,7 @@
         state.route.page === "workspace"
           ? `/p/${encodeURIComponent(state.route.projectKey)}`
           : "";
+      overlayViaNavigate = true;
       navigate(`${prefix}/run/${encodeURIComponent(eventId)}`);
     }
 
@@ -448,7 +458,18 @@
           class: "app-evt",
           onclick: () => openDrillin(e.id),
         },
-        span({ "data-testid": "card-icon", class: "app-card-icon" }, e.kind === "compile" ? "🛠" : "🧪"),
+        // §S1 — the kind icon is tinted by the agent's phase role (RED red /
+        // GREEN green / VERIFY purple / FIX yellow); roleless stays neutral.
+        span(
+          {
+            "data-testid": "card-icon",
+            class: (() => {
+              const role = L.phaseRole(e.agentId);
+              return `app-card-icon${role !== null ? ` app-role-${role}` : ""}`;
+            })(),
+          },
+          e.kind === "compile" ? "🛠" : "🧪",
+        ),
         div(
           { class: "app-evt-body" },
           div(
@@ -572,7 +593,12 @@
     const WorkspaceTabs = () =>
       div({ "data-testid": "workspace-tabs", class: "app-top" }, () => {
         const project = currentProject();
-        const tabs = L.workspaceTabs({ type: project?.type ?? "backend" });
+        // §S1 addendum — pass the coverage field through so the Coverage tab
+        // gates until the project has green-regression coverage.
+        const tabs = L.workspaceTabs({
+          type: project?.type ?? "backend",
+          latestCoverageEventId: project?.latestCoverageEventId,
+        });
         return div(
           tabs.map((t) =>
             button(
@@ -582,6 +608,7 @@
                   t.disabled ? " disabled" : ""
                 }`,
                 disabled: t.disabled,
+                title: t.hint ?? "",
                 onclick: () => {
                   if (!t.disabled) state.workspaceTab = t.name;
                 },
@@ -742,24 +769,28 @@
     // ── §S3 (CR-CRU-007) — codec-aware drill-in slide-over ──────────────
     // Test body: suite→test tree, suites-first (§S4.5 progressive payload —
     // ?depth=suites first, ?suite=<name> on expand; the server side landed
-    // in CR-CRU-004 §S4, consumed here). Failed leaf expands to
-    // failure.message + trace in a mono red-accent box. Compile body:
-    // diagnostics grouped by file + raw-output toggle, NO mode switch.
-    // §S4.0 — the Detail↔Density switch defaults per L.drillinDefaultMode
-    // (tier), overrides persist per tier group (L.drillinModeStorageKey).
+    // in CR-CRU-004 §S4, consumed here). F4 anatomy: flat mono TREE LINES
+    // (▾/▸ suite headers with fail-first colored counts, colored leaf
+    // glyphs), failing suites auto-expand, failed leaves show their failure
+    // box inline (Detail), failures-footer with jump + raw toggle. Compile
+    // body: diagnostics grouped by file + raw-output toggle.
+    // §S4.0 FINAL — presentation is purely tier-contextual
+    // (L.drillinDefaultMode(tier)): regression/e2e render Density,
+    // unit/module/integration render Detail; NO mode switch exists.
     function drillinLeafGlyph(status) {
       if (status === "fail") return "✗";
-      if (status === "pending") return "…";
+      if (status === "pending") return "⏭";
       return "✓";
     }
 
-    function drillinSuiteCounts(suite) {
-      const c = suite.counts;
-      if (c === undefined || c === null) return "";
-      const parts = [`✓${c.passed}`];
-      if (c.failed > 0) parts.push(`✗${c.failed}`);
-      if (c.pending > 0) parts.push(`…${c.pending}`);
-      return parts.join(" ");
+    function countsOfLeaves(leaves) {
+      const counts = { passed: 0, failed: 0, pending: 0 };
+      for (const leaf of leaves ?? []) {
+        if (leaf.status === "pass") counts.passed += 1;
+        else if (leaf.status === "fail") counts.failed += 1;
+        else counts.pending += 1;
+      }
+      return counts;
     }
 
     // §S4.4 — virtualized tree window: fixed row-count window over a suite's
@@ -770,14 +801,25 @@
 
     const RunOverlay = () => {
       const eventId = state.route.overlay;
+      // Captured once per overlay open: card/marker clicks auto-expand
+      // failing suites in BOTH presentations; cold deep-links render the
+      // Detail tree collapsed (Density always auto-expands).
+      const openedInApp = overlayViaNavigate;
+      overlayViaNavigate = false;
       const detail = van.state(null); // suites-depth event detail
       const loadError = van.state(null);
-      const mode = van.state("Detail"); // §S4.0 — test events only
       const suiteLeaves = van.state({}); // suiteName -> that suite's leaves
-      const openFailures = van.state({}); // "suite::leaf" -> true
+      const focusedLeaf = van.state(null); // "suite::leaf" — failure focus
       const openGroups = van.state({}); // §S4.3 — "suite::message" -> true
       const suiteWindow = van.state({}); // §S4.4 — suiteName -> window start index
       const showRaw = van.state(false);
+      let jumpPos = 0; // failures-footer jump cursor
+
+      // §S4.0 FINAL — purely tier-contextual presentation.
+      const presentationOf = (ev) =>
+        ev !== null && ev !== undefined && ev.kind === "test"
+          ? L.drillinDefaultMode(ev.tier)
+          : "Detail";
 
       // §S4.5 — the FIRST fetch is ?depth=suites (never the full leaf tree).
       (async () => {
@@ -792,21 +834,13 @@
             loadError.val = "run detail unavailable";
             return;
           }
-          if (ev.kind === "test") {
-            // §S4.0 — remembered per-tier-group override wins, else tier default.
-            const stored = window.localStorage.getItem(
-              L.drillinModeStorageKey(ev.tier),
-            );
-            mode.val =
-              stored === "Detail" || stored === "Density"
-                ? stored
-                : L.drillinDefaultMode(ev.tier);
-          }
           detail.val = ev;
-          // §S4.1 — failures float: in Density mode, auto-expand ONLY the
-          // failing suites (fetch their leaves); all-pass suites stay folded
-          // and are never fetched until clicked.
-          if (mode.val === "Density") autoExpandFailing(ev);
+          // §S4.1/F4 — failures float: auto-expand ONLY the failing suites
+          // (fetch their leaves); all-pass suites stay folded and are never
+          // fetched until clicked. Density always; Detail on in-app opens.
+          if (presentationOf(ev) === "Density" || openedInApp) {
+            autoExpandFailing(ev);
+          }
         } catch (err) {
           loadError.val = `run detail failed to load — ${String(err)}`;
         }
@@ -827,14 +861,11 @@
         }
       }
 
-      async function toggleSuite(name) {
-        const current = suiteLeaves.val;
-        if (current[name] !== undefined) {
-          const next = { ...current };
-          delete next[name];
-          suiteLeaves.val = next;
-          return;
-        }
+      // F4 — suite-row click expands (fetches) a collapsed suite; clicking
+      // an already-expanded suite keeps it expanded (auto-expanded failing
+      // suites stay open — status lives in the ▾/▸ affordance).
+      async function expandSuite(name) {
+        if (suiteLeaves.val[name] !== undefined) return;
         await loadSuite(name);
       }
 
@@ -844,15 +875,19 @@
         for (const name of L.foldSuites(ev.tree ?? [])) void loadSuite(name);
       }
 
-      function toggleFailure(key) {
-        const next = { ...openFailures.val };
-        if (next[key] === true) delete next[key];
-        else next[key] = true;
-        openFailures.val = next;
+      // F4 — a failed leaf's failure box: inline (no click) in Detail until
+      // the user focuses a leaf; after any leaf click only the focused
+      // failed leaf shows its box. Density starts with boxes closed —
+      // heat-cell / leaf clicks focus-open them.
+      function failureBoxVisible(key, presentation) {
+        const focused = focusedLeaf.val;
+        if (focused === null) return presentation === "Detail";
+        return focused === key;
       }
 
-      // One leaf row (+ its failure box when a failed leaf is expanded).
-      const LeafRows = (suiteName, leaf, open) => {
+      // One leaf row (+ its failure box when visible). Graceful degradation:
+      // a failed leaf with NO failure data renders its ✗ line and no box.
+      const LeafRows = (suiteName, leaf, presentation) => {
         const key = `${suiteName}::${leaf.name}`;
         const failed = leaf.status === "fail";
         const nodes = [
@@ -860,9 +895,9 @@
             {
               "data-testid": "leaf-row",
               "data-leaf-key": key, // §S4.4 — stable identity for the window
-              class: `app-leaf-row ${leaf.status}`,
+              class: `app-leaf-row app-tree-line app-leaf-${leaf.status} ${leaf.status}`,
               onclick: () => {
-                if (failed) toggleFailure(key);
+                focusedLeaf.val = key;
               },
             },
             span(
@@ -872,7 +907,12 @@
             span({ class: "app-card-meta" }, fmtDuration(leaf.duration_ms ?? 0)),
           ),
         ];
-        if (failed && open[key] === true && leaf.failure !== undefined) {
+        if (
+          failed &&
+          leaf.failure !== undefined &&
+          leaf.failure !== null &&
+          failureBoxVisible(key, presentation)
+        ) {
           nodes.push(
             div(
               { "data-testid": "failure-box", class: "app-failure-box" },
@@ -889,7 +929,7 @@
       // §S4.3 — failure digest: identical-message failed leaves collapse to
       // one digest row + "+N identical" expander (Density mode only; the
       // grouping itself is L.digestFailures).
-      const DigestRows = (suiteName, group, open) => {
+      const DigestRows = (suiteName, group, presentation) => {
         const groupKey = `${suiteName}::${group.message}`;
         const expanded = openGroups.val[groupKey] === true;
         const nodes = [
@@ -912,7 +952,9 @@
           ),
         ];
         if (expanded) {
-          for (const leaf of group.leaves) nodes.push(...LeafRows(suiteName, leaf, open));
+          for (const leaf of group.leaves) {
+            nodes.push(...LeafRows(suiteName, leaf, presentation));
+          }
         }
         return nodes;
       };
@@ -920,9 +962,9 @@
       // §S4.4 — one suite's (digested) entry list inside its virtualized
       // scroll container: only the VIRT_WINDOW entries at the current scroll
       // position mount; spacer divs keep the scrollbar honest.
-      const SuiteLeafList = (suiteName, leaves, open) => {
+      const SuiteLeafList = (suiteName, leaves, presentation) => {
         const entries =
-          mode.val === "Density"
+          presentation === "Density"
             ? L.digestFailures(leaves)
             : leaves.map((leaf) => ({ kind: "leaf", leaf }));
         const total = entries.length;
@@ -934,8 +976,11 @@
         const rows = [];
         for (let i = start; i < end; i++) {
           const entry = entries[i];
-          if (entry.kind === "group") rows.push(...DigestRows(suiteName, entry, open));
-          else rows.push(...LeafRows(suiteName, entry.leaf, open));
+          if (entry.kind === "group") {
+            rows.push(...DigestRows(suiteName, entry, presentation));
+          } else {
+            rows.push(...LeafRows(suiteName, entry.leaf, presentation));
+          }
         }
         return div(
           {
@@ -973,10 +1018,7 @@
                 ...openGroups.val,
                 [`${suiteName}::${leaf.failure.message}`]: true,
               };
-              openFailures.val = {
-                ...openFailures.val,
-                [`${suiteName}::${leaf.name}`]: true,
-              };
+              focusedLeaf.val = `${suiteName}::${leaf.name}`;
             }
           },
         });
@@ -1006,31 +1048,149 @@
         return div({ "data-testid": "heat-strip", class: "app-heat-strip" }, cells);
       };
 
-      // Suite tree — §S4.0: Detail renders the plain tree; Density adds the
-      // heat-strip (§S4.2), failure digest (§S4.3) and failures-float folding
-      // (§S4.1). Virtualization (§S4.4) applies in BOTH modes.
+      // F4½ — Density status chips row, above the heat-strip.
+      const StatusChips = (d) => {
+        const s = d.summary ?? {};
+        return div(
+          { "data-testid": "density-status-chips", class: "app-density-chips" },
+          span({ class: "app-count-fail" }, `✗ failures ${s.failed ?? 0}`),
+          " · ",
+          span({ class: "app-count-pending" }, `⏭ pending ${s.pending ?? 0}`),
+          " · ",
+          span({ class: "app-count-pass" }, `✓ passed ${s.passed ?? 0}`),
+        );
+      };
+
+      // F4 — suite-header inline counts: fail-first, per-status colored
+      // spans (`F ✗ [P ⏭] P ✓`); a folded all-pass Density suite compacts
+      // to its `✓N` counted row (§S4.1 green folds).
+      const SuiteCountSpans = (counts, foldedAllPass) => {
+        if (foldedAllPass) {
+          return span(
+            { class: "app-suite-counts app-count-pass" },
+            `✓${counts.passed ?? 0}`,
+          );
+        }
+        const parts = [
+          span(
+            { "data-testid": "suite-count-fail", class: "app-count-fail" },
+            `${counts.failed ?? 0} ✗`,
+          ),
+          " ",
+        ];
+        if ((counts.pending ?? 0) > 0) {
+          parts.push(
+            span(
+              { "data-testid": "suite-count-pending", class: "app-count-pending" },
+              `${counts.pending} ⏭`,
+            ),
+            " ",
+          );
+        }
+        parts.push(
+          span(
+            { "data-testid": "suite-count-pass", class: "app-count-pass" },
+            `${counts.passed ?? 0} ✓`,
+          ),
+        );
+        return span({ class: "app-suite-counts" }, parts);
+      };
+
+      // F4 — failures-footer (test events with ≥1 failure): jump advances to
+      // the next failing leaf; the raw toggle reveals the stored raw output.
+      function failingLeafKeys(d) {
+        const keys = [];
+        for (const suite of d.tree ?? []) {
+          const leaves = suiteLeaves.val[suite.name];
+          if (leaves === undefined) continue;
+          for (const leaf of leaves) {
+            if (leaf.status === "fail") keys.push(`${suite.name}::${leaf.name}`);
+          }
+        }
+        return keys;
+      }
+
+      function jumpToNextFailure(d) {
+        const keys = failingLeafKeys(d);
+        if (keys.length === 0) return;
+        jumpPos = (jumpPos + 1) % keys.length;
+        const target = keys[jumpPos];
+        const rows = document.querySelectorAll('[data-testid="leaf-row"]');
+        for (const row of rows) {
+          if (row.getAttribute("data-leaf-key") === target) {
+            if (typeof row.scrollIntoView === "function") row.scrollIntoView();
+            break;
+          }
+        }
+      }
+
+      const FailuresFooter = (d) => {
+        const failed = d.summary?.failed ?? 0;
+        if (failed < 1) return null;
+        return div(
+          { "data-testid": "failures-footer", class: "app-failures-footer" },
+          button(
+            {
+              "data-testid": "failure-jump",
+              class: "app-chip app-footer-chip",
+              onclick: () => jumpToNextFailure(d),
+            },
+            `▸ ${failed - 1} more failures`,
+          ),
+          " · ",
+          button(
+            {
+              "data-testid": "raw-toggle",
+              class: "app-chip app-footer-chip",
+              onclick: () => {
+                showRaw.val = !showRaw.val;
+              },
+            },
+            "toggle raw output",
+          ),
+        );
+      };
+
+      // Suite tree — §S4.0 FINAL: the tier decides everything. Detail (unit/
+      // module/integration) renders the plain tree; Density (regression/e2e)
+      // adds the status chips (F4½), heat-strip (§S4.2), failure digest
+      // (§S4.3) and failures-float folding (§S4.1). Virtualization (§S4.4)
+      // applies in BOTH presentations.
       const TestBody = (d) => {
+        const presentation = presentationOf(d);
+        const density = presentation === "Density";
         const leavesMap = suiteLeaves.val;
-        const open = openFailures.val;
         return div(
           { class: "app-drillin-tree" },
-          mode.val === "Density" ? HeatStrip(d) : null,
+          density ? StatusChips(d) : null,
+          density ? HeatStrip(d) : null,
           (d.tree ?? []).map((suite) => {
             const leaves = leavesMap[suite.name];
+            const expanded = leaves !== undefined;
+            const counts = suite.counts ?? countsOfLeaves(leaves ?? suite.children);
+            const foldedAllPass = density && !expanded && (counts.failed ?? 0) === 0;
             return div(
               { class: "app-suite-group" },
               div(
                 {
                   "data-testid": "suite-row",
-                  class: `app-suite-row ${suite.status}`,
-                  onclick: () => toggleSuite(suite.name),
+                  class: `app-suite-row app-tree-line ${suite.status}`,
+                  onclick: () => expandSuite(suite.name),
                 },
+                span(
+                  { "data-testid": "tree-toggle", class: "app-tree-toggle" },
+                  expanded ? "▾" : "▸",
+                ),
                 span({ class: "app-suite-name" }, suite.name),
-                span({ class: "app-card-meta" }, drillinSuiteCounts(suite)),
+                SuiteCountSpans(counts, foldedAllPass),
               ),
-              leaves === undefined ? null : SuiteLeafList(suite.name, leaves, open),
+              expanded ? SuiteLeafList(suite.name, leaves, presentation) : null,
             );
           }),
+          FailuresFooter(d),
+          showRaw.val && typeof d.raw === "string"
+            ? pre({ "data-testid": "raw-output", class: "app-raw-output" }, d.raw)
+            : null,
         );
       };
 
@@ -1105,41 +1265,19 @@
           },
           // §S5.3 — '← timeline' back chip: closes exactly like Escape
           // (same closeOverlay — same route/scroll restore).
-          () => {
-            const d = detail.val;
-            return div(
-              { class: "app-drillin-head" },
-              button(
-                { class: "app-chip", onclick: () => closeOverlay() },
-                "← timeline",
-              ),
-              span({ class: "app-rail-title" }, `run · ${eventId}`),
-              // §S5 fidelity #3 — the density toggle renders in the drill-in
-              // header (distinct from the Detail↔Density mode switch).
-              DensityToggle(),
-              d !== null && d.kind === "test"
-                ? button(
-                    {
-                      "data-testid": "drillin-mode",
-                      "data-mode": mode.val,
-                      class: "app-chip app-drillin-mode",
-                      onclick: () => {
-                        const next =
-                          mode.val === "Density" ? "Detail" : "Density";
-                        mode.val = next;
-                        window.localStorage.setItem(
-                          L.drillinModeStorageKey(d.tier),
-                          next,
-                        );
-                        // §S4.1 — entering Density floats the failures.
-                        if (next === "Density") autoExpandFailing(d);
-                      },
-                    },
-                    `mode: ${mode.val}`,
-                  )
-                : null,
-            );
-          },
+          // §S4.0 FINAL — no mode switch here (or anywhere): presentation is
+          // purely tier-contextual. Header: back chip + title + density toggle.
+          div(
+            { class: "app-drillin-head" },
+            button(
+              { class: "app-chip", onclick: () => closeOverlay() },
+              "← timeline",
+            ),
+            span({ class: "app-rail-title" }, `Run detail · ${eventId}`),
+            // §S5 fidelity #3 — the density toggle renders in the drill-in
+            // header (comfortable/compact/ultra — the only user control).
+            DensityToggle(),
+          ),
           () => {
             if (loadError.val !== null)
               return div({ class: "app-empty" }, loadError.val);

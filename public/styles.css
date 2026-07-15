@@ -276,6 +276,12 @@ body {
   flex-wrap: wrap;
 }
 .app-card-icon { font-size: 13px; line-height: 1; }
+/* §S1 — phase-role icon tinting: RED red / GREEN green / VERIFY purple /
+   FIX yellow; roleless cards keep the neutral tint. */
+.app-role-red { color: var(--fail); text-shadow: 0 0 6px rgba(248, 113, 113, 0.5); }
+.app-role-green { color: var(--pass); text-shadow: 0 0 6px rgba(74, 222, 128, 0.5); }
+.app-role-verify { color: #c084fc; text-shadow: 0 0 6px rgba(192, 132, 252, 0.5); }
+.app-role-fix { color: var(--pend); text-shadow: 0 0 6px rgba(250, 204, 21, 0.5); }
 .app-card-badges { display: inline-flex; gap: 4px; }
 
 /* ── Run-card pills + badges (§S1 CR-CRU-007) ───────────────────────────── */
@@ -338,23 +344,26 @@ body {
   gap: 8px;
   margin-bottom: 8px;
 }
-.app-drillin-mode { color: var(--ink-dim); }
-.app-drillin-mode[data-mode="Density"] { color: var(--heat); border-color: var(--heat); }
-
+/* F4 anatomy — flat mono TREE LINES: status is text color alone; NO
+   border/outline on any tree row (the failure box below is the only boxed
+   element inside the tree). */
+.app-tree-line { font-family: var(--mono); }
 .app-suite-group { margin-bottom: 4px; }
 .app-suite-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   font: 600 11px var(--mono);
   padding: 4px 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg-2);
   cursor: pointer;
 }
-.app-suite-row.fail { border-color: var(--fail); }
+.app-suite-row .app-suite-name { flex: 1; }
+.app-suite-row.fail { color: var(--fail); }
+.app-tree-toggle { color: var(--ink-dim); width: 12px; }
+.app-suite-counts { white-space: pre; }
+.app-count-fail { color: var(--fail); }
+.app-count-pass { color: var(--pass); }
+.app-count-pending { color: var(--pend); }
 .app-leaf-list { margin: 2px 0 4px 14px; }
 .app-leaf-row {
   display: flex;
@@ -362,11 +371,14 @@ body {
   justify-content: space-between;
   gap: 8px;
   font: 10.5px var(--mono);
-  color: var(--ink-dim);
+  color: var(--ink);
   padding: 2px 8px;
+  cursor: pointer;
 }
-.app-leaf-row.fail { color: var(--fail); cursor: pointer; }
-.app-leaf-row.pending { color: var(--heat); }
+/* Passing leaves render GREEN/bright — never a faint grey. */
+.app-leaf-pass { color: var(--pass); }
+.app-leaf-fail { color: var(--fail); }
+.app-leaf-pending { color: var(--pend); }
 
 /* Failed leaf expansion — failure.message + trace, mono red-accent box. */
 .app-failure-box {
@@ -412,6 +424,29 @@ body {
 
 /* ── CR-CRU-007 §S4 — density set ─────────────────────────────────────── */
 
+/* F4½ — Density status chips row, above the heat-strip. */
+.app-density-chips {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  font: 600 10.5px var(--mono);
+  padding: 4px 8px;
+  margin-bottom: 6px;
+}
+
+/* F4 — failures-footer: `▸ N more failures · toggle raw output`. */
+.app-failures-footer {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font: 10.5px var(--mono);
+  color: var(--ink-dim);
+  padding: 6px 8px;
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.app-footer-chip { cursor: pointer; }
+
 /* §S4.2 — heat-strip minimap: one cell per test, wrap at any run size. */
 .app-heat-strip {
   display: flex;
@@ -452,7 +487,26 @@ body {
 }
 .app-virt-spacer { flex: none; }
 
-/* §S4.6 — density root classes: row spacing per comfortable/compact/ultra. */
+/* §S1/§nav — clickable drill-down spots (run cards, transition markers,
+   coverage meter) show the pointer with a subtle hover lift (forge
+   conventions) so the click affordance is discoverable. */
+.app-evt { cursor: pointer; transition: border-color 0.12s ease, background 0.12s ease; }
+.app-evt:hover {
+  border-color: var(--ember);
+  background: var(--bg-1);
+}
+.app-transition-marker { transition: border-color 0.12s ease, background 0.12s ease; }
+.app-transition-marker:hover {
+  border-color: var(--heat);
+  background: var(--bg-2);
+}
+.app-coverage.clickable { transition: opacity 0.12s ease; }
+.app-coverage.clickable:hover { opacity: 0.8; }
+
+/* §S4.6 — density root classes drive VISIBLE global spacing: comfortable is
+   the base; compact tightens padding/margins ≈ −35%; ultra ≈ −60% (and a
+   smaller mono size). Applies to timeline run cards + marker rows (home AND
+   workspace), drill-in tree rows, and Project pane rows. */
 :root.app-density-comfortable { --row-pad: 6px; }
 :root.app-density-compact { --row-pad: 3px; }
 :root.app-density-ultra { --row-pad: 1px; }
@@ -462,3 +516,19 @@ body {
 .app-density-ultra .app-leaf-row,
 .app-density-ultra .app-suite-row,
 .app-density-ultra .app-digest-row { padding-top: var(--row-pad); padding-bottom: var(--row-pad); font-size: 9.5px; }
+
+/* compact — ≈ −35% on cards, markers, agent/pane rows. */
+.app-density-compact .app-evt,
+.app-density-compact .app-card,
+.app-density-compact .app-agent-row { padding: 5px 7px; margin-bottom: 5px; gap: 6px; }
+.app-density-compact .app-transition-marker { padding: 3px 7px; margin-bottom: 5px; }
+.app-density-compact .app-evt-body { gap: 1px; }
+
+/* ultra — ≈ −60%, plus a tighter mono size. */
+.app-density-ultra .app-evt,
+.app-density-ultra .app-card,
+.app-density-ultra .app-agent-row { padding: 3px 4px; margin-bottom: 3px; gap: 4px; }
+.app-density-ultra .app-transition-marker { padding: 2px 4px; margin-bottom: 3px; font-size: 9.5px; }
+.app-density-ultra .app-evt { font-size: 10px; }
+.app-density-ultra .app-evt .app-pill { font-size: 8.5px; padding: 1px 5px; }
+.app-density-ultra .app-card-meta { font-size: 9px; }
