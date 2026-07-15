@@ -31,12 +31,12 @@ progress + completion stream over SSE; concurrent run for the same project →
 no playwright config) → a failed bdd event with the error text, never a silent
 drop.
 
-### §S2 playwright codec
-Registry entry `playwright` (the CR-010 `Codec` interface): parses Playwright's
-JSON report into RunSchema — feature (describe) → scenario (test) → step tree,
-per-scenario browser badge, duration, failure `{message, trace}` + trace-file
-link (`trace ↗`) when retained. Registered with `parse` (+ `parsePath` for
-report files) — registry-only resolution per CR-010.
+### §S2 playwright codec — PULLED FORWARD to 0.1.0 (CR-CRU-007 C5b, user-directed)
+The `playwright` registry codec (feature → scenario → step trees, browser
+badge, failure `{message, trace}` + trace link) ships in 0.1.0 with CR-CRU-007's
+BDD E2E conversion, so Crucible reports BDD run results from 0.1.0 onward.
+THIS CR reuses that codec unchanged; any runner-specific extensions (trace-file
+links from server-side runs) are additive here.
 
 ### §S3 BDD tab content (frontend projects)
 The BDD tab activates: `▶ Run BDD suite` button (calls §S1; disabled while a
