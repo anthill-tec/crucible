@@ -1,6 +1,6 @@
 # CR-CRU-007 — Run timeline + density-adaptive drill-in
 
-**Status:** COMPLETED (2026-07-16 — 5 cycles + BDD conversion + VERIFY + 3 fix rounds (2 VERIFY findings, then 8 user-filed live-review contracts); final gates 464/464 unit · tsc 0 · 15/15 BDD · close-out coverage 93.7% lines / 95.1% functions; awaiting merge gate)
+**Status:** COMPLETED (2026-07-16 — 5 cycles + BDD conversion + VERIFY + 3 fix rounds (2 VERIFY findings, then 8 user-filed live-review contracts); final gates 464/464 unit · tsc 0 · 15/15 BDD · close-out coverage 93.7% lines / 95.1% functions; merged to develop 895fce0 after the approved orange→green meter revision)
 **Type:** feature
 **Priority:** P1
 **Depends on:** CR-CRU-006
