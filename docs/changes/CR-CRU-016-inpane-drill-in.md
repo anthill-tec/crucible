@@ -21,10 +21,14 @@ and apply identically in-pane.
 
 ### §S1 In-pane detail (replaces the slide-over)
 Clicking a run card / marker / coverage point swaps the CENTRAL pane's content
-(home timeline pane or workspace Runs pane) to the run detail; the right
-Project pane (workspace) and every other surface region remain mounted,
-visible, and live (SSE). `← timeline` (and Escape) restore the feed at its
-exact prior scroll position. Routes are unchanged and deep-linkable
+to the run detail; the right Project pane (workspace) and every other surface
+region remain mounted, visible, and live (SSE).
+**ONE RULE, user-approved 2026-07-16:** the detail is a pane state of
+WHICHEVER central pane is active — home timeline pane, workspace Runs pane,
+or the Compile/Coverage tab panes (a Compile-tab card and the Coverage tab's
+`view run` swap THEIR OWN pane; no tab switching) — and the Project pane's
+coverage-meter/trend clicks follow the same rule. `← timeline` (and Escape)
+restore that pane's prior content at its exact prior scroll position. Routes are unchanged and deep-linkable
 (`/run/<id>`, `/p/<key>/run/<id>` — cold load renders the in-pane detail).
 The slide-over container, scrim, and `app-slideover-right` contract are
 RETIRED — no overlay/scrim element remains for run detail (the /manage and
