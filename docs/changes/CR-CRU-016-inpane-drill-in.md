@@ -22,7 +22,26 @@ and apply identically in-pane.
 ### §S1 In-pane detail (replaces the slide-over)
 Clicking a run card / marker / coverage point swaps the CENTRAL pane's content
 to the run detail; the right Project pane (workspace) and every other surface
-region remain mounted, visible, and live (SSE).
+region remain mounted, visible, and live (SSE) — with ONE exception,
+user-corrected at the gate review 2026-07-16 ("the Runs/Coverage/Compile/BDD
+row is incongruent at the same level as the drill-down — the navigation
+conflicts"): the workspace TABS ROW hides while a detail is open — for ALL
+drill-down entries (run card on any tab, transition marker, coverage-meter,
+coverage-view-run, cold load) — and the ACTIVE TAB POPULATES THE DETAIL
+HEADER (user refinement, same day): the back chip carries the origin tab's
+name — `← runs` / `← coverage` / `← compile` — so the header is the single
+navigation context AND names where back goes; on home (no tabs) the chip
+stays `← timeline`. Closing the detail restores the tabs row with the
+previously-active tab still selected (the one-rule's preserved tab state)
+and the feed at its exact scroll; cold workspace loads default to Runs
+(`← runs`). The top bar and Project pane stay throughout.
+**Header always visible (user note, same review: "when there are so many
+items in the drill down, this bar will scroll out of view — navigation
+elements should always be visible!"):** the detail header (back chip · RUN
+DETAIL · density) sits in the BAR ABOVE the drill-down's scrolling content —
+on the workspace it occupies exactly the band the hidden tabs row vacates;
+scrolling a long drill-down never moves it. Same rule on home (the header
+stays pinned above the pane's scroller).
 **ONE RULE, user-approved 2026-07-16:** the detail is a pane state of
 WHICHEVER central pane is active — home timeline pane, workspace Runs pane,
 or the Compile/Coverage tab panes (a Compile-tab card and the Coverage tab's
@@ -70,6 +89,8 @@ table + PRD §4.11 synced.
 - [x] BDD E2E: a `drill-in.feature` scenario set covering open-from-card, back-restores-scroll, cold-load, and project-pane-stays-visible; results ingested `tier:"e2e"`.
 - [ ] §S4 tier passthrough (user defect 2026-07-16): `POST /api/ingest/parsed` with `tier:"regression"` stores an event whose `tier` is `regression` (asserted via the events listing); `tier:"banana"` → 400 whose error names `tier`; omitting `tier` keeps the `unit` default (existing ingest tests unchanged).
 - [ ] §S4 F7 card differentiation (user defect 2026-07-16): an event with tier `regression` and brief `coverageLines: 94.4` renders its card with the `regression` tier badge, codec badge text `parsed+lcov`, and `data-testid="card-coverage-meter"` (`.app-meter` anatomy, `.app-meter-fill` inline width `94.4%`) inline on the card; a `regression` event WITHOUT coverage renders the tier badge, codec `parsed`, and NO card meter; a `unit` event renders no card meter and codec `parsed` (class-level assertions).
+- [ ] §S1 header-always-visible (user note 2026-07-16): with a run detail open, the detail header (back chip · `RUN DETAIL` · density chip) is NOT a descendant of the drill-down's scroll container — on the workspace it renders in the band the hidden tabs row vacates, on home pinned above the pane's scroller; with the 10k-leaf fixture scrolled to its bottom, the header element remains present with its position unaffected by the scroller's `scrollTop` (DOM-structure + post-scroll visibility assertions).
+- [ ] §S1 tabs-hide + tab-in-header (user decisions 2026-07-16, gate review): on the workspace with a run detail open — from ANY entry (run card on any tab, transition marker, coverage-meter, coverage-view-run, cold load) — `data-testid="workspace-tabs"` is ABSENT from the DOM and the detail header's back-chip text equals `← <active tab, lowercase>` (`← runs` / `← coverage` / `← compile`); on home the chip stays `← timeline`. Closing (the chip, Escape, and browser back each) restores the tabs row with the previously-active tab still carrying the `on` class and the feed at its exact prior scrollTop; a detail opened from the Compile tab shows `← compile` and closes back to the COMPILE pane with its tab `on`; a cold workspace load defaults to Runs (`← runs`); the top bar and Project pane remain present throughout; the C4 BDD open-from-card scenario is re-targeted (tabs ABSENT + chip text asserted during detail, tabs PRESENT with correct selection after close).
 
 ## Gap analysis (2026-07-16, pre-design)
 What exists (CR-007 final tree, develop 895fce0) vs what this CR changes:
