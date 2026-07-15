@@ -1,6 +1,6 @@
 # CR-CRU-010 — Codec path-parsing interface + shim regression hardening
 
-**Status:** IN_PROGRESS (feature/CR-CRU-010, started 2026-07-15)
+**Status:** COMPLETED (VERIFY CONFIRMED 2026-07-15; 5/5 ACs; 291 tests green)
 **Type:** maintenance
 **Priority:** P2
 **Depends on:** CR-CRU-006
@@ -40,11 +40,11 @@ One named assertion per missing-required-field validation branch across shim + v
 400 and an `error` string naming the field.
 
 ## Acceptance criteria
-- [ ] `codecs.get("junit")!.parsePath` is a function; `POST /api/v2/runs {codec:"junit", dataPath:<dir>}` and v1 `POST /api/ingest {format:"junit", dataPath}` both succeed with the SAME summaries as before (regression-guarded against existing dataPath tests).
-- [ ] grep `parseJunitPath` in `src/server.ts` + `src/v2.ts` returns 0 AND its only occurrence in `src/codecs/index.ts` is the `junit` registry entry's `parsePath` registration — the `parseRunBody` helper body contains no `parseJunitPath` call (registry-only resolution).
-- [ ] A registry entry stub without `parsePath` given a `dataPath` request → 400 with the codec name in `error`.
-- [ ] Cross-surface pair test exists and passes both directions (v1→v2 flattened brief; v2→v1 nested summary).
-- [ ] ≥ 6 named per-branch 400 assertions, each failing independently if its branch's validation is removed (verified by test names enumerating the field).
+- [x] `codecs.get("junit")!.parsePath` is a function; `POST /api/v2/runs {codec:"junit", dataPath:<dir>}` and v1 `POST /api/ingest {format:"junit", dataPath}` both succeed with the SAME summaries as before (regression-guarded against existing dataPath tests).
+- [x] grep `parseJunitPath` in `src/server.ts` + `src/v2.ts` returns 0 AND its only occurrence in `src/codecs/index.ts` is the `junit` registry entry's `parsePath` registration — the `parseRunBody` helper body contains no `parseJunitPath` call (registry-only resolution).
+- [x] A registry entry stub without `parsePath` given a `dataPath` request → 400 with the codec name in `error`.
+- [x] Cross-surface pair test exists and passes both directions (v1→v2 flattened brief; v2→v1 nested summary).
+- [x] ≥ 6 named per-branch 400 assertions, each failing independently if its branch's validation is removed (verified by test names enumerating the field).
 
 ## Estimated size
 S.
