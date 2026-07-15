@@ -1,6 +1,6 @@
 # CR-CRU-006 — Dashboard shell (Mission Control + workspace + navigation)
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-07-15 on develop)
 **Type:** feature
 **Priority:** P1
 **Depends on:** CR-CRU-004
@@ -37,9 +37,9 @@ deep-linkable (server serves the SPA for any non-/api path).
 
 ### §S3 Mission Control home (layout revised 2026-07-15, user-directed)
 Top bar: logo, project chips (filter in place, "All projects" reset), server-health
-pill. **Two-column layout: the timeline occupies the WIDE left column** (more room
-for cards and the future drill-in); the **right rail stacks two sections — Projects
-ABOVE Agents**. Projects section: project cards (name, type badge, online-agent
+pill. **Two-column layout (revised again 2026-07-15): the rail sits on the LEFT —
+Projects section ABOVE Agents — and the timeline occupies the WIDE RIGHT column**
+(more room for cards and the future drill-in). Projects section: project cards (name, type badge, online-agent
 count, last-run status, latest-green coverage meter) from `GET /api/v2/projects`
 rollups. Agents section below: liveness dots (🟢/🟡 stale/⚰ tombstoned greyed with
 last message + died-ago; pruned disappear), from `GET /api/v2/agents`. Empty states
