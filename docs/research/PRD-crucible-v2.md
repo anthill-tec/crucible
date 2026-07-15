@@ -269,6 +269,9 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   attach `context.cycleId`; the timeline renders the plan inline (active cycle =
   open event span); the Wave → CR → Cycle **workflow lens** consumes the plan
   first with inferred pairing as fallback; planless projects degrade gracefully.
+  Cycles are not only RED→GREEN: **VERIFY and FIX steps are cycles under
+  identical rules** (optional `kind: red-green|verify|fix`; locked round 16) —
+  `done` = GREEN-confirm / report-acceptance / fix-batch-green respectively.
   All in v0.1.0: plan API + lens in CR-CRU-011, fleet plan verbs
   (plan-file / cycle-activate / cycle-done / cr-close + `CRUCIBLE_CYCLE_ID`) in
   CR-CRU-008.

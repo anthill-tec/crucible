@@ -32,15 +32,19 @@ encodes the plan verbs in the python/fleet clients for the agentic backend.
 ## Scope
 
 ### §S0 Cycle-plan API (server, additive — user-locked rounds 14–15)
-- `POST /api/v2/projects/<key>/plans` `{cr, wave?, cycles:[{label}, …]}` →
-  201 `{planId, cr, status:"open", cycles:[{id, label, status:"pending"}, …]}` —
-  the server assigns **unique numeric cycle ids** (per project). One OPEN plan
-  per `cr` (a second POST for the same open CR → 400 naming `cr`); appending
-  cycles to an open plan: `POST …/plans/<planId>/cycles {label}` → new id.
+- `POST /api/v2/projects/<key>/plans` `{cr, wave?, cycles:[{label, kind?}, …]}` →
+  201 `{planId, cr, status:"open", cycles:[{id, label, kind, status:"pending"}, …]}` —
+  the server assigns **unique numeric cycle ids** (per project). `kind` ∈
+  `red-green | verify | fix` (default `red-green`) — **all kinds follow
+  IDENTICAL rules** (user-locked round 16): same filing, transitions, span
+  semantics, orchestrator-confirmed close. One OPEN plan per `cr` (a second POST
+  for the same open CR → 400 naming `cr`); appending cycles to an open plan:
+  `POST …/plans/<planId>/cycles {label, kind?}` → new id.
 - `PATCH …/plans/<planId>/cycles/<id>` `{status}` — transitions
   `pending → active → done | skipped | failed`. `done` IS the orchestrator's
-  GREEN confirmation (the span-closing authority — a GREEN run alone never
-  closes a cycle). Invalid transition → 400 naming both states.
+  confirmation — GREEN-confirm for `red-green`, report acceptance for `verify`,
+  fix-batch-green for `fix` (the span-closing authority — a passing run alone
+  never closes a cycle of any kind). Invalid transition → 400 naming both states.
 - `PATCH …/plans/<planId>` `{status:"closed", merge?:{commit}}` — the CR close,
   issued on feature merge. Closing a plan with non-terminal cycles → 400 listing
   the open cycle ids (the orchestrator resolves them first).
@@ -84,6 +88,7 @@ never hidden.
 ## Acceptance criteria
 - [ ] §S0: `POST /plans {cr:"CR-X-1", cycles:[{label:"a"},{label:"b"}]}` → 201 with two distinct numeric ids, statuses `pending`, plan `open`; a second POST for `cr:"CR-X-1"` while open → 400 naming `cr`.
 - [ ] §S0: cycle transitions — `pending→active→done` succeed; `pending→done` (skipping active) → 400 naming both states; a GREEN run ingest linked via `context.cycleId` does NOT change the cycle's status (orchestrator-explicit close asserted).
+- [ ] §S0: kinds — cycles filed with `kind:"verify"` and `kind:"fix"` behave identically to `red-green` (same transition table, same span/run-linkage, asserted by running the transition AC parameterized over all three kinds); omitted `kind` defaults to `red-green`; `kind:"deploy"` → 400 naming `kind`.
 - [ ] §S0: `PATCH /plans/<id> {status:"closed", merge:{commit:"abc1234"}}` with a non-terminal cycle → 400 listing its id; after all cycles are terminal it succeeds and `GET /plans?cr=CR-X-1` shows `closed` + the merge commit.
 - [ ] §S0: a run ingested with an unknown `context.cycleId` is stored and surfaces as "unlinked" in the lens (never dropped, never 4xx); a planless project's ingest behavior is byte-identical to pre-CR-011 (regression-guarded).
 - [ ] `POST /api/v2/agents/register` then unregister appends two lifecycle events (`action:"registered"`, `action:"unregistered"`) visible via `GET /api/v2/events?project=…`; the unregistered event carries `firstSeen` and yields `runtime_ms = unregistered.timestamp − firstSeen` exactly.
