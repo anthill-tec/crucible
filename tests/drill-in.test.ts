@@ -55,14 +55,14 @@
 //      `${failed} ✗ ${passed} ✓` suite counts, BOTH-mode auto-expand of
 //      failing suites, inline failure box with no click required, the
 //      failures-footer + raw-output-for-test-events, and the F4½
-//      status-chips row). NOTE: the ORIGINAL "§S3 — test-run drill-in body"
-//      test above (and the last "§S4.5 progressive payload" test's
-//      ProgSuiteC click) still assume "no leaves until a suite-row click"
-//      and "no failure box until a leaf-row click" for a FAILING suite —
-//      that directly conflicts with the new BOTH-modes auto-expand rule.
-//      Flagged for GREEN-phase reconciliation; left unmodified here as
-//      outside the explicitly authorized C3 (§S4.0 mode-switch) scope — see
-//      the RED agent's dispatch report.
+//      status-chips row). RECONCILED (2026-07-15, approved): the ORIGINAL
+//      "§S3 — test-run drill-in body" test above and the "§S4.5 progressive
+//      payload" test's ProgSuiteC assertion were updated in place to the
+//      both-modes auto-expand rule — a FAILING suite's `?suite=` fetch is
+//      asserted straight from the fetch log (no suite-row click first);
+//      PASSING suites (SuiteB / ProgSuiteD) still require an explicit
+//      suite-row click, which both tests now exercise directly, keeping
+//      §S4.5's on-demand paging covered.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -343,17 +343,16 @@ describe("§S3 — test-run drill-in body (suite tree + failure box)", () => {
     const overlay = document.querySelector('[data-testid="run-overlay"]');
     expect(overlay).not.toBeNull();
 
-    // Suite tree present, no leaves yet (progressive payload — see §S4.5 tests below).
+    // RECONCILED (F4 anatomy, both-modes auto-expand — approved 2026-07-15):
+    // the FAILING suite (SuiteA) is fetched and its leaves rendered on OPEN,
+    // no suite-row click needed — was: "no leaves yet ... suiteARow!.click()".
     const suiteRows = overlay!.querySelectorAll('[data-testid="suite-row"]');
     expect(suiteRows.length).toBe(2);
 
-    const suiteARow = findByText(overlay!, '[data-testid="suite-row"]', "SuiteA");
-    expect(suiteARow).toBeDefined();
-    suiteARow!.click();
-    await settle();
-
-    const suiteFetch = fetchLog.find((u) => u.includes(`/api/v2/events/${eventId}`) && u.includes("suite=SuiteA"));
-    expect(suiteFetch).toBeDefined();
+    const suiteAFetch = fetchLog.find(
+      (u) => u.includes(`/api/v2/events/${eventId}`) && u.includes("suite=SuiteA"),
+    );
+    expect(suiteAFetch).toBeDefined();
 
     const leafRows = overlay!.querySelectorAll('[data-testid="leaf-row"]');
     expect(leafRows.length).toBe(2);
@@ -362,6 +361,24 @@ describe("§S3 — test-run drill-in body (suite tree + failure box)", () => {
     const passLeaf = findByText(overlay!, '[data-testid="leaf-row"]', "testPass1");
     expect(failLeaf).toBeDefined();
     expect(passLeaf).toBeDefined();
+
+    // PASSING suites still require the click (§S4.5 on-demand paging stays
+    // covered): SuiteB is NOT auto-fetched, and only renders its leaf after
+    // an explicit suite-row click.
+    expect(fetchLog.some((u) => u.includes(`/api/v2/events/${eventId}`) && u.includes("suite=SuiteB"))).toBe(
+      false,
+    );
+    const suiteBRow = findByText(overlay!, '[data-testid="suite-row"]', "SuiteB");
+    expect(suiteBRow).toBeDefined();
+    suiteBRow!.click();
+    await settle();
+
+    const suiteBFetch = fetchLog.find(
+      (u) => u.includes(`/api/v2/events/${eventId}`) && u.includes("suite=SuiteB"),
+    );
+    expect(suiteBFetch).toBeDefined();
+    const testPass2Row = findByText(overlay!, '[data-testid="leaf-row"]', "testPass2");
+    expect(testPass2Row).toBeDefined();
 
     // bound: clicking the PASSING leaf never produces a failure box.
     passLeaf!.click();
@@ -979,24 +996,37 @@ describe("§S4.5 — progressive payload (suites-first paging)", () => {
     const overlay = document.querySelector('[data-testid="run-overlay"]');
     expect(overlay).not.toBeNull();
 
-    const suiteCRow = findByText(overlay!, '[data-testid="suite-row"]', "ProgSuiteC");
-    expect(suiteCRow).toBeDefined();
-    suiteCRow!.click();
-    await settle();
-
-    const suiteFetch = fetchLog.find(
+    // RECONCILED (F4 anatomy, both-modes auto-expand — approved 2026-07-15):
+    // ProgSuiteC (failing) is fetched and expanded ON OPEN, no suite-row
+    // click needed — was: "suiteCRow!.click()" before asserting the fetch.
+    const suiteCFetch = fetchLog.find(
       (u) => u.includes(`/api/v2/events/${eventId}`) && u.includes("suite=ProgSuiteC"),
     );
-    expect(suiteFetch).toBeDefined();
+    expect(suiteCFetch).toBeDefined();
 
     const leafRows = overlay!.querySelectorAll('[data-testid="leaf-row"]');
     expect(leafRows.length).toBe(2);
     const leafTexts = Array.from(leafRows).map((l) => l.textContent ?? "");
     expect(leafTexts.some((t) => t.includes("cFail"))).toBe(true);
     expect(leafTexts.some((t) => t.includes("cPass"))).toBe(true);
-    // bound: ProgSuiteD was never expanded — none of its leaves fetched/rendered.
+    // bound: ProgSuiteD (passing) was never AUTO-expanded — none of its
+    // leaves fetched/rendered until clicked.
     expect(leafTexts.some((t) => t.includes("dPass"))).toBe(false);
     expect(fetchLog.some((u) => u.includes("suite=ProgSuiteD"))).toBe(false);
+
+    // PASSING suites still require the click (§S4.5 on-demand paging stays
+    // covered): clicking ProgSuiteD's suite-row DOES fetch + render it.
+    const suiteDRow = findByText(overlay!, '[data-testid="suite-row"]', "ProgSuiteD");
+    expect(suiteDRow).toBeDefined();
+    suiteDRow!.click();
+    await settle();
+
+    const suiteDFetch = fetchLog.find(
+      (u) => u.includes(`/api/v2/events/${eventId}`) && u.includes("suite=ProgSuiteD"),
+    );
+    expect(suiteDFetch).toBeDefined();
+    const dPassRow = findByText(overlay!, '[data-testid="leaf-row"]', "dPass");
+    expect(dPassRow).toBeDefined();
   });
 });
 
