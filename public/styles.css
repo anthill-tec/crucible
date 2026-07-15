@@ -273,7 +273,7 @@ body {
 .app-meter-fill {
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--ember-dim), var(--ember));
+  background: linear-gradient(90deg, var(--ember), var(--pass));
 }
 /* §S5.5 — Coverage tab panel rows. */
 .app-coverage-row {
