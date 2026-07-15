@@ -232,6 +232,10 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   chip** opening the **Projects manager** (`/manage` slide-over, CR-CRU-012):
   add project + edit name/type/sutRoot/per-project liveness overrides/retention;
   the project key is immutable (additive `PATCH /api/v2/projects/<key>`).
+  Projects are **archivable** (round 14, in 0.1.0): archived projects vanish
+  from the projects list and their records are excluded from every internal
+  query while retained; agent calls → 404 with an archived hint (no
+  auto-resurrect); explicit unarchive restores everything intact.
   **Clicking a badge drills down** to `/p/<key>` — never filters. The
   home body is the **collective all-projects timeline** (newest-first, each
   project contributing up to its retention limit) whose **filter pulldown lives in
