@@ -45,7 +45,9 @@ reason (a fourth presentation state — outside the pass/fail/pending palette).
 ### §S3 UI
 Timeline shows an OPEN run as a live "running…" card (pulsing, elapsed timer
 off `startedAt`, SSE-updated) that resolves into the end event's card (or the
-aborted card) in place. Drill-in of an aborted run shows the reason + whatever
+aborted card) in place. A running card is NOT clickable (default cursor, no
+drill-down) until it resolves — the pointer cursor + drill-down enable only on
+the completed/aborted card (user rule). Drill-in of an aborted run shows the reason + whatever
 partial context exists. Workflow tab: an active cycle's open span shows its
 currently-running run live.
 

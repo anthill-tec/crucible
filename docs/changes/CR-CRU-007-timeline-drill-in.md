@@ -24,6 +24,11 @@ event cards: kind icon (🧪 test / 🛠 compile), agentId, tier + codec badges,
 badges when present (branch@shortcommit, wave, orchestrator — omitted when absent),
 relative time, duration, ratio pill (`N/N` green / `F ✗ of N` red / `E errors`
 amber). Compile cards preview the first 2 diagnostics inline.
+Click affordance (user-added during execution): clickable run cards show the
+POINTER cursor + a hover affordance (forge conventions) so the drill-down spot
+is discoverable. In 0.1.0 every stored event is a completed run, so all cards
+are clickable; the disabled-until-run-completes rule binds CR-CRU-017's
+running cards (an open run's card is NOT clickable until it resolves).
 Phase-role icon tinting (user-added during execution): the card's kind icon is
 tinted by the agent's PHASE ROLE derived from the agentId — RED → red, GREEN →
 green, VERIFY → purple, FIX → yellow (suffix `-RED|-GREEN|-FIX` or a
@@ -102,7 +107,13 @@ heat-strip. Compile body: diagnostics grouped by file
    < 200 tree row nodes mounted.
 5. **Progressive payload** — drill-in fetches `?depth=suites` first, then
    `?suite=<name>` on expand (CR-CRU-004 §S4).
-6. **Density toggle** — comfortable / compact / ultra (persisted in localStorage).
+6. **Density toggle** — comfortable / compact / ultra (persisted in
+   localStorage). Scope (user defect report: switching produced no visible
+   change on home): the mode VISIBLY affects spacing GLOBALLY — timeline run
+   cards + marker rows (home and workspace), drill-in tree rows, and Project
+   pane rows all tighten padding/margins per mode (comfortable = current,
+   compact ≈ −35%, ultra ≈ −60%, forge conventions); the difference must be
+   plainly visible at a glance on the home timeline.
 
 ### §S5 Shell revisions — board design iteration, final form (round 6, 2026-07-15)
 1. **Home = title bar + projects row + collective timeline (round 7).** Title bar
