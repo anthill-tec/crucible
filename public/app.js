@@ -284,9 +284,9 @@
         () => EmptyState() ?? div(visibleEvents().map(EventCard)),
       );
 
-    const ProjectsRail = () =>
+    const ProjectsSection = () =>
       div(
-        { class: greyed("app-rail") },
+        { class: "app-rail-section" },
         div({ class: "app-rail-title" }, "projects"),
         () =>
           visibleProjects().length === 0
@@ -294,9 +294,9 @@
             : div(visibleProjects().map(ProjectCard)),
       );
 
-    const AgentsRail = () =>
+    const AgentsSection = () =>
       div(
-        { class: greyed("app-rail") },
+        { class: "app-rail-section" },
         div({ class: "app-rail-title" }, "agents"),
         () =>
           visibleAgents().length === 0
@@ -304,8 +304,19 @@
             : div(visibleAgents().map(AgentRow)),
       );
 
-    // Home = Mission Control (§S3 rails)
-    const Home = () => div({ class: "app-main" }, ProjectsRail(), Timeline(), AgentsRail());
+    // Kept for the workspace page (§S4 Agents tab + right rail) — the home
+    // page no longer renders a standalone agents rail.
+    const AgentsRail = () => div({ class: greyed("app-rail") }, AgentsSection());
+
+    // Home = Mission Control (revised §S3, 2026-07-15): two-column grid —
+    // timeline in the WIDE left column, ONE right rail stacking the Projects
+    // section ABOVE the Agents section. No left rail.
+    const Home = () =>
+      div(
+        { class: "app-main" },
+        Timeline(),
+        div({ class: greyed("app-rail") }, ProjectsSection(), AgentsSection()),
+      );
 
     // ── Workspace (§S4 — header, tabs, Runs listing, vitals rail) ───────
     const WorkspaceHeader = () =>

@@ -117,13 +117,21 @@ body {
 .app-dot.o { background: var(--offline); }
 .app-dot.r { background: var(--fail); box-shadow: 0 0 6px rgba(248, 113, 113, 0.7); }
 
-/* ── Rails grid (home layout) ───────────────────────────────────────────── */
+/* ── Rails grid (home layout — revised §S3: wide timeline left, one right
+   rail stacking projects above agents) ─────────────────────────────────── */
 .app-main {
   display: grid;
-  grid-template-columns: minmax(200px, 1fr) minmax(0, 2.2fr) minmax(200px, 1fr);
+  grid-template-columns: minmax(0, 1fr) 320px;
   gap: 12px;
   padding: 12px;
   align-items: start;
+}
+/* Workspace keeps its original three-column grid (§S4 unchanged). */
+.app-main[data-testid="workspace"] {
+  grid-template-columns: minmax(200px, 1fr) minmax(0, 2.2fr) minmax(200px, 1fr);
+}
+.app-rail-section + .app-rail-section {
+  margin-top: 16px;
 }
 .app-rail, .app-center {
   background: var(--bg-1);
