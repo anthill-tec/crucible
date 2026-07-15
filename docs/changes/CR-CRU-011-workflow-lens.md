@@ -32,7 +32,7 @@ encodes the plan verbs in the python/fleet clients for the agentic backend.
 ## Scope
 
 ### §S0 Cycle-plan API (server, additive — user-locked rounds 14–15)
-- `POST /api/v2/projects/<key>/plans` `{cr, wave?, cycles:[{label, kind?}, …]}` →
+- `POST /api/v2/projects/<key>/plans` `{cr, wave?, track?, cycles:[{label, kind?}, …]}` →
   201 `{planId, cr, status:"open", cycles:[{id, label, kind, status:"pending"}, …]}` —
   the server assigns **unique numeric cycle ids** (per project). `kind` ∈
   `red-green | verify | fix` (default `red-green`) — **all kinds follow
@@ -52,9 +52,14 @@ encodes the plan verbs in the python/fleet clients for the agentic backend.
   the server stores it verbatim (tolerant: unknown ids are stored, surfaced as
   "unlinked" — graceful degradation is sacred; planless projects behave exactly
   as before, `context.cycle` string label stays the fallback).
+- **Tracks (user-locked round 17):** a CR is always executed within a track. In
+  the Model-B multi-track combo, each track's operator registers its track with
+  the CR — `track` (string, e.g. `track-2` / `mainline`) on the plan. In the
+  single-orchestrator model `track` is simply ABSENT and everything works
+  seamlessly (the implicit solo track — no required field, no UI noise).
 - Plan mutations emit an SSE change event; plan state is queryable via
-  `GET …/plans` (+ `?cr=`) and flows through retention as plan records, not
-  test-run events (excluded from run rollups).
+  `GET …/plans` (+ `?cr=`, `?track=`) and flows through retention as plan
+  records, not test-run events (excluded from run rollups).
 
 ### §S1 Agent lifecycle events (server, additive)
 Registration and unregistration append **lifecycle events** to the project's
@@ -73,7 +78,11 @@ groups in the lens (§S3).
 
 ### §S3 Workflow lens view (plan-first, inferred fallback)
 A grouped lens over the workspace Runs timeline (toggle in the Runs tab header:
-`flat | workflow`): **Wave → CR → Cycle** hierarchy. **Declared-plan first**:
+`flat | workflow`): **Wave → [Track] → CR → Cycle** hierarchy — the Track level
+renders ONLY when a wave contains plans from more than one distinct track
+(multi-track Model-B); otherwise it is omitted entirely (single-orchestrator
+seamlessness, round 17). CR groups carry a track badge whenever `track` is
+present. **Declared-plan first**:
 where a §S0 plan exists, the tree IS the plan — todos with cycles as sub-items;
 the ACTIVE cycle renders as an **open event span** collecting its runs
 (`context.cycleId` linkage) live; `done` (orchestrator GREEN-confirm) closes the
@@ -89,6 +98,7 @@ never hidden.
 - [ ] §S0: `POST /plans {cr:"CR-X-1", cycles:[{label:"a"},{label:"b"}]}` → 201 with two distinct numeric ids, statuses `pending`, plan `open`; a second POST for `cr:"CR-X-1"` while open → 400 naming `cr`.
 - [ ] §S0: cycle transitions — `pending→active→done` succeed; `pending→done` (skipping active) → 400 naming both states; a GREEN run ingest linked via `context.cycleId` does NOT change the cycle's status (orchestrator-explicit close asserted).
 - [ ] §S0: kinds — cycles filed with `kind:"verify"` and `kind:"fix"` behave identically to `red-green` (same transition table, same span/run-linkage, asserted by running the transition AC parameterized over all three kinds); omitted `kind` defaults to `red-green`; `kind:"deploy"` → 400 naming `kind`.
+- [ ] §S0/§S3: tracks — two open plans in the same wave with `track:"track-1"` / `track:"track-2"` render a Track level between Wave and CR in the lens (both groups present, CR groups badged); a wave whose plans all lack `track` renders NO track level and is byte-identical to the pre-track lens output (single-orchestrator seamlessness); `GET /plans?track=track-2` returns only that track's plans.
 - [ ] §S0: `PATCH /plans/<id> {status:"closed", merge:{commit:"abc1234"}}` with a non-terminal cycle → 400 listing its id; after all cycles are terminal it succeeds and `GET /plans?cr=CR-X-1` shows `closed` + the merge commit.
 - [ ] §S0: a run ingested with an unknown `context.cycleId` is stored and surfaces as "unlinked" in the lens (never dropped, never 4xx); a planless project's ingest behavior is byte-identical to pre-CR-011 (regression-guarded).
 - [ ] `POST /api/v2/agents/register` then unregister appends two lifecycle events (`action:"registered"`, `action:"unregistered"`) visible via `GET /api/v2/events?project=…`; the unregistered event carries `firstSeen` and yields `runtime_ms = unregistered.timestamp − firstSeen` exactly.

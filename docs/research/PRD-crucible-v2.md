@@ -272,6 +272,10 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   Cycles are not only RED→GREEN: **VERIFY and FIX steps are cycles under
   identical rules** (optional `kind: red-green|verify|fix`; locked round 16) —
   `done` = GREEN-confirm / report-acceptance / fix-batch-green respectively.
+  **Tracks (locked round 17): a CR is always executed within a track.** Model-B
+  track operators register `track` with the CR's plan (clients auto-attach it
+  from `CRUCIBLE_ORCHESTRATOR`); single-orchestrator projects omit it and work
+  seamlessly — the lens renders a Track level only when a wave spans >1 track.
   All in v0.1.0: plan API + lens in CR-CRU-011, fleet plan verbs
   (plan-file / cycle-activate / cycle-done / cr-close + `CRUCIBLE_CYCLE_ID`) in
   CR-CRU-008.
