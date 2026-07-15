@@ -332,6 +332,24 @@ export class Store {
     }
   }
 
+  /**
+   * Single-row existence check with the same lazy-prune semantics as
+   * listAgents: a row past its prune window is deleted and reported absent.
+   */
+  hasAgent(projectKey: string, agentId: string, now: number = Date.now()): boolean {
+    const row = this.db
+      .query<AgentRow, [string, string]>(
+        `SELECT * FROM agents WHERE project_key = ? AND agent_id = ?`,
+      )
+      .get(projectKey, agentId);
+    if (row === null) return false;
+    if (this.livenessOf(Store.toAgent(row), now) === "pruned") {
+      this.removeAgent(projectKey, agentId);
+      return false;
+    }
+    return true;
+  }
+
   listAgents(projectKey?: string, now: number = Date.now()): LiveAgent[] {
     const rows =
       projectKey === undefined
@@ -575,10 +593,14 @@ export class Store {
          ORDER BY timestamp ASC, rowid ASC LIMIT ?`,
       )
       .all(projectKey, overflow);
-    for (const row of expired) {
-      this.foldIntoRollup(row);
-      this.db.query(`DELETE FROM events WHERE id = ?`).run(row.id);
-    }
+    // Fold + delete atomically so a crash can never leave an expired event
+    // both counted in rollups and still present for a later re-fold.
+    this.db.transaction(() => {
+      for (const row of expired) {
+        this.foldIntoRollup(row);
+        this.db.query(`DELETE FROM events WHERE id = ?`).run(row.id);
+      }
+    })();
   }
 
   private foldIntoRollup(row: EventRow): void {

@@ -254,6 +254,40 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
       expect(body.ok).toBe(false);
     });
 
+    test("malformed junit data → 400 JSON {ok:false, error}, never a plain-text 500", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject("runs-badxml");
+
+      const res = await postJson("/api/v2/runs", {
+        projectKey: key,
+        agentId: "a1",
+        codec: "junit",
+        data: "<not-junit>",
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as ErrResponse;
+      expect(body.ok).toBe(false);
+      expect(body.error.length).toBeGreaterThan(0);
+    });
+
+    test("nonexistent dataPath → 400 JSON {ok:false, error}, never a plain-text 500", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject("runs-baddatapath");
+
+      const res = await postJson("/api/v2/runs", {
+        projectKey: key,
+        agentId: "a1",
+        codec: "junit",
+        dataPath: join(tmpdir(), "v2-runs-definitely-missing"),
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as ErrResponse;
+      expect(body.ok).toBe(false);
+      expect(body.error.length).toBeGreaterThan(0);
+    });
+
     test("unknown project → 404 with help array present", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
 

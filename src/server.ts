@@ -4,9 +4,8 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { codecs } from "./codecs/index.ts";
+import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
-import { parseJunitPath } from "./codecs/junit.ts";
 import { Store, UUID_RE } from "./store.ts";
 import type { TouchAgentOpts } from "./store.ts";
 import { handleV2 } from "./v2.ts";
@@ -18,6 +17,7 @@ const pkg = JSON.parse(
 
 export interface StartServerOpts {
   port?: number;
+  hostname?: string;
   dbPath?: string;
 }
 
@@ -88,14 +88,9 @@ async function handleIngest(store: Store, req: Request): Promise<Response> {
   const codec = codecs.get(format);
   if (codec === undefined) return err(400, `unsupported format: ${format}`);
 
-  let run: RunSchema;
-  if (typeof body.data === "string") {
-    run = await codec.parse(body.data);
-  } else if (typeof body.dataPath === "string") {
-    run = await parseJunitPath(body.dataPath);
-  } else {
-    return err(400, "either data or dataPath is required");
-  }
+  const parsed = await parseRunBody(codec, body);
+  if ("error" in parsed) return err(400, parsed.error);
+  const { run } = parsed;
 
   const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
   store.recordTestEvent(pk.key, agentId, run, { codec: format });
@@ -435,6 +430,9 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
 
   const server = Bun.serve({
     port: opts?.port ?? Number(process.env.CRUCIBLE_PORT ?? 3849),
+    // The API is unauthenticated and dataPath ingest reads server-side files,
+    // so stay loopback-only unless CRUCIBLE_HOST opts into wider exposure.
+    hostname: opts?.hostname ?? process.env.CRUCIBLE_HOST ?? "127.0.0.1",
     // §S3 — SSE connections are long-lived and quiet between 15s keep-alives;
     // Bun's default 10s idleTimeout would reset them mid-stream.
     idleTimeout: 0,

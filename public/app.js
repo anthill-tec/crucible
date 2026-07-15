@@ -92,15 +92,18 @@
       }
     }
 
-    // SSE client with keep-alive watchdog (§S5): any frame (data OR comment
-    // keep-alive) proves liveness via onmessage/readyState; silence >20s AND a
-    // failing /api/v2/health flips the pill. Poll fallback every 5s when SSE is
+    // SSE client with watchdog (§S5): data frames (hello/changes) prove
+    // liveness via onopen/onmessage; the server's comment keep-alives never
+    // reach EventSource handlers, so during quiet periods liveness rests on
+    // the watchdog probing /api/v2/health after >20s of silence — only a
+    // failing probe flips the pill. Poll fallback every 5s when SSE is
     // unavailable.
     let lastFrameAt = Date.now();
     let sse = null;
     let pollTimer = null;
 
     function connectStream() {
+      if (sse !== null) return; // one live EventSource, however many callers race
       if (typeof EventSource === "undefined") {
         startPolling();
         return;

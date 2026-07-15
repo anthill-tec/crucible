@@ -199,6 +199,42 @@ describe("POST /api/ingest + POST /api/ingest/compile — §S4", () => {
       const body = (await res.json()) as IngestErrResponse;
       expect(body.ok).toBe(false);
     });
+
+    test("malformed junit `data` → 400 JSON {ok:false, error}, never a plain-text 500", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const pk = seedProject();
+
+      const res = await postJson("/api/ingest", {
+        projectKey: pk,
+        format: "junit",
+        data: "<not-junit>",
+        agentId: "a1",
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      const body = (await res.json()) as IngestErrResponse;
+      expect(body.ok).toBe(false);
+      expect(body.error.length).toBeGreaterThan(0);
+    });
+
+    test("nonexistent dataPath → 400 JSON {ok:false, error}, never a plain-text 500", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const pk = seedProject();
+
+      const res = await postJson("/api/ingest", {
+        projectKey: pk,
+        format: "junit",
+        dataPath: join(tmpdir(), "ingest-route-definitely-missing"),
+        agentId: "a1",
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      const body = (await res.json()) as IngestErrResponse;
+      expect(body.ok).toBe(false);
+      expect(body.error.length).toBeGreaterThan(0);
+    });
   });
 
   test("POST /api/ingest/compile — rustc fixture → 200 {ok:true, summary:{failed:1, pending:1}}; newest event kind=compile codec=rustc", async () => {

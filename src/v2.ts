@@ -2,9 +2,8 @@
 // project rollups (PRD §4.2), agent lifecycle verbs (PRD §4.3). Every write
 // response carries `changed: true|false` (§S5). Shares the ONE store instance
 // with the v1 shim — src/server.ts wires handleV2 into its dispatcher.
-import { codecs } from "./codecs/index.ts";
+import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
-import { parseJunitPath } from "./codecs/junit.ts";
 import { hints } from "./hints.ts";
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
@@ -224,7 +223,7 @@ async function handleAgentTouch(store: Store, req: Request): Promise<Response> {
     return fail(400, "agentId is required");
   }
 
-  const existed = store.listAgents(pk.key).some((a) => a.agentId === agentId);
+  const existed = store.hasAgent(pk.key, agentId);
   const opts: TouchAgentOpts = {};
   if (body.status === "busy" || body.status === "online") {
     opts.status = body.status;
@@ -248,7 +247,7 @@ async function handleAgentUnregister(store: Store, req: Request): Promise<Respon
   if (typeof agentId !== "string" || agentId.length === 0) {
     return fail(400, "agentId is required");
   }
-  const existed = store.listAgents(pk.key).some((a) => a.agentId === agentId);
+  const existed = store.hasAgent(pk.key, agentId);
   store.removeAgent(pk.key, agentId);
   return json({ ok: true, changed: existed });
 }
@@ -309,14 +308,9 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   const codec = codecs.get(codecName);
   if (codec === undefined) return fail(400, `unknown codec: ${codecName}`);
 
-  let run: RunSchema;
-  if (typeof body.data === "string") {
-    run = await codec.parse(body.data);
-  } else if (typeof body.dataPath === "string") {
-    run = await parseJunitPath(body.dataPath);
-  } else {
-    return fail(400, "either data or dataPath is required");
-  }
+  const parsed = await parseRunBody(codec, body);
+  if ("error" in parsed) return fail(400, parsed.error);
+  const { run } = parsed;
 
   const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
   const event = store.recordTestEvent(pk.key, agentId, run, {
