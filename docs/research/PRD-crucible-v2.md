@@ -260,10 +260,18 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   transition explicitly (the core TDD story v1 told). A RED→GREEN pair is a
   **Cycle** — one step in a CR's execution; **CR groups cycles, Wave groups CRs**.
   The marker labels the Cycle from `context.cycle` (optional additive RunContext
-  string carrying the orchestrator todo's description; fleet clients send it from
-  CR-CRU-008) with the agent stem as identifier. Crucible thereby shows the
-  implementation workflow, not just test runs; a full Wave → CR → Cycle grouped
-  "workflow lens" is post-0.1.0 backlog.
+  string carrying the orchestrator todo's description) with the agent stem as
+  identifier. Cycles are DECLARED, not only inferred (locked round 15): the
+  orchestrator **files the cycle plan** (`POST /api/v2/projects/<key>/plans`,
+  server-assigned numeric cycle ids), activates cycles, and closes them —
+  **a cycle's span completes when the orchestrator confirms the GREEN; the CR
+  closes on feature merge** (a GREEN run alone never closes anything). Agents
+  attach `context.cycleId`; the timeline renders the plan inline (active cycle =
+  open event span); the Wave → CR → Cycle **workflow lens** consumes the plan
+  first with inferred pairing as fallback; planless projects degrade gracefully.
+  All in v0.1.0: plan API + lens in CR-CRU-011, fleet plan verbs
+  (plan-file / cycle-activate / cycle-done / cr-close + `CRUCIBLE_CYCLE_ID`) in
+  CR-CRU-008.
 - **Coverage** — line/function/branch meters on green regression events; latest-green
   coverage shown at project level.
 - Localhost tool aesthetics: fast, dense, dark-friendly, zero build step.

@@ -16,10 +16,10 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-005](CR-CRU-005-axi-toon.md) | AXI layer: TOON subset + hints | feature | COMPLETED (2026-07-15) | 004 | 2 |
 | [CR-CRU-006](CR-CRU-006-spa-shell.md) | Dashboard shell + navigation | feature | COMPLETED (2026-07-15) | 004 | 3 |
 | [CR-CRU-007](CR-CRU-007-timeline-drill-in.md) | Timeline + density drill-in | feature | PENDING | 006 | 3 |
-| [CR-CRU-008](CR-CRU-008-cli-fleet-upgrade.md) | crucible-axi CLI + fleet upgrade | feature | PENDING | 005, 007 | 4 |
+| [CR-CRU-008](CR-CRU-008-cli-fleet-upgrade.md) | crucible-axi CLI + fleet upgrade + plan verbs | feature | PENDING | 005, 007, 011 | 4 (after 011) |
 | [CR-CRU-009](CR-CRU-009-release-0.1.0.md) | Release 0.1.0 skill bundle | feature | PENDING | 007, 008, 011, 012 | 4 |
 | [CR-CRU-010](CR-CRU-010-codec-path-interface-hardening.md) | Codec parsePath + shim hardening | maintenance | COMPLETED (2026-07-15) | 006 | 3 (after 006, before 007) |
-| [CR-CRU-011](CR-CRU-011-workflow-lens.md) | Workflow lens: Wave→CR→Cycle + agent runtimes | feature | PENDING | 007, 008 | 4 (before 009) |
+| [CR-CRU-011](CR-CRU-011-workflow-lens.md) | Cycle plans + workflow lens + agent runtimes | feature | PENDING | 007 | 4 (before 008) |
 | [CR-CRU-012](CR-CRU-012-projects-manager.md) | Projects manager: add + edit | feature | PENDING | 004, 007 | 4 (before 009) |
 
 ## Notes
@@ -72,6 +72,14 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   before 009; 009 now depends on 011). Backwards audit of the agent API found the
   lifecycle gap (unregister hard-deletes firstSeen/lastSeen → runtime lost) — closed
   by CR-011 §S1 lifecycle events.
+- 2026-07-15 (design iteration rounds 14–15) — CR-012 gained §S1b archive/unarchive
+  (user: in 0.1.0). Cycle-plan API user-locked: orchestrator FILES the cycle plan
+  (todo list) → server-assigned numeric cycle ids → agents attach `context.cycleId`;
+  a cycle's span completes when the ORCHESTRATOR confirms the GREEN (`done`); the CR
+  closes on feature MERGE (`closed` + commit); plan verbs encoded in the python/fleet
+  clients (CR-008). Plan API folded into CR-011 (renamed "Cycle plans + workflow
+  lens"; lens is plan-first, inferred fallback; planless projects unchanged).
+  REORDERED: 011 before 008 → execution order 007 → 011 → 008 → 012 → 009.
 - 2026-07-15 (design iteration round 13) — project activity rule locked: active while
   ≥1 live agent; inactive after the system-wide configurable timeout
   (`CRUCIBLE_PROJECT_INACTIVE_MS`, default 1 h) from last activity; v2 projects
