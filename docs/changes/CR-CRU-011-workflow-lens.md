@@ -48,6 +48,14 @@ encodes the plan verbs in the python/fleet clients for the agentic backend.
 - `PATCH …/plans/<planId>` `{status:"closed", merge?:{commit}}` — the CR close,
   issued on feature merge. Closing a plan with non-terminal cycles → 400 listing
   the open cycle ids (the orchestrator resolves them first).
+- **Commit boundary (user-added during CR-007 execution):** `GET …/plans?cr=<cr>`
+  responses on closed plans carry a derived read-only `commitBoundary`:
+  `{mergeCommit, branch?, firstRunCommit?, lastRunCommit?, closedAt}` — branch
+  and run commits derived from the linked runs' `context.git`. This ties
+  execution history to the actual code: an orchestrator doing review/code
+  analysis asks Crucible for a CR's boundary in one indexed query instead of
+  scanning `git log` — then `git show <mergeCommit>` / `git diff
+  <firstRunCommit>..<mergeCommit>` directly.
 - Run linkage: agents attach `context.cycleId` (numeric) to run/compile ingests;
   the server stores it verbatim (tolerant: unknown ids are stored, surfaced as
   "unlinked" — graceful degradation is sacred; planless projects behave exactly
@@ -128,6 +136,7 @@ is their whole UI.
 - [ ] §S0/§S3: tracks — two open plans in the same wave with `track:"track-1"` / `track:"track-2"` render a Track level between Wave and CR in the lens (both groups present, CR groups badged); a wave whose plans all lack `track` renders NO track level and is byte-identical to the pre-track lens output (single-orchestrator seamlessness); `GET /plans?track=track-2` returns only that track's plans.
 - [ ] §S3: wave boundary — with wave 1 plans all `closed` and no wave 2 plans, the wave-1 group header shows `lanes complete · awaiting review`; filing a wave-2 plan flips wave 1 out of the boundary state; while any wave-1 plan is open the header shows per-lane completion chips (fixture: track-1 closed, track-2 1-of-2 → `track-1 ✓ · track-2 1/2`). No wave API exists (state is inferred from plans only — grep asserts no wave route).
 - [ ] §S0: `PATCH /plans/<id> {status:"closed", merge:{commit:"abc1234"}}` with a non-terminal cycle → 400 listing its id; after all cycles are terminal it succeeds and `GET /plans?cr=CR-X-1` shows `closed` + the merge commit.
+- [ ] §S0 commit boundary: a closed plan whose linked runs carried `context.git {branch:"feat/x", commit:…}` returns `commitBoundary` with `mergeCommit:"abc1234"`, `branch:"feat/x"`, and `firstRunCommit`/`lastRunCommit` equal to the earliest/latest linked-run commits; a closed plan with NO linked git context returns `commitBoundary` with only `mergeCommit` + `closedAt` (absent fields omitted, not null).
 - [ ] §S0: a run ingested with an unknown `context.cycleId` is stored and surfaces as "unlinked" in the lens (never dropped, never 4xx); a planless project's ingest behavior is byte-identical to pre-CR-011 (regression-guarded).
 - [ ] `POST /api/v2/agents/register` then unregister appends two lifecycle events (`action:"registered"`, `action:"unregistered"`) visible via `GET /api/v2/events?project=…`; the unregistered event carries `firstSeen` and yields `runtime_ms = unregistered.timestamp − firstSeen` exactly.
 - [ ] Lifecycle events never alter test-run rollups: project rollup counts (runs, pass/fail) are identical before/after a register+unregister pair.
