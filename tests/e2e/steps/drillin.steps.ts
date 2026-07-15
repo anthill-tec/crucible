@@ -101,6 +101,25 @@ Step("the workspace Runs pane's scrollTop is {int}", async ({ page }, expected: 
   expect(scrollTop).toBe(expected);
 });
 
+// CR-CRU-016 §S1/AC2 fixture repair (RED escalation — Playwright
+// actionability auto-scroll defeats the pane-scroll-restore assertion): a
+// REAL user click on an already-rendered card does not reposition the
+// page/pane — it's Playwright's synthetic-mouse actionability check
+// (element-must-be-fully-in-view before dispatch) that nudges the pane's
+// scrollTop before the click event ever fires, which is unrelated to the
+// production scroll-restore contract this scenario pins. Dispatching a
+// native DOM click (still routes through the SAME onclick handler VanJS
+// attached — a real "click" event, not a bypass) opens the detail with the
+// pane's scrollTop exactly as the user left it.
+Step(
+  "I click the event card for {string} without letting Playwright re-scroll the pane",
+  async ({ page }, agentId: string) => {
+    const card = page.getByTestId("event-card").filter({ hasText: agentId });
+    await expect(card).toHaveCount(1);
+    await card.evaluate((el) => (el as HTMLElement).click());
+  },
+);
+
 Step("the overlay has no heat-strip", async ({ page }) => {
   await expect(overlayOf(page).getByTestId("heat-strip")).toHaveCount(0);
 });
