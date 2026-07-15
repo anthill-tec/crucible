@@ -53,6 +53,17 @@ release-boundary divider rows. Columns: CR · title · wave · depends-on chips 
 status badge (derived: PENDING / IN_PROGRESS / COMPLETED). A **graph view
 toggle** renders the same depends-on graph as nodes/edges (table is the
 default; graph is the alternate lens over identical data).
+**Graph node grammar (user whiteboard, during CR-007):** ellipse terminals
+(Start/End) · rectangles = **action nodes** (CRs) · diamonds = **milestone
+nodes** (release boundaries, gates) · wave/track/status carried by **node
+styling** (color, border, lane bands) — never crammed into label text.
+**Graph library (user-directed):** mermaid is representation-only — the
+product needs a real interactive graph library: vendored, zero-build,
+VanJS-compatible, with DAG layout, per-node styling hooks, pan/zoom,
+click-through to the Workflow tab, and SSE-driven live restyling.
+Candidate: **Cytoscape.js + cytoscape-dagre** (single vendorable files, no
+build step — matches the van.js/Tailwind-runtime philosophy); final pick is
+a gap-analysis decision with those requirements as the gate.
 **Live execution overlay (multi-track):** when the project has >1 active
 track, in-progress rows carry a live overlay — the executing track's lane
 badge + current cycle position (e.g. `track-2 ▶ cycle 3/5`), streaming over
