@@ -1114,7 +1114,7 @@ describe("§S5 fidelity #5b — F7/F8 Project pane visual fidelity: section titl
 
     const fillRule = ruleBodyFor(".app-meter-fill {") ?? ruleBodyFor(".app-meter-fill{");
     expect(fillRule).toBeDefined();
-    expect(fillRule).toMatch(/linear-gradient\(90deg,\s*var\(--ember-dim\),\s*var\(--ember\)\)/);
+    expect(fillRule).toMatch(/linear-gradient\(90deg,\s*var\(--ember\),\s*var\(--pass\)\)/);
 
     const fill = meter!.querySelector(".app-meter-fill") as HTMLElement | null;
     expect(fill).not.toBeNull();
