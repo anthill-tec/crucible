@@ -88,7 +88,7 @@ async function handleIngest(store: Store, req: Request): Promise<Response> {
   const codec = codecs.get(format);
   if (codec === undefined) return err(400, `unsupported format: ${format}`);
 
-  const parsed = await parseRunBody(codec, body);
+  const parsed = await parseRunBody(codec, body, format);
   if ("error" in parsed) return err(400, parsed.error);
   const { run } = parsed;
 
