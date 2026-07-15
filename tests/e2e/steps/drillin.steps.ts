@@ -165,6 +165,29 @@ Step("the workspace tabs row is visible", async ({ page }) => {
   await expect(page.getByTestId("workspace-tabs")).toBeVisible();
 });
 
+// CR-CRU-016 §S1 tabs-hide + tab-in-header (user decisions 2026-07-16, gate
+// review): while a run detail is open, the workspace TABS ROW is absent
+// from the DOM entirely (not merely hidden) — the pane header (back chip +
+// title + density) is the only navigation at that level.
+Step("the workspace tabs row is not present", async ({ page }) => {
+  await expect(page.getByTestId("workspace-tabs")).toHaveCount(0);
+});
+
+// CR-CRU-016 §S1 tabs-hide + tab-in-header — the detail header's back chip
+// carries the origin tab's name (`← runs` / `← coverage` / `← compile` on
+// the workspace; `← timeline` on home, unaffected).
+Step("the back chip reads {string}", async ({ page }, text: string) => {
+  await expect(overlayOf(page).getByRole("button", { name: text })).toBeVisible();
+});
+
+// CR-CRU-016 §S1 tabs-hide + tab-in-header — after closing the detail, the
+// previously-active tab still carries the "on" (selected) class — the
+// one-rule's preserved tab state.
+Step("the {string} tab is selected", async ({ page }, label: string) => {
+  const tab = page.getByTestId("workspace-tab").filter({ hasText: label });
+  await expect(tab).toHaveClass(/\bon\b/);
+});
+
 // AC4 — the slide-over container, its scrim, and `app-slideover-right` are
 // RETIRED for run detail; no such element exists anywhere while the detail
 // is open (/manage and /roadmap overlays are unaffected and out of scope
@@ -178,10 +201,15 @@ Step("there is no app-slideover-right element anywhere", async ({ page }) => {
 });
 
 // CR-CRU-016 C4 — "back-restores-scroll" scenario, the OTHER restore path:
-// the `← timeline` back chip (public/app.js: `button({...onclick: () =>
-// closeDetail()}, "← timeline")`) calls the SAME closeDetail() as Escape,
-// so it deserves its own BDD coverage of the pane-scroll-restore contract
-// (Escape already lives in shell-storyboard.feature).
-Step('I click the "← timeline" chip', async ({ page }) => {
-  await overlayOf(page).getByRole("button", { name: "← timeline" }).click();
+// the back chip (public/app.js: `button({...onclick: () => closeDetail()},
+// ...)`) calls the SAME closeDetail() as Escape, so it deserves its own BDD
+// coverage of the pane-scroll-restore contract (Escape already lives in
+// shell-storyboard.feature).
+// RE-TARGETED (§S1 tabs-hide + tab-in-header, CR's approved-modification
+// list): the chip text is now tab-keyed (`← runs` / `← coverage` /
+// `← compile` on the workspace, `← timeline` on home) instead of the
+// retired constant `← timeline` everywhere — parametrized so both contexts
+// share one step.
+Step("I click the {string} chip", async ({ page }, text: string) => {
+  await overlayOf(page).getByRole("button", { name: text }).click();
 });

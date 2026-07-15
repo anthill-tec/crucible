@@ -450,7 +450,12 @@ describe("AC1 — a run-card click swaps the ACTIVE pane's own content to the de
 // ────────────────────────────────────────────────────────────────────────
 
 describe("AC2 — closing the detail restores the pane's own scroller's EXACT prior scrollTop", () => {
-  test("'← timeline' restores the workspace Runs pane's scrollTop (not window.scrollY)", async () => {
+  // RE-TARGETED (§S1 tabs-hide + tab-in-header, CR's approved-modification
+  // list): the workspace back chip's text is now tab-keyed (`← runs` on the
+  // default Runs tab) instead of the retired constant `← timeline` — was
+  // `findByText(document, "button, a", "← timeline")`. Home's chip stays
+  // `← timeline` (see the AC2 Escape/home test below, unaffected).
+  test("'← runs' restores the workspace Runs pane's scrollTop (not window.scrollY)", async () => {
     const now = Date.now();
     const eventId = "evt-inpane-scroll-ws-1";
     const projectKey = "proj-inpane-scroll-ws-1";
@@ -478,7 +483,7 @@ describe("AC2 — closing the detail restores the pane's own scroller's EXACT pr
     const runsPaneOpen = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement;
     expect(runsPaneOpen.querySelector('[data-testid="event-card"]')).toBeNull();
 
-    const back = findByText(document, "button, a", "← timeline");
+    const back = findByText(document, "button, a", "← runs");
     expect(back).toBeDefined();
     back!.click();
     await settle();
@@ -753,6 +758,462 @@ describe("ONE RULE — a Compile/Coverage-tab card or the Project pane's coverag
     const contentRegion = body!.firstElementChild;
     expect(contentRegion!.querySelector('[data-testid="suite-row"]')).not.toBeNull();
   });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// §S1 tabs-hide + tab-in-header (user decisions 2026-07-16, gate review):
+// "the Runs/Coverage/Compile/BDD row is incongruent at the same level as
+// the drill-down — the navigation conflicts" — while a detail is open,
+// `data-testid="workspace-tabs"` is ABSENT from the DOM (for every entry:
+// run card on any tab, coverage-meter, coverage-view-run, cold load) and
+// the back chip's text names the ORIGIN tab (`← runs` / `← coverage` /
+// `← compile`, lowercase); home's chip stays `← timeline`. Closing (chip,
+// Escape, browser back) restores the tabs row with the previously-active
+// tab still carrying the "on" class.
+//
+// RED phase: expected to fail against the CURRENT public/app.js, whose
+// `WorkspaceTabs()` (public/app.js:649) is invoked unconditionally as a
+// static child of `Workspace()` (:994-997) — never gated on
+// `state.route.overlay` — and whose detail header (:1538-1540) hardcodes
+// the back-chip text to the literal string "← timeline" regardless of
+// `state.route.page`/`state.workspaceTab`.
+// ────────────────────────────────────────────────────────────────────────
+
+describe("§S1 tabs-hide + tab-in-header — workspace-tabs ABSENT while a detail is open; back chip names the origin tab", () => {
+  test("opening from the default Runs tab: workspace-tabs is ABSENT and the back chip reads '← runs'", async () => {
+    const now = Date.now();
+    const eventId = "evt-tabshide-runs-1";
+    const projectKey = "proj-tabshide-runs-1";
+    const fx = unitFixture(eventId, projectKey, now);
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [project({ key: projectKey, name: "Tabs-hide Runs Project" })],
+      events: [fx.brief],
+      eventDetails: { [eventId]: fx.detail },
+    });
+
+    expect(document.querySelector('[data-testid="workspace-tabs"]')).not.toBeNull();
+
+    const card = document.querySelector('[data-testid="event-card"]') as HTMLElement;
+    card.click();
+    await settle();
+
+    expect(document.querySelector('[data-testid="workspace-tabs"]')).toBeNull();
+    const backChip = findByText(document, "button, a", "← runs");
+    expect(backChip).toBeDefined();
+    expect((backChip!.textContent ?? "").trim()).toBe("← runs");
+    // Top bar + Project pane remain present throughout.
+    expect(document.querySelector('[data-testid="workspace-header"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="project-pane"]')).not.toBeNull();
+  });
+
+  test("opening from the Compile tab: workspace-tabs is ABSENT and the back chip reads '← compile'", async () => {
+    const now = Date.now();
+    const eventId = "evt-tabshide-compile-1";
+    const projectKey = "proj-tabshide-compile-1";
+    const fx = compileFixture(eventId, projectKey, now);
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [project({ key: projectKey, name: "Tabs-hide Compile Project" })],
+      events: [fx.brief],
+      eventDetails: { [eventId]: fx.detail },
+    });
+
+    const compileTab = findByText(document, '[data-testid="workspace-tab"]', "Compile");
+    expect(compileTab).toBeDefined();
+    compileTab!.click();
+    await settle();
+
+    const card = document.querySelector('[data-testid="event-card"]') as HTMLElement;
+    card.click();
+    await settle();
+
+    expect(document.querySelector('[data-testid="workspace-tabs"]')).toBeNull();
+    const backChip = findByText(document, "button, a", "← compile");
+    expect(backChip).toBeDefined();
+    expect((backChip!.textContent ?? "").trim()).toBe("← compile");
+  });
+
+  test("opening via the Coverage tab's coverage-view-run: workspace-tabs is ABSENT and the back chip reads '← coverage'", async () => {
+    const now = Date.now();
+    const eventId = "evt-tabshide-coverage-1";
+    const projectKey = "proj-tabshide-coverage-1";
+    const fx = unitFixture(eventId, projectKey, now);
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [
+        project({
+          key: projectKey,
+          name: "Tabs-hide Coverage Project",
+          latestGreenCoverage: { lines: { covered: 8, total: 10, percent: 80 } },
+          latestCoverageEventId: eventId,
+        }),
+      ],
+      events: [fx.brief],
+      eventDetails: { [eventId]: fx.detail },
+    });
+
+    const coverageTab = findByText(document, '[data-testid="workspace-tab"]', "Coverage");
+    expect(coverageTab).toBeDefined();
+    coverageTab!.click();
+    await settle();
+
+    const viewRun = document.querySelector('[data-testid="coverage-view-run"]') as HTMLElement;
+    expect(viewRun).not.toBeNull();
+    viewRun.click();
+    await settle();
+
+    expect(document.querySelector('[data-testid="workspace-tabs"]')).toBeNull();
+    const backChip = findByText(document, "button, a", "← coverage");
+    expect(backChip).toBeDefined();
+    expect((backChip!.textContent ?? "").trim()).toBe("← coverage");
+  });
+
+  test("opening via the Project pane's coverage-meter while the Compile tab is active: workspace-tabs is ABSENT and the back chip reads '← compile' (ONE RULE — origin is the ACTIVE tab, not the click source)", async () => {
+    const now = Date.now();
+    const eventId = "evt-tabshide-meter-1";
+    const projectKey = "proj-tabshide-meter-1";
+    const fx = unitFixture(eventId, projectKey, now);
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [
+        project({
+          key: projectKey,
+          name: "Tabs-hide Meter Project",
+          latestGreenCoverage: { lines: { covered: 8, total: 10, percent: 80 } },
+          latestCoverageEventId: eventId,
+        }),
+      ],
+      events: [fx.brief],
+      eventDetails: { [eventId]: fx.detail },
+    });
+
+    const compileTab = findByText(document, '[data-testid="workspace-tab"]', "Compile");
+    expect(compileTab).toBeDefined();
+    compileTab!.click();
+    await settle();
+
+    const meter = document
+      .querySelector('[data-testid="project-pane"]')!
+      .querySelector('[data-testid="coverage-meter"]') as HTMLElement | null;
+    expect(meter).not.toBeNull();
+    meter!.click();
+    await settle();
+
+    expect(document.querySelector('[data-testid="workspace-tabs"]')).toBeNull();
+    const backChip = findByText(document, "button, a", "← compile");
+    expect(backChip).toBeDefined();
+    expect((backChip!.textContent ?? "").trim()).toBe("← compile");
+  });
+
+  test("cold-loading a workspace run URL defaults to Runs: workspace-tabs is ABSENT and the back chip reads '← runs'", async () => {
+    const now = Date.now();
+    const eventId = "evt-tabshide-cold-1";
+    const projectKey = "proj-tabshide-cold-1";
+    const fx = unitFixture(eventId, projectKey, now);
+    await mountApp({
+      pathname: `/p/${projectKey}/run/${eventId}`,
+      projects: [project({ key: projectKey, name: "Tabs-hide Cold Project" })],
+      events: [fx.brief],
+      eventDetails: { [eventId]: fx.detail },
+    });
+
+    expect(document.querySelector('[data-testid="workspace-tabs"]')).toBeNull();
+    const backChip = findByText(document, "button, a", "← runs");
+    expect(backChip).toBeDefined();
+    expect((backChip!.textContent ?? "").trim()).toBe("← runs");
+  });
+
+  test("home is unaffected: opening a detail on home keeps the back chip reading '← timeline' (workspace-tabs never exists on home)", async () => {
+    const now = Date.now();
+    const eventId = "evt-tabshide-home-1";
+    const projectKey = "proj-tabshide-home-1";
+    const fx = unitFixture(eventId, projectKey, now);
+    await mountApp({
+      pathname: "/",
+      projects: [project({ key: projectKey, name: "Tabs-hide Home Project" })],
+      events: [fx.brief],
+      eventDetails: { [eventId]: fx.detail },
+    });
+
+    expect(document.querySelector('[data-testid="workspace-tabs"]')).toBeNull();
+
+    const card = document.querySelector('[data-testid="event-card"]') as HTMLElement;
+    card.click();
+    await settle();
+
+    expect(document.querySelector('[data-testid="workspace-tabs"]')).toBeNull();
+    const backChip = findByText(document, "button, a", "← timeline");
+    expect(backChip).toBeDefined();
+    expect((backChip!.textContent ?? "").trim()).toBe("← timeline");
+  });
+});
+
+describe("§S1 tabs-hide + tab-in-header — closing (chip / Escape / browser back) restores workspace-tabs with the previously-active tab still 'on'", () => {
+  test("closing via the back chip: workspace-tabs reappears with the Runs tab 'on' and the feed's exact prior scrollTop restored", async () => {
+    const now = Date.now();
+    const eventId = "evt-tabshide-close-chip-1";
+    const projectKey = "proj-tabshide-close-chip-1";
+    const fx = unitFixture(eventId, projectKey, now);
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [project({ key: projectKey, name: "Tabs-hide Close Chip Project" })],
+      events: [fx.brief],
+      eventDetails: { [eventId]: fx.detail },
+    });
+
+    const runsPaneBefore = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement;
+    runsPaneBefore.scrollTop = 150;
+
+    const card = document.querySelector('[data-testid="event-card"]') as HTMLElement;
+    card.click();
+    await settle();
+    expect(document.querySelector('[data-testid="workspace-tabs"]')).toBeNull();
+
+    const backChip = findByText(document, "button, a", "← runs");
+    expect(backChip).toBeDefined();
+    backChip!.click();
+    await settle();
+
+    const tabsRow = document.querySelector('[data-testid="workspace-tabs"]');
+    expect(tabsRow).not.toBeNull();
+    const runsTab = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+    expect(runsTab).toBeDefined();
+    expect(runsTab!.classList.contains("on")).toBe(true);
+
+    const runsPaneAfter = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement;
+    expect(runsPaneAfter.scrollTop).toBe(150);
+  });
+
+  test("closing via Escape from the Compile tab: workspace-tabs reappears with the Compile tab still 'on'", async () => {
+    const now = Date.now();
+    const eventId = "evt-tabshide-close-esc-1";
+    const projectKey = "proj-tabshide-close-esc-1";
+    const fx = compileFixture(eventId, projectKey, now);
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [project({ key: projectKey, name: "Tabs-hide Close Escape Project" })],
+      events: [fx.brief],
+      eventDetails: { [eventId]: fx.detail },
+    });
+
+    const compileTab = findByText(document, '[data-testid="workspace-tab"]', "Compile");
+    expect(compileTab).toBeDefined();
+    compileTab!.click();
+    await settle();
+
+    const card = document.querySelector('[data-testid="event-card"]') as HTMLElement;
+    card.click();
+    await settle();
+    expect(document.querySelector('[data-testid="workspace-tabs"]')).toBeNull();
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await settle();
+
+    const tabsRow = document.querySelector('[data-testid="workspace-tabs"]');
+    expect(tabsRow).not.toBeNull();
+    const activeTab = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((t) => t.classList.contains("on"));
+    expect(activeTab?.textContent).toBe("Compile");
+  });
+
+  test("closing via browser back (popstate): workspace-tabs reappears with the Coverage tab still 'on'", async () => {
+    const now = Date.now();
+    const eventId = "evt-tabshide-close-back-1";
+    const projectKey = "proj-tabshide-close-back-1";
+    const fx = unitFixture(eventId, projectKey, now);
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [
+        project({
+          key: projectKey,
+          name: "Tabs-hide Close Back Project",
+          latestGreenCoverage: { lines: { covered: 8, total: 10, percent: 80 } },
+          latestCoverageEventId: eventId,
+        }),
+      ],
+      events: [fx.brief],
+      eventDetails: { [eventId]: fx.detail },
+    });
+
+    const coverageTab = findByText(document, '[data-testid="workspace-tab"]', "Coverage");
+    expect(coverageTab).toBeDefined();
+    coverageTab!.click();
+    await settle();
+
+    const viewRun = document.querySelector('[data-testid="coverage-view-run"]') as HTMLElement;
+    viewRun.click();
+    await settle();
+    expect(location.pathname).toBe(`/p/${projectKey}/run/${eventId}`);
+    expect(document.querySelector('[data-testid="workspace-tabs"]')).toBeNull();
+
+    // Simulate a real "browser back": the address bar lands back on the
+    // workspace path and a popstate event fires — exercising the
+    // PRODUCTION popstate listener (public/app.js: `window.addEventListener
+    // ("popstate", () => { state.route = L.routeParse(location.pathname);
+    // })`), not a hand-rolled bypass of it.
+    history.pushState(null, "", `/p/${projectKey}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await settle();
+
+    expect(location.pathname).toBe(`/p/${projectKey}`);
+    const tabsRow = document.querySelector('[data-testid="workspace-tabs"]');
+    expect(tabsRow).not.toBeNull();
+    const activeTab = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((t) => t.classList.contains("on"));
+    expect(activeTab?.textContent).toBe("Coverage");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// §S1 header-always-visible (user note 2026-07-16 board round): "when there
+// are so many items in the drill down, this bar will scroll out of view
+// now. Navigation elements should always be visible!" — the detail header
+// (back chip · RUN DETAIL · density chip) must NOT be a descendant of the
+// drill-down's scroll container: on the workspace it renders in the band
+// the hidden tabs row vacates; on home it's pinned above the pane's
+// scroller. With a 10 000-leaf fixture scrolled to a large scrollTop, the
+// SAME header node stays mounted, unaffected by the scroller's scrollTop.
+//
+// RED phase: expected to fail against the CURRENT public/app.js RunDetail()
+// (~public/app.js:1531-1560), which returns ONE div — `app-drillin-head`
+// header then body — mounted directly as the pane's own child
+// (`WorkspaceRuns`/`Timeline` render `paneSwap(...)`'s return value, i.e.
+// the WHOLE run-overlay div incl. its header, straight inside
+// `workspace-runs`/`timeline`, public/app.js:624,703-707). The header is
+// today a plain descendant of that same scrolling pane element, so it
+// scrolls away with a long tree exactly as the user reported.
+// ────────────────────────────────────────────────────────────────────────
+
+function manyLeavesFixture(eventId: string, projectKey: string, tier: string, now: number) {
+  const BIG_SIZE = 300;
+  const OTHER_SIZE = 200;
+  const TOTAL = 10_000;
+
+  const bigLeaves: LeafFixture[] = [];
+  for (let i = 0; i < BIG_SIZE; i++) bigLeaves.push({ name: `big-${i}`, status: "pass", duration_ms: 5 });
+  const suites: SuiteFixture[] = [{ name: "SuiteBig", status: "pass", children: bigLeaves }];
+
+  let remaining = TOTAL - BIG_SIZE;
+  let suiteIdx = 0;
+  while (remaining > 0) {
+    const size = Math.min(OTHER_SIZE, remaining);
+    const leaves: LeafFixture[] = [];
+    for (let i = 0; i < size; i++) leaves.push({ name: `o${suiteIdx}-${i}`, status: "pass", duration_ms: 5 });
+    suites.push({ name: `SuiteOther${suiteIdx}`, status: "pass", children: leaves });
+    remaining -= size;
+    suiteIdx += 1;
+  }
+
+  const total = suites.reduce((sum, s) => sum + s.children.length, 0);
+  const detail: EventDetailFixture = {
+    id: eventId,
+    projectKey,
+    agentId: "many-leaves-agent",
+    kind: "test",
+    tier,
+    codec: "junit",
+    timestamp: now,
+    summary: { total, passed: total, failed: 0, pending: 0, duration_ms: 5000 },
+    tree: suites,
+  };
+  const brief: EventBriefFixture = {
+    id: eventId,
+    projectKey,
+    agentId: "many-leaves-agent",
+    kind: "test",
+    tier,
+    codec: "junit",
+    timestamp: now,
+    total,
+    passed: total,
+    failed: 0,
+    pending: 0,
+    duration_ms: 5000,
+    hasCoverage: false,
+  };
+  return { detail, brief, total };
+}
+
+describe("§S1 header-always-visible — the detail header is NOT a descendant of the drill-down's scroll container; stays mounted through a big scroll", () => {
+  test(
+    "workspace: the header is not a descendant of the workspace Runs pane's scroller; with a 10 000-leaf run scrolled to a large scrollTop, the SAME header node stays mounted",
+    async () => {
+      const now = Date.now();
+      const eventId = "evt-header-visible-ws-1";
+      const projectKey = "proj-header-visible-ws-1";
+      const { detail, brief, total } = manyLeavesFixture(eventId, projectKey, "unit", now);
+      expect(total).toBe(10_000);
+      await mountApp({
+        pathname: `/p/${projectKey}/run/${eventId}`,
+        projects: [project({ key: projectKey, name: "Header Visible WS Project" })],
+        events: [brief],
+        eventDetails: { [eventId]: detail },
+      });
+
+      const scroller = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement | null;
+      expect(scroller).not.toBeNull();
+
+      const header = document.querySelector(".app-drillin-head") as HTMLElement | null;
+      expect(header).not.toBeNull();
+      expect(scroller!.contains(header)).toBe(false);
+
+      header!.setAttribute("data-red-marker", "header-still-mounted");
+
+      // Scroll the pane's own scroller to a large offset — the gap this AC
+      // closes: today the header is a normal descendant of this same
+      // element, so scrolling it moves the header along with the tree.
+      scroller!.scrollTop = total * 28;
+      scroller!.dispatchEvent(new Event("scroll"));
+      await settle();
+
+      const headerAfter = document.querySelector(".app-drillin-head") as HTMLElement | null;
+      expect(headerAfter).not.toBeNull();
+      expect(headerAfter).toBe(header);
+      expect(headerAfter!.getAttribute("data-red-marker")).toBe("header-still-mounted");
+      expect(scroller!.contains(headerAfter)).toBe(false);
+    },
+    20_000,
+  );
+
+  test(
+    "home: the header is not a descendant of the timeline pane's scroller; with a 10 000-leaf run scrolled to a large scrollTop, the SAME header node stays mounted",
+    async () => {
+      const now = Date.now();
+      const eventId = "evt-header-visible-home-1";
+      const projectKey = "proj-header-visible-home-1";
+      const { detail, brief, total } = manyLeavesFixture(eventId, projectKey, "unit", now);
+      expect(total).toBe(10_000);
+      await mountApp({
+        pathname: `/run/${eventId}`,
+        projects: [project({ key: projectKey, name: "Header Visible Home Project" })],
+        events: [brief],
+        eventDetails: { [eventId]: detail },
+      });
+
+      const scroller = document.querySelector('[data-testid="timeline"]') as HTMLElement | null;
+      expect(scroller).not.toBeNull();
+
+      const header = document.querySelector(".app-drillin-head") as HTMLElement | null;
+      expect(header).not.toBeNull();
+      expect(scroller!.contains(header)).toBe(false);
+
+      header!.setAttribute("data-red-marker", "home-header-still-mounted");
+
+      scroller!.scrollTop = total * 28;
+      scroller!.dispatchEvent(new Event("scroll"));
+      await settle();
+
+      const headerAfter = document.querySelector(".app-drillin-head") as HTMLElement | null;
+      expect(headerAfter).not.toBeNull();
+      expect(headerAfter).toBe(header);
+      expect(headerAfter!.getAttribute("data-red-marker")).toBe("home-header-still-mounted");
+      expect(scroller!.contains(headerAfter)).toBe(false);
+    },
+    20_000,
+  );
 });
 
 // ────────────────────────────────────────────────────────────────────────

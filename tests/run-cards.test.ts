@@ -67,6 +67,9 @@ interface EventFixture {
   errors?: number;
   warnings?: number;
   diagnostics?: DiagnosticFixture[];
+  // CR-CRU-016 §S4 (F7 card differentiation) — coverage-bearing events'
+  // brief additive field (src/v2.ts eventBrief, landed CR-007 fix round 3).
+  coverageLines?: number;
 }
 
 interface ProjectFixture {
@@ -478,5 +481,173 @@ describe("§S1 AC1 — context badges", () => {
     expect(badgeText).not.toContain("branch");
     expect(badgeText).not.toContain("wave");
     expect(badgeText).not.toContain("—");
+  });
+});
+
+// CR-CRU-016 §S4 F7 card differentiation (user defect 2026-07-16): "the
+// close-out regression card rendered `unit · parsed · 482/482`,
+// indistinguishable from a unit run" — a regression-tier card with
+// coverage-bearing brief now renders its tier badge (already automatic),
+// a `parsed+lcov` codec badge, and an inline `.app-meter`/`.app-meter-fill`
+// mini coverage meter (`data-testid="card-coverage-meter"`); a regression
+// card with no coverage stays codec `parsed` and renders no meter; a
+// unit-tier card (even carrying coverageLines) never gets the +lcov suffix
+// or the meter — the differentiation gates on tier:"regression", not
+// merely on coverage presence.
+//
+// RED phase: expected to fail against the CURRENT public/app.js EventCard
+// (~line 500), which renders the codec badge as `e.codec` verbatim (no
+// tier-gated "+lcov" suffix) and has no card-coverage-meter element at all.
+describe("§S4 F7 card differentiation (user defect 2026-07-16)", () => {
+  test("regression-tier event with coverageLines:94.4 renders the regression tier badge, 'parsed+lcov' codec badge, and an inline card-coverage-meter (.app-meter/.app-meter-fill width 94.4%)", async () => {
+    const now = Date.now();
+    await mountApp({
+      pathname: "/",
+      projects: [
+        {
+          key: "proj-s4-1",
+          name: "S4 Regression",
+          type: "backend",
+          agentsOnline: 0,
+          agentsTotal: 0,
+          active: true,
+          lastActivity: now,
+        },
+      ],
+      events: [
+        {
+          id: "evt-s4-regression-cov",
+          projectKey: "proj-s4-1",
+          agentId: "regression-agent",
+          kind: "test",
+          tier: "regression",
+          codec: "parsed",
+          timestamp: now,
+          total: 482,
+          passed: 482,
+          failed: 0,
+          pending: 0,
+          duration_ms: 12000,
+          hasCoverage: true,
+          coverageLines: 94.4,
+        },
+      ],
+    });
+
+    const card = document.querySelector('[data-testid="event-card"]');
+    expect(card).not.toBeNull();
+
+    const tierBadge = card!.querySelector('[data-testid="tier-badge"]');
+    expect(tierBadge).not.toBeNull();
+    expect((tierBadge!.textContent ?? "").trim()).toBe("regression");
+
+    const codecBadge = card!.querySelector('[data-testid="codec-badge"]');
+    expect(codecBadge).not.toBeNull();
+    expect((codecBadge!.textContent ?? "").trim()).toBe("parsed+lcov");
+
+    const meter = card!.querySelector('[data-testid="card-coverage-meter"]');
+    expect(meter).not.toBeNull();
+    expect(meter!.className).toContain("app-meter");
+
+    const fill = meter!.querySelector(".app-meter-fill") as HTMLElement | null;
+    expect(fill).not.toBeNull();
+    expect(fill!.getAttribute("style") ?? "").toMatch(/width:\s*94\.4%/);
+  });
+
+  test("regression-tier event WITHOUT coverage renders the regression tier badge, plain 'parsed' codec badge, and NO card-coverage-meter", async () => {
+    const now = Date.now();
+    await mountApp({
+      pathname: "/",
+      projects: [
+        {
+          key: "proj-s4-2",
+          name: "S4 Regression No Cov",
+          type: "backend",
+          agentsOnline: 0,
+          agentsTotal: 0,
+          active: true,
+          lastActivity: now,
+        },
+      ],
+      events: [
+        {
+          id: "evt-s4-regression-nocov",
+          projectKey: "proj-s4-2",
+          agentId: "regression-agent-2",
+          kind: "test",
+          tier: "regression",
+          codec: "parsed",
+          timestamp: now,
+          total: 40,
+          passed: 38,
+          failed: 2,
+          pending: 0,
+          duration_ms: 9000,
+          hasCoverage: false,
+        },
+      ],
+    });
+
+    const card = document.querySelector('[data-testid="event-card"]');
+    expect(card).not.toBeNull();
+
+    const tierBadge = card!.querySelector('[data-testid="tier-badge"]');
+    expect(tierBadge).not.toBeNull();
+    expect((tierBadge!.textContent ?? "").trim()).toBe("regression");
+
+    const codecBadge = card!.querySelector('[data-testid="codec-badge"]');
+    expect(codecBadge).not.toBeNull();
+    expect((codecBadge!.textContent ?? "").trim()).toBe("parsed");
+
+    expect(card!.querySelector('[data-testid="card-coverage-meter"]')).toBeNull();
+  });
+
+  test("unit-tier event — even one carrying coverageLines — renders no card-coverage-meter and a plain 'parsed' codec badge (gated on tier:regression, not merely coverage presence)", async () => {
+    const now = Date.now();
+    await mountApp({
+      pathname: "/",
+      projects: [
+        {
+          key: "proj-s4-3",
+          name: "S4 Unit",
+          type: "backend",
+          agentsOnline: 0,
+          agentsTotal: 0,
+          active: true,
+          lastActivity: now,
+        },
+      ],
+      events: [
+        {
+          id: "evt-s4-unit",
+          projectKey: "proj-s4-3",
+          agentId: "unit-agent",
+          kind: "test",
+          tier: "unit",
+          codec: "parsed",
+          timestamp: now,
+          total: 12,
+          passed: 12,
+          failed: 0,
+          pending: 0,
+          duration_ms: 800,
+          hasCoverage: true,
+          coverageLines: 88.0,
+        },
+      ],
+    });
+
+    const card = document.querySelector('[data-testid="event-card"]');
+    expect(card).not.toBeNull();
+
+    const tierBadge = card!.querySelector('[data-testid="tier-badge"]');
+    expect(tierBadge).not.toBeNull();
+    expect((tierBadge!.textContent ?? "").trim()).toBe("unit");
+
+    const codecBadge = card!.querySelector('[data-testid="codec-badge"]');
+    expect(codecBadge).not.toBeNull();
+    expect((codecBadge!.textContent ?? "").trim()).toBe("parsed");
+
+    expect(card!.querySelector('[data-testid="card-coverage-meter"]')).toBeNull();
   });
 });
