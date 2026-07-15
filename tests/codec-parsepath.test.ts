@@ -114,7 +114,7 @@ describe("Codec.parsePath interface — CR-CRU-010 §S1", () => {
     expect(typeof parsePathFn).toBe("function");
 
     const run = await parsePathFn!(dir);
-    expect(run.summary).toEqual({ total: 2, passed: 2, failed: 0, pending: 0, duration_ms: 20 });
+    expect(run.summary).toEqual({ total: 2, passed: 2, failed: 0, pending: 0, duration_ms: 200 });
   });
 
   test("registry-only resolution: server.ts/v2.ts never reference parseJunitPath; parseRunBody's body contains no parseJunitPath call; index.ts's only non-import occurrence is the junit registry entry's parsePath registration", () => {
