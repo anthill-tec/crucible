@@ -17,9 +17,10 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-006](CR-CRU-006-spa-shell.md) | Dashboard shell + navigation | feature | COMPLETED (2026-07-15) | 004 | 3 |
 | [CR-CRU-007](CR-CRU-007-timeline-drill-in.md) | Timeline + density drill-in | feature | PENDING | 006 | 3 |
 | [CR-CRU-008](CR-CRU-008-cli-fleet-upgrade.md) | crucible-axi CLI + fleet upgrade | feature | PENDING | 005, 007 | 4 |
-| [CR-CRU-009](CR-CRU-009-release-0.1.0.md) | Release 0.1.0 skill bundle | feature | PENDING | 007, 008, 011 | 4 |
+| [CR-CRU-009](CR-CRU-009-release-0.1.0.md) | Release 0.1.0 skill bundle | feature | PENDING | 007, 008, 011, 012 | 4 |
 | [CR-CRU-010](CR-CRU-010-codec-path-interface-hardening.md) | Codec parsePath + shim hardening | maintenance | COMPLETED (2026-07-15) | 006 | 3 (after 006, before 007) |
 | [CR-CRU-011](CR-CRU-011-workflow-lens.md) | Workflow lens: Wave→CR→Cycle + agent runtimes | feature | PENDING | 007, 008 | 4 (before 009) |
+| [CR-CRU-012](CR-CRU-012-projects-manager.md) | Projects manager: add + edit | feature | PENDING | 004, 007 | 4 (before 009) |
 
 ## Notes
 - 2026-07-14 — Project kickoff: PRD + evidence DN landed. Kickoff design review (lavish)
@@ -71,6 +72,14 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   before 009; 009 now depends on 011). Backwards audit of the agent API found the
   lifecycle gap (unregister hard-deletes firstSeen/lastSeen → runtime lost) — closed
   by CR-011 §S1 lifecycle events.
+- 2026-07-15 (design iteration round 13) — project activity rule locked: active while
+  ≥1 live agent; inactive after the system-wide configurable timeout
+  (`CRUCIBLE_PROJECT_INACTIVE_MS`, default 1 h) from last activity; v2 projects
+  listing gains additive `active`+`lastActivity` (CR-007 §S5). Missing surface filed:
+  CR-CRU-012 Projects manager (⚙ manage chip → /manage slide-over; add + edit
+  name/type/sutRoot/liveness overrides/retention; key immutable; additive
+  `PATCH /api/v2/projects/<key>`) — Wave 4 before 009; 009 depends on it. Storyboard
+  gained frame F12.
 - 2026-07-15 (post-merge review) — no-mistakes hardening landed on develop after the
   CR-CRU-006 merge: ingest parse/`dataPath` failures now return 400 `{ok:false, error}`
   on BOTH surfaces (v1 `/api/ingest` + v2 `/api/v2/runs`, shared `parseRunBody` core —

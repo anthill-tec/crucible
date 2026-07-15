@@ -82,10 +82,18 @@ Test body: suite→test tree; failed leaf expands to `failure.message` + `trace`
    renders logo + slogan one-liner + the Health Pill only. Below it, the
    **projects row**: a second-row header pane in a **flow (wrapping) layout**
    holding one badge per registered project, ordered **most-recently-active
-   first, inactive last** (activity = max of the project's last event timestamp
-   and its agents' last-seen; a project with zero live [online/stale] agents is
-   `inactive`). Badge display state is binary — `active` / `inactive` — and
-   badges follow the canonical format everywhere: **name + type badge**.
+   first, inactive last**. Activity rule (user-locked round 13): a project is
+   **`active` while it has ≥1 live (online/stale) agent**; with none left it
+   turns **`inactive` once `now − lastActivity` exceeds the system-wide
+   configurable project-inactive timeout** (`CRUCIBLE_PROJECT_INACTIVE_MS`,
+   default 3 600 000 ms; `lastActivity` = max of the project's last event
+   timestamp and its agents' last-seen) — no flapping the instant agents
+   tombstone. Server delta (additive): the v2 projects listing carries
+   `active: boolean` + `lastActivity` per project, server-computed with that
+   config. Badge display state is binary — `active` / `inactive` — and badges
+   follow the canonical format everywhere: **name + type badge**. The row also
+   carries the **⚙ manage chip** (opens the CR-CRU-012 manager; chip renders in
+   this CR, the surface lands in 012).
    **Clicking a badge navigates to `/p/<key>`** (drill-down, never filter). The
    home body is the **collective all-projects timeline** (newest-first, each
    project contributing up to its retention limit); the **filter pulldown
@@ -126,7 +134,7 @@ Test body: suite→test tree; failed leaf expands to `failure.message` + `trace`
 - [ ] §S5: workspace Project pane — on `/p/<key>` for a project with 2 online agents + 1 tombstoned, `data-testid="project-pane"` renders the project card (name + type badge + coverage meter) followed by exactly 3 `⌁`-marked agent sub-rows, with the Vitals cards beneath; the home page (`/`) renders 0 agent rows anywhere.
 - [ ] §S5: `L.workspaceTabs({type:"backend"})` returns exactly `["Runs","Coverage","Compile","BDD"(disabled)]` and `L.workspaceTabs({type:"frontend"})` the same with BDD enabled — no `Agents` entry in either.
 - [ ] §S5: home renders a `data-testid="projects-row"` (second header row) with one `data-testid="project-badge"` per registered project, each containing the project name AND a type badge (canonical format); clicking a badge changes the route to `/p/<key>`; the title bar itself contains no project badges. A `data-testid="filter-pulldown"` control inside the timeline pane header defaults to `All projects`; selecting a project in it filters the home timeline in place (`location.pathname` stays `/`, timeline shows only that project's cards).
-- [ ] §S5: projects-row ordering + state — given project A (agent seen 5 s ago), project B (last event 10 min ago, no live agents), project C (last event 1 min ago, 1 online agent): badge order is A, C, B; A and C carry the `active` state class, B carries `inactive` (0 live agents ⇒ inactive, sorted after actives).
+- [ ] §S5: projects-row ordering + state — with `CRUCIBLE_PROJECT_INACTIVE_MS=3600000`: project A (1 online agent, seen 5 s ago) and project C (no live agents, last event 10 min ago — within the timeout) are `active`; project B (no live agents, last activity 2 h ago — timeout elapsed) is `inactive`; badge order is A, C, B and the v2 projects listing carries matching `active`/`lastActivity` fields.
 - [ ] §S5: with two projects ingesting runs, the home timeline interleaves both projects' cards newest-first (collective feed); clicking an agent sub-row in the workspace does NOT change the route and filters the visible timeline to that agent's runs.
 - [ ] §S5: the drill-in header renders a `← timeline` control whose click closes the overlay with the exact same route/scroll restore as Escape; the workspace header's `← projects` control navigates to `/`.
 - [ ] §S5: `data-testid="workspace-header"` (with the `← projects` control) exists on `/p/<key>` and does not exist on `/`.

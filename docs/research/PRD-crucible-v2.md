@@ -224,8 +224,15 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   **projects row**: a second-row header pane, **flow (wrapping) layout** scaling to
   any project count, one badge per registered project in the canonical format
   (**name + type badge**), ordered **most-recently-active first, inactive last**;
-  badge display state is binary **active / inactive** (zero live agents ⇒
-  inactive). **Clicking a badge drills down** to `/p/<key>` — never filters. The
+  badge display state is binary **active / inactive** — active while the project
+  has ≥1 live agent (agent inactive rules apply); inactive once the system-wide
+  configurable project-inactive timeout (`CRUCIBLE_PROJECT_INACTIVE_MS`, default
+  1 h) elapses after its last activity (locked round 13; v2 projects listing
+  carries additive `active`+`lastActivity`). The row also carries a **⚙ manage
+  chip** opening the **Projects manager** (`/manage` slide-over, CR-CRU-012):
+  add project + edit name/type/sutRoot/per-project liveness overrides/retention;
+  the project key is immutable (additive `PATCH /api/v2/projects/<key>`).
+  **Clicking a badge drills down** to `/p/<key>` — never filters. The
   home body is the **collective all-projects timeline** (newest-first, each
   project contributing up to its retention limit) whose **filter pulldown lives in
   the timeline pane header** (default "All projects", filters only the timeline,
