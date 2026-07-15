@@ -308,7 +308,7 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   const codec = codecs.get(codecName);
   if (codec === undefined) return fail(400, `unknown codec: ${codecName}`);
 
-  const parsed = await parseRunBody(codec, body);
+  const parsed = await parseRunBody(codec, body, codecName);
   if ("error" in parsed) return fail(400, parsed.error);
   const { run } = parsed;
 
