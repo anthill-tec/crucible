@@ -12,7 +12,9 @@
     "start": "bun run src/server.ts"
   },
   "devDependencies": {
+    "@happy-dom/global-registrator": "^20.10.6",
     "@playwright/test": "^1.61.1",
-    "bun-types": "^1.3.14"
+    "bun-types": "^1.3.14",
+    "happy-dom": "^20.10.6"
   }
 }

@@ -14,6 +14,13 @@ import {
   emptyStates,
   type CrucibleEventBrief,
 } from "../public/app-logic.mjs";
+// CR-CRU-007 §S5 — projectActivity/orderProjects do not exist yet (GREEN adds
+// them). A namespace import stays loadable even for not-yet-exported names
+// (only the named-binding `import { x }` form link-errors on a missing
+// export) — so referencing `AppLogic.projectActivity`/`AppLogic.orderProjects`
+// below fails at CALL time ("is not a function"), the missing-export RED
+// signal, WITHOUT breaking this file's already-passing tests above.
+import * as AppLogic from "../public/app-logic.mjs";
 
 // Local minimal shapes for lambda-parameter annotations below — kept
 // independent of the (not-yet-existing) module's own ambient types so tsc
@@ -184,38 +191,201 @@ describe("routeParse — hash-free History routing (§S2)", () => {
   });
 });
 
-describe("workspaceTabs — Runs/Agents/Coverage/Compile/BDD (§S4)", () => {
-  test("backend project: BDD tab disabled, all others enabled, fixed order", () => {
+describe("workspaceTabs — Runs/Coverage/Compile/BDD, Agents dropped (§S5 shell final form)", () => {
+  // §S5.2 — agents nested under the workspace's Project pane everywhere;
+  // `Agents` is removed from L.workspaceTabs for BOTH project types. This
+  // REPLACES the CR-CRU-006 contract (which included an "Agents" tab) — the
+  // old assertions currently pass against the CURRENT TAB_NAMES list, so this
+  // update is the RED signal for the tab-removal AC (S5 AC2).
+  test("backend project: exactly [Runs, Coverage, Compile, BDD(disabled)] — no Agents entry", () => {
     const tabs = workspaceTabs({ type: "backend" });
 
-    expect(tabs.map((t: TabShape) => t.name)).toEqual([
-      "Runs",
-      "Agents",
-      "Coverage",
-      "Compile",
-      "BDD",
-    ]);
+    expect(tabs.map((t: TabShape) => t.name)).toEqual(["Runs", "Coverage", "Compile", "BDD"]);
     expect(tabs.find((t: TabShape) => t.name === "BDD")).toEqual({ name: "BDD", disabled: true });
     // bound: none of the non-BDD tabs are disabled
     expect(
       tabs.filter((t: TabShape) => t.name !== "BDD").some((t: TabShape) => t.disabled),
     ).toBe(false);
+    // bound: Agents is gone, not merely relabeled
+    expect(tabs.find((t: TabShape) => t.name === "Agents")).toBeUndefined();
   });
 
-  test("frontend project: BDD tab enabled, same fixed order", () => {
+  test("frontend project: same fixed order, BDD enabled, no Agents entry", () => {
     const tabs = workspaceTabs({ type: "frontend" });
 
-    expect(tabs.map((t: TabShape) => t.name)).toEqual([
-      "Runs",
-      "Agents",
-      "Coverage",
-      "Compile",
-      "BDD",
-    ]);
+    expect(tabs.map((t: TabShape) => t.name)).toEqual(["Runs", "Coverage", "Compile", "BDD"]);
     expect(tabs.find((t: TabShape) => t.name === "BDD")).toEqual({
       name: "BDD",
       disabled: false,
     });
+    expect(tabs.find((t: TabShape) => t.name === "Agents")).toBeUndefined();
+  });
+});
+
+// §S5.1 — activity rule (user-locked round 13): a project is `active` while
+// it has >=1 live (online/stale) agent; with none left it turns `inactive`
+// once now-lastActivity exceeds the configurable timeout. `lastActivity` is
+// the max of the project's last event timestamp and its agents' last-seen.
+// Not yet exported by app-logic.mjs — GREEN adds `projectActivity`.
+describe("L.projectActivity — activity state rule (§S5 AC4, pure)", () => {
+  interface ActivityAgent {
+    liveness: "online" | "stale" | "tombstoned";
+    lastSeen: number;
+  }
+  interface ActivityProject {
+    lastEventAt: number | null;
+    agents: ActivityAgent[];
+  }
+
+  test("project A: 1 online agent seen 5s ago -> active, regardless of timeout", () => {
+    const now = Date.now();
+    const project: ActivityProject = {
+      lastEventAt: null,
+      agents: [{ liveness: "online", lastSeen: now - 5_000 }],
+    };
+
+    const result = AppLogic.projectActivity(project, now, 3_600_000);
+
+    expect(result.active).toBe(true);
+    expect(result.lastActivity).toBe(now - 5_000);
+  });
+
+  test("project C: no live agents, last event 10 min ago, timeout 1h (3_600_000ms) -> active (within grace)", () => {
+    const now = Date.now();
+    const project: ActivityProject = {
+      lastEventAt: now - 600_000,
+      agents: [],
+    };
+
+    const result = AppLogic.projectActivity(project, now, 3_600_000);
+
+    expect(result.active).toBe(true);
+    expect(result.lastActivity).toBe(now - 600_000);
+  });
+
+  test("project B: no live agents, last activity 2h ago, timeout 1h (3_600_000ms) -> inactive (timeout elapsed)", () => {
+    const now = Date.now();
+    const project: ActivityProject = {
+      lastEventAt: now - 7_200_000,
+      agents: [],
+    };
+
+    const result = AppLogic.projectActivity(project, now, 3_600_000);
+
+    expect(result.active).toBe(false);
+    expect(result.lastActivity).toBe(now - 7_200_000);
+  });
+
+  test("boundary: now - lastActivity exactly equal to the timeout -> still active (only EXCEEDING flips it)", () => {
+    const now = Date.now();
+    const project: ActivityProject = {
+      lastEventAt: now - 3_600_000,
+      agents: [],
+    };
+
+    expect(AppLogic.projectActivity(project, now, 3_600_000).active).toBe(true);
+  });
+
+  test("boundary: 1ms past the timeout -> inactive", () => {
+    const now = Date.now();
+    const project: ActivityProject = {
+      lastEventAt: now - 3_600_001,
+      agents: [],
+    };
+
+    expect(AppLogic.projectActivity(project, now, 3_600_000).active).toBe(false);
+  });
+
+  test("a tombstoned-only agent roster does not count as live (falls back to the timeout grace rule)", () => {
+    const now = Date.now();
+    const project: ActivityProject = {
+      lastEventAt: now - 600_000,
+      agents: [{ liveness: "tombstoned", lastSeen: now - 600_000 }],
+    };
+
+    const result = AppLogic.projectActivity(project, now, 3_600_000);
+
+    // no live (online/stale) agent -> falls to the event/lastSeen timeout
+    // grace rule, same as project C above (10 min < 1h timeout -> active).
+    expect(result.active).toBe(true);
+  });
+
+  test("lastActivity is the MAX of lastEventAt and agents' lastSeen, not just the event timestamp", () => {
+    const now = Date.now();
+    const project: ActivityProject = {
+      lastEventAt: now - 7_200_000, // stale event
+      agents: [{ liveness: "stale", lastSeen: now - 10_000 }], // fresher agent activity
+    };
+
+    const result = AppLogic.projectActivity(project, now, 3_600_000);
+
+    expect(result.lastActivity).toBe(now - 10_000);
+    expect(result.active).toBe(true); // has a live (stale) agent too
+  });
+});
+
+// §S5.1 — projects-row ordering: "most-recently-active first, inactive
+// last". Not yet exported by app-logic.mjs — GREEN adds `orderProjects`.
+describe("L.orderProjects — projects-row badge ordering (§S5 AC4, pure)", () => {
+  interface OrderableProject {
+    key: string;
+    active: boolean;
+    lastActivity: number;
+  }
+
+  test("A (active, 5s ago), C (active, 10min ago), B (inactive, 2h ago) order as A, C, B", () => {
+    const now = Date.now();
+    // Deliberately shuffled input order to prove the function re-orders.
+    const projects: OrderableProject[] = [
+      { key: "B", active: false, lastActivity: now - 7_200_000 },
+      { key: "A", active: true, lastActivity: now - 5_000 },
+      { key: "C", active: true, lastActivity: now - 600_000 },
+    ];
+
+    const ordered = AppLogic.orderProjects(projects);
+
+    expect(ordered.map((p: OrderableProject) => p.key)).toEqual(["A", "C", "B"]);
+  });
+
+  test("all-active group sorts by lastActivity descending (most recent first)", () => {
+    const now = Date.now();
+    const projects: OrderableProject[] = [
+      { key: "old", active: true, lastActivity: now - 50_000 },
+      { key: "newest", active: true, lastActivity: now - 1_000 },
+      { key: "mid", active: true, lastActivity: now - 20_000 },
+    ];
+
+    expect(AppLogic.orderProjects(projects).map((p: OrderableProject) => p.key)).toEqual([
+      "newest",
+      "mid",
+      "old",
+    ]);
+  });
+
+  test("bound: an inactive project NEVER sorts before an active one, even with a fresher lastActivity value", () => {
+    const now = Date.now();
+    const projects: OrderableProject[] = [
+      { key: "inactive-but-fresher", active: false, lastActivity: now - 1_000 },
+      { key: "active-but-older", active: true, lastActivity: now - 500_000 },
+    ];
+
+    expect(AppLogic.orderProjects(projects).map((p: OrderableProject) => p.key)).toEqual([
+      "active-but-older",
+      "inactive-but-fresher",
+    ]);
+  });
+
+  test("does not mutate the input array", () => {
+    const now = Date.now();
+    const projects: OrderableProject[] = [
+      { key: "B", active: false, lastActivity: now - 7_200_000 },
+      { key: "A", active: true, lastActivity: now - 5_000 },
+    ];
+    const original = [...projects];
+
+    AppLogic.orderProjects(projects);
+
+    expect(projects).toEqual(original);
   });
 });
 
