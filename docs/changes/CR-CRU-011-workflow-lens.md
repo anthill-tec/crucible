@@ -52,11 +52,15 @@ encodes the plan verbs in the python/fleet clients for the agentic backend.
   the server stores it verbatim (tolerant: unknown ids are stored, surfaced as
   "unlinked" — graceful degradation is sacred; planless projects behave exactly
   as before, `context.cycle` string label stays the fallback).
-- **Tracks (user-locked round 17):** a CR is always executed within a track. In
-  the Model-B multi-track combo, each track's operator registers its track with
-  the CR — `track` (string, e.g. `track-2` / `mainline`) on the plan. In the
-  single-orchestrator model `track` is simply ABSENT and everything works
-  seamlessly (the implicit solo track — no required field, no UI noise).
+- **Tracks (user-locked rounds 17+19):** a CR is always executed within a track.
+  Tracks are **numbered lanes** (Track 1, 2, 3…; wire format `track-<n>`,
+  matching the `CRUCIBLE_ORCHESTRATOR` convention) — the highway model: CRs are
+  the vehicles, and the mainline allocates lanes from the CRs' depends-on graph.
+  In the Model-B multi-track combo, each track's operator registers its track
+  with the CR — `track` (string) on the plan. In the single-orchestrator model
+  `track` is simply ABSENT and everything works seamlessly (the implicit solo
+  track — no required field, no UI noise). The lens sorts Track groups
+  numerically.
 - Plan mutations emit an SSE change event; plan state is queryable via
   `GET …/plans` (+ `?cr=`, `?track=`) and flows through retention as plan
   records, not test-run events (excluded from run rollups).

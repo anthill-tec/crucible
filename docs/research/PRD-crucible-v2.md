@@ -282,6 +282,11 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   agent** — coordinator/manager of the workflow — and is an agent in every
   respect (registration, heartbeats, runtime, tombstone); its special role is
   filing and driving the cycle plan. Both project shapes are first-class.
+  **The highway model (locked round 19):** tracks are numbered lanes — Track 1,
+  2, 3… (wire format `track-<n>`) — where **CRs are the vehicles**; the mainline
+  allocates CRs to lanes from their depends-on graph (independent CRs run in
+  parallel lanes, dependents queue). Track orchestrators enforce the workflow
+  rules and verify agents deliver their work accurately within their lane.
   All in v0.1.0: plan API + lens in CR-CRU-011, fleet plan verbs
   (plan-file / cycle-activate / cycle-done / cr-close + `CRUCIBLE_CYCLE_ID`) in
   CR-CRU-008.
