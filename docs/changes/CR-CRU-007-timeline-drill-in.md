@@ -160,7 +160,34 @@ non-empty `raw` is stored.
    rollup, coverage meters) with the project's agents (live + tombstoned,
    `L.livenessGlyph` semantics kept) as indented `⌁`-marked (heat-amber) sub-rows
    beneath it, then the Vitals cards (coverage trend, cycle health). This pane
-   exists ONLY inside the workspace. `Agents` is removed from `L.workspaceTabs`
+   exists ONLY inside the workspace.
+   **F7/F8 fidelity contract (user defect report 2026-07-15: "coverage meter
+   too thin… doesn't look distinct… color scheme uninspiring"):** the pane
+   follows the F8 mock's anatomy verbatim — (a) TWO section titles, `Project`
+   above the card and `Vitals` above the vitals cards, uppercase mono,
+   letter-spacing ≥ 0.14em, in the EMBER accent (the board's own
+   section-header treatment; ember tokens `--ember:#ff7a1a` /
+   `--ember-dim:#b35415` added to the app palette if absent); (b) the coverage
+   meter is the mock `.meter`: 6px tall, fully rounded, BORDERLESS track,
+   fill a `linear-gradient(90deg, var(--ember-dim), var(--ember))` sized to
+   the lines percent; (c) the project-card coverage caption carries BOTH
+   metrics — `cov <lines>% lines · fn <functions>%`; (d) the coverage-trend
+   vitals card renders the dim uppercase label
+   `COVERAGE TREND (green regressions)`, a mini BAR-CHART (one bar per
+   green-coverage point, oldest→newest, ≤12 bars, heights proportional to
+   lines percent, earlier bars ember-dim + latest bar bright ember) and the
+   caption `<first> → <latest>% lines` when ≥2 points else
+   `latest green coverage <p>%`; (e) the cycle-health card renders the dim
+   uppercase label `CYCLE HEALTH (7d)` ABOVE a bright 600-weight value line
+   `N RED→GREEN · median <duration>` (label-over-value hierarchy); (f) status
+   text in the pane uses the UNIVERSAL status palette (user note 2026-07-15:
+   "our color palette for green red etc is not being used there") — the
+   project card's latest-run status line renders pass-green when passing
+   (`✓ green · N/N`) / fail-red when failing, and the cycle-health value's
+   `RED` / `GREEN` tokens render fail-red / pass-green respectively — never
+   neutral dim ink. Server delta (additive): `eventBrief` gains optional
+   `coverageLines` (lines percent, present only on events storing green
+   coverage) so trend bars derive from the already-loaded timeline slice. `Agents` is removed from `L.workspaceTabs`
    (both project types). Agent sub-row click filters the visible timeline to that
    agent (in place).
 3. **Three levels, consistent ← back chip.** Level 1 home → level 2 workspace
@@ -204,6 +231,9 @@ non-empty `raw` is stored.
 - [ ] Compile card pill palette (user defect 2026-07-15): a compile card with `errors:0` renders its `0 errors` pill with the SAME pass-green class as an `N/N` test pill; with `errors:3` the `3 errors` pill carries the fail-red class; no amber compile pill exists anywhere (class-level assertion).
 - [ ] §S5 Coverage tab (user defect 2026-07-15): with `latestGreenCoverage {lines:{covered:1736,total:1849,percent:93.9}, functions:{covered:199,total:208,percent:95.7}}` and a `latestCoverageEventId`, selecting the Coverage tab renders `data-testid="coverage-panel"` containing `93.9%`, `1736/1849`, `95.7%`, and `199/208`, plus a `data-testid="coverage-view-run"` control whose click opens the drill-in route `/p/<key>/run/<latestCoverageEventId>`; the string `lands in CR-CRU-007` renders on NO tab.
 - [ ] §S5 Compile tab (F5 COMPILE PANEL): with a fixture of 2 test + 2 compile events, selecting the Compile tab renders exactly the 2 compile-kind cards (same card anatomy/testids as Runs); with 0 compile events it renders `no compile events yet`; the BDD tab body text contains `CR-CRU-015` and not `CR-CRU-007`.
+- [ ] §S5 Project pane F7/F8 fidelity (user defect 2026-07-15): the pane renders exactly two `data-testid="pane-section-title"` elements with texts `Project` and `Vitals`, each carrying a class whose styles.css rule declares the ember accent (`color: var(--ember)`) and `letter-spacing` ≥ 0.14em; the coverage meter (`data-testid="coverage-meter"`) contains an `.app-meter-fill` child whose inline width equals the lines percent and whose styles.css rule declares `linear-gradient(90deg, var(--ember-dim), var(--ember))`; the `.app-meter` rule declares `height: 6px`, `border-radius: 999px`, and NO border; the project-card coverage caption reads `cov 93.9% lines · fn 95.7%` for the fixture coverage (both metrics).
+- [ ] §S5 Vitals cards F8 anatomy (user defect 2026-07-15): the coverage-trend card renders label text `COVERAGE TREND (green regressions)` (dim uppercase) + `data-testid="coverage-trend-bars"` containing one bar per green-coverage point in the loaded slice (fixture with 4 coverage events at 82.1/84.0/86.2/87.3 renders 4 bars oldest→newest; the last bar's class/style resolves to bright ember, earlier bars ember-dim) + caption `82.1 → 87.3% lines`; with exactly 1 point the caption is `latest green coverage <p>%`; the cycle-health card renders label `CYCLE HEALTH (7d)` (dim uppercase) ABOVE a value line matching `/^\d+ RED→GREEN · median .+$/` styled bright/600 — label-over-value on BOTH cards; `eventBrief` carries optional `coverageLines` on coverage-bearing events (server unit assertion) and no other brief field changes.
+- [ ] §S5 pane status palette (user note 2026-07-15): the project card's latest-run status line carries the pass-green class when the latest run passes (`✓ green · 446/446`) and the fail-red class on a failing-latest fixture (`✗ …`) — never only neutral/dim ink classes; in the cycle-health value the `RED` token carries the fail-red class and the `GREEN` token the pass-green class (the same status classes the timeline uses).
 - [ ] Integration: coverage meter click on a project card opens the drill-in of the event whose id equals the project's latest-green-coverage event (wired per §nav table).
 - [ ] §S5: workspace Project pane — on `/p/<key>` for a project with 2 online agents + 1 tombstoned, `data-testid="project-pane"` renders the project card (name + type badge + coverage meter) followed by exactly 3 `⌁`-marked agent sub-rows, with the Vitals cards beneath; the home page (`/`) renders 0 agent rows anywhere.
 - [ ] §S5: `L.workspaceTabs({type:"backend"})` returns exactly `["Runs","Coverage","Compile","BDD"(disabled)]` and `L.workspaceTabs({type:"frontend"})` the same with BDD enabled — no `Agents` entry in either.
