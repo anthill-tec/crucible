@@ -45,13 +45,15 @@ Feature: CR-CRU-006 shell — storyboard frames
     And an online agent "sse-agent" with message "hot off the stream" is registered on that project
     Then a projects-row badge for "F2b Project" becomes visible within 2 seconds without reloading
 
-  Scenario: nav Esc closes the run overlay and restores scroll
+  Scenario: nav Esc closes the in-pane run detail and restores the workspace Runs pane's exact scroll position (CR-CRU-016 §S1/AC2 re-target)
     Given a project named "Esc Project" is registered
     And a passing 1-test run is ingested for agent "agent-esc" on that project
-    When I open the run overlay directly at its cold URL under the workspace
+    When I open the workspace for that project
+    And I scroll the workspace Runs pane down by 240px
+    And I click the event card for "agent-esc"
     Then the run overlay is visible and contains the event id
     When I press Escape
     Then the run overlay and its scrim are gone
     And the URL path is the workspace path with no run-overlay suffix
     And the workspace is visible
-    And the page scrollY is 0
+    And the workspace Runs pane's scrollTop is 240

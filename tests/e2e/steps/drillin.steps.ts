@@ -79,10 +79,26 @@ Step("the workspace is visible", async ({ page }) => {
   await expect(page.getByTestId("workspace")).toBeVisible();
 });
 
-Step("the page scrollY is 0", async ({ page }) => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const scrollY = await page.evaluate(() => (globalThis as any).scrollY as number);
-  expect(scrollY).toBe(0);
+// CR-CRU-016 §S1/AC2 re-target (RED report approved-modification list) —
+// the CR-007 mechanism tracked `window.scrollY` (there was never a
+// dedicated pane scroller since the overlay sat on a page-covering scrim).
+// In-pane, the feed's OWN scroller is the workspace Runs pane
+// ([data-testid="workspace-runs"]) — AC2 demands the EXACT PRIOR scrollTop
+// of THAT element is restored, not the window's. Replaces the deleted
+// "the page scrollY is 0" step, which no longer applies — see
+// docs/changes/CR-CRU-016-inpane-drill-in.md Gap analysis ("Scroll
+// restore").
+Step("I scroll the workspace Runs pane down by {int}px", async ({ page }, amount: number) => {
+  await page.getByTestId("workspace-runs").evaluate((el, amt) => {
+    (el as HTMLElement).scrollTop = amt;
+  }, amount);
+});
+
+Step("the workspace Runs pane's scrollTop is {int}", async ({ page }, expected: number) => {
+  const scrollTop = await page
+    .getByTestId("workspace-runs")
+    .evaluate((el) => (el as HTMLElement).scrollTop);
+  expect(scrollTop).toBe(expected);
 });
 
 Step("the overlay has no heat-strip", async ({ page }) => {
