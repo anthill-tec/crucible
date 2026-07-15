@@ -35,14 +35,12 @@ Feature: CR-CRU-007 timeline — storyboard frames F2-F8
     When I click the single failing leaf row
     Then the failure box is visible and contains "boom"
 
-  Scenario: F4½ a 60-test run with failures, switched to Density mode, renders the heat-strip
+  Scenario: F4½ a 60-test regression run with failures renders Density presentation (status chips + heat-strip), with no drillin-mode element anywhere
     Given a project named "F4.5 Project" is registered
-    And a 60-test junit run with 3 failures is ingested for agent "agent-f4half" at tier "unit"
+    And a 60-test junit run with 3 failures is ingested for agent "agent-f4half" at tier "regression"
     When I open the run overlay directly at its cold URL
-    Then the overlay has no heat-strip
-    And the drill-in mode switch is visible with data-mode "Detail"
-    When I click the drill-in mode switch
-    Then the drill-in mode switch has data-mode "Density"
+    Then there is no drillin-mode element anywhere in the overlay
+    And the status-chips row is visible
     And the heat-strip is visible with exactly 60 heat cells
     When I click the first failing heat cell
     Then a failure box is visible and contains "boom-60"

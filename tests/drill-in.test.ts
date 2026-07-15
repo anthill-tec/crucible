@@ -883,8 +883,8 @@ describe("§S4.5 — progressive payload (suites-first paging)", () => {
           codec: "junit",
           timestamp: now,
           total: 3,
-          passed: 2,
-          failed: 1,
+          passed: 3,
+          failed: 0,
           pending: 0,
           duration_ms: 100,
           hasCoverage: false,
@@ -899,14 +899,21 @@ describe("§S4.5 — progressive payload (suites-first paging)", () => {
           tier: "unit",
           codec: "junit",
           timestamp: now,
-          summary: { total: 3, passed: 2, failed: 1, pending: 0, duration_ms: 100 },
+          // RECONCILED (approved 2026-07-15): ALL-PASS fixture — under the
+          // both-modes auto-expand rule a FAILING suite's leaves render on
+          // open, which would make this test's "no leaf rows initially"
+          // assertion unsatisfiable. All-pass preserves the test's true
+          // intent (suites-first paging: nothing auto-expands, so no leaves
+          // render until a suite-row click) — was: ProgSuiteA status "fail"
+          // with a failing leaf.
+          summary: { total: 3, passed: 3, failed: 0, pending: 0, duration_ms: 100 },
           tree: [
             {
               name: "ProgSuiteA",
-              status: "fail",
+              status: "pass",
               children: [
-                { name: "pFail", status: "fail", duration_ms: 5, failure: { message: "boom" } },
-                { name: "pPass", status: "pass", duration_ms: 5 },
+                { name: "p1", status: "pass", duration_ms: 5 },
+                { name: "p2", status: "pass", duration_ms: 5 },
               ],
             },
             {

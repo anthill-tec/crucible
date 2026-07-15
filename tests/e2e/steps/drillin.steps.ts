@@ -89,21 +89,17 @@ Step("the overlay has no heat-strip", async ({ page }) => {
   await expect(overlayOf(page).getByTestId("heat-strip")).toHaveCount(0);
 });
 
-Step(
-  "the drill-in mode switch is visible with data-mode {string}",
-  async ({ page }, mode: string) => {
-    const modeSwitch = overlayOf(page).getByTestId("drillin-mode");
-    await expect(modeSwitch).toBeVisible();
-    await expect(modeSwitch).toHaveAttribute("data-mode", mode);
-  },
-);
-
-Step("I click the drill-in mode switch", async ({ page }) => {
-  await overlayOf(page).getByTestId("drillin-mode").click();
+// CR-CRU-007 §S4.0 FINAL re-baseline (2026-07-15): the mode badge/switch is
+// removed entirely — presentation is purely tier-contextual (regression/e2e
+// render Density, everything else renders Detail). Replaces the deleted
+// "the drill-in mode switch ..." steps (data-mode click/assert), which no
+// longer apply — see docs/changes/CR-CRU-007-timeline-drill-in.md §S4.0.
+Step("there is no drillin-mode element anywhere in the overlay", async ({ page }) => {
+  await expect(page.getByTestId("drillin-mode")).toHaveCount(0);
 });
 
-Step("the drill-in mode switch has data-mode {string}", async ({ page }, mode: string) => {
-  await expect(overlayOf(page).getByTestId("drillin-mode")).toHaveAttribute("data-mode", mode);
+Step("the status-chips row is visible", async ({ page }) => {
+  await expect(overlayOf(page).getByTestId("density-status-chips")).toBeVisible();
 });
 
 Step(
