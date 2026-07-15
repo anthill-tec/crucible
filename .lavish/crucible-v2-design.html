@@ -46,8 +46,8 @@
   .cols-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
   @media (max-width: 860px) { .cols-2, .cols-3 { grid-template-columns: minmax(0,1fr); } }
   .badge {
-    display: inline-block; font: 600 11px/1.6 var(--mono); padding: 2px 9px; border-radius: 999px;
-    border: 1px solid var(--line); color: var(--ink-dim); white-space: nowrap;
+    display: inline-block; font: 600 11px/1.8 var(--mono); padding: 2px 10px 2px 9px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--ink-dim); white-space: normal; overflow-wrap: anywhere;
   }
   .badge.ember { color: var(--ember); border-color: rgba(255,122,26,.45); background: rgba(255,122,26,.08); }
   .badge.pass { color: var(--pass); border-color: rgba(74,222,128,.4); background: rgba(74,222,128,.08); }
@@ -172,10 +172,29 @@
           <tr><td>CR-CRU-003</td><td>v1 shim + contract tests</td><td>1</td><td><span class="badge pass">COMPLETED</span><div class="agent-ts" style="margin-top:3px">shipped 2026-07-15 · Wave 1 CLOSED · VERIFY CONFIRMED (12/12 ACs) · 148 tests · DN contract zero-violation · unmodified fleet client works live · dog-food ACTIVE on :3849</div></td></tr>
           <tr><td>CR-CRU-004</td><td>Clean v2 API + SSE</td><td>2</td><td><span class="badge pass">COMPLETED</span><div class="agent-ts" style="margin-top:3px">shipped 2026-07-15 · 3 cycles + 1 runtime-limitation escalation (bun#5039) · VERIFY CONFIRMED (9/9 ACs) · 191 tests · one-store invariant proven live · SSE + progressive paging live</div></td></tr>
           <tr><td>CR-CRU-005</td><td>AXI layer: TOON subset + hints</td><td>2</td><td><span class="badge pass">COMPLETED</span><div class="agent-ts" style="margin-top:3px">shipped 2026-07-15 · Wave 2 CLOSED · VERIFY CONFIRMED (9/9 ACs) · 219 tests · TOON live on all v2 GETs · honest ratio measured: flat listings win, nested events[] 105% (reshape decision at Wave-3 open)</div></td></tr>
-          <tr><td>CR-CRU-006</td><td>Dashboard shell + navigation</td><td>3</td><td><span class="badge">PENDING</span></td></tr>
+          <tr><td>CR-CRU-006</td><td>Dashboard shell + navigation</td><td>3</td><td><span class="badge ember">IN_PROGRESS</span><div class="agent-ts" style="margin-top:3px"><span class="badge pass" style="font-size:9px">gap ✓ (§S0 reshape folded)</span> <span class="badge pass" style="font-size:9px">C1 ✓ reshape (TOON 47.1%)</span> <span class="badge pass" style="font-size:9px">C2 ✓ shell live</span> <span class="badge pass" style="font-size:9px">C3 ✓ app-logic + workspace (265 tests)</span> <span class="badge pass" style="font-size:9px">FIX ✓ .mjs blank-page (267 tests)</span> <span class="badge pass" style="font-size:9px">C4 ✓ E2E 5/5 + right-rail layout LIVE</span> <span class="badge ember" style="font-size:9px">VERIFY running</span> <span class="badge" style="font-size:9px">MERGE GATE</span> <span class="badge" style="font-size:9px">C3 surfaces</span> <span class="badge" style="font-size:9px">C4 E2E seed</span> <span class="badge" style="font-size:9px">VERIFY</span></div></td></tr>
           <tr><td>CR-CRU-007</td><td>Timeline + density drill-in</td><td>3</td><td><span class="badge">PENDING</span></td></tr>
           <tr><td>CR-CRU-008</td><td>crucible-axi CLI + fleet upgrade</td><td>4</td><td><span class="badge">PENDING</span></td></tr>
           <tr><td>CR-CRU-009</td><td>Release 0.1.0 skill bundle</td><td>4</td><td><span class="badge">PENDING</span></td></tr>
+          <tr><td>CR-CRU-010</td><td>Codec parsePath + shim hardening (maintenance)</td><td>3</td><td><span class="badge">PENDING · next after 006</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ══ SCHEDULING & PROPOSALS ══ -->
+  <section id="scheduling" style="margin-top:36px">
+    <div class="kicker">Scheduling &amp; proposals — annotate a row to (de)schedule</div>
+    <h2>Deferred register &amp; upcoming decisions</h2>
+    <div class="panel" style="padding:0">
+      <table class="data">
+        <thead><tr><th>Item</th><th style="width:170px">Proposed slot</th><th style="width:110px">State</th></tr></thead>
+        <tbody>
+          <tr><td>Event-brief reshape (TOON table form for events[])</td><td>CR-006 C1</td><td><span class="badge ember">SCHEDULED</span></td></tr>
+          <tr><td>CR-CRU-010 filed (user-directed): parsePath Codec interface + cross-surface pair test + per-branch 400 assertions — all three register items bundled</td><td>after CR-006 merges, before CR-007</td><td><span class="badge ember">CR FILED · SCHEDULED</span></td></tr>
+          <tr><td>CLI-bootstrap smoke test (import.meta.main lines) — AC added to CR-009 spec</td><td>CR-009 packaging</td><td><span class="badge ember">APPROVED (user)</span></td></tr>
+          <tr><td>Shim retirement — folded into CR-008 §S4, soak-gated (retires only after a full dog-food cycle through the upgraded fleet)</td><td>CR-008</td><td><span class="badge ember">APPROVED (user)</span></td></tr>
+          <tr><td>Create remote repo anthill-tec/crucible + publish via no-mistakes pipeline (user-directed)</td><td>immediately after CR-006 merges</td><td><span class="badge ember">SCHEDULED</span></td></tr>
         </tbody>
       </table>
     </div>

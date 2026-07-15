@@ -80,3 +80,11 @@ Flat/uniform payloads (e.g. `agents[]`, `projects[]` with no nested objects)
 are expected to compress well under Construct 3; nested-object listings like
 `events[]` do not, until callers request `?depth=suites`-style flattening or
 the events payload is reshaped to hoist `summary` fields to top-level scalars.
+
+Re-measured 2026-07-15 (post CR-CRU-006 §S0 event-brief reshape): 50-event
+`GET /api/v2/events` listing (`:memory:` server probe, flattened all-scalar
+briefs `{id, projectKey, agentId, kind, tier, codec, timestamp, total, passed,
+failed, pending, duration_ms, hasCoverage}`, no nested `summary`) — JSON 12862
+bytes, TOON 6062 bytes, **TOON = 47.1% of JSON bytes** (uniform-table
+Construct 3 form confirmed: body matches `/^events\[\d+\]\{/`). AC gate ≤ 70%
+met.

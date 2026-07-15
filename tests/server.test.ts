@@ -55,8 +55,15 @@ describe("startServer — production boot + /api/health", () => {
     const nope = await fetch(`http://localhost:${handle.server.port}/api/nope`);
     expect(nope.status).toBe(404);
 
-    const root = await fetch(`http://localhost:${handle.server.port}/`);
-    expect(root.status).toBe(404);
+    // CR-CRU-006 §S1 supersedes CR-CRU-001's "everything else 404s" — `/` is
+    // now released to the SPA. Rescoped to an unknown API-shaped path so the
+    // test still asserts the surviving contract: unknown API routes 404.
+    const definitelyNotARoute = await fetch(
+      `http://localhost:${handle.server.port}/api/definitely-not-a-route`,
+    );
+    expect(definitelyNotARoute.status).toBe(404);
+    const body = (await definitelyNotARoute.json()) as { ok: boolean };
+    expect(body.ok).toBe(false);
   });
 
   test("stop() closes the server so a subsequent fetch rejects", async () => {

@@ -205,8 +205,8 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
       ...project,
       agentsOnline: agents.filter((a) => a.liveness === "online").length,
       agentsTotal: agents.length,
-      lastEvent:
-        last !== undefined ? { id: last.id, agentId: last.agentId, timestamp: last.timestamp } : null,
+      // §S0 (CR-CRU-006) — same flattened brief shape as the events list.
+      lastEvent: last !== undefined ? eventBrief(last) : null,
       latestGreenCoverage: greenCovered?.coverage ?? null,
     };
   });
@@ -400,15 +400,27 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
 
 // ── §S1 — events list/get/delete + status ───────────────────────────────────
 
-/** Brief of an event for lists and status (full detail via /events/:id). */
+/**
+ * Brief of an event for lists, status, and rollups (full detail via
+ * /events/:id). §S0 (CR-CRU-006) — run numbers hoisted to top-level scalars,
+ * NO nested `summary`; compile events carry uniform numeric 0s so every brief
+ * shares one all-scalar shape (TOON's uniform-table form applies).
+ */
 function eventBrief(event: RunEvent) {
   return {
     id: event.id,
+    projectKey: event.projectKey,
     agentId: event.agentId,
     kind: event.kind,
     tier: event.tier,
+    codec: event.codec,
     timestamp: event.timestamp,
-    ...(event.summary !== undefined ? { summary: event.summary } : {}),
+    total: event.summary?.total ?? 0,
+    passed: event.summary?.passed ?? 0,
+    failed: event.summary?.failed ?? 0,
+    pending: event.summary?.pending ?? 0,
+    duration_ms: event.summary?.duration_ms ?? 0,
+    hasCoverage: !!event.coverage,
   };
 }
 

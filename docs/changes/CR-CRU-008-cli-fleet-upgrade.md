@@ -38,6 +38,15 @@ tolerantly. Behavior flags unchanged — call sites in agent definitions keep wo
 `agent-protocol` (+ its `heartbeat.sh`): v2 endpoints, context fields, TOON-aware
 examples, removal of the dedicated-ping guidance (ingest is the heartbeat).
 
+### §S4 Shim retirement (fold-in, user-approved 2026-07-15)
+After the fleet upgrade lands AND the soak gate passes (one full RED→GREEN→regression
+dog-food cycle of this repo executed entirely through the UPGRADED clients against
+`/api/v2/*`), retire the v1 shim: remove the legacy `/api/*` route handlers (health
+stays), mark `tests/v1-contract.test.ts` as the retired-contract archive (moved to
+`tests/archive/` and excluded from the suite), and record the retirement in the DN.
+If the soak gate fails, retirement DOES NOT happen in this CR — it reverts to a
+follow-up, and the shim stays.
+
 ## Acceptance criteria
 - [ ] `npx crucible-axi` (built from `cli/`, run locally) with the server up prints a TOON dashboard whose first line is `ok: true` and includes a `help[` block; with the server down exits non-zero with a message naming `/api/health`.
 - [ ] `crucible-axi ingest <fixture.xml> --project-key <k> --agent a1` inside a git repo → the recorded event's `context.git.branch` equals the repo's current branch (auto-detect); the same command with `GIT_DIR` unset/outside a repo records NO context (graceful).
@@ -46,6 +55,7 @@ examples, removal of the dedicated-ping guidance (ingest is the heartbeat).
 - [ ] Skill docs contain no `POST /api/agents/heartbeat` legacy references except in an explicit "legacy/shim" note; `heartbeat.sh` targets `/api/v2/agents/heartbeat`.
 - [ ] Soak gate: one full RED→GREEN→regression cycle of THIS repo (Crucible dog-food) executes end-to-end through `bun-crucible.py` upgraded, visible on the dashboard with transition marker + context badges.
 - [ ] Caller-existence: `rg "api/v2" ~/.claude/scripts/*-crucible.py` returns ≥ 5 files.
+- [ ] Shim retirement (§S4, soak-gated): after the dog-food soak cycle passes through upgraded clients, `GET/POST` on legacy `/api/ingest`, `/api/agents/heartbeat`, `/api/projects/add` → 404 JSON; `/api/health` still 200; `tests/archive/v1-contract.test.ts` exists and is excluded from `bun test`; a dated retirement line exists in DN-crucible-api-reconstruction.md. If the soak gate failed, this AC is N/A and the spec gains a dated deferral note instead.
 
 ## Estimated size
 L (touches 5 scripts + 7 skills + new CLI package; stage script-by-script).
