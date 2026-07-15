@@ -17,8 +17,9 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-006](CR-CRU-006-spa-shell.md) | Dashboard shell + navigation | feature | COMPLETED (2026-07-15) | 004 | 3 |
 | [CR-CRU-007](CR-CRU-007-timeline-drill-in.md) | Timeline + density drill-in | feature | PENDING | 006 | 3 |
 | [CR-CRU-008](CR-CRU-008-cli-fleet-upgrade.md) | crucible-axi CLI + fleet upgrade | feature | PENDING | 005 | 4 |
-| [CR-CRU-009](CR-CRU-009-release-0.1.0.md) | Release 0.1.0 skill bundle | feature | PENDING | 007, 008 | 4 |
+| [CR-CRU-009](CR-CRU-009-release-0.1.0.md) | Release 0.1.0 skill bundle | feature | PENDING | 007, 008, 011 | 4 |
 | [CR-CRU-010](CR-CRU-010-codec-path-interface-hardening.md) | Codec parsePath + shim hardening | maintenance | COMPLETED (2026-07-15) | 006 | 3 (after 006, before 007) |
+| [CR-CRU-011](CR-CRU-011-workflow-lens.md) | Workflow lens: Wave→CR→Cycle + agent runtimes | feature | PENDING | 007, 008 | 4 (before 009) |
 
 ## Notes
 - 2026-07-14 — Project kickoff: PRD + evidence DN landed. Kickoff design review (lavish)
@@ -61,6 +62,15 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   §4.11 + nav model synced; the whole set folds into CR-CRU-007 (spec §S5, re-baselined
   same day). Process rule recorded: micro design iterations run between CRs on develop,
   no active feature flow.
+- 2026-07-15 (design iteration rounds 8–11) — drill-in mode: tier-contextual default
+  (regression/e2e → Density; focused cycle tiers → Detail) + manual override per tier
+  group, never test-count; compile drill-ins carry no mode switch; compile reporting
+  agent-agnostic. Terminology locked: RED→GREEN pair = Cycle, CR groups cycles, Wave
+  groups CRs; marker labeled via additive `context.cycle` (fleet sends in CR-008).
+  Round-11: workflow lens USER-SCHEDULED INTO v0.1.0 → CR-CRU-011 filed (Wave 4,
+  before 009; 009 now depends on 011). Backwards audit of the agent API found the
+  lifecycle gap (unregister hard-deletes firstSeen/lastSeen → runtime lost) — closed
+  by CR-011 §S1 lifecycle events.
 - 2026-07-15 (post-merge review) — no-mistakes hardening landed on develop after the
   CR-CRU-006 merge: ingest parse/`dataPath` failures now return 400 `{ok:false, error}`
   on BOTH surfaces (v1 `/api/ingest` + v2 `/api/v2/runs`, shared `parseRunBody` core —
