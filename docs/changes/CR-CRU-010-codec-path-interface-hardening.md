@@ -1,6 +1,6 @@
 # CR-CRU-010 — Codec path-parsing interface + shim regression hardening
 
-**Status:** PENDING
+**Status:** IN_PROGRESS (feature/CR-CRU-010, started 2026-07-15)
 **Type:** maintenance
 **Priority:** P2
 **Depends on:** CR-CRU-006
