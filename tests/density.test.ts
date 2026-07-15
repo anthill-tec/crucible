@@ -62,9 +62,14 @@
 //     - the choice persists to `localStorage` under the key
 //       `"crucible.density.mode"` and is honored as the default on the
 //       next cold mount.
-//     - flipping the density toggle never changes `[data-testid=
-//       "drillin-mode"]`'s `data-mode`, and flipping the drillin-mode
-//       switch never changes the density toggle's `data-density`.
+//     - the density toggle behaves identically regardless of which tier
+//       drives the drill-in's presentation (Density for regression/e2e,
+//       Detail for unit/module/integration) — CR-CRU-007 C5b FINAL
+//       re-baseline: the mode badge/switch is REMOVED ENTIRELY, so there is
+//       no `[data-testid="drillin-mode"]` element anywhere to interact with
+//       (was: "flipping the density toggle never changes drillin-mode's
+//       data-mode, and vice versa" — every affected assertion below was
+//       rewritten; see the RED agent's dispatch report for the list).
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -280,7 +285,9 @@ describe("§S4.1 — failures float, green folds (Density mode)", () => {
     const brief: EventBriefFixture = { id: eventId, projectKey: "proj-fold", agentId: "fold-agent", kind: "test", tier: "regression", codec: "junit", timestamp: now, total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 800, hasCoverage: false };
     await mountAtRunCold(eventId, "regression", detail, brief);
 
-    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Density");
+    // CR-CRU-007 C5b FINAL re-baseline (§S4.0 — no drillin-mode element
+    // anywhere; regression tier renders Density presentation by itself).
+    expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
     expect(overlay.querySelectorAll('[data-testid="suite-row"]').length).toBe(2);
     expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
@@ -372,7 +379,10 @@ describe("§S4.1 — failures float, green folds (Density mode)", () => {
     const brief: EventBriefFixture = { id: eventId, projectKey: "proj-fold", agentId: "fold-agent-3", kind: "test", tier: "unit", codec: "junit", timestamp: now, total: 2, passed: 1, failed: 1, pending: 0, duration_ms: 100, hasCoverage: false };
     await mountAtRunCold(eventId, "unit", detail, brief);
 
-    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Detail");
+    // CR-CRU-007 C5b re-baseline (§S4.0 — Density is regression-only):
+    // modified from asserting data-mode="Detail" — a unit-tier drill-in now
+    // renders no drillin-mode element at all.
+    expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
     expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
     expect(fetchLog.some((u) => u.includes("suite="))).toBe(false);
@@ -470,7 +480,10 @@ describe("§S4.2 — heat-strip minimap (Density mode)", () => {
     const { detail, brief } = buildHeatFixture(eventId, "unit", now, 60, [10, 40], [5]);
     await mountAtRunCold(eventId, "unit", detail, brief);
 
-    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Detail");
+    // CR-CRU-007 C5b re-baseline (§S4.0 — Density is regression-only):
+    // modified from asserting data-mode="Detail" — a unit-tier drill-in now
+    // renders no drillin-mode element at all.
+    expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
     expect(overlay.querySelector('[data-testid="heat-strip"]')).toBeNull();
   });
@@ -784,7 +797,15 @@ describe("§S4.6 — density toggle (comfortable / compact / ultra)", () => {
     expect(document.documentElement.classList.contains("app-density-ultra")).toBe(true);
   });
 
-  test("is independent of drillin-mode: flipping density never changes drillin-mode's data-mode, and vice versa", async () => {
+  // CR-CRU-007 C5b FINAL re-baseline: the mode badge/switch is REMOVED
+  // ENTIRELY (§S4.0 — purely tier-contextual, no drillin-mode element
+  // anywhere). Rewritten from "flipping density never changes drillin-mode's
+  // data-mode, and vice versa" (which asserted a data-mode attribute that no
+  // longer exists) to: the comfortable/compact/ultra density-toggle (idea 6
+  // — the only user-facing control left) behaves identically regardless of
+  // which tier-driven presentation (Density for regression, Detail for
+  // unit) is showing, and neither tier ever renders a drillin-mode element.
+  test("the comfortable/compact/ultra density-toggle is independent of tier-driven presentation — no drillin-mode element exists on either tier", async () => {
     const now = Date.now();
     const eventId = "evt-density-independence";
     const detail: EventDetailFixture = {
@@ -801,21 +822,33 @@ describe("§S4.6 — density toggle (comfortable / compact / ultra)", () => {
     const brief: EventBriefFixture = { id: eventId, projectKey: "proj-independence", agentId: "independence-agent", kind: "test", tier: "regression", codec: "junit", timestamp: now, total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 5, hasCoverage: false };
     await mountAtRunCold(eventId, "regression", detail, brief);
 
+    expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
     const densityToggle = document.querySelector('[data-testid="density-toggle"]') as HTMLElement | null;
-    const drillinMode = document.querySelector('[data-testid="drillin-mode"]') as HTMLElement | null;
     expect(densityToggle).not.toBeNull();
-    expect(drillinMode).not.toBeNull();
     expect(densityToggle!.getAttribute("data-density")).toBe("comfortable");
-    expect(drillinMode!.getAttribute("data-mode")).toBe("Density");
 
     densityToggle!.click(); // comfortable -> compact
     await settle();
-    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Density");
     expect(document.querySelector('[data-testid="density-toggle"]')!.getAttribute("data-density")).toBe("compact");
+    expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
 
-    document.querySelector('[data-testid="drillin-mode"]')!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await settle();
-    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Detail");
-    expect(document.querySelector('[data-testid="density-toggle"]')!.getAttribute("data-density")).toBe("compact");
+    // Same control, same behavior on a Detail-presented (unit-tier) run.
+    const eventId2 = "evt-density-independence-unit";
+    const detail2: EventDetailFixture = {
+      id: eventId2,
+      projectKey: "proj-independence",
+      agentId: "independence-agent-2",
+      kind: "test",
+      tier: "unit",
+      codec: "junit",
+      timestamp: now,
+      summary: { total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 5 },
+      tree: [{ name: "SuiteIndep2", status: "pass", children: [{ name: "i2", status: "pass", duration_ms: 5 }] }],
+    };
+    const brief2: EventBriefFixture = { id: eventId2, projectKey: "proj-independence", agentId: "independence-agent-2", kind: "test", tier: "unit", codec: "junit", timestamp: now, total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 5, hasCoverage: false };
+    await mountAtRunCold(eventId2, "unit", detail2, brief2);
+
+    expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
+    expect(document.querySelector('[data-testid="density-toggle"]')).not.toBeNull();
   });
 });

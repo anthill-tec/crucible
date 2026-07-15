@@ -33,20 +33,41 @@
 //     or "warning"); `[data-testid="raw-toggle"]` toggles
 //     `[data-testid="raw-output"]` (the stored raw compiler output); NO
 //     `[data-testid="drillin-mode"]` renders for compile events.
-//   - `[data-testid="drillin-mode"]` (test events only) exposes the current
-//     mode via a `data-mode` attribute ("Detail" | "Density"), defaulted
-//     per `L.drillinDefaultMode(tier)` and overridable by click; the
-//     override persists to `L.drillinModeStorageKey(tier)` in localStorage.
+//   - `[data-testid="drillin-mode"]` (BROAD tiers — regression/e2e — only)
+//     exposes the current mode via a `data-mode` attribute
+//     ("Detail" | "Density"), defaulted per `L.drillinDefaultMode(tier)` and
+//     overridable by click; the override persists to
+//     `L.drillinModeStorageKey(tier)` in localStorage.
 //   - a "← timeline" control (matched by text, same convention as the
 //     existing "← projects" workspace chip) closes the overlay exactly like
 //     Escape — restoring the underlying surface's own route (home stays
 //     home, workspace stays workspace).
+//
+// CR-CRU-007 C5b re-baseline (2026-07-15, user-corrected against the live
+// render — see docs/changes/CR-CRU-007-timeline-drill-in.md §S3/§S4.0):
+//   0. Density is REGRESSION-ONLY. Focused tiers (unit/module/integration)
+//      are ALWAYS Detail and render NO `drillin-mode` element at all — the
+//      §S4.0 describe blocks below were updated in place to this rule (were:
+//      focused tiers rendered the switch defaulted to "Detail"; a focused
+//      group also had its own persisted override — both dropped).
+//   1. F4 anatomy — see the "F4 anatomy" describe block near the end of this
+//      file for the full contract (tree-line rows, ▾/▸ affordance,
+//      `${failed} ✗ ${passed} ✓` suite counts, BOTH-mode auto-expand of
+//      failing suites, inline failure box with no click required, the
+//      failures-footer + raw-output-for-test-events, and the F4½
+//      status-chips row). NOTE: the ORIGINAL "§S3 — test-run drill-in body"
+//      test above (and the last "§S4.5 progressive payload" test's
+//      ProgSuiteC click) still assume "no leaves until a suite-row click"
+//      and "no failure box until a leaf-row click" for a FAILING suite —
+//      that directly conflicts with the new BOTH-modes auto-expand rule.
+//      Flagged for GREEN-phase reconciliation; left unmodified here as
+//      outside the explicitly authorized C3 (§S4.0 mode-switch) scope — see
+//      the RED agent's dispatch report.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as AppLogic from "../public/app-logic.mjs";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -103,6 +124,10 @@ interface EventDetailFixture {
   summary?: { total: number; passed: number; failed: number; pending: number; duration_ms: number };
   tree?: SuiteFixture[];
   compile?: CompileFixture;
+  /** F4 anatomy (§S3 re-baseline) — stored raw output for TEST events too
+   * (previously compile-only via `compile.raw`); the failures-footer's
+   * raw-output toggle reveals this. */
+  raw?: string;
 }
 
 interface EventBriefFixture {
@@ -697,115 +722,125 @@ async function mountAtRunCold(eventId: string, tier: string, now: number, total 
   });
 }
 
-describe("§S4.0 — tier-default mode selection", () => {
-  test("a regression-tier run defaults the mode switch to Density", async () => {
+// CR-CRU-007 C5b — FINAL re-baseline (supersedes the earlier "Density is
+// regression-only WITH a switch" pass): the mode badge/switch is REMOVED
+// ENTIRELY. There is no `drillin-mode` element anywhere, no toggle, no
+// persistence key. Presentation is purely tier-contextual: regression/e2e
+// render Density (chips row + heat-strip + folds); unit/module/integration
+// render the Detail tree; compile renders diagnostics. Every test below was
+// rewritten from the earlier switch-based contract to this one — see the RED
+// agent's dispatch report for the full list of superseded assertions.
+describe("§S4.0 — purely tier-contextual presentation (no mode switch)", () => {
+  test("a regression-tier run renders Density presentation (heat-strip) with NO drillin-mode element", async () => {
     const now = Date.now();
     await mountAtRunCold("evt-mode-regression-1", "regression", now);
-    const modeSwitch = document.querySelector('[data-testid="drillin-mode"]');
-    expect(modeSwitch).not.toBeNull();
-    expect(modeSwitch!.getAttribute("data-mode")).toBe("Density");
+    expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay.querySelector('[data-testid="heat-strip"]')).not.toBeNull();
   });
 
-  test("an e2e-tier run defaults the mode switch to Density", async () => {
+  test("an e2e-tier run renders Density presentation (heat-strip) with NO drillin-mode element", async () => {
     const now = Date.now();
     await mountAtRunCold("evt-mode-e2e-1", "e2e", now);
-    const modeSwitch = document.querySelector('[data-testid="drillin-mode"]');
-    expect(modeSwitch).not.toBeNull();
-    expect(modeSwitch!.getAttribute("data-mode")).toBe("Density");
+    expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay.querySelector('[data-testid="heat-strip"]')).not.toBeNull();
   });
 
-  test("a unit-tier run defaults the mode switch to Detail", async () => {
+  test("a unit-tier run renders the Detail tree (no heat-strip) with NO drillin-mode element", async () => {
     const now = Date.now();
     await mountAtRunCold("evt-mode-unit-1", "unit", now);
-    const modeSwitch = document.querySelector('[data-testid="drillin-mode"]');
-    expect(modeSwitch).not.toBeNull();
-    expect(modeSwitch!.getAttribute("data-mode")).toBe("Detail");
+    expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay.querySelectorAll('[data-testid="suite-row"]').length).toBe(3);
+    expect(overlay.querySelector('[data-testid="heat-strip"]')).toBeNull();
   });
 
-  test("module- and integration-tier runs default the mode switch to Detail", async () => {
+  test("module- and integration-tier runs render the Detail tree with NO drillin-mode element", async () => {
     const now = Date.now();
     await mountAtRunCold("evt-mode-module-1", "module", now);
-    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Detail");
+    expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
+    expect(
+      document.querySelector('[data-testid="run-overlay"]')!.querySelector('[data-testid="heat-strip"]'),
+    ).toBeNull();
 
     await mountAtRunCold("evt-mode-integration-1", "integration", now);
-    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Detail");
+    expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
+    expect(
+      document.querySelector('[data-testid="run-overlay"]')!.querySelector('[data-testid="heat-strip"]'),
+    ).toBeNull();
   });
 
-  test("a 200-test unit-tier run STILL defaults to Detail — no code path selects the mode from test count", async () => {
+  test("a 200-test unit-tier run STILL renders Detail (no heat-strip, no drillin-mode) — no code path selects presentation from test count", async () => {
     const now = Date.now();
     await mountAtRunCold("evt-mode-unit-200", "unit", now, 200);
-    const modeSwitch = document.querySelector('[data-testid="drillin-mode"]');
-    expect(modeSwitch).not.toBeNull();
-    expect(modeSwitch!.getAttribute("data-mode")).toBe("Detail");
-  });
-});
-
-describe("§S4.0 — manual override persistence (per-tier-group localStorage)", () => {
-  test("flipping the mode switch on a regression-tier run writes ONLY the broad persistence key, not the focused one", async () => {
-    const now = Date.now();
-    await mountAtRunCold("evt-mode-persist-1", "regression", now);
-    const modeSwitch = document.querySelector('[data-testid="drillin-mode"]') as HTMLElement | null;
-    expect(modeSwitch).not.toBeNull();
-    expect(modeSwitch!.getAttribute("data-mode")).toBe("Density");
-
-    modeSwitch!.click();
-    await settle();
-    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Detail");
-
-    const broadKey = AppLogic.drillinModeStorageKey("regression");
-    const focusedKey = AppLogic.drillinModeStorageKey("unit");
-    expect(window.localStorage.getItem(broadKey)).toBe("Detail");
-    expect(window.localStorage.getItem(focusedKey)).toBeNull();
+    expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay.querySelectorAll('[data-testid="suite-row"]').length).toBe(3);
+    expect(overlay.querySelector('[data-testid="heat-strip"]')).toBeNull();
   });
 
-  test("a remembered broad-group override is honored as the default for the NEXT regression open AND the next e2e open", async () => {
+  test("a 200-test regression-tier run STILL renders Density (heat-strip present) — no code path selects presentation from test count", async () => {
     const now = Date.now();
-    const broadKey = AppLogic.drillinModeStorageKey("regression");
-
-    await mountAtRunCold("evt-mode-persist-2a", "regression", now, 4, { [broadKey]: "Detail" });
-    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Detail");
-
-    await mountAtRunCold("evt-mode-persist-2b", "e2e", now, 4, { [broadKey]: "Detail" });
-    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Detail");
+    await mountAtRunCold("evt-mode-regression-200", "regression", now, 200);
+    expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay.querySelector('[data-testid="heat-strip"]')).not.toBeNull();
   });
 
-  test("a broad-group override does NOT leak into the focused (unit/module/integration) tier-group default", async () => {
+  test("no drillin-mode persistence key is ever written to localStorage — unit tier", async () => {
     const now = Date.now();
-    const broadKey = AppLogic.drillinModeStorageKey("regression");
-    const focusedKey = AppLogic.drillinModeStorageKey("unit");
-
-    await mountAtRunCold("evt-mode-persist-3", "unit", now, 4, { [broadKey]: "Detail" });
-    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Detail");
-    expect(window.localStorage.getItem(focusedKey)).toBeNull();
+    await mountAtRunCold("evt-mode-nopersist-unit", "unit", now);
+    expect(window.localStorage.length).toBe(0);
   });
 
-  test("the focused group persists its own override independently (unit override remembered on a later module open)", async () => {
+  test("no drillin-mode persistence key is ever written to localStorage — regression tier", async () => {
     const now = Date.now();
-    await mountAtRunCold("evt-mode-persist-4a", "unit", now);
-    const modeSwitch = document.querySelector('[data-testid="drillin-mode"]') as HTMLElement | null;
-    expect(modeSwitch!.getAttribute("data-mode")).toBe("Detail");
-    modeSwitch!.click();
-    await settle();
-    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Density");
-
-    const focusedKey = AppLogic.drillinModeStorageKey("unit");
-    expect(window.localStorage.getItem(focusedKey)).toBe("Density");
-
-    await mountAtRunCold("evt-mode-persist-4b", "module", now, 4, { [focusedKey]: "Density" });
-    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Density");
+    await mountAtRunCold("evt-mode-nopersist-regression", "regression", now);
+    expect(window.localStorage.length).toBe(0);
   });
-});
 
-describe("§S4.0 — mode is presentation-only this cycle", () => {
-  test("in Detail mode the plain suite tree renders regardless of run size, and no Density-only heat-strip renders", async () => {
+  test("a compile drill-in renders the diagnostics body with NO drillin-mode element", async () => {
     const now = Date.now();
-    await mountAtRunCold("evt-mode-presentation-1", "unit", now, 200);
-    const overlay = document.querySelector('[data-testid="run-overlay"]');
-    expect(overlay).not.toBeNull();
-    expect(overlay!.querySelectorAll('[data-testid="suite-row"]').length).toBe(3);
-    // bound: Density-mode-only affordance (lands in C4) must not render here.
-    expect(overlay!.querySelector('[data-testid="heat-strip"]')).toBeNull();
-    expect(document.querySelector('[data-testid="drillin-mode"]')!.getAttribute("data-mode")).toBe("Detail");
+    const eventId = "evt-mode-compile-1";
+    await mountApp({
+      pathname: `/run/${eventId}`,
+      projects: [],
+      events: [
+        {
+          id: eventId,
+          projectKey: "proj-mode",
+          agentId: "compile-mode-agent",
+          kind: "compile",
+          tier: "unit",
+          codec: "rustc",
+          timestamp: now,
+          hasCoverage: false,
+          errors: 1,
+          warnings: 0,
+        },
+      ],
+      eventDetails: {
+        [eventId]: {
+          id: eventId,
+          projectKey: "proj-mode",
+          agentId: "compile-mode-agent",
+          kind: "compile",
+          tier: "unit",
+          codec: "rustc",
+          timestamp: now,
+          compile: {
+            format: "rustc",
+            errorCount: 1,
+            warningCount: 0,
+            diagnostics: [{ file: "src/lib.rs", line: 1, col: 1, message: "boom", level: "error" }],
+            raw: "error: boom\n --> src/lib.rs:1:1",
+          },
+        },
+      },
+    });
+    expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
+    expect(document.querySelector('[data-testid="diag-group"]')).not.toBeNull();
   });
 });
 
@@ -962,5 +997,461 @@ describe("§S4.5 — progressive payload (suites-first paging)", () => {
     // bound: ProgSuiteD was never expanded — none of its leaves fetched/rendered.
     expect(leafTexts.some((t) => t.includes("dPass"))).toBe(false);
     expect(fetchLog.some((u) => u.includes("suite=ProgSuiteD"))).toBe(false);
+  });
+});
+
+// ── F4 anatomy (user-corrected against the live render, CR-CRU-007 §S3
+// re-baseline 2026-07-15) ────────────────────────────────────────────────
+//
+// RED phase: expected to fail against the CURRENT public/app.js RunOverlay,
+// which (a) renders suite-row/leaf-row WITHOUT an "app-tree-line" class or a
+// ▾/▸ `[data-testid="tree-toggle"]` affordance, (b) formats suite counts
+// "✓P ✗F" (pass-first, no spaces) instead of the spec's `${F} ✗ ${P} ✓`
+// (fail-first, spaced), (c) only auto-expands a failing suite's leaves in
+// Density mode (§S4.1's `autoExpandFailing` is gated on `mode.val ===
+// "Density"`) rather than in BOTH Detail and Density, (d) only shows a
+// failed leaf's `[data-testid="failure-box"]` after a click
+// (`toggleFailure`/`openFailures`) rather than inline on open, and (e) has
+// no `[data-testid="failures-footer"]` at all for test-kind events (raw
+// output + a "toggle raw output"/jump affordance currently exist ONLY on
+// the compile body). Contract this block defines for GREEN:
+//   - `[data-testid="suite-row"]` / `[data-testid="leaf-row"]` both carry an
+//     "app-tree-line" class (no bordered card-box class).
+//   - each suite-row contains `[data-testid="tree-toggle"]` whose text is
+//     "▾" while its leaves are loaded/expanded, "▸" while collapsed.
+//   - suite-row text contains `${failedCount} ✗ ${passedCount} ✓`.
+//   - a FAILING suite's leaves are fetched/rendered on OPEN with no suite-row
+//     click, in Detail mode too (not Density-only); an all-pass suite stays
+//     collapsed (no fetch) until clicked.
+//   - a failed leaf's `[data-testid="failure-box"]` (message + trace, trace's
+//     LAST line matching `at …`) renders inline beneath it with NO leaf-row
+//     click required.
+//   - `[data-testid="failures-footer"]` (test-kind events, when ≥1 failure
+//     exists) renders text matching `▸ N more failures · toggle raw output`
+//     (N = total failing leaves - 1); its `[data-testid="failure-jump"]`
+//     control calls `scrollIntoView()` on the NEXT failing leaf-row when
+//     clicked; its `[data-testid="raw-toggle"]` toggles
+//     `[data-testid="raw-output"]` containing the event detail's stored
+//     `raw` field (test events get a `raw` field too now, not just compile).
+describe("F4 anatomy — tree lines, ▾/▸ affordance, fail-first counts", () => {
+  test("suite/leaf rows are tree-line elements with a ▾/▸ affordance and fail-first `F ✗ P ✓` counts; a failing suite auto-expands on open in Detail mode with no click", async () => {
+    const now = Date.now();
+    const eventId = "evt-anatomy-1";
+    const projectKey = "proj-anatomy-1";
+    await mountApp({
+      pathname: "/",
+      projects: [
+        { key: projectKey, name: "Anatomy", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
+      ],
+      events: [
+        {
+          id: eventId,
+          projectKey,
+          agentId: "anatomy-agent",
+          kind: "test",
+          tier: "unit",
+          codec: "junit",
+          timestamp: now,
+          total: 4,
+          passed: 2,
+          failed: 2,
+          pending: 0,
+          duration_ms: 100,
+          hasCoverage: false,
+        },
+      ],
+      eventDetails: {
+        [eventId]: {
+          id: eventId,
+          projectKey,
+          agentId: "anatomy-agent",
+          kind: "test",
+          tier: "unit",
+          codec: "junit",
+          timestamp: now,
+          summary: { total: 4, passed: 2, failed: 2, pending: 0, duration_ms: 100 },
+          tree: [
+            {
+              name: "SuiteFail",
+              status: "fail",
+              children: [
+                { name: "okLeaf", status: "pass", duration_ms: 5 },
+                {
+                  name: "badLeaf",
+                  status: "fail",
+                  duration_ms: 5,
+                  failure: { message: "boom detail", trace: "some frame\nat file.ts:12:3" },
+                },
+                // Failure fidelity (user note): a legacy/partial ingest can
+                // land a failed leaf with NO failure object (e.g. the client
+                // discarded <failure> content) — graceful degradation only,
+                // no failure box, no "undefined" text.
+                { name: "silentFail", status: "fail", duration_ms: 5 },
+              ],
+            },
+            {
+              name: "SuitePass",
+              status: "pass",
+              children: [{ name: "okLeaf2", status: "pass", duration_ms: 5 }],
+            },
+          ],
+        },
+      },
+    });
+
+    const card = document.querySelector('[data-testid="event-card"]') as HTMLElement | null;
+    card!.click();
+    await settle();
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay).not.toBeNull();
+
+    // Tree-line class on both suite-row and leaf-row — not a bordered card box.
+    const suiteFailRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteFail")!;
+    expect(suiteFailRow).toBeDefined();
+    expect(suiteFailRow.className).toMatch(/\bapp-tree-line\b/);
+
+    const suitePassRow = findByText(overlay, '[data-testid="suite-row"]', "SuitePass")!;
+    expect(suitePassRow).toBeDefined();
+    expect(suitePassRow.className).toMatch(/\bapp-tree-line\b/);
+
+    // ▾/▸ affordance: SuiteFail auto-expanded (▾), SuitePass collapsed (▸).
+    const failToggle = suiteFailRow.querySelector('[data-testid="tree-toggle"]');
+    expect(failToggle).not.toBeNull();
+    expect((failToggle!.textContent ?? "").trim()).toBe("▾");
+    const passToggle = suitePassRow.querySelector('[data-testid="tree-toggle"]');
+    expect(passToggle).not.toBeNull();
+    expect((passToggle!.textContent ?? "").trim()).toBe("▸");
+
+    // Fail-first, spaced counts: "2 ✗ 1 ✓" (badLeaf + silentFail / okLeaf) /
+    // "0 ✗ 1 ✓" for the all-pass suite.
+    expect(suiteFailRow.textContent ?? "").toContain("2 ✗ 1 ✓");
+    expect(suitePassRow.textContent ?? "").toContain("0 ✗ 1 ✓");
+
+    // COLORED per status (user note vs the F4 mock): the ✗ / ✓ count
+    // segments are separate spans carrying status-color classes, not plain
+    // uncolored text glued together.
+    const failCountSpan = suiteFailRow.querySelector('[data-testid="suite-count-fail"]');
+    expect(failCountSpan).not.toBeNull();
+    expect((failCountSpan!.textContent ?? "").trim()).toBe("2 ✗");
+    expect(failCountSpan!.className).toMatch(/\bapp-count-fail\b/);
+
+    const passCountSpan = suiteFailRow.querySelector('[data-testid="suite-count-pass"]');
+    expect(passCountSpan).not.toBeNull();
+    expect((passCountSpan!.textContent ?? "").trim()).toBe("1 ✓");
+    expect(passCountSpan!.className).toMatch(/\bapp-count-pass\b/);
+
+    const suitePassFailCountSpan = suitePassRow.querySelector('[data-testid="suite-count-fail"]');
+    expect(suitePassFailCountSpan).not.toBeNull();
+    expect(suitePassFailCountSpan!.className).toMatch(/\bapp-count-fail\b/);
+    const suitePassPassCountSpan = suitePassRow.querySelector('[data-testid="suite-count-pass"]');
+    expect(suitePassPassCountSpan).not.toBeNull();
+    expect(suitePassPassCountSpan!.className).toMatch(/\bapp-count-pass\b/);
+
+    // Auto-expand in DETAIL mode (unit tier, no click on suite-row): badLeaf's
+    // leaf-row is ALREADY rendered.
+    const badLeafRow = findByText(overlay, '[data-testid="leaf-row"]', "badLeaf");
+    expect(badLeafRow).toBeDefined();
+    expect(badLeafRow!.className).toMatch(/\bapp-tree-line\b/);
+    const okLeafRow = findByText(overlay, '[data-testid="leaf-row"]', "okLeaf");
+    expect(okLeafRow).toBeDefined();
+    expect(fetchLog.some((u) => u.includes("suite=SuiteFail"))).toBe(true);
+
+    // Passing leaves render GREEN/bright (user note vs the F4 mock) — an
+    // explicit "pass" color class, NOT the dim/faint ink the plain
+    // `.app-leaf-row` base rule currently applies to every status.
+    expect(okLeafRow!.className).toMatch(/\bapp-leaf-pass\b/);
+    expect(okLeafRow!.className).not.toMatch(/\b(app-leaf-dim|app-dim|app-faint)\b/);
+
+    // Bound: the all-pass suite stays collapsed — never fetched.
+    expect(findByText(overlay, '[data-testid="leaf-row"]', "okLeaf2")).toBeUndefined();
+    expect(fetchLog.some((u) => u.includes("suite=SuitePass"))).toBe(false);
+
+    // Inline failure box — NO click on badLeafRow.
+    const failureBox = overlay.querySelector('[data-testid="failure-box"]');
+    expect(failureBox).not.toBeNull();
+    expect((failureBox!.textContent ?? "")).toContain("boom detail");
+    expect((failureBox!.textContent ?? "")).toContain("at file.ts:12:3");
+    const traceLines = (failureBox!.textContent ?? "").trim().split("\n");
+    expect(traceLines[traceLines.length - 1]).toMatch(/^at /);
+
+    // Graceful degradation (user note, bun-crucible.py failure-fidelity
+    // hotfix): a failed leaf with NO failure object still renders its ✗
+    // line, but produces NO failure box and no "undefined" text anywhere.
+    const silentFailRow = findByText(overlay, '[data-testid="leaf-row"]', "silentFail");
+    expect(silentFailRow).toBeDefined();
+    expect(silentFailRow!.className).toMatch(/\bapp-tree-line\b/);
+    expect(silentFailRow!.textContent ?? "").toContain("✗");
+    const afterSilentFail = silentFailRow!.nextElementSibling;
+    expect(afterSilentFail?.getAttribute("data-testid")).not.toBe("failure-box");
+    expect(overlay.textContent ?? "").not.toContain("undefined");
+  });
+});
+
+// CR-CRU-007 §S3 anatomy (final user correction, live screenshot): NO
+// edge/outline highlight on any tree row — status is text color alone; the
+// ONLY boxed element inside the tree is the failure box. happy-dom's
+// mountApp harness never loads public/styles.css (VanJS DOM is asserted
+// structurally, not via computed style — see this file's header), so this
+// is a grep-style assertion over the REAL stylesheet source, same
+// convention as the codec "registry-only resolution" grep tests
+// (tests/codec-parsepath.test.ts) and tests/drill-in-mode.test.ts's new
+// "no drillin-mode source references" tests.
+describe("F4 anatomy — no border/outline highlight on tree rows (styles.css)", () => {
+  const STYLES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8");
+
+  /** Extracts a CSS rule's `{ ... }` body for an EXACT selector text (first match). */
+  function ruleBody(selector: string): string | undefined {
+    const idx = STYLES_SRC.indexOf(selector);
+    if (idx === -1) return undefined;
+    const braceStart = STYLES_SRC.indexOf("{", idx);
+    const braceEnd = STYLES_SRC.indexOf("}", braceStart);
+    if (braceStart === -1 || braceEnd === -1) return undefined;
+    return STYLES_SRC.slice(braceStart + 1, braceEnd);
+  }
+
+  test(".app-suite-row carries no border/outline in its base rule", () => {
+    const body = ruleBody(".app-suite-row {") ?? ruleBody(".app-suite-row{");
+    expect(body).toBeDefined();
+    expect(body ?? "").not.toMatch(/\bborder\b/);
+    expect(body ?? "").not.toMatch(/\boutline\b/);
+  });
+
+  test(".app-suite-row.fail carries no red border/outline (the row-border removed by the live-screenshot correction)", () => {
+    const body = ruleBody(".app-suite-row.fail {") ?? ruleBody(".app-suite-row.fail{");
+    // Either the selector is gone entirely, or (if kept for some other
+    // reason) its body must not set a border/outline.
+    if (body !== undefined) {
+      expect(body).not.toMatch(/\bborder\b/);
+      expect(body).not.toMatch(/\boutline\b/);
+    }
+  });
+
+  test(".app-leaf-row (base + status modifiers) never carries a border/outline", () => {
+    for (const selector of [".app-leaf-row {", ".app-leaf-row{", ".app-leaf-row.fail {", ".app-leaf-row.fail{", ".app-leaf-row.pending {", ".app-leaf-row.pending{"]) {
+      const body = ruleBody(selector);
+      if (body === undefined) continue;
+      expect(body).not.toMatch(/\bborder\b/);
+      expect(body).not.toMatch(/\boutline\b/);
+    }
+  });
+
+  test("bound: .app-failure-box remains the ONLY boxed element inside the tree — it still carries a border", () => {
+    const body = ruleBody(".app-failure-box {") ?? ruleBody(".app-failure-box{");
+    expect(body).toBeDefined();
+    expect(body ?? "").toMatch(/\bborder\b/);
+  });
+});
+
+describe("F4 anatomy — failures-footer (jump + raw-output, test events)", () => {
+  test("renders '▸ N more failures · toggle raw output'; the jump calls scrollIntoView on the next failing leaf; the raw toggle reveals the event's stored raw output", async () => {
+    const now = Date.now();
+    const eventId = "evt-anatomy-footer-1";
+    const projectKey = "proj-anatomy-footer-1";
+    const rawOutput = "raw test runner output — anatomy footer fixture";
+    await mountApp({
+      pathname: "/",
+      projects: [
+        { key: projectKey, name: "Footer", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
+      ],
+      events: [
+        {
+          id: eventId,
+          projectKey,
+          agentId: "footer-agent",
+          kind: "test",
+          tier: "unit",
+          codec: "junit",
+          timestamp: now,
+          total: 3,
+          passed: 0,
+          failed: 3,
+          pending: 0,
+          duration_ms: 30,
+          hasCoverage: false,
+        },
+      ],
+      eventDetails: {
+        [eventId]: {
+          id: eventId,
+          projectKey,
+          agentId: "footer-agent",
+          kind: "test",
+          tier: "unit",
+          codec: "junit",
+          timestamp: now,
+          summary: { total: 3, passed: 0, failed: 3, pending: 0, duration_ms: 30 },
+          raw: rawOutput,
+          tree: [
+            {
+              name: "SuiteFooter",
+              status: "fail",
+              children: [
+                { name: "f1", status: "fail", duration_ms: 10, failure: { message: "m1" } },
+                { name: "f2", status: "fail", duration_ms: 10, failure: { message: "m2" } },
+                { name: "f3", status: "fail", duration_ms: 10, failure: { message: "m3" } },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const card = document.querySelector('[data-testid="event-card"]') as HTMLElement | null;
+    card!.click();
+    await settle();
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+
+    const footer = overlay.querySelector('[data-testid="failures-footer"]');
+    expect(footer).not.toBeNull();
+    expect((footer!.textContent ?? "")).toMatch(/▸ 2 more failures · toggle raw output/);
+
+    // Jump: the SECOND failing leaf-row (f2) is the "next" failure — stub
+    // scrollIntoView (happy-dom has no real layout) and assert it fires on
+    // exactly that row.
+    const f2Row = findByText(overlay, '[data-testid="leaf-row"]', "f2") as HTMLElement;
+    expect(f2Row).toBeDefined();
+    const scrollCalls: HTMLElement[] = [];
+    (HTMLElement.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView =
+      function (this: HTMLElement) {
+        scrollCalls.push(this);
+      };
+    const jump = footer!.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
+    expect(jump).not.toBeNull();
+    jump!.click();
+    await settle();
+    expect(scrollCalls.length).toBe(1);
+    expect(scrollCalls[0]).toBe(f2Row);
+
+    // Raw toggle — test events too (not compile-only).
+    expect(overlay.querySelector('[data-testid="raw-output"]')).toBeNull();
+    const rawToggle = footer!.querySelector('[data-testid="raw-toggle"]') as HTMLElement | null;
+    expect(rawToggle).not.toBeNull();
+    rawToggle!.click();
+    await settle();
+    const rawOutputEl = overlay.querySelector('[data-testid="raw-output"]');
+    expect(rawOutputEl).not.toBeNull();
+    expect(rawOutputEl!.textContent ?? "").toContain(rawOutput);
+  });
+});
+
+// ── F4½ header anatomy — status chips above the heat-strip (Density) ──────
+describe("F4½ anatomy — status-chips row above the heat-strip (Density presentation)", () => {
+  test("a regression-tier run renders '✗ failures N · ⏭ pending N · ✓ passed N' above the heat-strip", async () => {
+    const now = Date.now();
+    const eventId = "evt-anatomy-chips-1";
+    const projectKey = "proj-anatomy-chips-1";
+    const children = [];
+    for (let i = 0; i < 5; i++) {
+      if (i < 2) children.push({ name: `t${i}`, status: "fail" as const, duration_ms: 5, failure: { message: `boom${i}` } });
+      else if (i === 2) children.push({ name: `t${i}`, status: "pending" as const, duration_ms: 5 });
+      else children.push({ name: `t${i}`, status: "pass" as const, duration_ms: 5 });
+    }
+    await mountApp({
+      pathname: "/",
+      projects: [
+        { key: projectKey, name: "Chips", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
+      ],
+      events: [
+        {
+          id: eventId,
+          projectKey,
+          agentId: "chips-agent",
+          kind: "test",
+          tier: "regression",
+          codec: "junit",
+          timestamp: now,
+          total: 5,
+          passed: 2,
+          failed: 2,
+          pending: 1,
+          duration_ms: 200,
+          hasCoverage: false,
+        },
+      ],
+      eventDetails: {
+        [eventId]: {
+          id: eventId,
+          projectKey,
+          agentId: "chips-agent",
+          kind: "test",
+          tier: "regression",
+          codec: "junit",
+          timestamp: now,
+          summary: { total: 5, passed: 2, failed: 2, pending: 1, duration_ms: 200 },
+          tree: [{ name: "SuiteChips", status: "fail", children }],
+        },
+      },
+    });
+
+    const card = document.querySelector('[data-testid="event-card"]') as HTMLElement | null;
+    card!.click();
+    await settle();
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+
+    const chips = overlay.querySelector('[data-testid="density-status-chips"]');
+    expect(chips).not.toBeNull();
+    expect((chips!.textContent ?? "")).toMatch(/✗ failures 2 · ⏭ pending 1 · ✓ passed 2/);
+
+    const heatStrip = overlay.querySelector('[data-testid="heat-strip"]');
+    expect(heatStrip).not.toBeNull();
+    // Bound: the chips row precedes the heat-strip in document order.
+    expect(chips!.compareDocumentPosition(heatStrip!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeGreaterThan(0);
+
+    // COLORED per status, suite-row level too: this suite has a pending leaf
+    // (1), so its inline counts include a separate amber-classed pending
+    // segment alongside the fail/pass ones.
+    const suiteChipsRow = overlay.querySelector('[data-testid="suite-row"]')!;
+    const pendingCountSpan = suiteChipsRow.querySelector('[data-testid="suite-count-pending"]');
+    expect(pendingCountSpan).not.toBeNull();
+    expect((pendingCountSpan!.textContent ?? "").trim()).toBe("1 ⏭");
+    expect(pendingCountSpan!.className).toMatch(/\bapp-count-pending\b/);
+  });
+
+  test("a unit-tier (Detail) run renders NO status-chips row", async () => {
+    const now = Date.now();
+    const eventId = "evt-anatomy-chips-2";
+    const projectKey = "proj-anatomy-chips-2";
+    await mountApp({
+      pathname: "/",
+      projects: [
+        { key: projectKey, name: "ChipsDetail", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
+      ],
+      events: [
+        {
+          id: eventId,
+          projectKey,
+          agentId: "chips-detail-agent",
+          kind: "test",
+          tier: "unit",
+          codec: "junit",
+          timestamp: now,
+          total: 1,
+          passed: 1,
+          failed: 0,
+          pending: 0,
+          duration_ms: 5,
+          hasCoverage: false,
+        },
+      ],
+      eventDetails: {
+        [eventId]: {
+          id: eventId,
+          projectKey,
+          agentId: "chips-detail-agent",
+          kind: "test",
+          tier: "unit",
+          codec: "junit",
+          timestamp: now,
+          summary: { total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 5 },
+          tree: [{ name: "SuiteChipsDetail", status: "pass", children: [{ name: "t0", status: "pass", duration_ms: 5 }] }],
+        },
+      },
+    });
+
+    const card = document.querySelector('[data-testid="event-card"]') as HTMLElement | null;
+    card!.click();
+    await settle();
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay.querySelector('[data-testid="density-status-chips"]')).toBeNull();
   });
 });

@@ -33,6 +33,7 @@ interface EventBriefShape {
 interface TabShape {
   name: string;
   disabled: boolean;
+  hint?: string;
 }
 
 function brief(overrides: Partial<CrucibleEventBrief> = {}): CrucibleEventBrief {
@@ -202,10 +203,13 @@ describe("workspaceTabs — Runs/Coverage/Compile/BDD, Agents dropped (§S5 shel
 
     expect(tabs.map((t: TabShape) => t.name)).toEqual(["Runs", "Coverage", "Compile", "BDD"]);
     expect(tabs.find((t: TabShape) => t.name === "BDD")).toEqual({ name: "BDD", disabled: true });
-    // bound: none of the non-BDD tabs are disabled
-    expect(
-      tabs.filter((t: TabShape) => t.name !== "BDD").some((t: TabShape) => t.disabled),
-    ).toBe(false);
+    // Modified per the §S1 addendum (Coverage tab gating, user-added during
+    // execution): a project with NO `latestCoverageEventId` (this fixture
+    // supplies none) now legitimately disables Coverage too — was: "bound:
+    // none of the non-BDD tabs are disabled". Runs and Compile are still
+    // NEVER gated.
+    expect(tabs.find((t: TabShape) => t.name === "Runs")?.disabled).toBe(false);
+    expect(tabs.find((t: TabShape) => t.name === "Compile")?.disabled).toBe(false);
     // bound: Agents is gone, not merely relabeled
     expect(tabs.find((t: TabShape) => t.name === "Agents")).toBeUndefined();
   });
@@ -219,6 +223,34 @@ describe("workspaceTabs — Runs/Coverage/Compile/BDD, Agents dropped (§S5 shel
       disabled: false,
     });
     expect(tabs.find((t: TabShape) => t.name === "Agents")).toBeUndefined();
+  });
+});
+
+// §S1 addendum (user note, during execution): the Coverage tab gates like
+// BDD does — disabled with a hint until the project has green-regression
+// coverage data (`latestCoverageEventId` present, same field the server
+// already emits — src/v2.ts's v2 projects listing), enabled once it exists.
+describe("workspaceTabs — Coverage tab gating (§S1 addendum)", () => {
+  test("no latestCoverageEventId: Coverage is disabled with a hint", () => {
+    const tabs = workspaceTabs({ type: "backend" });
+    const coverage = tabs.find((t: TabShape) => t.name === "Coverage");
+    expect(coverage?.disabled).toBe(true);
+    expect(coverage?.hint).toBe("coverage lands with the first green regression");
+  });
+
+  test("latestCoverageEventId present: Coverage is enabled (no hint)", () => {
+    const tabs = workspaceTabs({ type: "backend", latestCoverageEventId: "evt-cov-1" });
+    const coverage = tabs.find((t: TabShape) => t.name === "Coverage");
+    expect(coverage?.disabled).toBe(false);
+    expect(coverage?.hint).toBeUndefined();
+  });
+
+  test("gating applies identically to frontend projects", () => {
+    const gated = workspaceTabs({ type: "frontend" });
+    expect(gated.find((t: TabShape) => t.name === "Coverage")?.disabled).toBe(true);
+
+    const ungated = workspaceTabs({ type: "frontend", latestCoverageEventId: "evt-cov-2" });
+    expect(ungated.find((t: TabShape) => t.name === "Coverage")?.disabled).toBe(false);
   });
 });
 

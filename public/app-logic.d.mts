@@ -47,11 +47,20 @@ export interface RouteState {
 
 export interface WorkspaceProjectLike {
   type: "backend" | "frontend";
+  // CR-CRU-007 §S1 addendum — Coverage tab gating: same field names the
+  // server already emits on the v2 projects listing (src/v2.ts
+  // handleProjectsList: `latestGreenCoverage` + `latestCoverageEventId`,
+  // ABSENT — not merely null — until a green regression run with coverage
+  // exists).
+  latestCoverageEventId?: string;
 }
 
 export interface WorkspaceTab {
   name: "Runs" | "Coverage" | "Compile" | "BDD";
   disabled: boolean;
+  /** RED-phase declaration only — present when `disabled` explains why
+   * (Coverage: "coverage lands with the first green regression"). */
+  hint?: string;
 }
 
 // CR-CRU-007 §S5.1 — activity rule + projects-row ordering (pure).
@@ -181,3 +190,11 @@ export declare function foldSuites(suites: FoldSuiteLike[]): string[];
 export declare function digestFailures<T extends DigestLeafLike>(
   leaves: T[],
 ): Array<DigestEntry<T>>;
+
+// CR-CRU-007 §S1 — phase-role icon tinting (pure). RED-phase declaration
+// only (mirrors this file's own convention for every prior §S4/§S2 addition
+// above) — public/app-logic.mjs does not export `phaseRole` yet; GREEN adds
+// the real implementation and it must satisfy this signature.
+export type PhaseRole = "red" | "green" | "verify" | "fix" | null;
+
+export declare function phaseRole(agentId: string): PhaseRole;

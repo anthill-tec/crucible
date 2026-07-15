@@ -1,26 +1,34 @@
-// CR-CRU-007 §S4 item 0 — tier-default drill-in mode, pure logic.
+// CR-CRU-007 §S4 item 0 — tier-driven drill-in presentation, pure logic.
 //
-// `L.drillinDefaultMode(tier)` and `L.drillinModeStorageKey(tier)` do not
-// exist yet on public/app-logic.mjs. Same convention as the existing
-// `projectActivity`/`orderProjects` RED tests in tests/app-logic.test.ts:
-// a namespace import (`import * as AppLogic`) stays loadable even for a
-// not-yet-exported name, so calling `AppLogic.drillinDefaultMode(...)`
-// fails at CALL time ("... is not a function") — that TypeError IS the RED
-// signal here (bun test has no static type-check gate on this import).
+// CR-CRU-007 C5b FINAL re-baseline (user correction, 2026-07-15): the mode
+// badge/switch is REMOVED ENTIRELY — there is no `drillin-mode` DOM element,
+// no toggle, no persistence. Presentation is decided PURELY by tier:
+// `L.drillinDefaultMode(tier)` survives as that pure tier -> presentation
+// mapping (kept verbatim: "regression"/"e2e" -> "Density", everything else
+// -> "Detail" — the function's OWN behavior didn't change, only what calls
+// it and how the result is used did). `L.drillinModeStorageKey(tier)` is
+// DELETED from the contract — there is nothing left to persist, since there
+// is no manual override to remember. Same not-yet-existing-export
+// convention as tests/app-logic.test.ts: a namespace import
+// (`import * as AppLogic`) stays loadable even for a not-yet-exported name,
+// so calling `AppLogic.drillinDefaultMode(...)` fails at CALL time ("... is
+// not a function") — that TypeError IS the RED signal here (bun test has no
+// static type-check gate on this import).
 //
-// Contract this file defines for GREEN (the round-10 mode-switch revision,
-// §S4 item 0):
+// Contract this file defines for GREEN:
 //   - drillinDefaultMode(tier): "regression" | "e2e" -> "Density";
 //     everything else ("unit" | "module" | "integration" | ...) -> "Detail".
 //     Single-argument — there is NO test-count parameter anywhere, matching
-//     "no code path selects the mode from test count".
-//   - drillinModeStorageKey(tier): returns the SAME key string for every
-//     tier in the "broad" group (regression, e2e) and a DIFFERENT, but
-//     mutually shared, key string for every tier in the "focused" group
-//     (unit, module, integration) — the two localStorage keys the spec
-//     calls "focused / broad".
+//     "no code path selects presentation from test count".
+//   - drillinModeStorageKey is NOT exported from public/app-logic.mjs (the
+//     export is gone — nothing left to persist).
 import { describe, test, expect } from "bun:test";
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import * as AppLogic from "../public/app-logic.mjs";
+
+const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 describe("app-logic — drillinDefaultMode (§S4.0 tier-default mode, round 10)", () => {
   test("regression tier defaults to Density", () => {
@@ -52,24 +60,28 @@ describe("app-logic — drillinDefaultMode (§S4.0 tier-default mode, round 10)"
   });
 });
 
-describe("app-logic — drillinModeStorageKey (§S4.0 per-tier-group persistence keys)", () => {
-  test("regression and e2e (the broad group) share the same storage key", () => {
-    expect(AppLogic.drillinModeStorageKey("regression")).toBe(AppLogic.drillinModeStorageKey("e2e"));
+// DROPPED + REPLACED per the CR-CRU-007 C5b FINAL re-baseline: the mode
+// badge/switch is removed entirely, so drillinModeStorageKey has nothing
+// left to persist — the whole "per-tier-group persistence keys" describe
+// block above is superseded by proving the export itself is gone.
+describe("app-logic — drillinModeStorageKey is DELETED from the contract (§S4.0 FINAL re-baseline)", () => {
+  test("drillinModeStorageKey is not exported from app-logic.mjs", () => {
+    expect((AppLogic as unknown as Record<string, unknown>).drillinModeStorageKey).toBeUndefined();
+  });
+});
+
+// AC: "Purely tier-contextual: NO `drillin-mode` element exists anywhere
+// (DOM + grep assertion) ... no mode persistence key exists." — the DOM half
+// is covered by tests/drill-in.test.ts + tests/density.test.ts; this is the
+// grep half, over the real production source.
+describe("app-logic + app.js — no drillin-mode source references remain (grep AC)", () => {
+  test("public/app.js never references the data-testid \"drillin-mode\"", () => {
+    const src = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
+    expect(src).not.toContain("drillin-mode");
   });
 
-  test("unit, module, and integration (the focused group) share the same storage key", () => {
-    const focused = AppLogic.drillinModeStorageKey("unit");
-    expect(AppLogic.drillinModeStorageKey("module")).toBe(focused);
-    expect(AppLogic.drillinModeStorageKey("integration")).toBe(focused);
-  });
-
-  test("the focused-group key and the broad-group key are distinct strings", () => {
-    expect(AppLogic.drillinModeStorageKey("unit")).not.toBe(AppLogic.drillinModeStorageKey("regression"));
-  });
-
-  test("bound: the key is a non-empty string usable directly as a localStorage key", () => {
-    const key = AppLogic.drillinModeStorageKey("regression");
-    expect(typeof key).toBe("string");
-    expect(key.length).toBeGreaterThan(0);
+  test("public/app-logic.mjs never references drillinModeStorageKey", () => {
+    const src = readFileSync(path.join(REPO_ROOT, "public/app-logic.mjs"), "utf8");
+    expect(src).not.toContain("drillinModeStorageKey");
   });
 });

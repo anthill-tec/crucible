@@ -357,3 +357,82 @@ describe("workspace Project pane — coverage meter click wiring (integration AC
     expect(document.querySelector('[data-testid="run-overlay"]')).toBeNull();
   });
 });
+
+// CR-CRU-007 §S1 addendum (user note, during execution) — the workspace
+// Coverage TAB gates like BDD does: disabled/greyed with a hint until the
+// project has green-regression coverage data (`latestCoverageEventId`
+// present — same field asserted server-side in describe block (A) above),
+// enabled once it exists. RED phase: the workspace-tabs render call
+// (public/app.js) passes ONLY `{type: project?.type}` into `L.workspaceTabs`
+// today — no coverage field flows through at all — so Coverage never gates
+// regardless of this fixture's `latestCoverageEventId`.
+describe("workspace Coverage tab — gated on green-regression coverage (§S1 addendum)", () => {
+  afterEach(async () => {
+    await GlobalRegistrator.unregister();
+  });
+
+  function coverageTab(): HTMLElement | undefined {
+    return Array.from(document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]')).find(
+      (el) => (el.textContent ?? "").includes("Coverage"),
+    );
+  }
+
+  test("no latestCoverageEventId: the Coverage tab renders disabled", async () => {
+    const projectKey = "cov-tab-gate-1";
+    const now = Date.now();
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [
+        {
+          key: projectKey,
+          name: "Coverage Tab No Coverage",
+          type: "backend",
+          agentsOnline: 1,
+          agentsTotal: 1,
+          active: true,
+          lastActivity: now,
+          lastEvent: null,
+          latestGreenCoverage: null,
+        },
+      ],
+    });
+
+    const tab = coverageTab();
+    expect(tab).toBeDefined();
+    expect(tab!.hasAttribute("disabled")).toBe(true);
+    expect(tab!.className).toMatch(/\bdisabled\b/);
+
+    // Clicking a disabled Coverage tab never switches the workspace pane.
+    tab!.click();
+    await settle();
+    expect(document.querySelector('[data-testid="workspace-runs"]')).not.toBeNull();
+  });
+
+  test("latestCoverageEventId present: the Coverage tab renders enabled and switches the pane on click", async () => {
+    const projectKey = "cov-tab-gate-2";
+    const eventId = "evt-cov-tab-gate-2";
+    const now = Date.now();
+    await mountApp({
+      pathname: `/p/${projectKey}`,
+      projects: [
+        {
+          key: projectKey,
+          name: "Coverage Tab With Coverage",
+          type: "backend",
+          agentsOnline: 1,
+          agentsTotal: 1,
+          active: true,
+          lastActivity: now,
+          lastEvent: null,
+          latestGreenCoverage: { lines: { covered: 8, total: 10, percent: 80 } },
+          latestCoverageEventId: eventId,
+        },
+      ],
+    });
+
+    const tab = coverageTab();
+    expect(tab).toBeDefined();
+    expect(tab!.hasAttribute("disabled")).toBe(false);
+    expect(tab!.className).not.toMatch(/\bdisabled\b/);
+  });
+});
