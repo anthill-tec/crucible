@@ -1,6 +1,6 @@
 # CR-CRU-007 — Run timeline + density-adaptive drill-in
 
-**Status:** PENDING
+**Status:** IN_PROGRESS (2026-07-15 — GO after the 31-round design iteration; branch feature/CR-CRU-007)
 **Type:** feature
 **Priority:** P1
 **Depends on:** CR-CRU-006
