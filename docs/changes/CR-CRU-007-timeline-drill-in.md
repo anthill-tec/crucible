@@ -71,6 +71,11 @@ Test body: suite→test tree; failed leaf expands to `failure.message` + `trace`
    to `/p/<key>` — pane rows never filter. Agent sub-row click filters the visible
    timeline to that agent (in place). The `← projects` breadcrumb renders on the
    workspace view only.
+4. **Health pill fidelity (user note 2026-07-15, post-approval addendum).** The
+   pill is the SAME server-liveness badge on home AND workspace top bars: green
+   dot + `server healthy · live` (or `· up <uptime>`), red dot +
+   `server unreachable · retrying…`. It never shows version/event counts, and the
+   workspace top bar carries the pill instead of an agent-count chip.
 
 ## Acceptance criteria
 - [ ] A `context`-bearing event's card shows `branch@abc1234` + wave badge; a context-less event's card shows neither (no placeholder text).
@@ -88,6 +93,7 @@ Test body: suite→test tree; failed leaf expands to `failure.message` + `trace`
 - [ ] §S5: home top bar renders zero `data-testid="project-chip"` elements with ≥1 project registered; a `data-testid="filter-pulldown"` control defaults to `All projects`; selecting a project in it filters the home timeline in place (`location.pathname` stays `/`, timeline shows only that project's cards).
 - [ ] §S5: clicking a Projects-pane project row changes the route to `/p/<key>` (drill-down); clicking an agent sub-row does NOT change the route and filters the visible timeline to that agent's runs.
 - [ ] §S5: `data-testid="workspace-header"` (with the `← projects` control) exists on `/p/<key>` and does not exist on `/`.
+- [ ] §S5: `data-testid="health-pill"` renders on BOTH `/` and `/p/<key>`; its text matches `/^server healthy · (live|up .+)$/` when the backend is up and equals `server unreachable · retrying…` when down (no version or event-count text in either state); the workspace top bar contains no agent-count chip.
 - [ ] E2E (storyboard as contract, PRD §5): Playwright suite `tests/e2e/timeline.e2e.ts` extends the CR-CRU-006 harness with frame-mapped scenarios — F2 (registered project shows ⌁ agent sub-rows live in the pane), F3 (ingest via API → red card appears live with tier+codec badges), F4/F4½ (drill-in shows failing test's assertion message; 60-test run renders the heat-strip), F5 (compile ingest renders a 🛠 card, never "0/N tests"), F6 (fail-then-pass same agent stem → transition marker text `RED 2/5 ➜ GREEN 5/5`), F7 (green regression updates the project card coverage meter), F8 (pane-row click lands on the workspace: no Agents tab, ⌁ agents in the vitals rail, breadcrumb present). All pass headless against the real server; results ingested with `tier: "e2e"`.
 
 ## Estimated size

@@ -214,6 +214,9 @@ events}}`. The SSE channel emits keep-alive frames every
 15 s. The dashboard pins a server-health pill (healthy / unreachable) and visibly greys
 all live data when keep-alives stop and a health probe fails — the frontend must never
 present stale data as live. Orchestrators may gate wave dispatch on `/api/health`.
+Pill fidelity (user-locked 2026-07-15): the pill is the same server-liveness badge on
+every surface (home + workspace top bars) — green dot + `server healthy · live / up Xm`,
+red dot + `server unreachable · retrying…`; it never shows version or event counts.
 
 ### 4.11 Dashboard (v2 UX)
 - **Project switcher (final — design iteration approved 2026-07-15 via review
