@@ -22,8 +22,12 @@ filter-by pulldown, drill-down pane navigation, workspace Agents tab removed.
 Timeline (home: cross-project; workspace Runs tab: scoped) renders newest-first
 event cards: kind icon (🧪 test / 🛠 compile), agentId, tier + codec badges, context
 badges when present (branch@shortcommit, wave, orchestrator — omitted when absent),
-relative time, duration, ratio pill (`N/N` green / `F ✗ of N` red / `E errors`
-amber). Compile cards preview the first 2 diagnostics inline.
+relative time, duration, ratio pill. Pill palette follows the UNIVERSAL status
+palette (user-corrected 2026-07-15 against the live render — the original amber
+compile pill predated the palette rule): `N/N` green / `F ✗ of N` red / compile
+`E errors` **red when E>0, pass-green `0 errors` when clean** — a successful
+run of ANY kind is green, a failed one red; amber stays reserved for pending.
+Compile cards preview the first 2 diagnostics inline.
 Click affordance (user-added during execution): clickable run cards show the
 POINTER cursor + a hover affordance (forge conventions) so the drill-down spot
 is discoverable. In 0.1.0 every stored event is a completed run, so all cards
@@ -76,12 +80,24 @@ row-border seen live was never in the storyboard; status is conveyed by text
 color alone — the ONLY boxed element in the tree is the failure box itself);
 **failing suites auto-expand in BOTH modes** (their leaves fetched immediately;
 passing suites stay collapsed rows); a failed leaf shows its `failure.message`
-+ `trace` INLINE beneath it (mono, red-accent box, `at file:line` last); footer
++ `trace` INLINE beneath it (mono, red-accent box, `at file:line` last). The
+failure box NEVER renders empty (user defect report 2026-07-15: bun's JUnit
+reporter emits bare `<failure type="AssertionError"/>` — no message attribute,
+no text — so the box rendered as an empty red band): when `message` is absent
+the box renders the failure `type` as its message line plus a dim note
+`no failure detail captured by the reporter`; a failure with neither message
+nor type renders `test failed` + the same note; the trace block renders only
+when a trace exists. Footer
 row: `▸ N more failures · toggle raw output` (jumps to the next failure; raw
 toggle reveals the stored raw output). Density (broad tiers) adds the F4½
 header: status chips `✗ failures N · ⏭ pending N · ✓ passed N` above the
-heat-strip. Compile body: diagnostics grouped by file
-(`file:line:col — message`, level-colored) + raw-output toggle.
+heat-strip. Compile body (user defect report 2026-07-15: a clean tsc drill-in rendered a
+fully EMPTY pane): a status line ALWAYS renders first —
+`<format> · N errors · M warnings`, pass-green when `errorCount` is 0, fail-red
+otherwise — then diagnostics grouped by file (`file:line:col — message`,
+level-colored) when present, else the empty-state line
+`clean compile — no diagnostics`; the raw-output toggle renders only when a
+non-empty `raw` is stored.
 
 ### §S4 Density set (release 0.1.0 — approved F4½ verdicts; mode-switch revision 2026-07-15)
 0. **Purely tier-contextual — NO mode switch exists (final user correction:
@@ -169,6 +185,9 @@ heat-strip. Compile body: diagnostics grouped by file
 - [ ] A 10 000-leaf synthetic run: mounted tree-row DOM nodes < 200 (virtualization) and the initial drill-in network payload contains no leaf entries (suites-first paging) — in BOTH modes.
 - [ ] Density toggle cycles 3 modes and survives reload (localStorage).
 - [ ] The drill-in URL `/p/<key>/run/<id>` opened cold (fresh load) renders the same drill-in.
+- [ ] Failure-box degradation (user defect 2026-07-15): a failing leaf whose `failure` is exactly `{type:"AssertionError"}` renders a failure box whose visible text contains `AssertionError` AND `no failure detail captured by the reporter` — the box's text content is never empty; a failing leaf with NO failure object (or one with neither message nor type) renders `test failed` + the same note; no `.app-failure-trace` node renders when `trace` is absent.
+- [ ] Compile drill-in status line (user defect 2026-07-15): a compile event with `errorCount:0, warningCount:0, diagnostics:[]` renders `data-testid="compile-status"` with text `tsc · 0 errors · 0 warnings` carrying the pass-green class, followed by the empty-state `clean compile — no diagnostics`; the same event with 2 error diagnostics renders the status line fail-red with the diagnostics list; the raw-output toggle is ABSENT when `raw` is empty/absent and present when non-empty.
+- [ ] Compile card pill palette (user defect 2026-07-15): a compile card with `errors:0` renders its `0 errors` pill with the SAME pass-green class as an `N/N` test pill; with `errors:3` the `3 errors` pill carries the fail-red class; no amber compile pill exists anywhere (class-level assertion).
 - [ ] Integration: coverage meter click on a project card opens the drill-in of the event whose id equals the project's latest-green-coverage event (wired per §nav table).
 - [ ] §S5: workspace Project pane — on `/p/<key>` for a project with 2 online agents + 1 tombstoned, `data-testid="project-pane"` renders the project card (name + type badge + coverage meter) followed by exactly 3 `⌁`-marked agent sub-rows, with the Vitals cards beneath; the home page (`/`) renders 0 agent rows anywhere.
 - [ ] §S5: `L.workspaceTabs({type:"backend"})` returns exactly `["Runs","Coverage","Compile","BDD"(disabled)]` and `L.workspaceTabs({type:"frontend"})` the same with BDD enabled — no `Agents` entry in either.
