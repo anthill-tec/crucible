@@ -182,6 +182,33 @@ body {
 .app-main:not(.app-home) {
   grid-template-rows: auto minmax(0, 1fr);
 }
+/* CR-CRU-016 §S1 tabs-hide — while a detail is open the tabs row is parked
+   (hidden, testid retired); the body row takes the whole main area and the
+   detail header renders inside the detail column (WorkspaceRunDetail). */
+.app-tabs-parked { display: none; }
+.app-main:not(.app-home):has(> .app-tabs-parked) {
+  grid-template-rows: minmax(0, 1fr);
+}
+/* CR-CRU-016 §S1 header-always-visible — home pins the detail header in a
+   band ABOVE the timeline pane's scroller. */
+.app-main.app-home:has(> .app-drillin-head) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.app-main > .app-drillin-head { margin-bottom: 0; }
+/* The workspace detail column: header band on top, the detail's own
+   scroller filling the rest. */
+.app-detail-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.app-detail-col > .app-drillin-head { margin-bottom: 8px; }
+.app-detail-col > .app-center { flex: 1 1 auto; }
+/* Hidden COMPAT copy of the detail head inside home's in-pane overlay (the
+   visible header is the band above the pane) — kept for the pre-C5
+   overlay-scoped chip/density contracts. */
+.app-drillin-inhead { display: none; }
 .app-workspace-body {
   display: grid;
   grid-template-columns: minmax(0, 2.6fr) minmax(260px, 1fr);
@@ -306,6 +333,12 @@ body {
   height: 100%;
   border-radius: 999px;
   background: linear-gradient(90deg, var(--ember), var(--pass));
+}
+/* CR-CRU-016 §S4 F7 — inline card coverage meter (regression runs carrying
+   coverage): same .app-meter anatomy as the pane meter, sized to the card. */
+.app-card-meter {
+  max-width: 180px;
+  margin-top: 4px;
 }
 /* §S5.5 — Coverage tab panel rows. */
 .app-coverage-row {

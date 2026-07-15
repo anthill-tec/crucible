@@ -8,8 +8,8 @@ import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import { Store, UUID_RE } from "./store.ts";
 import type { TouchAgentOpts } from "./store.ts";
-import { handleV2 } from "./v2.ts";
-import type { AgentIdentity, Coverage, RunSchema, RunSummary, SuiteNode } from "./types.ts";
+import { TIERS, handleV2 } from "./v2.ts";
+import type { AgentIdentity, Coverage, RunSchema, RunSummary, SuiteNode, Tier } from "./types.ts";
 
 const pkg = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -45,6 +45,8 @@ interface IngestBody {
   tree?: unknown;
   coverage?: unknown;
   eventId?: unknown;
+  // CR-CRU-016 §S4 — optional tier passthrough on /api/ingest/parsed
+  tier?: unknown;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -134,6 +136,17 @@ async function handleIngestParsed(store: Store, req: Request): Promise<Response>
     return err(400, "tree is required");
   }
 
+  // CR-CRU-016 §S4 — optional tier passthrough: validated against the known
+  // tier set; invalid → 400 naming `tier`; omitted → the store's existing
+  // `unit` default.
+  let tier: Tier | undefined;
+  if (body.tier !== undefined) {
+    if (typeof body.tier !== "string" || !TIERS.has(body.tier)) {
+      return err(400, `tier must be one of ${[...TIERS].join(", ")}`);
+    }
+    tier = body.tier as Tier;
+  }
+
   const summary = body.summary as RunSummary;
   const run: RunSchema = {
     summary,
@@ -148,6 +161,7 @@ async function handleIngestParsed(store: Store, req: Request): Promise<Response>
   store.recordTestEvent(pk.key, agentId, run, {
     codec: "parsed",
     ...(typeof body.name === "string" ? { name: body.name } : {}),
+    ...(tier !== undefined ? { tier } : {}),
   });
   // §S1 — echoes the input summary verbatim.
   return json({ ok: true, summary });
