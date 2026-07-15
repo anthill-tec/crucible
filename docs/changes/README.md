@@ -22,7 +22,8 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-011](CR-CRU-011-workflow-lens.md) | Cycle plans + workflow lens + agent runtimes | feature | PENDING | 007 | 4 (before 008) |
 | [CR-CRU-012](CR-CRU-012-projects-manager.md) | Projects manager: add + edit + archive | feature | PENDING | 004, 007 | 4 (before 009) |
 | [CR-CRU-013](CR-CRU-013-gate-events.md) | Workflow events: gates (no-mistakes) + milestones | feature | PENDING | 008, 011 | 4 (before 009) |
-| [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 opener) | 011, 013 | 5 (0.2.0) |
+| [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 · track-1) | 011, 013 | 5 (0.2.0) |
+| [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Playwright runner + codec + tab | feature | PENDING (0.2.0 · track-2) | 004, 007 | 5 (0.2.0) |
 
 ## Notes
 - 2026-07-14 — Project kickoff: PRD + evidence DN landed. Kickoff design review (lavish)
@@ -74,6 +75,14 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   before 009; 009 now depends on 011). Backwards audit of the agent API found the
   lifecycle gap (unregister hard-deletes firstSeen/lastSeen → runtime lost) — closed
   by CR-011 §S1 lifecycle events.
+- 2026-07-15 (during CR-007 execution) — §S2 markers re-baselined to STREAK-based
+  pairing (live view showed marker proliferation; declared plans supersede the
+  heuristic in CR-011 — orchestrator todo-complete IS the boundary). Storyboard
+  100%-compliance locked as the acceptance bar (fidelity batch running in C5).
+  USER-APPROVED: post-0.1.0 this project shifts to the MULTI-TRACK model —
+  0.2.0 = Wave 5 running CR-014 (track-1) ∥ CR-015 (track-2, BDD harness, filed
+  with full ACs incl. the multi-track dog-food AC); CR-011's commit-boundary
+  query added (closed plans expose mergeCommit + run-commit range).
 - 2026-07-15 (design iteration rounds 25–31, close) — roles-vs-tool correction
   (`WORKFLOW_*` env vars; `CRUCIBLE_*` = tool config only); role hierarchy
   (Mainline Orchestrator → Orchestrator → RED/GREEN/VERIFY/FIX, authority follows
