@@ -4,7 +4,7 @@
 **Co-author:** claude (orchestrator — crucible)
 **Date:** 2026-07-14
 **Status:** DRAFT — kickoff design contract
-**Design inputs:** [DN-crucible-api-reconstruction.md](DN-crucible-api-reconstruction.md)
+**Design inputs:** [DN-crucible-api-reconstruction.md](DN-crucible-api-reconstruction.md) · [DN-model-b-language.md](DN-model-b-language.md) (the locked Model-B ontology, rounds 10–30)
 
 ## 1 Why
 

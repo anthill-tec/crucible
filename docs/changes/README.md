@@ -74,6 +74,15 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   before 009; 009 now depends on 011). Backwards audit of the agent API found the
   lifecycle gap (unregister hard-deletes firstSeen/lastSeen → runtime lost) — closed
   by CR-011 §S1 lifecycle events.
+- 2026-07-15 (design iteration rounds 25–31, close) — roles-vs-tool correction
+  (`WORKFLOW_*` env vars; `CRUCIBLE_*` = tool config only); role hierarchy
+  (Mainline Orchestrator → Orchestrator → RED/GREEN/VERIFY/FIX, authority follows
+  scope); Model B in one sentence (actions by actors with roles); product
+  definition locked (Crucible = the tracking system for the Model-B workflow);
+  roadmap navigation resolved (/p/<key>/roadmap slide-over); nav map finalized.
+  The whole ontology is consolidated in
+  [DN-model-b-language.md](../research/DN-model-b-language.md) (user-directed,
+  round 31 — "document so we don't lose context").
 - 2026-07-15 (design iteration rounds 23–24) — milestones folded into CR-013
   (renamed "Workflow events: gates + milestones"): gap-analysis / design-review /
   stage-flip entries on the PROJECT WORKSPACE timeline only (home stays a
