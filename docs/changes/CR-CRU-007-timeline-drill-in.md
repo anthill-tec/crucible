@@ -42,13 +42,20 @@ Test body: suite→test tree; failed leaf expands to `failure.message` + `trace`
 (mono, red-accent box). Compile body: diagnostics grouped by file
 (`file:line:col — message`, level-colored) + raw-output toggle.
 
-### §S4 Density set (release 0.1.0 — approved F4½ verdicts)
-1. **Failures float, green folds** — all-pass suites collapse to one counted row;
-   failing suites auto-expand; runs with 0 failures open with suites collapsed.
-2. **Heat-strip minimap** — one cell per test (fail red / pending amber / pass
-   dimmed green), rendered for runs with > 50 tests; clicking a cell scrolls to and
-   expands that test.
-3. **Failure digest** — leaves within a suite sharing an identical
+### §S4 Density set (release 0.1.0 — approved F4½ verdicts; mode-switch revision 2026-07-15)
+0. **Detail ↔ Density mode switch (user note, round 8)** — the drill-in header
+   renders a persisted (localStorage) mode switch, default `Detail`. There is NO
+   test-count auto-decision anywhere. `Detail` = the plain suite tree. `Density`
+   applies ideas 1–3 below. Ideas 4–5 (virtualization, progressive payload) are
+   always-on in both modes; idea 6 (comfortable/compact/ultra toggle) is
+   independent of the mode.
+1. **Failures float, green folds** (Density mode) — all-pass suites collapse to one
+   counted row; failing suites auto-expand; runs with 0 failures open with suites
+   collapsed.
+2. **Heat-strip minimap** (Density mode) — one cell per test (fail red / pending
+   amber / pass dimmed green), any run size — no count threshold; clicking a cell
+   scrolls to and expands that test.
+3. **Failure digest** (Density mode) — leaves within a suite sharing an identical
    `failure.message` group into one row + "+N identical" expander.
 4. **Virtualized tree** — only visible rows in the DOM; 10 000-leaf run keeps
    < 200 tree row nodes mounted.
@@ -94,10 +101,11 @@ Test body: suite→test tree; failed leaf expands to `failure.message` + `trace`
 - [ ] A `context`-bearing event's card shows `branch@abc1234` + wave badge; a context-less event's card shows neither (no placeholder text).
 - [ ] Ingesting fail(2/5) then pass(5/5) for agents `CR-X-1-RED` / `CR-X-1-GREEN` renders exactly one marker row whose text matches `RED 2/5 ➜ GREEN 5/5` and includes a duration; pass-then-pass renders none.
 - [ ] Clicking a 🛠 card opens the drill-in with a diagnostics list grouped by file and a working raw-output toggle; clicking a 🧪 card shows the suite tree.
-- [ ] Drill-in of a run with 0 failures opens with every suite collapsed to `name + ✓count` rows; a run with failures opens with ONLY failing suites expanded.
-- [ ] A 60-test fixture renders a heat-strip with 60 cells; clicking the first red cell expands that test's failure box (assert `failure.message` text visible).
-- [ ] 4 leaves with identical `failure.message` render as 1 row + an expander labeled `+3 identical`.
-- [ ] A 10 000-leaf synthetic run: mounted tree-row DOM nodes < 200 (virtualization) and the initial drill-in network payload contains no leaf entries (suites-first paging).
+- [ ] The drill-in header renders a Detail↔Density mode switch (data-testid `drillin-mode`) defaulting to `Detail`; the chosen mode survives reload (localStorage); no code path selects the mode from test count.
+- [ ] In Density mode, drill-in of a run with 0 failures opens with every suite collapsed to `name + ✓count` rows; a run with failures opens with ONLY failing suites expanded.
+- [ ] With Density mode ON, a 60-test fixture renders a heat-strip with 60 cells and clicking the first red cell expands that test's failure box (assert `failure.message` text visible); in Detail mode the same fixture renders no heat-strip.
+- [ ] In Density mode, 4 leaves with identical `failure.message` render as 1 row + an expander labeled `+3 identical`.
+- [ ] A 10 000-leaf synthetic run: mounted tree-row DOM nodes < 200 (virtualization) and the initial drill-in network payload contains no leaf entries (suites-first paging) — in BOTH modes.
 - [ ] Density toggle cycles 3 modes and survives reload (localStorage).
 - [ ] The drill-in URL `/p/<key>/run/<id>` opened cold (fresh load) renders the same drill-in.
 - [ ] Integration: coverage meter click on a project card opens the drill-in of the event whose id equals the project's latest-green-coverage event (wired per §nav table).
@@ -109,7 +117,7 @@ Test body: suite→test tree; failed leaf expands to `failure.message` + `trace`
 - [ ] §S5: the drill-in header renders a `← timeline` control whose click closes the overlay with the exact same route/scroll restore as Escape; the workspace header's `← projects` control navigates to `/`.
 - [ ] §S5: `data-testid="workspace-header"` (with the `← projects` control) exists on `/p/<key>` and does not exist on `/`.
 - [ ] §S5: `data-testid="health-pill"` renders on BOTH `/` and `/p/<key>`; its text matches `/^server healthy · (live|up .+)$/` when the backend is up and equals `server unreachable · retrying…` when down (no version or event-count text in either state); the workspace top bar contains no agent-count chip.
-- [ ] E2E (storyboard as contract, PRD §5): Playwright suite `tests/e2e/timeline.e2e.ts` extends the CR-CRU-006 harness with frame-mapped scenarios — F2 (project registration lights its projects-row badge live over SSE, active-first ordering), F3 (ingest via API → red card appears live with tier+codec badges), F4/F4½ (drill-in shows failing test's assertion message; 60-test run renders the heat-strip), F5 (compile ingest renders a 🛠 card, never "0/N tests"), F6 (fail-then-pass same agent stem → transition marker text `RED 2/5 ➜ GREEN 5/5`), F7 (green regression updates the Project-pane coverage meter), F8 (badge click lands on the workspace: no Agents tab, right Project pane with ⌁ agents, `← projects` breadcrumb present). All pass headless against the real server; results ingested with `tier: "e2e"`.
+- [ ] E2E (storyboard as contract, PRD §5): Playwright suite `tests/e2e/timeline.e2e.ts` extends the CR-CRU-006 harness with frame-mapped scenarios — F2 (project registration lights its projects-row badge live over SSE, active-first ordering), F3 (ingest via API → red card appears live with tier+codec badges), F4/F4½ (drill-in shows failing test's assertion message; switching to Density mode renders the 60-test heat-strip), F5 (compile ingest renders a 🛠 card, never "0/N tests"), F6 (fail-then-pass same agent stem → transition marker text `RED 2/5 ➜ GREEN 5/5`), F7 (green regression updates the Project-pane coverage meter), F8 (badge click lands on the workspace: no Agents tab, right Project pane with ⌁ agents, `← projects` breadcrumb present). All pass headless against the real server; results ingested with `tier: "e2e"`.
 
 ## Estimated size
 L (grew with §S5 fold-in — plan an extra shell-revision cycle before the drill-in cycles).

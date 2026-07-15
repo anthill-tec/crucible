@@ -263,13 +263,16 @@ compile); transition markers open the GREEN run with the paired RED one hop away
 coverage trend points open their producing regression run; the health pill never
 navigates. All states deep-linkable; SSE keeps every surface live.
 
-**Drill-in density (decided 2026-07-14, for release 0.1.0):** one density-adaptive
-drill-in surface — small runs open fully expanded; large runs open in failures-float
-mode. Shipping in 0.1.0: failures-float/green-folds, heat-strip minimap (1 cell =
-1 test, click-to-jump), failure digest (identical assertion messages grouped),
-virtualized tree, progressive payload paging (suite summaries first, leaves on
-expand), density toggle. Deferred post-0.1.0: the filter bar (status chips +
-free-text + module facet).
+**Drill-in density (decided 2026-07-14; mode-switch revision 2026-07-15):** one
+drill-in surface with a **user-chosen Detail ↔ Density mode switch** in its header
+(persisted; default Detail) — no test-count auto-decision. Density mode applies:
+failures-float/green-folds, heat-strip minimap (1 cell = 1 test, click-to-jump,
+any run size), failure digest (identical assertion messages grouped). Always-on in
+both modes: virtualized tree, progressive payload paging (suite summaries first,
+leaves on expand). Independent: the comfortable/compact/ultra density toggle.
+Deferred post-0.1.0: the filter bar (status chips + free-text + module facet).
+Compile reporting is agent-agnostic — any agent may post compile/reference
+failures; RED agents are the default reporters (TDD).
 
 ### 4.12 BDD harness for frontend projects (later wave — approved 2026-07-14)
 BDD-style UI testing applies only to `type:"frontend"` projects — and for those,
