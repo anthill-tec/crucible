@@ -91,44 +91,34 @@ test.describe("CR-CRU-006 shell — storyboard frames", () => {
     );
   });
 
-  test("F2: agents light up the rail", async ({ page, request }) => {
+  // CR-CRU-007 §S5 re-target (round 6/7 lock supersedes the CR-006 rail
+  // layout this test originally asserted): registering a project lights its
+  // projects-row BADGE on home — home renders ZERO agent rows anywhere by
+  // design (agents nest under the workspace Project pane only, §S5.2).
+  test("F2: a registered project lights its projects-row badge on home (zero agent rows by design)", async ({
+    page,
+    request,
+  }) => {
     const projectKey = await seedProject(request, "F2 Project");
     await registerAgent(request, projectKey, "agent-f2", "building the widget");
 
     await page.goto("/");
 
-    // Agent row visible in the rail, carrying its message (Agent.message on
-    // the wire — app.js currently reads `agent.msg`, which does not exist on
-    // the API payload, so this assertion also pins down that field-name fix).
-    const agentRow = page.getByTestId("agent-row").filter({ hasText: "agent-f2" });
-    await expect(agentRow).toBeVisible();
-    await expect(agentRow).toContainText("building the widget");
+    const badge = page.getByTestId("project-badge").filter({ hasText: "F2 Project" });
+    await expect(badge).toBeVisible();
+    // Canonical badge format: name + type badge.
+    await expect(badge).toContainText("backend");
 
-    // Re-revised §S3 — exactly ONE `.app-rail` as a direct child of
-    // `.app-main`: both sections stack inside a single LEFT rail.
-    const rails = page.locator(".app-main > .app-rail");
-    await expect(rails).toHaveCount(1);
-
-    // Projects section precedes Agents section inside that one rail (DOM
-    // order), per the revised §S3 stacking order.
-    const sectionTitles = await rails.locator(".app-rail-title").allTextContents();
-    expect(sectionTitles).toEqual(["projects", "agents"]);
-
-    // Project card for the seeded project lives inside the same rail.
-    await expect(rails.getByTestId("project-card")).toContainText("F2 Project");
-
-    // Timeline (wide RIGHT column) is wider than the left rail, and the rail
-    // sits to the timeline's left.
-    const timelineBox = await page.getByTestId("timeline").boundingBox();
-    const railBox = await rails.boundingBox();
-    expect(timelineBox).not.toBeNull();
-    expect(railBox).not.toBeNull();
-    expect(timelineBox!.width).toBeGreaterThan(railBox!.width);
-    expect(railBox!.x).toBeLessThan(timelineBox!.x);
+    // §S5.1 — home renders 0 agent rows anywhere, even with a live agent
+    // registered on the seeded project.
+    await expect(page.getByTestId("agent-row")).toHaveCount(0);
   });
 
+  // CR-CRU-007 §S5.2 re-target: liveness dots (and the tombstone path, when
+  // reachable) render on the WORKSPACE Project pane's agent sub-rows —
+  // agents no longer have a home-page rail to render into at all.
   test(
-    "F9: liveness dots render (tombstone path unit-covered)",
+    "F9: liveness dots render on the workspace Project pane's agent sub-rows (tombstone path unit-covered)",
     async ({ page, request }) => {
       // LIMITATION (flagged for the orchestrator): tombstoning requires
       // silence >= T2 (300_000ms, see tests/liveness.test.ts) computed
@@ -139,21 +129,26 @@ test.describe("CR-CRU-006 shell — storyboard frames", () => {
       // either (a) a spec-approved test-only override endpoint/param, or
       // (b) a >=5-minute real-time wait, neither of which this RED agent is
       // authorized to invent. This test asserts the CONTRACT that IS
-      // reachable over HTTP (a live agent renders its liveness dot) and
-      // tolerates zero tombstoned agents being present; the tombstone
-      // rendering path itself stays covered by the `livenessGlyph` unit
-      // tests (tests/app-logic.test.ts) + tests/liveness.test.ts.
+      // reachable over HTTP (a live agent renders its liveness dot on the
+      // workspace Project pane) and tolerates zero tombstoned agents being
+      // present; the tombstone rendering path itself stays covered by the
+      // `livenessGlyph` unit tests (tests/app-logic.test.ts) +
+      // tests/liveness.test.ts.
       const projectKey = await seedProject(request, "F9 Project");
       await registerAgent(request, projectKey, "agent-f9", "still working");
 
-      await page.goto("/");
+      // §S5.2 — the Project pane (and its ⌁-marked agent sub-rows) exists
+      // ONLY inside the workspace — navigate there first.
+      await page.goto(`/p/${projectKey}`);
 
-      const agentRow = page.getByTestId("agent-row").filter({ hasText: "agent-f9" });
+      const pane = page.getByTestId("project-pane");
+      await expect(pane).toBeVisible();
+      const agentRow = pane.getByTestId("agent-row").filter({ hasText: "agent-f9" });
       await expect(agentRow).toBeVisible();
       await expect(agentRow.locator(".app-dot")).toHaveCount(1);
       await expect(agentRow.locator(".app-dot")).toHaveClass(/\b[gyr]\b/);
 
-      const tombstoned = page.locator('[data-testid="agent-row"].tombstoned');
+      const tombstoned = pane.locator('[data-testid="agent-row"].tombstoned');
       const tombstonedCount = await tombstoned.count();
       if (tombstonedCount > 0) {
         const row = tombstoned.first();
@@ -166,45 +161,74 @@ test.describe("CR-CRU-006 shell — storyboard frames", () => {
     },
   );
 
-  test("Layout AC (re-revised §S3): two-column grid, rail left, projects above agents", async ({
+  // CR-CRU-007 §S5 re-target (round 6/7 final-form lock): home is title bar
+  // + projects row + a FULL-WIDTH timeline (no rail at all); the workspace
+  // is a full-width horizontal tabs row directly under its own top bar, then
+  // a body of [content | Project pane] with NO left rail anywhere.
+  test("Layout AC (final form, round 6/7 lock): home = title bar + projects row + full-width timeline; workspace = full-width tabs row + [content | Project pane], no left rail", async ({
     page,
+    request,
   }) => {
-    // Purely structural — independent of seeded data, so it does not rely on
-    // test ordering relative to F2/F9 (though it will typically run after
-    // them in this serial file).
     await page.goto("/");
+
+    // HOME — no `.app-rail` survives anywhere on the page; the timeline
+    // spans (effectively) the whole `.app-main` width, not a "wide column
+    // beside a rail".
+    await expect(page.locator(".app-rail")).toHaveCount(0);
+    const timeline = page.getByTestId("timeline");
+    await expect(timeline).toBeVisible();
+    const mainBox = await page.locator(".app-main").boundingBox();
+    const timelineBox = await timeline.boundingBox();
+    expect(mainBox).not.toBeNull();
+    expect(timelineBox).not.toBeNull();
+    expect(timelineBox!.width).toBeGreaterThan(mainBox!.width * 0.9);
+
+    // WORKSPACE
+    const projectKey = await seedProject(request, "Layout Project");
+    await page.goto(`/p/${projectKey}`);
 
     // DOM globals (getComputedStyle/HTMLElement/children) are typed via
     // `any` here — this project's tsconfig deliberately omits the "DOM" lib
     // (server-side package), so evaluate() callbacks that touch browser
     // globals stay untyped at the boundary; they still run for real inside
     // Chromium.
-    const columns = await page.locator(".app-main").evaluate((el: any) => {
-      const style = el.ownerDocument.defaultView.getComputedStyle(el);
-      return (style.gridTemplateColumns as string).trim().split(/\s+/).filter(Boolean);
-    });
-    expect(columns).toHaveLength(2);
-    // Rail track (first, 320px) is narrower than the timeline track (second,
-    // the flexible wide column) — timeline still WIDER.
-    expect(parseFloat(columns[1])).toBeGreaterThan(parseFloat(columns[0]));
+    const header = page.getByTestId("workspace-header");
+    await expect(header).toBeVisible();
+    const tabsRow = page.getByTestId("workspace-tabs");
+    await expect(tabsRow).toBeVisible();
 
-    const rails = page.locator(".app-main > .app-rail");
-    await expect(rails).toHaveCount(1);
-    // Exactly one `.app-rail` child of `.app-main`, and it IS the first grid
-    // child (rail left); the timeline — the wide column — comes second /
-    // right.
-    const mainChildClasses = await page
-      .locator(".app-main")
-      .evaluate((el: any) => Array.from(el.children).map((c: any) => c.className as string));
-    expect(mainChildClasses).toHaveLength(2);
-    expect(mainChildClasses[0]).toContain("app-rail");
-    expect(mainChildClasses[1]).not.toContain("app-rail");
+    // Tabs row is a full-width horizontal strip directly beneath the top
+    // bar — not nested inside any rail/left-column wrapper.
+    const tabsParentClass = await tabsRow.evaluate(
+      (el: any) => (el.parentElement?.className as string) ?? "",
+    );
+    expect(tabsParentClass).not.toMatch(/rail/);
+    const headerBox = await header.boundingBox();
+    const tabsBox = await tabsRow.boundingBox();
+    expect(headerBox).not.toBeNull();
+    expect(tabsBox).not.toBeNull();
+    // "directly beneath": the tabs row's top sits at (or just past) the
+    // header's bottom edge, well before the workspace body starts.
+    expect(tabsBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height - 1);
+    const workspaceBox = await page.getByTestId("workspace").boundingBox();
+    expect(workspaceBox).not.toBeNull();
+    expect(tabsBox!.width).toBeGreaterThan(workspaceBox!.width * 0.9);
 
-    const sectionTitles = await rails.locator(".app-rail-title").allTextContents();
-    expect(sectionTitles).toEqual(["projects", "agents"]);
+    // Body: exactly two columns — main content (Runs pane by default) and
+    // the Project pane — with NO left rail anywhere in the workspace.
+    await expect(page.locator('[data-testid="workspace"] .app-rail')).toHaveCount(0);
+    const runsBox = await page.getByTestId("workspace-runs").boundingBox();
+    const paneBox = await page.getByTestId("project-pane").boundingBox();
+    expect(runsBox).not.toBeNull();
+    expect(paneBox).not.toBeNull();
+    // Project pane sits to the RIGHT of the main content column.
+    expect(paneBox!.x).toBeGreaterThan(runsBox!.x);
   });
 
-  test("F2b: SSE pushes a new agent into the rail without reload", async ({
+  // CR-CRU-007 §S5 re-target: the SAME live-SSE contract as before, but the
+  // live artifact is now the project's projects-row BADGE (home renders no
+  // agent rows at all).
+  test("F2b: SSE pushes a new project's badge onto the projects-row without reload", async ({
     page,
     request,
   }) => {
@@ -214,15 +238,11 @@ test.describe("CR-CRU-006 shell — storyboard frames", () => {
     await expect(page.getByTestId("health-pill")).toBeVisible();
 
     const projectKey = await seedProject(request, "F2b Project");
-    // NB: id must not prefix-collide with F2's "agent-f2" — hasText is a
-    // substring match over the row ("agent-f2" + "building…" contains
-    // "agent-f2b"), so a distinct stem keeps the locator strict-mode clean.
     await registerAgent(request, projectKey, "sse-agent", "hot off the stream");
 
     // The 2s budget starts once the register write has been acknowledged.
-    const agentRow = page.getByTestId("agent-row").filter({ hasText: "sse-agent" });
-    await expect(agentRow).toBeVisible({ timeout: 2_000 });
-    await expect(agentRow).toContainText("hot off the stream");
+    const badge = page.getByTestId("project-badge").filter({ hasText: "F2b Project" });
+    await expect(badge).toBeVisible({ timeout: 2_000 });
   });
 
   test("nav: Esc closes the run overlay and restores scroll", async ({
