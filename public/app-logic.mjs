@@ -177,6 +177,48 @@ export function drillinModeStorageKey(tier) {
     : "crucible.drillin.mode.focused";
 }
 
+// CR-CRU-007 §S4.1 — failures float / green folds (pure). Returns the names
+// of suites (input order) whose status is "fail" — the suites Density mode
+// auto-expands. A 0-failure run returns [] (every suite folds); "pending" is
+// NOT "fail", so pending-only suites fold too.
+export function foldSuites(suites) {
+  return suites.filter((s) => s.status === "fail").map((s) => s.name);
+}
+
+// CR-CRU-007 §S4.3 — failure digest (pure). Groups 2+ failed leaves sharing
+// an IDENTICAL failure.message into one {kind:"group"} entry (placed at the
+// first grouped leaf's position, leaves in input order, extraCount =
+// leaves.length - 1 — the "+N identical" label count); every other leaf
+// (pass, pending, or a uniquely-failing leaf) passes through as
+// {kind:"leaf", leaf} in input order. Never mutates the input.
+export function digestFailures(leaves) {
+  const messageCounts = new Map();
+  for (const leaf of leaves) {
+    const message = leaf.status === "fail" ? leaf.failure?.message : undefined;
+    if (typeof message === "string") {
+      messageCounts.set(message, (messageCounts.get(message) ?? 0) + 1);
+    }
+  }
+  const groupsByMessage = new Map();
+  const entries = [];
+  for (const leaf of leaves) {
+    const message = leaf.status === "fail" ? leaf.failure?.message : undefined;
+    if (typeof message === "string" && (messageCounts.get(message) ?? 0) >= 2) {
+      let group = groupsByMessage.get(message);
+      if (group === undefined) {
+        group = { kind: "group", message, leaves: [], extraCount: 0 };
+        groupsByMessage.set(message, group);
+        entries.push(group);
+      }
+      group.leaves.push(leaf);
+      group.extraCount = group.leaves.length - 1;
+    } else {
+      entries.push({ kind: "leaf", leaf });
+    }
+  }
+  return entries;
+}
+
 // Bridge for the nomodule app shell (app.js consumes window.CrucibleLogic).
 if (typeof window !== "undefined") {
   window.CrucibleLogic = {
@@ -192,5 +234,7 @@ if (typeof window !== "undefined") {
     pairTransitions,
     drillinDefaultMode,
     drillinModeStorageKey,
+    foldSuites,
+    digestFailures,
   };
 }

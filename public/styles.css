@@ -394,3 +394,56 @@ body {
 
 .greyed { opacity: 0.45; filter: grayscale(0.6); }
 .app-synced { color: var(--ink-faint); font: 9.5px var(--mono); }
+
+/* ── CR-CRU-007 §S4 — density set ─────────────────────────────────────── */
+
+/* §S4.2 — heat-strip minimap: one cell per test, wrap at any run size. */
+.app-heat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  margin-bottom: 8px;
+}
+.app-heat-cell {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.app-heat-fail { background: var(--fail); }
+.app-heat-pending { background: var(--heat); }
+.app-heat-pass { background: var(--pass); opacity: 0.35; }
+
+/* §S4.3 — failure digest: shared-message group row + "+N identical". */
+.app-digest-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: 10.5px var(--mono);
+  color: var(--fail);
+  padding: 2px 8px;
+}
+.app-digest-expander { font: 9.5px var(--mono); }
+
+/* §S4.4 — virtualized tree: windowed scroll container + honest spacers. */
+.app-tree-scroll {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.app-virt-spacer { flex: none; }
+
+/* §S4.6 — density root classes: row spacing per comfortable/compact/ultra. */
+:root.app-density-comfortable { --row-pad: 6px; }
+:root.app-density-compact { --row-pad: 3px; }
+:root.app-density-ultra { --row-pad: 1px; }
+.app-density-compact .app-leaf-row,
+.app-density-compact .app-suite-row,
+.app-density-compact .app-digest-row { padding-top: var(--row-pad); padding-bottom: var(--row-pad); }
+.app-density-ultra .app-leaf-row,
+.app-density-ultra .app-suite-row,
+.app-density-ultra .app-digest-row { padding-top: var(--row-pad); padding-bottom: var(--row-pad); font-size: 9.5px; }

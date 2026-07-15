@@ -222,6 +222,40 @@
         },
       );
 
+    // ── §S4.6 (CR-CRU-007) — density toggle: comfortable / compact / ultra,
+    // independent of the drill-in's Detail↔Density switch. Persisted under
+    // localStorage "crucible.density.mode"; the root class
+    // `app-density-<mode>` on <html> drives row spacing (styles.css).
+    const DENSITY_MODES = ["comfortable", "compact", "ultra"];
+    const DENSITY_STORAGE_KEY = "crucible.density.mode";
+    const storedDensity = window.localStorage.getItem(DENSITY_STORAGE_KEY);
+    const densityMode = van.state(
+      DENSITY_MODES.includes(storedDensity) ? storedDensity : "comfortable",
+    );
+
+    van.derive(() => {
+      const root = document.documentElement;
+      for (const known of DENSITY_MODES) root.classList.remove(`app-density-${known}`);
+      root.classList.add(`app-density-${densityMode.val}`);
+    });
+
+    const DensityToggle = () =>
+      button(
+        {
+          "data-testid": "density-toggle",
+          "data-density": () => densityMode.val,
+          class: "app-chip app-density-toggle",
+          title: "row density",
+          onclick: () => {
+            const next =
+              DENSITY_MODES[(DENSITY_MODES.indexOf(densityMode.val) + 1) % DENSITY_MODES.length];
+            densityMode.val = next;
+            window.localStorage.setItem(DENSITY_STORAGE_KEY, next);
+          },
+        },
+        () => `density: ${densityMode.val}`,
+      );
+
     // §S5.1 — title bar: logo + slogan + Health Pill ONLY (no project chips).
     const TopBar = () =>
       div(
@@ -239,6 +273,7 @@
           span("v2"),
         ),
         span({ class: "app-slogan" }, "where agentic TDD forges green"),
+        DensityToggle(),
         HealthPill(),
       );
 
@@ -515,6 +550,7 @@
             span({ class: "app-type-badge" }, p ? p.type : ""),
           );
         },
+        DensityToggle(),
         HealthPill(),
       );
 
@@ -645,6 +681,12 @@
       return parts.join(" ");
     }
 
+    // §S4.4 — virtualized tree window: fixed row-count window over a suite's
+    // (digested) entry list, positioned by scrollTop / row-height. Mounted
+    // suite-row + leaf-row nodes stay well under 200 at any leaf count.
+    const VIRT_ROW_HEIGHT = 28;
+    const VIRT_WINDOW = 120;
+
     const RunOverlay = () => {
       const eventId = state.route.overlay;
       const detail = van.state(null); // suites-depth event detail
@@ -652,6 +694,8 @@
       const mode = van.state("Detail"); // §S4.0 — test events only
       const suiteLeaves = van.state({}); // suiteName -> that suite's leaves
       const openFailures = van.state({}); // "suite::leaf" -> true
+      const openGroups = van.state({}); // §S4.3 — "suite::message" -> true
+      const suiteWindow = van.state({}); // §S4.4 — suiteName -> window start index
       const showRaw = van.state(false);
 
       // §S4.5 — the FIRST fetch is ?depth=suites (never the full leaf tree).
@@ -678,19 +722,18 @@
                 : L.drillinDefaultMode(ev.tier);
           }
           detail.val = ev;
+          // §S4.1 — failures float: in Density mode, auto-expand ONLY the
+          // failing suites (fetch their leaves); all-pass suites stay folded
+          // and are never fetched until clicked.
+          if (mode.val === "Density") autoExpandFailing(ev);
         } catch (err) {
           loadError.val = `run detail failed to load — ${String(err)}`;
         }
       })();
 
-      async function toggleSuite(name) {
-        const current = suiteLeaves.val;
-        if (current[name] !== undefined) {
-          const next = { ...current };
-          delete next[name];
-          suiteLeaves.val = next;
-          return;
-        }
+      // §S4.5 — a suite's leaves arrive only via ?suite=<name>.
+      async function loadSuite(name) {
+        if (suiteLeaves.val[name] !== undefined) return;
         try {
           const res = await fetch(
             `/api/v2/events/${encodeURIComponent(eventId)}?suite=${encodeURIComponent(name)}`,
@@ -701,6 +744,23 @@
         } catch (err) {
           loadError.val = `suite "${name}" failed to load — ${String(err)}`;
         }
+      }
+
+      async function toggleSuite(name) {
+        const current = suiteLeaves.val;
+        if (current[name] !== undefined) {
+          const next = { ...current };
+          delete next[name];
+          suiteLeaves.val = next;
+          return;
+        }
+        await loadSuite(name);
+      }
+
+      // §S4.1 — fetch (and thereby expand) exactly the failing suites.
+      function autoExpandFailing(ev) {
+        if (ev === null || ev === undefined || ev.kind !== "test") return;
+        for (const name of L.foldSuites(ev.tree ?? [])) void loadSuite(name);
       }
 
       function toggleFailure(key) {
@@ -718,6 +778,7 @@
           div(
             {
               "data-testid": "leaf-row",
+              "data-leaf-key": key, // §S4.4 — stable identity for the window
               class: `app-leaf-row ${leaf.status}`,
               onclick: () => {
                 if (failed) toggleFailure(key);
@@ -744,13 +805,135 @@
         return nodes;
       };
 
-      // Suite tree — §S4.0: Detail renders the plain tree regardless of run
-      // size; Density renders the same tree this cycle (ideas 1–3 land in C4).
+      // §S4.3 — failure digest: identical-message failed leaves collapse to
+      // one digest row + "+N identical" expander (Density mode only; the
+      // grouping itself is L.digestFailures).
+      const DigestRows = (suiteName, group, open) => {
+        const groupKey = `${suiteName}::${group.message}`;
+        const expanded = openGroups.val[groupKey] === true;
+        const nodes = [
+          div(
+            { "data-testid": "digest-row", class: "app-digest-row" },
+            span({ class: "app-digest-message" }, `✗ ${group.message}`),
+            button(
+              {
+                "data-testid": "digest-expander",
+                class: "app-chip app-digest-expander",
+                onclick: () => {
+                  const next = { ...openGroups.val };
+                  if (next[groupKey] === true) delete next[groupKey];
+                  else next[groupKey] = true;
+                  openGroups.val = next;
+                },
+              },
+              `+${group.extraCount} identical`,
+            ),
+          ),
+        ];
+        if (expanded) {
+          for (const leaf of group.leaves) nodes.push(...LeafRows(suiteName, leaf, open));
+        }
+        return nodes;
+      };
+
+      // §S4.4 — one suite's (digested) entry list inside its virtualized
+      // scroll container: only the VIRT_WINDOW entries at the current scroll
+      // position mount; spacer divs keep the scrollbar honest.
+      const SuiteLeafList = (suiteName, leaves, open) => {
+        const entries =
+          mode.val === "Density"
+            ? L.digestFailures(leaves)
+            : leaves.map((leaf) => ({ kind: "leaf", leaf }));
+        const total = entries.length;
+        const start = Math.max(
+          0,
+          Math.min(suiteWindow.val[suiteName] ?? 0, Math.max(0, total - VIRT_WINDOW)),
+        );
+        const end = Math.min(total, start + VIRT_WINDOW);
+        const rows = [];
+        for (let i = start; i < end; i++) {
+          const entry = entries[i];
+          if (entry.kind === "group") rows.push(...DigestRows(suiteName, entry, open));
+          else rows.push(...LeafRows(suiteName, entry.leaf, open));
+        }
+        return div(
+          {
+            "data-testid": "tree-scroll",
+            class: "app-tree-scroll app-leaf-list",
+            onscroll: (e) => {
+              suiteWindow.val = {
+                ...suiteWindow.val,
+                [suiteName]: Math.floor((e.target.scrollTop ?? 0) / VIRT_ROW_HEIGHT),
+              };
+            },
+          },
+          div({ class: "app-virt-spacer", style: `height:${start * VIRT_ROW_HEIGHT}px;` }),
+          rows,
+          div({ class: "app-virt-spacer", style: `height:${(total - end) * VIRT_ROW_HEIGHT}px;` }),
+        );
+      };
+
+      // §S4.2 — heat-strip minimap: one cell per test, any run size. Loaded
+      // suites contribute identity-bearing cells (click scrolls to + expands
+      // that test); folded suites synthesize cells from their counts (click
+      // loads the suite).
+      const HeatCell = (suiteName, leaf, index) =>
+        span({
+          "data-testid": "heat-cell",
+          class: `app-heat-cell app-heat-${leaf.status === "fail" ? "fail" : leaf.status === "pending" ? "pending" : "pass"}`,
+          title: `${suiteName} › ${leaf.name}`,
+          onclick: () => {
+            suiteWindow.val = {
+              ...suiteWindow.val,
+              [suiteName]: Math.max(0, index - Math.floor(VIRT_WINDOW / 2)),
+            };
+            if (leaf.status === "fail" && leaf.failure !== undefined) {
+              openGroups.val = {
+                ...openGroups.val,
+                [`${suiteName}::${leaf.failure.message}`]: true,
+              };
+              openFailures.val = {
+                ...openFailures.val,
+                [`${suiteName}::${leaf.name}`]: true,
+              };
+            }
+          },
+        });
+
+      const SynthHeatCell = (suiteName, status) =>
+        span({
+          "data-testid": "heat-cell",
+          class: `app-heat-cell app-heat-${status}`,
+          title: suiteName,
+          onclick: () => void loadSuite(suiteName),
+        });
+
+      const HeatStrip = (d) => {
+        const leavesMap = suiteLeaves.val;
+        const cells = [];
+        for (const suite of d.tree ?? []) {
+          const leaves = leavesMap[suite.name];
+          if (leaves !== undefined) {
+            leaves.forEach((leaf, i) => cells.push(HeatCell(suite.name, leaf, i)));
+          } else {
+            const c = suite.counts ?? {};
+            for (let i = 0; i < (c.failed ?? 0); i++) cells.push(SynthHeatCell(suite.name, "fail"));
+            for (let i = 0; i < (c.pending ?? 0); i++) cells.push(SynthHeatCell(suite.name, "pending"));
+            for (let i = 0; i < (c.passed ?? 0); i++) cells.push(SynthHeatCell(suite.name, "pass"));
+          }
+        }
+        return div({ "data-testid": "heat-strip", class: "app-heat-strip" }, cells);
+      };
+
+      // Suite tree — §S4.0: Detail renders the plain tree; Density adds the
+      // heat-strip (§S4.2), failure digest (§S4.3) and failures-float folding
+      // (§S4.1). Virtualization (§S4.4) applies in BOTH modes.
       const TestBody = (d) => {
         const leavesMap = suiteLeaves.val;
         const open = openFailures.val;
         return div(
           { class: "app-drillin-tree" },
+          mode.val === "Density" ? HeatStrip(d) : null,
           (d.tree ?? []).map((suite) => {
             const leaves = leavesMap[suite.name];
             return div(
@@ -764,12 +947,7 @@
                 span({ class: "app-suite-name" }, suite.name),
                 span({ class: "app-card-meta" }, drillinSuiteCounts(suite)),
               ),
-              leaves === undefined
-                ? null
-                : div(
-                    { class: "app-leaf-list" },
-                    leaves.map((leaf) => LeafRows(suite.name, leaf, open)),
-                  ),
+              leaves === undefined ? null : SuiteLeafList(suite.name, leaves, open),
             );
           }),
         );
@@ -866,6 +1044,8 @@
                           L.drillinModeStorageKey(d.tier),
                           next,
                         );
+                        // §S4.1 — entering Density floats the failures.
+                        if (next === "Density") autoExpandFailing(d);
                       },
                     },
                     `mode: ${mode.val}`,

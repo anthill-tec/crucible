@@ -145,3 +145,39 @@ export type DrillinMode = "Detail" | "Density";
 export declare function drillinDefaultMode(tier: string): DrillinMode;
 
 export declare function drillinModeStorageKey(tier: string): string;
+
+// CR-CRU-007 §S4 items 1 & 3 — Density-mode pure helpers.
+export interface FoldSuiteLike {
+  name: string;
+  status: string;
+}
+
+export interface DigestLeafLike {
+  name: string;
+  status: string;
+  failure?: { message: string } | undefined;
+}
+
+/**
+ * One digest entry. `kind` discriminates at runtime: "leaf" entries carry
+ * `leaf`; "group" entries carry `message`/`leaves`/`extraCount`. Declared
+ * flat (all fields present) so call sites can read either side after a
+ * runtime `kind` check without a type-guard dance.
+ */
+export interface DigestEntry<T extends DigestLeafLike> {
+  kind: "leaf" | "group";
+  /** the pass/pending/uniquely-failing leaf (kind "leaf") */
+  leaf: T;
+  /** the shared failure.message (kind "group") */
+  message: string;
+  /** the grouped leaves, input order (kind "group") */
+  leaves: T[];
+  /** leaves.length - 1 — the "+N identical" count (kind "group") */
+  extraCount: number;
+}
+
+export declare function foldSuites(suites: FoldSuiteLike[]): string[];
+
+export declare function digestFailures<T extends DigestLeafLike>(
+  leaves: T[],
+): Array<DigestEntry<T>>;
