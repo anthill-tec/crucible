@@ -54,7 +54,7 @@ encodes the plan verbs in the python/fleet clients for the agentic backend.
   as before, `context.cycle` string label stays the fallback).
 - **Tracks (user-locked rounds 17+19):** a CR is always executed within a track.
   Tracks are **numbered lanes** (Track 1, 2, 3…; wire format `track-<n>`,
-  matching the `CRUCIBLE_ORCHESTRATOR` convention) — the highway model: CRs are
+  matching the `WORKFLOW_ROLE` convention) — the highway model: CRs are
   the vehicles, and the mainline allocates lanes from the CRs' depends-on graph.
   In the Model-B multi-track combo, each track's operator registers its track
   with the CR — `track` (string) on the plan. In the single-orchestrator model

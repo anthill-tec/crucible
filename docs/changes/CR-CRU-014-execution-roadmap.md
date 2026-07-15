@@ -42,11 +42,12 @@ change.
 `queue-file` parses the project's `docs/changes/README.md` queue table (CR,
 title, depends-on, wave columns) → POST; `--from-file` override.
 
-### §S3 Roadmap table (workspace)
-The workspace Project pane (or Workflow tab header area — final placement at
-gap-analysis) gains the expandable **Roadmap**: Wave groups → CR rows with
-depends-on chips + derived status badges, the ACTIVE CR highlighted, linking
-into the Workflow tab's live view. Storyboard F14 is the contract.
+### §S3 Roadmap slide-over (workspace — placement resolved round 25)
+The workspace Project pane gains a **`roadmap` chip** opening a slide-over at
+`/p/<key>/roadmap` (deep-linkable, `← workspace` back chip, Esc/scrim close —
+the same overlay model as the run drill-in and `/manage`): Wave groups → CR
+rows with depends-on chips + derived status badges, the ACTIVE CR highlighted,
+rows linking into the Workflow tab's live view. Storyboard F14 is the contract.
 
 ## Acceptance criteria
 - [ ] `POST /queue` with 3 entries → `GET /queue` returns them with derived statuses: a CR with no plan → `PENDING`; after `plan-file` → `IN_PROGRESS`; after plan close with merge → `COMPLETED` (single fixture walks all three).

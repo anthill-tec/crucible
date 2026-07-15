@@ -85,7 +85,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   rows show the Workflow tab.
 - 2026-07-15 (design iteration rounds 16–22) — cycle kinds (verify/fix identical
   rules); tracks = numbered lanes, CR always within a track (plan `track`, auto from
-  `CRUCIBLE_ORCHESTRATOR`); containment hierarchy locked (Project → mainline
+  `WORKFLOW_ROLE`); containment hierarchy locked (Project → mainline
   [vidushi] → spawns track orchestrators; orchestrator = special agent); wave =
   sync boundary, no dedicated track UI, wave state inferred; no-mistakes runs at
   wave boundaries ingested as `gate` events → CR-CRU-013 filed (boundary card,

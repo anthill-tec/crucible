@@ -62,8 +62,8 @@ cross-project).
 ### §S5 Client verb
 `gate-report` on the fleet clients: parses `no-mistakes axi status` TOON (or
 accepts `--outcome/--steps/--commit` flags as fallback) → `POST /api/v2/gates`,
-auto-attaching `context.wave` from `CRUCIBLE_WAVE` and `track` from
-`CRUCIBLE_ORCHESTRATOR` (established pattern). Sibling `milestone` verb:
+auto-attaching `context.wave` from `WORKFLOW_WAVE` and `track` from
+`WORKFLOW_ROLE` (established pattern). Sibling `milestone` verb:
 `milestone --type gap-analysis --label "CR-NAI-043 gap-analysis" [--cr …]` →
 `POST /api/v2/milestones` with the same env auto-context.
 
@@ -78,7 +78,7 @@ Still zero wave-control API — state remains inferred from plans + gate events.
 - [ ] Clicking the gate card opens the drill-in with the step ladder (one row per submitted step, status visible), the fixes table (row count equals submitted fixes), and no `drillin-mode` element.
 - [ ] Workflow tab: with a gate ingested for wave 3, the gate pane shows its outcome + step ladder; ingesting a second wave-3 gate replaces the pane content (latest wins) — over SSE, no reload.
 - [ ] Wave state: wave 3 with all plans closed + a `passed` gate event renders `gated` in the lens header (fixture also asserts `awaiting review` before the gate arrives); grep asserts no wave-control route exists.
-- [ ] Client: `bun-crucible.py gate-report --outcome passed --commit abc1234 --steps "review:passed,test:passed"` posts a valid gate with `context.wave` from `CRUCIBLE_WAVE`; unset env → no wave key.
+- [ ] Client: `bun-crucible.py gate-report --outcome passed --commit abc1234 --steps "review:passed,test:passed"` posts a valid gate with `context.wave` from `WORKFLOW_WAVE`; unset env → no wave key.
 - [ ] §S4b: `POST /api/v2/milestones {type:"gap-analysis", label:"…"}` → 201 `kind:"milestone"`; `type:"deploy"` → 400 naming `type`; rollups unchanged; the WORKSPACE timeline renders a `data-testid="milestone-entry"` slim row with the ◇ glyph + type + label, while the HOME timeline renders zero milestone entries for the same fixture (workspace-scoped assertion).
 - [ ] E2E: `tests/e2e/gates.e2e.ts` — file plan → milestone gap-analysis → close cycles + plan → ingest gate via API → workspace timeline shows the milestone entry AND the boundary card, home shows the compact gate entry but no milestone, `gated` wave header + populated gate pane; results ingested `tier:"e2e"`.
 

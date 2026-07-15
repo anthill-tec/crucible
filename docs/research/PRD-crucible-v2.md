@@ -274,8 +274,14 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   `done` = GREEN-confirm / report-acceptance / fix-batch-green respectively.
   **Tracks (locked round 17): a CR is always executed within a track.** Model-B
   track operators register `track` with the CR's plan (clients auto-attach it
-  from `CRUCIBLE_ORCHESTRATOR`); single-orchestrator projects omit it and work
+  from `WORKFLOW_ROLE`); single-orchestrator projects omit it and work
   seamlessly — the lens renders a Track level only when a wave spans >1 track.
+  **Roles vs the tool (corrected round 25):** MAINLINE ORCHESTRATOR and
+  ORCHESTRATOR are workflow ROLES; **Crucible is a front-end tool and tracking
+  system** — never a workflow actor, never lending its name to workflow
+  concepts. Workflow-state env vars are `WORKFLOW_ROLE` (mainline | track-n),
+  `WORKFLOW_WAVE`, `WORKFLOW_CYCLE`, `WORKFLOW_CYCLE_ID`; the `CRUCIBLE_*`
+  prefix is reserved for Crucible's own configuration.
   **Containment hierarchy (locked round 18):** Project → mainline orchestrator →
   (spawns) track orchestrators in multi-orchestrator Model B; single-orchestrator
   projects have mainline only (alias **vidushi**). An orchestrator is a **special
@@ -316,7 +322,7 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   0.1.0: `plans.cr` is the verbatim stable join key, the queue table is purely
   additive.
   All in v0.1.0: plan API + lens in CR-CRU-011, fleet plan verbs
-  (plan-file / cycle-activate / cycle-done / cr-close + `CRUCIBLE_CYCLE_ID`) in
+  (plan-file / cycle-activate / cycle-done / cr-close + `WORKFLOW_CYCLE_ID`) in
   CR-CRU-008.
 - **Coverage** — line/function/branch meters on green regression events; latest-green
   coverage shown at project level.
