@@ -24,6 +24,11 @@ event cards: kind icon (🧪 test / 🛠 compile), agentId, tier + codec badges,
 badges when present (branch@shortcommit, wave, orchestrator — omitted when absent),
 relative time, duration, ratio pill (`N/N` green / `F ✗ of N` red / `E errors`
 amber). Compile cards preview the first 2 diagnostics inline.
+Phase-role icon tinting (user-added during execution): the card's kind icon is
+tinted by the agent's PHASE ROLE derived from the agentId — RED → red, GREEN →
+green, VERIFY → purple, FIX → yellow (suffix `-RED|-GREEN|-FIX` or a
+`verify`/`-VERIFY` name segment, case-insensitive; roleless agents keep the
+neutral tint). A pure `L.phaseRole(agentId)` helper backs it.
 Server delta (additive, shim untouched): v2 `eventBrief` gains optional `context`
 passthrough (`{git:{branch,commit}, wave, orchestrator, cycle}` verbatim when
 stored — `cycle?: string` is a new optional `RunContext` field, round 10) and
