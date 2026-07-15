@@ -7,3 +7,4 @@ test-reports/
 playwright-report/
 test-results/
 blob-report/
+.lavish/
