@@ -282,6 +282,13 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   concepts. Workflow-state env vars are `WORKFLOW_ROLE` (mainline | track-n),
   `WORKFLOW_WAVE`, `WORKFLOW_CYCLE`, `WORKFLOW_CYCLE_ID`; the `CRUCIBLE_*`
   prefix is reserved for Crucible's own configuration.
+  **Role hierarchy (locked round 27):** roles nest by scope — MAINLINE
+  ORCHESTRATOR (widest: the project workflow — allocates lanes, launches waves,
+  gates boundaries) → ORCHESTRATOR (track scope: one lane's CR queue) →
+  **RED / GREEN / VERIFY / FIX (agentic roles at the narrowest scope: one phase
+  of one cycle)**. Every level is an agent to Crucible; role determines scope
+  and authority (file plans / confirm cycles / close CRs / gate waves), and the
+  tool observes the hierarchy without being part of it.
   **Containment hierarchy (locked round 18):** Project → mainline orchestrator →
   (spawns) track orchestrators in multi-orchestrator Model B; single-orchestrator
   projects have mainline only (alias **vidushi**). An orchestrator is a **special
