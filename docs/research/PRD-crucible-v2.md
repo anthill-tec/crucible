@@ -276,6 +276,12 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   track operators register `track` with the CR's plan (clients auto-attach it
   from `CRUCIBLE_ORCHESTRATOR`); single-orchestrator projects omit it and work
   seamlessly — the lens renders a Track level only when a wave spans >1 track.
+  **Containment hierarchy (locked round 18):** Project → mainline orchestrator →
+  (spawns) track orchestrators in multi-orchestrator Model B; single-orchestrator
+  projects have mainline only (alias **vidushi**). An orchestrator is a **special
+  agent** — coordinator/manager of the workflow — and is an agent in every
+  respect (registration, heartbeats, runtime, tombstone); its special role is
+  filing and driving the cycle plan. Both project shapes are first-class.
   All in v0.1.0: plan API + lens in CR-CRU-011, fleet plan verbs
   (plan-file / cycle-activate / cycle-done / cr-close + `CRUCIBLE_CYCLE_ID`) in
   CR-CRU-008.
