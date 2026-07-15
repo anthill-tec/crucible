@@ -353,7 +353,23 @@ describe("§S4.1 — failures float, green folds (Density mode)", () => {
     expect(suitePassingRow!.textContent ?? "").toContain("✓2");
   });
 
-  test("Detail mode bound: the same failing fixture renders the plain tree — nothing auto-expands", async () => {
+  // CR-CRU-007 VERIFY-findings fix 2 (2026-07-15) — re-targeted. §S3 was
+  // corrected to remove the cold-load carve-out: failing suites now
+  // auto-expand in BOTH Detail and Density (public/app.js's RunOverlay
+  // calls `autoExpandFailing(ev)` unconditionally, no `openedInApp` gate).
+  // "Nothing auto-expands in Detail mode" is no longer true for ANY
+  // fixture, so this test is re-targeted to the bound that's STILL true and
+  // still distinguishes Detail from Density post-fix: Detail auto-expands
+  // failing suites exactly like Density does, but renders NONE of the
+  // Density-only presentation additions (heat-strip / status-chips /
+  // failure-digest) — those, not auto-expand, are what "Detail mode" now
+  // uniquely means. Kept the FAILING fixture (rather than switching to an
+  // all-pass one) because an all-pass "nothing fetched" bound would no
+  // longer be Detail-specific — Density behaves identically for an
+  // all-pass run — so it would not actually test anything about Detail
+  // mode; asserting the absent Density-only elements on a failing,
+  // auto-expanded fixture is the strongest bound left standing.
+  test("Detail mode bound: the same failing fixture auto-expands (like Density) but renders NONE of the Density-only elements (heat-strip / status-chips / digest-row)", async () => {
     const now = Date.now();
     const eventId = "evt-fold-detail-bound";
     const detail: EventDetailFixture = {
@@ -384,8 +400,23 @@ describe("§S4.1 — failures float, green folds (Density mode)", () => {
     // renders no drillin-mode element at all.
     expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
-    expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
-    expect(fetchLog.some((u) => u.includes("suite="))).toBe(false);
+
+    // §S3 (no cold-load carve-out): the failing suite auto-expands in
+    // Detail mode too — its leaves fetched and rendered with no click.
+    expect(fetchLog.some((u) => u.includes("suite=SuiteFailingDetail"))).toBe(true);
+    const leafRows = overlay.querySelectorAll('[data-testid="leaf-row"]');
+    expect(leafRows.length).toBe(2);
+    expect(findByText(overlay, '[data-testid="leaf-row"]', "badLeaf")).toBeDefined();
+    expect(findByText(overlay, '[data-testid="leaf-row"]', "okLeaf")).toBeDefined();
+    const failureBox = overlay.querySelector('[data-testid="failure-box"]');
+    expect(failureBox).not.toBeNull();
+    expect((failureBox!.textContent ?? "")).toContain("boom detail");
+
+    // Bound: Density-only presentation additions are absent in Detail mode
+    // — auto-expand is now shared, but these remain Density-exclusive.
+    expect(overlay.querySelector('[data-testid="heat-strip"]')).toBeNull();
+    expect(overlay.querySelector('[data-testid="density-status-chips"]')).toBeNull();
+    expect(overlay.querySelectorAll('[data-testid="digest-row"]').length).toBe(0);
   });
 });
 
@@ -730,7 +761,16 @@ describe("§S4.4 — virtualized tree (always-on, both modes)", () => {
     20_000,
   );
 
-  test("the initial drill-in payload for a 10 000-leaf run contains no leaf entries (suites-first paging holds at 10k scale)", async () => {
+  // CR-CRU-007 VERIFY-findings fix 2 — the `leaf-row` count MUST be 0
+  // assertion assumed the removed cold-load carve-out (unit-tier cold
+  // mount used to render collapsed, so a "no leaves yet" payload check
+  // doubled as a DOM check). §S3 now auto-expands SuiteBig (it has a
+  // failing leaf) on this very cold mount, so leaf-rows are expected —
+  // windowed by virtualization, not absent. Dropped ONLY that assertion;
+  // the paging intent (`?depth=suites` fetched FIRST, before any
+  // `?suite=`) and the virtualization intent (mounted rows stay < 200 even
+  // though SuiteBig auto-expanded) both still hold and are asserted below.
+  test("the initial drill-in fetch for a 10 000-leaf run is suites-first (?depth=suites before any ?suite=); SuiteBig auto-expands but stays windowed under 200 mounted rows", async () => {
     const now = Date.now();
     const eventId = "evt-virt-payload";
     const { detail, brief, total } = manyLeavesFixture(eventId, "unit", now);
@@ -741,7 +781,7 @@ describe("§S4.4 — virtualized tree (always-on, both modes)", () => {
     const eventFetches = fetchLog.filter((u) => u.includes(`/api/v2/events/${eventId}`));
     expect(eventFetches.length).toBeGreaterThan(0);
     expect(eventFetches[0]).toContain("depth=suites");
-    expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+    expect(mountedTreeRowCount(overlay)).toBeLessThan(200);
   });
 });
 

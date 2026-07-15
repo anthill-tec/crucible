@@ -19,7 +19,7 @@ Feature: CR-CRU-007 timeline — storyboard frames F2-F8
     And I have opened the home page
     When a failing 3-case junit run (1 failing) is ingested for agent "agent-f3" at tier "unit"
     Then an event card for "agent-f3" becomes visible within 2 seconds
-    And that card's icon reads "🧪"
+    And that card's icon shows the "test" kind
     And that card's tier badge reads "unit"
     And that card's codec badge reads "junit"
     And that card's ratio pill contains "1" and "3"
@@ -50,7 +50,7 @@ Feature: CR-CRU-007 timeline — storyboard frames F2-F8
     And I have opened the home page
     When a rustc compile error report is ingested for agent "agent-f5"
     Then an event card for "agent-f5" becomes visible within 2 seconds
-    And that card's icon reads "🛠"
+    And that card's icon shows the "compile" kind
     And that card's ratio pill contains "errors"
     And that card's diagnostics preview is visible and its first diagnostic line contains "src/lib.rs"
     And that card's text never contains "0/"

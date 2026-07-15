@@ -60,10 +60,19 @@ Step(
   },
 );
 
-Step("that card's icon reads {string}", async ({ world }, icon: string) => {
+// CR-CRU-007 VERIFY-findings fix 2 (2026-07-15) — the kind icon is no
+// longer color-emoji TEXT (CSS `color` cannot tint it); it's now a
+// CSS-mask-driven glyph: `[data-testid="card-icon"]` wraps a
+// `[data-testid="icon-glyph"]` child selected by `data-kind="test"` /
+// `data-kind="compile"` (public/app.js's tintable-icon contract).
+Step("that card's icon shows the {string} kind", async ({ world }, kind: string) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const card = world.card as any;
-  await expect(card.getByTestId("card-icon")).toHaveText(icon);
+  const icon = card.getByTestId("card-icon");
+  await expect(icon).toHaveAttribute("data-icon-tintable", "true");
+  const glyph = icon.getByTestId("icon-glyph");
+  await expect(glyph).toHaveAttribute("data-kind", kind);
+  await expect(glyph).toHaveClass(/app-icon-mask/);
 });
 
 Step("that card's tier badge reads {string}", async ({ world }, tier: string) => {

@@ -162,7 +162,20 @@ describe("§S1 run card anatomy", () => {
     const card = document.querySelector('[data-testid="event-card"]');
     expect(card).not.toBeNull();
 
-    expect(card!.querySelector('[data-testid="card-icon"]')?.textContent).toBe("🧪");
+    // CR-CRU-007 VERIFY-findings fix 2 (2026-07-15) — the tintable-icon
+    // contract (public/app.js ~452, public/styles.css .app-icon-mask):
+    // card-icon is a wrapper (`data-icon-tintable="true"`, NO emoji text)
+    // around a CSS-mask-driven `[data-testid="icon-glyph"]` child carrying
+    // `data-kind="test"` — CSS `color` cannot tint color-emoji text, so the
+    // glyph is a monochrome mask painted with `currentColor` instead.
+    const cardIcon = card!.querySelector('[data-testid="card-icon"]');
+    expect(cardIcon).not.toBeNull();
+    expect(cardIcon!.getAttribute("data-icon-tintable")).toBe("true");
+    expect((cardIcon!.textContent ?? "")).toBe("");
+    const iconGlyph = cardIcon!.querySelector('[data-testid="icon-glyph"]');
+    expect(iconGlyph).not.toBeNull();
+    expect(iconGlyph!.className).toMatch(/\bapp-icon-mask\b/);
+    expect(iconGlyph!.getAttribute("data-kind")).toBe("test");
     expect(card!.textContent ?? "").toContain("pass-agent");
 
     const tierBadge = card!.querySelector('[data-testid="tier-badge"]');
@@ -269,7 +282,16 @@ describe("§S1 run card anatomy", () => {
     const card = document.querySelector('[data-testid="event-card"]');
     expect(card).not.toBeNull();
 
-    expect(card!.querySelector('[data-testid="card-icon"]')?.textContent).toBe("🛠");
+    // CR-CRU-007 VERIFY-findings fix 2 — same tintable-icon contract as the
+    // test-event card above, for the compile glyph (`data-kind="compile"`).
+    const cardIcon = card!.querySelector('[data-testid="card-icon"]');
+    expect(cardIcon).not.toBeNull();
+    expect(cardIcon!.getAttribute("data-icon-tintable")).toBe("true");
+    expect((cardIcon!.textContent ?? "")).toBe("");
+    const iconGlyph = cardIcon!.querySelector('[data-testid="icon-glyph"]');
+    expect(iconGlyph).not.toBeNull();
+    expect(iconGlyph!.className).toMatch(/\bapp-icon-mask\b/);
+    expect(iconGlyph!.getAttribute("data-kind")).toBe("compile");
 
     const pill = card!.querySelector('[data-testid="ratio-pill"]');
     expect(pill).not.toBeNull();
