@@ -17,10 +17,11 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-006](CR-CRU-006-spa-shell.md) | Dashboard shell + navigation | feature | COMPLETED (2026-07-15) | 004 | 3 |
 | [CR-CRU-007](CR-CRU-007-timeline-drill-in.md) | Timeline + density drill-in | feature | PENDING | 006 | 3 |
 | [CR-CRU-008](CR-CRU-008-cli-fleet-upgrade.md) | crucible-axi CLI + fleet upgrade + plan verbs | feature | PENDING | 005, 007, 011 | 4 (after 011) |
-| [CR-CRU-009](CR-CRU-009-release-0.1.0.md) | Release 0.1.0 skill bundle | feature | PENDING | 007, 008, 011, 012 | 4 |
+| [CR-CRU-009](CR-CRU-009-release-0.1.0.md) | Release 0.1.0 skill bundle | feature | PENDING | 007, 008, 011, 012, 013 | 4 |
 | [CR-CRU-010](CR-CRU-010-codec-path-interface-hardening.md) | Codec parsePath + shim hardening | maintenance | COMPLETED (2026-07-15) | 006 | 3 (after 006, before 007) |
 | [CR-CRU-011](CR-CRU-011-workflow-lens.md) | Cycle plans + workflow lens + agent runtimes | feature | PENDING | 007 | 4 (before 008) |
-| [CR-CRU-012](CR-CRU-012-projects-manager.md) | Projects manager: add + edit | feature | PENDING | 004, 007 | 4 (before 009) |
+| [CR-CRU-012](CR-CRU-012-projects-manager.md) | Projects manager: add + edit + archive | feature | PENDING | 004, 007 | 4 (before 009) |
+| [CR-CRU-013](CR-CRU-013-gate-events.md) | Gate events: no-mistakes ingestion + gate pane | feature | PENDING | 008, 011 | 4 (before 009) |
 
 ## Notes
 - 2026-07-14 — Project kickoff: PRD + evidence DN landed. Kickoff design review (lavish)
@@ -72,6 +73,15 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   before 009; 009 now depends on 011). Backwards audit of the agent API found the
   lifecycle gap (unregister hard-deletes firstSeen/lastSeen → runtime lost) — closed
   by CR-011 §S1 lifecycle events.
+- 2026-07-15 (design iteration rounds 16–22) — cycle kinds (verify/fix identical
+  rules); tracks = numbered lanes, CR always within a track (plan `track`, auto from
+  `CRUCIBLE_ORCHESTRATOR`); containment hierarchy locked (Project → mainline
+  [vidushi] → spawns track orchestrators; orchestrator = special agent); wave =
+  sync boundary, no dedicated track UI, wave state inferred; no-mistakes runs at
+  wave boundaries ingested as `gate` events → CR-CRU-013 filed (boundary card,
+  gate drill-in, Workflow-tab no-mistakes pane, gate-report verb, `gated` wave
+  state); CR-011 §S3 restructured to a dedicated Workflow tab (live per-CR todo
+  view + gate pane, history lens below). Order: 007 → 011 → 008 → 012 → 013 → 009.
 - 2026-07-15 (design iteration rounds 14–15) — CR-012 gained §S1b archive/unarchive
   (user: in 0.1.0). Cycle-plan API user-locked: orchestrator FILES the cycle plan
   (todo list) → server-assigned numeric cycle ids → agents attach `context.cycleId`;

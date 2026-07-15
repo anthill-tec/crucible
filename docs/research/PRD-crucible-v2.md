@@ -294,7 +294,18 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   their whole representation, and the wave group header carries per-lane
   completion chips plus an inferred wave state — `running` → `lanes complete ·
   awaiting review` (the boundary pause) → superseded when the next wave opens.
-  No wave API; state is inferred from plan states alone.
+  No wave-control API; state is inferred from plan states + gate events.
+  **Gate events + Workflow tab (locked rounds 21–22):** no-mistakes pipeline runs
+  at wave boundaries are ingested as first-class `gate` events (codec
+  `no-mistakes`: intent, outcome, step ladder with findings/fix rounds, fixes
+  table, pushed commit/PR — a no-mistakes push is categorically distinct from an
+  ordinary push, which never reaches Crucible). The timeline renders a full-width
+  wave-boundary card; the drill-in mirrors the axi structure. The workspace gains
+  a dedicated **Workflow tab** (Runs · Workflow · Coverage · Compile · BDD): live
+  section = the open plan as a **per-CR todo view** (active cycle expanded with
+  its live runs) beside the **no-mistakes gate pane**; the Wave → [Track] → CR →
+  Cycle history lens below. Wave states: `running → lanes complete · awaiting
+  review → gated → superseded`. (CR-CRU-011 + CR-CRU-013.)
   All in v0.1.0: plan API + lens in CR-CRU-011, fleet plan verbs
   (plan-file / cycle-activate / cycle-done / cr-close + `CRUCIBLE_CYCLE_ID`) in
   CR-CRU-008.

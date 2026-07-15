@@ -80,9 +80,19 @@ still live → `now − firstSeen` (ticking); never unregistered and no longer l
 Project-pane agent sub-rows (live: ticking; tombstones: sealed), and cycle/CR
 groups in the lens (§S3).
 
-### §S3 Workflow lens view (plan-first, inferred fallback)
-A grouped lens over the workspace Runs timeline (toggle in the Runs tab header:
-`flat | workflow`): **Wave → [Track] → CR → Cycle** hierarchy — the Track level
+### §S3 Workflow tab (live view + history lens; round-22 arrangement)
+The workspace gains a dedicated **Workflow tab** (`L.workspaceTabs` becomes
+`Runs · Workflow · Coverage · Compile · BDD` — updating the CR-007 §S5 tab AC's
+expected list from this CR onward; the earlier Runs-tab `flat|workflow` toggle
+idea is superseded). Two sections:
+1. **Active workflow (live):** the current open plan(s) rendered as a
+   **per-CR todo view** — cycles as todo rows with their statuses
+   (pending / active ▶ / done ✓ / skipped / failed ✗), the ACTIVE cycle
+   expanded to show its `context.cycleId`-linked runs live over SSE. Beside it,
+   a **gate pane** placeholder (populated by CR-CRU-013's no-mistakes pane;
+   until then it renders "gate reporting lands in CR-013").
+2. **History lens:** the grouped lens below —
+   **Wave → [Track] → CR → Cycle** hierarchy — the Track level
 renders ONLY when a wave contains plans from more than one distinct track
 (multi-track Model-B); otherwise it is omitted entirely (single-orchestrator
 seamlessness, round 17). CR groups carry a track badge whenever `track` is
@@ -120,7 +130,7 @@ is their whole UI.
 - [ ] Lifecycle events never alter test-run rollups: project rollup counts (runs, pass/fail) are identical before/after a register+unregister pair.
 - [ ] An agent that ingests runs and is then tombstone-pruned (no unregister): its runtime renders as `lastRunTimestamp − firstSeen` (AC fixture: register at t0, runs at t0+10s and t0+60s, prune → runtime 60s).
 - [ ] Workspace Project pane: a live agent row shows a ticking runtime (`firstSeen`-anchored); a tombstoned row shows a sealed runtime.
-- [ ] Runs-tab toggle `flat | workflow`: with a filed plan, workflow mode renders the plan tree (todos → cycles) — the `active` cycle as an open span containing its `context.cycleId`-linked runs, `done` cycles as closed spans; without a plan, a fixture with 2 waves × 2 CRs × 2 cycles renders the inferred tree with `context.cycle` labels; unlinked/context-less events land in an "ungrouped" tail (count asserted), never dropped.
+- [ ] Workflow tab: `L.workspaceTabs` returns exactly `["Runs","Workflow","Coverage","Compile","BDD"(per type)]`; the tab's ACTIVE section renders the open plan as a per-CR todo view — cycle rows with status glyphs, the `active` cycle expanded with its `context.cycleId`-linked runs appearing live over SSE (no reload), and a gate-pane placeholder element present; the HISTORY section renders the plan tree — `done` cycles as closed spans; without a plan, a fixture with 2 waves × 2 CRs × 2 cycles renders the inferred tree with `context.cycle` labels; unlinked/context-less events land in an "ungrouped" tail (count asserted), never dropped.
 - [ ] E2E: `tests/e2e/workflow.e2e.ts` — file a plan via API → activate cycle 1 → register agent → ingest fail/pass with `context.cycleId` → PATCH cycle done → close plan with merge commit → the lens shows the plan tree with the closed span, cycle label, merge commit, and the sealed agent runtime; results ingested `tier:"e2e"`.
 
 ## Estimated size
