@@ -33,9 +33,17 @@ cannot render context badges or compile previews from the list payload.
 ### §S2 RED→GREEN transition markers (= Cycles)
 Terminology (user-locked 2026-07-15, round 10): a RED→GREEN pair is a **Cycle** —
 one step in a CR's execution; CR groups cycles, Wave groups CRs.
-Pairing rule: same `projectKey` + same agent stem (agentId with a trailing
-`-RED|-GREEN|-FIX` suffix stripped, case-insensitive) — when a failing test run is
-followed by a passing test run within 24 h, render the marker row above the pair:
+Pairing rule (STREAK-BASED — user-revised during execution: the live view showed
+marker proliferation when agents ingest many runs per cycle): same `projectKey` +
+same agent stem (agentId with a trailing `-RED|-GREEN|-FIX` suffix stripped,
+case-insensitive), runs timestamp-ordered — ONE marker per maximal failing
+STREAK closed by its first subsequent passing run within 24 h (the marker's RED
+counts come from the streak's FIRST failing run; intermediate failing runs are
+absorbed into the same cycle, never paired separately; pass-after-pass never
+creates a marker). Interim heuristic only: once CR-CRU-011's declared plans
+exist, the orchestrator's cycle-done (todo-complete) IS the boundary and the
+timeline suppresses inferred markers for `cycleId`-linked runs. Marker row
+above the pair:
 `RED f/t ➜ GREEN t/t · Cycle: <label> · <stem> · <tier> · closed in <duration>`
 where `<label>` is `context.cycle` (an OPTIONAL additive string on `RunContext`,
 carrying the orchestrator todo's description) from the GREEN run when present,
