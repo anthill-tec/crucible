@@ -97,6 +97,12 @@ let cacheBust = 0;
  */
 async function mountApp(opts: MountOpts): Promise<void> {
   const pathname = opts.pathname ?? "/";
+  // Idempotent register — a test that mounts twice (e.g. the AC7 both-
+  // surfaces test remounting for / then /p/<key>) would otherwise hit
+  // "Failed to register. Happy DOM has already been globally registered."
+  // on the second call, before any production source even runs. The
+  // existing afterEach still does the final unregister for the test.
+  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
   await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
   document.body.innerHTML = '<div id="app"></div>';
 
