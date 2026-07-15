@@ -282,6 +282,13 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   concepts. Workflow-state env vars are `WORKFLOW_ROLE` (mainline | track-n),
   `WORKFLOW_WAVE`, `WORKFLOW_CYCLE`, `WORKFLOW_CYCLE_ID`; the `CRUCIBLE_*`
   prefix is reserved for Crucible's own configuration.
+  **Model B in one sentence (locked round 29):** a flow of ACTIONS triggered by
+  ACTORS with specific ROLES. Multi-track (parallel) and single-track
+  (sequential) execution differ only in which actor roles are present and how
+  the actions are scheduled — the model itself is uniform, which is why Crucible
+  needs exactly one data model for both shapes: actors = agents carrying roles;
+  actions = registrations, runs, plan verbs, cycle confirms, CR closes,
+  milestones, gates. Everything Crucible tracks is an actor acting.
   **Role hierarchy (locked round 27):** roles nest by scope — MAINLINE
   ORCHESTRATOR (widest: the project workflow — allocates lanes, launches waves,
   gates boundaries) → ORCHESTRATOR (track scope: one lane's CR queue) →
