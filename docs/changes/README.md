@@ -53,6 +53,14 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   TOON's uniform-table form applies to events[] — measured ratio currently 105% of
   JSON for nested shape (DN-crucible-toon-subset §Measured token-ratio); decide
   together with the SPA's consumption of the same payload in CR-CRU-006/007.
+- 2026-07-15 (design iteration, post CR-010) — board micro design iteration APPROVED
+  (final round): agents render nested under their project everywhere (⌁ glyph, heat
+  tint; tombstones too); workspace Agents tab dropped; home top bar simplified (logo +
+  slogan + filter-by pulldown + health — no project chips); Projects-pane rows drill
+  down to the workspace (never filter); `← projects` breadcrumb workspace-only. PRD
+  §4.11 + nav model synced; the whole set folds into CR-CRU-007 (spec §S5, re-baselined
+  same day). Process rule recorded: micro design iterations run between CRs on develop,
+  no active feature flow.
 - 2026-07-15 (post-merge review) — no-mistakes hardening landed on develop after the
   CR-CRU-006 merge: ingest parse/`dataPath` failures now return 400 `{ok:false, error}`
   on BOTH surfaces (v1 `/api/ingest` + v2 `/api/v2/runs`, shared `parseRunBody` core —

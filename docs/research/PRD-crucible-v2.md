@@ -216,12 +216,16 @@ all live data when keep-alives stop and a health probe fails — the frontend mu
 present stale data as live. Orchestrators may gate wave dispatch on `/api/health`.
 
 ### 4.11 Dashboard (v2 UX)
-- **Project switcher (revised 2026-07-15, user-locked via review board)** — the
-  Projects rail/pane owns project selection with per-project health at a glance (type
-  badge, online-agent count, last-run pass/fail, latest coverage). The home top bar
-  carries NO project chips/breadcrumbs (they don't scale with project count): logo +
-  a one-liner slogan + health pill only. The "All projects" badge (default,
-  reset-filter) lives in the Projects pane title area.
+- **Project switcher (final — design iteration approved 2026-07-15 via review
+  board)** — the Projects pane lists projects with per-project health at a glance
+  (type badge, online-agent count, last-run pass/fail, latest coverage) and their
+  agents nested beneath. Clicking a pane row **drills down** into that project's
+  workspace (`/p/<key>`) — pane rows navigate, they never filter. Home-timeline
+  filtering is a **"filter by" pulldown in the top title bar** (default "All
+  projects", resets): one compact control that scales with any project count. The
+  home top bar carries NO project chips/breadcrumbs: logo + a one-liner slogan +
+  the filter pulldown + health pill. The `← projects` breadcrumb exists only on
+  the workspace view.
 - **Agents — nested under their project (revised 2026-07-15, user-locked via review
   board)** — agents are NEVER a flat standalone section: everywhere they appear, live
   agents (and tombstones) render as sub-nodes of their owning project's card/container,
@@ -230,7 +234,8 @@ present stale data as live. Orchestrators may gate wave dispatch on `/api/health
   in heat-amber) so they read as agents, not sub-projects (user note 2026-07-15).
   The "who is working right now" view is read per-project.
   Consequence: the workspace **Agents tab is dropped** (no flat agents view exists
-  anywhere); implementation lands in CR-CRU-007.
+  anywhere); in the workspace, the project's agents sit ⌁-marked in the right
+  (vitals) rail. Implementation lands in CR-CRU-007.
 - **Run timeline** — newest-first event cards: agent, tier, pass ratio (`34/34` green /
   `3 failed of 5` red / pending count), duration, expandable suite→test tree with per-test
   status; compile cards show error/warning counts and per-file structured errors.
@@ -244,8 +249,9 @@ present stale data as live. Orchestrators may gate wave dispatch on `/api/health
 Control home (`/`), project workspace (`/p/<key>`), and the run drill-in as a
 slide-over overlay (`…/run/<eventId>` suffix) that opens over whichever surface is
 active and closes back to its exact state (Esc / scrim / browser back). Projects-pane
-rows filter in place (not navigation; the pane-title "All projects" badge resets —
-top-bar project chips removed 2026-07-15); project cards/names navigate; run cards open the
+rows drill down to the workspace (revised final round 2026-07-15 — the top-bar
+filter-by pulldown filters the home timeline in place); project cards/names also
+navigate; agent sub-rows filter the visible timeline to that agent; run cards open the
 drill-in with a codec-aware body (suite tree for tests, per-file diagnostics for
 compile); transition markers open the GREEN run with the paired RED one hop away;
 coverage trend points open their producing regression run; the health pill never
