@@ -376,13 +376,19 @@
       return `${Math.floor(s / 60)}m ${s % 60}s`;
     }
 
-    // Ratio pill: `N/N` green / `F ✗ of N` red / `E errors` amber (compile
-    // cards NEVER show a test-ratio shape).
+    // Ratio pill — UNIVERSAL status palette (user-corrected 2026-07-15):
+    // `N/N` pass-green / `F ✗ of N` fail-red / compile `E errors` fail-red
+    // when E>0 and pass-green when clean (compile cards NEVER show a
+    // test-ratio shape; the amber compile pill is retired).
     const RatioPill = (e) => {
       if (e.kind === "compile") {
+        const errors = e.errors ?? 0;
         return span(
-          { "data-testid": "ratio-pill", class: "app-pill app-ratio-error" },
-          `${e.errors ?? 0} errors`,
+          {
+            "data-testid": "ratio-pill",
+            class: `app-pill ${errors > 0 ? "app-ratio-fail" : "app-ratio-pass"}`,
+          },
+          `${errors} errors`,
         );
       }
       if (e.failed > 0) {
@@ -640,9 +646,12 @@
         },
       );
 
-    // §S5 fidelity #5 — Vitals. CYCLE HEALTH renders from transition pairs
-    // alone ("N RED→GREEN · median <duration>"), independent of coverage;
-    // the coverage-trend card renders ONLY when coverage actually exists.
+    // §S5 fidelity #5 + §S5.2 F8 anatomy (user defect 2026-07-15) — Vitals.
+    // Both cards follow the F8 label-over-value hierarchy: a dim uppercase
+    // label ABOVE a bright/600 value line. CYCLE HEALTH renders from
+    // transition pairs alone, independent of coverage; the coverage-trend
+    // card renders ONLY when coverage actually exists, with one bar per
+    // green-coverage point from the already-loaded timeline slice.
     function medianMs(values) {
       if (values.length === 0) return 0;
       const sorted = [...values].sort((x, y) => x - y);
@@ -656,32 +665,79 @@
       );
       return div(
         { "data-testid": "cycle-health-card", class: "app-card app-vitals-card" },
-        div({ class: "app-card-name" }, "cycle health"),
         div(
-          { class: "app-card-meta" },
+          { "data-testid": "vitals-card-label", class: "app-vitals-label" },
+          "CYCLE HEALTH (7d)",
+        ),
+        div(
+          { "data-testid": "vitals-card-value", class: "app-vitals-value" },
           pairs.length === 0
             ? "no cycles yet"
-            : `${pairs.length} RED→GREEN · median ${fmtDuration(
-                medianMs(pairs.map((m) => m.greenEvent.timestamp - m.redEvent.timestamp)),
-              )}`,
+            : [
+                `${pairs.length} `,
+                // §S5.2 (f) — the RED/GREEN tokens carry the SAME status
+                // classes the timeline uses, never neutral dim ink.
+                span({ class: "app-ratio-fail" }, "RED"),
+                "→",
+                span({ class: "app-ratio-pass" }, "GREEN"),
+                ` · median ${fmtDuration(
+                  medianMs(pairs.map((m) => m.greenEvent.timestamp - m.redEvent.timestamp)),
+                )}`,
+              ],
         ),
       );
     };
 
+    // §S5.2 (d) — green-coverage points from the loaded slice (events
+    // carrying the additive `coverageLines` brief field), oldest→newest,
+    // capped at the latest 12.
+    function coverageTrendPoints() {
+      return L.filterEvents(state.events, { projectKey: state.route.projectKey })
+        .filter((e) => typeof e.coverageLines === "number")
+        .sort((x, y) => x.timestamp - y.timestamp)
+        .slice(-12)
+        .map((e) => e.coverageLines);
+    }
+
     const CoverageTrendCard = () => {
       const percent = currentProject()?.latestGreenCoverage?.lines?.percent;
       if (typeof percent !== "number") return null;
+      const points = coverageTrendPoints();
+      const caption =
+        points.length >= 2
+          ? `${points[0]} → ${points[points.length - 1]}% lines`
+          : `latest green coverage ${points.length === 1 ? points[0] : percent}%`;
       return div(
         { "data-testid": "coverage-trend-card", class: "app-card app-vitals-card" },
-        div({ class: "app-card-name" }, "coverage trend"),
-        div({ class: "app-card-meta" }, `latest green coverage ${percent}%`),
+        div(
+          { "data-testid": "vitals-card-label", class: "app-vitals-label" },
+          "COVERAGE TREND (green regressions)",
+        ),
+        points.length >= 2
+          ? div(
+              { "data-testid": "coverage-trend-bars", class: "app-trend-bars" },
+              points.map((p, i) =>
+                div({
+                  "data-testid": "coverage-trend-bar",
+                  class: `app-trend-bar ${
+                    i === points.length - 1 ? "app-trend-bar-latest" : "app-trend-bar-dim"
+                  }`,
+                  style: `height:${p}%;`,
+                }),
+              ),
+            )
+          : null,
+        div({ "data-testid": "vitals-card-value", class: "app-vitals-value" }, caption),
       );
     };
 
     const VitalsRail = () =>
       div(
         { "data-testid": "vitals-rail", class: "app-rail-section" },
-        div({ class: "app-rail-title" }, "vitals"),
+        div(
+          { "data-testid": "pane-section-title", class: "app-pane-section-title" },
+          "Vitals",
+        ),
         () => CycleHealthCard(),
         () => CoverageTrendCard() ?? span(),
       );
@@ -704,13 +760,40 @@
             `/p/${encodeURIComponent(project.key)}/run/${encodeURIComponent(eventId)}`,
           );
       }
+      // §S5.2 (c) — the caption carries BOTH metrics when functions coverage
+      // exists: `cov <lines>% lines · fn <functions>%`.
+      const fnPercent = project.latestGreenCoverage?.functions?.percent;
+      const caption =
+        typeof fnPercent === "number"
+          ? `cov ${percent}% lines · fn ${fnPercent}%`
+          : `cov ${percent}% lines`;
       return div(
         props,
-        div({ class: "app-card-meta" }, `coverage ${percent}%`),
+        div({ class: "app-card-meta" }, caption),
         div(
           { class: "app-meter" },
           div({ class: "app-meter-fill", style: `width:${Math.min(100, percent)}%;` }),
         ),
+      );
+    };
+
+    // §S5.2 (f) — the latest-run status line carries the universal status
+    // palette (pass-green when passing / fail-red when failing), never only
+    // neutral dim ink.
+    const ProjectStatusLine = (project) => {
+      const last = project.lastEvent;
+      const statusCls =
+        last === null || last === undefined
+          ? ""
+          : last.failed > 0
+            ? " app-ratio-fail"
+            : " app-ratio-pass";
+      return div(
+        {
+          "data-testid": "project-status-line",
+          class: `app-card-meta app-status-line${statusCls}`,
+        },
+        () => L.projectRollupLabel(project),
       );
     };
 
@@ -722,7 +805,7 @@
           { class: "app-card-meta" },
           `${project.type} · ${project.agentsOnline}/${project.agentsTotal} agents online`,
         ),
-        div({ class: "app-card-meta" }, () => L.projectRollupLabel(project)),
+        ProjectStatusLine(project),
         CoverageMeter(project),
       );
 
@@ -732,6 +815,12 @@
     const ProjectPane = () =>
       div(
         { "data-testid": "project-pane", class: greyed("app-pane") },
+        // §S5.2 (a) — F8 section title above the project card (uppercase
+        // mono, ember accent, wide letter-spacing — styles.css).
+        div(
+          { "data-testid": "pane-section-title", class: "app-pane-section-title" },
+          "Project",
+        ),
         () => {
           const p = currentProject();
           return p === null ? div() : ProjectPaneCard(p);
@@ -744,12 +833,86 @@
         VitalsRail(),
       );
 
-    const WorkspaceBody = () => {
-      if (state.workspaceTab === "Runs") return WorkspaceRuns();
+    // §S5.5 (user defect 2026-07-15) — the Coverage tab renders the real
+    // latest-green-coverage panel: lines + functions meter rows and a
+    // `view run` control opening the latest coverage event's drill-in (same
+    // wiring as the §nav coverage-meter click). Gating unchanged.
+    const CoveragePanel = () => {
+      const p = currentProject();
+      const cov = p?.latestGreenCoverage;
+      const lines = cov?.lines;
+      const fns = cov?.functions;
+      const eventId = p?.latestCoverageEventId;
       return div(
         { class: greyed("app-center") },
-        div({ class: "app-empty" }, `${state.workspaceTab} lands in CR-CRU-007`),
+        div(
+          { "data-testid": "coverage-panel", class: "app-coverage-panel" },
+          div({ class: "app-rail-title" }, "Coverage — latest green regression"),
+          lines !== undefined && lines !== null
+            ? div(
+                { class: "app-coverage-row" },
+                `lines ${lines.covered}/${lines.total} · ${lines.percent}%`,
+              )
+            : null,
+          fns !== undefined && fns !== null
+            ? div(
+                { class: "app-coverage-row" },
+                `functions ${fns.covered}/${fns.total} · ${fns.percent}%`,
+              )
+            : null,
+          eventId !== undefined && eventId !== null
+            ? button(
+                {
+                  "data-testid": "coverage-view-run",
+                  class: "app-chip",
+                  onclick: () =>
+                    navigate(
+                      `/p/${encodeURIComponent(p.key)}/run/${encodeURIComponent(eventId)}`,
+                    ),
+                },
+                "view run",
+              )
+            : null,
+        ),
       );
+    };
+
+    // §S5.5 — F5 COMPILE PANEL: the workspace timeline filtered to compile
+    // events, identical card anatomy/testids as Runs.
+    const CompilePanel = () =>
+      div(
+        { class: greyed("app-center") },
+        div(
+          { class: "app-timeline-head" },
+          div({ class: "app-rail-title" }, () => {
+            const p = currentProject();
+            return `Compile — ${p ? p.name || p.key : state.route.projectKey}`;
+          }),
+        ),
+        () => {
+          const compiles = visibleEvents().filter((e) => e.kind === "compile");
+          return compiles.length === 0
+            ? div({ class: "app-empty" }, "no compile events yet")
+            : div(compiles.map(EventCard));
+        },
+      );
+
+    // §S5.5 — BDD keeps a placeholder naming the REAL landing CR (0.2.0).
+    const BddPlaceholder = () =>
+      div(
+        { class: greyed("app-center") },
+        div(
+          { class: "app-empty" },
+          "BDD run results already stream into the Runs timeline — " +
+            "the dedicated BDD surface lands in CR-CRU-015 (0.2.0)",
+        ),
+      );
+
+    const WorkspaceBody = () => {
+      if (state.workspaceTab === "Coverage") return CoveragePanel();
+      if (state.workspaceTab === "Compile") return CompilePanel();
+      if (state.workspaceTab === "BDD") return BddPlaceholder();
+      return WorkspaceRuns();
     };
 
     // §S5 fidelity #1 — the workspace has NO left rail: the tabs row is a
@@ -880,8 +1043,11 @@
         return focused === key;
       }
 
-      // One leaf row (+ its failure box when visible). Graceful degradation:
-      // a failed leaf with NO failure data renders its ✗ line and no box.
+      // One leaf row (+ its failure box when visible). §S3 failure-box
+      // degradation (user defect 2026-07-15): the box NEVER renders empty —
+      // message → else failure.type → else `test failed`; when the message
+      // is absent a dim reporter note is appended; the trace block renders
+      // only when a trace exists.
       const LeafRows = (suiteName, leaf, presentation) => {
         const key = `${suiteName}::${leaf.name}`;
         const failed = leaf.status === "fail";
@@ -902,19 +1068,28 @@
             span({ class: "app-card-meta" }, fmtDuration(leaf.duration_ms ?? 0)),
           ),
         ];
-        if (
-          failed &&
-          leaf.failure !== undefined &&
-          leaf.failure !== null &&
-          failureBoxVisible(key, presentation)
-        ) {
+        if (failed && failureBoxVisible(key, presentation)) {
+          const failure = leaf.failure ?? null;
+          const hasMessage =
+            typeof failure?.message === "string" && failure.message.length > 0;
+          const hasType = typeof failure?.type === "string" && failure.type.length > 0;
+          const messageLine = hasMessage
+            ? failure.message
+            : hasType
+              ? failure.type
+              : "test failed";
+          const hasTrace = typeof failure?.trace === "string" && failure.trace.length > 0;
           nodes.push(
             div(
               { "data-testid": "failure-box", class: "app-failure-box" },
-              div({ class: "app-failure-message" }, leaf.failure.message),
-              leaf.failure.trace !== undefined && leaf.failure.trace !== null
-                ? div({ class: "app-failure-trace" }, leaf.failure.trace)
-                : null,
+              div({ class: "app-failure-message" }, messageLine),
+              hasMessage
+                ? null
+                : div(
+                    { class: "app-failure-note" },
+                    "no failure detail captured by the reporter",
+                  ),
+              hasTrace ? div({ class: "app-failure-trace" }, failure.trace) : null,
             ),
           );
         }
@@ -1189,10 +1364,19 @@
         );
       };
 
-      // Compile body — diagnostics grouped by file, level-colored lines,
-      // raw-output toggle. No mode switch renders for compile events.
+      // Compile body — §S3 (user defect 2026-07-15): a status line ALWAYS
+      // renders first (`<format> · N errors · M warnings`, pass-green when
+      // errorCount is 0, fail-red otherwise), then diagnostics grouped by
+      // file (level-colored lines) when present, else the empty-state line
+      // `clean compile — no diagnostics`; the raw-output toggle renders
+      // ONLY when a non-empty raw is stored. No mode switch renders for
+      // compile events.
       const CompileBody = (d) => {
         const compile = d.compile ?? {};
+        const errorCount = compile.errorCount ?? 0;
+        const warningCount = compile.warningCount ?? 0;
+        const format = compile.format ?? "compile";
+        const hasRaw = typeof compile.raw === "string" && compile.raw.length > 0;
         const groups = new Map();
         for (const diag of compile.diagnostics ?? []) {
           const file = diag.file ?? "(unknown file)";
@@ -1201,35 +1385,48 @@
         }
         return div(
           { class: "app-drillin-diags" },
-          [...groups.entries()].map(([file, lines]) =>
-            div(
-              { "data-testid": "diag-group", class: "app-diag-group" },
-              div({ class: "app-diag-file" }, file),
-              lines.map((diag) =>
+          div(
+            {
+              "data-testid": "compile-status",
+              class: `app-pill app-compile-status ${
+                errorCount > 0 ? "app-ratio-fail" : "app-ratio-pass"
+              }`,
+            },
+            `${format} · ${errorCount} errors · ${warningCount} warnings`,
+          ),
+          groups.size === 0
+            ? div({ class: "app-empty" }, "clean compile — no diagnostics")
+            : [...groups.entries()].map(([file, lines]) =>
                 div(
-                  {
-                    "data-testid": "diag-line",
-                    class: `app-diag-line app-diag-${diag.level}`,
-                  },
-                  `${file}:${diag.line}:${diag.col} — ${diag.message}`,
+                  { "data-testid": "diag-group", class: "app-diag-group" },
+                  div({ class: "app-diag-file" }, file),
+                  lines.map((diag) =>
+                    div(
+                      {
+                        "data-testid": "diag-line",
+                        class: `app-diag-line app-diag-${diag.level}`,
+                      },
+                      `${file}:${diag.line}:${diag.col} — ${diag.message}`,
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
-          button(
-            {
-              "data-testid": "raw-toggle",
-              class: "app-chip app-raw-toggle",
-              onclick: () => {
-                showRaw.val = !showRaw.val;
-              },
-            },
-            showRaw.val ? "hide raw output" : "show raw output",
-          ),
-          showRaw.val
+          hasRaw
+            ? button(
+                {
+                  "data-testid": "raw-toggle",
+                  class: "app-chip app-raw-toggle",
+                  onclick: () => {
+                    showRaw.val = !showRaw.val;
+                  },
+                },
+                showRaw.val ? "hide raw output" : "show raw output",
+              )
+            : null,
+          showRaw.val && hasRaw
             ? pre(
                 { "data-testid": "raw-output", class: "app-raw-output" },
-                compile.raw ?? "",
+                compile.raw,
               )
             : null,
         );

@@ -18,6 +18,9 @@ export interface CrucibleEventBrief {
   pending: number;
   duration_ms: number;
   hasCoverage: boolean;
+  /** CR-CRU-007 §S5.2 (F8 vitals, additive) — the stored coverage's lines
+   * percent; present ONLY on coverage-bearing events. */
+  coverageLines?: number;
 }
 
 export interface EventFilters {

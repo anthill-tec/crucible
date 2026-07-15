@@ -222,17 +222,64 @@ body {
 .app-coverage { margin-top: 4px; }
 .app-coverage.clickable { cursor: pointer; }
 .app-vitals-card { cursor: default; }
+/* §S5.2 (a) — F8 pane section titles: uppercase mono, ember accent, wide
+   letter-spacing (the board's own section-header treatment). */
+.app-pane-section-title {
+  font: 600 10.5px/1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--ember);
+  margin: 2px 0 8px;
+}
+/* §S5.2 (d)/(e) — F8 vitals card anatomy: dim uppercase label ABOVE a
+   bright 600-weight value line. */
+.app-vitals-label {
+  font: 600 9px/1.5 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-faint);
+}
+.app-vitals-value {
+  font-weight: 600;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+}
+/* §S5.2 (d) — coverage-trend mini bar-chart: one bar per green-coverage
+   point (oldest→newest, ≤12); earlier bars ember-dim, latest bright ember. */
+.app-trend-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 36px;
+  margin: 6px 0 4px;
+}
+.app-trend-bar {
+  flex: 1 1 0;
+  min-width: 4px;
+  border-radius: 2px 2px 0 0;
+}
+.app-trend-bar-dim { background: var(--ember-dim); }
+.app-trend-bar-latest { background: var(--ember); }
+/* §S5.2 (b) — the F8 mock `.meter`: 6px tall, fully rounded, BORDERLESS
+   track, ember-gradient fill sized to the lines percent. */
 .app-meter {
-  height: 4px;
+  height: 6px;
   border-radius: 999px;
   background: var(--bg);
-  border: 1px solid var(--line);
   overflow: hidden;
   margin-top: 2px;
 }
 .app-meter-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--ember-dim), var(--pass));
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--ember-dim), var(--ember));
+}
+/* §S5.5 — Coverage tab panel rows. */
+.app-coverage-row {
+  font: 600 11px var(--mono);
+  color: var(--ink);
+  margin: 4px 0;
 }
 
 /* ── Timeline pane header + filter pulldown (§S5.1 CR-CRU-007) ──────────── */
@@ -321,7 +368,6 @@ body {
 }
 .app-ratio-pass { color: var(--pass); border-color: var(--pass); }
 .app-ratio-fail { color: var(--fail); border-color: var(--fail); }
-.app-ratio-error { color: var(--heat); border-color: var(--heat); }
 .app-ctx-badge { color: var(--ink-faint); }
 
 /* Compile-card diagnostics preview (first 2 lines, file:line — msg). */
@@ -419,6 +465,14 @@ body {
   word-break: break-word;
 }
 .app-failure-trace { color: var(--ink-faint); margin-top: 4px; }
+/* §S3 failure-box degradation — dim reporter note when no message stored. */
+.app-failure-note { color: var(--ink-faint); font-style: italic; margin-top: 2px; }
+/* §S3 — compile drill-in status line (always first). */
+.app-compile-status {
+  display: inline-block;
+  font: 600 11px var(--mono);
+  margin-bottom: 8px;
+}
 
 /* Compile drill-in — diagnostics grouped by file + raw-output toggle. */
 .app-diag-group {

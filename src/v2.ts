@@ -458,6 +458,13 @@ function eventBrief(event: RunEvent) {
     pending: event.summary?.pending ?? 0,
     duration_ms: event.summary?.duration_ms ?? 0,
     hasCoverage: !!event.coverage,
+    // CR-CRU-007 §S5.2 (F8 vitals, additive) — optional `coverageLines`
+    // (the stored coverage's lines percent) on coverage-bearing events, so
+    // the workspace coverage-trend card derives its bars from the
+    // already-loaded timeline slice. Key ABSENT on events with no coverage.
+    ...(typeof (event.coverage as Coverage | undefined)?.lines?.percent === "number"
+      ? { coverageLines: (event.coverage as Coverage).lines.percent }
+      : {}),
     ...(event.context !== undefined ? { context: event.context } : {}),
     ...(compile !== undefined
       ? {
