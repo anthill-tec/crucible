@@ -244,8 +244,15 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
 - **Run timeline** — newest-first event cards: agent, tier, pass ratio (`34/34` green /
   `3 failed of 5` red / pending count), duration, expandable suite→test tree with per-test
   status; compile cards show error/warning counts and per-file structured errors.
-- **RED→GREEN transition marker** — when an agent's failing run is followed by its passing
-  run, the timeline surfaces the transition explicitly (the core TDD story v1 told).
+- **RED→GREEN transition marker (= Cycle; terminology locked 2026-07-15)** — when
+  an agent's failing run is followed by its passing run, the timeline surfaces the
+  transition explicitly (the core TDD story v1 told). A RED→GREEN pair is a
+  **Cycle** — one step in a CR's execution; **CR groups cycles, Wave groups CRs**.
+  The marker labels the Cycle from `context.cycle` (optional additive RunContext
+  string carrying the orchestrator todo's description; fleet clients send it from
+  CR-CRU-008) with the agent stem as identifier. Crucible thereby shows the
+  implementation workflow, not just test runs; a full Wave → CR → Cycle grouped
+  "workflow lens" is post-0.1.0 backlog.
 - **Coverage** — line/function/branch meters on green regression events; latest-green
   coverage shown at project level.
 - Localhost tool aesthetics: fast, dense, dark-friendly, zero build step.
@@ -263,9 +270,13 @@ compile); transition markers open the GREEN run with the paired RED one hop away
 coverage trend points open their producing regression run; the health pill never
 navigates. All states deep-linkable; SSE keeps every surface live.
 
-**Drill-in density (decided 2026-07-14; mode-switch revision 2026-07-15):** one
-drill-in surface with a **user-chosen Detail ↔ Density mode switch** in its header
-(persisted; default Detail) — no test-count auto-decision. Density mode applies:
+**Drill-in density (decided 2026-07-14; tier-default revision 2026-07-15 round
+10):** one drill-in surface whose **default mode is contextual by tier** —
+`regression`/`e2e` (broad, orchestrator-fired sweeps) open in **Density**; all
+other tiers (the focused RED/GREEN/VERIFY/FIX cycle runs) open in **Detail**. The
+header **Detail ↔ Density switch is the manual override**, remembered per tier
+group — never decided by test count. Compile drill-ins carry no mode switch
+(diagnostics-by-file is their single form). Density mode applies:
 failures-float/green-folds, heat-strip minimap (1 cell = 1 test, click-to-jump,
 any run size), failure digest (identical assertion messages grouped). Always-on in
 both modes: virtualized tree, progressive payload paging (suite summaries first,
