@@ -8,8 +8,14 @@
 
 ## 1 Why
 
-Crucible is the test-observability hub of the agentic-TDD platform (MDX: CodeForge,
-Crucible, Velocity). Every RED/GREEN/VERIFY/FIX agent across every stack (Rust, Java/
+**Crucible is a tracking system that works with the Model-B code-development
+workflow** (definition locked 2026-07-15, design-iteration round 30) — the
+test-observability hub of the agentic-TDD platform (MDX: CodeForge, Crucible,
+Velocity). It tracks the workflow's actors (agents carrying roles — mainline
+orchestrator, track orchestrators, RED/GREEN/VERIFY/FIX) and their actions
+(registrations, runs, cycle plans, confirms, CR closes, milestones, gates),
+front-ending the whole execution without ever being an actor in it.
+Every RED/GREEN/VERIFY/FIX agent across every stack (Rust, Java/
 Quarkus, Python, Bun/TS, VS Code ext, Arduino) registers with Crucible, heartbeats its
 progress, and ingests every test cycle it runs — including compile failures, because in
 TDD "the test doesn't compile yet" is itself a reportable RED state. Orchestrators and
