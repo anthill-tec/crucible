@@ -50,8 +50,29 @@ export interface WorkspaceProjectLike {
 }
 
 export interface WorkspaceTab {
-  name: "Runs" | "Agents" | "Coverage" | "Compile" | "BDD";
+  name: "Runs" | "Coverage" | "Compile" | "BDD";
   disabled: boolean;
+}
+
+// CR-CRU-007 §S5.1 — activity rule + projects-row ordering (pure).
+export interface ActivityAgentLike {
+  liveness: "online" | "stale" | "tombstoned";
+  lastSeen: number;
+}
+
+export interface ActivityProjectLike {
+  lastEventAt: number | null;
+  agents: ActivityAgentLike[];
+}
+
+export interface ProjectActivityResult {
+  active: boolean;
+  lastActivity: number;
+}
+
+export interface OrderableProjectLike {
+  active: boolean;
+  lastActivity: number;
 }
 
 export interface ProjectRollupLike {
@@ -86,5 +107,13 @@ export declare function routeParse(pathname: string): RouteState;
 export declare function workspaceTabs(project: WorkspaceProjectLike): WorkspaceTab[];
 
 export declare function projectRollupLabel(project: ProjectRollupLike): string;
+
+export declare function projectActivity(
+  project: ActivityProjectLike,
+  now: number,
+  inactiveMs: number,
+): ProjectActivityResult;
+
+export declare function orderProjects<T extends OrderableProjectLike>(projects: T[]): T[];
 
 export declare function emptyStates(state: EmptyStateInput): EmptyStateResult | null;

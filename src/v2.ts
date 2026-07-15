@@ -191,8 +191,18 @@ async function handleProjectCreate(store: Store, req: Request): Promise<Response
   return json({ ok: true, changed: true, project });
 }
 
+// CR-CRU-007 §S5.1 — system-wide project-inactive timeout (ms), env-configurable.
+const DEFAULT_PROJECT_INACTIVE_MS = 3_600_000;
+
+function projectInactiveMs(): number {
+  const raw = Number(process.env.CRUCIBLE_PROJECT_INACTIVE_MS ?? "");
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_PROJECT_INACTIVE_MS;
+}
+
 /** PRD §4.2 — project rollups. */
 function handleProjectsList(store: Store, req: Request, url: URL): Response {
+  const inactiveMs = projectInactiveMs();
+  const now = Date.now();
   const projects = store.listProjects().map((project) => {
     const agents = store.listAgents(project.key);
     const events = store.listEvents(project.key, Number.MAX_SAFE_INTEGER);
@@ -200,6 +210,22 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
     // §S4 (CR-CRU-001) discards coverage on failed runs, so any stored
     // coverage belongs to a green run — newest one wins.
     const greenCovered = events.find((e) => e.coverage !== undefined);
+    // §S5.1 (CR-CRU-007) activity rule (user-locked round 13): active while
+    // ≥1 live (online/stale) agent; with none left, inactive once
+    // now − lastActivity EXCEEDS the timeout. lastActivity = max(last event
+    // timestamp, agents' last-seen).
+    const lastActivity = Math.max(
+      last?.timestamp ?? 0,
+      ...agents.map((a) => a.lastSeen),
+      0,
+    );
+    // Age is second-floored: `lastActivity` and `now` come from different
+    // Date.now() calls, and sub-second scheduling jitter must never flip a
+    // project sitting exactly AT its timeout — only EXCEEDING it flips.
+    // Any live (online/stale) agent's last-seen feeds lastActivity above,
+    // so liveness keeps a project active throughout the grace window.
+    const ageMs = Math.floor((now - lastActivity) / 1000) * 1000;
+    const active = ageMs <= inactiveMs;
     return {
       ...project,
       agentsOnline: agents.filter((a) => a.liveness === "online").length,
@@ -207,7 +233,15 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
       // §S0 (CR-CRU-006) — same flattened brief shape as the events list.
       lastEvent: last !== undefined ? eventBrief(last) : null,
       latestGreenCoverage: greenCovered?.coverage ?? null,
+      // §S5.1 (CR-CRU-007) — additive activity fields.
+      active,
+      lastActivity,
     };
+  });
+  // §S5.1 ordering — most-recently-active first, inactive last.
+  projects.sort((a, b) => {
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    return b.lastActivity - a.lastActivity;
   });
   return reply(req, url, { ok: true, projects });
 }

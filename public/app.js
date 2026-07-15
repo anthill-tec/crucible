@@ -1,4 +1,7 @@
-/* CR-CRU-006 §S2–§S5 — Crucible v2 app shell (VanJS + VanX, no build step).
+/* CR-CRU-006 §S2–§S5 + CR-CRU-007 §S5 — Crucible v2 app shell (VanJS + VanX,
+   no build step), board-design-iteration final form: title bar + projects row
+   + collective timeline on home; workspace Project pane with ⌁-nested agents;
+   Health Pill fidelity on both surfaces.
    `van` / `vanX` are globals from the vendored nomodule bundles; pure app
    logic lives in app-logic.mjs and arrives here as `window.CrucibleLogic`
    (the module script sets it before deferred scripts would normally need it,
@@ -8,7 +11,7 @@
   "use strict";
 
   function main(L) {
-    const { a, button, div, span } = van.tags;
+    const { a, button, div, option, select, span } = van.tags;
 
     // ── State ───────────────────────────────────────────────────────────
     const state = vanX.reactive({
@@ -16,8 +19,8 @@
       agents: [],
       events: [],
       health: null,
-      selectedProject: null, // chip filter on Mission Control (null = all)
-      selectedAgent: null, // agent-row click filter (null = all)
+      selectedProject: null, // home filter pulldown (null = all projects)
+      selectedAgent: null, // agent sub-row click filter (null = all)
       route: L.routeParse(location.pathname),
       workspaceTab: "Runs",
       backendUp: true,
@@ -36,6 +39,7 @@
       history.pushState(null, "", pathname);
       state.route = next;
       state.workspaceTab = "Runs";
+      state.selectedAgent = null;
     }
 
     function restoreScroll() {
@@ -187,17 +191,21 @@
       return L.filterEvents(state.agents, { projectKey: activeFilters().projectKey });
     }
 
-    function visibleProjects() {
-      return state.selectedProject === null
-        ? state.projects
-        : state.projects.filter((p) => p.key === state.selectedProject);
-    }
-
     function currentProject() {
       return state.projects.find((p) => p.key === state.route.projectKey) ?? null;
     }
 
+    function uptimeLabel(seconds) {
+      const s = Math.max(0, Math.floor(seconds));
+      if (s < 60) return `${s}s`;
+      if (s < 3600) return `${Math.floor(s / 60)}m`;
+      return `${Math.floor(s / 3600)}h`;
+    }
+
     // ── Components ──────────────────────────────────────────────────────
+    // §S5.4 (CR-CRU-007) — server-liveness fidelity on BOTH surfaces:
+    // healthy·live / healthy·up <duration>, unreachable·retrying… — never
+    // version or event counts.
     const HealthPill = () =>
       span(
         {
@@ -205,26 +213,16 @@
           class: () => `app-chip app-health${state.backendUp ? "" : " down"}`,
         },
         span({ class: () => `app-dot ${state.backendUp ? "g" : "r"}` }),
-        () =>
-          state.backendUp
-            ? `crucible ${state.health?.version ?? ""} · ${state.health?.counts?.events ?? 0} events`
-            : `backend unreachable · ${syncedStamp()}`,
-      );
-
-    const ProjectChip = (project) =>
-      button(
-        {
-          "data-testid": "project-chip",
-          class: () =>
-            `app-chip${state.selectedProject === (project?.key ?? null) ? " on" : ""}`,
-          onclick: () => {
-            state.selectedProject = project?.key ?? null;
-            state.selectedAgent = null;
-          },
+        () => {
+          if (!state.backendUp) return "server unreachable · retrying…";
+          const up = state.health?.uptime_s;
+          return typeof up === "number"
+            ? `server healthy · up ${uptimeLabel(up)}`
+            : "server healthy · live";
         },
-        project?.name ?? "All projects",
       );
 
+    // §S5.1 — title bar: logo + slogan + Health Pill ONLY (no project chips).
     const TopBar = () =>
       div(
         { "data-testid": "app-topbar", class: "app-top" },
@@ -240,29 +238,60 @@
           "⚒ Crucible ",
           span("v2"),
         ),
-        vanX.list(div, state.projects, (p) => ProjectChip(p.val)),
-        ProjectChip(null),
+        span({ class: "app-slogan" }, "where agentic TDD forges green"),
         HealthPill(),
       );
 
-    const ProjectCard = (project) =>
-      div(
+    // §S5.1 — projects row: canonical badge (name + type badge + liveness
+    // dot); click drills down to /p/<key>, never filters.
+    const ProjectBadge = (project) =>
+      button(
         {
-          "data-testid": "project-card",
-          class: "app-card",
+          "data-testid": "project-badge",
+          class: `app-chip app-badge ${project.active === false ? "inactive" : "active"}`,
           onclick: () => navigate(`/p/${encodeURIComponent(project.key)}`),
         },
-        div({ class: "app-card-name" }, project.name || project.key),
-        div(
-          { class: "app-card-meta" },
-          `${project.type} · ${project.agentsOnline}/${project.agentsTotal} agents online`,
+        span({ class: `app-dot ${project.active === false ? "o" : "g"}` }),
+        project.name || project.key,
+        span({ class: "app-type-badge" }, project.type),
+      );
+
+    const ProjectsRow = () =>
+      div(
+        { "data-testid": "projects-row", class: "app-top app-projects-row" },
+        () =>
+          div(
+            { class: "app-badge-flow" },
+            L.orderProjects([...state.projects]).map(ProjectBadge),
+          ),
+        // ⚙ manage chip — renders here; the manager surface lands in CR-CRU-012.
+        button(
+          { "data-testid": "manage-chip", class: "app-chip", title: "manage projects" },
+          "⚙",
         ),
-        div({ class: "app-card-meta" }, () => L.projectRollupLabel(project)),
+      );
+
+    // §S5.1 — filter pulldown lives in the timeline pane's own header and
+    // filters the collective home timeline in place (route stays "/").
+    const FilterPulldown = () =>
+      select(
+        {
+          "data-testid": "filter-pulldown",
+          class: "app-filter",
+          onchange: (e) => {
+            state.selectedProject = e.target.value === "" ? null : e.target.value;
+          },
+        },
+        option({ value: "", selected: state.selectedProject === null }, "All projects"),
+        [...state.projects].map((p) =>
+          option({ value: p.key, selected: state.selectedProject === p.key }, p.name || p.key),
+        ),
       );
 
     // Card treatment (user-directed polish): agent rows share the project-card
-    // family — `app-card` is ADDED alongside the existing classes so every
-    // selector that keys on `app-agent-row` / data-testid="agent-row" holds.
+    // family. §S5.2 — every agent row is a ⌁-marked (heat-amber) sub-row now,
+    // rendered only inside the workspace Project pane; click filters the
+    // visible timeline to that agent, in place.
     const AgentRow = (agent) => {
       const glyph = L.livenessGlyph(agent);
       const busy = agent.liveness === "online" && agent.status === "busy";
@@ -270,7 +299,7 @@
         {
           "data-testid": "agent-row",
           class: () =>
-            `app-agent-row app-card${glyph.tombstone ? " tombstoned" : ""}${
+            `app-agent-row app-card app-agent-subrow${glyph.tombstone ? " tombstoned" : ""}${
               state.selectedAgent === agent.agentId ? " on" : ""
             }`,
           onclick: () => {
@@ -280,6 +309,7 @@
         },
         span(
           { class: "app-agent-id" },
+          span({ class: "app-agent-glyph" }, "⌁ "),
           glyph.tombstone
             ? span("⚰ ")
             : span({ class: `app-dot ${busy ? "r" : glyph.cls}` }),
@@ -315,50 +345,26 @@
       );
     };
 
+    // §S5.1 — home body: the collective all-projects timeline, interleaved
+    // newest-first (server order), filter pulldown in this pane's header.
     const Timeline = () =>
       div(
         { "data-testid": "timeline", class: greyed("app-center") },
-        div({ class: "app-rail-title" }, "timeline"),
+        div(
+          { class: "app-timeline-head" },
+          div({ class: "app-rail-title" }, "timeline"),
+          () => FilterPulldown(),
+        ),
         () =>
           state.backendUp ? span() : span({ class: "app-synced" }, syncedStamp()),
         () => EmptyState() ?? div(visibleEvents().map(EventCard)),
       );
 
-    const ProjectsSection = () =>
-      div(
-        { class: "app-rail-section" },
-        div({ class: "app-rail-title" }, "projects"),
-        () =>
-          visibleProjects().length === 0
-            ? div({ class: "app-empty" }, "no projects registered")
-            : div(visibleProjects().map(ProjectCard)),
-      );
+    const Home = () => div({ class: "app-main app-home" }, Timeline());
 
-    const AgentsSection = () =>
-      div(
-        { class: "app-rail-section" },
-        div({ class: "app-rail-title" }, "agents"),
-        () =>
-          visibleAgents().length === 0
-            ? div({ class: "app-empty" }, "no agents online")
-            : div(visibleAgents().map(AgentRow)),
-      );
-
-    // Kept for the workspace page (§S4 Agents tab + right rail) — the home
-    // page no longer renders a standalone agents rail.
-    const AgentsRail = () => div({ class: greyed("app-rail") }, AgentsSection());
-
-    // Home = Mission Control (§S3 re-revised 2026-07-15): two-column grid —
-    // ONE left rail stacking the Projects section ABOVE the Agents section,
-    // timeline in the WIDE right column.
-    const Home = () =>
-      div(
-        { class: "app-main" },
-        div({ class: greyed("app-rail") }, ProjectsSection(), AgentsSection()),
-        Timeline(),
-      );
-
-    // ── Workspace (§S4 — header, tabs, Runs listing, vitals rail) ───────
+    // ── Workspace (§S4 header/tabs/runs + §S5.2 Project pane) ───────────
+    // §S5.4 — the workspace top bar carries ← projects + the current project
+    // chip (name + type badge) + the Health Pill; no agent-count chip.
     const WorkspaceHeader = () =>
       div(
         { "data-testid": "workspace-header", class: "app-top" },
@@ -366,17 +372,12 @@
         () => {
           const p = currentProject();
           return span(
-            { class: "app-card-name" },
+            { class: "app-chip on" },
             p ? p.name || p.key : state.route.projectKey,
+            span({ class: "app-type-badge" }, p ? p.type : ""),
           );
         },
-        () => {
-          const p = currentProject();
-          return span(
-            { class: "app-card-meta" },
-            p ? `${p.type} · ${p.agentsOnline}/${p.agentsTotal} agents online` : "",
-          );
-        },
+        HealthPill(),
       );
 
     const WorkspaceTabs = () =>
@@ -416,15 +417,59 @@
 
     const VitalsRail = () =>
       div(
-        { "data-testid": "vitals-rail", class: greyed("app-rail") },
+        { "data-testid": "vitals-rail", class: "app-rail-section" },
         div({ class: "app-rail-title" }, "vitals"),
-        div({ class: "app-empty" }, "vitals land in CR-CRU-007"),
+        div({ class: "app-empty" }, "vitals land with the drill-in cycles"),
+      );
+
+    // §S5.2 — coverage meter on the project card (latest green coverage).
+    const CoverageMeter = (coverage) => {
+      const percent = coverage?.lines?.percent;
+      if (typeof percent !== "number") {
+        return div({ class: "app-card-meta" }, "no coverage yet");
+      }
+      return div(
+        { class: "app-coverage" },
+        div({ class: "app-card-meta" }, `coverage ${percent}%`),
+        div(
+          { class: "app-meter" },
+          div({ class: "app-meter-fill", style: `width:${Math.min(100, percent)}%;` }),
+        ),
+      );
+    };
+
+    const ProjectPaneCard = (project) =>
+      div(
+        { class: "app-card app-pane-card" },
+        div({ class: "app-card-name" }, project.name || project.key),
+        div(
+          { class: "app-card-meta" },
+          `${project.type} · ${project.agentsOnline}/${project.agentsTotal} agents online`,
+        ),
+        div({ class: "app-card-meta" }, () => L.projectRollupLabel(project)),
+        CoverageMeter(project.latestGreenCoverage),
+      );
+
+    // §S5.2 — the workspace's right rail: project card, then the project's
+    // agents (live + tombstoned) as ⌁-marked indented sub-rows, then Vitals.
+    // This pane exists ONLY inside the workspace.
+    const ProjectPane = () =>
+      div(
+        { "data-testid": "project-pane", class: greyed("app-rail") },
+        () => {
+          const p = currentProject();
+          return p === null ? div() : ProjectPaneCard(p);
+        },
+        div({ class: "app-agent-subrows" }, () =>
+          visibleAgents().length === 0
+            ? div({ class: "app-empty" }, "no agents yet")
+            : div(visibleAgents().map(AgentRow)),
+        ),
+        VitalsRail(),
       );
 
     const WorkspaceBody = () => {
       if (state.workspaceTab === "Runs") return WorkspaceRuns();
-      if (state.workspaceTab === "Agents")
-        return div({ class: greyed("app-center") }, AgentsRail());
       return div(
         { class: greyed("app-center") },
         div({ class: "app-empty" }, `${state.workspaceTab} lands in CR-CRU-007`),
@@ -434,13 +479,9 @@
     const Workspace = () =>
       div(
         { "data-testid": "workspace", class: "app-main" },
-        div(
-          { class: greyed("app-rail") },
-          WorkspaceHeader(),
-          WorkspaceTabs(),
-        ),
+        div({ class: greyed("app-rail") }, WorkspaceTabs()),
         () => WorkspaceBody(),
-        div(AgentsRail(), VitalsRail()),
+        ProjectPane(),
       );
 
     // AC 10b(c) — the overlay sits on a scrim: a fixed full-viewport backdrop
@@ -470,9 +511,13 @@
         ),
       );
 
+    // §S5.1/§S5.3 — home chrome is title bar + projects row; the workspace
+    // swaps in its own top bar (← projects + project chip + Health Pill).
+    const HomeChrome = () => div(TopBar(), ProjectsRow());
+
     const App = () =>
       div(
-        TopBar(),
+        () => (state.route.page === "workspace" ? WorkspaceHeader() : HomeChrome()),
         () => (state.route.page === "workspace" ? Workspace() : Home()),
         () => (state.route.overlay !== undefined ? RunOverlay() : span()),
       );

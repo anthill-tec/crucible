@@ -56,7 +56,9 @@ export function routeParse(pathname) {
   return route;
 }
 
-const TAB_NAMES = ["Runs", "Agents", "Coverage", "Compile", "BDD"];
+// CR-CRU-007 §S5.2 — Agents dropped: agents nest under the workspace's
+// Project pane instead of owning a tab.
+const TAB_NAMES = ["Runs", "Coverage", "Compile", "BDD"];
 
 /** §S4 workspace tabs — fixed order; BDD disabled unless frontend project. */
 export function workspaceTabs(project) {
@@ -75,6 +77,37 @@ export function projectRollupLabel(project) {
   return `✓ green · ${last.passed}/${last.total} · ${rel}`;
 }
 
+/**
+ * CR-CRU-007 §S5.1 — activity state rule (user-locked round 13, pure).
+ * A project is `active` while it has ≥1 live (online/stale) agent; with none
+ * left it turns `inactive` once now − lastActivity EXCEEDS the timeout.
+ * `lastActivity` = max(project's last event timestamp, agents' last-seen).
+ */
+export function projectActivity(project, now, inactiveMs) {
+  const agents = project.agents ?? [];
+  let lastActivity = project.lastEventAt ?? 0;
+  for (const agent of agents) {
+    if (agent.lastSeen > lastActivity) lastActivity = agent.lastSeen;
+  }
+  const hasLiveAgent = agents.some(
+    (a) => a.liveness === "online" || a.liveness === "stale",
+  );
+  const active = hasLiveAgent || now - lastActivity <= inactiveMs;
+  return { active, lastActivity };
+}
+
+/**
+ * CR-CRU-007 §S5.1 — projects-row badge ordering: most-recently-active
+ * first, inactive last (each group by lastActivity descending). Pure — never
+ * mutates the input array.
+ */
+export function orderProjects(projects) {
+  return [...projects].sort((a, b) => {
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    return b.lastActivity - a.lastActivity;
+  });
+}
+
 /** Storyboard F1 empty states — no-projects wins over no-runs. */
 export function emptyStates(state) {
   if (state.projects.length === 0) return { kind: "no-projects" };
@@ -91,6 +124,8 @@ if (typeof window !== "undefined") {
     routeParse,
     workspaceTabs,
     projectRollupLabel,
+    projectActivity,
+    orderProjects,
     emptyStates,
   };
 }
