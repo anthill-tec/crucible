@@ -1,6 +1,6 @@
 # CR-CRU-016 — In-pane drill-in: run detail inside the Run Timeline pane
 
-**Status:** IN_PROGRESS (2026-07-16 — user "Go with 016, do a gap analysis first"; branch feature/CR-CRU-016)
+**Status:** COMPLETED (2026-07-16 — C0 design (board-approved in-pane F4/F4½) + C1/C2 merged batch + C3 PASS-ALREADY pins + C4 BDD; VERIFY: READY FOR CLOSE-OUT, zero blocking; final gates 482/482 unit · tsc 0 · 19/19 BDD · coverage 94.4% lines / 96.6% functions; awaiting merge gate)
 **Type:** feature
 **Priority:** P1
 **Depends on:** CR-CRU-007
@@ -61,13 +61,13 @@ the Project pane visible beside it); the nav diagram/model text changes from
 table + PRD §4.11 synced.
 
 ## Acceptance criteria
-- [ ] Clicking a run card on the workspace Runs pane swaps that pane's content to the run detail while `data-testid="project-pane"` remains present and visible (same DOM mount — reference equality or absence of remount asserted via a marker attribute); the home timeline pane behaves identically on `/`.
-- [ ] `← timeline` and Escape both restore the feed with the exact prior `scrollTop` (fixture scrolls, opens, closes, asserts).
-- [ ] Cold-loading `/p/<key>/run/<id>` renders the in-pane detail (Project pane present); `/run/<id>` on home likewise.
-- [ ] No `run-overlay-scrim` and no `app-slideover-right` element exists anywhere for run detail (grep + DOM assertions); /manage and /roadmap overlays are untouched.
-- [ ] Context rules in-pane: a `unit`-tier detail renders NO `drillin-mode`; a `regression`-tier detail opens in Density with the chips row + heat-strip; the F4 anatomy assertions (tree lines, inline failure box, footer) pass against the in-pane container (re-targeted from the CR-007 slide-over tests — the approved-modification list is part of this CR's RED report).
-- [ ] SSE liveness: with the detail open, a new run ingested for the project updates the Project pane's agent row (visible beside the detail) without closing the detail.
-- [ ] BDD E2E: a `drill-in.feature` scenario set covering open-from-card, back-restores-scroll, cold-load, and project-pane-stays-visible; results ingested `tier:"e2e"`.
+- [x] Clicking a run card on the workspace Runs pane swaps that pane's content to the run detail while `data-testid="project-pane"` remains present and visible (same DOM mount — reference equality or absence of remount asserted via a marker attribute); the home timeline pane behaves identically on `/`.
+- [x] `← timeline` and Escape both restore the feed with the exact prior `scrollTop` (fixture scrolls, opens, closes, asserts).
+- [x] Cold-loading `/p/<key>/run/<id>` renders the in-pane detail (Project pane present); `/run/<id>` on home likewise.
+- [x] No `run-overlay-scrim` and no `app-slideover-right` element exists anywhere for run detail (grep + DOM assertions); /manage and /roadmap overlays are untouched.
+- [x] Context rules in-pane: a `unit`-tier detail renders NO `drillin-mode`; a `regression`-tier detail opens in Density with the chips row + heat-strip; the F4 anatomy assertions (tree lines, inline failure box, footer) pass against the in-pane container (re-targeted from the CR-007 slide-over tests — the approved-modification list is part of this CR's RED report).
+- [x] SSE liveness: with the detail open, a new run ingested for the project updates the Project pane's agent row (visible beside the detail) without closing the detail.
+- [x] BDD E2E: a `drill-in.feature` scenario set covering open-from-card, back-restores-scroll, cold-load, and project-pane-stays-visible; results ingested `tier:"e2e"`.
 
 ## Gap analysis (2026-07-16, pre-design)
 What exists (CR-007 final tree, develop 895fce0) vs what this CR changes:
@@ -122,6 +122,20 @@ M.
 ## Risk
 Scroll restoration + virtualized tree interplay; mitigated by the existing
 windowing contract (tree-scroll) and explicit scrollTop ACs.
+
+## VERIFY seams (deferred, non-blocking — filed 2026-07-16)
+1. **E2E inter-feature DB-ordering fragility** — `navigation.steps.ts`'s
+   "fresh, empty database" step is a no-op relying on execution order;
+   drill-in.feature needed a Playwright project-dependency to run last. A real
+   per-feature DB reset belongs to CR-CRU-015's harness work (note added to
+   that spec).
+2. **popstate/navigate() asymmetry** — browser back/forward bypasses
+   `navigate()`, so forward-into-detail never captures `savedPaneScroll` and
+   cross-surface popstate doesn't reset workspaceTab/selectedAgent. No AC
+   covers browser-forward paths; documented here as a known seam for a future
+   navigation CR.
+3. **`run-overlay` testid** retained on the in-pane element (compatibility
+   with ~55 assertions); rename to `run-detail` is a pure-cleanup candidate.
 
 ## Non-goals
 Anatomy/density changes (carried verbatim); /manage & /roadmap overlay model;

@@ -20,6 +20,16 @@ filed per CR carrying track info, so 0.2.0's own dashboard shows two live lanes.
 
 ## Scope
 
+### §S0 Harness hygiene — per-feature DB reset (CR-CRU-016 VERIFY should-fix, filed 2026-07-16)
+Crucible's OWN E2E suite relies on execution order for its "fresh, empty
+database" precondition (shell-storyboard F1 must run before any feature seeds
+the shared single-webServer DB; CR-016 had to add a Playwright
+project-dependency just to force drill-in.feature last). This CR's harness
+work gives the fixture a REAL reset — a test-only reset endpoint (e.g.
+`POST /api/v2/testing/reset`, enabled only under the test profile) or a
+fresh-DB-per-feature-file webServer — and removes the ordering dependency +
+the chromium-drill-in ordering project.
+
 ### §S1 Runner (server)
 `POST /api/v2/projects/<key>/bdd/run` — frontend projects only (`type:"backend"`
 → 400 naming `type`). Spawns Playwright (headless chromium, the CR-006 harness
