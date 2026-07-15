@@ -97,12 +97,23 @@ the agent stem, Cycle = the CR-007 §S2 marker pairing labeled by
 plans), RED→GREEN durations, participating agents + runtimes, final regression
 state. Runs lacking any linkage degrade gracefully into an "ungrouped" tail —
 never hidden.
+**Wave boundary (user semantics, round 20 — no new track surface, no new
+API):** the wave is the synchronization boundary — all lanes pause when their
+individual queues complete; the next wave launches after design reviews. The
+lens INFERS wave state from plan states: `running` (≥1 open plan in the wave) →
+`lanes complete · awaiting review` (every plan in the wave closed, and no later
+wave has plans yet — the boundary pause made visible) → superseded (a newer
+wave opened). Multi-track wave group headers carry per-lane completion chips
+(`track-1 ✓ · track-2 2/3`). Tracks get NO dedicated surface — they are
+transient allocation lanes within a wave; the conditional Track level + badges
+is their whole UI.
 
 ## Acceptance criteria
 - [ ] §S0: `POST /plans {cr:"CR-X-1", cycles:[{label:"a"},{label:"b"}]}` → 201 with two distinct numeric ids, statuses `pending`, plan `open`; a second POST for `cr:"CR-X-1"` while open → 400 naming `cr`.
 - [ ] §S0: cycle transitions — `pending→active→done` succeed; `pending→done` (skipping active) → 400 naming both states; a GREEN run ingest linked via `context.cycleId` does NOT change the cycle's status (orchestrator-explicit close asserted).
 - [ ] §S0: kinds — cycles filed with `kind:"verify"` and `kind:"fix"` behave identically to `red-green` (same transition table, same span/run-linkage, asserted by running the transition AC parameterized over all three kinds); omitted `kind` defaults to `red-green`; `kind:"deploy"` → 400 naming `kind`.
 - [ ] §S0/§S3: tracks — two open plans in the same wave with `track:"track-1"` / `track:"track-2"` render a Track level between Wave and CR in the lens (both groups present, CR groups badged); a wave whose plans all lack `track` renders NO track level and is byte-identical to the pre-track lens output (single-orchestrator seamlessness); `GET /plans?track=track-2` returns only that track's plans.
+- [ ] §S3: wave boundary — with wave 1 plans all `closed` and no wave 2 plans, the wave-1 group header shows `lanes complete · awaiting review`; filing a wave-2 plan flips wave 1 out of the boundary state; while any wave-1 plan is open the header shows per-lane completion chips (fixture: track-1 closed, track-2 1-of-2 → `track-1 ✓ · track-2 1/2`). No wave API exists (state is inferred from plans only — grep asserts no wave route).
 - [ ] §S0: `PATCH /plans/<id> {status:"closed", merge:{commit:"abc1234"}}` with a non-terminal cycle → 400 listing its id; after all cycles are terminal it succeeds and `GET /plans?cr=CR-X-1` shows `closed` + the merge commit.
 - [ ] §S0: a run ingested with an unknown `context.cycleId` is stored and surfaces as "unlinked" in the lens (never dropped, never 4xx); a planless project's ingest behavior is byte-identical to pre-CR-011 (regression-guarded).
 - [ ] `POST /api/v2/agents/register` then unregister appends two lifecycle events (`action:"registered"`, `action:"unregistered"`) visible via `GET /api/v2/events?project=…`; the unregistered event carries `firstSeen` and yields `runtime_ms = unregistered.timestamp − firstSeen` exactly.

@@ -287,6 +287,14 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   allocates CRs to lanes from their depends-on graph (independent CRs run in
   parallel lanes, dependents queue). Track orchestrators enforce the workflow
   rules and verify agents deliver their work accurately within their lane.
+  **Wave boundary (locked round 20):** the wave is the synchronization boundary —
+  all lanes pause when their individual queues complete; the next wave launches
+  after design reviews/corrections. Tracks get NO dedicated UI surface (they are
+  transient lanes within a wave): the lens's conditional Track level + badges is
+  their whole representation, and the wave group header carries per-lane
+  completion chips plus an inferred wave state — `running` → `lanes complete ·
+  awaiting review` (the boundary pause) → superseded when the next wave opens.
+  No wave API; state is inferred from plan states alone.
   All in v0.1.0: plan API + lens in CR-CRU-011, fleet plan verbs
   (plan-file / cycle-activate / cycle-done / cr-close + `CRUCIBLE_CYCLE_ID`) in
   CR-CRU-008.
