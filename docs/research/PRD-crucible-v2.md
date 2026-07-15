@@ -216,13 +216,19 @@ all live data when keep-alives stop and a health probe fails — the frontend mu
 present stale data as live. Orchestrators may gate wave dispatch on `/api/health`.
 
 ### 4.11 Dashboard (v2 UX)
-- **Project switcher** — chips/rail with per-project health at a glance (type badge,
-  online-agent count, last-run pass/fail, latest coverage). "All projects" default.
+- **Project switcher (revised 2026-07-15, user-locked via review board)** — the
+  Projects rail/pane owns project selection with per-project health at a glance (type
+  badge, online-agent count, last-run pass/fail, latest coverage). The home top bar
+  carries NO project chips/breadcrumbs (they don't scale with project count): logo +
+  a one-liner slogan + health pill only. The "All projects" badge (default,
+  reset-filter) lives in the Projects pane title area.
 - **Agents — nested under their project (revised 2026-07-15, user-locked via review
   board)** — agents are NEVER a flat standalone section: everywhere they appear, live
   agents (and tombstones) render as sub-nodes of their owning project's card/container,
   with liveness dot (🟢 online / 🟡 stale / ⚪ offline), display name, current `message`,
-  relative last-seen. The "who is working right now" view is read per-project.
+  relative last-seen. Nested agent rows carry a distinct glyph + tint (storyboard: `⌁`
+  in heat-amber) so they read as agents, not sub-projects (user note 2026-07-15).
+  The "who is working right now" view is read per-project.
   Consequence: the workspace **Agents tab is dropped** (no flat agents view exists
   anywhere); implementation lands in CR-CRU-007.
 - **Run timeline** — newest-first event cards: agent, tier, pass ratio (`34/34` green /
@@ -237,8 +243,9 @@ present stale data as live. Orchestrators may gate wave dispatch on `/api/health
 **Navigation model (decided 2026-07-14):** two routed pages + one overlay. Mission
 Control home (`/`), project workspace (`/p/<key>`), and the run drill-in as a
 slide-over overlay (`…/run/<eventId>` suffix) that opens over whichever surface is
-active and closes back to its exact state (Esc / scrim / browser back). Project chips
-filter in place (not navigation); project cards/names navigate; run cards open the
+active and closes back to its exact state (Esc / scrim / browser back). Projects-pane
+rows filter in place (not navigation; the pane-title "All projects" badge resets —
+top-bar project chips removed 2026-07-15); project cards/names navigate; run cards open the
 drill-in with a codec-aware body (suite tree for tests, per-file diagnostics for
 compile); transition markers open the GREEN run with the paired RED one hop away;
 coverage trend points open their producing regression run; the health pill never
