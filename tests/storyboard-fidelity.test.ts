@@ -1106,7 +1106,11 @@ describe("§S5 fidelity #5b — F7/F8 Project pane visual fidelity: section titl
     expect(meterRule).toBeDefined();
     expect(meterRule).toMatch(/height:\s*6px/);
     expect(meterRule).toMatch(/border-radius:\s*999px/);
-    expect(meterRule).not.toMatch(/\bborder\b/);
+    // NOTE (GREEN-escalated fix): `\bborder\b` self-contradicts against this
+    // rule's OWN required `border-radius: 999px` above — "-" is a non-word
+    // char so a boundary follows "border" there too. Match only a real
+    // `border:` property declaration.
+    expect(meterRule).not.toMatch(/\bborder\s*:/);
 
     const fillRule = ruleBodyFor(".app-meter-fill {") ?? ruleBodyFor(".app-meter-fill{");
     expect(fillRule).toBeDefined();

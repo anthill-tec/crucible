@@ -81,6 +81,16 @@ const FLATTENED_TEST_BRIEF_KEYS = [
   "hasCoverage",
 ].sort();
 
+// CR-CRU-007 §S5.2 F8 vitals anatomy (additive) — a COVERAGE-BEARING brief
+// also gains the optional `coverageLines` field (see
+// tests/v2-brief-context.test.ts). The guard for coverage-bearing items
+// below pins this exact set; the no-coverage failItem (still
+// FLATTENED_TEST_BRIEF_KEYS) keeps proving the field's absence.
+const FLATTENED_TEST_BRIEF_KEYS_WITH_COVERAGE_LINES = [
+  ...FLATTENED_TEST_BRIEF_KEYS,
+  "coverageLines",
+].sort();
+
 // rustc fixture: 1 error[E0308] block + 1 plain warning block (matches the
 // fixture used across the v2 runs/events suite).
 const RUSTC_ERRORS = [
@@ -186,7 +196,9 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
     expect(compileItem).toBeDefined();
 
     // Covered test-kind item — exact flattened field set + exact values.
-    expect(Object.keys(covItem!).sort()).toEqual(FLATTENED_TEST_BRIEF_KEYS);
+    // Coverage-bearing, so the set additionally includes `coverageLines`
+    // (CR-CRU-007 §S5.2 F8 — additive, coverage-bearing events only).
+    expect(Object.keys(covItem!).sort()).toEqual(FLATTENED_TEST_BRIEF_KEYS_WITH_COVERAGE_LINES);
     expect("summary" in covItem!).toBe(false);
     expect(covItem!.id).toMatch(/^evt-/);
     expect(covItem!.projectKey).toBe(key);
@@ -246,7 +258,9 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
     expect(lastTest).not.toBeNull();
     expect(lastTest!.id).toBe(testId);
     expect("summary" in lastTest!).toBe(false);
-    expect(Object.keys(lastTest!).sort()).toEqual(FLATTENED_TEST_BRIEF_KEYS);
+    // Coverage-bearing (same `seedCoveredTestEvent` fixture) — additionally
+    // carries `coverageLines`.
+    expect(Object.keys(lastTest!).sort()).toEqual(FLATTENED_TEST_BRIEF_KEYS_WITH_COVERAGE_LINES);
     expect(lastTest!.total).toBe(5);
     expect(lastTest!.passed).toBe(5);
     expect(lastTest!.failed).toBe(0);
