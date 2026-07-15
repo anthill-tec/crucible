@@ -347,6 +347,14 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
 - **Coverage** — line/function/branch meters on green regression events; latest-green
   coverage shown at project level.
 - Localhost tool aesthetics: fast, dense, dark-friendly, zero build step.
+- **Design consistency (user-locked during CR-007):** one design vocabulary
+  everywhere. Status chips/badges are deliberate HIGHLIGHT elements (the F4½
+  chips row, ratio pills, type badges) and may be boxed; tree rows and inline
+  content convey status by TEXT COLOR alone (pass green · fail red · pending
+  yellow — the universal palette). The same components, palette, and navigation
+  patterns (`←` back chips, drill-down vs filter semantics, pane headers)
+  repeat identically across every surface; VERIFY's fidelity sweep checks
+  cross-surface consistency, not just per-frame compliance.
 
 **Navigation model (decided 2026-07-14):** two routed pages + one overlay. Mission
 Control home (`/`), project workspace (`/p/<key>`), and the run drill-in as a

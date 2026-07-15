@@ -79,6 +79,38 @@ body {
   white-space: nowrap;
 }
 .app-logo span { color: var(--ember); }
+.app-slogan {
+  color: var(--ink-faint);
+  font: italic 11px var(--sans);
+  white-space: nowrap;
+}
+
+/* ── Projects row (§S5.1 CR-CRU-007 — second header row, flow layout) ───── */
+.app-projects-row {
+  border-top: none;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.app-badge-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.app-badge.active { color: var(--ink); }
+.app-badge.inactive { color: var(--ink-faint); opacity: 0.6; }
+.app-type-badge {
+  font: 600 8.5px/1.6 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-left: 6px;
+  color: var(--ink-dim);
+  background: var(--bg-2);
+}
 
 /* ── Pills / chips ──────────────────────────────────────────────────────── */
 .app-chip {
@@ -117,23 +149,26 @@ body {
 .app-dot.o { background: var(--offline); }
 .app-dot.r { background: var(--fail); box-shadow: 0 0 6px rgba(248, 113, 113, 0.7); }
 
-/* ── Rails grid (home layout — §S3 re-revised 2026-07-15: one LEFT rail
-   stacking projects above agents, wide timeline right) ──────────────────── */
+/* ── Shell grid (§S5 fidelity #1 — NO left rail anywhere: home is the
+   collective timeline alone; the workspace stacks a full-width tabs row
+   over a [content | Project pane] two-column body) ──────────────────────── */
 .app-main {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding: 12px;
   align-items: start;
 }
-/* Workspace keeps its original three-column grid (§S4 unchanged). */
-.app-main[data-testid="workspace"] {
-  grid-template-columns: minmax(200px, 1fr) minmax(0, 2.2fr) minmax(200px, 1fr);
+.app-workspace-body {
+  display: grid;
+  grid-template-columns: minmax(0, 2.6fr) minmax(260px, 1fr);
+  gap: 12px;
+  align-items: start;
 }
 .app-rail-section + .app-rail-section {
   margin-top: 16px;
 }
-.app-rail, .app-center {
+.app-pane, .app-center {
   background: var(--bg-1);
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -180,6 +215,94 @@ body {
 .app-agent-msg { color: var(--ink-dim); font: 10.5px var(--mono); }
 .app-agent-row.tombstoned { opacity: 0.45; }
 
+/* ── Project pane (§S5.2 CR-CRU-007 — agents nested as ⌁-marked sub-rows) ── */
+.app-pane-card { cursor: default; }
+.app-agent-subrows { margin-left: 12px; }
+.app-agent-glyph { color: var(--heat); font: 600 11px var(--mono); }
+.app-coverage { margin-top: 4px; }
+.app-coverage.clickable { cursor: pointer; }
+.app-vitals-card { cursor: default; }
+/* §S5.2 (a) — F8 pane section titles: uppercase mono, ember accent, wide
+   letter-spacing (the board's own section-header treatment). */
+.app-pane-section-title {
+  font: 600 10.5px/1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--ember);
+  margin: 2px 0 8px;
+}
+/* §S5.2 (d)/(e) — F8 vitals card anatomy: dim uppercase label ABOVE a
+   bright 600-weight value line. */
+.app-vitals-label {
+  font: 600 9px/1.5 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-faint);
+}
+.app-vitals-value {
+  font-weight: 600;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+}
+/* §S5.2 (d) — coverage-trend mini bar-chart: one bar per green-coverage
+   point (oldest→newest, ≤12); earlier bars ember-dim, latest bright ember. */
+.app-trend-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 36px;
+  margin: 6px 0 4px;
+}
+.app-trend-bar {
+  flex: 1 1 0;
+  min-width: 4px;
+  border-radius: 2px 2px 0 0;
+}
+.app-trend-bar-dim { background: var(--ember-dim); }
+.app-trend-bar-latest { background: var(--ember); }
+/* §S5.2 (b) — the F8 mock `.meter`: 6px tall, fully rounded, BORDERLESS
+   track, ember-gradient fill sized to the lines percent. */
+.app-meter {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg);
+  overflow: hidden;
+  margin-top: 2px;
+}
+.app-meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--ember), var(--pass));
+}
+/* §S5.5 — Coverage tab panel rows. */
+.app-coverage-row {
+  font: 600 11px var(--mono);
+  color: var(--ink);
+  margin: 4px 0;
+}
+
+/* ── Timeline pane header + filter pulldown (§S5.1 CR-CRU-007) ──────────── */
+.app-timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.app-pane-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.app-filter {
+  font: 600 10.5px var(--mono);
+  color: var(--ink-dim);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px 6px;
+}
+
 /* ── Timeline / events ──────────────────────────────────────────────────── */
 .app-evt {
   display: flex;
@@ -192,6 +315,83 @@ body {
   margin-bottom: 8px;
   font: 11px var(--mono);
 }
+.app-evt-body { flex: 1; min-width: 0; }
+.app-evt-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.app-card-icon { display: inline-flex; line-height: 1; color: var(--ink-dim); }
+/* §S1 — the kind glyph is a monochrome CSS-mask silhouette painted with
+   currentColor, so the wrapper's app-role-* `color` ACTUALLY tints it
+   (CSS `color` is a no-op on color-emoji text glyphs). */
+.app-icon-mask {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+  -webkit-mask-image: var(--icon-mask);
+  mask-image: var(--icon-mask);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+/* Flask silhouette (test runs). */
+.app-icon-mask[data-kind="test"] {
+  --icon-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 2h6v2h-1v4.6l5.6 9.8A1.8 1.8 0 0 1 18 21H6a1.8 1.8 0 0 1-1.6-2.6L10 8.6V4H9V2zm3 4v3.1a2 2 0 0 1-.26.99L8.3 15h7.4l-3.44-4.91A2 2 0 0 1 12 9.1V6z'/%3E%3C/svg%3E");
+}
+/* Wrench silhouette (compile runs). */
+.app-icon-mask[data-kind="compile"] {
+  --icon-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z'/%3E%3C/svg%3E");
+}
+/* §S1 — phase-role icon tinting: RED red / GREEN green / VERIFY purple /
+   FIX yellow; roleless cards keep the neutral tint. */
+.app-role-red { color: var(--fail); text-shadow: 0 0 6px rgba(248, 113, 113, 0.5); }
+.app-role-green { color: var(--pass); text-shadow: 0 0 6px rgba(74, 222, 128, 0.5); }
+.app-role-verify { color: #c084fc; text-shadow: 0 0 6px rgba(192, 132, 252, 0.5); }
+.app-role-fix { color: var(--pend); text-shadow: 0 0 6px rgba(250, 204, 21, 0.5); }
+.app-card-badges { display: inline-flex; gap: 4px; }
+
+/* ── Run-card pills + badges (§S1 CR-CRU-007) ───────────────────────────── */
+.app-pill {
+  font: 600 9.5px var(--mono);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 6px;
+  color: var(--ink-dim);
+  background: var(--bg);
+  white-space: nowrap;
+}
+.app-ratio-pass { color: var(--pass); border-color: var(--pass); }
+.app-ratio-fail { color: var(--fail); border-color: var(--fail); }
+.app-ctx-badge { color: var(--ink-faint); }
+
+/* Compile-card diagnostics preview (first 2 lines, file:line — msg). */
+.app-diag-preview { margin-top: 4px; }
+.app-diag-line {
+  color: var(--fail);
+  font: 10px var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── RED→GREEN transition markers = Cycles (§S2 CR-CRU-007) ─────────────── */
+.app-transition-marker {
+  font: 600 10.5px var(--mono);
+  color: var(--heat);
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 4px 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  background: var(--bg);
+}
+
 .app-empty {
   color: var(--ink-faint);
   font: 12px var(--mono);
@@ -200,5 +400,214 @@ body {
 }
 
 /* ── Live-region degradation (§S5) ──────────────────────────────────────── */
+/* ── CR-CRU-007 §S3/§S4 — drill-in slide-over (§S5 fidelity #2: right-hand
+   sheet, full height, ember left border) ─────────────────────────────────── */
+.app-drillin { overflow-y: auto; }
+.app-slideover-right {
+  background: var(--bg-1);
+  border-left: 3px solid var(--ember);
+  padding: 10px 12px;
+  box-shadow: -16px 0 40px rgba(0, 0, 0, 0.55);
+}
+.app-drillin-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+/* F4 anatomy — flat mono TREE LINES: status is text color alone; NO
+   border/outline on any tree row (the failure box below is the only boxed
+   element inside the tree). */
+.app-tree-line { font-family: var(--mono); }
+.app-suite-group { margin-bottom: 4px; }
+.app-suite-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 600 11px var(--mono);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.app-suite-row .app-suite-name { flex: 1; }
+.app-suite-row.fail { color: var(--fail); }
+.app-tree-toggle { color: var(--ink-dim); width: 12px; }
+.app-suite-counts { white-space: pre; }
+.app-count-fail { color: var(--fail); }
+.app-count-pass { color: var(--pass); }
+.app-count-pending { color: var(--pend); }
+.app-leaf-list { margin: 2px 0 4px 14px; }
+.app-leaf-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: 10.5px var(--mono);
+  color: var(--ink);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+/* Passing leaves render GREEN/bright — never a faint grey. */
+.app-leaf-pass { color: var(--pass); }
+.app-leaf-fail { color: var(--fail); }
+.app-leaf-pending { color: var(--pend); }
+
+/* Failed leaf expansion — failure.message + trace, mono red-accent box. */
+.app-failure-box {
+  font: 10.5px var(--mono);
+  color: var(--fail);
+  border: 1px solid var(--fail);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 6px 10px;
+  margin: 2px 0 6px 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.app-failure-trace { color: var(--ink-faint); margin-top: 4px; }
+/* §S3 failure-box degradation — dim reporter note when no message stored. */
+.app-failure-note { color: var(--ink-faint); font-style: italic; margin-top: 2px; }
+/* §S3 — compile drill-in status line (always first). */
+.app-compile-status {
+  display: inline-block;
+  font: 600 11px var(--mono);
+  margin-bottom: 8px;
+}
+
+/* Compile drill-in — diagnostics grouped by file + raw-output toggle. */
+.app-diag-group {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  padding: 6px 10px;
+  margin-bottom: 6px;
+}
+.app-diag-file { font: 600 11px var(--mono); color: var(--ink); margin-bottom: 2px; }
+.app-diag-error { color: var(--fail); }
+.app-diag-warning { color: var(--heat); }
+.app-raw-toggle { margin: 4px 0; }
+.app-raw-output {
+  font: 10px var(--mono);
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 4px 0 0;
+}
+
 .greyed { opacity: 0.45; filter: grayscale(0.6); }
 .app-synced { color: var(--ink-faint); font: 9.5px var(--mono); }
+
+/* ── CR-CRU-007 §S4 — density set ─────────────────────────────────────── */
+
+/* F4½ — Density status chips row, above the heat-strip. */
+.app-density-chips {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  font: 600 10.5px var(--mono);
+  padding: 4px 8px;
+  margin-bottom: 6px;
+}
+
+/* F4 — failures-footer: `▸ N more failures · toggle raw output`. */
+.app-failures-footer {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font: 10.5px var(--mono);
+  color: var(--ink-dim);
+  padding: 6px 8px;
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.app-footer-chip { cursor: pointer; }
+
+/* §S4.2 — heat-strip minimap: one cell per test, wrap at any run size. */
+.app-heat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  margin-bottom: 8px;
+}
+.app-heat-cell {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.app-heat-fail { background: var(--fail); }
+.app-heat-pending { background: var(--heat); }
+.app-heat-pass { background: var(--pass); opacity: 0.35; }
+
+/* §S4.3 — failure digest: shared-message group row + "+N identical". */
+.app-digest-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: 10.5px var(--mono);
+  color: var(--fail);
+  padding: 2px 8px;
+}
+.app-digest-expander { font: 9.5px var(--mono); }
+
+/* §S4.4 — virtualized tree: windowed scroll container + honest spacers. */
+.app-tree-scroll {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.app-virt-spacer { flex: none; }
+
+/* §S1/§nav — clickable drill-down spots (run cards, transition markers,
+   coverage meter) show the pointer with a subtle hover lift (forge
+   conventions) so the click affordance is discoverable. */
+.app-evt { cursor: pointer; transition: border-color 0.12s ease, background 0.12s ease; }
+.app-evt:hover {
+  border-color: var(--ember);
+  background: var(--bg-1);
+}
+.app-transition-marker { transition: border-color 0.12s ease, background 0.12s ease; }
+.app-transition-marker:hover {
+  border-color: var(--heat);
+  background: var(--bg-2);
+}
+.app-coverage.clickable { transition: opacity 0.12s ease; }
+.app-coverage.clickable:hover { opacity: 0.8; }
+
+/* §S4.6 — density root classes drive VISIBLE global spacing: comfortable is
+   the base; compact tightens padding/margins ≈ −35%; ultra ≈ −60% (and a
+   smaller mono size). Applies to timeline run cards + marker rows (home AND
+   workspace), drill-in tree rows, and Project pane rows. */
+:root.app-density-comfortable { --row-pad: 6px; }
+:root.app-density-compact { --row-pad: 3px; }
+:root.app-density-ultra { --row-pad: 1px; }
+.app-density-compact .app-leaf-row,
+.app-density-compact .app-suite-row,
+.app-density-compact .app-digest-row { padding-top: var(--row-pad); padding-bottom: var(--row-pad); }
+.app-density-ultra .app-leaf-row,
+.app-density-ultra .app-suite-row,
+.app-density-ultra .app-digest-row { padding-top: var(--row-pad); padding-bottom: var(--row-pad); font-size: 9.5px; }
+
+/* compact — ≈ −35% on cards, markers, agent/pane rows. */
+.app-density-compact .app-evt,
+.app-density-compact .app-card,
+.app-density-compact .app-agent-row { padding: 5px 7px; margin-bottom: 5px; gap: 6px; }
+.app-density-compact .app-transition-marker { padding: 3px 7px; margin-bottom: 5px; }
+.app-density-compact .app-evt-body { gap: 1px; }
+
+/* ultra — ≈ −60%, plus a tighter mono size. */
+.app-density-ultra .app-evt,
+.app-density-ultra .app-card,
+.app-density-ultra .app-agent-row { padding: 3px 4px; margin-bottom: 3px; gap: 4px; }
+.app-density-ultra .app-transition-marker { padding: 2px 4px; margin-bottom: 3px; font-size: 9.5px; }
+.app-density-ultra .app-evt { font-size: 10px; }
+.app-density-ultra .app-evt .app-pill { font-size: 8.5px; padding: 1px 5px; }
+.app-density-ultra .app-card-meta { font-size: 9px; }

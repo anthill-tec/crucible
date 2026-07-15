@@ -4,6 +4,7 @@
 // with the v1 shim — src/server.ts wires handleV2 into its dispatcher.
 import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
+import type { CompileReport } from "./codecs/compile.ts";
 import { hints } from "./hints.ts";
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
@@ -191,8 +192,18 @@ async function handleProjectCreate(store: Store, req: Request): Promise<Response
   return json({ ok: true, changed: true, project });
 }
 
+// CR-CRU-007 §S5.1 — system-wide project-inactive timeout (ms), env-configurable.
+const DEFAULT_PROJECT_INACTIVE_MS = 3_600_000;
+
+function projectInactiveMs(): number {
+  const raw = Number(process.env.CRUCIBLE_PROJECT_INACTIVE_MS ?? "");
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_PROJECT_INACTIVE_MS;
+}
+
 /** PRD §4.2 — project rollups. */
 function handleProjectsList(store: Store, req: Request, url: URL): Response {
+  const inactiveMs = projectInactiveMs();
+  const now = Date.now();
   const projects = store.listProjects().map((project) => {
     const agents = store.listAgents(project.key);
     const events = store.listEvents(project.key, Number.MAX_SAFE_INTEGER);
@@ -200,6 +211,22 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
     // §S4 (CR-CRU-001) discards coverage on failed runs, so any stored
     // coverage belongs to a green run — newest one wins.
     const greenCovered = events.find((e) => e.coverage !== undefined);
+    // §S5.1 (CR-CRU-007) activity rule (user-locked round 13): active while
+    // ≥1 live (online/stale) agent; with none left, inactive once
+    // now − lastActivity EXCEEDS the timeout. lastActivity = max(last event
+    // timestamp, agents' last-seen).
+    const lastActivity = Math.max(
+      last?.timestamp ?? 0,
+      ...agents.map((a) => a.lastSeen),
+      0,
+    );
+    // Age is second-floored: `lastActivity` and `now` come from different
+    // Date.now() calls, and sub-second scheduling jitter must never flip a
+    // project sitting exactly AT its timeout — only EXCEEDING it flips.
+    // Any live (online/stale) agent's last-seen feeds lastActivity above,
+    // so liveness keeps a project active throughout the grace window.
+    const ageMs = Math.floor((now - lastActivity) / 1000) * 1000;
+    const active = ageMs <= inactiveMs;
     return {
       ...project,
       agentsOnline: agents.filter((a) => a.liveness === "online").length,
@@ -207,7 +234,19 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
       // §S0 (CR-CRU-006) — same flattened brief shape as the events list.
       lastEvent: last !== undefined ? eventBrief(last) : null,
       latestGreenCoverage: greenCovered?.coverage ?? null,
+      // CR-CRU-007 integration AC (§nav table) — the id of that SAME green
+      // coverage event, so the client's coverage meter can open its drill-in.
+      // Key ABSENT (not null) when no green-coverage run exists.
+      ...(greenCovered !== undefined ? { latestCoverageEventId: greenCovered.id } : {}),
+      // §S5.1 (CR-CRU-007) — additive activity fields.
+      active,
+      lastActivity,
     };
+  });
+  // §S5.1 ordering — most-recently-active first, inactive last.
+  projects.sort((a, b) => {
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    return b.lastActivity - a.lastActivity;
   });
   return reply(req, url, { ok: true, projects });
 }
@@ -399,8 +438,12 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
  * /events/:id). §S0 (CR-CRU-006) — run numbers hoisted to top-level scalars,
  * NO nested `summary`; compile events carry uniform numeric 0s so every brief
  * shares one all-scalar shape (TOON's uniform-table form applies).
+ * CR-CRU-007 §S1 (additive) — optional `context` passthrough (verbatim when
+ * stored, key ABSENT when not) + compile-event `errors`/`warnings` counts
+ * (test-event briefs carry neither key).
  */
 function eventBrief(event: RunEvent) {
+  const compile = event.kind === "compile" ? (event.compile as CompileReport | undefined) : undefined;
   return {
     id: event.id,
     projectKey: event.projectKey,
@@ -415,6 +458,23 @@ function eventBrief(event: RunEvent) {
     pending: event.summary?.pending ?? 0,
     duration_ms: event.summary?.duration_ms ?? 0,
     hasCoverage: !!event.coverage,
+    // CR-CRU-007 §S5.2 (F8 vitals, additive) — optional `coverageLines`
+    // (the stored coverage's lines percent) on coverage-bearing events, so
+    // the workspace coverage-trend card derives its bars from the
+    // already-loaded timeline slice. Key ABSENT on events with no coverage.
+    ...(typeof (event.coverage as Coverage | undefined)?.lines?.percent === "number"
+      ? { coverageLines: (event.coverage as Coverage).lines.percent }
+      : {}),
+    ...(event.context !== undefined ? { context: event.context } : {}),
+    ...(compile !== undefined
+      ? {
+          errors: compile.errorCount,
+          warnings: compile.warningCount,
+          // CR-CRU-007 §S1 (F5) — the first 2 diagnostics, exactly what the
+          // compile card's inline preview renders; test briefs unaffected.
+          diagnostics: compile.diagnostics.slice(0, 2),
+        }
+      : {}),
   };
 }
 

@@ -2,6 +2,7 @@
 // adding a codec never touches core.
 import type { RunSchema } from "../types.ts";
 import { parseJunit, parseJunitPath } from "./junit.ts";
+import { parsePlaywright, parsePlaywrightPath } from "./playwright.ts";
 
 export interface Codec {
   parse(data: string): RunSchema | Promise<RunSchema>;
@@ -14,6 +15,13 @@ export const codecs: Map<string, Codec> = new Map<string, Codec>([
     {
       parse: (data: string) => parseJunit(data),
       parsePath: (path: string) => parseJunitPath(path),
+    },
+  ],
+  [
+    "playwright",
+    {
+      parse: (data: string) => parsePlaywright(data),
+      parsePath: (path: string) => parsePlaywrightPath(path),
     },
   ],
 ]);

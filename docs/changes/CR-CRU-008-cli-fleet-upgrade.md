@@ -48,6 +48,33 @@ round 17), `cycle-activate <id>`,
 `context.cycleId` when it is set (alongside `WORKFLOW_CYCLE` for the label
 fallback).
 
+### §S2b In-run progress narration (user-approved option (a) — message field)
+While a runner executes, the wrapping script TAILS its output and posts
+throttled heartbeats (`message: "running 214/385 · <current file>"`) so the
+Project pane's agent row narrates live progress — no new API (the `message`
+field was built for narration). Per-stack granularity (all stacks work; detail
+varies with what the runner streams):
+- bun test → per-test/file lines → fine-grained counter
+- cargo nextest → per-test status stream → fine-grained counter
+- pytest → per-test `[ 45%]` lines → fine-grained counter/percent
+- maven surefire → per-CLASS "Running …/Tests run:" lines → class-level counter
+- arduino/native g++ runners → per-suite prints → suite-level counter
+- playwright (BDD/e2e) → `--reporter=line` `[k/N]` → fine-grained counter
+Throttle: update at most every 2 s (or every 10 completions) to keep heartbeat
+traffic negligible. On completion the final ingest replaces the narration.
+
+### §S2c Failure-detail enrichment for bun runs (user defect 2026-07-15)
+Bun's JUnit reporter emits bare `<failure type="AssertionError"/>` — no
+message attribute, no element text (probe-verified: even a thrown
+`new Error("boom with detail")` carries zero detail in the XML). The bun
+ingest path must therefore MARRY the JUnit tree with the captured console
+output: the wrapper already tails the run (§S2b); it additionally parses
+bun's per-test failure blocks (the `error:`/assertion block preceding each
+`(fail) <name>` line in the stream) and attaches `{message, trace}` to the
+matching failing leaf before ingest. The UI's degradation fallback
+(`no failure detail captured by the reporter`, CR-007 re-baseline 82ad70d)
+then appears only for genuinely detail-less reporters.
+
 ### §S3 Skill fleet upgrade (`~/.claude/skills/`)
 `crucible-register`, `crucible-report-{rust,java,python,bun,vscode}`,
 `agent-protocol` (+ its `heartbeat.sh`): v2 endpoints, context fields, TOON-aware
@@ -67,6 +94,8 @@ follow-up, and the shim stays.
 - [ ] `crucible-axi ingest <fixture.xml> --project-key <k> --agent a1` inside a git repo → the recorded event's `context.git.branch` equals the repo's current branch (auto-detect); the same command with `GIT_DIR` unset/outside a repo records NO context (graceful).
 - [ ] `rust-crucible.py regression …` against the v2 server records an event with `tier: "regression"`; `mvn-crucible.py` unit path records `tier: "unit"` (grep the stored event).
 - [ ] With `WORKFLOW_CYCLE="checkpoint persistence"` set, an upgraded script's ingest records `context.cycle: "checkpoint persistence"` on the event; with the env var unset, the stored context has no `cycle` key.
+- [ ] §S2b: during a wrapped `bun-crucible.py test` run of ≥20 tests, the agent's `message` (polled via GET agents) changes at least once to a `running N/M` narration before the final ingest, and updates are throttled (≤1 per 2 s asserted from the poll log); `mvn-crucible.py` narrates at class granularity (fixture with ≥3 classes).
+- [ ] §S2c: a bun run with 2 failing tests (one `expect(1+1).toBe(3)` mismatch, one `throw new Error("boom with detail")`) ingests failing leaves whose `failure.message` contains `expect(` / `boom with detail` respectively — married from the captured console output, since bun's JUnit XML carries only the failure `type`; an unmatched failing leaf degrades to type-only (the UI renders its fallback note).
 - [ ] Plan verbs: `bun-crucible.py plan-file --cr CR-X-1 --cycles "a,b"` creates an open plan and prints two numeric ids; with `WORKFLOW_ROLE=track-2` set the plan records `track:"track-2"` and with it unset the plan has no `track` key; `cycle-activate 1` → cycle 1 `active`; with `WORKFLOW_CYCLE_ID=1` an ingest records `context.cycleId: 1`; `cycle-done 1` → `done`; `cr-close --commit abc1234` → plan `closed` with the commit (each asserted via `GET /plans`).
 - [ ] Each upgraded script's register call hits `/api/v2/agents/register` (assert via server access log or store) and still exits 0 with the same CLI arguments used in the agent definitions today (no call-site changes).
 - [ ] Skill docs contain no `POST /api/agents/heartbeat` legacy references except in an explicit "legacy/shim" note; `heartbeat.sh` targets `/api/v2/agents/heartbeat`.

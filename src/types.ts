@@ -90,6 +90,9 @@ export interface RunContext {
   };
   wave?: string;
   orchestrator?: string;
+  // CR-CRU-007 §S2 (round 10, additive) — the orchestrator todo's description
+  // labelling the RED→GREEN cycle this run belongs to.
+  cycle?: string;
 }
 
 export type Tier = "unit" | "module" | "integration" | "e2e" | "regression" | "bdd";

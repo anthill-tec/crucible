@@ -18,6 +18,9 @@ export interface CrucibleEventBrief {
   pending: number;
   duration_ms: number;
   hasCoverage: boolean;
+  /** CR-CRU-007 §S5.2 (F8 vitals, additive) — the stored coverage's lines
+   * percent; present ONLY on coverage-bearing events. */
+  coverageLines?: number;
 }
 
 export interface EventFilters {
@@ -47,11 +50,41 @@ export interface RouteState {
 
 export interface WorkspaceProjectLike {
   type: "backend" | "frontend";
+  // CR-CRU-007 §S1 addendum — Coverage tab gating: same field names the
+  // server already emits on the v2 projects listing (src/v2.ts
+  // handleProjectsList: `latestGreenCoverage` + `latestCoverageEventId`,
+  // ABSENT — not merely null — until a green regression run with coverage
+  // exists).
+  latestCoverageEventId?: string;
 }
 
 export interface WorkspaceTab {
-  name: "Runs" | "Agents" | "Coverage" | "Compile" | "BDD";
+  name: "Runs" | "Coverage" | "Compile" | "BDD";
   disabled: boolean;
+  /** RED-phase declaration only — present when `disabled` explains why
+   * (Coverage: "coverage lands with the first green regression"). */
+  hint?: string;
+}
+
+// CR-CRU-007 §S5.1 — activity rule + projects-row ordering (pure).
+export interface ActivityAgentLike {
+  liveness: "online" | "stale" | "tombstoned";
+  lastSeen: number;
+}
+
+export interface ActivityProjectLike {
+  lastEventAt: number | null;
+  agents: ActivityAgentLike[];
+}
+
+export interface ProjectActivityResult {
+  active: boolean;
+  lastActivity: number;
+}
+
+export interface OrderableProjectLike {
+  active: boolean;
+  lastActivity: number;
 }
 
 export interface ProjectRollupLike {
@@ -61,6 +94,23 @@ export interface ProjectRollupLike {
     failed: number;
     timestamp: number;
   } | null;
+}
+
+// CR-CRU-007 §S2 — RED→GREEN transition markers (= Cycles), pure pairing.
+export interface TransitionEventLike {
+  id: string;
+  projectKey: string;
+  agentId: string;
+  kind: string;
+  timestamp: number;
+  failed: number;
+}
+
+export interface TransitionMarker<T extends TransitionEventLike = TransitionEventLike> {
+  redEvent: T;
+  greenEvent: T;
+  projectKey: string;
+  stem: string;
 }
 
 export interface EmptyStateInput {
@@ -87,4 +137,63 @@ export declare function workspaceTabs(project: WorkspaceProjectLike): WorkspaceT
 
 export declare function projectRollupLabel(project: ProjectRollupLike): string;
 
+export declare function projectActivity(
+  project: ActivityProjectLike,
+  now: number,
+  inactiveMs: number,
+): ProjectActivityResult;
+
+export declare function orderProjects<T extends OrderableProjectLike>(projects: T[]): T[];
+
 export declare function emptyStates(state: EmptyStateInput): EmptyStateResult | null;
+
+export declare function pairTransitions<T extends TransitionEventLike>(
+  events: T[],
+): Array<TransitionMarker<T>>;
+
+// CR-CRU-007 §S4.0 (FINAL re-baseline) — purely tier-contextual presentation;
+// the storage-key helper is gone with the removed mode switch.
+export type DrillinMode = "Detail" | "Density";
+
+export declare function drillinDefaultMode(tier: string): DrillinMode;
+
+// CR-CRU-007 §S4 items 1 & 3 — Density-mode pure helpers.
+export interface FoldSuiteLike {
+  name: string;
+  status: string;
+}
+
+export interface DigestLeafLike {
+  name: string;
+  status: string;
+  failure?: { message: string } | undefined;
+}
+
+/**
+ * One digest entry. `kind` discriminates at runtime: "leaf" entries carry
+ * `leaf`; "group" entries carry `message`/`leaves`/`extraCount`. Declared
+ * flat (all fields present) so call sites can read either side after a
+ * runtime `kind` check without a type-guard dance.
+ */
+export interface DigestEntry<T extends DigestLeafLike> {
+  kind: "leaf" | "group";
+  /** the pass/pending/uniquely-failing leaf (kind "leaf") */
+  leaf: T;
+  /** the shared failure.message (kind "group") */
+  message: string;
+  /** the grouped leaves, input order (kind "group") */
+  leaves: T[];
+  /** leaves.length - 1 — the "+N identical" count (kind "group") */
+  extraCount: number;
+}
+
+export declare function foldSuites(suites: FoldSuiteLike[]): string[];
+
+export declare function digestFailures<T extends DigestLeafLike>(
+  leaves: T[],
+): Array<DigestEntry<T>>;
+
+// CR-CRU-007 §S1 — phase-role icon tinting (pure).
+export type PhaseRole = "red" | "green" | "verify" | "fix" | null;
+
+export declare function phaseRole(agentId: string): PhaseRole;
