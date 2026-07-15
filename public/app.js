@@ -257,6 +257,9 @@
         div({ class: "app-card-meta" }, () => L.projectRollupLabel(project)),
       );
 
+    // Card treatment (user-directed polish): agent rows share the project-card
+    // family — `app-card` is ADDED alongside the existing classes so every
+    // selector that keys on `app-agent-row` / data-testid="agent-row" holds.
     const AgentRow = (agent) => {
       const glyph = L.livenessGlyph(agent);
       const busy = agent.liveness === "online" && agent.status === "busy";
@@ -264,7 +267,7 @@
         {
           "data-testid": "agent-row",
           class: () =>
-            `app-agent-row${glyph.tombstone ? " tombstoned" : ""}${
+            `app-agent-row app-card${glyph.tombstone ? " tombstoned" : ""}${
               state.selectedAgent === agent.agentId ? " on" : ""
             }`,
           onclick: () => {
@@ -280,9 +283,12 @@
           agent.identity?.displayName ?? agent.agentId,
         ),
         span({ class: "app-agent-msg" }, agent.message || "—"),
+        // Small last-seen / died-ago line (card-meta family).
         glyph.tombstone
-          ? span({ class: "app-agent-msg" }, `died ${glyph.diedAgo}`)
-          : null,
+          ? span({ class: "app-card-meta" }, `died ${glyph.diedAgo}`)
+          : agent.lastSeen !== undefined
+            ? span({ class: "app-card-meta" }, `seen ${rel(agent.lastSeen)}`)
+            : null,
       );
     };
 
@@ -339,14 +345,14 @@
     // page no longer renders a standalone agents rail.
     const AgentsRail = () => div({ class: greyed("app-rail") }, AgentsSection());
 
-    // Home = Mission Control (revised §S3, 2026-07-15): two-column grid —
-    // timeline in the WIDE left column, ONE right rail stacking the Projects
-    // section ABOVE the Agents section. No left rail.
+    // Home = Mission Control (§S3 re-revised 2026-07-15): two-column grid —
+    // ONE left rail stacking the Projects section ABOVE the Agents section,
+    // timeline in the WIDE right column.
     const Home = () =>
       div(
         { class: "app-main" },
-        Timeline(),
         div({ class: greyed("app-rail") }, ProjectsSection(), AgentsSection()),
+        Timeline(),
       );
 
     // ── Workspace (§S4 — header, tabs, Runs listing, vitals rail) ───────

@@ -1,7 +1,7 @@
 // CR-CRU-006 §S6 — E2E harness seed (storyboard as contract — PRD §5) +
-// revised §S3 layout (2026-07-15): two-column Mission Control home, timeline
-// in the wide LEFT column, right rail stacking Projects ABOVE Agents, no
-// left rail.
+// §S3 layout as re-revised 2026-07-15: two-column Mission Control home, ONE
+// LEFT rail stacking Projects ABOVE Agents, timeline in the wide RIGHT
+// column.
 //
 // RED phase: this suite is expected to FAIL against the CURRENT UI (still a
 // three-column grid: [projects rail] [timeline] [agents rail]) — that is the
@@ -104,10 +104,8 @@ test.describe("CR-CRU-006 shell — storyboard frames", () => {
     await expect(agentRow).toBeVisible();
     await expect(agentRow).toContainText("building the widget");
 
-    // Revised §S3 — exactly ONE `.app-rail` as a direct child of `.app-main`:
-    // today ProjectsRail() and AgentsRail() are two SEPARATE `.app-rail`
-    // divs either side of the timeline (the old left rail). The revised
-    // layout stacks both sections inside a single right rail.
+    // Re-revised §S3 — exactly ONE `.app-rail` as a direct child of
+    // `.app-main`: both sections stack inside a single LEFT rail.
     const rails = page.locator(".app-main > .app-rail");
     await expect(rails).toHaveCount(1);
 
@@ -119,14 +117,14 @@ test.describe("CR-CRU-006 shell — storyboard frames", () => {
     // Project card for the seeded project lives inside the same rail.
     await expect(rails.getByTestId("project-card")).toContainText("F2 Project");
 
-    // Timeline (wide LEFT column) is wider than the right rail, and sits to
-    // its left.
+    // Timeline (wide RIGHT column) is wider than the left rail, and the rail
+    // sits to the timeline's left.
     const timelineBox = await page.getByTestId("timeline").boundingBox();
     const railBox = await rails.boundingBox();
     expect(timelineBox).not.toBeNull();
     expect(railBox).not.toBeNull();
     expect(timelineBox!.width).toBeGreaterThan(railBox!.width);
-    expect(timelineBox!.x).toBeLessThan(railBox!.x);
+    expect(railBox!.x).toBeLessThan(timelineBox!.x);
   });
 
   test(
@@ -168,7 +166,7 @@ test.describe("CR-CRU-006 shell — storyboard frames", () => {
     },
   );
 
-  test("Layout AC (revised §S3): two-column grid, projects above agents", async ({
+  test("Layout AC (re-revised §S3): two-column grid, rail left, projects above agents", async ({
     page,
   }) => {
     // Purely structural — independent of seeded data, so it does not rely on
@@ -186,17 +184,21 @@ test.describe("CR-CRU-006 shell — storyboard frames", () => {
       return (style.gridTemplateColumns as string).trim().split(/\s+/).filter(Boolean);
     });
     expect(columns).toHaveLength(2);
+    // Rail track (first, 320px) is narrower than the timeline track (second,
+    // the flexible wide column) — timeline still WIDER.
+    expect(parseFloat(columns[1])).toBeGreaterThan(parseFloat(columns[0]));
 
     const rails = page.locator(".app-main > .app-rail");
     await expect(rails).toHaveCount(1);
-    // No separate left rail: only one `.app-rail` child of `.app-main`
-    // remains, and it is not the first child (timeline — the wide column —
-    // comes first / left).
+    // Exactly one `.app-rail` child of `.app-main`, and it IS the first grid
+    // child (rail left); the timeline — the wide column — comes second /
+    // right.
     const mainChildClasses = await page
       .locator(".app-main")
       .evaluate((el: any) => Array.from(el.children).map((c: any) => c.className as string));
     expect(mainChildClasses).toHaveLength(2);
-    expect(mainChildClasses[0]).not.toContain("app-rail");
+    expect(mainChildClasses[0]).toContain("app-rail");
+    expect(mainChildClasses[1]).not.toContain("app-rail");
 
     const sectionTitles = await rails.locator(".app-rail-title").allTextContents();
     expect(sectionTitles).toEqual(["projects", "agents"]);

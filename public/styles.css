@@ -117,11 +117,11 @@ body {
 .app-dot.o { background: var(--offline); }
 .app-dot.r { background: var(--fail); box-shadow: 0 0 6px rgba(248, 113, 113, 0.7); }
 
-/* ── Rails grid (home layout — revised §S3: wide timeline left, one right
-   rail stacking projects above agents) ─────────────────────────────────── */
+/* ── Rails grid (home layout — §S3 re-revised 2026-07-15: one LEFT rail
+   stacking projects above agents, wide timeline right) ──────────────────── */
 .app-main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: 320px minmax(0, 1fr);
   gap: 12px;
   padding: 12px;
   align-items: start;
@@ -163,13 +163,18 @@ body {
 .app-card-name { font: 600 12px var(--mono); color: var(--ink); }
 .app-card-meta { color: var(--ink-faint); font: 9.5px var(--mono); }
 
-/* ── Agent rows ─────────────────────────────────────────────────────────── */
+/* ── Agent rows (card treatment — same border/radius/background/padding
+   family as the project cards, per user-directed polish) ────────────────── */
 .app-agent-row {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 6px 8px;
-  border-radius: 8px;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+  margin-bottom: 8px;
+  cursor: pointer;
 }
 .app-agent-id { font: 600 11px var(--mono); color: var(--ink); }
 .app-agent-msg { color: var(--ink-dim); font: 10.5px var(--mono); }
