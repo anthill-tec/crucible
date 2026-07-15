@@ -53,3 +53,11 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   TOON's uniform-table form applies to events[] — measured ratio currently 105% of
   JSON for nested shape (DN-crucible-toon-subset §Measured token-ratio); decide
   together with the SPA's consumption of the same payload in CR-CRU-006/007.
+- 2026-07-15 (post-merge review) — no-mistakes hardening landed on develop after the
+  CR-CRU-006 merge: ingest parse/`dataPath` failures now return 400 `{ok:false, error}`
+  on BOTH surfaces (v1 `/api/ingest` + v2 `/api/v2/runs`, shared `parseRunBody` core —
+  never a plain-text 500); server binds loopback `127.0.0.1` by default (`CRUCIBLE_HOST`
+  / `hostname` opt override); SPA guards against duplicate `EventSource` connections;
+  retention fold+delete is one transaction; `Store.hasAgent` backs the v2 `changed`
+  flags. CR-CRU-010's Context re-baselined (the `parseJunitPath` special-case now lives
+  in `parseRunBody`, not `src/server.ts`/`src/v2.ts`).

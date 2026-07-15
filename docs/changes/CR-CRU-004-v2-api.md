@@ -21,7 +21,8 @@ GET `/api/v2` (orientation: service, version, projects, next-step hints); GET
 key → 200 `{ok:true, changed:false}` NOT 400); POST `/api/v2/agents/register`,
 `/api/v2/agents/heartbeat` (same handler semantics), `/api/v2/agents/unregister`;
 GET `/api/v2/agents?project=` (each agent carries computed `liveness`); POST
-`/api/v2/runs` (raw, `{codec, data|dataPath}`), `/api/v2/runs/parsed`,
+`/api/v2/runs` (raw, `{codec, data|dataPath}`; malformed `data` / unreadable
+`dataPath` → 400 `{ok:false, error}`, never a plain-text 500), `/api/v2/runs/parsed`,
 `/api/v2/runs/compile`; GET `/api/v2/events?project=&limit=`; GET+DELETE
 `/api/v2/events/:id`; GET `/api/v2/status?project=`.
 

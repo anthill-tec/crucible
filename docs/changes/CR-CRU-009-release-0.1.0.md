@@ -27,7 +27,8 @@ or runtime (all assets vendored).
 `README.md`: what Crucible is, quick start (3 commands to a live dashboard),
 API pointers (v2 orientation, shim status), version 0.1.0 + link scheme per house
 convention. `docs/RUNBOOK.md`: start/stop, db path, corrupt-db behavior, retention,
-health monitoring, port config.
+health monitoring, port + bind-address config (`CRUCIBLE_PORT`/`CRUCIBLE_HOST` —
+loopback-only by default).
 
 ### §S3 Version + release ceremony
 `package.json` version `0.1.0`; git-flow release per house git-workflow (release

@@ -34,8 +34,10 @@ Class `Store` backed by `bun:sqlite`, WAL mode, db path `data/crucible.db`
 `events` (summary columns + JSON `tree`/`coverage`/`compile`/`context` blobs),
 `rollups`. Index `events(project_key, timestamp)`. Public API: `addProject`,
 `getProject`, `listProjects`, `touchAgent`, `removeAgent`, `listAgents`,
-`recordTestEvent`, `recordCompileEvent`, `listEvents(projectKey?, limit=50)`
-(newest-first), `getEvent(id)`, `deleteEvent(id, projectKey)`,
+`hasAgent(projectKey, agentId)` (single-row existence check with `listAgents`'
+lazy-prune semantics), `recordTestEvent`, `recordCompileEvent`,
+`listEvents(projectKey?, limit=50)` (newest-first), `countEvents(projectKey?)`,
+`getEvent(id)`, `deleteEvent(id, projectKey)`,
 `clearEvents(projectKey)`, `onChange(fn)` (emits `"projects"|"agents"|"events"` +
 projectKey).
 
@@ -51,7 +53,8 @@ a heartbeat without `identity` preserves previously stored identity.
 On event insert: if the project's full-fidelity events exceed 100 (per-project
 override field `retention` allowed), fold the oldest overflow into `rollups` —
 grouped by `context.wave` when present, else by UTC day — accumulating
-`{runs, passed, failed, duration_ms, lastCoverage}` — then delete the raw rows.
+`{runs, passed, failed, duration_ms, lastCoverage}` — then delete the raw rows
+(fold + delete run in a single transaction, so a crash never double-counts).
 `listRollups(projectKey)` returns them oldest-first.
 
 ### §S5 Boot safety
@@ -59,7 +62,9 @@ Opening a corrupt/unreadable db: rename it to `crucible.db.corrupt-<epoch>`,
 start a fresh db, log one loud line. Boot must never fail because of a bad file.
 
 ### §S6 Minimal boot + health (the CR's production call path)
-`src/server.ts`: `Bun.serve` on port 3849 (env `CRUCIBLE_PORT` override) serving
+`src/server.ts`: `Bun.serve` on port 3849 (env `CRUCIBLE_PORT` override), bound to
+loopback `127.0.0.1` by default (env `CRUCIBLE_HOST` / `hostname` opt override —
+the API is unauthenticated and `dataPath` ingest reads server-side files), serving
 exactly one route, `GET /api/health` → `{ok: true, status: "healthy", version,
 uptime_s, counts: {projects, agents, events}}` with counts read from the Store.
 Everything else 404s. CR-CRU-003 extends this server with the shim routes.

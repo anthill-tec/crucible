@@ -35,7 +35,8 @@ exist) with a dispatcher for the 13 v1 routes: POST
   across identity-less heartbeats. Unknown project → 404 with actionable error.
 - `POST /api/ingest` `{projectKey, format: "junit", data|dataPath, agentId}` —
   `dataPath` file or directory; response `{ok:true, summary: {total, passed,
-  failed, pending, duration_ms}}`.
+  failed, pending, duration_ms}}`. Malformed `data` / unreadable `dataPath` →
+  400 `{ok:false, error}`, never a plain-text 500.
 - `/api/ingest/parsed` — accepts `{summary, tree, coverage?, name?}` as-is;
   coverage discarded when `summary.failed > 0` (core behavior, asserted here).
 - `/api/ingest/compile` — `{errors, format?}`, format optional (mvn/arduino omit);

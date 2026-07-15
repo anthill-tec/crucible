@@ -35,6 +35,8 @@ around two commitments:
 ```
 
 - Single-user, localhost developer tool. No auth, no TLS, no multi-tenant (non-goals §7).
+  The server binds loopback (`127.0.0.1`) by default; `CRUCIBLE_HOST` opts into wider
+  exposure (the API is unauthenticated and `dataPath` ingest reads server-side files).
 - Server: Bun + TypeScript, zero runtime framework (Bun.serve router). Tests: `bun test`
   (this project eats its own dog food: it ingests its own runs via `bun-crucible.py`).
 - **API strategy (decided 2026-07-14, kickoff review):** the primary contract is a
@@ -207,7 +209,7 @@ Omitted `type` ⇒ `unit`.
 
 ### 4.10 Service health (v1 parity — the backend is monitored too)
 `GET /api/health` → `{ok, status:"healthy", version, uptime_s, counts:{projects, agents,
-events}, snapshot:{lastWriteAt, ok}}`. The SSE channel emits keep-alive frames every
+events}}`. The SSE channel emits keep-alive frames every
 15 s. The dashboard pins a server-health pill (healthy / unreachable) and visibly greys
 all live data when keep-alives stop and a health probe fails — the frontend must never
 present stale data as live. Orchestrators may gate wave dispatch on `/api/health`.
@@ -265,7 +267,7 @@ BDD/Playwright runtime was never fully realized. Scoped to a post-skeleton wave.
 - Full TDD via the project's own tooling: `bun test`, JUnit reporter, lcov coverage,
   ingested to Crucible itself via `bun-crucible.py` / `crucible-report-bun`.
 - Server start < 1 s; ingest of a 1000-case JUnit directory < 500 ms.
-- State survives restart (snapshot load); a corrupt snapshot must not prevent boot
+- State survives restart (SQLite db reload); a corrupt db file must not prevent boot
   (rename aside, start fresh, log loudly).
 - No external network at runtime; all UI assets vendored.
 
@@ -280,7 +282,7 @@ client-fleet upgrade, then the BDD harness (§4.12). Crucible ingests its own ru
 
 ## 7 Non-goals (v2.0)
 - Auth/multi-user/remote hosting; Crucible stays a localhost single-developer tool.
-- A database server — JSON snapshot persistence only.
+- A database server — embedded `bun:sqlite` only (§2), no external daemon.
 - Historical analytics beyond the capped per-project event log (trend charts over
   retained events are in scope; unbounded history is not).
 - CodeForge/Velocity integration beyond sharing the agent-protocol conventions.
