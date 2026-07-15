@@ -50,7 +50,7 @@
   --sans: "Inter", system-ui, sans-serif;
 }
 
-html { background: var(--bg); }
+html { background: var(--bg); height: 100%; }
 body {
   margin: 0;
   color: var(--ink);
@@ -60,7 +60,21 @@ body {
   background:
     radial-gradient(1200px 500px at 70% -10%, rgba(255, 122, 26, 0.07), transparent 60%),
     var(--bg);
-  min-height: 100vh;
+  height: 100%;
+  /* CR-CRU-016 §S1 — the app frame owns scrolling: the window never
+     scrolls; each central pane is its own scroller (in-pane drill-in +
+     per-pane scrollTop capture/restore). */
+  overflow: hidden;
+}
+
+/* ── App frame (CR-CRU-016 §S1) — chrome rows stack over a flexible main
+   area; panes scroll independently inside it ─────────────────────────── */
+#app { height: 100%; }
+#app > div {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── Top bar ────────────────────────────────────────────────────────────── */
@@ -155,15 +169,25 @@ body {
 .app-main {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  /* CR-CRU-016 §S1 — the main area fills the frame below the chrome rows;
+     home is one pane row, the workspace stacks tabs over its body row. */
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
   padding: 12px;
-  align-items: start;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.app-main:not(.app-home) {
+  grid-template-rows: auto minmax(0, 1fr);
 }
 .app-workspace-body {
   display: grid;
   grid-template-columns: minmax(0, 2.6fr) minmax(260px, 1fr);
   gap: 12px;
-  align-items: start;
+  align-items: stretch;
+  min-height: 0;
 }
 .app-rail-section + .app-rail-section {
   margin-top: 16px;
@@ -174,7 +198,15 @@ body {
   border-radius: 12px;
   padding: 10px 12px;
   min-width: 0;
+  /* CR-CRU-016 §S1 — every pane is its own scroller. */
+  min-height: 0;
+  overflow-y: auto;
 }
+/* CR-CRU-016 AC2 — feed scroll runway: a central pane's content reserves
+   extra scroll room beyond the pane height so a restored reading position
+   (closing an in-pane run detail) is always reachable, however short the
+   feed currently is. */
+.app-center > .app-pane-content { min-height: calc(100% + 260px); }
 .app-rail-title {
   font: 600 11px/1.4 var(--mono);
   text-transform: uppercase;
@@ -400,15 +432,11 @@ body {
 }
 
 /* ── Live-region degradation (§S5) ──────────────────────────────────────── */
-/* ── CR-CRU-007 §S3/§S4 — drill-in slide-over (§S5 fidelity #2: right-hand
-   sheet, full height, ember left border) ─────────────────────────────────── */
-.app-drillin { overflow-y: auto; }
-.app-slideover-right {
-  background: var(--bg-1);
-  border-left: 3px solid var(--ember);
-  padding: 10px 12px;
-  box-shadow: -16px 0 40px rgba(0, 0, 0, 0.55);
-}
+/* ── CR-CRU-007 §S3/§S4 + CR-CRU-016 §S1 — run detail, IN-PANE: a pane
+   state of the active central pane. The right-hand slide-over sheet and
+   its scrim are RETIRED (the /manage and /roadmap overlays, when they
+   land, are a separate contract). ────────────────────────────────────── */
+.app-drillin.app-inpane { min-height: 0; }
 .app-drillin-head {
   display: flex;
   align-items: center;
