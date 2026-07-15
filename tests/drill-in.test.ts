@@ -689,6 +689,160 @@ describe("§S3 — cold load of /p/<key>/run/<id>", () => {
     expect(overlay!.querySelectorAll('[data-testid="suite-row"]').length).toBe(1);
     expect((overlay!.textContent ?? "")).toContain("ColdSuite");
   });
+
+  // CR-CRU-007 VERIFY-findings fix (2026-07-15) — FINDING 2: §S3 states
+  // "failing suites auto-expand in BOTH modes" with NO cold-load carve-out,
+  // but public/app.js:802-847 gates the Detail-mode auto-expand behind
+  // `openedInApp` (captured from `overlayViaNavigate`, which is only true
+  // for an in-app card/marker click) — `presentationOf(ev) === "Density" ||
+  // openedInApp`. A cold mount at `/p/<key>/run/<id>` never sets
+  // `overlayViaNavigate`, so a Detail-mode (unit/module/integration) cold
+  // deep-link into a FAILING run renders collapsed, contradicting the spec.
+  // The test above only asserted suite-row COUNT + suite name text (true
+  // even with the failing suite collapsed) and stayed green through this
+  // bug — these two tests pin the real rendered outcome: the failing
+  // suite's leaves + inline failure box must appear on cold mount with NO
+  // click, in Detail presentation, exactly as a warm (in-app) open does.
+  test("cold-mounting /p/<key>/run/<id> for a unit-tier (Detail) run with a FAILING suite auto-expands it: fetches ?suite=<failing> with no click and renders the failed leaf's failure-box inline", async () => {
+    const now = Date.now();
+    const eventId = "evt-cold-autoexpand-fail";
+    const projectKey = "proj-cold-autoexpand";
+    await mountApp({
+      pathname: `/p/${projectKey}/run/${eventId}`,
+      projects: [
+        { key: projectKey, name: "Cold Autoexpand", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
+      ],
+      events: [
+        {
+          id: eventId,
+          projectKey,
+          agentId: "cold-autoexpand-agent",
+          kind: "test",
+          tier: "unit",
+          codec: "junit",
+          timestamp: now,
+          total: 3,
+          passed: 2,
+          failed: 1,
+          pending: 0,
+          duration_ms: 12,
+          hasCoverage: false,
+        },
+      ],
+      eventDetails: {
+        [eventId]: {
+          id: eventId,
+          projectKey,
+          agentId: "cold-autoexpand-agent",
+          kind: "test",
+          tier: "unit",
+          codec: "junit",
+          timestamp: now,
+          summary: { total: 3, passed: 2, failed: 1, pending: 0, duration_ms: 12 },
+          tree: [
+            {
+              name: "ColdFailSuite",
+              status: "fail",
+              children: [
+                { name: "coldOkLeaf", status: "pass", duration_ms: 4 },
+                {
+                  name: "coldBadLeaf",
+                  status: "fail",
+                  duration_ms: 5,
+                  failure: { message: "cold deep-link failure", trace: "at coldBadLeaf\nat file.ts:9:1" },
+                },
+              ],
+            },
+            {
+              name: "ColdPassSuite",
+              status: "pass",
+              children: [{ name: "coldOkLeaf2", status: "pass", duration_ms: 3 }],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(location.pathname).toBe(`/p/${projectKey}/run/${eventId}`);
+    const overlay = document.querySelector('[data-testid="run-overlay"]');
+    expect(overlay).not.toBeNull();
+
+    // The FAILING suite's leaves fetch fired with NO click on the suite-row.
+    expect(fetchLog.some((u) => u.includes(`suite=${encodeURIComponent("ColdFailSuite")}`))).toBe(true);
+    const badLeafRow = findByText(overlay!, '[data-testid="leaf-row"]', "coldBadLeaf");
+    expect(badLeafRow).toBeDefined();
+    const okLeafRow = findByText(overlay!, '[data-testid="leaf-row"]', "coldOkLeaf");
+    expect(okLeafRow).toBeDefined();
+
+    // The inline failure box renders with no click on the failed leaf-row.
+    const failureBox = overlay!.querySelector('[data-testid="failure-box"]');
+    expect(failureBox).not.toBeNull();
+    expect((failureBox!.textContent ?? "")).toContain("cold deep-link failure");
+    expect((failureBox!.textContent ?? "")).toContain("at file.ts:9:1");
+
+    // Bound: the PASSING suite stays collapsed on cold load too (folded
+    // rule is unaffected by this fix) — never fetched, no leaf-row.
+    expect(fetchLog.some((u) => u.includes(`suite=${encodeURIComponent("ColdPassSuite")}`))).toBe(false);
+    expect(findByText(overlay!, '[data-testid="leaf-row"]', "coldOkLeaf2")).toBeUndefined();
+  });
+
+  test("cold-mounting /p/<key>/run/<id> for an ALL-PASS unit-tier run fetches nothing beyond ?depth=suites (no ?suite= fetch, no leaf-row) — protects §S4.5 progressive paging", async () => {
+    const now = Date.now();
+    const eventId = "evt-cold-allpass";
+    const projectKey = "proj-cold-allpass";
+    await mountApp({
+      pathname: `/p/${projectKey}/run/${eventId}`,
+      projects: [
+        { key: projectKey, name: "Cold All Pass", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
+      ],
+      events: [
+        {
+          id: eventId,
+          projectKey,
+          agentId: "cold-allpass-agent",
+          kind: "test",
+          tier: "unit",
+          codec: "junit",
+          timestamp: now,
+          total: 2,
+          passed: 2,
+          failed: 0,
+          pending: 0,
+          duration_ms: 8,
+          hasCoverage: false,
+        },
+      ],
+      eventDetails: {
+        [eventId]: {
+          id: eventId,
+          projectKey,
+          agentId: "cold-allpass-agent",
+          kind: "test",
+          tier: "unit",
+          codec: "junit",
+          timestamp: now,
+          summary: { total: 2, passed: 2, failed: 0, pending: 0, duration_ms: 8 },
+          tree: [
+            {
+              name: "AllPassSuite",
+              status: "pass",
+              children: [
+                { name: "passLeaf1", status: "pass", duration_ms: 3 },
+                { name: "passLeaf2", status: "pass", duration_ms: 5 },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const overlay = document.querySelector('[data-testid="run-overlay"]');
+    expect(overlay).not.toBeNull();
+
+    expect(fetchLog.some((u) => u.includes("depth=suites"))).toBe(true);
+    expect(fetchLog.some((u) => /[?&]suite=/.test(u))).toBe(false);
+    expect(overlay!.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+  });
 });
 
 // ── §S4 item 0 — tier-default mode ─────────────────────────────────────────

@@ -21,6 +21,47 @@
 //   - DOM: `[data-testid="card-icon"]` carries `app-role-red` / `app-role-green`
 //     / `app-role-verify` (purple) / `app-role-fix` (yellow) to match; a
 //     roleless agent's card-icon carries NONE of those four classes.
+//
+// CR-CRU-007 VERIFY-findings fix (2026-07-15) — FINDING 1: the tests above
+// (and the original "DOM (run cards)" describe block below, prior to this
+// fix) asserted ONLY that `app-role-*` landed as a class on `card-icon` —
+// but `card-icon`'s content was a BARE COLOR-EMOJI TEXT NODE ("🧪"/"🛠",
+// public/app.js ~471). CSS `color` has NO effect on color-emoji glyphs in
+// any modern browser (they carry their own embedded color via the
+// COLR/CPAL font table) — so all four `app-role-*` tints
+// (public/styles.css ~278-284) were a browser no-op even though the class
+// WAS present and this DOM assertion stayed green. The class-presence
+// check was true but insufficient — the AC ("phase role icon tinting")
+// was unmet.
+//
+// CORRECTED CONTRACT (spec §S1) — picked as the ONE precise, RED-testable
+// gate for this fix (happy-dom cannot assert actual glyph rasterization,
+// so the gate is the DOM/CSS-source contract that MAKES tinting possible,
+// not a visual render): GREEN must stop rendering the icon as CSS-colorable
+// emoji TEXT and instead render it as a CSS-MASK-DRIVEN monochrome glyph:
+//   - `[data-testid="card-icon"]` is a WRAPPER element: it carries
+//     `data-icon-tintable="true"` PLUS the `app-role-*` class exactly as
+//     before (none of the four for a roleless agent) — `color` on this
+//     element now drives a `currentColor`-based mask, which DOES tint.
+//   - It contains exactly one child `[data-testid="icon-glyph"]` carrying
+//     class `app-icon-mask`, plus `data-kind="test"` or `data-kind="compile"`
+//     selecting which glyph mask renders via CSS.
+//   - Neither `card-icon` nor `icon-glyph` carries the raw emoji character
+//     as a text node anywhere inside them — `card-icon.textContent` is `""`
+//     (the glyph is drawn purely via the CSS mask + `background:
+//     currentColor`, never as colorable-but-uncolorable emoji text).
+//   - `public/styles.css` defines `.app-icon-mask` with a `mask-image` (or
+//     `-webkit-mask-image`) declaration AND a `background`/`background-color`
+//     of `currentColor` — verified by reading the real stylesheet source
+//     (same grep-style convention as tests/drill-in.test.ts's "F4 anatomy —
+//     no border/outline" block), since happy-dom does not compute real
+//     mask/background styles.
+//
+// RED phase: public/app.js still renders `card-icon` as
+// `span({...}, e.kind === "compile" ? "🛠" : "🧪")` (bare emoji text, no
+// `data-icon-tintable`, no `icon-glyph` child) and public/styles.css has no
+// `.app-icon-mask` rule — every new/updated assertion below fails against
+// that code.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -198,12 +239,16 @@ describe("§S1 phase-role icon tinting — DOM (run cards)", () => {
     const cards = document.querySelectorAll('[data-testid="event-card"]');
     expect(cards.length).toBe(5);
 
-    function iconClassFor(agentId: string): string {
+    function iconElFor(agentId: string): Element {
       const card = Array.from(cards).find((c) => (c.textContent ?? "").includes(agentId));
       expect(card).toBeDefined();
       const icon = card!.querySelector('[data-testid="card-icon"]');
       expect(icon).not.toBeNull();
-      return icon!.className;
+      return icon!;
+    }
+
+    function iconClassFor(agentId: string): string {
+      return iconElFor(agentId).className;
     }
 
     const redClass = iconClassFor("CR-X-1-RED");
@@ -226,9 +271,33 @@ describe("§S1 phase-role icon tinting — DOM (run cards)", () => {
     for (const roleClass of ROLE_CLASSES) {
       expect(noneClass).not.toMatch(new RegExp(`\\b${roleClass}\\b`));
     }
+
+    // FINDING 1 fix — the tintable-icon contract (see file header): for
+    // EVERY role (including the roleless/neutral case), card-icon must be a
+    // wrapper (`data-icon-tintable="true"`, NO bare emoji text) around a
+    // CSS-mask-driven `[data-testid="icon-glyph"]` child carrying
+    // `app-icon-mask` — never a color-emoji text node the role class sits
+    // on (a browser no-op for `color`).
+    function assertTintable(agentId: string): void {
+      const icon = iconElFor(agentId);
+      expect(icon.getAttribute("data-icon-tintable")).toBe("true");
+      // No raw color-emoji glyph rendered as text anywhere inside the icon
+      // wrapper — CSS `color` cannot tint color-emoji text, so the fixed
+      // contract must not carry the glyph as text content at all.
+      expect((icon.textContent ?? "")).toBe("");
+      const glyph = icon.querySelector('[data-testid="icon-glyph"]');
+      expect(glyph).not.toBeNull();
+      expect(glyph!.className).toMatch(/\bapp-icon-mask\b/);
+      expect(glyph!.getAttribute("data-kind")).toBe("test");
+      expect((glyph!.textContent ?? "")).toBe("");
+    }
+
+    for (const agentId of ["CR-X-1-RED", "CR-X-1-GREEN", "CR-X-1-VERIFY", "CR-X-1-FIX", "plain-agent-1"]) {
+      assertTintable(agentId);
+    }
   });
 
-  test("phase-role tinting applies to compile-event (🛠) cards too, not just test-event cards", async () => {
+  test("the tintable-icon contract applies to compile-event (🛠) cards too, not just test-event cards", async () => {
     const now = Date.now();
     const projectKey = "proj-phase-role-compile";
     await mountApp({
@@ -256,7 +325,41 @@ describe("§S1 phase-role icon tinting — DOM (run cards)", () => {
     expect(card).not.toBeNull();
     const icon = card!.querySelector('[data-testid="card-icon"]');
     expect(icon).not.toBeNull();
-    expect(icon!.textContent).toBe("🛠");
     expect(icon!.className).toMatch(/\bapp-role-red\b/);
+
+    // FINDING 1 fix — compile cards get the same tintable-icon contract as
+    // test cards: no bare "🛠" text node on the tinted element; a
+    // CSS-mask-driven `icon-glyph` child with `data-kind="compile"` instead.
+    expect(icon!.getAttribute("data-icon-tintable")).toBe("true");
+    expect((icon!.textContent ?? "")).toBe("");
+    const glyph = icon!.querySelector('[data-testid="icon-glyph"]');
+    expect(glyph).not.toBeNull();
+    expect(glyph!.className).toMatch(/\bapp-icon-mask\b/);
+    expect(glyph!.getAttribute("data-kind")).toBe("compile");
+    expect((glyph!.textContent ?? "")).toBe("");
+  });
+});
+
+// FINDING 1 fix — CSS-source contract: happy-dom does not compute real
+// mask/background styles, so the "actually tintable" half of the fix (the
+// browser applying `color` via `currentColor` to a CSS mask) is verified by
+// reading the real stylesheet source directly, same grep-style convention
+// as tests/drill-in.test.ts's "F4 anatomy — no border/outline highlight on
+// tree rows (styles.css)" block.
+describe("§S1 phase-role icon tinting — .app-icon-mask is CSS-mask-driven (styles.css)", () => {
+  const STYLES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8");
+
+  function ruleBodyFor(selector: string): string {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(STYLES_SRC);
+    expect(match).not.toBeNull();
+    return match![1] ?? "";
+  }
+
+  test(".app-icon-mask declares a mask-image (or -webkit-mask-image) driven by a background of currentColor — the mechanism that makes app-role-* colors ACTUALLY tint the icon (unlike CSS `color` on color-emoji text)", () => {
+    expect(STYLES_SRC).toMatch(/\.app-icon-mask\s*\{/);
+    const body = ruleBodyFor(".app-icon-mask");
+    expect(body).toMatch(/(-webkit-)?mask-image\s*:/);
+    expect(body).toMatch(/background(-color)?\s*:\s*currentColor\s*;/);
   });
 });
