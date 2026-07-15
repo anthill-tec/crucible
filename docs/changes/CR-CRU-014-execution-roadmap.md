@@ -51,8 +51,9 @@ Status table** — rows in EXECUTION SEQUENCE derived from the depends-on graph
 (topological order), one line per CR, minimal status flags, wave-boundary and
 release-boundary divider rows. Columns: CR · title · wave · depends-on chips ·
 status badge (derived: PENDING / IN_PROGRESS / COMPLETED). A **graph view
-toggle** renders the same depends-on graph as nodes/edges (table is the
-default; graph is the alternate lens over identical data).
+toggle** renders the same depends-on graph as nodes/edges — an **EXCLUSIVE
+toggle** with the table badge (table is the default; exactly ONE of
+table | graph renders at a time — user-clarified).
 **Graph node grammar (user whiteboard, during CR-007):** ellipse terminals
 (Start/End) · rectangles = **action nodes** (CRs) · diamonds = **milestone
 nodes** (release boundaries, gates) · wave/track/status carried by **node
