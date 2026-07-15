@@ -234,6 +234,10 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
       // §S0 (CR-CRU-006) — same flattened brief shape as the events list.
       lastEvent: last !== undefined ? eventBrief(last) : null,
       latestGreenCoverage: greenCovered?.coverage ?? null,
+      // CR-CRU-007 integration AC (§nav table) — the id of that SAME green
+      // coverage event, so the client's coverage meter can open its drill-in.
+      // Key ABSENT (not null) when no green-coverage run exists.
+      ...(greenCovered !== undefined ? { latestCoverageEventId: greenCovered.id } : {}),
       // §S5.1 (CR-CRU-007) — additive activity fields.
       active,
       lastActivity,
@@ -456,7 +460,13 @@ function eventBrief(event: RunEvent) {
     hasCoverage: !!event.coverage,
     ...(event.context !== undefined ? { context: event.context } : {}),
     ...(compile !== undefined
-      ? { errors: compile.errorCount, warnings: compile.warningCount }
+      ? {
+          errors: compile.errorCount,
+          warnings: compile.warningCount,
+          // CR-CRU-007 §S1 (F5) — the first 2 diagnostics, exactly what the
+          // compile card's inline preview renders; test briefs unaffected.
+          diagnostics: compile.diagnostics.slice(0, 2),
+        }
       : {}),
   };
 }

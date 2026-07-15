@@ -149,25 +149,26 @@ body {
 .app-dot.o { background: var(--offline); }
 .app-dot.r { background: var(--fail); box-shadow: 0 0 6px rgba(248, 113, 113, 0.7); }
 
-/* ── Rails grid (§S5.1 CR-CRU-007 — home is the collective timeline alone;
-   the workspace keeps a three-column grid: tabs · body · Project pane) ──── */
+/* ── Shell grid (§S5 fidelity #1 — NO left rail anywhere: home is the
+   collective timeline alone; the workspace stacks a full-width tabs row
+   over a [content | Project pane] two-column body) ──────────────────────── */
 .app-main {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding: 12px;
   align-items: start;
 }
-.app-main.app-home {
-  grid-template-columns: minmax(0, 1fr);
-}
-.app-main[data-testid="workspace"] {
-  grid-template-columns: minmax(200px, 1fr) minmax(0, 2.2fr) minmax(240px, 1fr);
+.app-workspace-body {
+  display: grid;
+  grid-template-columns: minmax(0, 2.6fr) minmax(260px, 1fr);
+  gap: 12px;
+  align-items: start;
 }
 .app-rail-section + .app-rail-section {
   margin-top: 16px;
 }
-.app-rail, .app-center {
+.app-pane, .app-center {
   background: var(--bg-1);
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -219,6 +220,8 @@ body {
 .app-agent-subrows { margin-left: 12px; }
 .app-agent-glyph { color: var(--heat); font: 600 11px var(--mono); }
 .app-coverage { margin-top: 4px; }
+.app-coverage.clickable { cursor: pointer; }
+.app-vitals-card { cursor: default; }
 .app-meter {
   height: 4px;
   border-radius: 999px;
@@ -238,6 +241,11 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+.app-pane-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .app-filter {
   font: 600 10.5px var(--mono);
@@ -315,8 +323,15 @@ body {
 }
 
 /* ── Live-region degradation (§S5) ──────────────────────────────────────── */
-/* ── CR-CRU-007 §S3/§S4 — drill-in slide-over ─────────────────────────── */
-.app-drillin { overflow-y: auto; max-height: 85vh; }
+/* ── CR-CRU-007 §S3/§S4 — drill-in slide-over (§S5 fidelity #2: right-hand
+   sheet, full height, ember left border) ─────────────────────────────────── */
+.app-drillin { overflow-y: auto; }
+.app-slideover-right {
+  background: var(--bg-1);
+  border-left: 3px solid var(--ember);
+  padding: 10px 12px;
+  box-shadow: -16px 0 40px rgba(0, 0, 0, 0.55);
+}
 .app-drillin-head {
   display: flex;
   align-items: center;

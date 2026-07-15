@@ -256,24 +256,29 @@
         () => `density: ${densityMode.val}`,
       );
 
-    // §S5.1 — title bar: logo + slogan + Health Pill ONLY (no project chips).
+    // Shared app logo — the workspace top bar renders the SAME element/class/
+    // text as home (§S5 fidelity #6).
+    const Logo = () =>
+      a(
+        {
+          class: "app-logo",
+          href: "/",
+          onclick: (e) => {
+            e.preventDefault();
+            navigate("/");
+          },
+        },
+        "⚒ Crucible ",
+        span("v2"),
+      );
+
+    // §S5.1 — title bar: logo + slogan + Health Pill ONLY (no project chips,
+    // no density toggle — §S5 fidelity #3: the toggle lives in pane headers).
     const TopBar = () =>
       div(
         { "data-testid": "app-topbar", class: "app-top" },
-        a(
-          {
-            class: "app-logo",
-            href: "/",
-            onclick: (e) => {
-              e.preventDefault();
-              navigate("/");
-            },
-          },
-          "⚒ Crucible ",
-          span("v2"),
-        ),
+        Logo(),
         span({ class: "app-slogan" }, "where agentic TDD forges green"),
-        DensityToggle(),
         HealthPill(),
       );
 
@@ -525,8 +530,16 @@
         { "data-testid": "timeline", class: greyed("app-center") },
         div(
           { class: "app-timeline-head" },
-          div({ class: "app-rail-title" }, "timeline"),
-          () => FilterPulldown(),
+          // §S5 fidelity #4 — "Run timeline — <scope>": all projects, or the
+          // filter pulldown's selected project.
+          div({ "data-testid": "pane-heading", class: "app-rail-title" }, () => {
+            const selected = state.projects.find((p) => p.key === state.selectedProject);
+            return selected !== undefined
+              ? `Run timeline — ${selected.name || selected.key}`
+              : "Run timeline — all projects";
+          }),
+          // §S5 fidelity #3 — density toggle next to the filter pulldown.
+          div({ class: "app-pane-controls" }, DensityToggle(), () => FilterPulldown()),
         ),
         () =>
           state.backendUp ? span() : span({ class: "app-synced" }, syncedStamp()),
@@ -536,11 +549,14 @@
     const Home = () => div({ class: "app-main app-home" }, Timeline());
 
     // ── Workspace (§S4 header/tabs/runs + §S5.2 Project pane) ───────────
-    // §S5.4 — the workspace top bar carries ← projects + the current project
-    // chip (name + type badge) + the Health Pill; no agent-count chip.
+    // §S5.4 + fidelity #6 — the workspace top bar's locked composition:
+    // logo FIRST (same element as home), then ← projects chip, then the
+    // current project chip (name + type badge), then the Health Pill —
+    // nothing else (no density toggle, no agent-count chip).
     const WorkspaceHeader = () =>
       div(
         { "data-testid": "workspace-header", class: "app-top" },
+        Logo(),
         button({ class: "app-chip", onclick: () => navigate("/") }, "← projects"),
         () => {
           const p = currentProject();
@@ -550,7 +566,6 @@
             span({ class: "app-type-badge" }, p ? p.type : ""),
           );
         },
-        DensityToggle(),
         HealthPill(),
       );
 
@@ -580,7 +595,16 @@
     const WorkspaceRuns = () =>
       div(
         { "data-testid": "workspace-runs", class: greyed("app-center") },
-        div({ class: "app-rail-title" }, "runs"),
+        div(
+          { class: "app-timeline-head" },
+          // §S5 fidelity #4 — workspace Runs pane label; #3 — density toggle
+          // in this pane's header.
+          div({ "data-testid": "pane-heading", class: "app-rail-title" }, () => {
+            const p = currentProject();
+            return `Run timeline — ${p ? p.name || p.key : state.route.projectKey}`;
+          }),
+          div({ class: "app-pane-controls" }, DensityToggle()),
+        ),
         () => {
           const runs = visibleEvents();
           return runs.length === 0
@@ -589,21 +613,72 @@
         },
       );
 
+    // §S5 fidelity #5 — Vitals. CYCLE HEALTH renders from transition pairs
+    // alone ("N RED→GREEN · median <duration>"), independent of coverage;
+    // the coverage-trend card renders ONLY when coverage actually exists.
+    function medianMs(values) {
+      if (values.length === 0) return 0;
+      const sorted = [...values].sort((x, y) => x - y);
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    }
+
+    const CycleHealthCard = () => {
+      const pairs = L.pairTransitions(
+        L.filterEvents(state.events, { projectKey: state.route.projectKey }),
+      );
+      return div(
+        { "data-testid": "cycle-health-card", class: "app-card app-vitals-card" },
+        div({ class: "app-card-name" }, "cycle health"),
+        div(
+          { class: "app-card-meta" },
+          pairs.length === 0
+            ? "no cycles yet"
+            : `${pairs.length} RED→GREEN · median ${fmtDuration(
+                medianMs(pairs.map((m) => m.greenEvent.timestamp - m.redEvent.timestamp)),
+              )}`,
+        ),
+      );
+    };
+
+    const CoverageTrendCard = () => {
+      const percent = currentProject()?.latestGreenCoverage?.lines?.percent;
+      if (typeof percent !== "number") return null;
+      return div(
+        { "data-testid": "coverage-trend-card", class: "app-card app-vitals-card" },
+        div({ class: "app-card-name" }, "coverage trend"),
+        div({ class: "app-card-meta" }, `latest green coverage ${percent}%`),
+      );
+    };
+
     const VitalsRail = () =>
       div(
         { "data-testid": "vitals-rail", class: "app-rail-section" },
         div({ class: "app-rail-title" }, "vitals"),
-        div({ class: "app-empty" }, "vitals land with the drill-in cycles"),
+        () => CycleHealthCard(),
+        () => CoverageTrendCard() ?? span(),
       );
 
     // §S5.2 — coverage meter on the project card (latest green coverage).
-    const CoverageMeter = (coverage) => {
-      const percent = coverage?.lines?.percent;
+    // Integration AC (§nav table): clicking the meter opens the drill-in of
+    // the project's latest-green-coverage event; without one there is no
+    // meter (and nothing clickable), just "no coverage yet".
+    const CoverageMeter = (project) => {
+      const percent = project.latestGreenCoverage?.lines?.percent;
       if (typeof percent !== "number") {
         return div({ class: "app-card-meta" }, "no coverage yet");
       }
+      const eventId = project.latestCoverageEventId;
+      const props = { "data-testid": "coverage-meter", class: "app-coverage" };
+      if (eventId !== undefined && eventId !== null) {
+        props.class = "app-coverage clickable";
+        props.onclick = () =>
+          navigate(
+            `/p/${encodeURIComponent(project.key)}/run/${encodeURIComponent(eventId)}`,
+          );
+      }
       return div(
-        { class: "app-coverage" },
+        props,
         div({ class: "app-card-meta" }, `coverage ${percent}%`),
         div(
           { class: "app-meter" },
@@ -621,7 +696,7 @@
           `${project.type} · ${project.agentsOnline}/${project.agentsTotal} agents online`,
         ),
         div({ class: "app-card-meta" }, () => L.projectRollupLabel(project)),
-        CoverageMeter(project.latestGreenCoverage),
+        CoverageMeter(project),
       );
 
     // §S5.2 — the workspace's right rail: project card, then the project's
@@ -629,7 +704,7 @@
     // This pane exists ONLY inside the workspace.
     const ProjectPane = () =>
       div(
-        { "data-testid": "project-pane", class: greyed("app-rail") },
+        { "data-testid": "project-pane", class: greyed("app-pane") },
         () => {
           const p = currentProject();
           return p === null ? div() : ProjectPaneCard(p);
@@ -650,12 +725,18 @@
       );
     };
 
+    // §S5 fidelity #1 — the workspace has NO left rail: the tabs row is a
+    // full-width horizontal strip directly beneath the top bar, and the body
+    // is exactly [main content | right Project pane], same on every tab.
     const Workspace = () =>
       div(
         { "data-testid": "workspace", class: "app-main" },
-        div({ class: greyed("app-rail") }, WorkspaceTabs()),
-        () => WorkspaceBody(),
-        ProjectPane(),
+        WorkspaceTabs(),
+        div(
+          { "data-testid": "workspace-body", class: "app-workspace-body" },
+          () => WorkspaceBody(),
+          ProjectPane(),
+        ),
       );
 
     // ── §S3 (CR-CRU-007) — codec-aware drill-in slide-over ──────────────
@@ -1006,18 +1087,21 @@
         {
           "data-testid": "run-overlay-scrim",
           class: "app-overlay-scrim",
-          style:
-            "position:fixed;inset:0;background:rgba(0,0,0,0.45);" +
-            "display:flex;align-items:center;justify-content:center;z-index:20;",
+          style: "position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:20;",
           onclick: (e) => {
             if (e.target === e.currentTarget) closeOverlay();
           },
         },
+        // §S5 fidelity #2 — the drill-in is a RIGHT-HAND SLIDE-OVER sheet:
+        // anchored to the right edge, full viewport height, ember left
+        // border (styles.css .app-slideover-right).
         div(
           {
             "data-testid": "run-overlay",
-            class: "app-rail app-drillin",
-            style: "min-width:320px;max-width:70vw;",
+            class: "app-drillin app-slideover-right",
+            style:
+              "position:fixed;top:0;right:0;bottom:0;" +
+              "width:min(720px,92vw);z-index:21;",
           },
           // §S5.3 — '← timeline' back chip: closes exactly like Escape
           // (same closeOverlay — same route/scroll restore).
@@ -1030,6 +1114,9 @@
                 "← timeline",
               ),
               span({ class: "app-rail-title" }, `run · ${eventId}`),
+              // §S5 fidelity #3 — the density toggle renders in the drill-in
+              // header (distinct from the Detail↔Density mode switch).
+              DensityToggle(),
               d !== null && d.kind === "test"
                 ? button(
                     {
