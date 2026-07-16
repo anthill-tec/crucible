@@ -1,0 +1,675 @@
+// CR-CRU-011 C4 — §S3 history lens: Wave → [Track] → CR → Cycle hierarchy,
+// declared-plan first with inferred fallback, wave-boundary states, and the
+// ungrouped tail. The ACTIVE view (per-CR todo + gate pane) is C3 — out of
+// scope here (see tests/workflow-tab.test.ts).
+//
+// RED phase: expected to fail against CURRENT production, whose
+// `[data-testid="workflow-history"]` element (public/app.js ~1206) renders
+// ONLY a static placeholder div — "history lens lands in C4 of this CR" —
+// with no wave/track/CR/cycle grouping elements at all.
+//
+// Drives the REAL production public/app.js shell inside a happy-dom window
+// — same harness pattern as tests/workflow-tab.test.ts (workspace pathname,
+// scripted `/api/v2/projects/<key>/plans` fetch), extended with an `agents`
+// fixture (same shape as tests/agent-runtime-pane.test.ts) for the rollup
+// assertions.
+//
+// Testid/attribute contract this file introduces for GREEN (none of these
+// exist yet — this is the RED-authored contract, chosen to read naturally
+// off the CR text):
+//   - `[data-testid="wave-group"]` (`data-wave`, `data-source="declared"|
+//     "inferred"`) — one per wave.
+//   - `[data-testid="wave-header"]` — the wave group's header text, carrying
+//     the wave-boundary state text/lane chips.
+//   - `[data-testid="lane-chip"]` — one per track, inside the wave header,
+//     while the wave is open with tracks.
+//   - `[data-testid="track-group"]` (`data-track`) — ONLY when a wave holds
+//     plans from >1 distinct track; absent entirely otherwise.
+//   - `[data-testid="track-badge"]` — on a CR group, whenever its plan
+//     carries a `track`.
+//   - `[data-testid="cr-group"]` (`data-cr`, `data-status`) — one per CR.
+//   - `[data-testid="cr-merge-commit"]` — on a closed CR group.
+//   - `[data-testid="cr-rollup"]` — cycles done/total.
+//   - `[data-testid="cr-agent-runtime"]` — one per participating agent.
+//   - `[data-testid="lens-cycle-row"]` (`data-status`) — a cycle sub-item
+//     under a CR group (declared OR inferred).
+//   - `[data-testid="cycle-span-closed"]` — a done cycle's closed span,
+//     wrapping its `[data-testid="linked-run-row"]` children.
+//   - `[data-testid="ungrouped-tail"]` / `[data-testid="ungrouped-count"]`.
+import { describe, test, expect, afterEach } from "bun:test";
+import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const VAN_SRC = readFileSync(
+  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
+  "utf8",
+);
+const VAN_X_SRC = readFileSync(
+  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
+  "utf8",
+);
+const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
+const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
+const V2_SRC = readFileSync(path.join(REPO_ROOT, "src/v2.ts"), "utf8");
+const SERVER_SRC = readFileSync(path.join(REPO_ROOT, "src/server.ts"), "utf8");
+const STORE_SRC = readFileSync(path.join(REPO_ROOT, "src/store.ts"), "utf8");
+
+interface EventFixture {
+  id: string;
+  projectKey: string;
+  agentId: string;
+  kind: "test";
+  tier: string;
+  timestamp: number;
+  total: number;
+  passed: number;
+  failed: number;
+  pending: number;
+  duration_ms?: number;
+  hasCoverage?: boolean;
+  context?: { cycleId?: number; wave?: string; cycle?: string };
+}
+
+interface CycleFixture {
+  id: number;
+  label: string;
+  kind?: string;
+  status: "pending" | "active" | "done" | "skipped" | "failed";
+}
+
+interface PlanFixture {
+  planId: number | string;
+  cr: string;
+  status: "open" | "closed";
+  wave?: string;
+  track?: string;
+  cycles: CycleFixture[];
+  merge?: { commit: string };
+}
+
+interface ProjectFixture {
+  key: string;
+  name: string;
+  type: "backend" | "frontend";
+  agentsOnline: number;
+  agentsTotal: number;
+  active?: boolean;
+  lastActivity?: number;
+}
+
+interface AgentFixture {
+  agentId: string;
+  projectKey: string;
+  liveness: "online" | "stale" | "tombstoned";
+  lastSeen: number;
+  runtime_ms?: number;
+}
+
+interface MountOpts {
+  pathname?: string;
+  projects: ProjectFixture[];
+  events: EventFixture[];
+  plans: PlanFixture[];
+  agents?: AgentFixture[];
+}
+
+let cacheBust = 0;
+
+async function mountApp(opts: MountOpts): Promise<void> {
+  const pathname = opts.pathname ?? "/";
+  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
+  document.body.innerHTML = '<div id="app"></div>';
+
+  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+    let body: unknown;
+    if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
+      body = { ok: true, plans: opts.plans };
+    } else if (url.includes("/api/v2/projects")) {
+      body = { ok: true, projects: opts.projects };
+    } else if (url.includes("/api/v2/agents")) {
+      body = { ok: true, agents: opts.agents ?? [] };
+    } else if (url.includes("/api/v2/events")) {
+      body = { ok: true, events: opts.events };
+    } else if (url.includes("/api/v2/health")) {
+      body = { ok: true, version: "2.0.0-test", counts: { events: 0 } };
+    } else {
+      throw new Error(`workflow-lens.test.ts mountApp: unexpected fetch url ${url}`);
+    }
+    return { ok: true, status: 200, json: async () => body } as Response;
+  }) as typeof fetch;
+
+  (0, eval)(VAN_SRC);
+  (0, eval)(VAN_X_SRC);
+
+  cacheBust += 1;
+  await import(`${APP_LOGIC_PATH}?workflowLens=${cacheBust}`);
+
+  (0, eval)(APP_JS_SRC);
+
+  await settle();
+}
+
+async function settle(ticks = 8): Promise<void> {
+  for (let i = 0; i < ticks; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+afterEach(async () => {
+  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+});
+
+function project(overrides: Partial<ProjectFixture> & { key: string }): ProjectFixture {
+  const now = Date.now();
+  return {
+    name: overrides.key,
+    type: "backend",
+    agentsOnline: 0,
+    agentsTotal: 0,
+    active: true,
+    lastActivity: now,
+    ...overrides,
+  };
+}
+
+function runEvent(
+  overrides: Partial<EventFixture> & Pick<EventFixture, "id" | "projectKey" | "agentId" | "timestamp">,
+): EventFixture {
+  return {
+    kind: "test",
+    tier: "unit",
+    total: 2,
+    passed: 2,
+    failed: 0,
+    pending: 0,
+    duration_ms: 100,
+    hasCoverage: false,
+    ...overrides,
+  };
+}
+
+async function openWorkflowTab(): Promise<void> {
+  const tab = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+  ).find((t) => (t.textContent ?? "").trim() === "Workflow");
+  expect(tab).toBeDefined();
+  tab!.click();
+  await settle();
+}
+
+function history(): HTMLElement {
+  const el = document.querySelector<HTMLElement>('[data-testid="workflow-history"]');
+  expect(el).not.toBeNull();
+  return el!;
+}
+
+// ── LENS HIERARCHY — declared-first: the tree IS the plan ─────────────────
+
+describe("§S3 history lens — hierarchy (Wave → CR → Cycle, declared-first)", () => {
+  test("renders Wave → CR → Cycle groups from a CLOSED+OPEN plan pair in the same wave; a done cycle renders as a closed span with its linked runs; the closed plan's merge seals its CR group with the merge commit", async () => {
+    const key = "lens-hier-1";
+    const now = Date.now();
+    const linkedRun = runEvent({
+      id: "evt-hier-run-1",
+      projectKey: key,
+      agentId: "agent-a",
+      timestamp: now,
+      context: { cycleId: 1 },
+    });
+    const planOpen: PlanFixture = {
+      planId: 601,
+      cr: "CR-A-1",
+      status: "open",
+      wave: "1",
+      cycles: [
+        { id: 1, label: "c1 red-green", status: "done" },
+        { id: 2, label: "c2 verify", status: "active" },
+      ],
+    };
+    const planClosed: PlanFixture = {
+      planId: 602,
+      cr: "CR-B-1",
+      status: "closed",
+      wave: "1",
+      merge: { commit: "abc1234" },
+      cycles: [{ id: 3, label: "c1", status: "done" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Hierarchy Project" })],
+      events: [linkedRun],
+      plans: [planOpen, planClosed],
+    });
+    await openWorkflowTab();
+
+    const hist = history();
+    expect(hist.textContent ?? "").not.toContain("lands in C4");
+
+    const waveGroups = hist.querySelectorAll<HTMLElement>('[data-testid="wave-group"]');
+    expect(waveGroups.length).toBe(1);
+    const wave1 = waveGroups[0]!;
+    expect(wave1.getAttribute("data-wave")).toBe("1");
+
+    // single-track wave — no Track level at all.
+    expect(wave1.querySelectorAll('[data-testid="track-group"]').length).toBe(0);
+
+    const crGroups = wave1.querySelectorAll<HTMLElement>('[data-testid="cr-group"]');
+    expect(crGroups.length).toBe(2);
+    const crIds = Array.from(crGroups).map((g) => g.getAttribute("data-cr")).sort();
+    expect(crIds).toEqual(["CR-A-1", "CR-B-1"]);
+
+    const crA = Array.from(crGroups).find((g) => g.getAttribute("data-cr") === "CR-A-1")!;
+    const cycleRows = crA.querySelectorAll<HTMLElement>('[data-testid="lens-cycle-row"]');
+    expect(cycleRows.length).toBe(2);
+    const doneRow = Array.from(cycleRows).find((r) => r.getAttribute("data-status") === "done")!;
+    expect(doneRow).toBeDefined();
+    const closedSpan = doneRow.querySelector('[data-testid="cycle-span-closed"]');
+    expect(closedSpan).not.toBeNull();
+    const linkedRow = closedSpan!.querySelector('[data-testid="linked-run-row"]');
+    expect(linkedRow).not.toBeNull();
+    expect(linkedRow!.getAttribute("data-run-id")).toBe("evt-hier-run-1");
+
+    const crB = Array.from(crGroups).find((g) => g.getAttribute("data-cr") === "CR-B-1")!;
+    expect(crB.getAttribute("data-status")).toBe("closed");
+    const mergeEl = crB.querySelector('[data-testid="cr-merge-commit"]');
+    expect(mergeEl).not.toBeNull();
+    expect((mergeEl!.textContent ?? "")).toContain("abc1234");
+  });
+});
+
+// ── TRACKS — the Track level renders ONLY for multi-track waves ──────────
+
+describe("§S3/§S0 history lens — tracks", () => {
+  test("two open plans in the same wave with track:\"track-1\"/track:\"track-2\" render a Track level between Wave and CR (both groups present, CR groups badged)", async () => {
+    const key = "lens-tracks-1";
+    const planA: PlanFixture = {
+      planId: 611,
+      cr: "CR-T-1",
+      status: "open",
+      wave: "2",
+      track: "track-1",
+      cycles: [{ id: 10, label: "c", status: "pending" }],
+    };
+    const planB: PlanFixture = {
+      planId: 612,
+      cr: "CR-T-2",
+      status: "open",
+      wave: "2",
+      track: "track-2",
+      cycles: [{ id: 11, label: "c", status: "pending" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Tracks Project" })],
+      events: [],
+      plans: [planA, planB],
+    });
+    await openWorkflowTab();
+
+    const wave2 = history().querySelector<HTMLElement>('[data-testid="wave-group"][data-wave="2"]');
+    expect(wave2).not.toBeNull();
+
+    const trackGroups = wave2!.querySelectorAll<HTMLElement>('[data-testid="track-group"]');
+    expect(trackGroups.length).toBe(2);
+    const trackIds = Array.from(trackGroups).map((g) => g.getAttribute("data-track"));
+    expect(trackIds.sort()).toEqual(["track-1", "track-2"]);
+
+    for (const trackGroup of Array.from(trackGroups)) {
+      const crGroup = trackGroup.querySelector('[data-testid="cr-group"]');
+      expect(crGroup).not.toBeNull();
+      const badge = crGroup!.querySelector('[data-testid="track-badge"]');
+      expect(badge).not.toBeNull();
+      expect((badge!.textContent ?? "")).toContain(trackGroup.getAttribute("data-track")!);
+    }
+  });
+
+  test("a wave whose plans all lack track renders NO track level — CR groups sit directly under the wave (single-orchestrator seamlessness)", async () => {
+    const key = "lens-tracks-2";
+    const plan: PlanFixture = {
+      planId: 613,
+      cr: "CR-NT-1",
+      status: "open",
+      wave: "3",
+      cycles: [{ id: 12, label: "c", status: "pending" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "No Track Project" })],
+      events: [],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const wave3 = history().querySelector<HTMLElement>('[data-testid="wave-group"][data-wave="3"]');
+    expect(wave3).not.toBeNull();
+    expect(wave3!.querySelectorAll('[data-testid="track-group"]').length).toBe(0);
+
+    const crGroup = wave3!.querySelector<HTMLElement>('[data-testid="cr-group"]');
+    expect(crGroup).not.toBeNull();
+    expect(crGroup!.querySelector('[data-testid="track-badge"]')).toBeNull();
+    // bound: the CR group's nearest track-group ancestor is null — it hangs
+    // directly off the wave, not a track level.
+    expect(crGroup!.closest('[data-testid="track-group"]')).toBeNull();
+  });
+
+  test("track groups sort numerically, not lexicographically (track-2 before track-10)", async () => {
+    const key = "lens-tracks-3";
+    const planA: PlanFixture = {
+      planId: 614,
+      cr: "CR-T-10",
+      status: "open",
+      wave: "4",
+      track: "track-10",
+      cycles: [{ id: 20, label: "c", status: "pending" }],
+    };
+    const planB: PlanFixture = {
+      planId: 615,
+      cr: "CR-T-2",
+      status: "open",
+      wave: "4",
+      track: "track-2",
+      cycles: [{ id: 21, label: "c", status: "pending" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Numeric Sort Project" })],
+      events: [],
+      plans: [planA, planB],
+    });
+    await openWorkflowTab();
+
+    const wave4 = history().querySelector<HTMLElement>('[data-testid="wave-group"][data-wave="4"]');
+    const trackGroups = Array.from(
+      wave4!.querySelectorAll<HTMLElement>('[data-testid="track-group"]'),
+    );
+    expect(trackGroups.map((g) => g.getAttribute("data-track"))).toEqual([
+      "track-2",
+      "track-10",
+    ]);
+  });
+});
+
+// ── WAVE STATES — inferred from plan states, no dedicated wave API ───────
+
+describe("§S3 history lens — wave boundary states", () => {
+  test("wave-1 plans all closed + no wave-2 plans → wave-1 header shows 'lanes complete · awaiting review'", async () => {
+    const key = "lens-wave-1";
+    const plan: PlanFixture = {
+      planId: 621,
+      cr: "CR-W-1",
+      status: "closed",
+      wave: "1",
+      merge: { commit: "aaa1111" },
+      cycles: [{ id: 30, label: "c", status: "done" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Wave Boundary Project" })],
+      events: [],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const wave1 = history().querySelector<HTMLElement>('[data-testid="wave-group"][data-wave="1"]');
+    expect(wave1).not.toBeNull();
+    const header = wave1!.querySelector('[data-testid="wave-header"]');
+    expect(header).not.toBeNull();
+    expect((header!.textContent ?? "")).toContain("lanes complete · awaiting review");
+  });
+
+  test("filing a wave-2 plan flips wave 1 out of the boundary state (superseded)", async () => {
+    const key = "lens-wave-2";
+    const plan1: PlanFixture = {
+      planId: 622,
+      cr: "CR-W-2",
+      status: "closed",
+      wave: "1",
+      merge: { commit: "bbb2222" },
+      cycles: [{ id: 31, label: "c", status: "done" }],
+    };
+    const plan2: PlanFixture = {
+      planId: 623,
+      cr: "CR-W-3",
+      status: "open",
+      wave: "2",
+      cycles: [{ id: 32, label: "c", status: "pending" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Wave Supersede Project" })],
+      events: [],
+      plans: [plan1, plan2],
+    });
+    await openWorkflowTab();
+
+    const hist = history();
+    const wave1 = hist.querySelector<HTMLElement>('[data-testid="wave-group"][data-wave="1"]')!;
+    const header1 = wave1.querySelector('[data-testid="wave-header"]')!;
+    // no longer the boundary-pause text — the newer wave superseded it.
+    expect((header1.textContent ?? "")).not.toContain("lanes complete · awaiting review");
+
+    const wave2 = hist.querySelector<HTMLElement>('[data-testid="wave-group"][data-wave="2"]');
+    expect(wave2).not.toBeNull();
+    const header2 = wave2!.querySelector('[data-testid="wave-header"]')!;
+    expect((header2.textContent ?? "")).not.toContain("lanes complete · awaiting review");
+  });
+
+  test("while any wave-1 plan is open with tracks → per-lane completion chips (track-1 closed, track-2 1-of-2 → 'track-1 ✓ · track-2 1/2')", async () => {
+    const key = "lens-wave-3";
+    const planClosed: PlanFixture = {
+      planId: 624,
+      cr: "CR-L-1",
+      status: "closed",
+      wave: "1",
+      track: "track-1",
+      merge: { commit: "ccc3333" },
+      cycles: [{ id: 33, label: "c", status: "done" }],
+    };
+    const planOpen: PlanFixture = {
+      planId: 625,
+      cr: "CR-L-2",
+      status: "open",
+      wave: "1",
+      track: "track-2",
+      cycles: [
+        { id: 34, label: "c1", status: "done" },
+        { id: 35, label: "c2", status: "pending" },
+      ],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Lane Chips Project" })],
+      events: [],
+      plans: [planClosed, planOpen],
+    });
+    await openWorkflowTab();
+
+    const wave1 = history().querySelector<HTMLElement>('[data-testid="wave-group"][data-wave="1"]')!;
+    const header = wave1.querySelector('[data-testid="wave-header"]')!;
+    expect((header.textContent ?? "")).toContain("track-1 ✓ · track-2 1/2");
+  });
+
+  test("no dedicated wave API route exists in src/ — wave state is inferred from plans only", () => {
+    for (const src of [V2_SRC, SERVER_SRC, STORE_SRC]) {
+      expect(src).not.toMatch(/["'`]\/api\/v2\/[^"'`]*waves[^"'`]*["'`]/i);
+      expect(src).not.toContain("/waves");
+    }
+  });
+});
+
+// ── INFERRED FALLBACK — no plan: Wave/CR/Cycle from context + agent stem ──
+
+describe("§S3 history lens — inferred fallback (no plan)", () => {
+  test("without any plan, a fixture with 2 waves × 2 CRs × 2 cycles (context.wave + agent stems + context.cycle labels) renders the inferred tree; runs lacking linkage land in an ungrouped tail with its count asserted", async () => {
+    const key = "lens-fallback-1";
+    const t0 = Date.now() - 2 * 60 * 60 * 1000;
+    let idc = 0;
+    function pair(wave: string, cr: string, cycleLabel: string): EventFixture[] {
+      idc += 1;
+      const ts = t0 + idc * 1000;
+      const red = runEvent({
+        id: `evt-fb-${idc}-red`,
+        projectKey: key,
+        agentId: `${cr}-RED`,
+        timestamp: ts,
+        total: 4,
+        passed: 2,
+        failed: 2,
+        context: { wave, cycle: cycleLabel },
+      });
+      const green = runEvent({
+        id: `evt-fb-${idc}-green`,
+        projectKey: key,
+        agentId: `${cr}-GREEN`,
+        timestamp: ts + 30_000,
+        total: 4,
+        passed: 4,
+        failed: 0,
+        context: { wave, cycle: cycleLabel },
+      });
+      return [red, green];
+    }
+
+    const events: EventFixture[] = [
+      ...pair("1", "CR-F-1", "cycle-a"),
+      ...pair("1", "CR-F-1", "cycle-b"),
+      ...pair("1", "CR-F-2", "cycle-a"),
+      ...pair("1", "CR-F-2", "cycle-b"),
+      ...pair("2", "CR-G-1", "cycle-a"),
+      ...pair("2", "CR-G-1", "cycle-b"),
+      ...pair("2", "CR-G-2", "cycle-a"),
+      ...pair("2", "CR-G-2", "cycle-b"),
+    ];
+    // Ungrouped tail: runs lacking any wave/cr/cycle linkage — never dropped.
+    const ungrouped1 = runEvent({
+      id: "evt-ungrouped-1",
+      projectKey: key,
+      agentId: "solo-agent-1",
+      timestamp: t0 + 500_000,
+      total: 1,
+      passed: 1,
+    });
+    const ungrouped2 = runEvent({
+      id: "evt-ungrouped-2",
+      projectKey: key,
+      agentId: "solo-agent-2",
+      timestamp: t0 + 600_000,
+      total: 1,
+      passed: 1,
+    });
+    events.push(ungrouped1, ungrouped2);
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Fallback Project" })],
+      events,
+      plans: [],
+    });
+    await openWorkflowTab();
+
+    const hist = history();
+    const waveGroups = hist.querySelectorAll<HTMLElement>(
+      '[data-testid="wave-group"][data-source="inferred"]',
+    );
+    expect(waveGroups.length).toBe(2);
+    const waveIds = Array.from(waveGroups).map((g) => g.getAttribute("data-wave")).sort();
+    expect(waveIds).toEqual(["1", "2"]);
+
+    const wave1 = Array.from(waveGroups).find((g) => g.getAttribute("data-wave") === "1")!;
+    const crGroups = wave1.querySelectorAll<HTMLElement>('[data-testid="cr-group"]');
+    expect(crGroups.length).toBe(2);
+    const crIds = Array.from(crGroups).map((g) => g.getAttribute("data-cr")).sort();
+    expect(crIds).toEqual(["CR-F-1", "CR-F-2"]);
+
+    const crF1 = Array.from(crGroups).find((g) => g.getAttribute("data-cr") === "CR-F-1")!;
+    const cycleRows = crF1.querySelectorAll('[data-testid="lens-cycle-row"]');
+    expect(cycleRows.length).toBe(2);
+    const cycleLabels = Array.from(cycleRows).map((r) => (r.textContent ?? "")).join(" ");
+    expect(cycleLabels).toContain("cycle-a");
+    expect(cycleLabels).toContain("cycle-b");
+
+    const ungroupedTail = hist.querySelector('[data-testid="ungrouped-tail"]');
+    expect(ungroupedTail).not.toBeNull();
+    const countEl = ungroupedTail!.querySelector('[data-testid="ungrouped-count"]');
+    expect(countEl).not.toBeNull();
+    expect((countEl!.textContent ?? "")).toContain("2");
+
+    // bound: the ungrouped runs are never absorbed into a CR group.
+    expect(hist.textContent ?? "").not.toContain("no wave/cr grouping is dropped");
+    const allCrGroups = hist.querySelectorAll<HTMLElement>('[data-testid="cr-group"]');
+    for (const g of Array.from(allCrGroups)) {
+      expect(g.querySelector('[data-run-id="evt-ungrouped-1"]')).toBeNull();
+      expect(g.querySelector('[data-run-id="evt-ungrouped-2"]')).toBeNull();
+    }
+  });
+});
+
+// ── GROUP ROLLUPS — cycles done/total + participating agents + runtimes ──
+
+describe("§S3 history lens — group rollups", () => {
+  test("a CR group row shows cycles done/total, and participating agents with runtimes (runtime_ms surfaces — pin presence, not exact ms)", async () => {
+    const key = "lens-rollup-1";
+    const now = Date.now();
+    const plan: PlanFixture = {
+      planId: 631,
+      cr: "CR-R-1",
+      status: "open",
+      wave: "1",
+      cycles: [
+        { id: 40, label: "c1", status: "done" },
+        { id: 41, label: "c2", status: "done" },
+        { id: 42, label: "c3", status: "pending" },
+      ],
+    };
+    const linkedRun = runEvent({
+      id: "evt-rollup-run-1",
+      projectKey: key,
+      agentId: "agent-a",
+      timestamp: now,
+      context: { cycleId: 40 },
+    });
+    const agentFixture: AgentFixture = {
+      agentId: "agent-a",
+      projectKey: key,
+      liveness: "online",
+      lastSeen: now,
+      runtime_ms: 12_345,
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Rollup Project" })],
+      events: [linkedRun],
+      plans: [plan],
+      agents: [agentFixture],
+    });
+    await openWorkflowTab();
+
+    const crGroup = history().querySelector<HTMLElement>(
+      '[data-testid="cr-group"][data-cr="CR-R-1"]',
+    );
+    expect(crGroup).not.toBeNull();
+
+    const rollup = crGroup!.querySelector('[data-testid="cr-rollup"]');
+    expect(rollup).not.toBeNull();
+    expect((rollup!.textContent ?? "")).toContain("2/3");
+
+    const agentRuntime = crGroup!.querySelector('[data-testid="cr-agent-runtime"]');
+    expect(agentRuntime).not.toBeNull();
+    const runtimeText = agentRuntime!.textContent ?? "";
+    expect(runtimeText).toContain("agent-a");
+    // pin presence of a runtime figure, not its exact ms value.
+    expect(runtimeText).toMatch(/\d/);
+  });
+});
