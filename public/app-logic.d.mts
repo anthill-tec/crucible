@@ -184,6 +184,9 @@ export interface LensPlanLike {
   track?: string;
   cycles: LensPlanCycleLike[];
   merge?: { commit: string };
+  // CR-CRU-020 §S1.1 — real server field (Plan.closedAt), consumed by the
+  // lens to order CR groups within a wave newest-first.
+  closedAt?: number;
 }
 
 export declare function planCycleIndex<
@@ -217,6 +220,8 @@ export interface LensCrNode<E extends LensRunLike> {
   status?: "open" | "closed";
   track?: string;
   merge?: { commit: string };
+  // CR-CRU-020 §S1.1 — passthrough of Plan.closedAt (declared nodes only).
+  closedAt?: number;
   cycles: Array<LensCycleNode<E>>;
   rollup: { done: number; total: number };
   agents: string[];

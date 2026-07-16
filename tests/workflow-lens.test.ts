@@ -35,7 +35,11 @@
 //     under a CR group (declared OR inferred).
 //   - `[data-testid="cycle-span-closed"]` — a done cycle's closed span,
 //     wrapping its `[data-testid="linked-run-row"]` children.
-//   - `[data-testid="ungrouped-tail"]` / `[data-testid="ungrouped-count"]`.
+//   - `[data-testid="ungrouped-tail"]` / `[data-testid="ungrouped-count"]` —
+//     CR-CRU-020 retarget (§S1.4 corrected, gate-review defect 2026-07-16):
+//     these elements are REMOVED from the Workflow lens entirely; the
+//     ungrouped-runs assertion below now confirms their ABSENCE and checks
+//     the Runs timeline for visibility instead (never-hidden rule moved).
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -210,7 +214,13 @@ function history(): HTMLElement {
 // ── LENS HIERARCHY — declared-first: the tree IS the plan ─────────────────
 
 describe("§S3 history lens — hierarchy (Wave → CR → Cycle, declared-first)", () => {
-  test("renders Wave → CR → Cycle groups from a CLOSED+OPEN plan pair in the same wave; a done cycle renders as a closed span with its linked runs; the closed plan's merge seals its CR group with the merge commit", async () => {
+  // CR-CRU-020 retarget (§S1.2/§S1.3): both plans are now CLOSED — an open
+  // plan's CR group no longer renders in history at all (§S1.3 exclusion is
+  // pinned separately in tests/workflow-history-refinements.test.ts), and
+  // reading a CR group's cycle rows now requires expanding it first
+  // (collapsed-by-default, §S1.2), then expanding the specific cycle row to
+  // reach its linked runs (§S2.1 — a distinct toggle level).
+  test("renders Wave → CR → Cycle groups from a pair of CLOSED plans in the same wave; a done cycle (once expanded) renders as a closed span with its linked runs; each closed plan's merge seals its CR group with the merge commit", async () => {
     const key = "lens-hier-1";
     const now = Date.now();
     const linkedRun = runEvent({
@@ -220,14 +230,15 @@ describe("§S3 history lens — hierarchy (Wave → CR → Cycle, declared-first
       timestamp: now,
       context: { cycleId: 1 },
     });
-    const planOpen: PlanFixture = {
+    const planA: PlanFixture = {
       planId: 601,
       cr: "CR-A-1",
-      status: "open",
+      status: "closed",
       wave: "1",
+      merge: { commit: "aaa9999" },
       cycles: [
         { id: 1, label: "c1 red-green", status: "done" },
-        { id: 2, label: "c2 verify", status: "active" },
+        { id: 2, label: "c2 verify", status: "done" },
       ],
     };
     const planClosed: PlanFixture = {
@@ -243,7 +254,7 @@ describe("§S3 history lens — hierarchy (Wave → CR → Cycle, declared-first
       pathname: `/p/${key}`,
       projects: [project({ key, name: "Hierarchy Project" })],
       events: [linkedRun],
-      plans: [planOpen, planClosed],
+      plans: [planA, planClosed],
     });
     await openWorkflowTab();
 
@@ -264,10 +275,23 @@ describe("§S3 history lens — hierarchy (Wave → CR → Cycle, declared-first
     expect(crIds).toEqual(["CR-A-1", "CR-B-1"]);
 
     const crA = Array.from(crGroups).find((g) => g.getAttribute("data-cr") === "CR-A-1")!;
+    // §S1.2 — expand the CR group to reach its cycle rows.
+    const crAToggle = crA.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]');
+    expect(crAToggle).not.toBeNull();
+    crAToggle!.click();
+    await settle();
+
     const cycleRows = crA.querySelectorAll<HTMLElement>('[data-testid="lens-cycle-row"]');
     expect(cycleRows.length).toBe(2);
     const doneRow = Array.from(cycleRows).find((r) => r.getAttribute("data-status") === "done")!;
     expect(doneRow).toBeDefined();
+    // §S2.1 — a history cycle row's OWN linked runs are a further, distinct
+    // toggle level from the CR group's expand/collapse above.
+    const doneRowToggle = doneRow.querySelector<HTMLElement>('[data-testid="cycle-toggle"]');
+    expect(doneRowToggle).not.toBeNull();
+    doneRowToggle!.click();
+    await settle();
+
     const closedSpan = doneRow.querySelector('[data-testid="cycle-span-closed"]');
     expect(closedSpan).not.toBeNull();
     const linkedRow = closedSpan!.querySelector('[data-testid="linked-run-row"]');
@@ -285,23 +309,30 @@ describe("§S3 history lens — hierarchy (Wave → CR → Cycle, declared-first
 // ── TRACKS — the Track level renders ONLY for multi-track waves ──────────
 
 describe("§S3/§S0 history lens — tracks", () => {
-  test("two open plans in the same wave with track:\"track-1\"/track:\"track-2\" render a Track level between Wave and CR (both groups present, CR groups badged)", async () => {
+  // CR-CRU-020 retarget (§S1.3): plans are now CLOSED — an open plan's CR
+  // group would no longer render in history at all, which would collapse
+  // this test's track-level assertions to nothing. Track-level rendering
+  // itself is unaffected by open/closed status, so closing the fixtures
+  // (with a merge commit) keeps testing the SAME track behavior post-GREEN.
+  test("two closed plans in the same wave with track:\"track-1\"/track:\"track-2\" render a Track level between Wave and CR (both groups present, CR groups badged)", async () => {
     const key = "lens-tracks-1";
     const planA: PlanFixture = {
       planId: 611,
       cr: "CR-T-1",
-      status: "open",
+      status: "closed",
       wave: "2",
       track: "track-1",
-      cycles: [{ id: 10, label: "c", status: "pending" }],
+      merge: { commit: "trackACommit" },
+      cycles: [{ id: 10, label: "c", status: "done" }],
     };
     const planB: PlanFixture = {
       planId: 612,
       cr: "CR-T-2",
-      status: "open",
+      status: "closed",
       wave: "2",
       track: "track-2",
-      cycles: [{ id: 11, label: "c", status: "pending" }],
+      merge: { commit: "trackBCommit" },
+      cycles: [{ id: 11, label: "c", status: "done" }],
     };
 
     await mountApp({
@@ -334,9 +365,10 @@ describe("§S3/§S0 history lens — tracks", () => {
     const plan: PlanFixture = {
       planId: 613,
       cr: "CR-NT-1",
-      status: "open",
+      status: "closed",
       wave: "3",
-      cycles: [{ id: 12, label: "c", status: "pending" }],
+      merge: { commit: "noTrackCommit" },
+      cycles: [{ id: 12, label: "c", status: "done" }],
     };
 
     await mountApp({
@@ -364,18 +396,20 @@ describe("§S3/§S0 history lens — tracks", () => {
     const planA: PlanFixture = {
       planId: 614,
       cr: "CR-T-10",
-      status: "open",
+      status: "closed",
       wave: "4",
       track: "track-10",
-      cycles: [{ id: 20, label: "c", status: "pending" }],
+      merge: { commit: "track10Commit" },
+      cycles: [{ id: 20, label: "c", status: "done" }],
     };
     const planB: PlanFixture = {
       planId: 615,
       cr: "CR-T-2",
-      status: "open",
+      status: "closed",
       wave: "4",
       track: "track-2",
-      cycles: [{ id: 21, label: "c", status: "pending" }],
+      merge: { commit: "track2Commit" },
+      cycles: [{ id: 21, label: "c", status: "done" }],
     };
 
     await mountApp({
@@ -593,17 +627,27 @@ describe("§S3 history lens — inferred fallback (no plan)", () => {
     expect(crIds).toEqual(["CR-F-1", "CR-F-2"]);
 
     const crF1 = Array.from(crGroups).find((g) => g.getAttribute("data-cr") === "CR-F-1")!;
+    // CR-CRU-020 retarget (§S1.2) — CR groups collapse by default, declared
+    // AND inferred alike; expand before reading cycle rows.
+    const crF1Toggle = crF1.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]');
+    expect(crF1Toggle).not.toBeNull();
+    crF1Toggle!.click();
+    await settle();
     const cycleRows = crF1.querySelectorAll('[data-testid="lens-cycle-row"]');
     expect(cycleRows.length).toBe(2);
     const cycleLabels = Array.from(cycleRows).map((r) => (r.textContent ?? "")).join(" ");
     expect(cycleLabels).toContain("cycle-a");
     expect(cycleLabels).toContain("cycle-b");
 
-    const ungroupedTail = hist.querySelector('[data-testid="ungrouped-tail"]');
-    expect(ungroupedTail).not.toBeNull();
-    const countEl = ungroupedTail!.querySelector('[data-testid="ungrouped-count"]');
-    expect(countEl).not.toBeNull();
-    expect((countEl!.textContent ?? "")).toContain("2");
+    // CR-CRU-020 retarget (§S1.4 corrected 2026-07-16 gate-review defect) —
+    // this CR-011 AC ("ungrouped tail never dropped") is superseded FOR THE
+    // WORKFLOW LENS by the corrected §S1.4: the ungrouped listing is REMOVED
+    // from `workflow-history` entirely (no tail, no count, no toggle); the
+    // never-hidden guarantee for these 2 unlinked runs is honored by the
+    // Runs timeline instead, asserted there.
+    expect(hist.querySelector('[data-testid="ungrouped-tail"]')).toBeNull();
+    expect(hist.querySelector('[data-testid="ungrouped-count"]')).toBeNull();
+    expect(hist.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(0);
 
     // bound: the ungrouped runs are never absorbed into a CR group.
     expect(hist.textContent ?? "").not.toContain("no wave/cr grouping is dropped");
@@ -612,20 +656,39 @@ describe("§S3 history lens — inferred fallback (no plan)", () => {
       expect(g.querySelector('[data-run-id="evt-ungrouped-1"]')).toBeNull();
       expect(g.querySelector('[data-run-id="evt-ungrouped-2"]')).toBeNull();
     }
+
+    // The never-hidden rule now lives on the Runs timeline: both unlinked
+    // runs are still fully visible there.
+    const runsTab = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((t) => (t.textContent ?? "").trim() === "Runs");
+    expect(runsTab).toBeDefined();
+    runsTab!.click();
+    await settle();
+    const runsPane = document.querySelector<HTMLElement>('[data-testid="workspace-runs"]');
+    expect(runsPane).not.toBeNull();
+    expect(runsPane!.querySelectorAll('[data-run-id="evt-ungrouped-1"]').length).toBe(1);
+    expect(runsPane!.querySelectorAll('[data-run-id="evt-ungrouped-2"]').length).toBe(1);
   });
 });
 
 // ── GROUP ROLLUPS — cycles done/total + participating agents + runtimes ──
 
 describe("§S3 history lens — group rollups", () => {
+  // CR-CRU-020 retarget (§S1.3) — an open plan's CR group no longer renders
+  // in history at all; close the plan (with a merge commit) so the rollup /
+  // agent-runtime assertions (both part of the ALWAYS-visible header per
+  // §S1.2 — they are not `lens-cycle-row` elements, so the collapse-by-
+  // default toggle does not gate them) keep exercising the same rendering.
   test("a CR group row shows cycles done/total, and participating agents with runtimes (runtime_ms surfaces — pin presence, not exact ms)", async () => {
     const key = "lens-rollup-1";
     const now = Date.now();
     const plan: PlanFixture = {
       planId: 631,
       cr: "CR-R-1",
-      status: "open",
+      status: "closed",
       wave: "1",
+      merge: { commit: "rollupCommit1" },
       cycles: [
         { id: 40, label: "c1", status: "done" },
         { id: 41, label: "c2", status: "done" },
