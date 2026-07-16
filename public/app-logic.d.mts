@@ -59,7 +59,8 @@ export interface WorkspaceProjectLike {
 }
 
 export interface WorkspaceTab {
-  name: "Runs" | "Coverage" | "Compile" | "BDD";
+  // CR-CRU-011 §S3 — "Workflow" joins the fixed order after Runs.
+  name: "Runs" | "Workflow" | "Coverage" | "Compile" | "BDD";
   disabled: boolean;
   /** RED-phase declaration only — present when `disabled` explains why
    * (Coverage: "coverage lands with the first green regression"). */
@@ -150,6 +151,94 @@ export declare function emptyStates(state: EmptyStateInput): EmptyStateResult | 
 export declare function pairTransitions<T extends TransitionEventLike>(
   events: T[],
 ): Array<TransitionMarker<T>>;
+
+// CR-CRU-011 C4 — §S0b timeline plan integration + §S3 history lens (pure).
+export interface LensRunLike {
+  id: string;
+  projectKey: string;
+  agentId: string;
+  kind: string;
+  timestamp: number;
+  failed: number;
+  context?: {
+    cycleId?: number;
+    wave?: string | null;
+    cycle?: string;
+  };
+}
+
+export interface LensPlanCycleLike {
+  id: number;
+  label: string;
+  kind?: string;
+  status: string;
+  activatedAt?: number;
+  doneAt?: number;
+}
+
+export interface LensPlanLike {
+  planId: number | string;
+  cr: string;
+  status: "open" | "closed";
+  wave?: string;
+  track?: string;
+  cycles: LensPlanCycleLike[];
+  merge?: { commit: string };
+}
+
+export declare function planCycleIndex<
+  P extends LensPlanLike,
+>(plans: P[]): Map<number, { cycle: P["cycles"][number]; plan: P }>;
+
+export type TimelineRow<
+  E extends LensRunLike,
+  P extends LensPlanLike,
+> =
+  | { kind: "marker"; marker: TransitionMarker<E & TransitionEventLike> }
+  | { kind: "cycle-span-open"; cycle: P["cycles"][number]; plan: P }
+  | { kind: "declared-marker"; cycle: P["cycles"][number]; plan: P }
+  | { kind: "card"; event: E };
+
+export declare function timelineRows<
+  E extends LensRunLike & TransitionEventLike,
+  P extends LensPlanLike,
+>(events: E[], plans: P[]): Array<TimelineRow<E, P>>;
+
+export interface LensCycleNode<E extends LensRunLike> {
+  id?: number;
+  label: string;
+  status: string;
+  runs: E[];
+}
+
+export interface LensCrNode<E extends LensRunLike> {
+  cr: string;
+  source: "declared" | "inferred";
+  status?: "open" | "closed";
+  track?: string;
+  merge?: { commit: string };
+  cycles: Array<LensCycleNode<E>>;
+  rollup: { done: number; total: number };
+  agents: string[];
+}
+
+export interface LensWaveNode<E extends LensRunLike> {
+  wave: string;
+  source: "declared" | "inferred";
+  state: { label: string; chips: string[] } | null;
+  tracks: Array<{ track: string; crs: Array<LensCrNode<E>> }> | null;
+  crs: Array<LensCrNode<E>>;
+}
+
+export interface WorkflowLensResult<E extends LensRunLike> {
+  waves: Array<LensWaveNode<E>>;
+  ungrouped: E[];
+}
+
+export declare function workflowLens<E extends LensRunLike>(input: {
+  plans: LensPlanLike[];
+  events: E[];
+}): WorkflowLensResult<E>;
 
 // CR-CRU-007 §S4.0 (FINAL re-baseline) — purely tier-contextual presentation;
 // the storage-key helper is gone with the removed mode switch.

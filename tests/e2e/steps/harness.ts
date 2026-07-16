@@ -81,7 +81,7 @@ export async function ingestParsed(
   projectKey: string,
   agentId: string,
   summary: RunSummaryInput,
-  opts?: { coverage?: unknown; tier?: string },
+  opts?: { coverage?: unknown; tier?: string; context?: unknown },
 ): Promise<RunIngestResponse> {
   const status = summary.failed > 0 ? "fail" : "pass";
   const res = await request.post("/api/v2/runs/parsed", {
@@ -92,10 +92,70 @@ export async function ingestParsed(
       tree: [{ name: "s", status, children: [{ name: "t1", status, duration_ms: 5 }] }],
       ...(opts?.coverage !== undefined ? { coverage: opts.coverage } : {}),
       ...(opts?.tier !== undefined ? { tier: opts.tier } : {}),
+      ...(opts?.context !== undefined ? { context: opts.context } : {}),
     },
   });
   expect(res.ok()).toBe(true);
   return (await res.json()) as RunIngestResponse;
+}
+
+// CR-CRU-011 §S0/§S0b — cycle-plan API helpers (RED phase, C5 BDD layer).
+// Mirrors the ingest helpers above: raw request calls, `expect(res.ok())`
+// gate, JSON body returned to the caller's step for world-state stashing.
+export interface PlanCycleFixture {
+  id: number;
+  label: string;
+  kind: string;
+  status: string;
+}
+
+export interface PlanFileResponse {
+  planId: number;
+  cr: string;
+  status: string;
+  cycles: PlanCycleFixture[];
+}
+
+/** POST …/plans — file a plan with one cycle per label, `kind` defaulted. */
+export async function filePlan(
+  request: APIRequestContext,
+  projectKey: string,
+  cr: string,
+  cycleLabels: string[],
+): Promise<PlanFileResponse> {
+  const res = await request.post(`/api/v2/projects/${projectKey}/plans`, {
+    data: { cr, cycles: cycleLabels.map((label) => ({ label })) },
+  });
+  expect(res.ok()).toBe(true);
+  return (await res.json()) as PlanFileResponse;
+}
+
+/** PATCH …/plans/<planId>/cycles/<cycleId> — a §S0 status transition. */
+export async function transitionCycle(
+  request: APIRequestContext,
+  projectKey: string,
+  planId: number,
+  cycleId: number,
+  status: string,
+): Promise<void> {
+  const res = await request.patch(
+    `/api/v2/projects/${projectKey}/plans/${planId}/cycles/${cycleId}`,
+    { data: { status } },
+  );
+  expect(res.ok()).toBe(true);
+}
+
+/** PATCH …/plans/<planId> {status:"closed", merge} — the CR close. */
+export async function closePlan(
+  request: APIRequestContext,
+  projectKey: string,
+  planId: number,
+  mergeCommit: string,
+): Promise<void> {
+  const res = await request.patch(`/api/v2/projects/${projectKey}/plans/${planId}`, {
+    data: { status: "closed", merge: { commit: mergeCommit } },
+  });
+  expect(res.ok()).toBe(true);
 }
 
 export interface CompileIngestResponse {

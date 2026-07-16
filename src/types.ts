@@ -93,6 +93,9 @@ export interface RunContext {
   // CR-CRU-007 §S2 (round 10, additive) — the orchestrator todo's description
   // labelling the RED→GREEN cycle this run belongs to.
   cycle?: string;
+  // CR-CRU-011 §S0 (additive) — declared-plan linkage: the numeric id of the
+  // plan cycle this run belongs to. Stored verbatim; unknown ids tolerated.
+  cycleId?: number;
 }
 
 export type Tier = "unit" | "module" | "integration" | "e2e" | "regression" | "bdd";
@@ -101,15 +104,67 @@ export interface RunEvent {
   id: string;
   projectKey: string;
   agentId: string;
-  kind: "test" | "compile";
+  kind: "test" | "compile" | "lifecycle";
   tier: Tier;
   stack?: string;
   codec?: string;
   context?: RunContext;
   timestamp: number;
+  // CR-CRU-011 §S1 (additive) — lifecycle events only: which transition this
+  // event records, and (on "unregistered") the firstSeen snapshot taken
+  // BEFORE the agents-row deletion so the final runtime survives it.
+  action?: "registered" | "unregistered";
+  firstSeen?: number;
   name?: string;
   summary?: RunSummary;
   tree?: SuiteNode[];
   coverage?: Coverage;
   compile?: unknown;
+}
+
+// ── CR-CRU-011 §S0 — cycle plans (the orchestrator's declared todo list) ─────
+
+export type CycleKind = "red-green" | "verify" | "fix";
+
+export type CycleStatus = "pending" | "active" | "done" | "skipped" | "failed";
+
+export interface PlanCycle {
+  /** Unique numeric id per PROJECT (not per plan). */
+  id: number;
+  label: string;
+  kind: CycleKind;
+  status: CycleStatus;
+  // CR-CRU-011 §S0b (additive, mirrors Plan.closedAt) — transition
+  // timestamps: stamped on pending→active and on reaching a terminal
+  // state; the timeline's declared marker derives its active→done
+  // duration from these. Absent (never null) until the transition lands.
+  activatedAt?: number;
+  doneAt?: number;
+}
+
+/**
+ * §S0 — derived read-only boundary on closed plans: merge commit + the
+ * earliest/latest linked-run commits and branch from `context.git`.
+ * Absent fields are OMITTED, never null.
+ */
+export interface CommitBoundary {
+  mergeCommit: string;
+  branch?: string;
+  firstRunCommit?: string;
+  lastRunCommit?: string;
+  closedAt: number;
+}
+
+export interface Plan {
+  planId: number;
+  projectKey: string;
+  /** Stored VERBATIM — the stable join key (round 24, binding). */
+  cr: string;
+  wave?: string;
+  track?: string;
+  status: "open" | "closed";
+  cycles: PlanCycle[];
+  merge?: { commit: string };
+  closedAt?: number;
+  commitBoundary?: CommitBoundary;
 }

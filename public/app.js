@@ -18,6 +18,8 @@
       projects: [],
       agents: [],
       events: [],
+      plans: [], // CR-CRU-011 §S3 — the workspace project's cycle plans
+
       health: null,
       selectedProject: null, // home filter pulldown (null = all projects)
       selectedAgent: null, // agent sub-row click filter (null = all)
@@ -110,6 +112,24 @@
       } catch {
         // Reachability is owned by the watchdog below; keep stale data visible.
       }
+      await refetchPlans();
+    }
+
+    // CR-CRU-011 §S3 — the Workflow tab's plan slice (the C1 project-scoped
+    // route). Fetched on every refetch tick while a workspace is open, so the
+    // active todo view refreshes over the SAME SSE/poll cadence as the feed.
+    // Guarded separately from the core slice: a plans failure never poisons
+    // projects/agents/events, and reachability stays the watchdog's concern.
+    async function refetchPlans() {
+      if (state.route.page !== "workspace") return;
+      try {
+        const body = await getJson(
+          `/api/v2/projects/${encodeURIComponent(state.route.projectKey)}/plans`,
+        );
+        vanX.replace(state.plans, () => body.plans ?? []);
+      } catch {
+        // Keep the last-known plans visible while the route is unreachable.
+      }
     }
 
     // SSE client with watchdog (§S5): data frames (hello/changes) prove
@@ -199,7 +219,11 @@
     }
 
     function visibleEvents() {
-      return L.filterEvents(state.events, activeFilters());
+      // CR-CRU-011 §S1/§S2 (DRIFT-4) — lifecycle events are data for runtime
+      // computation and the workflow lens, never Runs-timeline cards.
+      return L.filterEvents(state.events, activeFilters()).filter(
+        (e) => e.kind !== "lifecycle",
+      );
     }
 
     function visibleAgents() {
@@ -372,6 +396,14 @@
           agent.identity?.displayName ?? agent.agentId,
         ),
         span({ class: "app-agent-msg" }, agent.message || "—"),
+        // CR-CRU-011 §S2 — server-computed runtime: live rows tick with each
+        // refetched runtime_ms; tombstoned rows render the sealed value.
+        typeof agent.runtime_ms === "number"
+          ? span(
+              { "data-testid": "agent-runtime", class: "app-card-meta" },
+              fmtDuration(agent.runtime_ms),
+            )
+          : null,
         // Small last-seen / died-ago line (card-meta family).
         glyph.tombstone
           ? span({ class: "app-card-meta" }, `died ${glyph.diedAgo}`)
@@ -569,16 +601,45 @@
         markerLabel(m),
       );
 
+    // CR-CRU-011 §S0b — declared plan boundaries on the Runs timeline. The
+    // ACTIVE cycle's linked runs collect under an open-span header; a `done`
+    // cycle renders a declared marker row (same structural weight as the
+    // heuristic marker) with the active→done span from the §S0b timestamps.
+    const KIND_GLYPHS = { "red-green": "⟲", verify: "☑", fix: "✚" };
+
+    const CycleSpanOpenRow = (cycle, plan) =>
+      div(
+        { "data-testid": "cycle-span-open", class: "app-cycle-span-open" },
+        `${KIND_GLYPHS[cycle.kind] ?? KIND_GLYPHS["red-green"]} Cycle · ${cycle.label} · ${plan.cr} · active`,
+      );
+
+    const DeclaredMarkerRow = (cycle, plan) => {
+      const parts = [
+        `${KIND_GLYPHS[cycle.kind] ?? KIND_GLYPHS["red-green"]} Cycle done`,
+        cycle.label,
+        plan.cr,
+      ];
+      if (cycle.activatedAt !== undefined && cycle.doneAt !== undefined) {
+        parts.push(`closed in ${fmtDuration(cycle.doneAt - cycle.activatedAt)}`);
+      }
+      return div(
+        { "data-testid": "declared-marker", class: "app-transition-marker" },
+        parts.join(" · "),
+      );
+    };
+
     // Feed rows: each Cycle's marker renders directly above its pair — i.e.
     // immediately before the GREEN run's card in the (newest-first) feed.
+    // §S0b — the row plan is pure (app-logic timelineRows): cycleId-linked
+    // runs suppress the streak heuristic and carry declared boundaries;
+    // unlinked runs / planless projects keep the heuristic byte-identical.
     function runFeed(events) {
-      const markers = L.pairTransitions(events);
-      const byGreenId = new Map(markers.map((m) => [m.greenEvent.id, m]));
       const rows = [];
-      for (const e of events) {
-        const marker = byGreenId.get(e.id);
-        if (marker !== undefined) rows.push(TransitionMarkerRow(marker));
-        rows.push(EventCard(e));
+      for (const row of L.timelineRows(events, state.plans)) {
+        if (row.kind === "marker") rows.push(TransitionMarkerRow(row.marker));
+        else if (row.kind === "cycle-span-open") rows.push(CycleSpanOpenRow(row.cycle, row.plan));
+        else if (row.kind === "declared-marker") rows.push(DeclaredMarkerRow(row.cycle, row.plan));
+        else rows.push(EventCard(row.event));
       }
       return rows;
     }
@@ -1064,6 +1125,257 @@
     const BddPlaceholder = () =>
       div({ class: greyed("app-center") }, BddFeed());
 
+    // ── CR-CRU-011 §S3 — Workflow tab: ACTIVE view (per-CR todo over the
+    // open plan) + gate-pane placeholder. The HISTORY lens lands in C4.
+    // Cycle-status glyphs: active ▶ / done ✓ / failed ✗ are the CR's literal
+    // glyphs; pending ○ / skipped ⊘ are the distinct text-only markers.
+    const CYCLE_GLYPHS = {
+      pending: "○",
+      active: "▶",
+      done: "✓",
+      skipped: "⊘",
+      failed: "✗",
+    };
+
+    // Runs linked to a cycle via the §S0 `context.cycleId` passthrough.
+    const linkedRunsFor = (cycleId) =>
+      state.events.filter(
+        (e) =>
+          e.projectKey === state.route.projectKey &&
+          e.kind !== "lifecycle" &&
+          e.context?.cycleId === cycleId,
+      );
+
+    // CR-CRU-016 binding — a linked run opens as a pane state of the
+    // WORKFLOW pane through the SAME openDrillin path as cards/markers
+    // (one-rule: no tab switch, tabs-hide, `← workflow` back chip).
+    const LinkedRunRow = (e) =>
+      div(
+        {
+          "data-testid": "linked-run-row",
+          "data-run-id": e.id,
+          class: "app-linked-run-row",
+          onclick: () => openDrillin(e.id),
+        },
+        span({ class: "app-agent-id" }, e.agentId),
+        e.failed > 0
+          ? span({ class: "app-ratio-fail" }, `${e.failed} ✗ of ${e.total}`)
+          : span({ class: "app-ratio-pass" }, `${e.passed}/${e.total}`),
+        span({ class: "app-card-meta" }, rel(e.timestamp)),
+      );
+
+    // One todo row per cycle; ONLY the active cycle expands to list its
+    // context.cycleId-linked runs (live over the refetch cadence).
+    const CycleRow = (cycle) =>
+      div(
+        {
+          "data-testid": "cycle-row",
+          "data-status": cycle.status,
+          class: `app-cycle-row cycle-status-${cycle.status}`,
+        },
+        div(
+          { class: "app-cycle-line" },
+          span(
+            { "data-testid": "cycle-glyph", class: "app-cycle-glyph" },
+            CYCLE_GLYPHS[cycle.status] ?? CYCLE_GLYPHS.pending,
+          ),
+          span({ class: "app-cycle-label" }, cycle.label),
+        ),
+        cycle.status === "active"
+          ? div(
+              { class: "app-cycle-runs" },
+              linkedRunsFor(cycle.id).map(LinkedRunRow),
+            )
+          : null,
+      );
+
+    const WorkflowActive = () => {
+      const openPlans = state.plans.filter((p) => p.status === "open");
+      return div(
+        { "data-testid": "workflow-active", class: "app-workflow-active" },
+        openPlans.length === 0
+          ? div(
+              { class: "app-empty" },
+              "no open plan — file one via POST /api/v2/projects/<key>/plans",
+            )
+          : openPlans.map((plan) =>
+              div(
+                { class: "app-workflow-plan" },
+                div({ class: "app-pane-section-title" }, plan.cr),
+                (plan.cycles ?? []).map(CycleRow),
+              ),
+            ),
+      );
+    };
+
+    // Gate pane placeholder — populated by CR-CRU-013's no-mistakes pane.
+    const GatePane = () =>
+      div(
+        { "data-testid": "gate-pane", class: "app-gate-pane" },
+        div({ class: "app-pane-section-title" }, "Gate"),
+        div({ class: "app-empty" }, "gate reporting lands in CR-013"),
+      );
+
+    // ── §S3 history lens — Wave → [Track] → CR → Cycle (C4) ─────────────
+    // Grouping is pure (app-logic workflowLens); this is the render layer.
+    // Rows are text-color only; chips/badges are the boxed elements.
+
+    // Participating-agent runtime (§S2 surface): the server-computed
+    // runtime_ms off the agents slice, sealed or ticking as the row is.
+    const CrAgentRuntime = (agentId) => {
+      const agent = state.agents.find((a) => a.agentId === agentId);
+      return div(
+        { "data-testid": "cr-agent-runtime", class: "app-card-meta" },
+        span({ class: "app-agent-id" }, agentId),
+        ` · ${fmtDuration(agent?.runtime_ms ?? 0)}`,
+      );
+    };
+
+    const LensCycleRow = (cycle) =>
+      div(
+        {
+          "data-testid": "lens-cycle-row",
+          "data-status": cycle.status,
+          class: `app-cycle-row cycle-status-${cycle.status}`,
+        },
+        div(
+          { class: "app-cycle-line" },
+          span(
+            { class: "app-cycle-glyph" },
+            CYCLE_GLYPHS[cycle.status] ?? CYCLE_GLYPHS.pending,
+          ),
+          span({ class: "app-cycle-label" }, cycle.label),
+        ),
+        // A done cycle is a CLOSED span wrapping its linked runs; the active
+        // cycle keeps collecting its runs live (open span, §S3).
+        cycle.status === "done"
+          ? div(
+              { "data-testid": "cycle-span-closed", class: "app-cycle-span-closed" },
+              cycle.runs.map(LinkedRunRow),
+            )
+          : cycle.status === "active" && cycle.runs.length > 0
+            ? div({ class: "app-cycle-runs" }, cycle.runs.map(LinkedRunRow))
+            : null,
+      );
+
+    const LensCrGroup = (node) =>
+      div(
+        {
+          "data-testid": "cr-group",
+          "data-cr": node.cr,
+          "data-status": node.status ?? "inferred",
+          class: "app-cr-group",
+        },
+        div(
+          { class: "app-cr-line" },
+          span({ class: "app-pane-section-title" }, node.cr),
+          node.track !== undefined
+            ? span({ "data-testid": "track-badge", class: "app-pill" }, node.track)
+            : null,
+          span(
+            { "data-testid": "cr-rollup", class: "app-pill" },
+            `${node.rollup.done}/${node.rollup.total}`,
+          ),
+          node.merge !== undefined
+            ? span(
+                { "data-testid": "cr-merge-commit", class: "app-pill" },
+                `merged @ ${node.merge.commit}`,
+              )
+            : null,
+        ),
+        node.cycles.map(LensCycleRow),
+        node.agents.map(CrAgentRuntime),
+      );
+
+    const WaveHeader = (wave) => {
+      const chips = wave.state?.chips ?? [];
+      return div(
+        { "data-testid": "wave-header", class: "app-wave-header" },
+        span({ class: "app-pane-section-title" }, `Wave ${wave.wave}`),
+        chips.length > 0
+          ? chips.flatMap((chip, i) => [
+              i > 0 ? " · " : " ",
+              span({ "data-testid": "lane-chip", class: "app-pill" }, chip),
+            ])
+          : wave.state !== null
+            ? span({ class: "app-card-meta" }, ` ${wave.state.label}`)
+            : null,
+      );
+    };
+
+    const WaveGroup = (wave) =>
+      div(
+        {
+          "data-testid": "wave-group",
+          "data-wave": wave.wave,
+          "data-source": wave.source,
+          class: "app-wave-group",
+        },
+        WaveHeader(wave),
+        wave.tracks !== null
+          ? wave.tracks.map((t) =>
+              div(
+                { "data-testid": "track-group", "data-track": t.track, class: "app-track-group" },
+                t.crs.map(LensCrGroup),
+              ),
+            )
+          : null,
+        wave.crs.map(LensCrGroup),
+      );
+
+    const UngroupedTail = (runs) =>
+      div(
+        { "data-testid": "ungrouped-tail", class: "app-ungrouped-tail" },
+        div(
+          { class: "app-cr-line" },
+          span({ class: "app-pane-section-title" }, "ungrouped"),
+          span(
+            { "data-testid": "ungrouped-count", class: "app-pill" },
+            `${runs.length} runs`,
+          ),
+        ),
+        runs.map(LinkedRunRow),
+      );
+
+    const WorkflowHistory = () => {
+      const lens = L.workflowLens({
+        plans: state.plans,
+        events: state.events.filter((e) => e.projectKey === state.route.projectKey),
+      });
+      return div(
+        { "data-testid": "workflow-history", class: "app-workflow-history" },
+        div({ class: "app-pane-section-title" }, "History"),
+        lens.waves.length === 0 && lens.ungrouped.length === 0
+          ? div({ class: "app-empty" }, "no workflow history yet")
+          : [
+              lens.waves.map(WaveGroup),
+              lens.ungrouped.length > 0 ? UngroupedTail(lens.ungrouped) : null,
+            ],
+      );
+    };
+
+    const WorkflowFeed = () =>
+      div(
+        { class: "app-pane-content" },
+        div(
+          { class: "app-timeline-head" },
+          div({ class: "app-rail-title" }, () => {
+            const p = currentProject();
+            return `Workflow — ${p ? p.name || p.key : state.route.projectKey}`;
+          }),
+        ),
+        div(
+          { class: "app-workflow-cols" },
+          () => WorkflowActive(),
+          GatePane(),
+        ),
+        // §S3 history lens — the grouped Wave → [Track] → CR → Cycle tree.
+        () => WorkflowHistory(),
+      );
+
+    const WorkflowPanel = () =>
+      div({ class: greyed("app-center") }, WorkflowFeed());
+
     // CR-CRU-016 §S1 (C5) — the workspace detail: run-overlay wraps the
     // detail header AND the detail's own scroller, so the header (back chip ·
     // RUN DETAIL · density) sits ABOVE the scrolling content and never moves
@@ -1091,13 +1403,15 @@
         return WorkspaceRunDetail(state.route.overlay);
       }
       const pane =
-        state.workspaceTab === "Coverage"
-          ? CoveragePanel()
-          : state.workspaceTab === "Compile"
-            ? CompilePanel()
-            : state.workspaceTab === "BDD"
-              ? BddPlaceholder()
-              : WorkspaceRuns();
+        state.workspaceTab === "Workflow"
+          ? WorkflowPanel()
+          : state.workspaceTab === "Coverage"
+            ? CoveragePanel()
+            : state.workspaceTab === "Compile"
+              ? CompilePanel()
+              : state.workspaceTab === "BDD"
+                ? BddPlaceholder()
+                : WorkspaceRuns();
       if (wsShowingDetail) {
         wsShowingDetail = false;
         queueMicrotask(() => {

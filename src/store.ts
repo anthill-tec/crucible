@@ -6,8 +6,13 @@ import { DEFAULT_LIVENESS } from "./types.ts";
 import type {
   Agent,
   AgentIdentity,
+  CommitBoundary,
   Coverage,
+  CycleKind,
+  CycleStatus,
   LivenessConfig,
+  Plan,
+  PlanCycle,
   Project,
   RunContext,
   RunEvent,
@@ -66,6 +71,9 @@ interface EventRow {
   coverage: string | null;
   compile: string | null;
   context: string | null;
+  // CR-CRU-011 §S1 — lifecycle events only (NULL on test/compile rows).
+  action: string | null;
+  first_seen: number | null;
 }
 
 interface RollupRow {
@@ -87,6 +95,40 @@ export interface Rollup {
   failed: number;
   duration_ms: number;
   lastCoverage?: Coverage;
+}
+
+interface PlanRow {
+  plan_id: number;
+  project_key: string;
+  cr: string;
+  wave: string | null;
+  track: string | null;
+  status: string;
+  merge_commit: string | null;
+  closed_at: number | null;
+}
+
+interface PlanCycleRow {
+  project_key: string;
+  cycle_id: number;
+  plan_id: number;
+  label: string;
+  kind: string;
+  status: string;
+  // CR-CRU-011 §S0b — transition timestamps (nullable until stamped).
+  activated_at: number | null;
+  done_at: number | null;
+}
+
+/**
+ * CR-CRU-011 §S0 — plan mutation failure. `notFound` distinguishes the 404
+ * path (missing plan/cycle) from plain 400 validation; `openCycleIds` carries
+ * the non-terminal cycles blocking a close.
+ */
+export interface PlanOpError {
+  error: string;
+  notFound?: boolean;
+  openCycleIds?: number[];
 }
 
 /** CR-CRU-002 §S1 — recordTestEvent's run param adopts the canonical RunSchema. */
@@ -186,7 +228,9 @@ export class Store {
         tree TEXT,
         coverage TEXT,
         compile TEXT,
-        context TEXT
+        context TEXT,
+        action TEXT,
+        first_seen INTEGER
       );
 
       CREATE INDEX IF NOT EXISTS idx_events_project_timestamp
@@ -202,7 +246,61 @@ export class Store {
         last_coverage TEXT,
         PRIMARY KEY (project_key, bucket)
       );
+
+      CREATE TABLE IF NOT EXISTS plans (
+        plan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_key TEXT NOT NULL,
+        cr TEXT NOT NULL,
+        wave TEXT,
+        track TEXT,
+        status TEXT NOT NULL,
+        merge_commit TEXT,
+        closed_at INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_plans_project_cr
+        ON plans (project_key, cr);
+
+      CREATE TABLE IF NOT EXISTS plan_cycles (
+        project_key TEXT NOT NULL,
+        cycle_id INTEGER NOT NULL,
+        plan_id INTEGER NOT NULL,
+        label TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        activated_at INTEGER,
+        done_at INTEGER,
+        PRIMARY KEY (project_key, cycle_id)
+      );
     `);
+    // CR-CRU-011 §S1 — additive columns for lifecycle events; pre-011 db
+    // files lack them (CREATE TABLE IF NOT EXISTS never retrofits columns).
+    const eventCols = new Set(
+      this.db
+        .query<{ name: string }, []>(`PRAGMA table_info(events)`)
+        .all()
+        .map((col) => col.name),
+    );
+    if (!eventCols.has("action")) {
+      this.db.exec(`ALTER TABLE events ADD COLUMN action TEXT`);
+    }
+    if (!eventCols.has("first_seen")) {
+      this.db.exec(`ALTER TABLE events ADD COLUMN first_seen INTEGER`);
+    }
+    // CR-CRU-011 §S0b — additive cycle-timestamp columns; pre-C4 db files
+    // lack them (same PRAGMA-checked retrofit pattern as events above).
+    const cycleCols = new Set(
+      this.db
+        .query<{ name: string }, []>(`PRAGMA table_info(plan_cycles)`)
+        .all()
+        .map((col) => col.name),
+    );
+    if (!cycleCols.has("activated_at")) {
+      this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN activated_at INTEGER`);
+    }
+    if (!cycleCols.has("done_at")) {
+      this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN done_at INTEGER`);
+    }
   }
 
   // ── Projects ──────────────────────────────────────────────────────────
@@ -333,21 +431,32 @@ export class Store {
   }
 
   /**
-   * Single-row existence check with the same lazy-prune semantics as
-   * listAgents: a row past its prune window is deleted and reported absent.
+   * Single-row lookup with the same lazy-prune semantics as listAgents:
+   * a row past its prune window is deleted and reported absent (null).
+   * CR-CRU-011 §S1 — lets the unregister handler snapshot firstSeen
+   * BEFORE removeAgent hard-deletes the row.
    */
-  hasAgent(projectKey: string, agentId: string, now: number = Date.now()): boolean {
+  getAgent(projectKey: string, agentId: string, now: number = Date.now()): Agent | null {
     const row = this.db
       .query<AgentRow, [string, string]>(
         `SELECT * FROM agents WHERE project_key = ? AND agent_id = ?`,
       )
       .get(projectKey, agentId);
-    if (row === null) return false;
-    if (this.livenessOf(Store.toAgent(row), now) === "pruned") {
+    if (row === null) return null;
+    const agent = Store.toAgent(row);
+    if (this.livenessOf(agent, now) === "pruned") {
       this.removeAgent(projectKey, agentId);
-      return false;
+      return null;
     }
-    return true;
+    return agent;
+  }
+
+  /**
+   * Single-row existence check with the same lazy-prune semantics as
+   * listAgents: a row past its prune window is deleted and reported absent.
+   */
+  hasAgent(projectKey: string, agentId: string, now: number = Date.now()): boolean {
+    return this.getAgent(projectKey, agentId, now) !== null;
   }
 
   listAgents(projectKey?: string, now: number = Date.now()): LiveAgent[] {
@@ -430,6 +539,46 @@ export class Store {
     return event;
   }
 
+  /**
+   * CR-CRU-011 §S1 — append a lifecycle event (real registration or
+   * unregistration; never heartbeats-on-existing). Flows through retention
+   * like any event; foldIntoRollup skips it (contributes zero runs).
+   */
+  recordLifecycleEvent(
+    projectKey: string,
+    agentId: string,
+    action: "registered" | "unregistered",
+    firstSeen?: number,
+  ): RunEvent {
+    const event: RunEvent = {
+      id: this.nextEventId(),
+      projectKey,
+      agentId,
+      kind: "lifecycle",
+      tier: "unit",
+      timestamp: Date.now(),
+      action,
+      ...(firstSeen !== undefined ? { firstSeen } : {}),
+    };
+    this.insertEvent(event);
+    return event;
+  }
+
+  /**
+   * CR-CRU-011 §S2 — the newest run (test/compile) timestamp for an agent;
+   * lifecycle events excluded. Seals a tombstoned agent's runtime.
+   */
+  lastRunTimestamp(projectKey: string, agentId: string): number | null {
+    const row = this.db
+      .query<{ timestamp: number }, [string, string]>(
+        `SELECT timestamp FROM events
+         WHERE project_key = ? AND agent_id = ? AND kind != 'lifecycle'
+         ORDER BY timestamp DESC, rowid DESC LIMIT 1`,
+      )
+      .get(projectKey, agentId);
+    return row?.timestamp ?? null;
+  }
+
   listEvents(projectKey?: string, limit = 50): RunEvent[] {
     const rows =
       projectKey === undefined
@@ -499,8 +648,8 @@ export class Store {
       .query(
         `INSERT INTO events (id, project_key, agent_id, kind, tier, stack, codec,
            timestamp, name, total, passed, failed, pending, duration_ms,
-           tree, coverage, compile, context)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           tree, coverage, compile, context, action, first_seen)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         event.id,
@@ -521,6 +670,8 @@ export class Store {
         event.coverage !== undefined ? JSON.stringify(event.coverage) : null,
         event.compile !== undefined ? JSON.stringify(event.compile) : null,
         event.context !== undefined ? JSON.stringify(event.context) : null,
+        event.action ?? null,
+        event.firstSeen ?? null,
       );
     this.enforceRetention(event.projectKey);
     this.emit("events", event.projectKey);
@@ -531,9 +682,11 @@ export class Store {
       id: row.id,
       projectKey: row.project_key,
       agentId: row.agent_id,
-      kind: row.kind === "compile" ? "compile" : "test",
+      kind: row.kind === "compile" ? "compile" : row.kind === "lifecycle" ? "lifecycle" : "test",
       tier: row.tier as Tier,
       timestamp: row.timestamp,
+      ...(row.action !== null ? { action: row.action as "registered" | "unregistered" } : {}),
+      ...(row.first_seen !== null ? { firstSeen: row.first_seen } : {}),
       ...(row.stack !== null ? { stack: row.stack } : {}),
       ...(row.codec !== null ? { codec: row.codec } : {}),
       ...(row.name !== null ? { name: row.name } : {}),
@@ -597,7 +750,11 @@ export class Store {
     // both counted in rollups and still present for a later re-fold.
     this.db.transaction(() => {
       for (const row of expired) {
-        this.foldIntoRollup(row);
+        // CR-CRU-011 §S1 — lifecycle events flow through retention like any
+        // event but contribute NOTHING to the test-run rollup folds.
+        if (row.kind !== "lifecycle") {
+          this.foldIntoRollup(row);
+        }
         this.db.query(`DELETE FROM events WHERE id = ?`).run(row.id);
       }
     })();
@@ -630,6 +787,294 @@ export class Store {
   }
 
   // ── Change notifications (§S2 onChange) ───────────────────
+
+  // ── CR-CRU-011 §S0 — cycle plans (NOT events: no event rows, no rollups) ──
+  //
+  // Plan mutations notify through the SAME onChange listener path SSE
+  // consumes, under the existing "events" kind: §S0b renders plan state
+  // (markers/spans) inline on the events timeline, so the events surface IS
+  // the affected consumer surface. (A dedicated "plans" ChangeKind would
+  // widen the union pinned by tests/events.test.ts — deferred to a
+  // sanctioned re-target if a later cycle needs kind-discriminated pushes.)
+
+  /** Terminal cycle statuses — a plan closes only when every cycle is here. */
+  private static readonly CYCLE_TERMINAL: ReadonlySet<string> = new Set([
+    "done",
+    "skipped",
+    "failed",
+  ]);
+
+  /**
+   * §S0 legal transition table: pending→active, active→done|skipped|failed,
+   * plus the ONE shortcut pending→skipped (a never-started cycle can be
+   * cancelled outright). Everything else rejects naming both states.
+   */
+  private static readonly CYCLE_TRANSITIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+    pending: new Set(["active", "skipped"]),
+    active: new Set(["done", "skipped", "failed"]),
+  };
+
+  /** §S0 — cycle ids are unique per PROJECT, not per plan. */
+  private nextCycleId(projectKey: string): number {
+    const row = this.db
+      .query<{ n: number }, [string]>(
+        `SELECT COALESCE(MAX(cycle_id), 0) AS n FROM plan_cycles WHERE project_key = ?`,
+      )
+      .get(projectKey)!;
+    return row.n + 1;
+  }
+
+  private getPlanRow(projectKey: string, planId: number): PlanRow | null {
+    return this.db
+      .query<PlanRow, [string, number]>(
+        `SELECT * FROM plans WHERE project_key = ? AND plan_id = ?`,
+      )
+      .get(projectKey, planId);
+  }
+
+  private listCycleRows(projectKey: string, planId: number): PlanCycleRow[] {
+    return this.db
+      .query<PlanCycleRow, [string, number]>(
+        `SELECT * FROM plan_cycles WHERE project_key = ? AND plan_id = ?
+         ORDER BY cycle_id ASC`,
+      )
+      .all(projectKey, planId);
+  }
+
+  private insertCycle(
+    projectKey: string,
+    planId: number,
+    label: string,
+    kind: CycleKind,
+  ): PlanCycle {
+    const id = this.nextCycleId(projectKey);
+    this.db
+      .query(
+        `INSERT INTO plan_cycles (project_key, cycle_id, plan_id, label, kind, status)
+         VALUES (?, ?, ?, ?, ?, 'pending')`,
+      )
+      .run(projectKey, id, planId, label, kind);
+    return { id, label, kind, status: "pending" };
+  }
+
+  /** §S0 — file the orchestrator's cycle plan. ONE open plan per cr. */
+  filePlan(
+    projectKey: string,
+    input: {
+      cr: string;
+      wave?: string;
+      track?: string;
+      cycles: Array<{ label: string; kind: CycleKind }>;
+    },
+  ): Plan | PlanOpError {
+    const open = this.db
+      .query<PlanRow, [string, string]>(
+        `SELECT * FROM plans WHERE project_key = ? AND cr = ? AND status = 'open'`,
+      )
+      .get(projectKey, input.cr);
+    if (open !== null) {
+      return { error: `an open plan already exists for cr: ${input.cr}` };
+    }
+    const inserted = this.db
+      .query(
+        `INSERT INTO plans (project_key, cr, wave, track, status)
+         VALUES (?, ?, ?, ?, 'open')`,
+      )
+      .run(projectKey, input.cr, input.wave ?? null, input.track ?? null);
+    const planId = Number(inserted.lastInsertRowid);
+    const cycles = input.cycles.map((cycle) =>
+      this.insertCycle(projectKey, planId, cycle.label, cycle.kind),
+    );
+    this.emit("events", projectKey);
+    return {
+      planId,
+      projectKey,
+      cr: input.cr,
+      ...(input.wave !== undefined ? { wave: input.wave } : {}),
+      ...(input.track !== undefined ? { track: input.track } : {}),
+      status: "open",
+      cycles,
+    };
+  }
+
+  /** §S0 — append a cycle to an OPEN plan; returns the new project-unique id. */
+  appendCycle(
+    projectKey: string,
+    planId: number,
+    cycle: { label: string; kind: CycleKind },
+  ): PlanCycle | PlanOpError {
+    const plan = this.getPlanRow(projectKey, planId);
+    if (plan === null) {
+      return { error: `plan not found: ${planId}`, notFound: true };
+    }
+    if (plan.status !== "open") {
+      return { error: `plan ${planId} is closed — cannot append cycles` };
+    }
+    const appended = this.insertCycle(projectKey, planId, cycle.label, cycle.kind);
+    this.emit("events", projectKey);
+    return appended;
+  }
+
+  /** §S0 — transition a cycle per the legal table; illegal moves name both states. */
+  transitionCycle(
+    projectKey: string,
+    planId: number,
+    cycleId: number,
+    to: CycleStatus,
+  ): PlanCycle | PlanOpError {
+    const row = this.db
+      .query<PlanCycleRow, [string, number, number]>(
+        `SELECT * FROM plan_cycles WHERE project_key = ? AND plan_id = ? AND cycle_id = ?`,
+      )
+      .get(projectKey, planId, cycleId);
+    if (row === null) {
+      return { error: `cycle not found in plan ${planId}: ${cycleId}`, notFound: true };
+    }
+    if (!(Store.CYCLE_TRANSITIONS[row.status]?.has(to) ?? false)) {
+      return { error: `illegal cycle transition: ${row.status} -> ${to}` };
+    }
+    // §S0b — stamp the transition timestamps (mirrors Plan.closedAt):
+    // pending→active stamps activated_at; reaching a terminal state stamps
+    // done_at. The timeline's declared marker derives active→done from them.
+    const now = Date.now();
+    const activatedAt = to === "active" ? now : row.activated_at;
+    const doneAt = Store.CYCLE_TERMINAL.has(to) ? now : row.done_at;
+    this.db
+      .query(
+        `UPDATE plan_cycles SET status = ?, activated_at = ?, done_at = ?
+         WHERE project_key = ? AND cycle_id = ?`,
+      )
+      .run(to, activatedAt, doneAt, projectKey, cycleId);
+    this.emit("events", projectKey);
+    return {
+      id: row.cycle_id,
+      label: row.label,
+      kind: row.kind as CycleKind,
+      status: to,
+      ...(activatedAt !== null ? { activatedAt } : {}),
+      ...(doneAt !== null ? { doneAt } : {}),
+    };
+  }
+
+  /** §S0 — the CR close (feature merge). Rejects while any cycle is non-terminal. */
+  closePlan(
+    projectKey: string,
+    planId: number,
+    merge?: { commit: string },
+  ): Plan | PlanOpError {
+    const row = this.getPlanRow(projectKey, planId);
+    if (row === null) {
+      return { error: `plan not found: ${planId}`, notFound: true };
+    }
+    if (row.status === "closed") {
+      return { error: `plan ${planId} is already closed` };
+    }
+    const openCycleIds = this.listCycleRows(projectKey, planId)
+      .filter((cycle) => !Store.CYCLE_TERMINAL.has(cycle.status))
+      .map((cycle) => cycle.cycle_id);
+    if (openCycleIds.length > 0) {
+      return {
+        error: `cannot close plan ${planId}: non-terminal cycles: ${openCycleIds.join(", ")}`,
+        openCycleIds,
+      };
+    }
+    const closedAt = Date.now();
+    this.db
+      .query(`UPDATE plans SET status = 'closed', merge_commit = ?, closed_at = ? WHERE plan_id = ?`)
+      .run(merge?.commit ?? null, closedAt, planId);
+    this.emit("events", projectKey);
+    return this.toPlan({
+      ...row,
+      status: "closed",
+      merge_commit: merge?.commit ?? null,
+      closed_at: closedAt,
+    });
+  }
+
+  /** §S0 — list a project's plans, optionally filtered by cr / track. */
+  listPlans(projectKey: string, filter?: { cr?: string; track?: string }): Plan[] {
+    const rows = this.db
+      .query<PlanRow, [string]>(
+        `SELECT * FROM plans WHERE project_key = ? ORDER BY plan_id ASC`,
+      )
+      .all(projectKey);
+    return rows
+      .filter(
+        (row) =>
+          (filter?.cr === undefined || row.cr === filter.cr) &&
+          (filter?.track === undefined || row.track === filter.track),
+      )
+      .map((row) => this.toPlan(row));
+  }
+
+  private toPlan(row: PlanRow): Plan {
+    const cycles: PlanCycle[] = this.listCycleRows(row.project_key, row.plan_id).map(
+      (cycle) => ({
+        id: cycle.cycle_id,
+        label: cycle.label,
+        kind: cycle.kind as CycleKind,
+        status: cycle.status as CycleStatus,
+        // §S0b — transition timestamps surface on plan reads (omitted, not
+        // null, until stamped — same convention as Plan.closedAt).
+        ...(cycle.activated_at !== null ? { activatedAt: cycle.activated_at } : {}),
+        ...(cycle.done_at !== null ? { doneAt: cycle.done_at } : {}),
+      }),
+    );
+    const plan: Plan = {
+      planId: row.plan_id,
+      projectKey: row.project_key,
+      cr: row.cr,
+      ...(row.wave !== null ? { wave: row.wave } : {}),
+      ...(row.track !== null ? { track: row.track } : {}),
+      status: row.status === "closed" ? "closed" : "open",
+      cycles,
+      ...(row.merge_commit !== null ? { merge: { commit: row.merge_commit } } : {}),
+      ...(row.closed_at !== null ? { closedAt: row.closed_at } : {}),
+    };
+    const boundary = this.deriveCommitBoundary(plan);
+    return boundary !== undefined ? { ...plan, commitBoundary: boundary } : plan;
+  }
+
+  /**
+   * §S0 commit boundary — derived read-only on CLOSED plans: branch + the
+   * earliest/latest linked-run commits from the runs' `context.git`, linked
+   * via `context.cycleId`. Absent fields are OMITTED (never null).
+   */
+  private deriveCommitBoundary(plan: Plan): CommitBoundary | undefined {
+    if (plan.status !== "closed" || plan.merge === undefined || plan.closedAt === undefined) {
+      return undefined;
+    }
+    const cycleIds = new Set(plan.cycles.map((cycle) => cycle.id));
+    const rows = this.db
+      .query<EventRow, [string]>(
+        `SELECT * FROM events WHERE project_key = ? AND context IS NOT NULL
+         ORDER BY timestamp ASC, rowid ASC`,
+      )
+      .all(plan.projectKey);
+    let branch: string | undefined;
+    let firstRunCommit: string | undefined;
+    let lastRunCommit: string | undefined;
+    for (const row of rows) {
+      const context = JSON.parse(row.context!) as RunContext;
+      if (typeof context.cycleId !== "number" || !cycleIds.has(context.cycleId)) {
+        continue;
+      }
+      if (context.git === undefined) {
+        continue;
+      }
+      branch ??= context.git.branch;
+      firstRunCommit ??= context.git.commit;
+      lastRunCommit = context.git.commit;
+    }
+    return {
+      mergeCommit: plan.merge.commit,
+      ...(branch !== undefined ? { branch } : {}),
+      ...(firstRunCommit !== undefined ? { firstRunCommit } : {}),
+      ...(lastRunCommit !== undefined ? { lastRunCommit } : {}),
+      closedAt: plan.closedAt,
+    };
+  }
+
 
   onChange(fn: ChangeListener): () => void {
     this.listeners.add(fn);

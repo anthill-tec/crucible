@@ -192,16 +192,30 @@ describe("routeParse — hash-free History routing (§S2)", () => {
   });
 });
 
-describe("workspaceTabs — Runs/Coverage/Compile/BDD, Agents dropped (§S5 shell final form)", () => {
+describe("workspaceTabs — Runs/Workflow/Coverage/Compile/BDD, Agents dropped (§S5 shell final form)", () => {
   // §S5.2 — agents nested under the workspace's Project pane everywhere;
   // `Agents` is removed from L.workspaceTabs for BOTH project types. This
   // REPLACES the CR-CRU-006 contract (which included an "Agents" tab) — the
   // old assertions currently pass against the CURRENT TAB_NAMES list, so this
   // update is the RED signal for the tab-removal AC (S5 AC2).
-  test("backend project: exactly [Runs, Coverage, Compile, BDD(disabled)] — no Agents entry", () => {
+  //
+  // SANCTIONED RE-TARGET (CR-CRU-011 §S3, dispatch-approved): the CR-007-era
+  // four-tab expectation ["Runs","Coverage","Compile","BDD"] is updated to
+  // the CR-011 five-tab list ["Runs","Workflow","Coverage","Compile","BDD"]
+  // — Workflow is inserted right after Runs, per the spec's fixed order
+  // "Runs · Workflow · Coverage · Compile · BDD", and is NEVER gated (bound:
+  // unlike Coverage/BDD, Workflow has no `disabled`/`hint` semantics — it is
+  // enabled for both project types, same as Runs/Compile).
+  test("backend project: exactly [Runs, Workflow, Coverage, Compile, BDD(disabled)] — no Agents entry", () => {
     const tabs = workspaceTabs({ type: "backend" });
 
-    expect(tabs.map((t: TabShape) => t.name)).toEqual(["Runs", "Coverage", "Compile", "BDD"]);
+    expect(tabs.map((t: TabShape) => t.name)).toEqual([
+      "Runs",
+      "Workflow",
+      "Coverage",
+      "Compile",
+      "BDD",
+    ]);
     expect(tabs.find((t: TabShape) => t.name === "BDD")).toEqual({ name: "BDD", disabled: true });
     // Modified per the §S1 addendum (Coverage tab gating, user-added during
     // execution): a project with NO `latestCoverageEventId` (this fixture
@@ -210,18 +224,28 @@ describe("workspaceTabs — Runs/Coverage/Compile/BDD, Agents dropped (§S5 shel
     // NEVER gated.
     expect(tabs.find((t: TabShape) => t.name === "Runs")?.disabled).toBe(false);
     expect(tabs.find((t: TabShape) => t.name === "Compile")?.disabled).toBe(false);
+    // Workflow is never gated (bound: not disabled even with no plans/coverage).
+    expect(tabs.find((t: TabShape) => t.name === "Workflow")?.disabled).toBe(false);
     // bound: Agents is gone, not merely relabeled
     expect(tabs.find((t: TabShape) => t.name === "Agents")).toBeUndefined();
   });
 
-  test("frontend project: same fixed order, BDD enabled, no Agents entry", () => {
+  test("frontend project: same fixed order, BDD enabled, Workflow enabled, no Agents entry", () => {
     const tabs = workspaceTabs({ type: "frontend" });
 
-    expect(tabs.map((t: TabShape) => t.name)).toEqual(["Runs", "Coverage", "Compile", "BDD"]);
+    expect(tabs.map((t: TabShape) => t.name)).toEqual([
+      "Runs",
+      "Workflow",
+      "Coverage",
+      "Compile",
+      "BDD",
+    ]);
     expect(tabs.find((t: TabShape) => t.name === "BDD")).toEqual({
       name: "BDD",
       disabled: false,
     });
+    // bound: Workflow enabled identically for the frontend project type too.
+    expect(tabs.find((t: TabShape) => t.name === "Workflow")?.disabled).toBe(false);
     expect(tabs.find((t: TabShape) => t.name === "Agents")).toBeUndefined();
   });
 });

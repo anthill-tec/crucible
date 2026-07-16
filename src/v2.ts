@@ -12,6 +12,8 @@ import type { RecordEventMeta, TouchAgentOpts } from "./store.ts";
 import type {
   AgentIdentity,
   Coverage,
+  CycleKind,
+  CycleStatus,
   Project,
   RunContext,
   RunEvent,
@@ -50,6 +52,14 @@ interface V2Body {
   tier?: unknown;
   stack?: unknown;
   context?: unknown;
+  // CR-CRU-011 §S0 — cycle-plan routes
+  cr?: unknown;
+  wave?: unknown;
+  track?: unknown;
+  cycles?: unknown;
+  label?: unknown;
+  kind?: unknown;
+  merge?: unknown;
 }
 
 // §S3 — all help[] wording lives in src/hints.ts (one reviewable module).
@@ -274,6 +284,11 @@ async function handleAgentTouch(store: Store, req: Request): Promise<Response> {
     opts.identity = body.identity as AgentIdentity;
   }
   store.touchAgent(pk.key, agentId, opts);
+  // CR-CRU-011 §S1 — a REAL registration (row created) appends a lifecycle
+  // event; a heartbeat on an existing agent never does.
+  if (!existed) {
+    store.recordLifecycleEvent(pk.key, agentId, "registered");
+  }
   return json({ ok: true, changed: !existed, help: hints.registered });
 }
 
@@ -286,15 +301,35 @@ async function handleAgentUnregister(store: Store, req: Request): Promise<Respon
   if (typeof agentId !== "string" || agentId.length === 0) {
     return fail(400, "agentId is required");
   }
-  const existed = store.hasAgent(pk.key, agentId);
+  // CR-CRU-011 §S1 — snapshot firstSeen BEFORE removeAgent hard-deletes the
+  // row (the round-11 audit's gap: the final runtime must survive deletion).
+  const agent = store.getAgent(pk.key, agentId);
   store.removeAgent(pk.key, agentId);
-  return json({ ok: true, changed: existed });
+  if (agent !== null) {
+    store.recordLifecycleEvent(pk.key, agentId, "unregistered", agent.firstSeen);
+  }
+  return json({ ok: true, changed: agent !== null });
 }
 
-/** §S1 — each agent carries computed liveness; `?project=` filters. */
+/**
+ * §S1 — each agent carries computed liveness; `?project=` filters.
+ * CR-CRU-011 §S2 — plus a server-computed `runtime_ms`: still live →
+ * `now − firstSeen` (ticking); tombstoned (never unregistered) →
+ * `lastRunTimestamp − firstSeen` (sealed; lastSeen fallback when the agent
+ * never ingested a run). Unregistered agents live on the lifecycle event.
+ */
 function handleAgentsList(store: Store, req: Request, url: URL): Response {
   const project = url.searchParams.get("project") ?? undefined;
-  return reply(req, url, { ok: true, agents: store.listAgents(project) });
+  const now = Date.now();
+  const agents = store.listAgents(project, now).map((agent) => ({
+    ...agent,
+    runtime_ms:
+      agent.liveness === "tombstoned"
+        ? (store.lastRunTimestamp(agent.projectKey, agent.agentId) ?? agent.lastSeen) -
+          agent.firstSeen
+        : now - agent.firstSeen,
+  }));
+  return reply(req, url, { ok: true, agents });
 }
 
 // ── §S1+§S2 — runs: raw codec ingest, parsed ingest, compile ingest ─────────
@@ -431,6 +466,216 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
   });
 }
 
+// ── CR-CRU-011 §S0 — cycle-plan routes (plans are NOT events) ───────────────
+
+const CYCLE_KINDS: ReadonlySet<string> = new Set<CycleKind>(["red-green", "verify", "fix"]);
+
+const CYCLE_STATUSES: ReadonlySet<string> = new Set<CycleStatus>([
+  "pending",
+  "active",
+  "done",
+  "skipped",
+  "failed",
+]);
+
+/** Plan/cycle path ids are numeric; anything else can never exist → 404 path. */
+function numericId(raw: string): number | null {
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+interface CycleInput {
+  label: string;
+  kind: CycleKind;
+}
+
+/** §S0 — one {label, kind?} cycle body; the error names the offending field. */
+function parseCycleInput(raw: unknown): CycleInput | { error: string } {
+  if (typeof raw !== "object" || raw === null) {
+    return { error: "cycles entries must be objects with a label" };
+  }
+  const { label, kind } = raw as { label?: unknown; kind?: unknown };
+  if (typeof label !== "string" || label.length === 0) {
+    return { error: "label is required" };
+  }
+  if (kind === undefined) {
+    // §S0 — omitted kind defaults to red-green.
+    return { label, kind: "red-green" };
+  }
+  if (typeof kind !== "string" || !CYCLE_KINDS.has(kind)) {
+    return { error: `invalid kind: ${String(kind)} (expected red-green | verify | fix)` };
+  }
+  return { label, kind: kind as CycleKind };
+}
+
+/** POST …/plans — file the cycle plan. 201; one OPEN plan per cr → 400. */
+async function handlePlanFile(store: Store, key: string, req: Request): Promise<Response> {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  if (typeof body.cr !== "string" || body.cr.length === 0) {
+    return fail(400, "cr is required");
+  }
+  if (!Array.isArray(body.cycles) || body.cycles.length === 0) {
+    return fail(400, "cycles must be a non-empty array");
+  }
+  const cycles: CycleInput[] = [];
+  for (const raw of body.cycles) {
+    const parsed = parseCycleInput(raw);
+    if ("error" in parsed) return fail(400, parsed.error);
+    cycles.push(parsed);
+  }
+  const wave = typeof body.wave === "string" ? body.wave : undefined;
+  const track = typeof body.track === "string" ? body.track : undefined;
+  const plan = store.filePlan(pk.key, {
+    cr: body.cr,
+    ...(wave !== undefined ? { wave } : {}),
+    ...(track !== undefined ? { track } : {}),
+    cycles,
+  });
+  if ("error" in plan) return fail(400, plan.error);
+  return json(
+    {
+      ok: true,
+      changed: true,
+      planId: plan.planId,
+      cr: plan.cr,
+      status: plan.status,
+      ...(plan.wave !== undefined ? { wave: plan.wave } : {}),
+      ...(plan.track !== undefined ? { track: plan.track } : {}),
+      cycles: plan.cycles,
+    },
+    201,
+  );
+}
+
+/** POST …/plans/<planId>/cycles — append a cycle to an OPEN plan. */
+async function handleCycleAppend(
+  store: Store,
+  key: string,
+  planIdRaw: string,
+  req: Request,
+): Promise<Response> {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  const planId = numericId(planIdRaw);
+  if (planId === null) return fail(404, `plan not found: ${planIdRaw}`);
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  const parsed = parseCycleInput(body);
+  if ("error" in parsed) return fail(400, parsed.error);
+  const cycle = store.appendCycle(pk.key, planId, parsed);
+  if ("error" in cycle) return fail(cycle.notFound === true ? 404 : 400, cycle.error);
+  return json({ ok: true, changed: true, ...cycle }, 201);
+}
+
+/** PATCH …/plans/<planId>/cycles/<id> — §S0 transitions (legal table in the store). */
+async function handleCycleTransition(
+  store: Store,
+  key: string,
+  planIdRaw: string,
+  cycleIdRaw: string,
+  req: Request,
+): Promise<Response> {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  const planId = numericId(planIdRaw);
+  if (planId === null) return fail(404, `plan not found: ${planIdRaw}`);
+  const cycleId = numericId(cycleIdRaw);
+  if (cycleId === null) return fail(404, `cycle not found: ${cycleIdRaw}`);
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  if (typeof body.status !== "string" || !CYCLE_STATUSES.has(body.status)) {
+    return fail(
+      400,
+      `invalid status: ${String(body.status)} (expected pending | active | done | skipped | failed)`,
+    );
+  }
+  const cycle = store.transitionCycle(pk.key, planId, cycleId, body.status as CycleStatus);
+  if ("error" in cycle) return fail(cycle.notFound === true ? 404 : 400, cycle.error);
+  return json({ ok: true, changed: true, cycle });
+}
+
+/** PATCH …/plans/<planId> — the CR close (feature merge). */
+async function handlePlanClose(
+  store: Store,
+  key: string,
+  planIdRaw: string,
+  req: Request,
+): Promise<Response> {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  const planId = numericId(planIdRaw);
+  if (planId === null) return fail(404, `plan not found: ${planIdRaw}`);
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  if (body.status !== "closed") {
+    return fail(400, `status must be "closed" to close a plan`);
+  }
+  let merge: { commit: string } | undefined;
+  if (body.merge !== undefined) {
+    const commit =
+      typeof body.merge === "object" && body.merge !== null
+        ? (body.merge as { commit?: unknown }).commit
+        : undefined;
+    if (typeof commit !== "string" || commit.length === 0) {
+      return fail(400, "merge.commit must be a non-empty string");
+    }
+    merge = { commit };
+  }
+  const plan = store.closePlan(pk.key, planId, merge);
+  if ("error" in plan) {
+    return fail(
+      plan.notFound === true ? 404 : 400,
+      plan.error,
+      plan.openCycleIds !== undefined ? { openCycles: plan.openCycleIds } : undefined,
+    );
+  }
+  return json({ ok: true, changed: true, plan });
+}
+
+/** GET …/plans (+?cr=&track=) — closed plans carry the derived commitBoundary. */
+function handlePlansList(store: Store, key: string, req: Request, url: URL): Response {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  const cr = url.searchParams.get("cr") ?? undefined;
+  const track = url.searchParams.get("track") ?? undefined;
+  const plans = store.listPlans(pk.key, {
+    ...(cr !== undefined ? { cr } : {}),
+    ...(track !== undefined ? { track } : {}),
+  });
+  return reply(req, url, { ok: true, plans });
+}
+
+/**
+ * Dispatch …/projects/<key>/plans[…] paths; null when the shape/method is
+ * not a plans route (caller falls through to its catch-all).
+ */
+function handlePlansRoute(
+  store: Store,
+  segments: string[],
+  req: Request,
+  url: URL,
+): Promise<Response> | Response | null {
+  const key = segments[0]!;
+  if (segments.length === 2) {
+    if (req.method === "POST") return handlePlanFile(store, key, req);
+    if (req.method === "GET") return handlePlansList(store, key, req, url);
+    return null;
+  }
+  if (segments.length === 3 && req.method === "PATCH") {
+    return handlePlanClose(store, key, segments[2]!, req);
+  }
+  if (segments.length === 4 && segments[3] === "cycles" && req.method === "POST") {
+    return handleCycleAppend(store, key, segments[2]!, req);
+  }
+  if (segments.length === 5 && segments[3] === "cycles" && req.method === "PATCH") {
+    return handleCycleTransition(store, key, segments[2]!, segments[4]!, req);
+  }
+  return null;
+}
+
 // ── §S1 — events list/get/delete + status ───────────────────────────────────
 
 /**
@@ -465,6 +710,10 @@ function eventBrief(event: RunEvent) {
     ...(typeof (event.coverage as Coverage | undefined)?.lines?.percent === "number"
       ? { coverageLines: (event.coverage as Coverage).lines.percent }
       : {}),
+    // CR-CRU-011 §S1 (additive) — lifecycle-event fields, keys ABSENT on
+    // test/compile briefs.
+    ...(event.action !== undefined ? { action: event.action } : {}),
+    ...(event.firstSeen !== undefined ? { firstSeen: event.firstSeen } : {}),
     ...(event.context !== undefined ? { context: event.context } : {}),
     ...(compile !== undefined
       ? {
@@ -575,6 +824,17 @@ export function handleV2(
   }
   if (req.method === "GET" && pathname === "/api/v2/projects") {
     return handleProjectsList(store, req, url);
+  }
+  // CR-CRU-011 §S0 — project-scoped plans routes.
+  if (pathname.startsWith("/api/v2/projects/")) {
+    const segments = pathname
+      .slice("/api/v2/projects/".length)
+      .split("/")
+      .filter((segment) => segment.length > 0);
+    if (segments.length >= 2 && segments[1] === "plans") {
+      const handled = handlePlansRoute(store, segments, req, url);
+      if (handled !== null) return handled;
+    }
   }
   if (
     req.method === "POST" &&

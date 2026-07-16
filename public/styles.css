@@ -672,3 +672,49 @@ body {
 .app-density-ultra .app-evt { font-size: 10px; }
 .app-density-ultra .app-evt .app-pill { font-size: 8.5px; padding: 1px 5px; }
 .app-density-ultra .app-card-meta { font-size: 9px; }
+
+/* ── CR-CRU-011 §S3 — Workflow tab: ACTIVE todo view + gate pane ──────────
+   Design language: section titles ember (app-pane-section-title), panes
+   boxed like cards, cycle/linked-run ROWS text-color only (no boxes). */
+.app-workflow-cols {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.app-workflow-active { flex: 1 1 auto; min-width: 0; }
+.app-gate-pane {
+  flex: 0 0 220px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-1);
+  padding: 8px 10px;
+}
+.app-workflow-plan { margin-bottom: 12px; }
+.app-cycle-row {
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: var(--row-pad, 6px) 2px;
+}
+.app-cycle-line { display: flex; gap: 8px; align-items: baseline; }
+.app-cycle-glyph { width: 1.2em; text-align: center; }
+.cycle-status-pending .app-cycle-line { color: var(--ink-dim); }
+.cycle-status-active .app-cycle-line { color: var(--heat); }
+.cycle-status-active .app-cycle-glyph { color: var(--ember); }
+.cycle-status-done .app-cycle-line { color: var(--pass); }
+.cycle-status-skipped .app-cycle-line { color: var(--ink-faint); }
+.cycle-status-failed .app-cycle-line { color: var(--fail); }
+.app-cycle-runs {
+  margin: 2px 0 4px 1.9em;
+  border-left: 1px solid var(--line);
+  padding-left: 10px;
+}
+.app-linked-run-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  cursor: pointer;
+  color: var(--ink);
+  padding: calc(var(--row-pad, 6px) / 2) 2px;
+}
+.app-linked-run-row:hover { color: var(--heat); }
+.app-workflow-history { color: var(--ink-faint); }
