@@ -1,6 +1,6 @@
 # CR-CRU-011 — Cycle plans + workflow lens + agent runtimes
 
-**Status:** PENDING
+**Status:** IN_PROGRESS (2026-07-16 — user "proceed" after CR-016 merge; gap analysis applied 4 spec updates; branch feature/CR-CRU-011)
 **Type:** feature
 **Priority:** P1
 **Depends on:** CR-CRU-007
@@ -76,6 +76,20 @@ encodes the plan verbs in the python/fleet clients for the agentic backend.
   the stable join key for the 0.2.0 execution-roadmap queue table (CR-CRU-014).
   Nothing in this CR may treat "CRs with plans" as "the full CR list".
 
+### §S0b Timeline plan integration (gap-analysis DRIFT-1 — PRD §4.11 + CR-007 §S2 commitments)
+The RUNS timeline (home + workspace) consumes plans directly:
+1. **Marker suppression:** runs linked via `context.cycleId` NEVER produce
+   inferred (streak-heuristic) transition markers — the declared plan is the
+   boundary authority (CR-007 §S2's "interim heuristic only" clause resolves
+   here). Unlinked runs keep the heuristic unchanged.
+2. **Declared markers inline:** a cycle transitioning to `done` renders a
+   declared marker row on the timeline (same structural weight as the
+   heuristic marker): `<kind glyph> Cycle done · <label> · <cr> · closed in
+   <duration>` where duration = active→done span; the ACTIVE cycle renders as
+   an open span header above its linked runs (PRD: "the timeline renders the
+   plan inline — active cycle = open event span").
+3. Planless projects: timeline byte-identical to pre-CR-011 (regression-guarded).
+
 ### §S1 Agent lifecycle events (server, additive)
 Registration and unregistration append **lifecycle events** to the project's
 event log (`kind: "lifecycle"`, `action: "registered" | "unregistered"`,
@@ -90,12 +104,22 @@ still live → `now − firstSeen` (ticking); never unregistered and no longer l
 (tombstoned/pruned) → `last run timestamp − firstSeen`. Shown on: workspace
 Project-pane agent sub-rows (live: ticking; tombstones: sealed), and cycle/CR
 groups in the lens (§S3).
+**Feed rendering (gap-analysis DRIFT-4):** lifecycle events do NOT render as
+cards on the Runs timeline in 0.1.0 — they exist for runtime computation (and
+the §S3 lens); rendering register/unregister rows at agent-per-cycle cadence
+would be feed noise. (CR-CRU-013's workflow journal may surface them later.)
 
 ### §S3 Workflow tab (live view + history lens; round-22 arrangement)
 The workspace gains a dedicated **Workflow tab** (`L.workspaceTabs` becomes
 `Runs · Workflow · Coverage · Compile · BDD` — updating the CR-007 §S5 tab AC's
-expected list from this CR onward; the earlier Runs-tab `flat|workflow` toggle
-idea is superseded). Two sections:
+expected list from this CR onward, INCLUDING the CR-016-era tests that
+enumerate tabs; the earlier Runs-tab `flat|workflow` toggle idea is
+superseded). **CR-016 pane-state contracts bind to it (gap-analysis
+DRIFT-3):** clicking a linked run in the active todo view or lens swaps the
+WORKFLOW pane to the run detail per the one-rule (no tab switch), the tabs
+row hides while that detail is open, and the back chip reads `← workflow`;
+close restores the Workflow pane with tab `on` and exact scroll. Two
+sections:
 1. **Active workflow (live):** the current open plan(s) rendered as a
    **per-CR todo view** — cycles as todo rows with their statuses
    (pending / active ▶ / done ✓ / skipped / failed ✗), the ACTIVE cycle
@@ -143,7 +167,42 @@ is their whole UI.
 - [ ] An agent that ingests runs and is then tombstone-pruned (no unregister): its runtime renders as `lastRunTimestamp − firstSeen` (AC fixture: register at t0, runs at t0+10s and t0+60s, prune → runtime 60s).
 - [ ] Workspace Project pane: a live agent row shows a ticking runtime (`firstSeen`-anchored); a tombstoned row shows a sealed runtime.
 - [ ] Workflow tab: `L.workspaceTabs` returns exactly `["Runs","Workflow","Coverage","Compile","BDD"(per type)]`; the tab's ACTIVE section renders the open plan as a per-CR todo view — cycle rows with status glyphs, the `active` cycle expanded with its `context.cycleId`-linked runs appearing live over SSE (no reload), and a gate-pane placeholder element present; the HISTORY section renders the plan tree — `done` cycles as closed spans; without a plan, a fixture with 2 waves × 2 CRs × 2 cycles renders the inferred tree with `context.cycle` labels; unlinked/context-less events land in an "ungrouped" tail (count asserted), never dropped.
-- [ ] E2E: `tests/e2e/workflow.e2e.ts` — file a plan via API → activate cycle 1 → register agent → ingest fail/pass with `context.cycleId` → PATCH cycle done → close plan with merge commit → the lens shows the plan tree with the closed span, cycle label, merge commit, and the sealed agent runtime; results ingested `tier:"e2e"`.
+- [ ] §S0b timeline plan integration: with an open plan and a cycle `active`, ingesting fail(2/5) then pass(5/5) runs linked via `context.cycleId` renders NO inferred transition marker (the streak heuristic is suppressed for linked runs — count asserted zero) and the timeline shows the active cycle's open-span header above its linked runs; PATCHing the cycle `done` renders the declared marker row containing the cycle label, the cr, and the active→done duration; the same fail/pass pair WITHOUT cycleId still yields exactly one heuristic marker (fallback intact); a planless project's timeline output is unchanged (regression-guarded).
+- [ ] §S3 CR-016 binding: with the Workflow tab active and the plan's active cycle expanded, clicking a linked run swaps the WORKFLOW pane to the run detail (`workspace-tabs` absent, back chip text `← workflow`, no tab switch); closing restores the Workflow pane with its tab `on` and prior scroll; the tab-list assertions across CR-007/CR-016-era tests are updated to the five-tab list under this CR's sanctioned re-target.
+- [ ] §S1/§S2 feed exclusion: lifecycle events never render cards on the Runs timeline (fixture: register+unregister around two runs → exactly two `event-card`s); agent runtime values render per the §S2 rule on the pane rows.
+- [ ] BDD E2E (house style): `tests/e2e/features/workflow.feature` — scenarios: file a plan via API → activate cycle 1 → register agent → ingest fail/pass with `context.cycleId` → PATCH cycle done → close plan with merge commit → the lens shows the plan tree with the closed span, cycle label, merge commit, and the sealed agent runtime; plus a timeline scenario asserting suppression + the declared marker; results ingested `tier:"e2e"`.
+
+## Gap analysis (2026-07-16, pre-RED — verdict SPEC_UPDATE_NEEDED, applied in this commit)
+- DRIFT-1 (blocking): timeline plan integration (PRD §4.11:275 inline-plan
+  rendering + CR-007 §S2 marker suppression for cycleId-linked runs) was
+  absent — added as §S0b + AC.
+- DRIFT-2: E2E AC named `workflow.e2e.ts` — superseded by the BDD house style
+  (CR-007 C5b); now `workflow.feature` (sorts after shell-storyboard.feature,
+  no ordering project needed; root fix remains CR-015 §S0).
+- DRIFT-3: CR-016 pane-state contracts (one-rule, tabs-hide, `← workflow`
+  chip) now bind to the Workflow tab; tab-list re-targets sanctioned.
+- DRIFT-4: lifecycle-event feed rendering was undefined — excluded from the
+  Runs feed in 0.1.0 (runtime computation + lens only), board-flagged for veto.
+- Verified clean: `?project=` param matches ACs; `RunContext.cycleId` purely
+  additive (cycle label exists, types.ts:86-96); agents.firstSeen/lastSeen
+  present and removeAgent hard-deletes (store.ts:322 — the audit's gap is
+  real); plans reuse store.onChange→SSE and pairTransitions stays the
+  inferred fallback; plans/cycles are NEW tables independent of event
+  retention (closed plans persist as the workflow record); no symbol
+  removals; the "flat|workflow toggle" superseded idea was never built.
+
+## Cycle plan
+- C1: §S0 plan API — tables, routes, transitions, kinds, one-open-per-cr,
+  commitBoundary, SSE, cycleId linkage (RED → GREEN).
+- C2: §S1 lifecycle events + §S2 runtimes (server + pane rows + feed
+  exclusion).
+- C3: §S3 Workflow tab — active todo view + gate placeholder + CR-016
+  bindings (tabs list update, one-rule, `← workflow`).
+- C4: §S3 history lens (Wave → [Track] → CR → Cycle, inferred fallback,
+  ungrouped tail, wave states) + §S0b timeline integration (suppression +
+  declared markers/spans).
+- C5: BDD workflow.feature + integration ACs sweep.
+- C6: VERIFY → close-out (regression --coverage) → merge gate.
 
 ## Estimated size
 L (grew with the §S0 plan API fold-in, round 15).
