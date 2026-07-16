@@ -8,7 +8,8 @@ backend data structures designed NOW so 0.1.0 → 0.2.0 needs no migration)
 **Labels:** api, workflow, roadmap, ui
 **Phase:** Wave 5 — the 0.2.0 opener (waves number continuously across releases; user-corrected)
 **Design reference:** board rounds 23–24; storyboard F14 (roadmap table, drawn
-in the 0.1.0 design iteration for the clear picture)
+in the 0.1.0 design iteration for the clear picture); tab elevation user-locked
+2026-07-16 (F14 design round — supersedes the round-25 slide-over placement)
 
 ## Context
 Round 23: the project workspace should expand to Wave → CR sequences using the
@@ -42,10 +43,22 @@ change.
 `queue-file` parses the project's `docs/changes/README.md` queue table (CR,
 title, depends-on, wave columns) → POST; `--from-file` override.
 
-### §S3 Roadmap slide-over (workspace — placement resolved round 25)
-The workspace Project pane gains a **`roadmap` chip** opening a slide-over at
-`/p/<key>/roadmap` (deep-linkable, `← workspace` back chip, Esc/scrim close —
-the same overlay model as the run drill-in and `/manage`).
+### §S3 Roadmap tab (workspace — user-locked 2026-07-16, supersedes the round-25 slide-over)
+The Roadmap is a **first-class workspace tab** — hierarchy matches importance:
+Model-B tracking requires a roadmap, so it sits at the same level as Workflow.
+- **Tab order:** `Workflow · Runs · Coverage · Compile · Roadmap · BDD` —
+  amends CR-CRU-021 §S1's five-tab list additively (tab-list assertions
+  re-target under THIS CR's sanction at its RED).
+- **Deep link:** `/p/<key>/roadmap` opens the workspace with the Roadmap tab
+  active (mirrors `/p/<key>/run/<id>`); no slide-over, no scrim. The CR-016
+  one-rule applies: drill-downs from roadmap rows are pane states of the
+  Roadmap pane (`← roadmap` back chip).
+- **Pane chip retained:** the Project pane keeps a **🗺 `roadmap` chip** as a
+  contextual shortcut — same destination, activates the tab.
+- **Empty state carries the Model-B imperative:** with no queue registered the
+  tab renders "No roadmap registered — register your CR queue:
+  `POST /projects/<key>/queue` (`queue-file`)" — orchestrators learn the
+  expectation from the tool itself.
 **Design inspiration (user-directed): the lavish review board's CR Queue &
 Status table** — rows in EXECUTION SEQUENCE derived from the depends-on graph
 (topological order), one line per CR, minimal status flags, wave-boundary and
@@ -76,7 +89,9 @@ is the contract.
 - [ ] `POST /queue` with 3 entries → `GET /queue` returns them with derived statuses: a CR with no plan → `PENDING`; after `plan-file` → `IN_PROGRESS`; after plan close with merge → `COMPLETED` (single fixture walks all three).
 - [ ] Queue replace is idempotent and full-replace (POST twice → no duplicates; removing an entry removes it); unknown `dependsOn` target is accepted and flagged in the response.
 - [ ] `queue-file` against this repo's `docs/changes/README.md` registers every row of the CR table with correct wave + dependsOn (spot-assert CR-CRU-009's five dependencies).
-- [ ] Workspace Roadmap renders rows in topological (depends-on) execution order — one line per CR: CR · title · wave · depends-on chips · minimal status badge matching `GET /queue`, with wave/release boundary divider rows; a graph-view toggle renders the same data as a depends-on node graph; the row whose plan is open carries the active highlight; clicking it lands on the Workflow tab.
+- [ ] `L.workspaceTabs` returns names exactly `["Workflow","Runs","Coverage","Compile","Roadmap","BDD"]` (both project types); cold `/p/<key>/roadmap` load renders the workspace with the `Roadmap` tab `on`; clicking the Project pane's 🗺 `roadmap` chip activates the same tab (no slide-over/scrim element exists); prior tab-list assertions re-targeted under this CR's sanction.
+- [ ] With no queue registered, the Roadmap pane renders the empty-state imperative containing exactly `POST /projects/<key>/queue` (testid `roadmap-empty`).
+- [ ] Workspace Roadmap tab renders rows in topological (depends-on) execution order — one line per CR: CR · title · wave · depends-on chips · minimal status badge matching `GET /queue`, with wave/release boundary divider rows; a graph-view toggle renders the same data as a depends-on node graph; the row whose plan is open carries the active highlight; clicking it (or its graph node) activates the Workflow tab with that CR's active section in view — a one-rule tab swap, no overlay (storyboard F14½ is the transition contract); a COMPLETED row lands on its expanded history group; a PENDING row is inert beyond its badge.
 - [ ] Live overlay: with two open plans on `track-1`/`track-2`, each in-progress row shows its lane badge + live cycle position (`track-N ▶ cycle a/b`, updating over SSE when a cycle activates); a single-track project's active row shows the plain highlight with NO lane badge.
 - [ ] E2E: register queue → file plan for one CR → its roadmap row flips PENDING→IN_PROGRESS live (SSE); close plan with merge → COMPLETED.
 

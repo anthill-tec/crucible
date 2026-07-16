@@ -73,11 +73,11 @@ registrations/unregistrations (lifecycle events preserve runtimes), heartbeats
 | Wave → [Track] → CR → Cycle (history) | Workflow tab history lens; Track level only when a wave spans >1 lane; per-lane completion chips; wave states |
 | Runs | home collective timeline (runs only) · workspace timeline (runs + milestones + 🛡 gate boundary cards) |
 | Gate detail | drill-in with the axi-mirrored body (step ladder, findings, fixes, outcome) |
-| Roadmap (0.2.0) | `/p/<key>/roadmap` slide-over: Wave → CR table, statuses DERIVED (PENDING = no plan · IN_PROGRESS = open plan · COMPLETED = closed + merge) |
+| Roadmap (0.2.0) | **Roadmap workspace tab** (user-elevated 2026-07-16; sixth tab — Workflow · Runs · Coverage · Compile · Roadmap · BDD), deep-linked `/p/<key>/roadmap`, Project-pane 🗺 chip as shortcut: Wave → CR table + graph, statuses DERIVED (PENDING = no plan · IN_PROGRESS = open plan · COMPLETED = closed + merge); empty state carries the queue-registration imperative |
 
-Navigation: two routed pages (home L1, workspace L2) + four slide-overs
-(run drill-in, /manage, /roadmap, — all with the consistent `←` back chip =
-Esc/scrim/back).
+Navigation: two routed pages (home L1, workspace L2), the in-pane run detail
+(CR-016 pane state, `←` back chip = Esc/back), and one slide-over (/manage,
+`←` back chip = Esc/scrim/back). The Roadmap is a workspace TAB (0.2.0).
 
 ## 4 Why one data model suffices
 
@@ -96,4 +96,4 @@ model is uniform (round 29) — the difference is never structural.
 | CR-CRU-008 | fleet verbs: plan-file / cycle-activate / cycle-done / cr-close + `WORKFLOW_*` plumbing |
 | CR-CRU-012 | projects manager (add/edit/archive) |
 | CR-CRU-013 | workflow events: gates (no-mistakes) + milestones, gate pane, `gated` wave state |
-| CR-CRU-014 (0.2.0) | queue registration + roadmap slide-over (forward-compat contract binds 0.1.0) |
+| CR-CRU-014 (0.2.0) | queue registration + Roadmap workspace tab (forward-compat contract binds 0.1.0) |

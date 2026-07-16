@@ -43,7 +43,10 @@ Cycle rows become interactive everywhere:
    WORKFLOW pane (CR-016 one-rule; back chip `← workflow`), returning to the
    Workflow view with scroll/tab state restored.
 3. The ACTIVE section's active cycle rows get the identical toggle +
-   drill-down behavior (parity with history).
+   drill-down behavior (parity with history). *(Narrowed 2026-07-16 by the
+   CR-021 §S6 ruling — user-locked (a): the TOGGLE applies to history rows
+   only; the ACTIVE cycle's span renders always-inline from CR-021.
+   Drill-down parity unchanged.)*
 
 ## Acceptance criteria
 - [x] §S1.1: a fixture with waves 3 and 4 (both closed) renders wave 4's group ABOVE wave 3's; within a wave, a CR closed later renders above one closed earlier.

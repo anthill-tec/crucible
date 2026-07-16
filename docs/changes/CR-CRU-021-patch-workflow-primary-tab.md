@@ -17,7 +17,8 @@ the project's primary narrative; Runs becomes the second tab.
 ### §S1 Tab order + default
 `L.workspaceTabs` order becomes `Workflow · Runs · Coverage · Compile · BDD`;
 the workspace's default active tab on entry (badge click, cold `/p/<key>`
-load) becomes `Workflow`. The one-rule, tabs-hide, and back-chip naming are
+load) becomes `Workflow`. (CR-CRU-014 adds a sixth `Roadmap` tab in 0.2.0 —
+user-locked 2026-07-16; that re-target is sanctioned there, not here.) The one-rule, tabs-hide, and back-chip naming are
 order-agnostic and unchanged; cold `/p/<key>/run/<id>` detail loads keep
 their existing behavior (close lands on the pane that hosted the detail —
 now Workflow by default for tab-less cold loads).
@@ -83,11 +84,13 @@ is the contract; the shipped UI drifted). The exact formats:
 9. Merge wording exactly `merged <sha>` (no `@`).
 10. The pane renders NO extra `WORKFLOW — <project>` rail-title above the
     active header (the mock's header structure is the whole top).
-OPEN RULING (user, from the thorough comparison 2026-07-16): the mock shows
-the ACTIVE cycle's linked runs always visible inline, contradicting CR-020
-§S2.3's no-auto-expand. Orchestrator recommends: active cycle's span always
-visible (mock wins; §S2.3 narrows to history rows); awaiting the user's call
-— the losing side gets re-baselined before this CR's RED.
+RULED (a) — user-locked 2026-07-16: "Mock wins on active cycle, the toggle
+contract narrows to History." The ACTIVE cycle's open span renders its
+linked runs ALWAYS inline (no toggle to reveal them); CR-020 §S2.3's
+expand/collapse toggle applies to HISTORY cycle rows only (annotated there);
+run drill-down parity is unchanged (any run entry, active or history, swaps
+to the detail). CR-020's active-cycle toggle assertions re-target under
+THIS CR's sanction at its RED.
 Colors/typography: the mock's exact classes translate to the app's
 equivalents (mono 10.5px-scale lines, dim annotations, ember accents) —
 side-by-side comparison against the F13 frame is the review gate. Run-entry

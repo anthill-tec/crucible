@@ -4,7 +4,7 @@
 **Co-author:** claude (orchestrator — crucible)
 **Date:** 2026-07-14
 **Status:** DRAFT — kickoff design contract
-**Design inputs:** [DN-crucible-api-reconstruction.md](DN-crucible-api-reconstruction.md) · [DN-model-b-language.md](DN-model-b-language.md) (the locked Model-B ontology, rounds 10–30)
+**Design inputs:** [DN-crucible-api-reconstruction.md](DN-crucible-api-reconstruction.md) · [DN-model-b-language.md](DN-model-b-language.md) (the locked Model-B ontology, rounds 10–30) · [DN-crucible-analytics.md](DN-crucible-analytics.md) (progress/velocity/estimation model, locked 2026-07-16)
 
 ## 1 Why
 
@@ -340,7 +340,17 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   IN_PROGRESS = open plan, COMPLETED = closed + merge) ships in **0.2.0**
   (CR-CRU-014, schema designed now — storyboard F14); binding forward-compat on
   0.1.0: `plans.cr` is the verbatim stable join key, the queue table is purely
-  additive.
+  additive. **Placement (user-locked 2026-07-16, supersedes the round-25
+  slide-over):** the Roadmap is a **first-class workspace tab** — order
+  `Workflow · Runs · Coverage · Compile · Roadmap · BDD` (post-CR-021 order;
+  Roadmap added by CR-014); `/p/<key>/roadmap` deep-links to the tab; the
+  Project pane keeps a 🗺 chip shortcut; the empty state carries the
+  queue-registration imperative (the roadmap is required by Model-B tracking). **Analytics (user-locked 2026-07-16):** the
+  progress/velocity/estimation model is a full design contract —
+  [DN-crucible-analytics.md](DN-crucible-analytics.md) (two-clock model,
+  weighted burndown with queue snapshots, confidence-gated Monte Carlo P50/P80
+  bands, schedule health; zero new agent reporting) — implemented by
+  CR-CRU-022 on the Roadmap tab.
   All in v0.1.0: plan API + lens in CR-CRU-011, fleet plan verbs
   (plan-file / cycle-activate / cycle-done / cr-close + `WORKFLOW_CYCLE_ID`) in
   CR-CRU-008.
