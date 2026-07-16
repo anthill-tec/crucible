@@ -110,6 +110,28 @@ Step(
   },
 );
 
+// CR-CRU-020 §S1.2/§S2.1 — a history CR group is collapsed by default (its
+// `lens-cycle-row` children are absent) and a cycle row's OWN linked runs are
+// a further, distinct toggle level (collapsed even once the CR group is
+// expanded). These two explicit action steps make that honest in Gherkin —
+// the closed-span assertion below no longer holds "for free" on mount.
+Step("I expand the cr group for {string}", async ({ page }, cr: string) => {
+  const toggle = crGroup(page, cr).getByTestId("cr-group-toggle");
+  await expect(toggle).toBeVisible();
+  await toggle.click();
+});
+
+Step(
+  "I expand cycle {string} in the cr group for {string}",
+  async ({ page }, label: string, cr: string) => {
+    const cycleRow = crGroup(page, cr).getByTestId("lens-cycle-row").filter({ hasText: label });
+    await expect(cycleRow).toBeVisible();
+    const toggle = cycleRow.getByTestId("cycle-toggle");
+    await expect(toggle).toBeVisible();
+    await toggle.click();
+  },
+);
+
 Step(
   "the cr group for {string} shows cycle {string} as a closed span containing the linked run for agent {string}",
   async ({ page }, cr: string, label: string, agentId: string) => {
@@ -137,6 +159,18 @@ Step(
 );
 
 // ── §S3 active-view assertions ───────────────────────────────────────────────
+
+// CR-CRU-020 §S2.3 — the ACTIVE section's active cycle row no longer
+// auto-expands its linked runs; it gets the SAME click-based toggle as a
+// history cycle row (parity). This explicit action step is what actually
+// reveals the linked run the assertion below checks for.
+Step("I expand the active cycle row for {string}", async ({ page }, label: string) => {
+  const row = page.getByTestId("workflow-active").getByTestId("cycle-row").filter({ hasText: label });
+  await expect(row).toBeVisible();
+  const toggle = row.getByTestId("cycle-toggle");
+  await expect(toggle).toBeVisible();
+  await toggle.click();
+});
 
 Step(
   "the workflow active section shows a cycle row for {string} expanded with the linked run for agent {string}",

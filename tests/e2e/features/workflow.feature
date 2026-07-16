@@ -27,8 +27,10 @@ Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline pla
     And I click the "Workflow" workspace tab
     Then the history lens shows a cr group for "CR-WF-1" with rollup "1/1"
     And the cr group for "CR-WF-1" shows a merge-commit pill reading "merged @ abc1234"
-    And the cr group for "CR-WF-1" shows cycle "c1 red-green" as a closed span containing the linked run for agent "agent-wf1"
     And the cr group for "CR-WF-1" shows the runtime for agent "agent-wf1"
+    When I expand the cr group for "CR-WF-1"
+    And I expand cycle "c1 red-green" in the cr group for "CR-WF-1"
+    Then the cr group for "CR-WF-1" shows cycle "c1 red-green" as a closed span containing the linked run for agent "agent-wf1"
 
   Scenario: F13 the Runs timeline suppresses the heuristic marker for plan-linked runs and renders the active-cycle span, then the declared marker once the cycle is done; an unlinked control pair still gets the classic heuristic marker
     Given a project named "WF Timeline Project" is registered
@@ -46,11 +48,12 @@ Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline pla
     Then the declared marker for "c1 red-green" on "CR-WF-2" becomes visible within 2 seconds
     And the workspace Runs pane shows no cycle-span-open element
 
-  Scenario: F13 with an open plan and an active cycle, the Workflow tab's active section shows the per-CR todo with the active cycle expanded over its linked run
+  Scenario: F13 with an open plan and an active cycle, the Workflow tab's active section shows the per-CR todo, and expanding the active cycle row reveals its linked run
     Given a project named "WF Active Project" is registered
     And a cycle plan is filed for cr "CR-WF-3" with a cycle labelled "c1 red-green"
     And cycle 1 of that plan is activated
     And a fail(2/5) run linked to that cycle is ingested for agent "agent-wf3"
     When I open the workspace for that project
     And I click the "Workflow" workspace tab
+    And I expand the active cycle row for "c1 red-green"
     Then the workflow active section shows a cycle row for "c1 red-green" expanded with the linked run for agent "agent-wf3"
