@@ -45,6 +45,7 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import * as AppLogic from "../public/app-logic.mjs";
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -460,7 +461,19 @@ describe("§S3 history lens — wave boundary states", () => {
     expect((header!.textContent ?? "")).toContain("lanes complete · awaiting review");
   });
 
-  test("filing a wave-2 plan flips wave 1 out of the boundary state (superseded)", async () => {
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S6 Chrome-gate GAP 2) — this test's
+  // ORIGINAL assertion required wave 2's group to render (`wave2` not null)
+  // even though wave 2 holds ONLY an open plan (CR-W-3) — exactly the shape
+  // GAP 2 forbids (a wave whose only material is an open plan, its CR
+  // stripped by §S1.3, must render NO wave-group at all — no ghost header).
+  // Re-targeted: the SUBJECT survives (wave 1's boundary state flips to
+  // "superseded" purely because a NEWER wave now holds a declared plan —
+  // superseded detection reads `declaredWaveLabels` off the raw plans list,
+  // independent of whether wave 2's own group renders), strengthened to a
+  // POSITIVE assertion ("superseded", not just "not the old text"); wave 2
+  // itself is now asserted ABSENT, which strengthens GAP 2 coverage instead
+  // of duplicating tests/workflow-lens.test.ts's own dedicated GAP 2 block.
+  test("filing a wave-2 plan (open-only, no visible CR) flips wave 1's boundary state to superseded — wave 2 itself renders NO group at all", async () => {
     const key = "lens-wave-2";
     const plan1: PlanFixture = {
       planId: 622,
@@ -488,14 +501,17 @@ describe("§S3 history lens — wave boundary states", () => {
 
     const hist = history();
     const wave1 = hist.querySelector<HTMLElement>('[data-testid="wave-group"][data-wave="1"]')!;
+    expect(wave1).not.toBeNull();
     const header1 = wave1.querySelector('[data-testid="wave-header"]')!;
     // no longer the boundary-pause text — the newer wave superseded it.
     expect((header1.textContent ?? "")).not.toContain("lanes complete · awaiting review");
+    // POSITIVE: wave 1's state now reads "superseded" (declaredWaveLabels
+    // sees wave 2's plan regardless of whether wave 2's OWN group renders).
+    expect((header1.textContent ?? "")).toContain("superseded");
 
-    const wave2 = hist.querySelector<HTMLElement>('[data-testid="wave-group"][data-wave="2"]');
-    expect(wave2).not.toBeNull();
-    const header2 = wave2!.querySelector('[data-testid="wave-header"]')!;
-    expect((header2.textContent ?? "")).not.toContain("lanes complete · awaiting review");
+    // GAP 2 — wave 2 holds ONLY an open plan (its CR stripped by §S1.3), so
+    // it renders NO wave-group/header at all (no ghost).
+    expect(hist.querySelector('[data-testid="wave-group"][data-wave="2"]')).toBeNull();
   });
 
   test("while any wave-1 plan is open with tracks → per-lane completion chips (track-1 closed, track-2 1-of-2 → 'track-1 ✓ · track-2 1/2')", async () => {
@@ -734,5 +750,89 @@ describe("§S3 history lens — group rollups", () => {
     expect(runtimeText).toContain("agent-a");
     // pin presence of a runtime figure, not its exact ms value.
     expect(runtimeText).toMatch(/\d/);
+  });
+});
+
+// ── RED ADDENDUM (cycle 13, gap 2) — ghost wave-header suppression ────────
+// Chrome side-by-side against F13 found a ghost `HISTORY — WAVE · running`
+// header (blank label, no rows) above WAVE 4 in the live app: an open
+// plan's wave group SURVIVES `workflowLens`'s output as a header-only entry
+// once §S1.3 strips its (open) CR node from `wave.crs`, because the
+// per-wave state computation (`declared.length > 0`) still fires on the
+// PRE-strip `declared` list even though `wave.crs` itself is left empty.
+// A history wave group with ZERO visible CRs must render NOTHING — no
+// `wave-group` element, no header — at either layer: the pure
+// `workflowLens({ plans, events })` data AND the DOM it drives.
+describe("§S6 RED addendum (cycle 13, gap 2) — ghost history wave-header suppression (wave whose only material is an OPEN plan)", () => {
+  test("pure workflowLens: a wave whose ONLY plan is OPEN (crs emptied by the §S1.3 strip) is ABSENT from `waves` — no header-only ghost entry", () => {
+    const openOnlyWavePlan = {
+      planId: 9701,
+      cr: "CR-GHOST-OPEN",
+      status: "open" as const,
+      wave: "9",
+      cycles: [{ id: 97001, label: "c1", status: "pending" as const }],
+    };
+    const closedWavePlan = {
+      planId: 9702,
+      cr: "CR-GHOST-CLOSED",
+      status: "closed" as const,
+      wave: "8",
+      merge: { commit: "8888888" },
+      cycles: [{ id: 97002, label: "c1", status: "done" as const }],
+    };
+
+    const result = AppLogic.workflowLens({
+      plans: [openOnlyWavePlan, closedWavePlan],
+      events: [],
+    });
+    const waves = result.waves as Array<{ wave: string; crs: unknown[] }>;
+
+    expect(waves.find((w) => w.wave === "9")).toBeUndefined();
+    const wave8 = waves.find((w) => w.wave === "8");
+    expect(wave8).toBeDefined();
+    expect(waves.length).toBe(1);
+    for (const w of waves) {
+      expect(w.wave === "" || w.wave === undefined || w.wave === null).toBe(false);
+    }
+  });
+
+  test("DOM: the history section renders EXACTLY ONE wave-group (Wave 8) — no wave-group/header for the open-only wave 9, and every rendered header has a non-empty label", async () => {
+    const key = "ghost-wave-1";
+    const openPlan: PlanFixture = {
+      planId: 9703,
+      cr: "CR-GHOST-OPEN-2",
+      status: "open",
+      wave: "9",
+      cycles: [{ id: 97003, label: "c1", status: "pending" }],
+    };
+    const closedPlan: PlanFixture = {
+      planId: 9704,
+      cr: "CR-GHOST-CLOSED-2",
+      status: "closed",
+      wave: "8",
+      merge: { commit: "8888888" },
+      cycles: [{ id: 97004, label: "c1", status: "done" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Ghost Wave Project" })],
+      events: [],
+      plans: [openPlan, closedPlan],
+    });
+    await openWorkflowTab();
+
+    const hist = history();
+    const waveGroups = Array.from(hist.querySelectorAll<HTMLElement>('[data-testid="wave-group"]'));
+    expect(waveGroups.length).toBe(1);
+    expect(waveGroups[0]!.getAttribute("data-wave")).toBe("8");
+
+    expect(hist.querySelector('[data-testid="wave-group"][data-wave="9"]')).toBeNull();
+
+    const headers = Array.from(hist.querySelectorAll<HTMLElement>('[data-testid="wave-header"]'));
+    expect(headers.length).toBe(1);
+    for (const h of headers) {
+      expect((h.textContent ?? "").trim().length).toBeGreaterThan(0);
+    }
   });
 });

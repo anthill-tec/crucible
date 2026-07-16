@@ -689,3 +689,124 @@ describe("RULED (a) — the ACTIVE cycle's open span is ALWAYS inline; no toggle
     expect(activeRow.querySelector('[data-testid="cycle-toggle"]')).toBeNull();
   });
 });
+
+// ── RED ADDENDUM (cycle 13, gap 1) — open-span runs are ONE INLINE FLOW ────
+// §S6 #3 literal text: "renders its linked runs INLINE on one row: `🧪
+// <agent> <ratio> · 🧪 <agent> <ratio> · awaiting orchestrator confirm`".
+// Chrome side-by-side against F13 found the live UI renders each linked run
+// as its OWN block row with a per-run relative-age stamp ("...ago") — the
+// mock has NO ages and uses `·` text-node separators on a single flowing
+// line. This pins: ONE container (`[data-testid="open-span"]`) whose
+// normalized visible text is the EXACT mock string (mask-icon elements
+// excluded from text, asserted present separately), no "ago" anywhere, and
+// run entries that are inline-level (a `<span>` tag, or a container class
+// `app-inline-run`), joined by literal `·` text nodes.
+function collectDotTextNodes(root: Node): string[] {
+  const found: string[] = [];
+  const walk = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent ?? "";
+      if (text.includes("·")) found.push(text);
+    } else {
+      node.childNodes.forEach(walk);
+    }
+  };
+  walk(root);
+  return found;
+}
+
+describe("§S6 #3 RED addendum (cycle 13, gap 1) — open-span runs render as ONE INLINE FLOW, not stacked per-run block rows with ages", () => {
+  test("the active cycle's open span is a single container whose normalized text is EXACTLY the mock string, has no relative-age text, carries the mask-icon elements as non-text siblings, and joins its run entries with literal '·' text nodes on inline-level elements", async () => {
+    const key = "f13-inline-span-1";
+    const now = Date.now();
+
+    const redRun = runEvent({
+      id: "evt-inline-red-1",
+      projectKey: key,
+      agentId: "CR-NAI-042-RED",
+      timestamp: now,
+      total: 5,
+      passed: 2,
+      failed: 3,
+      context: { cycleId: 4202 },
+    });
+    const greenRun = runEvent({
+      id: "evt-inline-green-1",
+      projectKey: key,
+      agentId: "CR-NAI-042-GREEN",
+      timestamp: now + 10,
+      total: 5,
+      passed: 5,
+      failed: 0,
+      context: { cycleId: 4202 },
+    });
+    const plan: PlanFixture = {
+      planId: 9801,
+      cr: "CR-NAI-042",
+      status: "open",
+      wave: "1",
+      track: "track-1",
+      cycles: [{ id: 4202, label: "compile fallback", status: "active" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Inline Span Project" })],
+      events: [redRun, greenRun],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const activeRow = active().querySelector<HTMLElement>(
+      '[data-testid="cycle-row"][data-status="active"]',
+    )!;
+    expect(activeRow).not.toBeNull();
+
+    // ONE container hosting the whole open span (item 3's introduced testid
+    // — none of `open-span` exists yet on production).
+    const spanContainer = activeRow.querySelector<HTMLElement>('[data-testid="open-span"]');
+    expect(spanContainer).not.toBeNull();
+
+    // Normalized visible text equals the mock string EXACTLY — mask-icon
+    // glyph elements carry no text of their own (asserted separately below),
+    // so they don't leak into this comparison.
+    expect(norm(spanContainer!.textContent)).toBe(
+      "CR-NAI-042-RED 2/5 · CR-NAI-042-GREEN 5/5 · awaiting orchestrator confirm",
+    );
+
+    // NO relative-age text anywhere in the span — the mock has none, the
+    // live UI's per-run age stamp is the defect this pins away.
+    expect(spanContainer!.textContent ?? "").not.toMatch(/\bago\b/);
+
+    // Mask-icon elements are present — asserted separately from the text.
+    const icons = Array.from(
+      spanContainer!.querySelectorAll<HTMLElement>('[data-testid="card-icon"]'),
+    );
+    expect(icons.length).toBe(2);
+    for (const icon of icons) {
+      expect(icon.getAttribute("data-icon-tintable")).toBe("true");
+    }
+
+    // Run entries are inline-level elements: a `<span>` tag, or a container
+    // carrying the `app-inline-run` class.
+    const runRows = Array.from(
+      spanContainer!.querySelectorAll<HTMLElement>('[data-testid="linked-run-row"]'),
+    );
+    expect(runRows.length).toBe(2);
+    for (const row of runRows) {
+      const isInlineTag = row.tagName.toLowerCase() === "span";
+      const hasInlineClass = /\bapp-inline-run\b/.test(row.className);
+      expect(isInlineTag || hasInlineClass).toBe(true);
+    }
+
+    // The two runs + the trailing annotation are joined by literal '·' TEXT
+    // NODES within the one flowing container — never separate block rows.
+    const dotTextNodes = collectDotTextNodes(spanContainer!);
+    expect(dotTextNodes.length).toBeGreaterThanOrEqual(2);
+
+    // The trailing annotation stays nested inside the same flowing container.
+    const annotation = spanContainer!.querySelector('[data-testid="open-span-annotation"]');
+    expect(annotation).not.toBeNull();
+    expect(norm(annotation!.textContent)).toBe("awaiting orchestrator confirm");
+  });
+});

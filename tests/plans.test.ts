@@ -661,6 +661,72 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
   });
 
+  // ── RED addendum (cycle 13, gap 3) — POST /plans `wave` coercion ─────────
+  // src/v2.ts:537 currently accepts ONLY strings for `wave`
+  // (`typeof body.wave === "string" ? body.wave : undefined`) — a numeric
+  // wave (e.g. the orchestrator's real plan 4, filed with `wave: 4`) is
+  // silently coerced to `undefined` and stored NULL, with no 400 at all.
+  // The lens sorts wave labels with the string-label model
+  // (`numericLabelCompare`, public/app-logic.mjs) — a numeric wave must
+  // coerce to its string form on entry to match that model, exactly the
+  // way an already-string wave is accepted unchanged; anything else
+  // (an object) 400s naming the field, mirroring the §S6.11 `title` pattern.
+  describe("POST /api/v2/projects/<key>/plans — wave coercion (RED addendum, cycle 13, gap 3)", () => {
+    test('a numeric wave (4) is stored and returned as the STRING "4" on the POST response and on GET', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-WAVE-NUM-1",
+        wave: 4,
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      expect(filedBody.wave).toBe("4");
+      expect(typeof filedBody.wave).toBe("string");
+
+      const listed = await getJson(plansPath(key, "?cr=CR-WAVE-NUM-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const plan = listedBody.plans.find((p) => p.cr === "CR-WAVE-NUM-1")!;
+      expect(plan.wave).toBe("4");
+      expect(typeof plan.wave).toBe("string");
+    });
+
+    test('a string wave ("4") is stored and returned UNCHANGED', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-WAVE-STR-1",
+        wave: "4",
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      expect(filedBody.wave).toBe("4");
+
+      const listed = await getJson(plansPath(key, "?cr=CR-WAVE-STR-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const plan = listedBody.plans.find((p) => p.cr === "CR-WAVE-STR-1")!;
+      expect(plan.wave).toBe("4");
+    });
+
+    test("a non-string-non-number wave (an object) -> 400 naming the wave field", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const res = await postJson(plansPath(key), {
+        cr: "CR-WAVE-BAD-1",
+        wave: { nested: true },
+        cycles: [{ label: "a" }],
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toMatch(/\bwave\b/i);
+    });
+  });
+
   // ── §S0 — plans are not run events ────────────────────────────────────────
   describe("plans do not affect run-event surfaces", () => {
     test("filing, transitioning, and closing a plan add NO events and change NO events-list count", async () => {
