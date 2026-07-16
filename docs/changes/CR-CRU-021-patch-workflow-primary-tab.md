@@ -37,10 +37,30 @@ Applies to the Workflow active section and history cycle rows alike (history
 shows sealed durations). Cycles predating the timestamp migration (no
 `activatedAt`) show no timer, never a fabricated value.
 
+### §S4 Group headers carry aggregates, never agent-id rows (user-locked 2026-07-16)
+The CR-group header renders NO per-agent rows of any kind — participating
+agents appear as an aggregate pill (`N agents`) on the header; per-agent
+identity + runtime detail renders only behind the group's expansion
+(alongside the cycle rows). Root cause class closed structurally: three
+distinct causes (fabricated 0ms rows, lingering gate-agent ghosts, the
+original run leak) all manifested as agent-id rows at group level reading as
+run entries. CR-011's "participating agents + runtimes" information survives,
+one level down.
+
+### §S5 Gate runs bracket their lifecycle (client, formalized by CR-008)
+`bun-crucible.py test`/`regression` with `--agent` REGISTERS the agent before
+the run and UNREGISTERS it after the final ingest — gate/close-out agents
+never linger as online ghosts, and their runtimes seal honestly on the
+lifecycle event (CR-CRU-020-CLOSE lingered 38 minutes as `online` — the
+gremlin of 2026-07-16). Orchestrator procedure until this lands: unregister
+gate agents manually at close-out.
+
 ## Acceptance criteria
 - [ ] `L.workspaceTabs` returns names exactly `["Workflow","Runs","Coverage","Compile","BDD"]` (both project types; existing enable/disable semantics untouched); tab-list assertions across suites re-targeted under this CR's sanction.
 - [ ] Entering a workspace (badge click AND cold `/p/<key>` load) renders the Workflow pane active (`Workflow` tab `on`, `workflow-active` present); selecting Runs still works and the one-rule/tabs-hide behaviors are unchanged (spot re-run of the CR-016/020 binding tests).
 - [ ] Cold `/p/<key>/run/<id>`: the detail renders in-pane; closing it lands on the WORKFLOW pane with its tab `on` (the new default), chip text `← workflow`.
+- [ ] §S4: a closed CR group's header contains an `N agents` aggregate pill and ZERO elements carrying an agentId; expanding the group reveals the per-agent runtime rows (fleet-registered semantics unchanged); the three historical causes are regression-pinned (fabricated-0ms fixture, lingering-online-agent fixture, linked-run fixture — none may surface an agent-id row at header level).
+- [ ] §S5: `bun-crucible.py regression --agent X` against a live server leaves NO agent row in the fleet after exit (register→ingest→unregister bracketed; asserted via the Python client contract harness + a lifecycle-event pair check); `test --agent X` identical; omitted `--agent` unchanged.
 - [ ] §S3 timer: an active cycle row renders `data-testid="cycle-timer"` whose text advances across two samples with an injected clock (ticking, anchored to `activatedAt`); PATCHing the cycle `done` seals it — the timer text equals the formatted `doneAt − activatedAt` and no longer advances; a done history cycle row shows the same sealed duration; a cycle with no `activatedAt` renders NO `cycle-timer` element.
 
 ## Estimated size
