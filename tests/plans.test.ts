@@ -252,6 +252,20 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       expect(await getCycleStatus(key, "CR-T-3")).toBe("skipped");
     });
 
+    test("pending -> failed (skipping active) -> 400 naming both states — the boundary of the one shortcut", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+      const { planId, cycleId } = await fileSingleCycle(key, "CR-T-3b");
+
+      const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+        status: "failed",
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toMatch(/pending/i);
+      expect(text).toMatch(/failed/i);
+    });
+
     test("active -> skipped succeeds", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject();
