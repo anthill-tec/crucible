@@ -1,6 +1,6 @@
 # CR-CRU-020 — Patch: workflow history view refinements
 
-**Status:** COMPLETED (2026-07-16 — awaiting merge gate)
+**Status:** COMPLETED (2026-07-16 — merged to develop 9ce9eba)
 
 **Type:** patch
 **Priority:** P2
