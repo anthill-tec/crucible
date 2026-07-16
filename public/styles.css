@@ -717,8 +717,16 @@ body {
   color: var(--ember);
   border: 1px solid rgba(255, 122, 26, 0.45);
   background: rgba(255, 122, 26, 0.08);
+  white-space: nowrap;
 }
-.app-cycle-timer-sealed { font-family: var(--mono); }
+.app-cycle-timer-sealed {
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+/* §S6 item 2 (re-baselined 2026-07-17) — ALIGNED TIMERS: both timer forms
+   share this slot class; the flex .app-cycle-line pushes the badge to a
+   right-hand column so rows read clean regardless of label length. */
+.app-cycle-timer-slot { margin-left: auto; }
 /* §S6 #11 — heat-highlighted CR-root id */
 .app-heat-ink { color: var(--heat); }
 .app-cr-root {

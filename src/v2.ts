@@ -56,6 +56,8 @@ interface V2Body {
   cr?: unknown;
   // CR-CRU-021 §S6.11 — optional CR title captured at plan filing
   title?: unknown;
+  // CR-CRU-021 §S6 re-baseline (cycle 19) — optional orchestrator identity
+  orchestrator?: unknown;
   wave?: unknown;
   track?: unknown;
   cycles?: unknown;
@@ -534,6 +536,14 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
     return fail(400, "title must be a string");
   }
   const title = typeof body.title === "string" ? body.title : undefined;
+  // §S6 re-baseline (cycle 19) — additive optional orchestrator identity:
+  // stored verbatim when a string, 400 naming the field on any other
+  // present type (same contract as title).
+  if (body.orchestrator !== undefined && typeof body.orchestrator !== "string") {
+    return fail(400, "orchestrator must be a string");
+  }
+  const orchestrator =
+    typeof body.orchestrator === "string" ? body.orchestrator : undefined;
   // Cycle 13 gap 3 — a numeric wave is coerced to its decimal string; any
   // other non-string present type → 400 naming the field.
   if (body.wave !== undefined && typeof body.wave !== "string" && typeof body.wave !== "number") {
@@ -549,6 +559,7 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
   const plan = store.filePlan(pk.key, {
     cr: body.cr,
     ...(title !== undefined ? { title } : {}),
+    ...(orchestrator !== undefined ? { orchestrator } : {}),
     ...(wave !== undefined ? { wave } : {}),
     ...(track !== undefined ? { track } : {}),
     cycles,
@@ -562,6 +573,7 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
       cr: plan.cr,
       status: plan.status,
       ...(plan.title !== undefined ? { title: plan.title } : {}),
+      ...(plan.orchestrator !== undefined ? { orchestrator: plan.orchestrator } : {}),
       ...(plan.wave !== undefined ? { wave: plan.wave } : {}),
       ...(plan.track !== undefined ? { track: plan.track } : {}),
       cycles: plan.cycles,
@@ -630,6 +642,19 @@ async function handlePlanClose(
   if (planId === null) return fail(404, `plan not found: ${planIdRaw}`);
   const body = await readBody(req);
   if (body === null) return fail(400, "malformed JSON body");
+  // §S6 re-baseline (cycle 19) — one-field orchestrator backfill: a PATCH
+  // body carrying `orchestrator` with NO `status` stamps an OPEN plan (the
+  // executing plan); closed plans → 400, mirroring the close validation.
+  if (body.status === undefined && body.orchestrator !== undefined) {
+    if (typeof body.orchestrator !== "string") {
+      return fail(400, "orchestrator must be a string");
+    }
+    const stamped = store.stampOrchestrator(pk.key, planId, body.orchestrator);
+    if ("error" in stamped) {
+      return fail(stamped.notFound === true ? 404 : 400, stamped.error);
+    }
+    return json({ ok: true, changed: true, plan: stamped });
+  }
   if (body.status !== "closed") {
     return fail(400, `status must be "closed" to close a plan`);
   }

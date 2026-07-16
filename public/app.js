@@ -453,13 +453,16 @@
       if (cycle.activatedAt === undefined) return null;
       if (cycle.status === "active") {
         return span(
-          { "data-testid": "cycle-timer", class: "app-cycle-timer-ember" },
+          { "data-testid": "cycle-timer", class: "app-cycle-timer-slot app-cycle-timer-ember" },
           () => fmtCycleTimer(tickNow.val - cycle.activatedAt),
         );
       }
       if (cycle.doneAt === undefined) return null;
       return span(
-        { "data-testid": "cycle-timer", class: "app-card-meta app-cycle-timer-sealed" },
+        {
+          "data-testid": "cycle-timer",
+          class: "app-card-meta app-cycle-timer-slot app-cycle-timer-sealed",
+        },
         fmtCycleTimer(cycle.doneAt - cycle.activatedAt),
       );
     };
@@ -1206,13 +1209,19 @@
       span({ class: "app-toggle-glyph" }, () => (lensOpen(key) ? "▾" : "▸"));
 
     // Runs linked to a cycle via the §S0 `context.cycleId` passthrough.
+    // §S6 #3 (re-baselined 2026-07-17) — CHRONOLOGICAL, latest LAST: run
+    // lists inside a cycle sort by timestamp ascending regardless of the
+    // events array's arrival order (latest-first stays EXCLUSIVELY the
+    // History section's wave/CR-group ordering).
     const linkedRunsFor = (cycleId) =>
-      state.events.filter(
-        (e) =>
-          e.projectKey === state.route.projectKey &&
-          e.kind !== "lifecycle" &&
-          e.context?.cycleId === cycleId,
-      );
+      state.events
+        .filter(
+          (e) =>
+            e.projectKey === state.route.projectKey &&
+            e.kind !== "lifecycle" &&
+            e.context?.cycleId === cycleId,
+        )
+        .sort((a, b) => a.timestamp - b.timestamp);
 
     // CR-CRU-016 binding — a linked run opens as a pane state of the
     // WORKFLOW pane through the SAME openDrillin path as cards/markers
@@ -1309,14 +1318,14 @@
       return div({ "data-testid": "open-span", class: "app-open-span" }, parts);
     };
 
-    // CR-CRU-021 §S6 #2 — cycle-row status narration where data allows.
-    const cycleNarration = (cycle, plan) => {
+    // CR-CRU-021 §S6 #2 (re-baselined 2026-07-17) — DONE rows are BARE: the
+    // ✓ glyph IS the done signal, no status narration at all (the removed
+    // "done — GREEN confirmed[ by X]" / "done — report accepted" forms; the
+    // orchestrator identity stamps the CR ROOT instead). ACTIVE keeps
+    // `· ACTIVE`; pending/skipped/failed keep their status word.
+    const cycleNarration = (cycle) => {
       if (cycle.status === "active") return "ACTIVE";
-      if (cycle.status === "done") {
-        if (cycle.kind === "verify") return "done — report accepted";
-        const by = plan?.orchestrator !== undefined ? ` by ${plan.orchestrator}` : "";
-        return `done — GREEN confirmed${by}`;
-      }
+      if (cycle.status === "done") return null;
       return cycle.status;
     };
 
@@ -1326,11 +1335,12 @@
     // renders its linked runs ALWAYS inline (no toggle element at all; the
     // toggle contract narrows to History), trailed by the dim
     // `awaiting orchestrator confirm` annotation (§S6 #3).
-    const CycleRow = (cycle, ordinal, plan) => {
+    const CycleRow = (cycle, ordinal) => {
       // §S3 — ember badge inline after `· ACTIVE`, before the open span;
-      // dim sealed timer trailing the done narration. Null when the cycle
+      // dim sealed timer trailing the bare done label. Null when the cycle
       // predates the timestamp migration (F13 fixtures stay byte-identical).
       const timer = CycleTimer(cycle);
+      const narration = cycleNarration(cycle);
       const lineParts = [
         `cycle ${ordinal} · "${cycle.label}"`,
         ...(cycle.kind !== undefined && cycle.kind !== "red-green"
@@ -1343,7 +1353,7 @@
               "]",
             ]
           : []),
-        ` · ${cycleNarration(cycle, plan)}`,
+        ...(narration !== null ? [` · ${narration}`] : []),
       ];
       return div(
         {
@@ -1393,9 +1403,11 @@
                   },
                   activeHeaderText(plan),
                 ),
-                // §S6 #11 — the CR ROOT: heat-highlighted id, ` · <title>`
-                // when the plan carries one (id-only root otherwise), the
-                // cycle rows INDENTED beneath it.
+                // §S6 #11 (re-baselined 2026-07-17) — the CR ROOT:
+                // heat-highlighted id, ` · <title>` when the plan carries
+                // one, ` — <orchestrator>` when stamped (each segment
+                // independently omitted when absent), the cycle rows
+                // INDENTED beneath it.
                 div(
                   { "data-testid": "workflow-cr-root", "data-cr": plan.cr, class: "app-cr-root" },
                   span(
@@ -1403,10 +1415,11 @@
                     plan.cr,
                   ),
                   plan.title !== undefined ? ` · ${plan.title}` : null,
+                  plan.orchestrator !== undefined ? ` — ${plan.orchestrator}` : null,
                 ),
                 div(
                   { class: "app-cr-root-cycles" },
-                  (plan.cycles ?? []).map((cycle, i) => CycleRow(cycle, i + 1, plan)),
+                  (plan.cycles ?? []).map((cycle, i) => CycleRow(cycle, i + 1)),
                 ),
               ),
             ),
