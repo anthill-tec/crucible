@@ -718,3 +718,8 @@ body {
 }
 .app-linked-run-row:hover { color: var(--heat); }
 .app-workflow-history { color: var(--ink-faint); }
+/* CR-CRU-020 — ▸/▾ expand affordances (rows stay text-color only) */
+.app-lens-toggle { cursor: pointer; user-select: none; }
+.app-lens-toggle:hover .app-pane-section-title { color: var(--heat); }
+.app-cycle-toggle { cursor: pointer; user-select: none; }
+.app-toggle-glyph { color: var(--ink-faint); width: 1em; display: inline-block; }

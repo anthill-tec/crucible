@@ -1140,6 +1140,29 @@
       failed: "✗",
     };
 
+    // CR-CRU-020 §S1.2/§S1.4/§S2 — expand/collapse state for CR groups,
+    // cycle rows and the ungrouped tail. Keyed OUTSIDE the render tree
+    // (surface-keyed — the CR-016 one-rule precedent) so poll-tick
+    // re-renders and the detail pane swap never reset an expansion. The
+    // van.state rev is the reactive handle each slot's OWN child binding
+    // reads, so a toggle re-renders only that slot — row/group element
+    // identity is preserved across clicks.
+    const lensOpenKeys = new Set();
+    const lensOpenRev = van.state(0);
+    const lensKey = (kind, id) => `${kind}:${state.route.projectKey}:${id}`;
+    const lensOpen = (key) => {
+      lensOpenRev.val; // subscribe the enclosing binding to toggle flips
+      return lensOpenKeys.has(key);
+    };
+    const lensToggle = (key) => {
+      if (!lensOpenKeys.delete(key)) lensOpenKeys.add(key);
+      lensOpenRev.val += 1;
+    };
+    // ▸/▾ — the drill-in tree's expand affordance (design language: rows
+    // stay text-color only; the glyph is the visual cue).
+    const ToggleGlyph = (key) =>
+      span({ class: "app-toggle-glyph" }, () => (lensOpen(key) ? "▾" : "▸"));
+
     // Runs linked to a cycle via the §S0 `context.cycleId` passthrough.
     const linkedRunsFor = (cycleId) =>
       state.events.filter(
@@ -1167,10 +1190,13 @@
         span({ class: "app-card-meta" }, rel(e.timestamp)),
       );
 
-    // One todo row per cycle; ONLY the active cycle expands to list its
-    // context.cycleId-linked runs (live over the refetch cadence).
-    const CycleRow = (cycle) =>
-      div(
+    // One todo row per cycle; ONLY the active cycle can list its
+    // context.cycleId-linked runs (live over the refetch cadence), and —
+    // CR-CRU-020 §S2.3 — those runs sit behind the row's own click toggle
+    // (parity with history's cycle rows, collapsed by default).
+    const CycleRow = (cycle) => {
+      const key = lensKey("cycle", cycle.id);
+      return div(
         {
           "data-testid": "cycle-row",
           "data-status": cycle.status,
@@ -1178,6 +1204,16 @@
         },
         div(
           { class: "app-cycle-line" },
+          cycle.status === "active"
+            ? span(
+                {
+                  "data-testid": "cycle-toggle",
+                  class: "app-cycle-toggle",
+                  onclick: () => lensToggle(key),
+                },
+                ToggleGlyph(key),
+              )
+            : null,
           span(
             { "data-testid": "cycle-glyph", class: "app-cycle-glyph" },
             CYCLE_GLYPHS[cycle.status] ?? CYCLE_GLYPHS.pending,
@@ -1185,12 +1221,16 @@
           span({ class: "app-cycle-label" }, cycle.label),
         ),
         cycle.status === "active"
-          ? div(
-              { class: "app-cycle-runs" },
-              linkedRunsFor(cycle.id).map(LinkedRunRow),
-            )
+          ? () =>
+              lensOpen(key)
+                ? div(
+                    { class: "app-cycle-runs" },
+                    linkedRunsFor(cycle.id).map(LinkedRunRow),
+                  )
+                : ""
           : null,
       );
+    };
 
     const WorkflowActive = () => {
       const openPlans = state.plans.filter((p) => p.status === "open");
@@ -1234,8 +1274,13 @@
       );
     };
 
-    const LensCycleRow = (cycle) =>
-      div(
+    // CR-CRU-020 §S2.1 — history cycle rows own a DISTINCT toggle level for
+    // their linked runs (collapsed by default); done + active rows are the
+    // expandable ones. Inferred cycles carry no id — key on cr + label.
+    const LensCycleRow = (cycle, crName) => {
+      const expandable = cycle.status === "done" || cycle.status === "active";
+      const key = lensKey("cycle", cycle.id ?? `${crName}:${cycle.label}`);
+      return div(
         {
           "data-testid": "lens-cycle-row",
           "data-status": cycle.status,
@@ -1243,6 +1288,16 @@
         },
         div(
           { class: "app-cycle-line" },
+          expandable
+            ? span(
+                {
+                  "data-testid": "cycle-toggle",
+                  class: "app-cycle-toggle",
+                  onclick: () => lensToggle(key),
+                },
+                ToggleGlyph(key),
+              )
+            : null,
           span(
             { class: "app-cycle-glyph" },
             CYCLE_GLYPHS[cycle.status] ?? CYCLE_GLYPHS.pending,
@@ -1250,27 +1305,43 @@
           span({ class: "app-cycle-label" }, cycle.label),
         ),
         // A done cycle is a CLOSED span wrapping its linked runs; the active
-        // cycle keeps collecting its runs live (open span, §S3).
-        cycle.status === "done"
-          ? div(
-              { "data-testid": "cycle-span-closed", class: "app-cycle-span-closed" },
-              cycle.runs.map(LinkedRunRow),
-            )
-          : cycle.status === "active" && cycle.runs.length > 0
-            ? div({ class: "app-cycle-runs" }, cycle.runs.map(LinkedRunRow))
-            : null,
+        // cycle keeps collecting its runs live (open span, §S3). Both sit
+        // behind the row's own toggle (§S2.1/§S2.2 drill-down).
+        expandable
+          ? () => {
+              if (!lensOpen(key)) return "";
+              return cycle.status === "done"
+                ? div(
+                    { "data-testid": "cycle-span-closed", class: "app-cycle-span-closed" },
+                    cycle.runs.map(LinkedRunRow),
+                  )
+                : cycle.runs.length > 0
+                  ? div({ class: "app-cycle-runs" }, cycle.runs.map(LinkedRunRow))
+                  : "";
+            }
+          : null,
       );
+    };
 
-    const LensCrGroup = (node) =>
-      div(
+    const LensCrGroup = (node) => {
+      const key = lensKey("cr", node.cr);
+      return div(
         {
           "data-testid": "cr-group",
           "data-cr": node.cr,
           "data-status": node.status ?? "inferred",
           class: "app-cr-group",
         },
+        // CR-CRU-020 §S1.2 — the existing header row IS the toggle: cr,
+        // track badge, rollup and merge pill stay always-visible; only the
+        // cycle list collapses (by default) beneath it.
         div(
-          { class: "app-cr-line" },
+          {
+            "data-testid": "cr-group-toggle",
+            class: "app-cr-line app-lens-toggle",
+            onclick: () => lensToggle(key),
+          },
+          ToggleGlyph(key),
           span({ class: "app-pane-section-title" }, node.cr),
           node.track !== undefined
             ? span({ "data-testid": "track-badge", class: "app-pill" }, node.track)
@@ -1286,9 +1357,16 @@
               )
             : null,
         ),
-        node.cycles.map(LensCycleRow),
+        () =>
+          lensOpen(key)
+            ? div(
+                { class: "app-cr-cycles" },
+                node.cycles.map((c) => LensCycleRow(c, node.cr)),
+              )
+            : "",
         node.agents.map(CrAgentRuntime),
       );
+    };
 
     const WaveHeader = (wave) => {
       const chips = wave.state?.chips ?? [];
@@ -1326,19 +1404,32 @@
         wave.crs.map(LensCrGroup),
       );
 
-    const UngroupedTail = (runs) =>
-      div(
+    // CR-CRU-020 §S1.4 — the raw ungrouped listing is demoted to a single
+    // count-only row (`ungrouped · N runs`), collapsed by default; the count
+    // row itself never disappears (the never-hidden degradation rule).
+    const UngroupedTail = (runs) => {
+      const key = lensKey("ungrouped", "tail");
+      return div(
         { "data-testid": "ungrouped-tail", class: "app-ungrouped-tail" },
         div(
-          { class: "app-cr-line" },
+          {
+            "data-testid": "ungrouped-toggle",
+            class: "app-cr-line app-lens-toggle",
+            onclick: () => lensToggle(key),
+          },
+          ToggleGlyph(key),
           span({ class: "app-pane-section-title" }, "ungrouped"),
           span(
             { "data-testid": "ungrouped-count", class: "app-pill" },
             `${runs.length} runs`,
           ),
         ),
-        runs.map(LinkedRunRow),
+        () =>
+          lensOpen(key)
+            ? div({ class: "app-ungrouped-runs" }, runs.map(LinkedRunRow))
+            : "",
       );
+    };
 
     const WorkflowHistory = () => {
       const lens = L.workflowLens({
