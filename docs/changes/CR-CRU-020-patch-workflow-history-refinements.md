@@ -1,6 +1,6 @@
 # CR-CRU-020 — Patch: workflow history view refinements
 
-**Status:** IN_PROGRESS (2026-07-16 — reopened at the merge gate: user review defects, C3)
+**Status:** COMPLETED (2026-07-16 — awaiting merge gate)
 
 **Type:** patch
 **Priority:** P2
@@ -49,8 +49,8 @@ Cycle rows become interactive everywhere:
 - [x] §S1.1: a fixture with waves 3 and 4 (both closed) renders wave 4's group ABOVE wave 3's; within a wave, a CR closed later renders above one closed earlier.
 - [x] §S1.2: a history CR group mounts with its cycle rows ABSENT from the DOM; clicking the group header renders them; a second click removes them (toggle asserted twice).
 - [x] §S1.3: with plan A open and plan B closed, the history section contains exactly one CR group (B); PATCHing plan A closed moves A's group into history without reload (SSE/poll tick).
-- [ ] §S1.4 (corrected): the Workflow view contains NO ungrouped listing element and NO run entry outside an expanded cycle drill-down — with 5 unlinked runs present, `workflow-history` renders zero `linked-run-row`/run entries and no `ungrouped` element; the 5 runs remain on the Runs timeline (count asserted there).
-- [ ] §S2 group-level negative bound (user defect): expanding a CR group (group toggle ONLY, no cycle toggle) renders its cycle rows and ZERO run entries — a closed plan whose cycles have linked runs shows those runs only after the specific cycle's toggle is clicked (the stray GREEN/CLOSE-at-group-level scenario pinned as a regression).
+- [x] §S1.4 (corrected): the Workflow view contains NO ungrouped listing element and NO run entry outside an expanded cycle drill-down — with 5 unlinked runs present, `workflow-history` renders zero `linked-run-row`/run entries and no `ungrouped` element; the 5 runs remain on the Runs timeline (count asserted there).
+- [x] §S2 group-level negative bound (user defect): expanding a CR group (group toggle ONLY, no cycle toggle) renders its cycle rows and ZERO run entries — a closed plan whose cycles have linked runs shows those runs only after the specific cycle's toggle is clicked (the stray GREEN/CLOSE-at-group-level scenario pinned as a regression).
 - [x] §S2.1/§S2.2: clicking a history cycle row expands its linked-run entries; clicking a run entry swaps the Workflow pane to that run's detail (`workspace-tabs` absent, back chip `← workflow`); closing restores the Workflow view with the expanded state and scroll intact.
 - [x] §S2.3: the ACTIVE section's active cycle supports the same expand toggle and run drill-down (asserted with the same technique as §S2.1/2).
 
