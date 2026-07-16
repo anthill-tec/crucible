@@ -580,3 +580,236 @@ describe('§S3 — no activatedAt renders NO cycle-timer element (never a fabric
     },
   );
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// PLAN CYCLE 18 — live-review DEFECT: "the timer is working but the badge
+// is not getting live updated! Preferably the badge should be updated
+// every 10 seconds." (user report, 2026-07-16, verbatim)
+//
+// Root cause: the GREEN-phase cycle-timer render (public/app.js) computes
+// `Date.now() - activatedAt` only at RENDER time, and the app only
+// re-renders when a poll/SSE tick observes CHANGED fetched data. With no
+// new data flowing — the common steady-state case, e.g. a long-running
+// cycle sitting between poll ticks with nothing else changing on the
+// project — `Date.now()` is never recomputed and the on-screen badge
+// freezes, even though §S3 requires the elapsed time to be "visibly
+// updating while it runs".
+//
+// Every test ABOVE this line only ever observes a "tick" by tearing down
+// and re-mounting under a NEW injected `setSystemTime()` value (a fresh
+// render each time) — never by holding ONE mount open across real elapsed
+// time with the fetch mock returning UNCHANGED data. That is exactly why
+// the existing suite is green today even though the live UI is frozen: it
+// never actually exercises "does the SAME mounted badge move on its own".
+// The tests below close that gap.
+//
+// ── SELF-TICK TECHNIQUE FINDING (this RED session) ────────────────────
+// Per the dispatch brief, bun's fake-timer API was checked FIRST, before
+// falling back to a real wait:
+//   - `bun:test` DOES expose `jest.useFakeTimers()` / `jest.advanceTimersByTime()`
+//     (node_modules/bun-types/test.d.ts:98-104), and a throwaway probe
+//     confirmed it correctly advances a plain `setInterval` — including one
+//     registered on `globalThis` AFTER `GlobalRegistrator.register()` — with
+//     zero real wall-clock wait, and that `Date.now()` itself moves under
+//     `advanceTimersByTime()`.
+//   - However, wiring fake timers into THIS harness is not viable: the
+//     shared `mountApp()`/`settle()` helper (used by every test in this
+//     file, matching `tests/f13-fidelity.test.ts` / `tests/workflow-lens.test.ts`)
+//     flushes van-x's rendering pipeline via REAL `await new Promise((r) =>
+//     setTimeout(r, 20))` loops. A second probe reproduced that exact shape
+//     under `jest.useFakeTimers()` and it hung indefinitely (killed by an
+//     external 15s timeout, never resolving): once fake timers are
+//     installed, ALL `setTimeout` calls become fake — including the
+//     harness's own flush loop — and nothing outside that `await` chain is
+//     free to call `advanceTimersByTime()` to unblock it, because the test
+//     is synchronously blocked awaiting `mountApp()` itself.
+//   - Enabling fake timers only AFTER `mountApp()` resolves does not help
+//     either: `jest.useFakeTimers()` does not retroactively intercept a
+//     `setInterval` handle that a real-timer mount already created — it only
+//     fakes timer calls made AFTER installation.
+//   - Conclusion: no clock-injection technique is available that both (a)
+//     drives the real production render path through the existing,
+//     precedented `mountApp` harness and (b) deterministically advances an
+//     internal ticker without a real wait. The tests below use a BOUNDED
+//     REAL wall-clock wait instead — the same technique already established
+//     in this repo by `tests/agent-runtime-pane.test.ts`'s `waitForPollTick`
+//     (a real `setTimeout` wait bracketing the production poll interval) —
+//     scaled to the user-reported "every 10 seconds" cadence, with a
+//     generous per-test timeout.
+//
+// All elapsed offsets below are chosen to keep the rendered minutes
+// component >= 1 throughout (this file's own FORMAT FINDING above notes the
+// zero-minute case is not a contract pinned anywhere in this suite), so a
+// `parseTimerMs` mismatch here can only mean a genuine ticking failure, not
+// an untested zero-minute formatting edge case.
+
+/** Parses the pinned `⏱ <m>m <ss>s` (zero-padded seconds) format back to ms. */
+function parseTimerMs(text: string): number {
+  const m = /^⏱\s+(\d+)m\s+(\d{2})s$/.exec(text.trim());
+  expect(m).not.toBeNull();
+  const minutes = Number(m![1]);
+  const seconds = Number(m![2]);
+  return minutes * 60_000 + seconds * 1_000;
+}
+
+describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): the badge self-ticks without new poll/SSE data", () => {
+  test(
+    "an ACTIVE cycle's cycle-timer badge advances on its own, across a real >=10s wait, on the SAME mount with UNCHANGED fetch data (no remount, no fixture mutation)",
+    async () => {
+      const activatedAt = Date.now() - 62_000; // real clock, ~1m 02s elapsed at mount
+      const plan: PlanFixture = {
+        planId: 101,
+        cr: "CR-TIMER-LIVE-1",
+        status: "open",
+        wave: "1",
+        cycles: [{ id: 901, label: "compile fallback", status: "active", activatedAt }],
+      };
+      await mountApp({
+        pathname: "/p/proj-timer-live-1",
+        projects: [project({ key: "proj-timer-live-1", name: "Live Tick Project" })],
+        plans: [plan],
+      });
+      await openWorkflowTab();
+
+      const rowBefore = cycleRowFor(active(), "cycle-row", "compile fallback");
+      const timerBefore = rowBefore.querySelector('[data-testid="cycle-timer"]');
+      expect(timerBefore).not.toBeNull();
+      const msBefore = parseTimerMs(norm(timerBefore!.textContent));
+
+      // Real wall-clock wait, comfortably past the user-requested 10s
+      // cadence, with NO change to the plan/fixture and NO remount — the
+      // mocked fetch keeps returning the identical `activatedAt` every poll.
+      // If the badge only recomputes `Date.now()` at render time and only
+      // re-renders on a data-changing poll (today's bug), this observes the
+      // SAME frozen text.
+      await new Promise((resolve) => setTimeout(resolve, 11_000));
+      await settle();
+
+      const rowAfter = cycleRowFor(active(), "cycle-row", "compile fallback");
+      const timerAfter = rowAfter.querySelector('[data-testid="cycle-timer"]');
+      expect(timerAfter).not.toBeNull();
+      const msAfter = parseTimerMs(norm(timerAfter!.textContent));
+
+      // Self-ticking: elapsed time advanced by roughly the real wait, purely
+      // from the wall clock passing — never from a data change (the fixture
+      // object was never mutated).
+      expect(msAfter).toBeGreaterThan(msBefore);
+      expect(msAfter - msBefore).toBeGreaterThanOrEqual(9_000);
+    },
+    20_000,
+  );
+
+  test(
+    "the self-tick cadence is <=10s: TWO consecutive real waits of ~10.7s each (same mount, unchanged data) EACH show a further advance — not one eventual catch-up jump after a long wait",
+    async () => {
+      const activatedAt = Date.now() - 65_000; // ~1m 05s elapsed at mount
+      const plan: PlanFixture = {
+        planId: 102,
+        cr: "CR-TIMER-LIVE-2",
+        status: "open",
+        wave: "1",
+        cycles: [{ id: 902, label: "compile fallback", status: "active", activatedAt }],
+      };
+      await mountApp({
+        pathname: "/p/proj-timer-live-2",
+        projects: [project({ key: "proj-timer-live-2", name: "Live Tick Cadence Project" })],
+        plans: [plan],
+      });
+      await openWorkflowTab();
+
+      const readMs = (): number => {
+        const row = cycleRowFor(active(), "cycle-row", "compile fallback");
+        const timer = row.querySelector('[data-testid="cycle-timer"]');
+        expect(timer).not.toBeNull();
+        return parseTimerMs(norm(timer!.textContent));
+      };
+
+      const msSample0 = readMs();
+
+      // Window 1 — a hair over 10s, matching the user's "every 10 seconds"
+      // cadence request (a CADENCE bound, not merely an eventual-freshness
+      // bound).
+      await new Promise((resolve) => setTimeout(resolve, 10_700));
+      await settle();
+      const msSample1 = readMs();
+      expect(msSample1).toBeGreaterThan(msSample0);
+      expect(msSample1 - msSample0).toBeGreaterThanOrEqual(9_000);
+      expect(msSample1 - msSample0).toBeLessThanOrEqual(15_000);
+
+      // Window 2 — a SECOND ~10s-scale window also shows a further advance,
+      // pinning ONGOING cadence rather than a single one-off catch-up tick.
+      await new Promise((resolve) => setTimeout(resolve, 10_700));
+      await settle();
+      const msSample2 = readMs();
+      expect(msSample2).toBeGreaterThan(msSample1);
+      expect(msSample2 - msSample1).toBeGreaterThanOrEqual(9_000);
+      expect(msSample2 - msSample1).toBeLessThanOrEqual(15_000);
+    },
+    35_000,
+  );
+});
+
+describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): sealed rows never tick even across a real wait", () => {
+  test(
+    "a DONE cycle's sealed cycle-timer text is UNCHANGED across an >=10s real wall-clock wait on the SAME mount (no re-seal, no drift)",
+    async () => {
+      const activatedAt = Date.now() - 800_000;
+      const doneAt = activatedAt + 760_000; // 12m 40s sealed span
+      const plan: PlanFixture = {
+        planId: 103,
+        cr: "CR-TIMER-LIVE-3",
+        status: "open",
+        wave: "1",
+        cycles: [{ id: 903, label: "compile fallback", status: "done", activatedAt, doneAt }],
+      };
+      await mountApp({
+        pathname: "/p/proj-timer-live-3",
+        projects: [project({ key: "proj-timer-live-3", name: "Sealed Live Project" })],
+        plans: [plan],
+      });
+      await openWorkflowTab();
+
+      const rowBefore = cycleRowFor(active(), "cycle-row", "compile fallback");
+      const timerBefore = rowBefore.querySelector('[data-testid="cycle-timer"]');
+      expect(timerBefore).not.toBeNull();
+      const textBefore = norm(timerBefore!.textContent);
+      expect(textBefore).toBe("⏱ 12m 40s");
+
+      await new Promise((resolve) => setTimeout(resolve, 11_000));
+      await settle();
+
+      const rowAfter = cycleRowFor(active(), "cycle-row", "compile fallback");
+      const timerAfter = rowAfter.querySelector('[data-testid="cycle-timer"]');
+      expect(timerAfter).not.toBeNull();
+      const textAfter = norm(timerAfter!.textContent);
+      expect(textAfter).toBe(textBefore);
+      expect(textAfter).toBe("⏱ 12m 40s");
+    },
+    20_000,
+  );
+});
+
+// ── ITEM 4 (unmount/pane-swap clears the interval) — DEFERRED, not RED-valid ──
+// The dispatch brief allows skipping this item "if happy-dom can't observe
+// it" — but happy-dom is NOT the blocker here. A throwaway probe confirmed
+// `spyOn(globalThis, "setInterval")` / `spyOn(globalThis, "clearInterval")`
+// installed AFTER `GlobalRegistrator.register()` correctly survive the
+// registration and accurately count real calls in this exact harness.
+// The actual blocker: TODAY (pre-GREEN, this RED phase) there is NO
+// cycle-timer interval of any kind — mounting a plan with an active timered
+// cycle and mounting one without create the IDENTICAL set of app-wide
+// intervals (the existing poll timer + watchdog timer, public/app.js:174 /
+// :2295), so a "no NEW interval leaks past teardown" assertion would be
+// vacuously true (0 new intervals created, 0 to leak) against the CURRENT
+// no-op state. Per the RED self-check rule ("would this pass against a
+// no-op stub?") that disqualifies it as a RED assertion. Whether GREEN even
+// needs a DEDICATED per-row interval (vs. piggybacking the existing 5s
+// poll/watchdog cadence to recompute the badge) is exactly the
+// implementation choice GREEN has yet to make — pinning a specific
+// interval-count contract now would presume that choice rather than
+// specify required behavior. This is left as a GREEN-phase regression
+// follow-up: once a ticker mechanism exists to potentially leak an
+// interval, assert (via the spy technique confirmed feasible above) that
+// mounting a plan with an active timered cycle creates no more NEW
+// `setInterval` handles than are `clearInterval`'d by the time the pane is
+// torn down / swapped away from.

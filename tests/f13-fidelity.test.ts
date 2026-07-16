@@ -810,3 +810,88 @@ describe("§S6 #3 RED addendum (cycle 13, gap 1) — open-span runs render as ON
     expect(norm(annotation!.textContent)).toBe("awaiting orchestrator confirm");
   });
 });
+
+// ── RED ADDENDUM (cycle 18, live-review) — ZERO linked runs renders NO open-span row at all ──
+// Orchestrator live-review pin (2026-07-16, same UI domain as the cycle-18
+// timer defect): §S6 #3's open-span contract ("renders its linked runs
+// INLINE on one row: `🧪 <agent> <ratio> · 🧪 <agent> <ratio> · awaiting
+// orchestrator confirm`") is a contract for the case where the active cycle
+// HAS linked runs. On inspection, `public/app.js` `OpenSpan(cycleId)`
+// (~line 1278) unconditionally pushes the trailing "awaiting orchestrator
+// confirm" annotation regardless of how many entries `linkedRunsFor(cycleId)`
+// returns, and `CycleRow` (~line 1348) unconditionally calls `OpenSpan` for
+// ANY `active` cycle — so with ZERO cycleId-linked runs, today's UI still
+// renders a bare `[data-testid="open-span"]` container holding nothing but
+// the annotation: an "awaiting orchestrator confirm" floating with nothing
+// to confirm. The mock never shows this — the span row exists only WITH
+// runs. This pins the negative case.
+describe("§S6 #3 RED addendum (cycle 18, live-review) — ZERO linked runs renders NO open-span row at all", () => {
+  test("an ACTIVE cycle with NO events anywhere (so none can carry its cycleId) renders NO open-span container, NO open-span-annotation, and NO 'awaiting orchestrator confirm' text anywhere in its row", async () => {
+    const key = "f13-no-runs-1";
+
+    const plan: PlanFixture = {
+      planId: 9802,
+      cr: "CR-NAI-043",
+      status: "open",
+      wave: "1",
+      track: "track-1",
+      cycles: [{ id: 4302, label: "compile fallback", status: "active" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "No Linked Runs Project" })],
+      events: [], // zero events anywhere — nothing can link to cycleId 4302
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const activeRow = active().querySelector<HTMLElement>(
+      '[data-testid="cycle-row"][data-status="active"]',
+    )!;
+    expect(activeRow).not.toBeNull();
+
+    expect(activeRow.querySelector('[data-testid="open-span"]')).toBeNull();
+    expect(activeRow.querySelector('[data-testid="open-span-annotation"]')).toBeNull();
+    expect(norm(activeRow.textContent)).not.toContain("awaiting orchestrator confirm");
+  });
+
+  test("an ACTIVE cycle whose only events link to a DIFFERENT cycle's id (no match for THIS cycle) also renders NO open-span row", async () => {
+    const key = "f13-no-runs-2";
+    const now = Date.now();
+
+    const otherCycleRun = runEvent({
+      id: "evt-other-cycle-1",
+      projectKey: key,
+      agentId: "CR-NAI-044-RED",
+      timestamp: now,
+      context: { cycleId: 9999 }, // some OTHER cycle's id, never this one
+    });
+
+    const plan: PlanFixture = {
+      planId: 9803,
+      cr: "CR-NAI-044",
+      status: "open",
+      wave: "1",
+      track: "track-1",
+      cycles: [{ id: 4402, label: "compile fallback", status: "active" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Mismatched Linked Runs Project" })],
+      events: [otherCycleRun],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const activeRow = active().querySelector<HTMLElement>(
+      '[data-testid="cycle-row"][data-status="active"]',
+    )!;
+    expect(activeRow).not.toBeNull();
+
+    expect(activeRow.querySelector('[data-testid="open-span"]')).toBeNull();
+    expect(activeRow.querySelector('[data-testid="open-span-annotation"]')).toBeNull();
+    expect(norm(activeRow.textContent)).not.toContain("awaiting orchestrator confirm");
+  });
+});
