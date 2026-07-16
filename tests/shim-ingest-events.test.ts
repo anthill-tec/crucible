@@ -76,6 +76,7 @@ describe("shim ingest/events routes — §S1/§S2", () => {
     agentId?: string;
     projectKey?: string;
     tier?: unknown;
+    context?: unknown;
   }) {
     return {
       projectKey: overrides?.projectKey,
@@ -101,6 +102,7 @@ describe("shim ingest/events routes — §S1/§S2", () => {
       ...(overrides?.coverage !== undefined ? { coverage: overrides.coverage } : {}),
       ...(overrides?.name !== undefined ? { name: overrides.name } : {}),
       ...(overrides?.tier !== undefined ? { tier: overrides.tier } : {}),
+      ...(overrides?.context !== undefined ? { context: overrides.context } : {}),
     };
   }
 
@@ -236,6 +238,76 @@ describe("shim ingest/events routes — §S1/§S2", () => {
       };
       expect(listBody.events.length).toBe(1);
       expect(listBody.events[0]!.tier).toBe("unit");
+    });
+  });
+
+  // CR-CRU-019 §P1 AC-1 — v1 shim context passthrough. Today
+  // handleIngestParsed (src/server.ts) reads `body.tier` but never
+  // `body.context` at all — no interface field, no read, nothing forwarded
+  // to store.recordTestEvent's meta. The v2 paths (src/v2.ts runMeta) already
+  // forward `context` verbatim when it is a non-null object and silently
+  // DROP it otherwise (no 400) — that tolerant convention is what §P1
+  // prescribes mirroring onto this v1 path, so the malformed-context case
+  // below pins "silently dropped, no context key stored" per that precedent
+  // rather than a 400 (there is no existing 400-on-malformed-context
+  // behavior anywhere in the codebase to contradict this choice).
+  describe("POST /api/ingest/parsed — §P1 context passthrough (CR-CRU-019)", () => {
+    test('context:{cycleId:3, cycle:"x", git:{branch:"b",commit:"c"}} → stored VERBATIM on the event (asserted via GET /api/events)', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const pk = seedProject();
+      const context = { cycleId: 3, cycle: "x", git: { branch: "b", commit: "c" } };
+
+      const res = await postJson("/api/ingest/parsed", parsedBody({ projectKey: pk, context }));
+      expect(res.status).toBe(200);
+
+      const listRes = await getJson(`/api/events?projectKey=${pk}`);
+      expect(listRes.status).toBe(200);
+      const listBody = (await listRes.json()) as {
+        ok: true;
+        events: Array<{ id: string; context?: unknown }>;
+      };
+      expect(listBody.ok).toBe(true);
+      expect(listBody.events.length).toBe(1);
+      expect(listBody.events[0]!.context).toEqual(context);
+    });
+
+    test("omitted context → stored event carries NO context key at all (unchanged from pre-§P1 behavior)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const pk = seedProject();
+
+      const res = await postJson("/api/ingest/parsed", parsedBody({ projectKey: pk }));
+      expect(res.status).toBe(200);
+
+      const listRes = await getJson(`/api/events?projectKey=${pk}`);
+      expect(listRes.status).toBe(200);
+      const listBody = (await listRes.json()) as {
+        ok: true;
+        events: Array<Record<string, unknown>>;
+      };
+      expect(listBody.events.length).toBe(1);
+      expect(Object.prototype.hasOwnProperty.call(listBody.events[0], "context")).toBe(false);
+    });
+
+    test("malformed context (a non-object, e.g. a string) → tolerated exactly like the v2 runs path's runMeta(): silently dropped, 200 {ok:true}, event stored with NO context key (never a 400)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const pk = seedProject();
+
+      const res = await postJson(
+        "/api/ingest/parsed",
+        parsedBody({ projectKey: pk, context: "not-an-object" }),
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as OkParsedResponse;
+      expect(body.ok).toBe(true);
+
+      const listRes = await getJson(`/api/events?projectKey=${pk}`);
+      expect(listRes.status).toBe(200);
+      const listBody = (await listRes.json()) as {
+        ok: true;
+        events: Array<Record<string, unknown>>;
+      };
+      expect(listBody.events.length).toBe(1);
+      expect(Object.prototype.hasOwnProperty.call(listBody.events[0], "context")).toBe(false);
     });
   });
 

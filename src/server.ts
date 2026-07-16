@@ -9,7 +9,15 @@ import { parseCompile } from "./codecs/compile.ts";
 import { Store, UUID_RE } from "./store.ts";
 import type { TouchAgentOpts } from "./store.ts";
 import { TIERS, handleV2 } from "./v2.ts";
-import type { AgentIdentity, Coverage, RunSchema, RunSummary, SuiteNode, Tier } from "./types.ts";
+import type {
+  AgentIdentity,
+  Coverage,
+  RunContext,
+  RunSchema,
+  RunSummary,
+  SuiteNode,
+  Tier,
+} from "./types.ts";
 
 const pkg = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -47,6 +55,8 @@ interface IngestBody {
   eventId?: unknown;
   // CR-CRU-016 §S4 — optional tier passthrough on /api/ingest/parsed
   tier?: unknown;
+  // CR-CRU-019 §P1 — optional context passthrough on /api/ingest/parsed
+  context?: unknown;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -162,6 +172,11 @@ async function handleIngestParsed(store: Store, req: Request): Promise<Response>
     codec: "parsed",
     ...(typeof body.name === "string" ? { name: body.name } : {}),
     ...(tier !== undefined ? { tier } : {}),
+    // CR-CRU-019 §P1 — pass context through verbatim; non-object silently
+    // dropped, matching the v2 paths' runMeta() tolerant convention.
+    ...(typeof body.context === "object" && body.context !== null
+      ? { context: body.context as RunContext }
+      : {}),
   });
   // §S1 — echoes the input summary verbatim.
   return json({ ok: true, summary });

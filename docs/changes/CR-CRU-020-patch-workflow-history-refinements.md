@@ -1,0 +1,59 @@
+# CR-CRU-020 — Patch: workflow history view refinements
+
+**Status:** PENDING
+**Type:** patch
+**Priority:** P2
+**Depends on:** CR-CRU-011, CR-CRU-019
+**Labels:** patch, ui, workflow, lens
+**Phase:** Wave 4 (after 019, before 013)
+**Design reference:** user live review 2026-07-16 (five numbered improvements, screenshot: crucible_workflow_history.jpg); board F13 frame
+
+## Context
+The CR-011 lens shipped per spec; the user's first live review of real
+history data filed five usability refinements. New scope post-merge →
+patch CR per the process rule.
+
+## Scope
+
+### §S1 History ordering + grouping refinements
+1. **Latest first:** waves order newest-first; CR groups within a wave order
+   newest-first (by plan close time, open plans by filing time).
+2. **Collapsible CR groups:** a history CR entry renders COLLAPSED by default
+   (header row: cr, cycles done/total, merge pill) and toggles its cycle list
+   expanded/hidden on click.
+3. **Executing CR excluded:** a CR with an OPEN plan renders ONLY in the
+   ACTIVE section — the history lens shows exclusively closed (merged) plans;
+   a plan's close moves its CR group from Active to History.
+4. **Ungrouped tail demoted:** the raw ungrouped run listing collapses to a
+   single count-only row (`ungrouped · N runs`), collapsed by default,
+   expandable on click — preserving the never-hidden degradation rule while
+   removing the noise the user flagged as "not much value".
+
+### §S2 Cycle drill-down (history + active parity)
+Cycle rows become interactive everywhere:
+1. A history cycle row toggles its `context.cycleId`-linked run entries
+   expanded/hidden on click.
+2. A linked run entry drills into the run detail as a pane state of the
+   WORKFLOW pane (CR-016 one-rule; back chip `← workflow`), returning to the
+   Workflow view with scroll/tab state restored.
+3. The ACTIVE section's active cycle rows get the identical toggle +
+   drill-down behavior (parity with history).
+
+## Acceptance criteria
+- [ ] §S1.1: a fixture with waves 3 and 4 (both closed) renders wave 4's group ABOVE wave 3's; within a wave, a CR closed later renders above one closed earlier.
+- [ ] §S1.2: a history CR group mounts with its cycle rows ABSENT from the DOM; clicking the group header renders them; a second click removes them (toggle asserted twice).
+- [ ] §S1.3: with plan A open and plan B closed, the history section contains exactly one CR group (B); PATCHing plan A closed moves A's group into history without reload (SSE/poll tick).
+- [ ] §S1.4: 5 unlinked runs render as one `ungrouped · 5 runs` row with NO run entries mounted; clicking expands the 5 entries; the count row never disappears (degradation preserved).
+- [ ] §S2.1/§S2.2: clicking a history cycle row expands its linked-run entries; clicking a run entry swaps the Workflow pane to that run's detail (`workspace-tabs` absent, back chip `← workflow`); closing restores the Workflow view with the expanded state and scroll intact.
+- [ ] §S2.3: the ACTIVE section's active cycle supports the same expand toggle and run drill-down (asserted with the same technique as §S2.1/2).
+
+## Estimated size
+S.
+
+## Risk
+Expanded-state preservation across the CR-016 pane swap — the detail
+open/close must not reset lens toggle state (same class of state-keeping the
+one-rule already solved for tabs).
+
+## Non-goals
+Lens data-model changes; roadmap views (CR-014); milestone/gate rows (CR-013).

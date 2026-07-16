@@ -1,8 +1,7 @@
 # CR-CRU-019 — Patch: workflow-review tweak accumulator
 
-**Status:** PENDING (accumulator — user-directed 2026-07-16: "we will
-accumulate any such tweaks till the end of the current CR"; scope FREEZES at
-CR-CRU-011's merge, then this executes as a normal cycle-structured CR)
+**Status:** COMPLETED (2026-07-16 — awaiting merge gate)
+
 **Type:** patch
 **Priority:** P2
 **Depends on:** CR-CRU-011 (declared spans must exist)
@@ -45,20 +44,20 @@ place the marker after the LAST consecutive same-stem pass — changes locked
 semantics and still guesses; declared linkage is the honest fix.
 
 #### Acceptance criteria (§P1)
-- [ ] `POST /api/ingest/parsed` with `context:{cycleId: 3, cycle:"x",
+- [x] `POST /api/ingest/parsed` with `context:{cycleId: 3, cycle:"x",
   git:{branch:"b",commit:"c"}}` stores the context verbatim on the event
   (asserted via the events listing); omitted context unchanged.
-- [ ] `bun-crucible.py test` and `regression` with `WORKFLOW_CYCLE_ID=3
+- [x] `bun-crucible.py test` and `regression` with `WORKFLOW_CYCLE_ID=3
   WORKFLOW_CYCLE="checkpoint persistence"` set attach
   `context.cycleId === 3` + `context.cycle` (and `context.git` inside a
   repo); unset env → no context keys (byte-identical payload).
-- [ ] Dog-food proof: with an open plan, an active cycle, and linked RED →
+- [x] Dog-food proof: with an open plan, an active cycle, and linked RED →
   targeted-GREEN → full-suite runs, the timeline renders the declared span
   containing ALL THREE runs and NO inferred marker (the screenshot scenario,
   fixed).
 
 ## Estimated size
-S (grows as tweaks accumulate).
+S (scope frozen at §P1).
 
 ## Non-goals
 The full CR-008 fleet upgrade (plan verbs, narration, other stacks); heuristic
