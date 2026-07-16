@@ -54,6 +54,8 @@ interface V2Body {
   context?: unknown;
   // CR-CRU-011 §S0 — cycle-plan routes
   cr?: unknown;
+  // CR-CRU-021 §S6.11 — optional CR title captured at plan filing
+  title?: unknown;
   wave?: unknown;
   track?: unknown;
   cycles?: unknown;
@@ -526,10 +528,17 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
     if ("error" in parsed) return fail(400, parsed.error);
     cycles.push(parsed);
   }
+  // CR-CRU-021 §S6.11 — additive optional title: stored verbatim when a
+  // string, 400 naming the field on any other present type.
+  if (body.title !== undefined && typeof body.title !== "string") {
+    return fail(400, "title must be a string");
+  }
+  const title = typeof body.title === "string" ? body.title : undefined;
   const wave = typeof body.wave === "string" ? body.wave : undefined;
   const track = typeof body.track === "string" ? body.track : undefined;
   const plan = store.filePlan(pk.key, {
     cr: body.cr,
+    ...(title !== undefined ? { title } : {}),
     ...(wave !== undefined ? { wave } : {}),
     ...(track !== undefined ? { track } : {}),
     cycles,
@@ -542,6 +551,7 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
       planId: plan.planId,
       cr: plan.cr,
       status: plan.status,
+      ...(plan.title !== undefined ? { title: plan.title } : {}),
       ...(plan.wave !== undefined ? { wave: plan.wave } : {}),
       ...(plan.track !== undefined ? { track: plan.track } : {}),
       cycles: plan.cycles,

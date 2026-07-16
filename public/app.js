@@ -11,7 +11,7 @@
   "use strict";
 
   function main(L) {
-    const { a, button, div, option, pre, select, span } = van.tags;
+    const { a, b, button, div, option, pre, select, span } = van.tags;
 
     // ── State ───────────────────────────────────────────────────────────
     const state = vanX.reactive({
@@ -1176,6 +1176,9 @@
     // CR-CRU-016 binding — a linked run opens as a pane state of the
     // WORKFLOW pane through the SAME openDrillin path as cards/markers
     // (one-rule: no tab switch, tabs-hide, `← workflow` back chip).
+    // CR-CRU-021 §S6 #3 — the run entry carries the CR-007 mask-icon (never
+    // the mock's literal 🧪 emoji) and the PLAIN `P/T` ratio for pass AND
+    // fail, colored via class only.
     const LinkedRunRow = (e) =>
       div(
         {
@@ -1184,19 +1187,61 @@
           class: "app-linked-run-row",
           onclick: () => openDrillin(e.id),
         },
+        span(
+          {
+            "data-testid": "card-icon",
+            "data-icon-tintable": "true",
+            class: (() => {
+              const role = L.phaseRole(e.agentId);
+              return `app-card-icon${role !== null ? ` app-role-${role}` : ""}`;
+            })(),
+          },
+          span({
+            "data-testid": "icon-glyph",
+            class: "app-icon-mask",
+            "data-kind": "test",
+          }),
+        ),
         span({ class: "app-agent-id" }, e.agentId),
-        e.failed > 0
-          ? span({ class: "app-ratio-fail" }, `${e.failed} ✗ of ${e.total}`)
-          : span({ class: "app-ratio-pass" }, `${e.passed}/${e.total}`),
+        span(
+          { class: e.failed > 0 ? "app-ratio-fail" : "app-ratio-pass" },
+          `${e.passed}/${e.total}`,
+        ),
         span({ class: "app-card-meta" }, rel(e.timestamp)),
       );
 
-    // One todo row per cycle; ONLY the active cycle can list its
-    // context.cycleId-linked runs (live over the refetch cadence), and —
-    // CR-CRU-020 §S2.3 — those runs sit behind the row's own click toggle
-    // (parity with history's cycle rows, collapsed by default).
-    const CycleRow = (cycle) => {
-      const key = lensKey("cycle", cycle.id);
+    // CR-CRU-021 §S6 #2 — cycle-row status narration where data allows.
+    const cycleNarration = (cycle, plan) => {
+      if (cycle.status === "active") return "ACTIVE";
+      if (cycle.status === "done") {
+        if (cycle.kind === "verify") return "done — report accepted";
+        const by = plan?.orchestrator !== undefined ? ` by ${plan.orchestrator}` : "";
+        return `done — GREEN confirmed${by}`;
+      }
+      return cycle.status;
+    };
+
+    // One todo row per cycle: `<glyph> cycle <n> · "<label>" · <status>`
+    // (§S6 #2, label QUOTED, ACTIVE row bold, inline `[<kind>]` badge for
+    // non-default kinds, §S6 #4). RULED (a) — the ACTIVE cycle's open span
+    // renders its linked runs ALWAYS inline (no toggle element at all; the
+    // toggle contract narrows to History), trailed by the dim
+    // `awaiting orchestrator confirm` annotation (§S6 #3).
+    const CycleRow = (cycle, ordinal, plan) => {
+      const lineParts = [
+        `cycle ${ordinal} · "${cycle.label}"`,
+        ...(cycle.kind !== undefined && cycle.kind !== "red-green"
+          ? [
+              " [",
+              span(
+                { "data-testid": "cycle-kind-badge", class: "app-cycle-kind-badge" },
+                cycle.kind,
+              ),
+              "]",
+            ]
+          : []),
+        ` · ${cycleNarration(cycle, plan)}`,
+      ];
       return div(
         {
           "data-testid": "cycle-row",
@@ -1205,33 +1250,37 @@
         },
         div(
           { class: "app-cycle-line" },
-          cycle.status === "active"
-            ? span(
-                {
-                  "data-testid": "cycle-toggle",
-                  class: "app-cycle-toggle",
-                  onclick: () => lensToggle(key),
-                },
-                ToggleGlyph(key),
-              )
-            : null,
           span(
             { "data-testid": "cycle-glyph", class: "app-cycle-glyph" },
             CYCLE_GLYPHS[cycle.status] ?? CYCLE_GLYPHS.pending,
           ),
-          span({ class: "app-cycle-label" }, cycle.label),
+          cycle.status === "active"
+            ? b({ class: "app-cycle-text" }, ...lineParts)
+            : span({ class: "app-cycle-text" }, ...lineParts),
         ),
         cycle.status === "active"
-          ? () =>
-              lensOpen(key)
-                ? div(
-                    { class: "app-cycle-runs" },
-                    linkedRunsFor(cycle.id).map(LinkedRunRow),
-                  )
-                : ""
+          ? div(
+              { class: "app-cycle-runs" },
+              linkedRunsFor(cycle.id).map(LinkedRunRow),
+              span(
+                {
+                  "data-testid": "open-span-annotation",
+                  class: "app-card-meta app-open-span-annotation",
+                },
+                "awaiting orchestrator confirm",
+              ),
+            )
           : null,
       );
     };
+
+    // §S6 #1 — `Active workflow — <cr> · <track> · wave <n>` (track segment
+    // omitted when absent — solo model; wave segment likewise).
+    const activeHeaderText = (plan) =>
+      ["Active workflow — " + plan.cr]
+        .concat(plan.track !== undefined ? [plan.track] : [])
+        .concat(plan.wave !== undefined ? [`wave ${plan.wave}`] : [])
+        .join(" · ");
 
     const WorkflowActive = () => {
       const openPlans = state.plans.filter((p) => p.status === "open");
@@ -1245,8 +1294,28 @@
           : openPlans.map((plan) =>
               div(
                 { class: "app-workflow-plan" },
-                div({ class: "app-pane-section-title" }, plan.cr),
-                (plan.cycles ?? []).map(CycleRow),
+                div(
+                  {
+                    "data-testid": "workflow-active-header",
+                    class: "app-pane-section-title",
+                  },
+                  activeHeaderText(plan),
+                ),
+                // §S6 #11 — the CR ROOT: heat-highlighted id, ` · <title>`
+                // when the plan carries one (id-only root otherwise), the
+                // cycle rows INDENTED beneath it.
+                div(
+                  { "data-testid": "workflow-cr-root", "data-cr": plan.cr, class: "app-cr-root" },
+                  span(
+                    { "data-testid": "cr-root-id", class: "app-heat-ink" },
+                    plan.cr,
+                  ),
+                  plan.title !== undefined ? ` · ${plan.title}` : null,
+                ),
+                div(
+                  { class: "app-cr-root-cycles" },
+                  (plan.cycles ?? []).map((cycle, i) => CycleRow(cycle, i + 1, plan)),
+                ),
               ),
             ),
       );
@@ -1304,6 +1373,16 @@
             CYCLE_GLYPHS[cycle.status] ?? CYCLE_GLYPHS.pending,
           ),
           span({ class: "app-cycle-label" }, cycle.label),
+          // CR-CRU-021 §S6 #8 — collapsed rows hint at their linked runs.
+          expandable
+            ? () =>
+                !lensOpen(key) && cycle.runs.length > 0
+                  ? span(
+                      { class: "app-card-meta app-run-count-hint" },
+                      `▸ ${cycle.runs.length} runs`,
+                    )
+                  : ""
+            : null,
         ),
         // A done cycle is a CLOSED span wrapping its linked runs; the active
         // cycle keeps collecting its runs live (open span, §S3). Both sit
@@ -1333,30 +1412,43 @@
           "data-status": node.status ?? "inferred",
           class: "app-cr-group",
         },
-        // CR-CRU-020 §S1.2 — the existing header row IS the toggle: cr,
-        // track badge, rollup and merge pill stay always-visible; only the
-        // cycle list collapses (by default) beneath it.
+        // CR-CRU-020 §S1.2 — the existing header row IS the toggle; only the
+        // cycle list collapses (by default) beneath it. CR-CRU-021 §S6 #6/#9
+        // — the collapsed form is INLINE DIM TEXT, not pill-chips:
+        // `▸ [<track> › ]<cr> · <n> cycles ✓ · merged <sha>` (no `@`). The
+        // legacy `<done>/<total>` rollup figure stays addressable (visually
+        // hidden) for the CR-020 header contract.
         div(
           {
             "data-testid": "cr-group-toggle",
-            class: "app-cr-line app-lens-toggle",
+            class: "app-cr-line app-lens-toggle app-card-meta",
             onclick: () => lensToggle(key),
           },
           ToggleGlyph(key),
-          span({ class: "app-pane-section-title" }, node.cr),
+          " ",
           node.track !== undefined
-            ? span({ "data-testid": "track-badge", class: "app-pill" }, node.track)
+            ? [
+                span({ "data-testid": "track-badge", class: "app-cr-track" }, node.track),
+                " › ",
+              ]
+            : null,
+          span({ class: "app-cr-name" }, node.cr),
+          node.rollup.total > 0 && node.rollup.done === node.rollup.total
+            ? ` · ${node.rollup.total} cycles ✓`
+            : ` · ${node.rollup.done}/${node.rollup.total} cycles`,
+          node.merge !== undefined
+            ? [
+                " · ",
+                span(
+                  { "data-testid": "cr-merge-commit", class: "app-cr-merge" },
+                  `merged ${node.merge.commit}`,
+                ),
+              ]
             : null,
           span(
-            { "data-testid": "cr-rollup", class: "app-pill" },
-            `${node.rollup.done}/${node.rollup.total}`,
+            { "data-testid": "cr-rollup", class: "app-hidden-data" },
+            ` ${node.rollup.done}/${node.rollup.total}`,
           ),
-          node.merge !== undefined
-            ? span(
-                { "data-testid": "cr-merge-commit", class: "app-pill" },
-                `merged @ ${node.merge.commit}`,
-              )
-            : null,
         ),
         () =>
           lensOpen(key)
@@ -1377,18 +1469,25 @@
       );
     };
 
+    // CR-CRU-021 §S6 #5 — ONE combined header line per wave:
+    // `History — Wave <n> · lanes: <chips> · <state>` (wave, lane chips and
+    // boundary state inline — never separate rows).
     const WaveHeader = (wave) => {
       const chips = wave.state?.chips ?? [];
       return div(
         { "data-testid": "wave-header", class: "app-wave-header" },
-        span({ class: "app-pane-section-title" }, `Wave ${wave.wave}`),
+        span({ class: "app-pane-section-title" }, `History — Wave ${wave.wave}`),
         chips.length > 0
-          ? chips.flatMap((chip, i) => [
-              i > 0 ? " · " : " ",
-              span({ "data-testid": "lane-chip", class: "app-pill" }, chip),
-            ])
+          ? [
+              " · lanes: ",
+              ...chips.flatMap((chip, i) => [
+                i > 0 ? " · " : null,
+                span({ "data-testid": "lane-chip", class: "app-lane-chip" }, chip),
+              ]),
+              span({ class: "app-card-meta" }, ` · ${wave.state.label}`),
+            ]
           : wave.state !== null
-            ? span({ class: "app-card-meta" }, ` ${wave.state.label}`)
+            ? span({ class: "app-card-meta" }, ` · ${wave.state.label}`)
             : null,
       );
     };
@@ -1423,24 +1522,20 @@
         events: state.events.filter((e) => e.projectKey === state.route.projectKey),
       });
       return div(
+        // §S6 #5 — no standalone "History" title row; each wave's combined
+        // `History — Wave <n> · …` header line carries the section naming.
         { "data-testid": "workflow-history", class: "app-workflow-history" },
-        div({ class: "app-pane-section-title" }, "History"),
         lens.waves.length === 0
           ? div({ class: "app-empty" }, "no workflow history yet")
           : lens.waves.map(WaveGroup),
       );
     };
 
+    // CR-CRU-021 §S6 #10 — NO `Workflow — <project>` rail-title above the
+    // active header: the F13 header structure is the pane's whole top.
     const WorkflowFeed = () =>
       div(
         { class: "app-pane-content" },
-        div(
-          { class: "app-timeline-head" },
-          div({ class: "app-rail-title" }, () => {
-            const p = currentProject();
-            return `Workflow — ${p ? p.name || p.key : state.route.projectKey}`;
-          }),
-        ),
         div(
           { class: "app-workflow-cols" },
           () => WorkflowActive(),

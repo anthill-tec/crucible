@@ -101,6 +101,7 @@ interface PlanRow {
   plan_id: number;
   project_key: string;
   cr: string;
+  title: string | null;
   wave: string | null;
   track: string | null;
   status: string;
@@ -251,6 +252,7 @@ export class Store {
         plan_id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_key TEXT NOT NULL,
         cr TEXT NOT NULL,
+        title TEXT,
         wave TEXT,
         track TEXT,
         status TEXT NOT NULL,
@@ -300,6 +302,17 @@ export class Store {
     }
     if (!cycleCols.has("done_at")) {
       this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN done_at INTEGER`);
+    }
+    // CR-CRU-021 §S6.11 — additive plan title column; pre-021 db files lack
+    // it (same PRAGMA-checked retrofit pattern as events/plan_cycles above).
+    const planCols = new Set(
+      this.db
+        .query<{ name: string }, []>(`PRAGMA table_info(plans)`)
+        .all()
+        .map((col) => col.name),
+    );
+    if (!planCols.has("title")) {
+      this.db.exec(`ALTER TABLE plans ADD COLUMN title TEXT`);
     }
   }
 
@@ -862,6 +875,7 @@ export class Store {
     projectKey: string,
     input: {
       cr: string;
+      title?: string;
       wave?: string;
       track?: string;
       cycles: Array<{ label: string; kind: CycleKind }>;
@@ -877,10 +891,10 @@ export class Store {
     }
     const inserted = this.db
       .query(
-        `INSERT INTO plans (project_key, cr, wave, track, status)
-         VALUES (?, ?, ?, ?, 'open')`,
+        `INSERT INTO plans (project_key, cr, title, wave, track, status)
+         VALUES (?, ?, ?, ?, ?, 'open')`,
       )
-      .run(projectKey, input.cr, input.wave ?? null, input.track ?? null);
+      .run(projectKey, input.cr, input.title ?? null, input.wave ?? null, input.track ?? null);
     const planId = Number(inserted.lastInsertRowid);
     const cycles = input.cycles.map((cycle) =>
       this.insertCycle(projectKey, planId, cycle.label, cycle.kind),
@@ -890,6 +904,7 @@ export class Store {
       planId,
       projectKey,
       cr: input.cr,
+      ...(input.title !== undefined ? { title: input.title } : {}),
       ...(input.wave !== undefined ? { wave: input.wave } : {}),
       ...(input.track !== undefined ? { track: input.track } : {}),
       status: "open",
@@ -1024,6 +1039,7 @@ export class Store {
       planId: row.plan_id,
       projectKey: row.project_key,
       cr: row.cr,
+      ...(row.title !== null ? { title: row.title } : {}),
       ...(row.wave !== null ? { wave: row.wave } : {}),
       ...(row.track !== null ? { track: row.track } : {}),
       status: row.status === "closed" ? "closed" : "open",

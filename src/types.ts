@@ -160,6 +160,10 @@ export interface Plan {
   projectKey: string;
   /** Stored VERBATIM — the stable join key (round 24, binding). */
   cr: string;
+  // CR-CRU-021 §S6.11 (additive, optional) — the CR's human title, captured
+  // at plan filing; the Workflow CR-root renders `<cr> · <title>`. Absent
+  // (never null) when the plan was filed without one.
+  title?: string;
   wave?: string;
   track?: string;
   status: "open" | "closed";

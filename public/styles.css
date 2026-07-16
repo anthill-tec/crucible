@@ -697,12 +697,36 @@ body {
 }
 .app-cycle-line { display: flex; gap: 8px; align-items: baseline; }
 .app-cycle-glyph { width: 1.2em; text-align: center; }
-.cycle-status-pending .app-cycle-line { color: var(--ink-dim); }
-.cycle-status-active .app-cycle-line { color: var(--heat); }
+/* CR-CRU-021 §S6 #7 — GLYPH-ONLY status coloring: the status color paints
+   the glyph alone; row text stays default ink (the whole-row coloring the
+   live UI drifted into is the regression this fixes). */
+.cycle-status-pending .app-cycle-glyph { color: var(--ink-faint); }
 .cycle-status-active .app-cycle-glyph { color: var(--ember); }
-.cycle-status-done .app-cycle-line { color: var(--pass); }
-.cycle-status-skipped .app-cycle-line { color: var(--ink-faint); }
-.cycle-status-failed .app-cycle-line { color: var(--fail); }
+.cycle-status-done .app-cycle-glyph { color: var(--pass); }
+.cycle-status-skipped .app-cycle-glyph { color: var(--ink-faint); }
+.cycle-status-failed .app-cycle-glyph { color: var(--fail); }
+.cycle-status-active .app-cycle-text { color: var(--ink-strong, inherit); }
+/* §S6 #11 — heat-highlighted CR-root id */
+.app-heat-ink { color: var(--heat); }
+.app-cr-root {
+  font: 600 11px var(--mono);
+  margin: 4px 0 2px;
+}
+.app-cr-root-cycles { margin-left: 14px; }
+/* §S6 #6 — legacy done/total figure kept addressable, visually hidden */
+.app-hidden-data {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.app-run-count-hint { margin-left: 8px; }
+.app-cycle-kind-badge { color: var(--ink-faint); }
+.app-open-span-annotation { margin-left: 8px; }
+.app-lane-chip { color: var(--ink-dim); }
+.app-cr-track { color: var(--ink-dim); }
 .app-cycle-runs {
   margin: 2px 0 4px 1.9em;
   border-left: 1px solid var(--line);
