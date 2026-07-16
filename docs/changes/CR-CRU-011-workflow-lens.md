@@ -1,6 +1,6 @@
 # CR-CRU-011 — Cycle plans + workflow lens + agent runtimes
 
-**Status:** COMPLETED (2026-07-16 — gap analysis (4 drifts applied) + C1 plan API + C2 lifecycle/runtimes + C3 Workflow tab + C4 lens/timeline + C5 BDD + C6 VERIFY (READY FOR CLOSE-OUT, zero blocking); final gates 559/559 unit · tsc 0 · 22/22 BDD · coverage 93.0%/93.0%; dog-fooded via its own plan 1 (the first plan ever filed); awaiting merge gate)
+**Status:** COMPLETED (2026-07-16 — gap analysis (4 drifts applied) + C1 plan API + C2 lifecycle/runtimes + C3 Workflow tab + C4 lens/timeline + C5 BDD + C6 VERIFY (READY FOR CLOSE-OUT, zero blocking); final gates 559/559 unit · tsc 0 · 22/22 BDD · coverage 93.0%/93.0%; dog-fooded via its own plan 1 (the first plan ever filed); merged to develop 5b913bf)
 **Type:** feature
 **Priority:** P1
 **Depends on:** CR-CRU-007
