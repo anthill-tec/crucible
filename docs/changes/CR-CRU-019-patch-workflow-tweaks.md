@@ -1,8 +1,8 @@
 # CR-CRU-019 — Patch: workflow-review tweak accumulator
 
-**Status:** PENDING (accumulator — user-directed 2026-07-16: "we will
-accumulate any such tweaks till the end of the current CR"; scope FREEZES at
-CR-CRU-011's merge, then this executes as a normal cycle-structured CR)
+**Status:** IN_PROGRESS (2026-07-16 — scope froze at CR-CRU-011's merge
+(5b913bf) with §P1 as the sole item; user-directed kickoff WITH a Crucible
+plan filed from the start; branch feature/CR-CRU-019)
 **Type:** patch
 **Priority:** P2
 **Depends on:** CR-CRU-011 (declared spans must exist)
@@ -57,8 +57,20 @@ semantics and still guesses; declared linkage is the honest fix.
   containing ALL THREE runs and NO inferred marker (the screenshot scenario,
   fixed).
 
+## Gap analysis (2026-07-16, pre-RED — verdict READY)
+The three §P1 seams verified against HEAD (develop 5b913bf): server
+`handleIngestParsed` reads `tier` but not `context` (server.ts:139-145 area);
+client `_ingest_parsed(…, tier=None)` has no context param
+(bun-crucible.py:301); `RunContext.cycleId` exists from 011 C1
+(types.ts:98). Spec is code-accurate; no drifts.
+
+## Cycle plan
+- C1 (red-green): §P1 — server context passthrough + client env linkage
+  (WORKFLOW_CYCLE_ID / WORKFLOW_CYCLE / git) + the dog-food proof AC.
+- C2 (verify): VERIFY + close-out + merge gate.
+
 ## Estimated size
-S (grows as tweaks accumulate).
+S (scope frozen at §P1).
 
 ## Non-goals
 The full CR-008 fleet upgrade (plan verbs, narration, other stacks); heuristic
