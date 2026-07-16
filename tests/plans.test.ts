@@ -240,7 +240,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       expect(text).toMatch(/done/i);
     });
 
-    test("pending -> skipped (skipping active) -> 400 naming both states", async () => {
+    test("pending -> skipped succeeds — the one legal shortcut (orchestrator cancels an unnecessary cycle without activating it)", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject();
       const { planId, cycleId } = await fileSingleCycle(key, "CR-T-3");
@@ -248,10 +248,8 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
         status: "skipped",
       });
-      expect(res.status).toBe(400);
-      const text = await bodyText(res);
-      expect(text).toMatch(/pending/i);
-      expect(text).toMatch(/skipped/i);
+      expect(res.status).toBe(200);
+      expect(await getCycleStatus(key, "CR-T-3")).toBe("skipped");
     });
 
     test("active -> skipped succeeds", async () => {
