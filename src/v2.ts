@@ -284,6 +284,11 @@ async function handleAgentTouch(store: Store, req: Request): Promise<Response> {
     opts.identity = body.identity as AgentIdentity;
   }
   store.touchAgent(pk.key, agentId, opts);
+  // CR-CRU-011 §S1 — a REAL registration (row created) appends a lifecycle
+  // event; a heartbeat on an existing agent never does.
+  if (!existed) {
+    store.recordLifecycleEvent(pk.key, agentId, "registered");
+  }
   return json({ ok: true, changed: !existed, help: hints.registered });
 }
 
@@ -296,15 +301,35 @@ async function handleAgentUnregister(store: Store, req: Request): Promise<Respon
   if (typeof agentId !== "string" || agentId.length === 0) {
     return fail(400, "agentId is required");
   }
-  const existed = store.hasAgent(pk.key, agentId);
+  // CR-CRU-011 §S1 — snapshot firstSeen BEFORE removeAgent hard-deletes the
+  // row (the round-11 audit's gap: the final runtime must survive deletion).
+  const agent = store.getAgent(pk.key, agentId);
   store.removeAgent(pk.key, agentId);
-  return json({ ok: true, changed: existed });
+  if (agent !== null) {
+    store.recordLifecycleEvent(pk.key, agentId, "unregistered", agent.firstSeen);
+  }
+  return json({ ok: true, changed: agent !== null });
 }
 
-/** §S1 — each agent carries computed liveness; `?project=` filters. */
+/**
+ * §S1 — each agent carries computed liveness; `?project=` filters.
+ * CR-CRU-011 §S2 — plus a server-computed `runtime_ms`: still live →
+ * `now − firstSeen` (ticking); tombstoned (never unregistered) →
+ * `lastRunTimestamp − firstSeen` (sealed; lastSeen fallback when the agent
+ * never ingested a run). Unregistered agents live on the lifecycle event.
+ */
 function handleAgentsList(store: Store, req: Request, url: URL): Response {
   const project = url.searchParams.get("project") ?? undefined;
-  return reply(req, url, { ok: true, agents: store.listAgents(project) });
+  const now = Date.now();
+  const agents = store.listAgents(project, now).map((agent) => ({
+    ...agent,
+    runtime_ms:
+      agent.liveness === "tombstoned"
+        ? (store.lastRunTimestamp(agent.projectKey, agent.agentId) ?? agent.lastSeen) -
+          agent.firstSeen
+        : now - agent.firstSeen,
+  }));
+  return reply(req, url, { ok: true, agents });
 }
 
 // ── §S1+§S2 — runs: raw codec ingest, parsed ingest, compile ingest ─────────
@@ -685,6 +710,10 @@ function eventBrief(event: RunEvent) {
     ...(typeof (event.coverage as Coverage | undefined)?.lines?.percent === "number"
       ? { coverageLines: (event.coverage as Coverage).lines.percent }
       : {}),
+    // CR-CRU-011 §S1 (additive) — lifecycle-event fields, keys ABSENT on
+    // test/compile briefs.
+    ...(event.action !== undefined ? { action: event.action } : {}),
+    ...(event.firstSeen !== undefined ? { firstSeen: event.firstSeen } : {}),
     ...(event.context !== undefined ? { context: event.context } : {}),
     ...(compile !== undefined
       ? {

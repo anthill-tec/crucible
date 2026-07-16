@@ -71,6 +71,9 @@ interface EventRow {
   coverage: string | null;
   compile: string | null;
   context: string | null;
+  // CR-CRU-011 §S1 — lifecycle events only (NULL on test/compile rows).
+  action: string | null;
+  first_seen: number | null;
 }
 
 interface RollupRow {
@@ -222,7 +225,9 @@ export class Store {
         tree TEXT,
         coverage TEXT,
         compile TEXT,
-        context TEXT
+        context TEXT,
+        action TEXT,
+        first_seen INTEGER
       );
 
       CREATE INDEX IF NOT EXISTS idx_events_project_timestamp
@@ -263,6 +268,20 @@ export class Store {
         PRIMARY KEY (project_key, cycle_id)
       );
     `);
+    // CR-CRU-011 §S1 — additive columns for lifecycle events; pre-011 db
+    // files lack them (CREATE TABLE IF NOT EXISTS never retrofits columns).
+    const eventCols = new Set(
+      this.db
+        .query<{ name: string }, []>(`PRAGMA table_info(events)`)
+        .all()
+        .map((col) => col.name),
+    );
+    if (!eventCols.has("action")) {
+      this.db.exec(`ALTER TABLE events ADD COLUMN action TEXT`);
+    }
+    if (!eventCols.has("first_seen")) {
+      this.db.exec(`ALTER TABLE events ADD COLUMN first_seen INTEGER`);
+    }
   }
 
   // ── Projects ──────────────────────────────────────────────────────────
@@ -393,21 +412,32 @@ export class Store {
   }
 
   /**
-   * Single-row existence check with the same lazy-prune semantics as
-   * listAgents: a row past its prune window is deleted and reported absent.
+   * Single-row lookup with the same lazy-prune semantics as listAgents:
+   * a row past its prune window is deleted and reported absent (null).
+   * CR-CRU-011 §S1 — lets the unregister handler snapshot firstSeen
+   * BEFORE removeAgent hard-deletes the row.
    */
-  hasAgent(projectKey: string, agentId: string, now: number = Date.now()): boolean {
+  getAgent(projectKey: string, agentId: string, now: number = Date.now()): Agent | null {
     const row = this.db
       .query<AgentRow, [string, string]>(
         `SELECT * FROM agents WHERE project_key = ? AND agent_id = ?`,
       )
       .get(projectKey, agentId);
-    if (row === null) return false;
-    if (this.livenessOf(Store.toAgent(row), now) === "pruned") {
+    if (row === null) return null;
+    const agent = Store.toAgent(row);
+    if (this.livenessOf(agent, now) === "pruned") {
       this.removeAgent(projectKey, agentId);
-      return false;
+      return null;
     }
-    return true;
+    return agent;
+  }
+
+  /**
+   * Single-row existence check with the same lazy-prune semantics as
+   * listAgents: a row past its prune window is deleted and reported absent.
+   */
+  hasAgent(projectKey: string, agentId: string, now: number = Date.now()): boolean {
+    return this.getAgent(projectKey, agentId, now) !== null;
   }
 
   listAgents(projectKey?: string, now: number = Date.now()): LiveAgent[] {
@@ -490,6 +520,46 @@ export class Store {
     return event;
   }
 
+  /**
+   * CR-CRU-011 §S1 — append a lifecycle event (real registration or
+   * unregistration; never heartbeats-on-existing). Flows through retention
+   * like any event; foldIntoRollup skips it (contributes zero runs).
+   */
+  recordLifecycleEvent(
+    projectKey: string,
+    agentId: string,
+    action: "registered" | "unregistered",
+    firstSeen?: number,
+  ): RunEvent {
+    const event: RunEvent = {
+      id: this.nextEventId(),
+      projectKey,
+      agentId,
+      kind: "lifecycle",
+      tier: "unit",
+      timestamp: Date.now(),
+      action,
+      ...(firstSeen !== undefined ? { firstSeen } : {}),
+    };
+    this.insertEvent(event);
+    return event;
+  }
+
+  /**
+   * CR-CRU-011 §S2 — the newest run (test/compile) timestamp for an agent;
+   * lifecycle events excluded. Seals a tombstoned agent's runtime.
+   */
+  lastRunTimestamp(projectKey: string, agentId: string): number | null {
+    const row = this.db
+      .query<{ timestamp: number }, [string, string]>(
+        `SELECT timestamp FROM events
+         WHERE project_key = ? AND agent_id = ? AND kind != 'lifecycle'
+         ORDER BY timestamp DESC, rowid DESC LIMIT 1`,
+      )
+      .get(projectKey, agentId);
+    return row?.timestamp ?? null;
+  }
+
   listEvents(projectKey?: string, limit = 50): RunEvent[] {
     const rows =
       projectKey === undefined
@@ -559,8 +629,8 @@ export class Store {
       .query(
         `INSERT INTO events (id, project_key, agent_id, kind, tier, stack, codec,
            timestamp, name, total, passed, failed, pending, duration_ms,
-           tree, coverage, compile, context)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           tree, coverage, compile, context, action, first_seen)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         event.id,
@@ -581,6 +651,8 @@ export class Store {
         event.coverage !== undefined ? JSON.stringify(event.coverage) : null,
         event.compile !== undefined ? JSON.stringify(event.compile) : null,
         event.context !== undefined ? JSON.stringify(event.context) : null,
+        event.action ?? null,
+        event.firstSeen ?? null,
       );
     this.enforceRetention(event.projectKey);
     this.emit("events", event.projectKey);
@@ -591,9 +663,11 @@ export class Store {
       id: row.id,
       projectKey: row.project_key,
       agentId: row.agent_id,
-      kind: row.kind === "compile" ? "compile" : "test",
+      kind: row.kind === "compile" ? "compile" : row.kind === "lifecycle" ? "lifecycle" : "test",
       tier: row.tier as Tier,
       timestamp: row.timestamp,
+      ...(row.action !== null ? { action: row.action as "registered" | "unregistered" } : {}),
+      ...(row.first_seen !== null ? { firstSeen: row.first_seen } : {}),
       ...(row.stack !== null ? { stack: row.stack } : {}),
       ...(row.codec !== null ? { codec: row.codec } : {}),
       ...(row.name !== null ? { name: row.name } : {}),
@@ -657,7 +731,11 @@ export class Store {
     // both counted in rollups and still present for a later re-fold.
     this.db.transaction(() => {
       for (const row of expired) {
-        this.foldIntoRollup(row);
+        // CR-CRU-011 §S1 — lifecycle events flow through retention like any
+        // event but contribute NOTHING to the test-run rollup folds.
+        if (row.kind !== "lifecycle") {
+          this.foldIntoRollup(row);
+        }
         this.db.query(`DELETE FROM events WHERE id = ?`).run(row.id);
       }
     })();

@@ -104,12 +104,17 @@ export interface RunEvent {
   id: string;
   projectKey: string;
   agentId: string;
-  kind: "test" | "compile";
+  kind: "test" | "compile" | "lifecycle";
   tier: Tier;
   stack?: string;
   codec?: string;
   context?: RunContext;
   timestamp: number;
+  // CR-CRU-011 §S1 (additive) — lifecycle events only: which transition this
+  // event records, and (on "unregistered") the firstSeen snapshot taken
+  // BEFORE the agents-row deletion so the final runtime survives it.
+  action?: "registered" | "unregistered";
+  firstSeen?: number;
   name?: string;
   summary?: RunSummary;
   tree?: SuiteNode[];

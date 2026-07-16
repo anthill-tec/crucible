@@ -199,7 +199,11 @@
     }
 
     function visibleEvents() {
-      return L.filterEvents(state.events, activeFilters());
+      // CR-CRU-011 §S1/§S2 (DRIFT-4) — lifecycle events are data for runtime
+      // computation and the workflow lens, never Runs-timeline cards.
+      return L.filterEvents(state.events, activeFilters()).filter(
+        (e) => e.kind !== "lifecycle",
+      );
     }
 
     function visibleAgents() {
@@ -372,6 +376,14 @@
           agent.identity?.displayName ?? agent.agentId,
         ),
         span({ class: "app-agent-msg" }, agent.message || "—"),
+        // CR-CRU-011 §S2 — server-computed runtime: live rows tick with each
+        // refetched runtime_ms; tombstoned rows render the sealed value.
+        typeof agent.runtime_ms === "number"
+          ? span(
+              { "data-testid": "agent-runtime", class: "app-card-meta" },
+              fmtDuration(agent.runtime_ms),
+            )
+          : null,
         // Small last-seen / died-ago line (card-meta family).
         glyph.tombstone
           ? span({ class: "app-card-meta" }, `died ${glyph.diedAgo}`)
