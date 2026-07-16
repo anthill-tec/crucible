@@ -24,7 +24,7 @@
       selectedProject: null, // home filter pulldown (null = all projects)
       selectedAgent: null, // agent sub-row click filter (null = all)
       route: L.routeParse(location.pathname),
-      workspaceTab: "Runs",
+      workspaceTab: "Workflow",
       backendUp: true,
       lastSynced: null,
     });
@@ -58,14 +58,15 @@
       // ONE RULE (CR-CRU-016 §S1, user-approved 2026-07-16) — navigation
       // within the SAME surface (detail open/close, tab-owned pane swaps)
       // never touches the active workspace tab or the agent filter; only a
-      // surface change (home↔workspace, project→project) lands on Runs.
+      // surface change (home↔workspace, project→project) lands on Workflow
+      // (the CR-CRU-021 §S1 primary tab).
       const sameSurface =
         next.page === state.route.page &&
         (next.page !== "workspace" || next.projectKey === state.route.projectKey);
       history.pushState(null, "", pathname);
       state.route = next;
       if (!sameSurface) {
-        state.workspaceTab = "Runs";
+        state.workspaceTab = "Workflow";
         state.selectedAgent = null;
       }
     }
