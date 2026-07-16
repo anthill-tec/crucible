@@ -520,6 +520,9 @@
       div(
         {
           "data-testid": "event-card",
+          // CR-CRU-019 §P1 AC-3 — the card is addressable by its run id, so
+          // declared-span membership is assertable against real ingested runs.
+          "data-run-id": e.id,
           class: "app-evt",
           onclick: () => openDrillin(e.id),
         },
