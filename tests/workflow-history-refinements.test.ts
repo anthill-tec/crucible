@@ -694,8 +694,17 @@ describe("§S2.1/§S2.2 history cycle drill-down — toggle linked runs, drill i
 
 // ── §S2.3 — ACTIVE section parity ──────────────────────────────────────────
 
-describe("§S2.3 active-cycle drill-down parity — same toggle + drill-down technique as history", () => {
-  test("the ACTIVE section's active cycle row toggles its linked runs and drills into the detail identically to a history cycle row; closing preserves the expanded state", async () => {
+// SANCTIONED RE-TARGET (CR-CRU-021 §S6 RULED (a), user-locked 2026-07-16:
+// "Mock wins on active cycle, the toggle contract narrows to History.") — the
+// ACTIVE cycle's open span now renders its linked runs ALWAYS inline, with NO
+// toggle at all on the active row; CR-CRU-020 §S2.3's collapsed-by-default
+// toggle behavior asserted below is RETARGETED accordingly. History's OWN
+// cycle-row toggle (§S2.1/§S2.2, above) is UNCHANGED — this retarget touches
+// ONLY the active-section parity block. Drill-down parity (any run entry,
+// active or history, swaps to the run detail; close restores state) is
+// UNCHANGED and re-asserted below without the toggle step.
+describe("§S2.3 active-cycle drill-down parity — RULED (a): always-inline runs, no toggle; drill-down parity unchanged", () => {
+  test("the ACTIVE section's active cycle row renders its linked runs immediately (no toggle, no click) and drills into the detail identically to a history cycle row; closing preserves the runs visible", async () => {
     const key = "active-drill-1";
     const now = Date.now();
     const linkedRun = runEvent({
@@ -725,14 +734,13 @@ describe("§S2.3 active-cycle drill-down parity — same toggle + drill-down tec
     )!;
     expect(cycleRow).not.toBeNull();
 
-    // Collapsed by default — parity with history (§S2.3), NOT the old
-    // auto-expand-when-active behavior.
-    expect(cycleRow.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(0);
-
-    const cycleToggle = cycleRow.querySelector<HTMLElement>('[data-testid="cycle-toggle"]')!;
-    expect(cycleToggle).not.toBeNull();
-    cycleToggle.click();
-    await settle();
+    // RULED (a) — ALWAYS inline: the linked run is visible immediately, no
+    // toggle click needed (reverses the CR-020 §S2.3 collapsed-by-default
+    // behavior for the ACTIVE row specifically).
+    expect(cycleRow.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(1);
+    // bound — the toggle element itself is gone from the active row (the
+    // toggle contract narrows to History only).
+    expect(cycleRow.querySelector('[data-testid="cycle-toggle"]')).toBeNull();
 
     const linkedRow = cycleRow.querySelector<HTMLElement>('[data-testid="linked-run-row"]');
     expect(linkedRow).not.toBeNull();
@@ -752,6 +760,8 @@ describe("§S2.3 active-cycle drill-down parity — same toggle + drill-down tec
     const cycleRowAfter = active().querySelector<HTMLElement>(
       '[data-testid="cycle-row"][data-status="active"]',
     )!;
+    // Still visible after the close — always-inline, not a state that needs
+    // "preserving" via a toggle anymore.
     expect(cycleRowAfter.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(1);
   });
 });

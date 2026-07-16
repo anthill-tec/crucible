@@ -1,0 +1,691 @@
+// CR-CRU-021 §S6 — F13 EXACT look-and-feel fidelity + RULED (a) (user-ordered
+// 2026-07-16: "I like this look. Implement EXACTLY the same in UI"). This file
+// pins the eleven numbered format contracts in §S6 verbatim against a plan
+// fixture matching the F13 mock, plus the RULED (a) always-inline active span.
+//
+// Drives the REAL production public/app.js shell inside a happy-dom window —
+// same harness pattern as tests/workflow-lens.test.ts / tests/workflow-tab.
+// test.ts (workspace pathname, scripted `/api/v2/projects/<key>/plans` fetch).
+//
+// RED phase: expected to fail against CURRENT production, which:
+//   - renders the Active section header as nothing at all (WorkflowActive,
+//     public/app.js ~1236 renders only a bare `plan.cr` title div, no
+//     "Active workflow — <cr> · <track> · wave <n>" line, no CR-root element,
+//     no title support at all — `title` doesn't exist on Plan anywhere).
+//   - narrates NOTHING on cycle rows beyond the bare label (no "done — GREEN
+//     confirmed", no kind badge, no orchestrator suffix).
+//   - the active cycle's linked runs sit behind a click toggle (CR-CRU-020
+//     §S2.3), not always inline (RULED (a) reverses this).
+//   - LinkedRunRow (public/app.js ~1179) has NO icon at all (no mask-icon
+//     wrapper) and renders a fail ratio as "N ✗ of T", not the plain "P/T"
+//     form the mock/AC uses for both pass and fail.
+//   - the History section renders "History" and "Wave N" as SEPARATE
+//     elements (public/app.js ~1380/~1427), not the combined one-line
+//     "History — Wave N · lanes: … · state" form; the CR-group's collapsed
+//     row shows PILL CHIPS ("3/3", "merged @ e41d2aa" — note the wrong "@"),
+//     not the inline dim text form; no per-cycle "▸ N runs" hint exists.
+//   - the Workflow feed's `app-rail-title` STILL renders "Workflow — <project>"
+//     above the active header (public/app.js ~1439) — §S6 #10 forbids this.
+//   - styles.css colors the WHOLE `.app-cycle-line` per status (~700-705),
+//     not just the glyph (§S6 #7).
+//
+// Testid/attribute contract this file introduces for GREEN (none of these
+// exist yet):
+//   - `[data-testid="workflow-active-header"]` — the Active section's own
+//     header line (item 1).
+//   - `[data-testid="workflow-cr-root"]` (`data-cr`) — the CR-root grouping
+//     element (item 11); `[data-testid="cr-root-id"]` — the heat-highlighted
+//     id segment within it.
+//   - `[data-testid="cycle-kind-badge"]` — the inline `[verify]`-style kind
+//     badge on a non-default-kind cycle row (item 4).
+//   - `[data-testid="open-span-annotation"]` — the dim trailing annotation on
+//     the active cycle's open span (item 3).
+// Reused, unchanged testids: `cycle-row`, `cycle-glyph`, `cycle-toggle`,
+// `linked-run-row`, `wave-group`, `wave-header`, `cr-group`, `cr-group-
+// toggle`, `lens-cycle-row`, `card-icon`, `icon-glyph` (CR-007 mask-icon,
+// public/app.js ~535-548 / tests/phase-role.test.ts, tests/run-cards.test.ts).
+//
+// SANCTIONED RE-TARGET (CR-CRU-021 §S6 RULED (a), this CR's authority): the
+// "§S2.3 active-cycle drill-down parity" describe block in tests/workflow-
+// history-refinements.test.ts (asserting the ACTIVE cycle's runs are
+// collapsed-by-default behind its own toggle, CR-CRU-020 §S2.3) is retargeted
+// in THIS cycle to always-inline — done in the same commit as this file.
+// History's own cycle-row toggle (§S2.1/§S2.2) is UNTOUCHED.
+import { describe, test, expect, afterEach } from "bun:test";
+import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const VAN_SRC = readFileSync(
+  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
+  "utf8",
+);
+const VAN_X_SRC = readFileSync(
+  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
+  "utf8",
+);
+const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
+const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
+const STYLES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8");
+
+interface CycleFixture {
+  id: number;
+  label: string;
+  kind?: string;
+  status: "pending" | "active" | "done" | "skipped" | "failed";
+}
+
+interface PlanFixture {
+  planId: number | string;
+  cr: string;
+  status: "open" | "closed";
+  wave?: string;
+  track?: string;
+  // §S6.11 — additive, optional: CR-root title, captured at plan filing.
+  title?: string;
+  // §S6 #2 — additive, optional: the confirming orchestrator's identity.
+  orchestrator?: string;
+  cycles: CycleFixture[];
+  merge?: { commit: string };
+}
+
+interface EventFixture {
+  id: string;
+  projectKey: string;
+  agentId: string;
+  kind: "test";
+  tier: string;
+  timestamp: number;
+  total: number;
+  passed: number;
+  failed: number;
+  pending: number;
+  duration_ms?: number;
+  hasCoverage?: boolean;
+  context?: { cycleId?: number };
+}
+
+interface ProjectFixture {
+  key: string;
+  name: string;
+  type: "backend" | "frontend";
+  agentsOnline: number;
+  agentsTotal: number;
+  active?: boolean;
+  lastActivity?: number;
+}
+
+interface MountOpts {
+  pathname?: string;
+  projects: ProjectFixture[];
+  events: EventFixture[];
+  plans: PlanFixture[];
+}
+
+let cacheBust = 0;
+
+async function mountApp(opts: MountOpts): Promise<void> {
+  const pathname = opts.pathname ?? "/";
+  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
+  document.body.innerHTML = '<div id="app"></div>';
+
+  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+    let body: unknown;
+    if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
+      body = { ok: true, plans: opts.plans };
+    } else if (url.includes("/api/v2/projects")) {
+      body = { ok: true, projects: opts.projects };
+    } else if (url.includes("/api/v2/agents")) {
+      body = { ok: true, agents: [] };
+    } else if (url.includes("/api/v2/events")) {
+      body = { ok: true, events: opts.events };
+    } else if (url.includes("/api/v2/health")) {
+      body = { ok: true, version: "2.0.0-test", counts: { events: 0 } };
+    } else {
+      throw new Error(`f13-fidelity.test.ts mountApp: unexpected fetch url ${url}`);
+    }
+    return { ok: true, status: 200, json: async () => body } as Response;
+  }) as typeof fetch;
+
+  (0, eval)(VAN_SRC);
+  (0, eval)(VAN_X_SRC);
+
+  cacheBust += 1;
+  await import(`${APP_LOGIC_PATH}?f13Fidelity=${cacheBust}`);
+
+  (0, eval)(APP_JS_SRC);
+
+  await settle();
+}
+
+async function settle(ticks = 8): Promise<void> {
+  for (let i = 0; i < ticks; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+afterEach(async () => {
+  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+});
+
+function project(overrides: Partial<ProjectFixture> & { key: string }): ProjectFixture {
+  const now = Date.now();
+  return {
+    name: overrides.key,
+    type: "backend",
+    agentsOnline: 0,
+    agentsTotal: 0,
+    active: true,
+    lastActivity: now,
+    ...overrides,
+  };
+}
+
+function runEvent(
+  overrides: Partial<EventFixture> & Pick<EventFixture, "id" | "projectKey" | "agentId" | "timestamp">,
+): EventFixture {
+  return {
+    kind: "test",
+    tier: "unit",
+    total: 2,
+    passed: 2,
+    failed: 0,
+    pending: 0,
+    duration_ms: 100,
+    hasCoverage: false,
+    ...overrides,
+  };
+}
+
+async function openWorkflowTab(): Promise<void> {
+  const tab = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+  ).find((t) => (t.textContent ?? "").trim() === "Workflow");
+  expect(tab).toBeDefined();
+  tab!.click();
+  await settle();
+}
+
+function active(): HTMLElement {
+  const el = document.querySelector<HTMLElement>('[data-testid="workflow-active"]');
+  expect(el).not.toBeNull();
+  return el!;
+}
+
+function history(): HTMLElement {
+  const el = document.querySelector<HTMLElement>('[data-testid="workflow-history"]');
+  expect(el).not.toBeNull();
+  return el!;
+}
+
+const norm = (s: string | null): string => (s ?? "").replace(/\s+/g, " ").trim();
+
+// ── §S6 main fixture — the F13 mock, EXACT strings (AC ‐ acceptance criteria line 114) ──
+
+describe("§S6 F13 exact fidelity — Active section + History header (F13 mock fixture)", () => {
+  test(
+    "the Workflow active section renders the EXACT F13-fidelity strings: header, CR-root (heat + title), narrated cycle rows, always-inline mask-icon open span (plain ratio), inline [verify] badge, and the combined History+Wave+lanes+state header line with its dim collapsed row",
+    async () => {
+      const key = "f13-fidelity-1";
+      const now = Date.now();
+
+      const activePlan: PlanFixture = {
+        planId: 9001,
+        cr: "CR-NAI-042",
+        status: "open",
+        wave: "1",
+        track: "track-1",
+        title: "Runtime checkpoint persistence",
+        cycles: [
+          { id: 4201, label: "checkpoint persistence", status: "done" },
+          { id: 4202, label: "compile fallback", status: "active" },
+          { id: 4203, label: "verify sweep", kind: "verify", status: "pending" },
+        ],
+      };
+      // History — track-1's PRIOR cr, fully merged (the collapsed row target).
+      const historyTrack1: PlanFixture = {
+        planId: 9002,
+        cr: "CR-NAI-041",
+        status: "closed",
+        wave: "1",
+        track: "track-1",
+        merge: { commit: "e41d2aa" },
+        cycles: [
+          { id: 4101, label: "schema groundwork", status: "done" },
+          { id: 4102, label: "wire the API", status: "done" },
+          { id: 4103, label: "verify sweep", status: "done" },
+        ],
+      };
+      // History — track-2, CLOSED but not every cycle "done" (1 done + 1
+      // skipped, both terminal — a plan may legally close this way, §S0):
+      // the fixture the header's "track-2 1/2" chip needs. Track-1's NEXT cr
+      // (CR-NAI-042, the ACTIVE plan above) stays exclusively in Active
+      // (§S1.3) — History's own boundary state reads off its OWN closed
+      // material, independent of a same-wave cr still open elsewhere.
+      const historyTrack2: PlanFixture = {
+        planId: 9003,
+        cr: "CR-NAI-040",
+        status: "closed",
+        wave: "1",
+        track: "track-2",
+        cycles: [
+          { id: 4001, label: "c1", status: "done" },
+          { id: 4002, label: "c2", status: "skipped" },
+        ],
+      };
+
+      const redRun = runEvent({
+        id: "evt-f13-red-1",
+        projectKey: key,
+        agentId: "CR-NAI-042-RED",
+        timestamp: now,
+        total: 5,
+        passed: 2,
+        failed: 3,
+        context: { cycleId: 4202 },
+      });
+      const greenRun = runEvent({
+        id: "evt-f13-green-1",
+        projectKey: key,
+        agentId: "CR-NAI-042-GREEN",
+        timestamp: now + 10,
+        total: 5,
+        passed: 5,
+        failed: 0,
+        context: { cycleId: 4202 },
+      });
+
+      await mountApp({
+        pathname: `/p/${key}`,
+        projects: [project({ key, name: "F13 Fidelity Project" })],
+        events: [redRun, greenRun],
+        plans: [activePlan, historyTrack1, historyTrack2],
+      });
+      await openWorkflowTab();
+
+      const activeSection = active();
+
+      // ── item 1 — active section header ──────────────────────────────
+      const header = activeSection.querySelector('[data-testid="workflow-active-header"]');
+      expect(header).not.toBeNull();
+      expect(norm(header!.textContent)).toBe("Active workflow — CR-NAI-042 · track-1 · wave 1");
+
+      // ── item 11 — CR ROOT: heat id + title, cycles grouped beneath ────
+      const root = activeSection.querySelector<HTMLElement>(
+        '[data-testid="workflow-cr-root"][data-cr="CR-NAI-042"]',
+      );
+      expect(root).not.toBeNull();
+      expect(norm(root!.textContent)).toBe("CR-NAI-042 · Runtime checkpoint persistence");
+      const rootId = root!.querySelector('[data-testid="cr-root-id"]');
+      expect(rootId).not.toBeNull();
+      expect(norm(rootId!.textContent)).toBe("CR-NAI-042");
+      // heat-highlighted — class or inline style references the heat token.
+      expect(`${rootId!.className} ${rootId!.getAttribute("style") ?? ""}`).toMatch(/heat/i);
+
+      const cycleRows = Array.from(
+        activeSection.querySelectorAll<HTMLElement>('[data-testid="cycle-row"]'),
+      );
+      expect(cycleRows.length).toBe(3);
+      const groupContainer = root!.parentElement!;
+      for (const row of cycleRows) {
+        expect(groupContainer.contains(row)).toBe(true);
+      }
+
+      function rowFor(label: string): HTMLElement {
+        const row = cycleRows.find((r) => (r.textContent ?? "").includes(label));
+        expect(row).toBeDefined();
+        return row!;
+      }
+
+      // ── item 2 — done row narration (no orchestrator on this plan → no "by") ──
+      const doneRow = rowFor("checkpoint persistence");
+      expect(doneRow.getAttribute("data-status")).toBe("done");
+      expect(norm(doneRow.textContent)).toContain(
+        'cycle 1 · "checkpoint persistence" · done — GREEN confirmed',
+      );
+      expect(doneRow.textContent ?? "").not.toContain(" by ");
+
+      // ── item 2/3 — active row: bold, ember; inline always-visible open span ──
+      const activeRow = rowFor("compile fallback");
+      expect(activeRow.getAttribute("data-status")).toBe("active");
+      const boldEl = Array.from(activeRow.querySelectorAll("b")).find((b) =>
+        norm(b.textContent).includes('cycle 2 · "compile fallback" · ACTIVE'),
+      );
+      expect(boldEl).toBeDefined();
+
+      // RULED (a) — always inline, NO toggle click needed to see them.
+      const linkedRows = Array.from(
+        activeRow.querySelectorAll<HTMLElement>('[data-testid="linked-run-row"]'),
+      );
+      expect(linkedRows.length).toBe(2);
+
+      const redRow = linkedRows.find((r) => r.getAttribute("data-run-id") === "evt-f13-red-1");
+      const greenRow = linkedRows.find((r) => r.getAttribute("data-run-id") === "evt-f13-green-1");
+      expect(redRow).toBeDefined();
+      expect(greenRow).toBeDefined();
+
+      // Run-entry icons follow the CR-007 mask-icon system — never the
+      // mock's literal 🧪 emoji (CSS `color` cannot tint color-emoji text).
+      for (const row of [redRow!, greenRow!]) {
+        const cardIcon = row.querySelector('[data-testid="card-icon"]');
+        expect(cardIcon).not.toBeNull();
+        expect(cardIcon!.getAttribute("data-icon-tintable")).toBe("true");
+        const iconGlyph = cardIcon!.querySelector('[data-testid="icon-glyph"]');
+        expect(iconGlyph).not.toBeNull();
+        expect(iconGlyph!.className).toMatch(/\bapp-icon-mask\b/);
+        expect(iconGlyph!.getAttribute("data-kind")).toBe("test");
+        expect(row.textContent ?? "").not.toContain("🧪");
+      }
+
+      expect(redRow!.textContent ?? "").toContain("CR-NAI-042-RED");
+      expect(greenRow!.textContent ?? "").toContain("CR-NAI-042-GREEN");
+
+      // Ratio text is the PLAIN num/total form for BOTH pass and fail
+      // (never "N ✗ of T"), colored pass/fail via class only.
+      const redRatio = redRow!.querySelector(".app-ratio-fail, .app-ratio-pass");
+      expect(redRatio).not.toBeNull();
+      expect(norm(redRatio!.textContent)).toBe("2/5");
+      expect(redRatio!.className).toMatch(/\bapp-ratio-fail\b/);
+
+      const greenRatio = greenRow!.querySelector(".app-ratio-fail, .app-ratio-pass");
+      expect(greenRatio).not.toBeNull();
+      expect(norm(greenRatio!.textContent)).toBe("5/5");
+      expect(greenRatio!.className).toMatch(/\bapp-ratio-pass\b/);
+
+      // Trailing dim annotation, exactly once.
+      const annotation = activeRow.querySelector('[data-testid="open-span-annotation"]');
+      expect(annotation).not.toBeNull();
+      expect(norm(annotation!.textContent)).toBe("awaiting orchestrator confirm");
+      expect(annotation!.className).toMatch(/app-card-meta/);
+
+      // ── item 4 — pending verify cycle: inline [verify] kind badge ─────
+      const pendingRow = rowFor("verify sweep");
+      expect(pendingRow.getAttribute("data-status")).toBe("pending");
+      const kindBadge = pendingRow.querySelector('[data-testid="cycle-kind-badge"]');
+      expect(kindBadge).not.toBeNull();
+      expect(norm(kindBadge!.textContent)).toBe("verify");
+      expect(norm(pendingRow.textContent)).toContain('cycle 3 · "verify sweep"');
+      expect(norm(pendingRow.textContent)).toContain("pending");
+      // bound: the badge is INLINE within the row line, not a separate block.
+      expect(kindBadge!.closest('[data-testid="cycle-row"]')).toBe(pendingRow);
+
+      // ── item 10 — no extra "WORKFLOW — <project>" rail title above it ──
+      const workspaceBody = document.querySelector('[data-testid="workspace-body"]')!;
+      expect(workspaceBody.querySelector(".app-rail-title") === null).toBe(true);
+
+      // ── item 5 — combined History header: Wave + lanes + state, ONE line ──
+      const hist = history();
+      const wave1 = hist.querySelector<HTMLElement>('[data-testid="wave-group"][data-wave="1"]');
+      expect(wave1).not.toBeNull();
+      const waveHeader = wave1!.querySelector('[data-testid="wave-header"]');
+      expect(waveHeader).not.toBeNull();
+      expect(norm(waveHeader!.textContent)).toBe(
+        "History — Wave 1 · lanes: track-1 ✓ · track-2 1/2 · awaiting review",
+      );
+
+      // ── item 6/8/9 — collapsed history row: inline dim text, "merged <sha>" (no "@") ──
+      const crGroup1 = wave1!.querySelector<HTMLElement>(
+        '[data-testid="cr-group"][data-cr="CR-NAI-041"]',
+      );
+      expect(crGroup1).not.toBeNull();
+      // Collapsed by default (§S1.2, unchanged) — no cycle rows mounted yet.
+      expect(crGroup1!.querySelectorAll('[data-testid="lens-cycle-row"]').length).toBe(0);
+      const collapsedText = norm(crGroup1!.textContent);
+      expect(collapsedText).toContain("▸ track-1 › CR-NAI-041 · 3 cycles ✓ · merged e41d2aa");
+      expect(collapsedText).not.toContain("merged @");
+      expect(collapsedText).not.toContain("@");
+    },
+  );
+
+  test("a plan with no title renders the id-only CR root (§S6.11 graceful degradation)", async () => {
+    const key = "f13-fidelity-notitle";
+    const plan: PlanFixture = {
+      planId: 9101,
+      cr: "CR-NT-1",
+      status: "open",
+      track: "track-1",
+      wave: "1",
+      cycles: [{ id: 5001, label: "c1", status: "pending" }],
+    };
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "No Title Project" })],
+      events: [],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const root = active().querySelector('[data-testid="workflow-cr-root"][data-cr="CR-NT-1"]');
+    expect(root).not.toBeNull();
+    expect(norm(root!.textContent)).toBe("CR-NT-1");
+  });
+
+  test("the active header omits the track segment when the plan carries no track (solo model, item 1)", async () => {
+    const key = "f13-fidelity-solo";
+    const plan: PlanFixture = {
+      planId: 9102,
+      cr: "CR-SOLO-1",
+      status: "open",
+      wave: "2",
+      cycles: [{ id: 5101, label: "c1", status: "pending" }],
+    };
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Solo Project" })],
+      events: [],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const header = active().querySelector('[data-testid="workflow-active-header"]');
+    expect(header).not.toBeNull();
+    expect(norm(header!.textContent)).toBe("Active workflow — CR-SOLO-1 · wave 2");
+  });
+});
+
+// ── §S6 #2 — done-cycle narration variants ─────────────────────────────────
+
+describe("§S6 #2 — done-cycle narration variants", () => {
+  test('a done cycle whose plan carries an orchestrator identity reads "done — GREEN confirmed by <orchestrator>"', async () => {
+    const key = "f13-narration-1";
+    const plan: PlanFixture = {
+      planId: 9201,
+      cr: "CR-NARR-1",
+      status: "open",
+      track: "track-1",
+      wave: "1",
+      orchestrator: "vidushi",
+      cycles: [{ id: 6001, label: "checkpoint persistence", status: "done" }],
+    };
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Narration Project" })],
+      events: [],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const row = active().querySelector<HTMLElement>('[data-testid="cycle-row"][data-status="done"]')!;
+    expect(row).not.toBeNull();
+    expect(norm(row.textContent)).toContain("done — GREEN confirmed by vidushi");
+  });
+
+  test('a done VERIFY-kind cycle reads "done — report accepted" (never "GREEN confirmed")', async () => {
+    const key = "f13-narration-2";
+    const plan: PlanFixture = {
+      planId: 9202,
+      cr: "CR-NARR-2",
+      status: "open",
+      track: "track-1",
+      wave: "1",
+      cycles: [{ id: 6002, label: "verify sweep", kind: "verify", status: "done" }],
+    };
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Narration Verify Project" })],
+      events: [],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const row = active().querySelector<HTMLElement>('[data-testid="cycle-row"][data-status="done"]')!;
+    expect(row).not.toBeNull();
+    const text = norm(row.textContent);
+    expect(text).toContain("done — report accepted");
+    expect(text).not.toContain("GREEN confirmed");
+  });
+});
+
+// ── §S6 #7 — GLYPH-ONLY status coloring (styles.css source) ───────────────
+
+describe("§S6 #7 — GLYPH-ONLY status coloring (styles.css)", () => {
+  function ruleBody(selector: string): string | undefined {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(STYLES_SRC);
+    return match?.[1];
+  }
+
+  test("each status's cycle-GLYPH carries its OWN `color` declaration (pass-green done / ember active / faint pending)", () => {
+    const doneGlyph = ruleBody(".cycle-status-done .app-cycle-glyph");
+    expect(doneGlyph).toBeDefined();
+    expect(doneGlyph ?? "").toMatch(/color\s*:\s*var\(--pass\)/);
+
+    const activeGlyph = ruleBody(".cycle-status-active .app-cycle-glyph");
+    expect(activeGlyph).toBeDefined();
+    expect(activeGlyph ?? "").toMatch(/color\s*:\s*var\(--ember\)/);
+
+    const pendingGlyph = ruleBody(".cycle-status-pending .app-cycle-glyph");
+    expect(pendingGlyph).toBeDefined();
+    expect(pendingGlyph ?? "").toMatch(/color\s*:\s*var\(--ink-faint\)/);
+  });
+
+  test("the ROW TEXT (`.app-cycle-line`) carries NO status color anymore — the live-UI regression this CR fixes (glyph-only, not whole-row)", () => {
+    for (const status of ["pending", "active", "done", "skipped", "failed"]) {
+      const lineRule = ruleBody(`.cycle-status-${status} .app-cycle-line`);
+      if (lineRule !== undefined) {
+        expect(lineRule).not.toMatch(/color\s*:/);
+      }
+    }
+  });
+});
+
+// ── §S6 #8 — collapsed HISTORY cycle rows carry a run-count hint ──────────
+
+describe("§S6 #8 — collapsed history cycle rows carry a run-count hint (▸ N runs)", () => {
+  test("a done history cycle with 2 linked runs, before its OWN toggle is clicked, shows '▸ 2 runs' inline", async () => {
+    const key = "f13-runcount-1";
+    const now = Date.now();
+    const run1 = runEvent({
+      id: "evt-rc-1",
+      projectKey: key,
+      agentId: "agent-a",
+      timestamp: now,
+      context: { cycleId: 7001 },
+    });
+    const run2 = runEvent({
+      id: "evt-rc-2",
+      projectKey: key,
+      agentId: "agent-b",
+      timestamp: now + 10,
+      context: { cycleId: 7001 },
+    });
+    const plan: PlanFixture = {
+      planId: 9301,
+      cr: "CR-RC-1",
+      status: "closed",
+      wave: "1",
+      merge: { commit: "rc0000a" },
+      cycles: [{ id: 7001, label: "wire the API", status: "done" }],
+    };
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Run Count Project" })],
+      events: [run1, run2],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const crGroup = history().querySelector<HTMLElement>('[data-testid="cr-group"][data-cr="CR-RC-1"]');
+    expect(crGroup).not.toBeNull();
+    const groupToggle = crGroup!.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]')!;
+    expect(groupToggle).not.toBeNull();
+    groupToggle.click();
+    await settle();
+
+    const cycleRow = crGroup!.querySelector<HTMLElement>('[data-testid="lens-cycle-row"]')!;
+    expect(cycleRow).not.toBeNull();
+    // the cycle's OWN toggle (for its linked runs) is untouched — collapsed.
+    expect(cycleRow.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(0);
+    expect(norm(cycleRow.textContent)).toContain("▸ 2 runs");
+  });
+});
+
+// ── §S6 #10 — no extra rail-title above the active header (dedicated) ─────
+
+describe("§S6 #10 — no extra rail-title above the active header", () => {
+  test("the Workflow pane renders no separate 'Workflow — <project>' rail-title anywhere in its body", async () => {
+    const key = "f13-norail-1";
+    const plan: PlanFixture = {
+      planId: 9401,
+      cr: "CR-NORAIL-1",
+      status: "open",
+      wave: "1",
+      cycles: [{ id: 8001, label: "c1", status: "pending" }],
+    };
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "No Rail Title Project" })],
+      events: [],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const workspaceBody = document.querySelector('[data-testid="workspace-body"]')!;
+    expect(workspaceBody.querySelector(".app-rail-title") === null).toBe(true);
+    expect(workspaceBody.textContent ?? "").not.toMatch(/^\s*Workflow\s*—/);
+  });
+});
+
+// ── RULED (a) — active cycle's open span is ALWAYS inline, no toggle ──────
+
+describe("RULED (a) — the ACTIVE cycle's open span is ALWAYS inline; no toggle exists on it", () => {
+  test("the active cycle's linked runs render immediately on mount with no click needed, and the row carries NO cycle-toggle element (the toggle narrows to History only)", async () => {
+    const key = "f13-ruled-a-1";
+    const now = Date.now();
+    const run = runEvent({
+      id: "evt-ruled-a-1",
+      projectKey: key,
+      agentId: "agent-x-RED",
+      timestamp: now,
+      context: { cycleId: 9601 },
+    });
+    const plan: PlanFixture = {
+      planId: 9501,
+      cr: "CR-RULED-A",
+      status: "open",
+      wave: "1",
+      track: "track-1",
+      cycles: [{ id: 9601, label: "c1", status: "active" }],
+    };
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Ruled A Project" })],
+      events: [run],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const activeRow = active().querySelector<HTMLElement>(
+      '[data-testid="cycle-row"][data-status="active"]',
+    )!;
+    expect(activeRow).not.toBeNull();
+    expect(activeRow.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(1);
+    expect(
+      activeRow.querySelector('[data-testid="linked-run-row"]')!.getAttribute("data-run-id"),
+    ).toBe("evt-ruled-a-1");
+    expect(activeRow.querySelector('[data-testid="cycle-toggle"]')).toBeNull();
+  });
+});

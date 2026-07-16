@@ -585,6 +585,82 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
   });
 
+  // ── §S6.11 (CR-CRU-021) — optional plan title, captured at filing ────────
+  // The CR ROOT element in the Workflow active view renders `<cr> · <title>`
+  // when the plan carries one (heat-highlighted id, title captured at plan
+  // filing via this additive optional `title` field), and the id-only root
+  // when it doesn't (graceful degradation, §S6.11). RED phase: expected to
+  // fail against CURRENT production — POST /plans has no `title` handling at
+  // all (src/v2.ts handlePlanFile ~512, no `title` in the V2Body interface,
+  // no `title` column in src/store.ts filePlan) — title is silently dropped
+  // today, never 400s on a bad type, and never appears in GET.
+  describe("POST /api/v2/projects/<key>/plans — optional title (§S6.11)", () => {
+    test('a string title is stored and returned VERBATIM on the POST response and on GET /plans', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-TITLE-1",
+        title: "Runtime checkpoint persistence",
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      expect(filedBody.title).toBe("Runtime checkpoint persistence");
+
+      const listed = await getJson(plansPath(key, "?cr=CR-TITLE-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const plan = listedBody.plans.find((p) => p.cr === "CR-TITLE-1")!;
+      expect(plan.title).toBe("Runtime checkpoint persistence");
+    });
+
+    test("omitting title entirely files the plan with NO title field on the POST response or on GET (absent, not null — graceful degradation, §S6.11 id-only root)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-TITLE-2",
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      expect("title" in filedBody).toBe(false);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-TITLE-2"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const plan = listedBody.plans.find((p) => p.cr === "CR-TITLE-2")!;
+      expect("title" in plan).toBe(false);
+    });
+
+    test("a non-string title -> 400 naming the title field", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const res = await postJson(plansPath(key), {
+        cr: "CR-TITLE-3",
+        title: 12345,
+        cycles: [{ label: "a" }],
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toMatch(/\btitle\b/i);
+    });
+
+    test("an empty-object title -> 400 naming the title field (not silently coerced to string)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const res = await postJson(plansPath(key), {
+        cr: "CR-TITLE-4",
+        title: { nested: true },
+        cycles: [{ label: "a" }],
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toMatch(/\btitle\b/i);
+    });
+  });
+
   // ── §S0 — plans are not run events ────────────────────────────────────────
   describe("plans do not affect run-event surfaces", () => {
     test("filing, transitioning, and closing a plan add NO events and change NO events-list count", async () => {
