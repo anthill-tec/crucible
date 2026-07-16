@@ -693,9 +693,19 @@ describe("§S3 history lens — inferred fallback (no plan)", () => {
 describe("§S3 history lens — group rollups", () => {
   // CR-CRU-020 retarget (§S1.3) — an open plan's CR group no longer renders
   // in history at all; close the plan (with a merge commit) so the rollup /
-  // agent-runtime assertions (both part of the ALWAYS-visible header per
-  // §S1.2 — they are not `lens-cycle-row` elements, so the collapse-by-
-  // default toggle does not gate them) keep exercising the same rendering.
+  // agent-runtime assertions keep exercising the same rendering. The rollup
+  // itself stays part of the ALWAYS-visible header (§S1.2).
+  //
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S4, 2026-07-16) — group headers now
+  // carry NO per-agent rows while collapsed; `cr-agent-runtime` renders only
+  // behind the group's own expansion (the aggregate `N agents` pill takes
+  // its place at header level while collapsed — see tests/aggregate-
+  // headers.test.ts). This test's SUBJECT is the rollup figure + a
+  // participating agent's runtime surfacing at all, not collapse timing, so
+  // it now expands the group via `cr-group-toggle` before reading
+  // `cr-agent-runtime` — same click-before-read pattern already used at
+  // lines 648/650 and 280 in this file. Was: read `cr-agent-runtime`
+  // directly off the collapsed header with no toggle click.
   test("a CR group row shows cycles done/total, and participating agents with runtimes (runtime_ms surfaces — pin presence, not exact ms)", async () => {
     const key = "lens-rollup-1";
     const now = Date.now();
@@ -743,6 +753,13 @@ describe("§S3 history lens — group rollups", () => {
     const rollup = crGroup!.querySelector('[data-testid="cr-rollup"]');
     expect(rollup).not.toBeNull();
     expect((rollup!.textContent ?? "")).toContain("2/3");
+
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S4) — per-agent runtime rows now
+    // render only once the group's own header toggle is expanded.
+    const groupToggle = crGroup!.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]');
+    expect(groupToggle).not.toBeNull();
+    groupToggle!.click();
+    await settle();
 
     const agentRuntime = crGroup!.querySelector('[data-testid="cr-agent-runtime"]');
     expect(agentRuntime).not.toBeNull();
