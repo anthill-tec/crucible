@@ -1,6 +1,6 @@
 # CR-CRU-019 — Patch: workflow-review tweak accumulator
 
-**Status:** COMPLETED (2026-07-16 — awaiting merge gate)
+**Status:** COMPLETED (2026-07-16 — merged to develop 296d1eb)
 
 **Type:** patch
 **Priority:** P2
