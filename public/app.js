@@ -1498,15 +1498,29 @@
                 node.cycles.map((c) => LensCycleRow(c, node.cr)),
               )
             : "",
-        // CR-CRU-020 §S2 (C3 gate-review defect) — an agent-runtime row in
-        // the always-visible header renders ONLY for a fleet-registered
-        // agent (the server-computed runtime_ms off the agents slice). A
-        // raw run agentId with no agent record must never fabricate a 0ms
-        // row here — those read as run rows at group level, and run entries
-        // belong exclusively inside an expanded cycle's drill-down.
-        node.agents
-          .filter((id) => state.agents.some((a) => a.agentId === id))
-          .map(CrAgentRuntime),
+        // CR-CRU-021 §S4 — the collapsed header carries ZERO agentId-bearing
+        // elements; participating agents surface as an aggregate `N agents`
+        // pill in the header REGION, and per-agent runtime rows render only
+        // behind the group's expansion (CR-011's information survives, one
+        // level down). CR-CRU-020 §S2 (C3) fleet-registered semantics are
+        // unchanged: a raw run agentId with no fleet record never fabricates
+        // a 0ms row and is excluded from the pill count. Zero registered
+        // participants → no pill at all (never `0 agents`).
+        () => {
+          if (!lensOpen(key)) return "";
+          const registered = node.agents.filter((id) =>
+            state.agents.some((a) => a.agentId === id),
+          );
+          if (registered.length === 0) return "";
+          return div(
+            { class: "app-cr-agents" },
+            span(
+              { "data-testid": "cr-agents-pill", class: "app-pill app-card-meta" },
+              `${registered.length} agent${registered.length === 1 ? "" : "s"}`,
+            ),
+            registered.map(CrAgentRuntime),
+          );
+        },
       );
     };
 
