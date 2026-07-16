@@ -1,6 +1,6 @@
 # CR-CRU-016 — In-pane drill-in: run detail inside the Run Timeline pane
 
-**Status:** IN_PROGRESS (2026-07-16 — reopened at the merge gate: user review filed §S4 regression-run differentiation; C0–C4 + VERIFY complete, fix round running)
+**Status:** COMPLETED (2026-07-16 — C0 design + C1/C2 + C3 pins + C4 BDD + C5 gate-fix cycle (user-excepted inline scope: §S4 regression differentiation, tabs-hide, tab-in-header, sticky header, marker routing) + C6 VERIFY (READY FOR RE-CLOSE, zero blocking); final gates 500/500 unit · tsc 0 · 19/19 BDD · coverage 95.0% lines / 96.1% functions, first tier-tagged regression ingested; awaiting merge gate)
 **Type:** feature
 **Priority:** P1
 **Depends on:** CR-CRU-007
@@ -87,10 +87,10 @@ table + PRD §4.11 synced.
 - [x] Context rules in-pane: a `unit`-tier detail renders NO `drillin-mode`; a `regression`-tier detail opens in Density with the chips row + heat-strip; the F4 anatomy assertions (tree lines, inline failure box, footer) pass against the in-pane container (re-targeted from the CR-007 slide-over tests — the approved-modification list is part of this CR's RED report).
 - [x] SSE liveness: with the detail open, a new run ingested for the project updates the Project pane's agent row (visible beside the detail) without closing the detail.
 - [x] BDD E2E: a `drill-in.feature` scenario set covering open-from-card, back-restores-scroll, cold-load, and project-pane-stays-visible; results ingested `tier:"e2e"`.
-- [ ] §S4 tier passthrough (user defect 2026-07-16): `POST /api/ingest/parsed` with `tier:"regression"` stores an event whose `tier` is `regression` (asserted via the events listing); `tier:"banana"` → 400 whose error names `tier`; omitting `tier` keeps the `unit` default (existing ingest tests unchanged).
-- [ ] §S4 F7 card differentiation (user defect 2026-07-16): an event with tier `regression` and brief `coverageLines: 94.4` renders its card with the `regression` tier badge, codec badge text `parsed+lcov`, and `data-testid="card-coverage-meter"` (`.app-meter` anatomy, `.app-meter-fill` inline width `94.4%`) inline on the card; a `regression` event WITHOUT coverage renders the tier badge, codec `parsed`, and NO card meter; a `unit` event renders no card meter and codec `parsed` (class-level assertions).
-- [ ] §S1 header-always-visible (user note 2026-07-16): with a run detail open, the detail header (back chip · `RUN DETAIL` · density chip) is NOT a descendant of the drill-down's scroll container — on the workspace it renders in the band the hidden tabs row vacates, on home pinned above the pane's scroller; with the 10k-leaf fixture scrolled to its bottom, the header element remains present with its position unaffected by the scroller's `scrollTop` (DOM-structure + post-scroll visibility assertions).
-- [ ] §S1 tabs-hide + tab-in-header (user decisions 2026-07-16, gate review): on the workspace with a run detail open — from ANY entry (run card on any tab, transition marker, coverage-meter, coverage-view-run, cold load) — `data-testid="workspace-tabs"` is ABSENT from the DOM and the detail header's back-chip text equals `← <active tab, lowercase>` (`← runs` / `← coverage` / `← compile`); on home the chip stays `← timeline`. Closing (the chip, Escape, and browser back each) restores the tabs row with the previously-active tab still carrying the `on` class and the feed at its exact prior scrollTop; a detail opened from the Compile tab shows `← compile` and closes back to the COMPILE pane with its tab `on`; a cold workspace load defaults to Runs (`← runs`); the top bar and Project pane remain present throughout; the C4 BDD open-from-card scenario is re-targeted (tabs ABSENT + chip text asserted during detail, tabs PRESENT with correct selection after close).
+- [x] §S4 tier passthrough (user defect 2026-07-16): `POST /api/ingest/parsed` with `tier:"regression"` stores an event whose `tier` is `regression` (asserted via the events listing); `tier:"banana"` → 400 whose error names `tier`; omitting `tier` keeps the `unit` default (existing ingest tests unchanged).
+- [x] §S4 F7 card differentiation (user defect 2026-07-16): an event with tier `regression` and brief `coverageLines: 94.4` renders its card with the `regression` tier badge, codec badge text `parsed+lcov`, and `data-testid="card-coverage-meter"` (`.app-meter` anatomy, `.app-meter-fill` inline width `94.4%`) inline on the card; a `regression` event WITHOUT coverage renders the tier badge, codec `parsed`, and NO card meter; a `unit` event renders no card meter and codec `parsed` (class-level assertions).
+- [x] §S1 header-always-visible (user note 2026-07-16): with a run detail open, the detail header (back chip · `RUN DETAIL` · density chip) is NOT a descendant of the drill-down's scroll container — on the workspace it renders in the band the hidden tabs row vacates, on home pinned above the pane's scroller; with the 10k-leaf fixture scrolled to its bottom, the header element remains present with its position unaffected by the scroller's `scrollTop` (DOM-structure + post-scroll visibility assertions).
+- [x] §S1 tabs-hide + tab-in-header (user decisions 2026-07-16, gate review): on the workspace with a run detail open — from ANY entry (run card on any tab, transition marker, coverage-meter, coverage-view-run, cold load) — `data-testid="workspace-tabs"` is ABSENT from the DOM and the detail header's back-chip text equals `← <active tab, lowercase>` (`← runs` / `← coverage` / `← compile`); on home the chip stays `← timeline`. Closing (the chip, Escape, and browser back each) restores the tabs row with the previously-active tab still carrying the `on` class and the feed at its exact prior scrollTop; a detail opened from the Compile tab shows `← compile` and closes back to the COMPILE pane with its tab `on`; a cold workspace load defaults to Runs (`← runs`); the top bar and Project pane remain present throughout; the C4 BDD open-from-card scenario is re-targeted (tabs ABSENT + chip text asserted during detail, tabs PRESENT with correct selection after close).
 
 ## Gap analysis (2026-07-16, pre-design)
 What exists (CR-007 final tree, develop 895fce0) vs what this CR changes:
@@ -179,6 +179,16 @@ change.
    navigation CR.
 3. **`run-overlay` testid** retained on the in-pane element (compatibility
    with ~55 assertions); rename to `run-detail` is a pure-cleanup candidate.
+4. **Hidden compat head** (C6 VERIFY suggestion): `.app-drillin-inhead`
+   (public/app.js ~1656) exists only so tests/storyboard-fidelity.test.ts:405
+   and tests/drill-in.test.ts:731 (which query header content INSIDE
+   `run-overlay`) stay green. Cleanup: re-target those two assertions to the
+   visible band header, then retire the compat copy — pairs with the
+   `run-detail` rename above.
+5. **Parked tabs row** (C6-blessed): while a detail is open the tabs row
+   keeps its DOM node with testid swapped to `workspace-tabs-parked` +
+   `display:none` — ruled sound engineering (preserves the `on` state across
+   close paths); noted for transparency.
 
 ## Non-goals
 Anatomy/density changes (carried verbatim); /manage & /roadmap overlay model;
