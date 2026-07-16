@@ -59,7 +59,8 @@ export interface WorkspaceProjectLike {
 }
 
 export interface WorkspaceTab {
-  name: "Runs" | "Coverage" | "Compile" | "BDD";
+  // CR-CRU-011 §S3 — "Workflow" joins the fixed order after Runs.
+  name: "Runs" | "Workflow" | "Coverage" | "Compile" | "BDD";
   disabled: boolean;
   /** RED-phase declaration only — present when `disabled` explains why
    * (Coverage: "coverage lands with the first green regression"). */

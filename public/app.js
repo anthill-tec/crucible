@@ -18,6 +18,8 @@
       projects: [],
       agents: [],
       events: [],
+      plans: [], // CR-CRU-011 §S3 — the workspace project's cycle plans
+
       health: null,
       selectedProject: null, // home filter pulldown (null = all projects)
       selectedAgent: null, // agent sub-row click filter (null = all)
@@ -109,6 +111,24 @@
         state.lastSynced = Date.now();
       } catch {
         // Reachability is owned by the watchdog below; keep stale data visible.
+      }
+      await refetchPlans();
+    }
+
+    // CR-CRU-011 §S3 — the Workflow tab's plan slice (the C1 project-scoped
+    // route). Fetched on every refetch tick while a workspace is open, so the
+    // active todo view refreshes over the SAME SSE/poll cadence as the feed.
+    // Guarded separately from the core slice: a plans failure never poisons
+    // projects/agents/events, and reachability stays the watchdog's concern.
+    async function refetchPlans() {
+      if (state.route.page !== "workspace") return;
+      try {
+        const body = await getJson(
+          `/api/v2/projects/${encodeURIComponent(state.route.projectKey)}/plans`,
+        );
+        vanX.replace(state.plans, () => body.plans ?? []);
+      } catch {
+        // Keep the last-known plans visible while the route is unreachable.
       }
     }
 
@@ -1076,6 +1096,122 @@
     const BddPlaceholder = () =>
       div({ class: greyed("app-center") }, BddFeed());
 
+    // ── CR-CRU-011 §S3 — Workflow tab: ACTIVE view (per-CR todo over the
+    // open plan) + gate-pane placeholder. The HISTORY lens lands in C4.
+    // Cycle-status glyphs: active ▶ / done ✓ / failed ✗ are the CR's literal
+    // glyphs; pending ○ / skipped ⊘ are the distinct text-only markers.
+    const CYCLE_GLYPHS = {
+      pending: "○",
+      active: "▶",
+      done: "✓",
+      skipped: "⊘",
+      failed: "✗",
+    };
+
+    // Runs linked to a cycle via the §S0 `context.cycleId` passthrough.
+    const linkedRunsFor = (cycleId) =>
+      state.events.filter(
+        (e) =>
+          e.projectKey === state.route.projectKey &&
+          e.kind !== "lifecycle" &&
+          e.context?.cycleId === cycleId,
+      );
+
+    // CR-CRU-016 binding — a linked run opens as a pane state of the
+    // WORKFLOW pane through the SAME openDrillin path as cards/markers
+    // (one-rule: no tab switch, tabs-hide, `← workflow` back chip).
+    const LinkedRunRow = (e) =>
+      div(
+        {
+          "data-testid": "linked-run-row",
+          "data-run-id": e.id,
+          class: "app-linked-run-row",
+          onclick: () => openDrillin(e.id),
+        },
+        span({ class: "app-agent-id" }, e.agentId),
+        e.failed > 0
+          ? span({ class: "app-ratio-fail" }, `${e.failed} ✗ of ${e.total}`)
+          : span({ class: "app-ratio-pass" }, `${e.passed}/${e.total}`),
+        span({ class: "app-card-meta" }, rel(e.timestamp)),
+      );
+
+    // One todo row per cycle; ONLY the active cycle expands to list its
+    // context.cycleId-linked runs (live over the refetch cadence).
+    const CycleRow = (cycle) =>
+      div(
+        {
+          "data-testid": "cycle-row",
+          "data-status": cycle.status,
+          class: `app-cycle-row cycle-status-${cycle.status}`,
+        },
+        div(
+          { class: "app-cycle-line" },
+          span(
+            { "data-testid": "cycle-glyph", class: "app-cycle-glyph" },
+            CYCLE_GLYPHS[cycle.status] ?? CYCLE_GLYPHS.pending,
+          ),
+          span({ class: "app-cycle-label" }, cycle.label),
+        ),
+        cycle.status === "active"
+          ? div(
+              { class: "app-cycle-runs" },
+              linkedRunsFor(cycle.id).map(LinkedRunRow),
+            )
+          : null,
+      );
+
+    const WorkflowActive = () => {
+      const openPlans = state.plans.filter((p) => p.status === "open");
+      return div(
+        { "data-testid": "workflow-active", class: "app-workflow-active" },
+        openPlans.length === 0
+          ? div(
+              { class: "app-empty" },
+              "no open plan — file one via POST /api/v2/projects/<key>/plans",
+            )
+          : openPlans.map((plan) =>
+              div(
+                { class: "app-workflow-plan" },
+                div({ class: "app-pane-section-title" }, plan.cr),
+                (plan.cycles ?? []).map(CycleRow),
+              ),
+            ),
+      );
+    };
+
+    // Gate pane placeholder — populated by CR-CRU-013's no-mistakes pane.
+    const GatePane = () =>
+      div(
+        { "data-testid": "gate-pane", class: "app-gate-pane" },
+        div({ class: "app-pane-section-title" }, "Gate"),
+        div({ class: "app-empty" }, "gate reporting lands in CR-013"),
+      );
+
+    const WorkflowFeed = () =>
+      div(
+        { class: "app-pane-content" },
+        div(
+          { class: "app-timeline-head" },
+          div({ class: "app-rail-title" }, () => {
+            const p = currentProject();
+            return `Workflow — ${p ? p.name || p.key : state.route.projectKey}`;
+          }),
+        ),
+        div(
+          { class: "app-workflow-cols" },
+          () => WorkflowActive(),
+          GatePane(),
+        ),
+        // §S3 history lens — C4 of this CR; honest placeholder until then.
+        div(
+          { "data-testid": "workflow-history", class: "app-empty" },
+          "history lens lands in C4 of this CR",
+        ),
+      );
+
+    const WorkflowPanel = () =>
+      div({ class: greyed("app-center") }, WorkflowFeed());
+
     // CR-CRU-016 §S1 (C5) — the workspace detail: run-overlay wraps the
     // detail header AND the detail's own scroller, so the header (back chip ·
     // RUN DETAIL · density) sits ABOVE the scrolling content and never moves
@@ -1103,13 +1239,15 @@
         return WorkspaceRunDetail(state.route.overlay);
       }
       const pane =
-        state.workspaceTab === "Coverage"
-          ? CoveragePanel()
-          : state.workspaceTab === "Compile"
-            ? CompilePanel()
-            : state.workspaceTab === "BDD"
-              ? BddPlaceholder()
-              : WorkspaceRuns();
+        state.workspaceTab === "Workflow"
+          ? WorkflowPanel()
+          : state.workspaceTab === "Coverage"
+            ? CoveragePanel()
+            : state.workspaceTab === "Compile"
+              ? CompilePanel()
+              : state.workspaceTab === "BDD"
+                ? BddPlaceholder()
+                : WorkspaceRuns();
       if (wsShowingDetail) {
         wsShowingDetail = false;
         queueMicrotask(() => {
