@@ -41,7 +41,11 @@ encodes the plan verbs in the python/fleet clients for the agentic backend.
   for the same open CR → 400 naming `cr`); appending cycles to an open plan:
   `POST …/plans/<planId>/cycles {label, kind?}` → new id.
 - `PATCH …/plans/<planId>/cycles/<id>` `{status}` — transitions
-  `pending → active → done | skipped | failed`. `done` IS the orchestrator's
+  `pending → active → done | skipped | failed`, plus the ONE legal shortcut
+  `pending → skipped` (C1 clarification: a never-started cycle can be
+  cancelled outright — todo semantics; forcing activate-then-skip at plan
+  close would be pure ceremony). `pending → done` and `pending → failed`
+  remain illegal (both imply execution happened). `done` IS the orchestrator's
   confirmation — GREEN-confirm for `red-green`, report acceptance for `verify`,
   fix-batch-green for `fix` (the span-closing authority — a passing run alone
   never closes a cycle of any kind). Invalid transition → 400 naming both states.
