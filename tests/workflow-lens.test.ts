@@ -35,7 +35,11 @@
 //     under a CR group (declared OR inferred).
 //   - `[data-testid="cycle-span-closed"]` — a done cycle's closed span,
 //     wrapping its `[data-testid="linked-run-row"]` children.
-//   - `[data-testid="ungrouped-tail"]` / `[data-testid="ungrouped-count"]`.
+//   - `[data-testid="ungrouped-tail"]` / `[data-testid="ungrouped-count"]` —
+//     CR-CRU-020 retarget (§S1.4 corrected, gate-review defect 2026-07-16):
+//     these elements are REMOVED from the Workflow lens entirely; the
+//     ungrouped-runs assertion below now confirms their ABSENCE and checks
+//     the Runs timeline for visibility instead (never-hidden rule moved).
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -635,11 +639,15 @@ describe("§S3 history lens — inferred fallback (no plan)", () => {
     expect(cycleLabels).toContain("cycle-a");
     expect(cycleLabels).toContain("cycle-b");
 
-    const ungroupedTail = hist.querySelector('[data-testid="ungrouped-tail"]');
-    expect(ungroupedTail).not.toBeNull();
-    const countEl = ungroupedTail!.querySelector('[data-testid="ungrouped-count"]');
-    expect(countEl).not.toBeNull();
-    expect((countEl!.textContent ?? "")).toContain("2");
+    // CR-CRU-020 retarget (§S1.4 corrected 2026-07-16 gate-review defect) —
+    // this CR-011 AC ("ungrouped tail never dropped") is superseded FOR THE
+    // WORKFLOW LENS by the corrected §S1.4: the ungrouped listing is REMOVED
+    // from `workflow-history` entirely (no tail, no count, no toggle); the
+    // never-hidden guarantee for these 2 unlinked runs is honored by the
+    // Runs timeline instead, asserted there.
+    expect(hist.querySelector('[data-testid="ungrouped-tail"]')).toBeNull();
+    expect(hist.querySelector('[data-testid="ungrouped-count"]')).toBeNull();
+    expect(hist.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(0);
 
     // bound: the ungrouped runs are never absorbed into a CR group.
     expect(hist.textContent ?? "").not.toContain("no wave/cr grouping is dropped");
@@ -648,6 +656,19 @@ describe("§S3 history lens — inferred fallback (no plan)", () => {
       expect(g.querySelector('[data-run-id="evt-ungrouped-1"]')).toBeNull();
       expect(g.querySelector('[data-run-id="evt-ungrouped-2"]')).toBeNull();
     }
+
+    // The never-hidden rule now lives on the Runs timeline: both unlinked
+    // runs are still fully visible there.
+    const runsTab = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((t) => (t.textContent ?? "").trim() === "Runs");
+    expect(runsTab).toBeDefined();
+    runsTab!.click();
+    await settle();
+    const runsPane = document.querySelector<HTMLElement>('[data-testid="workspace-runs"]');
+    expect(runsPane).not.toBeNull();
+    expect(runsPane!.querySelectorAll('[data-run-id="evt-ungrouped-1"]').length).toBe(1);
+    expect(runsPane!.querySelectorAll('[data-run-id="evt-ungrouped-2"]').length).toBe(1);
   });
 });
 

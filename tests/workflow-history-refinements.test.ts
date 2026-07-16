@@ -1,9 +1,9 @@
 // CR-CRU-020 §S1 + §S2 — RED phase for the user's live-review history
 // refinements: latest-first ordering, collapsed-by-default CR groups,
-// executing-CR exclusion from history, ungrouped demotion to a count row,
-// and cycle drill-down (history + active parity) with state-preserving pane
-// swap. Board fidelity: .lavish/crucible-v2-design.html F13 (refined
-// 2026-07-16) + F13½ (drill-down navigation).
+// executing-CR exclusion from history, ungrouped listing REMOVAL from the
+// Workflow lens, and cycle drill-down (history + active parity) with
+// state-preserving pane swap. Board fidelity: .lavish/crucible-v2-design.html
+// F13 (refined 2026-07-16) + F13½ (drill-down navigation).
 //
 // Drives the REAL production public/app.js shell inside a happy-dom window —
 // same harness pattern as tests/workflow-lens.test.ts / tests/workflow-
@@ -12,11 +12,18 @@
 //
 // RED phase: expected to fail against CURRENT production, which (a) sorts
 // waves oldest-first and never reorders CRs within a wave by close time
-// (§S1.1), (b) renders CR groups and the ungrouped tail always-expanded with
-// no toggle at all (§S1.2/§S1.4), (c) renders an OPEN plan's CR group in
-// history alongside closed ones (§S1.3), and (d) auto-expands only the
-// ACTIVE section's active cycle with no click-based toggle anywhere, history
-// or active (§S2.1/§S2.2/§S2.3).
+// (§S1.1), (b) renders CR groups always-expanded with no toggle at all
+// (§S1.2), (c) renders an OPEN plan's CR group in history alongside closed
+// ones (§S1.3), (d) auto-expands only the ACTIVE section's active cycle with
+// no click-based toggle anywhere, history or active (§S2.1/§S2.2/§S2.3), and
+// (e) STILL renders the C1-era `ungrouped-tail` count row in
+// `workflow-history` instead of nothing at all (§S1.4 corrected — the C1
+// count-row compromise was itself a mis-reading of the original ask, fixed
+// at the 2026-07-16 gate review; see the §S1.4 (corrected) describe block
+// below). The §S2 group-level negative bound below pins the user's SEPARATE
+// gate-review defect (group expansion leaking run rows without any cycle
+// toggle) as a regression, independent of whether it already happens to hold
+// against the current C1 GREEN rendering.
 //
 // Testid/attribute contract this file introduces for GREEN (none of these
 // exist yet — chosen to read naturally off the CR text and to reuse the
@@ -32,10 +39,11 @@
 //     row"]` descendants (and the `cycle-span-closed` wrapper for a done
 //     cycle) between absent and present. Collapsed by default — identical
 //     contract in both places (§S2.1/§S2.2 history, §S2.3 active parity).
-//   - `[data-testid="ungrouped-toggle"]` — the ungrouped tail's existing
-//     header line (the "ungrouped" title + the `ungrouped-count` pill, which
-//     stays visible always — the never-hidden degradation rule); click
-//     toggles the raw `linked-run-row` list beneath it. Collapsed by default.
+//   - §S1.4 (corrected) — NO `ungrouped-tail`/`ungrouped-count`/
+//     `ungrouped-toggle` element renders in `workflow-history` at all, in
+//     any state. Unlinked runs remain visible on the Runs timeline
+//     (`[data-testid="workspace-runs"]` → `[data-testid="event-card"]`)
+//     instead — the never-hidden rule now lives there exclusively.
 //   - §S1.1 ordering: waves render newest-first (wave label numeric
 //     descending); within a wave, CR groups render by plan `closedAt`
 //     descending. `closedAt` is a real field already returned by the server
@@ -422,13 +430,20 @@ describe("§S1.3 executing-CR exclusion — open plan lives only in Active; clos
 
 // ── §S1.4 — ungrouped tail demoted to a count-only row ─────────────────────
 
-describe("§S1.4 ungrouped tail — demoted to a count-only row, collapsed by default, never disappears", () => {
-  test("5 unlinked runs render as one count row with NO run entries mounted; clicking expands the 5 entries; the count row survives both expand and re-collapse", async () => {
-    const key = "hist-ungrouped-1";
+// CR-CRU-020 §S1.4 CORRECTED (2026-07-16 gate-review defect, C3) — the
+// count-row compromise below (`ungrouped-tail`/`ungrouped-count`/
+// `ungrouped-toggle`) was a mis-reading of the original ask; the user
+// corrected it at the gate: the Workflow view renders plan/cycle structure
+// ONLY — no ungrouped run listing of ANY form, not even a collapsed count
+// row. Unlinked runs remain fully visible on the Runs timeline instead (the
+// never-hidden rule now lives there, not in the Workflow lens).
+describe("§S1.4 (corrected) — ungrouped listing REMOVED from Workflow entirely; unlinked runs stay visible on the Runs timeline", () => {
+  test("5 unlinked runs render NO ungrouped element (tail/count/toggle) and ZERO run entries anywhere in workflow-history; the same 5 runs render as event-cards on the Runs timeline", async () => {
+    const key = "hist-ungrouped-removed-1";
     const t0 = Date.now() - 500_000;
     const runs: EventFixture[] = Array.from({ length: 5 }, (_, i) =>
       runEvent({
-        id: `evt-ungrouped-demote-${i}`,
+        id: `evt-ungrouped-removed-${i}`,
         projectKey: key,
         agentId: `solo-agent-${i}`,
         timestamp: t0 + i * 1000,
@@ -437,37 +452,144 @@ describe("§S1.4 ungrouped tail — demoted to a count-only row, collapsed by de
 
     await mountApp({
       pathname: `/p/${key}`,
-      projects: [project({ key, name: "Ungrouped Demotion Project" })],
+      projects: [project({ key, name: "Ungrouped Removal Project" })],
       events: runs,
       plans: [],
     });
+
+    // Default tab is Runs — all 5 runs are cards there BEFORE ever touching
+    // the Workflow tab.
+    const runsPaneBefore = document.querySelector<HTMLElement>('[data-testid="workspace-runs"]');
+    expect(runsPaneBefore).not.toBeNull();
+    for (const r of runs) {
+      expect(runsPaneBefore!.querySelectorAll(`[data-run-id="${r.id}"]`).length).toBe(1);
+    }
+
     await openWorkflowTab();
 
     const hist = history();
-    const tail = hist.querySelector<HTMLElement>('[data-testid="ungrouped-tail"]');
-    expect(tail).not.toBeNull();
+    // No ungrouped element of ANY form.
+    expect(hist.querySelector('[data-testid="ungrouped-tail"]')).toBeNull();
+    expect(hist.querySelector('[data-testid="ungrouped-count"]')).toBeNull();
+    expect(hist.querySelector('[data-testid="ungrouped-toggle"]')).toBeNull();
+    expect((hist.textContent ?? "").toLowerCase()).not.toContain("ungrouped");
 
-    const countEl = tail!.querySelector('[data-testid="ungrouped-count"]');
-    expect(countEl).not.toBeNull();
-    expect((countEl!.textContent ?? "")).toContain("5");
+    // Zero run entries anywhere in workflow-history — nothing to expand into,
+    // since these runs have no plan/cycle linkage at all.
+    expect(hist.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(0);
+    expect(hist.querySelectorAll('[data-run-id]').length).toBe(0);
 
-    // Collapsed by default — no run entries mounted at all.
-    expect(tail!.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(0);
-
-    const toggle = tail!.querySelector<HTMLElement>('[data-testid="ungrouped-toggle"]');
-    expect(toggle).not.toBeNull();
-
-    toggle!.click();
+    // The 5 runs are STILL fully visible — just on the Runs timeline, never
+    // dropped anywhere.
+    const runsTab = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((t) => (t.textContent ?? "").trim() === "Runs");
+    expect(runsTab).toBeDefined();
+    runsTab!.click();
     await settle();
-    expect(tail!.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(5);
-    // The count row never disappears once expanded.
-    expect(tail!.querySelector('[data-testid="ungrouped-count"]')).not.toBeNull();
 
-    toggle!.click();
+    const runsPaneAfter = document.querySelector<HTMLElement>('[data-testid="workspace-runs"]');
+    expect(runsPaneAfter).not.toBeNull();
+    expect(runsPaneAfter!.querySelectorAll('[data-testid="event-card"]').length).toBe(5);
+    for (const r of runs) {
+      expect(runsPaneAfter!.querySelectorAll(`[data-run-id="${r.id}"]`).length).toBe(1);
+    }
+  });
+});
+
+// CR-CRU-020 §S2 group-level negative bound (2026-07-16 gate-review defect,
+// C3) — the user's live-review defect report: expanding a CR group showed
+// raw run rows (agentIds CR-CRU-019-GREEN / CR-CRU-019-CLOSE) at GROUP level
+// without any cycle toggle. Pinned here as a regression with the user's
+// exact two-done-cycles-both-linked-with-runs shape: the group toggle alone
+// must reveal cycle rows ONLY, never a single run-id-bearing row anywhere in
+// the group, until the SPECIFIC cycle's own toggle is clicked.
+describe("§S2 group-level negative bound — expanding a CR group alone renders cycle rows only; ZERO run entries anywhere in the group until a cycle's OWN toggle is clicked", () => {
+  test("a closed CR group with two done cycles, both carrying linked runs: group-toggle-only expansion shows the two cycle rows and not a single run row anywhere in the group; clicking one cycle's own toggle reveals ONLY that cycle's run — the sibling cycle stays run-free", async () => {
+    const key = "hist-group-leak-1";
+    const now = Date.now();
+    const greenRun = runEvent({
+      id: "evt-CR-CRU-019-GREEN",
+      projectKey: key,
+      agentId: "CR-CRU-019-GREEN",
+      timestamp: now - 20_000,
+      context: { cycleId: 90 },
+    });
+    const closeRun = runEvent({
+      id: "evt-CR-CRU-019-CLOSE",
+      projectKey: key,
+      agentId: "CR-CRU-019-CLOSE",
+      timestamp: now,
+      context: { cycleId: 91 },
+    });
+    const plan: PlanFixture = {
+      planId: 751,
+      cr: "CR-CRU-019",
+      status: "closed",
+      wave: "1",
+      merge: { commit: "leakCommit19" },
+      cycles: [
+        { id: 90, label: "C1 green", status: "done" },
+        { id: 91, label: "close", status: "done" },
+      ],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Group Leak Project" })],
+      events: [greenRun, closeRun],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const crGroup = history().querySelector<HTMLElement>(
+      '[data-testid="cr-group"][data-cr="CR-CRU-019"]',
+    );
+    expect(crGroup).not.toBeNull();
+
+    // Collapsed by default (§S1.2) — expand the GROUP ONLY, no cycle toggle.
+    expect(crGroup!.querySelectorAll('[data-testid="lens-cycle-row"]').length).toBe(0);
+    const crToggle = crGroup!.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]');
+    expect(crToggle).not.toBeNull();
+    crToggle!.click();
     await settle();
-    expect(tail!.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(0);
-    // The count row never disappears once re-collapsed either.
-    expect((tail!.querySelector('[data-testid="ungrouped-count"]')!.textContent ?? "")).toContain("5");
+
+    const cycleRows = Array.from(
+      crGroup!.querySelectorAll<HTMLElement>('[data-testid="lens-cycle-row"]'),
+    );
+    expect(cycleRows.length).toBe(2);
+
+    // The user's exact defect: group-level expansion alone must NEVER
+    // surface either linked run — not as `linked-run-row`, not as any
+    // `[data-run-id]` element, anywhere under the group.
+    expect(crGroup!.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(0);
+    expect(crGroup!.querySelectorAll('[data-run-id]').length).toBe(0);
+    expect(crGroup!.textContent ?? "").not.toContain("CR-CRU-019-GREEN");
+    expect(crGroup!.textContent ?? "").not.toContain("CR-CRU-019-CLOSE");
+
+    // Click ONE cycle's own toggle (cycle 90, "C1 green") — ONLY that
+    // cycle's run appears; the sibling cycle (91, "close") stays run-free.
+    const cycle90Row = cycleRows.find((r) => (r.textContent ?? "").includes("C1 green"));
+    const cycle91Row = cycleRows.find((r) => (r.textContent ?? "").includes("close"));
+    expect(cycle90Row).toBeDefined();
+    expect(cycle91Row).toBeDefined();
+
+    const cycle90Toggle = cycle90Row!.querySelector<HTMLElement>('[data-testid="cycle-toggle"]');
+    expect(cycle90Toggle).not.toBeNull();
+    cycle90Toggle!.click();
+    await settle();
+
+    const cycle90Runs = cycle90Row!.querySelectorAll<HTMLElement>('[data-testid="linked-run-row"]');
+    expect(cycle90Runs.length).toBe(1);
+    expect(cycle90Runs[0]!.getAttribute("data-run-id")).toBe("evt-CR-CRU-019-GREEN");
+
+    // The sibling cycle is STILL untouched — zero runs, its own toggle not
+    // yet clicked.
+    expect(cycle91Row!.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(0);
+
+    // Total run-id-bearing rows in the WHOLE group is exactly 1 — only the
+    // toggled cycle's — never both.
+    expect(crGroup!.querySelectorAll('[data-run-id]').length).toBe(1);
   });
 });
 
