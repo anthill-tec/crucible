@@ -59,12 +59,22 @@ must state whether downtime is excluded — the DN gets a dated amendment with
 whichever semantics is chosen; sealed historical durations are NOT
 retroactively rewritten).
 
+### §S4 CR-021 VERIFY follow-ups (cosmetic/tech-debt, verify-recommended 2026-07-17)
+1. Singular run hint: collapsed cycle hints read `▸ 1 run` at N=1 (`▸ N runs`
+   otherwise) — app.js:1491 region; pin the N=1 case.
+2. Retire the hidden legacy rollup span: re-target the two frozen CR-020
+   assertions (workflow-lens.test.ts:753, workflow-history-refinements.test.ts
+   :344/366) onto the VISIBLE rollup form and delete the `.app-hidden-data`
+   `cr-rollup` compatibility span (app.js:1557-1560, styles.css:738-744) —
+   sanctioned re-target recorded here.
+
 ## Acceptance criteria
 - [ ] A shared pane-container class carries `overflow-x: auto` and a `min-width` floor (styles.css source assertion names the class; every central pane — `workflow`, `runs`, `coverage`, `compile`, `bdd` panes, home timeline, run detail — renders inside it, asserted via DOM class presence per pane).
 - [ ] E2E (Playwright, viewport 800×640): the Workflow pane with a long-label active plan renders a horizontal scrollbar on the PANE (pane `scrollWidth > clientWidth`), the cycle-timer badge keeps its single-line pill form, and `document.body.scrollWidth <= window.innerWidth` (no page-level horizontal scroll).
 - [ ] E2E (viewport 1024×640): standard fixture content renders with NO horizontal scroll on any pane (`scrollWidth <= clientWidth` for each central pane).
 
 - [ ] §S2: with 4 retained green-regression coverage points, the Vitals COVERAGE TREND box renders 4 bar elements (heights monotone with the coverage values, latest last) + the range caption; with 1 point it renders 1 bar (no text-only fallback).
+- [ ] §S4: a 1-run collapsed cycle hint renders `▸ 1 run` (N=1 fixture); the `cr-rollup` testid exists ONLY as the visible rollup form (no `.app-hidden-data` span in the DOM), with the two CR-020 assertions re-targeted onto it.
 - [ ] §S3: per the option chosen at gap analysis — (a) an active cycle's timer value derives from persisted accumulated epochs and a simulated service restart (store reopen) resumes the accumulated value, not wall-clock-since-activation; or (b) the display anchors to `max(activatedAt, serverStartedAt)` asserted with an injected boot timestamp. Sealed history rows keep `doneAt − activatedAt` untouched either way; the DN amendment ships in the same cycle.
 
 ## Estimated size
