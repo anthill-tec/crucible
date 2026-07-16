@@ -1,6 +1,6 @@
 # CR-CRU-016 — In-pane drill-in: run detail inside the Run Timeline pane
 
-**Status:** COMPLETED (2026-07-16 — C0 design + C1/C2 + C3 pins + C4 BDD + C5 gate-fix cycle (user-excepted inline scope: §S4 regression differentiation, tabs-hide, tab-in-header, sticky header, marker routing) + C6 VERIFY (READY FOR RE-CLOSE, zero blocking); final gates 500/500 unit · tsc 0 · 19/19 BDD · coverage 95.0% lines / 96.1% functions, first tier-tagged regression ingested; awaiting merge gate)
+**Status:** COMPLETED (2026-07-16 — C0 design + C1/C2 + C3 pins + C4 BDD + C5 gate-fix cycle (user-excepted inline scope: §S4 regression differentiation, tabs-hide, tab-in-header, sticky header, marker routing) + C6 VERIFY (READY FOR RE-CLOSE, zero blocking); final gates 500/500 unit · tsc 0 · 19/19 BDD · coverage 95.0% lines / 96.1% functions, first tier-tagged regression ingested; merged to develop b6bba3e)
 **Type:** feature
 **Priority:** P1
 **Depends on:** CR-CRU-007
