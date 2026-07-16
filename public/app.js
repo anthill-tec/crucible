@@ -431,9 +431,21 @@
       return `⏱ ${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
     }
 
+    // §S3 (cycle 18, live-review defect) — the ACTIVE badge must SELF-TICK:
+    // recomputing `Date.now()` only at render time froze the badge whenever
+    // no poll/SSE tick observed changed data. A SINGLETON module-level 10s
+    // interval bumps `tickNow`; each active badge's text is a van-derived
+    // binding on it, so ONLY the timer text re-derives — never a whole-pane
+    // rebuild, and no per-mount/per-row interval accumulation across pane
+    // swaps (created exactly once here, at module init).
+    const tickNow = van.state(Date.now());
+    setInterval(() => {
+      tickNow.val = Date.now();
+    }, 10_000);
+
     // §S3 — active-cycle timer: an ACTIVE cycle ticks `now − activatedAt`
-    // (ember badge; Date.now() at render — the poll/SSE refetch cadence
-    // supplies the visible updating, same loop that ticks agent runtimes);
+    // (ember badge; `tickNow` supplies the visible updating at a ≤10s
+    // cadence, on top of the poll/SSE refetch cadence);
     // a terminal cycle shows the sealed `doneAt − activatedAt` (dim, never
     // advancing). Cycles predating the timestamp migration (no activatedAt,
     // or terminal without doneAt) render NO timer — never a fabricated value.
@@ -442,7 +454,7 @@
       if (cycle.status === "active") {
         return span(
           { "data-testid": "cycle-timer", class: "app-cycle-timer-ember" },
-          fmtCycleTimer(Date.now() - cycle.activatedAt),
+          () => fmtCycleTimer(tickNow.val - cycle.activatedAt),
         );
       }
       if (cycle.doneAt === undefined) return null;
@@ -1275,9 +1287,14 @@
         ),
       );
 
+    // §S6 #3 (cycle 18, live-review) — the open-span row exists only WITH
+    // linked runs; with ZERO cycleId-linked runs there is nothing awaiting
+    // confirm, so NO container (and no annotation) renders at all.
     const OpenSpan = (cycleId) => {
+      const runs = linkedRunsFor(cycleId);
+      if (runs.length === 0) return null;
       const parts = [];
-      for (const run of linkedRunsFor(cycleId)) {
+      for (const run of runs) {
         parts.push(InlineRunEntry(run), " · ");
       }
       parts.push(

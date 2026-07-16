@@ -62,15 +62,20 @@ is the contract; the shipped UI drifted). The exact formats:
 1. Active section header: `Active workflow — <cr> · <track> · wave <n>`
    (track segment omitted when absent — solo model), in the ember section
    header treatment.
-2. Cycle rows: `<glyph> cycle <n> · "<label>" · <status>` — the label QUOTED,
-   glyph colored per status (✓ pass-green / ▶ ember / ○ faint / ⊘ / ✗), the
-   ACTIVE row bold. Status narration where data allows: done cycles read
-   `done — GREEN confirmed` (+ ` by <orchestrator>` when the plan carries an
-   orchestrator identity — additive plan field, optional); verify-kind done
-   reads `done — report accepted`.
+2. Cycle rows: `<glyph> cycle <n> · "<label>"[ · <status>]` — the label
+   QUOTED, glyph colored per status (✓ pass-green / ▶ ember / ○ faint / ⊘ /
+   ✗), the ACTIVE row bold. RE-BASELINED (user, 2026-07-17): done rows carry
+   NO status narration — the ✓ glyph IS the done signal (`done — GREEN
+   confirmed` and verify's `done — report accepted` are REMOVED); ACTIVE rows
+   keep `· ACTIVE`, pending keep `· pending`. Row timers (§S3) render in an
+   ALIGNED right-hand column so rows read clean regardless of label length.
 3. The ACTIVE cycle's open span renders its linked runs INLINE on one row:
    `🧪 <agent> <ratio> · 🧪 <agent> <ratio> · awaiting orchestrator confirm`
-   (ratio colored pass/fail; the annotation dims).
+   (ratio colored pass/fail; the annotation dims). Run lists order
+   CHRONOLOGICALLY — latest LAST (user, 2026-07-17; spans AND cycle
+   drill-downs; latest-FIRST remains EXCLUSIVELY the History section's
+   ordering per CR-020 §S1.1); the span renders ONLY when linked runs exist
+   (zero-run active cycles render no span row — gate defect 2026-07-16).
 4. Pending verify cycles carry the small `verify` kind badge inline (mock
    form), not a separate treatment.
 5. History header: `History — Wave <n> · lanes: <chips> · <state>` — wave +
@@ -91,9 +96,15 @@ is the contract; the shipped UI drifted). The exact formats:
     "every CR has a title!"): rendered `<cr> · <title>` — the title is
     CAPTURED at plan filing via an additive optional `title` field on
     `POST /plans` (stored on the plan, returned by GET; no title → id-only
-    root, graceful degradation). The fleet `plan-file` verb gains `--title`
-    at CR-008 (noted there); orchestrator procedure NOW: include `title`
-    when filing plans.
+    root, graceful degradation). **The root also carries the ORCHESTRATOR IDENTITY**
+    (user re-baseline 2026-07-17 — replaces the removed per-row
+    `by <orchestrator>` narration): rendered `<cr> · <title> — <orchestrator>`
+    via an additive optional `orchestrator` field on `POST /plans` (stored,
+    returned by GET) AND accepted by PATCH on an OPEN plan (one-field
+    backfill so the executing plan can be stamped); absent → segment
+    omitted. The fleet `plan-file` verb gains `--title` and `--orchestrator`
+    at CR-008 (noted there); orchestrator procedure NOW: include both when
+    filing plans (this orchestrator's identity: `vidushi`).
 RULED (a) — user-locked 2026-07-16: "Mock wins on active cycle, the toggle
 contract narrows to History." The ACTIVE cycle's open span renders its
 linked runs ALWAYS inline (no toggle to reveal them); CR-020 §S2.3's
@@ -111,7 +122,7 @@ mock to be touched up at execution).
 - [ ] `L.workspaceTabs` returns names exactly `["Workflow","Runs","Coverage","Compile","BDD"]` (both project types; existing enable/disable semantics untouched); tab-list assertions across suites re-targeted under this CR's sanction.
 - [ ] Entering a workspace (badge click AND cold `/p/<key>` load) renders the Workflow pane active (`Workflow` tab `on`, `workflow-active` present); selecting Runs still works and the one-rule/tabs-hide behaviors are unchanged (spot re-run of the CR-016/020 binding tests).
 - [ ] Cold `/p/<key>/run/<id>`: the detail renders in-pane; closing it lands on the WORKFLOW pane with its tab `on` (the new default), chip text `← workflow`.
-- [ ] §S6: with a plan fixture matching the F13 mock (cr, track-1, wave 1, three cycles — done red-green with label "checkpoint persistence", active with two linked runs fail 2/5 + pass 5/5, pending verify), the Workflow active section renders the EXACT strings: header `Active workflow — CR-NAI-042 · track-1 · wave 1`; a CR ROOT line `CR-NAI-042 · Runtime checkpoint persistence` (heat-highlighted id, plan filed with `title: "Runtime checkpoint persistence"`) with the cycle rows indented beneath it, and a title-less plan renders the id-only root (§S6.11); rows `✓ cycle 1 · "checkpoint persistence" · done — GREEN confirmed`, `▶ cycle 2 · "compile fallback" · ACTIVE` (bold, ember) with the inline span row `🧪 CR-NAI-042-RED 2/5 · 🧪 CR-NAI-042-GREEN 5/5 · awaiting orchestrator confirm`, `○ cycle 3 · "verify sweep" [verify] · pending`; the history header renders `History — Wave 1 · lanes: track-1 ✓ · track-2 1/2 · awaiting review` inline and a collapsed row `▸ track-1 › CR-NAI-041 · 3 cycles ✓ · merged e41d2aa` (glyph/color classes asserted alongside the strings).
+- [ ] §S6 (re-baselined 2026-07-17): with a plan fixture matching the F13 mock (cr, track-1, wave 1, `title: "Runtime checkpoint persistence"`, `orchestrator: "vidushi"`, three cycles — done red-green with label "checkpoint persistence", active with two linked runs fail 2/5 ingested BEFORE pass 5/5, pending verify), the Workflow active section renders the EXACT strings: header `Active workflow — CR-NAI-042 · track-1 · wave 1`; a CR ROOT line `CR-NAI-042 · Runtime checkpoint persistence — vidushi` (heat-highlighted id; title-less → id-only root; orchestrator-less → no `— …` segment; PATCH `{orchestrator}` on the open plan stamps it live) with cycle rows indented beneath; rows `✓ cycle 1 · "checkpoint persistence"` (NO narration), `▶ cycle 2 · "compile fallback" · ACTIVE` (bold, ember) with the inline span `🧪 CR-NAI-042-RED 2/5 · 🧪 CR-NAI-042-GREEN 5/5 · awaiting orchestrator confirm` in CHRONOLOGICAL order (the RED ingested first renders FIRST — latest last; History section alone stays latest-first), `○ cycle 3 · "verify sweep" [verify] · pending`; row timers render right-ALIGNED (shared alignment container asserted); the history header renders `History — Wave 1 · lanes: track-1 ✓ · track-2 1/2 · awaiting review` inline and a collapsed row `▸ track-1 › CR-NAI-041 · 3 cycles ✓ · merged e41d2aa` (glyph/color classes asserted alongside the strings).
 - [ ] §S4: a closed CR group's header contains an `N agents` aggregate pill and ZERO elements carrying an agentId; expanding the group reveals the per-agent runtime rows (fleet-registered semantics unchanged); the three historical causes are regression-pinned (fabricated-0ms fixture, lingering-online-agent fixture, linked-run fixture — none may surface an agent-id row at header level).
 - [ ] §S5: `bun-crucible.py regression --agent X` against a live server leaves NO agent row in the fleet after exit (register→ingest→unregister bracketed; asserted via the Python client contract harness + a lifecycle-event pair check); `test --agent X` identical; omitted `--agent` unchanged.
 - [ ] §S3 timer: an active cycle row renders `data-testid="cycle-timer"` whose text advances across two samples with an injected clock (ticking, anchored to `activatedAt`); PATCHing the cycle `done` seals it — the timer text equals the formatted `doneAt − activatedAt` and no longer advances; a done history cycle row shows the same sealed duration; a cycle with no `activatedAt` renders NO `cycle-timer` element.
