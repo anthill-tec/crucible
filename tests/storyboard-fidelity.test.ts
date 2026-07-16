@@ -280,7 +280,10 @@ describe("§S5 fidelity #1 — workspace tabs row is full-width, NOT inside a ra
     expect(body!.contains(runsPane)).toBe(true);
   });
 
-  test("every workspace tab (Runs/Coverage/Compile/BDD) keeps the same full-width, no-rail treatment", async () => {
+  // SANCTIONED RE-TARGET (CR-CRU-011 §S3, dispatch-approved): the tab count
+  // grows from 4 to 5 with the new Workflow tab inserted after Runs. Inner
+  // fidelity assertions (no-rail, 2-column body) are unchanged per tab.
+  test("every workspace tab (Runs/Workflow/Coverage/Compile/BDD) keeps the same full-width, no-rail treatment", async () => {
     const key = "fid1-p3";
     await mountApp({
       pathname: `/p/${key}`,
@@ -290,7 +293,7 @@ describe("§S5 fidelity #1 — workspace tabs row is full-width, NOT inside a ra
     const tabButtons = Array.from(
       document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
     );
-    expect(tabButtons.length).toBe(4);
+    expect(tabButtons.length).toBe(5);
 
     for (const button of tabButtons) {
       button.click();
@@ -928,6 +931,11 @@ describe("§S5 Coverage tab (user defect 2026-07-15)", () => {
     expect(document.querySelector('[data-testid="run-overlay"]')).not.toBeNull();
   });
 
+  // SANCTIONED RE-TARGET (CR-CRU-011 §S3, dispatch-approved): 4 -> 5 tabs.
+  // This loop clicks through every enabled tab (now including Workflow) and
+  // asserts the body never contains the stale CR-CRU-007 placeholder string —
+  // this is the "tab-bodies rule" grep-style assertion the Workflow tab must
+  // also satisfy (its honest placeholder names CR-013, never CR-CRU-007).
   test("no tab ever renders the stale CR-CRU-007 placeholder text", async () => {
     const key = "cov-tab-p2";
     const eventId = "evt-cov-tab-p2";
@@ -945,7 +953,7 @@ describe("§S5 Coverage tab (user defect 2026-07-15)", () => {
     });
 
     const tabs = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'));
-    expect(tabs.length).toBe(4);
+    expect(tabs.length).toBe(5);
     for (const tab of tabs) {
       if (tab.hasAttribute("disabled")) continue;
       tab.click();
