@@ -304,13 +304,19 @@ describe("Workflow tab — DOM wiring", () => {
 // ── Active workflow view — per-CR todo view over the open plan ────────────
 
 describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", () => {
-  // CR-CRU-020 retarget (§S2.3) — the active cycle's linked runs no longer
-  // auto-expand; they stay hidden behind the SAME click-based toggle history
-  // cycle rows use (parity), so the active row must be toggled open before
-  // its linked-run-row count can be asserted. Other statuses (pending/done/
-  // skipped/failed) never show linked runs regardless of any click — that
-  // part of the original contract is unchanged.
-  test("renders one cycle-row per cycle with status glyphs (active ▶ / done ✓ / failed ✗ literal; pending/skipped structurally distinct); the active cycle's linked runs stay hidden until its own toggle is clicked (others never show runs)", async () => {
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S6 ruling (a)): "Mock wins on active
+  // cycle, the toggle contract narrows to History." The ACTIVE cycle's open
+  // span renders its linked runs ALWAYS inline — no toggle element exists on
+  // the active row at all; the CR-CRU-020 §S2.3 collapsed-by-default toggle
+  // now applies ONLY to HISTORY cycle rows (see tests/workflow-history-
+  // refinements.test.ts's "§S2.3 active-cycle drill-down parity" describe
+  // block and tests/f13-fidelity.test.ts's "RULED (a)" describe block for
+  // the History-side and F13-string assertions — this file keeps only its
+  // own subjects: the per-status glyph/row contract and the active-only
+  // linked-run scoping). Other statuses (pending/done/skipped/failed) never
+  // show linked runs regardless — that part of the original contract is
+  // unchanged.
+  test("renders one cycle-row per cycle with status glyphs (active ▶ / done ✓ / failed ✗ literal; pending/skipped structurally distinct); the active cycle's linked runs render ALWAYS inline with no toggle element at all (others never show runs)", async () => {
     const key = "wf-active-1";
     const now = Date.now();
     const plan: PlanFixture = {
@@ -400,18 +406,18 @@ describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", ()
       expect(["▶", "✓", "✗"]).not.toContain(g);
     }
 
-    // §S2.3 — the active cycle's linked runs are collapsed by default (parity
-    // with history's cycle-row toggle), NOT auto-expanded.
-    expect(activeRow.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(0);
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S6 ruling (a)) — the active cycle's
+    // linked runs render ALWAYS inline immediately on mount; no toggle
+    // element exists on the active row at all (the toggle narrows to
+    // HISTORY rows only). Was: collapsed-by-default behind a click (CR-020
+    // §S2.3), asserted here as length 0 pre-click then a click to reveal.
     const activeToggle = activeRow.querySelector<HTMLElement>('[data-testid="cycle-toggle"]');
-    expect(activeToggle).not.toBeNull();
-    activeToggle!.click();
-    await settle();
+    expect(activeToggle).toBeNull();
 
-    // ONLY the active cycle (id 2), once toggled open, shows its linked runs:
-    // exactly 2 linked-run-rows, both nested under the active row, with none
-    // under the done row (even though the done row also has a linked run in
-    // this fixture, and even though it is never clicked).
+    // ONLY the active cycle (id 2) shows its linked runs, rendered inline
+    // with no click needed: exactly 2 linked-run-rows, both nested under the
+    // active row, with none under the done row (even though the done row
+    // also has a linked run in this fixture).
     const allLinkedRows = active!.querySelectorAll('[data-testid="linked-run-row"]');
     expect(allLinkedRows.length).toBe(2);
     const linkedUnderActive = activeRow.querySelectorAll('[data-testid="linked-run-row"]');
@@ -422,12 +428,12 @@ describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", ()
   });
 
   test(
-    // CR-CRU-020 retarget (§S2.3) — the active cycle must be toggled open
-    // (once) before its linked runs are visible; this also strengthens the
-    // test to pin that the expand-toggle state SURVIVES the poll-tick
-    // re-render (a persistent-state requirement, not merely a one-shot DOM
-    // read).
-    "a linked run ingested AFTER mount appears in the toggled-open active cycle without reload, and the expand state survives the poll tick (poll-tick liveness)",
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S6 ruling (a)) — the active cycle's
+    // linked runs render ALWAYS inline; there is no toggle to click and no
+    // expand-state to survive a re-render. This test now pins only the
+    // poll-tick liveness subject: a run ingested after mount appears in the
+    // always-inline span without reload.
+    "a linked run ingested AFTER mount appears in the always-inline active cycle span without reload (poll-tick liveness)",
     async () => {
       const key = "wf-live-1";
       const now = Date.now();
@@ -453,11 +459,9 @@ describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", ()
       const cycleRow = active.querySelector<HTMLElement>(
         '[data-testid="cycle-row"][data-status="active"]',
       )!;
-      const cycleToggle = cycleRow.querySelector<HTMLElement>('[data-testid="cycle-toggle"]')!;
-      expect(cycleToggle).not.toBeNull();
-      cycleToggle.click();
-      await settle();
-
+      // SANCTIONED RE-TARGET (CR-CRU-021 §S6 ruling (a)) — no toggle exists
+      // on the active row; the linked run is inline immediately, no click.
+      expect(cycleRow.querySelector('[data-testid="cycle-toggle"]')).toBeNull();
       expect(active.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(1);
 
       // "ingest a new run" — mutate the SAME fixture object the mocked
@@ -557,19 +561,13 @@ describe("Workflow tab — CR-016 bindings: clicking a linked run swaps the WORK
     return { plan, run };
   }
 
-  // CR-CRU-020 retarget (§S2.3) — the active cycle's linked runs are collapsed
-  // by default; every test below must click its toggle before a `linked-run-
-  // row` exists to click at all.
-  async function expandActiveCycle(): Promise<void> {
-    const cycleRow = document.querySelector<HTMLElement>(
-      '[data-testid="cycle-row"][data-status="active"]',
-    );
-    expect(cycleRow).not.toBeNull();
-    const toggle = cycleRow!.querySelector<HTMLElement>('[data-testid="cycle-toggle"]');
-    expect(toggle).not.toBeNull();
-    toggle!.click();
-    await settle();
-  }
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S6 ruling (a)) — the active cycle's
+  // linked runs render ALWAYS inline; the CR-020 §S2.3 collapsed-by-default
+  // toggle-open setup step (formerly `expandActiveCycle()`, called before
+  // every test below) is removed — these tests read the always-inline
+  // `linked-run-row` directly with no click. Subject unchanged: clicking a
+  // linked run still swaps the WORKFLOW pane to the run detail (CR-016
+  // binding contract; CR-020 §S2.2 drill-down guard).
 
   test("clicking the linked-run-row swaps the WORKFLOW pane to the detail: workspace-tabs absent, back chip '← workflow', no tab switch", async () => {
     const key = "wf-bind-1";
@@ -588,7 +586,8 @@ describe("Workflow tab — CR-016 bindings: clicking a linked run swaps the WORK
 
     expect(document.querySelector('[data-testid="workspace-tabs"]')).not.toBeNull();
 
-    await expandActiveCycle();
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S6 ruling (a)) — no toggle-open step;
+    // the linked run is inline immediately.
     const linkedRow = document.querySelector('[data-testid="linked-run-row"]') as HTMLElement | null;
     expect(linkedRow).not.toBeNull();
     linkedRow!.click();
@@ -627,7 +626,8 @@ describe("Workflow tab — CR-016 bindings: clicking a linked run swaps the WORK
     expect(paneBefore).not.toBeNull();
     paneBefore.scrollTop = 175;
 
-    await expandActiveCycle();
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S6 ruling (a)) — no toggle-open step;
+    // the linked run is inline immediately.
     const linkedRow = document.querySelector('[data-testid="linked-run-row"]') as HTMLElement;
     linkedRow.click();
     await settle();
@@ -667,7 +667,8 @@ describe("Workflow tab — CR-016 bindings: clicking a linked run swaps the WORK
 
     await openWorkflowTab();
 
-    await expandActiveCycle();
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S6 ruling (a)) — no toggle-open step;
+    // the linked run is inline immediately.
     const linkedRow = document.querySelector('[data-testid="linked-run-row"]') as HTMLElement;
     linkedRow.click();
     await settle();
