@@ -115,6 +115,9 @@ interface PlanCycleRow {
   label: string;
   kind: string;
   status: string;
+  // CR-CRU-011 §S0b — transition timestamps (nullable until stamped).
+  activated_at: number | null;
+  done_at: number | null;
 }
 
 /**
@@ -265,6 +268,8 @@ export class Store {
         label TEXT NOT NULL,
         kind TEXT NOT NULL,
         status TEXT NOT NULL,
+        activated_at INTEGER,
+        done_at INTEGER,
         PRIMARY KEY (project_key, cycle_id)
       );
     `);
@@ -281,6 +286,20 @@ export class Store {
     }
     if (!eventCols.has("first_seen")) {
       this.db.exec(`ALTER TABLE events ADD COLUMN first_seen INTEGER`);
+    }
+    // CR-CRU-011 §S0b — additive cycle-timestamp columns; pre-C4 db files
+    // lack them (same PRAGMA-checked retrofit pattern as events above).
+    const cycleCols = new Set(
+      this.db
+        .query<{ name: string }, []>(`PRAGMA table_info(plan_cycles)`)
+        .all()
+        .map((col) => col.name),
+    );
+    if (!cycleCols.has("activated_at")) {
+      this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN activated_at INTEGER`);
+    }
+    if (!cycleCols.has("done_at")) {
+      this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN done_at INTEGER`);
     }
   }
 
@@ -914,11 +933,27 @@ export class Store {
     if (!(Store.CYCLE_TRANSITIONS[row.status]?.has(to) ?? false)) {
       return { error: `illegal cycle transition: ${row.status} -> ${to}` };
     }
+    // §S0b — stamp the transition timestamps (mirrors Plan.closedAt):
+    // pending→active stamps activated_at; reaching a terminal state stamps
+    // done_at. The timeline's declared marker derives active→done from them.
+    const now = Date.now();
+    const activatedAt = to === "active" ? now : row.activated_at;
+    const doneAt = Store.CYCLE_TERMINAL.has(to) ? now : row.done_at;
     this.db
-      .query(`UPDATE plan_cycles SET status = ? WHERE project_key = ? AND cycle_id = ?`)
-      .run(to, projectKey, cycleId);
+      .query(
+        `UPDATE plan_cycles SET status = ?, activated_at = ?, done_at = ?
+         WHERE project_key = ? AND cycle_id = ?`,
+      )
+      .run(to, activatedAt, doneAt, projectKey, cycleId);
     this.emit("events", projectKey);
-    return { id: row.cycle_id, label: row.label, kind: row.kind as CycleKind, status: to };
+    return {
+      id: row.cycle_id,
+      label: row.label,
+      kind: row.kind as CycleKind,
+      status: to,
+      ...(activatedAt !== null ? { activatedAt } : {}),
+      ...(doneAt !== null ? { doneAt } : {}),
+    };
   }
 
   /** §S0 — the CR close (feature merge). Rejects while any cycle is non-terminal. */
@@ -979,6 +1014,10 @@ export class Store {
         label: cycle.label,
         kind: cycle.kind as CycleKind,
         status: cycle.status as CycleStatus,
+        // §S0b — transition timestamps surface on plan reads (omitted, not
+        // null, until stamped — same convention as Plan.closedAt).
+        ...(cycle.activated_at !== null ? { activatedAt: cycle.activated_at } : {}),
+        ...(cycle.done_at !== null ? { doneAt: cycle.done_at } : {}),
       }),
     );
     const plan: Plan = {

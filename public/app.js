@@ -601,16 +601,45 @@
         markerLabel(m),
       );
 
+    // CR-CRU-011 §S0b — declared plan boundaries on the Runs timeline. The
+    // ACTIVE cycle's linked runs collect under an open-span header; a `done`
+    // cycle renders a declared marker row (same structural weight as the
+    // heuristic marker) with the active→done span from the §S0b timestamps.
+    const KIND_GLYPHS = { "red-green": "⟲", verify: "☑", fix: "✚" };
+
+    const CycleSpanOpenRow = (cycle, plan) =>
+      div(
+        { "data-testid": "cycle-span-open", class: "app-cycle-span-open" },
+        `${KIND_GLYPHS[cycle.kind] ?? KIND_GLYPHS["red-green"]} Cycle · ${cycle.label} · ${plan.cr} · active`,
+      );
+
+    const DeclaredMarkerRow = (cycle, plan) => {
+      const parts = [
+        `${KIND_GLYPHS[cycle.kind] ?? KIND_GLYPHS["red-green"]} Cycle done`,
+        cycle.label,
+        plan.cr,
+      ];
+      if (cycle.activatedAt !== undefined && cycle.doneAt !== undefined) {
+        parts.push(`closed in ${fmtDuration(cycle.doneAt - cycle.activatedAt)}`);
+      }
+      return div(
+        { "data-testid": "declared-marker", class: "app-transition-marker" },
+        parts.join(" · "),
+      );
+    };
+
     // Feed rows: each Cycle's marker renders directly above its pair — i.e.
     // immediately before the GREEN run's card in the (newest-first) feed.
+    // §S0b — the row plan is pure (app-logic timelineRows): cycleId-linked
+    // runs suppress the streak heuristic and carry declared boundaries;
+    // unlinked runs / planless projects keep the heuristic byte-identical.
     function runFeed(events) {
-      const markers = L.pairTransitions(events);
-      const byGreenId = new Map(markers.map((m) => [m.greenEvent.id, m]));
       const rows = [];
-      for (const e of events) {
-        const marker = byGreenId.get(e.id);
-        if (marker !== undefined) rows.push(TransitionMarkerRow(marker));
-        rows.push(EventCard(e));
+      for (const row of L.timelineRows(events, state.plans)) {
+        if (row.kind === "marker") rows.push(TransitionMarkerRow(row.marker));
+        else if (row.kind === "cycle-span-open") rows.push(CycleSpanOpenRow(row.cycle, row.plan));
+        else if (row.kind === "declared-marker") rows.push(DeclaredMarkerRow(row.cycle, row.plan));
+        else rows.push(EventCard(row.event));
       }
       return rows;
     }
@@ -1187,6 +1216,144 @@
         div({ class: "app-empty" }, "gate reporting lands in CR-013"),
       );
 
+    // ── §S3 history lens — Wave → [Track] → CR → Cycle (C4) ─────────────
+    // Grouping is pure (app-logic workflowLens); this is the render layer.
+    // Rows are text-color only; chips/badges are the boxed elements.
+
+    // Participating-agent runtime (§S2 surface): the server-computed
+    // runtime_ms off the agents slice, sealed or ticking as the row is.
+    const CrAgentRuntime = (agentId) => {
+      const agent = state.agents.find((a) => a.agentId === agentId);
+      return div(
+        { "data-testid": "cr-agent-runtime", class: "app-card-meta" },
+        span({ class: "app-agent-id" }, agentId),
+        ` · ${fmtDuration(agent?.runtime_ms ?? 0)}`,
+      );
+    };
+
+    const LensCycleRow = (cycle) =>
+      div(
+        {
+          "data-testid": "lens-cycle-row",
+          "data-status": cycle.status,
+          class: `app-cycle-row cycle-status-${cycle.status}`,
+        },
+        div(
+          { class: "app-cycle-line" },
+          span(
+            { class: "app-cycle-glyph" },
+            CYCLE_GLYPHS[cycle.status] ?? CYCLE_GLYPHS.pending,
+          ),
+          span({ class: "app-cycle-label" }, cycle.label),
+        ),
+        // A done cycle is a CLOSED span wrapping its linked runs; the active
+        // cycle keeps collecting its runs live (open span, §S3).
+        cycle.status === "done"
+          ? div(
+              { "data-testid": "cycle-span-closed", class: "app-cycle-span-closed" },
+              cycle.runs.map(LinkedRunRow),
+            )
+          : cycle.status === "active" && cycle.runs.length > 0
+            ? div({ class: "app-cycle-runs" }, cycle.runs.map(LinkedRunRow))
+            : null,
+      );
+
+    const LensCrGroup = (node) =>
+      div(
+        {
+          "data-testid": "cr-group",
+          "data-cr": node.cr,
+          "data-status": node.status ?? "inferred",
+          class: "app-cr-group",
+        },
+        div(
+          { class: "app-cr-line" },
+          span({ class: "app-pane-section-title" }, node.cr),
+          node.track !== undefined
+            ? span({ "data-testid": "track-badge", class: "app-pill" }, node.track)
+            : null,
+          span(
+            { "data-testid": "cr-rollup", class: "app-pill" },
+            `${node.rollup.done}/${node.rollup.total}`,
+          ),
+          node.merge !== undefined
+            ? span(
+                { "data-testid": "cr-merge-commit", class: "app-pill" },
+                `merged @ ${node.merge.commit}`,
+              )
+            : null,
+        ),
+        node.cycles.map(LensCycleRow),
+        node.agents.map(CrAgentRuntime),
+      );
+
+    const WaveHeader = (wave) => {
+      const chips = wave.state?.chips ?? [];
+      return div(
+        { "data-testid": "wave-header", class: "app-wave-header" },
+        span({ class: "app-pane-section-title" }, `Wave ${wave.wave}`),
+        chips.length > 0
+          ? chips.flatMap((chip, i) => [
+              i > 0 ? " · " : " ",
+              span({ "data-testid": "lane-chip", class: "app-pill" }, chip),
+            ])
+          : wave.state !== null
+            ? span({ class: "app-card-meta" }, ` ${wave.state.label}`)
+            : null,
+      );
+    };
+
+    const WaveGroup = (wave) =>
+      div(
+        {
+          "data-testid": "wave-group",
+          "data-wave": wave.wave,
+          "data-source": wave.source,
+          class: "app-wave-group",
+        },
+        WaveHeader(wave),
+        wave.tracks !== null
+          ? wave.tracks.map((t) =>
+              div(
+                { "data-testid": "track-group", "data-track": t.track, class: "app-track-group" },
+                t.crs.map(LensCrGroup),
+              ),
+            )
+          : null,
+        wave.crs.map(LensCrGroup),
+      );
+
+    const UngroupedTail = (runs) =>
+      div(
+        { "data-testid": "ungrouped-tail", class: "app-ungrouped-tail" },
+        div(
+          { class: "app-cr-line" },
+          span({ class: "app-pane-section-title" }, "ungrouped"),
+          span(
+            { "data-testid": "ungrouped-count", class: "app-pill" },
+            `${runs.length} runs`,
+          ),
+        ),
+        runs.map(LinkedRunRow),
+      );
+
+    const WorkflowHistory = () => {
+      const lens = L.workflowLens({
+        plans: state.plans,
+        events: state.events.filter((e) => e.projectKey === state.route.projectKey),
+      });
+      return div(
+        { "data-testid": "workflow-history", class: "app-workflow-history" },
+        div({ class: "app-pane-section-title" }, "History"),
+        lens.waves.length === 0 && lens.ungrouped.length === 0
+          ? div({ class: "app-empty" }, "no workflow history yet")
+          : [
+              lens.waves.map(WaveGroup),
+              lens.ungrouped.length > 0 ? UngroupedTail(lens.ungrouped) : null,
+            ],
+      );
+    };
+
     const WorkflowFeed = () =>
       div(
         { class: "app-pane-content" },
@@ -1202,11 +1369,8 @@
           () => WorkflowActive(),
           GatePane(),
         ),
-        // §S3 history lens — C4 of this CR; honest placeholder until then.
-        div(
-          { "data-testid": "workflow-history", class: "app-empty" },
-          "history lens lands in C4 of this CR",
-        ),
+        // §S3 history lens — the grouped Wave → [Track] → CR → Cycle tree.
+        () => WorkflowHistory(),
       );
 
     const WorkflowPanel = () =>

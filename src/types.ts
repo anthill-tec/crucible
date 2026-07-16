@@ -134,6 +134,12 @@ export interface PlanCycle {
   label: string;
   kind: CycleKind;
   status: CycleStatus;
+  // CR-CRU-011 §S0b (additive, mirrors Plan.closedAt) — transition
+  // timestamps: stamped on pending→active and on reaching a terminal
+  // state; the timeline's declared marker derives its active→done
+  // duration from these. Absent (never null) until the transition lands.
+  activatedAt?: number;
+  doneAt?: number;
 }
 
 /**
