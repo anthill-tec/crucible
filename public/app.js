@@ -423,6 +423,35 @@
       return `${Math.floor(s / 60)}m ${s % 60}s`;
     }
 
+    // CR-CRU-021 §S3 — cycle-timer format: OWN zero-padded-seconds form
+    // (`⏱ 4m 05s`, F13 contract), deliberately NOT fmtDuration (which
+    // renders `4m 5s`).
+    function fmtCycleTimer(ms) {
+      const s = Math.max(0, Math.floor(ms / 1000));
+      return `⏱ ${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+    }
+
+    // §S3 — active-cycle timer: an ACTIVE cycle ticks `now − activatedAt`
+    // (ember badge; Date.now() at render — the poll/SSE refetch cadence
+    // supplies the visible updating, same loop that ticks agent runtimes);
+    // a terminal cycle shows the sealed `doneAt − activatedAt` (dim, never
+    // advancing). Cycles predating the timestamp migration (no activatedAt,
+    // or terminal without doneAt) render NO timer — never a fabricated value.
+    const CycleTimer = (cycle) => {
+      if (cycle.activatedAt === undefined) return null;
+      if (cycle.status === "active") {
+        return span(
+          { "data-testid": "cycle-timer", class: "app-cycle-timer-ember" },
+          fmtCycleTimer(Date.now() - cycle.activatedAt),
+        );
+      }
+      if (cycle.doneAt === undefined) return null;
+      return span(
+        { "data-testid": "cycle-timer", class: "app-card-meta app-cycle-timer-sealed" },
+        fmtCycleTimer(cycle.doneAt - cycle.activatedAt),
+      );
+    };
+
     // Ratio pill — UNIVERSAL status palette (user-corrected 2026-07-15):
     // `N/N` pass-green / `F ✗ of N` fail-red / compile `E errors` fail-red
     // when E>0 and pass-green when clean (compile cards NEVER show a
@@ -1281,6 +1310,10 @@
     // toggle contract narrows to History), trailed by the dim
     // `awaiting orchestrator confirm` annotation (§S6 #3).
     const CycleRow = (cycle, ordinal, plan) => {
+      // §S3 — ember badge inline after `· ACTIVE`, before the open span;
+      // dim sealed timer trailing the done narration. Null when the cycle
+      // predates the timestamp migration (F13 fixtures stay byte-identical).
+      const timer = CycleTimer(cycle);
       const lineParts = [
         `cycle ${ordinal} · "${cycle.label}"`,
         ...(cycle.kind !== undefined && cycle.kind !== "red-green"
@@ -1310,6 +1343,7 @@
           cycle.status === "active"
             ? b({ class: "app-cycle-text" }, ...lineParts)
             : span({ class: "app-cycle-text" }, ...lineParts),
+          ...(timer !== null ? [" ", timer] : []),
         ),
         cycle.status === "active" ? OpenSpan(cycle.id) : null,
       );
@@ -1391,6 +1425,9 @@
     const LensCycleRow = (cycle, crName) => {
       const expandable = cycle.status === "done" || cycle.status === "active";
       const key = lensKey("cycle", cycle.id ?? `${crName}:${cycle.label}`);
+      // §S3 — history rows show the SAME sealed `doneAt − activatedAt`
+      // timer as the active section (null when timestamps predate C4).
+      const timer = CycleTimer(cycle);
       return div(
         {
           "data-testid": "lens-cycle-row",
@@ -1414,6 +1451,7 @@
             CYCLE_GLYPHS[cycle.status] ?? CYCLE_GLYPHS.pending,
           ),
           span({ class: "app-cycle-label" }, cycle.label),
+          ...(timer !== null ? [" ", timer] : []),
           // CR-CRU-021 §S6 #8 — collapsed rows hint at their linked runs.
           expandable
             ? () =>
