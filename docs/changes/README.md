@@ -19,7 +19,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-008](CR-CRU-008-cli-fleet-upgrade.md) | crucible-axi CLI + fleet upgrade + plan verbs | feature | PENDING | 005, 007, 011 | 4 (after 011) |
 | [CR-CRU-009](CR-CRU-009-release-0.1.0.md) | Release 0.1.0 skill bundle | feature | PENDING | 007, 008, 011, 012, 013, 016 | 4 |
 | [CR-CRU-010](CR-CRU-010-codec-path-interface-hardening.md) | Codec parsePath + shim hardening | maintenance | COMPLETED (2026-07-15) | 006 | 3 (after 006, before 007) |
-| [CR-CRU-016](CR-CRU-016-inpane-drill-in.md) | In-pane drill-in (replaces slide-over) | feature | PENDING | 007 | 4 (first after 007) |
+| [CR-CRU-016](CR-CRU-016-inpane-drill-in.md) | In-pane drill-in (replaces slide-over) | feature | COMPLETED (2026-07-16) | 007 | 4 (first after 007) |
 | [CR-CRU-011](CR-CRU-011-workflow-lens.md) | Cycle plans + workflow lens + agent runtimes | feature | PENDING | 007 | 4 (after 016) |
 | [CR-CRU-012](CR-CRU-012-projects-manager.md) | Projects manager: add + edit + archive | feature | PENDING | 004, 007 | 4 (before 009) |
 | [CR-CRU-013](CR-CRU-013-gate-events.md) | Workflow events: gates (no-mistakes) + milestones | feature | PENDING | 008, 011 | 4 (before 009) |

@@ -299,7 +299,7 @@ function handleAgentsList(store: Store, req: Request, url: URL): Response {
 
 // ── §S1+§S2 — runs: raw codec ingest, parsed ingest, compile ingest ─────────
 
-const TIERS: ReadonlySet<string> = new Set<Tier>([
+export const TIERS: ReadonlySet<string> = new Set<Tier>([
   "unit",
   "module",
   "integration",

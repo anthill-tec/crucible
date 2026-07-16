@@ -45,13 +45,33 @@ Feature: CR-CRU-006 shell — storyboard frames
     And an online agent "sse-agent" with message "hot off the stream" is registered on that project
     Then a projects-row badge for "F2b Project" becomes visible within 2 seconds without reloading
 
-  Scenario: nav Esc closes the run overlay and restores scroll
+  Scenario: nav Esc closes the in-pane run detail and restores the workspace Runs pane's exact scroll position (CR-CRU-016 §S1/AC2 re-target)
+    # 8 runs give the feed real scroll runway: with only one card the whole
+    # feed sits inside the pane's unscrolled viewport, so scrolling 240px
+    # pushes the sole clickable card OUT of view and Playwright's click
+    # actionability auto-scrolls the pane back toward 0 before dispatching
+    # the click — a false RED unrelated to the production scroll-restore
+    # contract. With 8 runs, "agent-esc-mid" (seeded 5th of 8, so newest-
+    # first ordering lands it mid-feed) is already rendered — the click
+    # below dispatches a native DOM click (not a synthetic Playwright
+    # mouse click) so the pane's scrollTop is never touched by the test
+    # harness itself, and the detail opens with the pane still genuinely
+    # at 240 — the contract this scenario exists to pin.
     Given a project named "Esc Project" is registered
-    And a passing 1-test run is ingested for agent "agent-esc" on that project
-    When I open the run overlay directly at its cold URL under the workspace
-    Then the run overlay is visible and contains the event id
+    And a passing 1-test run is ingested for agent "agent-esc-0" on that project
+    And a passing 1-test run is ingested for agent "agent-esc-1" on that project
+    And a passing 1-test run is ingested for agent "agent-esc-2" on that project
+    And a passing 1-test run is ingested for agent "agent-esc-3" on that project
+    And a passing 1-test run is ingested for agent "agent-esc-mid" on that project
+    And a passing 1-test run is ingested for agent "agent-esc-5" on that project
+    And a passing 1-test run is ingested for agent "agent-esc-6" on that project
+    And a passing 1-test run is ingested for agent "agent-esc-7" on that project
+    When I open the workspace for that project
+    And I scroll the workspace Runs pane down by 240px
+    And I click the event card for "agent-esc-mid" without letting Playwright re-scroll the pane
+    Then the run overlay is visible
     When I press Escape
     Then the run overlay and its scrim are gone
     And the URL path is the workspace path with no run-overlay suffix
     And the workspace is visible
-    And the page scrollY is 0
+    And the workspace Runs pane's scrollTop is 240

@@ -75,6 +75,7 @@ describe("shim ingest/events routes — §S1/§S2", () => {
     name?: string;
     agentId?: string;
     projectKey?: string;
+    tier?: unknown;
   }) {
     return {
       projectKey: overrides?.projectKey,
@@ -99,6 +100,7 @@ describe("shim ingest/events routes — §S1/§S2", () => {
       ],
       ...(overrides?.coverage !== undefined ? { coverage: overrides.coverage } : {}),
       ...(overrides?.name !== undefined ? { name: overrides.name } : {}),
+      ...(overrides?.tier !== undefined ? { tier: overrides.tier } : {}),
     };
   }
 
@@ -167,6 +169,73 @@ describe("shim ingest/events routes — §S1/§S2", () => {
       expect(res.status).toBe(200);
       const newest = handle.store.listEvents(pk)[0];
       expect(newest?.name).toBe("smoke-run");
+    });
+  });
+
+  // ── §S4 tier passthrough (user defect 2026-07-16, CR-CRU-016) ──────────
+  // Valid tier set per spec: unit, module, integration, regression, e2e,
+  // bdd. `POST /api/ingest/parsed` currently ignores any `tier` field on
+  // the body entirely (ALWAYS defaults to "unit" via the store) — these
+  // three tests pin the passthrough + validation + default-preservation
+  // contract exactly.
+  describe("POST /api/ingest/parsed — §S4 tier passthrough", () => {
+    test('tier:"regression" → stored event\'s tier is "regression" (asserted via GET /api/events)', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const pk = seedProject();
+
+      const res = await postJson(
+        "/api/ingest/parsed",
+        parsedBody({ projectKey: pk, tier: "regression" }),
+      );
+
+      expect(res.status).toBe(200);
+
+      const listRes = await getJson(`/api/events?projectKey=${pk}`);
+      expect(listRes.status).toBe(200);
+      const listBody = (await listRes.json()) as {
+        ok: true;
+        events: Array<{ id: string; tier: string }>;
+      };
+      expect(listBody.ok).toBe(true);
+      expect(listBody.events.length).toBe(1);
+      expect(listBody.events[0]!.tier).toBe("regression");
+    });
+
+    test('tier:"banana" (not in the known tier set) → 400 {ok:false, error} naming "tier"; no event stored', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const pk = seedProject();
+
+      const res = await postJson(
+        "/api/ingest/parsed",
+        parsedBody({ projectKey: pk, tier: "banana" }),
+      );
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as ErrResponse;
+      expect(body.ok).toBe(false);
+      expect(body.error).toContain("tier");
+
+      const listRes = await getJson(`/api/events?projectKey=${pk}`);
+      expect(listRes.status).toBe(200);
+      const listBody = (await listRes.json()) as OkEventsResponse;
+      expect(listBody.events.length).toBe(0);
+    });
+
+    test('omitting tier keeps the "unit" default (asserted via GET /api/events) — existing ingest behavior unchanged', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const pk = seedProject();
+
+      const res = await postJson("/api/ingest/parsed", parsedBody({ projectKey: pk }));
+      expect(res.status).toBe(200);
+
+      const listRes = await getJson(`/api/events?projectKey=${pk}`);
+      expect(listRes.status).toBe(200);
+      const listBody = (await listRes.json()) as {
+        ok: true;
+        events: Array<{ id: string; tier: string }>;
+      };
+      expect(listBody.events.length).toBe(1);
+      expect(listBody.events[0]!.tier).toBe("unit");
     });
   });
 

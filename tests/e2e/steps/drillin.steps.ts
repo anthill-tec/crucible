@@ -79,11 +79,46 @@ Step("the workspace is visible", async ({ page }) => {
   await expect(page.getByTestId("workspace")).toBeVisible();
 });
 
-Step("the page scrollY is 0", async ({ page }) => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const scrollY = await page.evaluate(() => (globalThis as any).scrollY as number);
-  expect(scrollY).toBe(0);
+// CR-CRU-016 §S1/AC2 re-target (RED report approved-modification list) —
+// the CR-007 mechanism tracked `window.scrollY` (there was never a
+// dedicated pane scroller since the overlay sat on a page-covering scrim).
+// In-pane, the feed's OWN scroller is the workspace Runs pane
+// ([data-testid="workspace-runs"]) — AC2 demands the EXACT PRIOR scrollTop
+// of THAT element is restored, not the window's. Replaces the deleted
+// "the page scrollY is 0" step, which no longer applies — see
+// docs/changes/CR-CRU-016-inpane-drill-in.md Gap analysis ("Scroll
+// restore").
+Step("I scroll the workspace Runs pane down by {int}px", async ({ page }, amount: number) => {
+  await page.getByTestId("workspace-runs").evaluate((el, amt) => {
+    (el as HTMLElement).scrollTop = amt;
+  }, amount);
 });
+
+Step("the workspace Runs pane's scrollTop is {int}", async ({ page }, expected: number) => {
+  const scrollTop = await page
+    .getByTestId("workspace-runs")
+    .evaluate((el) => (el as HTMLElement).scrollTop);
+  expect(scrollTop).toBe(expected);
+});
+
+// CR-CRU-016 §S1/AC2 fixture repair (RED escalation — Playwright
+// actionability auto-scroll defeats the pane-scroll-restore assertion): a
+// REAL user click on an already-rendered card does not reposition the
+// page/pane — it's Playwright's synthetic-mouse actionability check
+// (element-must-be-fully-in-view before dispatch) that nudges the pane's
+// scrollTop before the click event ever fires, which is unrelated to the
+// production scroll-restore contract this scenario pins. Dispatching a
+// native DOM click (still routes through the SAME onclick handler VanJS
+// attached — a real "click" event, not a bypass) opens the detail with the
+// pane's scrollTop exactly as the user left it.
+Step(
+  "I click the event card for {string} without letting Playwright re-scroll the pane",
+  async ({ page }, agentId: string) => {
+    const card = page.getByTestId("event-card").filter({ hasText: agentId });
+    await expect(card).toHaveCount(1);
+    await card.evaluate((el) => (el as HTMLElement).click());
+  },
+);
 
 Step("the overlay has no heat-strip", async ({ page }) => {
   await expect(overlayOf(page).getByTestId("heat-strip")).toHaveCount(0);
@@ -116,4 +151,65 @@ Step("I click the first failing heat cell", async ({ page }) => {
   const firstFailCell = heatStrip.locator(".app-heat-fail").first();
   await expect(firstFailCell).toBeVisible();
   await firstFailCell.click();
+});
+
+// CR-CRU-016 C4 (BDD layer, drill-in.feature) — "open-from-card" scenario:
+// the workspace Runs pane's own feed content (event cards) is gone once the
+// pane swaps to the detail (paneSwap in public/app.js unmounts the feed —
+// the pane CONTAINER stays mounted, only its content swaps).
+Step("the workspace Runs pane shows no event cards", async ({ page }) => {
+  await expect(page.getByTestId("workspace-runs").getByTestId("event-card")).toHaveCount(0);
+});
+
+Step("the workspace tabs row is visible", async ({ page }) => {
+  await expect(page.getByTestId("workspace-tabs")).toBeVisible();
+});
+
+// CR-CRU-016 §S1 tabs-hide + tab-in-header (user decisions 2026-07-16, gate
+// review): while a run detail is open, the workspace TABS ROW is absent
+// from the DOM entirely (not merely hidden) — the pane header (back chip +
+// title + density) is the only navigation at that level.
+Step("the workspace tabs row is not present", async ({ page }) => {
+  await expect(page.getByTestId("workspace-tabs")).toHaveCount(0);
+});
+
+// CR-CRU-016 §S1 tabs-hide + tab-in-header — the detail header's back chip
+// carries the origin tab's name (`← runs` / `← coverage` / `← compile` on
+// the workspace; `← timeline` on home, unaffected).
+Step("the back chip reads {string}", async ({ page }, text: string) => {
+  await expect(overlayOf(page).getByRole("button", { name: text })).toBeVisible();
+});
+
+// CR-CRU-016 §S1 tabs-hide + tab-in-header — after closing the detail, the
+// previously-active tab still carries the "on" (selected) class — the
+// one-rule's preserved tab state.
+Step("the {string} tab is selected", async ({ page }, label: string) => {
+  const tab = page.getByTestId("workspace-tab").filter({ hasText: label });
+  await expect(tab).toHaveClass(/\bon\b/);
+});
+
+// AC4 — the slide-over container, its scrim, and `app-slideover-right` are
+// RETIRED for run detail; no such element exists anywhere while the detail
+// is open (/manage and /roadmap overlays are unaffected and out of scope
+// here).
+Step("there is no run-overlay-scrim element anywhere", async ({ page }) => {
+  await expect(page.getByTestId("run-overlay-scrim")).toHaveCount(0);
+});
+
+Step("there is no app-slideover-right element anywhere", async ({ page }) => {
+  await expect(page.locator(".app-slideover-right")).toHaveCount(0);
+});
+
+// CR-CRU-016 C4 — "back-restores-scroll" scenario, the OTHER restore path:
+// the back chip (public/app.js: `button({...onclick: () => closeDetail()},
+// ...)`) calls the SAME closeDetail() as Escape, so it deserves its own BDD
+// coverage of the pane-scroll-restore contract (Escape already lives in
+// shell-storyboard.feature).
+// RE-TARGETED (§S1 tabs-hide + tab-in-header, CR's approved-modification
+// list): the chip text is now tab-keyed (`← runs` / `← coverage` /
+// `← compile` on the workspace, `← timeline` on home) instead of the
+// retired constant `← timeline` everywhere — parametrized so both contexts
+// share one step.
+Step("I click the {string} chip", async ({ page }, text: string) => {
+  await overlayOf(page).getByRole("button", { name: text }).click();
 });

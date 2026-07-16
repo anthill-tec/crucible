@@ -738,7 +738,12 @@ describe("§S3 — back control ('← timeline') and Escape parity", () => {
     expect(document.querySelector('[data-testid="timeline"]')).not.toBeNull();
   });
 
-  test("from the workspace: '← timeline' closes the overlay and restores the workspace route (workspace stays workspace, not home)", async () => {
+  // RE-TARGETED (CR-CRU-016 §S1 tabs-hide + tab-in-header, CR's
+  // approved-modification list): the workspace back chip's text is now
+  // tab-keyed (`← runs` on the default Runs tab) instead of the retired
+  // constant `← timeline` — was `findByText(overlay!, "button, a", "← timeline")`.
+  // Home's chip stays `← timeline` (see the test above, unaffected).
+  test("from the workspace: '← runs' closes the overlay and restores the workspace route (workspace stays workspace, not home)", async () => {
     const now = Date.now();
     const eventId = "evt-back-ws-1";
     const projectKey = "proj-back-2";
@@ -760,7 +765,7 @@ describe("§S3 — back control ('← timeline') and Escape parity", () => {
     const overlay = document.querySelector('[data-testid="run-overlay"]');
     expect(overlay).not.toBeNull();
 
-    const back = findByText(overlay!, "button, a", "← timeline");
+    const back = findByText(overlay!, "button, a", "← runs");
     expect(back).toBeDefined();
     back!.click();
     await settle();

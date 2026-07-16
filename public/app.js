@@ -25,51 +25,65 @@
       workspaceTab: "Runs",
       backendUp: true,
       lastSynced: null,
-      savedScrollY: 0, // §S2/AC 10b — scroll position under the run overlay
     });
 
     // ── Routing (§S2 — hash-free History routing, parse in app-logic) ───
+    // CR-CRU-016 §S1 — the run detail is a PANE STATE of the ACTIVE central
+    // pane (home timeline / workspace Runs / Compile / Coverage). The pane's
+    // OWN scroller position is captured when a detail opens and restored
+    // when it closes — the window never scrolls (styles.css app frame).
+    let savedPaneScroll = 0;
+
+    // The active central pane's scroller element: the home timeline pane on
+    // "/", else whichever tab pane currently fills the workspace body.
+    function activePaneEl() {
+      if (state.route.page === "workspace") {
+        const body = document.querySelector('[data-testid="workspace-body"]');
+        return body !== null ? body.firstElementChild : null;
+      }
+      return document.querySelector('[data-testid="timeline"]');
+    }
+
     function navigate(pathname) {
       const next = L.routeParse(pathname);
-      // AC 10b(a) — opening the run overlay: remember where the underlying
-      // surface was scrolled so closing can restore it.
-      if (next.overlay !== undefined && state.route.overlay === undefined) {
-        state.savedScrollY = window.scrollY;
+      // CR-CRU-016 AC2 — opening a detail: remember the ACTIVE pane's own
+      // scrollTop so closing can restore the feed at its exact position.
+      const opening = next.overlay !== undefined && state.route.overlay === undefined;
+      if (opening) {
+        const pane = activePaneEl();
+        savedPaneScroll = pane === null ? 0 : pane.scrollTop;
       }
+      // ONE RULE (CR-CRU-016 §S1, user-approved 2026-07-16) — navigation
+      // within the SAME surface (detail open/close, tab-owned pane swaps)
+      // never touches the active workspace tab or the agent filter; only a
+      // surface change (home↔workspace, project→project) lands on Runs.
+      const sameSurface =
+        next.page === state.route.page &&
+        (next.page !== "workspace" || next.projectKey === state.route.projectKey);
       history.pushState(null, "", pathname);
       state.route = next;
-      state.workspaceTab = "Runs";
-      state.selectedAgent = null;
+      if (!sameSurface) {
+        state.workspaceTab = "Runs";
+        state.selectedAgent = null;
+      }
     }
 
-    function restoreScroll() {
-      const y = state.savedScrollY;
-      // After the reactive re-render (VanJS applies state-derived DOM this
-      // frame), put the underlying surface back where it was.
-      requestAnimationFrame(() => window.scrollTo(0, y));
-    }
-
-    // AC 10b(b/c) — close the overlay back to the underlying surface path
-    // (strip the /run/<id> suffix) and restore the saved scroll position.
-    function closeOverlay() {
+    // CR-CRU-016 AC2 — close the detail back to the underlying surface path
+    // (strip the /run/<id> suffix); the pane's saved scrollTop is restored
+    // by paneSwap when the feed re-mounts (also covers browser-back).
+    function closeDetail() {
       if (state.route.overlay === undefined) return;
       const base = location.pathname.replace(/\/run\/[^/]+\/?$/, "") || "/";
       history.pushState(null, "", base);
       state.route = L.routeParse(base);
-      restoreScroll();
     }
 
     window.addEventListener("popstate", () => {
-      // AC 10b(d) — browser-back out of the overlay restores scroll too.
-      const hadOverlay = state.route.overlay !== undefined;
       state.route = L.routeParse(location.pathname);
-      if (hadOverlay && state.route.overlay === undefined) {
-        restoreScroll();
-      }
     });
 
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && state.route.overlay !== undefined) closeOverlay();
+      if (e.key === "Escape" && state.route.overlay !== undefined) closeDetail();
     });
 
     // ── Data plumbing (§S5 — v2 surface only) ───────────────────────────
@@ -449,6 +463,27 @@
       navigate(`${prefix}/run/${encodeURIComponent(eventId)}`);
     }
 
+    // CR-CRU-016 §S4 F7 (user defect 2026-07-16) — regression-run
+    // differentiation on the CARD: a `regression`-tier event whose brief
+    // carries `coverageLines` reads codec `<codec>+lcov` and renders an
+    // inline mini coverage meter. Gated on tier:"regression", not merely
+    // coverage presence (a unit run's coverage never decorates its card).
+    const cardCoverage = (e) =>
+      e.tier === "regression" && typeof e.coverageLines === "number"
+        ? e.coverageLines
+        : null;
+
+    // F7 card meter — same `.app-meter` anatomy as the Project pane's
+    // coverage meter, inline on the card, fill width = lines percent.
+    const CardCoverageMeter = (percent) =>
+      div(
+        { "data-testid": "card-coverage-meter", class: "app-meter app-card-meter" },
+        div({
+          class: "app-meter-fill",
+          style: `width:${Math.min(100, percent)}%;`,
+        }),
+      );
+
     const EventCard = (e) =>
       div(
         {
@@ -483,7 +518,12 @@
             span({ class: "app-agent-id" }, e.agentId),
             span({ "data-testid": "tier-badge", class: "app-pill app-tier-badge" }, e.tier),
             e.codec !== undefined && e.codec !== null
-              ? span({ "data-testid": "codec-badge", class: "app-pill app-codec-badge" }, e.codec)
+              ? span(
+                  { "data-testid": "codec-badge", class: "app-pill app-codec-badge" },
+                  // §S4 F7 — the +lcov suffix marks a coverage-bearing
+                  // regression run's codec.
+                  cardCoverage(e) !== null ? `${e.codec}+lcov` : e.codec,
+                )
               : null,
             CardBadges(e),
           ),
@@ -494,6 +534,7 @@
               ? span({ "data-testid": "card-duration" }, fmtDuration(e.duration_ms ?? 0))
               : null,
           ),
+          cardCoverage(e) !== null ? CardCoverageMeter(cardCoverage(e)) : null,
           DiagPreview(e),
         ),
         RatioPill(e),
@@ -515,12 +556,15 @@
       return parts.join(" · ");
     }
 
+    // CR-CRU-016 §S1 (C5) — markers open through the SAME workspace-aware
+    // path as cards (openDrillin): a workspace marker opens the GREEN run
+    // in-pane at /p/<key>/run/<id>; home markers keep /run/<id>.
     const TransitionMarkerRow = (m) =>
       div(
         {
           "data-testid": "transition-marker",
           class: "app-transition-marker",
-          onclick: () => navigate(`/run/${encodeURIComponent(m.greenEvent.id)}`),
+          onclick: () => openDrillin(m.greenEvent.id),
         },
         markerLabel(m),
       );
@@ -550,11 +594,65 @@
       );
     };
 
+    // CR-CRU-016 §S1 tabs-hide + tab-in-header (user decisions 2026-07-16,
+    // gate review) — the detail header is the single navigation context and
+    // NAMES where back goes: the back chip carries the ACTIVE workspace
+    // tab's name (`← runs` / `← coverage` / `← compile`, the one-rule's
+    // preserved workspaceTab); home (no tabs) stays `← timeline`.
+    const backChipLabel = () =>
+      state.route.page === "workspace"
+        ? `← ${String(state.workspaceTab).toLowerCase()}`
+        : "← timeline";
+
+    // Shared detail-header content: back chip · RUN DETAIL · density chip.
+    // The chip closes exactly like Escape (same closeDetail — same
+    // route/pane-scroll restore). §S4.0 FINAL — no mode switch here (or
+    // anywhere): presentation is purely tier-contextual.
+    const DetailHeadContent = (eventId) => [
+      button({ class: "app-chip", onclick: () => closeDetail() }, () => backChipLabel()),
+      span({ class: "app-rail-title" }, `Run detail · ${eventId}`),
+      // §S5 fidelity #3 — the density toggle renders in the drill-in header.
+      DensityToggle(),
+    ];
+
+    // CR-CRU-016 §S1 — pane-state swap: a central pane renders EITHER its
+    // own feed content or the run detail, never both. The pane CONTAINER
+    // node stays mounted (marker/no-remount contract); only its content
+    // swaps. The scroll discipline lives here so it runs exactly when the
+    // swapped content is actually in the DOM (a microtask after VanJS
+    // mounts the new child): the detail opens at the top of its pane; the
+    // feed returns at its exact prior scrollTop (AC2).
+    const paneSwap = (Feed) => {
+      let showingDetail = false;
+      return () => {
+        if (state.route.overlay !== undefined) {
+          const detailDom = RunDetail(state.route.overlay);
+          if (!showingDetail) {
+            showingDetail = true;
+            queueMicrotask(() => {
+              const pane = detailDom.parentElement;
+              if (pane !== null) pane.scrollTop = 0;
+            });
+          }
+          return detailDom;
+        }
+        const feedDom = Feed();
+        if (showingDetail) {
+          showingDetail = false;
+          queueMicrotask(() => {
+            const pane = feedDom.parentElement;
+            if (pane !== null) pane.scrollTop = savedPaneScroll;
+          });
+        }
+        return feedDom;
+      };
+    };
+
     // §S5.1 — home body: the collective all-projects timeline, interleaved
     // newest-first (server order), filter pulldown in this pane's header.
-    const Timeline = () =>
+    const TimelineFeed = () =>
       div(
-        { "data-testid": "timeline", class: greyed("app-center") },
+        { class: "app-pane-content" },
         div(
           { class: "app-timeline-head" },
           // §S5 fidelity #4 — "Run timeline — <scope>": all projects, or the
@@ -573,7 +671,24 @@
         () => EmptyState() ?? div(runFeed(visibleEvents())),
       );
 
-    const Home = () => div({ class: "app-main app-home" }, Timeline());
+    const Timeline = () =>
+      div({ "data-testid": "timeline", class: greyed("app-center") }, paneSwap(TimelineFeed));
+
+    // CR-CRU-016 §S1 header-always-visible — with a detail open, home pins
+    // the detail header ABOVE the timeline pane's scroller in its own band;
+    // scrolling a long drill-down never moves it. Closed: the band is empty.
+    const Home = () =>
+      div(
+        { class: "app-main app-home" },
+        () =>
+          state.route.overlay !== undefined
+            ? div(
+                { class: "app-drillin-head app-top" },
+                DetailHeadContent(state.route.overlay),
+              )
+            : "",
+        Timeline(),
+      );
 
     // ── Workspace (§S4 header/tabs/runs + §S5.2 Project pane) ───────────
     // §S5.4 + fidelity #6 — the workspace top bar's locked composition:
@@ -596,8 +711,23 @@
         HealthPill(),
       );
 
+    // CR-CRU-016 §S1 tabs-hide (user decision 2026-07-16: "the
+    // Runs/Coverage/Compile/BDD row is incongruent at the same level as the
+    // drill-down — the navigation conflicts") — while a detail is open the
+    // tabs ROW is retired from the surface: its `workspace-tabs` handle is
+    // parked and the row hidden. The tab BUTTONS stay mounted so the active
+    // tab's `on` state survives the detail (the one-rule's preserved tab
+    // state) and every close path (chip / Escape / popstate) restores the
+    // row with the same tab still selected.
     const WorkspaceTabs = () =>
-      div({ "data-testid": "workspace-tabs", class: "app-top" }, () => {
+      div(
+        {
+          "data-testid": () =>
+            state.route.overlay === undefined ? "workspace-tabs" : "workspace-tabs-parked",
+          class: () =>
+            `app-top${state.route.overlay === undefined ? "" : " app-tabs-parked"}`,
+        },
+        () => {
         const project = currentProject();
         // §S1 addendum — pass the coverage field through so the Coverage tab
         // gates until the project has green-regression coverage.
@@ -610,9 +740,13 @@
             button(
               {
                 "data-testid": "workspace-tab",
-                class: `app-chip${state.workspaceTab === t.name ? " on" : ""}${
-                  t.disabled ? " disabled" : ""
-                }`,
+                // Reactive class — the tab BUTTON node stays mounted while
+                // the active tab flips (CR-CRU-016: switching tabs or
+                // opening a detail must not rebuild the tabs row).
+                class: () =>
+                  `app-chip${state.workspaceTab === t.name ? " on" : ""}${
+                    t.disabled ? " disabled" : ""
+                  }`,
                 disabled: t.disabled,
                 title: t.hint ?? "",
                 onclick: () => {
@@ -625,9 +759,9 @@
         );
       });
 
-    const WorkspaceRuns = () =>
+    const WorkspaceRunsFeed = () =>
       div(
-        { "data-testid": "workspace-runs", class: greyed("app-center") },
+        { class: "app-pane-content" },
         div(
           { class: "app-timeline-head" },
           // §S5 fidelity #4 — workspace Runs pane label; #3 — density toggle
@@ -644,6 +778,15 @@
             ? div({ class: "app-empty" }, "no runs yet — ingest a run to light the forge")
             : div(runFeed(runs));
         },
+      );
+
+    // CR-CRU-016 §S1 (C5) — the workspace detail is hosted by WorkspaceBody
+    // (see WorkspaceRunDetail), so the tab panes render their feeds
+    // directly; only the home timeline still paneSwaps.
+    const WorkspaceRuns = () =>
+      div(
+        { "data-testid": "workspace-runs", class: greyed("app-center") },
+        WorkspaceRunsFeed(),
       );
 
     // §S5 fidelity #5 + §S5.2 F8 anatomy (user defect 2026-07-15) — Vitals.
@@ -837,14 +980,14 @@
     // latest-green-coverage panel: lines + functions meter rows and a
     // `view run` control opening the latest coverage event's drill-in (same
     // wiring as the §nav coverage-meter click). Gating unchanged.
-    const CoveragePanel = () => {
+    const CoveragePanelBody = () => {
       const p = currentProject();
       const cov = p?.latestGreenCoverage;
       const lines = cov?.lines;
       const fns = cov?.functions;
       const eventId = p?.latestCoverageEventId;
       return div(
-        { class: greyed("app-center") },
+        { class: "app-pane-content" },
         div(
           { "data-testid": "coverage-panel", class: "app-coverage-panel" },
           div({ class: "app-rail-title" }, "Coverage — latest green regression"),
@@ -877,11 +1020,16 @@
       );
     };
 
+    // CR-CRU-016 ONE RULE — coverage-view-run / coverage-meter clicks never
+    // switch the tab; the detail replaces this pane via WorkspaceBody.
+    const CoveragePanel = () =>
+      div({ class: greyed("app-center") }, () => CoveragePanelBody());
+
     // §S5.5 — F5 COMPILE PANEL: the workspace timeline filtered to compile
     // events, identical card anatomy/testids as Runs.
-    const CompilePanel = () =>
+    const CompileFeed = () =>
       div(
-        { class: greyed("app-center") },
+        { class: "app-pane-content" },
         div(
           { class: "app-timeline-head" },
           div({ class: "app-rail-title" }, () => {
@@ -897,10 +1045,15 @@
         },
       );
 
+    // CR-CRU-016 ONE RULE — a Compile-tab card swaps the content region to
+    // the detail (via WorkspaceBody); the tab stays "Compile".
+    const CompilePanel = () =>
+      div({ class: greyed("app-center") }, CompileFeed());
+
     // §S5.5 — BDD keeps a placeholder naming the REAL landing CR (0.2.0).
-    const BddPlaceholder = () =>
+    const BddFeed = () =>
       div(
-        { class: greyed("app-center") },
+        { class: "app-pane-content" },
         div(
           { class: "app-empty" },
           "BDD run results already stream into the Runs timeline — " +
@@ -908,11 +1061,50 @@
         ),
       );
 
+    const BddPlaceholder = () =>
+      div({ class: greyed("app-center") }, BddFeed());
+
+    // CR-CRU-016 §S1 (C5) — the workspace detail: run-overlay wraps the
+    // detail header AND the detail's own scroller, so the header (back chip ·
+    // RUN DETAIL · density) sits ABOVE the scrolling content and never moves
+    // with it (header-always-visible), while the overlay container still
+    // carries the chip/anatomy for the drill-in contracts.
+    const WorkspaceRunDetail = (eventId) =>
+      div(
+        { "data-testid": "run-overlay", class: "app-drillin app-inpane app-detail-col" },
+        div({ class: "app-drillin-head app-top" }, DetailHeadContent(eventId)),
+        div(
+          { "data-testid": "workspace-runs", class: greyed("app-center") },
+          RunDetailBody(eventId),
+        ),
+      );
+
+    // AC2 — the feed pane returns at its exact prior scrollTop after a
+    // detail closes (same discipline as home's paneSwap, hoisted to the
+    // body slot because the detail replaces the whole tab pane here).
+    let wsShowingDetail = false;
     const WorkspaceBody = () => {
-      if (state.workspaceTab === "Coverage") return CoveragePanel();
-      if (state.workspaceTab === "Compile") return CompilePanel();
-      if (state.workspaceTab === "BDD") return BddPlaceholder();
-      return WorkspaceRuns();
+      // ONE RULE — the detail is a state of WHICHEVER tab pane is active;
+      // no tab switching happens on open or close.
+      if (state.route.overlay !== undefined) {
+        wsShowingDetail = true;
+        return WorkspaceRunDetail(state.route.overlay);
+      }
+      const pane =
+        state.workspaceTab === "Coverage"
+          ? CoveragePanel()
+          : state.workspaceTab === "Compile"
+            ? CompilePanel()
+            : state.workspaceTab === "BDD"
+              ? BddPlaceholder()
+              : WorkspaceRuns();
+      if (wsShowingDetail) {
+        wsShowingDetail = false;
+        queueMicrotask(() => {
+          pane.scrollTop = savedPaneScroll;
+        });
+      }
+      return pane;
     };
 
     // §S5 fidelity #1 — the workspace has NO left rail: the tabs row is a
@@ -929,7 +1121,7 @@
         ),
       );
 
-    // ── §S3 (CR-CRU-007) — codec-aware drill-in slide-over ──────────────
+    // ── §S3 (CR-CRU-007) — codec-aware drill-in, in-pane (CR-CRU-016) ───
     // Test body: suite→test tree, suites-first (§S4.5 progressive payload —
     // ?depth=suites first, ?suite=<name> on expand; the server side landed
     // in CR-CRU-004 §S4, consumed here). F4 anatomy: flat mono TREE LINES
@@ -962,8 +1154,10 @@
     const VIRT_ROW_HEIGHT = 28;
     const VIRT_WINDOW = 120;
 
-    const RunOverlay = () => {
-      const eventId = state.route.overlay;
+    // Body factory shared by BOTH detail containers (home in-pane form and
+    // the workspace's WorkspaceRunDetail wrapper): owns the fetch/suite
+    // state and renders the codec-aware body.
+    const RunDetailBody = (eventId) => {
       const detail = van.state(null); // suites-depth event detail
       const loadError = van.state(null);
       const suiteLeaves = van.state({}); // suiteName -> that suite's leaves
@@ -1280,11 +1474,28 @@
         return keys;
       }
 
+      // §S2 focus-model contract (CR-CRU-016) — the footer jump ADVANCES to
+      // the next failing leaf and FOCUSES it: exactly that leaf's failure
+      // box opens (focusedLeaf keeps ONE box open at a time — repeated
+      // jumps move the box, they never accumulate) and its row scrolls
+      // into the pane's viewport.
       function jumpToNextFailure(d) {
         const keys = failingLeafKeys(d);
         if (keys.length === 0) return;
         jumpPos = (jumpPos + 1) % keys.length;
         const target = keys[jumpPos];
+        const sep = target.indexOf("::");
+        const suiteName = target.slice(0, sep);
+        const leafName = target.slice(sep + 2);
+        const leaf = (suiteLeaves.val[suiteName] ?? []).find((l) => l.name === leafName);
+        if (typeof leaf?.failure?.message === "string") {
+          // A digest-grouped target expands its group so the row is visible.
+          openGroups.val = {
+            ...openGroups.val,
+            [`${suiteName}::${leaf.failure.message}`]: true,
+          };
+        }
+        focusedLeaf.val = target;
         const rows = document.querySelectorAll('[data-testid="leaf-row"]');
         for (const row of rows) {
           if (row.getAttribute("data-leaf-key") === target) {
@@ -1432,65 +1643,70 @@
         );
       };
 
-      // AC 10b(c) — the overlay sits on a scrim: a fixed full-viewport
-      // backdrop whose outside-the-panel surface closes the overlay the
-      // same way Escape does.
-      return div(
-        {
-          "data-testid": "run-overlay-scrim",
-          class: "app-overlay-scrim",
-          style: "position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:20;",
-          onclick: (e) => {
-            if (e.target === e.currentTarget) closeOverlay();
-          },
-        },
-        // §S5 fidelity #2 — the drill-in is a RIGHT-HAND SLIDE-OVER sheet:
-        // anchored to the right edge, full viewport height, ember left
-        // border (styles.css .app-slideover-right).
-        div(
-          {
-            "data-testid": "run-overlay",
-            class: "app-drillin app-slideover-right",
-            style:
-              "position:fixed;top:0;right:0;bottom:0;" +
-              "width:min(720px,92vw);z-index:21;",
-          },
-          // §S5.3 — '← timeline' back chip: closes exactly like Escape
-          // (same closeOverlay — same route/scroll restore).
-          // §S4.0 FINAL — no mode switch here (or anywhere): presentation is
-          // purely tier-contextual. Header: back chip + title + density toggle.
-          div(
-            { class: "app-drillin-head" },
-            button(
-              { class: "app-chip", onclick: () => closeOverlay() },
-              "← timeline",
-            ),
-            span({ class: "app-rail-title" }, `Run detail · ${eventId}`),
-            // §S5 fidelity #3 — the density toggle renders in the drill-in
-            // header (comfortable/compact/ultra — the only user control).
-            DensityToggle(),
-          ),
-          () => {
-            if (loadError.val !== null)
-              return div({ class: "app-empty" }, loadError.val);
-            const d = detail.val;
-            if (d === null)
-              return div({ class: "app-empty" }, "loading run detail…");
-            return d.kind === "compile" ? CompileBody(d) : TestBody(d);
-          },
-        ),
-      );
+      return div({ class: "app-drillin-body" }, () => {
+        if (loadError.val !== null)
+          return div({ class: "app-empty" }, loadError.val);
+        const d = detail.val;
+        if (d === null)
+          return div({ class: "app-empty" }, "loading run detail…");
+        return d.kind === "compile" ? CompileBody(d) : TestBody(d);
+      });
     };
+
+    // CR-CRU-016 §S1 — home's pane-state container: the detail renders
+    // INSIDE the timeline pane. The scrim + right slide-over sheet are
+    // RETIRED (no fixed positioning, no backdrop — /manage and /roadmap
+    // overlays are unaffected). The `run-overlay` testid is kept as the
+    // detail container's stable handle (RED's deliberate compatibility
+    // choice — the drill-in/density anatomy suites scope by it), and the
+    // in-overlay head is a hidden COMPAT copy of the same contract (chip +
+    // title + density) for the pre-C5 overlay-scoped assertions — the
+    // VISIBLE home header is the band Home() pins above this pane's
+    // scroller (§S1 header-always-visible).
+    const RunDetail = (eventId) =>
+      div(
+        { "data-testid": "run-overlay", class: "app-drillin app-inpane" },
+        div({ class: "app-drillin-inhead" }, DetailHeadContent(eventId)),
+        RunDetailBody(eventId),
+      );
 
     // §S5.1/§S5.3 — home chrome is title bar + projects row; the workspace
     // swaps in its own top bar (← projects + project chip + Health Pill).
     const HomeChrome = () => div(TopBar(), ProjectsRow());
 
+    // CR-CRU-016 AC1 — surface stability: while the surface identity (home,
+    // or workspace + projectKey) is unchanged, the SAME chrome/surface DOM
+    // nodes are returned (VanJS keeps an identical node in place), so
+    // opening/closing a run detail never remounts the Project pane, the
+    // topbar, or the projects row. A surface change rebuilds fresh DOM.
+    const surfaceKeyOf = () =>
+      state.route.page === "workspace"
+        ? `workspace:${state.route.projectKey}`
+        : "home";
+    let chromeKey = null;
+    let chromeDom = null;
+    let surfaceKey = null;
+    let surfaceDom = null;
+
     const App = () =>
       div(
-        () => (state.route.page === "workspace" ? WorkspaceHeader() : HomeChrome()),
-        () => (state.route.page === "workspace" ? Workspace() : Home()),
-        () => (state.route.overlay !== undefined ? RunOverlay() : span()),
+        () => {
+          const key = surfaceKeyOf();
+          if (chromeKey !== key) {
+            chromeKey = key;
+            chromeDom =
+              state.route.page === "workspace" ? WorkspaceHeader() : HomeChrome();
+          }
+          return chromeDom;
+        },
+        () => {
+          const key = surfaceKeyOf();
+          if (surfaceKey !== key) {
+            surfaceKey = key;
+            surfaceDom = state.route.page === "workspace" ? Workspace() : Home();
+          }
+          return surfaceDom;
+        },
       );
 
     // ── Boot ────────────────────────────────────────────────────────────

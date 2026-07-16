@@ -316,11 +316,21 @@ describe("§S5 fidelity #1 — workspace tabs row is full-width, NOT inside a ra
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-// 2. Drill-in presentation — right-hand slide-over, not a centered box
+// 2. Drill-in presentation — RE-TARGETED (CR-CRU-016 §S1, RED report
+//    approved-modification list): the right-hand slide-over sheet contract
+//    is RETIRED. Run detail is now a PANE STATE of whichever central pane
+//    is active — it renders NESTED inside [data-testid="timeline"] (home)
+//    or [data-testid="workspace-runs"] (workspace), never as a fixed,
+//    right-anchored sheet on a scrim. This describe block previously
+//    asserted the OPPOSITE (app-slideover-right + right:0 anchoring) — the
+//    assertions below are the flipped, retirement-form contract. Inner
+//    anatomy (F4 tree/failure-box/footer) is UNCHANGED and covered
+//    elsewhere (tests/drill-in.test.ts, tests/density.test.ts,
+//    tests/inpane-drill-in.test.ts).
 // ─────────────────────────────────────────────────────────────────────────
 
-describe("§S5 fidelity #2 — drill-in overlay is a right-hand slide-over sheet", () => {
-  test("run-overlay carries the slide-over structural contract: app-slideover-right class, right-anchored + full-height inline/class styling", async () => {
+describe("§S5 fidelity #2 RE-TARGETED (CR-CRU-016 §S1) — run detail is IN-PANE; the slide-over sheet contract is retired", () => {
+  test("the run detail renders nested inside the home timeline pane; NO app-slideover-right class, NO fixed right-anchored positioning, NO scrim", async () => {
     const key = "fid2-p1";
     const eventId = "evt-fid2-1";
     await mountApp({
@@ -328,20 +338,23 @@ describe("§S5 fidelity #2 — drill-in overlay is a right-hand slide-over sheet
       projects: [project({ key, name: "Fid2 Project" })],
     });
 
-    const overlay = document.querySelector('[data-testid="run-overlay"]') as HTMLElement | null;
-    expect(overlay).not.toBeNull();
+    // CR-CRU-016 AC4 — the slide-over/scrim contract is retired.
+    expect(document.querySelector('[data-testid="run-overlay-scrim"]')).toBeNull();
+    expect(document.querySelector(".app-slideover-right")).toBeNull();
 
-    expect(overlay!.classList.contains("app-slideover-right")).toBe(true);
+    // CR-CRU-016 AC1/AC3 — the detail is a PANE STATE of the home timeline
+    // pane: whatever renders the detail is a DESCENDANT of
+    // [data-testid="timeline"], never a separate top-level element.
+    const timeline = document.querySelector('[data-testid="timeline"]');
+    expect(timeline).not.toBeNull();
+    const detail = timeline!.querySelector('[data-testid="run-overlay"]');
+    expect(detail).not.toBeNull();
+    expect(document.querySelector('[data-testid="run-overlay"]')).toBe(detail);
 
-    const style = overlay!.getAttribute("style") ?? "";
-    // Anchored to the right edge...
-    expect(style).toMatch(/right\s*:\s*0/);
-    // ...and full viewport height (either an explicit height or a
-    // top:0 + bottom:0 pin — whichever GREEN chooses, testable as raw
-    // style-attribute text under happy-dom).
-    const fullHeight =
-      /height\s*:\s*100(vh|%)/.test(style) || (/top\s*:\s*0/.test(style) && /bottom\s*:\s*0/.test(style));
-    expect(fullHeight).toBe(true);
+    // Never a fixed, right-anchored sheet.
+    const style = (detail as HTMLElement).getAttribute("style") ?? "";
+    expect(style).not.toMatch(/position\s*:\s*fixed/);
+    expect(style).not.toMatch(/right\s*:\s*0/);
   });
 });
 

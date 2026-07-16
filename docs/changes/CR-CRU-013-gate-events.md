@@ -59,7 +59,24 @@ gate boundary card (§S2) renders on the workspace timeline; home shows a
 compact one-line gate entry (a wave seal is significant enough to surface
 cross-project).
 
-### §S5 Client verb
+### §S4c CR-merge markers (user-filed 2026-07-16, from the CR-016 gate review)
+User (annotating the F13 gate row): "There should be an entry similar to this
+to mark the end of a feature merge. It brings a break in the timeline just
+like the RED GREEN barrier as well as demarcates the end of a CR's
+implementation. This will have to be sent as a marker event by the
+orchestrator or the script tool responsible for the close out!"
+A third workflow-event sibling: `type:"cr-merged"` on the milestone family
+(`POST /api/v2/milestones` `{type:"cr-merged", label:<CR id>, context:{cr,
+wave, track}, commit}` — `commit` = the merge sha). UI: a full-width BREAK
+row on the timeline (same structural weight as the RED→GREEN transition
+marker, distinct glyph — e.g. ⚑):
+`⚑ <CR-id> merged · <n> cycles · <branch>@<shortsha> · <relative time>` —
+rendered on the WORKSPACE timeline and (like gates) as a compact one-line
+entry on home (a CR merge is significant enough to surface cross-project).
+Sender: the close-out path — the fleet `cr-close` verb (CR-CRU-008 / plan
+close in CR-CRU-011) emits it automatically on merge; until the fleet verb
+exists the orchestrator sends it manually at close-out. Once CR-CRU-011
+plans exist, the marker links `plans.cr` (the commitBoundary join key).
 `gate-report` on the fleet clients: parses `no-mistakes axi status` TOON (or
 accepts `--outcome/--steps/--commit` flags as fallback) → `POST /api/v2/gates`,
 auto-attaching `context.wave` from `WORKFLOW_WAVE` and `track` from
@@ -73,6 +90,7 @@ review → gated (a passed/checks-passed gate event for that wave) → supersede
 Still zero wave-control API — state remains inferred from plans + gate events.
 
 ## Acceptance criteria
+- [ ] §S4c CR-merge marker: `POST /api/v2/milestones` with `type:"cr-merged", label:"CR-NAI-042", commit:"abc1234", context:{cr:"CR-NAI-042", wave:1}` → 201 stored as a milestone; the WORKSPACE timeline renders a full-width `data-testid="merge-marker"` break row whose text matches `⚑ CR-NAI-042 merged · … abc1234` (same structural weight/placement rules as transition markers); home renders the compact one-line entry; test rollups unchanged; `type:"cr-merged"` joins the §S4b valid-type set.
 - [ ] `POST /api/v2/gates` with the full §S1 shape → 201; the stored event has `kind:"gate"`, `codec:"no-mistakes"`; missing `outcome` → 400 naming `outcome`; test-run rollup counts are unchanged by gate ingestion.
 - [ ] The timeline renders a gate event as a full-width `data-testid="gate-card"` containing the outcome and pushed short-commit; it never contains the string "0/" (no test-ratio leakage).
 - [ ] Clicking the gate card opens the drill-in with the step ladder (one row per submitted step, status visible), the fixes table (row count equals submitted fixes), and no `drillin-mode` element.
