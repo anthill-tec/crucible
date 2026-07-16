@@ -55,10 +55,37 @@ lifecycle event (CR-CRU-020-CLOSE lingered 38 minutes as `online` — the
 gremlin of 2026-07-16). Orchestrator procedure until this lands: unregister
 gate agents manually at close-out.
 
+### §S6 F13 look-and-feel EXACT fidelity (user-ordered 2026-07-16: "I like this look. Implement EXACTLY the same in UI")
+The Workflow tab's entry formatting matches the F13 mock VERBATIM (the mock
+is the contract; the shipped UI drifted). The exact formats:
+1. Active section header: `Active workflow — <cr> · <track> · wave <n>`
+   (track segment omitted when absent — solo model), in the ember section
+   header treatment.
+2. Cycle rows: `<glyph> cycle <n> · "<label>" · <status>` — the label QUOTED,
+   glyph colored per status (✓ pass-green / ▶ ember / ○ faint / ⊘ / ✗), the
+   ACTIVE row bold. Status narration where data allows: done cycles read
+   `done — GREEN confirmed` (+ ` by <orchestrator>` when the plan carries an
+   orchestrator identity — additive plan field, optional); verify-kind done
+   reads `done — report accepted`.
+3. The ACTIVE cycle's open span renders its linked runs INLINE on one row:
+   `🧪 <agent> <ratio> · 🧪 <agent> <ratio> · awaiting orchestrator confirm`
+   (ratio colored pass/fail; the annotation dims).
+4. Pending verify cycles carry the small `verify` kind badge inline (mock
+   form), not a separate treatment.
+5. History header: `History — Wave <n> · lanes: <chips> · <state>` — wave +
+   lane chips + boundary state INLINE in the header line (not separate rows).
+6. History rows: `▸ [<track> › ]<cr> · <n> cycles ✓ · merged <sha>` — inline
+   text form (dim), not pill-chips; expanded form keeps the CR-020 toggle
+   contract.
+Colors/typography: the mock's exact classes translate to the app's
+equivalents (mono 10.5px-scale lines, dim annotations, ember accents) —
+side-by-side comparison against the F13 frame is the review gate.
+
 ## Acceptance criteria
 - [ ] `L.workspaceTabs` returns names exactly `["Workflow","Runs","Coverage","Compile","BDD"]` (both project types; existing enable/disable semantics untouched); tab-list assertions across suites re-targeted under this CR's sanction.
 - [ ] Entering a workspace (badge click AND cold `/p/<key>` load) renders the Workflow pane active (`Workflow` tab `on`, `workflow-active` present); selecting Runs still works and the one-rule/tabs-hide behaviors are unchanged (spot re-run of the CR-016/020 binding tests).
 - [ ] Cold `/p/<key>/run/<id>`: the detail renders in-pane; closing it lands on the WORKFLOW pane with its tab `on` (the new default), chip text `← workflow`.
+- [ ] §S6: with a plan fixture matching the F13 mock (cr, track-1, wave 1, three cycles — done red-green with label "checkpoint persistence", active with two linked runs fail 2/5 + pass 5/5, pending verify), the Workflow active section renders the EXACT strings: header `Active workflow — CR-NAI-042 · track-1 · wave 1`; rows `✓ cycle 1 · "checkpoint persistence" · done — GREEN confirmed`, `▶ cycle 2 · "compile fallback" · ACTIVE` (bold, ember) with the inline span row `🧪 CR-NAI-042-RED 2/5 · 🧪 CR-NAI-042-GREEN 5/5 · awaiting orchestrator confirm`, `○ cycle 3 · "verify sweep" [verify] · pending`; the history header renders `History — Wave 1 · lanes: track-1 ✓ · track-2 1/2 · awaiting review` inline and a collapsed row `▸ track-1 › CR-NAI-041 · 3 cycles ✓ · merged e41d2aa` (glyph/color classes asserted alongside the strings).
 - [ ] §S4: a closed CR group's header contains an `N agents` aggregate pill and ZERO elements carrying an agentId; expanding the group reveals the per-agent runtime rows (fleet-registered semantics unchanged); the three historical causes are regression-pinned (fabricated-0ms fixture, lingering-online-agent fixture, linked-run fixture — none may surface an agent-id row at header level).
 - [ ] §S5: `bun-crucible.py regression --agent X` against a live server leaves NO agent row in the fleet after exit (register→ingest→unregister bracketed; asserted via the Python client contract harness + a lifecycle-event pair check); `test --agent X` identical; omitted `--agent` unchanged.
 - [ ] §S3 timer: an active cycle row renders `data-testid="cycle-timer"` whose text advances across two samples with an injected clock (ticking, anchored to `activatedAt`); PATCHing the cycle `done` seals it — the timer text equals the formatted `doneAt − activatedAt` and no longer advances; a done history cycle row shows the same sealed duration; a cycle with no `activatedAt` renders NO `cycle-timer` element.
