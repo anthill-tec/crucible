@@ -261,6 +261,10 @@ describe("§S5 fidelity #1 — workspace tabs row is full-width, NOT inside a ra
     expect(/rail/i.test(tabsRow!.className)).toBe(false);
   });
 
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S1, dispatch-approved): the workspace's
+  // default active tab flips from Runs to Workflow — the other column on a
+  // cold `/p/<key>` load is now the Workflow pane (`workflow-active`), not
+  // `workspace-runs`. Was: `document.querySelector('[data-testid="workspace-runs"]')`.
   test("workspace body renders exactly two columns: main content + Project pane, with no left rail anywhere in the workspace", async () => {
     const key = "fid1-p2";
     await mountApp({ pathname: `/p/${key}`, projects: [project({ key, name: "Fid1 Project 2" })] });
@@ -274,10 +278,11 @@ describe("§S5 fidelity #1 — workspace tabs row is full-width, NOT inside a ra
     const pane = document.querySelector('[data-testid="project-pane"]');
     expect(pane).not.toBeNull();
     expect(body!.contains(pane)).toBe(true);
-    // The other column is the tab's own content pane (Runs by default).
-    const runsPane = document.querySelector('[data-testid="workspace-runs"]');
-    expect(runsPane).not.toBeNull();
-    expect(body!.contains(runsPane)).toBe(true);
+    // The other column is the tab's own content pane (Workflow by default,
+    // CR-CRU-021 §S1).
+    const workflowPane = document.querySelector('[data-testid="workflow-active"]');
+    expect(workflowPane).not.toBeNull();
+    expect(body!.contains(workflowPane)).toBe(true);
   });
 
   // SANCTIONED RE-TARGET (CR-CRU-011 §S3, dispatch-approved): the tab count
@@ -386,9 +391,19 @@ describe("§S5 fidelity #3 — title bar purity: density toggle out of both top 
     expect(timeline!.querySelector('[data-testid="filter-pulldown"]')).not.toBeNull();
   });
 
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S1): the workspace's default active
+  // tab is now Workflow, not Runs — this test targets the RUNS pane
+  // specifically, so it selects the Runs tab explicitly before asserting
+  // (was: relied on Runs being the cold-load default).
   test("workspace Runs pane header renders the density toggle", async () => {
     const key = "fid3-p1";
     await mountApp({ pathname: `/p/${key}`, projects: [project({ key, name: "Fid3 Project" })] });
+
+    const runsTab = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((el) => (el.textContent ?? "").includes("Runs"))!;
+    runsTab.click();
+    await settle();
 
     const runsPane = document.querySelector('[data-testid="workspace-runs"]');
     expect(runsPane).not.toBeNull();
@@ -448,12 +463,21 @@ describe("§S5 fidelity #4 — pane header labels: 'Run timeline — <scope>'", 
     expect((heading!.textContent ?? "").trim()).toBe("Run timeline — Fid4 Alpha");
   });
 
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S1): default active tab is now
+  // Workflow — select Runs explicitly before asserting its pane header (was:
+  // relied on Runs being the cold-load default).
   test('workspace Runs pane header reads "Run timeline — <project name>"', async () => {
     const key = "fid4-p2";
     await mountApp({
       pathname: `/p/${key}`,
       projects: [project({ key, name: "Fid4 Workspace Project" })],
     });
+
+    const runsTab = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((el) => (el.textContent ?? "").includes("Runs"))!;
+    runsTab.click();
+    await settle();
 
     const heading = document.querySelector(
       '[data-testid="workspace-runs"] [data-testid="pane-heading"]',

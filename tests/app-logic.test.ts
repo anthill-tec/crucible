@@ -206,12 +206,16 @@ describe("workspaceTabs — Runs/Workflow/Coverage/Compile/BDD, Agents dropped (
   // "Runs · Workflow · Coverage · Compile · BDD", and is NEVER gated (bound:
   // unlike Coverage/BDD, Workflow has no `disabled`/`hint` semantics — it is
   // enabled for both project types, same as Runs/Compile).
-  test("backend project: exactly [Runs, Workflow, Coverage, Compile, BDD(disabled)] — no Agents entry", () => {
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S1, dispatch-approved): the tab order
+  // flips to Workflow-first ("Workflow · Runs · Coverage · Compile · BDD")
+  // — user direction at the CR-020 gate review, "the Workflow should be the
+  // primary view ... followed by runs". Was: ["Runs","Workflow",...].
+  test("backend project: exactly [Workflow, Runs, Coverage, Compile, BDD(disabled)] — no Agents entry", () => {
     const tabs = workspaceTabs({ type: "backend" });
 
     expect(tabs.map((t: TabShape) => t.name)).toEqual([
-      "Runs",
       "Workflow",
+      "Runs",
       "Coverage",
       "Compile",
       "BDD",
@@ -230,12 +234,14 @@ describe("workspaceTabs — Runs/Workflow/Coverage/Compile/BDD, Agents dropped (
     expect(tabs.find((t: TabShape) => t.name === "Agents")).toBeUndefined();
   });
 
-  test("frontend project: same fixed order, BDD enabled, Workflow enabled, no Agents entry", () => {
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S1): same Workflow-first order flip,
+  // frontend project type. Was: ["Runs","Workflow",...].
+  test("frontend project: same fixed order (Workflow-first), BDD enabled, Workflow enabled, no Agents entry", () => {
     const tabs = workspaceTabs({ type: "frontend" });
 
     expect(tabs.map((t: TabShape) => t.name)).toEqual([
-      "Runs",
       "Workflow",
+      "Runs",
       "Coverage",
       "Compile",
       "BDD",

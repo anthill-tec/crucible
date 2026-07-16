@@ -402,10 +402,13 @@ describe("workspace Coverage tab — gated on green-regression coverage (§S1 ad
     expect(tab!.hasAttribute("disabled")).toBe(true);
     expect(tab!.className).toMatch(/\bdisabled\b/);
 
-    // Clicking a disabled Coverage tab never switches the workspace pane.
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S1): clicking a disabled Coverage tab
+    // never switches the workspace pane — the pane stays on whatever was
+    // active, which on a cold load is now Workflow (was: Runs).
     tab!.click();
     await settle();
-    expect(document.querySelector('[data-testid="workspace-runs"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="workflow-active"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="workspace-runs"]')).toBeNull();
   });
 
   test("latestCoverageEventId present: the Coverage tab renders enabled and switches the pane on click", async () => {

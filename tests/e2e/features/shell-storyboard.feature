@@ -67,6 +67,10 @@ Feature: CR-CRU-006 shell — storyboard frames
     And a passing 1-test run is ingested for agent "agent-esc-6" on that project
     And a passing 1-test run is ingested for agent "agent-esc-7" on that project
     When I open the workspace for that project
+    # SANCTIONED RE-TARGET (CR-CRU-021 §S1): the workspace's default active
+    # tab is now Workflow, not Runs — select Runs explicitly before scrolling
+    # its pane (was: relied on Runs being the cold-load default).
+    And I click the "Runs" workspace tab
     And I scroll the workspace Runs pane down by 240px
     And I click the event card for "agent-esc-mid" without letting Playwright re-scroll the pane
     Then the run overlay is visible

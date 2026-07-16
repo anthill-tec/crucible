@@ -39,6 +39,10 @@ Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline pla
     And a fail(2/5) run linked to that cycle is ingested for agent "agent-wf2"
     And a pass(5/5) run linked to that cycle is ingested for agent "agent-wf2"
     When I open the workspace for that project
+    # SANCTIONED RE-TARGET (CR-CRU-021 §S1): the workspace's default active
+    # tab is now Workflow, not Runs — select Runs explicitly to view its
+    # pane (was: relied on Runs being the cold-load default).
+    And I click the "Runs" workspace tab
     Then the workspace Runs pane shows no transition marker
     And the workspace Runs pane shows the active cycle span for "c1 red-green" on "CR-WF-2"
     When a fail(2/5) run is ingested for agent "CR-WF2-CTRL-RED"
