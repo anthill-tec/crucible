@@ -239,6 +239,10 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
         wave: "1",
         track: "track-1",
         title: "Runtime checkpoint persistence",
+        // RE-BASELINED (user, 2026-07-17) — the confirming orchestrator's
+        // identity now stamps the CR ROOT line (`— <orchestrator>`),
+        // replacing the removed per-row "by <orchestrator>" narration.
+        orchestrator: "vidushi",
         cycles: [
           { id: 4201, label: "checkpoint persistence", status: "done" },
           { id: 4202, label: "compile fallback", status: "active" },
@@ -318,7 +322,11 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
         '[data-testid="workflow-cr-root"][data-cr="CR-NAI-042"]',
       );
       expect(root).not.toBeNull();
-      expect(norm(root!.textContent)).toBe("CR-NAI-042 · Runtime checkpoint persistence");
+      // RE-BASELINED (user, 2026-07-17) — the root now carries the
+      // orchestrator identity too: `<cr> · <title> — <orchestrator>`.
+      expect(norm(root!.textContent)).toBe(
+        "CR-NAI-042 · Runtime checkpoint persistence — vidushi",
+      );
       const rootId = root!.querySelector('[data-testid="cr-root-id"]');
       expect(rootId).not.toBeNull();
       expect(norm(rootId!.textContent)).toBe("CR-NAI-042");
@@ -340,13 +348,19 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
         return row!;
       }
 
-      // ── item 2 — done row narration (no orchestrator on this plan → no "by") ──
+      // ── item 2 — RE-BASELINED (user, 2026-07-17): done row is BARE — no
+      // status narration at all (the ✓ glyph IS the done signal); the
+      // plan's orchestrator identity now stamps the CR ROOT line instead
+      // (asserted above), never a per-row "by <orchestrator>".
       const doneRow = rowFor("checkpoint persistence");
       expect(doneRow.getAttribute("data-status")).toBe("done");
-      expect(norm(doneRow.textContent)).toContain(
-        'cycle 1 · "checkpoint persistence" · done — GREEN confirmed',
-      );
+      expect(norm(doneRow.textContent)).toContain('cycle 1 · "checkpoint persistence"');
       expect(doneRow.textContent ?? "").not.toContain(" by ");
+      expect(doneRow.textContent ?? "").not.toContain("GREEN confirmed");
+      expect(doneRow.textContent ?? "").not.toContain("report accepted");
+      // Bare — nothing at all trails the quoted label (no " · " narration
+      // segment of any kind, present or future).
+      expect(norm(doneRow.textContent)).toMatch(/cycle 1 · "checkpoint persistence"\s*$/);
 
       // ── item 2/3 — active row: bold, ember; inline always-visible open span ──
       const activeRow = rowFor("compile fallback");
@@ -366,6 +380,12 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
       const greenRow = linkedRows.find((r) => r.getAttribute("data-run-id") === "evt-f13-green-1");
       expect(redRow).toBeDefined();
       expect(greenRow).toBeDefined();
+
+      // RE-BASELINED (user, 2026-07-17) — CHRONOLOGICAL order, latest LAST:
+      // the RED run (timestamp `now`) was ingested BEFORE the GREEN run
+      // (`now + 10`), so RED renders FIRST in DOM order.
+      expect(linkedRows[0]!.getAttribute("data-run-id")).toBe("evt-f13-red-1");
+      expect(linkedRows[1]!.getAttribute("data-run-id")).toBe("evt-f13-green-1");
 
       // Run-entry icons follow the CR-007 mask-icon system — never the
       // mock's literal 🧪 emoji (CSS `color` cannot tint color-emoji text).
@@ -484,12 +504,75 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
     expect(header).not.toBeNull();
     expect(norm(header!.textContent)).toBe("Active workflow — CR-SOLO-1 · wave 2");
   });
+
+  // ── §S6.11 RE-BASELINE (2026-07-17) — orchestrator/title CR-root combinations ──
+  test('a plan with a TITLE but NO orchestrator renders `<cr> · <title>` (no "— …" segment)', async () => {
+    const key = "f13-fidelity-title-only";
+    const plan: PlanFixture = {
+      planId: 9103,
+      cr: "CR-TITLE-ONLY-1",
+      status: "open",
+      track: "track-1",
+      wave: "1",
+      title: "Title Without Orchestrator",
+      cycles: [{ id: 5201, label: "c1", status: "pending" }],
+    };
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Title Only Project" })],
+      events: [],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const root = active().querySelector(
+      '[data-testid="workflow-cr-root"][data-cr="CR-TITLE-ONLY-1"]',
+    );
+    expect(root).not.toBeNull();
+    expect(norm(root!.textContent)).toBe("CR-TITLE-ONLY-1 · Title Without Orchestrator");
+    expect(root!.textContent ?? "").not.toContain("—");
+  });
+
+  test('a plan with an ORCHESTRATOR but NO title renders `<cr> — <orchestrator>` (id-only root plus the orchestrator segment, no " · <title>")', async () => {
+    const key = "f13-fidelity-orch-only";
+    const plan: PlanFixture = {
+      planId: 9104,
+      cr: "CR-ORCH-ONLY-1",
+      status: "open",
+      track: "track-1",
+      wave: "1",
+      orchestrator: "vidushi",
+      cycles: [{ id: 5202, label: "c1", status: "pending" }],
+    };
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Orchestrator Only Project" })],
+      events: [],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const root = active().querySelector(
+      '[data-testid="workflow-cr-root"][data-cr="CR-ORCH-ONLY-1"]',
+    );
+    expect(root).not.toBeNull();
+    expect(norm(root!.textContent)).toBe("CR-ORCH-ONLY-1 — vidushi");
+  });
 });
 
-// ── §S6 #2 — done-cycle narration variants ─────────────────────────────────
+// ── §S6 #2 — RE-BASELINED 2026-07-17: bare done rows carry NO narration ────
+// SANCTIONED RE-TARGET (CR-CRU-021 §S6 re-baseline, this cycle's authority):
+// the user removed done-row status narration entirely ("done — GREEN
+// confirmed" / "done — report accepted" and the per-row "by <orchestrator>"
+// suffix) — the ✓ glyph alone is now the done signal. The orchestrator
+// identity that used to trail a done row moved to the CR ROOT line instead
+// (§S6.11, tests/plans.test.ts + the main fixture test above). These two
+// tests previously asserted the REMOVED narration text; they are retargeted
+// here to assert its ABSENCE instead, so the orchestrator-carrying and
+// verify-kind done-row cases both keep a dedicated regression guard.
 
-describe("§S6 #2 — done-cycle narration variants", () => {
-  test('a done cycle whose plan carries an orchestrator identity reads "done — GREEN confirmed by <orchestrator>"', async () => {
+describe("§S6 #2 (re-baselined 2026-07-17) — bare done rows carry NO narration", () => {
+  test('a done cycle whose PLAN carries an orchestrator identity still reads the BARE `✓ cycle N · "<label>"` form — the removed "done — GREEN confirmed by <orchestrator>" narration never appears on the row (it now stamps the CR root only)', async () => {
     const key = "f13-narration-1";
     const plan: PlanFixture = {
       planId: 9201,
@@ -510,10 +593,19 @@ describe("§S6 #2 — done-cycle narration variants", () => {
 
     const row = active().querySelector<HTMLElement>('[data-testid="cycle-row"][data-status="done"]')!;
     expect(row).not.toBeNull();
-    expect(norm(row.textContent)).toContain("done — GREEN confirmed by vidushi");
+    expect(norm(row.textContent)).toContain('cycle 1 · "checkpoint persistence"');
+    expect(row.textContent ?? "").not.toContain("GREEN confirmed");
+    expect(row.textContent ?? "").not.toContain(" by ");
+    // Bare — nothing trails the quoted label.
+    expect(norm(row.textContent)).toMatch(/cycle 1 · "checkpoint persistence"\s*$/);
+
+    // The orchestrator identity DOES appear — but on the CR root, not here.
+    const root = active().querySelector('[data-testid="workflow-cr-root"][data-cr="CR-NARR-1"]');
+    expect(root).not.toBeNull();
+    expect(norm(root!.textContent)).toContain("— vidushi");
   });
 
-  test('a done VERIFY-kind cycle reads "done — report accepted" (never "GREEN confirmed")', async () => {
+  test('a done VERIFY-kind cycle also reads bare — `✓ cycle N · "<label>" [verify]` — with NEITHER the removed "done — report accepted" NOR "GREEN confirmed" narration', async () => {
     const key = "f13-narration-2";
     const plan: PlanFixture = {
       planId: 9202,
@@ -534,8 +626,13 @@ describe("§S6 #2 — done-cycle narration variants", () => {
     const row = active().querySelector<HTMLElement>('[data-testid="cycle-row"][data-status="done"]')!;
     expect(row).not.toBeNull();
     const text = norm(row.textContent);
-    expect(text).toContain("done — report accepted");
+    expect(text).not.toContain("done — report accepted");
     expect(text).not.toContain("GREEN confirmed");
+    // Bare form — label + kind badge, no trailing narration segment.
+    expect(text).toContain('cycle 1 · "verify sweep"');
+    const kindBadge = row.querySelector('[data-testid="cycle-kind-badge"]');
+    expect(kindBadge).not.toBeNull();
+    expect(norm(kindBadge!.textContent)).toBe("verify");
   });
 });
 

@@ -692,6 +692,91 @@ describe("§S2.1/§S2.2 history cycle drill-down — toggle linked runs, drill i
   });
 });
 
+// ── §S6 #3 RE-BASELINE (CR-CRU-021, cycle 19, user 2026-07-17) — CHRONOLOGICAL
+// run-list ordering (latest LAST) in the HISTORY cycle drill-down ──────────
+// "Run lists order CHRONOLOGICALLY — latest LAST (user, 2026-07-17; spans
+// AND cycle drill-downs; latest-FIRST remains EXCLUSIVELY the History
+// section's ordering per CR-020 §S1.1)." §S1.1's own wave/CR-group ordering
+// (asserted above, "§S1.1 history ordering — latest-first") is UNCHANGED —
+// this pins the run-list-WITHIN-a-cycle ordering only, a distinct axis.
+//
+// RED phase: `linkedRuns` in `public/app-logic.mjs`'s `workflowLens`
+// (~line 328) is built as `new Map(); // cycleId -> runs (input order)` —
+// each run is `.push()`ed onto its cycle's list strictly in the ORDER the
+// `events` array arrives in, with no timestamp sort at all. This fixture
+// deliberately feeds the 3 linked events to `mountApp` OUT of timestamp
+// order (run3, run1, run2) so a pure "preserve input/array order" render —
+// today's actual behavior — renders them in THAT shuffled order, failing
+// the chronological (oldest-first) assertion below.
+describe("§S6 #3 (re-baselined 2026-07-17) — history cycle drill-down orders linked runs CHRONOLOGICALLY, latest LAST", () => {
+  test("a done history cycle's expanded linked-run list (3 runs, fed to the fetch mock OUT of timestamp order) renders in TIMESTAMP order — oldest run FIRST, newest run LAST — never array/ingestion-array order", async () => {
+    const key = "hist-chrono-1";
+    const now = Date.now();
+    const run1 = runEvent({
+      id: "evt-chrono-1",
+      projectKey: key,
+      agentId: "agent-a",
+      timestamp: now,
+      context: { cycleId: 90 },
+    });
+    const run2 = runEvent({
+      id: "evt-chrono-2",
+      projectKey: key,
+      agentId: "agent-b",
+      timestamp: now + 10,
+      context: { cycleId: 90 },
+    });
+    const run3 = runEvent({
+      id: "evt-chrono-3",
+      projectKey: key,
+      agentId: "agent-c",
+      timestamp: now + 20,
+      context: { cycleId: 90 },
+    });
+    const plan: PlanFixture = {
+      planId: 751,
+      cr: "CR-CHRONO-H",
+      status: "closed",
+      wave: "1",
+      merge: { commit: "chronoCommit" },
+      cycles: [{ id: 90, label: "c1", status: "done" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Chrono History Project" })],
+      // Deliberately shuffled — NOT in timestamp order (run3, run1, run2) —
+      // so a render that merely preserves array order cannot accidentally
+      // satisfy the chronological assertion below.
+      events: [run3, run1, run2],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const crGroup = history().querySelector<HTMLElement>(
+      '[data-testid="cr-group"][data-cr="CR-CHRONO-H"]',
+    )!;
+    const crToggle = crGroup.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]')!;
+    crToggle.click();
+    await settle();
+
+    const cycleRow = crGroup.querySelector<HTMLElement>('[data-testid="lens-cycle-row"]')!;
+    const cycleToggle = cycleRow.querySelector<HTMLElement>('[data-testid="cycle-toggle"]')!;
+    cycleToggle.click();
+    await settle();
+
+    const runRows = Array.from(
+      cycleRow.querySelectorAll<HTMLElement>('[data-testid="linked-run-row"]'),
+    );
+    expect(runRows.length).toBe(3);
+    expect(runRows.map((r) => r.getAttribute("data-run-id"))).toEqual([
+      "evt-chrono-1",
+      "evt-chrono-2",
+      "evt-chrono-3",
+    ]);
+  });
+});
+
 // ── §S2.3 — ACTIVE section parity ──────────────────────────────────────────
 
 // SANCTIONED RE-TARGET (CR-CRU-021 §S6 RULED (a), user-locked 2026-07-16:

@@ -661,6 +661,164 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
   });
 
+  // ── §S6 RE-BASELINE (CR-CRU-021, cycle 19, user 2026-07-17) — optional plan
+  // orchestrator identity, mirroring the §S6.11 `title` pattern ────────────
+  // "The root also carries the ORCHESTRATOR IDENTITY (user re-baseline
+  // 2026-07-17 — replaces the removed per-row `by <orchestrator>`
+  // narration): rendered `<cr> · <title> — <orchestrator>` via an additive
+  // optional `orchestrator` field on `POST /plans` (stored, returned by GET)
+  // AND accepted by PATCH on an OPEN plan (one-field backfill so the
+  // executing plan can be stamped); absent → segment omitted."
+  //
+  // RED phase: expected to fail against CURRENT production — `Plan` has no
+  // `orchestrator` field at all (src/types.ts's `Plan` interface only carries
+  // `title`; `RunContext.orchestrator` is an unrelated, pre-existing field on
+  // RUN EVENTS, not plans), `handlePlanFile` (src/v2.ts ~514) never reads
+  // `body.orchestrator`, and `handlePlanClose` (src/v2.ts ~621, the sole
+  // PATCH …/plans/<planId> handler) unconditionally 400s any body whose
+  // `status` isn't literally `"closed"` — so an orchestrator-only PATCH body
+  // (no `status`) 400s today for the WRONG reason (missing status), not
+  // because the plan is open/closed.
+  describe("POST /api/v2/projects/<key>/plans — optional orchestrator (§S6 re-baseline, cycle 19)", () => {
+    test("a string orchestrator is stored and returned VERBATIM on the POST response and on GET /plans", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-ORCH-1",
+        orchestrator: "vidushi",
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      expect(filedBody.orchestrator).toBe("vidushi");
+
+      const listed = await getJson(plansPath(key, "?cr=CR-ORCH-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const plan = listedBody.plans.find((p) => p.cr === "CR-ORCH-1")!;
+      expect(plan.orchestrator).toBe("vidushi");
+    });
+
+    test("omitting orchestrator entirely files the plan with NO orchestrator field on the POST response or on GET (absent, not null — graceful degradation)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-ORCH-2",
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const filedBody = (await filed.json()) as PlanFileResponse;
+      expect("orchestrator" in filedBody).toBe(false);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-ORCH-2"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const plan = listedBody.plans.find((p) => p.cr === "CR-ORCH-2")!;
+      expect("orchestrator" in plan).toBe(false);
+    });
+
+    test("a non-string orchestrator -> 400 naming the orchestrator field", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const res = await postJson(plansPath(key), {
+        cr: "CR-ORCH-3",
+        orchestrator: 12345,
+        cycles: [{ label: "a" }],
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toMatch(/\borchestrator\b/i);
+    });
+
+    test("an empty-object orchestrator -> 400 naming the orchestrator field (not silently coerced to string)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const res = await postJson(plansPath(key), {
+        cr: "CR-ORCH-4",
+        orchestrator: { nested: true },
+        cycles: [{ label: "a" }],
+      });
+      expect(res.status).toBe(400);
+      const text = await bodyText(res);
+      expect(text).toMatch(/\borchestrator\b/i);
+    });
+  });
+
+  describe("PATCH .../plans/<planId> — optional orchestrator one-field backfill (§S6 re-baseline, cycle 19)", () => {
+    test('PATCH {orchestrator} on an OPEN plan (no "status", no "merge") stores it as a one-field backfill, visible on a subsequent GET, and the plan STAYS open', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-ORCH-PATCH-1",
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const plan = (await filed.json()) as PlanFileResponse;
+      expect("orchestrator" in plan).toBe(false); // sanity: unstamped at filing
+
+      const patched = await patchJson(plansPath(key, `/${plan.planId}`), {
+        orchestrator: "vidushi",
+      });
+      expect(patched.status).toBe(200);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-ORCH-PATCH-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const stamped = listedBody.plans.find((p) => p.cr === "CR-ORCH-PATCH-1")!;
+      expect(stamped.orchestrator).toBe("vidushi");
+      expect(stamped.status).toBe("open");
+    });
+
+    test("a non-string orchestrator on PATCH -> 400 naming the orchestrator field, plan left unstamped", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-ORCH-PATCH-2",
+        cycles: [{ label: "a" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+
+      const patched = await patchJson(plansPath(key, `/${plan.planId}`), {
+        orchestrator: 999,
+      });
+      expect(patched.status).toBe(400);
+      const text = await bodyText(patched);
+      expect(text).toMatch(/\borchestrator\b/i);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-ORCH-PATCH-2"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const unstamped = listedBody.plans.find((p) => p.cr === "CR-ORCH-PATCH-2")!;
+      expect("orchestrator" in unstamped).toBe(false);
+    });
+
+    test("PATCH {orchestrator} on a CLOSED plan -> 400 (the one-field backfill applies to an executing/open plan only)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-ORCH-PATCH-3",
+        cycles: [{ label: "a" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+      const cycleId = plan.cycles[0]!.id;
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "active" });
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "done" });
+      const closeRes = await patchJson(plansPath(key, `/${plan.planId}`), {
+        status: "closed",
+        merge: { commit: "abc9999" },
+      });
+      expect(closeRes.status).toBe(200);
+
+      const patched = await patchJson(plansPath(key, `/${plan.planId}`), {
+        orchestrator: "vidushi",
+      });
+      expect(patched.status).toBe(400);
+    });
+  });
+
   // ── RED addendum (cycle 13, gap 3) — POST /plans `wave` coercion ─────────
   // src/v2.ts:537 currently accepts ONLY strings for `wave`
   // (`typeof body.wave === "string" ? body.wave : undefined`) — a numeric

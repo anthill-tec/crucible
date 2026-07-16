@@ -87,6 +87,17 @@ const VAN_X_SRC = readFileSync(
 );
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
+// Orchestrator pin (live-review, same session as this RED) — cycle-timer
+// badges must never wrap at narrow widths; reuses the styles.css
+// source-assertion technique tests/f13-fidelity.test.ts's §S6 #7
+// GLYPH-ONLY-coloring block already established (`ruleBody` regex over the
+// real stylesheet source, independent of happy-dom's lack of real layout).
+const STYLES_SRC = readFileSync(path.join(REPO_ROOT, "public/styles.css"), "utf8");
+function ruleBody(selector: string): string | undefined {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(STYLES_SRC);
+  return match?.[1];
+}
 
 interface CycleFixture {
   id: number;
@@ -395,7 +406,7 @@ describe("§S3 — PATCH-to-done seals the timer (Workflow active section)", () 
   );
 
   test(
-    'a done cycle\'s sealed timer trails the "done — GREEN confirmed" narration (F13 composition: `… · done — GREEN confirmed ⏱ 12m 40s`) without breaking the existing narration substring contract',
+    'RE-BASELINED (user, 2026-07-17): a done cycle\'s sealed timer renders alongside the BARE label — NO "done — GREEN confirmed" narration anywhere (the ✓ glyph IS the done signal; F13 composition: `cycle 1 · "checkpoint persistence" ⏱ 12m 40s`)',
     async () => {
       const plan: PlanFixture = {
         planId: 4,
@@ -421,20 +432,210 @@ describe("§S3 — PATCH-to-done seals the timer (Workflow active section)", () 
       await openWorkflowTab();
 
       const row = cycleRowFor(active(), "cycle-row", "checkpoint persistence");
-      // Existing §S6 narration contract (tests/f13-fidelity.test.ts) — must
-      // still hold with the timer added.
-      expect(norm(row.textContent)).toContain(
-        'cycle 1 · "checkpoint persistence" · done — GREEN confirmed',
-      );
+      const rowText = norm(row.textContent);
+      // RE-BASELINED §S6 #2 — the removed narration, in every form.
+      expect(rowText).not.toContain("GREEN confirmed");
+      expect(rowText).not.toContain("report accepted");
+      expect(rowText).not.toContain(" by ");
+      expect(rowText).not.toContain(" · done");
 
       const timer = row.querySelector('[data-testid="cycle-timer"]');
       expect(timer).not.toBeNull();
       expect(norm(timer!.textContent)).toBe("⏱ 12m 40s");
 
-      const rowText = norm(row.textContent);
-      const narrationIdx = rowText.indexOf("GREEN confirmed");
+      // Bare label text precedes the timer, in the aligned column.
+      expect(rowText).toContain('cycle 1 · "checkpoint persistence"');
+      const labelIdx = rowText.indexOf('cycle 1 · "checkpoint persistence"');
       const timerIdx = rowText.indexOf("⏱ 12m 40s");
-      expect(timerIdx).toBeGreaterThan(narrationIdx);
+      expect(timerIdx).toBeGreaterThan(labelIdx);
+    },
+  );
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// PLAN CYCLE 19 — §S6 RE-BASELINE (user, 2026-07-17): ALIGNED TIMERS.
+// "Row timers (§S3) render in an ALIGNED right-hand column so rows read
+// clean regardless of label length." Neither variant currently carries a
+// shared class: the ACTIVE badge is `app-cycle-timer-ember` alone, the
+// sealed badge is `app-card-meta app-cycle-timer-sealed` — no common token
+// between them for a shared right-alignment rule to hook into. This pins
+// CLASS PRESENCE (a structural, additive shared class both variants must
+// carry) — not pixel values; happy-dom performs no layout, so GREEN's exact
+// CSS technique (flex `margin-left: auto`, grid column, etc.) is its own
+// choice as long as both variants expose the same alignment class.
+describe("§S3 (re-baselined 2026-07-17) — ALIGNED TIMERS: cycle-row timers share a common right-aligned class regardless of status", () => {
+  test("the ACTIVE ember timer badge and a DONE sealed timer badge both carry the SAME shared alignment class, additively alongside each variant's own distinct modifier class", async () => {
+    const activePlan: PlanFixture = {
+      planId: 201,
+      cr: "CR-ALIGN-1",
+      status: "open",
+      wave: "1",
+      cycles: [
+        { id: 1001, label: "compile fallback", status: "active", activatedAt: ACTIVATED_AT },
+      ],
+    };
+    setSystemTime(ACTIVATED_AT + 100_000);
+    await mountApp({
+      pathname: "/p/proj-align-1",
+      projects: [project({ key: "proj-align-1", name: "Align Project" })],
+      plans: [activePlan],
+    });
+    await openWorkflowTab();
+    const activeRow = cycleRowFor(active(), "cycle-row", "compile fallback");
+    const activeTimer = activeRow.querySelector<HTMLElement>('[data-testid="cycle-timer"]');
+    expect(activeTimer).not.toBeNull();
+    const activeTokens = new Set((activeTimer!.className ?? "").split(/\s+/).filter(Boolean));
+
+    const donePlan: PlanFixture = {
+      planId: 202,
+      cr: "CR-ALIGN-2",
+      status: "open",
+      wave: "1",
+      cycles: [
+        {
+          id: 1002,
+          label: "compile fallback",
+          status: "done",
+          activatedAt: ACTIVATED_AT,
+          doneAt: ACTIVATED_AT + 760_000,
+        },
+      ],
+    };
+    await mountApp({
+      pathname: "/p/proj-align-2",
+      projects: [project({ key: "proj-align-2", name: "Align Project 2" })],
+      plans: [donePlan],
+    });
+    await openWorkflowTab();
+    const doneRow = cycleRowFor(active(), "cycle-row", "compile fallback");
+    const doneTimer = doneRow.querySelector<HTMLElement>('[data-testid="cycle-timer"]');
+    expect(doneTimer).not.toBeNull();
+    const doneTokens = new Set((doneTimer!.className ?? "").split(/\s+/).filter(Boolean));
+
+    // Structural shared class — the same token on both variants.
+    const shared = [...activeTokens].filter((t) => doneTokens.has(t));
+    expect(shared.length).toBeGreaterThan(0);
+    expect(shared).toContain("app-cycle-timer-slot");
+
+    // Bound — additive, not a replacement: each variant keeps its OWN
+    // distinct modifier class too.
+    expect(activeTokens.has("app-cycle-timer-ember")).toBe(true);
+    expect(doneTokens.has("app-cycle-timer-sealed")).toBe(true);
+  });
+
+  test("a HISTORY lens-cycle-row's sealed timer carries the SAME shared alignment class (parity across the active section and history)", async () => {
+    const plan: PlanFixture = {
+      planId: 203,
+      cr: "CR-ALIGN-HIST-1",
+      status: "closed",
+      wave: "1",
+      track: "track-1",
+      merge: { commit: "align001" },
+      cycles: [
+        {
+          id: 1003,
+          label: "schema groundwork",
+          status: "done",
+          activatedAt: ACTIVATED_AT,
+          doneAt: ACTIVATED_AT + 441_000,
+        },
+      ],
+    };
+    setSystemTime(ACTIVATED_AT + 1_000_000);
+    await mountApp({
+      pathname: "/p/proj-align-hist-1",
+      projects: [project({ key: "proj-align-hist-1", name: "Align History Project" })],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const crGroup = history().querySelector<HTMLElement>(
+      '[data-testid="cr-group"][data-cr="CR-ALIGN-HIST-1"]',
+    );
+    expect(crGroup).not.toBeNull();
+    const groupToggle = crGroup!.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]');
+    expect(groupToggle).not.toBeNull();
+    groupToggle!.click();
+    await settle();
+
+    const row = cycleRowFor(crGroup!, "lens-cycle-row", "schema groundwork");
+    const timer = row.querySelector<HTMLElement>('[data-testid="cycle-timer"]');
+    expect(timer).not.toBeNull();
+    const tokens = new Set((timer!.className ?? "").split(/\s+/).filter(Boolean));
+    expect(tokens.has("app-cycle-timer-slot")).toBe(true);
+    expect(tokens.has("app-cycle-timer-sealed")).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// ORCHESTRATOR PIN (live-review, same §S6 item-2 aligned-timers scope,
+// mid-cycle-19 correction) — a user screenshot showed the ember timer badge
+// DISTORTING at narrow widths: its text wraps onto two lines ("246m" /
+// "56s") and the pill squishes into a blob. Cycle-timer badges (both the
+// ACTIVE ember form and the sealed dim form) must never wrap.
+//
+// happy-dom performs no real layout (no true visual line-wrapping to
+// observe), so the primary, genuinely-failing-today pin is a STYLES.CSS
+// SOURCE assertion — the exact technique tests/f13-fidelity.test.ts's §S6 #7
+// GLYPH-ONLY-coloring block already uses (`ruleBody` regex over the real
+// stylesheet). Today neither `.app-cycle-timer-ember` nor
+// `.app-cycle-timer-sealed` declares `white-space: nowrap` anywhere in
+// public/styles.css (confirmed: the only existing `white-space: nowrap`
+// rules in the file are `.app-hidden-data` and unrelated selectors) — this
+// fails against CURRENT production. The DOM-level guard alongside it is a
+// bound/regression check (not independently RED-failing under happy-dom's
+// no-layout model, same caveat this file's own "ITEM 4" note above
+// documents): it pins that GREEN's fix is a pure CSS property, never a
+// manual `<br>`/embedded-newline workaround splitting the badge text.
+describe("§S6 item 2 (aligned timers, orchestrator pin) — cycle-timer badges NEVER WRAP at narrow widths", () => {
+  test("both the ACTIVE ember badge rule and the DONE sealed badge rule declare `white-space: nowrap` in styles.css (source-assertion technique)", () => {
+    const emberRule = ruleBody(".app-cycle-timer-ember");
+    expect(emberRule).toBeDefined();
+    expect(emberRule ?? "").toMatch(/white-space\s*:\s*nowrap/);
+
+    const sealedRule = ruleBody(".app-cycle-timer-sealed");
+    expect(sealedRule).toBeDefined();
+    expect(sealedRule ?? "").toMatch(/white-space\s*:\s*nowrap/);
+  });
+
+  test(
+    "an ACTIVE cycle with a long label renders its ticking timer badge as ONE unbroken text node at a multi-hour-scale elapsed value ('246m 56s'-scale) — no <br>, no embedded newline, no split text nodes (bound: no manual line-break workaround)",
+    async () => {
+      const elapsedMs = 246 * 60_000 + 56_000; // 246m 56s — matches the reported screenshot scale.
+      const longActivatedAt = ACTIVATED_AT - elapsedMs;
+      const plan: PlanFixture = {
+        planId: 211,
+        cr: "CR-NOWRAP-1",
+        status: "open",
+        wave: "1",
+        cycles: [
+          {
+            id: 1101,
+            label:
+              "an extremely long cycle label meant to squeeze the aligned timer column at narrow pane widths",
+            status: "active",
+            activatedAt: longActivatedAt,
+          },
+        ],
+      };
+      setSystemTime(ACTIVATED_AT);
+      await mountApp({
+        pathname: "/p/proj-nowrap-1",
+        projects: [project({ key: "proj-nowrap-1", name: "Nowrap Project" })],
+        plans: [plan],
+      });
+      await openWorkflowTab();
+
+      const row = cycleRowFor(active(), "cycle-row", "an extremely long cycle label");
+      const timer = row.querySelector<HTMLElement>('[data-testid="cycle-timer"]');
+      expect(timer).not.toBeNull();
+
+      expect(timer!.querySelectorAll("br").length).toBe(0);
+      const rawText = timer!.textContent ?? "";
+      expect(rawText).not.toMatch(/[\n\r]/);
+      expect(timer!.childNodes.length).toBe(1);
+      expect(timer!.childNodes[0]!.nodeType).toBe(Node.TEXT_NODE);
+      expect(norm(rawText)).toBe("⏱ 246m 56s");
     },
   );
 });
