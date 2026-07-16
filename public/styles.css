@@ -741,6 +741,10 @@ body {
   padding: calc(var(--row-pad, 6px) / 2) 2px;
 }
 .app-linked-run-row:hover { color: var(--heat); }
+/* §S6 #3 (cycle 13) — the active cycle's open span: ONE inline flow */
+.app-open-span { margin: 2px 0 4px 1.9em; }
+.app-inline-run { cursor: pointer; color: var(--ink); }
+.app-inline-run:hover { color: var(--heat); }
 .app-workflow-history { color: var(--ink-faint); }
 /* CR-CRU-020 — ▸/▾ expand affordances (rows stay text-color only) */
 .app-lens-toggle { cursor: pointer; user-select: none; }

@@ -1210,6 +1210,59 @@
         span({ class: "app-card-meta" }, rel(e.timestamp)),
       );
 
+    // §S6 #3 (cycle 13, gap 1) — the ACTIVE cycle's open span renders its
+    // linked runs as ONE INLINE FLOW: `<icon> <agent> <ratio> · … · awaiting
+    // orchestrator confirm`. Inline-level entries (span, `app-inline-run`),
+    // literal `·` text-node separators, NO per-run age stamp (the mock has
+    // none — the stacked block rows with "ago" were the drift this fixes).
+    const InlineRunEntry = (e) =>
+      span(
+        {
+          "data-testid": "linked-run-row",
+          "data-run-id": e.id,
+          class: "app-inline-run",
+          onclick: () => openDrillin(e.id),
+        },
+        span(
+          {
+            "data-testid": "card-icon",
+            "data-icon-tintable": "true",
+            class: (() => {
+              const role = L.phaseRole(e.agentId);
+              return `app-card-icon${role !== null ? ` app-role-${role}` : ""}`;
+            })(),
+          },
+          span({
+            "data-testid": "icon-glyph",
+            class: "app-icon-mask",
+            "data-kind": "test",
+          }),
+        ),
+        span({ class: "app-agent-id" }, e.agentId),
+        " ",
+        span(
+          { class: e.failed > 0 ? "app-ratio-fail" : "app-ratio-pass" },
+          `${e.passed}/${e.total}`,
+        ),
+      );
+
+    const OpenSpan = (cycleId) => {
+      const parts = [];
+      for (const run of linkedRunsFor(cycleId)) {
+        parts.push(InlineRunEntry(run), " · ");
+      }
+      parts.push(
+        span(
+          {
+            "data-testid": "open-span-annotation",
+            class: "app-card-meta app-open-span-annotation",
+          },
+          "awaiting orchestrator confirm",
+        ),
+      );
+      return div({ "data-testid": "open-span", class: "app-open-span" }, parts);
+    };
+
     // CR-CRU-021 §S6 #2 — cycle-row status narration where data allows.
     const cycleNarration = (cycle, plan) => {
       if (cycle.status === "active") return "ACTIVE";
@@ -1258,19 +1311,7 @@
             ? b({ class: "app-cycle-text" }, ...lineParts)
             : span({ class: "app-cycle-text" }, ...lineParts),
         ),
-        cycle.status === "active"
-          ? div(
-              { class: "app-cycle-runs" },
-              linkedRunsFor(cycle.id).map(LinkedRunRow),
-              span(
-                {
-                  "data-testid": "open-span-annotation",
-                  class: "app-card-meta app-open-span-annotation",
-                },
-                "awaiting orchestrator confirm",
-              ),
-            )
-          : null,
+        cycle.status === "active" ? OpenSpan(cycle.id) : null,
       );
     };
 

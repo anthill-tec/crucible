@@ -534,7 +534,17 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
     return fail(400, "title must be a string");
   }
   const title = typeof body.title === "string" ? body.title : undefined;
-  const wave = typeof body.wave === "string" ? body.wave : undefined;
+  // Cycle 13 gap 3 — a numeric wave is coerced to its decimal string; any
+  // other non-string present type → 400 naming the field.
+  if (body.wave !== undefined && typeof body.wave !== "string" && typeof body.wave !== "number") {
+    return fail(400, "wave must be a string");
+  }
+  const wave =
+    typeof body.wave === "string"
+      ? body.wave
+      : typeof body.wave === "number"
+        ? String(body.wave)
+        : undefined;
   const track = typeof body.track === "string" ? body.track : undefined;
   const plan = store.filePlan(pk.key, {
     cr: body.cr,
