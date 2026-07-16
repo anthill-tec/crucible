@@ -77,9 +77,22 @@ is the contract; the shipped UI drifted). The exact formats:
 6. History rows: `▸ [<track> › ]<cr> · <n> cycles ✓ · merged <sha>` — inline
    text form (dim), not pill-chips; expanded form keeps the CR-020 toggle
    contract.
+7. GLYPH-ONLY coloring: status color applies to the GLYPH alone (✓/▶/○/⊘/✗);
+   row text stays default ink (the live UI wrongly colors whole rows).
+8. Collapsed cycle rows carry a run-count hint: `▸ N runs`.
+9. Merge wording exactly `merged <sha>` (no `@`).
+10. The pane renders NO extra `WORKFLOW — <project>` rail-title above the
+    active header (the mock's header structure is the whole top).
+OPEN RULING (user, from the thorough comparison 2026-07-16): the mock shows
+the ACTIVE cycle's linked runs always visible inline, contradicting CR-020
+§S2.3's no-auto-expand. Orchestrator recommends: active cycle's span always
+visible (mock wins; §S2.3 narrows to history rows); awaiting the user's call
+— the losing side gets re-baselined before this CR's RED.
 Colors/typography: the mock's exact classes translate to the app's
 equivalents (mono 10.5px-scale lines, dim annotations, ember accents) —
-side-by-side comparison against the F13 frame is the review gate.
+side-by-side comparison against the F13 frame is the review gate. Run-entry
+icons follow the CR-007 mask-icon system (the mock's 🧪 emoji predates it —
+mock to be touched up at execution).
 
 ## Acceptance criteria
 - [ ] `L.workspaceTabs` returns names exactly `["Workflow","Runs","Coverage","Compile","BDD"]` (both project types; existing enable/disable semantics untouched); tab-list assertions across suites re-targeted under this CR's sanction.
