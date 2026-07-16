@@ -300,7 +300,13 @@ describe("Workflow tab — DOM wiring", () => {
 // ── Active workflow view — per-CR todo view over the open plan ────────────
 
 describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", () => {
-  test("renders one cycle-row per cycle with status glyphs (active ▶ / done ✓ / failed ✗ literal; pending/skipped structurally distinct), and expands ONLY the active cycle to show its context.cycleId-linked runs", async () => {
+  // CR-CRU-020 retarget (§S2.3) — the active cycle's linked runs no longer
+  // auto-expand; they stay hidden behind the SAME click-based toggle history
+  // cycle rows use (parity), so the active row must be toggled open before
+  // its linked-run-row count can be asserted. Other statuses (pending/done/
+  // skipped/failed) never show linked runs regardless of any click — that
+  // part of the original contract is unchanged.
+  test("renders one cycle-row per cycle with status glyphs (active ▶ / done ✓ / failed ✗ literal; pending/skipped structurally distinct); the active cycle's linked runs stay hidden until its own toggle is clicked (others never show runs)", async () => {
     const key = "wf-active-1";
     const now = Date.now();
     const plan: PlanFixture = {
@@ -390,9 +396,18 @@ describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", ()
       expect(["▶", "✓", "✗"]).not.toContain(g);
     }
 
-    // ONLY the active cycle (id 2) is expanded: exactly 2 linked-run-rows,
-    // both nested under the active row, with none under the done row (even
-    // though the done row also has a linked run in this fixture).
+    // §S2.3 — the active cycle's linked runs are collapsed by default (parity
+    // with history's cycle-row toggle), NOT auto-expanded.
+    expect(activeRow.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(0);
+    const activeToggle = activeRow.querySelector<HTMLElement>('[data-testid="cycle-toggle"]');
+    expect(activeToggle).not.toBeNull();
+    activeToggle!.click();
+    await settle();
+
+    // ONLY the active cycle (id 2), once toggled open, shows its linked runs:
+    // exactly 2 linked-run-rows, both nested under the active row, with none
+    // under the done row (even though the done row also has a linked run in
+    // this fixture, and even though it is never clicked).
     const allLinkedRows = active!.querySelectorAll('[data-testid="linked-run-row"]');
     expect(allLinkedRows.length).toBe(2);
     const linkedUnderActive = activeRow.querySelectorAll('[data-testid="linked-run-row"]');
@@ -403,7 +418,12 @@ describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", ()
   });
 
   test(
-    "a linked run ingested AFTER mount appears in the expanded active cycle without reload (poll-tick liveness)",
+    // CR-CRU-020 retarget (§S2.3) — the active cycle must be toggled open
+    // (once) before its linked runs are visible; this also strengthens the
+    // test to pin that the expand-toggle state SURVIVES the poll-tick
+    // re-render (a persistent-state requirement, not merely a one-shot DOM
+    // read).
+    "a linked run ingested AFTER mount appears in the toggled-open active cycle without reload, and the expand state survives the poll tick (poll-tick liveness)",
     async () => {
       const key = "wf-live-1";
       const now = Date.now();
@@ -426,6 +446,14 @@ describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", ()
       await openWorkflowTab();
 
       const active = document.querySelector('[data-testid="workflow-active"]')!;
+      const cycleRow = active.querySelector<HTMLElement>(
+        '[data-testid="cycle-row"][data-status="active"]',
+      )!;
+      const cycleToggle = cycleRow.querySelector<HTMLElement>('[data-testid="cycle-toggle"]')!;
+      expect(cycleToggle).not.toBeNull();
+      cycleToggle.click();
+      await settle();
+
       expect(active.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(1);
 
       // "ingest a new run" — mutate the SAME fixture object the mocked
@@ -525,6 +553,20 @@ describe("Workflow tab — CR-016 bindings: clicking a linked run swaps the WORK
     return { plan, run };
   }
 
+  // CR-CRU-020 retarget (§S2.3) — the active cycle's linked runs are collapsed
+  // by default; every test below must click its toggle before a `linked-run-
+  // row` exists to click at all.
+  async function expandActiveCycle(): Promise<void> {
+    const cycleRow = document.querySelector<HTMLElement>(
+      '[data-testid="cycle-row"][data-status="active"]',
+    );
+    expect(cycleRow).not.toBeNull();
+    const toggle = cycleRow!.querySelector<HTMLElement>('[data-testid="cycle-toggle"]');
+    expect(toggle).not.toBeNull();
+    toggle!.click();
+    await settle();
+  }
+
   test("clicking the linked-run-row swaps the WORKFLOW pane to the detail: workspace-tabs absent, back chip '← workflow', no tab switch", async () => {
     const key = "wf-bind-1";
     const now = Date.now();
@@ -542,6 +584,7 @@ describe("Workflow tab — CR-016 bindings: clicking a linked run swaps the WORK
 
     expect(document.querySelector('[data-testid="workspace-tabs"]')).not.toBeNull();
 
+    await expandActiveCycle();
     const linkedRow = document.querySelector('[data-testid="linked-run-row"]') as HTMLElement | null;
     expect(linkedRow).not.toBeNull();
     linkedRow!.click();
@@ -580,6 +623,7 @@ describe("Workflow tab — CR-016 bindings: clicking a linked run swaps the WORK
     expect(paneBefore).not.toBeNull();
     paneBefore.scrollTop = 175;
 
+    await expandActiveCycle();
     const linkedRow = document.querySelector('[data-testid="linked-run-row"]') as HTMLElement;
     linkedRow.click();
     await settle();
@@ -619,6 +663,7 @@ describe("Workflow tab — CR-016 bindings: clicking a linked run swaps the WORK
 
     await openWorkflowTab();
 
+    await expandActiveCycle();
     const linkedRow = document.querySelector('[data-testid="linked-run-row"]') as HTMLElement;
     linkedRow.click();
     await settle();
