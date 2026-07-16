@@ -22,6 +22,12 @@ order-agnostic and unchanged; cold `/p/<key>/run/<id>` detail loads keep
 their existing behavior (close lands on the pane that hosted the detail —
 now Workflow by default for tab-less cold loads).
 
+### §S2 Storyboard sync (user input at filing)
+F8 redrawn (done 2026-07-16, leads this CR): tabs `Workflow · Runs · …` with
+Workflow active, the landing body showing the Workflow view (active plan +
+compact history), and the timeline elements annotated as living on the Runs
+tab. Further user inputs to this patch accumulate here before execution.
+
 ## Acceptance criteria
 - [ ] `L.workspaceTabs` returns names exactly `["Workflow","Runs","Coverage","Compile","BDD"]` (both project types; existing enable/disable semantics untouched); tab-list assertions across suites re-targeted under this CR's sanction.
 - [ ] Entering a workspace (badge click AND cold `/p/<key>` load) renders the Workflow pane active (`Workflow` tab `on`, `workflow-active` present); selecting Runs still works and the one-rule/tabs-hide behaviors are unchanged (spot re-run of the CR-016/020 binding tests).
