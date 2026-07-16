@@ -1140,8 +1140,8 @@
       failed: "✗",
     };
 
-    // CR-CRU-020 §S1.2/§S1.4/§S2 — expand/collapse state for CR groups,
-    // cycle rows and the ungrouped tail. Keyed OUTSIDE the render tree
+    // CR-CRU-020 §S1.2/§S2 — expand/collapse state for CR groups and
+    // cycle rows. Keyed OUTSIDE the render tree
     // (surface-keyed — the CR-016 one-rule precedent) so poll-tick
     // re-renders and the detail pane swap never reset an expansion. The
     // van.state rev is the reactive handle each slot's OWN child binding
@@ -1364,7 +1364,15 @@
                 node.cycles.map((c) => LensCycleRow(c, node.cr)),
               )
             : "",
-        node.agents.map(CrAgentRuntime),
+        // CR-CRU-020 §S2 (C3 gate-review defect) — an agent-runtime row in
+        // the always-visible header renders ONLY for a fleet-registered
+        // agent (the server-computed runtime_ms off the agents slice). A
+        // raw run agentId with no agent record must never fabricate a 0ms
+        // row here — those read as run rows at group level, and run entries
+        // belong exclusively inside an expanded cycle's drill-down.
+        node.agents
+          .filter((id) => state.agents.some((a) => a.agentId === id))
+          .map(CrAgentRuntime),
       );
     };
 
@@ -1404,33 +1412,10 @@
         wave.crs.map(LensCrGroup),
       );
 
-    // CR-CRU-020 §S1.4 — the raw ungrouped listing is demoted to a single
-    // count-only row (`ungrouped · N runs`), collapsed by default; the count
-    // row itself never disappears (the never-hidden degradation rule).
-    const UngroupedTail = (runs) => {
-      const key = lensKey("ungrouped", "tail");
-      return div(
-        { "data-testid": "ungrouped-tail", class: "app-ungrouped-tail" },
-        div(
-          {
-            "data-testid": "ungrouped-toggle",
-            class: "app-cr-line app-lens-toggle",
-            onclick: () => lensToggle(key),
-          },
-          ToggleGlyph(key),
-          span({ class: "app-pane-section-title" }, "ungrouped"),
-          span(
-            { "data-testid": "ungrouped-count", class: "app-pill" },
-            `${runs.length} runs`,
-          ),
-        ),
-        () =>
-          lensOpen(key)
-            ? div({ class: "app-ungrouped-runs" }, runs.map(LinkedRunRow))
-            : "",
-      );
-    };
-
+    // CR-CRU-020 §S1.4 (corrected at the 2026-07-16 gate review) — the
+    // Workflow view renders plan/cycle structure ONLY: no ungrouped run
+    // listing of any form. Unlinked runs remain fully visible on the Runs
+    // timeline (the never-hidden rule lives there).
     const WorkflowHistory = () => {
       const lens = L.workflowLens({
         plans: state.plans,
@@ -1439,12 +1424,9 @@
       return div(
         { "data-testid": "workflow-history", class: "app-workflow-history" },
         div({ class: "app-pane-section-title" }, "History"),
-        lens.waves.length === 0 && lens.ungrouped.length === 0
+        lens.waves.length === 0
           ? div({ class: "app-empty" }, "no workflow history yet")
-          : [
-              lens.waves.map(WaveGroup),
-              lens.ungrouped.length > 0 ? UngroupedTail(lens.ungrouped) : null,
-            ],
+          : lens.waves.map(WaveGroup),
       );
     };
 
