@@ -220,6 +220,19 @@ describe("§S0b — marker suppression + open-span header (cycleId-linked runs)"
       plans: [plan],
     });
 
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S1): a cold `/p/<key>` load now
+    // defaults to the Workflow pane, not Runs (workspace default flips) —
+    // this test's SUBJECT is the Runs timeline's marker-suppression + open-
+    // span behavior, so it now selects the Runs tab EXPLICITLY after mount
+    // instead of relying on Runs being the cold-load default. Was: no tab
+    // click, relied on cold load already showing the Runs pane's timeline.
+    const runsTab1 = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((t) => (t.textContent ?? "").trim() === "Runs");
+    expect(runsTab1).toBeDefined();
+    runsTab1!.click();
+    await settle();
+
     // The suppression assertion: this SAME fail/pass pair, same stem, within
     // 24h, would ordinarily pair via L.pairTransitions into exactly one
     // marker (see tests/transition-markers.test.ts) — but linkage via
@@ -265,6 +278,19 @@ describe("§S0b — marker suppression + open-span header (cycleId-linked runs)"
       plans: [plan],
     });
 
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S1): a cold `/p/<key>` load now
+    // defaults to the Workflow pane, not Runs (workspace default flips) —
+    // this test's SUBJECT is the Runs timeline's declared-marker rendering,
+    // so it now selects the Runs tab EXPLICITLY after mount instead of
+    // relying on Runs being the cold-load default. Was: no tab click, relied
+    // on cold load already showing the Runs pane's timeline.
+    const runsTab2 = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((t) => (t.textContent ?? "").trim() === "Runs");
+    expect(runsTab2).toBeDefined();
+    runsTab2!.click();
+    await settle();
+
     // still suppressed — the declared marker replaces the heuristic one.
     expect(document.querySelectorAll('[data-testid="transition-marker"]').length).toBe(0);
     // no longer an OPEN span — the cycle is done, not active.
@@ -302,6 +328,19 @@ describe("§S0b — fallback intact (no cycleId)", () => {
       plans: [plan],
     });
 
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S1): a cold `/p/<key>` load now
+    // defaults to the Workflow pane, not Runs (workspace default flips) —
+    // this test's SUBJECT is the Runs timeline's streak-heuristic fallback,
+    // so it now selects the Runs tab EXPLICITLY after mount instead of
+    // relying on Runs being the cold-load default. Was: no tab click, relied
+    // on cold load already showing the Runs pane's timeline.
+    const runsTab3 = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((t) => (t.textContent ?? "").trim() === "Runs");
+    expect(runsTab3).toBeDefined();
+    runsTab3!.click();
+    await settle();
+
     const markers = document.querySelectorAll('[data-testid="transition-marker"]');
     expect(markers.length).toBe(1);
     expect(document.querySelector('[data-testid="declared-marker"]')).toBeNull();
@@ -322,6 +361,19 @@ describe("§S0b — planless projects unchanged", () => {
       events: [redEvt, greenEvt],
       plans: [],
     });
+
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S1): a cold `/p/<key>` load now
+    // defaults to the Workflow pane, not Runs (workspace default flips) —
+    // this test's SUBJECT is the planless-project regression guard on the
+    // Runs timeline, so it now selects the Runs tab EXPLICITLY after mount
+    // instead of relying on Runs being the cold-load default. Was: no tab
+    // click, relied on cold load already showing the Runs pane's timeline.
+    const runsTab4 = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((t) => (t.textContent ?? "").trim() === "Runs");
+    expect(runsTab4).toBeDefined();
+    runsTab4!.click();
+    await settle();
 
     expect(document.querySelectorAll('[data-testid="transition-marker"]').length).toBe(1);
     expect(document.querySelector('[data-testid="cycle-span-open"]')).toBeNull();

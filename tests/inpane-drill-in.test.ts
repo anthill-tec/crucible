@@ -613,6 +613,17 @@ describe("AC4 — the slide-over/scrim contract is retired for run detail", () =
       eventDetails: { [eventId]: fx.detail },
     });
 
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S1): a cold `/p/<key>` load now
+    // defaults to the Workflow pane, not Runs (workspace default flips) —
+    // this test's SUBJECT is the retired-scrim contract from a Runs-pane
+    // card click, so it now selects the Runs tab EXPLICITLY after mount
+    // instead of relying on Runs being the cold-load default. Was: no tab
+    // click, relied on cold load already showing the Runs pane's event-card.
+    const runsTab = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+    expect(runsTab).toBeDefined();
+    runsTab!.click();
+    await settle();
+
     const card = document.querySelector('[data-testid="event-card"]') as HTMLElement;
     card.click();
     await settle();

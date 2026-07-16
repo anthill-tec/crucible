@@ -274,7 +274,11 @@ async function openWorkflowTab(): Promise<HTMLElement> {
 // ── Wiring smoke test — the Workflow tab button exists and is clickable ────
 
 describe("Workflow tab — DOM wiring", () => {
-  test("a 'Workflow' workspace-tab button exists (position 2, after Runs) and becomes the active tab on click", async () => {
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S1): the workspace-tab order flips —
+  // Workflow is now the FIRST (default) tab, Runs moves to second position
+  // (AC1). Was: ["Runs", "Workflow", "Coverage", "Compile", "BDD"] with the
+  // title claiming "position 2, after Runs".
+  test("a 'Workflow' workspace-tab button exists (position 1, the default tab) and becomes the active tab on click", async () => {
     const key = "wf-wiring-1";
     await mountApp({
       pathname: `/p/${key}`,
@@ -286,8 +290,8 @@ describe("Workflow tab — DOM wiring", () => {
 
     const tabs = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'));
     expect(tabs.map((t) => t.textContent?.trim())).toEqual([
-      "Runs",
       "Workflow",
+      "Runs",
       "Coverage",
       "Compile",
       "BDD",

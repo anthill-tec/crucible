@@ -328,6 +328,17 @@ describe("CR-CRU-011 C2 §S1/§S2 DRIFT-4 — lifecycle events excluded from the
       };
       await mountApp(opts);
 
+      // SANCTIONED RE-TARGET (CR-CRU-021 §S1): a cold `/p/<key>` load now
+      // defaults to the Workflow pane, not Runs (workspace default flips) —
+      // this test's SUBJECT is the Runs feed's lifecycle-event filtering, so
+      // it now selects the Runs tab EXPLICITLY after mount instead of
+      // relying on Runs being the cold-load default. Was: no tab click,
+      // relied on cold load already showing the Runs pane's event-cards.
+      const runsTab = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+      expect(runsTab).toBeDefined();
+      runsTab!.click();
+      await settle();
+
       const cards = document.querySelectorAll('[data-testid="event-card"]');
       expect(cards.length).toBe(2);
 

@@ -457,8 +457,21 @@ describe("§S1.4 (corrected) — ungrouped listing REMOVED from Workflow entirel
       plans: [],
     });
 
-    // Default tab is Runs — all 5 runs are cards there BEFORE ever touching
-    // the Workflow tab.
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S1): a cold `/p/<key>` load now
+    // defaults to the Workflow pane, not Runs (workspace default flips) —
+    // this test's SUBJECT is the Runs timeline's unlinked-run visibility, so
+    // it now selects the Runs tab EXPLICITLY after mount before checking it.
+    // Was: "Default tab is Runs — all 5 runs are cards there BEFORE ever
+    // touching the Workflow tab."
+    const runsTabInitial = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((t) => (t.textContent ?? "").trim() === "Runs");
+    expect(runsTabInitial).toBeDefined();
+    runsTabInitial!.click();
+    await settle();
+
+    // Runs tab selected explicitly — all 5 runs are cards there BEFORE ever
+    // touching the Workflow tab.
     const runsPaneBefore = document.querySelector<HTMLElement>('[data-testid="workspace-runs"]');
     expect(runsPaneBefore).not.toBeNull();
     for (const r of runs) {
