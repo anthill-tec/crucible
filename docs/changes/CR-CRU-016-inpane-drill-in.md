@@ -1,6 +1,7 @@
 # CR-CRU-016 — In-pane drill-in: run detail inside the Run Timeline pane
 
-**Status:** COMPLETED (2026-07-16 — C0 design + C1/C2 + C3 pins + C4 BDD + C5 gate-fix cycle (user-excepted inline scope: §S4 regression differentiation, tabs-hide, tab-in-header, sticky header, marker routing) + C6 VERIFY (READY FOR RE-CLOSE, zero blocking); final gates 500/500 unit · tsc 0 · 19/19 BDD · coverage 95.0% lines / 96.1% functions, first tier-tagged regression ingested; merged to develop b6bba3e)
+**Status:** COMPLETED (2026-07-16 — merged to develop b6bba3e)
+
 **Type:** feature
 **Priority:** P1
 **Depends on:** CR-CRU-007
@@ -92,53 +93,6 @@ table + PRD §4.11 synced.
 - [x] §S1 header-always-visible (user note 2026-07-16): with a run detail open, the detail header (back chip · `RUN DETAIL` · density chip) is NOT a descendant of the drill-down's scroll container — on the workspace it renders in the band the hidden tabs row vacates, on home pinned above the pane's scroller; with the 10k-leaf fixture scrolled to its bottom, the header element remains present with its position unaffected by the scroller's `scrollTop` (DOM-structure + post-scroll visibility assertions).
 - [x] §S1 tabs-hide + tab-in-header (user decisions 2026-07-16, gate review): on the workspace with a run detail open — from ANY entry (run card on any tab, transition marker, coverage-meter, coverage-view-run, cold load) — `data-testid="workspace-tabs"` is ABSENT from the DOM and the detail header's back-chip text equals `← <active tab, lowercase>` (`← runs` / `← coverage` / `← compile`); on home the chip stays `← timeline`. Closing (the chip, Escape, and browser back each) restores the tabs row with the previously-active tab still carrying the `on` class and the feed at its exact prior scrollTop; a detail opened from the Compile tab shows `← compile` and closes back to the COMPILE pane with its tab `on`; a cold workspace load defaults to Runs (`← runs`); the top bar and Project pane remain present throughout; the C4 BDD open-from-card scenario is re-targeted (tabs ABSENT + chip text asserted during detail, tabs PRESENT with correct selection after close).
 
-## Gap analysis (2026-07-16, pre-design)
-What exists (CR-007 final tree, develop 895fce0) vs what this CR changes:
-- **Container:** `RunOverlay` (public/app.js:965) renders the detail as a
-  fixed sheet on a scrim (`run-overlay-scrim` :1440) with
-  `app-drillin app-slideover-right` (:1453); Escape handled at :72;
-  `openDrillin` (:444) pushes the `/run/<id>` route. ALL of this is the
-  retirement surface — the detail becomes a STATE of the central pane
-  (home timeline pane / workspace Runs pane) with everything else mounted.
-- **Scroll restore:** current mechanism saves `window.scrollY`
-  (`state.savedScrollY`, :28-46) because the sheet overlays the page. AC2
-  demands the FEED's exact `scrollTop` — in-pane, the feed's scroll context
-  must be captured per-pane (central pane scroller), not window-level.
-  Implementation seam, called out for RED precision.
-- **Anatomy/density content:** carries verbatim — the inner bodies
-  (TestBody/CompileBody, density set, failure boxes incl. the round-3
-  degradation, compile status line) are container-agnostic today except for
-  overlay-specific assertions. Test surfaces pinning the container:
-  tests/storyboard-fidelity.test.ts, tests/e2e/steps/drillin.steps.ts,
-  tests/e2e/features/shell-storyboard.feature (grep `slideover|scrim`);
-  drill-in/density suites mount by route and mostly assert inner anatomy —
-  the RED re-target list (AC5's approved-modification list) starts from
-  these three files.
-- **Spec drift fixed in this commit:** §S2's "override switch" wording
-  predated CR-007's final no-switch rule — re-baselined; VERIFY's carryover
-  seam (footer-jump focus model) now an explicit §S2 contract.
-- **New surfaces landed AFTER this spec was filed (007 fix round 3) needing
-  design decisions in §S3's board iteration:** (a) the workspace now has
-  real Coverage/Compile tab panels — decide whether opening a detail from
-  the Compile tab's cards or the Coverage tab's `view run` swaps THAT tab's
-  pane or activates Runs first (recommendation: the detail is a pane state
-  of the ACTIVE central pane, whichever tab hosts it — one rule, no tab
-  switching); (b) the Project pane's coverage-meter/trend click opens the
-  detail in the central pane while the pane stays live (same rule).
-- **Routes:** unchanged and already deep-linkable; cold-load auto-expand
-  works (007 fix). Only the render target moves.
-
-## Cycle plan
-- C0 (design, precedes RED): F4/F4½ mocks redrawn to in-pane form + nav
-  model text ("pane state", overlays only /manage + /roadmap) + the two tab
-  interaction decisions — board micro-iteration, user approval gates RED.
-- C1: §S1 in-pane container swap + routes + pane-scroll restore + slide-over
-  retirement (RED → GREEN).
-- C2: §S2 anatomy/density re-target with the approved-modification list +
-  focus-model contract (RED → GREEN).
-- C3: SSE-liveness + integration ACs (project pane live beside detail).
-- C4: BDD drill-in.feature set + VERIFY + close-out.
-
 ## Estimated size
 M.
 
@@ -166,7 +120,8 @@ Failing regressions (coverage discarded) render the badge only. Drill-in
 differentiation already exists (regression tier → Density) and needs no
 change.
 
-## VERIFY seams (deferred, non-blocking — filed 2026-07-16)
+## Implementation Notes
+Deferred items (VERIFY seams, non-blocking — filed 2026-07-16):
 1. **E2E inter-feature DB-ordering fragility** — `navigation.steps.ts`'s
    "fresh, empty database" step is a no-op relying on execution order;
    drill-in.feature needed a Playwright project-dependency to run last. A real

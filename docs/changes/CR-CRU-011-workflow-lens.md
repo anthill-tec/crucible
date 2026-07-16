@@ -1,6 +1,7 @@
 # CR-CRU-011 — Cycle plans + workflow lens + agent runtimes
 
-**Status:** COMPLETED (2026-07-16 — gap analysis (4 drifts applied) + C1 plan API + C2 lifecycle/runtimes + C3 Workflow tab + C4 lens/timeline + C5 BDD + C6 VERIFY (READY FOR CLOSE-OUT, zero blocking); final gates 559/559 unit · tsc 0 · 22/22 BDD · coverage 93.0%/93.0%; dog-fooded via its own plan 1 (the first plan ever filed); merged to develop 5b913bf)
+**Status:** COMPLETED (2026-07-16 — merged to develop 5b913bf)
+
 **Type:** feature
 **Priority:** P1
 **Depends on:** CR-CRU-007
@@ -175,38 +176,6 @@ is their whole UI.
 - [x] §S3 CR-016 binding: with the Workflow tab active and the plan's active cycle expanded, clicking a linked run swaps the WORKFLOW pane to the run detail (`workspace-tabs` absent, back chip text `← workflow`, no tab switch); closing restores the Workflow pane with its tab `on` and prior scroll; the tab-list assertions across CR-007/CR-016-era tests are updated to the five-tab list under this CR's sanctioned re-target.
 - [x] §S1/§S2 feed exclusion: lifecycle events never render cards on the Runs timeline (fixture: register+unregister around two runs → exactly two `event-card`s); agent runtime values render per the §S2 rule on the pane rows.
 - [x] BDD E2E (house style): `tests/e2e/features/workflow.feature` — scenarios: file a plan via API → activate cycle 1 → register agent → ingest fail/pass with `context.cycleId` → PATCH cycle done → close plan with merge commit → the lens shows the plan tree with the closed span, cycle label, merge commit, and the sealed agent runtime; plus a timeline scenario asserting suppression + the declared marker; results ingested `tier:"e2e"`.
-
-## Gap analysis (2026-07-16, pre-RED — verdict SPEC_UPDATE_NEEDED, applied in this commit)
-- DRIFT-1 (blocking): timeline plan integration (PRD §4.11:275 inline-plan
-  rendering + CR-007 §S2 marker suppression for cycleId-linked runs) was
-  absent — added as §S0b + AC.
-- DRIFT-2: E2E AC named `workflow.e2e.ts` — superseded by the BDD house style
-  (CR-007 C5b); now `workflow.feature` (sorts after shell-storyboard.feature,
-  no ordering project needed; root fix remains CR-015 §S0).
-- DRIFT-3: CR-016 pane-state contracts (one-rule, tabs-hide, `← workflow`
-  chip) now bind to the Workflow tab; tab-list re-targets sanctioned.
-- DRIFT-4: lifecycle-event feed rendering was undefined — excluded from the
-  Runs feed in 0.1.0 (runtime computation + lens only), board-flagged for veto.
-- Verified clean: `?project=` param matches ACs; `RunContext.cycleId` purely
-  additive (cycle label exists, types.ts:86-96); agents.firstSeen/lastSeen
-  present and removeAgent hard-deletes (store.ts:322 — the audit's gap is
-  real); plans reuse store.onChange→SSE and pairTransitions stays the
-  inferred fallback; plans/cycles are NEW tables independent of event
-  retention (closed plans persist as the workflow record); no symbol
-  removals; the "flat|workflow toggle" superseded idea was never built.
-
-## Cycle plan
-- C1: §S0 plan API — tables, routes, transitions, kinds, one-open-per-cr,
-  commitBoundary, SSE, cycleId linkage (RED → GREEN).
-- C2: §S1 lifecycle events + §S2 runtimes (server + pane rows + feed
-  exclusion).
-- C3: §S3 Workflow tab — active todo view + gate placeholder + CR-016
-  bindings (tabs list update, one-rule, `← workflow`).
-- C4: §S3 history lens (Wave → [Track] → CR → Cycle, inferred fallback,
-  ungrouped tail, wave states) + §S0b timeline integration (suppression +
-  declared markers/spans).
-- C5: BDD workflow.feature + integration ACs sweep.
-- C6: VERIFY → close-out (regression --coverage) → merge gate.
 
 ## Estimated size
 L (grew with the §S0 plan API fold-in, round 15).
