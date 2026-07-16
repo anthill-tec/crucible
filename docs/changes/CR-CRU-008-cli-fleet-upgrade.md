@@ -38,7 +38,8 @@ in agent definitions keep working.
 **Plan verbs (user-locked round 15 — "encoded in the python client as calls for
 the agentic backend"):** orchestrator-facing subcommands on every `*-crucible.py`:
 `plan-file` (files the cycle plan from the orchestrator's todo list →
-CR-011 §S0 `POST /plans`, prints the assigned cycle ids — **auto-attaching
+CR-011 §S0 `POST /plans` — including `--title "<CR title>"` for the
+Workflow CR-root display (CR-021 §S6.11 additive field), prints the assigned cycle ids — **auto-attaching
 `track` from `WORKFLOW_ROLE` when set**: Model-B track operators
 register their track with the CR for free, solo orchestrators send nothing,
 round 17), `cycle-activate <id>`,

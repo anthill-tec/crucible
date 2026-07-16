@@ -600,6 +600,19 @@ describe("§S5 AC5 — collective timeline interleave + agent sub-row filter (no
       ],
     });
 
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S1): a cold `/p/<key>` load now
+    // defaults to the Workflow pane, not Runs (workspace default flips) —
+    // this test's SUBJECT is the workspace Runs pane's agent-filter, so it
+    // now selects the Runs tab EXPLICITLY after mount instead of relying on
+    // Runs being the cold-load default. Was: no tab click, relied on cold
+    // load already showing the Runs pane.
+    const runsTab = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((t) => (t.textContent ?? "").trim() === "Runs");
+    expect(runsTab).toBeDefined();
+    runsTab!.click();
+    await settle();
+
     const pathBefore = location.pathname;
     const subRow = Array.from(
       document.querySelectorAll('[data-testid="project-pane"] [data-testid="agent-row"]'),

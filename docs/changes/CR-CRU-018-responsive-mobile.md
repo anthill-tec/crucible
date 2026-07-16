@@ -9,6 +9,10 @@ considered media like a mobile phone")
 **Phase:** Wave 5/6 (0.2.0) — lane allocated by mainline at 0.2.0 planning
 
 ## Context
+**Interim floor already shipped by CR-CRU-023 (0.1.0 patch):** panes carry a
+min-width + `overflow-x:auto` scroll floor for sub-1024×640 viewports; this
+CR's responsive guidelines SUPERSEDE that floor with real breakpoints.
+
 Crucible's layout is desktop-only: fixed multi-column grids (timeline +
 Project pane), a wide projects row, hover-dependent affordances. On a phone
 the dashboard is unusable. The density system (comfortable/compact/ultra) is

@@ -11,7 +11,7 @@
   "use strict";
 
   function main(L) {
-    const { a, button, div, option, pre, select, span } = van.tags;
+    const { a, b, button, div, option, pre, select, span } = van.tags;
 
     // ── State ───────────────────────────────────────────────────────────
     const state = vanX.reactive({
@@ -24,7 +24,7 @@
       selectedProject: null, // home filter pulldown (null = all projects)
       selectedAgent: null, // agent sub-row click filter (null = all)
       route: L.routeParse(location.pathname),
-      workspaceTab: "Runs",
+      workspaceTab: "Workflow",
       backendUp: true,
       lastSynced: null,
     });
@@ -58,14 +58,15 @@
       // ONE RULE (CR-CRU-016 §S1, user-approved 2026-07-16) — navigation
       // within the SAME surface (detail open/close, tab-owned pane swaps)
       // never touches the active workspace tab or the agent filter; only a
-      // surface change (home↔workspace, project→project) lands on Runs.
+      // surface change (home↔workspace, project→project) lands on Workflow
+      // (the CR-CRU-021 §S1 primary tab).
       const sameSurface =
         next.page === state.route.page &&
         (next.page !== "workspace" || next.projectKey === state.route.projectKey);
       history.pushState(null, "", pathname);
       state.route = next;
       if (!sameSurface) {
-        state.workspaceTab = "Runs";
+        state.workspaceTab = "Workflow";
         state.selectedAgent = null;
       }
     }
@@ -421,6 +422,50 @@
       if (s < 60) return `${s}s`;
       return `${Math.floor(s / 60)}m ${s % 60}s`;
     }
+
+    // CR-CRU-021 §S3 — cycle-timer format: OWN zero-padded-seconds form
+    // (`⏱ 4m 05s`, F13 contract), deliberately NOT fmtDuration (which
+    // renders `4m 5s`).
+    function fmtCycleTimer(ms) {
+      const s = Math.max(0, Math.floor(ms / 1000));
+      return `⏱ ${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+    }
+
+    // §S3 (cycle 18, live-review defect) — the ACTIVE badge must SELF-TICK:
+    // recomputing `Date.now()` only at render time froze the badge whenever
+    // no poll/SSE tick observed changed data. A SINGLETON module-level 10s
+    // interval bumps `tickNow`; each active badge's text is a van-derived
+    // binding on it, so ONLY the timer text re-derives — never a whole-pane
+    // rebuild, and no per-mount/per-row interval accumulation across pane
+    // swaps (created exactly once here, at module init).
+    const tickNow = van.state(Date.now());
+    setInterval(() => {
+      tickNow.val = Date.now();
+    }, 10_000);
+
+    // §S3 — active-cycle timer: an ACTIVE cycle ticks `now − activatedAt`
+    // (ember badge; `tickNow` supplies the visible updating at a ≤10s
+    // cadence, on top of the poll/SSE refetch cadence);
+    // a terminal cycle shows the sealed `doneAt − activatedAt` (dim, never
+    // advancing). Cycles predating the timestamp migration (no activatedAt,
+    // or terminal without doneAt) render NO timer — never a fabricated value.
+    const CycleTimer = (cycle) => {
+      if (cycle.activatedAt === undefined) return null;
+      if (cycle.status === "active") {
+        return span(
+          { "data-testid": "cycle-timer", class: "app-cycle-timer-slot app-cycle-timer-ember" },
+          () => fmtCycleTimer(tickNow.val - cycle.activatedAt),
+        );
+      }
+      if (cycle.doneAt === undefined) return null;
+      return span(
+        {
+          "data-testid": "cycle-timer",
+          class: "app-card-meta app-cycle-timer-slot app-cycle-timer-sealed",
+        },
+        fmtCycleTimer(cycle.doneAt - cycle.activatedAt),
+      );
+    };
 
     // Ratio pill — UNIVERSAL status palette (user-corrected 2026-07-15):
     // `N/N` pass-green / `F ✗ of N` fail-red / compile `E errors` fail-red
@@ -1164,17 +1209,26 @@
       span({ class: "app-toggle-glyph" }, () => (lensOpen(key) ? "▾" : "▸"));
 
     // Runs linked to a cycle via the §S0 `context.cycleId` passthrough.
+    // §S6 #3 (re-baselined 2026-07-17) — CHRONOLOGICAL, latest LAST: run
+    // lists inside a cycle sort by timestamp ascending regardless of the
+    // events array's arrival order (latest-first stays EXCLUSIVELY the
+    // History section's wave/CR-group ordering).
     const linkedRunsFor = (cycleId) =>
-      state.events.filter(
-        (e) =>
-          e.projectKey === state.route.projectKey &&
-          e.kind !== "lifecycle" &&
-          e.context?.cycleId === cycleId,
-      );
+      state.events
+        .filter(
+          (e) =>
+            e.projectKey === state.route.projectKey &&
+            e.kind !== "lifecycle" &&
+            e.context?.cycleId === cycleId,
+        )
+        .sort((a, b) => a.timestamp - b.timestamp);
 
     // CR-CRU-016 binding — a linked run opens as a pane state of the
     // WORKFLOW pane through the SAME openDrillin path as cards/markers
     // (one-rule: no tab switch, tabs-hide, `← workflow` back chip).
+    // CR-CRU-021 §S6 #3 — the run entry carries the CR-007 mask-icon (never
+    // the mock's literal 🧪 emoji) and the PLAIN `P/T` ratio for pass AND
+    // fail, colored via class only.
     const LinkedRunRow = (e) =>
       div(
         {
@@ -1183,19 +1237,124 @@
           class: "app-linked-run-row",
           onclick: () => openDrillin(e.id),
         },
+        span(
+          {
+            "data-testid": "card-icon",
+            "data-icon-tintable": "true",
+            class: (() => {
+              const role = L.phaseRole(e.agentId);
+              return `app-card-icon${role !== null ? ` app-role-${role}` : ""}`;
+            })(),
+          },
+          span({
+            "data-testid": "icon-glyph",
+            class: "app-icon-mask",
+            "data-kind": "test",
+          }),
+        ),
         span({ class: "app-agent-id" }, e.agentId),
-        e.failed > 0
-          ? span({ class: "app-ratio-fail" }, `${e.failed} ✗ of ${e.total}`)
-          : span({ class: "app-ratio-pass" }, `${e.passed}/${e.total}`),
+        span(
+          { class: e.failed > 0 ? "app-ratio-fail" : "app-ratio-pass" },
+          `${e.passed}/${e.total}`,
+        ),
         span({ class: "app-card-meta" }, rel(e.timestamp)),
       );
 
-    // One todo row per cycle; ONLY the active cycle can list its
-    // context.cycleId-linked runs (live over the refetch cadence), and —
-    // CR-CRU-020 §S2.3 — those runs sit behind the row's own click toggle
-    // (parity with history's cycle rows, collapsed by default).
-    const CycleRow = (cycle) => {
-      const key = lensKey("cycle", cycle.id);
+    // §S6 #3 (cycle 13, gap 1) — the ACTIVE cycle's open span renders its
+    // linked runs as ONE INLINE FLOW: `<icon> <agent> <ratio> · … · awaiting
+    // orchestrator confirm`. Inline-level entries (span, `app-inline-run`),
+    // literal `·` text-node separators, NO per-run age stamp (the mock has
+    // none — the stacked block rows with "ago" were the drift this fixes).
+    const InlineRunEntry = (e) =>
+      span(
+        {
+          "data-testid": "linked-run-row",
+          "data-run-id": e.id,
+          class: "app-inline-run",
+          onclick: () => openDrillin(e.id),
+        },
+        span(
+          {
+            "data-testid": "card-icon",
+            "data-icon-tintable": "true",
+            class: (() => {
+              const role = L.phaseRole(e.agentId);
+              return `app-card-icon${role !== null ? ` app-role-${role}` : ""}`;
+            })(),
+          },
+          span({
+            "data-testid": "icon-glyph",
+            class: "app-icon-mask",
+            "data-kind": "test",
+          }),
+        ),
+        span({ class: "app-agent-id" }, e.agentId),
+        " ",
+        span(
+          { class: e.failed > 0 ? "app-ratio-fail" : "app-ratio-pass" },
+          `${e.passed}/${e.total}`,
+        ),
+      );
+
+    // §S6 #3 (cycle 18, live-review) — the open-span row exists only WITH
+    // linked runs; with ZERO cycleId-linked runs there is nothing awaiting
+    // confirm, so NO container (and no annotation) renders at all.
+    const OpenSpan = (cycleId) => {
+      const runs = linkedRunsFor(cycleId);
+      if (runs.length === 0) return null;
+      const parts = [];
+      for (const run of runs) {
+        parts.push(InlineRunEntry(run), " · ");
+      }
+      parts.push(
+        span(
+          {
+            "data-testid": "open-span-annotation",
+            class: "app-card-meta app-open-span-annotation",
+          },
+          "awaiting orchestrator confirm",
+        ),
+      );
+      return div({ "data-testid": "open-span", class: "app-open-span" }, parts);
+    };
+
+    // CR-CRU-021 §S6 #2 (re-baselined 2026-07-17) — DONE rows are BARE: the
+    // ✓ glyph IS the done signal, no status narration at all (the removed
+    // "done — GREEN confirmed[ by X]" / "done — report accepted" forms; the
+    // orchestrator identity stamps the CR ROOT instead). ACTIVE keeps
+    // `· ACTIVE`; pending/skipped/failed keep their status word.
+    const cycleNarration = (cycle) => {
+      if (cycle.status === "active") return "ACTIVE";
+      if (cycle.status === "done") return null;
+      return cycle.status;
+    };
+
+    // One todo row per cycle: `<glyph> cycle <n> · "<label>" · <status>`
+    // (§S6 #2, label QUOTED, ACTIVE row bold, inline `[<kind>]` badge for
+    // non-default kinds, §S6 #4). RULED (a) — the ACTIVE cycle's open span
+    // renders its linked runs ALWAYS inline (no toggle element at all; the
+    // toggle contract narrows to History), trailed by the dim
+    // `awaiting orchestrator confirm` annotation (§S6 #3).
+    const CycleRow = (cycle, ordinal) => {
+      // §S3 — ember badge inline after `· ACTIVE`, before the open span;
+      // dim sealed timer trailing the bare done label. Null when the cycle
+      // predates the timestamp migration (F13 fixtures stay byte-identical).
+      const timer = CycleTimer(cycle);
+      const narration = cycleNarration(cycle);
+      const lineParts = [
+        `cycle ${ordinal} · "${cycle.label}"`,
+        ...(cycle.kind !== undefined && cycle.kind !== "red-green"
+          ? [
+              " [",
+              span(
+                { "data-testid": "cycle-kind-badge", class: "app-cycle-kind-badge" },
+                cycle.kind,
+              ),
+              "]",
+            ]
+          : []),
+        ...(narration !== null ? [` · ${narration}`] : []),
+      ];
       return div(
         {
           "data-testid": "cycle-row",
@@ -1204,33 +1363,26 @@
         },
         div(
           { class: "app-cycle-line" },
-          cycle.status === "active"
-            ? span(
-                {
-                  "data-testid": "cycle-toggle",
-                  class: "app-cycle-toggle",
-                  onclick: () => lensToggle(key),
-                },
-                ToggleGlyph(key),
-              )
-            : null,
           span(
             { "data-testid": "cycle-glyph", class: "app-cycle-glyph" },
             CYCLE_GLYPHS[cycle.status] ?? CYCLE_GLYPHS.pending,
           ),
-          span({ class: "app-cycle-label" }, cycle.label),
+          cycle.status === "active"
+            ? b({ class: "app-cycle-text" }, ...lineParts)
+            : span({ class: "app-cycle-text" }, ...lineParts),
+          ...(timer !== null ? [" ", timer] : []),
         ),
-        cycle.status === "active"
-          ? () =>
-              lensOpen(key)
-                ? div(
-                    { class: "app-cycle-runs" },
-                    linkedRunsFor(cycle.id).map(LinkedRunRow),
-                  )
-                : ""
-          : null,
+        cycle.status === "active" ? OpenSpan(cycle.id) : null,
       );
     };
+
+    // §S6 #1 — `Active workflow — <cr> · <track> · wave <n>` (track segment
+    // omitted when absent — solo model; wave segment likewise).
+    const activeHeaderText = (plan) =>
+      ["Active workflow — " + plan.cr]
+        .concat(plan.track !== undefined ? [plan.track] : [])
+        .concat(plan.wave !== undefined ? [`wave ${plan.wave}`] : [])
+        .join(" · ");
 
     const WorkflowActive = () => {
       const openPlans = state.plans.filter((p) => p.status === "open");
@@ -1244,8 +1396,31 @@
           : openPlans.map((plan) =>
               div(
                 { class: "app-workflow-plan" },
-                div({ class: "app-pane-section-title" }, plan.cr),
-                (plan.cycles ?? []).map(CycleRow),
+                div(
+                  {
+                    "data-testid": "workflow-active-header",
+                    class: "app-pane-section-title",
+                  },
+                  activeHeaderText(plan),
+                ),
+                // §S6 #11 (re-baselined 2026-07-17) — the CR ROOT:
+                // heat-highlighted id, ` · <title>` when the plan carries
+                // one, ` — <orchestrator>` when stamped (each segment
+                // independently omitted when absent), the cycle rows
+                // INDENTED beneath it.
+                div(
+                  { "data-testid": "workflow-cr-root", "data-cr": plan.cr, class: "app-cr-root" },
+                  span(
+                    { "data-testid": "cr-root-id", class: "app-heat-ink" },
+                    plan.cr,
+                  ),
+                  plan.title !== undefined ? ` · ${plan.title}` : null,
+                  plan.orchestrator !== undefined ? ` — ${plan.orchestrator}` : null,
+                ),
+                div(
+                  { class: "app-cr-root-cycles" },
+                  (plan.cycles ?? []).map((cycle, i) => CycleRow(cycle, i + 1)),
+                ),
               ),
             ),
       );
@@ -1280,6 +1455,9 @@
     const LensCycleRow = (cycle, crName) => {
       const expandable = cycle.status === "done" || cycle.status === "active";
       const key = lensKey("cycle", cycle.id ?? `${crName}:${cycle.label}`);
+      // §S3 — history rows show the SAME sealed `doneAt − activatedAt`
+      // timer as the active section (null when timestamps predate C4).
+      const timer = CycleTimer(cycle);
       return div(
         {
           "data-testid": "lens-cycle-row",
@@ -1303,6 +1481,17 @@
             CYCLE_GLYPHS[cycle.status] ?? CYCLE_GLYPHS.pending,
           ),
           span({ class: "app-cycle-label" }, cycle.label),
+          ...(timer !== null ? [" ", timer] : []),
+          // CR-CRU-021 §S6 #8 — collapsed rows hint at their linked runs.
+          expandable
+            ? () =>
+                !lensOpen(key) && cycle.runs.length > 0
+                  ? span(
+                      { class: "app-card-meta app-run-count-hint" },
+                      `▸ ${cycle.runs.length} runs`,
+                    )
+                  : ""
+            : null,
         ),
         // A done cycle is a CLOSED span wrapping its linked runs; the active
         // cycle keeps collecting its runs live (open span, §S3). Both sit
@@ -1332,30 +1521,43 @@
           "data-status": node.status ?? "inferred",
           class: "app-cr-group",
         },
-        // CR-CRU-020 §S1.2 — the existing header row IS the toggle: cr,
-        // track badge, rollup and merge pill stay always-visible; only the
-        // cycle list collapses (by default) beneath it.
+        // CR-CRU-020 §S1.2 — the existing header row IS the toggle; only the
+        // cycle list collapses (by default) beneath it. CR-CRU-021 §S6 #6/#9
+        // — the collapsed form is INLINE DIM TEXT, not pill-chips:
+        // `▸ [<track> › ]<cr> · <n> cycles ✓ · merged <sha>` (no `@`). The
+        // legacy `<done>/<total>` rollup figure stays addressable (visually
+        // hidden) for the CR-020 header contract.
         div(
           {
             "data-testid": "cr-group-toggle",
-            class: "app-cr-line app-lens-toggle",
+            class: "app-cr-line app-lens-toggle app-card-meta",
             onclick: () => lensToggle(key),
           },
           ToggleGlyph(key),
-          span({ class: "app-pane-section-title" }, node.cr),
+          " ",
           node.track !== undefined
-            ? span({ "data-testid": "track-badge", class: "app-pill" }, node.track)
+            ? [
+                span({ "data-testid": "track-badge", class: "app-cr-track" }, node.track),
+                " › ",
+              ]
+            : null,
+          span({ class: "app-cr-name" }, node.cr),
+          node.rollup.total > 0 && node.rollup.done === node.rollup.total
+            ? ` · ${node.rollup.total} cycles ✓`
+            : ` · ${node.rollup.done}/${node.rollup.total} cycles`,
+          node.merge !== undefined
+            ? [
+                " · ",
+                span(
+                  { "data-testid": "cr-merge-commit", class: "app-cr-merge" },
+                  `merged ${node.merge.commit}`,
+                ),
+              ]
             : null,
           span(
-            { "data-testid": "cr-rollup", class: "app-pill" },
-            `${node.rollup.done}/${node.rollup.total}`,
+            { "data-testid": "cr-rollup", class: "app-hidden-data" },
+            ` ${node.rollup.done}/${node.rollup.total}`,
           ),
-          node.merge !== undefined
-            ? span(
-                { "data-testid": "cr-merge-commit", class: "app-pill" },
-                `merged @ ${node.merge.commit}`,
-              )
-            : null,
         ),
         () =>
           lensOpen(key)
@@ -1364,30 +1566,51 @@
                 node.cycles.map((c) => LensCycleRow(c, node.cr)),
               )
             : "",
-        // CR-CRU-020 §S2 (C3 gate-review defect) — an agent-runtime row in
-        // the always-visible header renders ONLY for a fleet-registered
-        // agent (the server-computed runtime_ms off the agents slice). A
-        // raw run agentId with no agent record must never fabricate a 0ms
-        // row here — those read as run rows at group level, and run entries
-        // belong exclusively inside an expanded cycle's drill-down.
-        node.agents
-          .filter((id) => state.agents.some((a) => a.agentId === id))
-          .map(CrAgentRuntime),
+        // CR-CRU-021 §S4 — the collapsed header carries ZERO agentId-bearing
+        // elements; participating agents surface as an aggregate `N agents`
+        // pill in the header REGION, and per-agent runtime rows render only
+        // behind the group's expansion (CR-011's information survives, one
+        // level down). CR-CRU-020 §S2 (C3) fleet-registered semantics are
+        // unchanged: a raw run agentId with no fleet record never fabricates
+        // a 0ms row and is excluded from the pill count. Zero registered
+        // participants → no pill at all (never `0 agents`).
+        () => {
+          if (!lensOpen(key)) return "";
+          const registered = node.agents.filter((id) =>
+            state.agents.some((a) => a.agentId === id),
+          );
+          if (registered.length === 0) return "";
+          return div(
+            { class: "app-cr-agents" },
+            span(
+              { "data-testid": "cr-agents-pill", class: "app-pill app-card-meta" },
+              `${registered.length} agent${registered.length === 1 ? "" : "s"}`,
+            ),
+            registered.map(CrAgentRuntime),
+          );
+        },
       );
     };
 
+    // CR-CRU-021 §S6 #5 — ONE combined header line per wave:
+    // `History — Wave <n> · lanes: <chips> · <state>` (wave, lane chips and
+    // boundary state inline — never separate rows).
     const WaveHeader = (wave) => {
       const chips = wave.state?.chips ?? [];
       return div(
         { "data-testid": "wave-header", class: "app-wave-header" },
-        span({ class: "app-pane-section-title" }, `Wave ${wave.wave}`),
+        span({ class: "app-pane-section-title" }, `History — Wave ${wave.wave}`),
         chips.length > 0
-          ? chips.flatMap((chip, i) => [
-              i > 0 ? " · " : " ",
-              span({ "data-testid": "lane-chip", class: "app-pill" }, chip),
-            ])
+          ? [
+              " · lanes: ",
+              ...chips.flatMap((chip, i) => [
+                i > 0 ? " · " : null,
+                span({ "data-testid": "lane-chip", class: "app-lane-chip" }, chip),
+              ]),
+              span({ class: "app-card-meta" }, ` · ${wave.state.label}`),
+            ]
           : wave.state !== null
-            ? span({ class: "app-card-meta" }, ` ${wave.state.label}`)
+            ? span({ class: "app-card-meta" }, ` · ${wave.state.label}`)
             : null,
       );
     };
@@ -1422,24 +1645,20 @@
         events: state.events.filter((e) => e.projectKey === state.route.projectKey),
       });
       return div(
+        // §S6 #5 — no standalone "History" title row; each wave's combined
+        // `History — Wave <n> · …` header line carries the section naming.
         { "data-testid": "workflow-history", class: "app-workflow-history" },
-        div({ class: "app-pane-section-title" }, "History"),
         lens.waves.length === 0
           ? div({ class: "app-empty" }, "no workflow history yet")
           : lens.waves.map(WaveGroup),
       );
     };
 
+    // CR-CRU-021 §S6 #10 — NO `Workflow — <project>` rail-title above the
+    // active header: the F13 header structure is the pane's whole top.
     const WorkflowFeed = () =>
       div(
         { class: "app-pane-content" },
-        div(
-          { class: "app-timeline-head" },
-          div({ class: "app-rail-title" }, () => {
-            const p = currentProject();
-            return `Workflow — ${p ? p.name || p.key : state.route.projectKey}`;
-          }),
-        ),
         div(
           { class: "app-workflow-cols" },
           () => WorkflowActive(),

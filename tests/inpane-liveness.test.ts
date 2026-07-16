@@ -353,6 +353,17 @@ describe("SSE liveness — with the detail open, a new run ingested for the proj
       };
       await mountApp(opts);
 
+      // SANCTIONED RE-TARGET (CR-CRU-021 §S1): a cold `/p/<key>` load now
+      // defaults to the Workflow pane, not Runs (workspace default flips) —
+      // this test's SUBJECT is SSE liveness behind the workspace Runs pane,
+      // so it now selects the Runs tab EXPLICITLY after mount instead of
+      // relying on Runs being the cold-load default. Was: no tab click,
+      // relied on cold load already showing the Runs pane's event-card.
+      const runsTab = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+      expect(runsTab).toBeDefined();
+      runsTab!.click();
+      await settle();
+
       const card = document.querySelector('[data-testid="event-card"]') as HTMLElement | null;
       expect(card).not.toBeNull();
       card!.click();
@@ -426,6 +437,17 @@ describe("SSE liveness — with the detail open, a new run ingested for the proj
       };
       await mountApp(opts);
 
+      // SANCTIONED RE-TARGET (CR-CRU-021 §S1): a cold `/p/<key>` load now
+      // defaults to the Workflow pane, not Runs (workspace default flips) —
+      // this test's SUBJECT is glyph-update behind the workspace Runs pane,
+      // so it now selects the Runs tab EXPLICITLY after mount instead of
+      // relying on Runs being the cold-load default. Was: no tab click,
+      // relied on cold load already showing the Runs pane's event-card.
+      const runsTab = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+      expect(runsTab).toBeDefined();
+      runsTab!.click();
+      await settle();
+
       const card = document.querySelector('[data-testid="event-card"]') as HTMLElement;
       card.click();
       await settle();
@@ -485,6 +507,18 @@ describe("the feed behind the open detail also absorbs the new run — closing t
         eventDetails: { [eventId]: fx.detail },
       };
       await mountApp(opts);
+
+      // SANCTIONED RE-TARGET (CR-CRU-021 §S1): a cold `/p/<key>` load now
+      // defaults to the Workflow pane, not Runs (workspace default flips) —
+      // this test's SUBJECT is the workspace Runs feed's absorb-behind-open-
+      // detail behavior, so it now selects the Runs tab EXPLICITLY after
+      // mount instead of relying on Runs being the cold-load default. Was:
+      // no tab click, relied on cold load already showing the Runs pane's
+      // event-card.
+      const runsTab = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+      expect(runsTab).toBeDefined();
+      runsTab!.click();
+      await settle();
 
       const card = document.querySelector('[data-testid="event-card"]') as HTMLElement;
       card.click();

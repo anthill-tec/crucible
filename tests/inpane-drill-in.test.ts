@@ -366,7 +366,12 @@ function regressionTwoFailuresFixture(eventId: string, projectKey: string, now: 
 // ────────────────────────────────────────────────────────────────────────
 
 describe("AC1 — a run-card click swaps the ACTIVE pane's own content to the detail (marker-attribute no-remount check)", () => {
-  test("workspace Runs pane: the pane's own content swaps to the detail; the Project pane is the SAME DOM node throughout (marker attribute + reference equality)", async () => {
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S1): a cold `/p/<key>` load now defaults
+  // to the Workflow pane, not Runs (workspace default flips) — this test's
+  // SUBJECT is Runs-pane behavior, so it now selects the Runs tab EXPLICITLY
+  // after mount instead of relying on Runs being the cold-load default. Was:
+  // asserted directly against the cold-load pane with no tab click.
+  test("workspace Runs pane (Runs tab selected explicitly): the pane's own content swaps to the detail; the Project pane is the SAME DOM node throughout (marker attribute + reference equality)", async () => {
     const now = Date.now();
     const eventId = "evt-inpane-ws-1";
     const projectKey = "proj-inpane-ws-1";
@@ -377,6 +382,12 @@ describe("AC1 — a run-card click swaps the ACTIVE pane's own content to the de
       events: [fx.brief],
       eventDetails: { [eventId]: fx.detail },
     });
+
+    const runsTab = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+    expect(runsTab).toBeDefined();
+    runsTab!.click();
+    await settle();
+    expect(runsTab!.classList.contains("on")).toBe(true);
 
     const projectPaneBefore = document.querySelector('[data-testid="project-pane"]') as HTMLElement | null;
     expect(projectPaneBefore).not.toBeNull();
@@ -455,7 +466,12 @@ describe("AC2 — closing the detail restores the pane's own scroller's EXACT pr
   // default Runs tab) instead of the retired constant `← timeline` — was
   // `findByText(document, "button, a", "← timeline")`. Home's chip stays
   // `← timeline` (see the AC2 Escape/home test below, unaffected).
-  test("'← runs' restores the workspace Runs pane's scrollTop (not window.scrollY)", async () => {
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S1): cold `/p/<key>` now defaults to
+  // Workflow, not Runs — this test's SUBJECT is the Runs pane's own scroller,
+  // so it now selects the Runs tab EXPLICITLY after mount before touching
+  // its scrollTop. Was: set scrollTop on workspace-runs immediately after
+  // cold mount with no tab click.
+  test("'← runs' restores the workspace Runs pane's scrollTop (not window.scrollY) — Runs tab selected explicitly", async () => {
     const now = Date.now();
     const eventId = "evt-inpane-scroll-ws-1";
     const projectKey = "proj-inpane-scroll-ws-1";
@@ -466,6 +482,12 @@ describe("AC2 — closing the detail restores the pane's own scroller's EXACT pr
       events: [fx.brief],
       eventDetails: { [eventId]: fx.detail },
     });
+
+    const runsTab = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+    expect(runsTab).toBeDefined();
+    runsTab!.click();
+    await settle();
+    expect(runsTab!.classList.contains("on")).toBe(true);
 
     const runsPaneBefore = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement;
     expect(runsPaneBefore).not.toBeNull();
@@ -590,6 +612,17 @@ describe("AC4 — the slide-over/scrim contract is retired for run detail", () =
       events: [fx.brief],
       eventDetails: { [eventId]: fx.detail },
     });
+
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S1): a cold `/p/<key>` load now
+    // defaults to the Workflow pane, not Runs (workspace default flips) —
+    // this test's SUBJECT is the retired-scrim contract from a Runs-pane
+    // card click, so it now selects the Runs tab EXPLICITLY after mount
+    // instead of relying on Runs being the cold-load default. Was: no tab
+    // click, relied on cold load already showing the Runs pane's event-card.
+    const runsTab = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+    expect(runsTab).toBeDefined();
+    runsTab!.click();
+    await settle();
 
     const card = document.querySelector('[data-testid="event-card"]') as HTMLElement;
     card.click();
@@ -780,7 +813,13 @@ describe("ONE RULE — a Compile/Coverage-tab card or the Project pane's coverag
 // ────────────────────────────────────────────────────────────────────────
 
 describe("§S1 tabs-hide + tab-in-header — workspace-tabs ABSENT while a detail is open; back chip names the origin tab", () => {
-  test("opening from the default Runs tab: workspace-tabs is ABSENT and the back chip reads '← runs'", async () => {
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S1): cold `/p/<key>` no longer defaults
+  // to Runs (Workflow is now the default) — this test's SUBJECT is the
+  // tabs-hide/back-chip behavior when Runs is the ORIGIN tab, so it now
+  // selects the Runs tab EXPLICITLY after mount instead of relying on it
+  // being the cold-load default. Was: "opening from the default Runs tab" —
+  // renamed to "opening from the Runs tab (selected explicitly)".
+  test("opening from the Runs tab (selected explicitly): workspace-tabs is ABSENT and the back chip reads '← runs'", async () => {
     const now = Date.now();
     const eventId = "evt-tabshide-runs-1";
     const projectKey = "proj-tabshide-runs-1";
@@ -793,6 +832,12 @@ describe("§S1 tabs-hide + tab-in-header — workspace-tabs ABSENT while a detai
     });
 
     expect(document.querySelector('[data-testid="workspace-tabs"]')).not.toBeNull();
+
+    const runsTab = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+    expect(runsTab).toBeDefined();
+    runsTab!.click();
+    await settle();
+    expect(runsTab!.classList.contains("on")).toBe(true);
 
     const card = document.querySelector('[data-testid="event-card"]') as HTMLElement;
     card.click();
@@ -906,17 +951,41 @@ describe("§S1 tabs-hide + tab-in-header — workspace-tabs ABSENT while a detai
     expect((backChip!.textContent ?? "").trim()).toBe("← compile");
   });
 
-  test("cold-loading a workspace run URL defaults to Runs: workspace-tabs is ABSENT and the back chip reads '← runs'", async () => {
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S1): this test asserted that a cold
+  // `/p/<key>/run/<id>` load DEFAULTS its close-target to Runs — that exact
+  // "cold-load-close" contract is now AC3, fully re-pinned (against the new
+  // Workflow default) by tests/workflow-primary-tab.test.ts ("§S1 AC3 —
+  // cold /p/<key>/run/<id> load closes back to the Workflow pane"). Rather
+  // than duplicate that coverage with a Workflow-flavored expectation here,
+  // CONVERTED to the explicit-Runs-click form (rule 1): mounts the workspace
+  // cold, selects the Runs tab EXPLICITLY, then navigates directly to the
+  // run URL via history.pushState + a real popstate dispatch (the PRODUCTION
+  // popstate listener — same technique as the "browser back" test below).
+  // This keeps distinct coverage (a URL-driven navigation into a run route,
+  // not a card click) while being origin-agnostic to whichever tab is the
+  // cold-load DEFAULT. Was: "cold-loading a workspace run URL defaults to
+  // Runs" (mounted the run URL cold with no explicit tab selection).
+  test("navigating directly to a workspace run URL while the Runs tab is explicitly active: workspace-tabs is ABSENT and the back chip reads '← runs'", async () => {
     const now = Date.now();
     const eventId = "evt-tabshide-cold-1";
     const projectKey = "proj-tabshide-cold-1";
     const fx = unitFixture(eventId, projectKey, now);
     await mountApp({
-      pathname: `/p/${projectKey}/run/${eventId}`,
+      pathname: `/p/${projectKey}`,
       projects: [project({ key: projectKey, name: "Tabs-hide Cold Project" })],
       events: [fx.brief],
       eventDetails: { [eventId]: fx.detail },
     });
+
+    const runsTab = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+    expect(runsTab).toBeDefined();
+    runsTab!.click();
+    await settle();
+    expect(runsTab!.classList.contains("on")).toBe(true);
+
+    history.pushState(null, "", `/p/${projectKey}/run/${eventId}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await settle();
 
     expect(document.querySelector('[data-testid="workspace-tabs"]')).toBeNull();
     const backChip = findByText(document, "button, a", "← runs");
@@ -938,7 +1007,12 @@ describe("§S1 tabs-hide + tab-in-header — workspace-tabs ABSENT while a detai
   // ~455-462), so clicking a marker on the workspace ALWAYS lands on the
   // bare `/run/<id>` route (home surface) regardless of where it was
   // clicked from.
-  test("workspace: clicking a transition-marker row opens the GREEN run's detail IN-PANE ON THE WORKSPACE (route /p/<key>/run/<greenId>, tabs ABSENT, chip '← runs'); closing restores the Runs tab + feed", async () => {
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S1): cold `/p/<key>` no longer defaults
+  // to Runs — this test's SUBJECT is the Runs pane's transition-marker +
+  // scroll-restore behavior, so it now selects the Runs tab EXPLICITLY after
+  // mount before touching the Runs pane's scrollTop or asserting it's 'on'
+  // after close. Was: set scrollTop on workspace-runs before any tab click.
+  test("workspace (Runs tab selected explicitly): clicking a transition-marker row opens the GREEN run's detail IN-PANE ON THE WORKSPACE (route /p/<key>/run/<greenId>, tabs ABSENT, chip '← runs'); closing restores the Runs tab + feed", async () => {
     const now = Date.now();
     const projectKey = "proj-tabshide-marker-1";
     const redId = "evt-tabshide-marker-red-1";
@@ -990,6 +1064,12 @@ describe("§S1 tabs-hide + tab-in-header — workspace-tabs ABSENT while a detai
       events: [redBrief, greenBrief],
       eventDetails: { [greenId]: greenDetail },
     });
+
+    const runsTabBefore = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+    expect(runsTabBefore).toBeDefined();
+    runsTabBefore!.click();
+    await settle();
+    expect(runsTabBefore!.classList.contains("on")).toBe(true);
 
     const marker = document.querySelector('[data-testid="transition-marker"]') as HTMLElement | null;
     expect(marker).not.toBeNull();
@@ -1048,7 +1128,13 @@ describe("§S1 tabs-hide + tab-in-header — workspace-tabs ABSENT while a detai
 });
 
 describe("§S1 tabs-hide + tab-in-header — closing (chip / Escape / browser back) restores workspace-tabs with the previously-active tab still 'on'", () => {
-  test("closing via the back chip: workspace-tabs reappears with the Runs tab 'on' and the feed's exact prior scrollTop restored", async () => {
+  // SANCTIONED RE-TARGET (CR-CRU-021 §S1): cold `/p/<key>` no longer defaults
+  // to Runs — this test's SUBJECT is the back-chip's restore-to-Runs
+  // behavior, so it now selects the Runs tab EXPLICITLY after mount before
+  // touching the Runs pane's scrollTop. Was: set scrollTop on
+  // workspace-runs and asserted the Runs tab 'on' after close, both with no
+  // prior tab click.
+  test("closing via the back chip (Runs tab selected explicitly): workspace-tabs reappears with the Runs tab 'on' and the feed's exact prior scrollTop restored", async () => {
     const now = Date.now();
     const eventId = "evt-tabshide-close-chip-1";
     const projectKey = "proj-tabshide-close-chip-1";
@@ -1059,6 +1145,12 @@ describe("§S1 tabs-hide + tab-in-header — closing (chip / Escape / browser ba
       events: [fx.brief],
       eventDetails: { [eventId]: fx.detail },
     });
+
+    const runsTabBefore = findByText(document, '[data-testid="workspace-tab"]', "Runs");
+    expect(runsTabBefore).toBeDefined();
+    runsTabBefore!.click();
+    await settle();
+    expect(runsTabBefore!.classList.contains("on")).toBe(true);
 
     const runsPaneBefore = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement;
     runsPaneBefore.scrollTop = 150;

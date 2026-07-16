@@ -219,6 +219,21 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
       plans: plansBody.plans,
     });
 
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S1): a cold `/p/<key>` load now
+    // defaults to the Workflow pane, not Runs (workspace default flips) —
+    // this test's SUBJECT is the Runs timeline's declared-span dog-food
+    // proof, so it now selects the Runs tab EXPLICITLY after mount instead
+    // of relying on Runs being the cold-load default. Was: no tab click,
+    // relied on cold load already showing the Runs pane's timeline.
+    const runsTab = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+    ).find((t) => (t.textContent ?? "").trim() === "Runs");
+    expect(runsTab).toBeDefined();
+    runsTab!.click();
+    for (let i = 0; i < 8; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
     // Zero inferred (heuristic) markers — declared linkage is the boundary
     // authority once context.cycleId round-trips onto the stored events.
     expect(document.querySelectorAll('[data-testid="transition-marker"]').length).toBe(0);

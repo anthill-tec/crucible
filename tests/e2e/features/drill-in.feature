@@ -20,6 +20,10 @@ Feature: CR-CRU-016 drill-in — run detail inside the Run Timeline pane
     Given a project named "Open Card Project" is registered
     And a passing 1-test run is ingested for agent "agent-drillin-open" on that project
     When I open the workspace for that project
+    # SANCTIONED RE-TARGET (CR-CRU-021 §S1): the workspace's default active
+    # tab is now Workflow, not Runs — select Runs explicitly to view its
+    # feed (was: relied on Runs being the cold-load default).
+    And I click the "Runs" workspace tab
     And I click the event card for "agent-drillin-open"
     Then the run overlay is visible
     And the workspace Runs pane shows no event cards
@@ -52,6 +56,9 @@ Feature: CR-CRU-016 drill-in — run detail inside the Run Timeline pane
     And a passing 1-test run is ingested for agent "agent-chip-6" on that project
     And a passing 1-test run is ingested for agent "agent-chip-7" on that project
     When I open the workspace for that project
+    # SANCTIONED RE-TARGET (CR-CRU-021 §S1): default active tab is now
+    # Workflow — select Runs explicitly before scrolling its pane.
+    And I click the "Runs" workspace tab
     And I scroll the workspace Runs pane down by 240px
     And I click the event card for "agent-chip-mid" without letting Playwright re-scroll the pane
     Then the run overlay is visible
@@ -72,6 +79,9 @@ Feature: CR-CRU-016 drill-in — run detail inside the Run Timeline pane
     Given a project named "Pane Visible Project" is registered with an online agent "agent-drillin-pane" (message "pane stays visible agent")
     And a passing 1-test run is ingested for agent "agent-drillin-pane" on that project
     When I open the workspace for that project
+    # SANCTIONED RE-TARGET (CR-CRU-021 §S1): default active tab is now
+    # Workflow — select Runs explicitly to view its feed.
+    And I click the "Runs" workspace tab
     And I click the event card for "agent-drillin-pane"
     Then the run overlay is visible
     And the project pane is visible

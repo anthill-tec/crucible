@@ -160,6 +160,16 @@ export interface Plan {
   projectKey: string;
   /** Stored VERBATIM — the stable join key (round 24, binding). */
   cr: string;
+  // CR-CRU-021 §S6.11 (additive, optional) — the CR's human title, captured
+  // at plan filing; the Workflow CR-root renders `<cr> · <title>`. Absent
+  // (never null) when the plan was filed without one.
+  title?: string;
+  // CR-CRU-021 §S6 re-baseline (2026-07-17, additive, optional) — the
+  // confirming orchestrator's identity; the Workflow CR-root renders
+  // `<cr> · <title> — <orchestrator>`. Accepted at filing (POST) or as a
+  // one-field PATCH backfill on an OPEN plan. Absent (never null) when
+  // unstamped.
+  orchestrator?: string;
   wave?: string;
   track?: string;
   status: "open" | "closed";
