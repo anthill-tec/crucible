@@ -1,6 +1,6 @@
 # CR-CRU-020 — Patch: workflow history view refinements
 
-**Status:** PENDING
+**Status:** IN_PROGRESS (2026-07-16 — branch feature/CR-CRU-020)
 **Type:** patch
 **Priority:** P2
 **Depends on:** CR-CRU-011, CR-CRU-019
