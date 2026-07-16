@@ -1,6 +1,6 @@
 # CR-CRU-021 — Patch: Workflow as the primary workspace tab
 
-**Status:** COMPLETED (2026-07-17 — merged to develop; 8 cycles, verify PASS, 633/633 · tsc 0 · pytest 8/8 · cov 92.1%)
+**Status:** COMPLETED (2026-07-17 — merged to develop c4c192e; 8 cycles, verify PASS, 633/633 · tsc 0 · pytest 8/8 · cov 92.1%)
 **Type:** patch
 **Priority:** P3
 **Depends on:** CR-CRU-020
