@@ -452,9 +452,19 @@
     const CycleTimer = (cycle) => {
       if (cycle.activatedAt === undefined) return null;
       if (cycle.status === "active") {
+        // CR-CRU-023 §S3 (a) — the ticking badge derives from the SERVER-fed
+        // accumulated attention time (`activeMs`, restart-resume semantics),
+        // advanced locally by `tickNow` from the render instant between
+        // polls — NEVER from wall-clock-since-activatedAt (which reads
+        // downtime as attention). Pre-epoch payloads without `activeMs`
+        // fall back to the wall-clock base, which reduces this derivation
+        // exactly to the previous `tickNow − activatedAt` behavior.
+        const renderedAt = Date.now();
+        const baseMs =
+          cycle.activeMs !== undefined ? cycle.activeMs : renderedAt - cycle.activatedAt;
         return span(
           { "data-testid": "cycle-timer", class: "app-cycle-timer-slot app-cycle-timer-ember" },
-          () => fmtCycleTimer(tickNow.val - cycle.activatedAt),
+          () => fmtCycleTimer(baseMs + (tickNow.val - renderedAt)),
         );
       }
       if (cycle.doneAt === undefined) return null;

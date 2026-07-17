@@ -120,6 +120,9 @@ interface PlanCycleRow {
   // CR-CRU-011 §S0b — transition timestamps (nullable until stamped).
   activated_at: number | null;
   done_at: number | null;
+  // CR-CRU-023 §S3 (a) — accumulated active-attention ms, checkpointed at
+  // transition writes (0 on activation; sealed on leaving active).
+  active_ms_accumulated: number | null;
 }
 
 /**
@@ -159,8 +162,15 @@ export class Store {
   /** Monotonic per-store sequence for event ids. */
   private seq = 0;
   private readonly listeners = new Set<ChangeListener>();
+  /**
+   * CR-CRU-023 §S3 (a) — per-Store boot anchor: the live attention epoch of
+   * an active cycle starts at max(activatedAt, bootedAt), so time the
+   * service spent DOWN is never counted as attention.
+   */
+  private readonly bootedAt: number;
 
   constructor(path: string) {
+    this.bootedAt = Date.now();
     this.db = new Database(path, { create: true });
     if (path !== ":memory:") {
       this.db.exec("PRAGMA journal_mode = WAL;");
@@ -274,6 +284,7 @@ export class Store {
         status TEXT NOT NULL,
         activated_at INTEGER,
         done_at INTEGER,
+        active_ms_accumulated INTEGER,
         PRIMARY KEY (project_key, cycle_id)
       );
     `);
@@ -304,6 +315,11 @@ export class Store {
     }
     if (!cycleCols.has("done_at")) {
       this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN done_at INTEGER`);
+    }
+    // CR-CRU-023 §S3 (a) — additive accumulated-attention column; pre-023
+    // db files lack it (same PRAGMA-checked retrofit pattern as above).
+    if (!cycleCols.has("active_ms_accumulated")) {
+      this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN active_ms_accumulated INTEGER`);
     }
     // CR-CRU-021 §S6.11 — additive plan title column; pre-021 db files lack
     // it (same PRAGMA-checked retrofit pattern as events/plan_cycles above).
@@ -970,12 +986,26 @@ export class Store {
     const now = Date.now();
     const activatedAt = to === "active" ? now : row.activated_at;
     const doneAt = Store.CYCLE_TERMINAL.has(to) ? now : row.done_at;
+    // CR-CRU-023 §S3 (a) — attention-epoch checkpoints at transition writes:
+    // activation opens an epoch with an explicit 0 checkpoint; leaving
+    // `active` (the terminal transition) seals the open epoch — accumulated
+    // += now − max(activatedAt, bootedAt) — so restarts resume from the
+    // persisted setpoint, excluding downtime.
+    let activeMsAccumulated = row.active_ms_accumulated;
+    if (to === "active") {
+      activeMsAccumulated = 0;
+    } else if (row.status === "active" && row.activated_at !== null) {
+      const epochStart = Math.max(row.activated_at, this.bootedAt);
+      activeMsAccumulated =
+        (row.active_ms_accumulated ?? 0) + Math.max(0, now - epochStart);
+    }
     this.db
       .query(
-        `UPDATE plan_cycles SET status = ?, activated_at = ?, done_at = ?
+        `UPDATE plan_cycles SET status = ?, activated_at = ?, done_at = ?,
+           active_ms_accumulated = ?
          WHERE project_key = ? AND cycle_id = ?`,
       )
-      .run(to, activatedAt, doneAt, projectKey, cycleId);
+      .run(to, activatedAt, doneAt, activeMsAccumulated, projectKey, cycleId);
     this.emit("events", projectKey);
     return {
       id: row.cycle_id,
@@ -1072,6 +1102,16 @@ export class Store {
         // null, until stamped — same convention as Plan.closedAt).
         ...(cycle.activated_at !== null ? { activatedAt: cycle.activated_at } : {}),
         ...(cycle.done_at !== null ? { doneAt: cycle.done_at } : {}),
+        // CR-CRU-023 §S3 (a) — ACTIVE cycles carry the derived accumulated
+        // attention time: persisted checkpoint + the live epoch anchored at
+        // max(activatedAt, bootedAt). Sealed/pending rows are untouched.
+        ...(cycle.status === "active" && cycle.activated_at !== null
+          ? {
+              activeMs:
+                (cycle.active_ms_accumulated ?? 0) +
+                Math.max(0, Date.now() - Math.max(cycle.activated_at, this.bootedAt)),
+            }
+          : {}),
       }),
     );
     const plan: Plan = {

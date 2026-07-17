@@ -51,6 +51,17 @@ running); gate latency is *loop overhead* (orchestrator attention, user
 review, scheduling). Classic trackers cannot make this split; Crucible can
 because every run is stamped and cycle-linked. Reported separately, always.
 
+**Amendment (2026-07-17 — CR-CRU-023 §S3, user-sanctioned option (a)):** the
+LIVE ticking display on an ACTIVE cycle shows **attention time**
+(`activeMs`) — accumulated server-up epochs anchored at
+`max(activatedAt, storeBootedAt)` — so service restarts RESUME from the
+persisted setpoint and infrastructure downtime is EXCLUDED from the ticking
+value. `loop(c)` as defined above (`doneAt − activatedAt`, downtime
+INCLUDED) is unchanged and remains what SEALED durations display and what
+§4-§6 velocity/forecast computations consume. Attention time is a display
+metric today; if analytics later want it, that is a new DN decision, not a
+silent swap.
+
 ## 4 Velocity
 
 Over a window `W` (default: since first closed cycle; UI may narrow):
@@ -144,6 +155,7 @@ no new event kinds; the UI recomputes on the existing plan/queue SSE ticks.
 | execution velocity | machine clock — agent run time per cycle |
 | loop velocity | wall clock — activate→done including gate latency |
 | gate latency | loop − execution; the human/orchestration overhead |
+| attention time | `activeMs` — accumulated server-up epochs; the ACTIVE ticking display (downtime excluded; CR-023 §S3a) |
 | band | a P50/P80 range; the only legal estimate form |
 | scope-change step | burndown discontinuity from a queue re-registration |
 
