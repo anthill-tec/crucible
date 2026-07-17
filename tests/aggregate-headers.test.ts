@@ -106,6 +106,7 @@ interface CycleFixture {
 interface PlanFixture {
   planId: number | string;
   cr: string;
+  projectKey: string;
   status: "open" | "closed";
   wave?: string;
   track?: string;
@@ -277,6 +278,7 @@ describe("§S4 — CR-group headers carry an aggregate pill, never per-agent row
       const plan: PlanFixture = {
         planId: 9001,
         cr: "CR-AGG-1",
+        projectKey: "agg-collapse-expand-1",
         status: "closed",
         wave: "1",
         merge: { commit: "agg1commit" },
@@ -350,6 +352,7 @@ describe("§S4 — CR-group headers carry an aggregate pill, never per-agent row
       const plan: PlanFixture = {
         planId: 9002,
         cr: "CR-AGG-2",
+        projectKey: "agg-singular-1",
         status: "closed",
         wave: "1",
         merge: { commit: "agg2commit" },
@@ -387,6 +390,7 @@ describe("§S4 — CR-group headers carry an aggregate pill, never per-agent row
       const plan: PlanFixture = {
         planId: 9003,
         cr: "CR-AGG-3",
+        projectKey: "agg-zero-1",
         status: "closed",
         wave: "1",
         merge: { commit: "agg3commit" },
@@ -440,6 +444,7 @@ describe("§S4 regression pins — the three historical causes never surface an 
       const plan: PlanFixture = {
         planId: 9004,
         cr: "CR-AGG-4",
+        projectKey: "agg-fabricated-0ms-1",
         status: "closed",
         wave: "1",
         merge: { commit: "agg4commit" },
@@ -502,6 +507,7 @@ describe("§S4 regression pins — the three historical causes never surface an 
       const plan: PlanFixture = {
         planId: 9005,
         cr: "CR-AGG-5",
+        projectKey: "agg-lingering-online-1",
         status: "closed",
         wave: "1",
         merge: { commit: "agg5commit" },
@@ -572,6 +578,7 @@ describe("§S4 regression pins — the three historical causes never surface an 
       const plan: PlanFixture = {
         planId: 9006,
         cr: "CR-AGG-6",
+        projectKey: "agg-linked-run-leak-1",
         status: "closed",
         wave: "1",
         merge: { commit: "agg6commit" },

@@ -47,7 +47,7 @@ Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline pla
     And I expand cycle "c1 red-green" in the cr group for "CR-WF-1"
     Then the cr group for "CR-WF-1" shows cycle "c1 red-green" as a closed span containing the linked run for agent "agent-wf1"
 
-  Scenario: F13 the Runs timeline suppresses the heuristic marker for plan-linked runs and renders the active-cycle span, then the declared marker once the cycle is done; an unlinked control pair still gets the classic heuristic marker
+  Scenario: F13 the Runs timeline suppresses the heuristic marker for plan-linked runs and renders the active-cycle span, then the declared marker once the cycle is done
     Given a project named "WF Timeline Project" is registered
     And a cycle plan is filed for cr "CR-WF-2" with a cycle labelled "c1 red-green"
     And cycle 1 of that plan is activated
@@ -60,12 +60,29 @@ Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline pla
     And I click the "Runs" workspace tab
     Then the workspace Runs pane shows no transition marker
     And the workspace Runs pane shows the active cycle span for "c1 red-green" on "CR-WF-2"
-    When a fail(2/5) run is ingested for agent "CR-WF2-CTRL-RED"
-    And a pass(5/5) run is ingested for agent "CR-WF2-CTRL-GREEN"
-    Then exactly one transition marker becomes visible within 2 seconds in the workspace Runs pane
     When cycle 1 of that plan is marked done
     Then the declared marker for "c1 red-green" on "CR-WF-2" becomes visible within 2 seconds
     And the workspace Runs pane shows no cycle-span-open element
+
+  # SANCTIONED RE-TARGET (CR-CRU-026 §S3.4 — vestige cleanout): this control
+  # pair used to be ingested unlinked into "WF Timeline Project" ABOVE (the
+  # very project CR-WF-2 owns a plan for). §S3.4 makes the CR-007 heuristic
+  # marker structurally UNREACHABLE on any project that has a plan — a
+  # capability-conditional rule, not the old per-event cycleId-linkage
+  # carve-out — so an unlinked run there now renders a plain card, never a
+  # phantom pair (pinned at the unit level in
+  # tests/home-marker-parity.test.ts's "§S3.4 — vestige cleanout" suite).
+  # The classic heuristic-marker assertion stays meaningful only on a
+  # PLANLESS project (the CR-011 §S0b fallback) — moved here, onto its own
+  # dedicated second project, per this file's existing precedent of one
+  # concern per scenario (e.g. Scenario 1 vs Scenario 3 above).
+  Scenario: F13 an unlinked RED/GREEN control pair on a PLANLESS project still gets the classic heuristic marker (§S3.4 capability-conditional)
+    Given a project named "WF Timeline Control Project" is registered
+    When I open the workspace for that project
+    And I click the "Runs" workspace tab
+    And a fail(2/5) run is ingested for agent "CR-WF2-CTRL-RED"
+    And a pass(5/5) run is ingested for agent "CR-WF2-CTRL-GREEN"
+    Then exactly one transition marker becomes visible within 2 seconds in the workspace Runs pane
 
   Scenario: F13 with an open plan and an active cycle, the Workflow tab's active section shows the per-CR todo, and the active cycle row renders its linked run inline with no toggle (CR-CRU-021 ruling (a) re-target)
     Given a project named "WF Active Project" is registered

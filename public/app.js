@@ -68,6 +68,25 @@
       if (!sameSurface) {
         state.workspaceTab = "Workflow";
         state.selectedAgent = null;
+        scopeChanged();
+      }
+    }
+
+    // CR-CRU-026 §S1 — a scope-changing transition (home↔workspace,
+    // project→project; click-driven OR popstate) synchronously removes the
+    // previous scope's plan data — no frame may paint another project's
+    // plans — and, when landing on a workspace, immediately fires the scoped
+    // plans fetch plus the core refetch slice. SSE/poll stays the
+    // steady-state refresh; navigation no longer depends on it.
+    function scopeChanged() {
+      vanX.replace(state.plans, () => []);
+      // CR-CRU-026 §S3.2 — refetchPlans is surface-aware (home → the global
+      // route, workspace → the scoped one), so EVERY scope change refetches
+      // the landing surface's plan slice; the core slice stays a
+      // workspace-landing concern (home keeps its poll/SSE cadence).
+      void refetchPlans();
+      if (state.route.page === "workspace") {
+        void refetchCore();
       }
     }
 
@@ -82,7 +101,15 @@
     }
 
     window.addEventListener("popstate", () => {
-      state.route = L.routeParse(location.pathname);
+      // CR-CRU-026 §S1 — popstate parity: back/forward across scopes gets
+      // the same clear + scoped-refetch treatment as navigate().
+      const prev = state.route;
+      const next = L.routeParse(location.pathname);
+      state.route = next;
+      const sameSurface =
+        next.page === prev.page &&
+        (next.page !== "workspace" || next.projectKey === prev.projectKey);
+      if (!sameSurface) scopeChanged();
     });
 
     // CR-CRU-012 §S2 — close the Projects manager slide-over back to home
@@ -107,6 +134,14 @@
     }
 
     async function refetch() {
+      await refetchCore();
+      await refetchPlans();
+    }
+
+    // CR-CRU-026 §S1 — the core slice (projects/agents/events/health) split
+    // out of refetch() so a scope-changing navigation can fire it alongside
+    // refetchPlans() without double-fetching the plans route.
+    async function refetchCore() {
       try {
         const [projects, agents, events, health] = await Promise.all([
           getJson("/api/v2/projects"),
@@ -123,7 +158,6 @@
       } catch {
         // Reachability is owned by the watchdog below; keep stale data visible.
       }
-      await refetchPlans();
     }
 
     // CR-CRU-011 §S3 — the Workflow tab's plan slice (the C1 project-scoped
@@ -131,12 +165,17 @@
     // active todo view refreshes over the SAME SSE/poll cadence as the feed.
     // Guarded separately from the core slice: a plans failure never poisons
     // projects/agents/events, and reachability stays the watchdog's concern.
+    // CR-CRU-026 §S3.2 — surface-aware: a workspace stays on the C1
+    // project-scoped route; every other surface (home) reads the additive
+    // global `GET /api/v2/plans` (all non-archived projects' plans), so the
+    // home timeline gets declared plan data over the same refetch cadence.
     async function refetchPlans() {
-      if (state.route.page !== "workspace") return;
+      const url =
+        state.route.page === "workspace"
+          ? `/api/v2/projects/${encodeURIComponent(state.route.projectKey)}/plans`
+          : "/api/v2/plans";
       try {
-        const body = await getJson(
-          `/api/v2/projects/${encodeURIComponent(state.route.projectKey)}/plans`,
-        );
+        const body = await getJson(url);
         vanX.replace(state.plans, () => body.plans ?? []);
       } catch {
         // Keep the last-known plans visible while the route is unreachable.
@@ -1796,8 +1835,16 @@
         .concat(plan.wave !== undefined ? [`wave ${plan.wave}`] : [])
         .join(" · ");
 
+    // CR-CRU-026 §S2 — STRICT render guard: the Workflow lens paints ONLY
+    // plans DECLARING the routed project's key (defense in depth over the
+    // §S1 clear — even if stale data survives a race, a plan tagged for
+    // another project, or one with NO projectKey at all, never renders
+    // here). C1's undefined-tolerance is dropped (sanctioned follow-up).
+    const scopedPlans = () =>
+      state.plans.filter((p) => p.projectKey === state.route.projectKey);
+
     const WorkflowActive = () => {
-      const openPlans = state.plans.filter((p) => p.status === "open");
+      const openPlans = scopedPlans().filter((p) => p.status === "open");
       return div(
         { "data-testid": "workflow-active", class: "app-workflow-active" },
         openPlans.length === 0
@@ -2050,7 +2097,7 @@
     // timeline (the never-hidden rule lives there).
     const WorkflowHistory = () => {
       const lens = L.workflowLens({
-        plans: state.plans,
+        plans: scopedPlans(), // CR-CRU-026 §S2 — same guard as Active
         events: state.events.filter((e) => e.projectKey === state.route.projectKey),
       });
       return div(

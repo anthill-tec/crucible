@@ -80,6 +80,7 @@ interface CycleFixture {
 interface PlanFixture {
   planId: number | string;
   cr: string;
+  projectKey: string;
   status: "open" | "closed";
   wave?: string;
   track?: string;
@@ -235,6 +236,7 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
       const activePlan: PlanFixture = {
         planId: 9001,
         cr: "CR-NAI-042",
+        projectKey: "f13-fidelity-1",
         status: "open",
         wave: "1",
         track: "track-1",
@@ -253,6 +255,7 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
       const historyTrack1: PlanFixture = {
         planId: 9002,
         cr: "CR-NAI-041",
+        projectKey: "f13-fidelity-1",
         status: "closed",
         wave: "1",
         track: "track-1",
@@ -272,6 +275,7 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
       const historyTrack2: PlanFixture = {
         planId: 9003,
         cr: "CR-NAI-040",
+        projectKey: "f13-fidelity-1",
         status: "closed",
         wave: "1",
         track: "track-2",
@@ -465,6 +469,7 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
     const plan: PlanFixture = {
       planId: 9101,
       cr: "CR-NT-1",
+      projectKey: "f13-fidelity-notitle",
       status: "open",
       track: "track-1",
       wave: "1",
@@ -488,6 +493,7 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
     const plan: PlanFixture = {
       planId: 9102,
       cr: "CR-SOLO-1",
+      projectKey: "f13-fidelity-solo",
       status: "open",
       wave: "2",
       cycles: [{ id: 5101, label: "c1", status: "pending" }],
@@ -511,6 +517,7 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
     const plan: PlanFixture = {
       planId: 9103,
       cr: "CR-TITLE-ONLY-1",
+      projectKey: "f13-fidelity-title-only",
       status: "open",
       track: "track-1",
       wave: "1",
@@ -538,6 +545,7 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
     const plan: PlanFixture = {
       planId: 9104,
       cr: "CR-ORCH-ONLY-1",
+      projectKey: "f13-fidelity-orch-only",
       status: "open",
       track: "track-1",
       wave: "1",
@@ -577,6 +585,7 @@ describe("§S6 #2 (re-baselined 2026-07-17) — bare done rows carry NO narratio
     const plan: PlanFixture = {
       planId: 9201,
       cr: "CR-NARR-1",
+      projectKey: "f13-narration-1",
       status: "open",
       track: "track-1",
       wave: "1",
@@ -610,6 +619,7 @@ describe("§S6 #2 (re-baselined 2026-07-17) — bare done rows carry NO narratio
     const plan: PlanFixture = {
       planId: 9202,
       cr: "CR-NARR-2",
+      projectKey: "f13-narration-2",
       status: "open",
       track: "track-1",
       wave: "1",
@@ -692,6 +702,7 @@ describe("§S6 #8 — collapsed history cycle rows carry a run-count hint (▸ N
     const plan: PlanFixture = {
       planId: 9301,
       cr: "CR-RC-1",
+      projectKey: "f13-runcount-1",
       status: "closed",
       wave: "1",
       merge: { commit: "rc0000a" },
@@ -735,6 +746,7 @@ describe("§S6 #8 — collapsed history cycle rows carry a run-count hint (▸ N
     const plan: PlanFixture = {
       planId: 9302,
       cr: "CR-RC-SINGULAR-1",
+      projectKey: "f13-runcount-singular-1",
       status: "closed",
       wave: "1",
       merge: { commit: "rc0000b" },
@@ -774,6 +786,7 @@ describe("§S6 #10 — no extra rail-title above the active header", () => {
     const plan: PlanFixture = {
       planId: 9401,
       cr: "CR-NORAIL-1",
+      projectKey: "f13-norail-1",
       status: "open",
       wave: "1",
       cycles: [{ id: 8001, label: "c1", status: "pending" }],
@@ -808,6 +821,7 @@ describe("RULED (a) — the ACTIVE cycle's open span is ALWAYS inline; no toggle
     const plan: PlanFixture = {
       planId: 9501,
       cr: "CR-RULED-A",
+      projectKey: "f13-ruled-a-1",
       status: "open",
       wave: "1",
       track: "track-1",
@@ -886,6 +900,7 @@ describe("§S6 #3 RED addendum (cycle 13, gap 1) — open-span runs render as ON
     const plan: PlanFixture = {
       planId: 9801,
       cr: "CR-NAI-042",
+      projectKey: "f13-inline-span-1",
       status: "open",
       wave: "1",
       track: "track-1",
@@ -975,6 +990,7 @@ describe("§S6 #3 RED addendum (cycle 18, live-review) — ZERO linked runs rend
     const plan: PlanFixture = {
       planId: 9802,
       cr: "CR-NAI-043",
+      projectKey: "f13-no-runs-1",
       status: "open",
       wave: "1",
       track: "track-1",
@@ -1014,6 +1030,7 @@ describe("§S6 #3 RED addendum (cycle 18, live-review) — ZERO linked runs rend
     const plan: PlanFixture = {
       planId: 9803,
       cr: "CR-NAI-044",
+      projectKey: "f13-no-runs-2",
       status: "open",
       wave: "1",
       track: "track-1",

@@ -721,6 +721,20 @@ function handlePlansList(store: Store, key: string, req: Request, url: URL): Res
 }
 
 /**
+ * CR-CRU-026 §S3.2 — GET /api/v2/plans: ALL non-archived projects' plans in
+ * one additive global read (the home timeline's plan feed). Item shape is
+ * IDENTICAL to the project-scoped list — both derive from store.listPlans()
+ * (toPlan() already stamps projectKey) — and reply() gives the same
+ * ?fmt=toon negotiation. GET-only: any other method falls through handleV2
+ * to the server's generic 404 catch-all. store.listProjects() excludes
+ * archived projects by default, which IS the exclusion rule here.
+ */
+function handlePlansGlobalList(store: Store, req: Request, url: URL): Response {
+  const plans = store.listProjects().flatMap((project) => store.listPlans(project.key));
+  return reply(req, url, { ok: true, plans });
+}
+
+/**
  * CR-CRU-012 §S1b — POST …/projects/<key>/archive | /unarchive. Validates
  * UUID shape + existence ONLY (an archived project must stay addressable so
  * unarchive can restore it — requireProject's archived gate does not apply
@@ -1011,6 +1025,10 @@ export function handleV2(
   }
   if (req.method === "GET" && pathname === "/api/v2/projects") {
     return handleProjectsList(store, req, url);
+  }
+  // CR-CRU-026 §S3.2 — the global (non-archived) plans read, GET-only.
+  if (req.method === "GET" && pathname === "/api/v2/plans") {
+    return handlePlansGlobalList(store, req, url);
   }
   // CR-CRU-011 §S0 — project-scoped plans routes.
   if (pathname.startsWith("/api/v2/projects/")) {
