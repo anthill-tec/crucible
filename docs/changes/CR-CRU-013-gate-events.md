@@ -100,6 +100,16 @@ Still zero wave-control API — state remains inferred from plans + gate events.
 - [ ] §S4b: `POST /api/v2/milestones {type:"gap-analysis", label:"…"}` → 201 `kind:"milestone"`; `type:"deploy"` → 400 naming `type`; rollups unchanged; the WORKSPACE timeline renders a `data-testid="milestone-entry"` slim row with the ◇ glyph + type + label, while the HOME timeline renders zero milestone entries for the same fixture (workspace-scoped assertion).
 - [ ] E2E: `tests/e2e/gates.e2e.ts` — file plan → milestone gap-analysis → close cycles + plan → ingest gate via API → workspace timeline shows the milestone entry AND the boundary card, home shows the compact gate entry but no milestone, `gated` wave header + populated gate pane; results ingested `tier:"e2e"`.
 
+### §S3 addendum — drill-in origin (LOCKED 2026-07-18, user design review)
+A gate is a wave-boundary MARKER, not a run (same class as the RED→GREEN
+transition marker / ⟲ Cycle-done boundary). The gate drill-in (§S3) is
+reachable from BOTH surfaces where the gate appears: the Runs-timeline 🛡
+boundary card (§S2) and the Workflow-tab gate pane (§S4). Per CR-016's
+one-rule, the drill-in is a pane state of WHICHEVER pane opened it — the back
+chip names the origin (`← runs` from the timeline seal, `← workflow` from the
+gate pane); tabs hide; the Project pane stays live; single form (no density
+switch). Storyboard F13¼ is the visual contract.
+
 ## Estimated size
 M.
 
