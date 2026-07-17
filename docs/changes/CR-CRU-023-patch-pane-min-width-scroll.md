@@ -1,6 +1,6 @@
 # CR-CRU-023 — Patch: gate-review defects — pane scroll floor · vitals trend chart · timer restart semantics
 
-**Status:** PENDING
+**Status:** COMPLETED (2026-07-17 — merged to develop; 5 cycles incl. verify FAIL→fix→re-verify PASS; 663/663 · 24/24 e2e · tsc 0 · cov 92.2%)
 **Type:** patch
 **Priority:** P3
 **Depends on:** CR-CRU-021
@@ -75,7 +75,7 @@ retroactively rewritten).
 
 - [ ] §S2: with 4 retained green-regression coverage points, the Vitals COVERAGE TREND box renders 4 bar elements (heights monotone with the coverage values, latest last) + the range caption; with 1 point it renders 1 bar (no text-only fallback).
 - [ ] §S4: a 1-run collapsed cycle hint renders `▸ 1 run` (N=1 fixture); the `cr-rollup` testid exists ONLY as the visible rollup form (no `.app-hidden-data` span in the DOM), with the two CR-020 assertions re-targeted onto it.
-- [ ] §S3: per the option chosen at gap analysis — (a) an active cycle's timer value derives from persisted accumulated epochs and a simulated service restart (store reopen) resumes the accumulated value, not wall-clock-since-activation; or (b) the display anchors to `max(activatedAt, serverStartedAt)` asserted with an injected boot timestamp. Sealed history rows keep `doneAt − activatedAt` untouched either way; the DN amendment ships in the same cycle.
+- [ ] §S3: per the option chosen at gap analysis — (a) an active cycle's timer value derives from persisted accumulated epochs and a simulated service restart (store reopen) resumes the accumulated value, not wall-clock-since-activation (CHECKPOINT CADENCE, recorded at the verify fix round: the accumulated value persists within ≤60s of the last cycle read while active (read-triggered checkpoint — SSE-quiet idle windows can exceed it; re-verify-noted precision) — a hard crash loses at most one 60s window; the resume pin asserts within that tolerance); or (b) the display anchors to `max(activatedAt, serverStartedAt)` asserted with an injected boot timestamp. Sealed history rows keep `doneAt − activatedAt` untouched either way; the DN amendment ships in the same cycle.
 
 ## Estimated size
 S.

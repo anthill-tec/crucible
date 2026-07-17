@@ -234,6 +234,18 @@ body {
    (closing an in-pane run detail) is always reachable, however short the
    feed currently is. */
 .app-center > .app-pane-content { min-height: calc(100% + 260px); }
+/* CR-CRU-023 §S1 — global pane scroll floor (min supported screen
+   1024×640): the shared content wrapper is each central pane's own
+   horizontal scroll boundary. Its children carry a min-width floor, so
+   below the floor the PANE scrolls inside itself instead of crushing its
+   content; the page body never scrolls horizontally. 660px: at a 1024px
+   viewport the workspace center pane's content box is ≈687px wide
+   (1024 − 2×12 frame padding − 260px right-rail minimum − 12px grid gap −
+   2×12 pane padding − 2px borders), so standard content stays scroll-free
+   at 1024×640 with headroom for a scrollbar gutter; home's full-width
+   timeline is far wider still. */
+.app-pane-content { overflow-x: auto; }
+.app-pane-content > * { min-width: 660px; }
 .app-rail-title {
   font: 600 11px/1.4 var(--mono);
   text-transform: uppercase;
@@ -734,15 +746,6 @@ body {
   margin: 4px 0 2px;
 }
 .app-cr-root-cycles { margin-left: 14px; }
-/* §S6 #6 — legacy done/total figure kept addressable, visually hidden */
-.app-hidden-data {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
 .app-run-count-hint { margin-left: 8px; }
 .app-cycle-kind-badge { color: var(--ink-faint); }
 .app-open-span-annotation { margin-left: 8px; }

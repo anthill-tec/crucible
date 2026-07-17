@@ -718,6 +718,52 @@ describe("§S6 #8 — collapsed history cycle rows carry a run-count hint (▸ N
     expect(cycleRow.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(0);
     expect(norm(cycleRow.textContent)).toContain("▸ 2 runs");
   });
+
+  // CR-CRU-023 §S4 #1 — singular run hint: N=1 pins "▸ 1 run", not "▸ 1 runs"
+  // (app.js:~1491 region hard-codes the plural "runs" suffix regardless of
+  // count — the AC requires the N=1 singular form).
+  test("a done history cycle with EXACTLY 1 linked run, before its OWN toggle is clicked, shows '▸ 1 run' (singular, not '▸ 1 runs')", async () => {
+    const key = "f13-runcount-singular-1";
+    const now = Date.now();
+    const run1 = runEvent({
+      id: "evt-rc-single-1",
+      projectKey: key,
+      agentId: "agent-a",
+      timestamp: now,
+      context: { cycleId: 7101 },
+    });
+    const plan: PlanFixture = {
+      planId: 9302,
+      cr: "CR-RC-SINGULAR-1",
+      status: "closed",
+      wave: "1",
+      merge: { commit: "rc0000b" },
+      cycles: [{ id: 7101, label: "wire the API", status: "done" }],
+    };
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Run Count Singular Project" })],
+      events: [run1],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const crGroup = history().querySelector<HTMLElement>('[data-testid="cr-group"][data-cr="CR-RC-SINGULAR-1"]');
+    expect(crGroup).not.toBeNull();
+    const groupToggle = crGroup!.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]')!;
+    expect(groupToggle).not.toBeNull();
+    groupToggle.click();
+    await settle();
+
+    const cycleRow = crGroup!.querySelector<HTMLElement>('[data-testid="lens-cycle-row"]')!;
+    expect(cycleRow).not.toBeNull();
+    // the cycle's OWN toggle (for its linked runs) is untouched — collapsed.
+    expect(cycleRow.querySelectorAll('[data-testid="linked-run-row"]').length).toBe(0);
+    const hintText = norm(cycleRow.textContent);
+    expect(hintText).toContain("▸ 1 run");
+    // negative pin — the plural suffix must NOT survive at N=1.
+    expect(hintText).not.toContain("▸ 1 runs");
+  });
 });
 
 // ── §S6 #10 — no extra rail-title above the active header (dedicated) ─────

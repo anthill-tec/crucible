@@ -452,9 +452,19 @@
     const CycleTimer = (cycle) => {
       if (cycle.activatedAt === undefined) return null;
       if (cycle.status === "active") {
+        // CR-CRU-023 §S3 (a) — the ticking badge derives from the SERVER-fed
+        // accumulated attention time (`activeMs`, restart-resume semantics),
+        // advanced locally by `tickNow` from the render instant between
+        // polls — NEVER from wall-clock-since-activatedAt (which reads
+        // downtime as attention). Pre-epoch payloads without `activeMs`
+        // fall back to the wall-clock base, which reduces this derivation
+        // exactly to the previous `tickNow − activatedAt` behavior.
+        const renderedAt = Date.now();
+        const baseMs =
+          cycle.activeMs !== undefined ? cycle.activeMs : renderedAt - cycle.activatedAt;
         return span(
           { "data-testid": "cycle-timer", class: "app-cycle-timer-slot app-cycle-timer-ember" },
-          () => fmtCycleTimer(tickNow.val - cycle.activatedAt),
+          () => fmtCycleTimer(baseMs + (tickNow.val - renderedAt)),
         );
       }
       if (cycle.doneAt === undefined) return null;
@@ -761,7 +771,7 @@
     // newest-first (server order), filter pulldown in this pane's header.
     const TimelineFeed = () =>
       div(
-        { class: "app-pane-content" },
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
         div(
           { class: "app-timeline-head" },
           // §S5 fidelity #4 — "Run timeline — <scope>": all projects, or the
@@ -870,7 +880,7 @@
 
     const WorkspaceRunsFeed = () =>
       div(
-        { class: "app-pane-content" },
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
         div(
           { class: "app-timeline-head" },
           // §S5 fidelity #4 — workspace Runs pane label; #3 — density toggle
@@ -940,21 +950,14 @@
       );
     };
 
-    // §S5.2 (d) — green-coverage points from the loaded slice (events
-    // carrying the additive `coverageLines` brief field), oldest→newest,
-    // capped at the latest 12.
-    function coverageTrendPoints() {
-      return L.filterEvents(state.events, { projectKey: state.route.projectKey })
-        .filter((e) => typeof e.coverageLines === "number")
-        .sort((x, y) => x.timestamp - y.timestamp)
-        .slice(-12)
-        .map((e) => e.coverageLines);
-    }
-
+    // CR-CRU-023 §S2 — trend points come from the DURABLE server-side
+    // rollup series (project.coverageTrend), NOT the transient state.events
+    // feed (retention pruning collapsed that slice — the §S2 regression).
     const CoverageTrendCard = () => {
-      const percent = currentProject()?.latestGreenCoverage?.lines?.percent;
+      const project = currentProject();
+      const percent = project?.latestGreenCoverage?.lines?.percent;
       if (typeof percent !== "number") return null;
-      const points = coverageTrendPoints();
+      const points = project?.coverageTrend ?? [];
       const caption =
         points.length >= 2
           ? `${points[0]} → ${points[points.length - 1]}% lines`
@@ -965,7 +968,9 @@
           { "data-testid": "vitals-card-label", class: "app-vitals-label" },
           "COVERAGE TREND (green regressions)",
         ),
-        points.length >= 2
+        // §S2 — bars render whenever the series is non-empty (the old
+        // `>= 2` gate was the defect: 1 point must render 1 bar).
+        points.length > 0
           ? div(
               { "data-testid": "coverage-trend-bars", class: "app-trend-bars" },
               points.map((p, i) =>
@@ -1096,7 +1101,7 @@
       const fns = cov?.functions;
       const eventId = p?.latestCoverageEventId;
       return div(
-        { class: "app-pane-content" },
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
         div(
           { "data-testid": "coverage-panel", class: "app-coverage-panel" },
           div({ class: "app-rail-title" }, "Coverage — latest green regression"),
@@ -1138,7 +1143,7 @@
     // events, identical card anatomy/testids as Runs.
     const CompileFeed = () =>
       div(
-        { class: "app-pane-content" },
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
         div(
           { class: "app-timeline-head" },
           div({ class: "app-rail-title" }, () => {
@@ -1162,7 +1167,7 @@
     // §S5.5 — BDD keeps a placeholder naming the REAL landing CR (0.2.0).
     const BddFeed = () =>
       div(
-        { class: "app-pane-content" },
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
         div(
           { class: "app-empty" },
           "BDD run results already stream into the Runs timeline — " +
@@ -1488,7 +1493,7 @@
                 !lensOpen(key) && cycle.runs.length > 0
                   ? span(
                       { class: "app-card-meta app-run-count-hint" },
-                      `▸ ${cycle.runs.length} runs`,
+                      `▸ ${cycle.runs.length} run${cycle.runs.length === 1 ? "" : "s"}`,
                     )
                   : ""
             : null,
@@ -1524,9 +1529,10 @@
         // CR-CRU-020 §S1.2 — the existing header row IS the toggle; only the
         // cycle list collapses (by default) beneath it. CR-CRU-021 §S6 #6/#9
         // — the collapsed form is INLINE DIM TEXT, not pill-chips:
-        // `▸ [<track> › ]<cr> · <n> cycles ✓ · merged <sha>` (no `@`). The
-        // legacy `<done>/<total>` rollup figure stays addressable (visually
-        // hidden) for the CR-020 header contract.
+        // `▸ [<track> › ]<cr> · <n> cycles ✓ · merged <sha>` (no `@`).
+        // CR-CRU-023 §S4 #2 — the hidden `.app-hidden-data` cr-rollup
+        // compatibility span is retired; the visible rollup form carries
+        // the done/total figures.
         div(
           {
             "data-testid": "cr-group-toggle",
@@ -1554,10 +1560,6 @@
                 ),
               ]
             : null,
-          span(
-            { "data-testid": "cr-rollup", class: "app-hidden-data" },
-            ` ${node.rollup.done}/${node.rollup.total}`,
-          ),
         ),
         () =>
           lensOpen(key)
@@ -1658,7 +1660,7 @@
     // active header: the F13 header structure is the pane's whole top.
     const WorkflowFeed = () =>
       div(
-        { class: "app-pane-content" },
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
         div(
           { class: "app-workflow-cols" },
           () => WorkflowActive(),
@@ -1682,7 +1684,13 @@
         div({ class: "app-drillin-head app-top" }, DetailHeadContent(eventId)),
         div(
           { "data-testid": "workspace-runs", class: greyed("app-center") },
-          RunDetailBody(eventId),
+          // CR-CRU-023 §S1 — the in-pane run detail renders inside the SAME
+          // shared pane-content wrapper as every other central pane, so the
+          // horizontal scroll floor is one mechanism, not a per-pane one-off.
+          div(
+            { "data-testid": "pane-scroll", class: "app-pane-content" },
+            RunDetailBody(eventId),
+          ),
         ),
       );
 
@@ -2276,7 +2284,15 @@
       div(
         { "data-testid": "run-overlay", class: "app-drillin app-inpane" },
         div({ class: "app-drillin-inhead" }, DetailHeadContent(eventId)),
-        RunDetailBody(eventId),
+        // CR-CRU-023 §S1 — same shared pane-content wrapper as the
+        // workspace's WorkspaceRunDetail form: the run detail is one of the
+        // seven floored pane surfaces wherever it renders. paneSwap's
+        // scroll save/restore reads the OUTER timeline `.app-center`
+        // (detailDom.parentElement), untouched by this inner wrapper.
+        div(
+          { "data-testid": "pane-scroll", class: "app-pane-content" },
+          RunDetailBody(eventId),
+        ),
       );
 
     // §S5.1/§S5.3 — home chrome is title bar + projects row; the workspace

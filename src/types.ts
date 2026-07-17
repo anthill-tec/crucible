@@ -140,6 +140,10 @@ export interface PlanCycle {
   // duration from these. Absent (never null) until the transition lands.
   activatedAt?: number;
   doneAt?: number;
+  // CR-CRU-023 §S3 (a) (additive) — accumulated attention time in ms:
+  // active-in-server-up epochs only (restart resumes, downtime excluded).
+  // Present on ACTIVE cycles; sealed rows keep `doneAt − activatedAt`.
+  activeMs?: number;
 }
 
 /**

@@ -94,19 +94,33 @@ function crGroup(page: import("@playwright/test").Page, cr: string) {
     .locator(`[data-testid="cr-group"][data-cr="${cr}"]`);
 }
 
+// SANCTIONED RE-TARGET (CR-CRU-023 §S4 #2): the hidden `.app-hidden-data`
+// `cr-rollup` compatibility span this step used to read is retired — its
+// done/total figures now live in the VISIBLE inline rollup form on the
+// group header toggle itself ("<done>/<total> cycles" while not all done,
+// "<total> cycles ✓" once all done — see app.js LensCrGroup and the
+// re-targeted unit assertion in tests/workflow-lens.test.ts). The scenario's
+// subject (the group rollup figures) is unchanged; only the DOM location
+// asserted moves from `cr-rollup` to `cr-group-toggle`.
 Step(
   "the history lens shows a cr group for {string} with rollup {string}",
   async ({ page }, cr: string, rollup: string) => {
     const group = crGroup(page, cr);
     await expect(group).toBeVisible();
-    await expect(group.getByTestId("cr-rollup")).toContainText(rollup);
+    await expect(group.getByTestId("cr-group-toggle")).toContainText(rollup);
   },
 );
 
 Step(
   "the cr group for {string} shows a merge-commit pill reading {string}",
   async ({ page }, cr: string, text: string) => {
-    await expect(crGroup(page, cr).getByTestId("cr-merge-commit")).toContainText(text);
+    const pill = crGroup(page, cr).getByTestId("cr-merge-commit");
+    await expect(pill).toContainText(text);
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S6.9): the `@` separator between
+    // "merged" and the sha was removed — pin its absence explicitly, not
+    // just the new substring, so a regression back to "merged @ <sha>"
+    // still fails this assertion.
+    await expect(pill).not.toContainText("@");
   },
 );
 
@@ -160,20 +174,15 @@ Step(
 
 // ── §S3 active-view assertions ───────────────────────────────────────────────
 
-// CR-CRU-020 §S2.3 — the ACTIVE section's active cycle row no longer
-// auto-expands its linked runs; it gets the SAME click-based toggle as a
-// history cycle row (parity). This explicit action step is what actually
-// reveals the linked run the assertion below checks for.
-Step("I expand the active cycle row for {string}", async ({ page }, label: string) => {
-  const row = page.getByTestId("workflow-active").getByTestId("cycle-row").filter({ hasText: label });
-  await expect(row).toBeVisible();
-  const toggle = row.getByTestId("cycle-toggle");
-  await expect(toggle).toBeVisible();
-  await toggle.click();
-});
-
+// SANCTIONED RE-TARGET (CR-CRU-021 §S6 ruling (a) — e2e sweep): the
+// CR-CRU-020 click-based toggle on the ACTIVE cycle row no longer exists —
+// CR-021 made the active span ALWAYS inline (toggles narrowed to History
+// rows only). The old "I expand the active cycle row for …" action step is
+// removed (it clicked a `cycle-toggle` that no longer renders); the
+// assertion below now pins BOTH the inline linked run AND the absence of
+// any toggle, inverting the prior "click reveals" contract.
 Step(
-  "the workflow active section shows a cycle row for {string} expanded with the linked run for agent {string}",
+  "the workflow active section shows a cycle row for {string} with the linked run for agent {string} rendered inline with no cycle-toggle",
   async ({ page }, label: string, agentId: string) => {
     const row = page
       .getByTestId("workflow-active")
@@ -181,6 +190,7 @@ Step(
       .filter({ hasText: label });
     await expect(row).toBeVisible();
     await expect(row).toHaveAttribute("data-status", "active");
+    await expect(row.getByTestId("cycle-toggle")).toHaveCount(0);
     await expect(
       row.getByTestId("linked-run-row").filter({ hasText: agentId }).first(),
     ).toBeVisible();

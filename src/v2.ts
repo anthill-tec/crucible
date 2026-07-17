@@ -225,6 +225,13 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
     // §S4 (CR-CRU-001) discards coverage on failed runs, so any stored
     // coverage belongs to a green run — newest one wins.
     const greenCovered = events.find((e) => e.coverage !== undefined);
+    // CR-CRU-023 §S2 — line-coverage percents from the DURABLE rollup
+    // series (listRollups returns rowid ASC = fold order = oldest→newest).
+    // Failing runs never contribute: recordTestEvent discards coverage on
+    // failed runs (§S4), so no rollup lastCoverage can come from one.
+    const coverageTrend = store
+      .listRollups(project.key)
+      .flatMap((r) => (r.lastCoverage !== undefined ? [r.lastCoverage.lines.percent] : []));
     // §S5.1 (CR-CRU-007) activity rule (user-locked round 13): active while
     // ≥1 live (online/stale) agent; with none left, inactive once
     // now − lastActivity EXCEEDS the timeout. lastActivity = max(last event
@@ -252,6 +259,12 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
       // coverage event, so the client's coverage meter can open its drill-in.
       // Key ABSENT (not null) when no green-coverage run exists.
       ...(greenCovered !== undefined ? { latestCoverageEventId: greenCovered.id } : {}),
+      // CR-CRU-023 §S2 — durable coverage-trend series from the rollup
+      // buckets (survives retention pruning, unlike the raw event feed).
+      // One point per bucket carrying lastCoverage, oldest→newest. Key
+      // ABSENT (not null/empty) when no rollup carries coverage — mirrors
+      // the latestCoverageEventId convention above.
+      ...(coverageTrend.length > 0 ? { coverageTrend } : {}),
       // §S5.1 (CR-CRU-007) — additive activity fields.
       active,
       lastActivity,

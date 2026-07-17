@@ -163,6 +163,11 @@ interface ProjectFixture {
   /** §S5 Coverage tab (user defect 2026-07-15) — id of the event backing
    * `latestGreenCoverage`, same field asserted in tests/coverage-click.test.ts. */
   latestCoverageEventId?: string;
+  /** SANCTIONED RE-TARGET (CR-CRU-023 §S2) — the durable rollup-backed
+   * trend series (see tests/coverage-trend.test.ts's (A)/(B) technique).
+   * The Vitals COVERAGE TREND bars now render from THIS server field, not
+   * from `state.events`/`coverageLines`. */
+  coverageTrend?: number[];
 }
 
 interface MountOpts {
@@ -1171,9 +1176,16 @@ describe("§S5 fidelity #5b — F7/F8 Project pane visual fidelity: section titl
 });
 
 describe("§S5 fidelity #5c — F8 Vitals card anatomy: coverage-trend bars + label-over-value hierarchy", () => {
-  test("coverage-trend renders 'COVERAGE TREND (green regressions)' + one bar per green-coverage point (oldest→newest, latest bright ember, earlier ember-dim) + the first→latest caption", async () => {
+  // SANCTIONED RE-TARGET (CR-CRU-023 §S2) — the trend bars' SOURCE moved
+  // from the transient `state.events`/`coverageLines` feed (retention-
+  // prunable, the root cause of the §S2 regression) to the durable server
+  // field `project.coverageTrend` (see tests/coverage-trend.test.ts's (A)/
+  // (B) technique). The bar-count/height/latest-vs-earlier subjects this
+  // test pins are UNCHANGED — only the fixture's data SOURCE is re-targeted;
+  // the client event feed is left empty to prove the bars no longer depend
+  // on it.
+  test("coverage-trend renders 'COVERAGE TREND (green regressions)' + one bar per green-coverage point from project.coverageTrend (oldest→newest, latest bright ember, earlier ember-dim) + the first→latest caption", async () => {
     const key = "f8-vitals-p1";
-    const t0 = Date.now() - 40_000;
     await mountApp({
       pathname: `/p/${key}`,
       projects: [
@@ -1181,14 +1193,10 @@ describe("§S5 fidelity #5c — F8 Vitals card anatomy: coverage-trend bars + la
           key,
           name: "F8 Vitals Trend Project",
           latestGreenCoverage: { lines: { covered: 873, total: 1000, percent: 87.3 } },
+          coverageTrend: [82.1, 84.0, 86.2, 87.3],
         }),
       ],
-      events: [
-        { id: "trend-1", projectKey: key, agentId: "trend-agent-1", kind: "test", tier: "regression", timestamp: t0, total: 10, passed: 10, failed: 0, pending: 0, duration_ms: 500, hasCoverage: true, coverageLines: 82.1 },
-        { id: "trend-2", projectKey: key, agentId: "trend-agent-2", kind: "test", tier: "regression", timestamp: t0 + 1000, total: 10, passed: 10, failed: 0, pending: 0, duration_ms: 500, hasCoverage: true, coverageLines: 84.0 },
-        { id: "trend-3", projectKey: key, agentId: "trend-agent-3", kind: "test", tier: "regression", timestamp: t0 + 2000, total: 10, passed: 10, failed: 0, pending: 0, duration_ms: 500, hasCoverage: true, coverageLines: 86.2 },
-        { id: "trend-4", projectKey: key, agentId: "trend-agent-4", kind: "test", tier: "regression", timestamp: t0 + 3000, total: 10, passed: 10, failed: 0, pending: 0, duration_ms: 500, hasCoverage: true, coverageLines: 87.3 },
-      ],
+      events: [],
     });
 
     const trendCard = document.querySelector('[data-testid="coverage-trend-card"]');
@@ -1220,9 +1228,17 @@ describe("§S5 fidelity #5c — F8 Vitals card anatomy: coverage-trend bars + la
     expect(trendCard!.textContent ?? "").toContain("82.1 → 87.3% lines");
   });
 
-  test("coverage-trend caption falls back to 'latest green coverage <p>%' with exactly 1 point", async () => {
+  // SANCTIONED RE-TARGET (CR-CRU-023 §S2) — the old contract ("no bar chart
+  // below 2 points, caption-only fallback") was the §S2 defect itself: the
+  // `points.length >= 2` gate in CoverageTrendCard is what collapsed the
+  // trend to text whenever retention pruning left fewer than 2 surviving
+  // points. The new contract renders ONE bar at exactly 1 point (bars
+  // container present, sole bar doubles as latest) ALONGSIDE the existing
+  // caption — inverted from the old count-0 assertion. Re-sourced through
+  // `project.coverageTrend` per the (A)/(B) technique, same as the 4-point
+  // test above.
+  test("coverage-trend with exactly 1 point renders ONE bar (bars container present, sole bar carries app-trend-bar-latest) alongside the 'latest green coverage <p>%' caption", async () => {
     const key = "f8-vitals-p2";
-    const now = Date.now();
     await mountApp({
       pathname: `/p/${key}`,
       projects: [
@@ -1230,11 +1246,10 @@ describe("§S5 fidelity #5c — F8 Vitals card anatomy: coverage-trend bars + la
           key,
           name: "F8 Vitals Single Point",
           latestGreenCoverage: { lines: { covered: 7, total: 10, percent: 70 } },
+          coverageTrend: [70],
         }),
       ],
-      events: [
-        { id: "single-trend-1", projectKey: key, agentId: "single-trend-agent", kind: "test", tier: "regression", timestamp: now, total: 10, passed: 10, failed: 0, pending: 0, duration_ms: 400, hasCoverage: true, coverageLines: 70 },
-      ],
+      events: [],
     });
 
     const trendCard = document.querySelector('[data-testid="coverage-trend-card"]');
@@ -1243,8 +1258,14 @@ describe("§S5 fidelity #5c — F8 Vitals card anatomy: coverage-trend bars + la
     // is the real RED signal (today's card just says "coverage trend").
     expect(trendCard!.textContent ?? "").toContain("COVERAGE TREND (green regressions)");
     expect(trendCard!.textContent ?? "").toContain("latest green coverage 70%");
-    // Bound: with exactly 1 point, no bar chart renders — just the caption.
-    expect(trendCard!.querySelectorAll('[data-testid="coverage-trend-bar"]').length).toBe(0);
+    // Bound (INVERTED from the old assertion): with exactly 1 point, the
+    // bars container renders — no text-only fallback — and it holds
+    // exactly 1 bar, which is simultaneously first and latest.
+    const barsContainer = trendCard!.querySelector('[data-testid="coverage-trend-bars"]');
+    expect(barsContainer).not.toBeNull();
+    const bars = trendCard!.querySelectorAll('[data-testid="coverage-trend-bar"]');
+    expect(bars.length).toBe(1);
+    expect((bars[0] as HTMLElement).className).toMatch(/\bapp-trend-bar-latest\b/);
   });
 
   test("label-over-value hierarchy on BOTH vitals cards: dim uppercase label ABOVE a bright/600 value line", async () => {

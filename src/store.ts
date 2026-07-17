@@ -120,6 +120,9 @@ interface PlanCycleRow {
   // CR-CRU-011 §S0b — transition timestamps (nullable until stamped).
   activated_at: number | null;
   done_at: number | null;
+  // CR-CRU-023 §S3 (a) — accumulated active-attention ms, checkpointed at
+  // transition writes (0 on activation; sealed on leaving active).
+  active_ms_accumulated: number | null;
 }
 
 /**
@@ -159,8 +162,32 @@ export class Store {
   /** Monotonic per-store sequence for event ids. */
   private seq = 0;
   private readonly listeners = new Set<ChangeListener>();
+  /**
+   * CR-CRU-023 §S3 (a) — per-Store boot anchor: the live attention epoch of
+   * an active cycle starts at max(activatedAt, bootedAt), so time the
+   * service spent DOWN is never counted as attention.
+   */
+  private readonly bootedAt: number;
+  /**
+   * CR-CRU-023 §S3 (a) — durable mid-epoch checkpoints: a hard crash while a
+   * cycle is ACTIVE may lose at most one <=60s window of attention time, so
+   * `active_ms_accumulated` is checkpointed on cycle reads (toPlan) whenever
+   * the live epoch exceeds this cadence — not only on the transition out of
+   * `active`.
+   */
+  private static readonly ACTIVE_MS_CHECKPOINT_CADENCE_MS = 60_000;
+  /**
+   * In-memory epoch re-anchor per active cycle (keyed `${projectKey}:${cycleId}`):
+   * a checkpoint write folds the live epoch into the persisted accumulated
+   * value and moves the epoch start to the persist moment, so later reads and
+   * the terminal transition never double-count. Deliberately NOT persisted —
+   * on restart `bootedAt` re-anchors the epoch, which is what excludes
+   * downtime.
+   */
+  private readonly epochCheckpointAt = new Map<string, number>();
 
   constructor(path: string) {
+    this.bootedAt = Date.now();
     this.db = new Database(path, { create: true });
     if (path !== ":memory:") {
       this.db.exec("PRAGMA journal_mode = WAL;");
@@ -274,6 +301,7 @@ export class Store {
         status TEXT NOT NULL,
         activated_at INTEGER,
         done_at INTEGER,
+        active_ms_accumulated INTEGER,
         PRIMARY KEY (project_key, cycle_id)
       );
     `);
@@ -304,6 +332,11 @@ export class Store {
     }
     if (!cycleCols.has("done_at")) {
       this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN done_at INTEGER`);
+    }
+    // CR-CRU-023 §S3 (a) — additive accumulated-attention column; pre-023
+    // db files lack it (same PRAGMA-checked retrofit pattern as above).
+    if (!cycleCols.has("active_ms_accumulated")) {
+      this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN active_ms_accumulated INTEGER`);
     }
     // CR-CRU-021 §S6.11 — additive plan title column; pre-021 db files lack
     // it (same PRAGMA-checked retrofit pattern as events/plan_cycles above).
@@ -946,6 +979,20 @@ export class Store {
     return appended;
   }
 
+  private epochKey(projectKey: string, cycleId: number): string {
+    return `${projectKey}:${cycleId}`;
+  }
+
+  /**
+   * CR-CRU-023 §S3 (a) — the live attention epoch of an ACTIVE cycle starts
+   * at max(activatedAt, bootedAt, last checkpoint), so downtime is excluded
+   * and a mid-epoch checkpoint is never counted twice.
+   */
+  private epochStart(projectKey: string, cycleId: number, activatedAt: number): number {
+    const checkpointAt = this.epochCheckpointAt.get(this.epochKey(projectKey, cycleId)) ?? 0;
+    return Math.max(activatedAt, this.bootedAt, checkpointAt);
+  }
+
   /** §S0 — transition a cycle per the legal table; illegal moves name both states. */
   transitionCycle(
     projectKey: string,
@@ -970,12 +1017,28 @@ export class Store {
     const now = Date.now();
     const activatedAt = to === "active" ? now : row.activated_at;
     const doneAt = Store.CYCLE_TERMINAL.has(to) ? now : row.done_at;
+    // CR-CRU-023 §S3 (a) — attention-epoch checkpoints at transition writes:
+    // activation opens an epoch with an explicit 0 checkpoint; leaving
+    // `active` (the terminal transition) seals the open epoch — accumulated
+    // += now − max(activatedAt, bootedAt) — so restarts resume from the
+    // persisted setpoint, excluding downtime.
+    let activeMsAccumulated = row.active_ms_accumulated;
+    if (to === "active") {
+      activeMsAccumulated = 0;
+      this.epochCheckpointAt.delete(this.epochKey(projectKey, cycleId));
+    } else if (row.status === "active" && row.activated_at !== null) {
+      const epochStart = this.epochStart(projectKey, cycleId, row.activated_at);
+      activeMsAccumulated =
+        (row.active_ms_accumulated ?? 0) + Math.max(0, now - epochStart);
+      this.epochCheckpointAt.delete(this.epochKey(projectKey, cycleId));
+    }
     this.db
       .query(
-        `UPDATE plan_cycles SET status = ?, activated_at = ?, done_at = ?
+        `UPDATE plan_cycles SET status = ?, activated_at = ?, done_at = ?,
+           active_ms_accumulated = ?
          WHERE project_key = ? AND cycle_id = ?`,
       )
-      .run(to, activatedAt, doneAt, projectKey, cycleId);
+      .run(to, activatedAt, doneAt, activeMsAccumulated, projectKey, cycleId);
     this.emit("events", projectKey);
     return {
       id: row.cycle_id,
@@ -1061,6 +1124,32 @@ export class Store {
       .map((row) => this.toPlan(row));
   }
 
+  /**
+   * CR-CRU-023 §S3 (a) — derive an ACTIVE cycle's accumulated attention time
+   * and, when the live epoch has run >=60s past the last durable write, fold
+   * it into `active_ms_accumulated` synchronously (one UPDATE) and re-anchor
+   * the epoch at the persist moment. The cadence bounds write frequency under
+   * constant UI polling; no change event is emitted (the value is derived on
+   * every read anyway). Restart resumes from the persisted setpoint, losing
+   * at most one <=60s window — never the full epoch, never scaled to downtime.
+   */
+  private deriveAndCheckpointActiveMs(cycle: PlanCycleRow, activatedAt: number): number {
+    const now = Date.now();
+    const epochStart = this.epochStart(cycle.project_key, cycle.cycle_id, activatedAt);
+    const liveEpochMs = Math.max(0, now - epochStart);
+    const activeMs = (cycle.active_ms_accumulated ?? 0) + liveEpochMs;
+    if (liveEpochMs >= Store.ACTIVE_MS_CHECKPOINT_CADENCE_MS) {
+      this.db
+        .query(
+          `UPDATE plan_cycles SET active_ms_accumulated = ?
+           WHERE project_key = ? AND cycle_id = ?`,
+        )
+        .run(activeMs, cycle.project_key, cycle.cycle_id);
+      this.epochCheckpointAt.set(this.epochKey(cycle.project_key, cycle.cycle_id), now);
+    }
+    return activeMs;
+  }
+
   private toPlan(row: PlanRow): Plan {
     const cycles: PlanCycle[] = this.listCycleRows(row.project_key, row.plan_id).map(
       (cycle) => ({
@@ -1072,6 +1161,15 @@ export class Store {
         // null, until stamped — same convention as Plan.closedAt).
         ...(cycle.activated_at !== null ? { activatedAt: cycle.activated_at } : {}),
         ...(cycle.done_at !== null ? { doneAt: cycle.done_at } : {}),
+        // CR-CRU-023 §S3 (a) — ACTIVE cycles carry the derived accumulated
+        // attention time: persisted checkpoint + the live epoch anchored at
+        // max(activatedAt, bootedAt, last checkpoint). Deriving it also
+        // checkpoints it durably at a <=60s cadence (the designed read-path
+        // piggyback — a crash loses at most one checkpoint window, never the
+        // whole epoch). Sealed/pending rows are untouched.
+        ...(cycle.status === "active" && cycle.activated_at !== null
+          ? { activeMs: this.deriveAndCheckpointActiveMs(cycle, cycle.activated_at) }
+          : {}),
       }),
     );
     const plan: Plan = {
