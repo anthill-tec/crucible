@@ -43,6 +43,14 @@ never has plan data — or shows stale workspace plans, making the vocabulary
 depend on navigation history). A browser cold load always displays
 correctly (SSE `onopen` fires a full refetch) — the failure is exclusively
 in-app navigation plus the home plans gap.
+**Face (c) corollary (user sighting 2026-07-17, drill-down):** the degraded
+markers FABRICATE cycle-closure narratives — with plans absent, the pairing
+heuristic fused the fix-round RED agent's targeted run (0/11) with the FIX
+agent's targeted run (11/11) into `RED 11/11 ➜ GREEN 11/11 · Cycle: "verify
+sweep" · closed in 7m 39s` while cycle 29 was ACTIVE mid-round; its
+drill-down lands on an intermediate agent run, reinforcing the false story.
+With plans present the same runs collect under the active cycle's open span
+and the phantom cannot render (§S3.1 covers this; no extra scope).
 **Process impact (user note 2026-07-17):** face (c) actively misled the
 CR-025 design rounds — the user issued the `⊙ Detail` badge instruction
 believing the heuristic markers (whole-body drill-in) they were seeing in
