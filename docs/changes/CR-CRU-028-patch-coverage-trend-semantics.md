@@ -1,60 +1,64 @@
-# CR-CRU-028 — Patch: coverage-trend semantics — level-colored bars + series granularity
+# CR-CRU-028 — Coverage trend: auto-coarsening health hierarchy (DN-locked)
 
 **Status:** PENDING
-**Type:** patch
+**Type:** feature (grew from patch — the locked DN model supersedes the
+flat-bar card)
 **Priority:** P2
-**Depends on:** CR-CRU-027 (sparkline geometry), CR-CRU-023 (trend series)
-**Labels:** patch, ui, vitals
-**Phase:** Wave 4 — slot proposed after CR-CRU-008 (user to confirm; both
-open questions below must be ruled before RED)
-**Design reference:** user board ruling 2026-07-17 on the F8 trend bars:
-"these bars should show green because they are showing high coverage. The
-orange-yellow-green gradient can also use to benefit here!"; granularity
-investigation same day (chat): the 2-bar mystery traced to rollup-bucket
-sourcing.
+**Depends on:** CR-CRU-027 (fixed-slice geometry discipline), CR-CRU-023
+(rollup series + retention)
+**Labels:** ui, vitals, coverage
+**Phase:** Wave 4 — slot proposed after CR-CRU-008 (user to confirm)
+**Design reference:** [DN-crucible-coverage-trend.md](../research/DN-crucible-coverage-trend.md)
+— LOCKED 2026-07-17 (user: "Approving the Coverage graphics design");
+supersedes the interim gradient-only and granularity questions from the
+same day's rounds — both dissolved by the hierarchy (buckets AND per-run,
+layered).
 
 ## Context
-Two semantic gaps remain after CR-027 fixed the geometry:
-1. **Color carries no meaning:** bars use history-dim/latest-bright ember
-   only; a 94.4% bar and a 60% bar look identical. The F8 mock now shows
-   the ruled form: bar color encodes the coverage LEVEL on the
-   orange→yellow→green ramp.
-2. **Series granularity is bucket-coarse:** `coverageTrend` derives from
-   rollup buckets (`context.wave` ?? UTC day, store.ts foldIntoRollup),
-   whose `last_coverage` updates only as events age past the 100-run
-   retention. A day of many coverage runs = ONE bar, valued at what has
-   aged out — measured live 2026-07-17: two bars [94.4, 93.1] while five+
-   coverage runs sat un-represented inside the retention window.
+After CR-027 fixed the geometry, two semantic gaps remained: bar color
+carried no meaning (a 94.4% and a 60% bar looked identical), and the series
+was bucket-coarse (one bar per day, valued only as runs aged past the
+100-run retention — measured live: two bars [94.4, 93.1] while five+
+coverage runs sat unrepresented). The design rounds resolved both into the
+DN's model: level-colored auto-coarsening bucket bars with an accordion
+drill-down that ends at the per-run heat strip and the existing run
+drill-in.
 
 ## Scope
 
-### §S1 Level-colored bars (RULED)
-Each bar's color derives from ITS point's value on the established
-orange→yellow→green ramp. Storyboard F8 contract (synced 2026-07-17):
-orange (--ember) below 65, yellow (#eab308) 65-80, green (--pass) ≥80 —
-EXACT thresholds are a gap-analysis decision (candidates: align with any
-existing coverage-health thresholds in the codebase; else adopt the mock's
-65/80). The latest-bar emphasis (bright vs dim history) composes WITH the
-level color (opacity, not hue). CR-027's geometry pins are untouched.
+### §S1 Auto-coarsening level-colored bucket bars (DN §3.1-§3.2)
+Top level renders ≤16 bars: recent DAY bars, older WEEK bars, oldest MONTH
+bars — width-hinted zoom (month < week < day widths). Every bar is colored
+by ITS value on the orange→yellow→green ramp (thresholds pinned at gap
+analysis as named constants; the F8 legend is provisional at 65/80); the
+latest bar's emphasis composes with its level color. Derived entirely from
+the immortal daily/wave rollups — aggregation only, no schema change.
+CR-027's fixed-slice geometry discipline holds at every level (no
+stretching at any count).
 
-### §S2 Per-run series granularity (OPEN — awaiting user ruling)
-Recommendation presented 2026-07-17 (option 2): the series becomes one
-point per coverage-bearing green regression — RETAINED events contribute
-live per-run points; rollup buckets remain the durable fallback for pruned
-history (prefix). The CR-027 last-16 window then shows a true run-by-run
-recent trend. Alternative (option 1): keep bucket granularity (one bar per
-day/wave). DO NOT start RED until the user rules; if option 1 is chosen,
-§S2 reduces to a spec note and this CR ships §S1 alone.
+### §S2 Drill-down hierarchy (DN §3.3-§3.4)
+Clicking a bar unfolds the next-finer level beneath it (accordion;
+one-open-per-card is a gap-analysis call): month → its weeks, week → its
+days, day → the coverage-run HEAT STRIP — one thin level-colored slice per
+coverage-bearing green regression inside retention, hover = value + time.
+Clicking a slice opens the existing run drill-in as a pane state (the
+interaction table's coverage-point contract, unchanged). Days aged past
+run retention keep their bar with a DIMMED drill affordance — never a dead
+click (per-run detail is genuinely no longer stored; the bucket survives).
 
 ## Acceptance criteria
-- [ ] §S1: with a series spanning the ramp (e.g. 55, 70, 92), each bar carries the level class/color for its own value (exact thresholds per gap analysis, pinned as constants); the latest bar keeps its emphasis treatment composed with its level color; a monotone high series renders all-green bars (the user's screenshot case).
-- [ ] §S1: CR-027 geometry pins unchanged (9px/26px/left-aligned/last-16).
-- [ ] §S2 (if ruled per-run): a project with N ≤ 16 coverage-bearing green regressions inside retention renders N bars (one per run, chronological); with runs aged out, the pruned prefix degrades to bucket values (durable series never shrinks below the rollup history); caption stays window-consistent.
+- [ ] Bucketing: a fixture series spanning 3 months renders month bars for the old range, week bars for the mid range, day bars for the recent days, ≤16 total; widths strictly increase month < week < day (class/style pin); the top level reads ONLY rollup data (no event queries).
+- [ ] Level color: bars below/inside/above the pinned thresholds carry the orange/yellow/green classes respectively; the latest bar composes emphasis + level (both classes present); a monotone high series renders all-green (the user's screenshot case).
+- [ ] Drill-down: clicking a month bar reveals its week row; a week its day row; a day its heat strip with exactly one slice per retained coverage-bearing green regression of that day (count pinned against a seeded fixture), each slice colored by its own value.
+- [ ] Slice → run drill-in: clicking a slice opens /run/<eventId> of that regression as a pane state (existing contract, testid-pinned).
+- [ ] Retention honesty: a day whose runs are pruned renders its bar (rollup value intact) with the dimmed affordance; clicking does NOT unfold — no dead strip.
+- [ ] CR-027 regression: fixed-slice geometry pins stay green; caption stays consistent with the rendered top level per gap analysis.
 - [ ] Eyes-parity: Chrome-measured against the synced F8 mock before verify.
 
 ## Estimated size
-XS (§S1 alone) / S (with §S2).
+S-M (hierarchy + drill-down + strip; re-estimate at gap analysis).
 
 ## Non-goals
-Charting-library adoption (CR-022); changing the coverage METER's ember
-gradient (separate element, already mock-faithful).
+Charting-library adoption (CR-022's analytics pane); the coverage METER
+(separate element, already mock-faithful); function-coverage series (lines
+only, as today); cross-project aggregation (DN non-goal).
