@@ -1493,7 +1493,7 @@
                 !lensOpen(key) && cycle.runs.length > 0
                   ? span(
                       { class: "app-card-meta app-run-count-hint" },
-                      `▸ ${cycle.runs.length} runs`,
+                      `▸ ${cycle.runs.length} run${cycle.runs.length === 1 ? "" : "s"}`,
                     )
                   : ""
             : null,
@@ -1529,9 +1529,10 @@
         // CR-CRU-020 §S1.2 — the existing header row IS the toggle; only the
         // cycle list collapses (by default) beneath it. CR-CRU-021 §S6 #6/#9
         // — the collapsed form is INLINE DIM TEXT, not pill-chips:
-        // `▸ [<track> › ]<cr> · <n> cycles ✓ · merged <sha>` (no `@`). The
-        // legacy `<done>/<total>` rollup figure stays addressable (visually
-        // hidden) for the CR-020 header contract.
+        // `▸ [<track> › ]<cr> · <n> cycles ✓ · merged <sha>` (no `@`).
+        // CR-CRU-023 §S4 #2 — the hidden `.app-hidden-data` cr-rollup
+        // compatibility span is retired; the visible rollup form carries
+        // the done/total figures.
         div(
           {
             "data-testid": "cr-group-toggle",
@@ -1559,10 +1560,6 @@
                 ),
               ]
             : null,
-          span(
-            { "data-testid": "cr-rollup", class: "app-hidden-data" },
-            ` ${node.rollup.done}/${node.rollup.total}`,
-          ),
         ),
         () =>
           lensOpen(key)

@@ -25,7 +25,14 @@ Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline pla
     And the plan is closed with merge commit "abc1234"
     When I open the workspace for that project
     And I click the "Workflow" workspace tab
-    Then the history lens shows a cr group for "CR-WF-1" with rollup "1/1"
+    # SANCTIONED RE-TARGET (CR-CRU-023 §S4 #2): the hidden `.app-hidden-data`
+    # `cr-rollup` compatibility span is retired — its done/total figures now
+    # live in the VISIBLE inline rollup form on the group header toggle
+    # itself ("<done>/<total> cycles" while not all done, "<total> cycles ✓"
+    # once all done — see app.js LensCrGroup). This fixture is 1 done of 1
+    # total (all done), so the visible form reads "1 cycles ✓" (was:
+    # asserted "1/1" against the retired `cr-rollup` testid).
+    Then the history lens shows a cr group for "CR-WF-1" with rollup "1 cycles ✓"
     # SANCTIONED RE-TARGET (CR-CRU-021 §S6.9): the merge-commit pill dropped
     # the `@` separator — it now reads `merged <sha>` (was: `merged @ <sha>`).
     And the cr group for "CR-WF-1" shows a merge-commit pill reading "merged abc1234"

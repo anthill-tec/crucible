@@ -746,15 +746,6 @@ body {
   margin: 4px 0 2px;
 }
 .app-cr-root-cycles { margin-left: 14px; }
-/* §S6 #6 — legacy done/total figure kept addressable, visually hidden */
-.app-hidden-data {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
 .app-run-count-hint { margin-left: 8px; }
 .app-cycle-kind-badge { color: var(--ink-faint); }
 .app-open-span-annotation { margin-left: 8px; }

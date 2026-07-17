@@ -94,12 +94,20 @@ function crGroup(page: import("@playwright/test").Page, cr: string) {
     .locator(`[data-testid="cr-group"][data-cr="${cr}"]`);
 }
 
+// SANCTIONED RE-TARGET (CR-CRU-023 §S4 #2): the hidden `.app-hidden-data`
+// `cr-rollup` compatibility span this step used to read is retired — its
+// done/total figures now live in the VISIBLE inline rollup form on the
+// group header toggle itself ("<done>/<total> cycles" while not all done,
+// "<total> cycles ✓" once all done — see app.js LensCrGroup and the
+// re-targeted unit assertion in tests/workflow-lens.test.ts). The scenario's
+// subject (the group rollup figures) is unchanged; only the DOM location
+// asserted moves from `cr-rollup` to `cr-group-toggle`.
 Step(
   "the history lens shows a cr group for {string} with rollup {string}",
   async ({ page }, cr: string, rollup: string) => {
     const group = crGroup(page, cr);
     await expect(group).toBeVisible();
-    await expect(group.getByTestId("cr-rollup")).toContainText(rollup);
+    await expect(group.getByTestId("cr-group-toggle")).toContainText(rollup);
   },
 );
 
