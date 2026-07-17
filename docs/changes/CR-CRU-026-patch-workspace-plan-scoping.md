@@ -115,7 +115,7 @@ navigation history:
 - [ ] Blank-view face: navigating home → the project's OWN workspace with `state.plans` empty and NO SSE frame delivered renders the plan content anyway (the navigation fetch alone suffices — assert with the stream mock silenced).
 - [ ] Browser back/forward (`popstate`) across two workspaces re-scopes identically (clear + scoped fetch per transition).
 - [ ] Render guard: seeding `state.plans` with a plan whose `projectKey` ≠ routed key renders nothing from it (unit-level pin on the lens).
-- [ ] Regression: SSE change frames still refetch plans for the CURRENT route (existing cadence unbroken); home ignores plans (no fetch fired when `route.page !== "workspace"`).
+- [ ] Regression: SSE change frames still refetch plan data appropriate to the CURRENT surface (workspace: the routed project's plans; home: the §S3.2 cross-project read) — existing cadence unbroken, no surface left on stale data.
 - [ ] E2E: from the seeded active project's workspace, click a fixture project's badge → Workflow tab shows that project's empty state, not the seeded project's plans; navigate back → the seeded project's plans return.
 - [ ] §S3 vocabulary parity: on the workspace Runs tab reached by IN-APP navigation, cycleId-linked runs render `declared-marker` rows (zero `transition-marker` rows for linked runs) — identical to the cold-load render of the same server state.
 - [ ] §S0 no-hidden-state equivalence: for BOTH home and workspace, the set of rendered marker testids is identical between (a) cold load and (b) arrival via any navigation sequence (assert at least: home→ws→home and ws-A→home→ws-B), given unchanged server data.
