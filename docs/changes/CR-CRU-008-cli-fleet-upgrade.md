@@ -100,6 +100,16 @@ go, v2 gains DOUBLE-GATED single-run deletion so retiring
    retro-adjusted.
 3. The legacy `/api/events/delete` + `/api/events/clear` retire WITH the
    shim (bulk clear is deliberately dropped — audit-log posture).
+4. **v2 silent unregister (C2 GREEN finding, orchestrator-ruled):** gated
+   runs are v2-native (ingest = implicit heartbeat, no lifecycle ceremony),
+   but the anti-ghost cleanup still needs a ceremony-free removal and v2
+   journals a lifecycle event on every unregister — so the clients' silent
+   cleanup currently rides the shim's `/api/agents/remove`, which would 404
+   after retirement. Precondition: `POST /api/v2/agents/unregister` accepts
+   `{silent: true}` — removes the agent WITHOUT journaling a lifecycle
+   event; the clients/ silent-cleanup path swaps to it in this cycle.
+   AC: silent unregister removes the agent (GET agents omits it) and the
+   events journal gains NO entry; non-silent behavior byte-unchanged.
 After the fleet upgrade lands AND the soak gate passes (one full RED→GREEN→regression
 dog-food cycle of this repo executed entirely through the UPGRADED clients against
 `/api/v2/*`), retire the v1 shim: remove the legacy `/api/*` route handlers (health
