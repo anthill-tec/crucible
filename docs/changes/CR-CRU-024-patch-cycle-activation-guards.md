@@ -76,8 +76,34 @@ resumes from the exact setpoint (no lost ≤60s window):
    cycle (all plans, all projects) on SIGTERM/SIGINT before exit — an orderly
    stop never loses timer state even without the ping; only a hard power cut
    falls back to the ≤60s read-cadence tolerance (CR-023 §S3).
-3. Fleet + orchestrator wiring is CR-008 scope (a `checkpoint` verb; the
-   /shutdown emergency flow calls it) — noted there at its gap analysis.
+3. **Project stop:** `POST /api/v2/projects/<key>/stop` — the project-level
+   graceful pause Crucible itself can use: checkpoints EVERY active cycle's
+   timer across the project's open plans (the §S5.1 fold, project-wide) and
+   persists any other restart-relevant state this verb later grows to own
+   (it is the designated extension point). Distinct from archive (stop hides
+   nothing). Returns `{ok, checkpointed: <n>}`.
+4. Fleet + orchestrator wiring is CR-008 scope (`checkpoint`/`stop` verbs;
+   the /shutdown emergency flow calls them) — noted there at its gap
+   analysis.
+
+### §S6 Workflow abort — user-approval-gated (user ruling 2026-07-17)
+Crucible allows aborting an active workflow (an OPEN plan), but the API
+actively discourages it:
+1. `POST …/plans/<planId>/abort` WITHOUT `userApproved: true` in the body →
+   **409** with a strongly discouraging AXI response: the error states that
+   aborting discards a declared workflow and REQUIRES explicit user approval;
+   `help[]` instructs the orchestrator to present the abort to the user and
+   retry with `userApproved: true` ONLY after the user approves. Nothing
+   changes state.
+2. WITH `userApproved: true` → the abort executes: the ACTIVE cycle →
+   `failed` (abort noted), all PENDING cycles → `skipped`, the plan status →
+   `aborted` (new terminal plan state, additive alongside open|closed).
+   Aborted plans render in the history lens with an `aborted` state (never
+   a merge pill); rollups/derived statuses treat aborted like closed-without-
+   merge (CR-014's derived PENDING logic: an aborted plan means the CR can
+   file a NEW plan — the one-open-plan-per-cr rule sees aborted as not-open).
+3. The timer state is checkpointed as part of the abort (sealed values stay
+   honest).
 
 ## Acceptance criteria
 - [ ] With cycles A(pending), B(pending): activating B → 400 whose `error` contains `out-of-order` and names A; `help[]` mentions both the activate-first and the `skipped` paths; B remains `pending` (no partial state).
@@ -90,9 +116,13 @@ resumes from the exact setpoint (no lost ≤60s window):
 - [ ] §S3 edit: `PATCH …/cycles/<id> {label:"new"}` on a PENDING cycle → 200 + label round-trips; on the ACTIVE cycle → 400 ("locked"); on a done/skipped/failed cycle → 400 ("immutable history"); label+status in one body → 400 (one mutation per call, named in help).
 - [ ] §S5 checkpoint verb: with an active cycle at 3 injected minutes since the last durable write, `POST …/plans/<planId>/checkpoint` → 200 `{ok:true, changed:true}`; an immediate store-reopen resumes `activeMs` at the checkpointed value EXACTLY (no cadence-window loss); with no active cycle → 200 `{changed:false}`; unknown plan → 404 + help.
 - [ ] §S5 signal checkpoint: sending SIGTERM to a test-spawned server process with an active mid-epoch cycle persists the epoch before exit — a fresh store over the same DB resumes the exact value (subprocess-based test; if the harness cannot spawn a signal-able server process, pin the shutdown hook function directly and SAY so).
+- [ ] §S5 project stop: with two open plans each holding an active mid-epoch cycle, `POST …/projects/<key>/stop` → 200 `{ok:true, checkpointed:2}`; store-reopen resumes both exactly; no active cycles → `{checkpointed:0}`.
+- [ ] §S6 abort unapproved: `POST …/plans/<id>/abort` (no flag) → 409; `error` states user approval is required; `help[]` instructs presenting to the user + retrying with `userApproved:true`; plan/cycles unchanged.
+- [ ] §S6 abort approved: with `{userApproved:true}` — active cycle → `failed`, pending cycles → `skipped`, plan → `aborted`; the history lens renders the group with an `aborted` state and NO merge pill; filing a new plan for the same cr afterwards succeeds (aborted ≠ open); the aborted cycle's timer sealed at its checkpointed value.
 
 ## Estimated size
-XS.
+S (grew from XS with §S3 mutation, §S5 checkpoints/stop, §S6 abort —
+re-estimate at gap analysis).
 
 ## Non-goals
 Cross-PLAN concurrency rules (multi-track lanes legitimately run parallel
