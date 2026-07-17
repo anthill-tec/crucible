@@ -83,9 +83,31 @@ Sender: the close-out path — the fleet `cr-close` verb (CR-CRU-008 / plan
 close in CR-CRU-011) emits it automatically on merge; until the fleet verb
 exists the orchestrator sends it manually at close-out. Once CR-CRU-011
 plans exist, the marker links `plans.cr` (the commitBoundary join key).
-`gate-report` on the fleet clients: parses `no-mistakes axi status` TOON (or
-accepts `--outcome/--steps/--commit` flags as fallback) → `POST /api/v2/gates`,
-auto-attaching `context.wave` from `WORKFLOW_WAVE` and `track` from
+Two client verbs (user refinement 2026-07-18 — "build the parsing and
+streaming within the python client layer; the orchestrator is just a consumer
+of the output … can save some tokens"):
+
+- **`gate-run` — the token-efficient wrapper (primary path).** The orchestrator
+  invokes it and NOTHING ELSE; the Python client owns the whole flow: it runs
+  `no-mistakes axi run --intent "<…>" [--yes]`, TAILS the TOON stdout stream,
+  decodes each step/status incrementally via `clients/toon.py` (C4), and
+  STREAMS gate events to Crucible — throttled interim snapshots as steps
+  complete (reusing the §S2b narration cadence from CR-008) plus a final
+  sealing `POST /api/v2/gates` carrying the outcome. It returns a COMPACT
+  result to the orchestrator (outcome + Crucible event id + link) — the
+  VERBOSE no-mistakes output (findings text, step logs) NEVER enters the
+  orchestrator's LLM context. This is exactly how `bun-crucible.py test`
+  already wraps a test run (client captures/parses/ingests; the orchestrator
+  reads only a compact summary), applied to the gate. Token-efficient by
+  construction; live-streaming for free. `--yes` auto-resolves findings fully
+  in the client; the only time the orchestrator re-enters the loop is a
+  genuine ask-user judgment finding (the exception, not the norm).
+- **`gate-report` — the lighter report-only verb (retained).** Parses a
+  pre-existing `no-mistakes axi status` TOON (or `--outcome/--steps/--commit`
+  flags) → `POST /api/v2/gates` — for when no-mistakes was already run
+  separately and you only want to report the sealed result.
+
+Both auto-attach `context.wave` from `WORKFLOW_WAVE` and `track` from
 `WORKFLOW_ROLE` (established pattern). Sibling `milestone` verb:
 `milestone --type gap-analysis --label "CR-NAI-043 gap-analysis" [--cr …]` →
 `POST /api/v2/milestones` with the same env auto-context.
@@ -103,6 +125,7 @@ Still zero wave-control API — state remains inferred from plans + gate events.
 - [ ] Workflow tab: with a gate ingested for wave 3, the gate pane shows its outcome + step ladder; ingesting a second wave-3 gate replaces the pane content (latest wins) — over SSE, no reload.
 - [ ] Wave state: wave 3 with all plans closed + a `passed` gate event renders `gated` in the lens header (fixture also asserts `awaiting review` before the gate arrives); grep asserts no wave-control route exists.
 - [ ] Client: `bun-crucible.py gate-report --outcome passed --commit abc1234 --steps "review:passed,test:passed"` posts a valid gate with `context.wave` from `WORKFLOW_WAVE`; unset env → no wave key.
+- [ ] Client `gate-run`: with a fake `no-mistakes` on PATH emitting a scripted TOON stream (steps completing over a few seconds), `bun-crucible.py gate-run --intent "…"` (a) posts ≥1 INTERIM gate to `/api/v2/gates` before the final sealing post (throttled per §S2b), (b) posts a final gate whose outcome matches the stream, and (c) its own stdout to the caller is a COMPACT summary (outcome + event id) — NOT the raw no-mistakes TOON (assert the verbose findings text is absent from the verb's stdout).
 - [ ] §S4b: `POST /api/v2/milestones {type:"gap-analysis", label:"…"}` → 201 `kind:"milestone"`; `type:"deploy"` → 400 naming `type`; rollups unchanged; the WORKSPACE timeline renders a `data-testid="milestone-entry"` slim row with the ◇ glyph + type + label, while the HOME timeline renders zero milestone entries for the same fixture (workspace-scoped assertion).
 - [ ] E2E: `tests/e2e/gates.e2e.ts` — file plan → milestone gap-analysis → close cycles + plan → ingest gate via API → workspace timeline shows the milestone entry AND the boundary card, home shows the compact gate entry but no milestone, `gated` wave header + populated gate pane; results ingested `tier:"e2e"`.
 
