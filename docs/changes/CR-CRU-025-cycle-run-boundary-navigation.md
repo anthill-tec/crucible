@@ -55,12 +55,12 @@ non-clickable — never a dead click.
 A declared `Cycle done` boundary marker renders TWO distinct trailing badges
 (user refinement 2026-07-17: "Detail and Cycle should both be clickable …
 Make them distinct badges" — badges, not prose affordances):
-- **`⊙ detail`** (`data-testid="boundary-detail"`) → the linked run's
+- **`⊙ Detail`** (`data-testid="boundary-detail"`) → the linked run's
   drill-in (parity with the heuristic marker's behavior).
-- **`⚑ cycle`** (`data-testid="boundary-to-cycle"`) → the workflow
+- **`⚑ Cycle`** (`data-testid="boundary-to-cycle"`) → the workflow
   navigation below.
 The heuristic RED➜GREEN marker keeps its shipped whole-body drill-in click
-untouched. Clicking `⚑ cycle`:
+untouched. Badge labels render init-caps (user refinement). Clicking `⚑ Cycle`:
 1. Switches to the Workflow tab (one-rule tab swap).
 2. Locates the exact CR and cycle: in the ACTIVE section directly, or in
    HISTORY — auto-expanding the containing CR group (and its wave, if
