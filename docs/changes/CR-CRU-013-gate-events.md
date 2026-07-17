@@ -56,13 +56,18 @@ ONLY when a no-mistakes gate is LIVE for the current wave — i.e. at the
 wave/release boundary, when the wave's CRs are all done and no CR is active
 (§S6 lanes-complete → gating/gated). During normal CR execution the Workflow
 tab shows ONLY the active-CR view — no gate element, no empty "no gate yet"
-state, no clutter. When no-mistakes runs, the widget materializes (naturally
-in the now-idle active zone, since no CR is running) and streams the live
-9-step ladder over SSE (interim snapshots → final seal). Once the wave
-advances, the widget recedes; the durable record lives on as the timeline 🛡
-seal (§S2) + history. **Timing invariant:** the gate widget and an active CR
-are never both present — they are mutually exclusive states of the Workflow
-tab's active zone.
+state, no clutter. When no-mistakes runs, the widget REUSES THE ACTIVE-WORKFLOW ZONE — the same
+space the live plan (active CR's cycle todo) occupies during execution (user
+ruling 2026-07-18: "since this wont be active at the time of no-mistakes run,
+this area can be reused for no-mistakes run display"). So the Workflow tab's
+primary zone is contextual, showing exactly ONE of: the LIVE PLAN (active CR,
+mid-execution) OR the NO-MISTAKES RUN (the live 9-step ladder, at the
+wave/release boundary) — the two are mutually exclusive and never coexist,
+matching the F13 title "the live plan + no-mistakes pane". The widget streams
+over SSE (interim snapshots → final seal); once the wave advances it recedes,
+the durable record living on as the timeline 🛡 seal (§S2) + history. No
+persistent element, no empty state — the zone simply shows whatever is active
+now.
 
 ### §S4b Milestone events (round-24 fold-in — WORKSPACE timeline only)
 Lightweight siblings of gates, one workflow-event family:
