@@ -52,6 +52,13 @@ The Workflow tab's live section (CR-011 §S3) carries a **no-mistakes pane**:
 the latest gate for the current wave, step ladder with statuses, updating over
 SSE. Empty state: "no gate run this wave yet".
 
+**Timing (user clarification 2026-07-18):** no-mistakes is the UNIQUE gate at
+the WAVE / RELEASE boundary — it runs only when the wave's CRs are ALL done
+and NO CR is active. So the gate pane is EMPTY during active-CR execution
+("no gate run this wave yet") and populates/streams only at the boundary
+(when the active-workflow section itself shows lanes-complete/awaiting-review,
+no active cycle). The pane and an active CR are never both live at once.
+
 ### §S4b Milestone events (round-24 fold-in — WORKSPACE timeline only)
 Lightweight siblings of gates, one workflow-event family:
 `POST /api/v2/milestones` `{projectKey, agentId, type, label?, context?{cr,
