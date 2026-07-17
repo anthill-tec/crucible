@@ -11,7 +11,7 @@
   "use strict";
 
   function main(L) {
-    const { a, b, button, div, option, pre, select, span } = van.tags;
+    const { a, b, button, div, input, option, pre, select, span } = van.tags;
 
     // ── State ───────────────────────────────────────────────────────────
     const state = vanX.reactive({
@@ -85,8 +85,18 @@
       state.route = L.routeParse(location.pathname);
     });
 
+    // CR-CRU-012 §S2 — close the Projects manager slide-over back to home
+    // (history-consistent: same pushState + route-state shape as closeDetail).
+    function closeManager() {
+      if (state.route.manage !== true) return;
+      history.pushState(null, "", "/");
+      state.route = L.routeParse("/");
+    }
+
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && state.route.overlay !== undefined) closeDetail();
+      if (e.key !== "Escape") return;
+      if (state.route.overlay !== undefined) closeDetail();
+      else if (state.route.manage === true) closeManager();
     });
 
     // ── Data plumbing (§S5 — v2 surface only) ───────────────────────────
@@ -345,9 +355,15 @@
             { class: "app-badge-flow" },
             L.orderProjects([...state.projects]).map(ProjectBadge),
           ),
-        // ⚙ manage chip — renders here; the manager surface lands in CR-CRU-012.
+        // ⚙ manage chip — opens the Projects manager slide-over (CR-CRU-012
+        // §S2, F12) at /manage.
         button(
-          { "data-testid": "manage-chip", class: "app-chip", title: "manage projects" },
+          {
+            "data-testid": "manage-chip",
+            class: "app-chip",
+            title: "manage projects",
+            onclick: () => navigate("/manage"),
+          },
           "⚙",
         ),
       );
@@ -807,6 +823,201 @@
               )
             : "",
         Timeline(),
+      );
+
+    // ── CR-CRU-012 §S2 — Projects manager slide-over (/manage, F12) ─────
+    // Its OWN scrim/slide-over contract (the CR-016 in-pane refactor retired
+    // the run-detail sheet; styles.css notes /manage is a separate contract).
+    // List + parameters + edit-in-place + add; archive UI is cycle 28's.
+    // Defaults are client-render-time facts mirroring the server's
+    // omit-when-unset Project shape (src/types.ts DEFAULT_LIVENESS 60s/300s/
+    // 1h, DEFAULT_RETENTION 100) — F12 mock text verbatim.
+    const MANAGER_LIVENESS_DEFAULTS = {
+      staleAfterMs: 60000,
+      tombstoneAfterMs: 300000,
+      pruneAfterMs: 3600000,
+    };
+    const MANAGER_RETENTION_DEFAULT = 100;
+
+    const fmtLivenessMs = (ms) =>
+      ms >= 3600000 && ms % 3600000 === 0 ? `${ms / 3600000}h` : `${Math.round(ms / 1000)}s`;
+
+    // "liveness T1 60s / T2 300s / T3 1h (defaults)" — the "(defaults)"
+    // label ONLY when the project carries no override at all; any override
+    // renders the merged values with no defaults label (F12 editing row).
+    function livenessLabel(project) {
+      const overrides = project.liveness ?? {};
+      const hasOverride =
+        typeof overrides.staleAfterMs === "number" ||
+        typeof overrides.tombstoneAfterMs === "number" ||
+        typeof overrides.pruneAfterMs === "number";
+      const v = { ...MANAGER_LIVENESS_DEFAULTS, ...overrides };
+      const core =
+        `liveness T1 ${fmtLivenessMs(v.staleAfterMs)}` +
+        ` / T2 ${fmtLivenessMs(v.tombstoneAfterMs)}` +
+        ` / T3 ${fmtLivenessMs(v.pruneAfterMs)}`;
+      return hasOverride ? core : `${core} (defaults)`;
+    }
+
+    // Display view — canonical name + type badge + ✎ edit chip, parameters
+    // line beneath (sutRoot · liveness · retention · immutable key as TEXT,
+    // never bound to an input).
+    const ManagerRowView = (project, editing) =>
+      div(
+        div(
+          { class: "app-manager-row-head" },
+          // The canonical name renders in a DIV on purpose: the storyboard's
+          // "✎ edit" chip is found by text, and a project NAMED "Edit …"
+          // must never shadow the row's real edit trigger.
+          div({ class: "app-card-name" }, project.name || project.key),
+          span({ class: "app-type-badge" }, project.type),
+          button(
+            { class: "app-chip app-manager-edit", onclick: () => (editing.val = true) },
+            "✎ edit",
+          ),
+        ),
+        div(
+          { class: "app-card-meta app-manager-params" },
+          `sutRoot: ${project.sutRoot ?? ""} · ${livenessLabel(project)}` +
+            ` · retention ${project.retention ?? MANAGER_RETENTION_DEFAULT} runs` +
+            ` · key ${project.key} (immutable)`,
+        ),
+      );
+
+    // Edit-in-place — name/type/sutRoot only; PATCH carries ONLY the fields
+    // the user actually changed and NEVER the immutable key (§S1 contract,
+    // src/v2.ts:771-773 — an echoed key would 400 against the live server).
+    // PATCH doesn't echo the updated project, so refetch to observe the edit.
+    const ManagerRowEdit = (project, editing) => {
+      const name = van.state(project.name ?? "");
+      const type = van.state(project.type);
+      const sutRoot = van.state(project.sutRoot ?? "");
+      const save = async () => {
+        const body = {};
+        if (name.val !== (project.name ?? "")) body.name = name.val;
+        if (type.val !== project.type) body.type = type.val;
+        if (sutRoot.val !== (project.sutRoot ?? "")) body.sutRoot = sutRoot.val;
+        if (Object.keys(body).length > 0) {
+          try {
+            await fetch(`/api/v2/projects/${encodeURIComponent(project.key)}`, {
+              method: "PATCH",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(body),
+            });
+          } catch {
+            // Reachability is the watchdog's concern; keep stale data visible.
+          }
+        }
+        editing.val = false;
+        refetch();
+      };
+      return div(
+        { class: "app-manager-edit-form" },
+        input({
+          "data-testid": "manager-edit-name",
+          value: name.val,
+          oninput: (e) => (name.val = e.target.value),
+        }),
+        select(
+          {
+            "data-testid": "manager-edit-type",
+            onchange: (e) => (type.val = e.target.value),
+          },
+          option({ value: "backend", selected: project.type === "backend" }, "backend"),
+          option({ value: "frontend", selected: project.type === "frontend" }, "frontend"),
+        ),
+        input({
+          "data-testid": "manager-edit-sutroot",
+          value: sutRoot.val,
+          oninput: (e) => (sutRoot.val = e.target.value),
+        }),
+        button({ "data-testid": "manager-edit-save", class: "app-chip on", onclick: save }, "save"),
+        button({ class: "app-chip", onclick: () => (editing.val = false) }, "cancel"),
+        div(
+          { class: "app-card-meta app-manager-params" },
+          `key ${project.key} (immutable)`,
+        ),
+      );
+    };
+
+    const ManagerProjectRow = (project) => {
+      const editing = van.state(false);
+      return div(
+        {
+          "data-testid": "manager-project-row",
+          "data-project-key": project.key,
+          class: "app-manager-row",
+        },
+        () => (editing.val ? ManagerRowEdit(project, editing) : ManagerRowView(project, editing)),
+      );
+    };
+
+    // + Add project — exactly name/type/sutRoot (never a key field); POST
+    // /api/v2/projects, then refetch so the new badge appears in the
+    // projects row without reload (the SSE projects frame drives the same
+    // refetch when a change arrives from elsewhere).
+    const ManagerAddForm = () => {
+      const name = van.state("");
+      const type = van.state("backend");
+      const sutRoot = van.state("");
+      const submit = async () => {
+        try {
+          await fetch("/api/v2/projects", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ name: name.val, type: type.val, sutRoot: sutRoot.val }),
+          });
+        } catch {
+          // Reachability is the watchdog's concern; keep stale data visible.
+        }
+        refetch();
+      };
+      return div(
+        { "data-testid": "manager-add-form", class: "app-manager-add" },
+        span({ class: "app-rail-title" }, "+ Add project"),
+        input({
+          "data-testid": "manager-add-name",
+          placeholder: "name",
+          oninput: (e) => (name.val = e.target.value),
+        }),
+        select(
+          { "data-testid": "manager-add-type", onchange: (e) => (type.val = e.target.value) },
+          option({ value: "backend" }, "backend"),
+          option({ value: "frontend" }, "frontend"),
+        ),
+        input({
+          "data-testid": "manager-add-sutroot",
+          placeholder: "sutRoot",
+          oninput: (e) => (sutRoot.val = e.target.value),
+        }),
+        button({ "data-testid": "manager-add-submit", class: "app-chip on", onclick: submit }, "add"),
+      );
+    };
+
+    // The slide-over layer: scrim (click-to-close) + dark right sheet with
+    // the ← home chip; home stays mounted beneath (route composes exactly
+    // like the run-detail overlay — same surface, no chrome rebuild).
+    const ProjectsManager = () =>
+      div(
+        { class: "app-manager-layer" },
+        div({
+          "data-testid": "manager-scrim",
+          class: "app-manager-scrim",
+          onclick: () => closeManager(),
+        }),
+        div(
+          { "data-testid": "projects-manager", class: "app-manager" },
+          div(
+            { class: "app-manager-head" },
+            button({ class: "app-chip", onclick: () => closeManager() }, "← home"),
+            span({ class: "app-rail-title" }, "Projects manager · /manage"),
+          ),
+          div(
+            { class: "app-pane-content" },
+            () => div([...state.projects].map(ManagerProjectRow)),
+            ManagerAddForm(),
+          ),
+        ),
       );
 
     // ── Workspace (§S4 header/tabs/runs + §S5.2 Project pane) ───────────
@@ -2332,6 +2543,9 @@
           }
           return surfaceDom;
         },
+        // CR-CRU-012 §S2 — /manage slide-over ABOVE the home surface (the
+        // surface key stays "home", so chrome/surface DOM never rebuild).
+        () => (state.route.manage === true ? ProjectsManager() : ""),
       );
 
     // ── Boot ────────────────────────────────────────────────────────────
