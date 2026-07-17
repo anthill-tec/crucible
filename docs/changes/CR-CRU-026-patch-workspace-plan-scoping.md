@@ -114,8 +114,16 @@ navigation history:
 3. **Compound matching:** with plans from MULTIPLE projects in client state,
    run↔cycle matching keys on (projectKey, cycleId) — plan cycle ids are
    per-project and MUST NOT collide across projects on the home feed.
-4. The heuristic marker itself stays byte-identical for planless projects
-   (CR-011 §S0b compatibility clause unchanged).
+4. **Vestige cleanout (user ruling 2026-07-17: "These behaviours are a
+   vestige of past design that was not cleaned out!"):** the heuristic
+   marker is the CR-007 PRE-PLAN design; its survival on plan-backed
+   surfaces was a data-conditional suppression, not a capability decision.
+   After this CR the rule is capability-conditional: a project that HAS
+   plans gets its cycle narration ONLY from declared plan data — heuristic
+   markers are structurally unreachable there in every data state (no
+   phantom pairs even for stray unlinked runs on such projects; those runs
+   render as plain cards). The heuristic stays byte-identical ONLY for
+   planless projects (CR-011 §S0b fallback, e.g. the fixture projects).
 
 ## Acceptance criteria
 - [ ] With project A's workspace open and plans loaded, `navigate("/p/<B>")` renders the Workflow tab WITHOUT any of A's plan content at ANY point (assert synchronously post-navigate: zero plan groups from A) and fires exactly one `GET /api/v2/projects/<B>/plans` (mock-asserted) without waiting for an SSE frame.
@@ -126,6 +134,7 @@ navigation history:
 - [ ] Regression: SSE change frames still refetch plan data appropriate to the CURRENT surface (workspace: the routed project's plans; home: the §S3.2 cross-project read) — existing cadence unbroken, no surface left on stale data.
 - [ ] E2E: from the seeded active project's workspace, click a fixture project's badge → Workflow tab shows that project's empty state, not the seeded project's plans; navigate back → the seeded project's plans return.
 - [ ] §S3 vocabulary parity: on the workspace Runs tab reached by IN-APP navigation, cycleId-linked runs render `declared-marker` rows (zero `transition-marker` rows for linked runs) — identical to the cold-load render of the same server state.
+- [ ] §S3.4 vestige cleanout: on a project with ≥1 plan, ZERO `transition-marker` rows render in ANY data state — including for a seeded run WITHOUT a cycleId (renders as a plain card, no phantom pairing); a planless project's timeline still renders the CR-007 heuristic byte-identically.
 - [ ] §S0 no-hidden-state equivalence: for BOTH home and workspace, the set of rendered marker testids is identical between (a) cold load and (b) arrival via any navigation sequence (assert at least: home→ws→home and ws-A→home→ws-B), given unchanged server data.
 - [ ] §S3 home parity: home renders `⟲ Cycle done` boundaries for linked runs of every listed project; with two projects each owning a plan whose cycle ids overlap numerically, each run matches only ITS project's cycle (compound-key pin).
 
