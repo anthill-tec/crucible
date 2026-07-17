@@ -34,6 +34,8 @@ interface ProjectRow {
   created_at: number;
   liveness: string | null;
   retention: number | null;
+  // CR-CRU-012 §S1b — archive timestamp; NULL = live (never deleted).
+  archived_at: number | null;
 }
 
 interface AgentRow {
@@ -225,7 +227,8 @@ export class Store {
         sut_root TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         liveness TEXT,
-        retention INTEGER
+        retention INTEGER,
+        archived_at INTEGER
       );
 
       CREATE TABLE IF NOT EXISTS agents (
@@ -354,7 +357,26 @@ export class Store {
     if (!planCols.has("orchestrator")) {
       this.db.exec(`ALTER TABLE plans ADD COLUMN orchestrator TEXT`);
     }
+    // CR-CRU-012 §S1b — additive archive-timestamp column; pre-012 db files
+    // lack it (same PRAGMA-checked retrofit pattern as above).
+    const projectCols = new Set(
+      this.db
+        .query<{ name: string }, []>(`PRAGMA table_info(projects)`)
+        .all()
+        .map((col) => col.name),
+    );
+    if (!projectCols.has("archived_at")) {
+      this.db.exec(`ALTER TABLE projects ADD COLUMN archived_at INTEGER`);
+    }
   }
+
+  /**
+   * CR-CRU-012 §S1b — the archived-project exclusion every hot listing query
+   * appends: rows belonging to an archived project (archived_at IS NOT NULL)
+   * are filtered out; the rows themselves are never deleted.
+   */
+  private static readonly NOT_ARCHIVED_SUBQUERY =
+    `project_key NOT IN (SELECT key FROM projects WHERE archived_at IS NOT NULL)`;
 
   // ── Projects ──────────────────────────────────────────────────────────
 
@@ -393,11 +415,56 @@ export class Store {
     return row ? Store.toProject(row) : null;
   }
 
-  listProjects(): Project[] {
+  /**
+   * CR-CRU-012 §S1b — the DEFAULT listing excludes archived projects;
+   * `archived: true` is the manager-only view listing ONLY archived ones.
+   */
+  listProjects(archived = false): Project[] {
     const rows = this.db
-      .query<ProjectRow, []>(`SELECT * FROM projects ORDER BY created_at ASC`)
+      .query<ProjectRow, []>(
+        `SELECT * FROM projects
+         WHERE archived_at IS ${archived ? "NOT NULL" : "NULL"}
+         ORDER BY created_at ASC`,
+      )
       .all();
     return rows.map(Store.toProject);
+  }
+
+  /** CR-CRU-012 §S1b — is the project currently archived? (false if unknown). */
+  isArchived(key: string): boolean {
+    const row = this.db
+      .query<{ archived_at: number | null }, [string]>(
+        `SELECT archived_at FROM projects WHERE key = ?`,
+      )
+      .get(key);
+    return row !== null && row.archived_at !== null;
+  }
+
+  /**
+   * CR-CRU-012 §S1b — archive a project (sets archived_at; records are never
+   * deleted). Idempotent: returns whether the state actually changed.
+   */
+  archiveProject(key: string): boolean {
+    const result = this.db
+      .query(`UPDATE projects SET archived_at = ? WHERE key = ? AND archived_at IS NULL`)
+      .run(Date.now(), key);
+    if (result.changes > 0) {
+      this.emit("projects", key);
+      return true;
+    }
+    return false;
+  }
+
+  /** CR-CRU-012 §S1b — unarchive: restores full visibility. Idempotent. */
+  unarchiveProject(key: string): boolean {
+    const result = this.db
+      .query(`UPDATE projects SET archived_at = NULL WHERE key = ? AND archived_at IS NOT NULL`)
+      .run(key);
+    if (result.changes > 0) {
+      this.emit("projects", key);
+      return true;
+    }
+    return false;
   }
 
   private static toProject(row: ProjectRow): Project {
@@ -513,12 +580,19 @@ export class Store {
   }
 
   listAgents(projectKey?: string, now: number = Date.now()): LiveAgent[] {
+    // CR-CRU-012 §S1b — archived projects' agents are excluded (not deleted).
     const rows =
       projectKey === undefined
-        ? this.db.query<AgentRow, []>(`SELECT * FROM agents ORDER BY last_seen DESC`).all()
+        ? this.db
+            .query<AgentRow, []>(
+              `SELECT * FROM agents WHERE ${Store.NOT_ARCHIVED_SUBQUERY}
+               ORDER BY last_seen DESC`,
+            )
+            .all()
         : this.db
             .query<AgentRow, [string]>(
-              `SELECT * FROM agents WHERE project_key = ? ORDER BY last_seen DESC`,
+              `SELECT * FROM agents WHERE project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY}
+               ORDER BY last_seen DESC`,
             )
             .all(projectKey);
 
@@ -633,16 +707,18 @@ export class Store {
   }
 
   listEvents(projectKey?: string, limit = 50): RunEvent[] {
+    // CR-CRU-012 §S1b — archived projects' events are excluded (not deleted).
     const rows =
       projectKey === undefined
         ? this.db
             .query<EventRow, [number]>(
-              `SELECT * FROM events ORDER BY timestamp DESC, rowid DESC LIMIT ?`,
+              `SELECT * FROM events WHERE ${Store.NOT_ARCHIVED_SUBQUERY}
+               ORDER BY timestamp DESC, rowid DESC LIMIT ?`,
             )
             .all(limit)
         : this.db
             .query<EventRow, [string, number]>(
-              `SELECT * FROM events WHERE project_key = ?
+              `SELECT * FROM events WHERE project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY}
                ORDER BY timestamp DESC, rowid DESC LIMIT ?`,
             )
             .all(projectKey, limit);
@@ -766,7 +842,9 @@ export class Store {
   listRollups(projectKey: string): Rollup[] {
     const rows = this.db
       .query<RollupRow, [string]>(
-        `SELECT * FROM rollups WHERE project_key = ? ORDER BY rowid ASC`,
+        // CR-CRU-012 §S1b — archived projects' rollups are excluded (not deleted).
+        `SELECT * FROM rollups WHERE project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY}
+         ORDER BY rowid ASC`,
       )
       .all(projectKey);
     return rows.map((row) => ({

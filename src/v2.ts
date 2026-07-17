@@ -157,13 +157,21 @@ async function readBody(req: Request): Promise<V2Body | null> {
   }
 }
 
-/** §S1 — projectKey validation: UUID shape (400) then existence (404 + help). */
+/**
+ * §S1 — projectKey validation: UUID shape (400) then existence (404 + help).
+ * CR-CRU-012 §S1b — an ARCHIVED project also 404s (help[] names the archived
+ * state); the rejected call must never mutate, so registration/ingest can
+ * never resurrect an archived project.
+ */
 function requireProject(store: Store, key: unknown): { key: string } | { fail: Response } {
   if (typeof key !== "string" || !UUID_RE.test(key)) {
     return { fail: fail(400, "projectKey must be a UUID", { help: hints.unknownProject }) };
   }
   if (store.getProject(key) === null) {
     return { fail: fail(404, `unknown project: ${key}`, { help: hints.unknownProject }) };
+  }
+  if (store.isArchived(key)) {
+    return { fail: fail(404, `project is archived: ${key}`, { help: hints.archivedProject }) };
   }
   return { key };
 }
@@ -214,11 +222,16 @@ function projectInactiveMs(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_PROJECT_INACTIVE_MS;
 }
 
-/** PRD §4.2 — project rollups. */
+/**
+ * PRD §4.2 — project rollups.
+ * CR-CRU-012 §S1b — the default listing excludes archived projects;
+ * `?archived=true` is the manager-only view listing ONLY archived ones.
+ */
 function handleProjectsList(store: Store, req: Request, url: URL): Response {
+  const archived = url.searchParams.get("archived") === "true";
   const inactiveMs = projectInactiveMs();
   const now = Date.now();
-  const projects = store.listProjects().map((project) => {
+  const projects = store.listProjects(archived).map((project) => {
     const agents = store.listAgents(project.key);
     const events = store.listEvents(project.key, Number.MAX_SAFE_INTEGER);
     const last = events[0];
@@ -707,6 +720,24 @@ function handlePlansList(store: Store, key: string, req: Request, url: URL): Res
 }
 
 /**
+ * CR-CRU-012 §S1b — POST …/projects/<key>/archive | /unarchive. Validates
+ * UUID shape + existence ONLY (an archived project must stay addressable so
+ * unarchive can restore it — requireProject's archived gate does not apply
+ * here). Idempotent: repeats → 200 {ok:true, changed:false}, matching the
+ * codebase's changed:boolean write convention.
+ */
+function handleProjectArchive(store: Store, key: string, archive: boolean): Response {
+  if (!UUID_RE.test(key)) {
+    return fail(400, "projectKey must be a UUID", { help: hints.unknownProject });
+  }
+  if (store.getProject(key) === null) {
+    return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
+  }
+  const changed = archive ? store.archiveProject(key) : store.unarchiveProject(key);
+  return json({ ok: true, changed });
+}
+
+/**
  * Dispatch …/projects/<key>/plans[…] paths; null when the shape/method is
  * not a plans route (caller falls through to its catch-all).
  */
@@ -892,6 +923,14 @@ export function handleV2(
     if (segments.length >= 2 && segments[1] === "plans") {
       const handled = handlePlansRoute(store, segments, req, url);
       if (handled !== null) return handled;
+    }
+    // CR-CRU-012 §S1b — archive / unarchive verbs.
+    if (
+      req.method === "POST" &&
+      segments.length === 2 &&
+      (segments[1] === "archive" || segments[1] === "unarchive")
+    ) {
+      return handleProjectArchive(store, segments[0]!, segments[1] === "archive");
     }
   }
   if (

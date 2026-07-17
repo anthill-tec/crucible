@@ -86,6 +86,12 @@ function validateProjectKey(store: Store, body: IngestBody): { key: string } | {
   if (store.getProject(key) === null) {
     return { fail: err(404, `unknown project: ${key}`) };
   }
+  // CR-CRU-012 §S1b — archived projects reject v1 calls too. The shim keeps
+  // its own bare {ok:false, error} 404 shape (NO help[] — orchestrator
+  // ruling: the shim mirrors v1's error surface faithfully).
+  if (store.isArchived(key)) {
+    return { fail: err(404, `project is archived: ${key}`) };
+  }
   return { key };
 }
 
