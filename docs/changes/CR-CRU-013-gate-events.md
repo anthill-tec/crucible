@@ -1,6 +1,6 @@
 # CR-CRU-013 — Workflow events: gates (no-mistakes) + milestones
 
-**Status:** PENDING
+**Status:** IN_PROGRESS (2026-07-18 — gap analysis underway)
 **Type:** feature
 **Priority:** P2
 **Depends on:** CR-CRU-008, CR-CRU-011
