@@ -15,16 +15,16 @@ the project path, the bun package dir, and the bun binary are parameterizable.
 Subcommands:
   register, unregister  Agent lifecycle.
   test                  Run a TARGETED test (file/path) or the whole suite, via
-                        `bun test --reporter=junit` → parse → /api/ingest/parsed. The
+                        `bun test --reporter=junit` → parse → /api/v2/runs/parsed. The
                         per-cycle RED/GREEN workhorse. With --agent the result is ingested
                         regardless of pass/fail (junit captures failures). The reports
                         file is wiped first so only THIS run's XML is ingested.
   regression            Run the FULL suite. With --coverage (bun --coverage-reporter=lcov)
-                        posts /api/ingest/parsed with line/function coverage; else posts
+                        posts /api/v2/runs/parsed with line/function coverage; else posts
                         the parsed junit only. Orchestrator pre-merge gate path.
-  auto-ingest           Ingest only: parse an already-produced junit file → /api/ingest/parsed.
+  auto-ingest           Ingest only: parse an already-produced junit file → /api/v2/runs/parsed.
   check                 `tsc --noEmit` typecheck gate over the package; ingest any errors to
-                        /api/ingest/compile. (Most TS RED failures are runtime, but a type
+                        /api/v2/runs/compile. (Most TS RED failures are runtime, but a type
                         error should still surface.)
   pre-merge-gate        ORCHESTRATOR gate: fail-fast `check` (tsc) → `regression --coverage`.
   plan-file             File a cycle plan: --cr, --title, --cycles "a,b[,c…]" →
@@ -969,7 +969,7 @@ def main():
     g = sub.add_parser("regression", help="Full-suite `bun test` + ingest. --coverage for lcov.")
     g.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     g.add_argument("--coverage", action="store_true",
-                   help="Run with bun lcov coverage and post /api/ingest/parsed with coverage")
+                   help="Run with bun lcov coverage and post /api/v2/runs/parsed with coverage")
     _add_reports_arg(g)
     _add_bun_arg(g)
     _add_package_dir_arg(g)
