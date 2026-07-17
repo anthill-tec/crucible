@@ -226,7 +226,7 @@ describe("§S3 (a) — SIMULATED SERVICE RESTART: activeMs resumes from the pers
     expect(resumed.activeMs as number).toBeGreaterThanOrEqual(0);
   });
 
-  test("a cycle with SOME live accumulation before a mid-epoch crash: after restart+downtime, resumed activeMs stays BOUNDED (>= 0, strictly < the full wall-clock-including-downtime span) — downtime is excluded regardless of exact checkpoint cadence", async () => {
+  test("a cycle with 3 minutes of live accumulation before a mid-epoch crash: resumed activeMs honors the CHECKPOINT CADENCE contract (>=120_000ms, <=180_000ms) — a hard crash loses AT MOST one <=60s checkpoint window, never the full epoch and never scaled to downtime", async () => {
     const dbPath = freshTmpDbPath();
 
     const server1 = boot(dbPath);
@@ -236,15 +236,27 @@ describe("§S3 (a) — SIMULATED SERVICE RESTART: activeMs resumes from the pers
     setSystemTime(T0);
     await patchJson(server1, plansPath(key, `/${planId}/cycles/${cycleId}`), { status: "active" });
 
-    // Live accumulation, SAME server session, BEFORE the crash: 3 minutes.
+    // Live accumulation, SAME server session, BEFORE the crash: 3 minutes
+    // (180_000ms). This GET at the 3-minute mark doubles as the fixture's
+    // CHECKPOINT-DRIVE POINT: per CR-CRU-023 §S3 (a) the store MUST durably
+    // persist `active_ms_accumulated` for an ACTIVE cycle at a cadence
+    // <=60s — via a periodic interval and/or by piggybacking a checkpoint
+    // write onto cycle-linked reads/ingest (e.g. this plans-GET). This
+    // fixture cannot drive a real `setInterval`-based checkpoint directly:
+    // `setSystemTime()` mocks `Date.now()` process-wide but does NOT
+    // advance real wall-clock timers, so a 3-minute jump via setSystemTime
+    // never fires a real 60s interval callback in-process. Driving a
+    // plans-GET at the exact 3-minute mark is therefore the SAFE, mechanism
+    // -agnostic way to pin the contract: it exercises a checkpoint write
+    // regardless of whether GREEN implements it as an interval, or as a
+    // synchronous checkpoint inside toPlan/plans-GET/ingest.
     const crashAt = T0 + 3 * 60 * 1000;
     setSystemTime(crashAt);
     const preCrash = await getCycle(server1, key, "CR-EPOCH-RESTART-2");
     expect(preCrash.activeMs).toBe(3 * 60 * 1000);
 
-    // "Crash" — the process goes down with whatever was durably persisted up
-    // to this point. This test does NOT assume a specific checkpoint cadence
-    // beyond the activation write (per the gap-analysis finding below).
+    // "Crash" — the process goes down immediately after that driven
+    // checkpoint, with whatever was durably persisted up to this point.
     server1.stop();
 
     // Downtime: another 2 hours.
@@ -256,12 +268,23 @@ describe("§S3 (a) — SIMULATED SERVICE RESTART: activeMs resumes from the pers
 
     const wallClockIncludingDowntime = restartAt - T0; // ~2h03m
     expect(resumed.status).toBe("active");
-    expect(resumed.activeMs as number).toBeGreaterThanOrEqual(0);
+    // CHECKPOINT CADENCE CONTRACT (recorded decision, not an accident): a
+    // hard crash while ACTIVE may lose AT MOST one <=60s checkpoint window
+    // of attention time. With 3 minutes (180_000ms) of live accumulation up
+    // to the driven checkpoint immediately before the crash, resumed
+    // activeMs MUST land in [180_000 - 60_000, 180_000] == [120_000, 180_000]:
+    //   - >= 120_000 rules out the crash-loses-everything defect (current
+    //     production resumes ~0, because active_ms_accumulated is only ever
+    //     persisted on the transition OUT of `active` — a crash while still
+    //     ACTIVE never writes the accumulated attention time at all).
+    //   - <= 180_000 (with the downtime-exclusion check below) rules out the
+    //     naive `now - activatedAt` defect that would scale with downtime.
+    expect(resumed.activeMs as number).toBeGreaterThanOrEqual(120_000);
+    expect(resumed.activeMs as number).toBeLessThanOrEqual(180_000);
     // Downtime EXCLUDED: resumed activeMs is nowhere near the full
     // wall-clock-including-downtime span — a naive `now - activatedAt`
     // implementation would read ~2h03m (7_380_000ms) here.
     expect(resumed.activeMs as number).toBeLessThan(wallClockIncludingDowntime);
-    expect(resumed.activeMs as number).toBeLessThan(10 * 60 * 1000); // well under 10 minutes, vs ~2h03m of naive wall-clock.
   });
 });
 
