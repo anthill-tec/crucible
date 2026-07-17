@@ -64,6 +64,21 @@ rework"), PATCH on a closed plan, unknown plan/cycle ids, malformed cycle
 input, duplicate open plan per cr. Response SHAPES stay otherwise unchanged
 (additive `help` only) — no client breakage.
 
+### §S5 Emergency-stop timer checkpoint (user ruling 2026-07-17)
+An emergency stop during execution pings Crucible so the attention timer
+resumes from the exact setpoint (no lost ≤60s window):
+1. **Checkpoint verb:** `POST /api/v2/projects/<key>/plans/<planId>/checkpoint`
+   — folds the current epoch of the plan's ACTIVE cycle into
+   `active_ms_accumulated` immediately and re-anchors (no-op `changed:false`
+   when no cycle is active). One verb per plan, not per cycle — the caller
+   shouldn't need the cycle id mid-emergency.
+2. **Graceful-signal checkpoint:** the server itself checkpoints EVERY active
+   cycle (all plans, all projects) on SIGTERM/SIGINT before exit — an orderly
+   stop never loses timer state even without the ping; only a hard power cut
+   falls back to the ≤60s read-cadence tolerance (CR-023 §S3).
+3. Fleet + orchestrator wiring is CR-008 scope (a `checkpoint` verb; the
+   /shutdown emergency flow calls it) — noted there at its gap analysis.
+
 ## Acceptance criteria
 - [ ] With cycles A(pending), B(pending): activating B → 400 whose `error` contains `out-of-order` and names A; `help[]` mentions both the activate-first and the `skipped` paths; B remains `pending` (no partial state).
 - [ ] After `A → skipped`, activating B → 200 (the sanctioned swap works).
@@ -73,6 +88,8 @@ input, duplicate open plan per cr. Response SHAPES stay otherwise unchanged
 - [ ] The orchestrator's own mis-activation replay: plan with cycles 1..5, POST activate on cycle 2 → 400 (the plan-7 incident becomes impossible).
 - [ ] §S3 insert: `POST …/cycles {label, before: <pendingId>}` lands the cycle immediately before that sibling (order asserted via GET); `before` pointing at the ACTIVE cycle or any earlier sibling → 400 + help naming the active cycle; plain append unchanged; an inserted cycle obeys §S1 (activating it before its new earlier pending sibling → 400).
 - [ ] §S3 edit: `PATCH …/cycles/<id> {label:"new"}` on a PENDING cycle → 200 + label round-trips; on the ACTIVE cycle → 400 ("locked"); on a done/skipped/failed cycle → 400 ("immutable history"); label+status in one body → 400 (one mutation per call, named in help).
+- [ ] §S5 checkpoint verb: with an active cycle at 3 injected minutes since the last durable write, `POST …/plans/<planId>/checkpoint` → 200 `{ok:true, changed:true}`; an immediate store-reopen resumes `activeMs` at the checkpointed value EXACTLY (no cadence-window loss); with no active cycle → 200 `{changed:false}`; unknown plan → 404 + help.
+- [ ] §S5 signal checkpoint: sending SIGTERM to a test-spawned server process with an active mid-epoch cycle persists the epoch before exit — a fresh store over the same DB resumes the exact value (subprocess-based test; if the harness cannot spawn a signal-able server process, pin the shutdown hook function directly and SAY so).
 
 ## Estimated size
 XS.
