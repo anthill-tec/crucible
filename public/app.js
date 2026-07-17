@@ -11,7 +11,7 @@
   "use strict";
 
   function main(L) {
-    const { a, b, button, div, option, pre, select, span } = van.tags;
+    const { a, b, button, div, input, option, pre, select, span } = van.tags;
 
     // ── State ───────────────────────────────────────────────────────────
     const state = vanX.reactive({
@@ -85,8 +85,18 @@
       state.route = L.routeParse(location.pathname);
     });
 
+    // CR-CRU-012 §S2 — close the Projects manager slide-over back to home
+    // (history-consistent: same pushState + route-state shape as closeDetail).
+    function closeManager() {
+      if (state.route.manage !== true) return;
+      history.pushState(null, "", "/");
+      state.route = L.routeParse("/");
+    }
+
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && state.route.overlay !== undefined) closeDetail();
+      if (e.key !== "Escape") return;
+      if (state.route.overlay !== undefined) closeDetail();
+      else if (state.route.manage === true) closeManager();
     });
 
     // ── Data plumbing (§S5 — v2 surface only) ───────────────────────────
@@ -345,9 +355,15 @@
             { class: "app-badge-flow" },
             L.orderProjects([...state.projects]).map(ProjectBadge),
           ),
-        // ⚙ manage chip — renders here; the manager surface lands in CR-CRU-012.
+        // ⚙ manage chip — opens the Projects manager slide-over (CR-CRU-012
+        // §S2, F12) at /manage.
         button(
-          { "data-testid": "manage-chip", class: "app-chip", title: "manage projects" },
+          {
+            "data-testid": "manage-chip",
+            class: "app-chip",
+            title: "manage projects",
+            onclick: () => navigate("/manage"),
+          },
           "⚙",
         ),
       );
@@ -808,6 +824,397 @@
             : "",
         Timeline(),
       );
+
+    // ── CR-CRU-012 §S2 — Projects manager slide-over (/manage, F12) ─────
+    // Its OWN scrim/slide-over contract (the CR-016 in-pane refactor retired
+    // the run-detail sheet; styles.css notes /manage is a separate contract).
+    // List + parameters + edit-in-place + add; archive UI is cycle 28's.
+    // Defaults are client-render-time facts mirroring the server's
+    // omit-when-unset Project shape (src/types.ts DEFAULT_LIVENESS 60s/300s/
+    // 1h, DEFAULT_RETENTION 100) — F12 mock text verbatim.
+    const MANAGER_LIVENESS_DEFAULTS = {
+      staleAfterMs: 60000,
+      tombstoneAfterMs: 300000,
+      pruneAfterMs: 3600000,
+    };
+    const MANAGER_RETENTION_DEFAULT = 100;
+
+    const fmtLivenessMs = (ms) =>
+      ms >= 3600000 && ms % 3600000 === 0 ? `${ms / 3600000}h` : `${Math.round(ms / 1000)}s`;
+
+    // "liveness T1 60s / T2 300s / T3 1h (defaults)" — the "(defaults)"
+    // label ONLY when the project carries no override at all; any override
+    // renders the merged values with no defaults label (F12 editing row).
+    function livenessLabel(project) {
+      const overrides = project.liveness ?? {};
+      const hasOverride =
+        typeof overrides.staleAfterMs === "number" ||
+        typeof overrides.tombstoneAfterMs === "number" ||
+        typeof overrides.pruneAfterMs === "number";
+      const v = { ...MANAGER_LIVENESS_DEFAULTS, ...overrides };
+      const core =
+        `liveness T1 ${fmtLivenessMs(v.staleAfterMs)}` +
+        ` / T2 ${fmtLivenessMs(v.tombstoneAfterMs)}` +
+        ` / T3 ${fmtLivenessMs(v.pruneAfterMs)}`;
+      return hasOverride ? core : `${core} (defaults)`;
+    }
+
+    // CR-CRU-012 §S2 (cycle 28) — archive/unarchive UI state, shared across
+    // manager rows: at most ONE row holds a pending archive confirm at a
+    // time (any row's trigger click claims it, resetting the others), and
+    // the archived list backs the bottom "archived (N)" fold.
+    const managerArchivePending = van.state(null); // project key awaiting confirm
+    const managerArchivedOpen = van.state(false); // fold expanded?
+    const managerArchived = van.state([]); // archived projects (?archived=true)
+
+    async function refetchArchived() {
+      try {
+        const body = await getJson("/api/v2/projects?archived=true");
+        // Copy: a same-reference (mutated-in-place) payload must still
+        // propagate — van only re-renders on a reference CHANGE.
+        managerArchived.val = [...(body.projects ?? [])];
+      } catch {
+        // Reachability is the watchdog's concern; keep stale data visible.
+      }
+    }
+
+    // POST /api/v2/projects/<key>/archive | /unarchive ({} body — §S1b),
+    // then refetch BOTH slices: the core refetch updates the home projects
+    // row live (same contract the SSE projects frame drives), and the
+    // archived refetch keeps the fold count/rows tracking the move.
+    async function postProjectLifecycle(key, action) {
+      try {
+        await fetch(`/api/v2/projects/${encodeURIComponent(key)}/${action}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        });
+      } catch {
+        // Reachability is the watchdog's concern; keep stale data visible.
+      }
+      refetch();
+      refetchArchived();
+    }
+
+    // Display view — canonical name + type badge + ✎ edit chip + archive
+    // trigger (confirm-gated: the first click only reveals the in-row
+    // confirm; only that second click POSTs), parameters line beneath
+    // (sutRoot · liveness · retention · immutable key as TEXT, never bound
+    // to an input).
+    const ManagerRowView = (project, startEdit) =>
+      div(
+        div(
+          { class: "app-manager-row-head" },
+          // The canonical name renders in a DIV on purpose: the storyboard's
+          // "✎ edit" chip is found by text, and a project NAMED "Edit …"
+          // must never shadow the row's real edit trigger.
+          div({ class: "app-card-name" }, project.name || project.key),
+          span({ class: "app-type-badge" }, project.type),
+          button({ class: "app-chip app-manager-edit", onclick: startEdit }, "✎ edit"),
+          button(
+            {
+              "data-testid": "manager-archive",
+              class: "app-chip app-manager-archive",
+              onclick: () => (managerArchivePending.val = project.key),
+            },
+            "archive",
+          ),
+          () =>
+            managerArchivePending.val === project.key
+              ? button(
+                  {
+                    "data-testid": "manager-archive-confirm",
+                    class: "app-chip app-manager-archive-confirm",
+                    onclick: () => {
+                      managerArchivePending.val = null;
+                      postProjectLifecycle(project.key, "archive");
+                    },
+                  },
+                  "confirm archive",
+                )
+              : "",
+        ),
+        div(
+          { class: "app-card-meta app-manager-params" },
+          `sutRoot: ${project.sutRoot ?? ""} · ${livenessLabel(project)}` +
+            ` · retention ${project.retention ?? MANAGER_RETENTION_DEFAULT} runs` +
+            ` · key ${project.key} (immutable)`,
+        ),
+      );
+
+    // Edit-in-place — name/type/sutRoot + liveness overrides (t1/t2/t3,
+    // edited in seconds, wired as ms) + retention; PATCH carries ONLY the
+    // fields the user actually changed and NEVER the immutable key (§S1,
+    // src/v2.ts:771-773 — an echoed key would 400 against the live server).
+    // PATCH doesn't echo the updated project, so refetch to observe the edit.
+    //
+    // Cycle-28 fix (pre-existing cycle-27 defect): the name/type/sutRoot
+    // states used to be CREATED here, inside the view/edit-swapping binding
+    // that ManagerProjectRow wraps this component in — so that binding's
+    // dependency tracking captured their `.val` reads (`value: name.val`),
+    // and every input tick re-ran the scope and REBUILT the form with fresh
+    // states, resetting the field before save() could read it. The states
+    // now live in ManagerProjectRow (created once per row, next to
+    // `editing`) and are handed in as `edit`; the inputs bind them as STATE
+    // props (`value: edit.name`), never `.val`-reads, so the swapping
+    // binding tracks only `editing` and typed values survive ticks.
+    const ManagerRowEdit = (project, editing, edit) => {
+      const { name, type, sutRoot, t1, t2, t3, retention } = edit;
+      // Diff baseline: the same effective values the fields were seeded with.
+      const eff = { ...MANAGER_LIVENESS_DEFAULTS, ...(project.liveness ?? {}) };
+      const effRetention = project.retention ?? MANAGER_RETENTION_DEFAULT;
+      // Non-numeric input never PATCHes: a native number input sanitizes
+      // junk to "" — empty (or unparseable) counts as UNCHANGED.
+      const numOr = (raw) => {
+        const s = String(raw).trim();
+        if (s === "") return undefined;
+        const n = Number(s);
+        return Number.isFinite(n) ? n : undefined;
+      };
+      const save = async () => {
+        const body = {};
+        if (name.val !== (project.name ?? "")) body.name = name.val;
+        if (type.val !== project.type) body.type = type.val;
+        if (sutRoot.val !== (project.sutRoot ?? "")) body.sutRoot = sutRoot.val;
+        // Liveness: seconds in the form, ms on the wire; ONLY changed keys
+        // (the server partial-merges — unchanged siblings must be omitted).
+        const liveness = {};
+        const t1s = numOr(t1.val);
+        if (t1s !== undefined && t1s * 1000 !== eff.staleAfterMs) liveness.t1_ms = t1s * 1000;
+        const t2s = numOr(t2.val);
+        if (t2s !== undefined && t2s * 1000 !== eff.tombstoneAfterMs) liveness.t2_ms = t2s * 1000;
+        const t3s = numOr(t3.val);
+        if (t3s !== undefined && t3s * 1000 !== eff.pruneAfterMs) liveness.t3_ms = t3s * 1000;
+        if (Object.keys(liveness).length > 0) body.liveness = liveness;
+        const ret = numOr(retention.val);
+        if (ret !== undefined && ret !== effRetention) body.retention = ret;
+        if (Object.keys(body).length > 0) {
+          try {
+            await fetch(`/api/v2/projects/${encodeURIComponent(project.key)}`, {
+              method: "PATCH",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(body),
+            });
+          } catch {
+            // Reachability is the watchdog's concern; keep stale data visible.
+          }
+        }
+        editing.val = false;
+        refetch();
+      };
+      return div(
+        { class: "app-manager-edit-form" },
+        input({
+          "data-testid": "manager-edit-name",
+          value: name,
+          oninput: (e) => (name.val = e.target.value),
+        }),
+        select(
+          {
+            "data-testid": "manager-edit-type",
+            onchange: (e) => (type.val = e.target.value),
+          },
+          option({ value: "backend", selected: project.type === "backend" }, "backend"),
+          option({ value: "frontend", selected: project.type === "frontend" }, "frontend"),
+        ),
+        input({
+          "data-testid": "manager-edit-sutroot",
+          value: sutRoot,
+          oninput: (e) => (sutRoot.val = e.target.value),
+        }),
+        input({
+          "data-testid": "manager-edit-t1",
+          type: "number",
+          value: t1,
+          oninput: (e) => (t1.val = e.target.value),
+        }),
+        input({
+          "data-testid": "manager-edit-t2",
+          type: "number",
+          value: t2,
+          oninput: (e) => (t2.val = e.target.value),
+        }),
+        input({
+          "data-testid": "manager-edit-t3",
+          type: "number",
+          value: t3,
+          oninput: (e) => (t3.val = e.target.value),
+        }),
+        input({
+          "data-testid": "manager-edit-retention",
+          type: "number",
+          value: retention,
+          oninput: (e) => (retention.val = e.target.value),
+        }),
+        button({ "data-testid": "manager-edit-save", class: "app-chip on", onclick: save }, "save"),
+        button({ class: "app-chip", onclick: () => (editing.val = false) }, "cancel"),
+        div(
+          { class: "app-card-meta app-manager-params" },
+          `key ${project.key} (immutable)`,
+        ),
+      );
+    };
+
+    const ManagerProjectRow = (project) => {
+      const editing = van.state(false);
+      // Edit-field states live HERE — outside the swapping binding below —
+      // so input ticks never rebuild the form (see ManagerRowEdit's note).
+      // startEdit re-seeds them from the project on every ✎ edit click, so
+      // a cancel-then-re-edit never shows stale draft values.
+      // Liveness fields edit in SECONDS (the wire is ms — save() converts);
+      // prefill is the current EFFECTIVE value: defaults merged with any
+      // project.liveness override (§S2 verify fix round, cycle 29).
+      const effLiveness = () => ({ ...MANAGER_LIVENESS_DEFAULTS, ...(project.liveness ?? {}) });
+      const edit = {
+        name: van.state(project.name ?? ""),
+        type: van.state(project.type),
+        sutRoot: van.state(project.sutRoot ?? ""),
+        t1: van.state(String(effLiveness().staleAfterMs / 1000)),
+        t2: van.state(String(effLiveness().tombstoneAfterMs / 1000)),
+        t3: van.state(String(effLiveness().pruneAfterMs / 1000)),
+        retention: van.state(String(project.retention ?? MANAGER_RETENTION_DEFAULT)),
+      };
+      const startEdit = () => {
+        const eff = effLiveness();
+        edit.name.val = project.name ?? "";
+        edit.type.val = project.type;
+        edit.sutRoot.val = project.sutRoot ?? "";
+        edit.t1.val = String(eff.staleAfterMs / 1000);
+        edit.t2.val = String(eff.tombstoneAfterMs / 1000);
+        edit.t3.val = String(eff.pruneAfterMs / 1000);
+        edit.retention.val = String(project.retention ?? MANAGER_RETENTION_DEFAULT);
+        editing.val = true;
+      };
+      return div(
+        {
+          "data-testid": "manager-project-row",
+          "data-project-key": project.key,
+          class: "app-manager-row",
+        },
+        () =>
+          editing.val ? ManagerRowEdit(project, editing, edit) : ManagerRowView(project, startEdit),
+      );
+    };
+
+    // "archived (N)" fold row — the project's name + type + the unarchive
+    // action (POST …/unarchive, then the same refetch pair brings the home
+    // badge back live).
+    const ManagerArchivedRow = (project) =>
+      div(
+        {
+          "data-testid": "manager-archived-row",
+          "data-project-key": project.key,
+          class: "app-manager-row app-manager-archived-row",
+        },
+        div(
+          { class: "app-manager-row-head" },
+          div({ class: "app-card-name" }, project.name || project.key),
+          span({ class: "app-type-badge" }, project.type),
+          button(
+            {
+              "data-testid": "manager-unarchive",
+              class: "app-chip",
+              onclick: () => postProjectLifecycle(project.key, "unarchive"),
+            },
+            "unarchive",
+          ),
+        ),
+      );
+
+    // The fold itself: header text EXACTLY `archived (N)`, ABSENT at N=0
+    // (never "archived (0)"), collapsed by default; rows render only while
+    // expanded. Bound as a function child so it tracks managerArchived.
+    const ManagerArchivedFold = () => {
+      const archived = managerArchived.val;
+      if (archived.length === 0) return "";
+      return div(
+        { class: "app-manager-archived" },
+        button(
+          {
+            "data-testid": "manager-archived-fold",
+            class: "app-manager-fold",
+            onclick: () => (managerArchivedOpen.val = !managerArchivedOpen.val),
+          },
+          `archived (${archived.length})`,
+        ),
+        () => (managerArchivedOpen.val ? div(archived.map(ManagerArchivedRow)) : ""),
+      );
+    };
+
+    // + Add project — exactly name/type/sutRoot (never a key field); POST
+    // /api/v2/projects, then refetch so the new badge appears in the
+    // projects row without reload (the SSE projects frame drives the same
+    // refetch when a change arrives from elsewhere).
+    const ManagerAddForm = () => {
+      const name = van.state("");
+      const type = van.state("backend");
+      const sutRoot = van.state("");
+      const submit = async () => {
+        try {
+          await fetch("/api/v2/projects", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ name: name.val, type: type.val, sutRoot: sutRoot.val }),
+          });
+        } catch {
+          // Reachability is the watchdog's concern; keep stale data visible.
+        }
+        refetch();
+      };
+      return div(
+        { "data-testid": "manager-add-form", class: "app-manager-add" },
+        span({ class: "app-rail-title" }, "+ Add project"),
+        input({
+          "data-testid": "manager-add-name",
+          placeholder: "name",
+          oninput: (e) => (name.val = e.target.value),
+        }),
+        select(
+          { "data-testid": "manager-add-type", onchange: (e) => (type.val = e.target.value) },
+          option({ value: "backend" }, "backend"),
+          option({ value: "frontend" }, "frontend"),
+        ),
+        input({
+          "data-testid": "manager-add-sutroot",
+          placeholder: "sutRoot",
+          oninput: (e) => (sutRoot.val = e.target.value),
+        }),
+        button({ "data-testid": "manager-add-submit", class: "app-chip on", onclick: submit }, "add"),
+      );
+    };
+
+    // The slide-over layer: scrim (click-to-close) + dark right sheet with
+    // the ← home chip; home stays mounted beneath (route composes exactly
+    // like the run-detail overlay — same surface, no chrome rebuild).
+    const ProjectsManager = () => {
+      // Fresh open: no dangling pending confirm, fold collapsed, and pull
+      // the archived slice so the fold count is honest without a click.
+      managerArchivePending.val = null;
+      managerArchivedOpen.val = false;
+      refetchArchived();
+      return div(
+        { class: "app-manager-layer" },
+        div({
+          "data-testid": "manager-scrim",
+          class: "app-manager-scrim",
+          onclick: () => closeManager(),
+        }),
+        div(
+          { "data-testid": "projects-manager", class: "app-manager" },
+          div(
+            { class: "app-manager-head" },
+            button({ class: "app-chip", onclick: () => closeManager() }, "← home"),
+            span({ class: "app-rail-title" }, "Projects manager · /manage"),
+          ),
+          div(
+            { class: "app-pane-content" },
+            () => div([...state.projects].map(ManagerProjectRow)),
+            ManagerAddForm(),
+            ManagerArchivedFold,
+          ),
+        ),
+      );
+    };
 
     // ── Workspace (§S4 header/tabs/runs + §S5.2 Project pane) ───────────
     // §S5.4 + fidelity #6 — the workspace top bar's locked composition:
@@ -2332,6 +2739,9 @@
           }
           return surfaceDom;
         },
+        // CR-CRU-012 §S2 — /manage slide-over ABOVE the home surface (the
+        // surface key stays "home", so chrome/surface DOM never rebuild).
+        () => (state.route.manage === true ? ProjectsManager() : ""),
       );
 
     // ── Boot ────────────────────────────────────────────────────────────

@@ -46,6 +46,8 @@ export interface RouteState {
   page: "home" | "workspace";
   projectKey?: string;
   overlay?: string;
+  /** CR-CRU-012 §S2 — /manage: the Projects manager slide-over over home. */
+  manage?: boolean;
 }
 
 export interface WorkspaceProjectLike {

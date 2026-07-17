@@ -3,7 +3,13 @@
 // agent-facing next-step text is auditable in one place.
 
 export const hints: Record<
-  "orientation" | "registered" | "afterRed" | "afterCompile" | "unknownProject" | "coverageDropped",
+  | "orientation"
+  | "registered"
+  | "afterRed"
+  | "afterCompile"
+  | "unknownProject"
+  | "archivedProject"
+  | "coverageDropped",
   string[]
 > = {
   /** GET /api/v2 — orientation for a fresh agent. */
@@ -33,6 +39,12 @@ export const hints: Record<
   unknownProject: [
     "GET /api/v2/projects — list registered projects and their keys",
     "POST /api/v2/projects {name} — register a new project (key auto-generated)",
+  ],
+  /** CR-CRU-012 §S1b — 404 on an agent call against an archived project. */
+  archivedProject: [
+    "this project is archived — agent calls are rejected and never resurrect it",
+    "POST /api/v2/projects/<key>/unarchive — explicitly restore the project first",
+    "GET /api/v2/projects?archived=true — list archived projects",
   ],
   /** Coverage arrived on a failing run and was discarded by the store. */
   coverageDropped: ["coverage DISCARDED — coverage from a failing run is meaningless"],

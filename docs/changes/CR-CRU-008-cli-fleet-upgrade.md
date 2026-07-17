@@ -115,3 +115,26 @@ install step documented in CR-CRU-009; VERIFY tests run against `clients/` copie
 ## Non-goals
 Shim removal (separate maintenance CR after soak); VS Code script (no v1 script
 exists — skill-only update).
+
+## Implementation Notes (gap-analysis accumulator — items ruled/found before execution)
+- **e2e ingest verb (from CR-012 VERIFY finding 1, 2026-07-17):** add an e2e
+  path to `bun-crucible.py` (and the fleet map) that runs/wraps playwright
+  with `PLAYWRIGHT_JUNIT_OUTPUT_NAME` and ingests the JUnit with
+  `tier:"e2e"` + workflow context — replacing the manual curl step
+  documented in CR-CRU-012's close-out. The `unit/module/e2e/regression`
+  tier map in §S2 already contracts this; the finding makes it concrete.
+- **`register` verb ergonomics (2026-07-17):** `bun-crucible.py register
+  --agent X` hard-requires `--phase`; orchestrator-side brackets (e.g. the
+  CR-012-E2E ingest) had to rely on implicit heartbeat registration. Make
+  `--phase` optional (default `report`) or document the implicit path.
+- **`plan-file --title` / `--orchestrator`:** CR-021 §S6.11 additive fields —
+  already reflected in §S2's plan-verbs text; keep the assigned-cycle-ids
+  printout prominent (the plan-7 mis-activation root cause was a guessed id).
+- **`checkpoint` / `stop` verbs + `/shutdown` emergency wiring:** CR-024 §S5.4
+  assigns the fleet side here — orchestrator emergency flow calls
+  `POST …/plans/<id>/checkpoint` and `POST …/projects/<key>/stop`.
+- **python-crucible.py no-XML fallback 400 bug:** carried from the 2026-07-16
+  python-side cycle — fix during §S2.
+- **Guards adoption:** CR-024 lands after this CR — the plan verbs here must
+  read AXI `help[]` tolerantly so the later guard 4xxs (out-of-order,
+  single-active, §S7 ingest cycle-reference validation) degrade gracefully.

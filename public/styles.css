@@ -476,6 +476,82 @@ body {
   padding: 24px 8px;
 }
 
+/* ── CR-CRU-012 §S2 — Projects manager slide-over (/manage, F12): its OWN
+   scrim + dark right sheet contract (the retired run-detail sheet below
+   stays retired — this is the separate contract that note reserved). ──── */
+.app-manager-layer { position: fixed; inset: 0; z-index: 40; }
+.app-manager-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.55); }
+.app-manager {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(560px, 92vw);
+  background: var(--bg-1);
+  border-left: 1px solid var(--line);
+  box-shadow: -18px 0 40px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  overflow-y: auto;
+}
+.app-manager-head { display: flex; align-items: center; gap: 8px; }
+.app-manager-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.app-manager-row-head { display: flex; align-items: center; gap: 6px; }
+.app-manager-row-head .app-manager-edit { margin-left: auto; }
+.app-manager-params { margin-top: 2px; }
+.app-manager-edit-form,
+.app-manager-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.app-manager-add {
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+/* CR-CRU-012 §S2 cycle 28 — archive/unarchive: confirm-gated row action +
+   the bottom "archived (N)" fold. Confirm reads as the destructive step
+   (ember-warm), the fold as a quiet dashed-off tail section. */
+.app-manager-archive-confirm {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.app-manager-archived {
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+.app-manager-fold {
+  background: none;
+  border: none;
+  color: var(--color-neutral-content);
+  font: 11px var(--mono);
+  cursor: pointer;
+  padding: 2px 0;
+}
+.app-manager-fold:hover { color: var(--ink); }
+.app-manager-archived-row { opacity: 0.75; }
+.app-manager-archived-row .app-card-name { color: var(--color-neutral-content); }
+.app-manager input,
+.app-manager select {
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: 11px var(--mono);
+  padding: 3px 8px;
+}
+
 /* ── Live-region degradation (§S5) ──────────────────────────────────────── */
 /* ── CR-CRU-007 §S3/§S4 + CR-CRU-016 §S1 — run detail, IN-PANE: a pane
    state of the active central pane. The right-hand slide-over sheet and

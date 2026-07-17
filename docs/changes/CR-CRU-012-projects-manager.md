@@ -1,6 +1,6 @@
 # CR-CRU-012 — Projects manager: add + edit project parameters
 
-**Status:** PENDING
+**Status:** IN_PROGRESS — AWAITING MERGE GATE (2026-07-17: plan 7 cycles 25-29 all done incl. the verify fix round; both gates green 730/730 + playwright 25/25 + tsc 0; e2e ingested tier:e2e evt-1784278234852-20)
 **Type:** feature
 **Priority:** P2
 **Depends on:** CR-CRU-004, CR-CRU-007
@@ -69,3 +69,30 @@ conventions.
 Hard-DELETING projects (archive covers the need; physical deletion deferred);
 system-wide config editing from the UI (project-inactive timeout etc. stay
 server config); authentication.
+
+## Implementation Notes
+- Delivered across plan 7 (cycles 25-29): §S1 PATCH (LIVENESS_WIRE_KEYS
+  partial-merge, validate-all-before-write, immutable projectKey), §S1b
+  archive/unarchive (archived_at + NOT_ARCHIVED_SUBQUERY exclusion sweep,
+  requireProject 404 + archivedProject hint, ?archived=true), §S2 manager
+  slide-over (/manage route composing over home; list/edit/add; archive UI
+  with confirm-gating + archived (N) fold + unarchive; SSE badge liveness).
+- E2E landed as tests/e2e/features/workspace-manager.feature (+ steps) —
+  house-style playwright-bdd equivalent of the spec's named
+  tests/e2e/manager.e2e.ts; behavior coverage identical (VERIFY-judged).
+- VERIFY findings + resolutions (cycle 29): (1) "results ingested tier:e2e"
+  gap → met at close-out via the documented manual step (playwright
+  --reporter=junit with PLAYWRIGHT_JUNIT_OUTPUT_NAME → POST /api/v2/runs
+  {codec:junit, tier:"e2e", context:{cycleId}}); the proper fleet verb is
+  filed in CR-CRU-008 Implementation Notes. (2) §S2 edit form lacked
+  liveness-override + retention fields → fix round (RED 00af839 pins
+  manager-edit-t1/t2/t3/retention, s→ms partial-merge PATCH; FIX 43cefaf
+  implements row-level states per the cycle-27 convention). (3) stale status
+  line → this update.
+- Notable defect fixed in-CR (cycle 28, sanctioned): ManagerRowEdit created
+  its edit states inside the view/edit-swapping reactive scope — real typing
+  (anything crossing a tick) rebuilt the form and reset the field; states
+  lifted to ManagerProjectRow, inputs bind state props.
+- GREEN hardening (cycle 28): archived-list fetch takes a defensive copy —
+  a same-reference payload (in-place spliced array) never stalls vanX
+  propagation.
