@@ -1,0 +1,675 @@
+// CR-CRU-008 C2 — clients/bun-crucible.py v2 contract (RED).
+//
+// Spec: docs/changes/CR-CRU-008-cli-fleet-upgrade.md — §S2 script fleet
+// upgrade (v2 endpoints, tier, git/wave/orchestrator/cycle context) + the
+// plan-verbs paragraph (plan-file/cycle-activate/cycle-done/cr-close,
+// track from WORKFLOW_ROLE) + §S2c (failure-detail enrichment) + Risk
+// section: "clients/ in-repo is the SOURCE OF TRUTH ... VERIFY tests run
+// against clients/ copies." This cycle (C2) upgrades bun-crucible.py.
+//
+// RED phase: `clients/bun-crucible.py` does not exist AT ALL yet on this
+// branch (only `~/.claude/scripts/bun-crucible.py`, the LIVE v1 script,
+// exists — it is copied into `clients/` and upgraded there by GREEN).
+// Every test below spawns `python3 clients/bun-crucible.py ...` against a
+// REAL live test server and fails because the file is missing — `python3`
+// exits 2 with "can't open file" on stderr. That is expected RED.
+//
+// Technique: reuses tests/cli-axi.test.ts's proven pattern — a real
+// `startServer({port:0, dbPath:":memory:"})` instance + `Bun.spawn`
+// against it. NEW here: a tiny CAPTURING PROXY (`startCapturingProxy`) —
+// its own `Bun.serve` that records {method, path} for every request it
+// receives, forwards it verbatim to the real server, and relays the real
+// response back untouched — so tests can pin the EXACT URLs the spawned
+// python script hit (v2-only, NEVER the v1 shim) without parsing the
+// script's source. `CRUCIBLE_URL` is pointed at the proxy (or, where the
+// proxy isn't needed, directly at the real server) instead of the
+// hardcoded `http://localhost:3849` the current script uses — the C2
+// upgrade must read this env var.
+//
+// §S2c ground truth (PROBED directly against the installed bun binary,
+// 1.3.14-canary, not assumed from the spec prose): `bun test
+// --reporter=junit` writes a BARE `<failure type="AssertionError"/>` (no
+// message attribute, no element text) for every failure kind — assertion
+// mismatch, thrown Error, AND timeout alike. Detail lives only in the
+// console stream:
+//   - assertion mismatch / thrown Error: an "error: <detail>" block
+//     appears IMMEDIATELY BEFORE the "(fail) <name>" line, e.g.:
+//       error: expect(received).toBe(expected)
+//       ...
+//       (fail) mismatched expectation [0.12ms]
+//   - a TIMEOUT's detail line ("^ this test timed out after Nms.") is
+//     printed AFTER the "(fail) <name>" line instead — structurally NOT a
+//     "preceding block". A marrying parser built to the spec's described
+//     mechanism ("the error:/assertion block preceding each (fail) <name>
+//     line") cannot associate it with that leaf. That is the deliberate
+//     "unmatched failing leaf" fixture case below (degrades to type-only).
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { startServer } from "../src/server.ts";
+
+const SCRIPT_PATH = join(import.meta.dir, "..", "clients", "bun-crucible.py");
+
+// ── spawn + capture helpers ──────────────────────────────────────────────
+
+interface RunResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Spawns `python3 clients/bun-crucible.py <args>`. Strips any ambient
+ * WORKFLOW_* env so each test controls it explicitly, and always injects
+ * CRUCIBLE_URL — the contract under test (the v1 script hardcodes
+ * `http://localhost:3849`; the C2 upgrade must honor this env var so tests
+ * can point it at an ephemeral-port test server instead).
+ */
+async function runScript(
+  args: string[],
+  opts: { cwd: string; crucibleUrl: string; env?: Record<string, string | undefined> },
+): Promise<RunResult> {
+  const baseEnv: Record<string, string | undefined> = { ...process.env };
+  for (const k of Object.keys(baseEnv)) {
+    if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
+  }
+  const proc = Bun.spawn({
+    cmd: ["python3", SCRIPT_PATH, ...args],
+    cwd: opts.cwd,
+    env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl, ...(opts.env ?? {}) },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { code, stdout, stderr };
+}
+
+interface ProxyCall {
+  method: string;
+  path: string;
+}
+
+/**
+ * A tiny Bun.serve CAPTURING PROXY: records every {method, path} it
+ * receives, forwards the request verbatim to `targetBaseUrl`, and relays
+ * the real response back untouched. Lets tests pin the EXACT URLs a
+ * spawned script hit (v2-only, never the v1 shim) without reading the
+ * script's source.
+ */
+function startCapturingProxy(targetBaseUrl: string): {
+  url: string;
+  calls: ProxyCall[];
+  stop(): void;
+} {
+  const calls: ProxyCall[] = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const url = new URL(req.url);
+      calls.push({ method: req.method, path: url.pathname });
+      const target = new URL(url.pathname + url.search, targetBaseUrl);
+      const headers = new Headers(req.headers);
+      headers.delete("host");
+      const init: RequestInit = { method: req.method, headers };
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        init.body = await req.arrayBuffer();
+      }
+      const upstream = await fetch(target, init);
+      const body = await upstream.arrayBuffer();
+      return new Response(body, { status: upstream.status, headers: upstream.headers });
+    },
+  });
+  return { url: `http://localhost:${server.port}`, calls, stop: () => server.stop(true) };
+}
+
+// ── server-side read helpers (plain fetch — no proxy) ────────────────────
+
+async function createProject(baseUrl: string, name: string): Promise<string> {
+  const res = await fetch(`${baseUrl}/api/v2/projects`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const body = (await res.json()) as { project: { key: string } };
+  return body.project.key;
+}
+
+async function getAgents(
+  baseUrl: string,
+  key: string,
+): Promise<Array<{ agentId: string; message: string }>> {
+  const res = await fetch(`${baseUrl}/api/v2/agents?project=${key}`);
+  const body = (await res.json()) as { agents: Array<{ agentId: string; message: string }> };
+  return body.agents;
+}
+
+async function getAgentIds(baseUrl: string, key: string): Promise<string[]> {
+  return (await getAgents(baseUrl, key)).map((a) => a.agentId);
+}
+
+interface PlanCycleWire {
+  id: number;
+  label: string;
+  kind: string;
+  status: string;
+}
+
+interface PlanWire {
+  planId: number;
+  cr: string;
+  title?: string;
+  track?: string;
+  status: string;
+  cycles: PlanCycleWire[];
+  merge?: { commit: string };
+}
+
+async function getPlans(baseUrl: string, key: string): Promise<PlanWire[]> {
+  const res = await fetch(`${baseUrl}/api/v2/projects/${key}/plans`);
+  const body = (await res.json()) as { plans: PlanWire[] };
+  return body.plans;
+}
+
+async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: string }>> {
+  const res = await fetch(`${baseUrl}/api/v2/events?project=${key}`);
+  const body = (await res.json()) as { events: Array<{ id: string }> };
+  return body.events;
+}
+
+interface EventLeaf {
+  name: string;
+  status: string;
+  failure?: { message?: string; trace?: string; type?: string };
+}
+
+interface EventSuite {
+  name: string;
+  status: string;
+  children: EventLeaf[];
+}
+
+interface FullEvent {
+  tier?: string;
+  codec?: string;
+  context?: {
+    git?: { branch?: string; commit?: string };
+    wave?: string;
+    orchestrator?: string;
+    cycle?: string;
+    cycleId?: number;
+  };
+  summary?: { total: number; passed: number; failed: number };
+  tree?: EventSuite[];
+}
+
+async function getFullEvent(baseUrl: string, id: string): Promise<FullEvent> {
+  const res = await fetch(`${baseUrl}/api/v2/events/${id}`);
+  const body = (await res.json()) as { event: FullEvent };
+  return body.event;
+}
+
+// ── git + fixture-project helpers ────────────────────────────────────────
+
+function runGit(args: string[], cwd: string): void {
+  const res = Bun.spawnSync({
+    cmd: ["git", ...args],
+    cwd,
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "clients-bun-crucible-test",
+      GIT_AUTHOR_EMAIL: "clients-bun-crucible-test@example.com",
+      GIT_COMMITTER_NAME: "clients-bun-crucible-test",
+      GIT_COMMITTER_EMAIL: "clients-bun-crucible-test@example.com",
+    },
+  });
+  if (res.exitCode !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${res.stderr.toString()}`);
+  }
+}
+
+// 1 passing + 3 failing (mismatch, thrown-with-detail, timeout) — see the
+// file header for why the timeout case is the deliberate "unmatched" leaf.
+const FIXTURE_TEST_SOURCE = `import { test, expect } from "bun:test";
+
+test("adds numbers correctly", () => {
+  expect(1 + 1).toBe(2);
+});
+
+test("mismatched expectation", () => {
+  expect(1 + 1).toBe(3);
+});
+
+test("throws with detail", () => {
+  throw new Error("boom with detail");
+});
+
+test("times out unmatched", async () => {
+  await new Promise(() => {});
+}, 50);
+`;
+
+function writeFixtureBunProject(dir: string, projectKey: string): void {
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({ name: "clients-bun-crucible-fixture", version: "0.0.0", private: true }),
+  );
+  writeFileSync(join(dir, "sample.test.ts"), FIXTURE_TEST_SOURCE);
+  writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${projectKey}\n`);
+}
+
+// ── §S2 — v2-only endpoints + CRUCIBLE_URL + register ergonomics ─────────
+
+describe("clients/bun-crucible.py — v2 endpoints + CRUCIBLE_URL honored (CR-CRU-008 §S2)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  let proxy: ReturnType<typeof startCapturingProxy> | undefined;
+  const scratchDirs: string[] = [];
+
+  afterEach(() => {
+    proxy?.stop();
+    proxy = undefined;
+    handle?.stop();
+    handle = undefined;
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  function scratchDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    scratchDirs.push(dir);
+    return dir;
+  }
+
+  function fixtureProjectDir(key: string): string {
+    const dir = scratchDir("bun-crucible-proj-");
+    writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
+    return dir;
+  }
+
+  test("register hits POST /api/v2/agents/register (never the v1 /api/agents/heartbeat shim) via CRUCIBLE_URL, not the hardcoded localhost:3849", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-register-v2");
+    const projectDir = fixtureProjectDir(key);
+    proxy = startCapturingProxy(baseUrl);
+
+    const res = await runScript(
+      ["register", "--agent", "a1", "--phase", "RED", "--project-dir", projectDir],
+      { cwd: projectDir, crucibleUrl: proxy.url },
+    );
+
+    expect(res.code).toBe(0);
+    expect(await getAgentIds(baseUrl, key)).toContain("a1");
+    expect(
+      proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/agents/register"),
+    ).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/agents/heartbeat")).toBe(false);
+    expect(proxy.calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
+  });
+
+  test("unregister hits POST /api/v2/agents/unregister (never v1 /api/agents/remove); agent vanishes from GET /api/v2/agents", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-unregister-v2");
+    const projectDir = fixtureProjectDir(key);
+    proxy = startCapturingProxy(baseUrl);
+
+    await runScript(
+      ["register", "--agent", "a2", "--phase", "RED", "--project-dir", projectDir],
+      { cwd: projectDir, crucibleUrl: proxy.url },
+    );
+    expect(await getAgentIds(baseUrl, key)).toContain("a2");
+
+    const res = await runScript(["unregister", "--agent", "a2", "--project-dir", projectDir], {
+      cwd: projectDir,
+      crucibleUrl: proxy.url,
+    });
+
+    expect(res.code).toBe(0);
+    expect(await getAgentIds(baseUrl, key)).not.toContain("a2");
+    expect(
+      proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/agents/unregister"),
+    ).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
+  });
+
+  test("register --agent X WITHOUT --phase succeeds (ergonomics fix: defaults to report phase) instead of hard-failing", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-phase-optional");
+    const projectDir = fixtureProjectDir(key);
+
+    const res = await runScript(["register", "--agent", "a3", "--project-dir", projectDir], {
+      cwd: projectDir,
+      crucibleUrl: baseUrl,
+    });
+
+    expect(res.code).toBe(0);
+    const agents = await getAgents(baseUrl, key);
+    const agent = agents.find((a) => a.agentId === "a3");
+    expect(agent).toBeDefined();
+    // Default phase is "report" (the pinned-away defect: --phase used to be
+    // a hard requirement, forcing orchestrator-side implicit-heartbeat
+    // workarounds — Implementation Notes, 2026-07-17).
+    expect(agent!.message.toLowerCase()).toContain("report");
+  });
+});
+
+// ── §S2 tier/context + §S2c failure marrying ──────────────────────────────
+
+describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c failure marrying", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  let proxy: ReturnType<typeof startCapturingProxy> | undefined;
+  const scratchDirs: string[] = [];
+  let baseUrl = "";
+  let projectKey = "";
+  let runResult: RunResult | undefined;
+  let event: FullEvent | undefined;
+  const branch = "cr-cru-008-c2-fixture-branch";
+
+  function scratchDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    scratchDirs.push(dir);
+    return dir;
+  }
+
+  beforeAll(async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    baseUrl = `http://localhost:${handle.server.port}`;
+    projectKey = await createProject(baseUrl, "clients-bc-test-ingest");
+    const dir = scratchDir("bun-crucible-fixture-");
+    writeFixtureBunProject(dir, projectKey);
+    runGit(["init", "-q"], dir);
+    runGit(["symbolic-ref", "HEAD", `refs/heads/${branch}`], dir);
+    runGit(["add", "."], dir);
+    runGit(["commit", "-q", "-m", "initial"], dir);
+
+    proxy = startCapturingProxy(baseUrl);
+    runResult = await runScript(
+      [
+        "test",
+        "--agent",
+        "cr-cru-008-c2-fixture-agent",
+        "--tests",
+        "sample.test.ts",
+        "--project-dir",
+        dir,
+        "--package-dir",
+        dir,
+      ],
+      {
+        cwd: dir,
+        crucibleUrl: proxy.url,
+        env: {
+          WORKFLOW_CYCLE_ID: "1",
+          WORKFLOW_CYCLE: "clients source of truth fixture",
+          WORKFLOW_WAVE: "wave-9",
+          WORKFLOW_ROLE: "track-2",
+        },
+      },
+    );
+    const events = await getEvents(baseUrl, projectKey);
+    // A hard miss here (events.length === 0, e.g. because clients/ is
+    // absent) leaves `event` undefined — the tests below still run and
+    // fail loudly on the undefined field reads rather than passing quietly.
+    event = events.length > 0 ? await getFullEvent(baseUrl, events[0]!.id) : undefined;
+  });
+
+  afterAll(() => {
+    proxy?.stop();
+    handle?.stop();
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  test("records tier:'unit' and posts to /api/v2/runs/parsed only (never v1 /api/ingest/parsed)", () => {
+    expect(runResult?.code).not.toBe(0); // 3 of 4 fixture tests fail
+    expect(event?.tier).toBe("unit");
+    expect(event?.summary?.total).toBe(4);
+    expect(event?.summary?.passed).toBe(1);
+    expect(event?.summary?.failed).toBe(3);
+    expect(
+      proxy?.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed"),
+    ).toBe(true);
+    expect(proxy?.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
+  });
+
+  test("records full run context: cycleId + cycle (WORKFLOW_CYCLE_ID/WORKFLOW_CYCLE), wave (WORKFLOW_WAVE), orchestrator (WORKFLOW_ROLE), and auto-detected git branch/commit", () => {
+    expect(event?.context?.cycleId).toBe(1);
+    expect(event?.context?.cycle).toBe("clients source of truth fixture");
+    expect(event?.context?.wave).toBe("wave-9");
+    expect(event?.context?.orchestrator).toBe("track-2");
+    expect(event?.context?.git?.branch).toBe(branch);
+    expect(typeof event?.context?.git?.commit).toBe("string");
+    expect((event?.context?.git?.commit ?? "").length).toBeGreaterThan(0);
+  });
+
+  test("§S2c: matched failing leaves carry failure.message married from the console stream (expect(...) / thrown detail)", () => {
+    const leaves = (event?.tree ?? []).flatMap((suite) => suite.children);
+    const mismatch = leaves.find((l) => l.name === "mismatched expectation");
+    const thrown = leaves.find((l) => l.name === "throws with detail");
+    expect(mismatch?.status).toBe("fail");
+    expect(mismatch?.failure?.message).toBeDefined();
+    expect(mismatch?.failure?.message ?? "").toContain("expect(");
+    expect(thrown?.status).toBe("fail");
+    expect(thrown?.failure?.message).toBeDefined();
+    expect(thrown?.failure?.message ?? "").toContain("boom with detail");
+  });
+
+  test("§S2c: an unmatched failing leaf (timeout — detail line falls AFTER '(fail)', not before) degrades to type-only, no message", () => {
+    const leaves = (event?.tree ?? []).flatMap((suite) => suite.children);
+    const timedOut = leaves.find((l) => l.name === "times out unmatched");
+    expect(timedOut?.status).toBe("fail");
+    expect(timedOut?.failure?.message).toBeUndefined();
+  });
+});
+
+// ── plan verbs ─────────────────────────────────────────────────────────────
+
+describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cycle-done, cr-close)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratchDirs: string[] = [];
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  function scratchDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    scratchDirs.push(dir);
+    return dir;
+  }
+
+  function fixtureProjectDir(key: string): string {
+    const dir = scratchDir("bun-crucible-plan-");
+    writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
+    return dir;
+  }
+
+  test("plan-file creates an OPEN plan with the title, two cycles, and prints both numeric cycle ids on stdout", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-plan-file");
+    const projectDir = fixtureProjectDir(key);
+
+    const res = await runScript(
+      [
+        "plan-file",
+        "--cr",
+        "CR-X-1",
+        "--title",
+        "Plan verbs C2",
+        "--cycles",
+        "cycle-a,cycle-b",
+        "--project-dir",
+        projectDir,
+      ],
+      { cwd: projectDir, crucibleUrl: baseUrl },
+    );
+
+    expect(res.code).toBe(0);
+    const plans = await getPlans(baseUrl, key);
+    expect(plans.length).toBe(1);
+    expect(plans[0]!.cr).toBe("CR-X-1");
+    expect(plans[0]!.title).toBe("Plan verbs C2");
+    expect(plans[0]!.status).toBe("open");
+    expect(plans[0]!.cycles.length).toBe(2);
+    expect(Object.prototype.hasOwnProperty.call(plans[0]!, "track")).toBe(false);
+
+    for (const cycle of plans[0]!.cycles) {
+      expect(new RegExp(`\\b${cycle.id}\\b`).test(res.stdout)).toBe(true);
+    }
+  });
+
+  test("with WORKFLOW_ROLE=track-2 set, plan-file records track:'track-2'; unset (default), the plan has no track key", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-plan-track");
+    const projectDir = fixtureProjectDir(key);
+
+    const res = await runScript(
+      ["plan-file", "--cr", "CR-X-2", "--cycles", "cycle-a,cycle-b", "--project-dir", projectDir],
+      { cwd: projectDir, crucibleUrl: baseUrl, env: { WORKFLOW_ROLE: "track-2" } },
+    );
+
+    expect(res.code).toBe(0);
+    const plans = await getPlans(baseUrl, key);
+    expect(plans[0]!.track).toBe("track-2");
+  });
+
+  test("cycle-activate <id> transitions the cycle to active", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-cycle-activate");
+    const projectDir = fixtureProjectDir(key);
+
+    await runScript(
+      ["plan-file", "--cr", "CR-X-3", "--cycles", "cycle-a,cycle-b", "--project-dir", projectDir],
+      { cwd: projectDir, crucibleUrl: baseUrl },
+    );
+    const cycleId = (await getPlans(baseUrl, key))[0]!.cycles[0]!.id;
+
+    const res = await runScript(
+      ["cycle-activate", String(cycleId), "--project-dir", projectDir],
+      { cwd: projectDir, crucibleUrl: baseUrl },
+    );
+
+    expect(res.code).toBe(0);
+    const plans = await getPlans(baseUrl, key);
+    const cycle = plans[0]!.cycles.find((c) => c.id === cycleId);
+    expect(cycle?.status).toBe("active");
+  });
+
+  test("cycle-done <id> transitions an ACTIVE cycle to done (the orchestrator's GREEN confirmation, closes the span)", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-cycle-done");
+    const projectDir = fixtureProjectDir(key);
+
+    await runScript(
+      ["plan-file", "--cr", "CR-X-4", "--cycles", "cycle-a,cycle-b", "--project-dir", projectDir],
+      { cwd: projectDir, crucibleUrl: baseUrl },
+    );
+    const cycleId = (await getPlans(baseUrl, key))[0]!.cycles[0]!.id;
+    await runScript(["cycle-activate", String(cycleId), "--project-dir", projectDir], {
+      cwd: projectDir,
+      crucibleUrl: baseUrl,
+    });
+
+    const res = await runScript(["cycle-done", String(cycleId), "--project-dir", projectDir], {
+      cwd: projectDir,
+      crucibleUrl: baseUrl,
+    });
+
+    expect(res.code).toBe(0);
+    const plans = await getPlans(baseUrl, key);
+    const cycle = plans[0]!.cycles.find((c) => c.id === cycleId);
+    expect(cycle?.status).toBe("done");
+  });
+
+  test("cr-close --commit <sha> closes the plan (once every cycle is terminal), recording the commit", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-cr-close");
+    const projectDir = fixtureProjectDir(key);
+
+    await runScript(
+      ["plan-file", "--cr", "CR-X-5", "--cycles", "cycle-a,cycle-b", "--project-dir", projectDir],
+      { cwd: projectDir, crucibleUrl: baseUrl },
+    );
+    const cycles = (await getPlans(baseUrl, key))[0]!.cycles;
+    for (const cycle of cycles) {
+      await runScript(["cycle-activate", String(cycle.id), "--project-dir", projectDir], {
+        cwd: projectDir,
+        crucibleUrl: baseUrl,
+      });
+      await runScript(["cycle-done", String(cycle.id), "--project-dir", projectDir], {
+        cwd: projectDir,
+        crucibleUrl: baseUrl,
+      });
+    }
+
+    const res = await runScript(["cr-close", "--commit", "abc1234", "--project-dir", projectDir], {
+      cwd: projectDir,
+      crucibleUrl: baseUrl,
+    });
+
+    expect(res.code).toBe(0);
+    const plans = await getPlans(baseUrl, key);
+    expect(plans[0]!.status).toBe("closed");
+    expect(plans[0]!.merge?.commit).toBe("abc1234");
+  });
+});
+
+// ── byte-compatible existing verbs (regression gate) ───────────────────────
+
+describe("clients/bun-crucible.py — byte-compatible CLI surface (existing verbs unchanged post-upgrade)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratchDirs: string[] = [];
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  function scratchDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    scratchDirs.push(dir);
+    return dir;
+  }
+
+  test("regression --agent A --coverage (unchanged flag surface) runs the full suite and ingests tier:'regression' via v2", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-regression-compat");
+    const dir = scratchDir("bun-crucible-regression-");
+    writeFixtureBunProject(dir, key);
+
+    const res = await runScript(
+      ["regression", "--agent", "regression-agent", "--coverage", "--project-dir", dir, "--package-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    // 3 of 4 fixture tests fail — existing cmd_regression contract returns
+    // non-zero whenever summary.failed > 0 (unchanged by this CR).
+    expect(res.code).toBe(1);
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+    expect(event.tier).toBe("regression");
+    expect(await getAgentIds(baseUrl, key)).not.toContain("regression-agent"); // unregistered after the gated run
+  });
+});
