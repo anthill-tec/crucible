@@ -2,12 +2,14 @@
 
 **Status:** PENDING
 **Type:** patch
-**Priority:** P1 (primary workspace surface renders blank or with another
-project's data; misleads the operator watching live execution)
+**Priority:** P0 — hotfix-class (user-bumped 2026-07-17: "Bump 026 priority
+and execute it right after the merge complete"); primary workspace surface
+renders blank or with another project's data, and the degraded marker
+vocabulary has already misled a design round
 **Depends on:** CR-CRU-011, CR-CRU-021
 **Labels:** patch, ui, workflow, navigation
-**Phase:** Wave 4 — IMMEDIATELY after CR-012 merges (user-directed
-2026-07-17: "classify this bug correctly and fix in 026")
+**Phase:** Wave 4 — EXECUTES IMMEDIATELY after the CR-012 merge completes,
+before all other queued work (user-locked 2026-07-17)
 **Design reference:** user bug report 2026-07-17 (screenshot,
 crucible_inactive_project_bug.jpg): "These inactive projects have no data and
 clicking on them lands in Workflow tab populated with the active Crucible
