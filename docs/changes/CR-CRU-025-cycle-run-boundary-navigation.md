@@ -52,11 +52,15 @@ the retained timeline (pruned past retention) show the affordance dim and
 non-clickable — never a dead click.
 
 ### §S2 Runs boundary → cycle row (inverse)
-A `Cycle done` boundary marker on the Runs timeline renders a trailing
-workflow affordance (`data-testid="boundary-to-cycle"`), DISTINCT from the
-marker body: the body click keeps/gains the linked-run drill-in (parity with
-the heuristic marker — wire it for declared markers if absent), while
-clicking the workflow affordance:
+A declared `Cycle done` boundary marker renders TWO distinct trailing badges
+(user refinement 2026-07-17: "Detail and Cycle should both be clickable …
+Make them distinct badges" — badges, not prose affordances):
+- **`⊙ detail`** (`data-testid="boundary-detail"`) → the linked run's
+  drill-in (parity with the heuristic marker's behavior).
+- **`⚑ cycle`** (`data-testid="boundary-to-cycle"`) → the workflow
+  navigation below.
+The heuristic RED➜GREEN marker keeps its shipped whole-body drill-in click
+untouched. Clicking `⚑ cycle`:
 1. Switches to the Workflow tab (one-rule tab swap).
 2. Locates the exact CR and cycle: in the ACTIVE section directly, or in
    HISTORY — auto-expanding the containing CR group (and its wave, if
@@ -76,8 +80,8 @@ scroll-restore contract is unaffected for other navigations.
 ## Acceptance criteria
 - [ ] A done cycle row in the ACTIVE section carries `data-testid="cycle-to-runs"`; clicking IT lands on the Runs tab with the matching `Cycle done` boundary (matched by cycleId) scrolled into view and blinking; the blink class is GONE after 10s (injected-clock or bounded-wait assertion).
 - [ ] Same from a HISTORY cycle row (inside an expanded group) — and clicking that row's BODY still toggles its linked-runs drill-down exactly as before (no rebinding; §S0).
-- [ ] A declared `Cycle done` boundary in Runs carries `data-testid="boundary-to-cycle"` DISTINCT from the marker body; clicking the AFFORDANCE → Workflow tab active, the containing collapsed CR group auto-expands, the exact cycle row is scrolled into view with the 10s blink; re-clicking within the window resets the animation clock (single indicator, never two).
-- [ ] Clicking the declared marker's BODY opens the linked run's drill-in (parity with the heuristic transition marker), NOT the workflow navigation (§S0).
+- [ ] A declared `Cycle done` boundary renders BOTH badges: `boundary-detail` and `boundary-to-cycle` (distinct elements, visually badge-styled); clicking `boundary-to-cycle` → Workflow tab active, the containing collapsed CR group auto-expands, the exact cycle row is scrolled into view with the 10s blink; re-clicking within the window resets the animation clock (single indicator, never two).
+- [ ] Clicking `boundary-detail` opens the linked run's drill-in (parity with the heuristic transition marker), NOT the workflow navigation (§S0); the heuristic marker's whole-body drill-in click is untouched.
 - [ ] A completed cycle whose boundary is pruned past retention renders `cycle-to-runs` disabled/dim; clicking does nothing (no tab switch).
 - [ ] E2E: full round-trip — Workflow cycle → Runs boundary → back via the boundary → Workflow with blink present; scroll positions asserted (`scrollIntoView` effect on the pane, not the page).
 
