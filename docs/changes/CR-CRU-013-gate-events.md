@@ -1,6 +1,6 @@
 # CR-CRU-013 — Workflow events: gates (no-mistakes) + milestones
 
-**Status:** IN_PROGRESS (2026-07-18 — gap analysis underway)
+**Status:** IN_PROGRESS (2026-07-18 — gap analysis + design review DONE; C1 server foundation merged-into-branch & sealed; gate UX/mechanism locked across storyboard F8/F8½/F8¾/F13; C2 next)
 **Type:** feature
 **Priority:** P2
 **Depends on:** CR-CRU-008, CR-CRU-011
