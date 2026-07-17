@@ -110,6 +110,7 @@ scroll-restore contract is unaffected for other navigations.
 - [ ] §S2b default + persistence: cold load renders ALL runs visible; a feed re-render (poll/SSE tick) while one cycle is collapsed keeps exactly that cycle collapsed and everything else expanded.
 - [ ] §S2b boundaries: the ACTIVE cycle's open-span runs stay inline regardless of any accordion state; a heuristic RED➜GREEN marker's body click still opens the run drill-in (no accordion on heuristic markers).
 - [ ] A completed cycle whose boundary is pruned past retention renders `cycle-to-runs` disabled/dim; clicking does nothing (no tab switch).
+- [ ] Badge shape under pressure (user ruling 2026-07-17: "Ensure the badges dont loose shape when layout starts loosing space!"): at the CR-023 pane floor (660px content min-width) the `⚑ Cycle` badge and the `cycle-to-runs` affordance render unwrapped and unclipped (`white-space: nowrap`, no flex shrink) — the marker/row LABEL is what truncates (ellipsis), never the badges.
 - [ ] E2E: full round-trip — Workflow cycle → Runs boundary → back via the boundary → Workflow with blink present; scroll positions asserted (`scrollIntoView` effect on the pane, not the page).
 
 ## Estimated size
