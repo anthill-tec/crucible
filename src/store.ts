@@ -89,6 +89,9 @@ interface EventRow {
   // CR-CRU-011 §S1 — lifecycle events only (NULL on test/compile rows).
   action: string | null;
   first_seen: number | null;
+  // CR-CRU-013 §S1+§S4b — generic JSON blob for gate/milestone kind-specific
+  // fields (the gate object; milestone type/label/commit). NULL otherwise.
+  payload: string | null;
 }
 
 interface RollupRow {
@@ -276,7 +279,8 @@ export class Store {
         compile TEXT,
         context TEXT,
         action TEXT,
-        first_seen INTEGER
+        first_seen INTEGER,
+        payload TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_events_project_timestamp
@@ -335,6 +339,12 @@ export class Store {
     }
     if (!eventCols.has("first_seen")) {
       this.db.exec(`ALTER TABLE events ADD COLUMN first_seen INTEGER`);
+    }
+    // CR-CRU-013 §S1+§S4b — additive generic payload column for gate/milestone
+    // kind-specific fields; pre-013 db files lack it (same PRAGMA-checked
+    // retrofit pattern as action/first_seen above).
+    if (!eventCols.has("payload")) {
+      this.db.exec(`ALTER TABLE events ADD COLUMN payload TEXT`);
     }
     // CR-CRU-011 §S0b — additive cycle-timestamp columns; pre-C4 db files
     // lack them (same PRAGMA-checked retrofit pattern as events above).
@@ -773,6 +783,62 @@ export class Store {
   }
 
   /**
+   * CR-CRU-013 §S1 — append a gate event (a no-mistakes gate outcome). The
+   * full gate object is stored verbatim in the generic payload column; codec
+   * is fixed to "no-mistakes". Flows through retention like any event;
+   * foldIntoRollup skips it (gate is not a rollup-eligible kind).
+   */
+  recordGateEvent(
+    projectKey: string,
+    agentId: string,
+    gate: unknown,
+    meta?: { context?: RunContext },
+  ): RunEvent {
+    this.touchAgent(projectKey, agentId);
+    const event: RunEvent = {
+      id: this.nextEventId(),
+      projectKey,
+      agentId,
+      kind: "gate",
+      tier: "unit",
+      codec: "no-mistakes",
+      timestamp: Date.now(),
+      gate,
+      ...(meta?.context !== undefined ? { context: meta.context } : {}),
+    };
+    this.insertEvent(event);
+    return event;
+  }
+
+  /**
+   * CR-CRU-013 §S4b/§S4c — append a milestone event. The flat type/label/
+   * commit fields live in the generic payload column; context round-trips
+   * verbatim. Rollup-excluded (not a rollup-eligible kind).
+   */
+  recordMilestoneEvent(
+    projectKey: string,
+    agentId: string,
+    type: string,
+    meta?: { label?: string; commit?: string; context?: RunContext },
+  ): RunEvent {
+    this.touchAgent(projectKey, agentId);
+    const event: RunEvent = {
+      id: this.nextEventId(),
+      projectKey,
+      agentId,
+      kind: "milestone",
+      tier: "unit",
+      timestamp: Date.now(),
+      type,
+      ...(meta?.label !== undefined ? { label: meta.label } : {}),
+      ...(meta?.commit !== undefined ? { commit: meta.commit } : {}),
+      ...(meta?.context !== undefined ? { context: meta.context } : {}),
+    };
+    this.insertEvent(event);
+    return event;
+  }
+
+  /**
    * CR-CRU-011 §S2 — the newest run (test/compile) timestamp for an agent;
    * lifecycle events excluded. Seals a tombstoned agent's runtime.
    */
@@ -854,12 +920,21 @@ export class Store {
   }
 
   private insertEvent(event: RunEvent): void {
+    // CR-CRU-013 §S1+§S4b — collect the kind-specific carrying fields into the
+    // one generic payload column (NULL when the event carries none).
+    const payloadObj: Record<string, unknown> = {
+      ...(event.gate !== undefined ? { gate: event.gate } : {}),
+      ...(event.type !== undefined ? { type: event.type } : {}),
+      ...(event.label !== undefined ? { label: event.label } : {}),
+      ...(event.commit !== undefined ? { commit: event.commit } : {}),
+    };
+    const payload = Object.keys(payloadObj).length > 0 ? JSON.stringify(payloadObj) : null;
     this.db
       .query(
         `INSERT INTO events (id, project_key, agent_id, kind, tier, stack, codec,
            timestamp, name, total, passed, failed, pending, duration_ms,
-           tree, coverage, compile, context, action, first_seen)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           tree, coverage, compile, context, action, first_seen, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         event.id,
@@ -882,19 +957,36 @@ export class Store {
         event.context !== undefined ? JSON.stringify(event.context) : null,
         event.action ?? null,
         event.firstSeen ?? null,
+        payload,
       );
     this.enforceRetention(event.projectKey);
     this.emit("events", event.projectKey);
   }
 
   private static toEvent(row: EventRow): RunEvent {
+    // CR-CRU-013 §S1+§S4b — pass the kind through for the whole known family
+    // (no longer collapse gate/milestone to "test"); hydrate their fields
+    // from the generic payload column.
+    const kind: RunEvent["kind"] =
+      row.kind === "compile" ||
+      row.kind === "lifecycle" ||
+      row.kind === "gate" ||
+      row.kind === "milestone"
+        ? row.kind
+        : "test";
+    const payload =
+      row.payload !== null ? (JSON.parse(row.payload) as Record<string, unknown>) : {};
     return {
       id: row.id,
       projectKey: row.project_key,
       agentId: row.agent_id,
-      kind: row.kind === "compile" ? "compile" : row.kind === "lifecycle" ? "lifecycle" : "test",
+      kind,
       tier: row.tier as Tier,
       timestamp: row.timestamp,
+      ...(payload.gate !== undefined ? { gate: payload.gate } : {}),
+      ...(typeof payload.type === "string" ? { type: payload.type } : {}),
+      ...(typeof payload.label === "string" ? { label: payload.label } : {}),
+      ...(typeof payload.commit === "string" ? { commit: payload.commit } : {}),
       ...(row.action !== null ? { action: row.action as "registered" | "unregistered" } : {}),
       ...(row.first_seen !== null ? { firstSeen: row.first_seen } : {}),
       ...(row.stack !== null ? { stack: row.stack } : {}),
@@ -941,6 +1033,13 @@ export class Store {
     }));
   }
 
+  // CR-CRU-013 §S1 — the ONLY kinds whose expired events fold into test-run
+  // rollups; every other kind (lifecycle, gate, milestone) is excluded.
+  private static readonly ROLLUP_ELIGIBLE_KINDS: ReadonlySet<string> = new Set([
+    "test",
+    "compile",
+  ]);
+
   private enforceRetention(projectKey: string): void {
     const cap = this.getProject(projectKey)?.retention ?? DEFAULT_RETENTION;
     const count = this.db
@@ -962,9 +1061,10 @@ export class Store {
     // both counted in rollups and still present for a later re-fold.
     this.db.transaction(() => {
       for (const row of expired) {
-        // CR-CRU-011 §S1 — lifecycle events flow through retention like any
-        // event but contribute NOTHING to the test-run rollup folds.
-        if (row.kind !== "lifecycle") {
+        // CR-CRU-013 §S1 — invert the single lifecycle-exclusion into a
+        // rollup-ELIGIBLE set {test, compile}: gate/milestone (like lifecycle)
+        // flow through retention but contribute NOTHING to test-run rollups.
+        if (Store.ROLLUP_ELIGIBLE_KINDS.has(row.kind)) {
           this.foldIntoRollup(row);
         }
         this.db.query(`DELETE FROM events WHERE id = ?`).run(row.id);

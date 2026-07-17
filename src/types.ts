@@ -107,7 +107,8 @@ export interface RunEvent {
   id: string;
   projectKey: string;
   agentId: string;
-  kind: "test" | "compile" | "lifecycle";
+  // CR-CRU-013 §S1+§S4b — gate/milestone join the event-kind family.
+  kind: "test" | "compile" | "lifecycle" | "gate" | "milestone";
   tier: Tier;
   stack?: string;
   codec?: string;
@@ -123,6 +124,13 @@ export interface RunEvent {
   tree?: SuiteNode[];
   coverage?: Coverage;
   compile?: unknown;
+  // CR-CRU-013 §S1 (gate) — the full no-mistakes gate object, stored verbatim
+  // (forward-tolerant: fields outside the ladder round-trip untouched).
+  gate?: unknown;
+  // CR-CRU-013 §S4b/§S4c (milestone) — flat carrying fields.
+  type?: string;
+  label?: string;
+  commit?: string;
 }
 
 // ── CR-CRU-011 §S0 — cycle plans (the orchestrator's declared todo list) ─────

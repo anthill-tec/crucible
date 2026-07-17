@@ -65,6 +65,9 @@ interface V2Body {
   label?: unknown;
   kind?: unknown;
   merge?: unknown;
+  // CR-CRU-013 §S1 (gate object) + §S4b/§S4c (milestone commit)
+  gate?: unknown;
+  commit?: unknown;
   // CR-CRU-008 §S4 — silent unregister + guarded run deletion
   silent?: unknown;
   userApproved?: unknown;
@@ -503,6 +506,87 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
   });
 }
 
+// ── CR-CRU-013 §S1+§S4b — gate/milestone event routes ───────────────────────
+
+/** §S1 — accepted no-mistakes gate outcomes (TIERS precedent). */
+const GATE_OUTCOMES: ReadonlySet<string> = new Set([
+  "checks-passed",
+  "passed",
+  "failed",
+  "cancelled",
+]);
+
+/** §S4b/§S4c — accepted milestone types ('cr-merged' joins the set). */
+const MILESTONE_TYPES: ReadonlySet<string> = new Set([
+  "gap-analysis",
+  "design-review",
+  "stage-flip",
+  "custom",
+  "cr-merged",
+]);
+
+/** §S2 — the optional graceful context, cast verbatim (runMeta convention). */
+function eventContext(body: V2Body): { context?: RunContext } {
+  return typeof body.context === "object" && body.context !== null
+    ? { context: body.context as RunContext }
+    : {};
+}
+
+/** §S1 — POST /api/v2/gates: a no-mistakes gate outcome → a gate event. */
+async function handleGates(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  const pk = requireProject(store, body.projectKey);
+  if ("fail" in pk) return pk.fail;
+
+  const gate = body.gate;
+  if (typeof gate !== "object" || gate === null) {
+    return fail(400, "gate is required", { help: hints.gateFields });
+  }
+  const g = gate as Record<string, unknown>;
+  if (typeof g.intent !== "string" || g.intent.length === 0) {
+    return fail(400, "gate.intent is required", { help: hints.gateFields });
+  }
+  if (typeof g.outcome !== "string" || g.outcome.length === 0) {
+    return fail(400, "gate.outcome is required", { help: hints.gateOutcomes });
+  }
+  if (!Array.isArray(g.steps)) {
+    return fail(400, "gate.steps is required", { help: hints.gateFields });
+  }
+  if (!GATE_OUTCOMES.has(g.outcome)) {
+    return fail(400, `gate.outcome must be one of: ${[...GATE_OUTCOMES].join(", ")}`, {
+      help: hints.gateOutcomes,
+    });
+  }
+  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  const event = store.recordGateEvent(pk.key, agentId, gate, eventContext(body));
+  return json({ ok: true, changed: true, event: event.id }, 201);
+}
+
+/** §S4b/§S4c — POST /api/v2/milestones: a workflow marker → a milestone event. */
+async function handleMilestones(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  const pk = requireProject(store, body.projectKey);
+  if ("fail" in pk) return pk.fail;
+
+  if (typeof body.type !== "string" || body.type.length === 0) {
+    return fail(400, "type is required", { help: hints.milestoneTypes });
+  }
+  if (!MILESTONE_TYPES.has(body.type)) {
+    return fail(400, `type must be one of: ${[...MILESTONE_TYPES].join(", ")}`, {
+      help: hints.milestoneTypes,
+    });
+  }
+  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  const event = store.recordMilestoneEvent(pk.key, agentId, body.type, {
+    ...(typeof body.label === "string" ? { label: body.label } : {}),
+    ...(typeof body.commit === "string" ? { commit: body.commit } : {}),
+    ...eventContext(body),
+  });
+  return json({ ok: true, changed: true, event: event.id }, 201);
+}
+
 // ── CR-CRU-011 §S0 — cycle-plan routes (plans are NOT events) ───────────────
 
 const CYCLE_KINDS: ReadonlySet<string> = new Set<CycleKind>(["red-green", "verify", "fix"]);
@@ -936,6 +1020,12 @@ function eventBrief(event: RunEvent) {
     ...(event.action !== undefined ? { action: event.action } : {}),
     ...(event.firstSeen !== undefined ? { firstSeen: event.firstSeen } : {}),
     ...(event.context !== undefined ? { context: event.context } : {}),
+    // CR-CRU-013 §S1+§S4b (additive) — gate/milestone carrying fields, keys
+    // ABSENT on every other kind.
+    ...(event.gate !== undefined ? { gate: event.gate } : {}),
+    ...(event.type !== undefined ? { type: event.type } : {}),
+    ...(event.label !== undefined ? { label: event.label } : {}),
+    ...(event.commit !== undefined ? { commit: event.commit } : {}),
     ...(compile !== undefined
       ? {
           errors: compile.errorCount,
@@ -1121,6 +1211,14 @@ export function handleV2(
   }
   if (req.method === "POST" && pathname === "/api/v2/runs/compile") {
     return handleRunsCompile(store, req);
+  }
+  // CR-CRU-013 §S1+§S4b — flat top-level gate/milestone routes (next to
+  // /runs, NOT under /projects/).
+  if (req.method === "POST" && pathname === "/api/v2/gates") {
+    return handleGates(store, req);
+  }
+  if (req.method === "POST" && pathname === "/api/v2/milestones") {
+    return handleMilestones(store, req);
   }
   if (req.method === "GET" && pathname === "/api/v2/events") {
     return handleEventsList(store, req, url);
