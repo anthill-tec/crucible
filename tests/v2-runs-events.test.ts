@@ -120,8 +120,23 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     return fetch(`http://localhost:${handle!.server.port}${path}`);
   }
 
-  async function deleteJson(path: string): Promise<Response> {
-    return fetch(`http://localhost:${handle!.server.port}${path}`, { method: "DELETE" });
+  // CR-CRU-008 §S4 — guarded run deletion: DELETE now carries an optional
+  // {userApproved} body (the approval gate); a caller with none gets the
+  // codebase's uniform empty-body treatment.
+  async function deleteJson(path: string, body?: Record<string, unknown>): Promise<Response> {
+    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body ?? {}),
+    });
+  }
+
+  async function patchJson(path: string, body: unknown): Promise<Response> {
+    return fetch(`http://localhost:${handle!.server.port}${path}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
   }
 
   async function createProject(name: string): Promise<string> {
@@ -501,31 +516,68 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
       expect(body.error.toLowerCase()).toContain("event");
     });
 
-    test("DELETE /api/v2/events/:id?project=<key> → {ok:true, changed:true}; repeat → 404 {ok:false}", async () => {
+    // CR-CRU-008 §S4 — spec-superseded re-pin: single-event DELETE is now
+    // DOUBLE-GATED (project's allowRunDeletion config AND a per-call
+    // userApproved:true), replacing the old unconditional-delete contract.
+    // 403 without config, 409 without approval, 200 only with both; a
+    // repeat delete (both gates still open) then 404s on the now-gone event.
+    test("DELETE /api/v2/events/:id?project=<key>: 403 without allowRunDeletion; 409 with config ON but no userApproved; 200 with both gates open (changed:true, event gone); repeat → 404 {ok:false}", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("events-delete");
       const [id] = await seedThreeEvents(key);
 
-      const first = await deleteJson(`/api/v2/events/${id}?project=${key}`);
+      // Gate 1 — config off.
+      const configOff = await deleteJson(`/api/v2/events/${id}?project=${key}`, {
+        userApproved: true,
+      });
+      expect(configOff.status).toBe(403);
+      const configOffBody = (await configOff.json()) as ErrResponse;
+      expect(configOffBody.ok).toBe(false);
+      expect(handle.store.getEvent(id!)).not.toBeNull();
+
+      // Gate 2 — config on, approval missing.
+      const patchRes = await patchJson(`/api/v2/projects/${key}`, { allowRunDeletion: true });
+      expect(patchRes.status).toBe(200);
+      const approvalMissing = await deleteJson(`/api/v2/events/${id}?project=${key}`, {});
+      expect(approvalMissing.status).toBe(409);
+      const approvalMissingBody = (await approvalMissing.json()) as ErrResponse;
+      expect(approvalMissingBody.ok).toBe(false);
+      expect(handle.store.getEvent(id!)).not.toBeNull();
+
+      // Both gates open.
+      const first = await deleteJson(`/api/v2/events/${id}?project=${key}`, {
+        userApproved: true,
+      });
       expect(first.status).toBe(200);
       const firstBody = (await first.json()) as OkResponse;
       expect(firstBody.ok).toBe(true);
       expect(firstBody.changed).toBe(true);
       expect(handle.store.getEvent(id!)).toBeNull();
 
-      const second = await deleteJson(`/api/v2/events/${id}?project=${key}`);
+      // Repeat — same (open) gates, event already gone → 404.
+      const second = await deleteJson(`/api/v2/events/${id}?project=${key}`, {
+        userApproved: true,
+      });
       expect(second.status).toBe(404);
       const secondBody = (await second.json()) as ErrResponse;
       expect(secondBody.ok).toBe(false);
     });
 
-    test("DELETE /api/v2/events/:id?project=<wrong-key> → 404 and the event still exists", async () => {
+    // CR-CRU-008 §S4 — spec-superseded re-pin: the wrong-project 404 is only
+    // reachable once BOTH gates are open on the (wrong) project doing the
+    // calling — otherwise the config/approval gate would fire first and mask
+    // the ownership check this test actually pins.
+    test("DELETE /api/v2/events/:id?project=<wrong-key>, both gates open on wrong-key → 404 and the event still exists", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("events-delete-wrongproj");
       const otherKey = await createProject("events-delete-otherproj");
       const [id] = await seedThreeEvents(key);
+      const patchRes = await patchJson(`/api/v2/projects/${otherKey}`, { allowRunDeletion: true });
+      expect(patchRes.status).toBe(200);
 
-      const res = await deleteJson(`/api/v2/events/${id}?project=${otherKey}`);
+      const res = await deleteJson(`/api/v2/events/${id}?project=${otherKey}`, {
+        userApproved: true,
+      });
 
       expect(res.status).toBe(404);
       const body = (await res.json()) as ErrResponse;

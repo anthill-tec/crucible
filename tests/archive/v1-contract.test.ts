@@ -1,3 +1,9 @@
+// RETIRED-CONTRACT ARCHIVE — CR-CRU-008 §S4, 2026-07-17. The v1 shim these
+// tests pinned has been retired (soak gate passed); this file is moved to
+// tests/archive/ and excluded from `bun test` (see bunfig.toml
+// [test].pathIgnorePatterns). Kept for historical reference only — do not
+// resurrect without a new CR reintroducing the legacy `/api/*` routes.
+//
 // CR-CRU-003 §S3 — v1 contract-test suite. One describe block per DN §3
 // subsection (docs/research/DN-crucible-api-reconstruction.md §1-§3). Fixture
 // payloads are copied verbatim from the DN's examples, including the exact
@@ -11,8 +17,8 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer } from "../src/server.ts";
-import type { Coverage, RunSummary } from "../src/types.ts";
+import { startServer } from "../../src/server.ts";
+import type { Coverage, RunSummary } from "../../src/types.ts";
 
 interface OkResponse {
   ok: true;

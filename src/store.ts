@@ -33,6 +33,8 @@ export interface ProjectPatch {
   sutRoot?: string;
   liveness?: Partial<LivenessConfig>;
   retention?: number;
+  /** CR-CRU-008 §S4 — guarded run deletion config gate. */
+  allowRunDeletion?: boolean;
 }
 
 interface ProjectRow {
@@ -45,6 +47,8 @@ interface ProjectRow {
   retention: number | null;
   // CR-CRU-012 §S1b — archive timestamp; NULL = live (never deleted).
   archived_at: number | null;
+  // CR-CRU-008 §S4 — guarded run deletion config gate; NULL = never set.
+  allow_run_deletion: number | null;
 }
 
 interface AgentRow {
@@ -237,7 +241,8 @@ export class Store {
         created_at INTEGER NOT NULL,
         liveness TEXT,
         retention INTEGER,
-        archived_at INTEGER
+        archived_at INTEGER,
+        allow_run_deletion INTEGER
       );
 
       CREATE TABLE IF NOT EXISTS agents (
@@ -377,6 +382,11 @@ export class Store {
     if (!projectCols.has("archived_at")) {
       this.db.exec(`ALTER TABLE projects ADD COLUMN archived_at INTEGER`);
     }
+    // CR-CRU-008 §S4 — additive guarded-deletion config column; pre-008 db
+    // files lack it (same PRAGMA-checked retrofit pattern as above).
+    if (!projectCols.has("allow_run_deletion")) {
+      this.db.exec(`ALTER TABLE projects ADD COLUMN allow_run_deletion INTEGER`);
+    }
   }
 
   /**
@@ -481,12 +491,17 @@ export class Store {
       patch.liveness !== undefined
         ? { ...existing.liveness, ...patch.liveness }
         : existing.liveness;
+    const existingAllow =
+      existing.allowRunDeletion !== undefined ? (existing.allowRunDeletion ? 1 : 0) : null;
     const next = {
       name: patch.name ?? existing.name,
       type: patch.type ?? existing.type,
       sutRoot: patch.sutRoot ?? existing.sutRoot,
       livenessJson: nextLiveness !== undefined ? JSON.stringify(nextLiveness) : null,
       retention: patch.retention ?? existing.retention ?? null,
+      // CR-CRU-008 §S4 — guarded-deletion config gate (1/0; NULL = never set).
+      allowRunDeletion:
+        patch.allowRunDeletion !== undefined ? (patch.allowRunDeletion ? 1 : 0) : existingAllow,
     };
     const unchanged =
       next.name === existing.name &&
@@ -494,14 +509,24 @@ export class Store {
       next.sutRoot === existing.sutRoot &&
       next.livenessJson ===
         (existing.liveness !== undefined ? JSON.stringify(existing.liveness) : null) &&
-      next.retention === (existing.retention ?? null);
+      next.retention === (existing.retention ?? null) &&
+      next.allowRunDeletion === existingAllow;
     if (unchanged) return false;
     this.db
       .query(
-        `UPDATE projects SET name = ?, type = ?, sut_root = ?, liveness = ?, retention = ?
+        `UPDATE projects SET name = ?, type = ?, sut_root = ?, liveness = ?, retention = ?,
+                             allow_run_deletion = ?
          WHERE key = ?`,
       )
-      .run(next.name, next.type, next.sutRoot, next.livenessJson, next.retention, key);
+      .run(
+        next.name,
+        next.type,
+        next.sutRoot,
+        next.livenessJson,
+        next.retention,
+        next.allowRunDeletion,
+        key,
+      );
     this.emit("projects", key);
     return true;
   }
@@ -527,6 +552,11 @@ export class Store {
       createdAt: row.created_at,
       ...(row.liveness !== null ? { liveness: JSON.parse(row.liveness) } : {}),
       ...(row.retention !== null ? { retention: row.retention } : {}),
+      // CR-CRU-008 §S4 — key ABSENT when never set (fresh projects stay
+      // absent/false on the wire, matching the AC).
+      ...(row.allow_run_deletion !== null
+        ? { allowRunDeletion: row.allow_run_deletion === 1 }
+        : {}),
     };
   }
 

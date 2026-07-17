@@ -1,6 +1,6 @@
 # CR-CRU-008 — crucible-axi CLI + client-fleet upgrade
 
-**Status:** PENDING
+**Status:** IN_PROGRESS — AWAITING MERGE GATE (2026-07-18: cycle plan C1-C8 complete incl. verify fix; regression 819/819 + coverage 84.4%/90.9% via the upgraded client; playwright 29/29 ingested tier:e2e evt-1784324106812-19; tsc 0; soak gate passed)
 **Type:** feature
 **Priority:** P2
 **Depends on:** CR-CRU-005, CR-CRU-007 (the `context.cycle` RunContext field + labeled markers land there), CR-CRU-011 (the cycle-plan API the plan verbs call — reordered round 15: 011 now runs BEFORE 008)
@@ -81,7 +81,35 @@ then appears only for genuinely detail-less reporters.
 `agent-protocol` (+ its `heartbeat.sh`): v2 endpoints, context fields, TOON-aware
 examples, removal of the dedicated-ping guidance (ingest is the heartbeat).
 
-### §S4 Shim retirement (fold-in, user-approved 2026-07-15)
+### §S4 Shim retirement (fold-in, user-approved 2026-07-15) + guarded run deletion (user-ruled 2026-07-17)
+**Retirement precondition — capability parity (user ruling 2026-07-17:
+"Cant we support both A and B? A is used only rarely. B can be by default
+and the configuration set in the project manager."):** before the v1 routes
+go, v2 gains DOUBLE-GATED single-run deletion so retiring
+`/api/events/delete`/`clear` leaves no capability gap:
+1. Per-project setting `allowRunDeletion` (default **false** — immutable
+   audit log is the default posture), additive PATCHable field on
+   `PATCH /api/v2/projects/<key>` and a toggle in the manager's
+   edit-in-place form (`manager-edit-allow-deletion`, danger-styled).
+2. `DELETE /api/v2/events/<id>` — single event only, NO bulk clear.
+   Refused unless BOTH gates pass: the project's `allowRunDeletion` is
+   true (else 403 + AXI help naming the manager setting) AND the body
+   carries `userApproved: true` (else 409 with the CR-024 §S6-style
+   discouraging help). A deleted event vanishes from events/timeline and
+   never folds into rollups at later prunes; existing rollups are not
+   retro-adjusted.
+3. The legacy `/api/events/delete` + `/api/events/clear` retire WITH the
+   shim (bulk clear is deliberately dropped — audit-log posture).
+4. **v2 silent unregister (C2 GREEN finding, orchestrator-ruled):** gated
+   runs are v2-native (ingest = implicit heartbeat, no lifecycle ceremony),
+   but the anti-ghost cleanup still needs a ceremony-free removal and v2
+   journals a lifecycle event on every unregister — so the clients' silent
+   cleanup currently rides the shim's `/api/agents/remove`, which would 404
+   after retirement. Precondition: `POST /api/v2/agents/unregister` accepts
+   `{silent: true}` — removes the agent WITHOUT journaling a lifecycle
+   event; the clients/ silent-cleanup path swaps to it in this cycle.
+   AC: silent unregister removes the agent (GET agents omits it) and the
+   events journal gains NO entry; non-silent behavior byte-unchanged.
 After the fleet upgrade lands AND the soak gate passes (one full RED→GREEN→regression
 dog-food cycle of this repo executed entirely through the UPGRADED clients against
 `/api/v2/*`), retire the v1 shim: remove the legacy `/api/*` route handlers (health
@@ -102,6 +130,9 @@ follow-up, and the shim stays.
 - [ ] Skill docs contain no `POST /api/agents/heartbeat` legacy references except in an explicit "legacy/shim" note; `heartbeat.sh` targets `/api/v2/agents/heartbeat`.
 - [ ] Soak gate: one full RED→GREEN→regression cycle of THIS repo (Crucible dog-food) executes end-to-end through `bun-crucible.py` upgraded, visible on the dashboard with transition marker + context badges.
 - [ ] Caller-existence: `rg "api/v2" ~/.claude/scripts/*-crucible.py` returns ≥ 5 files.
+- [ ] §S4 guarded deletion — config gate: fresh project has `allowRunDeletion` absent/false; `DELETE /api/v2/events/<id>` with `{userApproved:true}` → 403 whose help[] names the manager setting; after `PATCH {allowRunDeletion:true}` the same call → 200 and the event is gone (GET events count drops; a later retention prune folds rollups WITHOUT the deleted event's contribution).
+- [ ] §S4 guarded deletion — approval gate: with the config ON, `DELETE` without `userApproved:true` → 409 whose error demands user approval and help[] instructs presenting to the user first (CR-024 §S6 wording family); no state change.
+- [ ] §S4 guarded deletion — manager UI: the edit form renders `manager-edit-allow-deletion` (off by default, danger-styled); toggling + save PATCHes exactly `{allowRunDeletion:<bool>}`; the row view surfaces the enabled state.
 - [ ] Shim retirement (§S4, soak-gated): after the dog-food soak cycle passes through upgraded clients, `GET/POST` on legacy `/api/ingest`, `/api/agents/heartbeat`, `/api/projects/add` → 404 JSON; `/api/health` still 200; `tests/archive/v1-contract.test.ts` exists and is excluded from `bun test`; a dated retirement line exists in DN-crucible-api-reconstruction.md. If the soak gate failed, this AC is N/A and the spec gains a dated deferral note instead.
 
 ## Estimated size
@@ -138,3 +169,44 @@ exists — skill-only update).
 - **Guards adoption:** CR-024 lands after this CR — the plan verbs here must
   read AXI `help[]` tolerantly so the later guard 4xxs (out-of-order,
   single-active, §S7 ingest cycle-reference validation) degrade gracefully.
+
+## Implementation Notes
+- Delivered across the cycle plan C1-C8 (cycles 36-43): C1 `cli/crucible-axi`
+  package (runCli DI + CRUCIBLE_URL binary, TOON dashboard, v2-only verbs,
+  git-context auto-detect, .env discovery); C2 `clients/bun-crucible.py`
+  source-of-truth v2 upgrade + plan verbs (plan-file/cycle-activate/
+  cycle-done/cr-close, per-project cycle-id resolution, cr-close single-open
+  default + --cr) + §S2c console-stream failure marrying; C3 rust+mvn; C4
+  python+arduino incl. the no-XML 400 fix (capture real runner output);
+  C5 §S2b streaming narration (bun per-test / mvn per-class, throttled,
+  first-window silence); C6 skills fleet v2 + "ingest is the heartbeat";
+  C7 §S4 shim retirement + guarded run deletion + silent unregister +
+  manager toggle + all-five-clients silent cleanup; C8 verify sweep.
+- **The whole CR IS the soak gate:** every cycle from C7 onward ingested via
+  the upgraded `clients/bun-crucible.py` against a shim-free server
+  (register → narrated ingest → silent cleanup, ok=True throughout) — the
+  fleet operates entirely on /api/v2/*. Chrome/route-probe confirmed the
+  live dev server: /api/health 200, v1 routes 404, /api/v2/* 200, /api/stream
+  200.
+- VERIFY (C8) verdict PASS-after-fix: one BLOCKING finding (missing dated DN
+  retirement line) resolved (§6 added to DN-crucible-api-reconstruction,
+  commit c58a7cc); SHOULD-FIX docstring paths → v2 (66cb1b0). Two findings
+  resolved by orchestrator ruling: (a) store.clearEvents is NOT dead — it
+  retains a live unit test (events.test.ts); §S4 dropped the bulk-clear
+  ROUTE, not the internal store primitive, so it stays; (b)
+  tests/ingest-routes.test.ts was deleted (not archived) as a deliberate
+  exception — its assertions were exclusively v1 /api/ingest contract checks,
+  doubly redundant with the archived v1-contract suite and the live
+  shim-retirement 404 sweep, so zero unique coverage was lost.
+- **CR-009 dependency (NOT this CR):** the five upgraded `clients/*` scripts
+  and `clients/skills/*` are the in-repo source of truth; the LIVE
+  `~/.claude/scripts/` + `~/.claude/skills/` copies are intentionally NOT
+  synced this CR — the install/sync step is CR-CRU-009 scope. Until 009
+  lands, agent dispatches that shell the live scripts hit the retired shim;
+  this session's own crucible calls use `clients/bun-crucible.py` directly.
+- Guarded deletion (§S4, user both-A-and-B ruling): allowRunDeletion
+  PATCHable (default off = immutable-log posture B), manager danger toggle,
+  double-gated DELETE /api/v2/events/<id> (config 403 → approval 409 → 200),
+  bulk clear dropped forever, deleted events excluded from later rollup
+  folds. Silent unregister ({silent:true}, no lifecycle journal) backs the
+  clients' anti-ghost cleanup.

@@ -1,11 +1,19 @@
+// RETIRED-CONTRACT ARCHIVE — CR-CRU-008 §S4, 2026-07-17. This suite pins the
+// v1 shim's projects/agents routes WHOLESALE (POST /api/projects/add, GET
+// /api/projects, POST /api/agents/heartbeat|remove, GET /api/agents) —
+// every route it drives is retired. Moved to tests/archive/ and excluded
+// from `bun test` (see bunfig.toml [test].pathIgnorePatterns). Kept for
+// historical reference only — do not resurrect without a new CR
+// reintroducing the legacy `/api/*` routes.
+//
 // CR-CRU-003 §S1+§S2 — v1 shim routes: projects (add/list) + agents (heartbeat/remove/list).
 // Drives the REAL production server (startServer), not a hand-wired store, per DN
 // §3.1-3.3 byte contract. Item 7 (Store.removeAgent event-emission fold-in) is
 // asserted directly against Store since it is a store-level behavior.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../src/server.ts";
-import { Store } from "../src/store.ts";
-import type { ChangeKind } from "../src/store.ts";
+import { startServer } from "../../src/server.ts";
+import { Store } from "../../src/store.ts";
+import type { ChangeKind } from "../../src/store.ts";
 
 interface OkResponse {
   ok: true;

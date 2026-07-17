@@ -238,7 +238,7 @@ describe("SSE + progressive event paging (CR-CRU-004 §S3+§S4)", () => {
       await reader.cancel();
     });
 
-    test("an ingest via a v1 route (/api/ingest) produces a {type:'events', projectKey} frame within 1s", async () => {
+    test("an ingest via /api/v2/runs (modernized off the retired v1 shim, CR-CRU-008 §S4) produces a {type:'events', projectKey} frame within 1s", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("stream-events");
 
@@ -248,10 +248,10 @@ describe("SSE + progressive event paging (CR-CRU-004 §S3+§S4)", () => {
       // Consume the hello frame first so we don't accidentally match on it.
       await nextFrameMatching(sse, (f) => !f.isComment && f.data?.type === "hello", 1000);
 
-      const ingestRes = await postJson("/api/ingest", {
+      const ingestRes = await postJson("/api/v2/runs", {
         projectKey: key,
-        agentId: "v1-ingest-agent",
-        format: "junit",
+        agentId: "v2-ingest-agent",
+        codec: "junit",
         data: JUNIT_ALLPASS,
       });
       expect(ingestRes.status).toBe(200);
@@ -345,11 +345,13 @@ describe("SSE + progressive event paging (CR-CRU-004 §S3+§S4)", () => {
       await pollUntil(() => handle!.store.listenerCount() === baseline, 1000);
       expect(handle.store.listenerCount()).toBe(baseline);
 
-      // A subsequent ingest must not throw server-side (no dangling/broken listener).
-      const ingestRes = await postJson("/api/ingest", {
+      // A subsequent ingest must not throw server-side (no dangling/broken
+      // listener). Modernized off the retired v1 shim (CR-CRU-008 §S4) to
+      // /api/v2/runs — the seeding mechanism only, not the subject under test.
+      const ingestRes = await postJson("/api/v2/runs", {
         projectKey: key,
         agentId: "post-disconnect-agent",
-        format: "junit",
+        codec: "junit",
         data: JUNIT_ALLPASS,
       });
       expect(ingestRes.status).toBe(200);

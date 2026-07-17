@@ -6,10 +6,13 @@
 // these functions instead of re-implementing seeding/ingest logic inline.
 import { type APIRequestContext, expect } from "@playwright/test";
 
+// CR-CRU-008 §S4 — modernized off the retired v1 shim's POST /api/projects/add
+// (snake_case sut_root) to the v2 route (camelCase sutRoot); the key is still
+// caller-generated so seeded fixtures keep a stable, known project key.
 export async function seedProject(request: APIRequestContext, name: string): Promise<string> {
   const key = crypto.randomUUID();
-  const res = await request.post("/api/projects/add", {
-    data: { key, name, sut_root: "/tmp/e2e" },
+  const res = await request.post("/api/v2/projects", {
+    data: { key, name, sutRoot: "/tmp/e2e" },
   });
   expect(res.ok()).toBe(true);
   return key;

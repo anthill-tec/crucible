@@ -1,24 +1,26 @@
-// CR-CRU-019 §P1 AC-3 — dog-food proof: runs ingested through the v1 shim
-// (`POST /api/ingest/parsed`) carrying `context.cycleId` render as ONE
-// declared span containing ALL THREE runs, with ZERO inferred (heuristic)
-// transition markers — the exact screenshot scenario the CR-CRU-019 patch
-// fixes (a full-suite gate run landing outside the cycle that produced it).
+// CR-CRU-019 §P1 AC-3 — dog-food proof: runs ingested carrying
+// `context.cycleId` render as ONE declared span containing ALL THREE runs,
+// with ZERO inferred (heuristic) transition markers — the exact screenshot
+// scenario the CR-CRU-019 patch fixes (a full-suite gate run landing outside
+// the cycle that produced it).
 //
 // Drives the REAL production server (src/server.ts startServer) for BOTH
-// the plan/cycle routes AND the v1 parsed-ingest path, round-trips through
+// the plan/cycle routes AND the parsed-ingest path, round-trips through
 // the REAL GET /api/v2/events + GET /api/v2/projects/<key>/plans routes
 // (exactly what the client fetches), then feeds those REAL payloads into
 // the same happy-dom rendering harness tests/timeline-plan-integration.test.ts
 // established for the CR-CRU-011 §S0b declared-span machinery.
 //
-// RED phase: expected to fail. src/server.ts's handleIngestParsed (v1 shim)
-// does not read `body.context` at all today (CR-CRU-019 §P1 AC-1, pinned in
-// tests/shim-ingest-events.test.ts) — so none of the three ingested runs
-// carry `context.cycleId` once round-tripped through GET /api/v2/events;
-// the client never links them to the active cycle, and the §S0b machinery
-// (already GREEN from CR-CRU-011) falls back to either the CR-CRU-007
-// heuristic marker or nothing declared at all — never the single declared
-// open-span this AC requires.
+// CR-CRU-008 §S4 modernization note: the seeding ingest calls originally rode
+// the v1 shim's `POST /api/ingest/parsed` (this file's subject was ALWAYS the
+// client-side declared-span rendering, never the v1 route itself — the shim
+// was purely the seeding mechanism). Now that the shim is retiring, seeding
+// swapped to the equivalent v2 route, `POST /api/v2/runs/parsed`, with the
+// same body shape and the same `context.cycleId` linkage; the assertions are
+// unchanged. (The original RED-phase note about `handleIngestParsed`/v1's
+// context handling, and its cross-reference to the now-archived
+// tests/shim-ingest-events.test.ts, described a historical GREEN gap that
+// has long since landed — CR-CRU-011's declared-span machinery is GREEN.)
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -125,7 +127,7 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
     return fetch(`http://localhost:${handle!.server.port}${reqPath}`);
   }
 
-  test("RED(2/5) + targeted-GREEN(24/24) + full-suite gate(559/559), each ingested via /api/ingest/parsed with context.cycleId, render as ONE declared open-span containing all three real runs and ZERO inferred transition markers", async () => {
+  test("RED(2/5) + targeted-GREEN(24/24) + full-suite gate(559/559), each ingested via /api/v2/runs/parsed (modernized off the retired v1 shim, CR-CRU-008 §S4) with context.cycleId, render as ONE declared open-span containing all three real runs and ZERO inferred transition markers", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const pk = crypto.randomUUID();
     handle.store.addProject({
@@ -158,7 +160,7 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
     // context.cycleId linking it to the active cycle above — this is the
     // exact dog-food scenario: RED, a targeted GREEN, and a later full-suite
     // gate run, all declared members of the same cycle.
-    const redRes = await postJson("/api/ingest/parsed", {
+    const redRes = await postJson("/api/v2/runs/parsed", {
       projectKey: pk,
       agentId: "dogfood-RED",
       summary: { total: 5, passed: 3, failed: 2, pending: 0, duration_ms: 1000 },
@@ -167,7 +169,7 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
     });
     expect(redRes.status).toBe(200);
 
-    const greenRes = await postJson("/api/ingest/parsed", {
+    const greenRes = await postJson("/api/v2/runs/parsed", {
       projectKey: pk,
       agentId: "dogfood-GREEN",
       summary: { total: 24, passed: 24, failed: 0, pending: 0, duration_ms: 1500 },
@@ -176,7 +178,7 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
     });
     expect(greenRes.status).toBe(200);
 
-    const gateRes = await postJson("/api/ingest/parsed", {
+    const gateRes = await postJson("/api/v2/runs/parsed", {
       projectKey: pk,
       agentId: "dogfood-GATE",
       summary: { total: 559, passed: 559, failed: 0, pending: 0, duration_ms: 9000 },

@@ -65,6 +65,9 @@ interface V2Body {
   label?: unknown;
   kind?: unknown;
   merge?: unknown;
+  // CR-CRU-008 §S4 — silent unregister + guarded run deletion
+  silent?: unknown;
+  userApproved?: unknown;
 }
 
 // §S3 — all help[] wording lives in src/hints.ts (one reviewable module).
@@ -336,7 +339,10 @@ async function handleAgentUnregister(store: Store, req: Request): Promise<Respon
   // row (the round-11 audit's gap: the final runtime must survive deletion).
   const agent = store.getAgent(pk.key, agentId);
   store.removeAgent(pk.key, agentId);
-  if (agent !== null) {
+  // CR-CRU-008 §S4 precondition 4 — {silent:true} removes the agent WITHOUT
+  // journaling the lifecycle event (the clients' anti-ghost cleanup path);
+  // any other value keeps the non-silent journaling byte-unchanged.
+  if (agent !== null && body.silent !== true) {
     store.recordLifecycleEvent(pk.key, agentId, "unregistered", agent.firstSeen);
   }
   return json({ ok: true, changed: agent !== null });
@@ -753,7 +759,14 @@ function handleProjectArchive(store: Store, key: string, archive: boolean): Resp
 }
 
 // CR-CRU-012 §S1 — the PATCHable field set; anything else 400s by name.
-const PATCHABLE_FIELDS = new Set(["name", "type", "sutRoot", "liveness", "retention"]);
+const PATCHABLE_FIELDS = new Set([
+  "name",
+  "type",
+  "sutRoot",
+  "liveness",
+  "retention",
+  "allowRunDeletion",
+]);
 
 // CR-CRU-012 §S1 — wire liveness fields (spec's T1/T2/T3 thresholds, ms) →
 // the store's internal Partial<LivenessConfig> keys.
@@ -838,6 +851,13 @@ async function handleProjectPatch(store: Store, key: string, req: Request): Prom
       return fail(400, "retention must be a positive integer");
     }
     patch.retention = raw.retention;
+  }
+  if (raw.allowRunDeletion !== undefined) {
+    // CR-CRU-008 §S4 — the guarded-deletion config gate is a plain boolean.
+    if (typeof raw.allowRunDeletion !== "boolean") {
+      return fail(400, "allowRunDeletion must be a boolean");
+    }
+    patch.allowRunDeletion = raw.allowRunDeletion;
   }
 
   if (Object.keys(patch).length === 0) {
@@ -975,9 +995,36 @@ function handleEventGet(store: Store, id: string, req: Request, url: URL): Respo
   return reply(req, url, { ok: true, event });
 }
 
-function handleEventDelete(store: Store, id: string, url: URL): Response {
+/**
+ * CR-CRU-008 §S4 — DOUBLE-GATED single-run deletion (no bulk clear; the run
+ * journal is an immutable audit log by default):
+ * 1. config gate — the project's `allowRunDeletion` must be true (403 + help
+ *    naming the manager setting otherwise);
+ * 2. approval gate — the body must carry `userApproved: true` (409 + the
+ *    CR-024 §S6-style discouraging help otherwise).
+ * Only with BOTH gates open does the existing delete run (the deleted event
+ * never folds into later retention-prune rollups — store semantics).
+ */
+async function handleEventDelete(
+  store: Store,
+  id: string,
+  req: Request,
+  url: URL,
+): Promise<Response> {
   const pk = requireProject(store, url.searchParams.get("project") ?? undefined);
   if ("fail" in pk) return pk.fail;
+  const project = store.getProject(pk.key);
+  if (project?.allowRunDeletion !== true) {
+    return fail(403, `run deletion is disabled for project ${pk.key}`, {
+      help: hints.deletionDisabled,
+    });
+  }
+  const body = (await readBody(req)) ?? {};
+  if (body.userApproved !== true) {
+    return fail(409, "explicit user approval is required to delete a run — refused", {
+      help: hints.deletionNeedsApproval,
+    });
+  }
   if (!store.deleteEvent(id, pk.key)) {
     // §S1 — repeat delete / wrong project → 404, event-specific message.
     return fail(404, `event not found in project: ${id}`);
@@ -1085,7 +1132,7 @@ export function handleV2(
         return handleEventGet(store, id, req, url);
       }
       if (req.method === "DELETE") {
-        return handleEventDelete(store, id, url);
+        return handleEventDelete(store, id, req, url);
       }
     }
   }

@@ -9,7 +9,9 @@ export const hints: Record<
   | "afterCompile"
   | "unknownProject"
   | "archivedProject"
-  | "coverageDropped",
+  | "coverageDropped"
+  | "deletionDisabled"
+  | "deletionNeedsApproval",
   string[]
 > = {
   /** GET /api/v2 — orientation for a fresh agent. */
@@ -48,4 +50,14 @@ export const hints: Record<
   ],
   /** Coverage arrived on a failing run and was discarded by the store. */
   coverageDropped: ["coverage DISCARDED — coverage from a failing run is meaningless"],
+  /** CR-CRU-008 §S4 — DELETE refused: the project's config gate is off. */
+  deletionDisabled: [
+    "run deletion is DISABLED for this project — runs are an immutable audit log by default, and this refusal is final until a human changes that",
+    "only a human can enable it: the allowRunDeletion toggle in the project manager's edit form (or PATCH /api/v2/projects/<key> {allowRunDeletion: true}) — do NOT flip it yourself to force a delete",
+  ],
+  /** CR-CRU-008 §S4 — DELETE refused: no explicit user approval on the call. */
+  deletionNeedsApproval: [
+    "deleting a run permanently destroys audit history — never retry this call on your own initiative",
+    "present the deletion to the user first; retry with {userApproved: true} ONLY after the user has explicitly approved this specific deletion",
+  ],
 };

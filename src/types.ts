@@ -21,6 +21,9 @@ export interface Project {
   liveness?: Partial<LivenessConfig>;
   /** §S4 — per-project raw-event retention cap override (default 100). */
   retention?: number;
+  /** CR-CRU-008 §S4 — guarded run deletion config gate (default false:
+   * the run journal is an immutable audit log unless a human enables this). */
+  allowRunDeletion?: boolean;
 }
 
 export interface AgentIdentity {
