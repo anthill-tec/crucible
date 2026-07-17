@@ -30,10 +30,16 @@ ci`) but are stored verbatim (forward-tolerant). Missing `intent`/`outcome`/
 counts as implicit heartbeat; emits SSE.
 
 ### §S2 Timeline wave-boundary card
-Gate events render as a **full-width boundary card** (distinct from run cards —
-🛡 icon, outcome-colored edge): `🛡 Wave <n> gate — no-mistakes <OUTCOME> ·
-<steps> steps · <findings fixed> · pushed <shortcommit>`. Never rendered as
-"0/N tests". Click opens the drill-in (§S3).
+Gate events render on the timeline using the SAME MARKER DESIGN as the
+declared ⟲ Cycle-done boundary (user consistency ruling 2026-07-18) — the
+`.app-transition-marker`/cycmark dashed-pill form, outcome-colored border
+(green passed/checks-passed · red failed · grey cancelled), with a trailing
+DRILL-DOWN BADGE (`⊙ gate detail`, matching the CR-025 `⚑ Cycle` badge
+pattern) that opens the drill-in (§S3). Content:
+`🛡 Wave <n> gate · no-mistakes <OUTCOME> · <steps> steps · <findings fixed> ·
+pushed <shortcommit>`. NEVER rendered as "0/N tests". `data-testid="gate-card"`.
+The badge (not the whole body) is the drill affordance, consistent with the
+cycle marker's badge-drill convention. Storyboard F8 is the visual contract.
 
 ### §S3 Gate drill-in body (codec-aware)
 Mirrors the axi structure: outcome banner, the **step ladder** with per-step
