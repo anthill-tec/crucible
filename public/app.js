@@ -977,6 +977,9 @@
           { class: "app-card-meta app-manager-params" },
           `sutRoot: ${project.sutRoot ?? ""} · ${livenessLabel(project)}` +
             ` · retention ${project.retention ?? MANAGER_RETENTION_DEFAULT} runs` +
+            // §S4 (CR-CRU-008) — surface the danger state ONLY when enabled;
+            // the default (absent/false) posture stays silent.
+            (project.allowRunDeletion === true ? " · run deletion: enabled" : "") +
             ` · key ${project.key} (immutable)`,
         ),
       );
@@ -998,7 +1001,7 @@
     // props (`value: edit.name`), never `.val`-reads, so the swapping
     // binding tracks only `editing` and typed values survive ticks.
     const ManagerRowEdit = (project, editing, edit) => {
-      const { name, type, sutRoot, t1, t2, t3, retention } = edit;
+      const { name, type, sutRoot, t1, t2, t3, retention, allowDeletion } = edit;
       // Diff baseline: the same effective values the fields were seeded with.
       const eff = { ...MANAGER_LIVENESS_DEFAULTS, ...(project.liveness ?? {}) };
       const effRetention = project.retention ?? MANAGER_RETENTION_DEFAULT;
@@ -1027,6 +1030,12 @@
         if (Object.keys(liveness).length > 0) body.liveness = liveness;
         const ret = numOr(retention.val);
         if (ret !== undefined && ret !== effRetention) body.retention = ret;
+        // §S4 (CR-CRU-008) — changed-keys-only, like every field above: the
+        // danger toggle PATCHes only when it differs from the project's
+        // current effective value (absent counts as false).
+        if (allowDeletion.val !== (project.allowRunDeletion === true)) {
+          body.allowRunDeletion = allowDeletion.val;
+        }
         if (Object.keys(body).length > 0) {
           try {
             await fetch(`/api/v2/projects/${encodeURIComponent(project.key)}`, {
@@ -1085,6 +1094,16 @@
           value: retention,
           oninput: (e) => (retention.val = e.target.value),
         }),
+        // §S4 (CR-CRU-008) — the guarded-deletion DANGER toggle: enabling it
+        // lets agents delete runs (with per-call user approval), so it wears
+        // the destructive styling.
+        input({
+          "data-testid": "manager-edit-allow-deletion",
+          type: "checkbox",
+          class: "app-manager-danger-toggle",
+          checked: allowDeletion,
+          onchange: (e) => (allowDeletion.val = e.target.checked),
+        }),
         button({ "data-testid": "manager-edit-save", class: "app-chip on", onclick: save }, "save"),
         button({ class: "app-chip", onclick: () => (editing.val = false) }, "cancel"),
         div(
@@ -1112,6 +1131,8 @@
         t2: van.state(String(effLiveness().tombstoneAfterMs / 1000)),
         t3: van.state(String(effLiveness().pruneAfterMs / 1000)),
         retention: van.state(String(project.retention ?? MANAGER_RETENTION_DEFAULT)),
+        // §S4 (CR-CRU-008) — guarded-deletion config gate; absent = false.
+        allowDeletion: van.state(project.allowRunDeletion === true),
       };
       const startEdit = () => {
         const eff = effLiveness();
@@ -1122,6 +1143,7 @@
         edit.t2.val = String(eff.tombstoneAfterMs / 1000);
         edit.t3.val = String(eff.pruneAfterMs / 1000);
         edit.retention.val = String(project.retention ?? MANAGER_RETENTION_DEFAULT);
+        edit.allowDeletion.val = project.allowRunDeletion === true;
         editing.val = true;
       };
       return div(

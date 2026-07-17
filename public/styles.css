@@ -527,6 +527,16 @@ body {
   border-color: var(--color-primary);
   color: var(--color-primary);
 }
+/* CR-CRU-008 §S4 — the guarded-deletion DANGER toggle in the edit form:
+   enabling it opens the run journal to (user-approved) deletion, so it wears
+   the forge error red rather than the ember accent. */
+.app-manager-danger-toggle {
+  accent-color: var(--color-error);
+  outline: 1px solid var(--color-error);
+  outline-offset: 1px;
+  border-radius: 3px;
+  cursor: pointer;
+}
 .app-manager-archived {
   border-top: 1px dashed var(--line);
   padding-top: 10px;

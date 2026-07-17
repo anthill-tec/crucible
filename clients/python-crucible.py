@@ -252,6 +252,20 @@ def cmd_unregister(args):
     return 0 if resp.get("ok") else 1
 
 
+def _remove_agent_silent(project_dir, agent_id):
+    """CR-CRU-008 §S4 anti-ghost cleanup for a gated run: remove the agent row
+    WITHOUT journaling a lifecycle event (the run's ingest was the implicit
+    registration). Best-effort: never raises, never pollutes the run verdict or
+    stdout. Mirrors clients/bun-crucible.py's _remove_agent_silent."""
+    try:
+        _post(
+            "/api/v2/agents/unregister",
+            {"agentId": agent_id, "projectKey": _project_key(project_dir), "silent": True},
+        )
+    except Exception:
+        pass
+
+
 def _reports_dir(project_dir, arg_value):
     rd = arg_value or DEFAULT_REPORTS
     return rd if os.path.isabs(rd) else os.path.join(project_dir, rd)
@@ -387,6 +401,18 @@ def cmd_test(args):
 
 
 def cmd_regression(args):
+    """Gated regression run — wraps the ingest body in an anti-ghost silent
+    cleanup (CR-CRU-008 §S4): even a failed/raising run removes the implicitly
+    registered agent, and never touches the retired /api/agents/remove shim."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    try:
+        return _regression_run(args)
+    finally:
+        if getattr(args, "agent", None):
+            _remove_agent_silent(project_dir, args.agent)
+
+
+def _regression_run(args):
     """Full-suite discover via xmlrunner (tier regression). With --coverage: run under
     coverage.py and post /api/v2/runs/parsed with coverage. Ingests regardless of
     pass/fail. Returns non-zero if any test failed or ingest failed. A no-XML run

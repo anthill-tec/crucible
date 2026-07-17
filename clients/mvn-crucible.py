@@ -373,6 +373,20 @@ def cmd_unregister(args):
     return 0 if resp.get("ok") else 1
 
 
+def _remove_agent_silent(project_dir, agent_id):
+    """CR-CRU-008 §S4 anti-ghost cleanup for a gated run: remove the agent row
+    WITHOUT journaling a lifecycle event (the run's ingest was the implicit
+    registration). Best-effort: never raises, never pollutes the run verdict or
+    stdout. Mirrors clients/bun-crucible.py's _remove_agent_silent."""
+    try:
+        _post(
+            "/api/v2/agents/unregister",
+            {"agentId": agent_id, "projectKey": _project_key(project_dir), "silent": True},
+        )
+    except Exception:
+        pass
+
+
 # --------------------------------------------------------------------------- #
 # Report discovery + parsing (surefire / failsafe JUnit XML, JaCoCo CSV)
 # --------------------------------------------------------------------------- #
@@ -721,6 +735,18 @@ def cmd_e2e(args):
 
 
 def cmd_regression(args):
+    """Gated regression run — wraps the ingest body in an anti-ghost silent
+    cleanup (CR-CRU-008 §S4): even a failed/raising run removes the implicitly
+    registered agent, and never touches the retired /api/agents/remove shim."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    try:
+        return _regression_run(args)
+    finally:
+        if getattr(args, "agent", None):
+            _remove_agent_silent(project_dir, args.agent)
+
+
+def _regression_run(args):
     """REGRESSION tier — full reactor suite WITH JaCoCo coverage. Orchestrator
     pre-merge gate. Parses surefire + failsafe + jacoco.csv → /api/v2/runs/parsed.
     Coverage is published ONLY here, and ONLY when zero failures.

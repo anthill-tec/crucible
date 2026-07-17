@@ -165,7 +165,32 @@ def _parse_junit(path):
     return summary, tree
 
 
+def _remove_agent_silent(key, agent_id):
+    """CR-CRU-008 §S4 anti-ghost cleanup for a gated run: remove the agent row
+    WITHOUT journaling a lifecycle event (the run's ingest was the implicit
+    registration). Best-effort: never raises, never pollutes the run verdict or
+    stdout. Mirrors clients/bun-crucible.py's _remove_agent_silent."""
+    try:
+        _post("/api/v2/agents/unregister",
+              {"agentId": agent_id, "projectKey": key, "silent": True})
+    except Exception:
+        pass
+
+
 def cmd_unit(args):
+    """Gated native-test run — wraps the ingest body in an anti-ghost silent
+    cleanup (CR-CRU-008 §S4): even a failed/raising run removes the implicitly
+    registered agent, and never touches the retired /api/agents/remove shim."""
+    pd = _project_dir(args)
+    key, name = _load_env(pd)
+    agent_id, _ = _agent(name)
+    try:
+        return _unit_run(args)
+    finally:
+        _remove_agent_silent(key, agent_id)
+
+
+def _unit_run(args):
     pd = _project_dir(args)
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))

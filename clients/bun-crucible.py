@@ -334,16 +334,16 @@ def _remove_agent_silent(project_dir, agent_id):
 
     Under v2, a gated run needs NO explicit register: the run's ingest IS the
     registration (implicit heartbeat — creates the agent row with NO lifecycle
-    event). The closing cleanup must be equally silent: the v2 unregister VERB
+    event). The closing cleanup must be equally silent: a PLAIN v2 unregister
     journals an 'unregistered' lifecycle event into /api/v2/events
     (CR-CRU-011 §S1), which would bury and miscount the run event the gate
-    just ingested. The ceremony-free removal is the shim's /api/agents/remove
-    — the four NAMED client operations (register/unregister verbs, parsed +
-    compile ingest) remain v2-only per CR-CRU-008 §S2.
+    just ingested. CR-CRU-008 §S4 retired the shim's /api/agents/remove; the
+    ceremony-free removal is now the v2 unregister VERB with {silent: true} —
+    removes the agent row WITHOUT journaling a lifecycle event.
     """
     return _post(
-        "/api/agents/remove",
-        {"agentId": agent_id, "projectKey": _project_key(project_dir)},
+        "/api/v2/agents/unregister",
+        {"agentId": agent_id, "projectKey": _project_key(project_dir), "silent": True},
     )
 
 
