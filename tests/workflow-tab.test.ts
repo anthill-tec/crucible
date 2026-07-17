@@ -106,6 +106,7 @@ interface CycleFixture {
 interface PlanFixture {
   planId: number | string;
   cr: string;
+  projectKey: string;
   status: "open" | "closed";
   track?: string;
   cycles: CycleFixture[];
@@ -322,6 +323,7 @@ describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", ()
     const plan: PlanFixture = {
       planId: 101,
       cr: "CR-X-1",
+      projectKey: "wf-active-1",
       status: "open",
       cycles: [
         { id: 1, label: "C1 red", status: "pending" },
@@ -440,6 +442,7 @@ describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", ()
       const plan: PlanFixture = {
         planId: 102,
         cr: "CR-X-2",
+        projectKey: "wf-live-1",
         status: "open",
         cycles: [{ id: 7, label: "C1 red-green", status: "active" }],
       };
@@ -509,6 +512,7 @@ describe("Workflow tab — gate-pane placeholder beside the active view", () => 
     const plan: PlanFixture = {
       planId: 103,
       cr: "CR-X-3",
+      projectKey: "wf-gate-1",
       status: "open",
       cycles: [{ id: 9, label: "C1", status: "active" }],
     };
@@ -554,6 +558,7 @@ describe("Workflow tab — CR-016 bindings: clicking a linked run swaps the WORK
     const plan: PlanFixture = {
       planId: 104,
       cr: "CR-X-4",
+      projectKey: key,
       status: "open",
       cycles: [{ id: 11, label: "C1", status: "active" }],
     };

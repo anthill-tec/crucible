@@ -117,6 +117,7 @@ interface CycleFixture {
 interface PlanFixture {
   planId: number | string;
   cr: string;
+  projectKey: string;
   status: "open" | "closed";
   wave?: string;
   track?: string;
@@ -245,6 +246,7 @@ describe("§S3 — active-cycle timer: ticking, anchored to activatedAt (Workflo
       const plan = (): PlanFixture => ({
         planId: 1,
         cr: "CR-TIMER-1",
+        projectKey: "proj-timer-1",
         status: "open",
         wave: "1",
         cycles: [
@@ -293,6 +295,7 @@ describe("§S3 — active-cycle timer: ticking, anchored to activatedAt (Workflo
       const plan: PlanFixture = {
         planId: 2,
         cr: "CR-TIMER-2",
+        projectKey: "proj-timer-2",
         status: "open",
         wave: "1",
         cycles: [
@@ -336,6 +339,7 @@ describe("§S3 — PATCH-to-done seals the timer (Workflow active section)", () 
       const donePlan = (): PlanFixture => ({
         planId: 3,
         cr: "CR-TIMER-3",
+        projectKey: "proj-timer-3",
         status: "open",
         wave: "1",
         cycles: [
@@ -361,6 +365,7 @@ describe("§S3 — PATCH-to-done seals the timer (Workflow active section)", () 
           {
             planId: 30,
             cr: "CR-TIMER-3A",
+            projectKey: "proj-timer-3a",
             status: "open",
             wave: "1",
             cycles: [
@@ -416,6 +421,7 @@ describe("§S3 — PATCH-to-done seals the timer (Workflow active section)", () 
       const plan: PlanFixture = {
         planId: 4,
         cr: "CR-TIMER-4",
+        projectKey: "proj-timer-4",
         status: "open",
         wave: "1",
         cycles: [
@@ -473,6 +479,7 @@ describe("§S3 (re-baselined 2026-07-17) — ALIGNED TIMERS: cycle-row timers sh
     const activePlan: PlanFixture = {
       planId: 201,
       cr: "CR-ALIGN-1",
+      projectKey: "proj-align-1",
       status: "open",
       wave: "1",
       cycles: [
@@ -494,6 +501,7 @@ describe("§S3 (re-baselined 2026-07-17) — ALIGNED TIMERS: cycle-row timers sh
     const donePlan: PlanFixture = {
       planId: 202,
       cr: "CR-ALIGN-2",
+      projectKey: "proj-align-2",
       status: "open",
       wave: "1",
       cycles: [
@@ -532,6 +540,7 @@ describe("§S3 (re-baselined 2026-07-17) — ALIGNED TIMERS: cycle-row timers sh
     const plan: PlanFixture = {
       planId: 203,
       cr: "CR-ALIGN-HIST-1",
+      projectKey: "proj-align-hist-1",
       status: "closed",
       wave: "1",
       track: "track-1",
@@ -611,6 +620,7 @@ describe("§S6 item 2 (aligned timers, orchestrator pin) — cycle-timer badges 
       const plan: PlanFixture = {
         planId: 211,
         cr: "CR-NOWRAP-1",
+        projectKey: "proj-nowrap-1",
         status: "open",
         wave: "1",
         cycles: [
@@ -655,6 +665,7 @@ describe("§S3 — history cycle rows show the same sealed duration", () => {
       const plan: PlanFixture = {
         planId: 5,
         cr: "CR-TIMER-HIST-1",
+        projectKey: "proj-timer-hist-1",
         status: "closed",
         wave: "1",
         track: "track-1",
@@ -715,6 +726,7 @@ describe('§S3 — no activatedAt renders NO cycle-timer element (never a fabric
       const plan: PlanFixture = {
         planId: 6,
         cr: "CR-TIMER-NOTS-1",
+        projectKey: "proj-timer-nots-1",
         status: "open",
         wave: "1",
         cycles: [{ id: 701, label: "legacy active cycle", status: "active" }],
@@ -737,6 +749,7 @@ describe('§S3 — no activatedAt renders NO cycle-timer element (never a fabric
       const plan: PlanFixture = {
         planId: 7,
         cr: "CR-TIMER-NOTS-2",
+        projectKey: "proj-timer-nots-2",
         status: "open",
         wave: "1",
         cycles: [{ id: 702, label: "legacy done cycle", status: "done" }],
@@ -759,6 +772,7 @@ describe('§S3 — no activatedAt renders NO cycle-timer element (never a fabric
       const plan: PlanFixture = {
         planId: 8,
         cr: "CR-TIMER-NOTS-3",
+        projectKey: "proj-timer-nots-3",
         status: "closed",
         wave: "1",
         track: "track-1",
@@ -866,6 +880,7 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): the badge self-ticks without n
       const plan: PlanFixture = {
         planId: 101,
         cr: "CR-TIMER-LIVE-1",
+        projectKey: "proj-timer-live-1",
         status: "open",
         wave: "1",
         cycles: [{ id: 901, label: "compile fallback", status: "active", activatedAt }],
@@ -912,6 +927,7 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): the badge self-ticks without n
       const plan: PlanFixture = {
         planId: 102,
         cr: "CR-TIMER-LIVE-2",
+        projectKey: "proj-timer-live-2",
         status: "open",
         wave: "1",
         cycles: [{ id: 902, label: "compile fallback", status: "active", activatedAt }],
@@ -964,6 +980,7 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): sealed rows never tick even ac
       const plan: PlanFixture = {
         planId: 103,
         cr: "CR-TIMER-LIVE-3",
+        projectKey: "proj-timer-live-3",
         status: "open",
         wave: "1",
         cycles: [{ id: 903, label: "compile fallback", status: "done", activatedAt, doneAt }],
@@ -1044,6 +1061,7 @@ describe("§S3 (a) — CR-CRU-023: ACTIVE badge derives from server-fed activeMs
       const plan: PlanFixture = {
         planId: 301,
         cr: "CR-EPOCH-UI-1",
+        projectKey: "proj-epoch-ui-1",
         status: "open",
         wave: "1",
         cycles: [
@@ -1084,6 +1102,7 @@ describe("§S3 (a) — CR-CRU-023: ACTIVE badge derives from server-fed activeMs
       const plan: PlanFixture = {
         planId: 302,
         cr: "CR-EPOCH-UI-2",
+        projectKey: "proj-epoch-ui-2",
         status: "open",
         wave: "1",
         cycles: [
@@ -1150,6 +1169,7 @@ describe("§S3 (a) — CR-CRU-023: ACTIVE badge derives from server-fed activeMs
       const plan: PlanFixture = {
         planId: 303,
         cr: "CR-EPOCH-UI-3",
+        projectKey: "proj-epoch-ui-3",
         status: "open",
         wave: "1",
         cycles: [

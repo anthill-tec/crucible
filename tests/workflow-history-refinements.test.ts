@@ -103,6 +103,7 @@ interface CycleFixture {
 interface PlanFixture {
   planId: number | string;
   cr: string;
+  projectKey: string;
   status: "open" | "closed";
   wave?: string;
   track?: string;
@@ -257,6 +258,7 @@ describe("§S1.1 history ordering — latest-first (waves, then CR groups within
     const planWave3: PlanFixture = {
       planId: 701,
       cr: "CR-ORD-3",
+      projectKey: "hist-ord-1",
       status: "closed",
       wave: "3",
       closedAt: t0,
@@ -266,6 +268,7 @@ describe("§S1.1 history ordering — latest-first (waves, then CR groups within
     const planWave4: PlanFixture = {
       planId: 702,
       cr: "CR-ORD-4",
+      projectKey: "hist-ord-1",
       status: "closed",
       wave: "4",
       closedAt: t0 + 1000,
@@ -278,6 +281,7 @@ describe("§S1.1 history ordering — latest-first (waves, then CR groups within
     const planWave5Early: PlanFixture = {
       planId: 703,
       cr: "CR-ORD-5A",
+      projectKey: "hist-ord-1",
       status: "closed",
       wave: "5",
       closedAt: t0 + 2000,
@@ -287,6 +291,7 @@ describe("§S1.1 history ordering — latest-first (waves, then CR groups within
     const planWave5Late: PlanFixture = {
       planId: 704,
       cr: "CR-ORD-5B",
+      projectKey: "hist-ord-1",
       status: "closed",
       wave: "5",
       closedAt: t0 + 5000,
@@ -320,6 +325,7 @@ describe("§S1.2 history CR groups — collapsed by default, toggle on click", (
     const plan: PlanFixture = {
       planId: 711,
       cr: "CR-COL-1",
+      projectKey: "hist-collapse-1",
       status: "closed",
       wave: "1",
       merge: { commit: "colCommit1" },
@@ -389,6 +395,7 @@ describe("§S1.3 executing-CR exclusion — open plan lives only in Active; clos
     const planA: PlanFixture = {
       planId: 721,
       cr: "CR-EXC-A",
+      projectKey: "hist-exclude-1",
       status: "open",
       wave: "1",
       cycles: [{ id: 20, label: "c1", status: "active" }],
@@ -396,6 +403,7 @@ describe("§S1.3 executing-CR exclusion — open plan lives only in Active; clos
     const planB: PlanFixture = {
       planId: 722,
       cr: "CR-EXC-B",
+      projectKey: "hist-exclude-1",
       status: "closed",
       wave: "1",
       merge: { commit: "excCommitB" },
@@ -552,6 +560,7 @@ describe("§S2 group-level negative bound — expanding a CR group alone renders
     const plan: PlanFixture = {
       planId: 751,
       cr: "CR-CRU-019",
+      projectKey: "hist-group-leak-1",
       status: "closed",
       wave: "1",
       merge: { commit: "leakCommit19" },
@@ -636,6 +645,7 @@ describe("§S2.1/§S2.2 history cycle drill-down — toggle linked runs, drill i
     const plan: PlanFixture = {
       planId: 731,
       cr: "CR-DRILL-H",
+      projectKey: "hist-drill-1",
       status: "closed",
       wave: "1",
       merge: { commit: "drillHCommit" },
@@ -750,6 +760,7 @@ describe("§S6 #3 (re-baselined 2026-07-17) — history cycle drill-down orders 
     const plan: PlanFixture = {
       planId: 751,
       cr: "CR-CHRONO-H",
+      projectKey: "hist-chrono-1",
       status: "closed",
       wave: "1",
       merge: { commit: "chronoCommit" },
@@ -816,6 +827,7 @@ describe("§S2.3 active-cycle drill-down parity — RULED (a): always-inline run
     const plan: PlanFixture = {
       planId: 741,
       cr: "CR-DRILL-A",
+      projectKey: "active-drill-1",
       status: "open",
       cycles: [{ id: 60, label: "c1", status: "active" }],
     };
