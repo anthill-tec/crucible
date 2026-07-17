@@ -1,6 +1,6 @@
 # CR-CRU-008 — crucible-axi CLI + client-fleet upgrade
 
-**Status:** PENDING
+**Status:** IN_PROGRESS — AWAITING MERGE GATE (2026-07-18: cycle plan C1-C8 complete incl. verify fix; regression 819/819 + coverage 84.4%/90.9% via the upgraded client; playwright 29/29 ingested tier:e2e evt-1784324106812-19; tsc 0; soak gate passed)
 **Type:** feature
 **Priority:** P2
 **Depends on:** CR-CRU-005, CR-CRU-007 (the `context.cycle` RunContext field + labeled markers land there), CR-CRU-011 (the cycle-plan API the plan verbs call — reordered round 15: 011 now runs BEFORE 008)
@@ -169,3 +169,44 @@ exists — skill-only update).
 - **Guards adoption:** CR-024 lands after this CR — the plan verbs here must
   read AXI `help[]` tolerantly so the later guard 4xxs (out-of-order,
   single-active, §S7 ingest cycle-reference validation) degrade gracefully.
+
+## Implementation Notes
+- Delivered across the cycle plan C1-C8 (cycles 36-43): C1 `cli/crucible-axi`
+  package (runCli DI + CRUCIBLE_URL binary, TOON dashboard, v2-only verbs,
+  git-context auto-detect, .env discovery); C2 `clients/bun-crucible.py`
+  source-of-truth v2 upgrade + plan verbs (plan-file/cycle-activate/
+  cycle-done/cr-close, per-project cycle-id resolution, cr-close single-open
+  default + --cr) + §S2c console-stream failure marrying; C3 rust+mvn; C4
+  python+arduino incl. the no-XML 400 fix (capture real runner output);
+  C5 §S2b streaming narration (bun per-test / mvn per-class, throttled,
+  first-window silence); C6 skills fleet v2 + "ingest is the heartbeat";
+  C7 §S4 shim retirement + guarded run deletion + silent unregister +
+  manager toggle + all-five-clients silent cleanup; C8 verify sweep.
+- **The whole CR IS the soak gate:** every cycle from C7 onward ingested via
+  the upgraded `clients/bun-crucible.py` against a shim-free server
+  (register → narrated ingest → silent cleanup, ok=True throughout) — the
+  fleet operates entirely on /api/v2/*. Chrome/route-probe confirmed the
+  live dev server: /api/health 200, v1 routes 404, /api/v2/* 200, /api/stream
+  200.
+- VERIFY (C8) verdict PASS-after-fix: one BLOCKING finding (missing dated DN
+  retirement line) resolved (§6 added to DN-crucible-api-reconstruction,
+  commit c58a7cc); SHOULD-FIX docstring paths → v2 (66cb1b0). Two findings
+  resolved by orchestrator ruling: (a) store.clearEvents is NOT dead — it
+  retains a live unit test (events.test.ts); §S4 dropped the bulk-clear
+  ROUTE, not the internal store primitive, so it stays; (b)
+  tests/ingest-routes.test.ts was deleted (not archived) as a deliberate
+  exception — its assertions were exclusively v1 /api/ingest contract checks,
+  doubly redundant with the archived v1-contract suite and the live
+  shim-retirement 404 sweep, so zero unique coverage was lost.
+- **CR-009 dependency (NOT this CR):** the five upgraded `clients/*` scripts
+  and `clients/skills/*` are the in-repo source of truth; the LIVE
+  `~/.claude/scripts/` + `~/.claude/skills/` copies are intentionally NOT
+  synced this CR — the install/sync step is CR-CRU-009 scope. Until 009
+  lands, agent dispatches that shell the live scripts hit the retired shim;
+  this session's own crucible calls use `clients/bun-crucible.py` directly.
+- Guarded deletion (§S4, user both-A-and-B ruling): allowRunDeletion
+  PATCHable (default off = immutable-log posture B), manager danger toggle,
+  double-gated DELETE /api/v2/events/<id> (config 403 → approval 409 → 200),
+  bulk clear dropped forever, deleted events excluded from later rollup
+  folds. Silent unregister ({silent:true}, no lifecycle journal) backs the
+  clients' anti-ghost cleanup.
