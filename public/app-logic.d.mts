@@ -195,8 +195,11 @@ export interface LensPlanLike {
   closedAt?: number;
 }
 
-// CR-CRU-026 §S3.3 — keys are compound `<projectKey>\0<cycleId>` strings
-// for declared plans, bare numeric cycle ids for legacy undeclared ones.
+// CR-CRU-026 §S3.3 — keys are compound `<projectKey> <cycleId>` strings
+// (space-separated, matching the pairTransitions convention; safe because
+// UUID-shaped project keys cannot contain spaces and string keys cannot
+// collide with the bare numeric legacy keys) for declared plans, bare
+// numeric cycle ids for legacy undeclared ones.
 export declare function planCycleIndex<
   P extends LensPlanLike,
 >(plans: P[]): Map<number | string, { cycle: P["cycles"][number]; plan: P }>;
