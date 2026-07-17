@@ -81,7 +81,25 @@ then appears only for genuinely detail-less reporters.
 `agent-protocol` (+ its `heartbeat.sh`): v2 endpoints, context fields, TOON-aware
 examples, removal of the dedicated-ping guidance (ingest is the heartbeat).
 
-### §S4 Shim retirement (fold-in, user-approved 2026-07-15)
+### §S4 Shim retirement (fold-in, user-approved 2026-07-15) + guarded run deletion (user-ruled 2026-07-17)
+**Retirement precondition — capability parity (user ruling 2026-07-17:
+"Cant we support both A and B? A is used only rarely. B can be by default
+and the configuration set in the project manager."):** before the v1 routes
+go, v2 gains DOUBLE-GATED single-run deletion so retiring
+`/api/events/delete`/`clear` leaves no capability gap:
+1. Per-project setting `allowRunDeletion` (default **false** — immutable
+   audit log is the default posture), additive PATCHable field on
+   `PATCH /api/v2/projects/<key>` and a toggle in the manager's
+   edit-in-place form (`manager-edit-allow-deletion`, danger-styled).
+2. `DELETE /api/v2/events/<id>` — single event only, NO bulk clear.
+   Refused unless BOTH gates pass: the project's `allowRunDeletion` is
+   true (else 403 + AXI help naming the manager setting) AND the body
+   carries `userApproved: true` (else 409 with the CR-024 §S6-style
+   discouraging help). A deleted event vanishes from events/timeline and
+   never folds into rollups at later prunes; existing rollups are not
+   retro-adjusted.
+3. The legacy `/api/events/delete` + `/api/events/clear` retire WITH the
+   shim (bulk clear is deliberately dropped — audit-log posture).
 After the fleet upgrade lands AND the soak gate passes (one full RED→GREEN→regression
 dog-food cycle of this repo executed entirely through the UPGRADED clients against
 `/api/v2/*`), retire the v1 shim: remove the legacy `/api/*` route handlers (health
@@ -102,6 +120,9 @@ follow-up, and the shim stays.
 - [ ] Skill docs contain no `POST /api/agents/heartbeat` legacy references except in an explicit "legacy/shim" note; `heartbeat.sh` targets `/api/v2/agents/heartbeat`.
 - [ ] Soak gate: one full RED→GREEN→regression cycle of THIS repo (Crucible dog-food) executes end-to-end through `bun-crucible.py` upgraded, visible on the dashboard with transition marker + context badges.
 - [ ] Caller-existence: `rg "api/v2" ~/.claude/scripts/*-crucible.py` returns ≥ 5 files.
+- [ ] §S4 guarded deletion — config gate: fresh project has `allowRunDeletion` absent/false; `DELETE /api/v2/events/<id>` with `{userApproved:true}` → 403 whose help[] names the manager setting; after `PATCH {allowRunDeletion:true}` the same call → 200 and the event is gone (GET events count drops; a later retention prune folds rollups WITHOUT the deleted event's contribution).
+- [ ] §S4 guarded deletion — approval gate: with the config ON, `DELETE` without `userApproved:true` → 409 whose error demands user approval and help[] instructs presenting to the user first (CR-024 §S6 wording family); no state change.
+- [ ] §S4 guarded deletion — manager UI: the edit form renders `manager-edit-allow-deletion` (off by default, danger-styled); toggling + save PATCHes exactly `{allowRunDeletion:<bool>}`; the row view surfaces the enabled state.
 - [ ] Shim retirement (§S4, soak-gated): after the dog-food soak cycle passes through upgraded clients, `GET/POST` on legacy `/api/ingest`, `/api/agents/heartbeat`, `/api/projects/add` → 404 JSON; `/api/health` still 200; `tests/archive/v1-contract.test.ts` exists and is excluded from `bun test`; a dated retirement line exists in DN-crucible-api-reconstruction.md. If the soak gate failed, this AC is N/A and the spec gains a dated deferral note instead.
 
 ## Estimated size
