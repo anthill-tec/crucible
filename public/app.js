@@ -942,8 +942,9 @@
         ),
       );
 
-    // Edit-in-place — name/type/sutRoot only; PATCH carries ONLY the fields
-    // the user actually changed and NEVER the immutable key (§S1 contract,
+    // Edit-in-place — name/type/sutRoot + liveness overrides (t1/t2/t3,
+    // edited in seconds, wired as ms) + retention; PATCH carries ONLY the
+    // fields the user actually changed and NEVER the immutable key (§S1,
     // src/v2.ts:771-773 — an echoed key would 400 against the live server).
     // PATCH doesn't echo the updated project, so refetch to observe the edit.
     //
@@ -958,12 +959,35 @@
     // props (`value: edit.name`), never `.val`-reads, so the swapping
     // binding tracks only `editing` and typed values survive ticks.
     const ManagerRowEdit = (project, editing, edit) => {
-      const { name, type, sutRoot } = edit;
+      const { name, type, sutRoot, t1, t2, t3, retention } = edit;
+      // Diff baseline: the same effective values the fields were seeded with.
+      const eff = { ...MANAGER_LIVENESS_DEFAULTS, ...(project.liveness ?? {}) };
+      const effRetention = project.retention ?? MANAGER_RETENTION_DEFAULT;
+      // Non-numeric input never PATCHes: a native number input sanitizes
+      // junk to "" — empty (or unparseable) counts as UNCHANGED.
+      const numOr = (raw) => {
+        const s = String(raw).trim();
+        if (s === "") return undefined;
+        const n = Number(s);
+        return Number.isFinite(n) ? n : undefined;
+      };
       const save = async () => {
         const body = {};
         if (name.val !== (project.name ?? "")) body.name = name.val;
         if (type.val !== project.type) body.type = type.val;
         if (sutRoot.val !== (project.sutRoot ?? "")) body.sutRoot = sutRoot.val;
+        // Liveness: seconds in the form, ms on the wire; ONLY changed keys
+        // (the server partial-merges — unchanged siblings must be omitted).
+        const liveness = {};
+        const t1s = numOr(t1.val);
+        if (t1s !== undefined && t1s * 1000 !== eff.staleAfterMs) liveness.t1_ms = t1s * 1000;
+        const t2s = numOr(t2.val);
+        if (t2s !== undefined && t2s * 1000 !== eff.tombstoneAfterMs) liveness.t2_ms = t2s * 1000;
+        const t3s = numOr(t3.val);
+        if (t3s !== undefined && t3s * 1000 !== eff.pruneAfterMs) liveness.t3_ms = t3s * 1000;
+        if (Object.keys(liveness).length > 0) body.liveness = liveness;
+        const ret = numOr(retention.val);
+        if (ret !== undefined && ret !== effRetention) body.retention = ret;
         if (Object.keys(body).length > 0) {
           try {
             await fetch(`/api/v2/projects/${encodeURIComponent(project.key)}`, {
@@ -998,6 +1022,30 @@
           value: sutRoot,
           oninput: (e) => (sutRoot.val = e.target.value),
         }),
+        input({
+          "data-testid": "manager-edit-t1",
+          type: "number",
+          value: t1,
+          oninput: (e) => (t1.val = e.target.value),
+        }),
+        input({
+          "data-testid": "manager-edit-t2",
+          type: "number",
+          value: t2,
+          oninput: (e) => (t2.val = e.target.value),
+        }),
+        input({
+          "data-testid": "manager-edit-t3",
+          type: "number",
+          value: t3,
+          oninput: (e) => (t3.val = e.target.value),
+        }),
+        input({
+          "data-testid": "manager-edit-retention",
+          type: "number",
+          value: retention,
+          oninput: (e) => (retention.val = e.target.value),
+        }),
         button({ "data-testid": "manager-edit-save", class: "app-chip on", onclick: save }, "save"),
         button({ class: "app-chip", onclick: () => (editing.val = false) }, "cancel"),
         div(
@@ -1013,15 +1061,28 @@
       // so input ticks never rebuild the form (see ManagerRowEdit's note).
       // startEdit re-seeds them from the project on every ✎ edit click, so
       // a cancel-then-re-edit never shows stale draft values.
+      // Liveness fields edit in SECONDS (the wire is ms — save() converts);
+      // prefill is the current EFFECTIVE value: defaults merged with any
+      // project.liveness override (§S2 verify fix round, cycle 29).
+      const effLiveness = () => ({ ...MANAGER_LIVENESS_DEFAULTS, ...(project.liveness ?? {}) });
       const edit = {
         name: van.state(project.name ?? ""),
         type: van.state(project.type),
         sutRoot: van.state(project.sutRoot ?? ""),
+        t1: van.state(String(effLiveness().staleAfterMs / 1000)),
+        t2: van.state(String(effLiveness().tombstoneAfterMs / 1000)),
+        t3: van.state(String(effLiveness().pruneAfterMs / 1000)),
+        retention: van.state(String(project.retention ?? MANAGER_RETENTION_DEFAULT)),
       };
       const startEdit = () => {
+        const eff = effLiveness();
         edit.name.val = project.name ?? "";
         edit.type.val = project.type;
         edit.sutRoot.val = project.sutRoot ?? "";
+        edit.t1.val = String(eff.staleAfterMs / 1000);
+        edit.t2.val = String(eff.tombstoneAfterMs / 1000);
+        edit.t3.val = String(eff.pruneAfterMs / 1000);
+        edit.retention.val = String(project.retention ?? MANAGER_RETENTION_DEFAULT);
         editing.val = true;
       };
       return div(
