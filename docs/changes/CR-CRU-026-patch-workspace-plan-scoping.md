@@ -2,16 +2,38 @@
 
 **Status:** PENDING
 **Type:** patch
-**Priority:** P2 (cross-project data leak on a primary surface)
+**Priority:** P1 (primary workspace surface renders blank or with another
+project's data; misleads the operator watching live execution)
 **Depends on:** CR-CRU-011, CR-CRU-021
 **Labels:** patch, ui, workflow, navigation
-**Phase:** Wave 4 (proposed: immediately after CR-012 merges, before 008 —
-user to confirm the slot)
+**Phase:** Wave 4 — IMMEDIATELY after CR-012 merges (user-directed
+2026-07-17: "classify this bug correctly and fix in 026")
 **Design reference:** user bug report 2026-07-17 (screenshot,
 crucible_inactive_project_bug.jpg): "These inactive projects have no data and
 clicking on them lands in Workflow tab populated with the active Crucible
 projects workspace data! This is a bug"; filing directive: "Put the fix in
-the next appropriate patch CR!"
+the next appropriate patch CR!"; second live occurrence same day: the active
+project's OWN workspace rendered the workflow empty state while its plan was
+open with an active cycle ("Now workflow view for active Crucible project is
+not displaying").
+
+## Classification
+**Defect class:** client navigation data-lifecycle — route transitions are
+decoupled from data fetching (stale-while-navigate). NOT a server defect
+(the scoped API responses are correct); NOT transient (deterministic given
+the SSE-frame timeline); NOT introduced by CR-012's cycles (no workflow-view
+code in that diff).
+**Introduced:** CR-011 C3 wired `refetchPlans()` into the SSE-driven
+`refetch()` only; CR-021 §S1 (Workflow as the landing tab) put the affected
+surface first in every navigation, raising exposure.
+**Masking:** any server change fires an SSE frame that re-scopes plans
+within ~a second — so the defect is invisible while agents ingest steadily
+and surfaces only in quiet spells. Chrome-verified both faces 2026-07-17:
+(a) warm state → fixture workspace renders the active project's entire
+workflow; (b) cold state + quiet server → the active project's own workspace
+renders "no open plan" indefinitely. A browser cold load always displays
+correctly (SSE `onopen` fires a full refetch) — the failure is exclusively
+in-app navigation.
 
 ## Context
 `state.plans` is fetched project-scoped (`refetchPlans()`, app.js ~L134) but
@@ -19,10 +41,9 @@ ONLY inside `refetch()`, which runs on SSE change frames and the poll
 fallback. `navigate()` (~L49) and the `popstate` handler set `state.route`
 without triggering any refetch, and the Workflow lens renders `state.plans`
 wholesale with no `projectKey` check. Net effect: navigating home → any
-workspace (or workspace → workspace) shows the PREVIOUS project's plans on
-the Workflow landing tab until some unrelated server change fires an SSE
-frame — indefinitely on a quiet server. Reported against the no-data fixture
-projects, which rendered the active Crucible project's entire workflow.
+workspace (or workspace → workspace) shows the PREVIOUS project's plans (or
+nothing) on the Workflow landing tab until some unrelated server change
+fires an SSE frame — indefinitely on a quiet server.
 
 ## Scope
 
@@ -47,6 +68,7 @@ shows the existing CR-011 empty state (`no open plan — file one via POST …`)
 ## Acceptance criteria
 - [ ] With project A's workspace open and plans loaded, `navigate("/p/<B>")` renders the Workflow tab WITHOUT any of A's plan content at ANY point (assert synchronously post-navigate: zero plan groups from A) and fires exactly one `GET /api/v2/projects/<B>/plans` (mock-asserted) without waiting for an SSE frame.
 - [ ] A workspace for a project with zero plans shows the CR-011 workflow empty state; the previous project's active-plan section and history groups are absent (testid sweep).
+- [ ] Blank-view face: navigating home → the project's OWN workspace with `state.plans` empty and NO SSE frame delivered renders the plan content anyway (the navigation fetch alone suffices — assert with the stream mock silenced).
 - [ ] Browser back/forward (`popstate`) across two workspaces re-scopes identically (clear + scoped fetch per transition).
 - [ ] Render guard: seeding `state.plans` with a plan whose `projectKey` ≠ routed key renders nothing from it (unit-level pin on the lens).
 - [ ] Regression: SSE change frames still refetch plans for the CURRENT route (existing cadence unbroken); home ignores plans (no fetch fired when `route.page !== "workspace"`).
