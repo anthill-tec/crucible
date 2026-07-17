@@ -761,7 +761,7 @@
     // newest-first (server order), filter pulldown in this pane's header.
     const TimelineFeed = () =>
       div(
-        { class: "app-pane-content" },
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
         div(
           { class: "app-timeline-head" },
           // §S5 fidelity #4 — "Run timeline — <scope>": all projects, or the
@@ -870,7 +870,7 @@
 
     const WorkspaceRunsFeed = () =>
       div(
-        { class: "app-pane-content" },
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
         div(
           { class: "app-timeline-head" },
           // §S5 fidelity #4 — workspace Runs pane label; #3 — density toggle
@@ -1096,7 +1096,7 @@
       const fns = cov?.functions;
       const eventId = p?.latestCoverageEventId;
       return div(
-        { class: "app-pane-content" },
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
         div(
           { "data-testid": "coverage-panel", class: "app-coverage-panel" },
           div({ class: "app-rail-title" }, "Coverage — latest green regression"),
@@ -1138,7 +1138,7 @@
     // events, identical card anatomy/testids as Runs.
     const CompileFeed = () =>
       div(
-        { class: "app-pane-content" },
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
         div(
           { class: "app-timeline-head" },
           div({ class: "app-rail-title" }, () => {
@@ -1162,7 +1162,7 @@
     // §S5.5 — BDD keeps a placeholder naming the REAL landing CR (0.2.0).
     const BddFeed = () =>
       div(
-        { class: "app-pane-content" },
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
         div(
           { class: "app-empty" },
           "BDD run results already stream into the Runs timeline — " +
@@ -1658,7 +1658,7 @@
     // active header: the F13 header structure is the pane's whole top.
     const WorkflowFeed = () =>
       div(
-        { class: "app-pane-content" },
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
         div(
           { class: "app-workflow-cols" },
           () => WorkflowActive(),
@@ -1682,7 +1682,13 @@
         div({ class: "app-drillin-head app-top" }, DetailHeadContent(eventId)),
         div(
           { "data-testid": "workspace-runs", class: greyed("app-center") },
-          RunDetailBody(eventId),
+          // CR-CRU-023 §S1 — the in-pane run detail renders inside the SAME
+          // shared pane-content wrapper as every other central pane, so the
+          // horizontal scroll floor is one mechanism, not a per-pane one-off.
+          div(
+            { "data-testid": "pane-scroll", class: "app-pane-content" },
+            RunDetailBody(eventId),
+          ),
         ),
       );
 
@@ -2276,7 +2282,15 @@
       div(
         { "data-testid": "run-overlay", class: "app-drillin app-inpane" },
         div({ class: "app-drillin-inhead" }, DetailHeadContent(eventId)),
-        RunDetailBody(eventId),
+        // CR-CRU-023 §S1 — same shared pane-content wrapper as the
+        // workspace's WorkspaceRunDetail form: the run detail is one of the
+        // seven floored pane surfaces wherever it renders. paneSwap's
+        // scroll save/restore reads the OUTER timeline `.app-center`
+        // (detailDom.parentElement), untouched by this inner wrapper.
+        div(
+          { "data-testid": "pane-scroll", class: "app-pane-content" },
+          RunDetailBody(eventId),
+        ),
       );
 
     // §S5.1/§S5.3 — home chrome is title bar + projects row; the workspace
