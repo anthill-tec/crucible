@@ -1,6 +1,6 @@
 # CR-CRU-012 — Projects manager: add + edit project parameters
 
-**Status:** IN_PROGRESS — AWAITING MERGE GATE (2026-07-17: plan 7 cycles 25-29 all done incl. the verify fix round; both gates green 730/730 + playwright 25/25 + tsc 0; e2e ingested tier:e2e evt-1784278234852-20)
+**Status:** COMPLETED (2026-07-17 — merged 156c570; plan 7 closed; both gates green 730/730 + playwright 25/25 + tsc 0; e2e ingested tier:e2e)
 **Type:** feature
 **Priority:** P2
 **Depends on:** CR-CRU-004, CR-CRU-007
