@@ -1,6 +1,6 @@
 # CR-CRU-008 — crucible-axi CLI + client-fleet upgrade
 
-**Status:** IN_PROGRESS — AWAITING MERGE GATE (2026-07-18: cycle plan C1-C8 complete incl. verify fix; regression 819/819 + coverage 84.4%/90.9% via the upgraded client; playwright 29/29 ingested tier:e2e evt-1784324106812-19; tsc 0; soak gate passed)
+**Status:** COMPLETED (2026-07-18 — merged f0d5b99; cycle plan closed; live ~/.claude fleet synced to v2 per user option A; 819/819 · coverage 84.4%/90.9% · playwright 29/29 tier:e2e · tsc 0 · soak-gated)
 **Type:** feature
 **Priority:** P2
 **Depends on:** CR-CRU-005, CR-CRU-007 (the `context.cycle` RunContext field + labeled markers land there), CR-CRU-011 (the cycle-plan API the plan verbs call — reordered round 15: 011 now runs BEFORE 008)
