@@ -1,6 +1,6 @@
 # CR-CRU-026 — Patch: workspace plan scoping — navigation refetch + render guard
 
-**Status:** IN_PROGRESS — AWAITING MERGE GATE (2026-07-17: cycle plan complete incl. verify fix round; regression 753/753 + coverage 91.1%/89.0% ingested; playwright 29/29 ingested tier:e2e evt-1784287580698-10; tsc 0)
+**Status:** COMPLETED (2026-07-17 — merged 3b2ad6e; cycle plan closed; regression 753/753 + coverage 91.1%/89.0%; playwright 29/29 tier:e2e; tsc 0)
 **Type:** patch
 **Priority:** P0 — hotfix-class (user-bumped 2026-07-17: "Bump 026 priority
 and execute it right after the merge complete"); primary workspace surface
