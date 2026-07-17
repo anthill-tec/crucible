@@ -87,21 +87,24 @@ Two client verbs (user refinement 2026-07-18 — "build the parsing and
 streaming within the python client layer; the orchestrator is just a consumer
 of the output … can save some tokens"):
 
-- **`gate-run` — the token-efficient wrapper (primary path).** The orchestrator
-  invokes it and NOTHING ELSE; the Python client owns the whole flow: it runs
-  `no-mistakes axi run --intent "<…>" [--yes]`, TAILS the TOON stdout stream,
-  decodes each step/status incrementally via `clients/toon.py` (C4), and
-  STREAMS gate events to Crucible — throttled interim snapshots as steps
-  complete (reusing the §S2b narration cadence from CR-008) plus a final
-  sealing `POST /api/v2/gates` carrying the outcome. It returns a COMPACT
-  result to the orchestrator (outcome + Crucible event id + link) — the
-  VERBOSE no-mistakes output (findings text, step logs) NEVER enters the
-  orchestrator's LLM context. This is exactly how `bun-crucible.py test`
-  already wraps a test run (client captures/parses/ingests; the orchestrator
-  reads only a compact summary), applied to the gate. Token-efficient by
-  construction; live-streaming for free. `--yes` auto-resolves findings fully
-  in the client; the only time the orchestrator re-enters the loop is a
-  genuine ask-user judgment finding (the exception, not the norm).
+- **`gate-run` — the axi-PROXY wrapper (primary path; user model 2026-07-18:
+  "the Python client acts like an axi proxy to the orchestrator while also
+  serving crucible").** The client sits BETWEEN the orchestrator and
+  no-mistakes and plays TWO roles at once: (a) it PROXIES the no-mistakes axi
+  interface to the orchestrator — relaying the TOON (findings, gates, step
+  detail) up so the orchestrator can make decisions, and passing the
+  orchestrator's `respond`/intent down — because the orchestrator is the
+  decision-maker no-mistakes' axi is designed to be driven by; AND (b) it
+  simultaneously FORKS that same TOON stream, decodes each step via
+  `clients/toon.py` (C4), and streams gate events to Crucible (throttled
+  interim snapshots per the §S2b cadence + a final sealing
+  `POST /api/v2/gates`). One client, two consumers: the orchestrator gets the
+  detail it needs to decide; Crucible gets the parsed gate timeline. The
+  efficiency is that the client owns the Crucible-side PLUMBING (TOON→gate
+  event POSTs) so the orchestrator never re-formats or re-posts — not that the
+  detail is hidden (it isn't; the orchestrator needs it). `--yes` lets the
+  client auto-resolve mechanical findings without a proxy round-trip; genuine
+  ask-user findings surface to the orchestrator through the proxy.
 - **`gate-report` — the lighter report-only verb (retained).** Parses a
   pre-existing `no-mistakes axi status` TOON (or `--outcome/--steps/--commit`
   flags) → `POST /api/v2/gates` — for when no-mistakes was already run
@@ -125,7 +128,7 @@ Still zero wave-control API — state remains inferred from plans + gate events.
 - [ ] Workflow tab: with a gate ingested for wave 3, the gate pane shows its outcome + step ladder; ingesting a second wave-3 gate replaces the pane content (latest wins) — over SSE, no reload.
 - [ ] Wave state: wave 3 with all plans closed + a `passed` gate event renders `gated` in the lens header (fixture also asserts `awaiting review` before the gate arrives); grep asserts no wave-control route exists.
 - [ ] Client: `bun-crucible.py gate-report --outcome passed --commit abc1234 --steps "review:passed,test:passed"` posts a valid gate with `context.wave` from `WORKFLOW_WAVE`; unset env → no wave key.
-- [ ] Client `gate-run`: with a fake `no-mistakes` on PATH emitting a scripted TOON stream (steps completing over a few seconds), `bun-crucible.py gate-run --intent "…"` (a) posts ≥1 INTERIM gate to `/api/v2/gates` before the final sealing post (throttled per §S2b), (b) posts a final gate whose outcome matches the stream, and (c) its own stdout to the caller is a COMPACT summary (outcome + event id) — NOT the raw no-mistakes TOON (assert the verbose findings text is absent from the verb's stdout).
+- [ ] Client `gate-run` (axi proxy + Crucible reporter): with a fake `no-mistakes` on PATH emitting a scripted TOON stream (steps completing over a few seconds), `bun-crucible.py gate-run --intent "…"` (a) posts ≥1 INTERIM gate to `/api/v2/gates` before the final sealing post (throttled per §S2b) and (b) a final gate whose outcome matches the stream — WITHOUT the caller issuing any POST itself (the client owns the Crucible plumbing); (c) the no-mistakes axi detail is still RELAYED to the caller (proxy role) so the orchestrator can decide — assert the verb surfaces the stream/findings to its caller, not swallows them.
 - [ ] §S4b: `POST /api/v2/milestones {type:"gap-analysis", label:"…"}` → 201 `kind:"milestone"`; `type:"deploy"` → 400 naming `type`; rollups unchanged; the WORKSPACE timeline renders a `data-testid="milestone-entry"` slim row with the ◇ glyph + type + label, while the HOME timeline renders zero milestone entries for the same fixture (workspace-scoped assertion).
 - [ ] E2E: `tests/e2e/gates.e2e.ts` — file plan → milestone gap-analysis → close cycles + plan → ingest gate via API → workspace timeline shows the milestone entry AND the boundary card, home shows the compact gate entry but no milestone, `gated` wave header + populated gate pane; results ingested `tier:"e2e"`.
 
