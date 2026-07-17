@@ -1,6 +1,6 @@
 # CR-CRU-026 — Patch: workspace plan scoping — navigation refetch + render guard
 
-**Status:** IN_PROGRESS (2026-07-17 — gap analysis done; cycle plan filed on the Workflow tab, C1 active)
+**Status:** IN_PROGRESS — AWAITING MERGE GATE (2026-07-17: cycle plan complete incl. verify fix round; regression 753/753 + coverage 91.1%/89.0% ingested; playwright 29/29 ingested tier:e2e evt-1784287580698-10; tsc 0)
 **Type:** patch
 **Priority:** P0 — hotfix-class (user-bumped 2026-07-17: "Bump 026 priority
 and execute it right after the merge complete"); primary workspace surface
@@ -152,3 +152,30 @@ S (grew from XS: §S3 home plan availability + cross-project matching).
 Scoping changes to the events/agents slices (globally fetched, already
 filtered per surface at render); offline/error-state UX changes (the
 keep-last-known-on-failure behavior stays for the SAME project).
+
+## Implementation Notes
+- Delivered across the CR's cycle plan (C1-C4 + verify fix round): §S1
+  shared scope-change detector (navigate + popstate; synchronous clear +
+  immediate scoped refetch; closeDetail/closeManager correctly exempt as
+  same-surface), §S2 strict projectKey render guard, §S3 additive
+  GET /api/v2/plans (non-archived aggregate, reply() reuse for TOON parity),
+  surface-aware refetchPlans (home global / workspace scoped), compound
+  (projectKey,cycleId) cycle index (space-separated keys — UUID-safe;
+  bare-id legacy fallback for undeclared fixtures), §S3.4
+  capability-conditional heuristic exemption (planless byte-identical,
+  pinned by the re-targeted F13 control scenario).
+- Live Chrome measurements during execution: both bug faces confirmed dead
+  post-C1 (workspace renders ≤400ms after in-app navigation; fixture
+  workspace shows zero foreign content); full vocabulary parity post-C2
+  (home cold = home round-trip = workspace Runs = 7 declared + 1 open span
+  + 0 heuristic on identical server state).
+- VERIFY findings + resolutions: (1) compound-key doc comments said NUL,
+  implementation uses the collision-safe space convention → comments
+  corrected, code kept (328c031); (2) AC10's ws-A→home→ws-B
+  marker-fingerprint equivalence unpinned → test added, passes on shared
+  mechanism (9e50e4e); (3) stale pre-C2 comment + missing global-route mock
+  branch in plan-scoping.test.ts → corrected, no assertion changes.
+- Sanctioned test-side events during execution: legacy plan fixtures
+  modernized with projectKey across six suites (0159269 + 7f2ca3a);
+  F13's heuristic control pair re-targeted to a planless project per
+  §S3.4 (7f2ca3a, file precedent honored).
