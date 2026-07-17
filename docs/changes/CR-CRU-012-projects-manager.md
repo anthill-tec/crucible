@@ -1,6 +1,6 @@
 # CR-CRU-012 — Projects manager: add + edit project parameters
 
-**Status:** PENDING
+**Status:** IN_PROGRESS (2026-07-17 — plan 7 filed in Crucible, cycles 25-29; §S1b done, §S1 executing)
 **Type:** feature
 **Priority:** P2
 **Depends on:** CR-CRU-004, CR-CRU-007
