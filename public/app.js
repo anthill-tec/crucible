@@ -940,21 +940,14 @@
       );
     };
 
-    // §S5.2 (d) — green-coverage points from the loaded slice (events
-    // carrying the additive `coverageLines` brief field), oldest→newest,
-    // capped at the latest 12.
-    function coverageTrendPoints() {
-      return L.filterEvents(state.events, { projectKey: state.route.projectKey })
-        .filter((e) => typeof e.coverageLines === "number")
-        .sort((x, y) => x.timestamp - y.timestamp)
-        .slice(-12)
-        .map((e) => e.coverageLines);
-    }
-
+    // CR-CRU-023 §S2 — trend points come from the DURABLE server-side
+    // rollup series (project.coverageTrend), NOT the transient state.events
+    // feed (retention pruning collapsed that slice — the §S2 regression).
     const CoverageTrendCard = () => {
-      const percent = currentProject()?.latestGreenCoverage?.lines?.percent;
+      const project = currentProject();
+      const percent = project?.latestGreenCoverage?.lines?.percent;
       if (typeof percent !== "number") return null;
-      const points = coverageTrendPoints();
+      const points = project?.coverageTrend ?? [];
       const caption =
         points.length >= 2
           ? `${points[0]} → ${points[points.length - 1]}% lines`
@@ -965,7 +958,9 @@
           { "data-testid": "vitals-card-label", class: "app-vitals-label" },
           "COVERAGE TREND (green regressions)",
         ),
-        points.length >= 2
+        // §S2 — bars render whenever the series is non-empty (the old
+        // `>= 2` gate was the defect: 1 point must render 1 bar).
+        points.length > 0
           ? div(
               { "data-testid": "coverage-trend-bars", class: "app-trend-bars" },
               points.map((p, i) =>
