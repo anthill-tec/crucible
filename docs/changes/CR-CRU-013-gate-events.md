@@ -114,7 +114,7 @@ boundary card (§S2) and the Workflow-tab gate pane (§S4). Per CR-016's
 one-rule, the drill-in is a pane state of WHICHEVER pane opened it — the back
 chip names the origin (`← runs` from the timeline seal, `← workflow` from the
 gate pane); tabs hide; the Project pane stays live; single form (no density
-switch). Storyboard F13¼ is the visual contract.
+switch). Storyboard F8½ is the visual contract.
 
 ## Estimated size
 M.
