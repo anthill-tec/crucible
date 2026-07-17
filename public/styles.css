@@ -316,18 +316,19 @@ body {
   font-size: 11px;
   color: var(--ink);
 }
-/* §S5.2 (d) — coverage-trend mini bar-chart: one bar per green-coverage
-   point (oldest→newest, ≤12); earlier bars ember-dim, latest bright ember. */
+/* §S5.2 (d) / CR-CRU-027 §S1 — coverage-trend mini bar-chart: one bar per
+   green-coverage point (oldest→newest, last 16); earlier bars ember-dim,
+   latest bright ember. F8 mock geometry: fixed 9px bars in a 26px
+   left-aligned cluster — bars never grow/stretch to fill the card. */
 .app-trend-bars {
   display: flex;
   align-items: flex-end;
   gap: 3px;
-  height: 36px;
+  height: 26px;
   margin: 6px 0 4px;
 }
 .app-trend-bar {
-  flex: 1 1 0;
-  min-width: 4px;
+  flex: 0 0 9px;
   border-radius: 2px 2px 0 0;
 }
 .app-trend-bar-dim { background: var(--ember-dim); }

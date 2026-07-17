@@ -1403,7 +1403,10 @@
       const project = currentProject();
       const percent = project?.latestGreenCoverage?.lines?.percent;
       if (typeof percent !== "number") return null;
-      const points = project?.coverageTrend ?? [];
+      // CR-CRU-027 §S2 — window to the MOST RECENT 16 points (chronological,
+      // latest last); the caption reads the first WINDOWED point so text and
+      // bars always agree.
+      const points = (project?.coverageTrend ?? []).slice(-16);
       const caption =
         points.length >= 2
           ? `${points[0]} → ${points[points.length - 1]}% lines`
