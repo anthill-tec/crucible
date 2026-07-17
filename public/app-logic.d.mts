@@ -180,6 +180,10 @@ export interface LensPlanCycleLike {
 
 export interface LensPlanLike {
   planId: number | string;
+  // CR-CRU-026 §S3.3 — real server field (toPlan() stamps it); optional
+  // ONLY for legacy undeclared-plan fixtures, which keep bare-cycleId
+  // linkage semantics.
+  projectKey?: string;
   cr: string;
   status: "open" | "closed";
   wave?: string;
@@ -191,9 +195,11 @@ export interface LensPlanLike {
   closedAt?: number;
 }
 
+// CR-CRU-026 §S3.3 — keys are compound `<projectKey>\0<cycleId>` strings
+// for declared plans, bare numeric cycle ids for legacy undeclared ones.
 export declare function planCycleIndex<
   P extends LensPlanLike,
->(plans: P[]): Map<number, { cycle: P["cycles"][number]; plan: P }>;
+>(plans: P[]): Map<number | string, { cycle: P["cycles"][number]; plan: P }>;
 
 export type TimelineRow<
   E extends LensRunLike,

@@ -80,8 +80,12 @@
     // steady-state refresh; navigation no longer depends on it.
     function scopeChanged() {
       vanX.replace(state.plans, () => []);
+      // CR-CRU-026 §S3.2 — refetchPlans is surface-aware (home → the global
+      // route, workspace → the scoped one), so EVERY scope change refetches
+      // the landing surface's plan slice; the core slice stays a
+      // workspace-landing concern (home keeps its poll/SSE cadence).
+      void refetchPlans();
       if (state.route.page === "workspace") {
-        void refetchPlans();
         void refetchCore();
       }
     }
@@ -161,12 +165,17 @@
     // active todo view refreshes over the SAME SSE/poll cadence as the feed.
     // Guarded separately from the core slice: a plans failure never poisons
     // projects/agents/events, and reachability stays the watchdog's concern.
+    // CR-CRU-026 §S3.2 — surface-aware: a workspace stays on the C1
+    // project-scoped route; every other surface (home) reads the additive
+    // global `GET /api/v2/plans` (all non-archived projects' plans), so the
+    // home timeline gets declared plan data over the same refetch cadence.
     async function refetchPlans() {
-      if (state.route.page !== "workspace") return;
+      const url =
+        state.route.page === "workspace"
+          ? `/api/v2/projects/${encodeURIComponent(state.route.projectKey)}/plans`
+          : "/api/v2/plans";
       try {
-        const body = await getJson(
-          `/api/v2/projects/${encodeURIComponent(state.route.projectKey)}/plans`,
-        );
+        const body = await getJson(url);
         vanX.replace(state.plans, () => body.plans ?? []);
       } catch {
         // Keep the last-known plans visible while the route is unreachable.
@@ -1826,14 +1835,13 @@
         .concat(plan.wave !== undefined ? [`wave ${plan.wave}`] : [])
         .join(" · ");
 
-    // CR-CRU-026 §S2 — render guard: the Workflow lens paints ONLY plans
-    // tagged for the routed project (defense in depth over the §S1 clear —
-    // even if stale data survives a race, a plan DECLARING another
-    // project's key never renders here).
+    // CR-CRU-026 §S2 — STRICT render guard: the Workflow lens paints ONLY
+    // plans DECLARING the routed project's key (defense in depth over the
+    // §S1 clear — even if stale data survives a race, a plan tagged for
+    // another project, or one with NO projectKey at all, never renders
+    // here). C1's undefined-tolerance is dropped (sanctioned follow-up).
     const scopedPlans = () =>
-      state.plans.filter(
-        (p) => p.projectKey === undefined || p.projectKey === state.route.projectKey,
-      );
+      state.plans.filter((p) => p.projectKey === state.route.projectKey);
 
     const WorkflowActive = () => {
       const openPlans = scopedPlans().filter((p) => p.status === "open");
