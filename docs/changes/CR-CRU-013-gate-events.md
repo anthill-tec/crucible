@@ -47,17 +47,22 @@ status + findings counts + fix rounds, the **fixes table** (id, file,
 description), and the push/PR line. Same slide-over surface, `← timeline` back
 chip, no Detail/Density switch (single form, like compile).
 
-### §S4 Workflow-tab gate pane
-The Workflow tab's live section (CR-011 §S3) carries a **no-mistakes pane**:
-the latest gate for the current wave, step ladder with statuses, updating over
-SSE. Empty state: "no gate run this wave yet".
-
-**Timing (user clarification 2026-07-18):** no-mistakes is the UNIQUE gate at
-the WAVE / RELEASE boundary — it runs only when the wave's CRs are ALL done
-and NO CR is active. So the gate pane is EMPTY during active-CR execution
-("no gate run this wave yet") and populates/streams only at the boundary
-(when the active-workflow section itself shows lanes-complete/awaiting-review,
-no active cycle). The pane and an active CR are never both live at once.
+### §S4 Workflow-tab gate widget — CONTEXTUAL (user ruling 2026-07-18: "This need not appear in the Workspace all the time … a contextual widget that appears only when no-mistakes is running")
+The gate is NOT a persistent pane. The CR-011 `GatePane` placeholder
+(app.js — currently an always-mounted `data-testid="gate-pane"` column in
+`app-workflow-cols` reading "gate reporting lands in CR-013") is REMOVED, not
+populated. In its place, a CONTEXTUAL gate widget appears in the Workflow tab
+ONLY when a no-mistakes gate is LIVE for the current wave — i.e. at the
+wave/release boundary, when the wave's CRs are all done and no CR is active
+(§S6 lanes-complete → gating/gated). During normal CR execution the Workflow
+tab shows ONLY the active-CR view — no gate element, no empty "no gate yet"
+state, no clutter. When no-mistakes runs, the widget materializes (naturally
+in the now-idle active zone, since no CR is running) and streams the live
+9-step ladder over SSE (interim snapshots → final seal). Once the wave
+advances, the widget recedes; the durable record lives on as the timeline 🛡
+seal (§S2) + history. **Timing invariant:** the gate widget and an active CR
+are never both present — they are mutually exclusive states of the Workflow
+tab's active zone.
 
 ### §S4b Milestone events (round-24 fold-in — WORKSPACE timeline only)
 Lightweight siblings of gates, one workflow-event family:
