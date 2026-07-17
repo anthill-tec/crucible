@@ -38,7 +38,25 @@ Activating any cycle while another cycle in the SAME plan is `active` →
 cycle and the confirm path (transition it to a terminal state first). One
 active cycle per plan, mechanically guaranteed (the user rule of 2026-07-16).
 
-### §S3 AXI-ify every plan/cycle invalid-action response
+### §S3 Mid-execution plan mutation — sanctioned forms only (user ruling 2026-07-17)
+"Updating while executing is discouraged" — but two mutation forms are
+SANCTIONED so real-world scope arrivals have a legal path, and the guards
+hold across them all:
+1. **INSERT a cycle at a position:** `POST …/plans/<planId>/cycles` gains an
+   optional `before: <cycleId>` — the new cycle lands immediately before that
+   sibling. Constraint: the insertion point must be AFTER the active cycle
+   (inserting a pending cycle before the active one would instantly violate
+   the order invariant) — violating inserts → 400 + AXI help naming the
+   active cycle. Plain append (no `before`) stays as-is.
+2. **EDIT a cycle's label:** `PATCH …/cycles/<id> {label}` — legal ONLY while
+   the cycle is `pending`. The ACTIVE cycle is LOCKED (400: "the active
+   cycle is locked — confirm or fail it first"); terminal cycles are HISTORY
+   and immutable (400: "done/skipped/failed cycles are immutable history").
+3. The §S1/§S2 guards recompute against the CURRENT sibling order — appended
+   and inserted cycles obey the same out-of-order refusal; there is no
+   mutation path that bypasses activation ordering.
+
+### §S4 AXI-ify every plan/cycle invalid-action response
 Every 4xx from the plans/cycles routes carries `help[]` hints per hints.ts
 conventions — including the existing bare refusals: illegal transitions
 (e.g. `active -> pending` gains "cycles never retreat; append a new cycle for
@@ -53,6 +71,8 @@ input, duplicate open plan per cr. Response SHAPES stay otherwise unchanged
 - [ ] Sequential happy path unchanged: activate A → done A → activate B → done B all succeed (regression guard over the whole legal table).
 - [ ] Every 4xx from plans/cycles routes carries a non-empty `help` array (sweep-asserted across: illegal transition, closed-plan PATCH, unknown planId, unknown cycleId, malformed cycle input, duplicate open plan) — each help text names a concrete next action.
 - [ ] The orchestrator's own mis-activation replay: plan with cycles 1..5, POST activate on cycle 2 → 400 (the plan-7 incident becomes impossible).
+- [ ] §S3 insert: `POST …/cycles {label, before: <pendingId>}` lands the cycle immediately before that sibling (order asserted via GET); `before` pointing at the ACTIVE cycle or any earlier sibling → 400 + help naming the active cycle; plain append unchanged; an inserted cycle obeys §S1 (activating it before its new earlier pending sibling → 400).
+- [ ] §S3 edit: `PATCH …/cycles/<id> {label:"new"}` on a PENDING cycle → 200 + label round-trips; on the ACTIVE cycle → 400 ("locked"); on a done/skipped/failed cycle → 400 ("immutable history"); label+status in one body → 400 (one mutation per call, named in help).
 
 ## Estimated size
 XS.
