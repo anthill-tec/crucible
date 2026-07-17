@@ -110,3 +110,48 @@ step storage and the flags fallback on `gate-report`.
 ## Non-goals
 Driving no-mistakes FROM Crucible (report-only); wave-control API; gating
 non-no-mistakes pipelines (structure is codec-shaped for future codecs).
+
+## Implementation Notes (gap analysis 2026-07-18 — decisions before RED)
+- **Substrate first (C1):** gates/milestones/cr-merged are a NEW event-kind
+  family. Blockers found: `store.toEvent` collapses any non-compile/lifecycle
+  kind to "test"; `RunEvent.kind` is a 3-value union; no generic payload
+  column; rollup exclusion is the single `kind !== "lifecycle"`. C1 widens
+  the union + toEvent passthrough, adds a dedicated `payload` JSON column
+  (additive PRAGMA-retrofit, as with archived_at/allow_run_deletion), and
+  inverts rollup exclusion to a rollup-eligible set {test, compile}.
+- **Endpoints:** POST /api/v2/gates + /api/v2/milestones — projectKey in body
+  (runs convention), 201 response (plans convention), GATE_OUTCOMES /
+  MILESTONE_TYPES enum sets (TIERS precedent), verbatim payload, flat
+  top-level dispatch (not under /projects/). SSE is generic (insertEvent
+  emits).
+- **UI (C2):** timelineRows is already a generic row union — add gate-card /
+  merge-marker / milestone-entry kinds; runFeed renderers + testids. The
+  home-vs-workspace surface branch is NET-NEW (both surfaces share one
+  unscoped feed today) — thread a `surface` arg through timelineRows/runFeed
+  so milestones render workspace-only and gates+merges render compact on
+  home. Gate drill-in reuses the CompileBody single-form (no density switch).
+- **Gate pane (C3):** the F13 `data-testid="gate-pane"` placeholder already
+  exists ("gate reporting lands in CR-013") — replace it. Wave `gated` state:
+  pass gate events into workflowLens; branch on a passed/checks-passed gate
+  matching the wave.
+- **§S5 TOON — RESOLVED (user rulings 2026-07-18):** `no-mistakes axi status`
+  emits token-efficient TOON with NO JSON mode (verified — installed at
+  ~/.local/bin/no-mistakes). A real captured sample
+  (tests/fixtures/no-mistakes-axi-status.toon) confirms it is exactly the
+  4-construct subset src/toon.ts encodes. User directed: "Use the Typescript
+  variant and write a decoder/encoder for Python we have use for it." →
+  **C4 ports the MIT `@toon-format/toon` TS reference into a reusable Python
+  module `clients/toon.py` (encode + decode)** — pinned against @toon-format's
+  own test vectors (pull via opensrc) + the real no-mistakes sample +
+  round-trip against src/toon.ts toToon output. gate-report (C5) consumes it;
+  the flag fallback (--outcome/--steps/--commit) remains. The Python module is
+  fleet-shared (syncs to ~/.claude via CR-009), useful for any client
+  reading/writing TOON.
+- **cr-merged sender (C5):** wire the cr-merged milestone POST into the
+  `cr-close` verb (CR-008) after a successful close — plan + commit already in
+  scope; joins plans.cr (commitBoundary key).
+- **Cycle plan (M→ grew to 7 with the TOON lib cycle):** C1 server foundation
+  + endpoints · C2 timeline UI + scoping + drill-in · C3 gate pane + wave
+  gated · C4 Python TOON module (clients/toon.py) · C5 fleet verbs
+  (gate-report/milestone) + cr-close cr-merged hook · C6 E2E round-trip ·
+  C7 verify sweep.
