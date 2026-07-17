@@ -37,6 +37,11 @@ Feature: CR-CRU-006 shell — storyboard frames
     And the tabs row sits directly beneath the workspace header
     And the tabs row spans more than 90% of the workspace width
     And there is no ".app-rail" element anywhere inside the workspace
+    # SANCTIONED RE-TARGET (CR-CRU-021 §S1): the workspace's default active
+    # tab is now Workflow, not Runs — select Runs explicitly before probing
+    # the Runs pane's bounding box (was: relied on Runs being the cold-load
+    # default, which now hangs waiting on [data-testid="workspace-runs"]).
+    And I click the "Runs" workspace tab
     And the Project pane sits to the right of the main content column with no left rail
 
   Scenario: F2b SSE pushes a new project's badge onto the projects-row without reload

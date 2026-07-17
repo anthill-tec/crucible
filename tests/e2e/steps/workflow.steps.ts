@@ -106,7 +106,13 @@ Step(
 Step(
   "the cr group for {string} shows a merge-commit pill reading {string}",
   async ({ page }, cr: string, text: string) => {
-    await expect(crGroup(page, cr).getByTestId("cr-merge-commit")).toContainText(text);
+    const pill = crGroup(page, cr).getByTestId("cr-merge-commit");
+    await expect(pill).toContainText(text);
+    // SANCTIONED RE-TARGET (CR-CRU-021 §S6.9): the `@` separator between
+    // "merged" and the sha was removed — pin its absence explicitly, not
+    // just the new substring, so a regression back to "merged @ <sha>"
+    // still fails this assertion.
+    await expect(pill).not.toContainText("@");
   },
 );
 
@@ -160,20 +166,15 @@ Step(
 
 // ── §S3 active-view assertions ───────────────────────────────────────────────
 
-// CR-CRU-020 §S2.3 — the ACTIVE section's active cycle row no longer
-// auto-expands its linked runs; it gets the SAME click-based toggle as a
-// history cycle row (parity). This explicit action step is what actually
-// reveals the linked run the assertion below checks for.
-Step("I expand the active cycle row for {string}", async ({ page }, label: string) => {
-  const row = page.getByTestId("workflow-active").getByTestId("cycle-row").filter({ hasText: label });
-  await expect(row).toBeVisible();
-  const toggle = row.getByTestId("cycle-toggle");
-  await expect(toggle).toBeVisible();
-  await toggle.click();
-});
-
+// SANCTIONED RE-TARGET (CR-CRU-021 §S6 ruling (a) — e2e sweep): the
+// CR-CRU-020 click-based toggle on the ACTIVE cycle row no longer exists —
+// CR-021 made the active span ALWAYS inline (toggles narrowed to History
+// rows only). The old "I expand the active cycle row for …" action step is
+// removed (it clicked a `cycle-toggle` that no longer renders); the
+// assertion below now pins BOTH the inline linked run AND the absence of
+// any toggle, inverting the prior "click reveals" contract.
 Step(
-  "the workflow active section shows a cycle row for {string} expanded with the linked run for agent {string}",
+  "the workflow active section shows a cycle row for {string} with the linked run for agent {string} rendered inline with no cycle-toggle",
   async ({ page }, label: string, agentId: string) => {
     const row = page
       .getByTestId("workflow-active")
@@ -181,6 +182,7 @@ Step(
       .filter({ hasText: label });
     await expect(row).toBeVisible();
     await expect(row).toHaveAttribute("data-status", "active");
+    await expect(row.getByTestId("cycle-toggle")).toHaveCount(0);
     await expect(
       row.getByTestId("linked-run-row").filter({ hasText: agentId }).first(),
     ).toBeVisible();

@@ -26,9 +26,17 @@ Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline pla
     When I open the workspace for that project
     And I click the "Workflow" workspace tab
     Then the history lens shows a cr group for "CR-WF-1" with rollup "1/1"
-    And the cr group for "CR-WF-1" shows a merge-commit pill reading "merged @ abc1234"
-    And the cr group for "CR-WF-1" shows the runtime for agent "agent-wf1"
+    # SANCTIONED RE-TARGET (CR-CRU-021 §S6.9): the merge-commit pill dropped
+    # the `@` separator — it now reads `merged <sha>` (was: `merged @ <sha>`).
+    And the cr group for "CR-WF-1" shows a merge-commit pill reading "merged abc1234"
+    # SANCTIONED RE-TARGET (CR-CRU-021 §S4 — e2e sweep, newly uncovered while
+    # fixing the merge-commit pill above): the collapsed CR-group header now
+    # carries ZERO agentId-bearing elements — per-agent runtime rows render
+    # only once the group is expanded (an aggregate "N agents" pill stands
+    # in for them while collapsed). Moved this assertion to after the
+    # expand step below (was: asserted while still collapsed).
     When I expand the cr group for "CR-WF-1"
+    And the cr group for "CR-WF-1" shows the runtime for agent "agent-wf1"
     And I expand cycle "c1 red-green" in the cr group for "CR-WF-1"
     Then the cr group for "CR-WF-1" shows cycle "c1 red-green" as a closed span containing the linked run for agent "agent-wf1"
 
@@ -52,12 +60,16 @@ Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline pla
     Then the declared marker for "c1 red-green" on "CR-WF-2" becomes visible within 2 seconds
     And the workspace Runs pane shows no cycle-span-open element
 
-  Scenario: F13 with an open plan and an active cycle, the Workflow tab's active section shows the per-CR todo, and expanding the active cycle row reveals its linked run
+  Scenario: F13 with an open plan and an active cycle, the Workflow tab's active section shows the per-CR todo, and the active cycle row renders its linked run inline with no toggle (CR-CRU-021 ruling (a) re-target)
     Given a project named "WF Active Project" is registered
     And a cycle plan is filed for cr "CR-WF-3" with a cycle labelled "c1 red-green"
     And cycle 1 of that plan is activated
     And a fail(2/5) run linked to that cycle is ingested for agent "agent-wf3"
     When I open the workspace for that project
     And I click the "Workflow" workspace tab
-    And I expand the active cycle row for "c1 red-green"
-    Then the workflow active section shows a cycle row for "c1 red-green" expanded with the linked run for agent "agent-wf3"
+    # SANCTIONED RE-TARGET (CR-CRU-021 §S6 ruling (a)): the active cycle's
+    # open span is ALWAYS inline now — no cycle-toggle exists on the active
+    # row (toggles narrowed to History-only rows), so the linked run is
+    # already visible with no click. Was: "I expand the active cycle row
+    # for …" clicked a toggle that no longer renders.
+    Then the workflow active section shows a cycle row for "c1 red-green" with the linked run for agent "agent-wf3" rendered inline with no cycle-toggle
