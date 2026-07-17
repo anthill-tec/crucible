@@ -1,6 +1,6 @@
 # CR-CRU-027 — Patch: coverage-trend mock fidelity (F8 vitals sparkline)
 
-**Status:** PENDING
+**Status:** IN_PROGRESS — AWAITING MERGE GATE (2026-07-17: cycle plan complete; regression 762/762 + coverage 89.2%/84.7% ingested; playwright 29/29 ingested tier:e2e evt-1784291999440-7; tsc 0; eyes-parity MEASURED)
 **Type:** patch
 **Priority:** P1 (repeat drift — flagged by the user in two separate live
 rounds; the second time with maximum displeasure)
@@ -63,3 +63,26 @@ Changing the trend DATA series (CR-023 server plumbing stays); charting-
 library adoption (that is CR-022's analytics scope — this card stays
 hand-rolled per the mock); touching the coverage meter (.app-meter is
 already mock-faithful).
+
+## Implementation Notes
+- Delivered in one red-green cycle + verify: §S1 geometry (styles.css —
+  `.app-trend-bar` `flex: 1 1 0` → `flex: 0 0 9px`, dead `min-width: 4px`
+  removed; `.app-trend-bars` 36px → 26px; gap/flex-end/rounding unchanged)
+  and §S2 windowing (app.js CoverageTrendCard — one `slice(-16)` at the
+  series entry point; bars, latest/dim classes and the caption stay
+  window-consistent from the single site).
+- Eyes-parity gate (Chrome-measured on the live workspace, per the
+  storyboard-compliance measured rule): bar widths [9, 9] px, cluster
+  height 26px, two-point span 21px (mock math 9+3+9), left-aligned, bar
+  heights 25/24px = 94.4%/93.1% of the cluster, caption
+  `94.4 → 93.1% lines`. The 131px-slab drift is gone.
+- Test route: happy-dom resolves no CSS cascade (probe-verified:
+  getComputedStyle returns "" for width/flex without a loaded stylesheet),
+  so the width/height contracts pin via the established styles.css
+  source-assertion technique (`ruleBody()`, f13-fidelity precedent) with
+  DOM-side pins for counts/classes/inline heights; rationale documented in
+  the test file header.
+- VERIFY: PASS — zero blocking, zero should-fix, all 5 ACs MET; suggestion
+  recorded here for traceability (the eyes-parity evidence lives in these
+  notes; a durable playwright bounding-box guard is a possible follow-up,
+  suggestion-tier).
