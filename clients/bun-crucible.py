@@ -1,0 +1,902 @@
+#!/usr/bin/env python3
+"""Bun + TypeScript Crucible CLI — single entry point for orchestrator + RED/GREEN/
+FIX/VERIFY agent lifecycle ops AND for running TypeScript test targets (`bun test` →
+JUnit XML, optional lcov coverage). Replaces inline bun -e / loose curl so each
+invocation has a stable command signature.
+
+Modelled exactly on python-crucible.py / rust-crucible.py (same agent lifecycle,
+.env project-key resolution, /api/* ingest contract) — only the toolchain differs:
+xmlrunner/coverage.py → `bun test --reporter=junit` (+ `--coverage --coverage-reporter=lcov`)
+and `tsc --noEmit` for the syntax gate.
+
+This script is tool-specific (bun test / JUnit-XML / lcov / tsc), not project-specific —
+the project path, the bun package dir, and the bun binary are parameterizable.
+
+Subcommands:
+  register, unregister  Agent lifecycle.
+  test                  Run a TARGETED test (file/path) or the whole suite, via
+                        `bun test --reporter=junit` → parse → /api/ingest/parsed. The
+                        per-cycle RED/GREEN workhorse. With --agent the result is ingested
+                        regardless of pass/fail (junit captures failures). The reports
+                        file is wiped first so only THIS run's XML is ingested.
+  regression            Run the FULL suite. With --coverage (bun --coverage-reporter=lcov)
+                        posts /api/ingest/parsed with line/function coverage; else posts
+                        the parsed junit only. Orchestrator pre-merge gate path.
+  auto-ingest           Ingest only: parse an already-produced junit file → /api/ingest/parsed.
+  check                 `tsc --noEmit` typecheck gate over the package; ingest any errors to
+                        /api/ingest/compile. (Most TS RED failures are runtime, but a type
+                        error should still surface.)
+  pre-merge-gate        ORCHESTRATOR gate: fail-fast `check` (tsc) → `regression --coverage`.
+  plan-file             File a cycle plan: --cr, --title, --cycles "a,b[,c…]" →
+                        POST /api/v2/projects/<key>/plans. Prints the assigned NUMERIC
+                        cycle ids on stdout (never guess ids — the plan-7 incident).
+                        track comes from $WORKFLOW_ROLE; orchestrator from
+                        --orchestrator / $WORKFLOW_ORCHESTRATOR when set.
+  cycle-activate <id>   Transition a cycle to active. Cycle ids are unique per PROJECT:
+                        resolved by scanning the OPEN plans for the id.
+  cycle-done <id>       Transition an ACTIVE cycle to done (closes the span).
+  cr-close --commit <sha> [--cr <CR>]
+                        Close the single OPEN plan (PATCH status=closed + merge.commit).
+                        Multiple open plans → --cr picks one; ambiguous without it →
+                        non-zero exit naming the open plans.
+
+Project + Crucible endpoint:
+  Reads CRUCIBLE_PROJECT_KEY from <project-dir>/.env.
+  Project path resolution: --project-dir > $BUN_CRUCIBLE_PROJECT_DIR > the git repo
+  containing the current directory > CWD. No project is hardcoded.
+  Package (bun cwd) resolution: --package-dir > $BUN_CRUCIBLE_PACKAGE_DIR >
+  <project-dir>/integrations/pi (if it has a package.json) > <project-dir>.
+  Bun resolution: --bun > $BUN_CRUCIBLE_BUN > `bun` on PATH.
+  Posts to $CRUCIBLE_URL (default http://localhost:3849), v2 endpoints ONLY:
+  /api/v2/agents/register|unregister, /api/v2/runs/parsed|compile,
+  /api/v2/projects/<key>/plans. This in-repo clients/ copy is the SOURCE OF
+  TRUTH (CR-CRU-008 Risk section) — ~/.claude/scripts/ mirrors it.
+
+Examples:
+  # Targeted RED/GREEN run + ingest in one call
+  bun-crucible.py test --tests src/tools/send.test.ts --agent CR-SAN-013-C1-RED
+
+  # Whole suite without ingest (just see if it passes)
+  bun-crucible.py test
+
+  # Full regression + coverage + ingest (orchestrator gate)
+  bun-crucible.py pre-merge-gate --agent claude-sandesh
+
+Agent naming (agent-protocol): agentId = `<agent-type>-<project>` (e.g. claude-sandesh) for
+the orchestrator, or `CR-<PROJ>-NNN-<cycle>-<PHASE>` (e.g. CR-SAN-013-C1-RED) for TDD-phase
+agents. Identity carries displayName + source (default claude-md) + repoPath, inside the
+`identity` object.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+import xml.etree.ElementTree as ET
+
+CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
+DEFAULT_REPORTS = "test-reports"
+DEFAULT_JUNIT = "junit.xml"
+
+
+def _resolve_project_dir(arg_value):
+    """--project-dir > $BUN_CRUCIBLE_PROJECT_DIR > git repo of CWD > CWD.
+    The `.env` holding CRUCIBLE_PROJECT_KEY must live at the resolved root."""
+    if arg_value:
+        return arg_value
+    env_value = os.environ.get("BUN_CRUCIBLE_PROJECT_DIR")
+    if env_value:
+        return env_value
+    r = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True
+    )
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else os.getcwd()
+
+
+def _resolve_package_dir(arg_value, project_dir):
+    """--package-dir > $BUN_CRUCIBLE_PACKAGE_DIR > <project>/integrations/pi (if it has a
+    package.json) > <project>. This is the cwd `bun test` / `tsc` run in."""
+    if arg_value:
+        return arg_value if os.path.isabs(arg_value) else os.path.join(project_dir, arg_value)
+    env_value = os.environ.get("BUN_CRUCIBLE_PACKAGE_DIR")
+    if env_value:
+        return env_value
+    cand = os.path.join(project_dir, "integrations", "pi")
+    if os.path.exists(os.path.join(cand, "package.json")):
+        return cand
+    return project_dir
+
+
+def _resolve_bun(arg_value):
+    """--bun > $BUN_CRUCIBLE_BUN > `bun` on PATH."""
+    return arg_value or os.environ.get("BUN_CRUCIBLE_BUN") or "bun"
+
+
+def _read_env(project_dir):
+    env = {}
+    path = f"{project_dir}/.env"
+    if os.path.exists(path):
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    env[k.strip()] = v.strip()
+    return env
+
+
+def _project_key(project_dir):
+    env = _read_env(project_dir)
+    if "CRUCIBLE_PROJECT_KEY" not in env:
+        sys.exit(f"[crucible] ERROR: CRUCIBLE_PROJECT_KEY not found in {project_dir}/.env")
+    return env["CRUCIBLE_PROJECT_KEY"]
+
+
+def _request(method, path, payload=None):
+    """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error."""
+    req = urllib.request.Request(
+        f"{CRUCIBLE_URL}{path}",
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={"Content-Type": "application/json"},
+        method=method,
+    )
+    try:
+        return json.loads(urllib.request.urlopen(req).read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        return {"ok": False, "error": f"HTTP {e.code}: {body}"}
+    except urllib.error.URLError as e:
+        return {"ok": False, "error": f"connection failed: {e.reason} "
+                                      f"(is Crucible running at {CRUCIBLE_URL}?)"}
+
+
+def _post(path, payload):
+    return _request("POST", path, payload)
+
+
+def _get(path):
+    return _request("GET", path)
+
+
+def _patch(path, payload):
+    return _request("PATCH", path, payload)
+
+
+def _run_logged(cmd, cwd, env, log_path):
+    """Run `cmd`. If `log_path` set, capture combined stdout+stderr, write it, and echo."""
+    if not log_path:
+        return subprocess.run(cmd, cwd=cwd, env=env)
+    result = subprocess.run(
+        cmd, cwd=cwd, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    out = result.stdout or ""
+    try:
+        with open(log_path, "w") as f:
+            f.write(out)
+        print(f"[crucible] run log → {log_path} ({len(out)} bytes)")
+    except OSError as e:
+        print(f"[crucible] WARN: could not write run log to {log_path}: {e}")
+    sys.stdout.write(out)
+    return result
+
+
+def _register_agent(project_dir, agent_id, message, display_name=None, source="claude-md"):
+    """POST the agent-online heartbeat. Single payload builder shared by
+    cmd_register and the gate-run lifecycle brackets (CR-CRU-021 §S5)."""
+    payload = {
+        "agentId": agent_id,
+        "projectKey": _project_key(project_dir),
+        "status": "online",
+        "message": message,
+        "identity": {
+            "displayName": display_name or agent_id,
+            "source": source,
+            "repoPath": project_dir,
+        },
+    }
+    return _post("/api/v2/agents/register", payload)
+
+
+def _unregister_agent(project_dir, agent_id):
+    """POST the agent removal (the v2 unregister VERB — journals a
+    'unregistered' lifecycle event, CR-CRU-011 §S1). Used by cmd_unregister."""
+    return _post(
+        "/api/v2/agents/unregister",
+        {"agentId": agent_id, "projectKey": _project_key(project_dir)},
+    )
+
+
+def _remove_agent_silent(project_dir, agent_id):
+    """Gated-run cleanup (CR-CRU-021 §S5 anti-ghost, v2 model).
+
+    Under v2, a gated run needs NO explicit register: the run's ingest IS the
+    registration (implicit heartbeat — creates the agent row with NO lifecycle
+    event). The closing cleanup must be equally silent: the v2 unregister VERB
+    journals an 'unregistered' lifecycle event into /api/v2/events
+    (CR-CRU-011 §S1), which would bury and miscount the run event the gate
+    just ingested. The ceremony-free removal is the shim's /api/agents/remove
+    — the four NAMED client operations (register/unregister verbs, parsed +
+    compile ingest) remain v2-only per CR-CRU-008 §S2.
+    """
+    return _post(
+        "/api/agents/remove",
+        {"agentId": agent_id, "projectKey": _project_key(project_dir)},
+    )
+
+
+def cmd_register(args):
+    project_dir = _resolve_project_dir(args.project_dir)
+    resp = _register_agent(
+        project_dir, args.agent,
+        args.message or f"Starting {args.phase} phase",
+        display_name=args.display_name, source=args.source,
+    )
+    print(f"register: ok={resp.get('ok', False)} agent={args.agent} "
+          f"phase={args.phase} source={args.source}")
+    return 0 if resp.get("ok") else 1
+
+
+def cmd_unregister(args):
+    project_dir = _resolve_project_dir(args.project_dir)
+    resp = _unregister_agent(project_dir, args.agent)
+    print(f"unregister: ok={resp.get('ok', False)} agent={args.agent}")
+    return 0 if resp.get("ok") else 1
+
+
+def _reports_dir(package_dir, arg_value):
+    rd = arg_value or DEFAULT_REPORTS
+    return rd if os.path.isabs(rd) else os.path.join(package_dir, rd)
+
+
+def _junit_path(reports_dir):
+    return os.path.join(reports_dir, DEFAULT_JUNIT)
+
+
+def _wipe(reports_dir):
+    jp = _junit_path(reports_dir)
+    if os.path.exists(jp):
+        try:
+            os.remove(jp)
+        except OSError:
+            pass
+
+
+def _bun_test_cmd(bun, targets, junit_path, coverage, coverage_dir):
+    """Build the `bun test` invocation. Targeted (file paths) or whole-suite."""
+    cmd = [bun, "test"]
+    if targets:
+        cmd += list(targets)
+    cmd += ["--reporter=junit", f"--reporter-outfile={junit_path}"]
+    if coverage:
+        cmd += ["--coverage", "--coverage-reporter=lcov", f"--coverage-dir={coverage_dir}"]
+    return cmd
+
+
+def _parse_junit_file(junit_path):
+    """Parse a bun JUnit XML file into (summary, tree) with per-test leaf names."""
+    tree_nodes = []
+    total = passed = failed = 0
+    duration_ms = 0
+    root = ET.parse(junit_path).getroot()
+    suites = root.findall(".//testsuite") or [root]
+    for suite in suites:
+        children = []
+        suite_fail = False
+        for tc in suite.findall("testcase"):
+            tc_time = int(float(tc.get("time", 0)) * 1000)
+            fail = tc.find("failure") is not None or tc.find("error") is not None
+            status = "fail" if fail else "pass"
+            if fail:
+                failed += 1
+                suite_fail = True
+            else:
+                passed += 1
+            total += 1
+            duration_ms += tc_time
+            entry = {
+                "name": tc.get("name", "?"),
+                "status": status,
+                "duration_ms": tc_time,
+            }
+            if fail:
+                # Interim fidelity fix (CR-CRU-007 dog-food finding): preserve the
+                # <failure>/<error> assertion message + trace so drill-ins show
+                # WHY a test failed. CR-CRU-008 replaces this whole client-side
+                # parse with server-side v2 codec ingestion.
+                fnode = tc.find("failure")
+                if fnode is None:
+                    fnode = tc.find("error")
+                if fnode is not None:
+                    failure = {}
+                    msg = (fnode.get("message") or "").strip()
+                    txt = (fnode.text or "").strip()
+                    if msg:
+                        failure["message"] = msg[:1000]
+                    elif txt:
+                        failure["message"] = txt.splitlines()[0][:1000]
+                    if txt:
+                        failure["trace"] = txt[:8000]
+                    ftype = fnode.get("type")
+                    if ftype:
+                        failure["type"] = ftype
+                    if failure:
+                        entry["failure"] = failure
+            children.append(entry)
+        if children:
+            tree_nodes.append({
+                "name": suite.get("name", "?"),
+                "status": "fail" if suite_fail else "pass",
+                "children": children,
+            })
+    summary = {"total": total, "passed": passed, "failed": failed,
+               "pending": 0, "duration_ms": duration_ms}
+    return summary, tree_nodes
+
+
+_FAIL_LINE = re.compile(r"^\(fail\)\s+(?P<name>.*?)(?:\s+\[[0-9.]+m?s\])?\s*$")
+
+
+def _parse_console_failures(log_text):
+    """§S2c (CR-CRU-008) — marry bun's console failure detail to leaf names.
+
+    bun's JUnit reporter writes a BARE `<failure type="..."/>` for EVERY
+    failure kind (assertion mismatch, thrown Error, timeout alike) — the human
+    detail exists only on the console stream. For assertion mismatches and
+    thrown Errors an `error: <detail>` block appears IMMEDIATELY BEFORE the
+    `(fail) <name>` line; that block is captured here, keyed by leaf name.
+    Detail printed AFTER the fail line (e.g. a timeout's `^ this test timed
+    out after Nms.`) is structurally NOT a preceding block and stays
+    unmatched — the leaf degrades to type-only.
+    """
+    details = {}
+    block = []        # lines accumulated since the last result-line boundary
+    error_idx = None  # index in `block` of the most recent "error:" line
+    for line in log_text.splitlines():
+        m = _FAIL_LINE.match(line)
+        if m:
+            if error_idx is not None:
+                detail = block[error_idx:]
+                message = detail[0][len("error:"):].strip()
+                married = {"message": message[:1000]}
+                trace = "\n".join(detail).rstrip()
+                if trace:
+                    married["trace"] = trace[:8000]
+                name = m.group("name").strip()
+                details[name] = married
+                # Nested describes print "suite > name"; junit leaves carry
+                # the bare test name — index the last segment too.
+                details.setdefault(name.split(" > ")[-1], married)
+            block, error_idx = [], None
+            continue
+        if line.startswith(("(pass)", "(skip)", "(todo)")):
+            block, error_idx = [], None
+            continue
+        if line.startswith("error:"):
+            error_idx = len(block)
+        block.append(line)
+    return details
+
+
+def _marry_failures(tree, log_text):
+    """§S2c — attach console-married {message, trace} to failing leaves whose
+    junit <failure> carried no message (bun writes bare nodes). Unmatched
+    failing leaves keep their type-only failure object untouched."""
+    if not log_text:
+        return
+    details = _parse_console_failures(log_text)
+    if not details:
+        return
+    for suite in tree:
+        for leaf in suite.get("children", []):
+            if leaf.get("status") != "fail":
+                continue
+            if (leaf.get("failure") or {}).get("message"):
+                continue
+            detail = details.get(leaf.get("name"))
+            if detail:
+                leaf.setdefault("failure", {}).update(detail)
+
+
+def _parse_lcov(lcov_path):
+    """Sum LF/LH/FNF/FNH from an lcov file into a Crucible coverage object, or None."""
+    if not os.path.exists(lcov_path):
+        return None
+    lf = lh = ff = fh = 0
+    with open(lcov_path) as f:
+        for line in f:
+            if line.startswith("LF:"):
+                lf += int(line[3:].strip() or 0)
+            elif line.startswith("LH:"):
+                lh += int(line[3:].strip() or 0)
+            elif line.startswith("FNF:"):
+                ff += int(line[4:].strip() or 0)
+            elif line.startswith("FNH:"):
+                fh += int(line[4:].strip() or 0)
+    return {
+        "lines": {"total": lf, "covered": lh,
+                  "percent": round(lh / lf * 100, 1) if lf else 0},
+        "functions": {"total": ff, "covered": fh,
+                      "percent": round(fh / ff * 100, 1) if ff else 0},
+    }
+
+
+def _run_context():
+    """CR-CRU-019 §P1 — env + git → run context for declared cycle linkage.
+
+    Reads WORKFLOW_CYCLE_ID (int-coerced; invalid → omitted) and
+    WORKFLOW_CYCLE (string). When at least one is set, attaches
+    git {branch, commit} from a cheap `git rev-parse` (tolerant of a
+    non-repo cwd → omitted). Returns the context dict, or None when no
+    workflow env is set.
+    """
+    context = {}
+    cycle_id_raw = os.environ.get("WORKFLOW_CYCLE_ID")
+    if cycle_id_raw is not None:
+        try:
+            context["cycleId"] = int(cycle_id_raw)
+        except ValueError:
+            pass
+    cycle = os.environ.get("WORKFLOW_CYCLE")
+    if cycle:
+        context["cycle"] = cycle
+    # CR-CRU-008 §S2 — wave + orchestrator enrichment (alongside cycleId/cycle/git).
+    wave = os.environ.get("WORKFLOW_WAVE")
+    if wave:
+        context["wave"] = wave
+    role = os.environ.get("WORKFLOW_ROLE")
+    if role:
+        context["orchestrator"] = role
+    if not context:
+        return None
+    try:
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if branch and commit:
+            context["git"] = {"branch": branch, "commit": commit}
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    return context
+
+
+def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
+                   context=None):
+    payload = {
+        "projectKey": _project_key(project_dir),
+        "agentId": agent_id,
+        "summary": summary,
+        "tree": tree,
+    }
+    if coverage:
+        payload["coverage"] = coverage
+    # Regression sweeps must be distinguishable from focused unit runs
+    # (storyboard F7). Server-side tier passthrough: CR-CRU-016 §S4.
+    if tier:
+        payload["tier"] = tier
+    # CR-CRU-019 §P1 — declared cycle linkage: env/git context rides the
+    # payload verbatim when present (server passthrough on the v1 shim).
+    if context:
+        payload["context"] = context
+    resp = _post("/api/v2/runs/parsed", payload)
+    cov_line = ""
+    if coverage:
+        cov_line = (f" lines={coverage['lines']['percent']}%"
+                    f" funcs={coverage['functions']['percent']}%")
+    print(
+        f"ingest: ok={resp.get('ok')} passed={summary['passed']} "
+        f"failed={summary['failed']} total={summary['total']}{cov_line}"
+        + (f" error={resp['error']}" if resp.get("error") else "")
+    )
+    return 0 if resp.get("ok") else 1
+
+
+def _ingest_compile(project_dir, agent_id, errors_text):
+    payload = {
+        "projectKey": _project_key(project_dir),
+        "format": "typescript",
+        "errors": errors_text,
+        "agentId": agent_id,
+    }
+    resp = _post("/api/v2/runs/compile", payload)
+    print(f"ingest compile (typescript): ok={resp.get('ok')}"
+          + (f" error={resp['error']}" if resp.get("error") else ""))
+    return 0 if resp.get("ok") else 1
+
+
+def cmd_test(args):
+    project_dir = _resolve_project_dir(args.project_dir)
+    package_dir = _resolve_package_dir(args.package_dir, project_dir)
+    bun = _resolve_bun(args.bun)
+    reports_dir = _reports_dir(package_dir, args.reports)
+    os.makedirs(reports_dir, exist_ok=True)
+    _wipe(reports_dir)
+    junit_path = _junit_path(reports_dir)
+
+    # Gate-run lifecycle bracket (CR-CRU-021 §S5, v2 model): the ingest itself
+    # registers the agent (implicit heartbeat); AFTER the final ingest the
+    # agent row is silently removed — even on a failing run or a mid-ingest
+    # exception — so gate/close-out agents never linger as online ghosts.
+    # Omitted --agent: no lifecycle calls at all.
+    try:
+        cmd = _bun_test_cmd(bun, args.tests, junit_path, False, None)
+        env = os.environ.copy()
+        print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})")
+        # Capture output whenever an ingest may be needed: bun's JUnit reporter
+        # writes NOTHING when collection crashes, and the failure detail only
+        # exists on stdout/stderr.
+        log_path = getattr(args, "log", None)
+        if args.agent and not log_path:
+            log_path = os.path.join(reports_dir, "run.log")
+        result = _run_logged(cmd, package_dir, env, log_path)
+        print(f"[crucible] bun test exit={result.returncode}")
+
+        if not args.agent:
+            return result.returncode
+
+        if os.path.exists(junit_path):
+            summary, tree = _parse_junit_file(junit_path)
+            # §S2c — the captured run log IS the failure-detail source.
+            _marry_failures(tree, getattr(result, "stdout", None))
+            rc = _ingest_parsed(project_dir, args.agent, summary, tree,
+                                tier="unit", context=_run_context())
+            # A failing run exits non-zero even when the ingest succeeded —
+            # the exit code carries the RUNNER verdict, not the POST's.
+            return 1 if summary["failed"] > 0 else rc
+        # No XML → a hard collection/compile failure. Ingest as a FAILING compile:
+        # one synthetic tsc-format diagnostic (so errorCount=1 and the card reads
+        # red — never a misleading clean '0 errors') + the captured output as raw.
+        tail = (getattr(result, "stdout", None) or "")[-4000:]
+        synthetic = ("bun-test(1,1): error TS0000: "
+                     "bun test produced no JUnit XML (collection/compile failure)")
+        return _ingest_compile(project_dir, args.agent,
+                               synthetic + ("\n\n" + tail if tail else ""))
+    finally:
+        if args.agent:
+            resp = _remove_agent_silent(project_dir, args.agent)
+            print(f"cleanup: ok={resp.get('ok', False)} agent={args.agent}")
+
+
+def cmd_regression(args):
+    project_dir = _resolve_project_dir(args.project_dir)
+    package_dir = _resolve_package_dir(args.package_dir, project_dir)
+    bun = _resolve_bun(args.bun)
+    reports_dir = _reports_dir(package_dir, args.reports)
+    os.makedirs(reports_dir, exist_ok=True)
+    _wipe(reports_dir)
+    junit_path = _junit_path(reports_dir)
+    coverage_on = bool(args.coverage)
+    coverage_dir = os.path.join(package_dir, "coverage")
+    env = os.environ.copy()
+
+    # Gate-run lifecycle bracket (CR-CRU-021 §S5, v2 model): identical to
+    # cmd_test — implicit registration via the ingest, silent removal after
+    # the final ingest, try/finally.
+    try:
+        cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
+        print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})")
+        # §S2c — capture the run output (failure detail lives only there).
+        log_path = getattr(args, "log", None)
+        if args.agent and not log_path:
+            log_path = os.path.join(reports_dir, "run.log")
+        result = _run_logged(cmd, package_dir, env, log_path)
+        print(f"[crucible] bun test exit={result.returncode}")
+
+        if not os.path.exists(junit_path):
+            print("[crucible] ERROR: no JUnit XML produced — nothing to ingest")
+            return 1
+
+        summary, tree = _parse_junit_file(junit_path)
+        _marry_failures(tree, getattr(result, "stdout", None))
+        coverage = None
+        if coverage_on:
+            lcov_path = os.path.join(coverage_dir, "lcov.info")
+            coverage = _parse_lcov(lcov_path)
+            if coverage is None:
+                print(f"[crucible] WARN: lcov coverage unavailable at {lcov_path}")
+        rc = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
+                            tier="regression", context=_run_context())
+        return 0 if (rc == 0 and summary["failed"] == 0) else 1
+    finally:
+        if args.agent:
+            resp = _remove_agent_silent(project_dir, args.agent)
+            print(f"cleanup: ok={resp.get('ok', False)} agent={args.agent}")
+
+
+def cmd_auto_ingest(args):
+    project_dir = _resolve_project_dir(args.project_dir)
+    package_dir = _resolve_package_dir(args.package_dir, project_dir)
+    reports_dir = _reports_dir(package_dir, args.reports)
+    junit_path = _junit_path(reports_dir)
+    if not os.path.exists(junit_path):
+        print(f"[crucible] no {junit_path} — nothing to ingest")
+        return 1
+    summary, tree = _parse_junit_file(junit_path)
+    return _ingest_parsed(project_dir, args.agent, summary, tree)
+
+
+def cmd_check(args):
+    """`tsc --noEmit` typecheck gate over the package. With --agent, ingest errors."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    package_dir = _resolve_package_dir(args.package_dir, project_dir)
+    bun = _resolve_bun(args.bun)
+    # Prefer the package's local tsc via `bun x tsc`; falls back to a tsc on PATH.
+    cmd = [bun, "x", "tsc", "--noEmit"]
+    if os.path.exists(os.path.join(package_dir, "tsconfig.json")):
+        cmd += ["-p", "tsconfig.json"]
+    print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})")
+    result = subprocess.run(cmd, cwd=package_dir, capture_output=True, text=True)
+    print(f"[crucible] tsc exit={result.returncode}")
+    out = (result.stdout or "") + (result.stderr or "")
+    if result.returncode != 0:
+        sys.stderr.write(out)
+        if args.agent:
+            _ingest_compile(project_dir, args.agent, out)
+    return result.returncode
+
+
+def cmd_pre_merge_gate(args):
+    """ORCHESTRATOR pre-merge gate — the ONLY path that measures coverage (project policy:
+    coverage reserved for the pre-merge gate). fail-fast `check` (tsc) → `regression
+    --coverage`. A check failure aborts before the suite."""
+    if not getattr(args, "skip_check", False):
+        check_args = argparse.Namespace(
+            agent=args.agent, bun=args.bun, package_dir=args.package_dir,
+            project_dir=args.project_dir,
+        )
+        rc = cmd_check(check_args)
+        if rc != 0:
+            print("[crucible] pre-merge gate FAILED at the tsc check step — skipped the "
+                  "regression. Fix type errors first (or --skip-check to bypass).")
+            return rc
+    reg_args = argparse.Namespace(
+        agent=args.agent, coverage=True, reports=args.reports, bun=args.bun,
+        package_dir=args.package_dir, project_dir=args.project_dir,
+        log=getattr(args, "log", None),
+    )
+    return cmd_regression(reg_args)
+
+
+# ── CR-CRU-008 — plan verbs (plan-file / cycle-activate / cycle-done / cr-close) ──
+
+
+def _plans_path(project_dir):
+    return f"/api/v2/projects/{_project_key(project_dir)}/plans"
+
+
+def _open_plans(project_dir):
+    resp = _get(_plans_path(project_dir))
+    if not resp.get("ok"):
+        sys.exit(f"[crucible] ERROR: could not list plans: {resp.get('error')}")
+    return [p for p in resp.get("plans", []) if p.get("status") == "open"]
+
+
+def cmd_plan_file(args):
+    project_dir = _resolve_project_dir(args.project_dir)
+    labels = [label.strip() for label in args.cycles.split(",") if label.strip()]
+    if not labels:
+        sys.exit("[crucible] ERROR: --cycles must name at least one cycle")
+    payload = {"cr": args.cr, "cycles": [{"label": label} for label in labels]}
+    if args.title:
+        payload["title"] = args.title
+    # Track identity comes from the workflow env; the orchestrator NAME is a
+    # separate concept — explicit flag or $WORKFLOW_ORCHESTRATOR.
+    track = os.environ.get("WORKFLOW_ROLE")
+    if track:
+        payload["track"] = track
+    orchestrator = args.orchestrator or os.environ.get("WORKFLOW_ORCHESTRATOR")
+    if orchestrator:
+        payload["orchestrator"] = orchestrator
+    resp = _post(_plans_path(project_dir), payload)
+    if not resp.get("ok"):
+        print(f"plan-file: ok=False error={resp.get('error')}", file=sys.stderr)
+        return 1
+    # Print the ASSIGNED numeric cycle ids — never guess them (plan-7 incident).
+    ids = " ".join(f"{c.get('label')}={c.get('id')}" for c in resp.get("cycles", []))
+    print(f"plan-file: ok=True planId={resp.get('planId')} cr={resp.get('cr')} "
+          f"cycles: {ids}")
+    return 0
+
+
+def _cycle_transition(args, status):
+    """Cycle ids are unique per PROJECT — resolve the owning OPEN plan by
+    scanning GET …/plans, then PATCH that plan's cycle."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    cycle_id = args.cycle_id
+    open_plans = _open_plans(project_dir)
+    target = next(
+        (p for p in open_plans
+         if any(c.get("id") == cycle_id for c in p.get("cycles", []))),
+        None,
+    )
+    if target is None:
+        known = "; ".join(
+            f"plan {p.get('planId')} ({p.get('cr')}): "
+            + ", ".join(str(c.get("id")) for c in p.get("cycles", []))
+            for p in open_plans
+        ) or "none"
+        print(f"[crucible] ERROR: cycle {cycle_id} is not in any OPEN plan. "
+              f"Open plans' cycle ids: {known}", file=sys.stderr)
+        return 1
+    resp = _patch(f"{_plans_path(project_dir)}/{target['planId']}/cycles/{cycle_id}",
+                  {"status": status})
+    ok = resp.get("ok", False)
+    verb = "cycle-activate" if status == "active" else "cycle-done"
+    print(f"{verb}: ok={ok} cycle={cycle_id} plan={target['planId']}"
+          + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    return 0 if ok else 1
+
+
+def cmd_cycle_activate(args):
+    return _cycle_transition(args, "active")
+
+
+def cmd_cycle_done(args):
+    return _cycle_transition(args, "done")
+
+
+def cmd_cr_close(args):
+    project_dir = _resolve_project_dir(args.project_dir)
+    open_plans = _open_plans(project_dir)
+    if args.cr:
+        open_plans = [p for p in open_plans if p.get("cr") == args.cr]
+    if len(open_plans) == 0:
+        print("[crucible] ERROR: no OPEN plan to close"
+              + (f" for cr={args.cr}" if args.cr else ""), file=sys.stderr)
+        return 1
+    if len(open_plans) > 1:
+        names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in open_plans)
+        print(f"[crucible] ERROR: {len(open_plans)} open plans — ambiguous cr-close. "
+              f"Pass --cr to pick one of: {names}", file=sys.stderr)
+        return 1
+    plan = open_plans[0]
+    resp = _patch(f"{_plans_path(project_dir)}/{plan['planId']}",
+                  {"status": "closed", "merge": {"commit": args.commit}})
+    ok = resp.get("ok", False)
+    print(f"cr-close: ok={ok} plan={plan['planId']} cr={plan.get('cr')} "
+          f"commit={args.commit}"
+          + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    return 0 if ok else 1
+
+
+def _add_project_dir_arg(p):
+    p.add_argument("--project-dir",
+                   help="Override project root (default: $BUN_CRUCIBLE_PROJECT_DIR, else the "
+                        "git repo of CWD). The .env at the root must contain CRUCIBLE_PROJECT_KEY.")
+
+
+def _add_package_dir_arg(p):
+    p.add_argument("--package-dir",
+                   help="Bun package dir / test cwd (default: $BUN_CRUCIBLE_PACKAGE_DIR, else "
+                        "<project>/integrations/pi if it has package.json, else <project>).")
+
+
+def _add_bun_arg(p):
+    p.add_argument("--bun", help="bun binary (default: $BUN_CRUCIBLE_BUN, else `bun`).")
+
+
+def _add_reports_arg(p):
+    p.add_argument("--reports", help=f"Reports dir under the package (default: {DEFAULT_REPORTS}).")
+
+
+def _add_log_arg(p):
+    p.add_argument("--log", help="Write the FULL run output (combined stdout+stderr) to this path "
+                                 "in addition to streaming it.")
+
+
+def main():
+    p = argparse.ArgumentParser(prog="bun-crucible", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    r = sub.add_parser("register", help="Register / heartbeat an agent.")
+    r.add_argument("--agent", required=True,
+                   help="Agent id — `<type>-<project>` or `CR-<PROJ>-NNN-<cycle>-<PHASE>`.")
+    # Ergonomics fix (CR-CRU-008 §S2): --phase is OPTIONAL, defaulting to
+    # "report" — the old hard requirement forced orchestrator-side
+    # implicit-heartbeat workarounds.
+    r.add_argument("--phase", default="report",
+                   choices=["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"])
+    r.add_argument("--display-name", help="Human-readable name (default: the agentId)")
+    r.add_argument("--source", default="claude-md",
+                   choices=["claude-md", "package-json", "git-repo", "manual"])
+    r.add_argument("--message", help="Optional status message")
+    _add_project_dir_arg(r)
+    r.set_defaults(func=cmd_register)
+
+    u = sub.add_parser("unregister", help="Unregister an agent")
+    u.add_argument("--agent", required=True)
+    _add_project_dir_arg(u)
+    u.set_defaults(func=cmd_unregister)
+
+    t = sub.add_parser("test", help="Targeted/whole-suite `bun test` → junit → ingest.")
+    t.add_argument("--tests", nargs="+",
+                   help="Test file/path target(s) (e.g. src/tools/send.test.ts). Omit for all.")
+    t.add_argument("--agent", help="If set, ingest the junit result after the run")
+    _add_reports_arg(t)
+    _add_bun_arg(t)
+    _add_package_dir_arg(t)
+    _add_project_dir_arg(t)
+    _add_log_arg(t)
+    t.set_defaults(func=cmd_test)
+
+    g = sub.add_parser("regression", help="Full-suite `bun test` + ingest. --coverage for lcov.")
+    g.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
+    g.add_argument("--coverage", action="store_true",
+                   help="Run with bun lcov coverage and post /api/ingest/parsed with coverage")
+    _add_reports_arg(g)
+    _add_bun_arg(g)
+    _add_package_dir_arg(g)
+    _add_project_dir_arg(g)
+    _add_log_arg(g)
+    g.set_defaults(func=cmd_regression)
+
+    a = sub.add_parser("auto-ingest", help="Ingest an already-produced junit file.")
+    a.add_argument("--agent", required=True)
+    _add_reports_arg(a)
+    _add_package_dir_arg(a)
+    _add_project_dir_arg(a)
+    a.set_defaults(func=cmd_auto_ingest)
+
+    c = sub.add_parser("check", help="`tsc --noEmit` typecheck gate; ingest errors on failure.")
+    c.add_argument("--agent", help="If set, ingest type errors on failure")
+    _add_bun_arg(c)
+    _add_package_dir_arg(c)
+    _add_project_dir_arg(c)
+    c.set_defaults(func=cmd_check)
+
+    pmg = sub.add_parser("pre-merge-gate",
+                         help="ORCHESTRATOR pre-merge: fail-fast tsc check → regression WITH "
+                              "coverage (the only coverage path).")
+    pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
+    pmg.add_argument("--skip-check", action="store_true", help="Bypass the fail-fast tsc check")
+    _add_reports_arg(pmg)
+    _add_bun_arg(pmg)
+    _add_package_dir_arg(pmg)
+    _add_project_dir_arg(pmg)
+    _add_log_arg(pmg)
+    pmg.set_defaults(func=cmd_pre_merge_gate)
+
+    pf = sub.add_parser("plan-file",
+                        help="File a cycle plan; prints the ASSIGNED numeric cycle ids.")
+    pf.add_argument("--cr", required=True, help="CR id, e.g. CR-CRU-008.")
+    pf.add_argument("--title", help="Optional plan title.")
+    pf.add_argument("--cycles", required=True,
+                    help='Comma-separated cycle labels, e.g. "a,b,c".')
+    pf.add_argument("--orchestrator",
+                    help="Orchestrator name (default: $WORKFLOW_ORCHESTRATOR when set).")
+    _add_project_dir_arg(pf)
+    pf.set_defaults(func=cmd_plan_file)
+
+    ca = sub.add_parser("cycle-activate", help="Transition a plan cycle to active.")
+    ca.add_argument("cycle_id", type=int, help="Numeric cycle id (unique per project).")
+    _add_project_dir_arg(ca)
+    ca.set_defaults(func=cmd_cycle_activate)
+
+    cdn = sub.add_parser("cycle-done", help="Transition an ACTIVE plan cycle to done.")
+    cdn.add_argument("cycle_id", type=int, help="Numeric cycle id (unique per project).")
+    _add_project_dir_arg(cdn)
+    cdn.set_defaults(func=cmd_cycle_done)
+
+    cc = sub.add_parser("cr-close",
+                        help="Close the single OPEN plan (PATCH status=closed + merge.commit).")
+    cc.add_argument("--commit", required=True, help="Merge commit sha.")
+    cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _add_project_dir_arg(cc)
+    cc.set_defaults(func=cmd_cr_close)
+
+    args = p.parse_args()
+    sys.exit(args.func(args))
+
+
+if __name__ == "__main__":
+    main()
