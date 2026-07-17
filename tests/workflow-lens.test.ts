@@ -750,14 +750,24 @@ describe("§S3 history lens — group rollups", () => {
     );
     expect(crGroup).not.toBeNull();
 
-    const rollup = crGroup!.querySelector('[data-testid="cr-rollup"]');
-    expect(rollup).not.toBeNull();
-    expect((rollup!.textContent ?? "")).toContain("2/3");
+    // SANCTIONED RE-TARGET (CR-CRU-023 §S4 #2) — the frozen CR-020 rollup
+    // assertion moves off the hidden `.app-hidden-data` compatibility span
+    // (`[data-testid="cr-rollup"]`, retired by this CR) onto the VISIBLE
+    // rollup form rendered inline in the group header ("<done>/<total>
+    // cycles" while not all done, "<total> cycles ✓" once all done — see
+    // app.js LensCrGroup). This fixture is 2 done of 3 total (not all
+    // done), so the visible form matches the frozen "2/3" figure. Behavior
+    // is pinned, not a specific testid's survival — GREEN may drop
+    // `cr-rollup` outright or keep it as an alias on the visible form;
+    // either passes this pin.
+    const groupToggle = crGroup!.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]');
+    expect(groupToggle).not.toBeNull();
+    expect((groupToggle!.textContent ?? "")).toContain("2/3 cycles");
+    // negative pin — the hidden CR-020 compatibility span is retired.
+    expect(crGroup!.querySelectorAll(".app-hidden-data").length).toBe(0);
 
     // SANCTIONED RE-TARGET (CR-CRU-021 §S4) — per-agent runtime rows now
     // render only once the group's own header toggle is expanded.
-    const groupToggle = crGroup!.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]');
-    expect(groupToggle).not.toBeNull();
     groupToggle!.click();
     await settle();
 
@@ -767,6 +777,79 @@ describe("§S3 history lens — group rollups", () => {
     expect(runtimeText).toContain("agent-a");
     // pin presence of a runtime figure, not its exact ms value.
     expect(runtimeText).toMatch(/\d/);
+  });
+});
+
+// ── CR-CRU-023 §S4 #2 — retire the hidden legacy rollup span ──────────────
+// The `.app-hidden-data` class (styles.css ~750-758) was a visually-hidden
+// clip-rect wrapper existing ONLY to keep the CR-020 `[data-testid="cr-
+// rollup"]` done/total span addressable after §S6 #9 replaced it with the
+// inline dim-text rollup form. This CR retires the compatibility span
+// outright — the AC requires NO `.app-hidden-data` element anywhere in the
+// workflow pane DOM, whether or not `cr-rollup` itself survives as an alias
+// on the visible form.
+describe("§S4 #2 — no hidden `.app-hidden-data` compatibility span in the workflow pane DOM", () => {
+  test("a mixed history fixture (a fully-done CR group + a partially-done CR group, both expanded) renders zero `.app-hidden-data` elements anywhere under the workflow pane", async () => {
+    const key = "hidden-data-retire-1";
+    const now = Date.now();
+    const planAllDone: PlanFixture = {
+      planId: 741,
+      cr: "CR-HD-ALL-DONE",
+      status: "closed",
+      wave: "1",
+      merge: { commit: "hdAllDone1" },
+      cycles: [
+        { id: 60, label: "c1", status: "done" },
+        { id: 61, label: "c2", status: "done" },
+      ],
+    };
+    const planPartial: PlanFixture = {
+      planId: 742,
+      cr: "CR-HD-PARTIAL",
+      status: "closed",
+      wave: "1",
+      merge: { commit: "hdPartial1" },
+      cycles: [
+        { id: 62, label: "c1", status: "done" },
+        { id: 63, label: "c2", status: "pending" },
+      ],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Hidden Data Retire Project" })],
+      events: [],
+      plans: [planAllDone, planPartial],
+    });
+    await openWorkflowTab();
+
+    const allDoneGroup = history().querySelector<HTMLElement>(
+      '[data-testid="cr-group"][data-cr="CR-HD-ALL-DONE"]',
+    );
+    const partialGroup = history().querySelector<HTMLElement>(
+      '[data-testid="cr-group"][data-cr="CR-HD-PARTIAL"]',
+    );
+    expect(allDoneGroup).not.toBeNull();
+    expect(partialGroup).not.toBeNull();
+
+    // Expand both groups — the (now-retired) hidden span, when it existed,
+    // rendered inside the ALWAYS-visible header row regardless of expansion,
+    // so check both collapsed and expanded states.
+    expect(document.querySelectorAll(".app-hidden-data").length).toBe(0);
+
+    allDoneGroup!.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]')!.click();
+    partialGroup!.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]')!.click();
+    await settle();
+
+    expect(document.querySelectorAll(".app-hidden-data").length).toBe(0);
+
+    // The visible figures stay assertable, whatever GREEN does with the
+    // `cr-rollup` testid itself: all-done renders "N cycles ✓", partial
+    // renders "<done>/<total> cycles".
+    expect((allDoneGroup!.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]')!.textContent ?? ""))
+      .toContain("2 cycles ✓");
+    expect((partialGroup!.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]')!.textContent ?? ""))
+      .toContain("1/2 cycles");
   });
 });
 

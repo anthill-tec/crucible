@@ -340,10 +340,23 @@ describe("§S1.2 history CR groups — collapsed by default, toggle on click", (
     const crGroup = history().querySelector<HTMLElement>('[data-testid="cr-group"][data-cr="CR-COL-1"]');
     expect(crGroup).not.toBeNull();
 
+    // SANCTIONED RE-TARGET (CR-CRU-023 §S4 #2) — the frozen CR-020 rollup
+    // assertion moves off the hidden `.app-hidden-data` compatibility span
+    // (`[data-testid="cr-rollup"]`, retired by this CR) onto the VISIBLE
+    // rollup form rendered inline in the group header ("<done>/<total>
+    // cycles" while not all done, "<total> cycles ✓" once all done — see
+    // app.js LensCrGroup). This fixture is 2 done of 2 total (ALL done), so
+    // the visible form is "2 cycles ✓", not a "<done>/<total>" fraction —
+    // the re-targeted pin follows the actual visible text, preserving the
+    // test's subject (both cycles complete). Behavior is pinned, not a
+    // specific testid's survival — GREEN may drop `cr-rollup` outright or
+    // keep it as an alias on the visible form; either passes this pin.
     // Header row content is visible immediately, with no click required.
-    const rollup = crGroup!.querySelector('[data-testid="cr-rollup"]');
-    expect(rollup).not.toBeNull();
-    expect((rollup!.textContent ?? "")).toContain("2/2");
+    const toggleHeader = crGroup!.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]');
+    expect(toggleHeader).not.toBeNull();
+    expect((toggleHeader!.textContent ?? "")).toContain("2 cycles ✓");
+    // negative pin — the hidden CR-020 compatibility span is retired.
+    expect(crGroup!.querySelectorAll(".app-hidden-data").length).toBe(0);
     const merge = crGroup!.querySelector('[data-testid="cr-merge-commit"]');
     expect(merge).not.toBeNull();
     expect((merge!.textContent ?? "")).toContain("colCommit1");
@@ -351,8 +364,7 @@ describe("§S1.2 history CR groups — collapsed by default, toggle on click", (
     // Collapsed by default — no cycle rows mounted at all.
     expect(crGroup!.querySelectorAll('[data-testid="lens-cycle-row"]').length).toBe(0);
 
-    const toggle = crGroup!.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]');
-    expect(toggle).not.toBeNull();
+    const toggle = toggleHeader;
 
     toggle!.click();
     await settle();
@@ -362,8 +374,10 @@ describe("§S1.2 history CR groups — collapsed by default, toggle on click", (
     await settle();
     expect(crGroup!.querySelectorAll('[data-testid="lens-cycle-row"]').length).toBe(0);
 
-    // Header row is unaffected by the toggle either way.
-    expect((crGroup!.querySelector('[data-testid="cr-rollup"]')!.textContent ?? "")).toContain("2/2");
+    // Header row is unaffected by the toggle either way (re-targeted onto
+    // the visible form, CR-CRU-023 §S4 #2 — see comment above).
+    expect((crGroup!.querySelector<HTMLElement>('[data-testid="cr-group-toggle"]')!.textContent ?? "")).toContain("2 cycles ✓");
+    expect(crGroup!.querySelectorAll(".app-hidden-data").length).toBe(0);
   });
 });
 
