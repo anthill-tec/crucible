@@ -179,3 +179,32 @@ can guarantee wire compatibility with every existing client, unmodified.
    type** (user recollection); v2 adds optional `type` on add, default `backend`.
 5. Event retention policy — v2 caps at 1000 events/project (explicit `/api/events/clear`
    existed, so retention was manual in v1).
+
+## 6 Retirement (2026-07-18 — CR-CRU-008 §S4, soak-gated)
+
+The v1 shim catalogued above is **RETIRED** as of CR-CRU-008 (merged on
+`feature/CR-CRU-008`, C7 commit `caed1aa`). The soak gate passed: one full
+RED→GREEN→regression dog-food cycle of this repo executed end-to-end through
+the UPGRADED clients (`clients/*-crucible.py`) against a server with the v1
+routes removed — evidenced by the C7 full-suite run (819/819) ingested via
+`clients/bun-crucible.py` on `/api/v2/*` only, and by
+`tests/timeline-dogfood-linkage.test.ts`.
+
+Removed from `src/server.ts`: every legacy `/api/*` route handler catalogued
+in §2-§3 — `POST /api/ingest`, `/api/ingest/parsed`, `/api/ingest/compile`,
+`/api/ingest/clear`, `GET /api/ingest/status`, `POST /api/agents/heartbeat`,
+`/api/agents/remove`, `GET /api/agents`, `POST /api/projects/add`,
+`GET /api/projects`, `GET /api/events`, `POST /api/events/delete`,
+`/api/events/clear`. **`GET /api/health` and `GET /api/stream` are RETAINED**
+(never v1-shim scope). Unknown `/api/*` now returns the generic 404 JSON.
+
+The reconstructed v1 contract in §1-§5 is preserved as a **historical evidence
+catalog** — it documented what the lost server did and gated the v2 rebuild's
+wire-compatibility; that guarantee has now been intentionally released. The
+v1-contract test suite is archived at `tests/archive/v1-contract.test.ts`
+(excluded from `bun test` via `bunfig.toml`). The five `clients/*-crucible.py`
+scripts are the v2-native source of truth; the live `~/.claude/scripts/`
+copies sync via CR-CRU-009's install step. Bulk event clearing
+(`/api/events/clear`) is deliberately NOT carried forward — v2's posture is an
+immutable audit log with per-project, double-gated single-event deletion
+(`DELETE /api/v2/events/<id>`, CR-CRU-008 §S4).
