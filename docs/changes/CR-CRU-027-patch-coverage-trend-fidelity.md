@@ -1,6 +1,6 @@
 # CR-CRU-027 — Patch: coverage-trend mock fidelity (F8 vitals sparkline)
 
-**Status:** IN_PROGRESS — AWAITING MERGE GATE (2026-07-17: cycle plan complete; regression 762/762 + coverage 89.2%/84.7% ingested; playwright 29/29 ingested tier:e2e evt-1784291999440-7; tsc 0; eyes-parity MEASURED)
+**Status:** COMPLETED (2026-07-17 — merged 037211c; cycle plan closed; eyes-parity measured; 762/762 · playwright 29/29 tier:e2e · tsc 0)
 **Type:** patch
 **Priority:** P1 (repeat drift — flagged by the user in two separate live
 rounds; the second time with maximum displeasure)
