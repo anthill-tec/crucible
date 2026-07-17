@@ -5,8 +5,8 @@
 **Priority:** P2
 **Depends on:** CR-CRU-011
 **Labels:** patch, api, workflow, axi
-**Phase:** Wave 4 (after 012, before 008 — so the fleet plan verbs are born
-against the guarded API)
+**Phase:** Wave 4 (after 013, before 009 — user-scheduled 2026-07-17; CR-008's
+plan verbs ship first and adopt the guards when this lands)
 **Design reference:** user ruling 2026-07-17 ("Crucible should warn and not
 proceed if it receives request to start a cycle out of order. Use AXI
 principles to respond for all invalid actions") — provoked by two live
