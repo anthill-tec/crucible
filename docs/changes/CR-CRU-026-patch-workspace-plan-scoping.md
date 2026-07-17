@@ -21,7 +21,11 @@ not displaying").
 
 ## Classification
 **Defect class:** client navigation data-lifecycle — route transitions are
-decoupled from data fetching (stale-while-navigate). NOT a server defect
+decoupled from data fetching (stale-while-navigate). **Primary statement
+(user framing 2026-07-17): the DESIGNED `⟲ Cycle done` markers DISAPPEAR** —
+the plan slice they derive from goes missing from client state — **and the
+retired CR-007 heuristic backfills the void**; the RED➜GREEN markers
+appearing is the symptom, the designed markers vanishing is the defect. NOT a server defect
 (the scoped API responses are correct); NOT transient (deterministic given
 the SSE-frame timeline); NOT introduced by CR-012's cycles (no workflow-view
 code in that diff).
