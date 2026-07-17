@@ -34,7 +34,7 @@ Gate events render on the timeline using the SAME MARKER DESIGN as the
 declared ⟲ Cycle-done boundary (user consistency ruling 2026-07-18) — the
 `.app-transition-marker`/cycmark dashed-pill form, outcome-colored border
 (green passed/checks-passed · red failed · grey cancelled), with a trailing
-DRILL-DOWN BADGE (`⊙ gate detail`, matching the CR-025 `⚑ Cycle` badge
+DRILL-DOWN BADGE (`⊙ Detail`, matching the CR-025 `⚑ Cycle` badge
 pattern) that opens the drill-in (§S3). Content:
 `🛡 Wave <n> gate · no-mistakes <OUTCOME> · <steps> steps · <findings fixed> ·
 pushed <shortcommit>`. NEVER rendered as "0/N tests". `data-testid="gate-card"`.
