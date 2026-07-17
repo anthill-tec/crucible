@@ -1,6 +1,6 @@
 # CR-CRU-027 — Patch: coverage-trend mock fidelity (F8 vitals sparkline)
 
-**Status:** PENDING
+**Status:** IN_PROGRESS (2026-07-17 — gap analysis done: no pin conflicts, max legacy fixture 4 points; last-16 cap CONFIRMED — 16×9px + 15×3px gaps = 189px fits the measured 281px card; cycle plan filed)
 **Type:** patch
 **Priority:** P1 (repeat drift — flagged by the user in two separate live
 rounds; the second time with maximum displeasure)
