@@ -3,8 +3,13 @@
 // numbers to top-level scalars {id, projectKey, agentId, kind, tier, codec,
 // timestamp, total, passed, failed, pending, duration_ms, hasCoverage} with NO
 // nested `summary`. Full detail (GET /api/v2/events/:id) keeps nested
-// summary/tree unchanged. The v1 shim's GET /api/events shape is untouched.
-// Drives the REAL production server (startServer) end to end.
+// summary/tree unchanged. Drives the REAL production server (startServer)
+// end to end.
+//
+// CR-CRU-008 §S4 modernization note: this file originally also pinned "the
+// v1 shim's GET /api/events shape is untouched" as its own test — that
+// test's SUBJECT was the v1 route itself, so it moved wholesale to
+// tests/archive/v1-sections.test.ts on shim retirement.
 import { describe, test, expect, afterEach } from "bun:test";
 
 import { startServer } from "../src/server.ts";
@@ -313,29 +318,10 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
   });
 
   // -------------------------------------------------------------------
-  // 4. v1 contract untouched — GET /api/events items still carry nested
-  //    summary (contract-locked shim shape).
+  // 4. v1 contract untouched — CR-CRU-008 §S4: this test's SUBJECT was the
+  //    v1 shim's GET /api/events shape itself — moved wholesale to
+  //    tests/archive/v1-sections.test.ts on shim retirement.
   // -------------------------------------------------------------------
-  test("v1 GET /api/events items still carry nested summary (contract-locked, untouched by §S0)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
-    const key = await createProject("brief-v1-contract");
-    await seedCoveredTestEvent(key);
-
-    const res = await getJson(`/api/events?projectKey=${key}`);
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as OkResponse & {
-      events: Array<{ id: string; summary?: unknown; [key: string]: unknown }>;
-    };
-    expect(body.ok).toBe(true);
-    expect(body.events.length).toBe(1);
-    expect(body.events[0]?.summary).toEqual({
-      total: 5,
-      passed: 5,
-      failed: 0,
-      pending: 0,
-      duration_ms: 120,
-    });
-  });
 
   // -------------------------------------------------------------------
   // 5. TOON uniform-table form — ≥2 test-event briefs now scalar-only.

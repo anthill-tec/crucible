@@ -77,12 +77,6 @@ describe("Codec.parsePath interface — CR-CRU-010 §S1", () => {
     codecs.delete("stub-nopath");
   });
 
-  function seedProjectV1(): string {
-    const key = crypto.randomUUID();
-    handle!.store.addProject({ key, name: "p", type: "backend", sutRoot: "/tmp" });
-    return key;
-  }
-
   async function postJson(path: string, body: unknown): Promise<Response> {
     return fetch(`http://localhost:${handle!.server.port}${path}`, {
       method: "POST",
@@ -146,28 +140,11 @@ describe("Codec.parsePath interface — CR-CRU-010 §S1", () => {
     expect(mapLiteral).toContain("parsePath");
   });
 
-  test("400: dataPath request through a codec without parsePath names the codec (v1 POST /api/ingest)", async () => {
-    handle = startServer({ port: 0, dbPath: ":memory:" });
-    const pk = seedProjectV1();
-    const dir = freshDir();
-    tmpDirs.push(dir);
-    writeFileSync(join(dir, "TEST-a.xml"), JUNIT_2CASE_ALLPASS);
-
-    codecs.set("stub-nopath", { parse: (data: string) => JSON.parse(data) as RunSchema });
-
-    const res = await postJson("/api/ingest", {
-      projectKey: pk,
-      format: "stub-nopath",
-      dataPath: dir,
-      agentId: "a1",
-    });
-
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { ok: false; error: string };
-    expect(body.ok).toBe(false);
-    expect(body.error).toContain("stub-nopath");
-  });
-
+  // CR-CRU-008 §S4: the v1-route sibling of this test ("400: dataPath
+  // request through a codec without parsePath names the codec (v1 POST
+  // /api/ingest)") had the v1 route as its actual subject — moved to
+  // tests/archive/v1-sections.test.ts on shim retirement. The v2 test below
+  // already exercises the exact same shared parseRunBody/registry logic.
   test("400: dataPath request through a codec without parsePath names the codec (v2 POST /api/v2/runs)", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const key = await createProjectV2("parsepath-stub-v2");

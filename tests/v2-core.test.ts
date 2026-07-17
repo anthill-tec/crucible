@@ -257,7 +257,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
       expect(project!.latestGreenCoverage).toBeNull();
     });
 
-    test("after agent register + a green parsed ingest with coverage (via v1 /api/ingest/parsed, same store): agentsTotal>=1, lastEvent non-null, latestGreenCoverage non-null", async () => {
+    test("after agent register + a green parsed ingest with coverage (via v2 /api/v2/runs/parsed, same store — modernized off the retired v1 shim, CR-CRU-008 §S4): agentsTotal>=1, lastEvent non-null, latestGreenCoverage non-null", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("roll2");
 
@@ -271,7 +271,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
 
       const coverage: Coverage = { lines: { total: 10, covered: 8, percent: 80 } };
       const ingestRes = await postJson(
-        "/api/ingest/parsed",
+        "/api/v2/runs/parsed",
         parsedBody({ projectKey: key, agentId: "roll-agent", coverage }),
       );
       expect(ingestRes.status).toBe(200);

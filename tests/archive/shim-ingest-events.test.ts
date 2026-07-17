@@ -1,11 +1,19 @@
+// RETIRED-CONTRACT ARCHIVE — CR-CRU-008 §S4, 2026-07-17. This suite pins the
+// v1 shim's ingest/events routes WHOLESALE (POST /api/ingest/parsed|clear,
+// GET /api/ingest/status, GET /api/events, POST /api/events/delete|clear) —
+// every route it drives is retired. Moved to tests/archive/ and excluded
+// from `bun test` (see bunfig.toml [test].pathIgnorePatterns). Kept for
+// historical reference only — do not resurrect without a new CR
+// reintroducing the legacy `/api/*` routes.
+//
 // CR-CRU-003 §S1/§S2 — shim ingest/events routes:
 // POST /api/ingest/parsed, POST /api/ingest/clear, GET /api/ingest/status,
 // GET /api/events, POST /api/events/delete, POST /api/events/clear.
 // All extend the REAL production server (startServer) — not a hand-wired store.
 // DN §3.5, §3.7, §3.8 — byte contract.
 import { describe, test, expect, afterEach } from "bun:test";
-import { startServer } from "../src/server.ts";
-import type { Coverage, RunSummary } from "../src/types.ts";
+import { startServer } from "../../src/server.ts";
+import type { Coverage, RunSummary } from "../../src/types.ts";
 
 interface OkParsedResponse {
   ok: true;

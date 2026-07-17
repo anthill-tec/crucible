@@ -28,7 +28,7 @@
 //     `/api/v2/agents/unregister {silent:true}` has not happened yet.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { join } from "node:path";
@@ -702,6 +702,10 @@ describe("Manager UI — allowRunDeletion edit-in-place toggle (§S4)", () => {
 // exact {silent:true} argv can be pinned, not just the URL.)
 // ─────────────────────────────────────────────────────────────────────────
 const SCRIPT_PATH = join(import.meta.dir, "..", "clients", "bun-crucible.py");
+const RUST_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "rust-crucible.py");
+const MVN_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "mvn-crucible.py");
+const PYTHON_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "python-crucible.py");
+const ARDUINO_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "arduino-crucible.py");
 
 interface RunResult {
   code: number;
@@ -709,16 +713,25 @@ interface RunResult {
   stderr: string;
 }
 
+/** Generic spawn for any `clients/*.py` script — `scriptPath` defaults to
+ * bun-crucible.py (this file's original client) so existing call sites keep
+ * working unchanged; the four-client silent-cleanup pins below pass their
+ * own script path explicitly. */
 async function runScript(
   args: string[],
-  opts: { cwd: string; crucibleUrl: string; env?: Record<string, string | undefined> },
+  opts: {
+    cwd: string;
+    crucibleUrl: string;
+    env?: Record<string, string | undefined>;
+    scriptPath?: string;
+  },
 ): Promise<RunResult> {
   const baseEnv: Record<string, string | undefined> = { ...process.env };
   for (const k of Object.keys(baseEnv)) {
     if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
   }
   const proc = Bun.spawn({
-    cmd: ["python3", SCRIPT_PATH, ...args],
+    cmd: ["python3", opts.scriptPath ?? SCRIPT_PATH, ...args],
     cwd: opts.cwd,
     env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl, ...(opts.env ?? {}) },
     stdout: "pipe",
@@ -829,5 +842,212 @@ describe("clients/bun-crucible.py — silent-cleanup swap (§S4 precondition 4)"
     });
 
     expect(proxy.calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// §S4 precondition 4 addendum (2026-07-17 orchestrator ruling) — the
+// silent-cleanup requirement generalizes from clients/bun-crucible.py (C2's
+// finding) to the FOUR remaining clients: a gated run (implicit
+// registration via ingest, no explicit register call) must ALSO clean up
+// silently — POST /api/v2/agents/unregister {agentId, projectKey,
+// silent:true} — and never touch the retiring /api/agents/remove shim.
+//
+// TODAY none of these four clients make ANY post-run agent-cleanup call at
+// all (verified by reading each script: no "/api/agents/remove" reference,
+// no register/unregister pairing around a gated test/regression run — the
+// agent row is simply left to the liveness TTL). So every assertion below
+// is RED against an ABSENT call, not a wrong-endpoint call — GREEN must add
+// the silent-unregister call site to each script's gated-run path.
+//
+// TOOLCHAIN-FREE FIXTURE STRATEGY reused verbatim from
+// tests/clients-rust-mvn-crucible.test.ts / tests/clients-python-arduino-
+// crucible.test.ts (their header comments document why each is safe: a
+// no-op `cargo`/`mvnw`/`make` stub on PATH, or fake `xmlrunner`/`coverage`
+// python packages on PYTHONPATH, so pre-placed report fixtures are read
+// without any real toolchain invocation).
+// ─────────────────────────────────────────────────────────────────────────
+const NOOP_SCRIPT = "#!/bin/sh\nexit 0\n";
+
+function writeExecutable(filePath: string, script: string): void {
+  writeFileSync(filePath, script);
+  chmodSync(filePath, 0o755);
+}
+
+function junitXmlString(suiteName: string, cases: Array<{ name: string; fail?: boolean }>): string {
+  const testcases = cases
+    .map((c) =>
+      c.fail
+        ? `<testcase name="${c.name}" time="0.01"><failure message="boom">boom</failure></testcase>`
+        : `<testcase name="${c.name}" time="0.01"/>`,
+    )
+    .join("");
+  return `<?xml version="1.0"?><testsuite name="${suiteName}" tests="${cases.length}">${testcases}</testsuite>`;
+}
+
+function writeJunitXmlFile(
+  filePath: string,
+  suiteName: string,
+  cases: Array<{ name: string; fail?: boolean }>,
+): void {
+  writeFileSync(filePath, junitXmlString(suiteName, cases));
+}
+
+/** Two FAKE python packages (`xmlrunner`, `coverage`) — verbatim technique
+ * from tests/clients-python-arduino-crucible.test.ts's writeFakePyModules. */
+function writeFakePyModules(rootDir: string): string {
+  const xmlrunnerDir = join(rootDir, "xmlrunner");
+  mkdirSync(xmlrunnerDir, { recursive: true });
+  writeFileSync(join(xmlrunnerDir, "__init__.py"), "");
+  writeFileSync(
+    join(xmlrunnerDir, "__main__.py"),
+    `import os, sys
+reports_dir = None
+argv = sys.argv[1:]
+for i, a in enumerate(argv):
+    if a == "-o" and i + 1 < len(argv):
+        reports_dir = argv[i + 1]
+if reports_dir:
+    os.makedirs(reports_dir, exist_ok=True)
+    content = os.environ.get("FAKE_XMLRUNNER_JUNIT_XML")
+    if content:
+        with open(os.path.join(reports_dir, "TEST-fake_fixture.xml"), "w") as f:
+            f.write(content)
+sys.exit(int(os.environ.get("FAKE_XMLRUNNER_EXIT_CODE", "0")))
+`,
+  );
+  return rootDir;
+}
+
+describe("clients/{rust,mvn,python,arduino}-crucible.py — silent-cleanup swap (§S4 precondition 4 addendum)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  let proxy: ReturnType<typeof startCapturingProxy> | undefined;
+  const scratchDirs: string[] = [];
+
+  afterEach(() => {
+    proxy?.stop();
+    proxy = undefined;
+    handle?.stop();
+    handle = undefined;
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  function scratchDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    scratchDirs.push(dir);
+    return dir;
+  }
+
+  function assertSilentCleanup(
+    calls: Array<{ method: string; path: string; body?: unknown }>,
+    agentId: string,
+    projectKey: string,
+  ): void {
+    const unregisterCalls = calls.filter(
+      (c) => c.method === "POST" && c.path === "/api/v2/agents/unregister",
+    );
+    expect(unregisterCalls).toHaveLength(1);
+    expect(unregisterCalls[0]!.body).toMatchObject({ agentId, projectKey, silent: true });
+    expect(calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
+  }
+
+  test("rust-crucible.py: regression-ingest's gated-run cleanup POSTs /api/v2/agents/unregister {silent:true} and never /api/agents/remove", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    proxy = startCapturingProxy(baseUrl);
+    const key = await createProject(baseUrl, "silent-cleanup-rust-1");
+    const dir = scratchDir("rust-crucible-silent-cleanup-");
+    writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
+    const junitDir = join(dir, "target", "nextest", "ci");
+    mkdirSync(junitDir, { recursive: true });
+    writeJunitXmlFile(join(junitDir, "junit.xml"), "regression_fixture", [{ name: "alpha" }]);
+    const binDir = scratchDir("fake-cargo-bin-");
+    writeExecutable(join(binDir, "cargo"), NOOP_SCRIPT);
+
+    await runScript(
+      ["regression-ingest", "--agent", "rust-gated-agent", "--crates", "demo-crate", "--project-dir", dir],
+      {
+        cwd: dir,
+        crucibleUrl: proxy.url,
+        scriptPath: RUST_SCRIPT_PATH,
+        env: { PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      },
+    );
+
+    assertSilentCleanup(proxy.calls, "rust-gated-agent", key);
+  });
+
+  test("mvn-crucible.py: regression's gated-run cleanup POSTs /api/v2/agents/unregister {silent:true} and never /api/agents/remove", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    proxy = startCapturingProxy(baseUrl);
+    const key = await createProject(baseUrl, "silent-cleanup-mvn-1");
+    const dir = scratchDir("mvn-crucible-silent-cleanup-");
+    writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
+    writeExecutable(join(dir, "mvnw"), NOOP_SCRIPT);
+    const surefireDir = join(dir, "target", "surefire-reports");
+    mkdirSync(surefireDir, { recursive: true });
+    writeJunitXmlFile(join(surefireDir, "TEST-FooTest.xml"), "FooTest", [{ name: "testOne" }]);
+
+    await runScript(["regression", "--agent", "mvn-gated-agent", "--project-dir", dir], {
+      cwd: dir,
+      crucibleUrl: proxy.url,
+      scriptPath: MVN_SCRIPT_PATH,
+    });
+
+    assertSilentCleanup(proxy.calls, "mvn-gated-agent", key);
+  });
+
+  test("python-crucible.py: regression's gated-run cleanup POSTs /api/v2/agents/unregister {silent:true} and never /api/agents/remove", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    proxy = startCapturingProxy(baseUrl);
+    const key = await createProject(baseUrl, "silent-cleanup-python-1");
+    const dir = scratchDir("python-crucible-silent-cleanup-");
+    writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
+    const pythonPath = writeFakePyModules(scratchDir("python-crucible-fakepy-"));
+
+    await runScript(["regression", "--agent", "python-gated-agent", "--project-dir", dir], {
+      cwd: dir,
+      crucibleUrl: proxy.url,
+      scriptPath: PYTHON_SCRIPT_PATH,
+      env: {
+        PYTHONPATH: pythonPath,
+        FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("regression_fixture", [{ name: "alpha" }]),
+        FAKE_XMLRUNNER_EXIT_CODE: "0",
+      },
+    });
+
+    assertSilentCleanup(proxy.calls, "python-gated-agent", key);
+  });
+
+  test("arduino-crucible.py: unit's gated-run cleanup POSTs /api/v2/agents/unregister {silent:true} and never /api/agents/remove", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    proxy = startCapturingProxy(baseUrl);
+    const key = await createProject(baseUrl, "silent-cleanup-arduino-1");
+    const dir = scratchDir("arduino-crucible-silent-cleanup-");
+    writeFileSync(
+      join(dir, ".env"),
+      `CRUCIBLE_PROJECT_KEY=${key}\nCRUCIBLE_PROJECT_NAME=silent-cleanup-arduino-1\n`,
+    );
+    const reportsDir = join(dir, "tests", "native", "reports");
+    mkdirSync(reportsDir, { recursive: true });
+    writeJunitXmlFile(join(reportsDir, "TEST-native_fixture.xml"), "native_fixture", [
+      { name: "led_on" },
+    ]);
+    const binDir = scratchDir("fake-make-bin-");
+    writeExecutable(join(binDir, "make"), NOOP_SCRIPT);
+
+    await runScript(["unit", "--agent", "arduino-gated-agent", "--project-dir", dir], {
+      cwd: dir,
+      crucibleUrl: proxy.url,
+      scriptPath: ARDUINO_SCRIPT_PATH,
+      env: { PATH: `${binDir}:${process.env.PATH ?? ""}` },
+    });
+
+    assertSilentCleanup(proxy.calls, "arduino-gated-agent", key);
   });
 });
