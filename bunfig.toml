@@ -1,0 +1,4 @@
+[test]
+# tests/archive/ holds retired-contract suites (CR-CRU-008 §S4) — historical
+# reference only, excluded from `bun test` discovery.
+pathIgnorePatterns = ["tests/archive/**"]
