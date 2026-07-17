@@ -184,6 +184,17 @@ async function mountApp(opts: MountOpts): Promise<void> {
       const body = { ok: true, plans: plansByKey[key] ?? [] };
       return { ok: true, status: 200, json: async () => body } as Response;
     }
+    // §S3.2 (C2) — home is surface-aware and fetches the GLOBAL
+    // `GET /api/v2/plans` route instead of early-returning; this file's
+    // scoped-route counters (planFetchCalls/planCallCount) are deliberately
+    // untouched by this branch so every existing scoped-call assertion
+    // keeps its exact pre-C2 semantics. Mirrors the real server contract
+    // (all non-archived projects' plans) by flattening this file's
+    // per-key store.
+    if (/\/api\/v2\/plans(?:\?|$)/.test(url)) {
+      const body = { ok: true, plans: Object.values(plansByKey).flat() };
+      return { ok: true, status: 200, json: async () => body } as Response;
+    }
     if (url.includes("/api/v2/projects")) {
       const body = { ok: true, projects: projectsState };
       return { ok: true, status: 200, json: async () => body } as Response;
@@ -394,8 +405,10 @@ describe("§S1 — blank-view face: home → a project's OWN workspace renders i
       plans: { [key]: [plan] },
     });
 
-    // On home, refetchPlans() early-returns (not a workspace) — zero plan
-    // calls have happened yet, for anyone.
+    // On home, refetchPlans() is surface-aware (§S3.2, C2): it fires the
+    // GLOBAL GET /api/v2/plans read, not a project-scoped one — so the
+    // SCOPED-route counter tracked here stays at zero for anyone, even
+    // though a global fetch has already happened.
     expect(planCallCount(key)).toBe(0);
 
     badgeFor("Blank A").click(); // home → /p/<key>

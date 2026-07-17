@@ -273,6 +273,20 @@ async function openWorkflowTab(): Promise<void> {
   await settle();
 }
 
+// Finding 2 (VERIFY AC10 gap) — the marker/boundary testids
+// (cycle-span-open/declared-marker/transition-marker) render on the
+// workspace "Runs" tab (WorkspaceRunsFeed), NOT the default "Workflow" tab
+// scope-change resets to; the equivalence pin below needs this to read the
+// marker fingerprint on a workspace surface.
+async function openRunsTab(): Promise<void> {
+  const tab = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
+  ).find((t) => (t.textContent ?? "").trim() === "Runs");
+  if (tab === undefined) throw new Error('"Runs" workspace-tab not found');
+  tab.click();
+  await settle();
+}
+
 function renderedCrs(): string[] {
   return Array.from(document.querySelectorAll<HTMLElement>("[data-cr]")).map(
     (el) => el.getAttribute("data-cr") ?? "",
@@ -653,6 +667,79 @@ describe("§S0 — home's rendered marker/boundary set is IDENTICAL between cold
     await settle();
     clickBackToProjects(); // workspace -> home
     await settle();
+
+    const navFingerprint = markerFingerprint();
+    expect(navFingerprint).toEqual(coldFingerprint);
+  });
+
+  // VERIFY finding 2 (AC10 gap) — the §S0 AC names TWO sequences
+  // ("home→ws→home and ws-A→home→ws-B"); only the first was pinned above.
+  // This pins the second: cold-mounting directly on project B's workspace
+  // Runs surface must render the IDENTICAL marker/boundary fingerprint as
+  // arriving at B by hopping A's workspace -> home -> B via in-app
+  // navigation — same mechanism as the home pin (§S1's synchronous
+  // clear-and-scoped-refetch on every scope change), so this is expected to
+  // PASS against shipped code.
+  test("ws-A → home → ws-B renders the SAME marker/boundary testid+text set on B's Runs tab as cold-mounting directly on B", async () => {
+    const keyA = "home-eq-hop-a";
+    const keyB = "home-eq-hop-b";
+    const now = Date.now();
+    const t0 = now - 500_000;
+
+    const planA: PlanFixture = {
+      planId: 60,
+      projectKey: keyA,
+      cr: "CR-EQ-HOP-A",
+      status: "open",
+      cycles: [{ id: 601, label: "hop a cycle", status: "active", activatedAt: t0 }],
+    };
+    const planB: PlanFixture = {
+      planId: 61,
+      projectKey: keyB,
+      cr: "CR-EQ-HOP-B",
+      status: "open",
+      cycles: [{ id: 602, label: "hop b cycle", status: "done", activatedAt: t0, doneAt: t0 + 200_000 }],
+    };
+
+    const runA = runEvent({
+      id: "evt-eq-hop-a-1",
+      projectKey: keyA,
+      agentId: "agent-eq-hop-a",
+      timestamp: now,
+      context: { cycleId: 601 },
+    });
+    const runB = runEvent({
+      id: "evt-eq-hop-b-1",
+      projectKey: keyB,
+      agentId: "agent-eq-hop-b",
+      timestamp: now,
+      context: { cycleId: 602 },
+    });
+
+    const projects = [
+      project({ key: keyA, name: "Hop A" }),
+      project({ key: keyB, name: "Hop B" }),
+    ];
+    const events = [runA, runB];
+    const plans = [planA, planB];
+
+    // (a) cold mount directly on B's workspace Runs surface.
+    await mountApp({ pathname: `/p/${keyB}`, projects, events, plans });
+    await openRunsTab();
+    const coldFingerprint = markerFingerprint();
+    // Sanity — the cold load actually produced a declared row (otherwise
+    // the equivalence check below would trivially "pass" on two empty
+    // sets).
+    expect(coldFingerprint.length).toBeGreaterThan(0);
+
+    // (b) fresh mount at A's workspace, then A -> home -> B in-app
+    // navigation, landing on B's Runs tab.
+    await mountApp({ pathname: `/p/${keyA}`, projects, events, plans });
+    clickBackToProjects(); // A workspace -> home
+    await settle();
+    badgeFor("Hop B").click(); // home -> B workspace
+    await settle();
+    await openRunsTab();
 
     const navFingerprint = markerFingerprint();
     expect(navFingerprint).toEqual(coldFingerprint);
