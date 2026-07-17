@@ -519,6 +519,29 @@ body {
   padding-top: 10px;
   margin-top: 4px;
 }
+/* CR-CRU-012 §S2 cycle 28 — archive/unarchive: confirm-gated row action +
+   the bottom "archived (N)" fold. Confirm reads as the destructive step
+   (ember-warm), the fold as a quiet dashed-off tail section. */
+.app-manager-archive-confirm {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.app-manager-archived {
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+.app-manager-fold {
+  background: none;
+  border: none;
+  color: var(--color-neutral-content);
+  font: 11px var(--mono);
+  cursor: pointer;
+  padding: 2px 0;
+}
+.app-manager-fold:hover { color: var(--ink); }
+.app-manager-archived-row { opacity: 0.75; }
+.app-manager-archived-row .app-card-name { color: var(--color-neutral-content); }
 .app-manager input,
 .app-manager select {
   background: var(--bg);

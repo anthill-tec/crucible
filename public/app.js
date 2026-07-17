@@ -859,10 +859,49 @@
       return hasOverride ? core : `${core} (defaults)`;
     }
 
-    // Display view — canonical name + type badge + ✎ edit chip, parameters
-    // line beneath (sutRoot · liveness · retention · immutable key as TEXT,
-    // never bound to an input).
-    const ManagerRowView = (project, editing) =>
+    // CR-CRU-012 §S2 (cycle 28) — archive/unarchive UI state, shared across
+    // manager rows: at most ONE row holds a pending archive confirm at a
+    // time (any row's trigger click claims it, resetting the others), and
+    // the archived list backs the bottom "archived (N)" fold.
+    const managerArchivePending = van.state(null); // project key awaiting confirm
+    const managerArchivedOpen = van.state(false); // fold expanded?
+    const managerArchived = van.state([]); // archived projects (?archived=true)
+
+    async function refetchArchived() {
+      try {
+        const body = await getJson("/api/v2/projects?archived=true");
+        // Copy: a same-reference (mutated-in-place) payload must still
+        // propagate — van only re-renders on a reference CHANGE.
+        managerArchived.val = [...(body.projects ?? [])];
+      } catch {
+        // Reachability is the watchdog's concern; keep stale data visible.
+      }
+    }
+
+    // POST /api/v2/projects/<key>/archive | /unarchive ({} body — §S1b),
+    // then refetch BOTH slices: the core refetch updates the home projects
+    // row live (same contract the SSE projects frame drives), and the
+    // archived refetch keeps the fold count/rows tracking the move.
+    async function postProjectLifecycle(key, action) {
+      try {
+        await fetch(`/api/v2/projects/${encodeURIComponent(key)}/${action}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({}),
+        });
+      } catch {
+        // Reachability is the watchdog's concern; keep stale data visible.
+      }
+      refetch();
+      refetchArchived();
+    }
+
+    // Display view — canonical name + type badge + ✎ edit chip + archive
+    // trigger (confirm-gated: the first click only reveals the in-row
+    // confirm; only that second click POSTs), parameters line beneath
+    // (sutRoot · liveness · retention · immutable key as TEXT, never bound
+    // to an input).
+    const ManagerRowView = (project, startEdit) =>
       div(
         div(
           { class: "app-manager-row-head" },
@@ -871,10 +910,29 @@
           // must never shadow the row's real edit trigger.
           div({ class: "app-card-name" }, project.name || project.key),
           span({ class: "app-type-badge" }, project.type),
+          button({ class: "app-chip app-manager-edit", onclick: startEdit }, "✎ edit"),
           button(
-            { class: "app-chip app-manager-edit", onclick: () => (editing.val = true) },
-            "✎ edit",
+            {
+              "data-testid": "manager-archive",
+              class: "app-chip app-manager-archive",
+              onclick: () => (managerArchivePending.val = project.key),
+            },
+            "archive",
           ),
+          () =>
+            managerArchivePending.val === project.key
+              ? button(
+                  {
+                    "data-testid": "manager-archive-confirm",
+                    class: "app-chip app-manager-archive-confirm",
+                    onclick: () => {
+                      managerArchivePending.val = null;
+                      postProjectLifecycle(project.key, "archive");
+                    },
+                  },
+                  "confirm archive",
+                )
+              : "",
         ),
         div(
           { class: "app-card-meta app-manager-params" },
@@ -888,10 +946,19 @@
     // the user actually changed and NEVER the immutable key (§S1 contract,
     // src/v2.ts:771-773 — an echoed key would 400 against the live server).
     // PATCH doesn't echo the updated project, so refetch to observe the edit.
-    const ManagerRowEdit = (project, editing) => {
-      const name = van.state(project.name ?? "");
-      const type = van.state(project.type);
-      const sutRoot = van.state(project.sutRoot ?? "");
+    //
+    // Cycle-28 fix (pre-existing cycle-27 defect): the name/type/sutRoot
+    // states used to be CREATED here, inside the view/edit-swapping binding
+    // that ManagerProjectRow wraps this component in — so that binding's
+    // dependency tracking captured their `.val` reads (`value: name.val`),
+    // and every input tick re-ran the scope and REBUILT the form with fresh
+    // states, resetting the field before save() could read it. The states
+    // now live in ManagerProjectRow (created once per row, next to
+    // `editing`) and are handed in as `edit`; the inputs bind them as STATE
+    // props (`value: edit.name`), never `.val`-reads, so the swapping
+    // binding tracks only `editing` and typed values survive ticks.
+    const ManagerRowEdit = (project, editing, edit) => {
+      const { name, type, sutRoot } = edit;
       const save = async () => {
         const body = {};
         if (name.val !== (project.name ?? "")) body.name = name.val;
@@ -915,7 +982,7 @@
         { class: "app-manager-edit-form" },
         input({
           "data-testid": "manager-edit-name",
-          value: name.val,
+          value: name,
           oninput: (e) => (name.val = e.target.value),
         }),
         select(
@@ -928,7 +995,7 @@
         ),
         input({
           "data-testid": "manager-edit-sutroot",
-          value: sutRoot.val,
+          value: sutRoot,
           oninput: (e) => (sutRoot.val = e.target.value),
         }),
         button({ "data-testid": "manager-edit-save", class: "app-chip on", onclick: save }, "save"),
@@ -942,13 +1009,74 @@
 
     const ManagerProjectRow = (project) => {
       const editing = van.state(false);
+      // Edit-field states live HERE — outside the swapping binding below —
+      // so input ticks never rebuild the form (see ManagerRowEdit's note).
+      // startEdit re-seeds them from the project on every ✎ edit click, so
+      // a cancel-then-re-edit never shows stale draft values.
+      const edit = {
+        name: van.state(project.name ?? ""),
+        type: van.state(project.type),
+        sutRoot: van.state(project.sutRoot ?? ""),
+      };
+      const startEdit = () => {
+        edit.name.val = project.name ?? "";
+        edit.type.val = project.type;
+        edit.sutRoot.val = project.sutRoot ?? "";
+        editing.val = true;
+      };
       return div(
         {
           "data-testid": "manager-project-row",
           "data-project-key": project.key,
           class: "app-manager-row",
         },
-        () => (editing.val ? ManagerRowEdit(project, editing) : ManagerRowView(project, editing)),
+        () =>
+          editing.val ? ManagerRowEdit(project, editing, edit) : ManagerRowView(project, startEdit),
+      );
+    };
+
+    // "archived (N)" fold row — the project's name + type + the unarchive
+    // action (POST …/unarchive, then the same refetch pair brings the home
+    // badge back live).
+    const ManagerArchivedRow = (project) =>
+      div(
+        {
+          "data-testid": "manager-archived-row",
+          "data-project-key": project.key,
+          class: "app-manager-row app-manager-archived-row",
+        },
+        div(
+          { class: "app-manager-row-head" },
+          div({ class: "app-card-name" }, project.name || project.key),
+          span({ class: "app-type-badge" }, project.type),
+          button(
+            {
+              "data-testid": "manager-unarchive",
+              class: "app-chip",
+              onclick: () => postProjectLifecycle(project.key, "unarchive"),
+            },
+            "unarchive",
+          ),
+        ),
+      );
+
+    // The fold itself: header text EXACTLY `archived (N)`, ABSENT at N=0
+    // (never "archived (0)"), collapsed by default; rows render only while
+    // expanded. Bound as a function child so it tracks managerArchived.
+    const ManagerArchivedFold = () => {
+      const archived = managerArchived.val;
+      if (archived.length === 0) return "";
+      return div(
+        { class: "app-manager-archived" },
+        button(
+          {
+            "data-testid": "manager-archived-fold",
+            class: "app-manager-fold",
+            onclick: () => (managerArchivedOpen.val = !managerArchivedOpen.val),
+          },
+          `archived (${archived.length})`,
+        ),
+        () => (managerArchivedOpen.val ? div(archived.map(ManagerArchivedRow)) : ""),
       );
     };
 
@@ -997,8 +1125,13 @@
     // The slide-over layer: scrim (click-to-close) + dark right sheet with
     // the ← home chip; home stays mounted beneath (route composes exactly
     // like the run-detail overlay — same surface, no chrome rebuild).
-    const ProjectsManager = () =>
-      div(
+    const ProjectsManager = () => {
+      // Fresh open: no dangling pending confirm, fold collapsed, and pull
+      // the archived slice so the fold count is honest without a click.
+      managerArchivePending.val = null;
+      managerArchivedOpen.val = false;
+      refetchArchived();
+      return div(
         { class: "app-manager-layer" },
         div({
           "data-testid": "manager-scrim",
@@ -1016,9 +1149,11 @@
             { class: "app-pane-content" },
             () => div([...state.projects].map(ManagerProjectRow)),
             ManagerAddForm(),
+            ManagerArchivedFold,
           ),
         ),
       );
+    };
 
     // ── Workspace (§S4 header/tabs/runs + §S5.2 Project pane) ───────────
     // §S5.4 + fidelity #6 — the workspace top bar's locked composition:
