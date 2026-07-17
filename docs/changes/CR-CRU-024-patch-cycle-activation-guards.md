@@ -105,6 +105,21 @@ actively discourages it:
 3. The timer state is checkpointed as part of the abort (sealed values stay
    honest).
 
+### §S7 Ingest cycle-reference validity (user ruling 2026-07-17)
+"It should infact be a validty check on the client side API request …
+Crucible should be the source of truth not a client agent request!" — run
+ingest carrying `context.cycleId` is VALIDATED against stored plan state,
+never stored on trust:
+1. A `cycleId` that matches no cycle in ANY of the project's plans → **400**
+   + AXI `help[]` naming the project's open plan and its cycle ids (the
+   ingest is refused — an unlinkable reference must never enter the
+   timeline).
+2. A `cycleId` referencing a TERMINAL (done/skipped/failed) cycle is
+   accepted (late ingests are legal) but the response `help[]` notes the
+   cycle is closed — the agent likely exported a stale WORKFLOW_CYCLE_ID.
+3. `context.cycle` (the label string) remains free-form display metadata —
+   no validation (it is never used for linkage).
+
 ## Acceptance criteria
 - [ ] With cycles A(pending), B(pending): activating B → 400 whose `error` contains `out-of-order` and names A; `help[]` mentions both the activate-first and the `skipped` paths; B remains `pending` (no partial state).
 - [ ] After `A → skipped`, activating B → 200 (the sanctioned swap works).
@@ -117,6 +132,8 @@ actively discourages it:
 - [ ] §S5 checkpoint verb: with an active cycle at 3 injected minutes since the last durable write, `POST …/plans/<planId>/checkpoint` → 200 `{ok:true, changed:true}`; an immediate store-reopen resumes `activeMs` at the checkpointed value EXACTLY (no cadence-window loss); with no active cycle → 200 `{changed:false}`; unknown plan → 404 + help.
 - [ ] §S5 signal checkpoint: sending SIGTERM to a test-spawned server process with an active mid-epoch cycle persists the epoch before exit — a fresh store over the same DB resumes the exact value (subprocess-based test; if the harness cannot spawn a signal-able server process, pin the shutdown hook function directly and SAY so).
 - [ ] §S5 project stop: with two open plans each holding an active mid-epoch cycle, `POST …/projects/<key>/stop` → 200 `{ok:true, checkpointed:2}`; store-reopen resumes both exactly; no active cycles → `{checkpointed:0}`.
+- [ ] §S7: ingest with `context.cycleId` = 9999 (no such cycle) → 400 whose `error` names the unknown reference and `help[]` lists the open plan's cycle ids; no event stored (GET events count unchanged).
+- [ ] §S7: ingest with a terminal cycle's id → 200, event stored and linked, `help[]` mentions the closed cycle; ingest with the ACTIVE cycle's id → 200 with no such note (happy path byte-unchanged apart from additive help).
 - [ ] §S6 abort unapproved: `POST …/plans/<id>/abort` (no flag) → 409; `error` states user approval is required; `help[]` instructs presenting to the user + retrying with `userApproved:true`; plan/cycles unchanged.
 - [ ] §S6 abort approved: with `{userApproved:true}` — active cycle → `failed`, pending cycles → `skipped`, plan → `aborted`; the history lens renders the group with an `aborted` state and NO merge pill; filing a new plan for the same cr afterwards succeeds (aborted ≠ open); the aborted cycle's timer sealed at its checkpointed value.
 
