@@ -88,6 +88,7 @@ interface CycleFixture {
 interface PlanFixture {
   planId: number | string;
   cr: string;
+  projectKey: string;
   status: "open" | "closed";
   wave?: string;
   track?: string;
@@ -234,6 +235,7 @@ describe("§S3 history lens — hierarchy (Wave → CR → Cycle, declared-first
     const planA: PlanFixture = {
       planId: 601,
       cr: "CR-A-1",
+      projectKey: "lens-hier-1",
       status: "closed",
       wave: "1",
       merge: { commit: "aaa9999" },
@@ -245,6 +247,7 @@ describe("§S3 history lens — hierarchy (Wave → CR → Cycle, declared-first
     const planClosed: PlanFixture = {
       planId: 602,
       cr: "CR-B-1",
+      projectKey: "lens-hier-1",
       status: "closed",
       wave: "1",
       merge: { commit: "abc1234" },
@@ -320,6 +323,7 @@ describe("§S3/§S0 history lens — tracks", () => {
     const planA: PlanFixture = {
       planId: 611,
       cr: "CR-T-1",
+      projectKey: "lens-tracks-1",
       status: "closed",
       wave: "2",
       track: "track-1",
@@ -329,6 +333,7 @@ describe("§S3/§S0 history lens — tracks", () => {
     const planB: PlanFixture = {
       planId: 612,
       cr: "CR-T-2",
+      projectKey: "lens-tracks-1",
       status: "closed",
       wave: "2",
       track: "track-2",
@@ -366,6 +371,7 @@ describe("§S3/§S0 history lens — tracks", () => {
     const plan: PlanFixture = {
       planId: 613,
       cr: "CR-NT-1",
+      projectKey: "lens-tracks-2",
       status: "closed",
       wave: "3",
       merge: { commit: "noTrackCommit" },
@@ -397,6 +403,7 @@ describe("§S3/§S0 history lens — tracks", () => {
     const planA: PlanFixture = {
       planId: 614,
       cr: "CR-T-10",
+      projectKey: "lens-tracks-3",
       status: "closed",
       wave: "4",
       track: "track-10",
@@ -406,6 +413,7 @@ describe("§S3/§S0 history lens — tracks", () => {
     const planB: PlanFixture = {
       planId: 615,
       cr: "CR-T-2",
+      projectKey: "lens-tracks-3",
       status: "closed",
       wave: "4",
       track: "track-2",
@@ -440,6 +448,7 @@ describe("§S3 history lens — wave boundary states", () => {
     const plan: PlanFixture = {
       planId: 621,
       cr: "CR-W-1",
+      projectKey: "lens-wave-1",
       status: "closed",
       wave: "1",
       merge: { commit: "aaa1111" },
@@ -478,6 +487,7 @@ describe("§S3 history lens — wave boundary states", () => {
     const plan1: PlanFixture = {
       planId: 622,
       cr: "CR-W-2",
+      projectKey: "lens-wave-2",
       status: "closed",
       wave: "1",
       merge: { commit: "bbb2222" },
@@ -486,6 +496,7 @@ describe("§S3 history lens — wave boundary states", () => {
     const plan2: PlanFixture = {
       planId: 623,
       cr: "CR-W-3",
+      projectKey: "lens-wave-2",
       status: "open",
       wave: "2",
       cycles: [{ id: 32, label: "c", status: "pending" }],
@@ -519,6 +530,7 @@ describe("§S3 history lens — wave boundary states", () => {
     const planClosed: PlanFixture = {
       planId: 624,
       cr: "CR-L-1",
+      projectKey: "lens-wave-3",
       status: "closed",
       wave: "1",
       track: "track-1",
@@ -528,6 +540,7 @@ describe("§S3 history lens — wave boundary states", () => {
     const planOpen: PlanFixture = {
       planId: 625,
       cr: "CR-L-2",
+      projectKey: "lens-wave-3",
       status: "open",
       wave: "1",
       track: "track-2",
@@ -712,6 +725,7 @@ describe("§S3 history lens — group rollups", () => {
     const plan: PlanFixture = {
       planId: 631,
       cr: "CR-R-1",
+      projectKey: "lens-rollup-1",
       status: "closed",
       wave: "1",
       merge: { commit: "rollupCommit1" },
@@ -795,6 +809,7 @@ describe("§S4 #2 — no hidden `.app-hidden-data` compatibility span in the wor
     const planAllDone: PlanFixture = {
       planId: 741,
       cr: "CR-HD-ALL-DONE",
+      projectKey: "hidden-data-retire-1",
       status: "closed",
       wave: "1",
       merge: { commit: "hdAllDone1" },
@@ -806,6 +821,7 @@ describe("§S4 #2 — no hidden `.app-hidden-data` compatibility span in the wor
     const planPartial: PlanFixture = {
       planId: 742,
       cr: "CR-HD-PARTIAL",
+      projectKey: "hidden-data-retire-1",
       status: "closed",
       wave: "1",
       merge: { commit: "hdPartial1" },
@@ -901,6 +917,7 @@ describe("§S6 RED addendum (cycle 13, gap 2) — ghost history wave-header supp
     const openPlan: PlanFixture = {
       planId: 9703,
       cr: "CR-GHOST-OPEN-2",
+      projectKey: "ghost-wave-1",
       status: "open",
       wave: "9",
       cycles: [{ id: 97003, label: "c1", status: "pending" }],
@@ -908,6 +925,7 @@ describe("§S6 RED addendum (cycle 13, gap 2) — ghost history wave-header supp
     const closedPlan: PlanFixture = {
       planId: 9704,
       cr: "CR-GHOST-CLOSED-2",
+      projectKey: "ghost-wave-1",
       status: "closed",
       wave: "8",
       merge: { commit: "8888888" },
