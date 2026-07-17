@@ -26,6 +26,15 @@ export type Liveness = "online" | "stale" | "tombstoned" | "pruned";
 /** Agent as surfaced by listAgents — pruned rows are deleted, never returned. */
 export type LiveAgent = Agent & { liveness: Exclude<Liveness, "pruned"> };
 
+/** CR-CRU-012 §S1 — the editable-parameter subset updateProject accepts. */
+export interface ProjectPatch {
+  name?: string;
+  type?: Project["type"];
+  sutRoot?: string;
+  liveness?: Partial<LivenessConfig>;
+  retention?: number;
+}
+
 interface ProjectRow {
   key: string;
   name: string;
@@ -453,6 +462,48 @@ export class Store {
       return true;
     }
     return false;
+  }
+
+  /**
+   * CR-CRU-012 §S1 — apply a PATCH of editable project parameters in ONE
+   * UPDATE. `liveness` is a PARTIAL override MERGED over any existing stored
+   * partial (a t1-only patch never blows away a stored t2/t3 override, and
+   * unspecified thresholds keep falling through to DEFAULT_LIVENESS in
+   * livenessConfig). Returns whether anything actually changed — an identical
+   * patch is a no-op with no row churn and no SSE emit. Retention is
+   * non-retroactive by design: enforcement runs on the NEXT ingest
+   * (recordTestEvent → enforceRetention), never here.
+   */
+  updateProject(key: string, patch: ProjectPatch): boolean {
+    const existing = this.getProject(key);
+    if (existing === null) return false;
+    const nextLiveness =
+      patch.liveness !== undefined
+        ? { ...existing.liveness, ...patch.liveness }
+        : existing.liveness;
+    const next = {
+      name: patch.name ?? existing.name,
+      type: patch.type ?? existing.type,
+      sutRoot: patch.sutRoot ?? existing.sutRoot,
+      livenessJson: nextLiveness !== undefined ? JSON.stringify(nextLiveness) : null,
+      retention: patch.retention ?? existing.retention ?? null,
+    };
+    const unchanged =
+      next.name === existing.name &&
+      next.type === existing.type &&
+      next.sutRoot === existing.sutRoot &&
+      next.livenessJson ===
+        (existing.liveness !== undefined ? JSON.stringify(existing.liveness) : null) &&
+      next.retention === (existing.retention ?? null);
+    if (unchanged) return false;
+    this.db
+      .query(
+        `UPDATE projects SET name = ?, type = ?, sut_root = ?, liveness = ?, retention = ?
+         WHERE key = ?`,
+      )
+      .run(next.name, next.type, next.sutRoot, next.livenessJson, next.retention, key);
+    this.emit("projects", key);
+    return true;
   }
 
   /** CR-CRU-012 §S1b — unarchive: restores full visibility. Idempotent. */

@@ -8,12 +8,13 @@ import type { CompileReport } from "./codecs/compile.ts";
 import { hints } from "./hints.ts";
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
-import type { RecordEventMeta, TouchAgentOpts } from "./store.ts";
+import type { ProjectPatch, RecordEventMeta, TouchAgentOpts } from "./store.ts";
 import type {
   AgentIdentity,
   Coverage,
   CycleKind,
   CycleStatus,
+  LivenessConfig,
   Project,
   RunContext,
   RunEvent,
@@ -737,6 +738,103 @@ function handleProjectArchive(store: Store, key: string, archive: boolean): Resp
   return json({ ok: true, changed });
 }
 
+// CR-CRU-012 §S1 — the PATCHable field set; anything else 400s by name.
+const PATCHABLE_FIELDS = new Set(["name", "type", "sutRoot", "liveness", "retention"]);
+
+// CR-CRU-012 §S1 — wire liveness fields (spec's T1/T2/T3 thresholds, ms) →
+// the store's internal Partial<LivenessConfig> keys.
+const LIVENESS_WIRE_KEYS = {
+  t1_ms: "staleAfterMs",
+  t2_ms: "tombstoneAfterMs",
+  t3_ms: "pruneAfterMs",
+} as const;
+
+/**
+ * CR-CRU-012 §S1 — PATCH …/projects/<key>. Editable: name, type
+ * (backend|frontend), sutRoot (camelCase, matching POST's wire contract),
+ * liveness {t1_ms,t2_ms,t3_ms} (translated to the store's partial override
+ * and MERGED with any existing one — updateProject owns the merge), and
+ * retention (takes effect on the NEXT ingest, never retroactively).
+ * projectKey is immutable → 400; unknown fields → 400 naming the field, and
+ * EVERYTHING validates before anything writes (no partial apply). An empty
+ * body is the codebase's standard 200 {ok:true, changed:false} no-op.
+ * Unknown/archived keys → 404 via requireProject (archived hint included).
+ * A real change emits the projects SSE frame (via store.updateProject).
+ */
+async function handleProjectPatch(store: Store, key: string, req: Request): Promise<Response> {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  const raw = body as Record<string, unknown>;
+
+  if (raw.projectKey !== undefined) {
+    return fail(400, "projectKey is immutable");
+  }
+  for (const field of Object.keys(raw)) {
+    if (!PATCHABLE_FIELDS.has(field)) {
+      return fail(400, `unknown field: ${field}`);
+    }
+  }
+
+  const patch: ProjectPatch = {};
+  if (raw.name !== undefined) {
+    if (typeof raw.name !== "string" || raw.name.length === 0) {
+      return fail(400, "name must be a non-empty string");
+    }
+    patch.name = raw.name;
+  }
+  if (raw.type !== undefined) {
+    if (raw.type !== "backend" && raw.type !== "frontend") {
+      return fail(400, `type must be "backend" or "frontend"`);
+    }
+    patch.type = raw.type;
+  }
+  if (raw.sutRoot !== undefined) {
+    if (typeof raw.sutRoot !== "string") {
+      return fail(400, "sutRoot must be a string");
+    }
+    patch.sutRoot = raw.sutRoot;
+  }
+  if (raw.liveness !== undefined) {
+    if (typeof raw.liveness !== "object" || raw.liveness === null || Array.isArray(raw.liveness)) {
+      return fail(400, "liveness must be an object of {t1_ms, t2_ms, t3_ms}");
+    }
+    const liveness: Partial<LivenessConfig> = {};
+    for (const [wire, value] of Object.entries(raw.liveness)) {
+      const internal = LIVENESS_WIRE_KEYS[wire as keyof typeof LIVENESS_WIRE_KEYS];
+      if (internal === undefined) {
+        return fail(400, `unknown liveness field: ${wire}`);
+      }
+      if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+        return fail(400, `liveness.${wire} must be a positive number of milliseconds`);
+      }
+      liveness[internal] = value;
+    }
+    if (Object.keys(liveness).length > 0) {
+      patch.liveness = liveness;
+    }
+  }
+  if (raw.retention !== undefined) {
+    if (
+      typeof raw.retention !== "number" ||
+      !Number.isInteger(raw.retention) ||
+      raw.retention < 1
+    ) {
+      return fail(400, "retention must be a positive integer");
+    }
+    patch.retention = raw.retention;
+  }
+
+  if (Object.keys(patch).length === 0) {
+    // Empty body names no field to reject and changes nothing — the
+    // codebase's uniform "nothing changed" answer, not a 400.
+    return json({ ok: true, changed: false });
+  }
+  const changed = store.updateProject(pk.key, patch);
+  return json({ ok: true, changed });
+}
+
 /**
  * Dispatch …/projects/<key>/plans[…] paths; null when the shape/method is
  * not a plans route (caller falls through to its catch-all).
@@ -931,6 +1029,11 @@ export function handleV2(
       (segments[1] === "archive" || segments[1] === "unarchive")
     ) {
       return handleProjectArchive(store, segments[0]!, segments[1] === "archive");
+    }
+    // CR-CRU-012 §S1 — PATCH project parameters (v2-only; the v1 shim has
+    // no equivalent route).
+    if (req.method === "PATCH" && segments.length === 1) {
+      return handleProjectPatch(store, segments[0]!, req);
     }
   }
   if (
