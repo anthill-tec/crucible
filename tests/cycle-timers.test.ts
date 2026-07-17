@@ -107,6 +107,11 @@ interface CycleFixture {
   // CR-CRU-011 C4 — server-stamped, additive, optional.
   activatedAt?: number;
   doneAt?: number;
+  // CR-CRU-023 §S3 (a) — additive: server-fed accumulated attention time in
+  // ms (persisted `activeMs`, restart-resume semantics — store/server side
+  // pinned in tests/cycle-epochs.test.ts). ACTIVE rows must derive their
+  // ticking badge from THIS field, not from `Date.now() - activatedAt`.
+  activeMs?: number;
 }
 
 interface PlanFixture {
@@ -1014,3 +1019,163 @@ describe("§S3 — LIVE-REVIEW DEFECT (cycle 18): sealed rows never tick even ac
 // mounting a plan with an active timered cycle creates no more NEW
 // `setInterval` handles than are `clearInterval`'d by the time the pane is
 // torn down / swapped away from.
+
+// ── CR-CRU-023 §S3 (a) — ACTIVE-TIMER RESTART SEMANTICS: epoch coexistence ──
+// (cycle 22, RED). User-sanctioned outcome (a): "resume from the old
+// setpoint — accumulate active time in server-up epochs (persist
+// accumulated `activeMs` per active cycle; on service restart resume the
+// count, excluding downtime)". The server/store side of this contract
+// (persisted `activeMs`, restart-resume-excludes-downtime) is pinned in
+// tests/cycle-epochs.test.ts; THIS block pins the UI-CONSUMER side of the
+// SAME contract: once the server feeds an additive `activeMs` on the cycle
+// payload, the ACTIVE ticking badge must derive its value from THAT field —
+// never from client-side `Date.now() - activatedAt`, which is exactly the
+// "wall-clock-since-activation" behavior option (a) REJECTS (it is what
+// produced the reported "246m on a cycle that had minutes of real
+// attention" defect after a power outage). Sealed (done) rows are
+// UNCHANGED by this feature — they keep the existing `doneAt - activatedAt`
+// contract regardless of any (possibly stale) `activeMs` on the fixture.
+describe("§S3 (a) — CR-CRU-023: ACTIVE badge derives from server-fed activeMs, not client wall-since-activatedAt", () => {
+  test(
+    "an ACTIVE cycle with a STALE activatedAt (4h before 'now') but a SMALL server-fed activeMs (5m 03s) renders the activeMs-scale badge, not the activatedAt-scale one",
+    async () => {
+      const nowA = ACTIVATED_AT + 10_000_000; // arbitrary fixed "now", independent of activatedAt below
+      const oldActivatedAt = nowA - 4 * 3_600_000; // 4 hours before "now"
+      const plan: PlanFixture = {
+        planId: 301,
+        cr: "CR-EPOCH-UI-1",
+        status: "open",
+        wave: "1",
+        cycles: [
+          {
+            id: 2001,
+            label: "long-running epoch cycle",
+            status: "active",
+            activatedAt: oldActivatedAt,
+            activeMs: 303_000, // 5m 03s — server-accumulated attention time.
+          },
+        ],
+      };
+      setSystemTime(nowA);
+      await mountApp({
+        pathname: "/p/proj-epoch-ui-1",
+        projects: [project({ key: "proj-epoch-ui-1", name: "Epoch UI Project" })],
+        plans: [plan],
+      });
+      await openWorkflowTab();
+
+      const row = cycleRowFor(active(), "cycle-row", "long-running epoch cycle");
+      const timer = row.querySelector('[data-testid="cycle-timer"]');
+      expect(timer).not.toBeNull();
+      const text = norm(timer!.textContent);
+
+      // The activeMs-scale value — NOT the activatedAt-scale one (which
+      // would read "⏱ 240m 03s": 4h + 5m03s of wall-clock-since-activation,
+      // today's behavior since production has no notion of `activeMs` yet).
+      expect(text).toBe("⏱ 5m 03s");
+      expect(text).not.toBe("⏱ 240m 03s");
+    },
+  );
+
+  test(
+    "an ACTIVE cycle's badge, server-fed with a SMALL activeMs against a STALE activatedAt, ticks FORWARD from the activeMs baseline over a real >=10s wait (the existing self-tick cadence) — never jumps to the activatedAt-scale value",
+    async () => {
+      const oldActivatedAt = Date.now() - 4 * 3_600_000; // real 4h ago
+      const plan: PlanFixture = {
+        planId: 302,
+        cr: "CR-EPOCH-UI-2",
+        status: "open",
+        wave: "1",
+        cycles: [
+          {
+            id: 2002,
+            label: "long-running epoch cycle",
+            status: "active",
+            activatedAt: oldActivatedAt,
+            activeMs: 305_000, // 5m 05s baseline fed by the "server" at mount time.
+          },
+        ],
+      };
+      await mountApp({
+        pathname: "/p/proj-epoch-ui-2",
+        projects: [project({ key: "proj-epoch-ui-2", name: "Epoch UI Ticking Project" })],
+        plans: [plan],
+      });
+      await openWorkflowTab();
+
+      const rowBefore = cycleRowFor(active(), "cycle-row", "long-running epoch cycle");
+      const timerBefore = rowBefore.querySelector('[data-testid="cycle-timer"]');
+      expect(timerBefore).not.toBeNull();
+      const msBefore = parseTimerMs(norm(timerBefore!.textContent));
+
+      // Anchored to the activeMs baseline, NOT the stale activatedAt (which
+      // would read ~4h == 240m-scale, i.e. >= 14_400_000ms).
+      expect(msBefore).toBeGreaterThanOrEqual(300_000);
+      expect(msBefore).toBeLessThan(320_000);
+
+      // Bounded real wall-clock wait — the SAME technique (and rationale,
+      // documented above at "§S3 — LIVE-REVIEW DEFECT (cycle 18)") already
+      // established in this file for the self-ticking badge; fake timers
+      // hang this exact mountApp/settle harness (see that section's note).
+      await new Promise((resolve) => setTimeout(resolve, 11_000));
+      await settle();
+
+      const rowAfter = cycleRowFor(active(), "cycle-row", "long-running epoch cycle");
+      const timerAfter = rowAfter.querySelector('[data-testid="cycle-timer"]');
+      expect(timerAfter).not.toBeNull();
+      const msAfter = parseTimerMs(norm(timerAfter!.textContent));
+
+      expect(msAfter).toBeGreaterThan(msBefore);
+      expect(msAfter - msBefore).toBeGreaterThanOrEqual(9_000);
+      expect(msAfter - msBefore).toBeLessThanOrEqual(15_000);
+      // Bound — still nowhere near the activatedAt-scale value (~240m).
+      expect(msAfter).toBeLessThan(320_000 + 15_000);
+    },
+    20_000,
+  );
+
+  // Coexistence bound (per §S3 AC: "Sealed history rows keep `doneAt −
+  // activatedAt` untouched either way"). NOTE (RED self-check, same
+  // disclosure convention as this file's other bound-only assertions, e.g.
+  // the §S6 item-2 nowrap DOM-level guard above): this assertion already
+  // PASSES against TODAY's pre-GREEN code too, since production currently
+  // has no notion of `activeMs` at all and a done row's badge is computed
+  // purely from `doneAt - activatedAt` regardless. It is included here as a
+  // REGRESSION bound so GREEN cannot wire `activeMs` in a way that lets it
+  // leak into (or override) the sealed-row computation; the independently
+  // failing pin for this feature is the two ACTIVE-row tests above.
+  test(
+    "a DONE cycle's sealed badge ignores a (stale) activeMs field entirely — it stays exactly doneAt - activatedAt, coexisting with the epochs feature",
+    async () => {
+      const plan: PlanFixture = {
+        planId: 303,
+        cr: "CR-EPOCH-UI-3",
+        status: "open",
+        wave: "1",
+        cycles: [
+          {
+            id: 2003,
+            label: "sealed epoch cycle",
+            status: "done",
+            activatedAt: ACTIVATED_AT,
+            doneAt: ACTIVATED_AT + 760_000, // 12m 40s sealed span
+            activeMs: 999_000, // stale/irrelevant once sealed — must be ignored (would render "16m 39s" if it leaked through).
+          },
+        ],
+      };
+      setSystemTime(ACTIVATED_AT + 5_000_000);
+      await mountApp({
+        pathname: "/p/proj-epoch-ui-3",
+        projects: [project({ key: "proj-epoch-ui-3", name: "Epoch UI Sealed Project" })],
+        plans: [plan],
+      });
+      await openWorkflowTab();
+
+      const row = cycleRowFor(active(), "cycle-row", "sealed epoch cycle");
+      const timer = row.querySelector('[data-testid="cycle-timer"]');
+      expect(timer).not.toBeNull();
+      expect(norm(timer!.textContent)).toBe("⏱ 12m 40s");
+      expect(norm(timer!.textContent)).not.toBe("⏱ 16m 39s");
+    },
+  );
+});
