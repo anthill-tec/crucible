@@ -74,6 +74,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -166,23 +167,140 @@ def _patch(path, payload):
     return _request("PATCH", path, payload)
 
 
-def _run_logged(cmd, cwd, env, log_path):
-    """Run `cmd`. If `log_path` set, capture combined stdout+stderr, write it, and echo."""
-    if not log_path:
+# ── §S2b (CR-CRU-008) — in-run progress narration ──────────────────────────
+
+# bun's per-test completion line family (piped, non-quiet mode).
+_COMPLETION_LINE = re.compile(r"^\((?:pass|fail|skip|todo)\)")
+# bun's per-file section header, e.g. `narration.test.ts:`.
+_FILE_HEADER_LINE = re.compile(r"^(\S+\.[cm]?[jt]sx?):$")
+# A test declaration call site in a test source (`test(`/`it(`, with optional
+# modifier chain). The leading guard rejects method calls like `re.test(`.
+_TEST_DECL = re.compile(
+    r"(?:^|[^\w.])(?:test|it)"
+    r"(?:\s*\.\s*(?:only|failing|skip|todo|serial|concurrent|each))*\s*\("
+)
+_TEST_FILE = re.compile(r"\.(?:test|spec)\.[cm]?[jt]sx?$")
+_PRESCAN_SKIP_DIRS = {"node_modules", ".git", "coverage", "test-reports",
+                      "dist", "build", "target"}
+
+
+def _prescan_test_total(package_dir, targets):
+    """Best-known total test count — the narration's M. bun's own stream only
+    reveals the total AFTER the run ('Ran N tests…'), so M is counted from the
+    test SOURCES up front: targeted runs scan the targeted files/dirs, a
+    whole-suite run walks the package. Approximate by design (test.each
+    expands at runtime); the narrator clamps M to max(M, completions-so-far)
+    so it can never read below N."""
+    paths = []
+    for t in targets or [None]:
+        base = package_dir if t is None else (
+            t if os.path.isabs(t) else os.path.join(package_dir, t))
+        if os.path.isfile(base):
+            paths.append(base)
+        elif os.path.isdir(base):
+            for root, dirnames, filenames in os.walk(base):
+                dirnames[:] = [d for d in dirnames if d not in _PRESCAN_SKIP_DIRS]
+                paths += [os.path.join(root, f) for f in filenames
+                          if _TEST_FILE.search(f)]
+    total = 0
+    for p in paths:
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                total += len(_TEST_DECL.findall(f.read()))
+        except OSError:
+            pass
+    return total
+
+
+class _Narrator:
+    """§S2b (CR-CRU-008) — throttled in-run 'running N/M' narration.
+
+    Fed the runner's streamed combined output line-by-line; counts bun's
+    per-test completion lines ((pass)/(fail)/(skip)/(todo)) and posts progress
+    as a heartbeat `message` through the v2 register/heartbeat verb — no new
+    API, and it prints NOTHING (the stdout data pipe stays pure; heartbeats on
+    an already-existing agent journal no lifecycle event server-side).
+
+    Throttle, read literally from the spec ('update at most every 2s or every
+    10 completions'): the FIRST update fires only once ≥2s have elapsed since
+    the first completion OR ≥10 completions accumulated — a run that finishes
+    inside that first window narrates nothing — and each later update must be
+    ≥2s or ≥10 completions past the last POSTED one. Posting is deliberately
+    best-effort: narration must never fail or slow the wrapped run.
+    """
+
+    def __init__(self, post, total_hint=0, min_seconds=2.0, min_completions=10):
+        self._post = post
+        self._total_hint = total_hint
+        self._min_seconds = min_seconds
+        self._min_completions = min_completions
+        self._count = 0
+        self._current_file = None
+        self._first_seen = None   # monotonic ts of the first completion
+        self._posted_at = None    # monotonic ts of the last posted update
+        self._posted_count = 0
+        self.posted = False
+
+    def observe(self, line):
+        text = line.rstrip("\r\n")
+        header = _FILE_HEADER_LINE.match(text)
+        if header:
+            self._current_file = header.group(1)
+            return
+        if _COMPLETION_LINE.match(text):
+            self._completed()
+
+    def _completed(self):
+        now = time.monotonic()
+        self._count += 1
+        if self._first_seen is None:
+            self._first_seen = now
+        since = now - (self._posted_at if self._posted_at is not None
+                       else self._first_seen)
+        if (since < self._min_seconds
+                and self._count - self._posted_count < self._min_completions):
+            return
+        message = f"running {self._count}/{max(self._total_hint, self._count)}"
+        if self._current_file:
+            message += f" · {self._current_file}"
+        try:
+            self._post(message)
+        except (Exception, SystemExit):
+            return  # best-effort — a failed heartbeat retries next completion
+        self.posted = True
+        self._posted_at, self._posted_count = now, self._count
+
+
+def _run_logged(cmd, cwd, env, log_path, narrator=None):
+    """Run `cmd`. If `log_path` set, capture combined stdout+stderr, write it, and
+    echo. §S2b: the capture is a STREAMING tail (Popen, line-buffered) — the
+    optional `narrator` observes every line live for throttled progress
+    heartbeats — while the captured output, run.log and echo stay byte-identical
+    to the old capture-after-exit behavior (the §S2c failure-marrying parser
+    consumes `result.stdout` unchanged)."""
+    if not log_path and narrator is None:
         return subprocess.run(cmd, cwd=cwd, env=env)
-    result = subprocess.run(
+    proc = subprocess.Popen(
         cmd, cwd=cwd, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
     )
-    out = result.stdout or ""
-    try:
-        with open(log_path, "w") as f:
-            f.write(out)
-        print(f"[crucible] run log → {log_path} ({len(out)} bytes)")
-    except OSError as e:
-        print(f"[crucible] WARN: could not write run log to {log_path}: {e}")
+    lines = []
+    for line in proc.stdout:
+        lines.append(line)
+        if narrator is not None:
+            narrator.observe(line)
+    proc.stdout.close()
+    returncode = proc.wait()
+    out = "".join(lines)
+    if log_path:
+        try:
+            with open(log_path, "w") as f:
+                f.write(out)
+            print(f"[crucible] run log → {log_path} ({len(out)} bytes)")
+        except OSError as e:
+            print(f"[crucible] WARN: could not write run log to {log_path}: {e}")
     sys.stdout.write(out)
-    return result
+    return subprocess.CompletedProcess(cmd, returncode, stdout=out)
 
 
 def _register_agent(project_dir, agent_id, message, display_name=None, source="claude-md"):
@@ -537,7 +655,18 @@ def cmd_test(args):
         log_path = getattr(args, "log", None)
         if args.agent and not log_path:
             log_path = os.path.join(reports_dir, "run.log")
-        result = _run_logged(cmd, package_dir, env, log_path)
+        narrator = None
+        if args.agent:
+            # bun ≥1.3 hides per-test (pass) lines when it detects Claude Code
+            # (CLAUDECODE env). Drop it for the wrapped runner so the full
+            # (pass)/(fail) line family streams: §S2b counts it live and the
+            # §S2c run.log keeps its result-line block boundaries.
+            env.pop("CLAUDECODE", None)
+            narrator = _Narrator(
+                lambda message: _register_agent(project_dir, args.agent, message),
+                total_hint=_prescan_test_total(package_dir, args.tests),
+            )
+        result = _run_logged(cmd, package_dir, env, log_path, narrator)
         print(f"[crucible] bun test exit={result.returncode}")
 
         if not args.agent:
@@ -588,7 +717,15 @@ def cmd_regression(args):
         log_path = getattr(args, "log", None)
         if args.agent and not log_path:
             log_path = os.path.join(reports_dir, "run.log")
-        result = _run_logged(cmd, package_dir, env, log_path)
+        narrator = None
+        if args.agent:
+            # Same §S2b setup as cmd_test (whole-suite M via package walk).
+            env.pop("CLAUDECODE", None)
+            narrator = _Narrator(
+                lambda message: _register_agent(project_dir, args.agent, message),
+                total_hint=_prescan_test_total(package_dir, None),
+            )
+        result = _run_logged(cmd, package_dir, env, log_path, narrator)
         print(f"[crucible] bun test exit={result.returncode}")
 
         if not os.path.exists(junit_path):

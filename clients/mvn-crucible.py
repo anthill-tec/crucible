@@ -79,6 +79,7 @@ import csv
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -227,27 +228,121 @@ def _run_context():
     return context
 
 
-def _run_logged(cmd, cwd, env, log_path):
+# ── §S2b (CR-CRU-008) — in-run progress narration (class granularity) ──────
+
+# surefire/failsafe class-start line, e.g. `[INFO] Running com.acme.AlphaTest`.
+_MVN_RUNNING_LINE = re.compile(r"(?:^|\s)Running ([A-Za-z_][\w.$]*)\s*$")
+
+
+def _narrate_heartbeat(project_dir, agent_id, message):
+    """§S2b — one narration heartbeat via the v2 register/heartbeat verb (no
+    new API; a heartbeat against an already-existing agent journals no
+    lifecycle event server-side). Best-effort and silent: never raises, never
+    prints — the stdout data pipe stays pure and the run can never fail on a
+    narration hiccup."""
+    try:
+        _post("/api/v2/agents/register", {
+            "agentId": agent_id,
+            "projectKey": _project_key(project_dir),
+            "status": "online",
+            "message": message,
+            "identity": {"displayName": agent_id, "source": "openclaw"},
+        })
+    except (Exception, SystemExit):
+        pass
+
+
+class _Narrator:
+    """§S2b — throttled 'running class N/M' narration for Maven tiers.
+
+    Fed the streamed mvn output line-by-line; counts surefire/failsafe
+    `Running <class>` lines. M is the best-known class total: the larger of
+    classes seen in the stream and TEST-*.xml reports on disk (surefire writes
+    each class's XML as it finishes, so M ratchets toward the true total and
+    can never read below N). Throttle, read literally from the spec: FIRST
+    update only after ≥2s from the first class start OR ≥10 class starts (a
+    sub-window run narrates nothing); later updates ≥2s or ≥10 classes past
+    the last posted one. `finish()` posts one replacement heartbeat AFTER the
+    final ingest so the narration never outlives the run (mvn tiers keep the
+    agent row — there is no bun-style silent removal bracket).
+    """
+
+    def __init__(self, post, xml_total, min_seconds=2.0, min_completions=10):
+        self._post = post
+        self._xml_total = xml_total
+        self._min_seconds = min_seconds
+        self._min_completions = min_completions
+        self._count = 0
+        self._first_seen = None   # monotonic ts of the first class start
+        self._posted_at = None    # monotonic ts of the last posted update
+        self._posted_count = 0
+        self.posted = False
+
+    def observe(self, line):
+        m = _MVN_RUNNING_LINE.search(line.rstrip("\r\n"))
+        if m:
+            self._class_started(m.group(1))
+
+    def _class_started(self, class_name):
+        now = time.monotonic()
+        self._count += 1
+        if self._first_seen is None:
+            self._first_seen = now
+        since = now - (self._posted_at if self._posted_at is not None
+                       else self._first_seen)
+        if (since < self._min_seconds
+                and self._count - self._posted_count < self._min_completions):
+            return
+        total = max(self._xml_total(), self._count)
+        self._post(f"running class {self._count}/{total} · {class_name}")
+        self.posted = True
+        self._posted_at, self._posted_count = now, self._count
+
+    def finish(self):
+        """Replace the narration once the final ingest has landed (ordering:
+        call strictly after the ingest POST)."""
+        if not self.posted:
+            return
+        total = max(self._xml_total(), self._count)
+        self._post(f"finished {self._count}/{total} test classes — results ingested")
+
+
+def _run_logged(cmd, cwd, env, log_path, narrator=None):
     """Run `cmd`. If `log_path` set, capture COMBINED stdout+stderr (in order),
     write it to `log_path`, and echo it to stdout so the run stays visible — lets
     an agent read a long mvn run back from a file instead of re-running it
     (per the global rule: grep surefire/failsafe reports, don't re-run).
+
+    §S2b: capture is a STREAMING tail (Popen, line-buffered) — the optional
+    `narrator` observes every line live for throttled progress heartbeats —
+    while the captured output, log file and echo stay byte-identical to the
+    old capture-after-exit behavior. A narrator WITHOUT a log path still
+    streams (tailing requires the pipe); the combined output is then echoed on
+    completion instead of inheriting stdio.
     """
-    if not log_path:
+    if not log_path and narrator is None:
         return subprocess.run(cmd, cwd=cwd, env=env)
-    result = subprocess.run(
+    proc = subprocess.Popen(
         cmd, cwd=cwd, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
     )
-    out = result.stdout or ""
-    try:
-        with open(log_path, "w") as f:
-            f.write(out)
-        print(f"[crucible] run log → {log_path} ({len(out)} bytes)")
-    except OSError as e:
-        print(f"[crucible] WARN: could not write run log to {log_path}: {e}")
+    lines = []
+    for line in proc.stdout:
+        lines.append(line)
+        if narrator is not None:
+            narrator.observe(line)
+    proc.stdout.close()
+    returncode = proc.wait()
+    out = "".join(lines)
+    if log_path:
+        try:
+            with open(log_path, "w") as f:
+                f.write(out)
+            print(f"[crucible] run log → {log_path} ({len(out)} bytes)")
+        except OSError as e:
+            print(f"[crucible] WARN: could not write run log to {log_path}: {e}")
     sys.stdout.write(out)
-    return result
+    return subprocess.CompletedProcess(cmd, returncode, stdout=out)
 
 
 # --------------------------------------------------------------------------- #
@@ -499,15 +594,35 @@ def _run_surefire_tier(args, goal_extra, label):
     cmd = _mvn_base(maven_dir) + ["clean", "test"] + goal_extra + common
     env = os.environ.copy()
     print(f"[{label}] running: {' '.join(cmd)}  (cwd={maven_dir})")
-    result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None))
+    narrator = None
+    if args.agent:
+        # §S2b — tail the run and narrate class-level progress heartbeats.
+        module = getattr(args, "module", None)
+
+        def _xml_total():
+            return sum(
+                len(glob.glob(os.path.join(d, "TEST-*.xml")))
+                for d in _report_dirs(maven_dir, module, "surefire")
+            )
+
+        narrator = _Narrator(
+            lambda message: _narrate_heartbeat(project_dir, args.agent, message),
+            _xml_total,
+        )
+    result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None), narrator)
     print(f"[{label}] mvn exit={result.returncode}")
     if not args.agent:
         return result.returncode
     dirs = _report_dirs(maven_dir, getattr(args, "module", None), "surefire")
     # CR-CRU-008 §S2 tier map: the subcommand name IS the tier (unit/module).
     if _smart_ingest(project_dir, args.agent, dirs, tier=label):
-        return 0
-    return _compile_fallback(maven_dir, project_dir, args.agent, common)
+        rc = 0
+    else:
+        rc = _compile_fallback(maven_dir, project_dir, args.agent, common)
+    # §S2b — the final ingest replaces the narration (strictly after it).
+    if narrator is not None:
+        narrator.finish()
+    return rc
 
 
 def cmd_unit(args):
