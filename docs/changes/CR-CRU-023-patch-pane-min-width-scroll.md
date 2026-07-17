@@ -1,6 +1,6 @@
 # CR-CRU-023 — Patch: gate-review defects — pane scroll floor · vitals trend chart · timer restart semantics
 
-**Status:** COMPLETED (2026-07-17 — merged to develop; 5 cycles incl. verify FAIL→fix→re-verify PASS; 663/663 · 24/24 e2e · tsc 0 · cov 92.2%)
+**Status:** COMPLETED (2026-07-17 — merged to develop b99b547; 5 cycles incl. verify FAIL→fix→re-verify PASS; 663/663 · 24/24 e2e · tsc 0 · cov 92.2%)
 **Type:** patch
 **Priority:** P3
 **Depends on:** CR-CRU-021
