@@ -297,10 +297,14 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None):
         try:
             with open(log_path, "w") as f:
                 f.write(out)
-            print(f"[crucible] run log → {log_path} ({len(out)} bytes)")
+            print(f"[crucible] run log → {log_path} ({len(out)} bytes)", file=sys.stderr)
         except OSError as e:
-            print(f"[crucible] WARN: could not write run log to {log_path}: {e}")
-    sys.stdout.write(out)
+            print(f"[crucible] WARN: could not write run log to {log_path}: {e}",
+                  file=sys.stderr)
+    # §S1 — stdout is the TOON AXI channel; the captured run echo is interactive
+    # (stderr). The §S2c parser consumes the returned CompletedProcess.stdout,
+    # not the stream, so failure-marrying stays byte-identical.
+    sys.stderr.write(out)
     return subprocess.CompletedProcess(cmd, returncode, stdout=out)
 
 
@@ -355,16 +359,22 @@ def cmd_register(args):
         args.message or f"Starting {args.phase} phase",
         display_name=args.display_name, source=args.source,
     )
-    print(f"register: ok={resp.get('ok', False)} agent={args.agent} "
-          f"phase={args.phase} source={args.source}")
-    return 0 if resp.get("ok") else 1
+    ok = bool(resp.get("ok", False))
+    legacy = (f"register: ok={resp.get('ok', False)} agent={args.agent} "
+              f"phase={args.phase} source={args.source}")
+    _emit_axi("register", ok, {"agent": args.agent},
+              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+    return 0 if ok else 1
 
 
 def cmd_unregister(args):
     project_dir = _resolve_project_dir(args.project_dir)
     resp = _unregister_agent(project_dir, args.agent)
-    print(f"unregister: ok={resp.get('ok', False)} agent={args.agent}")
-    return 0 if resp.get("ok") else 1
+    ok = bool(resp.get("ok", False))
+    legacy = f"unregister: ok={resp.get('ok', False)} agent={args.agent}"
+    _emit_axi("unregister", ok, {"agent": args.agent},
+              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+    return 0 if ok else 1
 
 
 def _reports_dir(package_dir, arg_value):
@@ -611,12 +621,15 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     if coverage:
         cov_line = (f" lines={coverage['lines']['percent']}%"
                     f" funcs={coverage['functions']['percent']}%")
+    # The human-readable ingest line is interactive-only (stderr); the machine
+    # channel is the §S1 TOON AXI envelope the caller emits on stdout.
     print(
         f"ingest: ok={resp.get('ok')} passed={summary['passed']} "
         f"failed={summary['failed']} total={summary['total']}{cov_line}"
-        + (f" error={resp['error']}" if resp.get("error") else "")
+        + (f" error={resp['error']}" if resp.get("error") else ""),
+        file=sys.stderr,
     )
-    return 0 if resp.get("ok") else 1
+    return resp
 
 
 def _ingest_compile(project_dir, agent_id, errors_text):
@@ -649,7 +662,7 @@ def cmd_test(args):
     try:
         cmd = _bun_test_cmd(bun, args.tests, junit_path, False, None)
         env = os.environ.copy()
-        print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})")
+        print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
         # Capture output whenever an ingest may be needed: bun's JUnit reporter
         # writes NOTHING when collection crashes, and the failure detail only
         # exists on stdout/stderr.
@@ -668,7 +681,7 @@ def cmd_test(args):
                 total_hint=_prescan_test_total(package_dir, args.tests),
             )
         result = _run_logged(cmd, package_dir, env, log_path, narrator)
-        print(f"[crucible] bun test exit={result.returncode}")
+        print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
 
         if not args.agent:
             return result.returncode
@@ -677,11 +690,16 @@ def cmd_test(args):
             summary, tree = _parse_junit_file(junit_path)
             # §S2c — the captured run log IS the failure-detail source.
             _marry_failures(tree, getattr(result, "stdout", None))
-            rc = _ingest_parsed(project_dir, args.agent, summary, tree,
-                                tier="unit", context=_run_context())
+            resp = _ingest_parsed(project_dir, args.agent, summary, tree,
+                                  tier="unit", context=_run_context())
+            cycle_id, warnings = _cycle_id_and_warnings(project_dir)
+            _emit_ingest_axi("test", resp, summary, project_dir, args.agent,
+                             cycle_id, warnings)
             # A failing run exits non-zero even when the ingest succeeded —
             # the exit code carries the RUNNER verdict, not the POST's.
-            return 1 if summary["failed"] > 0 else rc
+            if summary["failed"] > 0:
+                return 1
+            return 0 if resp.get("ok") else 1
         # No XML → a hard collection/compile failure. Ingest as a FAILING compile:
         # one synthetic tsc-format diagnostic (so errorCount=1 and the card reads
         # red — never a misleading clean '0 errors') + the captured output as raw.
@@ -692,8 +710,9 @@ def cmd_test(args):
                                synthetic + ("\n\n" + tail if tail else ""))
     finally:
         if args.agent:
-            resp = _remove_agent_silent(project_dir, args.agent)
-            print(f"cleanup: ok={resp.get('ok', False)} agent={args.agent}")
+            cleanup_resp = _remove_agent_silent(project_dir, args.agent)
+            print(f"cleanup: ok={cleanup_resp.get('ok', False)} agent={args.agent}",
+                  file=sys.stderr)
 
 
 def cmd_regression(args):
@@ -713,7 +732,7 @@ def cmd_regression(args):
     # the final ingest, try/finally.
     try:
         cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
-        print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})")
+        print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
         # §S2c — capture the run output (failure detail lives only there).
         log_path = getattr(args, "log", None)
         if args.agent and not log_path:
@@ -727,10 +746,11 @@ def cmd_regression(args):
                 total_hint=_prescan_test_total(package_dir, None),
             )
         result = _run_logged(cmd, package_dir, env, log_path, narrator)
-        print(f"[crucible] bun test exit={result.returncode}")
+        print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
 
         if not os.path.exists(junit_path):
-            print("[crucible] ERROR: no JUnit XML produced — nothing to ingest")
+            print("[crucible] ERROR: no JUnit XML produced — nothing to ingest",
+                  file=sys.stderr)
             return 1
 
         summary, tree = _parse_junit_file(junit_path)
@@ -740,14 +760,19 @@ def cmd_regression(args):
             lcov_path = os.path.join(coverage_dir, "lcov.info")
             coverage = _parse_lcov(lcov_path)
             if coverage is None:
-                print(f"[crucible] WARN: lcov coverage unavailable at {lcov_path}")
-        rc = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                            tier="regression", context=_run_context())
-        return 0 if (rc == 0 and summary["failed"] == 0) else 1
+                print(f"[crucible] WARN: lcov coverage unavailable at {lcov_path}",
+                      file=sys.stderr)
+        resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
+                              tier="regression", context=_run_context())
+        cycle_id, warnings = _cycle_id_and_warnings(project_dir)
+        _emit_ingest_axi("regression", resp, summary, project_dir, args.agent,
+                         cycle_id, warnings)
+        return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
     finally:
         if args.agent:
-            resp = _remove_agent_silent(project_dir, args.agent)
-            print(f"cleanup: ok={resp.get('ok', False)} agent={args.agent}")
+            cleanup_resp = _remove_agent_silent(project_dir, args.agent)
+            print(f"cleanup: ok={cleanup_resp.get('ok', False)} agent={args.agent}",
+                  file=sys.stderr)
 
 
 def cmd_auto_ingest(args):
@@ -756,10 +781,14 @@ def cmd_auto_ingest(args):
     reports_dir = _reports_dir(package_dir, args.reports)
     junit_path = _junit_path(reports_dir)
     if not os.path.exists(junit_path):
-        print(f"[crucible] no {junit_path} — nothing to ingest")
+        print(f"[crucible] no {junit_path} — nothing to ingest", file=sys.stderr)
         return 1
     summary, tree = _parse_junit_file(junit_path)
-    return _ingest_parsed(project_dir, args.agent, summary, tree)
+    resp = _ingest_parsed(project_dir, args.agent, summary, tree)
+    cycle_id, warnings = _cycle_id_and_warnings(project_dir)
+    _emit_ingest_axi("auto-ingest", resp, summary, project_dir, args.agent,
+                     cycle_id, warnings)
+    return 0 if resp.get("ok") else 1
 
 
 def cmd_check(args):
@@ -836,12 +865,19 @@ def cmd_plan_file(args):
         payload["orchestrator"] = orchestrator
     resp = _post(_plans_path(project_dir), payload)
     if not resp.get("ok"):
-        print(f"plan-file: ok=False error={resp.get('error')}", file=sys.stderr)
+        legacy = f"plan-file: ok=False error={resp.get('error')}"
+        _emit_axi("plan-file", False, {"cr": args.cr},
+                  _axi_context(project_dir), [], legacy)
         return 1
-    # Print the ASSIGNED numeric cycle ids — never guess them (plan-7 incident).
-    ids = " ".join(f"{c.get('label')}={c.get('id')}" for c in resp.get("cycles", []))
-    print(f"plan-file: ok=True planId={resp.get('planId')} cr={resp.get('cr')} "
-          f"cycles: {ids}")
+    # Emit the ASSIGNED numeric cycle ids — never guess them (plan-7 incident);
+    # they stay machine-readable in the envelope's `cycles` table (AC 124).
+    cycles = resp.get("cycles", [])
+    ids = " ".join(f"{c.get('label')}={c.get('id')}" for c in cycles)
+    legacy = (f"plan-file: ok=True planId={resp.get('planId')} cr={resp.get('cr')} "
+              f"cycles: {ids}")
+    _emit_axi("plan-file", True,
+              {"planId": resp.get("planId"), "cr": resp.get("cr"), "cycles": cycles},
+              _axi_context(project_dir), [], legacy)
     return 0
 
 
@@ -856,21 +892,25 @@ def _cycle_transition(args, status):
          if any(c.get("id") == cycle_id for c in p.get("cycles", []))),
         None,
     )
+    verb = "cycle-activate" if status == "active" else "cycle-done"
     if target is None:
         known = "; ".join(
             f"plan {p.get('planId')} ({p.get('cr')}): "
             + ", ".join(str(c.get("id")) for c in p.get("cycles", []))
             for p in open_plans
         ) or "none"
-        print(f"[crucible] ERROR: cycle {cycle_id} is not in any OPEN plan. "
-              f"Open plans' cycle ids: {known}", file=sys.stderr)
+        legacy = (f"[crucible] ERROR: cycle {cycle_id} is not in any OPEN plan. "
+                  f"Open plans' cycle ids: {known}")
+        _emit_axi(verb, False, {"cycle": cycle_id},
+                  _axi_context(project_dir), [], legacy)
         return 1
     resp = _patch(f"{_plans_path(project_dir)}/{target['planId']}/cycles/{cycle_id}",
                   {"status": status})
     ok = resp.get("ok", False)
-    verb = "cycle-activate" if status == "active" else "cycle-done"
-    print(f"{verb}: ok={ok} cycle={cycle_id} plan={target['planId']}"
-          + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    legacy = (f"{verb}: ok={ok} cycle={cycle_id} plan={target['planId']}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi(verb, bool(ok), {"cycle": cycle_id, "plan": target["planId"]},
+              _axi_context(project_dir), [], legacy)
     return 0 if ok else 1
 
 
@@ -888,34 +928,42 @@ def cmd_cr_close(args):
     if args.cr:
         open_plans = [p for p in open_plans if p.get("cr") == args.cr]
     if len(open_plans) == 0:
-        print("[crucible] ERROR: no OPEN plan to close"
-              + (f" for cr={args.cr}" if args.cr else ""), file=sys.stderr)
+        legacy = ("[crucible] ERROR: no OPEN plan to close"
+                  + (f" for cr={args.cr}" if args.cr else ""))
+        _emit_axi("cr-close", False, {"commit": args.commit},
+                  _axi_context(project_dir, cr=args.cr), [], legacy)
         return 1
     if len(open_plans) > 1:
         names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in open_plans)
-        print(f"[crucible] ERROR: {len(open_plans)} open plans — ambiguous cr-close. "
-              f"Pass --cr to pick one of: {names}", file=sys.stderr)
+        legacy = (f"[crucible] ERROR: {len(open_plans)} open plans — ambiguous cr-close. "
+                  f"Pass --cr to pick one of: {names}")
+        _emit_axi("cr-close", False, {"commit": args.commit},
+                  _axi_context(project_dir), [], legacy)
         return 1
     plan = open_plans[0]
     resp = _patch(f"{_plans_path(project_dir)}/{plan['planId']}",
                   {"status": "closed", "merge": {"commit": args.commit}})
     ok = resp.get("ok", False)
-    print(f"cr-close: ok={ok} plan={plan['planId']} cr={plan.get('cr')} "
-          f"commit={args.commit}"
-          + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    cr_label = plan.get("cr")
+    legacy = (f"cr-close: ok={ok} plan={plan['planId']} cr={cr_label} "
+              f"commit={args.commit}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("cr-close", bool(ok),
+              {"plan": plan["planId"], "cr": cr_label, "commit": args.commit},
+              _axi_context(project_dir, cr=cr_label), [], legacy)
     if not ok:
         return 1
     # §S4c / AC 141 — a SUCCESSFUL close emits a cr-merged milestone marker
     # (label=CR id, the merge commit, env auto-context). Withheld on a failed
     # close: the CR is not actually merged, so no marker fires.
-    cr_label = plan.get("cr")
     ms_resp = _post_milestone(
         project_dir, _agent_id(args), "cr-merged",
         label=cr_label, commit=args.commit,
         context=_fleet_context(cr=cr_label) or None,
     )
     print(f"cr-merged: ok={ms_resp.get('ok', False)} cr={cr_label} commit={args.commit}"
-          + (f" error={ms_resp.get('error')}" if ms_resp.get("error") else ""))
+          + (f" error={ms_resp.get('error')}" if ms_resp.get("error") else ""),
+          file=sys.stderr)
     return 0
 
 
@@ -962,6 +1010,102 @@ def _toon():
         _TOON_MOD = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_TOON_MOD)
     return _TOON_MOD
+
+
+# ── CR-CRU-013 C51 §S1 — the TOON AXI envelope on stdout ────────────────────
+#
+# Every AXI verb prints a `clients/toon.py`-encoded envelope
+# `{"axi": {verb, ok, <result fields>, context, warnings}}` on STDOUT (the
+# machine channel); the former human-readable line moves to STDERR
+# (interactive only). §S3: an unresolved classifying field (cycleId) is emitted
+# as an EXPLICIT null AND raises a `warnings[]` entry — never silently dropped.
+
+_AXI_UNSET = object()
+
+
+def _axi_context(project_dir, agent_id=None, cr=None, cycle_id=_AXI_UNSET):
+    """§S1 envelope context: { projectKey, agentId?, cycleId?, wave, cr, track? }.
+    Absent env keys are OMITTED; a supplied cycle_id of None is kept as an
+    EXPLICIT null (the §S3 orphan signal)."""
+    ctx = {"projectKey": _project_key(project_dir)}
+    if agent_id:
+        ctx["agentId"] = agent_id
+    if cycle_id is not _AXI_UNSET:
+        ctx["cycleId"] = cycle_id
+    wave = os.environ.get("WORKFLOW_WAVE")
+    if wave:
+        ctx["wave"] = wave
+    if cr:
+        ctx["cr"] = cr
+    role = os.environ.get("WORKFLOW_ROLE")
+    if role:
+        ctx["track"] = role
+    return ctx
+
+
+def _emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
+    """Write the §S1 TOON AXI envelope to stdout (the AXI channel) and the
+    optional human-readable line to stderr (interactive only)."""
+    axi = {"verb": verb, "ok": ok}
+    axi.update(result_fields)
+    axi["context"] = context
+    axi["warnings"] = warnings
+    sys.stdout.write(_toon().encode({"axi": axi}) + "\n")
+    if legacy_line is not None:
+        print(legacy_line, file=sys.stderr)
+
+
+def _active_cycle_id(project_dir):
+    """First ACTIVE cycle id among the project's OPEN plans, or None. Tolerant
+    of any lookup failure — the §S3 guard must never break an ingest."""
+    try:
+        resp = _get(_plans_path(project_dir))
+    except Exception:
+        return None
+    if not isinstance(resp, dict) or not resp.get("ok"):
+        return None
+    for p in resp.get("plans", []):
+        if p.get("status") != "open":
+            continue
+        for c in p.get("cycles", []):
+            if c.get("status") == "active":
+                return c.get("id")
+    return None
+
+
+def _cycle_id_and_warnings(project_dir):
+    """(cycleId, warnings) for an --agent ingest. WORKFLOW_CYCLE_ID (int) when
+    set; otherwise an EXPLICIT null cycleId, plus a single `no-cycle-id` warning
+    NAMING the active cycle when the open plan has one (§S3)."""
+    raw = os.environ.get("WORKFLOW_CYCLE_ID")
+    cycle_id = None
+    if raw is not None:
+        try:
+            cycle_id = int(raw)
+        except ValueError:
+            cycle_id = None
+    warnings = []
+    if cycle_id is None:
+        active = _active_cycle_id(project_dir)
+        if active is not None:
+            warnings.append({
+                "code": "no-cycle-id",
+                "detail": (f"WORKFLOW_CYCLE_ID unset while cycle {active} is ACTIVE; "
+                           f"this ingest will orphan (cycleId=null)"),
+            })
+    return cycle_id, warnings
+
+
+def _emit_ingest_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
+    """Emit the §S1 envelope for an ingest verb (test/regression/auto-ingest):
+    run{passed,failed,total} + cycle-aware context + §S3 warnings. Each warning
+    is also surfaced on stderr."""
+    run = {"passed": summary["passed"], "failed": summary["failed"],
+           "total": summary["total"]}
+    context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
+    for w in warnings:
+        print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
+    _emit_axi(verb, bool(resp.get("ok")), {"run": run}, context, warnings)
 
 
 def _agent_id(args):
