@@ -504,53 +504,6 @@ describe("Workflow tab — ACTIVE view: per-CR todo view over the open plan", ()
   });
 });
 
-// ── Gate pane placeholder (honest — names CR-013, never CR-CRU-007) ───────
-
-describe("Workflow tab — gate-pane placeholder beside the active view", () => {
-  test("a gate-pane element is present, names CR-013, and never the stale CR-CRU-007 placeholder", async () => {
-    const key = "wf-gate-1";
-    const plan: PlanFixture = {
-      planId: 103,
-      cr: "CR-X-3",
-      projectKey: "wf-gate-1",
-      status: "open",
-      cycles: [{ id: 9, label: "C1", status: "active" }],
-    };
-    await mountApp({
-      pathname: `/p/${key}`,
-      projects: [project({ key, name: "Gate Pane Project" })],
-      events: [],
-      eventDetails: {},
-      plans: [plan],
-    });
-
-    await openWorkflowTab();
-
-    const gate = document.querySelector('[data-testid="gate-pane"]');
-    expect(gate).not.toBeNull();
-    const gateText = gate!.textContent ?? "";
-    expect(gateText).toContain("CR-013");
-    expect(gateText).not.toContain("CR-CRU-007");
-  });
-
-  test("the gate-pane renders even with no open plan (beside the empty-state active section)", async () => {
-    const key = "wf-gate-2";
-    await mountApp({
-      pathname: `/p/${key}`,
-      projects: [project({ key, name: "Gate Pane No-Plan Project" })],
-      events: [],
-      eventDetails: {},
-      plans: [],
-    });
-
-    await openWorkflowTab();
-
-    const gate = document.querySelector('[data-testid="gate-pane"]');
-    expect(gate).not.toBeNull();
-    expect(gate!.textContent ?? "").toContain("CR-013");
-  });
-});
-
 // ── CR-016 bindings — clicking a linked run swaps the WORKFLOW pane ───────
 
 describe("Workflow tab — CR-016 bindings: clicking a linked run swaps the WORKFLOW pane to the run detail", () => {

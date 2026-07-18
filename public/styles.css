@@ -862,3 +862,29 @@ body {
 .app-lens-toggle:hover .app-pane-section-title { color: var(--heat); }
 .app-cycle-toggle { cursor: pointer; user-select: none; }
 .app-toggle-glyph { color: var(--ink-faint); width: 1em; display: inline-block; }
+
+/* ── CR-CRU-013 — gate-body + milestone field separation ────────────────────
+   The shared gateBodyContent step ladder / fixes table (F8½ drill-in + F13
+   widget) and the §S4b milestone-entry row render ` · `-joined fields (the
+   same seal convention gate-card + merge-marker already use). These rules add
+   the per-field ink + row rhythm so no two fields visually abut. */
+.app-gate-step-row,
+.app-gate-fix-row {
+  font-size: 10.5px;
+  line-height: 1.9;
+  padding: 1px 0;
+}
+.app-gate-step-name { color: var(--pass); }
+.app-gate-step-status { color: var(--ink-faint); }
+.app-gate-step-findings { color: var(--heat); }
+.app-gate-fix-id { color: var(--heat); }
+.app-gate-fix-file { color: var(--ink-faint); }
+.app-gate-fix-desc { color: var(--ink); }
+.app-milestone-entry {
+  color: var(--ink-faint);
+  font-size: 10px;
+  line-height: 1.85;
+  padding: 3px 2px;
+}
+.app-milestone-glyph { color: var(--heat); }
+.app-milestone-type { color: var(--ink-dim); }

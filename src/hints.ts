@@ -11,7 +11,10 @@ export const hints: Record<
   | "archivedProject"
   | "coverageDropped"
   | "deletionDisabled"
-  | "deletionNeedsApproval",
+  | "deletionNeedsApproval"
+  | "gateFields"
+  | "gateOutcomes"
+  | "milestoneTypes",
   string[]
 > = {
   /** GET /api/v2 — orientation for a fresh agent. */
@@ -59,5 +62,19 @@ export const hints: Record<
   deletionNeedsApproval: [
     "deleting a run permanently destroys audit history — never retry this call on your own initiative",
     "present the deletion to the user first; retry with {userApproved: true} ONLY after the user has explicitly approved this specific deletion",
+  ],
+  /** CR-CRU-013 §S1 — a gate POST missing a required field. */
+  gateFields: [
+    "POST /api/v2/gates {projectKey, agentId, context?, gate:{intent, outcome, steps:[…], fixes?, push?, pr?}} — record a no-mistakes gate outcome",
+    "gate.intent, gate.outcome, and gate.steps are all required",
+  ],
+  /** CR-CRU-013 §S1 — a gate POST with an out-of-set outcome. */
+  gateOutcomes: [
+    "gate.outcome must be one of: checks-passed, passed, failed, cancelled",
+  ],
+  /** CR-CRU-013 §S4b/§S4c — a milestone POST with an out-of-set type. */
+  milestoneTypes: [
+    "POST /api/v2/milestones {projectKey, agentId, type, label?, commit?, context?} — record a workflow milestone",
+    "type must be one of: gap-analysis, design-review, stage-flip, custom, cr-merged",
   ],
 };

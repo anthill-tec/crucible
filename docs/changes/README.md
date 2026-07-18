@@ -26,12 +26,14 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-021](CR-CRU-021-patch-workflow-primary-tab.md) | Patch: Workflow as the primary workspace tab | patch | COMPLETED | 020 | 4 (after 020) |
 | [CR-CRU-023](CR-CRU-023-patch-pane-min-width-scroll.md) | Patch: gate-review defects — pane scroll floor · vitals trend chart · timer restart semantics | patch | COMPLETED | 021 | 4 |
 | [CR-CRU-012](CR-CRU-012-projects-manager.md) | Projects manager: add + edit + archive | feature | COMPLETED | 004, 007 | 4 (before 009) |
-| [CR-CRU-013](CR-CRU-013-gate-events.md) | Workflow events: gates (no-mistakes) + milestones | feature | NEXT (ready — deps 008+011 met) | 008, 011 | 4 (before 009) |
+| [CR-CRU-013](CR-CRU-013-gate-events.md) | Workflow events: gates (no-mistakes) + milestones | feature | IN_PROGRESS | 008, 011 | 4 (before 009) |
+| [CR-CRU-030](CR-CRU-030-fleet-toon-axi-compliance.md) | Fleet TOON-AXI conversion + mandatory classification context (wave/cycle/cr/track — all clients) | patch | PENDING (P1 — immediately after 013) | 013 | 4 (right after 013, before 009) |
 | [CR-CRU-024](CR-CRU-024-patch-cycle-activation-guards.md) | Patch: cycle activation guards · sanctioned mid-plan mutation (insert/edit, active locked) · AXI invalid-action responses | patch | PENDING | 011 | 4 |
 | [CR-CRU-025](CR-CRU-025-cycle-run-boundary-navigation.md) | Cycle ↔ run-boundary navigation (bidirectional, locate blink) | feature | PENDING | 011, 012 | 4 |
 | [CR-CRU-026](CR-CRU-026-patch-workspace-plan-scoping.md) | Patch: workspace plan scoping — remove hidden navigation state, marker parity (P0) | patch | COMPLETED | 011, 021 | 4 |
 | [CR-CRU-027](CR-CRU-027-patch-coverage-trend-fidelity.md) | Patch: coverage-trend mock fidelity — F8 sparkline geometry (P1, after 026) | patch | COMPLETED | 023 | 4 |
 | [CR-CRU-028](CR-CRU-028-patch-coverage-trend-semantics.md) | Coverage trend: auto-coarsening health hierarchy (DN-locked) | feature | PENDING | 023, 027 | 4 |
+| [CR-CRU-029](CR-CRU-029-patch-dual-axis-scroll-visibility.md) | Patch: dual-axis scroll always operable in narrow viewports | patch | PENDING | 023 | 4 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 · track-1) | 011, 013 | 5 (0.2.0) |
 | [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Playwright runner + codec + tab | feature | PENDING (0.2.0 · track-2) | 004, 007 | 5 (0.2.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end + Aborted state | feature | PENDING (0.2.0 · track-3 cand.) | 008, 011 | 5 (0.2.0) |

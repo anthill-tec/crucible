@@ -116,18 +116,30 @@ export interface PlanFileResponse {
   planId: number;
   cr: string;
   status: string;
+  wave?: string;
   cycles: PlanCycleFixture[];
 }
 
-/** POST …/plans — file a plan with one cycle per label, `kind` defaulted. */
+/**
+ * POST …/plans — file a plan with one cycle per label, `kind` defaulted.
+ * CR-CRU-013 C6 — `wave` is an additive optional 5th arg (existing callers
+ * unaffected) so the AC150 e2e round trip can pin a plan to the wave its
+ * gate event will later target (§S6 `gated` wave-state qualification keys
+ * off `context.wave` matching a closed plan's declared `wave`).
+ */
 export async function filePlan(
   request: APIRequestContext,
   projectKey: string,
   cr: string,
   cycleLabels: string[],
+  wave?: string,
 ): Promise<PlanFileResponse> {
   const res = await request.post(`/api/v2/projects/${projectKey}/plans`, {
-    data: { cr, cycles: cycleLabels.map((label) => ({ label })) },
+    data: {
+      cr,
+      cycles: cycleLabels.map((label) => ({ label })),
+      ...(wave !== undefined ? { wave } : {}),
+    },
   });
   expect(res.ok()).toBe(true);
   return (await res.json()) as PlanFileResponse;
@@ -214,3 +226,71 @@ export const RUSTC_ERRORS = [
   "warning: unused import",
   " --> src/a.rs:1:1",
 ].join("\n");
+
+// ── CR-CRU-013 §S1/§S4b — gate/milestone event POST helpers (C6 BDD layer,
+// AC150 e2e round trip). Verbatim field names from the CR spec's §S1/§S4b
+// shape, matching the fixture already round-tripped server-side by
+// tests/gate-milestone-server.test.ts's `defaultGate`/`gateBody` helpers:
+// {projectKey, agentId, context?{wave, track?}, gate:{intent, outcome,
+// steps:[{name, status, findings?, fixRounds?}], fixes?, push?, pr?}}.
+export interface GateStepFixture {
+  name: string;
+  status: string;
+  findings?: { total: number; autoFix: number; askUser: number; fixed: number };
+  fixRounds?: number;
+}
+
+export interface GatePayload {
+  intent: string;
+  outcome: "checks-passed" | "passed" | "failed" | "cancelled";
+  steps: GateStepFixture[];
+  fixes?: Array<{ id: string; file: string; description: string }>;
+  push?: { commit: string; remote: string };
+  pr?: string;
+}
+
+export interface EventPostResponse {
+  event: string;
+}
+
+/** POST /api/v2/gates — §S1 gate event ingest. */
+export async function postGate(
+  request: APIRequestContext,
+  projectKey: string,
+  agentId: string,
+  gate: GatePayload,
+  context?: Record<string, unknown>,
+): Promise<EventPostResponse> {
+  const res = await request.post("/api/v2/gates", {
+    data: {
+      projectKey,
+      agentId,
+      gate,
+      ...(context !== undefined ? { context } : {}),
+    },
+  });
+  expect(res.ok()).toBe(true);
+  return (await res.json()) as EventPostResponse;
+}
+
+/** POST /api/v2/milestones — §S4b/§S4c milestone event ingest. */
+export async function postMilestone(
+  request: APIRequestContext,
+  projectKey: string,
+  agentId: string,
+  type: string,
+  opts?: { label?: string; context?: Record<string, unknown>; commit?: string },
+): Promise<EventPostResponse> {
+  const res = await request.post("/api/v2/milestones", {
+    data: {
+      projectKey,
+      agentId,
+      type,
+      ...(opts?.label !== undefined ? { label: opts.label } : {}),
+      ...(opts?.context !== undefined ? { context: opts.context } : {}),
+      ...(opts?.commit !== undefined ? { commit: opts.commit } : {}),
+    },
+  });
+  expect(res.ok()).toBe(true);
+  return (await res.json()) as EventPostResponse;
+}
