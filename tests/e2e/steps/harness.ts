@@ -173,6 +173,25 @@ export async function closePlan(
   expect(res.ok()).toBe(true);
 }
 
+/**
+ * PATCH …/plans/<planId> {wave} (NO status) — CR-CRU-031 §S1's one-field
+ * wave backfill. Allowed on OPEN and CLOSED plans alike (unlike the
+ * orchestrator backfill, which 400s a closed plan). Returns the raw
+ * `{ok, changed, plan}` envelope so callers can assert `plan.wave` directly.
+ */
+export async function backfillPlanWave(
+  request: APIRequestContext,
+  projectKey: string,
+  planId: number,
+  wave: string,
+): Promise<{ ok: boolean; changed: boolean; plan: { wave?: string } }> {
+  const res = await request.patch(`/api/v2/projects/${projectKey}/plans/${planId}`, {
+    data: { wave },
+  });
+  expect(res.ok()).toBe(true);
+  return (await res.json()) as { ok: boolean; changed: boolean; plan: { wave?: string } };
+}
+
 export interface CompileIngestResponse {
   event: string;
   errors: number;
