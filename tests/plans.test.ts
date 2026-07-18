@@ -885,6 +885,186 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
   });
 
+  // ── CR-CRU-031 §S1 — `wave` one-field backfill on the plan PATCH ─────────
+  // Extends PATCH …/plans/<planId> (`handlePlanClose`) so a body carrying
+  // `wave` with NO `status` stamps the plan's wave — allowed on OPEN **and**
+  // CLOSED plans (unlike the existing `orchestrator` one-field backfill just
+  // above, which 400s a closed plan — a merged plan's wave is exactly what
+  // needs correcting, per the CR-021 History mis-grouping this CR fixes).
+  // `wave` coerces number -> its decimal string exactly as the POST /plans
+  // path already does (RED addendum cycle 13, gap 3, tested above); unknown
+  // planId -> 404; a non-string/non-number wave (an object) -> 400 naming
+  // the field; rollups/events untouched.
+  //
+  // RED phase: expected to fail against CURRENT production —
+  // `handlePlanClose` (src/v2.ts ~765) only recognizes `body.orchestrator` in
+  // the one-field-backfill branch, so a `{wave:...}`-only body (no `status`)
+  // falls through to the `body.status !== "closed"` check and 400s for the
+  // WRONG reason ("status must be \"closed\" to close a plan" — never
+  // mentions "wave", never distinguishes open/closed, never 404s an unknown
+  // plan on this path), and `store.ts` has no wave-backfill method at all.
+  describe("PATCH .../plans/<planId> — wave one-field backfill (CR-CRU-031 §S1)", () => {
+    test('PATCH {wave:"4"} (no status) on an OPEN plan stores it as a one-field backfill, visible on GET, plan STAYS open', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-WAVE-PATCH-1",
+        cycles: [{ label: "a" }],
+      });
+      expect(filed.status).toBe(201);
+      const plan = (await filed.json()) as PlanFileResponse;
+      expect("wave" in plan).toBe(false); // sanity: filed without a wave
+
+      const patched = await patchJson(plansPath(key, `/${plan.planId}`), { wave: "4" });
+      expect(patched.status).toBe(200);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const stamped = listedBody.plans.find((p) => p.cr === "CR-WAVE-PATCH-1")!;
+      expect(stamped.wave).toBe("4");
+      expect(stamped.status).toBe("open");
+    });
+
+    test("PATCH {wave} (no status) on a CLOSED plan ALSO succeeds and its wave updates — the point of this CR, contrasting with the orchestrator backfill which 400s a closed plan", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-WAVE-PATCH-CLOSED-1",
+        cycles: [{ label: "a" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+      const cycleId = plan.cycles[0]!.id;
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "active" });
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "done" });
+      const closeRes = await patchJson(plansPath(key, `/${plan.planId}`), {
+        status: "closed",
+        merge: { commit: "closedwave1" },
+      });
+      expect(closeRes.status).toBe(200);
+
+      const patched = await patchJson(plansPath(key, `/${plan.planId}`), { wave: "4" });
+      expect(patched.status).toBe(200);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-CLOSED-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const stamped = listedBody.plans.find((p) => p.cr === "CR-WAVE-PATCH-CLOSED-1")!;
+      expect(stamped.wave).toBe("4");
+      expect(stamped.status).toBe("closed");
+    });
+
+    test('a numeric wave on PATCH coerces to its decimal STRING, matching the POST /plans coercion, on both an OPEN and a CLOSED plan', async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      // OPEN
+      const filedOpen = await postJson(plansPath(key), {
+        cr: "CR-WAVE-PATCH-NUM-OPEN",
+        cycles: [{ label: "a" }],
+      });
+      const planOpen = (await filedOpen.json()) as PlanFileResponse;
+      const patchedOpen = await patchJson(plansPath(key, `/${planOpen.planId}`), { wave: 4 });
+      expect(patchedOpen.status).toBe(200);
+      const listedOpen = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-NUM-OPEN"));
+      const listedOpenBody = (await listedOpen.json()) as PlansListResponse;
+      const stampedOpen = listedOpenBody.plans.find((p) => p.cr === "CR-WAVE-PATCH-NUM-OPEN")!;
+      expect(stampedOpen.wave).toBe("4");
+      expect(typeof stampedOpen.wave).toBe("string");
+
+      // CLOSED
+      const filedClosed = await postJson(plansPath(key), {
+        cr: "CR-WAVE-PATCH-NUM-CLOSED",
+        cycles: [{ label: "a" }],
+      });
+      const planClosed = (await filedClosed.json()) as PlanFileResponse;
+      const cycleId = planClosed.cycles[0]!.id;
+      await patchJson(plansPath(key, `/${planClosed.planId}/cycles/${cycleId}`), { status: "active" });
+      await patchJson(plansPath(key, `/${planClosed.planId}/cycles/${cycleId}`), { status: "done" });
+      await patchJson(plansPath(key, `/${planClosed.planId}`), {
+        status: "closed",
+        merge: { commit: "closedwavenum1" },
+      });
+      const patchedClosed = await patchJson(plansPath(key, `/${planClosed.planId}`), { wave: 7 });
+      expect(patchedClosed.status).toBe(200);
+      const listedClosed = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-NUM-CLOSED"));
+      const listedClosedBody = (await listedClosed.json()) as PlansListResponse;
+      const stampedClosed = listedClosedBody.plans.find((p) => p.cr === "CR-WAVE-PATCH-NUM-CLOSED")!;
+      expect(stampedClosed.wave).toBe("7");
+      expect(typeof stampedClosed.wave).toBe("string");
+    });
+
+    test("an unknown planId -> 404", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const res = await patchJson(plansPath(key, "/999999"), { wave: "4" });
+      expect(res.status).toBe(404);
+    });
+
+    test("a non-string-non-number wave (an object) on PATCH -> 400 naming the wave field, plan left unstamped", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-WAVE-PATCH-BAD-1",
+        cycles: [{ label: "a" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+
+      const patched = await patchJson(plansPath(key, `/${plan.planId}`), { wave: { nested: true } });
+      expect(patched.status).toBe(400);
+      const text = await bodyText(patched);
+      expect(text).toMatch(/\bwave\b/i);
+
+      const listed = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-BAD-1"));
+      const listedBody = (await listed.json()) as PlansListResponse;
+      const unstamped = listedBody.plans.find((p) => p.cr === "CR-WAVE-PATCH-BAD-1")!;
+      expect("wave" in unstamped).toBe(false);
+    });
+
+    test("wave backfill on a closed plan adds NO events, changes NO events-list count, and leaves commitBoundary untouched (rollups/events untouched)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject();
+
+      const filed = await postJson(plansPath(key), {
+        cr: "CR-WAVE-PATCH-ROLLUP-1",
+        cycles: [{ label: "a" }],
+      });
+      const plan = (await filed.json()) as PlanFileResponse;
+      const cycleId = plan.cycles[0]!.id;
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "active" });
+      await patchJson(plansPath(key, `/${plan.planId}/cycles/${cycleId}`), { status: "done" });
+      await patchJson(plansPath(key, `/${plan.planId}`), {
+        status: "closed",
+        merge: { commit: "rollupwave1" },
+      });
+
+      const before = await getJson(`/api/v2/events?project=${key}`);
+      const beforeBody = (await before.json()) as EventsListResponse;
+      expect(beforeBody.events.length).toBe(0);
+
+      const listedBefore = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-ROLLUP-1"));
+      const listedBeforeBody = (await listedBefore.json()) as PlansListResponse;
+      const boundaryBefore = listedBeforeBody.plans.find(
+        (p) => p.cr === "CR-WAVE-PATCH-ROLLUP-1",
+      )!.commitBoundary!;
+
+      const patched = await patchJson(plansPath(key, `/${plan.planId}`), { wave: "9" });
+      expect(patched.status).toBe(200);
+
+      const after = await getJson(`/api/v2/events?project=${key}`);
+      const afterBody = (await after.json()) as EventsListResponse;
+      expect(afterBody.events.length).toBe(0);
+
+      const listedAfter = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-ROLLUP-1"));
+      const listedAfterBody = (await listedAfter.json()) as PlansListResponse;
+      const afterPlan = listedAfterBody.plans.find((p) => p.cr === "CR-WAVE-PATCH-ROLLUP-1")!;
+      expect(afterPlan.wave).toBe("9");
+      expect(afterPlan.commitBoundary).toEqual(boundaryBefore);
+    });
+  });
+
   // ── §S0 — plans are not run events ────────────────────────────────────────
   describe("plans do not affect run-event surfaces", () => {
     test("filing, transitioning, and closing a plan add NO events and change NO events-list count", async () => {
