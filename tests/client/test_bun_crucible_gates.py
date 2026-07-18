@@ -57,23 +57,27 @@ attribute ('dest') names for the brand-new subcommands -- only the flag names
 the CR text/AC give verbatim (--outcome, --commit, --steps, --type, --label,
 --cr, --intent).
 
-ASSUMPTION flagged for orchestrator/GREEN-dispatch review (ESCALATION-lite):
-the CR text says gate-run "FORKS that same TOON stream" from `no-mistakes`,
-but does not pin the exact subprocess wire contract (one streaming
-`no-mistakes axi run` call vs. a background `axi run` + polled `axi status`).
-This file assumes the SIMPLER, single-invocation reading: `no-mistakes` is
-invoked ONCE, and its stdout is a live stream of blank-line-delimited TOON
-records (reusing this file's own established Popen+readline-per-line pattern,
-see `_run_logged`/`_Narrator`), the last of which carries a top-level
-`outcome`. It also assumes throttled INTERIM posts reuse the SAME >=2-second
-cadence constant already established for `_Narrator` (§S2b, CR-CRU-008) since
-that is the only concrete "§S2b cadence" value this codebase defines, and that
-an in-progress interim gate's `gate.outcome` is the non-terminal
-`"checks-passed"` value (the only GATE_OUTCOMES member that reads as
-"not yet fully sealed" rather than a terminal passed/failed/cancelled state).
-If GREEN's actual design differs (e.g. the two-command axi run/status model),
-the gate-run tests in this file will need a follow-up RED adjustment -- the
-gate-report/milestone/cr-merged tests are unaffected either way.
+GATE-RUN WIRE CONTRACT (resolved 2026-07-18 via `no-mistakes axi ... --help`,
+orchestrator correction -- supersedes an earlier single-stream assumption):
+`axi run --intent "<goal>" [--yes]` BLOCKS and, once resolved, prints the
+FINAL TOON snapshot; `axi status [--run ID]` is a SEPARATE one-shot poll that
+returns the active/most-recent run's current detail WITHOUT disturbing it
+(exactly the shape of tests/fixtures/no-mistakes-axi-status.toon); `axi
+respond --action ...` answers an awaiting gate. There is no single streaming
+call. gate-run must therefore: launch `axi run` in the background, POLL `axi
+status` at the throttled §S2b cadence while it is in flight (posting
+throttled INTERIM gates decoded via clients/toon.py), and POST the FINAL
+sealing gate from `axi run`'s own resolved outcome when it exits -- all
+without the caller issuing any POST itself, while relaying the axi detail to
+the caller's own stdout (proxy role). The fake `no-mistakes` below implements
+BOTH `axi run` (writes progressive snapshots to a shared state file over
+~3 real seconds, then prints the final) and `axi status` (reads whatever is
+currently in that state file, fast, no sleep). §S2b cadence is still assumed
+to reuse the same >=2-second `_Narrator` constant (CR-CRU-008) since that is
+the only concrete cadence value this codebase defines; this file's `--yes` /
+ask-user proxy-decision path (`axi respond`) is intentionally NOT covered --
+AC 148 does not exercise a genuine ask-user gate, so that path is out of
+scope here.
 
 Invocation:
     python3 -m pytest tests/client/test_bun_crucible_gates.py -q
@@ -524,6 +528,25 @@ _SNAPSHOT_FINAL = (
     'outcome: passed\n'
 )
 
+# Real `no-mistakes axi` contract (confirmed via `no-mistakes axi ... --help`,
+# per orchestrator correction 2026-07-18): `axi run --intent "<goal>" [--yes]`
+# BLOCKS and, once resolved, prints the FINAL TOON snapshot. `axi status
+# [--run ID]` is the separate ONE-SHOT poll target -- it returns whatever the
+# active/most-recent run currently looks like, WITHOUT disturbing it (this is
+# exactly the shape of tests/fixtures/no-mistakes-axi-status.toon). There is
+# no single "streaming stdout" from one call; gate-run must launch `axi run`
+# in the background and separately POLL `axi status` while it is in flight.
+#
+# The fake below is TWO behaviours in one script, dispatched on argv[0:2]:
+#   `axi run`    -- writes progressive snapshots to a shared STATE_FILE (env
+#                   GATE_RUN_FAKE_STATE) as steps complete over ~3 real
+#                   seconds (comfortably past the >=2s §S2b cadence, CR-CRU-008
+#                   `_Narrator` default -- the only concrete cadence constant
+#                   this codebase defines), then prints the FINAL resolved
+#                   TOON to its OWN stdout and exits -- mirroring axi run's
+#                   real blocking-until-outcome behavior.
+#   `axi status` -- reads whatever is CURRENTLY in STATE_FILE and prints it,
+#                   fast, no sleep -- mirroring the real non-disturbing poll.
 _FAKE_NO_MISTAKES_BODY = '''
 import json
 import os
@@ -531,24 +554,39 @@ import sys
 import time
 
 argv = sys.argv[1:]
-argv_file = os.environ.get("GATE_RUN_FAKE_ARGV_FILE")
-if argv_file:
-    with open(argv_file, "w") as f:
-        json.dump(argv, f)
+state_file = os.environ.get("GATE_RUN_FAKE_STATE")
 
-records = [
-    ({s1!r}, 1.3),
-    ({s2!r}, 1.2),
-    ({s3!r}, 0.4),
-    ({sf!r}, 0.0),
-]
-for i, (text, delay_before_next) in enumerate(records):
-    sys.stdout.write(text)
-    sys.stdout.write("\\n")  # blank-line record separator
-    sys.stdout.flush()
-    if i < len(records) - 1:
-        time.sleep(delay_before_next)
-sys.exit(0)
+
+def _write_state(text):
+    if state_file:
+        with open(state_file, "w") as f:
+            f.write(text)
+
+
+if len(argv) >= 2 and argv[0] == "axi" and argv[1] == "run":
+    argv_file = os.environ.get("GATE_RUN_FAKE_ARGV_FILE")
+    if argv_file:
+        with open(argv_file, "w") as f:
+            json.dump(argv, f)
+    _write_state({s1!r})
+    time.sleep(1.0)
+    _write_state({s2!r})
+    time.sleep(1.5)
+    _write_state({s3!r})
+    time.sleep(0.8)
+    _write_state({sf!r})
+    sys.stdout.write({sf!r})
+    sys.exit(0)
+elif len(argv) >= 2 and argv[0] == "axi" and argv[1] == "status":
+    content = ""
+    if state_file and os.path.exists(state_file):
+        with open(state_file) as f:
+            content = f.read()
+    sys.stdout.write(content or {s1!r})
+    sys.exit(0)
+else:
+    sys.stderr.write("fake no-mistakes: unsupported invocation: " + repr(argv) + "\\n")
+    sys.exit(1)
 '''.format(s1=_SNAPSHOT_1, s2=_SNAPSHOT_2, s3=_SNAPSHOT_3, sf=_SNAPSHOT_FINAL)
 
 
@@ -568,15 +606,26 @@ class GateRunAxiProxyTest(_BaseClientVerbTest):
         os.environ["PATH"] = self.fake_bin_dir + os.pathsep + self._saved_path
 
         self.argv_file = os.path.join(self.tmpdir, "argv.json")
+        self.state_file = os.path.join(self.tmpdir, "state.toon")
         os.environ["GATE_RUN_FAKE_ARGV_FILE"] = self.argv_file
+        os.environ["GATE_RUN_FAKE_STATE"] = self.state_file
 
     def tearDown(self):
         os.environ["PATH"] = self._saved_path
         os.environ.pop("GATE_RUN_FAKE_ARGV_FILE", None)
+        os.environ.pop("GATE_RUN_FAKE_STATE", None)
         shutil.rmtree(self.fake_bin_dir, ignore_errors=True)
         super().tearDown()
 
-    def test_gate_run_streams_interim_and_final_gates_and_relays_detail(self):
+    def test_gate_run_polls_status_for_interim_gates_and_seals_final_from_run_outcome(self):
+        """gate-run must (1) launch `axi run --intent ...` in the BACKGROUND
+        (not block on it immediately), (2) POLL `axi status` at the throttled
+        §S2b cadence WHILE it is in flight, decoding each snapshot via
+        clients/toon.py and POSTing throttled INTERIM gates, (3) POST the
+        FINAL sealing gate from `axi run`'s own resolved outcome once it
+        exits, (4) do all of this WITHOUT the caller issuing any POST itself,
+        and (5) still RELAY the axi detail to the caller's own stdout (proxy
+        role)."""
         calls = []
 
         def fake_post(path, payload):
@@ -590,7 +639,7 @@ class GateRunAxiProxyTest(_BaseClientVerbTest):
 
         self.assertEqual(code, 0)
 
-        # (c) proxy role: the underlying axi detail must be genuinely
+        # (5) proxy role: the underlying axi detail must be genuinely
         # relayed to the CALLER's own stdout, not swallowed behind a terse
         # ingest confirmation line.
         self.assertIn(_RELAY_MARKER, out,
@@ -598,13 +647,17 @@ class GateRunAxiProxyTest(_BaseClientVerbTest):
                        "own stdout (proxy role) -- the caller must see it")
 
         gate_calls = [c for c in calls if c[0] == "/api/v2/gates"]
-        # (a) + (b): at least one throttled interim BEFORE an unconditional
-        # final seal; bounded above by the number of raw records (throttling
-        # must have suppressed at least one of the 4 raw snapshots).
+        # (2) + (3): at least one throttled interim (from an `axi status`
+        # poll while the run was still in flight) BEFORE an unconditional
+        # final seal (from `axi run`'s own resolved outcome). Upper bound is
+        # generous (poll cadence is a GREEN implementation detail) but still
+        # proves throttling isn't posting on every tick of a fast loop.
         self.assertGreaterEqual(len(gate_calls), 2,
                                  f"expected >=1 interim + 1 final gate POST, got {calls}")
-        self.assertLess(len(gate_calls), 4,
-                         f"throttling must suppress at least one raw snapshot, got {calls}")
+        self.assertLessEqual(len(gate_calls), 5,
+                              f"throttling must bound the poll-driven interim posts, got {calls}")
+        # (4) the caller issues NO POST itself -- gate-run owns ALL plumbing,
+        # and nothing besides /api/v2/gates should ever be hit here.
         self.assertEqual(calls, gate_calls,
                           "gate-run owns ALL Crucible plumbing -- the caller "
                           "must not have to issue any POST itself, and no "
@@ -615,7 +668,7 @@ class GateRunAxiProxyTest(_BaseClientVerbTest):
 
         final_gate = final[1].get("gate", {})
         self.assertEqual(final_gate.get("outcome"), "passed",
-                          "the final gate's outcome must match the stream's resolved outcome")
+                          "the final gate's outcome must match `axi run`'s resolved outcome")
         self.assertEqual(len(final_gate.get("steps", [])), 9)
         final_names = [s.get("name") for s in final_gate.get("steps", [])]
         self.assertEqual(
@@ -625,8 +678,9 @@ class GateRunAxiProxyTest(_BaseClientVerbTest):
 
         for path, payload in interim:
             interim_gate = payload.get("gate", {})
-            # bound: an interim snapshot must reflect a NOT-YET-COMPLETE
-            # ladder, strictly fewer steps than the final's full 9.
+            # bound: an interim gate (from an `axi status` POLL while the
+            # run was still in flight) must be a NOT-YET-COMPLETE ladder,
+            # strictly fewer steps than the final's full 9.
             self.assertLess(len(interim_gate.get("steps", [])), 9,
                              f"an interim gate must be a PARTIAL snapshot, got {interim_gate}")
             self.assertIn(interim_gate.get("outcome"), ("checks-passed", "passed",
@@ -634,13 +688,16 @@ class GateRunAxiProxyTest(_BaseClientVerbTest):
                            "gate.outcome is REQUIRED by the server and must be a valid "
                            "GATE_OUTCOMES member even for an interim snapshot")
 
-        # --intent must flow down to the underlying no-mistakes invocation.
+        # --intent must flow down to the underlying `axi run` invocation
+        # (NOT to `axi status`, which takes no --intent).
         self.assertTrue(os.path.exists(self.argv_file),
-                         "the fake no-mistakes executable was never invoked")
+                         "no-mistakes `axi run` was never invoked")
         with open(self.argv_file) as f:
             proxied_argv = json.load(f)
+        self.assertEqual(proxied_argv[:2], ["axi", "run"],
+                          f"gate-run must invoke `no-mistakes axi run`, got argv={proxied_argv}")
         self.assertIn("verify the auth flow refactor", proxied_argv,
-                      f"--intent must be passed down to no-mistakes, got argv={proxied_argv}")
+                      f"--intent must be passed down to `axi run`, got argv={proxied_argv}")
 
     def test_gate_run_missing_no_mistakes_executable_fails_cleanly(self):
         empty_bin = tempfile.mkdtemp(prefix="empty-path-")
