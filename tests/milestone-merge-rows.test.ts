@@ -223,6 +223,12 @@ describe("§S4b milestone-entry — slim workspace row (◇ glyph + type + label
     const crBadge = entry.querySelector<HTMLElement>('[data-testid="milestone-cr-badge"]');
     expect(crBadge).not.toBeNull();
     expect(textOf(crBadge)).toContain("CR-NAI-043");
+
+    // CR-CRU-013 fidelity guard — milestone fields must be visually SEPARATED,
+    // never mashed (`gap-analysisCR-NAI-043`): the row carries ` · ` seal
+    // separators between type / label / CR badge.
+    expect(text).toContain(" · ");
+    expect(text).not.toContain("gap-analysisCR-NAI-043");
   });
 
   test("a milestone with NO context.cr renders milestone-entry but no CR badge", async () => {

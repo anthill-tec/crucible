@@ -430,6 +430,13 @@ describe("§S3 GateBody — outcome banner, step ladder, fixes table, push/PR li
     expect(textOf(fixRows[0]!)).toContain("src/a.ts");
     expect(textOf(fixRows[0]!)).toContain("removed unused import");
 
+    // CR-CRU-013 fidelity guard — gate-body fields must be visually SEPARATED,
+    // never mashed (`intentpassed` / `f1src/a.ts…`): each step/fix row carries
+    // the ` · ` seal separator (same convention as gate-card + merge-marker).
+    expect(stepTexts.every((t) => t.includes(" · "))).toBe(true);
+    expect(textOf(fixRows[0]!)).toContain(" · ");
+    expect(textOf(fixRows[0]!)).not.toContain("f1src/a.ts");
+
     const pushLine = document.querySelector<HTMLElement>('[data-testid="gate-push-line"]');
     expect(pushLine).not.toBeNull();
     expect(textOf(pushLine)).toContain("abc1234");

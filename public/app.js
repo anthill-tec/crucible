@@ -804,22 +804,27 @@
 
     // §S4b — slim workspace milestone row: ◇ glyph · type · label · CR badge
     // (only when context.cr) · relative time.
-    const MilestoneEntryRow = (e) =>
-      div(
+    const MilestoneEntryRow = (e) => {
+      const hasLabel = e.label !== undefined && e.label !== null;
+      const hasCr = e.context?.cr !== undefined && e.context.cr !== null;
+      return div(
         { "data-testid": "milestone-entry", class: "app-milestone-entry app-tree-line" },
         span({ class: "app-milestone-glyph" }, "◇"),
+        " ",
         span({ class: "app-milestone-type" }, e.type),
-        e.label !== undefined && e.label !== null
-          ? span({ class: "app-milestone-label" }, e.label)
-          : null,
-        e.context?.cr !== undefined && e.context.cr !== null
+        hasLabel ? " · " : null,
+        hasLabel ? span({ class: "app-milestone-label" }, e.label) : null,
+        hasCr ? " · " : null,
+        hasCr
           ? span(
               { "data-testid": "milestone-cr-badge", class: "app-pill app-milestone-cr-badge" },
               e.context.cr,
             )
           : null,
+        " · ",
         span({ class: "app-card-meta" }, rel(e.timestamp)),
       );
+    };
 
     // §S4c — cycles count via the CR-CRU-011 plans.cr linkage: the plan
     // sharing this merge's `cr` (context.cr ?? label) supplies cycles.length.
@@ -2058,7 +2063,9 @@
           div(
             { "data-testid": "gate-step-row", class: "app-gate-step-row app-tree-line" },
             span({ class: "app-gate-step-name" }, s.name),
+            " · ",
             span({ class: "app-gate-step-status" }, s.status),
+            s.findings !== undefined && s.findings !== null ? " · " : null,
             s.findings !== undefined && s.findings !== null
               ? span({ class: "app-gate-step-findings" }, `${s.findings.total} findings`)
               : null,
@@ -2068,7 +2075,9 @@
           div(
             { "data-testid": "gate-fix-row", class: "app-gate-fix-row app-tree-line" },
             span({ class: "app-gate-fix-id" }, f.id),
+            " · ",
             span({ class: "app-gate-fix-file" }, f.file),
+            " · ",
             span({ class: "app-gate-fix-desc" }, f.description),
           ),
         ),
