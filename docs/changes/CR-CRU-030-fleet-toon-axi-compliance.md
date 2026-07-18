@@ -39,6 +39,10 @@ explicit flags, and WARNED when a plan/run that needs it is missing it — the
 client is where the fleet guarantees Crucible receives complete classification
 data.
 
+**Split (2026-07-18):** the wave-classification FIX — server `wave` backfill,
+`plan-file --wave`, and the CR-021 correction — is pulled out to **CR-CRU-031**
+(lands first). This CR is now CLIENT-ONLY (no server change).
+
 ## Scope
 
 ### §S1 The TOON-AXI envelope (the standard)
@@ -83,11 +87,6 @@ classification value is absent for the record it is writing:
 The guard fires BEFORE the write when possible, so the orchestrator can correct
 the env/flag rather than produce an unclassified record.
 
-### §S3b Explicit classification flags on `plan-file`
-`plan-file` currently reads `wave` from `WORKFLOW_WAVE` env only (no flag), so
-a forgotten export silently yields `wave=null` (CR-021). Add `--wave` (and keep
-env as the default) so the orchestrator can pass it explicitly; the flag/env
-resolution is shared across clients for every classification value.
 
 ### §S4 Expose the append-cycle verb (client gap)
 The server supports `POST …/plans/<planId>/cycles` (append a cycle to an open
@@ -102,18 +101,6 @@ decode the envelope (or provide a `--format {toon,text}` shim with `toon` the
 default). Grep the repo + `~/.claude/scripts` mirror for plain-text parsers of
 client stdout and update them.
 
-### §S6 Remediation of already-mis-classified plans (backfill)
-Prevention (§S1–§S3b) stops NEW unclassified records; the existing ones need
-correcting. The `PATCH …/plans/<planId>` endpoint currently backfills only
-`orchestrator`, and only on OPEN plans — there is no way to fix a CLOSED plan's
-`wave` (which is why CR-021 stays mis-grouped). Extend the one-field-backfill
-path to accept `wave` on OPEN **or** CLOSED plans, and expose it via a shared
-client `plan-backfill --wave <n> [--cr <CR>]` verb (returning the §S1
-envelope). Then backfill **CR-CRU-021 → wave 4** so the History lens folds it
-into the single Wave-4 band. (Defensive, low priority: the History lens should
-render a genuinely wave-less plan under an explicit "unclassified" label, not a
-phantom numberless "WAVE" group — but with §S1–§S3b + this backfill, wave-less
-plans should not occur.)
 
 ## Acceptance criteria
 - [ ] A shared envelope builder emits the §S1 schema; `clients/toon.py` decodes every verb's stdout back to a dict with `verb` + `ok`.
@@ -124,7 +111,6 @@ plans should not occur.)
 - [ ] `plan-file`'s assigned cycle ids stay machine-readable via the envelope (the "never guess ids" contract holds under TOON).
 - [ ] `context` is REQUIRED in the envelope of every classification-carrying verb; `wave` + `cr` present on plan/run-scoped verbs, `cycleId` on cycle-scoped ingests, `track` when `WORKFLOW_ROLE` set — asserted per client.
 - [ ] §S3 `no-wave`: `plan-file` with neither `--wave` nor `WORKFLOW_WAVE` emits a `no-wave` warning (envelope + stderr) naming the CR; with either supplied → the plan carries the wave and no warning. `--wave` overrides env.
-- [ ] §S6 backfill: `plan-backfill --wave 4 --cr CR-CRU-021` sets the CLOSED plan's wave via `PATCH …/plans/<id>`; re-fetching `GET …/plans` shows `wave:"4"`, and the History lens renders CR-021 inside the single Wave-4 band (no phantom numberless "WAVE" group). A backfill with no resolvable target → non-zero + error envelope.
 - [ ] Golden fixture per verb per client; the `~/.claude/scripts` mirror is re-synced from `clients/` (CR-008 source-of-truth rule).
 
 ## Estimated size
@@ -132,9 +118,9 @@ M–L (five clients × verb set, but mechanical once the bun reference + shared 
 
 ## Non-goals
 Changing the server INGEST contract (`/api/v2/runs/*`, gate/milestone POST
-bodies) — untouched; the only server change is the additive `wave` one-field
-backfill on the existing plan PATCH (§S6). The TOON wire format itself (that's
+bodies) — untouched; this CR is CLIENT-ONLY (the `wave` backfill is CR-CRU-031).
+The TOON wire format itself (that's
 `@toon-format`, ported in CR-013 C4); no-mistakes gate mechanics (CR-013 §S5);
-adding NEW verbs beyond `cycle-add` and `plan-backfill`; a full History-lens
+adding NEW verbs beyond `cycle-add`; a full History-lens
 redesign (only the defensive "unclassified" label is in scope, and only if
 cheap).

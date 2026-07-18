@@ -772,6 +772,21 @@ async function handlePlanClose(
     }
     return json({ ok: true, changed: true, plan: stamped });
   }
+  // CR-CRU-031 §S1 — one-field `wave` backfill: a PATCH body carrying `wave`
+  // with NO `status` stamps the wave on OPEN and CLOSED plans alike (waves are
+  // assigned retroactively). A numeric wave coerces to its decimal string,
+  // matching the POST /plans path; a non-string-non-number → 400 naming wave.
+  if (body.status === undefined && body.wave !== undefined) {
+    if (typeof body.wave !== "string" && typeof body.wave !== "number") {
+      return fail(400, "wave must be a string");
+    }
+    const wave = typeof body.wave === "string" ? body.wave : String(body.wave);
+    const stamped = store.stampWave(pk.key, planId, wave);
+    if ("error" in stamped) {
+      return fail(stamped.notFound === true ? 404 : 400, stamped.error);
+    }
+    return json({ ok: true, changed: true, plan: stamped });
+  }
   if (body.status !== "closed") {
     return fail(400, `status must be "closed" to close a plan`);
   }

@@ -855,6 +855,11 @@ def cmd_plan_file(args):
     payload = {"cr": args.cr, "cycles": [{"label": label} for label in labels]}
     if args.title:
         payload["title"] = args.title
+    # §S3: wave resolution is `--wave` > $WORKFLOW_WAVE. Neither resolvable ->
+    # NO `wave` key at all (no hard block; the env/flag is the prevention lever).
+    wave = args.wave if getattr(args, "wave", None) is not None else os.environ.get("WORKFLOW_WAVE")
+    if wave:
+        payload["wave"] = wave
     # Track identity comes from the workflow env; the orchestrator NAME is a
     # separate concept — explicit flag or $WORKFLOW_ORCHESTRATOR.
     track = os.environ.get("WORKFLOW_ROLE")
@@ -879,6 +884,50 @@ def cmd_plan_file(args):
               {"planId": resp.get("planId"), "cr": resp.get("cr"), "cycles": cycles},
               _axi_context(project_dir), [], legacy)
     return 0
+
+
+def cmd_plan_backfill(args):
+    """§S2: resolve the target plan (single plan, or --cr to disambiguate) and
+    PATCH its wave via S1. A wave-only PATCH body is closed-plan-safe, so the
+    resolver considers ALL plans (open AND closed) — a merged plan's wave is
+    exactly what a backfill corrects. Unknown/ambiguous/zero -> non-zero +
+    ok=False envelope. A server PATCH failure surfaces the same way."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    resp = _get(_plans_path(project_dir))
+    if not resp.get("ok"):
+        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
+        _emit_axi("plan-backfill", False, {"wave": args.wave},
+                  _axi_context(project_dir, cr=args.cr), [], legacy)
+        return 1
+    plans = resp.get("plans", [])
+    if args.cr:
+        plans = [p for p in plans if p.get("cr") == args.cr]
+    if len(plans) == 0:
+        legacy = ("[crucible] ERROR: no plan to backfill"
+                  + (f" for cr={args.cr}" if args.cr else ""))
+        _emit_axi("plan-backfill", False, {"wave": args.wave},
+                  _axi_context(project_dir, cr=args.cr), [], legacy)
+        return 1
+    if len(plans) > 1:
+        names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in plans)
+        legacy = (f"[crucible] ERROR: {len(plans)} plans — ambiguous plan-backfill. "
+                  f"Pass --cr to pick one of: {names}")
+        _emit_axi("plan-backfill", False, {"wave": args.wave},
+                  _axi_context(project_dir, cr=args.cr), [], legacy)
+        return 1
+    plan = plans[0]
+    # Wave-only body: NEVER a `status` key (S1 closed-plan-safe backfill).
+    patch_resp = _patch(f"{_plans_path(project_dir)}/{plan['planId']}",
+                        {"wave": args.wave})
+    ok = patch_resp.get("ok", False)
+    cr_label = plan.get("cr")
+    legacy = (f"plan-backfill: ok={ok} plan={plan['planId']} cr={cr_label} "
+              f"wave={args.wave}"
+              + (f" error={patch_resp.get('error')}" if patch_resp.get("error") else ""))
+    _emit_axi("plan-backfill", bool(ok),
+              {"plan": plan["planId"], "cr": cr_label, "wave": args.wave},
+              _axi_context(project_dir, cr=cr_label), [], legacy)
+    return 0 if ok else 1
 
 
 def _cycle_transition(args, status):
@@ -1428,8 +1477,18 @@ def main():
                     help='Comma-separated cycle labels, e.g. "a,b,c".')
     pf.add_argument("--orchestrator",
                     help="Orchestrator name (default: $WORKFLOW_ORCHESTRATOR when set).")
+    pf.add_argument("--wave",
+                    help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE; "
+                         "neither -> filed wave-less (no hard block).")
     _add_project_dir_arg(pf)
     pf.set_defaults(func=cmd_plan_file)
+
+    pb = sub.add_parser("plan-backfill",
+                        help="Backfill a plan's wave (PATCH wave-only; open OR closed).")
+    pb.add_argument("--wave", required=True, help="Wave number to assign.")
+    pb.add_argument("--cr", help="Disambiguate when multiple plans exist.")
+    _add_project_dir_arg(pb)
+    pb.set_defaults(func=cmd_plan_backfill)
 
     ca = sub.add_parser("cycle-activate", help="Transition a plan cycle to active.")
     ca.add_argument("cycle_id", type=int, help="Numeric cycle id (unique per project).")

@@ -1367,6 +1367,22 @@ export class Store {
     return this.toPlan({ ...row, orchestrator });
   }
 
+  /**
+   * CR-CRU-031 §S1 — one-field `wave` backfill. Unlike stampOrchestrator this
+   * stamps OPEN and CLOSED plans alike (waves are assigned retroactively). No
+   * events/rollup change beyond the plans-list refresh. Caller coerces the
+   * value to its decimal string, matching the POST /plans path.
+   */
+  stampWave(projectKey: string, planId: number, wave: string): Plan | PlanOpError {
+    const row = this.getPlanRow(projectKey, planId);
+    if (row === null) {
+      return { error: `plan not found: ${planId}`, notFound: true };
+    }
+    this.db.query(`UPDATE plans SET wave = ? WHERE plan_id = ?`).run(wave, planId);
+    this.emit("events", projectKey);
+    return this.toPlan({ ...row, wave });
+  }
+
   /** §S0 — list a project's plans, optionally filtered by cr / track. */
   listPlans(projectKey: string, filter?: { cr?: string; track?: string }): Plan[] {
     const rows = this.db
