@@ -255,7 +255,7 @@ describe("§S2 gate-card — cycle-done marker design, exact text template, neve
     // Exact §S2 text template: 🛡 Wave <n> gate · no-mistakes <outcome> ·
     // <N> steps · <findings fixed> · pushed <shortcommit>. 4 steps submitted;
     // only the "review" step carries findings.fixed (2) — the sum is 2.
-    expect(textOf(card)).toBe(
+    expect(textOf(card.querySelector('[data-testid="gate-seal"]'))).toBe(
       "🛡 Wave 3 gate · no-mistakes passed · 4 steps · 2 findings fixed · pushed abc1234",
     );
 

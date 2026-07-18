@@ -741,18 +741,146 @@
       );
     };
 
+    // CR-CRU-013 §S2/§S3/§S4 — gate + milestone timeline rows. Gate events
+    // seal a wave's no-mistakes run as a full-width cycle-done marker (never a
+    // run card); milestone events narrate design/process beats and CR merges.
+    const shortCommit = (c) => String(c ?? "").slice(0, 7);
+
+    // Outcome-conditioned class stem: passed/checks-passed → pass, failed →
+    // fail, cancelled → a distinct grey/cancel token (never pass/fail).
+    const gateOutcomeClass = (outcome) => {
+      const o = String(outcome ?? "");
+      if (/cancel/i.test(o)) return "cancel";
+      if (/fail/i.test(o)) return "fail";
+      return "pass";
+    };
+
+    // §S2 exact seal text: 🛡 Wave <n> gate · no-mistakes <outcome> · <N>
+    // steps · <fixed> findings fixed · pushed <shortcommit>. `<fixed>` is the
+    // SUM of every submitted step's findings.fixed (the only "fixed" figure
+    // the §S1 payload carries).
+    const gateCardText = (e) => {
+      const g = e.gate ?? {};
+      const steps = g.steps ?? [];
+      const fixed = steps.reduce((n, s) => n + (s.findings?.fixed ?? 0), 0);
+      return `🛡 Wave ${e.context?.wave ?? ""} gate · no-mistakes ${g.outcome} · ${steps.length} steps · ${fixed} findings fixed · pushed ${shortCommit(g.push?.commit)}`;
+    };
+
+    // §S2 — full-width gate seal (workspace). The trailing ⊙ Detail badge is
+    // the ONLY drill affordance; the card body itself is a bound no-op.
+    const GateCardRow = (e) =>
+      div(
+        {
+          "data-testid": "gate-card",
+          class: `app-transition-marker app-gate-card app-gate-${gateOutcomeClass(e.gate?.outcome)}`,
+        },
+        // §S2 — the exact seal text is isolated in its own child so the
+        // whole-card textContent (which also carries the ⊙ Detail badge) never
+        // over-constrains the seal string.
+        span({ "data-testid": "gate-seal", class: "app-gate-seal" }, gateCardText(e)),
+        span(
+          {
+            "data-testid": "gate-detail-badge",
+            class: "app-pill app-gate-detail-badge",
+            onclick: (ev) => {
+              ev.stopPropagation();
+              openDrillin(e.id);
+            },
+          },
+          "⊙ Detail",
+        ),
+      );
+
+    // §S4b/§S4c — home compact gate one-liner (distinct testid).
+    const GateCardCompact = (e) =>
+      div(
+        {
+          "data-testid": "gate-card-compact",
+          class: `app-gate-compact app-gate-${gateOutcomeClass(e.gate?.outcome)}`,
+          onclick: () => openDrillin(e.id),
+        },
+        `🛡 no-mistakes ${e.gate?.outcome} · ${shortCommit(e.gate?.push?.commit)}`,
+      );
+
+    // §S4b — slim workspace milestone row: ◇ glyph · type · label · CR badge
+    // (only when context.cr) · relative time.
+    const MilestoneEntryRow = (e) =>
+      div(
+        { "data-testid": "milestone-entry", class: "app-milestone-entry app-tree-line" },
+        span({ class: "app-milestone-glyph" }, "◇"),
+        span({ class: "app-milestone-type" }, e.type),
+        e.label !== undefined && e.label !== null
+          ? span({ class: "app-milestone-label" }, e.label)
+          : null,
+        e.context?.cr !== undefined && e.context.cr !== null
+          ? span(
+              { "data-testid": "milestone-cr-badge", class: "app-pill app-milestone-cr-badge" },
+              e.context.cr,
+            )
+          : null,
+        span({ class: "app-card-meta" }, rel(e.timestamp)),
+      );
+
+    // §S4c — cycles count via the CR-CRU-011 plans.cr linkage: the plan
+    // sharing this merge's `cr` (context.cr ?? label) supplies cycles.length.
+    const mergeCycles = (e) => {
+      const cr = e.context?.cr ?? e.label;
+      const plan = (state.plans ?? []).find((p) => p.cr === cr);
+      return plan !== undefined ? (plan.cycles ?? []).length : null;
+    };
+
+    const mergeCr = (e) => e.context?.cr ?? e.label ?? "";
+
+    // §S4c — full-width ⚑ merge break row (same structural weight as the
+    // RED→GREEN transition marker).
+    const MergeMarkerRow = (e) => {
+      const parts = [`⚑ ${mergeCr(e)} merged`];
+      const cycles = mergeCycles(e);
+      if (cycles !== null) parts.push(`${cycles} cycles`);
+      parts.push(shortCommit(e.commit));
+      return div(
+        {
+          "data-testid": "merge-marker",
+          class: "app-transition-marker app-merge-marker",
+          onclick: () => openDrillin(e.id),
+        },
+        parts.join(" · "),
+      );
+    };
+
+    // §S4c — home compact merge one-liner (distinct testid).
+    const MergeMarkerCompact = (e) =>
+      div(
+        {
+          "data-testid": "merge-marker-compact",
+          class: "app-merge-compact",
+          onclick: () => openDrillin(e.id),
+        },
+        `⚑ ${mergeCr(e)} · ${shortCommit(e.commit)}`,
+      );
+
     // Feed rows: each Cycle's marker renders directly above its pair — i.e.
     // immediately before the GREEN run's card in the (newest-first) feed.
     // §S0b — the row plan is pure (app-logic timelineRows): cycleId-linked
     // runs suppress the streak heuristic and carry declared boundaries;
     // unlinked runs / planless projects keep the heuristic byte-identical.
-    function runFeed(events) {
+    // CR-CRU-013 §S4b — `surface` ("home" | "workspace") scopes gate/merge to
+    // compact on home, and milestone-entries to workspace only.
+    function runFeed(events, surface) {
+      const home = surface === "home";
       const rows = [];
       for (const row of L.timelineRows(events, state.plans)) {
         if (row.kind === "marker") rows.push(TransitionMarkerRow(row.marker));
         else if (row.kind === "cycle-span-open") rows.push(CycleSpanOpenRow(row.cycle, row.plan));
         else if (row.kind === "declared-marker") rows.push(DeclaredMarkerRow(row.cycle, row.plan));
-        else rows.push(EventCard(row.event));
+        else if (row.event.kind === "gate")
+          rows.push(home ? GateCardCompact(row.event) : GateCardRow(row.event));
+        else if (row.event.kind === "milestone") {
+          if (row.event.type === "cr-merged")
+            rows.push(home ? MergeMarkerCompact(row.event) : MergeMarkerRow(row.event));
+          else if (!home) rows.push(MilestoneEntryRow(row.event));
+          // home + non-merge milestone: workspace-only, render nothing.
+        } else rows.push(EventCard(row.event));
       }
       return rows;
     }
@@ -842,7 +970,7 @@
         ),
         () =>
           state.backendUp ? span() : span({ class: "app-synced" }, syncedStamp()),
-        () => EmptyState() ?? div(runFeed(visibleEvents())),
+        () => EmptyState() ?? div(runFeed(visibleEvents(), "home")),
       );
 
     const Timeline = () =>
@@ -1363,7 +1491,7 @@
           const runs = visibleEvents();
           return runs.length === 0
             ? div({ class: "app-empty" }, "no runs yet — ingest a run to light the forge")
-            : div(runFeed(runs));
+            : div(runFeed(runs, "workspace"));
         },
       );
 
@@ -2739,13 +2867,64 @@
         );
       };
 
+      // CR-CRU-013 §S3 — GateBody drill-in (codec-aware, single form like
+      // compile: no Detail/Density switch). Outcome banner → one step-row per
+      // submitted step (name + status; the review step shows its findings
+      // count) → one fix-row per submitted fix (id/file/description) → the
+      // push/PR line. A gate event never falls through to TestBody's
+      // suite/leaf anatomy.
+      const GateBody = (d) => {
+        const g = d.gate ?? {};
+        const steps = g.steps ?? [];
+        const fixes = g.fixes ?? [];
+        const push = g.push ?? {};
+        return div(
+          { class: "app-drillin-gate" },
+          div(
+            {
+              "data-testid": "gate-outcome-banner",
+              class: `app-pill app-gate-banner app-gate-${gateOutcomeClass(g.outcome)}`,
+            },
+            `no-mistakes ${g.outcome}`,
+          ),
+          steps.map((s) =>
+            div(
+              { "data-testid": "gate-step-row", class: "app-gate-step-row app-tree-line" },
+              span({ class: "app-gate-step-name" }, s.name),
+              span({ class: "app-gate-step-status" }, s.status),
+              s.findings !== undefined && s.findings !== null
+                ? span({ class: "app-gate-step-findings" }, `${s.findings.total} findings`)
+                : null,
+            ),
+          ),
+          fixes.map((f) =>
+            div(
+              { "data-testid": "gate-fix-row", class: "app-gate-fix-row app-tree-line" },
+              span({ class: "app-gate-fix-id" }, f.id),
+              span({ class: "app-gate-fix-file" }, f.file),
+              span({ class: "app-gate-fix-desc" }, f.description),
+            ),
+          ),
+          div(
+            { "data-testid": "gate-push-line", class: "app-gate-push-line" },
+            `pushed ${shortCommit(push.commit)} → ${push.remote ?? ""}${
+              g.pr ? ` · ${g.pr}` : ""
+            }`,
+          ),
+        );
+      };
+
       return div({ class: "app-drillin-body" }, () => {
         if (loadError.val !== null)
           return div({ class: "app-empty" }, loadError.val);
         const d = detail.val;
         if (d === null)
           return div({ class: "app-empty" }, "loading run detail…");
-        return d.kind === "compile" ? CompileBody(d) : TestBody(d);
+        return d.kind === "gate"
+          ? GateBody(d)
+          : d.kind === "compile"
+            ? CompileBody(d)
+            : TestBody(d);
       });
     };
 
