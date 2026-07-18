@@ -1,6 +1,6 @@
 # CR-CRU-013 — Workflow events: gates (no-mistakes) + milestones
 
-**Status:** IN_PROGRESS (2026-07-18 — C1 server + C2 timeline UI sealed (846-baseline, tsc 0); C3 gate widget + wave state GREEN in flight; §S7 TOON-AXI bun slice folded in as cycle 51 per user direction — full-fleet TOON/AXI migration split to CR-CRU-030; C4 toon.py → C5 verbs → C6 e2e → S7 → C7 verify remaining)
+**Status:** IN_PROGRESS (2026-07-18 — C1/C2/C3 sealed; C4 `toon.py` next)
 **Type:** feature
 **Priority:** P2
 **Depends on:** CR-CRU-008, CR-CRU-011
@@ -137,24 +137,6 @@ The lens wave state machine gains `gated`: `running → lanes complete · awaiti
 review → gated (a passed/checks-passed gate event for that wave) → superseded`.
 Still zero wave-control API — state remains inferred from plans + gate events.
 
-### §S7 TOON-AXI client output (bun) — folded in per user direction 2026-07-18
-The fleet clients' AXI interface migrates to a TOON return contract. This CR
-lands the MINIMAL bun-client slice only; the full-fleet migration (all 5
-clients, full AXI compliance) is **CR-CRU-030**. `bun-crucible.py`'s AXI verbs
-(`register`, `unregister`, `plan-file`, `cycle-activate`, `cycle-done`,
-`cr-close`, and the `test`/`regression`/`auto-ingest` ingest result) return a
-TOON envelope on stdout — encoded via C4's `clients/toon.py` — replacing the
-ad-hoc `print(f"…ok=…")` lines. The ingest-verb envelope carries the run
-CONTEXT (`projectKey, agentId, cycleId, wave, cr`) so cycle association is
-VISIBLE in the AXI return — the gap that let 5 CR-013 runs ingest orphaned
-(cycleId=null) with nothing surfaced. Plus a WARNING GUARD: an `--agent`
-ingest run with `WORKFLOW_CYCLE_ID` unset while the open plan has an ACTIVE
-cycle emits a `no-cycle-id` warning (TOON `warnings[]` + stderr) naming the
-active cycle id — the safety net for the orchestrator forgetting to pass the
-cycle id (the defect that motivated this fold-in). Depends on C4 (`toon.py`);
-new cycle id 51 executes after C4, before the verify sweep. Scope is bun-only —
-the other four clients (`python`/`rust`/`mvn`/`arduino`) are CR-CRU-030.
-
 ## Acceptance criteria
 - [ ] §S4c CR-merge marker: `POST /api/v2/milestones` with `type:"cr-merged", label:"CR-NAI-042", commit:"abc1234", context:{cr:"CR-NAI-042", wave:1}` → 201 stored as a milestone; the WORKSPACE timeline renders a full-width `data-testid="merge-marker"` break row whose text matches `⚑ CR-NAI-042 merged · … abc1234` (same structural weight/placement rules as transition markers); home renders the compact one-line entry; test rollups unchanged; `type:"cr-merged"` joins the §S4b valid-type set.
 - [ ] `POST /api/v2/gates` with the full §S1 shape → 201; the stored event has `kind:"gate"`, `codec:"no-mistakes"`; missing `outcome` → 400 naming `outcome`; test-run rollup counts are unchanged by gate ingestion.
@@ -166,10 +148,6 @@ the other four clients (`python`/`rust`/`mvn`/`arduino`) are CR-CRU-030.
 - [ ] Client `gate-run` (axi proxy + Crucible reporter): with a fake `no-mistakes` on PATH emitting a scripted TOON stream (steps completing over a few seconds), `bun-crucible.py gate-run --intent "…"` (a) posts ≥1 INTERIM gate to `/api/v2/gates` before the final sealing post (throttled per §S2b) and (b) a final gate whose outcome matches the stream — WITHOUT the caller issuing any POST itself (the client owns the Crucible plumbing); (c) the no-mistakes axi detail is still RELAYED to the caller (proxy role) so the orchestrator can decide — assert the verb surfaces the stream/findings to its caller, not swallows them.
 - [ ] §S4b: `POST /api/v2/milestones {type:"gap-analysis", label:"…"}` → 201 `kind:"milestone"`; `type:"deploy"` → 400 naming `type`; rollups unchanged; the WORKSPACE timeline renders a `data-testid="milestone-entry"` slim row with the ◇ glyph + type + label, while the HOME timeline renders zero milestone entries for the same fixture (workspace-scoped assertion).
 - [ ] E2E: `tests/e2e/gates.e2e.ts` — file plan → milestone gap-analysis → close cycles + plan → ingest gate via API → workspace timeline shows the milestone entry AND the boundary card, home shows the compact gate entry but no milestone, `gated` wave header + populated gate pane; results ingested `tier:"e2e"`.
-- [ ] §S7 TOON-AXI (bun): each of `register`/`unregister`/`plan-file`/`cycle-activate`/`cycle-done`/`cr-close` and the `test`/`regression`/`auto-ingest` ingest result prints a `clients/toon.py`-decodable TOON envelope carrying `ok` + the verb's result fields (assert round-trip decode + field presence).
-- [ ] §S7 TOON-AXI (bun): the ingest-verb envelope includes `context.cycleId` — the value when `WORKFLOW_CYCLE_ID` is set, and explicit null when unset.
-- [ ] §S7 warning guard: `test --agent …` with `WORKFLOW_CYCLE_ID` UNSET while the open plan has an ACTIVE cycle emits a `no-cycle-id` warning (in the TOON `warnings[]` AND on stderr) naming the active cycle id; with `WORKFLOW_CYCLE_ID` set → no warning.
-- [ ] §S7: `plan-file`'s assigned cycle ids stay machine-readable via the envelope's cycles field (the "never guess ids" contract survives the TOON switch).
 
 ### §S3 addendum — drill-in origin (LOCKED 2026-07-18, user design review)
 A gate is a wave-boundary MARKER, not a run (same class as the RED→GREEN
@@ -193,6 +171,7 @@ Driving no-mistakes FROM Crucible (report-only); wave-control API; gating
 non-no-mistakes pipelines (structure is codec-shaped for future codecs).
 
 ## Implementation Notes (gap analysis 2026-07-18 — decisions before RED)
+- **TOON-AXI fold-in (user direction 2026-07-18):** the bun client's TOON-AXI output + missing-context warning is Crucible **cycle 51** (after C4's `toon.py`, before verify); the full-fleet migration is **CR-CRU-030**.
 - **Substrate first (C1):** gates/milestones/cr-merged are a NEW event-kind
   family. Blockers found: `store.toEvent` collapses any non-compile/lifecycle
   kind to "test"; `RunEvent.kind` is a 3-value union; no generic payload

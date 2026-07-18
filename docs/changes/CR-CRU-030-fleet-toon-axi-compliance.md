@@ -3,7 +3,7 @@
 **Status:** PENDING
 **Type:** patch
 **Priority:** P1
-**Depends on:** CR-CRU-013 (§S7 bun-client TOON-AXI slice + `clients/toon.py` codec from C4 — the reference implementation this CR rolls out fleet-wide)
+**Depends on:** CR-CRU-013 (the bun-client TOON-AXI slice — Crucible cycle 51 — + `clients/toon.py` codec from C4 — the reference implementation this CR rolls out fleet-wide)
 **Labels:** patch, fleet, tooling, axi, toon, classification, context-integrity, dx
 **Phase:** Wave 4 (0.1.0 — user-directed 2026-07-18)
 **Design reference:** user direction 2026-07-18 ("we need all the crucible
@@ -23,7 +23,7 @@ Python wrappers over different toolchains) print ad-hoc plain text from their
 AXI verbs (`print(f"cycle-done: ok=True cycle=45 plan=11")`). That output is
 not machine-parseable, does not surface the run context, and has no guard for a
 missing cycle association — which is exactly how CR-013 dropped 5 runs onto
-`cycleId=null` unnoticed. CR-013 §S7 lands the TOON-AXI contract for the **bun**
+`cycleId=null` unnoticed. CR-013's bun-client slice (cycle 51) lands the TOON-AXI contract for the **bun**
 client as the reference. This CR migrates the **remaining four** clients to the
 same contract and closes the residual AXI-compliance gaps, so every client
 returns structured TOON and the fleet speaks one AXI dialect.
@@ -64,7 +64,7 @@ Human-readable stderr lines may remain for interactive use; **stdout is the
 TOON AXI channel**.
 
 ### §S2 Migrate the four remaining clients
-Apply CR-013 §S7's bun pattern to `python-crucible.py`, `rust-crucible.py`,
+Apply CR-013's bun-client pattern (cycle 51) to `python-crucible.py`, `rust-crucible.py`,
 `mvn-crucible.py`, `arduino-crucible.py`: every AXI verb (`register`,
 `unregister`, `plan-file`, `cycle-activate`, `cycle-done`, `cr-close`, and the
 test/regression/auto-ingest ingest result, plus each stack's typecheck/compile
@@ -75,7 +75,7 @@ gate) returns the §S1 envelope. The ingest-verb envelopes carry `context`
 Every client warns (envelope `warnings[]` + stderr) when a mandatory
 classification value is absent for the record it is writing:
 - `no-cycle-id` — `--agent` ingest with `WORKFLOW_CYCLE_ID` unset while the open
-  plan has an ACTIVE cycle, naming the active cycle id (CR-013 §S7 lands it for
+  plan has an ACTIVE cycle, naming the active cycle id (CR-013's bun slice lands it for
   bun; generalize to all five).
 - `no-wave` — `plan-file` (and any wave-scoped verb) with no wave resolvable
   from `--wave`/`WORKFLOW_WAVE`; the plan would be filed unclassified (the
