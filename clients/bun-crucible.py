@@ -72,6 +72,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -902,6 +903,278 @@ def cmd_cr_close(args):
     print(f"cr-close: ok={ok} plan={plan['planId']} cr={plan.get('cr')} "
           f"commit={args.commit}"
           + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    if not ok:
+        return 1
+    # §S4c / AC 141 — a SUCCESSFUL close emits a cr-merged milestone marker
+    # (label=CR id, the merge commit, env auto-context). Withheld on a failed
+    # close: the CR is not actually merged, so no marker fires.
+    cr_label = plan.get("cr")
+    ms_resp = _post_milestone(
+        project_dir, _agent_id(args), "cr-merged",
+        label=cr_label, commit=args.commit,
+        context=_fleet_context(cr=cr_label) or None,
+    )
+    print(f"cr-merged: ok={ms_resp.get('ok', False)} cr={cr_label} commit={args.commit}"
+          + (f" error={ms_resp.get('error')}" if ms_resp.get("error") else ""))
+    return 0
+
+
+# ── CR-CRU-013 §S5 — fleet gate / milestone verbs ──────────────────────────
+#
+# `gate-run`    axi PROXY: launch `no-mistakes axi run`, poll `axi status`
+#               while it is in flight for throttled INTERIM gates, seal a FINAL
+#               gate from the run's own resolved outcome, relay the axi detail
+#               to the caller (the caller issues NO POST itself). AC 148.
+# `gate-report` report-only: flags (or an `axi status` TOON) → one POST
+#               /api/v2/gates. AC 147.
+# `milestone`   POST /api/v2/milestones. §S4b / AC 149.
+# `cr-close`    now also emits a `type:"cr-merged"` milestone on a successful
+#               close (withheld on a failed close). §S4c / AC 141.
+
+# Valid server-side gate outcomes (CR-CRU-013 §S1). An interim (in-flight)
+# snapshot has no resolved outcome of its own, so gate-run synthesises one from
+# the current step set — it must still be a member of this set (server 400s
+# otherwise).
+GATE_OUTCOMES = ("checks-passed", "passed", "failed", "cancelled")
+
+# §S2b cadence — the ONLY concrete throttle constant this codebase defines
+# (CR-CRU-008 `_Narrator` default). gate-run reuses it for its interim-poll
+# cadence so at most one interim gate posts per >=2-second window.
+_GATE_POLL_CADENCE_S = 2.0
+_GATE_POLL_TICK_S = 0.4
+
+_TOON_MOD = None
+
+
+def _toon():
+    """Lazily load the sibling `clients/toon.py` (C4) TOON codec by file path.
+
+    The hyphenated `bun-crucible.py` is itself loaded by path (not importable),
+    so `toon.py` sitting next to it is not on `sys.path` for a plain `import`.
+    """
+    global _TOON_MOD
+    if _TOON_MOD is None:
+        import importlib.util
+        toon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "toon.py")
+        spec = importlib.util.spec_from_file_location("bun_crucible_toon", toon_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"could not load TOON codec at {toon_path}")
+        _TOON_MOD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_TOON_MOD)
+    return _TOON_MOD
+
+
+def _agent_id(args):
+    """The agentId for a fleet event. Explicit --agent > $WORKFLOW_ROLE >
+    a stable fallback (these verbs never assert on the id, but the server
+    requires a non-empty agentId)."""
+    explicit = getattr(args, "agent", None)
+    if explicit:
+        return explicit
+    return os.environ.get("WORKFLOW_ROLE") or "bun-crucible"
+
+
+def _fleet_context(cr=None):
+    """Env auto-context shared by gates + milestones: `cr` (when supplied),
+    `wave` from $WORKFLOW_WAVE, `track` from $WORKFLOW_ROLE. Absent env keys are
+    OMITTED (never fabricated) so an unset WORKFLOW_WAVE yields no `wave` key."""
+    ctx = {}
+    if cr:
+        ctx["cr"] = cr
+    wave = os.environ.get("WORKFLOW_WAVE")
+    if wave:
+        ctx["wave"] = wave
+    role = os.environ.get("WORKFLOW_ROLE")
+    if role:
+        ctx["track"] = role
+    return ctx
+
+
+def _parse_steps_flag(steps_raw):
+    """Parse a `--steps "name:status,name:status"` flag into gate step dicts.
+    A malformed entry (no colon, or an empty name/status) raises ValueError —
+    the caller must surface it as a non-zero exit WITHOUT posting garbage."""
+    steps = []
+    for entry in steps_raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if ":" not in entry:
+            raise ValueError(
+                f"malformed --steps entry (expected name:status): {entry!r}")
+        name, status = entry.split(":", 1)
+        name, status = name.strip(), status.strip()
+        if not name or not status:
+            raise ValueError(
+                f"malformed --steps entry (empty name or status): {entry!r}")
+        steps.append({"name": name, "status": status})
+    return steps
+
+
+def _map_axi_step_status(status):
+    """Map a no-mistakes axi step status onto a gate step status."""
+    return {
+        "completed": "passed",
+        "skipped": "skipped",
+        "failed": "failed",
+        "running": "running",
+    }.get(status, status or "passed")
+
+
+def _gate_from_axi(decoded, intent, final):
+    """Build a `gate` object from a decoded `no-mistakes axi` TOON snapshot.
+
+    An in-flight snapshot (`final=False`) synthesises a valid interim outcome
+    from its steps; the sealing snapshot (`final=True`) takes the run's own
+    resolved top-level `outcome`. Returns (gate_dict, step_count)."""
+    run = decoded.get("run") if isinstance(decoded, dict) else None
+    run = run or {}
+    axi_steps = run.get("steps") or []
+    steps = []
+    any_failed = False
+    for s in axi_steps:
+        st = s.get("status")
+        if st == "failed":
+            any_failed = True
+        steps.append({"name": s.get("step"), "status": _map_axi_step_status(st)})
+    if final:
+        raw = decoded.get("outcome")
+        outcome = raw if raw in GATE_OUTCOMES else ("failed" if any_failed else "passed")
+    else:
+        outcome = "failed" if any_failed else "checks-passed"
+    gate = {"intent": intent, "outcome": outcome, "steps": steps}
+    head = run.get("head")
+    if final and head:
+        gate["push"] = {"commit": head}
+    return gate, len(steps)
+
+
+def _post_gate(project_dir, agent_id, gate, context=None):
+    payload = {"projectKey": _project_key(project_dir), "agentId": agent_id, "gate": gate}
+    if context:
+        payload["context"] = context
+    return _post("/api/v2/gates", payload)
+
+
+def _post_milestone(project_dir, agent_id, mtype, label=None, commit=None, context=None):
+    payload = {"projectKey": _project_key(project_dir), "agentId": agent_id, "type": mtype}
+    if label:
+        payload["label"] = label
+    if commit:
+        payload["commit"] = commit
+    if context:
+        payload["context"] = context
+    return _post("/api/v2/milestones", payload)
+
+
+def cmd_gate_report(args):
+    """Report a single already-run gate (flags path). AC 147."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    try:
+        steps = _parse_steps_flag(args.steps) if args.steps else []
+    except ValueError as e:
+        print(f"gate-report: ERROR: {e}", file=sys.stderr)
+        return 1
+    # gate.intent is REQUIRED server-side (400 if missing/empty); when no
+    # explicit intent is given, derive a non-empty one from the outcome.
+    intent = args.intent or f"{args.outcome} gate"
+    gate = {"intent": intent, "outcome": args.outcome, "steps": steps}
+    if args.commit:
+        gate["push"] = {"commit": args.commit}
+    context = _fleet_context()
+    resp = _post_gate(project_dir, _agent_id(args), gate, context or None)
+    ok = resp.get("ok", False)
+    print(f"gate-report: ok={ok} outcome={args.outcome}"
+          + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    return 0 if ok else 1
+
+
+def cmd_gate_run(args):
+    """axi PROXY wrapper: launch `no-mistakes axi run`, poll `axi status` for
+    throttled interim gates, seal a final gate from the run's outcome, and
+    relay the axi detail to the caller. The caller issues NO POST. AC 148."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    nm = shutil.which("no-mistakes")
+    if not nm:
+        print("gate-run: ERROR: `no-mistakes` not found on PATH — cannot proxy axi run",
+              file=sys.stderr)
+        return 1
+
+    intent = args.intent
+    agent_id = _agent_id(args)
+    context = _fleet_context()
+
+    try:
+        proc = subprocess.Popen(
+            [nm, "axi", "run", "--intent", intent],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except OSError as e:
+        print(f"gate-run: ERROR: could not launch `no-mistakes axi run`: {e}",
+              file=sys.stderr)
+        return 1
+
+    # Poll `axi status` while the run is in flight; post throttled INTERIM
+    # gates decoded from each (partial) snapshot.
+    last_post = None
+    while proc.poll() is None:
+        now = time.monotonic()
+        if last_post is None or (now - last_post) >= _GATE_POLL_CADENCE_S:
+            status = subprocess.run([nm, "axi", "status"], capture_output=True, text=True)
+            snap = (status.stdout or "").strip()
+            if snap:
+                try:
+                    decoded = _toon().decode(snap)
+                except Exception:
+                    decoded = None
+                if isinstance(decoded, dict):
+                    run = decoded.get("run") or {}
+                    in_flight = (str(run.get("status")) != "completed"
+                                 and "outcome" not in decoded)
+                    gate, nsteps = _gate_from_axi(decoded, intent, final=False)
+                    # Post only a genuine PARTIAL ladder (never a resolved /
+                    # full 9-step snapshot masquerading as interim).
+                    if in_flight and 0 < nsteps < 9:
+                        _post_gate(project_dir, agent_id, gate, context or None)
+                        last_post = now
+        time.sleep(_GATE_POLL_TICK_S)
+
+    out, _err = proc.communicate()
+    # Proxy role: relay the axi detail to the caller's OWN stdout.
+    if out:
+        sys.stdout.write(out)
+
+    final_snap = (out or "").strip()
+    final_decoded = None
+    if final_snap:
+        try:
+            final_decoded = _toon().decode(final_snap)
+        except Exception:
+            final_decoded = None
+    if not isinstance(final_decoded, dict):
+        print("gate-run: ERROR: `axi run` produced no parseable final snapshot",
+              file=sys.stderr)
+        return 1
+
+    final_gate, _ = _gate_from_axi(final_decoded, intent, final=True)
+    resp = _post_gate(project_dir, agent_id, final_gate, context or None)
+    ok = resp.get("ok", False)
+    print(f"gate-run: ok={ok} outcome={final_gate.get('outcome')} exit={proc.returncode}"
+          + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    return 0 if (ok and proc.returncode == 0) else 1
+
+
+def cmd_milestone(args):
+    """POST a workflow milestone. §S4b / AC 149."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    context = _fleet_context(cr=args.cr)
+    resp = _post_milestone(project_dir, _agent_id(args), args.type,
+                           label=args.label, commit=getattr(args, "commit", None),
+                           context=context or None)
+    ok = resp.get("ok", False)
+    print(f"milestone: ok={ok} type={args.type}"
+          + (f" label={args.label}" if args.label else "")
+          + (f" error={resp.get('error')}" if resp.get("error") else ""))
     return 0 if ok else 1
 
 
@@ -1030,6 +1303,36 @@ def main():
     cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
     _add_project_dir_arg(cc)
     cc.set_defaults(func=cmd_cr_close)
+
+    # ── CR-CRU-013 §S5 — fleet gate / milestone verbs ──
+    gr = sub.add_parser("gate-run",
+                        help="axi PROXY: run `no-mistakes axi run`, post throttled interim "
+                             "+ final gates, relay the axi detail to the caller.")
+    gr.add_argument("--intent", required=True, help="The intent/goal passed down to `axi run`.")
+    gr.add_argument("--agent", help="Agent id for the gate events (default: $WORKFLOW_ROLE).")
+    _add_project_dir_arg(gr)
+    gr.set_defaults(func=cmd_gate_run)
+
+    grp = sub.add_parser("gate-report",
+                         help="Report a single already-run gate → POST /api/v2/gates.")
+    grp.add_argument("--outcome", required=True,
+                     help="Gate outcome (checks-passed|passed|failed|cancelled).")
+    grp.add_argument("--commit", help="The pushed commit sha (gate.push.commit).")
+    grp.add_argument("--steps", help='Comma-separated "name:status" step results.')
+    grp.add_argument("--intent", help="Gate intent (default: derived from --outcome).")
+    grp.add_argument("--agent", help="Agent id (default: $WORKFLOW_ROLE).")
+    _add_project_dir_arg(grp)
+    grp.set_defaults(func=cmd_gate_report)
+
+    ms = sub.add_parser("milestone", help="POST a workflow milestone → /api/v2/milestones.")
+    ms.add_argument("--type", required=True,
+                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged).")
+    ms.add_argument("--label", help="Human-readable milestone label.")
+    ms.add_argument("--cr", help="CR id (rides context.cr).")
+    ms.add_argument("--commit", help="Optional commit sha.")
+    ms.add_argument("--agent", help="Agent id (default: $WORKFLOW_ROLE).")
+    _add_project_dir_arg(ms)
+    ms.set_defaults(func=cmd_milestone)
 
     args = p.parse_args()
     sys.exit(args.func(args))
