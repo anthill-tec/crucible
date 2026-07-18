@@ -2038,13 +2038,89 @@
       );
     };
 
-    // Gate pane placeholder — populated by CR-CRU-013's no-mistakes pane.
-    const GatePane = () =>
+    // CR-CRU-013 §S4 — shared no-mistakes gate rendering body (ONE form,
+    // reused by both the §S3 timeline drill-in GateBody AND the Workflow-tab
+    // contextual widget below): outcome banner → one step-row per submitted
+    // step → one fix-row per submitted fix → the push/PR line.
+    const gateBodyContent = (g) => {
+      const steps = g.steps ?? [];
+      const fixes = g.fixes ?? [];
+      const push = g.push ?? {};
+      return [
+        div(
+          {
+            "data-testid": "gate-outcome-banner",
+            class: `app-pill app-gate-banner app-gate-${gateOutcomeClass(g.outcome)}`,
+          },
+          `no-mistakes ${g.outcome}`,
+        ),
+        steps.map((s) =>
+          div(
+            { "data-testid": "gate-step-row", class: "app-gate-step-row app-tree-line" },
+            span({ class: "app-gate-step-name" }, s.name),
+            span({ class: "app-gate-step-status" }, s.status),
+            s.findings !== undefined && s.findings !== null
+              ? span({ class: "app-gate-step-findings" }, `${s.findings.total} findings`)
+              : null,
+          ),
+        ),
+        fixes.map((f) =>
+          div(
+            { "data-testid": "gate-fix-row", class: "app-gate-fix-row app-tree-line" },
+            span({ class: "app-gate-fix-id" }, f.id),
+            span({ class: "app-gate-fix-file" }, f.file),
+            span({ class: "app-gate-fix-desc" }, f.description),
+          ),
+        ),
+        div(
+          { "data-testid": "gate-push-line", class: "app-gate-push-line" },
+          `pushed ${shortCommit(push.commit)} → ${push.remote ?? ""}${
+            g.pr ? ` · ${g.pr}` : ""
+          }`,
+        ),
+      ];
+    };
+
+    // §S4 — scoped gate events for the routed project (kind:"gate" only).
+    const scopedGateEvents = () =>
+      state.events.filter(
+        (e) => e.projectKey === state.route.projectKey && e.kind === "gate",
+      );
+
+    // §S4 — the Workflow-tab primary zone is CONTEXTUAL and mutually
+    // exclusive: it shows the LIVE PLAN during normal execution, OR the
+    // no-mistakes gate widget ONLY at the wave/release boundary (every
+    // scoped plan closed — no CR active — AND a gate event exists). The
+    // boundary gate is the LATEST scoped gate (latest wins). Returns null
+    // when the live plan should own the zone (so no gate element mounts).
+    const boundaryGate = () => {
+      const plans = scopedPlans();
+      if (plans.length === 0) return null;
+      if (plans.some((p) => p.status === "open")) return null; // a CR is active
+      const gates = scopedGateEvents();
+      if (gates.length === 0) return null;
+      return gates.reduce(
+        (latest, e) => (latest === null || e.timestamp > latest.timestamp ? e : latest),
+        null,
+      );
+    };
+
+    // §S4 — the contextual gate widget, mounted under the SAME `gate-pane`
+    // testid the removed CR-011 placeholder used (in place, not a new name),
+    // reusing the shared gate body so its outcome banner + step ladder carry
+    // the identical `gate-outcome-banner` / `gate-step-row` testids.
+    const GateWidget = (event) =>
       div(
         { "data-testid": "gate-pane", class: "app-gate-pane" },
         div({ class: "app-pane-section-title" }, "Gate"),
-        div({ class: "app-empty" }, "gate reporting lands in CR-013"),
+        div({ class: "app-drillin-gate" }, gateBodyContent(event.gate ?? {})),
       );
+
+    // §S4 — exactly one of the live plan or the gate widget, never both.
+    const WorkflowPrimary = () => {
+      const gate = boundaryGate();
+      return gate !== null ? GateWidget(gate) : WorkflowActive();
+    };
 
     // ── §S3 history lens — Wave → [Track] → CR → Cycle (C4) ─────────────
     // Grouping is pure (app-logic workflowLens); this is the render layer.
@@ -2270,8 +2346,7 @@
         { "data-testid": "pane-scroll", class: "app-pane-content" },
         div(
           { class: "app-workflow-cols" },
-          () => WorkflowActive(),
-          GatePane(),
+          () => WorkflowPrimary(),
         ),
         // §S3 history lens — the grouped Wave → [Track] → CR → Cycle tree.
         () => WorkflowHistory(),
@@ -2873,46 +2948,8 @@
       // count) → one fix-row per submitted fix (id/file/description) → the
       // push/PR line. A gate event never falls through to TestBody's
       // suite/leaf anatomy.
-      const GateBody = (d) => {
-        const g = d.gate ?? {};
-        const steps = g.steps ?? [];
-        const fixes = g.fixes ?? [];
-        const push = g.push ?? {};
-        return div(
-          { class: "app-drillin-gate" },
-          div(
-            {
-              "data-testid": "gate-outcome-banner",
-              class: `app-pill app-gate-banner app-gate-${gateOutcomeClass(g.outcome)}`,
-            },
-            `no-mistakes ${g.outcome}`,
-          ),
-          steps.map((s) =>
-            div(
-              { "data-testid": "gate-step-row", class: "app-gate-step-row app-tree-line" },
-              span({ class: "app-gate-step-name" }, s.name),
-              span({ class: "app-gate-step-status" }, s.status),
-              s.findings !== undefined && s.findings !== null
-                ? span({ class: "app-gate-step-findings" }, `${s.findings.total} findings`)
-                : null,
-            ),
-          ),
-          fixes.map((f) =>
-            div(
-              { "data-testid": "gate-fix-row", class: "app-gate-fix-row app-tree-line" },
-              span({ class: "app-gate-fix-id" }, f.id),
-              span({ class: "app-gate-fix-file" }, f.file),
-              span({ class: "app-gate-fix-desc" }, f.description),
-            ),
-          ),
-          div(
-            { "data-testid": "gate-push-line", class: "app-gate-push-line" },
-            `pushed ${shortCommit(push.commit)} → ${push.remote ?? ""}${
-              g.pr ? ` · ${g.pr}` : ""
-            }`,
-          ),
-        );
-      };
+      const GateBody = (d) =>
+        div({ class: "app-drillin-gate" }, gateBodyContent(d.gate ?? {}));
 
       return div({ class: "app-drillin-body" }, () => {
         if (loadError.val !== null)
