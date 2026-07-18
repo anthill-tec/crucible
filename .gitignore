@@ -10,3 +10,4 @@ blob-report/
 .lavish/
 .features-gen/
 __pycache__/
+.venv/
