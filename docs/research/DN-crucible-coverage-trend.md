@@ -4,7 +4,8 @@
 **Co-author:** claude (orchestrator — crucible)
 **Date:** 2026-07-17
 **Status:** LOCKED (design rounds 2026-07-17 on the F8 vitals card; user:
-"Approving the Coverage graphics design")
+"Approving the Coverage graphics design") · amended 2026-07-21 (§6 — data
+model corrected to a server date-keyed daily series after CR-028 gap analysis)
 **Consumed by:** CR-CRU-028 (implementation) · storyboard F8 (visual contract)
 **Depends on designs:** CR-CRU-023 §S2 (durable rollup series) · CR-CRU-027
 (sparkline geometry) · DN-crucible-analytics §3 (two-clock separation — this
@@ -49,7 +50,47 @@ Months = trajectory · weeks/days = momentum · day strip = intra-day
 stability · run drill-in = the suite that moved the number.
 
 ## 5 CR mapping & non-goals
-CR-CRU-028 implements the model end-to-end (§S1 bars, §S2 drill-down).
-Non-goals: charting-library adoption (CR-022's analytics pane); the
-coverage METER (separate element); function-coverage series (lines only,
+The model ships in two CRs: **CR-CRU-033** delivers the date-keyed
+coverage-by-day SERIES (§6 below — the data prerequisite); **CR-CRU-028**
+implements the client hierarchy on that clean series (§S1 bars, §S2
+drill-down). Non-goals: charting-library adoption (CR-022's analytics pane);
+the coverage METER (separate element); function-coverage series (lines only,
 as today); cross-project aggregation.
+
+## 6 Amendment 2026-07-21 — the series is a date-keyed daily series, not the raw CR-023 rollups
+CR-028 gap analysis found the §3.1 assumption — "derived entirely from the
+daily/wave rollups" — does NOT hold against the CR-023 rollup implementation,
+so the model as first locked is not buildable on that data. Two facts:
+1. **Rollups are prune-only.** `foldIntoRollup` runs only inside
+   `enforceRetention` — a bucket exists only after an event ages PAST
+   retention. Recent within-retention coverage runs are never rolled up, so a
+   rollups-only top level would render exactly the "recent coverage
+   unrepresented" bug this card exists to fix.
+2. **Rollup buckets are keyed `context.wave ?? UTC-day`** — mixed, and
+   wave-keyed buckets carry no date, so they cannot sit on a day/week/month
+   axis (a wave spans many days, collapsed to one undateable bucket).
+
+**Corrected data model (locked 2026-07-21):**
+- The card consumes a **server-computed date-keyed coverage-by-day series**,
+  `{ day: "YYYY-MM-DD", percent }[]` oldest→newest — NOT the raw rollups and
+  NOT the old flat `number[]` payload.
+- The server builds it by MERGING, per UTC day: (a) day-keyed rollups (days
+  aged past retention) + (b) within-retention coverage-bearing green-regression
+  events grouped by their UTC day (last-of-day wins). This closes the recent-day
+  gap: recent days come from live events, older days from rollups.
+- **Coverage rollups are re-keyed to always UTC-day** (the `context.wave`
+  bucket key is dropped for the rollup). Safe: the ONLY consumer of the rollup
+  series is this coverage trend (via `lastCoverage`); no surface reads the
+  rollup's wave-grouping or its run/pass/fail aggregates.
+- **Legacy wave-keyed rollup buckets are excluded** from the date series — their
+  source events are already deleted, so no per-day is recoverable. A bounded
+  one-time historical gap; going forward every fold is date-keyed, so no new
+  gaps accrue. (Recent history is preserved regardless, via the live-event
+  half of the merge.)
+- §3.4 retention honesty is unchanged: a day whose per-run events are pruned
+  keeps its bar (rollup value) with a dimmed drill affordance; the per-run heat
+  strip exists only for days still inside retention (read from the live event
+  feed the workspace already loads, CR-CRU-032 §S4).
+
+This is aggregation + a payload-shape change + a rollup bucket-key change — no
+DB schema change. CR-CRU-033 carries it.
