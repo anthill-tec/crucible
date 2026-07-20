@@ -46,12 +46,99 @@
 // (real VanJS/VanX vendor bundles, real public/app-logic.mjs, real
 // public/app.js; only `fetch` is scripted).
 import { describe, test, expect, afterEach } from "bun:test";
+import { setSystemTime } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startServer } from "../src/server.ts";
-import type { Store } from "../src/store.ts";
+import { Store } from "../src/store.ts";
+import type { RunSummary, SuiteNode } from "../src/types.ts";
+
+// ── (S1) STORE — rollup buckets keyed by UTC day, never by wave (CR-CRU-033 §S1) ──
+//
+// Store.foldIntoRollup currently buckets `context.wave ?? UTC-day` — a
+// coverage event carrying context.wave folds into a WAVE-keyed bucket (e.g.
+// "4") with no date. §S1 drops the `context.wave ??` prefix so EVERY fold
+// buckets by the event's UTC day, always. Driven the same way the (A) SERVER
+// tests below force a fold: addProject({ retention: 0 }) makes every
+// insertEvent immediately overflow (count 1 > cap 0) and fold+delete, so the
+// bucket key is observable via store.listRollups() without waiting on real
+// wall-clock retention. bun:test's setSystemTime() pins Date.now() (and thus
+// the event's timestamp) to a known UTC day before each recordTestEvent call
+// — same clock-injection technique as tests/cycle-epochs.test.ts /
+// tests/checkpoint-stop.test.ts.
+
+function coverageSummary(overrides?: Partial<RunSummary>): RunSummary {
+  return { total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 20, ...overrides };
+}
+
+const s1EmptyTree: SuiteNode[] = [];
+
+describe("Store#foldIntoRollup — bucket key is always UTC day (CR-CRU-033 §S1)", () => {
+  afterEach(() => {
+    setSystemTime(); // reset the injected clock so it never leaks to other files
+  });
+
+  test("a wave-tagged coverage event folds into its UTC-day bucket, never the wave id; two same-day events (one wave-tagged, one not) fold into ONE bucket with runs=2", () => {
+    const store = new Store(":memory:");
+    const key = crypto.randomUUID();
+    // retention: 0 forces every insertEvent to immediately overflow (count
+    // 1 > cap 0) and fold into a rollup — same technique as the (A) SERVER
+    // describe block above.
+    store.addProject({ key, name: "s1-wave-day", type: "backend", sutRoot: "/tmp/s1-wave-day", retention: 0 });
+
+    // Event A: carries context.wave="4", timestamp pinned to 2026-07-14.
+    setSystemTime(new Date("2026-07-14T09:00:00.000Z"));
+    store.recordTestEvent(
+      key,
+      "agent-s1-a",
+      {
+        summary: coverageSummary(),
+        tree: s1EmptyTree,
+        coverage: { lines: { total: 100, covered: 70, percent: 70 } },
+      },
+      { tier: "regression", context: { wave: "4" } },
+    );
+
+    // §S1 AC: the wave-tagged event's persisted bucket is its UTC day
+    // ("2026-07-14"), NEVER the wave id ("4"). Every bucket in the table
+    // must be a UTC-day string.
+    const afterFirstFold = store.listRollups(key);
+    for (const rollup of afterFirstFold) {
+      expect(rollup.bucket).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+    const waveBucket = afterFirstFold.find((r) => r.bucket === "4");
+    expect(waveBucket).toBeUndefined();
+    const dayBucketAfterA = afterFirstFold.find((r) => r.bucket === "2026-07-14");
+    expect(dayBucketAfterA).toBeDefined();
+    expect(dayBucketAfterA!.runs).toBe(1);
+
+    // Event B: SAME UTC day (2026-07-14), no wave context at all.
+    setSystemTime(new Date("2026-07-14T18:00:00.000Z"));
+    store.recordTestEvent(
+      key,
+      "agent-s1-b",
+      {
+        summary: coverageSummary(),
+        tree: s1EmptyTree,
+        coverage: { lines: { total: 100, covered: 90, percent: 90 } },
+      },
+      { tier: "regression" },
+    );
+
+    // §S1 AC: A and B fold into the SAME "YYYY-MM-DD" bucket — exactly one
+    // rollup row for that day, with runs=2 (not split into a "4" bucket +
+    // a date bucket).
+    const afterSecondFold = store.listRollups(key);
+    expect(afterSecondFold.length).toBe(1);
+    const combined = afterSecondFold[0]!;
+    expect(combined.bucket).toBe("2026-07-14");
+    expect(combined.runs).toBe(2);
+    // Negative bound: no leftover wave-keyed bucket anywhere.
+    expect(afterSecondFold.some((r) => r.bucket === "4")).toBe(false);
+  });
+});
 
 // ── (A) SERVER — coverageTrend sourced from the durable rollup series ──
 
