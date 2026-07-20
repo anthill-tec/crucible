@@ -362,9 +362,14 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
       expect(doneRow.textContent ?? "").not.toContain(" by ");
       expect(doneRow.textContent ?? "").not.toContain("GREEN confirmed");
       expect(doneRow.textContent ?? "").not.toContain("report accepted");
-      // Bare — nothing at all trails the quoted label (no " · " narration
-      // segment of any kind, present or future).
-      expect(norm(doneRow.textContent)).toMatch(/cycle 1 · "checkpoint persistence"\s*$/);
+      // CR-CRU-025 §S1: the → Runs affordance is a separate node; the "bare done
+      // row" contract means no NARRATION trails, not "no affordance". The badge
+      // IS present + separate; the label proper still ends bare once it is removed.
+      const doneToRuns = doneRow.querySelector('[data-testid="cycle-to-runs"]');
+      expect(doneToRuns).not.toBeNull();
+      const doneBare = doneRow.cloneNode(true) as HTMLElement;
+      doneBare.querySelector('[data-testid="cycle-to-runs"]')!.remove();
+      expect(norm(doneBare.textContent)).toMatch(/cycle 1 · "checkpoint persistence"\s*$/);
 
       // ── item 2/3 — active row: bold, ember; inline always-visible open span ──
       const activeRow = rowFor("compile fallback");
@@ -605,8 +610,14 @@ describe("§S6 #2 (re-baselined 2026-07-17) — bare done rows carry NO narratio
     expect(norm(row.textContent)).toContain('cycle 1 · "checkpoint persistence"');
     expect(row.textContent ?? "").not.toContain("GREEN confirmed");
     expect(row.textContent ?? "").not.toContain(" by ");
-    // Bare — nothing trails the quoted label.
-    expect(norm(row.textContent)).toMatch(/cycle 1 · "checkpoint persistence"\s*$/);
+    // CR-CRU-025 §S1: the → Runs affordance is a separate node; the "bare done
+    // row" contract means no NARRATION trails, not "no affordance". The badge
+    // IS present + separate; the label proper still ends bare once it is removed.
+    const rowToRuns = row.querySelector('[data-testid="cycle-to-runs"]');
+    expect(rowToRuns).not.toBeNull();
+    const rowBare = row.cloneNode(true) as HTMLElement;
+    rowBare.querySelector('[data-testid="cycle-to-runs"]')!.remove();
+    expect(norm(rowBare.textContent)).toMatch(/cycle 1 · "checkpoint persistence"\s*$/);
 
     // The orchestrator identity DOES appear — but on the CR root, not here.
     const root = active().querySelector('[data-testid="workflow-cr-root"][data-cr="CR-NARR-1"]');
