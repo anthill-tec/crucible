@@ -34,6 +34,11 @@
       // naturally preserves it. A vanX reactive array so a toggle re-runs the
       // Runs feed binding (mutated via vanX.replace, like state.events).
       collapsedCycles: [],
+      // CR-CRU-032 §S3 — the cycleId whose `→ Runs` anchor-fetch resolved
+      // empty with NO `cycle` field (server-confirmed truly-pruned boundary),
+      // so the Runs pane can surface explicit "pruned" feedback instead of a
+      // silent tab-switch-and-nothing. null = no pending feedback.
+      anchorFeedback: null,
     });
 
     // ── Routing (§S2 — hash-free History routing, parse in app-logic) ───
@@ -1564,9 +1569,26 @@
     // CR-CRU-016 §S1 (C5) — the workspace detail is hosted by WorkspaceBody
     // (see WorkspaceRunDetail), so the tab panes render their feeds
     // directly; only the home timeline still paneSwaps.
+    // CR-CRU-032 §S3 — explicit, accurate feedback when a `→ Runs` click's
+    // anchor-fetch confirmed the boundary is truly pruned (empty events, no
+    // `cycle`). A real DOM node in the Runs pane, never a silent no-op or the
+    // old inaccurate `title` channel. Reactive on state.anchorFeedback.
+    const AnchorFetchFeedback = () => {
+      const fb = state.anchorFeedback;
+      if (fb === null || fb === undefined) return null;
+      return div(
+        { "data-testid": "anchor-fetch-feedback", class: "app-anchor-fetch-feedback app-card-meta" },
+        "This cycle's Runs boundary has been pruned from the retained timeline — nothing to jump to.",
+      );
+    };
+
     const WorkspaceRuns = () =>
       div(
         { "data-testid": "workspace-runs", class: greyed("app-center") },
+        // Always yield a node (empty placeholder when no feedback) so VanJS
+        // keeps this reactive binding alive — a `null`-first derived child is
+        // GC'd and never re-renders (same guard as the home feed at §S0b).
+        () => AnchorFetchFeedback() ?? span({ "aria-hidden": "true" }),
         WorkspaceRunsFeed(),
       );
 
@@ -2029,7 +2051,7 @@
     // boundary for `cycleId` re-renders asynchronously; retry (real timers,
     // never the 10s blink delay) until it mounts, then scroll it into view
     // and blink it.
-    const revealDeclaredMarker = (cycleId, attempts = 0) => {
+    const revealDeclaredMarker = (cycleId, attempts = 0, anchored = false) => {
       const marker = document.querySelector(
         `[data-testid="declared-marker"][data-cycle-id="${cycleId}"]`,
       );
@@ -2039,7 +2061,50 @@
         return;
       }
       if (attempts < 30) {
-        setTimeout(() => revealDeclaredMarker(cycleId, attempts + 1), 5);
+        setTimeout(() => revealDeclaredMarker(cycleId, attempts + 1, anchored), 5);
+        return;
+      }
+      // CR-CRU-032 §S2 — the marker never mounted from the loaded window: this
+      // cycle's boundary is beyond the loaded feed (not necessarily pruned).
+      // Anchor-fetch it ONCE (`anchored` guards against a fetch loop) — a
+      // beyond-window boundary comes back with events to merge, a truly-pruned
+      // one comes back empty and surfaces §S3 feedback. Never a silent give-up.
+      if (!anchored) anchorFetchRuns(cycleId);
+    };
+
+    // CR-CRU-032 §S2/§S3 — the beyond-window resolver behind `revealDeclaredMarker`.
+    // Issues the §S1 anchored route `GET /api/v2/events?project=<key>&cycleId=<id>`
+    // (`{events, cycle?}`): a non-empty `events` payload is merged into the Runs
+    // feed (sufficient on its own for `timelineRows` to mount the declared
+    // marker) and the reveal is retried; an EMPTY payload with NO `cycle` field
+    // is the server's "truly pruned" signal, surfaced as explicit feedback.
+    const anchorFetchRuns = async (cycleId) => {
+      const key = state.route.projectKey;
+      if (key === undefined || key === null) return;
+      let body;
+      try {
+        body = await getJson(
+          `/api/v2/events?project=${encodeURIComponent(key)}&cycleId=${encodeURIComponent(cycleId)}`,
+        );
+      } catch {
+        return;
+      }
+      const fetched = Array.isArray(body.events) ? body.events : [];
+      if (fetched.length > 0) {
+        const seen = new Set(state.events.map((e) => e.id));
+        const additions = fetched.filter((e) => !seen.has(e.id));
+        if (additions.length > 0) {
+          const merged = state.events.concat(additions);
+          vanX.replace(state.events, () => merged);
+        }
+        // Re-reveal with a fresh retry budget; `anchored` blocks a second fetch.
+        revealDeclaredMarker(cycleId, 0, true);
+        return;
+      }
+      // Empty events + absent `cycle` field ⇒ server confirms the boundary is
+      // truly gone (mirrors the §S1 "unknown cycleId" case). Surface §S3 feedback.
+      if (body.cycle === undefined || body.cycle === null) {
+        state.anchorFeedback = cycleId;
       }
     };
 
@@ -2048,19 +2113,25 @@
     // rebinding). Clicking flips the workspace tab to Runs (the one-rule
     // `state.workspaceTab` swap, NOT a navigate() pathname change), scrolls the
     // matching `declared-marker` (by cycleId) into view, and blinks it 10s.
-    // When the cycle's declared boundary has been pruned off the retained
-    // timeline (no linked run survives) the badge is dim + inert.
+    // CR-CRU-032 §S3 — the badge is LIVE for EVERY completed cycle: a boundary
+    // absent from the loaded window is beyond-window (reachable via §S2's
+    // anchor-fetch), NOT pruned. The old `linkedRunsFor(...).length > 0` dim
+    // gate conflated the two and lied — a cycle earns the pruned verdict only
+    // AFTER a click's anchor-fetch comes back empty (state.anchorFeedback),
+    // never at static render time.
     const CycleToRunsBadge = (cycleId) => {
-      const live = cycleId !== undefined && cycleId !== null && linkedRunsFor(cycleId).length > 0;
+      const live = cycleId !== undefined && cycleId !== null;
       return span(
         {
           "data-testid": "cycle-to-runs",
-          class: `app-pill app-cycle-to-runs${live ? "" : " disabled"}`,
-          "aria-disabled": live ? "false" : "true",
-          title: live ? "Jump to this cycle's Runs boundary" : "boundary pruned — no runs retained",
+          class: "app-pill app-cycle-to-runs",
+          "aria-disabled": "false",
+          title: "Jump to this cycle's Runs boundary",
           onclick: (ev) => {
             ev.stopPropagation();
             if (!live) return;
+            // Clear any stale pruned feedback from a prior cycle's click.
+            state.anchorFeedback = null;
             state.workspaceTab = "Runs";
             revealDeclaredMarker(cycleId);
           },
