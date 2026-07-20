@@ -223,25 +223,32 @@ describe("§S7.1 — run ingest with an unknown context.cycleId is REFUSED (400)
     expect(after.length).toBe(0);
   });
 
-  test("context.cycleId referencing a cycle that belongs to a DIFFERENT project entirely -> 400 (still unlinkable within THIS project)", async () => {
-    const handleA = boot();
-    const handleB = boot();
-    // Two independent servers guarantee the cycle id from project A's plan
-    // cannot coincidentally resolve inside project B's store.
-    const keyA = await createProject(handleA);
-    const { a } = await filePlanAB(handleA, keyA, "CR-INGEST-CYCLE-OTHER-PROJECT-A");
+  test("context.cycleId that exists in a SIBLING project but not THIS one -> 400 (validation is per-project, not global)", async () => {
+    // One server, two projects in the SAME store. Cycle ids are allocated
+    // PER PROJECT (store.nextCycleId scopes MAX(cycle_id) by project_key), so
+    // A and B both start at 1 and their id spaces overlap — two isolated
+    // servers could therefore never prove scoping (any id absent in B is just
+    // the unknown-id case). To actually prove the ingest lookup is scoped to
+    // THIS project, give project A a cycle id that B never mints (A files a
+    // SECOND plan -> ids 3,4), then ingest that A-only id into B: B owns only
+    // [1,2], so the reference is unlinkable HERE even though it is a live
+    // cycle in project A. This fails unless findCycle filters by project_key.
+    const handle = boot();
+    const keyA = await createProject(handle);
+    await filePlanAB(handle, keyA, "CR-INGEST-CYCLE-SIBLING-A1"); // A: cycles 1,2
+    const { a: aOnly } = await filePlanAB(handle, keyA, "CR-INGEST-CYCLE-SIBLING-A2"); // A: cycles 3,4 -> aOnly=3
 
-    const keyB = await createProject(handleB);
-    await filePlanAB(handleB, keyB, "CR-INGEST-CYCLE-OTHER-PROJECT-B");
+    const keyB = await createProject(handle);
+    await filePlanAB(handle, keyB, "CR-INGEST-CYCLE-SIBLING-B"); // B: cycles 1,2 (never 3)
 
-    const res = await postParsedRun(handleB, keyB, { cycleId: a });
+    const res = await postParsedRun(handle, keyB, { cycleId: aOnly });
     expect(res.status).toBe(400);
     const body = (await res.json()) as RunsPostResponse;
     expect(body.ok).toBe(false);
     expect(Array.isArray(body.help)).toBe(true);
     expect((body.help as string[]).length).toBeGreaterThan(0);
 
-    const events = await eventsForProject(handleB, keyB);
+    const events = await eventsForProject(handle, keyB);
     expect(events.length).toBe(0);
   });
 });

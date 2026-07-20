@@ -394,6 +394,46 @@ function runMeta(body: V2Body): Pick<RecordEventMeta, "tier" | "stack" | "contex
   };
 }
 
+/**
+ * CR-CRU-024 §S7 — validate a run ingest's `context.cycleId` against stored
+ * plan state (Crucible is the source of truth, not the client). Returns:
+ *  - `{ fail }` when the id matches NO cycle in any of the project's plans —
+ *    a 400 whose error names the unknown id and help[] lists the open plan's
+ *    cycle ids; the caller returns it and stores NOTHING;
+ *  - `{ staleHelp }` when the id references a TERMINAL cycle — the ingest is
+ *    accepted (late ingests are legal) but flagged as a stale reference;
+ *  - `{}` when there is no `context.cycleId`, or it references an
+ *    active/pending cycle (happy path — no added help).
+ * `context.cycle` (the free-form label) is never validated.
+ */
+function validateCycleRef(
+  store: Store,
+  projectKey: string,
+  body: V2Body,
+): { fail?: Response; staleHelp?: string[] } {
+  const context = body.context;
+  if (typeof context !== "object" || context === null) return {};
+  const cycleId = (context as { cycleId?: unknown }).cycleId;
+  if (typeof cycleId !== "number") return {};
+  const found = store.findCycle(projectKey, cycleId);
+  if (found === null) {
+    const summary = store.openPlanCycleSummary(projectKey);
+    const help =
+      summary !== null
+        ? cycleHints.unknownCycle(summary.cr, summary.cycleIds)
+        : hints.unknownCycleNoPlan;
+    return {
+      fail: fail(400, `unknown cycleId: ${cycleId} — no such cycle in this project's plans`, {
+        help,
+      }),
+    };
+  }
+  if (found.terminal) {
+    return { staleHelp: cycleHints.staleCycle(cycleId) };
+  }
+  return {};
+}
+
 /** §S1 — one-line run verdict: RED when failed>0, GREEN otherwise. */
 function runVerdict(summary: RunSummary): string {
   return summary.failed > 0
@@ -426,13 +466,22 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   if ("error" in parsed) return fail(400, parsed.error);
   const { run } = parsed;
 
+  // CR-CRU-024 §S7 — reject an unlinkable context.cycleId BEFORE the event is
+  // stored; a stale (terminal) cycle only adds a help note.
+  const cycleCheck = validateCycleRef(store, pk.key, body);
+  if (cycleCheck.fail !== undefined) return cycleCheck.fail;
+
   const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: codecName,
     ...runMeta(body),
   });
-  // §S3 — a RED ingest carries the transition hint.
-  return runResponse(event.id, run.summary, run.summary.failed > 0 ? hints.afterRed : undefined);
+  // §S3 — a RED ingest carries the transition hint; §S7 adds the stale note.
+  const help = [
+    ...(run.summary.failed > 0 ? hints.afterRed : []),
+    ...(cycleCheck.staleHelp ?? []),
+  ];
+  return runResponse(event.id, run.summary, help.length > 0 ? help : undefined);
 }
 
 async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
@@ -457,6 +506,11 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     ...(hasCoverage ? { coverage: body.coverage as Coverage } : {}),
   };
 
+  // CR-CRU-024 §S7 — reject an unlinkable context.cycleId BEFORE the event is
+  // stored; a stale (terminal) cycle only adds a help note.
+  const cycleCheck = validateCycleRef(store, pk.key, body);
+  if (cycleCheck.fail !== undefined) return cycleCheck.fail;
+
   const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: "parsed",
@@ -464,11 +518,12 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     ...runMeta(body),
   });
   // §S3 — RED transition hint; coverage arrived but the store dropped it
-  // (failing run) — say so in help too.
+  // (failing run) — say so in help too. §S7 adds the stale-cycle note.
   const dropped = hasCoverage && event.coverage === undefined;
   const help = [
     ...(summary.failed > 0 ? hints.afterRed : []),
     ...(dropped ? hints.coverageDropped : []),
+    ...(cycleCheck.staleHelp ?? []),
   ];
   return runResponse(event.id, summary, help.length > 0 ? help : undefined);
 }

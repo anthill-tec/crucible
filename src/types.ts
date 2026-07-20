@@ -97,7 +97,11 @@ export interface RunContext {
   // labelling the RED→GREEN cycle this run belongs to.
   cycle?: string;
   // CR-CRU-011 §S0 (additive) — declared-plan linkage: the numeric id of the
-  // plan cycle this run belongs to. Stored verbatim; unknown ids tolerated.
+  // plan cycle this run belongs to. CR-CRU-024 §S7 — VALIDATED on ingest against
+  // stored plan state (Crucible is the source of truth): an id matching no cycle
+  // in any of the project's plans is REFUSED (400, never stored); a terminal
+  // (done/skipped/failed) cycle is accepted but flagged as a stale reference; an
+  // active/pending cycle links silently.
   cycleId?: number;
 }
 

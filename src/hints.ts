@@ -27,7 +27,8 @@ export const hints: Record<
   | "malformedBody"
   | "cycleLocked"
   | "cycleImmutable"
-  | "cycleOneMutation",
+  | "cycleOneMutation"
+  | "unknownCycleNoPlan",
   string[]
 > = {
   /** GET /api/v2 — orientation for a fresh agent. */
@@ -152,6 +153,11 @@ export const hints: Record<
     "one mutation per call — send either {label} (rename) or {status} (transition), never both",
     "PATCH …/cycles/<id> {label} to rename, then PATCH …/cycles/<id> {status} to transition",
   ],
+  /** CR-CRU-024 §S7 — an unknown cycleId ingest when the project has no open plan. */
+  unknownCycleNoPlan: [
+    "context.cycleId matched no cycle — this project has no open plan to link a run to",
+    "file a plan first (POST …/plans {cr, cycles:[…]}) or omit context.cycleId",
+  ],
 };
 
 /**
@@ -177,5 +183,22 @@ export const cycleHints = {
   insertBeforeActive: (active: number): string[] => [
     `cycle ${active} is active — insert the new cycle after it, not before`,
     `target a cycle that sits after the active cycle ${active} in the plan order`,
+  ],
+  /**
+   * §S7 — a run ingest's context.cycleId matched no cycle in any of the
+   * project's plans; name the open plan (cr) and its known cycle ids so a
+   * mis-set WORKFLOW_CYCLE_ID can be corrected to a real one.
+   */
+  unknownCycle: (cr: string, cycleIds: number[]): string[] => [
+    `context.cycleId matched no cycle in this project's plans — the open plan ${cr} has cycle ids: ${cycleIds.join(", ")}`,
+    "export a WORKFLOW_CYCLE_ID that resolves to one of those cycles, or omit context.cycleId",
+  ],
+  /**
+   * §S7 — an accepted ingest referenced a TERMINAL (done/skipped/failed) cycle:
+   * late ingests are legal, but the WORKFLOW_CYCLE_ID is almost certainly stale.
+   */
+  staleCycle: (cycleId: number): string[] => [
+    `context.cycleId ${cycleId} references a CLOSED cycle — the run was stored, but your WORKFLOW_CYCLE_ID is likely stale`,
+    "confirm the active cycle (GET …/plans?cr=<cr>) and export its id before the next ingest",
   ],
 };

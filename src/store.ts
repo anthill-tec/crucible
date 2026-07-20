@@ -1598,6 +1598,47 @@ export class Store {
     return this.toPlan({ ...row, wave });
   }
 
+  /**
+   * CR-CRU-024 §S7 — resolve a run ingest's context.cycleId against stored plan
+   * state (Crucible is the source of truth, not the client). Scans EVERY plan of
+   * THIS project — scoping is strictly per-project, so a cycle id minted in
+   * another project never resolves here. Returns the cycle's status and a
+   * `terminal` flag (done/skipped/failed), or null when no plan carries the id.
+   */
+  findCycle(
+    projectKey: string,
+    cycleId: number,
+  ): { cycleId: number; planId: number; status: string; terminal: boolean } | null {
+    const row = this.db
+      .query<PlanCycleRow, [string, number]>(
+        `SELECT * FROM plan_cycles WHERE project_key = ? AND cycle_id = ?`,
+      )
+      .get(projectKey, cycleId);
+    if (row === null) return null;
+    return {
+      cycleId: row.cycle_id,
+      planId: row.plan_id,
+      status: row.status,
+      terminal: Store.CYCLE_TERMINAL.has(row.status),
+    };
+  }
+
+  /**
+   * CR-CRU-024 §S7 — summarize the project's open plan for the unknown-cycle
+   * help[]: the cr and its known cycle ids so a mis-set WORKFLOW_CYCLE_ID can be
+   * corrected to a real one. Returns null when the project has no open plan.
+   */
+  openPlanCycleSummary(projectKey: string): { cr: string; planId: number; cycleIds: number[] } | null {
+    const row = this.db
+      .query<PlanRow, [string]>(
+        `SELECT * FROM plans WHERE project_key = ? AND status = 'open' ORDER BY plan_id ASC`,
+      )
+      .get(projectKey);
+    if (row === null) return null;
+    const cycleIds = this.listCycleRows(projectKey, row.plan_id).map((c) => c.cycle_id);
+    return { cr: row.cr, planId: row.plan_id, cycleIds };
+  }
+
   /** §S0 — list a project's plans, optionally filtered by cr / track. */
   listPlans(projectKey: string, filter?: { cr?: string; track?: string }): Plan[] {
     const rows = this.db
