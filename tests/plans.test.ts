@@ -486,24 +486,34 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     });
   });
 
-  // ── §S0 — run linkage tolerance ────────────────────────────────────────────
-  describe("run linkage tolerance", () => {
-    test("a run ingested with an UNKNOWN context.cycleId is stored and queryable (never 4xx)", async () => {
+  // ── §S7 — run linkage: an unknown cycleId is REFUSED (400) ──────────────────
+  // CR-CRU-024 §S7 supersedes CR-011 §S0's tolerance — Crucible is the source of truth
+  describe("run linkage — unknown cycleId refused (§S7)", () => {
+    test("a run ingested with a context.cycleId that resolves to no cycle in the project → 400 (ok:false + help), no event stored", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject();
-      // No plan filed at all on this project — cycleId is unknown by construction.
+      // File a plan so the project HAS real cycles — the ingested cycleId (999999)
+      // still matches none of them, so §S7 refuses the ingest (never stored on trust).
+      await postJson(plansPath(key), { cr: "CR-T-LINK", cycles: [{ label: "a" }, { label: "b" }] });
+
+      const before = await getJson(`/api/v2/events?project=${key}`);
+      const beforeBody = (await before.json()) as EventsListResponse;
+      const beforeCount = beforeBody.events.length;
 
       const res = await postJson("/api/v2/runs/parsed", {
         projectKey: key,
         ...parsedRunBody({ context: { cycleId: 999999 } }),
       });
-      expect(res.status).toBeLessThan(400);
-      const body = (await res.json()) as RunIngestResponse;
-      expect(body.ok).toBe(true);
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as ErrResponse;
+      expect(body.ok).toBe(false);
+      expect(Array.isArray(body.help)).toBe(true);
+      expect((body.help as string[]).length).toBeGreaterThan(0);
 
+      // No event stored — the events count is unchanged after the refused ingest.
       const listed = await getJson(`/api/v2/events?project=${key}`);
       const listedBody = (await listed.json()) as EventsListResponse;
-      expect(listedBody.events.some((e) => e.id === body.event)).toBe(true);
+      expect(listedBody.events.length).toBe(beforeCount);
     });
 
     test("a planless project's parsed ingest is byte-identical to pre-CR-011 (regression guard)", async () => {

@@ -217,6 +217,22 @@ async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: stri
   return body.events;
 }
 
+/**
+ * Files a real OPEN plan and returns its first cycle id so a synthetic
+ * WORKFLOW_CYCLE_ID references a cycle that actually exists in THIS project.
+ * CR-CRU-024 §S7 refuses an unlinkable cycleId (400, event dropped) — Crucible
+ * is the source of truth — so the env cycleId must map to a genuinely-filed cycle.
+ */
+async function filePlanCycleId(baseUrl: string, key: string, cr: string): Promise<number> {
+  const res = await fetch(`${baseUrl}/api/v2/projects/${key}/plans`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cr, cycles: [{ label: "A" }, { label: "B" }] }),
+  });
+  const body = (await res.json()) as { cycles: Array<{ id: number }> };
+  return body.cycles[0]!.id;
+}
+
 interface FullEvent {
   tier?: string;
   codec?: string;
@@ -549,6 +565,8 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-test-context");
+    // §S7: file a real plan so WORKFLOW_CYCLE_ID maps to an existing cycle.
+    const cycleId = await filePlanCycleId(baseUrl, key, "CR-PC-CONTEXT");
     const { dir, pythonPath } = fixtureDir(key);
     runGit(["init", "-q"], dir);
     runGit(["symbolic-ref", "HEAD", `refs/heads/${branch}`], dir);
@@ -566,7 +584,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
           PYTHONPATH: pythonPath,
           FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("fixture", [{ name: "one" }]),
           FAKE_XMLRUNNER_EXIT_CODE: "0",
-          WORKFLOW_CYCLE_ID: "39",
+          WORKFLOW_CYCLE_ID: String(cycleId),
           WORKFLOW_CYCLE: "python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix",
           WORKFLOW_WAVE: "wave-4",
           WORKFLOW_ROLE: "track-4",
@@ -577,7 +595,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     const events = await getEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
-    expect(event.context?.cycleId).toBe(39);
+    expect(event.context?.cycleId).toBe(cycleId);
     expect(event.context?.cycle).toBe("python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix");
     expect(event.context?.wave).toBe("wave-4");
     expect(event.context?.orchestrator).toBe("track-4");
@@ -945,6 +963,8 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-unit-context");
+    // §S7: file a real plan so WORKFLOW_CYCLE_ID maps to an existing cycle.
+    const cycleId = await filePlanCycleId(baseUrl, key, "CR-AC-CONTEXT");
     const { dir, path } = fixtureDirWithFakeMake(key, "clients-ac-unit-context", [{ name: "led_on" }]);
     runGit(["init", "-q"], dir);
     runGit(["symbolic-ref", "HEAD", `refs/heads/${branch}`], dir);
@@ -959,7 +979,7 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
       crucibleUrl: baseUrl,
       env: {
         PATH: path,
-        WORKFLOW_CYCLE_ID: "39",
+        WORKFLOW_CYCLE_ID: String(cycleId),
         WORKFLOW_CYCLE: "python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix",
         WORKFLOW_WAVE: "wave-4",
         WORKFLOW_ROLE: "track-4",
@@ -969,7 +989,7 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
     const events = await getEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
-    expect(event.context?.cycleId).toBe(39);
+    expect(event.context?.cycleId).toBe(cycleId);
     expect(event.context?.cycle).toBe("python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix");
     expect(event.context?.wave).toBe("wave-4");
     expect(event.context?.orchestrator).toBe("track-4");

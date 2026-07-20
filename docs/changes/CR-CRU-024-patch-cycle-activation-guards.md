@@ -136,6 +136,12 @@ never stored on trust:
 3. `context.cycle` (the label string) remains free-form display metadata —
    no validation (it is never used for linkage).
 
+**Design lineage:** §S7 **supersedes** CR-CRU-011 §S0's "run linkage tolerance"
+(an unknown `context.cycleId` was stored verbatim and never 4xx'd). Under the
+2026-07-17 ruling Crucible is the source of truth, so an unlinkable `cycleId` is
+now refused (400) and never enters the timeline. The CR-011 tolerance tests were
+reconciled to this contract as part of CR-024.
+
 ## Acceptance criteria
 - [ ] With cycles A(pending), B(pending): activating B → 400 whose `error` contains `out-of-order` and names A; `help[]` mentions both the activate-first and the `skipped` paths; B remains `pending` (no partial state).
 - [ ] After `A → skipped`, activating B → 200 (the sanctioned swap works).
