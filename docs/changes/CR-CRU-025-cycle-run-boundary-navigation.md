@@ -1,6 +1,6 @@
 # CR-CRU-025 — Cycle ↔ run-boundary navigation (bidirectional, with locate blink)
 
-**Status:** PENDING
+**Status:** COMPLETED (2026-07-20 — merged to develop; plan 17 closed; C1–C4; §S1 cycle→runs + §S2 boundary→cycle + §S2b Run-Timeline accordion + e2e round-trip; 919/919 · coverage 91.7%/90.3% · playwright 34/34 tier:e2e · tsc 0; F13 fidelity reconciled to "no-narration". Known follow-up: `→ Runs` can't reach a boundary beyond the Runs-tab 50-event window — anchor-fetch on click filed as the next patch CR)
 **Type:** feature
 **Priority:** P3
 **Depends on:** CR-CRU-012 (tab plumbing as merged), CR-CRU-011
