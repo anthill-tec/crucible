@@ -1,6 +1,6 @@
 # CR-CRU-024 — Patch: plan-cycle activation guards + AXI invalid-action responses
 
-**Status:** PENDING
+**Status:** COMPLETED (2026-07-20 — merged to develop; plan 16 closed; C1–C7; 903/903 · coverage 91.7%/90.3% · playwright 31/31 tier:e2e · tsc 0; §S7 supersedes CR-CRU-011 §S0's run-linkage tolerance)
 **Type:** patch
 **Priority:** P2
 **Depends on:** CR-CRU-011
