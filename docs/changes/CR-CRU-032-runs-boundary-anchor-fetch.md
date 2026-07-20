@@ -20,7 +20,15 @@
 ## Scope
 
 ### §S1 Server: anchored events query
-Add an anchored read so the client can fetch one cycle's boundary + surrounding runs without pulling all history — e.g. `GET /api/v2/events?projectKey=<k>&cycleId=<id>` (returns that cycle's linked runs + its declared-boundary row), TOON-negotiable like sibling v2 GET routes; existing `?limit=N` recent-feed behavior unchanged. Unknown cycleId → empty set (not 4xx).
+Add an anchored read: `GET /api/v2/events?project=<key>&cycleId=<id>` — param name
+**`project`** to match every sibling v2 GET route (RED/gap-analysis confirmed
+2026-07-20; `projectKey` was an illustrative error). Returns that cycle's linked
+runs (events whose `context.cycleId === id`) in `events`, PLUS the cycle's declared
+`Cycle done` boundary as an additive top-level **`cycle`** field shaped like a
+`PlanCycle` — `{id, label, kind, status, activatedAt?, doneAt?}`, resolved via
+`findCycle` (CR-024 §S7) — NOT a synthesized RunEvent inside `events`. TOON-negotiable
+like siblings; existing `?limit=N` recent-feed behavior unchanged; unknown cycleId →
+200 with empty `events` and no `cycle` field (never 4xx).
 
 ### §S2 Client: anchor-fetch on `→ Runs` click (option b)
 When `cycle-to-runs` is clicked and `[data-testid="declared-marker"][data-cycle-id=<id>]` is not in the loaded feed after the retry budget, issue the §S1 anchored fetch, merge the events into the Runs feed so the marker mounts, then `scrollIntoView` + `locateBlink`. No silent give-up.
