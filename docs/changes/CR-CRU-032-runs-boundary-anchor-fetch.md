@@ -1,6 +1,6 @@
 # CR-CRU-032 — Patch: Runs-window governance + project-settings integrity
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-07-21)
 **Type:** patch
 **Priority:** P2
 **Depends on:** CR-CRU-025 (the `→ Runs` affordance), CR-CRU-012 (project manager), CR-CRU-008 (§S4 run-deletion toggle)
