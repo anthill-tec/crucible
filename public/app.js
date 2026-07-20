@@ -11,7 +11,7 @@
   "use strict";
 
   function main(L) {
-    const { a, b, button, div, input, option, pre, select, span } = van.tags;
+    const { a, b, button, div, input, label, option, pre, select, span } = van.tags;
 
     // ── State ───────────────────────────────────────────────────────────
     const state = vanX.reactive({
@@ -1269,58 +1269,90 @@
       };
       return div(
         { class: "app-manager-edit-form" },
-        input({
-          "data-testid": "manager-edit-name",
-          value: name,
-          oninput: (e) => (name.val = e.target.value),
-        }),
-        select(
-          {
-            "data-testid": "manager-edit-type",
-            onchange: (e) => (type.val = e.target.value),
-          },
-          option({ value: "backend", selected: project.type === "backend" }, "backend"),
-          option({ value: "frontend", selected: project.type === "frontend" }, "frontend"),
+        label(
+          { "data-testid": "manager-edit-name-label", class: "app-manager-edit-label" },
+          "Name",
+          input({
+            "data-testid": "manager-edit-name",
+            value: name,
+            oninput: (e) => (name.val = e.target.value),
+          }),
         ),
-        input({
-          "data-testid": "manager-edit-sutroot",
-          value: sutRoot,
-          oninput: (e) => (sutRoot.val = e.target.value),
-        }),
-        input({
-          "data-testid": "manager-edit-t1",
-          type: "number",
-          value: t1,
-          oninput: (e) => (t1.val = e.target.value),
-        }),
-        input({
-          "data-testid": "manager-edit-t2",
-          type: "number",
-          value: t2,
-          oninput: (e) => (t2.val = e.target.value),
-        }),
-        input({
-          "data-testid": "manager-edit-t3",
-          type: "number",
-          value: t3,
-          oninput: (e) => (t3.val = e.target.value),
-        }),
-        input({
-          "data-testid": "manager-edit-retention",
-          type: "number",
-          value: retention,
-          oninput: (e) => (retention.val = e.target.value),
-        }),
+        label(
+          { "data-testid": "manager-edit-type-label", class: "app-manager-edit-label" },
+          "Type",
+          select(
+            {
+              "data-testid": "manager-edit-type",
+              onchange: (e) => (type.val = e.target.value),
+            },
+            option({ value: "backend", selected: project.type === "backend" }, "backend"),
+            option({ value: "frontend", selected: project.type === "frontend" }, "frontend"),
+          ),
+        ),
+        label(
+          { "data-testid": "manager-edit-sutroot-label", class: "app-manager-edit-label" },
+          "SUT root",
+          input({
+            "data-testid": "manager-edit-sutroot",
+            value: sutRoot,
+            oninput: (e) => (sutRoot.val = e.target.value),
+          }),
+        ),
+        label(
+          { "data-testid": "manager-edit-t1-label", class: "app-manager-edit-label" },
+          "Stale after (T1, seconds)",
+          input({
+            "data-testid": "manager-edit-t1",
+            type: "number",
+            value: t1,
+            oninput: (e) => (t1.val = e.target.value),
+          }),
+        ),
+        label(
+          { "data-testid": "manager-edit-t2-label", class: "app-manager-edit-label" },
+          "Tombstone after (T2, seconds)",
+          input({
+            "data-testid": "manager-edit-t2",
+            type: "number",
+            value: t2,
+            oninput: (e) => (t2.val = e.target.value),
+          }),
+        ),
+        label(
+          { "data-testid": "manager-edit-t3-label", class: "app-manager-edit-label" },
+          "Prune after (T3, seconds)",
+          input({
+            "data-testid": "manager-edit-t3",
+            type: "number",
+            value: t3,
+            oninput: (e) => (t3.val = e.target.value),
+          }),
+        ),
+        label(
+          { "data-testid": "manager-edit-retention-label", class: "app-manager-edit-label" },
+          "Retention (runs shown in the timeline window)",
+          input({
+            "data-testid": "manager-edit-retention",
+            type: "number",
+            value: retention,
+            oninput: (e) => (retention.val = e.target.value),
+          }),
+        ),
         // §S4 (CR-CRU-008) — the guarded-deletion DANGER toggle: enabling it
         // lets agents delete runs (with per-call user approval), so it wears
         // the destructive styling.
-        input({
-          "data-testid": "manager-edit-allow-deletion",
-          type: "checkbox",
-          class: "app-manager-danger-toggle",
-          checked: allowDeletion,
-          onchange: (e) => (allowDeletion.val = e.target.checked),
-        }),
+        label(
+          { "data-testid": "manager-edit-allow-deletion-label", class: "app-manager-edit-label" },
+          "Allow agents to delete runs (guarded — per-call approval)",
+          input({
+            "data-testid": "manager-edit-allow-deletion",
+            type: "checkbox",
+            class: "app-manager-danger-toggle",
+            checked: allowDeletion,
+            onchange: (e) => (allowDeletion.val = e.target.checked),
+          }),
+        ),
         button({ "data-testid": "manager-edit-save", class: "app-chip on", onclick: save }, "save"),
         button({ class: "app-chip", onclick: () => (editing.val = false) }, "cancel"),
         div(
