@@ -163,11 +163,13 @@ interface ProjectFixture {
   /** §S5 Coverage tab (user defect 2026-07-15) — id of the event backing
    * `latestGreenCoverage`, same field asserted in tests/coverage-click.test.ts. */
   latestCoverageEventId?: string;
-  /** SANCTIONED RE-TARGET (CR-CRU-023 §S2) — the durable rollup-backed
-   * trend series (see tests/coverage-trend.test.ts's (A)/(B) technique).
-   * The Vitals COVERAGE TREND bars now render from THIS server field, not
-   * from `state.events`/`coverageLines`. */
-  coverageTrend?: number[];
+  /** SANCTIONED RE-TARGET (CR-CRU-023 §S2, shape superseded by CR-CRU-033
+   * §S2) — the durable, date-keyed trend series (see
+   * tests/coverage-trend.test.ts's (A)/(B) technique):
+   * { day: "YYYY-MM-DD", percent }[], oldest→newest. The Vitals COVERAGE
+   * TREND bars now render from THIS server field, not from
+   * `state.events`/`coverageLines`. */
+  coverageTrend?: { day: string; percent: number }[];
 }
 
 interface MountOpts {
@@ -1193,7 +1195,12 @@ describe("§S5 fidelity #5c — F8 Vitals card anatomy: coverage-trend bars + la
           key,
           name: "F8 Vitals Trend Project",
           latestGreenCoverage: { lines: { covered: 873, total: 1000, percent: 87.3 } },
-          coverageTrend: [82.1, 84.0, 86.2, 87.3],
+          coverageTrend: [
+            { day: "2026-03-01", percent: 82.1 },
+            { day: "2026-03-02", percent: 84.0 },
+            { day: "2026-03-03", percent: 86.2 },
+            { day: "2026-03-04", percent: 87.3 },
+          ],
         }),
       ],
       events: [],
@@ -1246,7 +1253,7 @@ describe("§S5 fidelity #5c — F8 Vitals card anatomy: coverage-trend bars + la
           key,
           name: "F8 Vitals Single Point",
           latestGreenCoverage: { lines: { covered: 7, total: 10, percent: 70 } },
-          coverageTrend: [70],
+          coverageTrend: [{ day: "2026-03-01", percent: 70 }],
         }),
       ],
       events: [],

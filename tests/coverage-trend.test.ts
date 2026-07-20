@@ -12,19 +12,23 @@
 // grow an additive `coverageTrend` field built from that rollup series, and
 // the client must render bars from THAT field instead of state.events.
 //
-// Shape decision (RED finding, recorded per dispatch instruction): plain
-// `coverageTrend: number[]` — the green-regression coverage LINES percent
-// per surviving rollup bucket, oldest→newest, present only when >=1 rollup
-// carries `lastCoverage` (key ABSENT — not null/empty — otherwise, mirroring
-// the existing `latestCoverageEventId` absent-not-null convention pinned in
-// tests/coverage-click.test.ts). This is the SAME shape
-// coverageTrendPoints() already produces client-side today (an ordered
-// array of percent numbers) — moving the computation server-side, onto the
-// durable rollup series, without inventing a new per-point shape (rollups
-// have no per-point timestamp column; `bucket` is a wave id or a UTC-day
-// string, not a numeric ts, so a `{ts, lines}` shape would need an
-// unrequested schema addition — out of scope for this AC, which only pins
-// point COUNT, VALUE, and oldest→newest ORDER).
+// Shape decision (RED finding, recorded per dispatch instruction): originally
+// plain `coverageTrend: number[]` — the green-regression coverage LINES
+// percent per surviving rollup bucket, oldest→newest, present only when >=1
+// rollup carries `lastCoverage` (key ABSENT — not null/empty — otherwise,
+// mirroring the existing `latestCoverageEventId` absent-not-null convention
+// pinned in tests/coverage-click.test.ts).
+//
+// SUPERSEDED by CR-CRU-033 §S2 (DN-crucible-coverage-trend.md §6): §S1 made
+// rollup buckets UTC-day-keyed (dropping the `context.wave ??` prefix), so a
+// per-point date IS now available. `coverageTrend` becomes a date-keyed
+// series `{ day: string, percent: number }[]` (`day` = "YYYY-MM-DD"),
+// oldest→newest, built by MERGING per UTC day: old day-rollups whose
+// `lastCoverage` is set, PLUS within-retention coverage-bearing events
+// grouped by their UTC day (last-of-day wins). A day in both halves yields
+// ONE point (live/last-of-day wins over the rollup's older value). Legacy
+// wave-keyed rollup buckets (non-`YYYY-MM-DD` bucket strings) contribute
+// nothing. Absent-not-null convention is unchanged.
 //
 // (A) SERVER — GET /api/v2/projects carries coverageTrend, sourced from
 // store.listRollups() (durable), NOT store.listEvents() (transient/pruned).
@@ -144,7 +148,11 @@ describe("Store#foldIntoRollup — bucket key is always UTC day (CR-CRU-033 §S1
 
 interface ProjectPayload {
   key: string;
-  coverageTrend?: number[];
+  // CR-CRU-033 §S2 — coverageTrend is now a date-keyed series, not a flat
+  // number[]: { day: "YYYY-MM-DD", percent } per point, oldest→newest,
+  // merged from durable day-rollups (old days) + within-retention
+  // coverage-bearing events (recent days, last-of-day wins on overlap).
+  coverageTrend?: { day: string; percent: number }[];
   [key: string]: unknown;
 }
 
@@ -153,7 +161,37 @@ interface ProjectsListResponse {
   projects: ProjectPayload[];
 }
 
-describe("GET /api/v2/projects — coverageTrend (durable rollup series, CR-CRU-023 §S2)", () => {
+interface QueryHandle {
+  run(...args: unknown[]): void;
+}
+interface RawDb {
+  query(sql: string): QueryHandle;
+}
+
+/**
+ * CR-CRU-033 §S2 legacy-exclusion AC — seed a pre-§S1-style wave-keyed
+ * rollup bucket directly. §S1 (already committed) made `foldIntoRollup`
+ * bucket EVERY fold by UTC day, so a wave-keyed bucket can no longer be
+ * produced through the public Store API — the only way left to exercise the
+ * "legacy bucket contributes nothing" AC is to reach past `Store`'s
+ * `private readonly db` (TypeScript `private` is compile-time only) and
+ * insert the row directly, same technique as
+ * tests/v2-projects-activity.test.ts's backdateEventTimestamp.
+ */
+function seedLegacyWaveRollup(store: Store, projectKey: string, bucket: string, percent: number): void {
+  (store as unknown as { db: RawDb }).db
+    .query(
+      `INSERT INTO rollups (project_key, bucket, runs, passed, failed, duration_ms, last_coverage)
+       VALUES (?, ?, 1, 1, 0, 10, ?)`,
+    )
+    .run(
+      projectKey,
+      bucket,
+      JSON.stringify({ lines: { total: 100, covered: percent, percent } }),
+    );
+}
+
+describe("GET /api/v2/projects — coverageTrend (date-keyed {day,percent}[] series, CR-CRU-033 §S2)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
 
   afterEach(() => {
@@ -219,15 +257,23 @@ describe("GET /api/v2/projects — coverageTrend (durable rollup series, CR-CRU-
     const projects = await projectsList();
     const project = projects.find((p) => p.key === key);
     expect(project).toBeDefined();
-    expect(project!.coverageTrend).toEqual(percents);
+    // §S2 shape + order AC: {day, percent}[], day = YYYY-MM-DD, oldest→newest.
+    const expectedPoints = days.map((day, i) => ({ day, percent: percents[i]! }));
+    expect(project!.coverageTrend).toEqual(expectedPoints);
+    for (const point of project!.coverageTrend ?? []) {
+      expect(point.day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+    const returnedDays = (project!.coverageTrend ?? []).map((p) => p.day);
+    expect(returnedDays).toEqual([...returnedDays].sort());
   });
 
-  test("1 coverage-bearing green-regression run, pruned past retention: coverageTrend returns exactly 1 point", async () => {
+  test("1 coverage-bearing green-regression run, pruned past retention: coverageTrend returns exactly 1 point keyed to its UTC day", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const store: Store = handle.store;
     const key = crypto.randomUUID();
     store.addProject({ key, name: "trend-1", type: "backend", sutRoot: "/tmp/trend-1", retention: 0 });
 
+    setSystemTime(new Date("2026-07-05T10:00:00.000Z"));
     store.recordTestEvent(
       key,
       "agent-trend-single",
@@ -238,13 +284,14 @@ describe("GET /api/v2/projects — coverageTrend (durable rollup series, CR-CRU-
       },
       { tier: "regression", context: { wave: "w-single" } },
     );
+    setSystemTime();
 
     expect(store.listEvents(key, 1000).length).toBe(0);
 
     const projects = await projectsList();
     const project = projects.find((p) => p.key === key);
     expect(project).toBeDefined();
-    expect(project!.coverageTrend).toEqual([55]);
+    expect(project!.coverageTrend).toEqual([{ day: "2026-07-05", percent: 55 }]);
   });
 
   test("fresh project with no coverage-bearing rollup: coverageTrend is ABSENT from the payload (not merely empty/null)", async () => {
@@ -282,6 +329,156 @@ describe("GET /api/v2/projects — coverageTrend (durable rollup series, CR-CRU-
     const project = projects.find((p) => p.key === key);
     expect(project).toBeDefined();
     expect(Object.prototype.hasOwnProperty.call(project, "coverageTrend")).toBe(false);
+  });
+
+  test("§S2 merge: 2 pruned day-rollups (07-15=90, 07-16=91) + within-retention live events (07-17=93, 07-18=94) yield exactly 4 points, oldest→newest", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const store: Store = handle.store;
+    const key = crypto.randomUUID();
+    // retention: 2 keeps at most 2 raw events; inserting a 3rd/4th event
+    // overflows and prunes the OLDEST raw row into a rollup each time — so
+    // after 4 sequential inserts on 4 distinct UTC days, days 1-2 (07-15,
+    // 07-16) are folded/pruned rollups and days 3-4 (07-17, 07-18) remain
+    // live raw events, exactly matching the CR-CRU-033 §S2 merge AC fixture.
+    store.addProject({ key, name: "trend-merge", type: "backend", sutRoot: "/tmp/trend-merge", retention: 2 });
+
+    const fixture: { day: string; percent: number }[] = [
+      { day: "2026-07-15", percent: 90 },
+      { day: "2026-07-16", percent: 91 },
+      { day: "2026-07-17", percent: 93 },
+      { day: "2026-07-18", percent: 94 },
+    ];
+    for (let i = 0; i < fixture.length; i++) {
+      setSystemTime(new Date(`${fixture[i]!.day}T12:00:00.000Z`));
+      store.recordTestEvent(
+        key,
+        `agent-merge-${i}`,
+        {
+          summary: { total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 50 },
+          tree: [],
+          coverage: { lines: { total: 100, covered: fixture[i]!.percent, percent: fixture[i]!.percent } },
+        },
+        { tier: "regression" },
+      );
+    }
+    setSystemTime();
+
+    // Sanity on the fixture setup itself: exactly 2 pruned rollups (the old
+    // half) and exactly 2 live raw events (the recent half) survive.
+    expect(store.listRollups(key).length).toBe(2);
+    expect(store.listEvents(key, 1000).length).toBe(2);
+
+    const projects = await projectsList();
+    const project = projects.find((p) => p.key === key);
+    expect(project).toBeDefined();
+    expect(project!.coverageTrend).toEqual(fixture);
+  });
+
+  test("§S2 same-day dedup: a day with BOTH a pruned rollup (percent 80) AND a within-retention live event (percent 88) yields ONE point with the live value winning", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const store: Store = handle.store;
+    const key = crypto.randomUUID();
+    // retention: 1 keeps at most 1 raw event: each new insert immediately
+    // prunes the previous one into the rollup. All 3 events below share the
+    // SAME UTC day, so: event1 (70) folds first, then event2 (80) folds
+    // into the SAME rollup bucket (COALESCE keeps the newest lastCoverage,
+    // 80) and is deleted, leaving event3 (88) as the sole live raw row for
+    // that day — a pruned rollup (80) coexisting with a live event (88) on
+    // the exact same UTC day.
+    store.addProject({ key, name: "trend-dedup", type: "backend", sutRoot: "/tmp/trend-dedup", retention: 1 });
+
+    setSystemTime(new Date("2026-07-20T06:00:00.000Z"));
+    store.recordTestEvent(
+      key,
+      "agent-dedup-1",
+      {
+        summary: { total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 50 },
+        tree: [],
+        coverage: { lines: { total: 100, covered: 70, percent: 70 } },
+      },
+      { tier: "regression" },
+    );
+    setSystemTime(new Date("2026-07-20T12:00:00.000Z"));
+    store.recordTestEvent(
+      key,
+      "agent-dedup-2",
+      {
+        summary: { total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 50 },
+        tree: [],
+        coverage: { lines: { total: 100, covered: 80, percent: 80 } },
+      },
+      { tier: "regression" },
+    );
+    setSystemTime(new Date("2026-07-20T18:00:00.000Z"));
+    store.recordTestEvent(
+      key,
+      "agent-dedup-3",
+      {
+        summary: { total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 50 },
+        tree: [],
+        coverage: { lines: { total: 100, covered: 88, percent: 88 } },
+      },
+      { tier: "regression" },
+    );
+    setSystemTime();
+
+    // Sanity: exactly 1 rollup bucket for the day (lastCoverage 80, from the
+    // fold of event2) and exactly 1 live raw event left (event3, 88).
+    const rollups = store.listRollups(key);
+    expect(rollups.length).toBe(1);
+    expect(rollups[0]!.bucket).toBe("2026-07-20");
+    expect(rollups[0]!.lastCoverage?.lines.percent).toBe(80);
+    expect(store.listEvents(key, 1000).length).toBe(1);
+
+    const projects = await projectsList();
+    const project = projects.find((p) => p.key === key);
+    expect(project).toBeDefined();
+    // Exactly ONE point for 2026-07-20, live value (88) wins over the
+    // rollup's older value (80) — never both, never the stale 80.
+    expect(project!.coverageTrend).toEqual([{ day: "2026-07-20", percent: 88 }]);
+  });
+
+  test("§S2 legacy exclusion: a wave-keyed rollup bucket (\"4\", non-date string) contributes NO point alongside a valid dated point", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const store: Store = handle.store;
+    const key = crypto.randomUUID();
+    store.addProject({ key, name: "trend-legacy", type: "backend", sutRoot: "/tmp/trend-legacy", retention: 0 });
+
+    // A legacy pre-§S1 wave-keyed rollup bucket. §S1 (already committed)
+    // means the public Store API can no longer PRODUCE one — this seeds a
+    // row directly to prove the merge still EXCLUDES any bucket that isn't
+    // a "YYYY-MM-DD" string, per the §S2 legacy-exclusion AC.
+    seedLegacyWaveRollup(store, key, "4", 99);
+
+    setSystemTime(new Date("2026-07-19T09:00:00.000Z"));
+    store.recordTestEvent(
+      key,
+      "agent-legacy-valid",
+      {
+        summary: { total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 50 },
+        tree: [],
+        coverage: { lines: { total: 100, covered: 85, percent: 85 } },
+      },
+      { tier: "regression" },
+    );
+    setSystemTime();
+
+    // Sanity: the rollups table really does contain both the legacy
+    // wave-keyed bucket AND the properly-folded date bucket.
+    const rollups = store.listRollups(key);
+    expect(rollups.length).toBe(2);
+    expect(rollups.some((r) => r.bucket === "4")).toBe(true);
+    expect(rollups.some((r) => r.bucket === "2026-07-19")).toBe(true);
+
+    const projects = await projectsList();
+    const project = projects.find((p) => p.key === key);
+    expect(project).toBeDefined();
+    // Positive: only the dated bucket contributes.
+    expect(project!.coverageTrend).toEqual([{ day: "2026-07-19", percent: 85 }]);
+    // Negative/bound: no point carries the legacy bucket's percent (99) or
+    // a "day" of "4".
+    expect((project!.coverageTrend ?? []).some((p) => p.percent === 99)).toBe(false);
+    expect((project!.coverageTrend ?? []).some((p) => p.day === "4")).toBe(false);
   });
 });
 
@@ -325,8 +522,9 @@ interface ProjectFixture {
   lastActivity?: number;
   lastEvent?: unknown;
   latestGreenCoverage?: unknown;
-  /** CR-CRU-023 §S2 — the durable rollup-backed trend series (see (A) above). */
-  coverageTrend?: number[];
+  /** CR-CRU-033 §S2 — the durable, date-keyed trend series (see (A) above):
+   * { day: "YYYY-MM-DD", percent }[], oldest→newest. */
+  coverageTrend?: { day: string; percent: number }[];
 }
 
 interface MountOpts {
@@ -404,7 +602,12 @@ describe("workspace Vitals COVERAGE TREND bars — driven by the SERVER coverage
           agentsOnline: 1,
           agentsTotal: 1,
           latestGreenCoverage: { lines: { covered: 95, total: 100, percent: 95 } },
-          coverageTrend: [61, 74, 88, 95],
+          coverageTrend: [
+            { day: "2026-01-01", percent: 61 },
+            { day: "2026-01-02", percent: 74 },
+            { day: "2026-01-03", percent: 88 },
+            { day: "2026-01-04", percent: 95 },
+          ],
         },
       ],
       // Client event feed is EMPTY — simulating full retention pruning.
@@ -451,7 +654,12 @@ describe("workspace Vitals COVERAGE TREND bars — driven by the SERVER coverage
           agentsOnline: 1,
           agentsTotal: 1,
           latestGreenCoverage: { lines: { covered: 40, total: 100, percent: 40 } },
-          coverageTrend: [10, 20, 30, 40],
+          coverageTrend: [
+            { day: "2026-01-01", percent: 10 },
+            { day: "2026-01-02", percent: 20 },
+            { day: "2026-01-03", percent: 30 },
+            { day: "2026-01-04", percent: 40 },
+          ],
         },
       ],
       // A DIFFERENT, stale client-side event feed — if bars were still
@@ -513,7 +721,7 @@ describe("workspace Vitals COVERAGE TREND bars — driven by the SERVER coverage
           agentsOnline: 1,
           agentsTotal: 1,
           latestGreenCoverage: { lines: { covered: 55, total: 100, percent: 55 } },
-          coverageTrend: [55],
+          coverageTrend: [{ day: "2026-01-01", percent: 55 }],
         },
       ],
       events: [],
