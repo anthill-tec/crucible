@@ -159,6 +159,9 @@ describe("GET /api/v2/projects — coverageTrend (durable rollup series, CR-CRU-
   afterEach(() => {
     handle?.stop();
     handle = undefined;
+    // Safety net: reset any clock injected by the §S1 distinct-UTC-day test
+    // below even if it threw before reaching its own inline reset.
+    setSystemTime();
   });
 
   async function projectsList(): Promise<ProjectPayload[]> {
@@ -177,7 +180,25 @@ describe("GET /api/v2/projects — coverageTrend (durable rollup series, CR-CRU-
     store.addProject({ key, name: "trend-4", type: "backend", sutRoot: "/tmp/trend-4", retention: 0 });
 
     const percents = [61, 74, 88, 95];
+    // Distinct buckets (distinct UTC days) so each fold lands in its OWN
+    // rollup row — rollups are keyed (project_key, bucket), so same-bucket
+    // folds would collapse to a single lastCoverage, not 4 points.
+    //
+    // CR-CRU-033 §S1: the bucket key is always the event's UTC day, so DAY
+    // (not wave id) is what must differentiate these 4 folds now — stamped
+    // via setSystemTime(), the same clock-injection technique the §S1
+    // Store#foldIntoRollup test above uses. Every event below shares the
+    // SAME wave id ("trend-4") deliberately: that proves the wave tag no
+    // longer splits the bucket (§S1 drops `context.wave ??` from the fold
+    // key). Pre-§S1 this is exactly the failure this test is meant to
+    // catch — a shared wave id still collapses all 4 folds into ONE
+    // wave-keyed rollup (a count mismatch: listRollups(key).length === 1,
+    // not 4), which is why this test currently fails RED against the
+    // wave-keyed production code. Once §S1 lands, the wave id is ignored
+    // and the 4 distinct UTC days correctly yield 4 points.
+    const days = ["2026-07-10", "2026-07-11", "2026-07-12", "2026-07-13"];
     for (let i = 0; i < percents.length; i++) {
+      setSystemTime(new Date(`${days[i]}T12:00:00.000Z`));
       store.recordTestEvent(
         key,
         `agent-trend-${i}`,
@@ -186,12 +207,10 @@ describe("GET /api/v2/projects — coverageTrend (durable rollup series, CR-CRU-
           tree: [],
           coverage: { lines: { total: 100, covered: percents[i]!, percent: percents[i]! } },
         },
-        // Distinct buckets (wave ids) so each fold lands in its OWN rollup
-        // row — rollups are keyed (project_key, bucket), so same-bucket
-        // folds would collapse to a single lastCoverage, not 4 points.
-        { tier: "regression", context: { wave: `w${i + 1}` } },
+        { tier: "regression", context: { wave: "trend-4" } },
       );
     }
+    setSystemTime(); // reset the injected clock so it never leaks to other tests
 
     // Sanity: retention: 0 really did prune every raw event away.
     expect(store.listEvents(key, 1000).length).toBe(0);
