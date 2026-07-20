@@ -736,7 +736,14 @@
         parts.push(`closed in ${fmtDuration(cycle.doneAt - cycle.activatedAt)}`);
       }
       return div(
-        { "data-testid": "declared-marker", class: "app-transition-marker" },
+        {
+          "data-testid": "declared-marker",
+          // CR-CRU-025 §S1 — carry the declared cycle id (mirrors the
+          // `data-run-id`/`data-cr` convention) so cycle→Runs navigation can
+          // match the boundary by cycleId.
+          "data-cycle-id": cycle.id,
+          class: "app-transition-marker",
+        },
         parts.join(" · "),
       );
     };
@@ -1938,6 +1945,80 @@
       return cycle.status;
     };
 
+    // CR-CRU-025 §S1 — shared 10s locate-blink. Adds a marker CSS class to a
+    // target element and schedules a JS timer that removes it after EXACTLY
+    // 10s ("CSS animation with a JS-cleared marker class"). Re-triggering
+    // resets the clock: any prior timer is cleared first so the blink never
+    // stacks. Reusable — C2 drives the inverse (run→cycle) direction through
+    // this same helper.
+    const LOCATE_BLINK_CLASS = "app-locate-blink";
+    let locateBlinkTimer = null;
+    let locateBlinkTarget = null;
+    const locateBlink = (el) => {
+      if (locateBlinkTimer !== null) {
+        clearTimeout(locateBlinkTimer);
+        locateBlinkTimer = null;
+      }
+      if (locateBlinkTarget !== null && locateBlinkTarget !== el) {
+        locateBlinkTarget.classList.remove(LOCATE_BLINK_CLASS);
+      }
+      locateBlinkTarget = el;
+      el.classList.add(LOCATE_BLINK_CLASS);
+      locateBlinkTimer = setTimeout(() => {
+        el.classList.remove(LOCATE_BLINK_CLASS);
+        locateBlinkTimer = null;
+        locateBlinkTarget = null;
+      }, 10000);
+    };
+
+    // CR-CRU-025 §S1 — after the one-rule tab swap to Runs, the declared
+    // boundary for `cycleId` re-renders asynchronously; retry (real timers,
+    // never the 10s blink delay) until it mounts, then scroll it into view
+    // and blink it.
+    const revealDeclaredMarker = (cycleId, attempts = 0) => {
+      const marker = document.querySelector(
+        `[data-testid="declared-marker"][data-cycle-id="${cycleId}"]`,
+      );
+      if (marker !== null) {
+        marker.scrollIntoView();
+        locateBlink(marker);
+        return;
+      }
+      if (attempts < 30) {
+        setTimeout(() => revealDeclaredMarker(cycleId, attempts + 1), 5);
+      }
+    };
+
+    // CR-CRU-025 §S1/§S0 — the trailing "→ Runs" affordance on a COMPLETED
+    // cycle row. A SEPARATE node from the history `cycle-toggle` (never a
+    // rebinding). Clicking flips the workspace tab to Runs (the one-rule
+    // `state.workspaceTab` swap, NOT a navigate() pathname change), scrolls the
+    // matching `declared-marker` (by cycleId) into view, and blinks it 10s.
+    // When the cycle's declared boundary has been pruned off the retained
+    // timeline (no linked run survives) the badge is dim + inert.
+    const CycleToRunsBadge = (cycleId) => {
+      const live = cycleId !== undefined && cycleId !== null && linkedRunsFor(cycleId).length > 0;
+      return span(
+        {
+          "data-testid": "cycle-to-runs",
+          class: `app-pill app-cycle-to-runs${live ? "" : " disabled"}`,
+          "aria-disabled": live ? "false" : "true",
+          title: live ? "Jump to this cycle's Runs boundary" : "boundary pruned — no runs retained",
+          onclick: (ev) => {
+            ev.stopPropagation();
+            if (!live) return;
+            state.workspaceTab = "Runs";
+            revealDeclaredMarker(cycleId);
+          },
+        },
+        "→ Runs",
+      );
+    };
+
+    // Completed cycles (done/skipped/failed) carry the §S1 navigation badge.
+    const cycleIsCompleted = (cycle) =>
+      cycle.status === "done" || cycle.status === "skipped" || cycle.status === "failed";
+
     // One todo row per cycle: `<glyph> cycle <n> · "<label>" · <status>`
     // (§S6 #2, label QUOTED, ACTIVE row bold, inline `[<kind>]` badge for
     // non-default kinds, §S6 #4). RULED (a) — the ACTIVE cycle's open span
@@ -1980,6 +2061,9 @@
             ? b({ class: "app-cycle-text" }, ...lineParts)
             : span({ class: "app-cycle-text" }, ...lineParts),
           ...(timer !== null ? [" ", timer] : []),
+          // CR-CRU-025 §S1 — trailing Runs-boundary affordance, AFTER the
+          // timer, on completed rows only (a separate node — never rebinding).
+          ...(cycleIsCompleted(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
         ),
         cycle.status === "active" ? OpenSpan(cycle.id) : null,
       );
@@ -2179,6 +2263,10 @@
           ),
           span({ class: "app-cycle-label" }, cycle.label),
           ...(timer !== null ? [" ", timer] : []),
+          // CR-CRU-025 §S1/§S0 — the Runs-boundary badge, a SEPARATE node
+          // from the existing `cycle-toggle` drill-down glyph, on completed
+          // rows only.
+          ...(cycleIsCompleted(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
           // CR-CRU-021 §S6 #8 — collapsed rows hint at their linked runs.
           expandable
             ? () =>
