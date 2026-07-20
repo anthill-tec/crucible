@@ -152,6 +152,14 @@ export interface PlanOpError {
   error: string;
   notFound?: boolean;
   openCycleIds?: number[];
+  /**
+   * CR-CRU-024 §S4 — discriminator so the route attaches the matching help[]:
+   * cross-cycle activation refusals ("out-of-order" / "already-active") and the
+   * per-cycle illegal transition. `cycleRef` carries the sibling cycle the help
+   * names (the earlier-pending cycle, or the already-active one).
+   */
+  code?: "out-of-order" | "already-active" | "illegal-transition";
+  cycleRef?: number;
 }
 
 /** CR-CRU-002 §S1 — recordTestEvent's run param adopts the canonical RunSchema. */
@@ -1268,7 +1276,38 @@ export class Store {
       return { error: `cycle not found in plan ${planId}: ${cycleId}`, notFound: true };
     }
     if (!(Store.CYCLE_TRANSITIONS[row.status]?.has(to) ?? false)) {
-      return { error: `illegal cycle transition: ${row.status} -> ${to}` };
+      return {
+        error: `illegal cycle transition: ${row.status} -> ${to}`,
+        code: "illegal-transition",
+      };
+    }
+    // CR-CRU-024 §S1+§S2 — cross-cycle activation guards. CYCLE_TRANSITIONS is
+    // per-cycle only, so activating a cycle while a sibling blocks it currently
+    // succeeds silently. Guard both invalid shapes on the pending→active edge.
+    if (to === "active") {
+      const siblings = this.listCycleRows(projectKey, planId);
+      // §S2 single-active: another cycle in this plan is already active.
+      const active = siblings.find(
+        (c) => c.cycle_id !== cycleId && c.status === "active",
+      );
+      if (active !== undefined) {
+        return {
+          error: `cycle ${active.cycle_id} is already active`,
+          code: "already-active",
+          cycleRef: active.cycle_id,
+        };
+      }
+      // §S1 out-of-order: an EARLIER sibling (lower cycle id) is still pending.
+      const earlier = siblings.find(
+        (c) => c.cycle_id < cycleId && c.status === "pending",
+      );
+      if (earlier !== undefined) {
+        return {
+          error: `out-of-order activation: cycle ${earlier.cycle_id} is still pending`,
+          code: "out-of-order",
+          cycleRef: earlier.cycle_id,
+        };
+      }
     }
     // §S0b — stamp the transition timestamps (mirrors Plan.closedAt):
     // pending→active stamps activated_at; reaching a terminal state stamps

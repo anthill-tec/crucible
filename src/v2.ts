@@ -5,7 +5,7 @@
 import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
-import { hints } from "./hints.ts";
+import { hints, cycleHints } from "./hints.ts";
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
 import type { ProjectPatch, RecordEventMeta, TouchAgentOpts } from "./store.ts";
@@ -634,37 +634,37 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
   const body = await readBody(req);
-  if (body === null) return fail(400, "malformed JSON body");
+  if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
   if (typeof body.cr !== "string" || body.cr.length === 0) {
-    return fail(400, "cr is required");
+    return fail(400, "cr is required", { help: hints.planFileInput });
   }
   if (!Array.isArray(body.cycles) || body.cycles.length === 0) {
-    return fail(400, "cycles must be a non-empty array");
+    return fail(400, "cycles must be a non-empty array", { help: hints.planFileInput });
   }
   const cycles: CycleInput[] = [];
   for (const raw of body.cycles) {
     const parsed = parseCycleInput(raw);
-    if ("error" in parsed) return fail(400, parsed.error);
+    if ("error" in parsed) return fail(400, parsed.error, { help: hints.cycleInput });
     cycles.push(parsed);
   }
   // CR-CRU-021 §S6.11 — additive optional title: stored verbatim when a
   // string, 400 naming the field on any other present type.
   if (body.title !== undefined && typeof body.title !== "string") {
-    return fail(400, "title must be a string");
+    return fail(400, "title must be a string", { help: hints.planFileInput });
   }
   const title = typeof body.title === "string" ? body.title : undefined;
   // §S6 re-baseline (cycle 19) — additive optional orchestrator identity:
   // stored verbatim when a string, 400 naming the field on any other
   // present type (same contract as title).
   if (body.orchestrator !== undefined && typeof body.orchestrator !== "string") {
-    return fail(400, "orchestrator must be a string");
+    return fail(400, "orchestrator must be a string", { help: hints.planFileInput });
   }
   const orchestrator =
     typeof body.orchestrator === "string" ? body.orchestrator : undefined;
   // Cycle 13 gap 3 — a numeric wave is coerced to its decimal string; any
   // other non-string present type → 400 naming the field.
   if (body.wave !== undefined && typeof body.wave !== "string" && typeof body.wave !== "number") {
-    return fail(400, "wave must be a string");
+    return fail(400, "wave must be a string", { help: hints.planFileInput });
   }
   const wave =
     typeof body.wave === "string"
@@ -681,7 +681,7 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
     ...(track !== undefined ? { track } : {}),
     cycles,
   });
-  if ("error" in plan) return fail(400, plan.error);
+  if ("error" in plan) return fail(400, plan.error, { help: hints.duplicateOpenPlan });
   return json(
     {
       ok: true,
@@ -709,13 +709,19 @@ async function handleCycleAppend(
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
   const planId = numericId(planIdRaw);
-  if (planId === null) return fail(404, `plan not found: ${planIdRaw}`);
+  if (planId === null) {
+    return fail(404, `plan not found: ${planIdRaw}`, { help: hints.planCycleNotFound });
+  }
   const body = await readBody(req);
-  if (body === null) return fail(400, "malformed JSON body");
+  if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
   const parsed = parseCycleInput(body);
-  if ("error" in parsed) return fail(400, parsed.error);
+  if ("error" in parsed) return fail(400, parsed.error, { help: hints.cycleInput });
   const cycle = store.appendCycle(pk.key, planId, parsed);
-  if ("error" in cycle) return fail(cycle.notFound === true ? 404 : 400, cycle.error);
+  if ("error" in cycle) {
+    return fail(cycle.notFound === true ? 404 : 400, cycle.error, {
+      help: cycle.notFound === true ? hints.planCycleNotFound : hints.closedPlan,
+    });
+  }
   return json({ ok: true, changed: true, ...cycle }, 201);
 }
 
@@ -730,19 +736,35 @@ async function handleCycleTransition(
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
   const planId = numericId(planIdRaw);
-  if (planId === null) return fail(404, `plan not found: ${planIdRaw}`);
+  if (planId === null) {
+    return fail(404, `plan not found: ${planIdRaw}`, { help: hints.planCycleNotFound });
+  }
   const cycleId = numericId(cycleIdRaw);
-  if (cycleId === null) return fail(404, `cycle not found: ${cycleIdRaw}`);
+  if (cycleId === null) {
+    return fail(404, `cycle not found: ${cycleIdRaw}`, { help: hints.planCycleNotFound });
+  }
   const body = await readBody(req);
-  if (body === null) return fail(400, "malformed JSON body");
+  if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
   if (typeof body.status !== "string" || !CYCLE_STATUSES.has(body.status)) {
     return fail(
       400,
       `invalid status: ${String(body.status)} (expected pending | active | done | skipped | failed)`,
+      { help: hints.cycleStatus },
     );
   }
   const cycle = store.transitionCycle(pk.key, planId, cycleId, body.status as CycleStatus);
-  if ("error" in cycle) return fail(cycle.notFound === true ? 404 : 400, cycle.error);
+  if ("error" in cycle) {
+    // CR-CRU-024 §S4 — attach the help[] matching the store's refusal code.
+    const help =
+      cycle.code === "out-of-order"
+        ? cycleHints.outOfOrder(cycle.cycleRef!)
+        : cycle.code === "already-active"
+          ? cycleHints.alreadyActive(cycle.cycleRef!)
+          : cycle.code === "illegal-transition"
+            ? hints.illegalCycleTransition
+            : hints.planCycleNotFound;
+    return fail(cycle.notFound === true ? 404 : 400, cycle.error, { help });
+  }
   return json({ ok: true, changed: true, cycle });
 }
 
@@ -756,19 +778,23 @@ async function handlePlanClose(
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
   const planId = numericId(planIdRaw);
-  if (planId === null) return fail(404, `plan not found: ${planIdRaw}`);
+  if (planId === null) {
+    return fail(404, `plan not found: ${planIdRaw}`, { help: hints.planCycleNotFound });
+  }
   const body = await readBody(req);
-  if (body === null) return fail(400, "malformed JSON body");
+  if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
   // §S6 re-baseline (cycle 19) — one-field orchestrator backfill: a PATCH
   // body carrying `orchestrator` with NO `status` stamps an OPEN plan (the
   // executing plan); closed plans → 400, mirroring the close validation.
   if (body.status === undefined && body.orchestrator !== undefined) {
     if (typeof body.orchestrator !== "string") {
-      return fail(400, "orchestrator must be a string");
+      return fail(400, "orchestrator must be a string", { help: hints.planFileInput });
     }
     const stamped = store.stampOrchestrator(pk.key, planId, body.orchestrator);
     if ("error" in stamped) {
-      return fail(stamped.notFound === true ? 404 : 400, stamped.error);
+      return fail(stamped.notFound === true ? 404 : 400, stamped.error, {
+        help: stamped.notFound === true ? hints.planCycleNotFound : hints.closedPlan,
+      });
     }
     return json({ ok: true, changed: true, plan: stamped });
   }
@@ -778,17 +804,19 @@ async function handlePlanClose(
   // matching the POST /plans path; a non-string-non-number → 400 naming wave.
   if (body.status === undefined && body.wave !== undefined) {
     if (typeof body.wave !== "string" && typeof body.wave !== "number") {
-      return fail(400, "wave must be a string");
+      return fail(400, "wave must be a string", { help: hints.planFileInput });
     }
     const wave = typeof body.wave === "string" ? body.wave : String(body.wave);
     const stamped = store.stampWave(pk.key, planId, wave);
     if ("error" in stamped) {
-      return fail(stamped.notFound === true ? 404 : 400, stamped.error);
+      return fail(stamped.notFound === true ? 404 : 400, stamped.error, {
+        help: hints.planCycleNotFound,
+      });
     }
     return json({ ok: true, changed: true, plan: stamped });
   }
   if (body.status !== "closed") {
-    return fail(400, `status must be "closed" to close a plan`);
+    return fail(400, `status must be "closed" to close a plan`, { help: hints.closedPlan });
   }
   let merge: { commit: string } | undefined;
   if (body.merge !== undefined) {
@@ -797,7 +825,7 @@ async function handlePlanClose(
         ? (body.merge as { commit?: unknown }).commit
         : undefined;
     if (typeof commit !== "string" || commit.length === 0) {
-      return fail(400, "merge.commit must be a non-empty string");
+      return fail(400, "merge.commit must be a non-empty string", { help: hints.closedPlan });
     }
     merge = { commit };
   }
@@ -806,7 +834,11 @@ async function handlePlanClose(
     return fail(
       plan.notFound === true ? 404 : 400,
       plan.error,
-      plan.openCycleIds !== undefined ? { openCycles: plan.openCycleIds } : undefined,
+      plan.notFound === true
+        ? { help: hints.planCycleNotFound }
+        : plan.openCycleIds !== undefined
+          ? { openCycles: plan.openCycleIds, help: hints.nonTerminalCycles }
+          : { help: hints.closedPlan },
     );
   }
   return json({ ok: true, changed: true, plan });
