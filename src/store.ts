@@ -1513,6 +1513,53 @@ export class Store {
   }
 
   /**
+   * CR-CRU-024 §S6 — abort an OPEN plan (user-approved at the route). The
+   * ACTIVE cycle → `failed` with its timer SEALED honestly (the same epoch-fold
+   * transitionCycle applies on leaving `active`: accumulated += now −
+   * max(activatedAt, bootedAt, lastCheckpoint), then the epoch checkpoint is
+   * dropped so a store-reopen resumes the sealed value exactly, never drifting
+   * with downtime); every PENDING cycle → `skipped`; the plan status →
+   * `aborted`. Closed/aborted/unknown plans reject (only an open plan aborts).
+   */
+  abortPlan(projectKey: string, planId: number): Plan | PlanOpError {
+    const row = this.getPlanRow(projectKey, planId);
+    if (row === null) {
+      return { error: `plan not found: ${planId}`, notFound: true };
+    }
+    if (row.status !== "open") {
+      return { error: `plan ${planId} is ${row.status} — only an open plan can be aborted` };
+    }
+    const now = Date.now();
+    for (const cycle of this.listCycleRows(projectKey, planId)) {
+      if (cycle.status === "active") {
+        // Seal the timer: fold the live epoch into accumulated (like
+        // transitionCycle on leaving active) and stamp done_at NOW, so the
+        // sealed activatedAt/doneAt span stays honest across a restart.
+        const epochStart = this.epochStart(projectKey, cycle.cycle_id, cycle.activated_at ?? now);
+        const activeMsAccumulated =
+          (cycle.active_ms_accumulated ?? 0) + Math.max(0, now - epochStart);
+        this.epochCheckpointAt.delete(this.epochKey(projectKey, cycle.cycle_id));
+        this.db
+          .query(
+            `UPDATE plan_cycles SET status = 'failed', done_at = ?, active_ms_accumulated = ?
+             WHERE project_key = ? AND cycle_id = ?`,
+          )
+          .run(now, activeMsAccumulated, projectKey, cycle.cycle_id);
+      } else if (cycle.status === "pending") {
+        this.db
+          .query(
+            `UPDATE plan_cycles SET status = 'skipped', done_at = ?
+             WHERE project_key = ? AND cycle_id = ?`,
+          )
+          .run(now, projectKey, cycle.cycle_id);
+      }
+    }
+    this.db.query(`UPDATE plans SET status = 'aborted' WHERE plan_id = ?`).run(planId);
+    this.emit("events", projectKey);
+    return this.toPlan({ ...row, status: "aborted" });
+  }
+
+  /**
    * §S6 re-baseline (cycle 19) — one-field orchestrator backfill on an OPEN
    * plan (stamping the executing plan); closed plans reject.
    */
@@ -1701,7 +1748,13 @@ export class Store {
       ...(row.orchestrator !== null ? { orchestrator: row.orchestrator } : {}),
       ...(row.wave !== null ? { wave: row.wave } : {}),
       ...(row.track !== null ? { track: row.track } : {}),
-      status: row.status === "closed" ? "closed" : "open",
+      // CR-CRU-024 §S6 — preserve the real terminal status. The prior collapse
+      // (`row.status === "closed" ? "closed" : "open"`) mapped ANY non-closed
+      // status (including the new "aborted") to "open", which hid aborted plans
+      // from the history lens and let the one-open-plan-per-cr rule mis-see
+      // them as open. "open"/"closed" behaviour is unchanged.
+      status:
+        row.status === "closed" ? "closed" : row.status === "aborted" ? "aborted" : "open",
       cycles,
       ...(row.merge_commit !== null ? { merge: { commit: row.merge_commit } } : {}),
       ...(row.closed_at !== null ? { closedAt: row.closed_at } : {}),

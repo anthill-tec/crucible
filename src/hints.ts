@@ -12,6 +12,7 @@ export const hints: Record<
   | "coverageDropped"
   | "deletionDisabled"
   | "deletionNeedsApproval"
+  | "abortNeedsApproval"
   | "gateFields"
   | "gateOutcomes"
   | "milestoneTypes"
@@ -74,6 +75,11 @@ export const hints: Record<
   deletionNeedsApproval: [
     "deleting a run permanently destroys audit history — never retry this call on your own initiative",
     "present the deletion to the user first; retry with {userApproved: true} ONLY after the user has explicitly approved this specific deletion",
+  ],
+  /** CR-CRU-024 §S6 — abort refused: no explicit user approval on the call. */
+  abortNeedsApproval: [
+    "aborting discards a declared workflow and destroys its running plan — never retry this call on your own initiative",
+    "present the abort to the user first; retry with {userApproved: true} ONLY after the user has explicitly approved this specific abort",
   ],
   /** CR-CRU-013 §S1 — a gate POST missing a required field. */
   gateFields: [

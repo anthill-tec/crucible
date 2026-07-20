@@ -187,7 +187,10 @@ export interface Plan {
   orchestrator?: string;
   wave?: string;
   track?: string;
-  status: "open" | "closed";
+  // CR-CRU-024 §S6 — `aborted` is an additive terminal plan state alongside
+  // open|closed: a declared workflow explicitly discarded (user-approved). The
+  // one-open-plan-per-cr rule treats it as not-open, so the cr can refile.
+  status: "open" | "closed" | "aborted";
   cycles: PlanCycle[];
   merge?: { commit: string };
   closedAt?: number;

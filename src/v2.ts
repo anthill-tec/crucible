@@ -906,6 +906,45 @@ function handlePlanCheckpoint(store: Store, key: string, planIdRaw: string): Res
 }
 
 /**
+ * CR-CRU-024 §S6 — POST …/plans/<planId>/abort — user-approval-gated workflow
+ * abort. The approval gate is the FIRST refusal on this route (checked BEFORE
+ * plan existence): a body without `userApproved: true` → 409 + discouraging
+ * help[], even for an unknown plan (an unapproved abort never leaks past the
+ * gate as a 404/500). WITH `userApproved: true` the abort executes: the active
+ * cycle → failed (timer sealed), pending cycles → skipped, plan → aborted; an
+ * unknown plan then → 404 + help[] (approval alone doesn't skip existence).
+ */
+async function handlePlanAbort(
+  store: Store,
+  key: string,
+  planIdRaw: string,
+  req: Request,
+): Promise<Response> {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  // Approval gate FIRST — mirrors the guarded-run-deletion 409 convention.
+  const body = (await readBody(req)) ?? {};
+  if (body.userApproved !== true) {
+    return fail(
+      409,
+      "aborting discards a declared workflow — explicit user approval is required; refused",
+      { help: hints.abortNeedsApproval },
+    );
+  }
+  const planId = numericId(planIdRaw);
+  if (planId === null) {
+    return fail(404, `plan not found: ${planIdRaw}`, { help: hints.planCycleNotFound });
+  }
+  const plan = store.abortPlan(pk.key, planId);
+  if ("error" in plan) {
+    return fail(plan.notFound === true ? 404 : 400, plan.error, {
+      help: plan.notFound === true ? hints.planCycleNotFound : hints.closedPlan,
+    });
+  }
+  return json({ ok: true, changed: true, plan });
+}
+
+/**
  * CR-CRU-024 §S5.3 — POST …/projects/<key>/stop — checkpoint every active
  * cycle's timer across the project's open plans. Returns {ok, checkpointed}.
  */
@@ -1093,6 +1132,9 @@ function handlePlansRoute(
   }
   if (segments.length === 4 && segments[3] === "checkpoint" && req.method === "POST") {
     return handlePlanCheckpoint(store, key, segments[2]!);
+  }
+  if (segments.length === 4 && segments[3] === "abort" && req.method === "POST") {
+    return handlePlanAbort(store, key, segments[2]!, req);
   }
   if (segments.length === 4 && segments[3] === "cycles" && req.method === "POST") {
     return handleCycleAppend(store, key, segments[2]!, req);
