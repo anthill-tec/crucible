@@ -36,18 +36,20 @@ When `cycle-to-runs` is clicked and `[data-testid="declared-marker"][data-cycle-
 ### §S3 Honest dim state + explicit no-op feedback
 The pill distinguishes **pruned** (server confirms the boundary is gone → dim, accurate "pruned" reason) from **beyond-window** (present server-side → stays LIVE, reached via §S2). A click that truly cannot locate a pruned boundary gives explicit feedback, never a bare tab-switch-and-nothing.
 
-### §S4 The feed window is governed by `retention` (the disconnect fix)
-**Gap-analysis correction (2026-07-20):** PRD §4.7 KEEPS the events API's `?limit`
-param (default 50, v1 inheritance) — that is a real API contract for programmatic
-callers and is NOT removed. The drift is that the FEED hardcodes `?limit=50`
-(`app.js:156`) instead of honoring PRD §4.7 / §5's "each project contributing **up
-to its retention limit**". Fix (client-side): the feed fetch — the home collective
-timeline AND the project-workspace Runs tab (both share this call) — passes the
-project's EFFECTIVE retention as the limit, `?limit=<project.retention ?? DEFAULT_RETENTION>`.
-Editing retention in project settings then visibly changes how many runs the
-timeline shows; the API's default-50 for other callers is untouched. (Single
-user-facing control per "make both governed by the same setting"; a separate
-display-limit field is a non-goal unless later requested.)
+### §S4 The workspace Runs window is governed by `retention` (the disconnect fix)
+**Gap-analysis (2026-07-20/21, architecture verified):** PRD §4.7 KEEPS the events
+API's `?limit` param (default 50) — a real contract for programmatic callers, NOT
+removed. The actual drift: `refetchCore` (`app.js:150`) fetches ONE all-projects
+`/api/v2/events?limit=50` into `state.events`, and the workspace Runs pane FILTERS
+that client-side by projectKey (`app.js:1610`) — so a project's Runs tab shows only
+its slice of the recent 50 across all projects (exactly the "so little" bug). Fix —
+make the events fetch **surface-aware**, mirroring the existing `refetchPlans`
+(CR-026 §S3.2: workspace→scoped, home→global): when `state.route.page === "workspace"`,
+fetch `/api/v2/events?project=<key>&limit=<project.retention ?? DEFAULT_RETENTION>`
+so the Runs tab shows THAT project's runs up to ITS retention; HOME keeps the
+recent-N collective `?limit=50`. Editing retention in project settings then visibly
+changes the workspace Runs count. The API's default-50 (PRD §4.7) is untouched.
+(HOME per-project up-to-retention is a server concern — non-goal here.)
 
 ### §S5 Project-settings UI integrity
 1. **Labels** — every manager-edit field gets a visible label: name, type, SUT root, liveness T1/T2/T3 (seconds), **retention (runs — now governs the timeline window)**, and the run-deletion toggle. No more bare number boxes.
@@ -57,7 +59,7 @@ display-limit field is a non-goal unless later requested.)
 - [ ] §S1: `GET …/events?cycleId=<id>` returns that cycle's runs + its `Cycle done` boundary (200); unknown id → empty; TOON negotiation matches siblings.
 - [ ] §S2: a boundary OUTSIDE the loaded window but present server-side → clicking `cycle-to-runs` fetches+merges it, marker `scrollIntoView`'d + blinks (e2e); the in-window happy path fires NO extra fetch.
 - [ ] §S3: beyond-window → pill LIVE; genuinely pruned → pill dim with accurate reason; a pruned-click shows explicit feedback (no silent no-op).
-- [ ] §S4: with `retention=N`, `GET …/events` (the feed's own call) returns min(N, available) and the timeline renders that many; changing retention in the manager changes the rendered count; the hardcoded 50 is gone (grep-asserted).
+- [ ] §S4: on a WORKSPACE route, `refetchCore` fetches `/api/v2/events?project=<key>&limit=<project.retention ?? DEFAULT_RETENTION>` (asserted on the fetch call); a project with `retention=N` renders up to N of ITS OWN runs in the Runs tab (not a slice of the all-projects 50); changing retention changes the count. HOME still fetches the recent-N collective `?limit=50` (unchanged). No hardcoded 50 governs the workspace window.
 - [ ] §S5.1: every manager-edit input has an associated visible label (asserted per field testid); the retention label states it governs the timeline window.
 - [ ] §S5.2: the allow-deletion toggle carries its destructive label; the F12 storyboard frame renders the labeled toggle (storyboard-fidelity assertion updated).
 
