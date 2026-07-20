@@ -59,16 +59,29 @@ export default defineConfig({
   // project completes before its dependent starts, independent of file
   // discovery order. `chromium` covers everything except drill-in.feature;
   // `chromium-drill-in` depends on it and runs strictly after.
+  //
+  // CR-CRU-025 C4 — `cycle-run-navigation.feature` sorts alphabetically
+  // BEFORE drill-in.feature too ("cycle" < "drill" < "shell"), which would
+  // break the SAME F1 precondition. Same fix, its own dependent project
+  // (`chromium-cycle-run-navigation`) — it and `chromium-drill-in` have no
+  // ordering requirement relative to EACH OTHER (each seeds its own
+  // namespaced fixtures), only relative to `chromium`.
   projects: [
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
-      testIgnore: /drill-in\.feature\.spec\.js$/,
+      testIgnore: /(drill-in|cycle-run-navigation)\.feature\.spec\.js$/,
     },
     {
       name: "chromium-drill-in",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /drill-in\.feature\.spec\.js$/,
+      dependencies: ["chromium"],
+    },
+    {
+      name: "chromium-cycle-run-navigation",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: /cycle-run-navigation\.feature\.spec\.js$/,
       dependencies: ["chromium"],
     },
   ],
