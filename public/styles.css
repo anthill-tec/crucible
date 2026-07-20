@@ -470,6 +470,11 @@ body {
   background: var(--bg);
 }
 
+/* CR-CRU-025 §S2b — Run Timeline accordion: a collapsed declared marker dims
+   its dashed frame and trails a `▸ N runs` cue for the hidden linked cards. */
+.app-accordion-collapsed { border-style: dotted; opacity: 0.85; }
+.app-accordion-collapsed-cue { margin-left: 8px; }
+
 .app-empty {
   color: var(--ink-faint);
   font: 12px var(--mono);
@@ -796,6 +801,14 @@ body {
 }
 .app-cycle-line { display: flex; gap: 8px; align-items: baseline; }
 .app-cycle-glyph { width: 1.2em; text-align: center; }
+/* CR-CRU-025 §S1 — the row LABEL truncates (ellipsis) so the trailing
+   nav badge is never the thing that clips at the CR-023 660px pane floor. */
+.app-cycle-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 /* CR-CRU-021 §S6 #7 — GLYPH-ONLY status coloring: the status color paints
    the glyph alone; row text stays default ink (the whole-row coloring the
    live UI drifted into is the regression this fixes). */
@@ -835,6 +848,42 @@ body {
 .app-cr-root-cycles { margin-left: 14px; }
 .app-run-count-hint { margin-left: 8px; }
 .app-cycle-kind-badge { color: var(--ink-faint); }
+/* CR-CRU-025 §S1 — the "→ Runs" nav badge. Never wraps, never shrinks
+   (CR-023 660px pane floor): it holds its size while the row LABEL ellipsizes.
+   Dim + inert when the declared boundary has been pruned off the timeline. */
+.app-cycle-to-runs {
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+.app-cycle-to-runs:hover { color: var(--ink); }
+/* CR-CRU-025 §S2 — the "⚑ Cycle" nav badge (inverse of "→ Runs"): never
+   wraps, never shrinks (CR-023 660px pane floor) so it holds its size while
+   the marker label ellipsizes. */
+.app-boundary-to-cycle {
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  color: var(--ink-dim);
+}
+.app-boundary-to-cycle:hover { color: var(--ink); }
+.app-cycle-to-runs.disabled {
+  cursor: default;
+  opacity: 0.4;
+  color: var(--ink-faint);
+}
+/* CR-CRU-025 §S1 — 10s locate blink applied to the scrolled-to declared
+   boundary; a JS timer removes the class after exactly 10s. */
+@keyframes app-locate-blink {
+  0%, 100% { background: transparent; }
+  50% { background: rgba(255, 122, 26, 0.28); }
+}
+.app-locate-blink {
+  animation: app-locate-blink 1s ease-in-out infinite;
+  border-radius: 4px;
+}
 .app-open-span-annotation { margin-left: 8px; }
 .app-lane-chip { color: var(--ink-dim); }
 .app-cr-track { color: var(--ink-dim); }

@@ -27,6 +27,13 @@
       workspaceTab: "Workflow",
       backendUp: true,
       lastSynced: null,
+      // CR-CRU-025 §S2b — the Run Timeline accordion's per-cycleId collapse
+      // set (cycleIds whose declared-marker is currently collapsed). Pure UI
+      // session state: default EMPTY (everything expanded), no URL/persistence,
+      // and untouched by refetchCore/refetchPlans — so a poll/SSE re-render
+      // naturally preserves it. A vanX reactive array so a toggle re-runs the
+      // Runs feed binding (mutated via vanX.replace, like state.events).
+      collapsedCycles: [],
     });
 
     // ── Routing (§S2 — hash-free History routing, parse in app-logic) ───
@@ -726,6 +733,21 @@
         `${KIND_GLYPHS[cycle.kind] ?? KIND_GLYPHS["red-green"]} Cycle · ${cycle.label} · ${plan.cr} · active`,
       );
 
+    // CR-CRU-025 §S2b — the Run Timeline accordion's collapse predicate +
+    // toggle. Reading the reactive `state.collapsedCycles` inside the Runs feed
+    // binding subscribes it, so a toggle re-runs the feed. The toggle mutates
+    // via vanX.replace (the reactive-array convention used for state.events),
+    // which both persists the flag on `state` (surviving poll re-renders) and
+    // re-renders the timeline. Only a declared (done) cycle's marker ever calls
+    // the toggle, so the ACTIVE cycle's id can never enter the set.
+    const isCycleCollapsed = (cycleId) => state.collapsedCycles.includes(cycleId);
+    const toggleCycleCollapsed = (cycleId) => {
+      const next = state.collapsedCycles.includes(cycleId)
+        ? state.collapsedCycles.filter((id) => id !== cycleId)
+        : [...state.collapsedCycles, cycleId];
+      vanX.replace(state.collapsedCycles, () => next);
+    };
+
     const DeclaredMarkerRow = (cycle, plan) => {
       const parts = [
         `${KIND_GLYPHS[cycle.kind] ?? KIND_GLYPHS["red-green"]} Cycle done`,
@@ -735,9 +757,39 @@
       if (cycle.activatedAt !== undefined && cycle.doneAt !== undefined) {
         parts.push(`closed in ${fmtDuration(cycle.doneAt - cycle.activatedAt)}`);
       }
+      // CR-CRU-025 §S2b — the marker body is the accordion handle. Collapsed:
+      // this cycle's linked run cards are omitted from the feed (runFeed) and a
+      // `▸ <N> runs` cue renders here. The nested `boundary-to-cycle` badge
+      // already stopPropagation's (C2), so it never trips this toggle.
+      const collapsed = isCycleCollapsed(cycle.id);
       return div(
-        { "data-testid": "declared-marker", class: "app-transition-marker" },
+        {
+          "data-testid": "declared-marker",
+          // CR-CRU-025 §S1 — carry the declared cycle id (mirrors the
+          // `data-run-id`/`data-cr` convention) so cycle→Runs navigation can
+          // match the boundary by cycleId.
+          "data-cycle-id": cycle.id,
+          class: `app-transition-marker${collapsed ? " app-accordion-collapsed" : ""}`,
+          onclick: () => toggleCycleCollapsed(cycle.id),
+        },
         parts.join(" · "),
+        // CR-CRU-025 §S2 — the trailing "⚑ Cycle" affordance that jumps back
+        // to this cycle's row in the Workflow pane (inverse of §S1's
+        // "→ Runs"). A SEPARATE trailing node; the heuristic RED➜GREEN
+        // `transition-marker` never routes through here, so it stays badge-less.
+        " ",
+        BoundaryToCycleBadge(cycle, plan),
+        // CR-CRU-025 §S2b — collapsed cue: exact `▸ <N> runs`, N = this cycle's
+        // current linked-run count. Absent when expanded.
+        collapsed
+          ? span(
+              {
+                "data-testid": "accordion-collapsed-cue",
+                class: "app-accordion-collapsed-cue app-card-meta",
+              },
+              `▸ ${linkedRunsFor(cycle.id).length} runs`,
+            )
+          : null,
       );
     };
 
@@ -885,7 +937,16 @@
             rows.push(home ? MergeMarkerCompact(row.event) : MergeMarkerRow(row.event));
           else if (!home) rows.push(MilestoneEntryRow(row.event));
           // home + non-merge milestone: workspace-only, render nothing.
-        } else rows.push(EventCard(row.event));
+        } else {
+          // CR-CRU-025 §S2b — a run card linked to a COLLAPSED declared cycle
+          // is omitted from the DOM entirely (mirrors OpenSpan's no-container
+          // convention, never CSS-hidden). Only that cycle's linked cards are
+          // affected; unlinked cards (no context.cycleId) always render, and
+          // the active cycle's id can never be in the collapse set.
+          const cid = row.event.context?.cycleId;
+          if (cid !== undefined && cid !== null && isCycleCollapsed(cid)) continue;
+          rows.push(EventCard(row.event));
+        }
       }
       return rows;
     }
@@ -1938,6 +1999,132 @@
       return cycle.status;
     };
 
+    // CR-CRU-025 §S1 — shared 10s locate-blink. Adds a marker CSS class to a
+    // target element and schedules a JS timer that removes it after EXACTLY
+    // 10s ("CSS animation with a JS-cleared marker class"). Re-triggering
+    // resets the clock: any prior timer is cleared first so the blink never
+    // stacks. Reusable — C2 drives the inverse (run→cycle) direction through
+    // this same helper.
+    const LOCATE_BLINK_CLASS = "app-locate-blink";
+    let locateBlinkTimer = null;
+    let locateBlinkTarget = null;
+    const locateBlink = (el) => {
+      if (locateBlinkTimer !== null) {
+        clearTimeout(locateBlinkTimer);
+        locateBlinkTimer = null;
+      }
+      if (locateBlinkTarget !== null && locateBlinkTarget !== el) {
+        locateBlinkTarget.classList.remove(LOCATE_BLINK_CLASS);
+      }
+      locateBlinkTarget = el;
+      el.classList.add(LOCATE_BLINK_CLASS);
+      locateBlinkTimer = setTimeout(() => {
+        el.classList.remove(LOCATE_BLINK_CLASS);
+        locateBlinkTimer = null;
+        locateBlinkTarget = null;
+      }, 10000);
+    };
+
+    // CR-CRU-025 §S1 — after the one-rule tab swap to Runs, the declared
+    // boundary for `cycleId` re-renders asynchronously; retry (real timers,
+    // never the 10s blink delay) until it mounts, then scroll it into view
+    // and blink it.
+    const revealDeclaredMarker = (cycleId, attempts = 0) => {
+      const marker = document.querySelector(
+        `[data-testid="declared-marker"][data-cycle-id="${cycleId}"]`,
+      );
+      if (marker !== null) {
+        marker.scrollIntoView();
+        locateBlink(marker);
+        return;
+      }
+      if (attempts < 30) {
+        setTimeout(() => revealDeclaredMarker(cycleId, attempts + 1), 5);
+      }
+    };
+
+    // CR-CRU-025 §S1/§S0 — the trailing "→ Runs" affordance on a COMPLETED
+    // cycle row. A SEPARATE node from the history `cycle-toggle` (never a
+    // rebinding). Clicking flips the workspace tab to Runs (the one-rule
+    // `state.workspaceTab` swap, NOT a navigate() pathname change), scrolls the
+    // matching `declared-marker` (by cycleId) into view, and blinks it 10s.
+    // When the cycle's declared boundary has been pruned off the retained
+    // timeline (no linked run survives) the badge is dim + inert.
+    const CycleToRunsBadge = (cycleId) => {
+      const live = cycleId !== undefined && cycleId !== null && linkedRunsFor(cycleId).length > 0;
+      return span(
+        {
+          "data-testid": "cycle-to-runs",
+          class: `app-pill app-cycle-to-runs${live ? "" : " disabled"}`,
+          "aria-disabled": live ? "false" : "true",
+          title: live ? "Jump to this cycle's Runs boundary" : "boundary pruned — no runs retained",
+          onclick: (ev) => {
+            ev.stopPropagation();
+            if (!live) return;
+            state.workspaceTab = "Runs";
+            revealDeclaredMarker(cycleId);
+          },
+        },
+        "→ Runs",
+      );
+    };
+
+    // CR-CRU-025 §S2 — the inverse of `revealDeclaredMarker`: after the
+    // one-rule tab swap to Workflow, the target cycle row re-renders
+    // asynchronously (and, in History, only once its collapsed cr-group has
+    // been expanded). Retry (real timers, never the 10s blink delay) until the
+    // ACTIVE `cycle-row` OR the HISTORY `lens-cycle-row` for `cycleId` mounts,
+    // then scroll it into view and blink it through the SAME shared util.
+    const revealCycleRow = (cycleId, attempts = 0) => {
+      const row = document.querySelector(
+        `[data-testid="cycle-row"][data-cycle-id="${cycleId}"], ` +
+          `[data-testid="lens-cycle-row"][data-cycle-id="${cycleId}"]`,
+      );
+      if (row !== null) {
+        row.scrollIntoView();
+        locateBlink(row);
+        return;
+      }
+      if (attempts < 30) {
+        setTimeout(() => revealCycleRow(cycleId, attempts + 1), 5);
+      }
+    };
+
+    // CR-CRU-025 §S2 — the trailing "⚑ Cycle" badge on a declared boundary
+    // marker. A SEPARATE node from the marker body; clicking it (and ONLY it —
+    // stopPropagation keeps the click off C3's future accordion body) flips the
+    // workspace tab to Workflow (the one-rule swap, inverse of §S1), expands
+    // the containing COLLAPSED history cr-group when the plan is closed, then
+    // scrolls+blinks the exact cycle row matched by cycleId.
+    const BoundaryToCycleBadge = (cycle, plan) => {
+      const cycleId = cycle.id;
+      const isHistory = plan.status === "closed";
+      return span(
+        {
+          "data-testid": "boundary-to-cycle",
+          class: "app-pill app-boundary-to-cycle",
+          title: "Jump to this cycle in Workflow",
+          onclick: (ev) => {
+            ev.stopPropagation();
+            state.workspaceTab = "Workflow";
+            if (isHistory) {
+              const crKey = lensKey("cr", plan.cr);
+              if (!lensOpenKeys.has(crKey)) {
+                lensOpenKeys.add(crKey);
+                lensOpenRev.val += 1;
+              }
+            }
+            revealCycleRow(cycleId);
+          },
+        },
+        "⚑ Cycle",
+      );
+    };
+
+    // Completed cycles (done/skipped/failed) carry the §S1 navigation badge.
+    const cycleIsCompleted = (cycle) =>
+      cycle.status === "done" || cycle.status === "skipped" || cycle.status === "failed";
+
     // One todo row per cycle: `<glyph> cycle <n> · "<label>" · <status>`
     // (§S6 #2, label QUOTED, ACTIVE row bold, inline `[<kind>]` badge for
     // non-default kinds, §S6 #4). RULED (a) — the ACTIVE cycle's open span
@@ -1968,6 +2155,10 @@
         {
           "data-testid": "cycle-row",
           "data-status": cycle.status,
+          // CR-CRU-025 §S2 — carry the cycle id (mirrors §S1's
+          // `declared-marker`) so a Runs boundary → cycle jump can match this
+          // active row by cycleId.
+          "data-cycle-id": cycle.id,
           class: `app-cycle-row cycle-status-${cycle.status}`,
         },
         div(
@@ -1980,6 +2171,9 @@
             ? b({ class: "app-cycle-text" }, ...lineParts)
             : span({ class: "app-cycle-text" }, ...lineParts),
           ...(timer !== null ? [" ", timer] : []),
+          // CR-CRU-025 §S1 — trailing Runs-boundary affordance, AFTER the
+          // timer, on completed rows only (a separate node — never rebinding).
+          ...(cycleIsCompleted(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
         ),
         cycle.status === "active" ? OpenSpan(cycle.id) : null,
       );
@@ -2159,6 +2353,10 @@
         {
           "data-testid": "lens-cycle-row",
           "data-status": cycle.status,
+          // CR-CRU-025 §S2 — carry the cycle id (mirrors §S1's
+          // `declared-marker`) so a Runs boundary → cycle jump can match this
+          // history row by cycleId.
+          "data-cycle-id": cycle.id,
           class: `app-cycle-row cycle-status-${cycle.status}`,
         },
         div(
@@ -2179,6 +2377,10 @@
           ),
           span({ class: "app-cycle-label" }, cycle.label),
           ...(timer !== null ? [" ", timer] : []),
+          // CR-CRU-025 §S1/§S0 — the Runs-boundary badge, a SEPARATE node
+          // from the existing `cycle-toggle` drill-down glyph, on completed
+          // rows only.
+          ...(cycleIsCompleted(cycle) ? [" ", CycleToRunsBadge(cycle.id)] : []),
           // CR-CRU-021 §S6 #8 — collapsed rows hint at their linked runs.
           expandable
             ? () =>
