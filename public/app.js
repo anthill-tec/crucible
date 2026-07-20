@@ -155,13 +155,31 @@
     // refetchPlans() without double-fetching the plans route.
     async function refetchCore() {
       try {
-        const [projects, agents, events, health] = await Promise.all([
-          getJson("/api/v2/projects"),
+        // CR-CRU-032 §S4 — the workspace Runs window is governed by the routed
+        // project's own `retention`. Load projects FIRST so state.projects is
+        // populated before we size the events window from it (on a cold
+        // workspace mount the boot refetch runs before any project is known).
+        const projects = await getJson("/api/v2/projects");
+        vanX.replace(state.projects, () => projects.projects ?? []);
+
+        // Surface-aware events fetch (mirrors refetchPlans' §S3.2 split): a
+        // WORKSPACE scopes the call to its project and caps it at that
+        // project's `retention` (falling back to MANAGER_RETENTION_DEFAULT
+        // when unset or not yet loaded); HOME keeps the unchanged collective
+        // recent-50 call byte-for-byte.
+        let eventsUrl = "/api/v2/events?limit=50";
+        if (state.route.page === "workspace") {
+          const key = state.route.projectKey;
+          const routed = state.projects.find((p) => p.key === key);
+          const retention = routed?.retention ?? MANAGER_RETENTION_DEFAULT;
+          eventsUrl = `/api/v2/events?project=${encodeURIComponent(key)}&limit=${retention}`;
+        }
+
+        const [agents, events, health] = await Promise.all([
           getJson("/api/v2/agents"),
-          getJson("/api/v2/events?limit=50"),
+          getJson(eventsUrl),
           getJson("/api/v2/health"),
         ]);
-        vanX.replace(state.projects, () => projects.projects ?? []);
         vanX.replace(state.agents, () => agents.agents ?? []);
         vanX.replace(state.events, () => events.events ?? []);
         state.health = health;
