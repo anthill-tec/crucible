@@ -1,6 +1,6 @@
 # CR-CRU-031 — Wave-classification fix: server wave-backfill + `plan-file --wave` + CR-021 correction
 
-**Status:** PENDING
+**Status:** COMPLETED (2026-07-18 — merged 406cff5; plan 12 closed; C1–C4; 856/856 · coverage 91.2%/90.4% · playwright 31/31 tier:e2e · tsc 0; status reconciled from live Crucible board 2026-07-20)
 **Type:** patch
 **Priority:** P1
 **Depends on:** CR-CRU-011 (plans + wave state), CR-CRU-013 (surfaced the gap)

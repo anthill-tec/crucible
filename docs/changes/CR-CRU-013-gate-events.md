@@ -1,6 +1,6 @@
 # CR-CRU-013 — Workflow events: gates (no-mistakes) + milestones
 
-**Status:** IN_PROGRESS (2026-07-18 — C1/C2/C3 sealed; C4 `toon.py` next)
+**Status:** COMPLETED (2026-07-18 — merged c7660b1; plan 11 closed, all 8 cycles done incl. C4 `toon.py`; status reconciled from live Crucible board 2026-07-20)
 **Type:** feature
 **Priority:** P2
 **Depends on:** CR-CRU-008, CR-CRU-011
