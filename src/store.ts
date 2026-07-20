@@ -158,7 +158,12 @@ export interface PlanOpError {
    * per-cycle illegal transition. `cycleRef` carries the sibling cycle the help
    * names (the earlier-pending cycle, or the already-active one).
    */
-  code?: "out-of-order" | "already-active" | "illegal-transition";
+  code?:
+    | "out-of-order"
+    | "already-active"
+    | "illegal-transition"
+    | "locked"
+    | "immutable-history";
   cycleRef?: number;
 }
 
@@ -1345,6 +1350,55 @@ export class Store {
       status: to,
       ...(activatedAt !== null ? { activatedAt } : {}),
       ...(doneAt !== null ? { doneAt } : {}),
+    };
+  }
+
+  /**
+   * CR-CRU-024 §S3.2 — edit a cycle's label. Legal ONLY while the cycle is
+   * `pending`: the active cycle is LOCKED and terminal cycles are immutable
+   * HISTORY. Mirrors transitionCycle's row-lookup + guard structure; returns
+   * distinct codes so the route maps the matching help[]. No partial state —
+   * a refusal leaves the label untouched.
+   */
+  editCycleLabel(
+    projectKey: string,
+    planId: number,
+    cycleId: number,
+    label: string,
+  ): PlanCycle | PlanOpError {
+    const row = this.db
+      .query<PlanCycleRow, [string, number, number]>(
+        `SELECT * FROM plan_cycles WHERE project_key = ? AND plan_id = ? AND cycle_id = ?`,
+      )
+      .get(projectKey, planId, cycleId);
+    if (row === null) {
+      return { error: `cycle not found in plan ${planId}: ${cycleId}`, notFound: true };
+    }
+    if (row.status === "active") {
+      return {
+        error: "the active cycle is locked — confirm or fail it first",
+        code: "locked",
+      };
+    }
+    if (row.status !== "pending") {
+      return {
+        error: "done/skipped/failed cycles are immutable history",
+        code: "immutable-history",
+      };
+    }
+    this.db
+      .query(
+        `UPDATE plan_cycles SET label = ? WHERE project_key = ? AND plan_id = ? AND cycle_id = ?`,
+      )
+      .run(label, projectKey, planId, cycleId);
+    this.emit("events", projectKey);
+    return {
+      id: row.cycle_id,
+      label,
+      kind: row.kind as CycleKind,
+      status: row.status as CycleStatus,
+      ...(row.activated_at !== null ? { activatedAt: row.activated_at } : {}),
+      ...(row.done_at !== null ? { doneAt: row.done_at } : {}),
     };
   }
 

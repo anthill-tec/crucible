@@ -23,7 +23,10 @@ export const hints: Record<
   | "duplicateOpenPlan"
   | "closedPlan"
   | "nonTerminalCycles"
-  | "malformedBody",
+  | "malformedBody"
+  | "cycleLocked"
+  | "cycleImmutable"
+  | "cycleOneMutation",
   string[]
 > = {
   /** GET /api/v2 — orientation for a fresh agent. */
@@ -127,6 +130,21 @@ export const hints: Record<
   /** CR-CRU-024 §S4 — an unparseable JSON request body on a plan/cycle route. */
   malformedBody: [
     "send a valid JSON body with content-type: application/json",
+  ],
+  /** CR-CRU-024 §S3.2 — a label edit aimed at the LOCKED active cycle. */
+  cycleLocked: [
+    "the active cycle is locked while it runs — confirm it (done) or fail it first, then edit",
+    "or append a new cycle for the rename: POST …/plans/<planId>/cycles {label}",
+  ],
+  /** CR-CRU-024 §S3.2 — a label edit aimed at a terminal (history) cycle. */
+  cycleImmutable: [
+    "done/skipped/failed cycles are immutable history — their labels are frozen",
+    "append a new cycle for rework instead: POST …/plans/<planId>/cycles {label}",
+  ],
+  /** CR-CRU-024 §S3.2 — a body carrying BOTH label and status. */
+  cycleOneMutation: [
+    "one mutation per call — send either {label} (rename) or {status} (transition), never both",
+    "PATCH …/cycles/<id> {label} to rename, then PATCH …/cycles/<id> {status} to transition",
   ],
 };
 

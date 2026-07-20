@@ -745,6 +745,31 @@ async function handleCycleTransition(
   }
   const body = await readBody(req);
   if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
+  // CR-CRU-024 §S3.2 — the PATCH carries EITHER {status} (transition) or {label}
+  // (rename), never both: one mutation per call.
+  const hasStatus = body.status !== undefined;
+  const hasLabel = body.label !== undefined;
+  if (hasStatus && hasLabel) {
+    return fail(400, "one mutation per call: send either {status} or {label}, not both", {
+      help: hints.cycleOneMutation,
+    });
+  }
+  if (hasLabel) {
+    if (typeof body.label !== "string" || body.label.length === 0) {
+      return fail(400, "label must be a non-empty string", { help: hints.cycleInput });
+    }
+    const edited = store.editCycleLabel(pk.key, planId, cycleId, body.label);
+    if ("error" in edited) {
+      const help =
+        edited.code === "locked"
+          ? hints.cycleLocked
+          : edited.code === "immutable-history"
+            ? hints.cycleImmutable
+            : hints.planCycleNotFound;
+      return fail(edited.notFound === true ? 404 : 400, edited.error, { help });
+    }
+    return json({ ok: true, changed: true, cycle: edited });
+  }
   if (typeof body.status !== "string" || !CYCLE_STATUSES.has(body.status)) {
     return fail(
       400,
