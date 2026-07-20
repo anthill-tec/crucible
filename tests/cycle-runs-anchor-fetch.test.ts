@@ -302,6 +302,19 @@ function findAnchorCall(key: string, cycleId: number): string | undefined {
   });
 }
 
+// Shared dim/disabled check (same channel AC3 already asserts against —
+// `disabled` attribute, `aria-disabled="true"`, or a disabled/dim class).
+// AC5 (§S3, VERIFY finding 1B) reuses this to assert the cycle-to-runs
+// PILL ITSELF (not just the separate anchor-fetch-feedback text) flips
+// dim after a confirmed-pruned anchor-fetch, and stays dim.
+function isBadgeDisabled(badge: HTMLElement): boolean {
+  return (
+    badge.hasAttribute("disabled") ||
+    badge.getAttribute("aria-disabled") === "true" ||
+    /disabled|dim/i.test(badge.className)
+  );
+}
+
 // ── AC1 (§S2) — beyond-window boundary: anchor-fetch, merge, mount, blink ──
 
 describe("§S2 cycle-to-runs anchor-fetch — beyond-window boundary reached", () => {
@@ -374,6 +387,15 @@ describe("§S2 cycle-to-runs anchor-fetch — beyond-window boundary reached", (
       // scrollIntoView + locate-blink — no silent give-up.
       expect(scroll.calls).toContain(marker!);
       expect(marker!.classList.contains("app-locate-blink")).toBe(true);
+
+      // Negative assertion (VERIFY finding 1B / §S3 guard): a SUCCESSFUL
+      // anchor-fetch (boundary reached, marker mounted) must NEVER dim or
+      // disable the cycle-to-runs pill — only a CONFIRMED-PRUNED
+      // anchor-fetch may do that (see the new AC5 test below). Re-query the
+      // badge from the DOM since it may have re-rendered after the fetch.
+      const badgeAfterReach = row.querySelector<HTMLElement>('[data-testid="cycle-to-runs"]');
+      expect(badgeAfterReach).not.toBeNull();
+      expect(isBadgeDisabled(badgeAfterReach!)).toBe(false);
     } finally {
       scroll.restore();
     }
@@ -532,5 +554,82 @@ describe("§S2 cycle-to-runs anchor-fetch — in-window happy path unchanged", (
     } finally {
       scroll.restore();
     }
+  });
+});
+
+// ── AC5 (§S3) — genuinely-pruned pill DIMS after the confirming anchor-fetch ──
+//
+// VERIFY (ruling 1B): §S3's literal requirement is *"server confirms
+// [boundary] gone → dim, accurate 'pruned' reason"* for the pill itself
+// (CR-CRU-032-runs-boundary-anchor-fetch.md §S3 lines 36-37, AC line 61).
+// AC2 already covers the SEPARATE `anchor-fetch-feedback` text node. This
+// test is about the `cycle-to-runs` PILL'S OWN live/dim state, which
+// `CycleToRunsBadge` (public/app.js:2172) currently ignores entirely — it
+// hardcodes `live = cycleId !== undefined && cycleId !== null` and never
+// reads `state.anchorFeedback` (set at app.js:2157 on a confirmed-pruned
+// anchor response). Today this pill NEVER dims after the click, no matter
+// how many times a confirmed-pruned anchor-fetch resolves — this test
+// pins the FIX contract that it must.
+describe("§S3 cycle-to-runs pill — genuinely-pruned pill DIMS after the confirming anchor-fetch", () => {
+  test("a confirmed-pruned anchor-fetch (empty events, no cycle field) dims the SAME cycle-to-runs pill with an accurate 'pruned' reason, and the dim state persists across a later render", async () => {
+    const key = "cr032-pill-dims-1";
+    const cycleId = 8005;
+    const plan: PlanFixture = {
+      planId: 9105,
+      cr: "CR-032-PILL-DIMS-1",
+      projectKey: key,
+      status: "open",
+      // Same key/cycle pattern as AC2's "genuinely pruned" fixture — a
+      // `done` cycle whose boundary is truly gone server-side.
+      cycles: [{ id: cycleId, label: "genuinely pruned cycle", status: "done" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "CR032 Pill Dims" })],
+      events: [],
+      plans: [plan],
+      // Server's "truly unknown/pruned" signal (mirrors AC2 and
+      // tests/events-anchored.test.ts's "unknown cycleId" case): empty
+      // events, no `cycle` field at all.
+      anchorResponse: { events: [] },
+    });
+    await openWorkflowTab();
+
+    const row = doneCycleRow();
+    const badgeBefore = row.querySelector<HTMLElement>('[data-testid="cycle-to-runs"]');
+    expect(badgeBefore).not.toBeNull();
+
+    // 1. BEFORE the click: pruning cannot be known upfront (mirrors AC3) —
+    // the pill is LIVE, not dim. The FIX must not dim everything by
+    // default; only a CONFIRMED-pruned click may earn the dim state.
+    expect(isBadgeDisabled(badgeBefore!)).toBe(false);
+
+    badgeBefore!.click();
+    await waitForRetryBudget();
+    await settle();
+
+    // The anchor-fetch fired and confirmed pruning (same trigger as AC2).
+    expect(findAnchorCall(key, cycleId)).toBeDefined();
+
+    // 2. AFTER the confirming anchor-fetch: the SAME pill (re-queried from
+    // the DOM — VanJS may have re-rendered it) now renders DIM/disabled,
+    // via aria-disabled="true" or a dim/pruned class (the same channel
+    // AC3's isDisabled check accepts), with an accurate accessible
+    // "pruned" reason surfaced on its title or aria-label.
+    const badgeAfter = row.querySelector<HTMLElement>('[data-testid="cycle-to-runs"]');
+    expect(badgeAfter).not.toBeNull();
+    expect(isBadgeDisabled(badgeAfter!)).toBe(true);
+    const accessibleReason =
+      (badgeAfter!.getAttribute("title") ?? "") + " " + (badgeAfter!.getAttribute("aria-label") ?? "");
+    expect(accessibleReason).toMatch(/pruned/i);
+
+    // 3. PERSISTENCE: after another settle (a later render pass), the SAME
+    // pill (re-queried again) is STILL dim — proving a stored per-cycle
+    // verdict, not a one-frame flash tied to transient click-handler state.
+    await settle();
+    const badgeStill = row.querySelector<HTMLElement>('[data-testid="cycle-to-runs"]');
+    expect(badgeStill).not.toBeNull();
+    expect(isBadgeDisabled(badgeStill!)).toBe(true);
   });
 });
