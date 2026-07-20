@@ -1259,6 +1259,24 @@ function eventBrief(event: RunEvent) {
 
 function handleEventsList(store: Store, req: Request, url: URL): Response {
   const project = url.searchParams.get("project") ?? undefined;
+  // CR-CRU-032 §S1 — anchored fetch: when a cycleId is supplied, return exactly
+  // that cycle's linked runs plus its declared "Cycle done" boundary as an
+  // additive top-level `cycle` field. Additive: the recent-N feed below is
+  // byte-unchanged when no cycleId is present.
+  const rawCycleId = url.searchParams.get("cycleId");
+  if (rawCycleId !== null && project !== undefined) {
+    const cycleId = Number(rawCycleId);
+    if (Number.isFinite(cycleId)) {
+      const events = store.listEventsForCycle(project, cycleId).map(eventBrief);
+      const cycle = store.findCyclePlanEntry(project, cycleId);
+      // Unknown cycleId → 200 with an empty set and NO `cycle` field.
+      return reply(req, url, {
+        ok: true,
+        events,
+        ...(cycle !== null ? { cycle } : {}),
+      });
+    }
+  }
   const rawLimit = Number(url.searchParams.get("limit") ?? "");
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 50;
   // store.listEvents is newest-first already.

@@ -859,6 +859,15 @@ body {
   color: var(--ink-dim);
 }
 .app-cycle-to-runs:hover { color: var(--ink); }
+/* CR-CRU-032 §S3 (VERIFY 1B) — a `→ Runs` pill whose boundary was
+   server-confirmed pruned by its own anchor-fetch renders permanently dim:
+   faded ink + not-allowed cursor, so it never reads as a normal live jump. */
+.app-pill-dim {
+  color: var(--ink-faint);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.app-pill-dim:hover { color: var(--ink-faint); }
 /* CR-CRU-025 §S2 — the "⚑ Cycle" nav badge (inverse of "→ Runs"): never
    wraps, never shrinks (CR-023 660px pane floor) so it holds its size while
    the marker label ellipsizes. */
@@ -869,10 +878,14 @@ body {
   color: var(--ink-dim);
 }
 .app-boundary-to-cycle:hover { color: var(--ink); }
-.app-cycle-to-runs.disabled {
-  cursor: default;
-  opacity: 0.4;
-  color: var(--ink-faint);
+/* CR-CRU-032 §S3 — explicit "boundary truly pruned" feedback in the Runs pane
+   after a `→ Runs` anchor-fetch resolves empty. Replaces the old (removed,
+   inaccurate) dim `.app-cycle-to-runs.disabled` render + `title` channel. */
+.app-anchor-fetch-feedback {
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  border-left: 2px solid var(--ink-faint);
+  color: var(--ink-dim);
 }
 /* CR-CRU-025 §S1 — 10s locate blink applied to the scrolled-to declared
    boundary; a JS timer removes the class after exactly 10s. */

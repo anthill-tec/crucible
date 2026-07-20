@@ -11,7 +11,7 @@
   "use strict";
 
   function main(L) {
-    const { a, b, button, div, input, option, pre, select, span } = van.tags;
+    const { a, b, button, div, input, label, option, pre, select, span } = van.tags;
 
     // ── State ───────────────────────────────────────────────────────────
     const state = vanX.reactive({
@@ -34,6 +34,19 @@
       // naturally preserves it. A vanX reactive array so a toggle re-runs the
       // Runs feed binding (mutated via vanX.replace, like state.events).
       collapsedCycles: [],
+      // CR-CRU-032 §S3 — the cycleId whose `→ Runs` anchor-fetch resolved
+      // empty with NO `cycle` field (server-confirmed truly-pruned boundary),
+      // so the Runs pane can surface explicit "pruned" feedback instead of a
+      // silent tab-switch-and-nothing. null = no pending feedback.
+      anchorFeedback: null,
+      // CR-CRU-032 §S3 (VERIFY 1B) — the set of cycleIds whose `→ Runs`
+      // anchor-fetch came back server-confirmed truly-pruned (empty events,
+      // NO `cycle` field). Unlike the transient `anchorFeedback` (cleared on
+      // the next click), this is a STORED, permanent per-cycle verdict: once
+      // a boundary is confirmed pruned its `→ Runs` pill renders DIM for good.
+      // A vanX reactive array (mutated via vanX.replace, like collapsedCycles)
+      // so the Workflow binding re-runs and the pill flips dim on confirm.
+      prunedCycles: [],
     });
 
     // ── Routing (§S2 — hash-free History routing, parse in app-logic) ───
@@ -89,12 +102,14 @@
       vanX.replace(state.plans, () => []);
       // CR-CRU-026 §S3.2 — refetchPlans is surface-aware (home → the global
       // route, workspace → the scoped one), so EVERY scope change refetches
-      // the landing surface's plan slice; the core slice stays a
-      // workspace-landing concern (home keeps its poll/SSE cadence).
+      // the landing surface's plan slice. CR-CRU-032 §S4 made state.events
+      // surface-scoped (refetchCore REPLACES the shared feed with a
+      // surface-scoped set), so the core slice must ALSO refetch on EVERY
+      // scope change, symmetric with refetchPlans: a home landing re-fetches
+      // the global ?limit=50 feed to restore the collective marker
+      // vocabulary (CR-026 §S0 equivalence), not just a workspace landing.
       void refetchPlans();
-      if (state.route.page === "workspace") {
-        void refetchCore();
-      }
+      void refetchCore();
     }
 
     // CR-CRU-016 AC2 — close the detail back to the underlying surface path
@@ -150,13 +165,31 @@
     // refetchPlans() without double-fetching the plans route.
     async function refetchCore() {
       try {
-        const [projects, agents, events, health] = await Promise.all([
-          getJson("/api/v2/projects"),
+        // CR-CRU-032 §S4 — the workspace Runs window is governed by the routed
+        // project's own `retention`. Load projects FIRST so state.projects is
+        // populated before we size the events window from it (on a cold
+        // workspace mount the boot refetch runs before any project is known).
+        const projects = await getJson("/api/v2/projects");
+        vanX.replace(state.projects, () => projects.projects ?? []);
+
+        // Surface-aware events fetch (mirrors refetchPlans' §S3.2 split): a
+        // WORKSPACE scopes the call to its project and caps it at that
+        // project's `retention` (falling back to MANAGER_RETENTION_DEFAULT
+        // when unset or not yet loaded); HOME keeps the unchanged collective
+        // recent-50 call byte-for-byte.
+        let eventsUrl = "/api/v2/events?limit=50";
+        if (state.route.page === "workspace") {
+          const key = state.route.projectKey;
+          const routed = state.projects.find((p) => p.key === key);
+          const retention = routed?.retention ?? MANAGER_RETENTION_DEFAULT;
+          eventsUrl = `/api/v2/events?project=${encodeURIComponent(key)}&limit=${retention}`;
+        }
+
+        const [agents, events, health] = await Promise.all([
           getJson("/api/v2/agents"),
-          getJson("/api/v2/events?limit=50"),
+          getJson(eventsUrl),
           getJson("/api/v2/health"),
         ]);
-        vanX.replace(state.projects, () => projects.projects ?? []);
         vanX.replace(state.agents, () => agents.agents ?? []);
         vanX.replace(state.events, () => events.events ?? []);
         state.health = health;
@@ -1246,58 +1279,90 @@
       };
       return div(
         { class: "app-manager-edit-form" },
-        input({
-          "data-testid": "manager-edit-name",
-          value: name,
-          oninput: (e) => (name.val = e.target.value),
-        }),
-        select(
-          {
-            "data-testid": "manager-edit-type",
-            onchange: (e) => (type.val = e.target.value),
-          },
-          option({ value: "backend", selected: project.type === "backend" }, "backend"),
-          option({ value: "frontend", selected: project.type === "frontend" }, "frontend"),
+        label(
+          { "data-testid": "manager-edit-name-label", class: "app-manager-edit-label" },
+          "Name",
+          input({
+            "data-testid": "manager-edit-name",
+            value: name,
+            oninput: (e) => (name.val = e.target.value),
+          }),
         ),
-        input({
-          "data-testid": "manager-edit-sutroot",
-          value: sutRoot,
-          oninput: (e) => (sutRoot.val = e.target.value),
-        }),
-        input({
-          "data-testid": "manager-edit-t1",
-          type: "number",
-          value: t1,
-          oninput: (e) => (t1.val = e.target.value),
-        }),
-        input({
-          "data-testid": "manager-edit-t2",
-          type: "number",
-          value: t2,
-          oninput: (e) => (t2.val = e.target.value),
-        }),
-        input({
-          "data-testid": "manager-edit-t3",
-          type: "number",
-          value: t3,
-          oninput: (e) => (t3.val = e.target.value),
-        }),
-        input({
-          "data-testid": "manager-edit-retention",
-          type: "number",
-          value: retention,
-          oninput: (e) => (retention.val = e.target.value),
-        }),
+        label(
+          { "data-testid": "manager-edit-type-label", class: "app-manager-edit-label" },
+          "Type",
+          select(
+            {
+              "data-testid": "manager-edit-type",
+              onchange: (e) => (type.val = e.target.value),
+            },
+            option({ value: "backend", selected: project.type === "backend" }, "backend"),
+            option({ value: "frontend", selected: project.type === "frontend" }, "frontend"),
+          ),
+        ),
+        label(
+          { "data-testid": "manager-edit-sutroot-label", class: "app-manager-edit-label" },
+          "SUT root",
+          input({
+            "data-testid": "manager-edit-sutroot",
+            value: sutRoot,
+            oninput: (e) => (sutRoot.val = e.target.value),
+          }),
+        ),
+        label(
+          { "data-testid": "manager-edit-t1-label", class: "app-manager-edit-label" },
+          "Stale after (T1, seconds)",
+          input({
+            "data-testid": "manager-edit-t1",
+            type: "number",
+            value: t1,
+            oninput: (e) => (t1.val = e.target.value),
+          }),
+        ),
+        label(
+          { "data-testid": "manager-edit-t2-label", class: "app-manager-edit-label" },
+          "Tombstone after (T2, seconds)",
+          input({
+            "data-testid": "manager-edit-t2",
+            type: "number",
+            value: t2,
+            oninput: (e) => (t2.val = e.target.value),
+          }),
+        ),
+        label(
+          { "data-testid": "manager-edit-t3-label", class: "app-manager-edit-label" },
+          "Prune after (T3, seconds)",
+          input({
+            "data-testid": "manager-edit-t3",
+            type: "number",
+            value: t3,
+            oninput: (e) => (t3.val = e.target.value),
+          }),
+        ),
+        label(
+          { "data-testid": "manager-edit-retention-label", class: "app-manager-edit-label" },
+          "Retention (runs shown in the timeline window)",
+          input({
+            "data-testid": "manager-edit-retention",
+            type: "number",
+            value: retention,
+            oninput: (e) => (retention.val = e.target.value),
+          }),
+        ),
         // §S4 (CR-CRU-008) — the guarded-deletion DANGER toggle: enabling it
         // lets agents delete runs (with per-call user approval), so it wears
         // the destructive styling.
-        input({
-          "data-testid": "manager-edit-allow-deletion",
-          type: "checkbox",
-          class: "app-manager-danger-toggle",
-          checked: allowDeletion,
-          onchange: (e) => (allowDeletion.val = e.target.checked),
-        }),
+        label(
+          { "data-testid": "manager-edit-allow-deletion-label", class: "app-manager-edit-label" },
+          "Allow agents to delete runs (guarded — per-call approval)",
+          input({
+            "data-testid": "manager-edit-allow-deletion",
+            type: "checkbox",
+            class: "app-manager-danger-toggle",
+            checked: allowDeletion,
+            onchange: (e) => (allowDeletion.val = e.target.checked),
+          }),
+        ),
         button({ "data-testid": "manager-edit-save", class: "app-chip on", onclick: save }, "save"),
         button({ class: "app-chip", onclick: () => (editing.val = false) }, "cancel"),
         div(
@@ -1564,9 +1629,26 @@
     // CR-CRU-016 §S1 (C5) — the workspace detail is hosted by WorkspaceBody
     // (see WorkspaceRunDetail), so the tab panes render their feeds
     // directly; only the home timeline still paneSwaps.
+    // CR-CRU-032 §S3 — explicit, accurate feedback when a `→ Runs` click's
+    // anchor-fetch confirmed the boundary is truly pruned (empty events, no
+    // `cycle`). A real DOM node in the Runs pane, never a silent no-op or the
+    // old inaccurate `title` channel. Reactive on state.anchorFeedback.
+    const AnchorFetchFeedback = () => {
+      const fb = state.anchorFeedback;
+      if (fb === null || fb === undefined) return null;
+      return div(
+        { "data-testid": "anchor-fetch-feedback", class: "app-anchor-fetch-feedback app-card-meta" },
+        "This cycle's Runs boundary has been pruned from the retained timeline — nothing to jump to.",
+      );
+    };
+
     const WorkspaceRuns = () =>
       div(
         { "data-testid": "workspace-runs", class: greyed("app-center") },
+        // Always yield a node (empty placeholder when no feedback) so VanJS
+        // keeps this reactive binding alive — a `null`-first derived child is
+        // GC'd and never re-renders (same guard as the home feed at §S0b).
+        () => AnchorFetchFeedback() ?? span({ "aria-hidden": "true" }),
         WorkspaceRunsFeed(),
       );
 
@@ -2025,11 +2107,34 @@
       }, 10000);
     };
 
+    // CR-CRU-032 §S3 (VERIFY 1B) — the accurate reason a `→ Runs` pill wears
+    // once its boundary is server-confirmed pruned, shared by the render-time
+    // dim (fresh re-mounts) and the imperative reflect on the clicked pill.
+    const PRUNED_PILL_REASON =
+      "This cycle's Runs boundary has been pruned from the retained timeline";
+
+    // §S3 (VERIFY 1B) — reflect the confirmed-pruned verdict onto the exact
+    // `→ Runs` element the user activated. The stored state.prunedCycles below
+    // dims every FRESH render of this cycle's pill; this reflects the same
+    // verdict on the ALREADY-rendered node that triggered the anchor-fetch
+    // (the tab has swapped to Runs by now, detaching that node from the live
+    // tree — VanJS no longer rebinds it, so the clicked control updates itself
+    // directly). Idempotent; mirrors the render-time dim styling exactly.
+    const reflectPrunedPill = (pillEl) => {
+      if (pillEl === null || pillEl === undefined) return;
+      pillEl.classList.add("app-pill-dim");
+      pillEl.setAttribute("aria-disabled", "true");
+      pillEl.setAttribute("title", PRUNED_PILL_REASON);
+      pillEl.setAttribute("aria-label", PRUNED_PILL_REASON);
+    };
+
     // CR-CRU-025 §S1 — after the one-rule tab swap to Runs, the declared
     // boundary for `cycleId` re-renders asynchronously; retry (real timers,
     // never the 10s blink delay) until it mounts, then scroll it into view
-    // and blink it.
-    const revealDeclaredMarker = (cycleId, attempts = 0) => {
+    // and blink it. `pillEl` (CR-CRU-032 §S3) is the clicked `→ Runs` node,
+    // threaded through so a confirmed-pruned anchor-fetch can reflect the dim
+    // verdict back onto it.
+    const revealDeclaredMarker = (cycleId, attempts = 0, anchored = false, pillEl = null) => {
       const marker = document.querySelector(
         `[data-testid="declared-marker"][data-cycle-id="${cycleId}"]`,
       );
@@ -2039,7 +2144,59 @@
         return;
       }
       if (attempts < 30) {
-        setTimeout(() => revealDeclaredMarker(cycleId, attempts + 1), 5);
+        setTimeout(() => revealDeclaredMarker(cycleId, attempts + 1, anchored, pillEl), 5);
+        return;
+      }
+      // CR-CRU-032 §S2 — the marker never mounted from the loaded window: this
+      // cycle's boundary is beyond the loaded feed (not necessarily pruned).
+      // Anchor-fetch it ONCE (`anchored` guards against a fetch loop) — a
+      // beyond-window boundary comes back with events to merge, a truly-pruned
+      // one comes back empty and surfaces §S3 feedback. Never a silent give-up.
+      if (!anchored) anchorFetchRuns(cycleId, pillEl);
+    };
+
+    // CR-CRU-032 §S2/§S3 — the beyond-window resolver behind `revealDeclaredMarker`.
+    // Issues the §S1 anchored route `GET /api/v2/events?project=<key>&cycleId=<id>`
+    // (`{events, cycle?}`): a non-empty `events` payload is merged into the Runs
+    // feed (sufficient on its own for `timelineRows` to mount the declared
+    // marker) and the reveal is retried; an EMPTY payload with NO `cycle` field
+    // is the server's "truly pruned" signal, surfaced as explicit feedback.
+    const anchorFetchRuns = async (cycleId, pillEl = null) => {
+      const key = state.route.projectKey;
+      if (key === undefined || key === null) return;
+      let body;
+      try {
+        body = await getJson(
+          `/api/v2/events?project=${encodeURIComponent(key)}&cycleId=${encodeURIComponent(cycleId)}`,
+        );
+      } catch {
+        return;
+      }
+      const fetched = Array.isArray(body.events) ? body.events : [];
+      if (fetched.length > 0) {
+        const seen = new Set(state.events.map((e) => e.id));
+        const additions = fetched.filter((e) => !seen.has(e.id));
+        if (additions.length > 0) {
+          const merged = state.events.concat(additions);
+          vanX.replace(state.events, () => merged);
+        }
+        // Re-reveal with a fresh retry budget; `anchored` blocks a second fetch.
+        revealDeclaredMarker(cycleId, 0, true);
+        return;
+      }
+      // Empty events + absent `cycle` field ⇒ server confirms the boundary is
+      // truly gone (mirrors the §S1 "unknown cycleId" case). Surface §S3 feedback.
+      if (body.cycle === undefined || body.cycle === null) {
+        state.anchorFeedback = cycleId;
+        // §S3 (VERIFY 1B) — record the PERMANENT pruned verdict for this
+        // cycle so its `→ Runs` pill dims and STAYS dim across later renders
+        // and other pills' clicks (do NOT clear this the way anchorFeedback
+        // is cleared — the feedback text is transient, the dim is permanent).
+        if (!state.prunedCycles.includes(cycleId)) {
+          vanX.replace(state.prunedCycles, () => [...state.prunedCycles, cycleId]);
+        }
+        // Reflect the same verdict onto the clicked pill (now tab-detached).
+        reflectPrunedPill(pillEl);
       }
     };
 
@@ -2048,21 +2205,55 @@
     // rebinding). Clicking flips the workspace tab to Runs (the one-rule
     // `state.workspaceTab` swap, NOT a navigate() pathname change), scrolls the
     // matching `declared-marker` (by cycleId) into view, and blinks it 10s.
-    // When the cycle's declared boundary has been pruned off the retained
-    // timeline (no linked run survives) the badge is dim + inert.
+    // CR-CRU-032 §S3 — the badge is LIVE for EVERY completed cycle: a boundary
+    // absent from the loaded window is beyond-window (reachable via §S2's
+    // anchor-fetch), NOT pruned. The old `linkedRunsFor(...).length > 0` dim
+    // gate conflated the two and lied — a cycle earns the pruned verdict only
+    // AFTER a click's anchor-fetch comes back empty (state.anchorFeedback),
+    // never at static render time.
     const CycleToRunsBadge = (cycleId) => {
-      const live = cycleId !== undefined && cycleId !== null && linkedRunsFor(cycleId).length > 0;
+      const live = cycleId !== undefined && cycleId !== null;
+      // §S3 (VERIFY 1B) — a cycle earns the DIM/pruned state ONLY after its
+      // own click's anchor-fetch confirmed the boundary is truly gone
+      // (membership in the stored, reactive state.prunedCycles). Never at
+      // static render time, and never for a boundary that merely isn't in the
+      // loaded window (that's beyond-window/reachable — AC1/AC3 stay LIVE).
+      // `pruned` is a plain boolean read ONCE here from the durable reactive
+      // store state.prunedCycles (the same way state.collapsedCycles is read);
+      // the dim attributes below are STATIC per render — NOT `() => …` reactive
+      // attribute bindings. Dim is achieved by TWO cooperating mechanisms:
+      //   (b) durable store — any FRESH render of this pill (initial mount, a
+      //   poll refresh, or returning to the Workflow tab, which fully
+      //   unmounts/remounts WorkspaceBody via its reactive `() => WorkspaceBody()`
+      //   child) re-invokes CycleToRunsBadge, re-reads state.prunedCycles, and
+      //   renders dim when this cycleId carries the pruned verdict. This is the
+      //   real, durable UX (proven by AC6, which dims a brand-new node the
+      //   reflection never touched).
+      //   (a) reflection — the node the user JUST clicked is detached by the
+      //   state.workspaceTab = "Runs" swap ~150ms BEFORE the async anchor-fetch
+      //   resolves, so no re-render can reach it; reflectPrunedPill imperatively
+      //   dims that exact detached node so its own click reflects the pruned
+      //   outcome immediately.
+      const pruned = live && state.prunedCycles.includes(cycleId);
       return span(
         {
           "data-testid": "cycle-to-runs",
-          class: `app-pill app-cycle-to-runs${live ? "" : " disabled"}`,
-          "aria-disabled": live ? "false" : "true",
-          title: live ? "Jump to this cycle's Runs boundary" : "boundary pruned — no runs retained",
+          class: pruned
+            ? "app-pill app-cycle-to-runs app-pill-dim"
+            : "app-pill app-cycle-to-runs",
+          "aria-disabled": pruned ? "true" : "false",
+          title: pruned ? PRUNED_PILL_REASON : "Jump to this cycle's Runs boundary",
+          ...(pruned ? { "aria-label": PRUNED_PILL_REASON } : {}),
           onclick: (ev) => {
             ev.stopPropagation();
             if (!live) return;
+            // A pruned pill is NOT a silent no-op — re-run the reveal so the
+            // anchor-fetch re-confirms and the §S3 anchor-fetch-feedback text
+            // resurfaces. It simply never pretends to be a normal live jump.
+            // Clear any stale pruned feedback from a prior cycle's click.
+            state.anchorFeedback = null;
             state.workspaceTab = "Runs";
-            revealDeclaredMarker(cycleId);
+            revealDeclaredMarker(cycleId, 0, false, ev.currentTarget);
           },
         },
         "→ Runs",

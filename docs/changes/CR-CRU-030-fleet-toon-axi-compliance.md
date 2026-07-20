@@ -128,6 +128,24 @@ clients), each returning the §S1 TOON-AXI envelope; the orchestrator's
 `--user-approved` (maps to the body's `userApproved:true`) so the discouraging
 409 path stays reachable by default.
 
+### §S8 Gate client verbs — `gate-run` streaming is the AXI standard, `gate-report` discouraged
+The no-mistakes gate has two client verbs: `gate-run` (the axi PROXY — polls
+`axi status` while the run is in flight, POSTs throttled INTERIM gate snapshots,
+then seals a FINAL gate) and `gate-report` (a one-shot POST of a single sealed
+gate). The streaming path is **already built end-to-end and works** — verified
+2026-07-21: interim POSTs → server gate events → the `gate-pane` widget renders
+the latest-by-timestamp event (`app.js`, `gates.reduce(max timestamp)`), so
+interim snapshots live-update the single card. A gate that appears "in one shot
+at the end" (observed on Model-B's Workflow tab) was posted via `gate-report`,
+**not** a Crucible defect. As part of the fleet AXI migration, make `gate-run`
+the STANDARD and DISCOURAGE `gate-report`: on every client, `gate-report` emits a
+`prefer-gate-run` warning (envelope `warnings[]` + stderr) naming `gate-run` as
+the expected streaming use; `gate-report` stays available only where no `axi`
+proxy exists. Both gate verbs return the §S1 envelope like every other verb.
+**Post-migration action (close-out):** when this CR merges and the fleet is
+migrated, notify Model-B (via Sandesh) that the expected gate use case is
+**streaming** (`gate-run`), not `gate-report`.
+
 ## Acceptance criteria
 - [ ] A shared envelope builder emits the §S1 schema; `clients/toon.py` decodes every verb's stdout back to a dict with `verb` + `ok`.
 - [ ] For EACH of `python`/`rust`/`mvn`/`arduino`-crucible.py: `register`, `unregister`, `plan-file`, `cycle-activate`, `cycle-done`, `cr-close`, `cycle-add`, and the ingest result print a `toon.py`-decodable envelope carrying `ok` + result fields (one assertion set per client).
@@ -139,6 +157,7 @@ clients), each returning the §S1 TOON-AXI envelope; the orchestrator's
 - [ ] §S3 `no-wave`: `plan-file` with neither `--wave` nor `WORKFLOW_WAVE` emits a `no-wave` warning (envelope + stderr) naming the CR; with either supplied → the plan carries the wave and no warning. `--wave` overrides env.
 - [ ] §S6 read verb: `status` (alias `plans`, no `--agent`) GETs `…/plans` and returns a `toon.py`-decodable envelope with the queue table (`cr`, `wave`, `status`, active cycle, `mergeCommit`) plus a `lastRunCr` field (the plan with the latest `closedAt`), for all five clients; a project with no plans → an empty-queue envelope (`ok:true`), not an error.
 - [ ] §S7 re-pointed verbs: `checkpoint`, `stop`, `abort` (`--user-approved`) exist on all five clients, each POSTing the CR-024 server route and returning a `toon.py`-decodable envelope; `abort` without `--user-approved` surfaces the server's discouraging 409 (envelope `ok:false` + help), with it executes.
+- [ ] §S8 gate verbs: `gate-run` and `gate-report` return the §S1 envelope on all five clients; `gate-report` additionally emits a `prefer-gate-run` warning (envelope `warnings[]` + stderr) naming `gate-run` as the streaming standard; `gate-run` emits no such warning and POSTs ≥1 interim snapshot before the final sealed gate (asserted per client).
 - [ ] Golden fixture per verb per client; the `~/.claude/scripts` mirror is re-synced from `clients/` (CR-008 source-of-truth rule).
 
 ## Estimated size
@@ -148,7 +167,9 @@ M–L (five clients × verb set, but mechanical once the bun reference + shared 
 Changing the server INGEST contract (`/api/v2/runs/*`, gate/milestone POST
 bodies) — untouched; this CR is CLIENT-ONLY (the `wave` backfill is CR-CRU-031).
 The TOON wire format itself (that's
-`@toon-format`, ported in CR-013 C4); no-mistakes gate mechanics (CR-013 §S5);
+`@toon-format`, ported in CR-013 C4); no-mistakes gate MECHANICS — the server
+gate model + the `gate-pane` UI rendering (CR-013 §S4/§S5) — are untouched (only
+the CLIENT gate verbs `gate-run`/`gate-report` are standardized, per §S8);
 adding NEW verbs beyond `cycle-add`, the §S6 `status`/`plans` read verb, and the §S7 re-pointed `checkpoint`/`stop`/`abort` verbs; a full History-lens
 redesign (only the defensive "unclassified" label is in scope, and only if
 cheap).

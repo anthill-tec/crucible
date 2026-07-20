@@ -899,6 +899,30 @@ export class Store {
     return rows.map(Store.toEvent);
   }
 
+  /**
+   * CR-CRU-032 §S1 — anchored fetch: exactly the runs linked to one cycle,
+   * i.e. whose parsed `context.cycleId` equals `cycleId`. Newest-first, like
+   * listEvents; archived projects excluded. Unlinked runs (no context) and
+   * other cycles' runs are filtered out. `context` is JSON in the column, so
+   * the match is done on the parsed value (same pattern as
+   * deriveCommitBoundary).
+   */
+  listEventsForCycle(projectKey: string, cycleId: number): RunEvent[] {
+    const rows = this.db
+      .query<EventRow, [string]>(
+        `SELECT * FROM events WHERE project_key = ? AND context IS NOT NULL
+         AND ${Store.NOT_ARCHIVED_SUBQUERY}
+         ORDER BY timestamp DESC, rowid DESC`,
+      )
+      .all(projectKey);
+    return rows
+      .filter((row) => {
+        const context = JSON.parse(row.context!) as RunContext;
+        return context.cycleId === cycleId;
+      })
+      .map(Store.toEvent);
+  }
+
   /** Cheap SQL count of raw (non-rolled-up) events, optionally scoped to a project. */
   countEvents(projectKey?: string): number {
     if (projectKey === undefined) {
@@ -1620,6 +1644,29 @@ export class Store {
       planId: row.plan_id,
       status: row.status,
       terminal: Store.CYCLE_TERMINAL.has(row.status),
+    };
+  }
+
+  /**
+   * CR-CRU-032 §S1 — resolve a cycle's declared boundary as a full PlanCycle
+   * (`{id, label, kind, status, activatedAt?, doneAt?}`), shaped exactly like
+   * the entries `toPlan` returns to clients. Reuses findCycle's row lookup;
+   * returns null for an unknown cycleId so the route can OMIT the field.
+   */
+  findCyclePlanEntry(projectKey: string, cycleId: number): PlanCycle | null {
+    const row = this.db
+      .query<PlanCycleRow, [string, number]>(
+        `SELECT * FROM plan_cycles WHERE project_key = ? AND cycle_id = ?`,
+      )
+      .get(projectKey, cycleId);
+    if (row === null) return null;
+    return {
+      id: row.cycle_id,
+      label: row.label,
+      kind: row.kind as CycleKind,
+      status: row.status as CycleStatus,
+      ...(row.activated_at !== null ? { activatedAt: row.activated_at } : {}),
+      ...(row.done_at !== null ? { doneAt: row.done_at } : {}),
     };
   }
 

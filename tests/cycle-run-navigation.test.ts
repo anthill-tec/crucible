@@ -419,66 +419,7 @@ describe("§S1/§S0 cycle-to-runs — HISTORY section (existing drill-down survi
   });
 });
 
-// ── AC3 — pruned boundary: dim/disabled, never a dead click ────────────────
-
-describe("§S1 cycle-to-runs — pruned boundary (past retention)", () => {
-  test("a completed cycle whose boundary is pruned (no declared marker survives on the retained timeline) renders cycle-to-runs disabled/dim; clicking it does nothing", async () => {
-    const key = "cr025-pruned-1";
-    const cycleId = 777;
-    const plan: PlanFixture = {
-      planId: 9003,
-      cr: "CR-025-PRUNED-1",
-      projectKey: key,
-      status: "open",
-      // Deliberately NO event anywhere references context.cycleId === 777 —
-      // simulates its declared marker having aged out of the retained
-      // Runs timeline.
-      cycles: [{ id: cycleId, label: "pruned cycle", status: "done" }],
-    };
-
-    await mountApp({
-      pathname: `/p/${key}`,
-      projects: [project({ key, name: "CR025 Pruned" })],
-      events: [],
-      plans: [plan],
-    });
-    await openWorkflowTab();
-
-    const row = activeSection().querySelector<HTMLElement>(
-      '[data-testid="cycle-row"][data-status="done"]',
-    );
-    expect(row).not.toBeNull();
-    const badge = row!.querySelector<HTMLElement>('[data-testid="cycle-to-runs"]');
-    expect(badge).not.toBeNull();
-
-    const isDisabled =
-      badge!.hasAttribute("disabled") ||
-      badge!.getAttribute("aria-disabled") === "true" ||
-      /disabled|dim/i.test(badge!.className);
-    expect(isDisabled).toBe(true);
-
-    // Never a dead click — no tab switch, no Runs pane, nothing scrolled.
-    expect(isActiveTab("Runs")).toBe(false);
-    const scrollCalls: HTMLElement[] = [];
-    const originalScrollIntoView = (
-      HTMLElement.prototype as unknown as { scrollIntoView?: (...args: unknown[]) => void }
-    ).scrollIntoView;
-    (HTMLElement.prototype as unknown as { scrollIntoView: (this: HTMLElement) => void }).scrollIntoView =
-      function (this: HTMLElement) {
-        scrollCalls.push(this);
-      };
-    try {
-      badge!.click();
-      await settle();
-      expect(isActiveTab("Runs")).toBe(false);
-      expect(document.querySelector('[data-testid="workspace-runs"]')).toBeNull();
-      expect(scrollCalls.length).toBe(0);
-    } finally {
-      (HTMLElement.prototype as unknown as { scrollIntoView?: (...args: unknown[]) => void }).scrollIntoView =
-        originalScrollIntoView;
-    }
-  });
-});
+// AC3 pruned/beyond-window SUPERSEDED by CR-CRU-032 §S3 — see tests/cycle-runs-anchor-fetch.test.ts
 
 // ── AC4 — badge shape at the CR-023 660px pane floor ───────────────────────
 
