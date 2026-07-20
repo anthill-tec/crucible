@@ -1704,11 +1704,13 @@
       // CR-CRU-027 §S2 — window to the MOST RECENT 16 points (chronological,
       // latest last); the caption reads the first WINDOWED point so text and
       // bars always agree.
+      // CR-CRU-033 §S3 — entries are now { day, percent } objects (was a
+      // flat number[]); read `.percent` for both the caption and bar height.
       const points = (project?.coverageTrend ?? []).slice(-16);
       const caption =
         points.length >= 2
-          ? `${points[0]} → ${points[points.length - 1]}% lines`
-          : `latest green coverage ${points.length === 1 ? points[0] : percent}%`;
+          ? `${points[0].percent} → ${points[points.length - 1].percent}% lines`
+          : `latest green coverage ${points.length === 1 ? points[0].percent : percent}%`;
       return div(
         { "data-testid": "coverage-trend-card", class: "app-card app-vitals-card" },
         div(
@@ -1726,7 +1728,7 @@
                   class: `app-trend-bar ${
                     i === points.length - 1 ? "app-trend-bar-latest" : "app-trend-bar-dim"
                   }`,
-                  style: `height:${p}%;`,
+                  style: `height:${p.percent}%;`,
                 }),
               ),
             )
