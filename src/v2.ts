@@ -5,7 +5,7 @@
 import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
-import { hints } from "./hints.ts";
+import { hints, cycleHints } from "./hints.ts";
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
 import type { ProjectPatch, RecordEventMeta, TouchAgentOpts } from "./store.ts";
@@ -394,6 +394,46 @@ function runMeta(body: V2Body): Pick<RecordEventMeta, "tier" | "stack" | "contex
   };
 }
 
+/**
+ * CR-CRU-024 §S7 — validate a run ingest's `context.cycleId` against stored
+ * plan state (Crucible is the source of truth, not the client). Returns:
+ *  - `{ fail }` when the id matches NO cycle in any of the project's plans —
+ *    a 400 whose error names the unknown id and help[] lists the open plan's
+ *    cycle ids; the caller returns it and stores NOTHING;
+ *  - `{ staleHelp }` when the id references a TERMINAL cycle — the ingest is
+ *    accepted (late ingests are legal) but flagged as a stale reference;
+ *  - `{}` when there is no `context.cycleId`, or it references an
+ *    active/pending cycle (happy path — no added help).
+ * `context.cycle` (the free-form label) is never validated.
+ */
+function validateCycleRef(
+  store: Store,
+  projectKey: string,
+  body: V2Body,
+): { fail?: Response; staleHelp?: string[] } {
+  const context = body.context;
+  if (typeof context !== "object" || context === null) return {};
+  const cycleId = (context as { cycleId?: unknown }).cycleId;
+  if (typeof cycleId !== "number") return {};
+  const found = store.findCycle(projectKey, cycleId);
+  if (found === null) {
+    const summary = store.openPlanCycleSummary(projectKey);
+    const help =
+      summary !== null
+        ? cycleHints.unknownCycle(summary.cr, summary.cycleIds)
+        : hints.unknownCycleNoPlan;
+    return {
+      fail: fail(400, `unknown cycleId: ${cycleId} — no such cycle in this project's plans`, {
+        help,
+      }),
+    };
+  }
+  if (found.terminal) {
+    return { staleHelp: cycleHints.staleCycle(cycleId) };
+  }
+  return {};
+}
+
 /** §S1 — one-line run verdict: RED when failed>0, GREEN otherwise. */
 function runVerdict(summary: RunSummary): string {
   return summary.failed > 0
@@ -426,13 +466,22 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   if ("error" in parsed) return fail(400, parsed.error);
   const { run } = parsed;
 
+  // CR-CRU-024 §S7 — reject an unlinkable context.cycleId BEFORE the event is
+  // stored; a stale (terminal) cycle only adds a help note.
+  const cycleCheck = validateCycleRef(store, pk.key, body);
+  if (cycleCheck.fail !== undefined) return cycleCheck.fail;
+
   const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: codecName,
     ...runMeta(body),
   });
-  // §S3 — a RED ingest carries the transition hint.
-  return runResponse(event.id, run.summary, run.summary.failed > 0 ? hints.afterRed : undefined);
+  // §S3 — a RED ingest carries the transition hint; §S7 adds the stale note.
+  const help = [
+    ...(run.summary.failed > 0 ? hints.afterRed : []),
+    ...(cycleCheck.staleHelp ?? []),
+  ];
+  return runResponse(event.id, run.summary, help.length > 0 ? help : undefined);
 }
 
 async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
@@ -457,6 +506,11 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     ...(hasCoverage ? { coverage: body.coverage as Coverage } : {}),
   };
 
+  // CR-CRU-024 §S7 — reject an unlinkable context.cycleId BEFORE the event is
+  // stored; a stale (terminal) cycle only adds a help note.
+  const cycleCheck = validateCycleRef(store, pk.key, body);
+  if (cycleCheck.fail !== undefined) return cycleCheck.fail;
+
   const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: "parsed",
@@ -464,11 +518,12 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     ...runMeta(body),
   });
   // §S3 — RED transition hint; coverage arrived but the store dropped it
-  // (failing run) — say so in help too.
+  // (failing run) — say so in help too. §S7 adds the stale-cycle note.
   const dropped = hasCoverage && event.coverage === undefined;
   const help = [
     ...(summary.failed > 0 ? hints.afterRed : []),
     ...(dropped ? hints.coverageDropped : []),
+    ...(cycleCheck.staleHelp ?? []),
   ];
   return runResponse(event.id, summary, help.length > 0 ? help : undefined);
 }
@@ -634,37 +689,37 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
   const body = await readBody(req);
-  if (body === null) return fail(400, "malformed JSON body");
+  if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
   if (typeof body.cr !== "string" || body.cr.length === 0) {
-    return fail(400, "cr is required");
+    return fail(400, "cr is required", { help: hints.planFileInput });
   }
   if (!Array.isArray(body.cycles) || body.cycles.length === 0) {
-    return fail(400, "cycles must be a non-empty array");
+    return fail(400, "cycles must be a non-empty array", { help: hints.planFileInput });
   }
   const cycles: CycleInput[] = [];
   for (const raw of body.cycles) {
     const parsed = parseCycleInput(raw);
-    if ("error" in parsed) return fail(400, parsed.error);
+    if ("error" in parsed) return fail(400, parsed.error, { help: hints.cycleInput });
     cycles.push(parsed);
   }
   // CR-CRU-021 §S6.11 — additive optional title: stored verbatim when a
   // string, 400 naming the field on any other present type.
   if (body.title !== undefined && typeof body.title !== "string") {
-    return fail(400, "title must be a string");
+    return fail(400, "title must be a string", { help: hints.planFileInput });
   }
   const title = typeof body.title === "string" ? body.title : undefined;
   // §S6 re-baseline (cycle 19) — additive optional orchestrator identity:
   // stored verbatim when a string, 400 naming the field on any other
   // present type (same contract as title).
   if (body.orchestrator !== undefined && typeof body.orchestrator !== "string") {
-    return fail(400, "orchestrator must be a string");
+    return fail(400, "orchestrator must be a string", { help: hints.planFileInput });
   }
   const orchestrator =
     typeof body.orchestrator === "string" ? body.orchestrator : undefined;
   // Cycle 13 gap 3 — a numeric wave is coerced to its decimal string; any
   // other non-string present type → 400 naming the field.
   if (body.wave !== undefined && typeof body.wave !== "string" && typeof body.wave !== "number") {
-    return fail(400, "wave must be a string");
+    return fail(400, "wave must be a string", { help: hints.planFileInput });
   }
   const wave =
     typeof body.wave === "string"
@@ -681,7 +736,7 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
     ...(track !== undefined ? { track } : {}),
     cycles,
   });
-  if ("error" in plan) return fail(400, plan.error);
+  if ("error" in plan) return fail(400, plan.error, { help: hints.duplicateOpenPlan });
   return json(
     {
       ok: true,
@@ -709,13 +764,35 @@ async function handleCycleAppend(
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
   const planId = numericId(planIdRaw);
-  if (planId === null) return fail(404, `plan not found: ${planIdRaw}`);
+  if (planId === null) {
+    return fail(404, `plan not found: ${planIdRaw}`, { help: hints.planCycleNotFound });
+  }
   const body = await readBody(req);
-  if (body === null) return fail(400, "malformed JSON body");
+  if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
   const parsed = parseCycleInput(body);
-  if ("error" in parsed) return fail(400, parsed.error);
-  const cycle = store.appendCycle(pk.key, planId, parsed);
-  if ("error" in cycle) return fail(cycle.notFound === true ? 404 : 400, cycle.error);
+  if ("error" in parsed) return fail(400, parsed.error, { help: hints.cycleInput });
+  // CR-CRU-024 §S3.1 — optional `before: <cycleId>` inserts the new cycle
+  // immediately before that sibling; omitted → plain append (unchanged).
+  const beforeRaw = (body as { before?: unknown }).before;
+  let before: number | undefined;
+  if (beforeRaw !== undefined) {
+    if (typeof beforeRaw !== "number" || !Number.isInteger(beforeRaw)) {
+      return fail(400, `invalid before: ${String(beforeRaw)} (expected a cycle id)`, {
+        help: hints.cycleInput,
+      });
+    }
+    before = beforeRaw;
+  }
+  const cycle = store.appendCycle(pk.key, planId, parsed, before);
+  if ("error" in cycle) {
+    const help =
+      cycle.code === "insert-before-active"
+        ? cycleHints.insertBeforeActive(cycle.cycleRef!)
+        : cycle.notFound === true
+          ? hints.planCycleNotFound
+          : hints.closedPlan;
+    return fail(cycle.notFound === true ? 404 : 400, cycle.error, { help });
+  }
   return json({ ok: true, changed: true, ...cycle }, 201);
 }
 
@@ -730,19 +807,60 @@ async function handleCycleTransition(
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
   const planId = numericId(planIdRaw);
-  if (planId === null) return fail(404, `plan not found: ${planIdRaw}`);
+  if (planId === null) {
+    return fail(404, `plan not found: ${planIdRaw}`, { help: hints.planCycleNotFound });
+  }
   const cycleId = numericId(cycleIdRaw);
-  if (cycleId === null) return fail(404, `cycle not found: ${cycleIdRaw}`);
+  if (cycleId === null) {
+    return fail(404, `cycle not found: ${cycleIdRaw}`, { help: hints.planCycleNotFound });
+  }
   const body = await readBody(req);
-  if (body === null) return fail(400, "malformed JSON body");
+  if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
+  // CR-CRU-024 §S3.2 — the PATCH carries EITHER {status} (transition) or {label}
+  // (rename), never both: one mutation per call.
+  const hasStatus = body.status !== undefined;
+  const hasLabel = body.label !== undefined;
+  if (hasStatus && hasLabel) {
+    return fail(400, "one mutation per call: send either {status} or {label}, not both", {
+      help: hints.cycleOneMutation,
+    });
+  }
+  if (hasLabel) {
+    if (typeof body.label !== "string" || body.label.length === 0) {
+      return fail(400, "label must be a non-empty string", { help: hints.cycleInput });
+    }
+    const edited = store.editCycleLabel(pk.key, planId, cycleId, body.label);
+    if ("error" in edited) {
+      const help =
+        edited.code === "locked"
+          ? hints.cycleLocked
+          : edited.code === "immutable-history"
+            ? hints.cycleImmutable
+            : hints.planCycleNotFound;
+      return fail(edited.notFound === true ? 404 : 400, edited.error, { help });
+    }
+    return json({ ok: true, changed: true, cycle: edited });
+  }
   if (typeof body.status !== "string" || !CYCLE_STATUSES.has(body.status)) {
     return fail(
       400,
       `invalid status: ${String(body.status)} (expected pending | active | done | skipped | failed)`,
+      { help: hints.cycleStatus },
     );
   }
   const cycle = store.transitionCycle(pk.key, planId, cycleId, body.status as CycleStatus);
-  if ("error" in cycle) return fail(cycle.notFound === true ? 404 : 400, cycle.error);
+  if ("error" in cycle) {
+    // CR-CRU-024 §S4 — attach the help[] matching the store's refusal code.
+    const help =
+      cycle.code === "out-of-order"
+        ? cycleHints.outOfOrder(cycle.cycleRef!)
+        : cycle.code === "already-active"
+          ? cycleHints.alreadyActive(cycle.cycleRef!)
+          : cycle.code === "illegal-transition"
+            ? hints.illegalCycleTransition
+            : hints.planCycleNotFound;
+    return fail(cycle.notFound === true ? 404 : 400, cycle.error, { help });
+  }
   return json({ ok: true, changed: true, cycle });
 }
 
@@ -756,19 +874,23 @@ async function handlePlanClose(
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
   const planId = numericId(planIdRaw);
-  if (planId === null) return fail(404, `plan not found: ${planIdRaw}`);
+  if (planId === null) {
+    return fail(404, `plan not found: ${planIdRaw}`, { help: hints.planCycleNotFound });
+  }
   const body = await readBody(req);
-  if (body === null) return fail(400, "malformed JSON body");
+  if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
   // §S6 re-baseline (cycle 19) — one-field orchestrator backfill: a PATCH
   // body carrying `orchestrator` with NO `status` stamps an OPEN plan (the
   // executing plan); closed plans → 400, mirroring the close validation.
   if (body.status === undefined && body.orchestrator !== undefined) {
     if (typeof body.orchestrator !== "string") {
-      return fail(400, "orchestrator must be a string");
+      return fail(400, "orchestrator must be a string", { help: hints.planFileInput });
     }
     const stamped = store.stampOrchestrator(pk.key, planId, body.orchestrator);
     if ("error" in stamped) {
-      return fail(stamped.notFound === true ? 404 : 400, stamped.error);
+      return fail(stamped.notFound === true ? 404 : 400, stamped.error, {
+        help: stamped.notFound === true ? hints.planCycleNotFound : hints.closedPlan,
+      });
     }
     return json({ ok: true, changed: true, plan: stamped });
   }
@@ -778,17 +900,19 @@ async function handlePlanClose(
   // matching the POST /plans path; a non-string-non-number → 400 naming wave.
   if (body.status === undefined && body.wave !== undefined) {
     if (typeof body.wave !== "string" && typeof body.wave !== "number") {
-      return fail(400, "wave must be a string");
+      return fail(400, "wave must be a string", { help: hints.planFileInput });
     }
     const wave = typeof body.wave === "string" ? body.wave : String(body.wave);
     const stamped = store.stampWave(pk.key, planId, wave);
     if ("error" in stamped) {
-      return fail(stamped.notFound === true ? 404 : 400, stamped.error);
+      return fail(stamped.notFound === true ? 404 : 400, stamped.error, {
+        help: hints.planCycleNotFound,
+      });
     }
     return json({ ok: true, changed: true, plan: stamped });
   }
   if (body.status !== "closed") {
-    return fail(400, `status must be "closed" to close a plan`);
+    return fail(400, `status must be "closed" to close a plan`, { help: hints.closedPlan });
   }
   let merge: { commit: string } | undefined;
   if (body.merge !== undefined) {
@@ -797,7 +921,7 @@ async function handlePlanClose(
         ? (body.merge as { commit?: unknown }).commit
         : undefined;
     if (typeof commit !== "string" || commit.length === 0) {
-      return fail(400, "merge.commit must be a non-empty string");
+      return fail(400, "merge.commit must be a non-empty string", { help: hints.closedPlan });
     }
     merge = { commit };
   }
@@ -806,10 +930,84 @@ async function handlePlanClose(
     return fail(
       plan.notFound === true ? 404 : 400,
       plan.error,
-      plan.openCycleIds !== undefined ? { openCycles: plan.openCycleIds } : undefined,
+      plan.notFound === true
+        ? { help: hints.planCycleNotFound }
+        : plan.openCycleIds !== undefined
+          ? { openCycles: plan.openCycleIds, help: hints.nonTerminalCycles }
+          : { help: hints.closedPlan },
     );
   }
   return json({ ok: true, changed: true, plan });
+}
+
+/**
+ * CR-CRU-024 §S5.1 — POST …/plans/<planId>/checkpoint — fold the plan's
+ * ACTIVE cycle's epoch NOW (one durable write, no cadence-window loss) and
+ * re-anchor. 200 {ok:true, changed:true} with an active cycle, {changed:false}
+ * with none; an unknown plan → 404 + help[].
+ */
+function handlePlanCheckpoint(store: Store, key: string, planIdRaw: string): Response {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  const planId = numericId(planIdRaw);
+  if (planId === null) {
+    return fail(404, `plan not found: ${planIdRaw}`, { help: hints.planCycleNotFound });
+  }
+  const result = store.checkpointPlan(pk.key, planId);
+  if ("error" in result) {
+    return fail(404, result.error, { help: hints.planCycleNotFound });
+  }
+  return json({ ok: true, changed: result.changed });
+}
+
+/**
+ * CR-CRU-024 §S6 — POST …/plans/<planId>/abort — user-approval-gated workflow
+ * abort. The approval gate is the FIRST refusal on this route (checked BEFORE
+ * plan existence): a body without `userApproved: true` → 409 + discouraging
+ * help[], even for an unknown plan (an unapproved abort never leaks past the
+ * gate as a 404/500). WITH `userApproved: true` the abort executes: the active
+ * cycle → failed (timer sealed), pending cycles → skipped, plan → aborted; an
+ * unknown plan then → 404 + help[] (approval alone doesn't skip existence).
+ */
+async function handlePlanAbort(
+  store: Store,
+  key: string,
+  planIdRaw: string,
+  req: Request,
+): Promise<Response> {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  // Approval gate FIRST — mirrors the guarded-run-deletion 409 convention.
+  const body = (await readBody(req)) ?? {};
+  if (body.userApproved !== true) {
+    return fail(
+      409,
+      "aborting discards a declared workflow — explicit user approval is required; refused",
+      { help: hints.abortNeedsApproval },
+    );
+  }
+  const planId = numericId(planIdRaw);
+  if (planId === null) {
+    return fail(404, `plan not found: ${planIdRaw}`, { help: hints.planCycleNotFound });
+  }
+  const plan = store.abortPlan(pk.key, planId);
+  if ("error" in plan) {
+    return fail(plan.notFound === true ? 404 : 400, plan.error, {
+      help: plan.notFound === true ? hints.planCycleNotFound : hints.closedPlan,
+    });
+  }
+  return json({ ok: true, changed: true, plan });
+}
+
+/**
+ * CR-CRU-024 §S5.3 — POST …/projects/<key>/stop — checkpoint every active
+ * cycle's timer across the project's open plans. Returns {ok, checkpointed}.
+ */
+function handleProjectStop(store: Store, key: string): Response {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  const checkpointed = store.stopProject(pk.key);
+  return json({ ok: true, checkpointed });
 }
 
 /** GET …/plans (+?cr=&track=) — closed plans carry the derived commitBoundary. */
@@ -986,6 +1184,12 @@ function handlePlansRoute(
   }
   if (segments.length === 3 && req.method === "PATCH") {
     return handlePlanClose(store, key, segments[2]!, req);
+  }
+  if (segments.length === 4 && segments[3] === "checkpoint" && req.method === "POST") {
+    return handlePlanCheckpoint(store, key, segments[2]!);
+  }
+  if (segments.length === 4 && segments[3] === "abort" && req.method === "POST") {
+    return handlePlanAbort(store, key, segments[2]!, req);
   }
   if (segments.length === 4 && segments[3] === "cycles" && req.method === "POST") {
     return handleCycleAppend(store, key, segments[2]!, req);
@@ -1199,6 +1403,10 @@ export function handleV2(
       (segments[1] === "archive" || segments[1] === "unarchive")
     ) {
       return handleProjectArchive(store, segments[0]!, segments[1] === "archive");
+    }
+    // CR-CRU-024 §S5.3 — project stop: checkpoint every active cycle's timer.
+    if (req.method === "POST" && segments.length === 2 && segments[1] === "stop") {
+      return handleProjectStop(store, segments[0]!);
     }
     // CR-CRU-012 §S1 — PATCH project parameters (v2-only; the v1 shim has
     // no equivalent route).

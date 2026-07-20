@@ -181,6 +181,21 @@ async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: stri
   return body.events;
 }
 
+/**
+ * Files a real OPEN plan so ingests carrying WORKFLOW_CYCLE_ID reference a
+ * cycle that actually exists in THIS project. CR-CRU-024 §S7 refuses an
+ * unlinkable cycleId (400, event dropped) — Crucible is the source of truth —
+ * so a synthetic env cycleId must map to a genuinely-filed cycle.
+ */
+async function filePlan(baseUrl: string, key: string, cr: string): Promise<PlanWire> {
+  const res = await fetch(`${baseUrl}/api/v2/projects/${key}/plans`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cr, cycles: [{ label: "A" }, { label: "B" }] }),
+  });
+  return (await res.json()) as PlanWire;
+}
+
 interface EventLeaf {
   name: string;
   status: string;
@@ -370,6 +385,7 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
   let projectKey = "";
   let runResult: RunResult | undefined;
   let event: FullEvent | undefined;
+  let filedCycleId = 0;
   const branch = "cr-cru-008-c2-fixture-branch";
 
   function scratchDir(prefix: string): string {
@@ -382,6 +398,10 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
     handle = startServer({ port: 0, dbPath: ":memory:" });
     baseUrl = `http://localhost:${handle.server.port}`;
     projectKey = await createProject(baseUrl, "clients-bc-test-ingest");
+    // §S7: file a real plan so WORKFLOW_CYCLE_ID maps to an existing cycle
+    // (an unlinkable id would be refused 400 and the event never stored).
+    const plan = await filePlan(baseUrl, projectKey, "CR-CRU-008-C2-FIXTURE");
+    filedCycleId = plan.cycles[0]!.id;
     const dir = scratchDir("bun-crucible-fixture-");
     writeFixtureBunProject(dir, projectKey);
     runGit(["init", "-q"], dir);
@@ -406,7 +426,7 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
         cwd: dir,
         crucibleUrl: proxy.url,
         env: {
-          WORKFLOW_CYCLE_ID: "1",
+          WORKFLOW_CYCLE_ID: String(filedCycleId),
           WORKFLOW_CYCLE: "clients source of truth fixture",
           WORKFLOW_WAVE: "wave-9",
           WORKFLOW_ROLE: "track-2",
@@ -441,7 +461,7 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
   });
 
   test("records full run context: cycleId + cycle (WORKFLOW_CYCLE_ID/WORKFLOW_CYCLE), wave (WORKFLOW_WAVE), orchestrator (WORKFLOW_ROLE), and auto-detected git branch/commit", () => {
-    expect(event?.context?.cycleId).toBe(1);
+    expect(event?.context?.cycleId).toBe(filedCycleId);
     expect(event?.context?.cycle).toBe("clients source of truth fixture");
     expect(event?.context?.wave).toBe("wave-9");
     expect(event?.context?.orchestrator).toBe("track-2");

@@ -1,6 +1,6 @@
 # CR-CRU-024 — Patch: plan-cycle activation guards + AXI invalid-action responses
 
-**Status:** PENDING
+**Status:** COMPLETED (2026-07-20 — merged to develop; plan 16 closed; C1–C7; 903/903 · coverage 91.7%/90.3% · playwright 31/31 tier:e2e · tsc 0; §S7 supersedes CR-CRU-011 §S0's run-linkage tolerance)
 **Type:** patch
 **Priority:** P2
 **Depends on:** CR-CRU-011
@@ -135,6 +135,12 @@ never stored on trust:
    cycle is closed — the agent likely exported a stale WORKFLOW_CYCLE_ID.
 3. `context.cycle` (the label string) remains free-form display metadata —
    no validation (it is never used for linkage).
+
+**Design lineage:** §S7 **supersedes** CR-CRU-011 §S0's "run linkage tolerance"
+(an unknown `context.cycleId` was stored verbatim and never 4xx'd). Under the
+2026-07-17 ruling Crucible is the source of truth, so an unlinkable `cycleId` is
+now refused (400) and never enters the timeline. The CR-011 tolerance tests were
+reconciled to this contract as part of CR-024.
 
 ## Acceptance criteria
 - [ ] With cycles A(pending), B(pending): activating B → 400 whose `error` contains `out-of-order` and names A; `help[]` mentions both the activate-first and the `skipped` paths; B remains `pending` (no partial state).

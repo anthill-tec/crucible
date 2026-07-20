@@ -179,6 +179,22 @@ async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: stri
   return body.events;
 }
 
+/**
+ * Files a real OPEN plan and returns its first cycle id so a synthetic
+ * WORKFLOW_CYCLE_ID references a cycle that actually exists in THIS project.
+ * CR-CRU-024 §S7 refuses an unlinkable cycleId (400, event dropped) — Crucible
+ * is the source of truth — so the env cycleId must map to a genuinely-filed cycle.
+ */
+async function filePlanCycleId(baseUrl: string, key: string, cr: string): Promise<number> {
+  const res = await fetch(`${baseUrl}/api/v2/projects/${key}/plans`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ cr, cycles: [{ label: "A" }, { label: "B" }] }),
+  });
+  const body = (await res.json()) as { cycles: Array<{ id: number }> };
+  return body.cycles[0]!.id;
+}
+
 interface FullEvent {
   tier?: string;
   codec?: string;
@@ -453,6 +469,8 @@ describe("clients/rust-crucible.py — auto-ingest: /api/v2/runs, tier:'unit', f
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-auto-ingest-context");
+    // §S7: file a real plan so WORKFLOW_CYCLE_ID maps to an existing cycle.
+    const cycleId = await filePlanCycleId(baseUrl, key, "CR-RC-CONTEXT");
     const dir = fixtureDir(key);
 
     await runScript(
@@ -462,7 +480,7 @@ describe("clients/rust-crucible.py — auto-ingest: /api/v2/runs, tier:'unit', f
         cwd: dir,
         crucibleUrl: baseUrl,
         env: {
-          WORKFLOW_CYCLE_ID: "38",
+          WORKFLOW_CYCLE_ID: String(cycleId),
           WORKFLOW_CYCLE: "rust-crucible + mvn-crucible v2 upgrade",
           WORKFLOW_WAVE: "wave-4",
           WORKFLOW_ROLE: "track-3",
@@ -473,7 +491,7 @@ describe("clients/rust-crucible.py — auto-ingest: /api/v2/runs, tier:'unit', f
     const events = await getEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
-    expect(event.context?.cycleId).toBe(38);
+    expect(event.context?.cycleId).toBe(cycleId);
     expect(event.context?.cycle).toBe("rust-crucible + mvn-crucible v2 upgrade");
     expect(event.context?.wave).toBe("wave-4");
     expect(event.context?.orchestrator).toBe("track-3");
@@ -856,6 +874,8 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-mc-unit-context");
+    // §S7: file a real plan so WORKFLOW_CYCLE_ID maps to an existing cycle.
+    const cycleId = await filePlanCycleId(baseUrl, key, "CR-MC-CONTEXT");
     const dir = fixtureDir(key);
     const reportsDir = join(dir, "target", "surefire-reports");
     Bun.spawnSync({ cmd: ["mkdir", "-p", reportsDir] });
@@ -873,7 +893,7 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
         cwd: dir,
         crucibleUrl: baseUrl,
         env: {
-          WORKFLOW_CYCLE_ID: "38",
+          WORKFLOW_CYCLE_ID: String(cycleId),
           WORKFLOW_CYCLE: "rust-crucible + mvn-crucible v2 upgrade",
           WORKFLOW_WAVE: "wave-4",
           WORKFLOW_ROLE: "track-3",
@@ -884,7 +904,7 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
     const eventsWithContext = await getEvents(baseUrl, key);
     expect(eventsWithContext.length).toBe(1);
     const eventWithContext = await getFullEvent(baseUrl, eventsWithContext[0]!.id);
-    expect(eventWithContext.context?.cycleId).toBe(38);
+    expect(eventWithContext.context?.cycleId).toBe(cycleId);
     expect(eventWithContext.context?.cycle).toBe("rust-crucible + mvn-crucible v2 upgrade");
     expect(eventWithContext.context?.wave).toBe("wave-4");
     expect(eventWithContext.context?.orchestrator).toBe("track-3");

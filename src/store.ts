@@ -141,6 +141,10 @@ interface PlanCycleRow {
   // CR-CRU-023 §S3 (a) — accumulated active-attention ms, checkpointed at
   // transition writes (0 on activation; sealed on leaving active).
   active_ms_accumulated: number | null;
+  // CR-CRU-024 §S3.1 — display-order key (REAL so insert-before can land a
+  // cycle strictly between two siblings via a fractional midpoint). Governs
+  // cycles[] order AND the §S1 out-of-order guard — cycle_id no longer orders.
+  seq: number;
 }
 
 /**
@@ -152,6 +156,20 @@ export interface PlanOpError {
   error: string;
   notFound?: boolean;
   openCycleIds?: number[];
+  /**
+   * CR-CRU-024 §S4 — discriminator so the route attaches the matching help[]:
+   * cross-cycle activation refusals ("out-of-order" / "already-active") and the
+   * per-cycle illegal transition. `cycleRef` carries the sibling cycle the help
+   * names (the earlier-pending cycle, or the already-active one).
+   */
+  code?:
+    | "out-of-order"
+    | "already-active"
+    | "illegal-transition"
+    | "locked"
+    | "immutable-history"
+    | "insert-before-active";
+  cycleRef?: number;
 }
 
 /** CR-CRU-002 §S1 — recordTestEvent's run param adopts the canonical RunSchema. */
@@ -323,6 +341,7 @@ export class Store {
         activated_at INTEGER,
         done_at INTEGER,
         active_ms_accumulated INTEGER,
+        seq REAL,
         PRIMARY KEY (project_key, cycle_id)
       );
     `);
@@ -364,6 +383,14 @@ export class Store {
     // db files lack it (same PRAGMA-checked retrofit pattern as above).
     if (!cycleCols.has("active_ms_accumulated")) {
       this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN active_ms_accumulated INTEGER`);
+    }
+    // CR-CRU-024 §S3.1 — additive display-order column; pre-024 db files lack
+    // it (same PRAGMA-checked retrofit pattern as above). Order-preserving
+    // backfill: seq = cycle_id for existing rows so pre-insert-before plans
+    // keep their historical (cycle_id-ascending) display order unchanged.
+    if (!cycleCols.has("seq")) {
+      this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN seq REAL`);
+      this.db.exec(`UPDATE plan_cycles SET seq = cycle_id WHERE seq IS NULL`);
     }
     // CR-CRU-021 §S6.11 — additive plan title column; pre-021 db files lack
     // it (same PRAGMA-checked retrofit pattern as events/plan_cycles above).
@@ -1145,12 +1172,25 @@ export class Store {
   }
 
   private listCycleRows(projectKey: string, planId: number): PlanCycleRow[] {
+    // CR-CRU-024 §S3.1 — display order is `seq`, not `cycle_id`; the cycle_id
+    // tiebreaker keeps a stable order for any legacy rows sharing a seq.
     return this.db
       .query<PlanCycleRow, [string, number]>(
         `SELECT * FROM plan_cycles WHERE project_key = ? AND plan_id = ?
-         ORDER BY cycle_id ASC`,
+         ORDER BY seq ASC, cycle_id ASC`,
       )
       .all(projectKey, planId);
+  }
+
+  /** CR-CRU-024 §S3.1 — next append `seq` for a plan: MAX(seq)+1 (lands last). */
+  private nextSeq(projectKey: string, planId: number): number {
+    const row = this.db
+      .query<{ n: number }, [string, number]>(
+        `SELECT COALESCE(MAX(seq), 0) AS n FROM plan_cycles
+         WHERE project_key = ? AND plan_id = ?`,
+      )
+      .get(projectKey, planId)!;
+    return row.n + 1;
   }
 
   private insertCycle(
@@ -1158,14 +1198,15 @@ export class Store {
     planId: number,
     label: string,
     kind: CycleKind,
+    seq: number,
   ): PlanCycle {
     const id = this.nextCycleId(projectKey);
     this.db
       .query(
-        `INSERT INTO plan_cycles (project_key, cycle_id, plan_id, label, kind, status)
-         VALUES (?, ?, ?, ?, ?, 'pending')`,
+        `INSERT INTO plan_cycles (project_key, cycle_id, plan_id, label, kind, status, seq)
+         VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
       )
-      .run(projectKey, id, planId, label, kind);
+      .run(projectKey, id, planId, label, kind, seq);
     return { id, label, kind, status: "pending" };
   }
 
@@ -1204,7 +1245,13 @@ export class Store {
       );
     const planId = Number(inserted.lastInsertRowid);
     const cycles = input.cycles.map((cycle) =>
-      this.insertCycle(projectKey, planId, cycle.label, cycle.kind),
+      this.insertCycle(
+        projectKey,
+        planId,
+        cycle.label,
+        cycle.kind,
+        this.nextSeq(projectKey, planId),
+      ),
     );
     this.emit("events", projectKey);
     return {
@@ -1220,11 +1267,19 @@ export class Store {
     };
   }
 
-  /** §S0 — append a cycle to an OPEN plan; returns the new project-unique id. */
+  /**
+   * §S0 — append a cycle to an OPEN plan; returns the new project-unique id.
+   * CR-CRU-024 §S3.1 — with `before`, INSERT the new cycle immediately before
+   * that sibling in `seq` order (fractional midpoint). The insertion point must
+   * sit AFTER the active cycle: targeting the active cycle or any seq-earlier
+   * sibling would land a pending cycle ahead of the active one (violating the
+   * §S1/§S2 order invariant) → refused, naming the active cycle.
+   */
   appendCycle(
     projectKey: string,
     planId: number,
     cycle: { label: string; kind: CycleKind },
+    before?: number,
   ): PlanCycle | PlanOpError {
     const plan = this.getPlanRow(projectKey, planId);
     if (plan === null) {
@@ -1233,7 +1288,37 @@ export class Store {
     if (plan.status !== "open") {
       return { error: `plan ${planId} is closed — cannot append cycles` };
     }
-    const appended = this.insertCycle(projectKey, planId, cycle.label, cycle.kind);
+    if (before !== undefined) {
+      const siblings = this.listCycleRows(projectKey, planId); // seq-ordered
+      const target = siblings.find((c) => c.cycle_id === before);
+      if (target === undefined) {
+        return { error: `cycle not found in plan ${planId}: ${before}`, notFound: true };
+      }
+      const active = siblings.find((c) => c.status === "active");
+      if (active !== undefined && target.seq <= active.seq) {
+        return {
+          error: `cannot insert before cycle ${before}: cycle ${active.cycle_id} is active — new cycles must land after the active cycle`,
+          code: "insert-before-active",
+          cycleRef: active.cycle_id,
+        };
+      }
+      // Predecessor = the seq-immediately-before sibling (siblings are
+      // seq-ordered, so the last one below target). Midpoint keeps the new
+      // cycle strictly between predecessor and target in display order.
+      const earlier = siblings.filter((c) => c.seq < target.seq);
+      const pred = earlier.length > 0 ? earlier[earlier.length - 1] : undefined;
+      const newSeq = pred !== undefined ? (pred.seq + target.seq) / 2 : target.seq - 1;
+      const inserted = this.insertCycle(projectKey, planId, cycle.label, cycle.kind, newSeq);
+      this.emit("events", projectKey);
+      return inserted;
+    }
+    const appended = this.insertCycle(
+      projectKey,
+      planId,
+      cycle.label,
+      cycle.kind,
+      this.nextSeq(projectKey, planId),
+    );
     this.emit("events", projectKey);
     return appended;
   }
@@ -1268,7 +1353,41 @@ export class Store {
       return { error: `cycle not found in plan ${planId}: ${cycleId}`, notFound: true };
     }
     if (!(Store.CYCLE_TRANSITIONS[row.status]?.has(to) ?? false)) {
-      return { error: `illegal cycle transition: ${row.status} -> ${to}` };
+      return {
+        error: `illegal cycle transition: ${row.status} -> ${to}`,
+        code: "illegal-transition",
+      };
+    }
+    // CR-CRU-024 §S1+§S2 — cross-cycle activation guards. CYCLE_TRANSITIONS is
+    // per-cycle only, so activating a cycle while a sibling blocks it currently
+    // succeeds silently. Guard both invalid shapes on the pending→active edge.
+    if (to === "active") {
+      const siblings = this.listCycleRows(projectKey, planId);
+      // §S2 single-active: another cycle in this plan is already active.
+      const active = siblings.find(
+        (c) => c.cycle_id !== cycleId && c.status === "active",
+      );
+      if (active !== undefined) {
+        return {
+          error: `cycle ${active.cycle_id} is already active`,
+          code: "already-active",
+          cycleRef: active.cycle_id,
+        };
+      }
+      // §S1 out-of-order: an EARLIER sibling (lower `seq`, i.e. earlier in
+      // display order) is still pending. CR-CRU-024 §S3.1 — keyed off `seq`,
+      // NOT cycle_id: after an insert-before, a seq-earlier pending sibling can
+      // carry a HIGHER cycle_id yet must still block this activation.
+      const earlier = siblings.find(
+        (c) => c.seq < row.seq && c.status === "pending",
+      );
+      if (earlier !== undefined) {
+        return {
+          error: `out-of-order activation: cycle ${earlier.cycle_id} is still pending`,
+          code: "out-of-order",
+          cycleRef: earlier.cycle_id,
+        };
+      }
     }
     // §S0b — stamp the transition timestamps (mirrors Plan.closedAt):
     // pending→active stamps activated_at; reaching a terminal state stamps
@@ -1309,6 +1428,55 @@ export class Store {
     };
   }
 
+  /**
+   * CR-CRU-024 §S3.2 — edit a cycle's label. Legal ONLY while the cycle is
+   * `pending`: the active cycle is LOCKED and terminal cycles are immutable
+   * HISTORY. Mirrors transitionCycle's row-lookup + guard structure; returns
+   * distinct codes so the route maps the matching help[]. No partial state —
+   * a refusal leaves the label untouched.
+   */
+  editCycleLabel(
+    projectKey: string,
+    planId: number,
+    cycleId: number,
+    label: string,
+  ): PlanCycle | PlanOpError {
+    const row = this.db
+      .query<PlanCycleRow, [string, number, number]>(
+        `SELECT * FROM plan_cycles WHERE project_key = ? AND plan_id = ? AND cycle_id = ?`,
+      )
+      .get(projectKey, planId, cycleId);
+    if (row === null) {
+      return { error: `cycle not found in plan ${planId}: ${cycleId}`, notFound: true };
+    }
+    if (row.status === "active") {
+      return {
+        error: "the active cycle is locked — confirm or fail it first",
+        code: "locked",
+      };
+    }
+    if (row.status !== "pending") {
+      return {
+        error: "done/skipped/failed cycles are immutable history",
+        code: "immutable-history",
+      };
+    }
+    this.db
+      .query(
+        `UPDATE plan_cycles SET label = ? WHERE project_key = ? AND plan_id = ? AND cycle_id = ?`,
+      )
+      .run(label, projectKey, planId, cycleId);
+    this.emit("events", projectKey);
+    return {
+      id: row.cycle_id,
+      label,
+      kind: row.kind as CycleKind,
+      status: row.status as CycleStatus,
+      ...(row.activated_at !== null ? { activatedAt: row.activated_at } : {}),
+      ...(row.done_at !== null ? { doneAt: row.done_at } : {}),
+    };
+  }
+
   /** §S0 — the CR close (feature merge). Rejects while any cycle is non-terminal. */
   closePlan(
     projectKey: string,
@@ -1342,6 +1510,53 @@ export class Store {
       merge_commit: merge?.commit ?? null,
       closed_at: closedAt,
     });
+  }
+
+  /**
+   * CR-CRU-024 §S6 — abort an OPEN plan (user-approved at the route). The
+   * ACTIVE cycle → `failed` with its timer SEALED honestly (the same epoch-fold
+   * transitionCycle applies on leaving `active`: accumulated += now −
+   * max(activatedAt, bootedAt, lastCheckpoint), then the epoch checkpoint is
+   * dropped so a store-reopen resumes the sealed value exactly, never drifting
+   * with downtime); every PENDING cycle → `skipped`; the plan status →
+   * `aborted`. Closed/aborted/unknown plans reject (only an open plan aborts).
+   */
+  abortPlan(projectKey: string, planId: number): Plan | PlanOpError {
+    const row = this.getPlanRow(projectKey, planId);
+    if (row === null) {
+      return { error: `plan not found: ${planId}`, notFound: true };
+    }
+    if (row.status !== "open") {
+      return { error: `plan ${planId} is ${row.status} — only an open plan can be aborted` };
+    }
+    const now = Date.now();
+    for (const cycle of this.listCycleRows(projectKey, planId)) {
+      if (cycle.status === "active") {
+        // Seal the timer: fold the live epoch into accumulated (like
+        // transitionCycle on leaving active) and stamp done_at NOW, so the
+        // sealed activatedAt/doneAt span stays honest across a restart.
+        const epochStart = this.epochStart(projectKey, cycle.cycle_id, cycle.activated_at ?? now);
+        const activeMsAccumulated =
+          (cycle.active_ms_accumulated ?? 0) + Math.max(0, now - epochStart);
+        this.epochCheckpointAt.delete(this.epochKey(projectKey, cycle.cycle_id));
+        this.db
+          .query(
+            `UPDATE plan_cycles SET status = 'failed', done_at = ?, active_ms_accumulated = ?
+             WHERE project_key = ? AND cycle_id = ?`,
+          )
+          .run(now, activeMsAccumulated, projectKey, cycle.cycle_id);
+      } else if (cycle.status === "pending") {
+        this.db
+          .query(
+            `UPDATE plan_cycles SET status = 'skipped', done_at = ?
+             WHERE project_key = ? AND cycle_id = ?`,
+          )
+          .run(now, projectKey, cycle.cycle_id);
+      }
+    }
+    this.db.query(`UPDATE plans SET status = 'aborted' WHERE plan_id = ?`).run(planId);
+    this.emit("events", projectKey);
+    return this.toPlan({ ...row, status: "aborted" });
   }
 
   /**
@@ -1381,6 +1596,47 @@ export class Store {
     this.db.query(`UPDATE plans SET wave = ? WHERE plan_id = ?`).run(wave, planId);
     this.emit("events", projectKey);
     return this.toPlan({ ...row, wave });
+  }
+
+  /**
+   * CR-CRU-024 §S7 — resolve a run ingest's context.cycleId against stored plan
+   * state (Crucible is the source of truth, not the client). Scans EVERY plan of
+   * THIS project — scoping is strictly per-project, so a cycle id minted in
+   * another project never resolves here. Returns the cycle's status and a
+   * `terminal` flag (done/skipped/failed), or null when no plan carries the id.
+   */
+  findCycle(
+    projectKey: string,
+    cycleId: number,
+  ): { cycleId: number; planId: number; status: string; terminal: boolean } | null {
+    const row = this.db
+      .query<PlanCycleRow, [string, number]>(
+        `SELECT * FROM plan_cycles WHERE project_key = ? AND cycle_id = ?`,
+      )
+      .get(projectKey, cycleId);
+    if (row === null) return null;
+    return {
+      cycleId: row.cycle_id,
+      planId: row.plan_id,
+      status: row.status,
+      terminal: Store.CYCLE_TERMINAL.has(row.status),
+    };
+  }
+
+  /**
+   * CR-CRU-024 §S7 — summarize the project's open plan for the unknown-cycle
+   * help[]: the cr and its known cycle ids so a mis-set WORKFLOW_CYCLE_ID can be
+   * corrected to a real one. Returns null when the project has no open plan.
+   */
+  openPlanCycleSummary(projectKey: string): { cr: string; planId: number; cycleIds: number[] } | null {
+    const row = this.db
+      .query<PlanRow, [string]>(
+        `SELECT * FROM plans WHERE project_key = ? AND status = 'open' ORDER BY plan_id ASC`,
+      )
+      .get(projectKey);
+    if (row === null) return null;
+    const cycleIds = this.listCycleRows(projectKey, row.plan_id).map((c) => c.cycle_id);
+    return { cr: row.cr, planId: row.plan_id, cycleIds };
   }
 
   /** §S0 — list a project's plans, optionally filtered by cr / track. */
@@ -1425,6 +1681,84 @@ export class Store {
     return activeMs;
   }
 
+  /**
+   * CR-CRU-024 §S5.1 — force-fold an ACTIVE cycle row's live epoch into the
+   * persisted `active_ms_accumulated` and re-anchor the epoch at NOW. Mirrors
+   * deriveAndCheckpointActiveMs's epoch math WITHOUT the >=60s cadence gate —
+   * the fold fires synchronously — so a store-reopen resumes the checkpointed
+   * value EXACTLY (bootedAt re-anchoring on restart excludes downtime, and the
+   * re-anchored checkpoint means the folded window is never counted twice).
+   */
+  private foldActiveEpoch(cycle: PlanCycleRow): void {
+    const now = Date.now();
+    const epochStart = this.epochStart(cycle.project_key, cycle.cycle_id, cycle.activated_at ?? 0);
+    const activeMs = (cycle.active_ms_accumulated ?? 0) + Math.max(0, now - epochStart);
+    this.db
+      .query(
+        `UPDATE plan_cycles SET active_ms_accumulated = ?
+         WHERE project_key = ? AND cycle_id = ?`,
+      )
+      .run(activeMs, cycle.project_key, cycle.cycle_id);
+    this.epochCheckpointAt.set(this.epochKey(cycle.project_key, cycle.cycle_id), now);
+  }
+
+  /**
+   * CR-CRU-024 §S5.1 — the plan checkpoint verb: fold the plan's ACTIVE
+   * cycle's epoch NOW (one durable write) and re-anchor. A no-op when no cycle
+   * is active (`changed:false`); an unknown plan is a notFound error the route
+   * maps to 404.
+   */
+  checkpointPlan(projectKey: string, planId: number): { changed: boolean } | PlanOpError {
+    if (this.getPlanRow(projectKey, planId) === null) {
+      return { error: `plan not found: ${planId}`, notFound: true };
+    }
+    const active = this.listCycleRows(projectKey, planId).find((c) => c.status === "active");
+    if (active === undefined) {
+      return { changed: false };
+    }
+    this.foldActiveEpoch(active);
+    this.emit("events", projectKey);
+    return { changed: true };
+  }
+
+  /**
+   * CR-CRU-024 §S5.2 — store-wide graceful-stop fold: checkpoint EVERY active
+   * cycle across ALL plans and ALL projects in one call and return the count.
+   * This is the exact call the server's SIGTERM/SIGINT handler makes before
+   * exit so an orderly stop never loses timer state.
+   */
+  checkpointAllActive(): number {
+    const active = this.db
+      .query<PlanCycleRow, []>(`SELECT * FROM plan_cycles WHERE status = 'active'`)
+      .all();
+    for (const cycle of active) {
+      this.foldActiveEpoch(cycle);
+    }
+    return active.length;
+  }
+
+  /**
+   * CR-CRU-024 §S5.3 — project stop: checkpoint every active cycle across the
+   * project's OPEN plans (the §S5.1 fold, project-wide) and return the count.
+   * Distinct from archive — it only folds timers, never changes plan status.
+   */
+  stopProject(projectKey: string): number {
+    const active = this.db
+      .query<PlanCycleRow, [string]>(
+        `SELECT c.* FROM plan_cycles c
+         JOIN plans p ON p.project_key = c.project_key AND p.plan_id = c.plan_id
+         WHERE c.project_key = ? AND c.status = 'active' AND p.status = 'open'`,
+      )
+      .all(projectKey);
+    for (const cycle of active) {
+      this.foldActiveEpoch(cycle);
+    }
+    if (active.length > 0) {
+      this.emit("events", projectKey);
+    }
+    return active.length;
+  }
+
   private toPlan(row: PlanRow): Plan {
     const cycles: PlanCycle[] = this.listCycleRows(row.project_key, row.plan_id).map(
       (cycle) => ({
@@ -1455,7 +1789,13 @@ export class Store {
       ...(row.orchestrator !== null ? { orchestrator: row.orchestrator } : {}),
       ...(row.wave !== null ? { wave: row.wave } : {}),
       ...(row.track !== null ? { track: row.track } : {}),
-      status: row.status === "closed" ? "closed" : "open",
+      // CR-CRU-024 §S6 — preserve the real terminal status. The prior collapse
+      // (`row.status === "closed" ? "closed" : "open"`) mapped ANY non-closed
+      // status (including the new "aborted") to "open", which hid aborted plans
+      // from the history lens and let the one-open-plan-per-cr rule mis-see
+      // them as open. "open"/"closed" behaviour is unchanged.
+      status:
+        row.status === "closed" ? "closed" : row.status === "aborted" ? "aborted" : "open",
       cycles,
       ...(row.merge_commit !== null ? { merge: { commit: row.merge_commit } } : {}),
       ...(row.closed_at !== null ? { closedAt: row.closed_at } : {}),
