@@ -256,7 +256,7 @@ describe("Store#onChange", () => {
 });
 
 describe("Store — retention + rollup (§S4)", () => {
-  test("105 inserts: first 3 (wave w1) fold into a wave rollup, next 2 fold into a day rollup, 100 raw remain", () => {
+  test("105 inserts: all 5 expired same-day events (3 wave-tagged + 2 untagged) fold into ONE UTC-day rollup — context.wave no longer splits the bucket (CR-CRU-033 §S1), 100 raw remain", () => {
     const store = new Store(":memory:");
     const pk = seedProject(store);
 
@@ -265,6 +265,8 @@ describe("Store — retention + rollup (§S4)", () => {
         pk,
         "a1",
         { summary: summary(), tree: emptyTree },
+        // The first 3 still carry context.wave — §S1 means this tag is now
+        // irrelevant to bucketing, it no longer splits the rollup.
         i < 3 ? { context: { wave: "w1" } } : undefined,
       );
     }
@@ -273,13 +275,11 @@ describe("Store — retention + rollup (§S4)", () => {
     expect(events.length).toBe(100);
 
     const rollups = store.listRollups(pk);
-    expect(rollups.length).toBe(2);
-
-    // oldest-first: the wave-w1 fold (from the first 3 inserts) precedes the
-    // day fold (from the next 2 inserts).
-    expect(rollups[0]).toMatchObject({ bucket: "w1", runs: 3, passed: 3, failed: 0, duration_ms: 15 });
-    expect(rollups[1]?.bucket).not.toBe("w1");
-    expect(rollups[1]).toMatchObject({ runs: 2, passed: 2, failed: 0, duration_ms: 10 });
+    // §S1: bucket key is always the event's UTC day, so ALL 5 expired
+    // same-day events (wave-tagged or not) fold into a single rollup.
+    expect(rollups.length).toBe(1);
+    expect(rollups[0]!.bucket).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(rollups[0]).toMatchObject({ runs: 5, passed: 5, failed: 0, duration_ms: 25 });
   });
 });
 

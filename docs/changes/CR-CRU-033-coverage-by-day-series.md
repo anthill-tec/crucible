@@ -1,6 +1,6 @@
 # CR-CRU-033 — Date-keyed coverage-by-day series (CR-028 data prerequisite)
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-07-21)
 **Type:** feature
 **Priority:** P2
 **Depends on:** CR-CRU-023 (durable rollup series), CR-CRU-032 (§S4 within-retention project feed)

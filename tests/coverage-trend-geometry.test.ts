@@ -81,7 +81,24 @@ interface ProjectFixture {
   agentsOnline: number;
   agentsTotal: number;
   latestGreenCoverage?: unknown;
-  coverageTrend?: number[];
+  /** CR-CRU-033 §S2 — date-keyed series: { day: "YYYY-MM-DD", percent }[],
+   * oldest→newest. */
+  coverageTrend?: { day: string; percent: number }[];
+}
+
+/** N consecutive distinct UTC-day strings starting at `start`, ascending —
+ * pairs 1:1 with a percents array to build a CR-CRU-033 §S2 coverageTrend
+ * fixture (same percents/order as before the shape change, now dated). */
+function consecutiveDays(start: string, n: number): string[] {
+  const startMs = new Date(`${start}T00:00:00.000Z`).getTime();
+  return Array.from({ length: n }, (_, i) =>
+    new Date(startMs + i * 86_400_000).toISOString().slice(0, 10),
+  );
+}
+
+function datedTrend(percents: number[], start = "2026-02-01"): { day: string; percent: number }[] {
+  const days = consecutiveDays(start, percents.length);
+  return percents.map((percent, i) => ({ day: days[i]!, percent }));
 }
 
 interface MountOpts {
@@ -190,7 +207,7 @@ describe("§S1 — rendered bar count at low point counts (CR-023's >=1-point re
           agentsOnline: 1,
           agentsTotal: 1,
           latestGreenCoverage: { lines: { covered: 80, total: 100, percent: 80 } },
-          coverageTrend: [70, 80],
+          coverageTrend: datedTrend([70, 80]),
         },
       ],
     });
@@ -221,7 +238,7 @@ describe("§S1 — rendered bar count at low point counts (CR-023's >=1-point re
           agentsOnline: 1,
           agentsTotal: 1,
           latestGreenCoverage: { lines: { covered: 55, total: 100, percent: 55 } },
-          coverageTrend: [55],
+          coverageTrend: datedTrend([55]),
         },
       ],
     });
@@ -260,7 +277,7 @@ describe("§S2 — coverage-trend series windowing: renders only the MOST RECENT
           agentsOnline: 1,
           agentsTotal: 1,
           latestGreenCoverage: { lines: { covered: 29, total: 100, percent: 29 } },
-          coverageTrend: points,
+          coverageTrend: datedTrend(points),
         },
       ],
     });
@@ -292,7 +309,7 @@ describe("§S2 — coverage-trend series windowing: renders only the MOST RECENT
           agentsOnline: 1,
           agentsTotal: 1,
           latestGreenCoverage: { lines: { covered: 29, total: 100, percent: 29 } },
-          coverageTrend: points,
+          coverageTrend: datedTrend(points),
         },
       ],
     });
@@ -327,7 +344,7 @@ describe("§S2 — coverage-trend series windowing: renders only the MOST RECENT
           agentsOnline: 1,
           agentsTotal: 1,
           latestGreenCoverage: { lines: { covered: 29, total: 100, percent: 29 } },
-          coverageTrend: points,
+          coverageTrend: datedTrend(points),
         },
       ],
     });
@@ -362,7 +379,7 @@ describe("Regression guard — CR-023 §S2 pins (4-point fixture: bar count, mon
           agentsOnline: 1,
           agentsTotal: 1,
           latestGreenCoverage: { lines: { covered: 95, total: 100, percent: 95 } },
-          coverageTrend: [61, 74, 88, 95],
+          coverageTrend: datedTrend([61, 74, 88, 95]),
         },
       ],
     });
