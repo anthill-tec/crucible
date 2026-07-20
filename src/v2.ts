@@ -885,6 +885,37 @@ async function handlePlanClose(
   return json({ ok: true, changed: true, plan });
 }
 
+/**
+ * CR-CRU-024 §S5.1 — POST …/plans/<planId>/checkpoint — fold the plan's
+ * ACTIVE cycle's epoch NOW (one durable write, no cadence-window loss) and
+ * re-anchor. 200 {ok:true, changed:true} with an active cycle, {changed:false}
+ * with none; an unknown plan → 404 + help[].
+ */
+function handlePlanCheckpoint(store: Store, key: string, planIdRaw: string): Response {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  const planId = numericId(planIdRaw);
+  if (planId === null) {
+    return fail(404, `plan not found: ${planIdRaw}`, { help: hints.planCycleNotFound });
+  }
+  const result = store.checkpointPlan(pk.key, planId);
+  if ("error" in result) {
+    return fail(404, result.error, { help: hints.planCycleNotFound });
+  }
+  return json({ ok: true, changed: result.changed });
+}
+
+/**
+ * CR-CRU-024 §S5.3 — POST …/projects/<key>/stop — checkpoint every active
+ * cycle's timer across the project's open plans. Returns {ok, checkpointed}.
+ */
+function handleProjectStop(store: Store, key: string): Response {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  const checkpointed = store.stopProject(pk.key);
+  return json({ ok: true, checkpointed });
+}
+
 /** GET …/plans (+?cr=&track=) — closed plans carry the derived commitBoundary. */
 function handlePlansList(store: Store, key: string, req: Request, url: URL): Response {
   const pk = requireProject(store, key);
@@ -1059,6 +1090,9 @@ function handlePlansRoute(
   }
   if (segments.length === 3 && req.method === "PATCH") {
     return handlePlanClose(store, key, segments[2]!, req);
+  }
+  if (segments.length === 4 && segments[3] === "checkpoint" && req.method === "POST") {
+    return handlePlanCheckpoint(store, key, segments[2]!);
   }
   if (segments.length === 4 && segments[3] === "cycles" && req.method === "POST") {
     return handleCycleAppend(store, key, segments[2]!, req);
@@ -1272,6 +1306,10 @@ export function handleV2(
       (segments[1] === "archive" || segments[1] === "unarchive")
     ) {
       return handleProjectArchive(store, segments[0]!, segments[1] === "archive");
+    }
+    // CR-CRU-024 §S5.3 — project stop: checkpoint every active cycle's timer.
+    if (req.method === "POST" && segments.length === 2 && segments[1] === "stop") {
+      return handleProjectStop(store, segments[0]!);
     }
     // CR-CRU-012 §S1 — PATCH project parameters (v2-only; the v1 shim has
     // no equivalent route).

@@ -214,6 +214,20 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
 }
 
 if (import.meta.main) {
-  const { server } = startServer();
-  console.log(`[crucible] listening on http://localhost:${server.port}`);
+  const handle = startServer();
+  console.log(`[crucible] listening on http://localhost:${handle.server.port}`);
+  // CR-CRU-024 §S5.2 — a graceful stop checkpoints EVERY active cycle's timer
+  // (all plans, all projects) before exit, so an orderly shutdown never loses
+  // in-flight epoch state; only a hard power cut falls back to the <=60s
+  // read-cadence tolerance (CR-023 §S3). Wired ONLY on the real boot path
+  // (import.meta.main), so test teardown — which calls handle.stop() directly,
+  // never a signal — is never affected.
+  const gracefulStop = (signal: string): void => {
+    const checkpointed = handle.store.checkpointAllActive();
+    console.log(`[crucible] ${signal}: checkpointed ${checkpointed} active cycle(s), stopping`);
+    handle.stop();
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => gracefulStop("SIGTERM"));
+  process.on("SIGINT", () => gracefulStop("SIGINT"));
 }

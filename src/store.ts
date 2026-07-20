@@ -1593,6 +1593,84 @@ export class Store {
     return activeMs;
   }
 
+  /**
+   * CR-CRU-024 §S5.1 — force-fold an ACTIVE cycle row's live epoch into the
+   * persisted `active_ms_accumulated` and re-anchor the epoch at NOW. Mirrors
+   * deriveAndCheckpointActiveMs's epoch math WITHOUT the >=60s cadence gate —
+   * the fold fires synchronously — so a store-reopen resumes the checkpointed
+   * value EXACTLY (bootedAt re-anchoring on restart excludes downtime, and the
+   * re-anchored checkpoint means the folded window is never counted twice).
+   */
+  private foldActiveEpoch(cycle: PlanCycleRow): void {
+    const now = Date.now();
+    const epochStart = this.epochStart(cycle.project_key, cycle.cycle_id, cycle.activated_at ?? 0);
+    const activeMs = (cycle.active_ms_accumulated ?? 0) + Math.max(0, now - epochStart);
+    this.db
+      .query(
+        `UPDATE plan_cycles SET active_ms_accumulated = ?
+         WHERE project_key = ? AND cycle_id = ?`,
+      )
+      .run(activeMs, cycle.project_key, cycle.cycle_id);
+    this.epochCheckpointAt.set(this.epochKey(cycle.project_key, cycle.cycle_id), now);
+  }
+
+  /**
+   * CR-CRU-024 §S5.1 — the plan checkpoint verb: fold the plan's ACTIVE
+   * cycle's epoch NOW (one durable write) and re-anchor. A no-op when no cycle
+   * is active (`changed:false`); an unknown plan is a notFound error the route
+   * maps to 404.
+   */
+  checkpointPlan(projectKey: string, planId: number): { changed: boolean } | PlanOpError {
+    if (this.getPlanRow(projectKey, planId) === null) {
+      return { error: `plan not found: ${planId}`, notFound: true };
+    }
+    const active = this.listCycleRows(projectKey, planId).find((c) => c.status === "active");
+    if (active === undefined) {
+      return { changed: false };
+    }
+    this.foldActiveEpoch(active);
+    this.emit("events", projectKey);
+    return { changed: true };
+  }
+
+  /**
+   * CR-CRU-024 §S5.2 — store-wide graceful-stop fold: checkpoint EVERY active
+   * cycle across ALL plans and ALL projects in one call and return the count.
+   * This is the exact call the server's SIGTERM/SIGINT handler makes before
+   * exit so an orderly stop never loses timer state.
+   */
+  checkpointAllActive(): number {
+    const active = this.db
+      .query<PlanCycleRow, []>(`SELECT * FROM plan_cycles WHERE status = 'active'`)
+      .all();
+    for (const cycle of active) {
+      this.foldActiveEpoch(cycle);
+    }
+    return active.length;
+  }
+
+  /**
+   * CR-CRU-024 §S5.3 — project stop: checkpoint every active cycle across the
+   * project's OPEN plans (the §S5.1 fold, project-wide) and return the count.
+   * Distinct from archive — it only folds timers, never changes plan status.
+   */
+  stopProject(projectKey: string): number {
+    const active = this.db
+      .query<PlanCycleRow, [string]>(
+        `SELECT c.* FROM plan_cycles c
+         JOIN plans p ON p.project_key = c.project_key AND p.plan_id = c.plan_id
+         WHERE c.project_key = ? AND c.status = 'active' AND p.status = 'open'`,
+      )
+      .all(projectKey);
+    for (const cycle of active) {
+      this.foldActiveEpoch(cycle);
+    }
+    if (active.length > 0) {
+      this.emit("events", projectKey);
+    }
+    return active.length;
+  }
+
   private toPlan(row: PlanRow): Plan {
     const cycles: PlanCycle[] = this.listCycleRows(row.project_key, row.plan_id).map(
       (cycle) => ({
