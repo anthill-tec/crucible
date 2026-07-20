@@ -1,6 +1,6 @@
 # CR-CRU-030 — Fleet-wide TOON-AXI conversion + mandatory classification context (all crucible clients)
 
-**Status:** CANCELLED — out of scope for Crucible v2 (2026-07-20, user-directed). The remaining fleet TOON-AXI conversion (python / rust / mvn / arduino clients) is now **owned by the Model B project** and coordinated over Sandesh with `Mainline - ModelB`. The bun-client TOON-AXI slice already shipped here (CR-CRU-013 cycle 51 + `clients/toon.py` codec); the wave-classification defect it surfaced was fixed under CR-CRU-031. Nothing further tracked in this queue.
+**Status:** PENDING — **owned by Crucible** (the server-side API + envelope contract live here). Briefly descoped to Model B on 2026-07-20, then re-owned the same day (user decision): the crucible-client work stays with Crucible because it holds the server-side API and requirements. **Model B is the requesting consumer**, tracking these deliverables as external dependencies of its Wave 4 (`worktree-flow.py` AXI migration + `contracts/` specs + `~/.claude` docs stay on Model B's side). Coordinated over Sandesh with `Mainline - ModelB` (Model B Crucible project key `019f7eb8-8cad-7000-9838-854eca8e7c20`). Bun-client TOON-AXI slice already shipped here (CR-CRU-013 cycle 51 + `clients/toon.py` codec); the wave-classification defect it surfaced was fixed under CR-CRU-031.
 **Type:** patch
 **Priority:** P1
 **Depends on:** CR-CRU-013 (the bun-client TOON-AXI slice — Crucible cycle 51 — + `clients/toon.py` codec from C4 — the reference implementation this CR rolls out fleet-wide)
