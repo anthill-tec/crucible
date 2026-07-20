@@ -1124,10 +1124,9 @@ export class Store {
   }
 
   private foldIntoRollup(row: EventRow): void {
-    const context =
-      row.context !== null ? (JSON.parse(row.context) as RunContext) : undefined;
-    // Bucket key: context.wave when present, else the UTC day of the event.
-    const bucket = context?.wave ?? new Date(row.timestamp).toISOString().slice(0, 10);
+    // Bucket key: ALWAYS the event's UTC day (CR-033 §S1 / DN §6 — the wave key
+    // served no consumer and broke date bucketing).
+    const bucket = new Date(row.timestamp).toISOString().slice(0, 10);
     this.db
       .query(
         `INSERT INTO rollups (project_key, bucket, runs, passed, failed, duration_ms, last_coverage)
