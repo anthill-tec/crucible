@@ -39,6 +39,14 @@
       // so the Runs pane can surface explicit "pruned" feedback instead of a
       // silent tab-switch-and-nothing. null = no pending feedback.
       anchorFeedback: null,
+      // CR-CRU-032 §S3 (VERIFY 1B) — the set of cycleIds whose `→ Runs`
+      // anchor-fetch came back server-confirmed truly-pruned (empty events,
+      // NO `cycle` field). Unlike the transient `anchorFeedback` (cleared on
+      // the next click), this is a STORED, permanent per-cycle verdict: once
+      // a boundary is confirmed pruned its `→ Runs` pill renders DIM for good.
+      // A vanX reactive array (mutated via vanX.replace, like collapsedCycles)
+      // so the Workflow binding re-runs and the pill flips dim on confirm.
+      prunedCycles: [],
     });
 
     // ── Routing (§S2 — hash-free History routing, parse in app-logic) ───
@@ -2097,11 +2105,34 @@
       }, 10000);
     };
 
+    // CR-CRU-032 §S3 (VERIFY 1B) — the accurate reason a `→ Runs` pill wears
+    // once its boundary is server-confirmed pruned, shared by the render-time
+    // dim (fresh re-mounts) and the imperative reflect on the clicked pill.
+    const PRUNED_PILL_REASON =
+      "This cycle's Runs boundary has been pruned from the retained timeline";
+
+    // §S3 (VERIFY 1B) — reflect the confirmed-pruned verdict onto the exact
+    // `→ Runs` element the user activated. The stored state.prunedCycles below
+    // dims every FRESH render of this cycle's pill; this reflects the same
+    // verdict on the ALREADY-rendered node that triggered the anchor-fetch
+    // (the tab has swapped to Runs by now, detaching that node from the live
+    // tree — VanJS no longer rebinds it, so the clicked control updates itself
+    // directly). Idempotent; mirrors the render-time dim styling exactly.
+    const reflectPrunedPill = (pillEl) => {
+      if (pillEl === null || pillEl === undefined) return;
+      pillEl.classList.add("app-pill-dim");
+      pillEl.setAttribute("aria-disabled", "true");
+      pillEl.setAttribute("title", PRUNED_PILL_REASON);
+      pillEl.setAttribute("aria-label", PRUNED_PILL_REASON);
+    };
+
     // CR-CRU-025 §S1 — after the one-rule tab swap to Runs, the declared
     // boundary for `cycleId` re-renders asynchronously; retry (real timers,
     // never the 10s blink delay) until it mounts, then scroll it into view
-    // and blink it.
-    const revealDeclaredMarker = (cycleId, attempts = 0, anchored = false) => {
+    // and blink it. `pillEl` (CR-CRU-032 §S3) is the clicked `→ Runs` node,
+    // threaded through so a confirmed-pruned anchor-fetch can reflect the dim
+    // verdict back onto it.
+    const revealDeclaredMarker = (cycleId, attempts = 0, anchored = false, pillEl = null) => {
       const marker = document.querySelector(
         `[data-testid="declared-marker"][data-cycle-id="${cycleId}"]`,
       );
@@ -2111,7 +2142,7 @@
         return;
       }
       if (attempts < 30) {
-        setTimeout(() => revealDeclaredMarker(cycleId, attempts + 1, anchored), 5);
+        setTimeout(() => revealDeclaredMarker(cycleId, attempts + 1, anchored, pillEl), 5);
         return;
       }
       // CR-CRU-032 §S2 — the marker never mounted from the loaded window: this
@@ -2119,7 +2150,7 @@
       // Anchor-fetch it ONCE (`anchored` guards against a fetch loop) — a
       // beyond-window boundary comes back with events to merge, a truly-pruned
       // one comes back empty and surfaces §S3 feedback. Never a silent give-up.
-      if (!anchored) anchorFetchRuns(cycleId);
+      if (!anchored) anchorFetchRuns(cycleId, pillEl);
     };
 
     // CR-CRU-032 §S2/§S3 — the beyond-window resolver behind `revealDeclaredMarker`.
@@ -2128,7 +2159,7 @@
     // feed (sufficient on its own for `timelineRows` to mount the declared
     // marker) and the reveal is retried; an EMPTY payload with NO `cycle` field
     // is the server's "truly pruned" signal, surfaced as explicit feedback.
-    const anchorFetchRuns = async (cycleId) => {
+    const anchorFetchRuns = async (cycleId, pillEl = null) => {
       const key = state.route.projectKey;
       if (key === undefined || key === null) return;
       let body;
@@ -2155,6 +2186,15 @@
       // truly gone (mirrors the §S1 "unknown cycleId" case). Surface §S3 feedback.
       if (body.cycle === undefined || body.cycle === null) {
         state.anchorFeedback = cycleId;
+        // §S3 (VERIFY 1B) — record the PERMANENT pruned verdict for this
+        // cycle so its `→ Runs` pill dims and STAYS dim across later renders
+        // and other pills' clicks (do NOT clear this the way anchorFeedback
+        // is cleared — the feedback text is transient, the dim is permanent).
+        if (!state.prunedCycles.includes(cycleId)) {
+          vanX.replace(state.prunedCycles, () => [...state.prunedCycles, cycleId]);
+        }
+        // Reflect the same verdict onto the clicked pill (now tab-detached).
+        reflectPrunedPill(pillEl);
       }
     };
 
@@ -2171,19 +2211,41 @@
     // never at static render time.
     const CycleToRunsBadge = (cycleId) => {
       const live = cycleId !== undefined && cycleId !== null;
+      // §S3 (VERIFY 1B) — a cycle earns the DIM/pruned state ONLY after its
+      // own click's anchor-fetch confirmed the boundary is truly gone
+      // (membership in the stored, reactive state.prunedCycles). Never at
+      // static render time, and never for a boundary that merely isn't in the
+      // loaded window (that's beyond-window/reachable — AC1/AC3 stay LIVE).
+      // Reactive per-attribute bindings (van `() => …` attrs) so this SPECIFIC
+      // pill node flips dim the instant its cycleId enters state.prunedCycles —
+      // even after a tab swap detaches it — reading the reactive array inside
+      // each binding subscribes it (mirrors state.collapsedCycles).
+      // Static read at render time: a FRESH render of this pill (initial mount
+      // or a later poll/tab re-render) dims when this cycleId already carries
+      // the stored pruned verdict. Reading state.prunedCycles here subscribes
+      // the enclosing Workflow binding, so a re-render re-evaluates it. (The
+      // node that triggered its OWN pruning verdict is dimmed imperatively via
+      // reflectPrunedPill — the tab has swapped away, detaching it, by then.)
+      const pruned = live && state.prunedCycles.includes(cycleId);
       return span(
         {
           "data-testid": "cycle-to-runs",
-          class: "app-pill app-cycle-to-runs",
-          "aria-disabled": "false",
-          title: "Jump to this cycle's Runs boundary",
+          class: pruned
+            ? "app-pill app-cycle-to-runs app-pill-dim"
+            : "app-pill app-cycle-to-runs",
+          "aria-disabled": pruned ? "true" : "false",
+          title: pruned ? PRUNED_PILL_REASON : "Jump to this cycle's Runs boundary",
+          ...(pruned ? { "aria-label": PRUNED_PILL_REASON } : {}),
           onclick: (ev) => {
             ev.stopPropagation();
             if (!live) return;
+            // A pruned pill is NOT a silent no-op — re-run the reveal so the
+            // anchor-fetch re-confirms and the §S3 anchor-fetch-feedback text
+            // resurfaces. It simply never pretends to be a normal live jump.
             // Clear any stale pruned feedback from a prior cycle's click.
             state.anchorFeedback = null;
             state.workspaceTab = "Runs";
-            revealDeclaredMarker(cycleId);
+            revealDeclaredMarker(cycleId, 0, false, ev.currentTarget);
           },
         },
         "→ Runs",

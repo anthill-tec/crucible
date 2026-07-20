@@ -859,6 +859,15 @@ body {
   color: var(--ink-dim);
 }
 .app-cycle-to-runs:hover { color: var(--ink); }
+/* CR-CRU-032 §S3 (VERIFY 1B) — a `→ Runs` pill whose boundary was
+   server-confirmed pruned by its own anchor-fetch renders permanently dim:
+   faded ink + not-allowed cursor, so it never reads as a normal live jump. */
+.app-pill-dim {
+  color: var(--ink-faint);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.app-pill-dim:hover { color: var(--ink-faint); }
 /* CR-CRU-025 §S2 — the "⚑ Cycle" nav badge (inverse of "→ Runs"): never
    wraps, never shrinks (CR-023 660px pane floor) so it holds its size while
    the marker label ellipsizes. */
