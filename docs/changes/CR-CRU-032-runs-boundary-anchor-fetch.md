@@ -28,8 +28,18 @@ When `cycle-to-runs` is clicked and `[data-testid="declared-marker"][data-cycle-
 ### §S3 Honest dim state + explicit no-op feedback
 The pill distinguishes **pruned** (server confirms the boundary is gone → dim, accurate "pruned" reason) from **beyond-window** (present server-side → stays LIVE, reached via §S2). A click that truly cannot locate a pruned boundary gives explicit feedback, never a bare tab-switch-and-nothing.
 
-### §S4 One setting governs the Runs window (the disconnect fix)
-The **`retention` project setting is the single source of truth** for the run window: it governs BOTH the server-side raw-event rollup cap AND the Runs-timeline display fetch. Remove the hardcoded `?limit=50` — the feed fetch uses the project's effective retention (`project.retention ?? DEFAULT_RETENTION`). Editing retention in project settings now visibly changes how many runs the timeline shows. (Chosen over exposing a separate UI-limit field, per "make both governed by the same setting"; a follow-up could split them if ever needed.)
+### §S4 The feed window is governed by `retention` (the disconnect fix)
+**Gap-analysis correction (2026-07-20):** PRD §4.7 KEEPS the events API's `?limit`
+param (default 50, v1 inheritance) — that is a real API contract for programmatic
+callers and is NOT removed. The drift is that the FEED hardcodes `?limit=50`
+(`app.js:156`) instead of honoring PRD §4.7 / §5's "each project contributing **up
+to its retention limit**". Fix (client-side): the feed fetch — the home collective
+timeline AND the project-workspace Runs tab (both share this call) — passes the
+project's EFFECTIVE retention as the limit, `?limit=<project.retention ?? DEFAULT_RETENTION>`.
+Editing retention in project settings then visibly changes how many runs the
+timeline shows; the API's default-50 for other callers is untouched. (Single
+user-facing control per "make both governed by the same setting"; a separate
+display-limit field is a non-goal unless later requested.)
 
 ### §S5 Project-settings UI integrity
 1. **Labels** — every manager-edit field gets a visible label: name, type, SUT root, liveness T1/T2/T3 (seconds), **retention (runs — now governs the timeline window)**, and the run-deletion toggle. No more bare number boxes.
