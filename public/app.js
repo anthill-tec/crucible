@@ -2216,16 +2216,22 @@
       // (membership in the stored, reactive state.prunedCycles). Never at
       // static render time, and never for a boundary that merely isn't in the
       // loaded window (that's beyond-window/reachable — AC1/AC3 stay LIVE).
-      // Reactive per-attribute bindings (van `() => …` attrs) so this SPECIFIC
-      // pill node flips dim the instant its cycleId enters state.prunedCycles —
-      // even after a tab swap detaches it — reading the reactive array inside
-      // each binding subscribes it (mirrors state.collapsedCycles).
-      // Static read at render time: a FRESH render of this pill (initial mount
-      // or a later poll/tab re-render) dims when this cycleId already carries
-      // the stored pruned verdict. Reading state.prunedCycles here subscribes
-      // the enclosing Workflow binding, so a re-render re-evaluates it. (The
-      // node that triggered its OWN pruning verdict is dimmed imperatively via
-      // reflectPrunedPill — the tab has swapped away, detaching it, by then.)
+      // `pruned` is a plain boolean read ONCE here from the durable reactive
+      // store state.prunedCycles (the same way state.collapsedCycles is read);
+      // the dim attributes below are STATIC per render — NOT `() => …` reactive
+      // attribute bindings. Dim is achieved by TWO cooperating mechanisms:
+      //   (b) durable store — any FRESH render of this pill (initial mount, a
+      //   poll refresh, or returning to the Workflow tab, which fully
+      //   unmounts/remounts WorkspaceBody via its reactive `() => WorkspaceBody()`
+      //   child) re-invokes CycleToRunsBadge, re-reads state.prunedCycles, and
+      //   renders dim when this cycleId carries the pruned verdict. This is the
+      //   real, durable UX (proven by AC6, which dims a brand-new node the
+      //   reflection never touched).
+      //   (a) reflection — the node the user JUST clicked is detached by the
+      //   state.workspaceTab = "Runs" swap ~150ms BEFORE the async anchor-fetch
+      //   resolves, so no re-render can reach it; reflectPrunedPill imperatively
+      //   dims that exact detached node so its own click reflects the pruned
+      //   outcome immediately.
       const pruned = live && state.prunedCycles.includes(cycleId);
       return span(
         {
