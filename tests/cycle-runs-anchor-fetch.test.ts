@@ -633,3 +633,98 @@ describe("§S3 cycle-to-runs pill — genuinely-pruned pill DIMS after the confi
     expect(isBadgeDisabled(badgeStill!)).toBe(true);
   });
 });
+
+// ── AC6 (§S3, verify-fix round 1B) — the DURABLE `state.prunedCycles` store
+// dims a FRESHLY-RENDERED pill, not just the exact node the user clicked ──
+//
+// §S3's dim has TWO mechanisms in production (public/app.js):
+//   (a) `reflectPrunedPill(pillEl)` (~2121) — imperative, mutates the EXACT
+//       node passed through from the click handler (`ev.currentTarget`),
+//       even after the tab swap has detached it from the live tree.
+//   (b) the durable reactive store `state.prunedCycles` (~2193-2194,
+//       `vanX.replace`) — read fresh inside `CycleToRunsBadge` (~2229) every
+//       time that function is INVOKED, i.e. every fresh render/re-mount of
+//       the Workflow pane.
+//
+// AC5 above asserts on `row.querySelector(...)` re-queried from a `row`
+// captured BEFORE the click, but it never leaves the Runs tab afterward — so
+// the Workflow pane (and its `cycle-to-runs` pill) is never torn down and
+// re-mounted during that test. AC5 never forces a NEW render of the pill
+// through a full tab-away-and-back cycle, so it cannot distinguish "(a)
+// alone" from "(a) and/or (b)". If (b) were silently broken (e.g. the
+// `vanX.replace(state.prunedCycles, ...)` call were missing or
+// `CycleToRunsBadge` never read `state.prunedCycles`), AC5 could still pass
+// via (a) alone while real UX — leave the Workflow tab, come back, the pill
+// should still show pruned — would be broken. This test forces exactly that
+// round-trip and asserts on a NEW node VanJS mounts, never the one captured
+// pre-click.
+describe("§S3 cycle-to-runs pill — durable prunedCycles store dims a freshly re-rendered pill (not just the clicked node)", () => {
+  test("after a confirmed-pruned anchor-fetch, leaving and returning to the Workflow tab re-mounts a BRAND-NEW cycle-to-runs pill that is ALSO dim with an accurate 'pruned' reason — proving the durable state.prunedCycles store, not merely the imperative reflect on the originally-clicked node", async () => {
+    const key = "cr032-pill-dims-durable-1";
+    const cycleId = 8006;
+    const plan: PlanFixture = {
+      planId: 9106,
+      cr: "CR-032-PILL-DIMS-DURABLE-1",
+      projectKey: key,
+      status: "open",
+      // Same "genuinely pruned" fixture shape as AC2/AC5: a `done` cycle
+      // whose boundary is truly gone server-side.
+      cycles: [{ id: cycleId, label: "genuinely pruned cycle (durable)", status: "done" }],
+    };
+
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "CR032 Pill Dims Durable" })],
+      events: [],
+      plans: [plan],
+      // Server's "truly unknown/pruned" signal: empty events, no `cycle`
+      // field at all (mirrors AC2/AC5 and tests/events-anchored.test.ts's
+      // "unknown cycleId" case).
+      anchorResponse: { events: [] },
+    });
+    await openWorkflowTab();
+
+    const rowBefore = doneCycleRow();
+    const badgeBefore = rowBefore.querySelector<HTMLElement>('[data-testid="cycle-to-runs"]');
+    expect(badgeBefore).not.toBeNull();
+
+    // Before the click: pruning cannot be known upfront — LIVE, not dim.
+    expect(isBadgeDisabled(badgeBefore!)).toBe(false);
+
+    // Click -> anchor-fetch confirms pruned -> the one-rule tab swap to Runs
+    // fires (app.js ~2247). The Workflow pane's `() => WorkspaceBody()`
+    // reactive child (app.js ~2812) now renders `WorkspaceRuns()` instead —
+    // `badgeBefore`'s node is detached from the live document tree.
+    badgeBefore!.click();
+    await waitForRetryBudget();
+    await settle();
+
+    // Sanity: the anchor-fetch genuinely fired and confirmed pruned, and we
+    // did land on Runs (mirrors AC2/AC5's setup).
+    expect(findAnchorCall(key, cycleId)).toBeDefined();
+    expect(isActiveTab("Runs")).toBe(true);
+    expect(document.body.contains(badgeBefore!)).toBe(false);
+
+    // Force a FRESH render of the pill: click the Workflow tab again. This
+    // re-mounts the Workflow pane from scratch, re-invoking
+    // `CycleToRunsBadge(cycleId)` and producing a BRAND-NEW `span` node —
+    // `reflectPrunedPill` NEVER touched this node; it only ever mutated
+    // `badgeBefore`, which is now unreachable from the document.
+    await openWorkflowTab();
+
+    const rowAfter = doneCycleRow();
+    const badgeAfter = rowAfter.querySelector<HTMLElement>('[data-testid="cycle-to-runs"]');
+    expect(badgeAfter).not.toBeNull();
+
+    // Proves this is genuinely a NEW node, not the one the reflect touched —
+    // the dim below can ONLY be explained by the durable
+    // `state.prunedCycles` store being read at render time.
+    expect(badgeAfter).not.toBe(badgeBefore);
+    expect(document.body.contains(badgeAfter!)).toBe(true);
+
+    expect(isBadgeDisabled(badgeAfter!)).toBe(true);
+    const accessibleReason =
+      (badgeAfter!.getAttribute("title") ?? "") + " " + (badgeAfter!.getAttribute("aria-label") ?? "");
+    expect(accessibleReason).toMatch(/pruned/i);
+  });
+});
