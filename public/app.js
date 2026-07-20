@@ -745,6 +745,12 @@
           class: "app-transition-marker",
         },
         parts.join(" · "),
+        // CR-CRU-025 §S2 — the trailing "⚑ Cycle" affordance that jumps back
+        // to this cycle's row in the Workflow pane (inverse of §S1's
+        // "→ Runs"). A SEPARATE trailing node; the heuristic RED➜GREEN
+        // `transition-marker` never routes through here, so it stays badge-less.
+        " ",
+        BoundaryToCycleBadge(cycle, plan),
       );
     };
 
@@ -2015,6 +2021,58 @@
       );
     };
 
+    // CR-CRU-025 §S2 — the inverse of `revealDeclaredMarker`: after the
+    // one-rule tab swap to Workflow, the target cycle row re-renders
+    // asynchronously (and, in History, only once its collapsed cr-group has
+    // been expanded). Retry (real timers, never the 10s blink delay) until the
+    // ACTIVE `cycle-row` OR the HISTORY `lens-cycle-row` for `cycleId` mounts,
+    // then scroll it into view and blink it through the SAME shared util.
+    const revealCycleRow = (cycleId, attempts = 0) => {
+      const row = document.querySelector(
+        `[data-testid="cycle-row"][data-cycle-id="${cycleId}"], ` +
+          `[data-testid="lens-cycle-row"][data-cycle-id="${cycleId}"]`,
+      );
+      if (row !== null) {
+        row.scrollIntoView();
+        locateBlink(row);
+        return;
+      }
+      if (attempts < 30) {
+        setTimeout(() => revealCycleRow(cycleId, attempts + 1), 5);
+      }
+    };
+
+    // CR-CRU-025 §S2 — the trailing "⚑ Cycle" badge on a declared boundary
+    // marker. A SEPARATE node from the marker body; clicking it (and ONLY it —
+    // stopPropagation keeps the click off C3's future accordion body) flips the
+    // workspace tab to Workflow (the one-rule swap, inverse of §S1), expands
+    // the containing COLLAPSED history cr-group when the plan is closed, then
+    // scrolls+blinks the exact cycle row matched by cycleId.
+    const BoundaryToCycleBadge = (cycle, plan) => {
+      const cycleId = cycle.id;
+      const isHistory = plan.status === "closed";
+      return span(
+        {
+          "data-testid": "boundary-to-cycle",
+          class: "app-pill app-boundary-to-cycle",
+          title: "Jump to this cycle in Workflow",
+          onclick: (ev) => {
+            ev.stopPropagation();
+            state.workspaceTab = "Workflow";
+            if (isHistory) {
+              const crKey = lensKey("cr", plan.cr);
+              if (!lensOpenKeys.has(crKey)) {
+                lensOpenKeys.add(crKey);
+                lensOpenRev.val += 1;
+              }
+            }
+            revealCycleRow(cycleId);
+          },
+        },
+        "⚑ Cycle",
+      );
+    };
+
     // Completed cycles (done/skipped/failed) carry the §S1 navigation badge.
     const cycleIsCompleted = (cycle) =>
       cycle.status === "done" || cycle.status === "skipped" || cycle.status === "failed";
@@ -2049,6 +2107,10 @@
         {
           "data-testid": "cycle-row",
           "data-status": cycle.status,
+          // CR-CRU-025 §S2 — carry the cycle id (mirrors §S1's
+          // `declared-marker`) so a Runs boundary → cycle jump can match this
+          // active row by cycleId.
+          "data-cycle-id": cycle.id,
           class: `app-cycle-row cycle-status-${cycle.status}`,
         },
         div(
@@ -2243,6 +2305,10 @@
         {
           "data-testid": "lens-cycle-row",
           "data-status": cycle.status,
+          // CR-CRU-025 §S2 — carry the cycle id (mirrors §S1's
+          // `declared-marker`) so a Runs boundary → cycle jump can match this
+          // history row by cycleId.
+          "data-cycle-id": cycle.id,
           class: `app-cycle-row cycle-status-${cycle.status}`,
         },
         div(
