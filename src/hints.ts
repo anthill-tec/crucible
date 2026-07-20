@@ -164,4 +164,12 @@ export const cycleHints = {
     `cycle ${active} is already active — a plan runs one cycle at a time`,
     `transition cycle ${active} to a terminal state (done | skipped | failed) first, then retry`,
   ],
+  /**
+   * §S3.1 — insert-before targeted the active cycle (or a seq-earlier sibling);
+   * a new pending cycle must land AFTER the active one to keep the order invariant.
+   */
+  insertBeforeActive: (active: number): string[] => [
+    `cycle ${active} is active — insert the new cycle after it, not before`,
+    `target a cycle that sits after the active cycle ${active} in the plan order`,
+  ],
 };

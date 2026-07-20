@@ -716,11 +716,27 @@ async function handleCycleAppend(
   if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
   const parsed = parseCycleInput(body);
   if ("error" in parsed) return fail(400, parsed.error, { help: hints.cycleInput });
-  const cycle = store.appendCycle(pk.key, planId, parsed);
+  // CR-CRU-024 §S3.1 — optional `before: <cycleId>` inserts the new cycle
+  // immediately before that sibling; omitted → plain append (unchanged).
+  const beforeRaw = (body as { before?: unknown }).before;
+  let before: number | undefined;
+  if (beforeRaw !== undefined) {
+    if (typeof beforeRaw !== "number" || !Number.isInteger(beforeRaw)) {
+      return fail(400, `invalid before: ${String(beforeRaw)} (expected a cycle id)`, {
+        help: hints.cycleInput,
+      });
+    }
+    before = beforeRaw;
+  }
+  const cycle = store.appendCycle(pk.key, planId, parsed, before);
   if ("error" in cycle) {
-    return fail(cycle.notFound === true ? 404 : 400, cycle.error, {
-      help: cycle.notFound === true ? hints.planCycleNotFound : hints.closedPlan,
-    });
+    const help =
+      cycle.code === "insert-before-active"
+        ? cycleHints.insertBeforeActive(cycle.cycleRef!)
+        : cycle.notFound === true
+          ? hints.planCycleNotFound
+          : hints.closedPlan;
+    return fail(cycle.notFound === true ? 404 : 400, cycle.error, { help });
   }
   return json({ ok: true, changed: true, ...cycle }, 201);
 }
