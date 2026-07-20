@@ -774,3 +774,110 @@ describe("workspace Vitals COVERAGE TREND bars — driven by the SERVER coverage
     expect(card!.textContent ?? "").toContain("latest green coverage 93.1%");
   });
 });
+
+// ── (C) §S3 INTEGRATION — real server merge driven through the mounted app ──
+//
+// CR-CRU-033 §S3 integration AC (the recent-day fix): "a project whose ONLY
+// coverage runs are within retention (NONE pruned) renders >= 1
+// coverage-trend-bar via the production render path — asserted by driving
+// /api/v2/projects data through the mounted app, NOT by constructing the
+// payload directly." Blocks (A) and (B) above each cover one HALF of this
+// path in isolation: (A) hits the real server but never mounts the client;
+// (B) mounts the client but hand-authors project.coverageTrend as a literal.
+// This block drives BOTH halves in the SAME test — a real startServer(),
+// seeded with coverage events that stay WITHIN the default retention cap
+// (never forced to prune, unlike the retention:0/1/2 fixtures above, so the
+// merge is proven for the live-event half without a rollup ever existing) —
+// then feeds the REAL fetched /api/v2/projects response object straight into
+// mountApp's scripted fetch, so the render consumes the server's actual
+// merge output rather than a constructed fixture.
+describe("§S3 integration — within-retention coverage renders bars end-to-end (real server -> mounted app) (CR-CRU-033)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+
+  afterEach(async () => {
+    handle?.stop();
+    handle = undefined;
+    setSystemTime(); // reset the injected clock so it never leaks to other files
+    if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  });
+
+  test("a project whose only coverage runs are within retention (NONE pruned) renders coverage-trend-bar elements sourced from the REAL /api/v2/projects merge, not a hand-authored payload", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const store: Store = handle.store;
+    const key = crypto.randomUUID();
+    // DEFAULT retention (no override, unlike the retention:0/1/2 fold
+    // fixtures elsewhere in this file) — DEFAULT_RETENTION (100) keeps both
+    // events below as LIVE raw rows. No rollup fold ever happens: the
+    // coverageTrend the server computes can only come from the within-
+    // retention/live-events half of the §S2 merge, never a rollup.
+    store.addProject({
+      key,
+      name: "trend-e2e-within-retention",
+      type: "backend",
+      sutRoot: "/tmp/trend-e2e-within-retention",
+    });
+
+    const fixture: { day: string; percent: number }[] = [
+      { day: "2026-07-18", percent: 72 },
+      { day: "2026-07-19", percent: 84 },
+    ];
+    for (let i = 0; i < fixture.length; i++) {
+      setSystemTime(new Date(`${fixture[i]!.day}T12:00:00.000Z`));
+      store.recordTestEvent(
+        key,
+        `agent-e2e-${i}`,
+        {
+          summary: { total: 5, passed: 5, failed: 0, pending: 0, duration_ms: 40 },
+          tree: [],
+          coverage: { lines: { total: 100, covered: fixture[i]!.percent, percent: fixture[i]!.percent } },
+        },
+        { tier: "regression" },
+      );
+    }
+    setSystemTime();
+
+    // Sanity on the fixture setup: NO rollup was ever created — both events
+    // stayed live/raw, well within DEFAULT_RETENTION (100). This is the
+    // deliberate opposite of the retention:0/1/2 fold fixtures used above.
+    expect(store.listRollups(key).length).toBe(0);
+    expect(store.listEvents(key, 1000).length).toBe(2);
+
+    // Step 1 — drive the REAL server: fetch the real /api/v2/projects
+    // response, not a constructed payload.
+    const res = await fetch(`http://localhost:${handle.server.port}/api/v2/projects`);
+    const body = (await res.json()) as ProjectsListResponse;
+    const fetchedProject = body.projects.find((p) => p.key === key);
+    expect(fetchedProject).toBeDefined();
+    // Proves the merge surfaced the within-retention days with no rollup
+    // involved (§S2 half of this AC).
+    expect(fetchedProject!.coverageTrend).toEqual(fixture);
+
+    // Step 2 — mount the REAL client, but feed it the REAL fetched response
+    // array (body.projects) rather than a hand-authored ProjectFixture
+    // literal: the render must consume the server's actual merge output.
+    // The cast only bridges the server response's permissive index-signature
+    // type to the harness's MountOpts["projects"] shape — the object and its
+    // values are exactly what the server returned, never reconstructed.
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: body.projects as unknown as ProjectFixture[],
+      events: [],
+    });
+
+    const card = trendCard();
+    expect(card).not.toBeNull();
+
+    const barsContainer = card!.querySelector('[data-testid="coverage-trend-bars"]');
+    expect(barsContainer).not.toBeNull();
+
+    const bars = trendBars(card!);
+    // Bar count matches the number of dated points the real merge produced.
+    expect(bars.length).toBe(fixture.length);
+    // Heights are derived from the real merge's .percent values, in order.
+    expect(bars.map(barHeight)).toEqual(fixture.map((f) => f.percent));
+    // Negative bound: no bar carries a height outside the fixture's values.
+    for (const height of bars.map(barHeight)) {
+      expect(fixture.map((f) => f.percent)).toContain(height);
+    }
+  });
+});
