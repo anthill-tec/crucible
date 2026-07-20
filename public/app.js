@@ -102,12 +102,14 @@
       vanX.replace(state.plans, () => []);
       // CR-CRU-026 §S3.2 — refetchPlans is surface-aware (home → the global
       // route, workspace → the scoped one), so EVERY scope change refetches
-      // the landing surface's plan slice; the core slice stays a
-      // workspace-landing concern (home keeps its poll/SSE cadence).
+      // the landing surface's plan slice. CR-CRU-032 §S4 made state.events
+      // surface-scoped (refetchCore REPLACES the shared feed with a
+      // surface-scoped set), so the core slice must ALSO refetch on EVERY
+      // scope change, symmetric with refetchPlans: a home landing re-fetches
+      // the global ?limit=50 feed to restore the collective marker
+      // vocabulary (CR-026 §S0 equivalence), not just a workspace landing.
       void refetchPlans();
-      if (state.route.page === "workspace") {
-        void refetchCore();
-      }
+      void refetchCore();
     }
 
     // CR-CRU-016 AC2 — close the detail back to the underlying surface path
