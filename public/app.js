@@ -27,6 +27,13 @@
       workspaceTab: "Workflow",
       backendUp: true,
       lastSynced: null,
+      // CR-CRU-025 §S2b — the Run Timeline accordion's per-cycleId collapse
+      // set (cycleIds whose declared-marker is currently collapsed). Pure UI
+      // session state: default EMPTY (everything expanded), no URL/persistence,
+      // and untouched by refetchCore/refetchPlans — so a poll/SSE re-render
+      // naturally preserves it. A vanX reactive array so a toggle re-runs the
+      // Runs feed binding (mutated via vanX.replace, like state.events).
+      collapsedCycles: [],
     });
 
     // ── Routing (§S2 — hash-free History routing, parse in app-logic) ───
@@ -726,6 +733,21 @@
         `${KIND_GLYPHS[cycle.kind] ?? KIND_GLYPHS["red-green"]} Cycle · ${cycle.label} · ${plan.cr} · active`,
       );
 
+    // CR-CRU-025 §S2b — the Run Timeline accordion's collapse predicate +
+    // toggle. Reading the reactive `state.collapsedCycles` inside the Runs feed
+    // binding subscribes it, so a toggle re-runs the feed. The toggle mutates
+    // via vanX.replace (the reactive-array convention used for state.events),
+    // which both persists the flag on `state` (surviving poll re-renders) and
+    // re-renders the timeline. Only a declared (done) cycle's marker ever calls
+    // the toggle, so the ACTIVE cycle's id can never enter the set.
+    const isCycleCollapsed = (cycleId) => state.collapsedCycles.includes(cycleId);
+    const toggleCycleCollapsed = (cycleId) => {
+      const next = state.collapsedCycles.includes(cycleId)
+        ? state.collapsedCycles.filter((id) => id !== cycleId)
+        : [...state.collapsedCycles, cycleId];
+      vanX.replace(state.collapsedCycles, () => next);
+    };
+
     const DeclaredMarkerRow = (cycle, plan) => {
       const parts = [
         `${KIND_GLYPHS[cycle.kind] ?? KIND_GLYPHS["red-green"]} Cycle done`,
@@ -735,6 +757,11 @@
       if (cycle.activatedAt !== undefined && cycle.doneAt !== undefined) {
         parts.push(`closed in ${fmtDuration(cycle.doneAt - cycle.activatedAt)}`);
       }
+      // CR-CRU-025 §S2b — the marker body is the accordion handle. Collapsed:
+      // this cycle's linked run cards are omitted from the feed (runFeed) and a
+      // `▸ <N> runs` cue renders here. The nested `boundary-to-cycle` badge
+      // already stopPropagation's (C2), so it never trips this toggle.
+      const collapsed = isCycleCollapsed(cycle.id);
       return div(
         {
           "data-testid": "declared-marker",
@@ -742,7 +769,8 @@
           // `data-run-id`/`data-cr` convention) so cycle→Runs navigation can
           // match the boundary by cycleId.
           "data-cycle-id": cycle.id,
-          class: "app-transition-marker",
+          class: `app-transition-marker${collapsed ? " app-accordion-collapsed" : ""}`,
+          onclick: () => toggleCycleCollapsed(cycle.id),
         },
         parts.join(" · "),
         // CR-CRU-025 §S2 — the trailing "⚑ Cycle" affordance that jumps back
@@ -751,6 +779,17 @@
         // `transition-marker` never routes through here, so it stays badge-less.
         " ",
         BoundaryToCycleBadge(cycle, plan),
+        // CR-CRU-025 §S2b — collapsed cue: exact `▸ <N> runs`, N = this cycle's
+        // current linked-run count. Absent when expanded.
+        collapsed
+          ? span(
+              {
+                "data-testid": "accordion-collapsed-cue",
+                class: "app-accordion-collapsed-cue app-card-meta",
+              },
+              `▸ ${linkedRunsFor(cycle.id).length} runs`,
+            )
+          : null,
       );
     };
 
@@ -898,7 +937,16 @@
             rows.push(home ? MergeMarkerCompact(row.event) : MergeMarkerRow(row.event));
           else if (!home) rows.push(MilestoneEntryRow(row.event));
           // home + non-merge milestone: workspace-only, render nothing.
-        } else rows.push(EventCard(row.event));
+        } else {
+          // CR-CRU-025 §S2b — a run card linked to a COLLAPSED declared cycle
+          // is omitted from the DOM entirely (mirrors OpenSpan's no-container
+          // convention, never CSS-hidden). Only that cycle's linked cards are
+          // affected; unlinked cards (no context.cycleId) always render, and
+          // the active cycle's id can never be in the collapse set.
+          const cid = row.event.context?.cycleId;
+          if (cid !== undefined && cid !== null && isCycleCollapsed(cid)) continue;
+          rows.push(EventCard(row.event));
+        }
       }
       return rows;
     }

@@ -470,6 +470,11 @@ body {
   background: var(--bg);
 }
 
+/* CR-CRU-025 §S2b — Run Timeline accordion: a collapsed declared marker dims
+   its dashed frame and trails a `▸ N runs` cue for the hidden linked cards. */
+.app-accordion-collapsed { border-style: dotted; opacity: 0.85; }
+.app-accordion-collapsed-cue { margin-left: 8px; }
+
 .app-empty {
   color: var(--ink-faint);
   font: 12px var(--mono);
