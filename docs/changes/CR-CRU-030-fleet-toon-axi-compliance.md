@@ -101,6 +101,20 @@ decode the envelope (or provide a `--format {toon,text}` shim with `toon` the
 default). Grep the repo + `~/.claude/scripts` mirror for plain-text parsers of
 client stdout and update them.
 
+### §S6 Expose the plan/status READ verb (client gap — required all along)
+The server exposes `GET /api/v2/projects/<key>/plans` (the full queue: every
+plan with its `cr`, `wave`, `status`, `cycles[]` + per-cycle status, merge
+commit, `closedAt`) but NO client surfaces it — it survives only as the private
+`_open_plans` helper used internally for cycle resolution. So an orchestrator
+cannot READ the board through the client at all; the only read paths today are
+the dashboard UI or raw `curl` (surfaced 2026-07-20 — identifying the last-run
+CR / queue status was done with hand-rolled `curl` + throwaway scripts, exactly
+what the client exists to replace). Add a READ verb to the shared client verb
+set (all five clients) — `status` (alias `plans`), no `--agent` — that GETs the
+plans and returns a §S1 TOON-AXI envelope: the queue as a `plans[]` table (`cr`,
+`wave`, `status`, active-cycle id/label, `mergeCommit`) plus a `lastRunCr`
+convenience field (the plan with the latest `closedAt`). Read-only; this is the
+read half of the client interface, the counterpart to the write/lifecycle verbs.
 
 ## Acceptance criteria
 - [ ] A shared envelope builder emits the §S1 schema; `clients/toon.py` decodes every verb's stdout back to a dict with `verb` + `ok`.
@@ -111,6 +125,7 @@ client stdout and update them.
 - [ ] `plan-file`'s assigned cycle ids stay machine-readable via the envelope (the "never guess ids" contract holds under TOON).
 - [ ] `context` is REQUIRED in the envelope of every classification-carrying verb; `wave` + `cr` present on plan/run-scoped verbs, `cycleId` on cycle-scoped ingests, `track` when `WORKFLOW_ROLE` set — asserted per client.
 - [ ] §S3 `no-wave`: `plan-file` with neither `--wave` nor `WORKFLOW_WAVE` emits a `no-wave` warning (envelope + stderr) naming the CR; with either supplied → the plan carries the wave and no warning. `--wave` overrides env.
+- [ ] §S6 read verb: `status` (alias `plans`, no `--agent`) GETs `…/plans` and returns a `toon.py`-decodable envelope with the queue table (`cr`, `wave`, `status`, active cycle, `mergeCommit`) plus a `lastRunCr` field (the plan with the latest `closedAt`), for all five clients; a project with no plans → an empty-queue envelope (`ok:true`), not an error.
 - [ ] Golden fixture per verb per client; the `~/.claude/scripts` mirror is re-synced from `clients/` (CR-008 source-of-truth rule).
 
 ## Estimated size
@@ -121,6 +136,6 @@ Changing the server INGEST contract (`/api/v2/runs/*`, gate/milestone POST
 bodies) — untouched; this CR is CLIENT-ONLY (the `wave` backfill is CR-CRU-031).
 The TOON wire format itself (that's
 `@toon-format`, ported in CR-013 C4); no-mistakes gate mechanics (CR-013 §S5);
-adding NEW verbs beyond `cycle-add`; a full History-lens
+adding NEW verbs beyond `cycle-add` and the §S6 `status`/`plans` read verb; a full History-lens
 redesign (only the defensive "unclassified" label is in scope, and only if
 cheap).
