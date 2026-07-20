@@ -48,6 +48,14 @@ hold across them all:
    (inserting a pending cycle before the active one would instantly violate
    the order invariant) — violating inserts → 400 + AXI help naming the
    active cycle. Plain append (no `before`) stays as-is.
+   **Ordering mechanism (resolved at gap analysis 2026-07-20):** cycle DISPLAY
+   ORDER moves off `cycle_id` onto a new `seq` column on `plan_cycles` —
+   `cycle_id` stays the stable per-project PK that runs reference via
+   `context.cycleId` and must NEVER be renumbered. `listCycleRows` / `Plan.cycles`
+   order by `seq ASC`; append sets `seq = MAX(seq)+1`; insert-before sets the new
+   cycle's `seq` strictly between the target and its predecessor (fractional or
+   rebalanced seq). Existing rows backfill `seq = cycle_id` (order-preserving, no
+   migration break).
 2. **EDIT a cycle's label:** `PATCH …/cycles/<id> {label}` — legal ONLY while
    the cycle is `pending`. The ACTIVE cycle is LOCKED (400: "the active
    cycle is locked — confirm or fail it first"); terminal cycles are HISTORY
@@ -82,9 +90,11 @@ resumes from the exact setpoint (no lost ≤60s window):
    persists any other restart-relevant state this verb later grows to own
    (it is the designated extension point). Distinct from archive (stop hides
    nothing). Returns `{ok, checkpointed: <n>}`.
-4. Fleet + orchestrator wiring is CR-008 scope (`checkpoint`/`stop` verbs;
-   the /shutdown emergency flow calls them) — noted there at its gap
-   analysis.
+4. Fleet + orchestrator wiring (`checkpoint`/`stop`/`abort` client verbs; the
+   /shutdown emergency flow calls them) is **CR-CRU-030 scope** — RE-POINTED
+   2026-07-20 at CR-024 gap analysis: CR-008 (the original home) shipped and
+   merged before these verbs existed, so it cannot host them. CR-024 is
+   server-side ONLY.
 
 ### §S6 Workflow abort — user-approval-gated (user ruling 2026-07-17)
 Crucible allows aborting an active workflow (an OPEN plan), but the API
@@ -102,6 +112,12 @@ actively discourages it:
    a merge pill); rollups/derived statuses treat aborted like closed-without-
    merge (CR-014's derived PENDING logic: an aborted plan means the CR can
    file a NEW plan — the one-open-plan-per-cr rule sees aborted as not-open).
+   **Implementation note (gap analysis 2026-07-20):** `PlanStatus`
+   (`"open" | "closed"` in `types.ts`) gains `"aborted"`, AND the derived-status
+   collapse in `store.ts` (`row.status === "closed" ? "closed" : "open"`, which
+   currently maps ANY non-closed status to `"open"`) MUST be updated to preserve
+   `"aborted"` — otherwise an aborted plan is reported as open and the history
+   lens can never render it.
 3. The timer state is checkpointed as part of the abort (sealed values stay
    honest).
 
@@ -138,8 +154,9 @@ never stored on trust:
 - [ ] §S6 abort approved: with `{userApproved:true}` — active cycle → `failed`, pending cycles → `skipped`, plan → `aborted`; the history lens renders the group with an `aborted` state and NO merge pill; filing a new plan for the same cr afterwards succeeds (aborted ≠ open); the aborted cycle's timer sealed at its checkpointed value.
 
 ## Estimated size
-S (grew from XS with §S3 mutation, §S5 checkpoints/stop, §S6 abort —
-re-estimate at gap analysis).
+M (re-sized at gap analysis 2026-07-20 from S: 7 scope sections → ~7 cycles,
+including the new `seq` ordering column for §S3 insert-before and the
+`aborted` plan-state + derived-status fix for §S6).
 
 ## Non-goals
 Cross-PLAN concurrency rules (multi-track lanes legitimately run parallel

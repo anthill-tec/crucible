@@ -116,6 +116,18 @@ plans and returns a §S1 TOON-AXI envelope: the queue as a `plans[]` table (`cr`
 convenience field (the plan with the latest `closedAt`). Read-only; this is the
 read half of the client interface, the counterpart to the write/lifecycle verbs.
 
+### §S7 Fleet wiring for the CR-024 server verbs (re-pointed from CR-008)
+CR-CRU-024 adds three server verbs — `checkpoint` (`POST …/plans/<id>/checkpoint`),
+project `stop` (`POST …/projects/<key>/stop`), and `abort`
+(`POST …/plans/<id>/abort`, `userApproved`-gated). Their fleet CLIENT verbs were
+originally slated for CR-008, which shipped and merged before these verbs
+existed; re-pointed here at CR-024 gap analysis (2026-07-20). Add
+`checkpoint` / `stop` / `abort` verbs to the shared client verb set (all five
+clients), each returning the §S1 TOON-AXI envelope; the orchestrator's
+`/shutdown` emergency flow calls `checkpoint`/`stop`. `abort` carries
+`--user-approved` (maps to the body's `userApproved:true`) so the discouraging
+409 path stays reachable by default.
+
 ## Acceptance criteria
 - [ ] A shared envelope builder emits the §S1 schema; `clients/toon.py` decodes every verb's stdout back to a dict with `verb` + `ok`.
 - [ ] For EACH of `python`/`rust`/`mvn`/`arduino`-crucible.py: `register`, `unregister`, `plan-file`, `cycle-activate`, `cycle-done`, `cr-close`, `cycle-add`, and the ingest result print a `toon.py`-decodable envelope carrying `ok` + result fields (one assertion set per client).
@@ -126,6 +138,7 @@ read half of the client interface, the counterpart to the write/lifecycle verbs.
 - [ ] `context` is REQUIRED in the envelope of every classification-carrying verb; `wave` + `cr` present on plan/run-scoped verbs, `cycleId` on cycle-scoped ingests, `track` when `WORKFLOW_ROLE` set — asserted per client.
 - [ ] §S3 `no-wave`: `plan-file` with neither `--wave` nor `WORKFLOW_WAVE` emits a `no-wave` warning (envelope + stderr) naming the CR; with either supplied → the plan carries the wave and no warning. `--wave` overrides env.
 - [ ] §S6 read verb: `status` (alias `plans`, no `--agent`) GETs `…/plans` and returns a `toon.py`-decodable envelope with the queue table (`cr`, `wave`, `status`, active cycle, `mergeCommit`) plus a `lastRunCr` field (the plan with the latest `closedAt`), for all five clients; a project with no plans → an empty-queue envelope (`ok:true`), not an error.
+- [ ] §S7 re-pointed verbs: `checkpoint`, `stop`, `abort` (`--user-approved`) exist on all five clients, each POSTing the CR-024 server route and returning a `toon.py`-decodable envelope; `abort` without `--user-approved` surfaces the server's discouraging 409 (envelope `ok:false` + help), with it executes.
 - [ ] Golden fixture per verb per client; the `~/.claude/scripts` mirror is re-synced from `clients/` (CR-008 source-of-truth rule).
 
 ## Estimated size
@@ -136,6 +149,6 @@ Changing the server INGEST contract (`/api/v2/runs/*`, gate/milestone POST
 bodies) — untouched; this CR is CLIENT-ONLY (the `wave` backfill is CR-CRU-031).
 The TOON wire format itself (that's
 `@toon-format`, ported in CR-013 C4); no-mistakes gate mechanics (CR-013 §S5);
-adding NEW verbs beyond `cycle-add` and the §S6 `status`/`plans` read verb; a full History-lens
+adding NEW verbs beyond `cycle-add`, the §S6 `status`/`plans` read verb, and the §S7 re-pointed `checkpoint`/`stop`/`abort` verbs; a full History-lens
 redesign (only the defensive "unclassified" label is in scope, and only if
 cheap).
