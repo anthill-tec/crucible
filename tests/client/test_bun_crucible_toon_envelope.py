@@ -642,17 +642,35 @@ class NoCycleIdWarningTest(_BaseEnvelopeTest):
         self.assertEqual(axi.get("warnings"), [])
         self.assertNotIn("no-cycle-id", err)
 
-    def test_no_cycle_id_env_unset_without_any_active_cycle_no_warning(self):
+    def test_no_cycle_id_env_unset_without_any_active_cycle_hard_errors(self):
+        """CR-CRU-030 §S9 SUPERSEDES the old soft no-cycle-id warn-and-proceed
+        behavior for exactly this scenario (no ACTIVE cycle at all, env
+        unset): it is now a HARD ERROR, never a silent orphan. Full coverage
+        of the §S9 auto-attach/hard-error contract (test/regression/
+        auto-ingest, the explicit-override case, and the exact stdout
+        message) lives in tests/client/test_bun_crucible_auto_attach.py --
+        this method only pins that the OLD assertion here (code==0,
+        warnings==[]) no longer holds."""
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
              mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
             code, out, err = self._run_test_verb()
 
-        self.assertEqual(code, 0)
+        self.assertNotEqual(code, 0,
+                             "no ACTIVE cycle exists -- §S9 requires a HARD "
+                             "ERROR, not a silent success")
         axi = self._decode_axi(out)
-        self.assertEqual(axi.get("warnings"), [],
-                          "no ACTIVE cycle exists, so no-cycle-id must not fire")
-        self.assertNotIn("no-cycle-id", err)
+        self.assertIs(axi.get("ok"), False)
+        warnings_list = axi.get("warnings", [])
+        warning_details = " ".join(w.get("detail", "") for w in warnings_list).lower()
+        self.assertIn("no active cycle", warning_details)
+        for call in post_mock.call_args_list:
+            args, kwargs = call
+            path = args[0] if args else kwargs.get("path")
+            self.assertNotEqual(
+                path, "/api/v2/runs/parsed",
+                "the run must never be POSTed as a silent orphan when there "
+                "is no active cycle to attach it to")
 
     def test_regression_also_warns_no_cycle_id_when_env_unset_and_cycle_active(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
