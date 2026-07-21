@@ -3341,12 +3341,30 @@
           };
         }
         focusedLeaf.val = target;
-        const rows = document.querySelectorAll('[data-testid="leaf-row"]');
-        for (const row of rows) {
-          if (row.getAttribute("data-leaf-key") === target) {
-            if (typeof row.scrollIntoView === "function") row.scrollIntoView();
+        // CR-CRU-034 §S1 — DEFER the row lookup + scroll until AFTER VanJS
+        // re-renders. Setting focusedLeaf/openGroups above schedules a
+        // microtask re-render: the previously-focused box (mounted ABOVE the
+        // target) closes and the target's box opens, shifting the layout. A
+        // SYNCHRONOUS query/scroll here would measure & scroll the STALE
+        // pre-render layout, leaving the target row scrolled above the pane
+        // top. requestAnimationFrame fires after VanJS's render flush, so we
+        // re-query the freshly-mounted `[data-leaf-key]` row and scroll THAT
+        // (block:"start" — its failure box opens directly below the row) into
+        // the SAME bounded pane-scroll viewport.
+        const scrollFocusedRowIntoView = () => {
+          const rows = document.querySelectorAll('[data-testid="leaf-row"]');
+          for (const row of rows) {
+            if (row.getAttribute("data-leaf-key") !== target) continue;
+            if (typeof row.scrollIntoView === "function") {
+              row.scrollIntoView({ block: "start" });
+            }
             break;
           }
+        };
+        if (typeof requestAnimationFrame === "function") {
+          requestAnimationFrame(scrollFocusedRowIntoView);
+        } else {
+          queueMicrotask(scrollFocusedRowIntoView);
         }
       }
 
