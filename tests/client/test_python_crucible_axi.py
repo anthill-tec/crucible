@@ -542,12 +542,23 @@ class PythonCrucibleAutoAttachTest(_BasePythonAxiTest):
 
 
 class PythonCrucibleToolchainTest(_BasePythonAxiTest):
+    # Deliberately NOT named "tests" -- the repo already has a top-level
+    # `tests/` package (with no `test_fixture` module inside it). If a
+    # subprocess's import path ever leaks the repo root ahead of the tmpdir
+    # (e.g. an inherited PYTHONPATH), a fixture package literally named
+    # `tests` silently resolves to the REPO's `tests/` instead of this
+    # tmpdir's copy and the dotted import fails with a collection error that
+    # looks like a hang/empty-output rather than a fixture bug. A collision-free
+    # name makes that class of failure structurally impossible regardless of
+    # what else is on the subprocess's sys.path.
+    FIXTURE_PKG = "python_crucible_axi_toolchain_fixture_pkg"
+
     def _write_fixture_test_module(self):
-        tests_dir = os.path.join(self.tmpdir, "tests")
-        os.makedirs(tests_dir, exist_ok=True)
-        with open(os.path.join(tests_dir, "__init__.py"), "w") as f:
+        pkg_dir = os.path.join(self.tmpdir, self.FIXTURE_PKG)
+        os.makedirs(pkg_dir, exist_ok=True)
+        with open(os.path.join(pkg_dir, "__init__.py"), "w") as f:
             f.write("")
-        with open(os.path.join(tests_dir, "test_fixture.py"), "w") as f:
+        with open(os.path.join(pkg_dir, "test_fixture.py"), "w") as f:
             f.write(FIXTURE_TEST_MODULE)
 
     def test_test_verb_runs_real_unittest_and_ingests_with_active_cycle_context(self):
@@ -560,7 +571,7 @@ class PythonCrucibleToolchainTest(_BasePythonAxiTest):
                                 create=True):
             code, out, _err = _run_main(self.module, [
                 "test", "--project-dir", self.tmpdir, "--python", sys.executable,
-                "--tests", "tests.test_fixture", "--reports", "reports",
+                "--tests", f"{self.FIXTURE_PKG}.test_fixture", "--reports", "reports",
                 "--agent", "CR-X-toolchain",
             ])
         self.assertEqual(code, 0, f"stdout={out!r}")
