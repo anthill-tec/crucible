@@ -48,12 +48,14 @@
 //     - the initial drill-in fetch is `?depth=suites` and contains no leaf
 //       entries, holding at 10k scale (already true from C3's suites-first
 //       paging).
-//     - a virtualized suite's leaf list renders inside a
-//       `[data-testid="tree-scroll"]` scroll container; each mounted
-//       `[data-testid="leaf-row"]` carries a `data-leaf-key` identity
-//       attribute (`"<suiteName>::<leafName>"`); scrolling that container
-//       changes WHICH leaf-row identities are mounted while the mounted
-//       count stays under 200.
+//     - CR-CRU-034 §S1 RE-SOURCE: a virtualized suite's leaf list's scroll
+//       source is the bounded run-detail scroller `[data-testid=
+//       "pane-scroll"]` (NOT the retired per-suite `[data-testid=
+//       "tree-scroll"]` 60vh inner box); each mounted `[data-testid=
+//       "leaf-row"]` carries a `data-leaf-key` identity attribute
+//       (`"<suiteName>::<leafName>"`); scrolling `pane-scroll` changes WHICH
+//       leaf-row identities are mounted while the mounted count stays under
+//       200.
 //   §S4 item 6 (density toggle — independent of Detail/Density):
 //     - `[data-testid="density-toggle"]` exposes its current mode via a
 //       `data-density` attribute, cycling "comfortable" -> "compact" ->
@@ -720,7 +722,10 @@ describe("§S4.4 — virtualized tree (always-on, both modes)", () => {
       expect(fetchLog.some((u) => u.includes("suite=SuiteBig"))).toBe(true);
       expect(mountedTreeRowCount(overlay)).toBeLessThan(200);
 
-      const scrollContainer = overlay.querySelector('[data-testid="tree-scroll"]') as HTMLElement | null;
+      // CR-CRU-034 §S1 RE-SOURCE: virtualization's scroll source is now the
+      // bounded run-detail scroller `pane-scroll` (the retired per-suite
+      // `tree-scroll` 60vh inner box no longer owns this scroll listener).
+      const scrollContainer = overlay.querySelector('[data-testid="pane-scroll"]') as HTMLElement | null;
       expect(scrollContainer).not.toBeNull();
       Object.defineProperty(scrollContainer, "clientHeight", { value: 400, configurable: true });
       Object.defineProperty(scrollContainer, "scrollHeight", { value: 300 * 28, configurable: true });

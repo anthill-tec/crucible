@@ -1,6 +1,6 @@
 # CR-CRU-034 — Patch: run-detail drill-down inherits CR-029 dual-axis operability
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-07-21)
 **Type:** patch
 **Priority:** P1
 **Depends on:** CR-CRU-029 (the regressed bounded dual-axis pane model), CR-CRU-007 (§S4 item 4 — the virtualized inner `tree-scroll` + its 60vh cap), CR-CRU-016 (§S2 footer-jump focus-model + the pane scroll-restore contract), CR-CRU-023 (§S1 pane horizontal-scroll floor)

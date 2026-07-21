@@ -66,11 +66,20 @@ export default defineConfig({
   // (`chromium-cycle-run-navigation`) — it and `chromium-drill-in` have no
   // ordering requirement relative to EACH OTHER (each seeds its own
   // namespaced fixtures), only relative to `chromium`.
+  //
+  // CR-CRU-034 C1 RED — `drilldown-dual-axis-scroll.feature` sorts
+  // alphabetically right after drill-in.feature ("drill-in" < "drilldown",
+  // the hyphen sorts before any letter) — still BEFORE shell-storyboard's
+  // F1 precondition. Same fix again, its own dependent project
+  // (`chromium-drilldown-dual-axis-scroll`); no ordering requirement
+  // relative to `chromium-drill-in` / `chromium-cycle-run-navigation`
+  // (own namespaced "DDA …" fixtures), only relative to `chromium`.
   projects: [
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
-      testIgnore: /(drill-in|cycle-run-navigation)\.feature\.spec\.js$/,
+      testIgnore:
+        /(drill-in|cycle-run-navigation|drilldown-dual-axis-scroll)\.feature\.spec\.js$/,
     },
     {
       name: "chromium-drill-in",
@@ -82,6 +91,12 @@ export default defineConfig({
       name: "chromium-cycle-run-navigation",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /cycle-run-navigation\.feature\.spec\.js$/,
+      dependencies: ["chromium"],
+    },
+    {
+      name: "chromium-drilldown-dual-axis-scroll",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: /drilldown-dual-axis-scroll\.feature\.spec\.js$/,
       dependencies: ["chromium"],
     },
   ],
