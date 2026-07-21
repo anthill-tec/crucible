@@ -109,6 +109,12 @@
     // steady-state refresh; navigation no longer depends on it.
     function scopeChanged() {
       vanX.replace(state.plans, () => []);
+      // CR-CRU-028 §S2 — bucket keys (YYYY-MM-DD / week-N / month-YYYY-MM) are
+      // deterministic and collide across projects, so a leftover open drill
+      // path would render a row pre-unfolded on the newly-navigated project.
+      // Reset the coverage drill closed on every scope change (both click-nav
+      // and popstate route here), symmetric with the plan-data clear above.
+      state.coverageDrillPath = [];
       // CR-CRU-026 §S3.2 — refetchPlans is surface-aware (home → the global
       // route, workspace → the scoped one), so EVERY scope change refetches
       // the landing surface's plan slice. CR-CRU-032 §S4 made state.events
