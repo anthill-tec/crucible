@@ -327,3 +327,36 @@ export interface CoarsenedCoverageBucket {
 export declare function coarsenCoverageTrend(
   points: CoverageTrendPoint[],
 ): CoarsenedCoverageBucket[];
+
+// CR-CRU-028 §S2 — drill-down accordion + per-run heat strip (pure).
+export interface UnfoldedCoverageBar {
+  level: "day" | "week";
+  day: string;
+  percent: number;
+}
+
+export declare function unfoldCoverageBucket(
+  points: CoverageTrendPoint[],
+  bucketKey: string,
+  level: "day" | "week" | "month",
+): UnfoldedCoverageBar[];
+
+export interface CoverageHeatSliceLike {
+  id: string;
+  projectKey: string;
+  tier: string;
+  timestamp: number;
+  coverageLines?: number;
+}
+
+export interface CoverageHeatSlice {
+  eventId: string;
+  percent: number;
+  level: CoverageLevelClass;
+}
+
+export declare function coverageHeatSlices(
+  events: CoverageHeatSliceLike[],
+  projectKey: string,
+  day: string,
+): CoverageHeatSlice[];

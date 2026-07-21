@@ -342,6 +342,31 @@ body {
 /* §S1 — latest bucket composes emphasis WITH its level color (outline, not a
    background override). */
 .app-trend-bar-latest { outline: 1px solid var(--ink-faint); }
+/* CR-CRU-028 §S2 — the drill-down accordion row (one branch open per card),
+   rendered beneath the top bars. */
+.app-trend-bar { cursor: pointer; }
+.app-trend-bar-retention-dim {
+  cursor: default;
+  opacity: 0.35;
+}
+.app-drill-row { margin: 0 0 4px; }
+.app-drill-bars { margin: 2px 0 4px; }
+/* §S2 — the per-run heat strip (F8 mock lines 538-541): a thin flex row of
+   level-colored, equal-flex slices. */
+.app-cov-heat-strip {
+  display: flex;
+  gap: 1px;
+  height: 8px;
+  margin: 2px 0 4px;
+}
+.app-cov-heat-slice {
+  flex: 1;
+  border-radius: 1px;
+  cursor: pointer;
+}
+.app-heat-slice-orange { background: var(--ember); }
+.app-heat-slice-yellow { background: #eab308; }
+.app-heat-slice-green { background: var(--pass); }
 /* §S5.2 (b) — the F8 mock `.meter`: 6px tall, fully rounded, BORDERLESS
    track, ember-gradient fill sized to the lines percent. */
 .app-meter {
