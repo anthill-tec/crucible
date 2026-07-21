@@ -3,13 +3,15 @@
 **Status:** PENDING
 **Type:** patch
 **Priority:** P1
-**Depends on:** CR-CRU-029 (the regressed bounded dual-axis pane model), CR-CRU-028 (§S4.4 virtualized inner tree-scroll), CR-CRU-023 (§S1 pane horizontal-scroll floor)
+**Depends on:** CR-CRU-029 (the regressed bounded dual-axis pane model), CR-CRU-007 (§S4 item 4 — the virtualized inner `tree-scroll` + its 60vh cap), CR-CRU-016 (§S2 footer-jump focus-model + the pane scroll-restore contract), CR-CRU-023 (§S1 pane horizontal-scroll floor)
 **Labels:** patch, ui, responsive, a11y, regression
 **Phase:** Wave 4 (0.1.0)
 **Design reference:** CR-CRU-029 §S1 (the bounded, non-scrolling `.app-center` that
-delegates BOTH axes to its `.app-pane-content` scroller) + user bug report 2026-07-21
-(`crucible_drilldown.jpg`): a run detail with ≥2 failures traps the vertical scroll in a
-60vh inner box, strands the failures-footer, and leaves dead space below.
+delegates BOTH axes to its `.app-pane-content` scroller — its chosen mechanism (a): the pane
+owns both axes) + CR-CRU-007 §S4 item 4 (the virtualized per-suite `tree-scroll` this patch
+re-sources) + user bug report 2026-07-21 (`crucible_drilldown.jpg`): a run detail with ≥2
+failures traps the vertical scroll in a 60vh inner box, strands the failures-footer, and
+leaves dead space below.
 
 ## Context
 
@@ -21,7 +23,7 @@ fill the full bounded viewport height and is meant to own the vertical scroll.
 
 The **run-detail drill-down body** was not carried onto that model. It still renders each suite's
 leaves inside a pre-existing per-suite inner scroller `.app-tree-scroll { max-height: 60vh }`
-(CR-CRU-028 §S4.4 virtualization). The two scroll models now conflict:
+(CR-CRU-007 §S4 item 4 virtualization). The two scroll models now conflict:
 
 - **Cramped inner scroll.** Multiple tall failure boxes scroll inside the 60vh inner box while the
   outer `pane-scroll` never scrolls (its content is shorter than its stretched height). Measured on
@@ -47,12 +49,19 @@ horizontal scroll operable at all times in a narrow viewport* — for the run-de
 ### §S1 — One bounded dual-axis scroller for the run-detail body (retire the 60vh trap)
 
 The run detail's suite/failure body scrolls as **one bounded scroller that fills the pane** and owns
-BOTH axes, replacing the nested `.app-tree-scroll { max-height: 60vh }` inner cap as the suite-leaf
-scroll surface. Consequences: multiple tall failures use the **full pane height** (no cramped inner
-box); the failures-footer + raw-output render as the **last content** of that scroller — reachable by
-scrolling, never stranded above a fixed cap; **no dead space** below the content. CR-CRU-028 §S4.4
-virtualization continues, keyed off the surviving scroller's `scrollTop` (re-sourced from the retired
-inner box).
+BOTH axes — **`[data-testid="pane-scroll"]` itself is that scroller** (CR-CRU-029 §S1 mechanism (a),
+now realised for the drill-down), replacing the nested `.app-tree-scroll { max-height: 60vh }` inner
+cap as the suite-leaf scroll surface. Consequences: multiple tall failures — **including several
+auto-expanded failing suites** — use the **full pane height** (no cramped inner box); the
+failures-footer + raw-output render as the **last content** of that scroller — reachable by scrolling,
+never stranded above a fixed cap; **no dead space** below the content.
+
+CR-CRU-007 §S4 item 4 virtualization continues, **re-sourced** off `pane-scroll`: its `scroll`
+listener + `scrollTop` read move from the retired per-suite inner box to `pane-scroll`, and each
+expanded suite's mounted-row window is computed relative to `pane-scroll`'s scroll position (the
+`density.test.ts` §S4 item 4 assertions retarget onto the surviving scroller — RED owns the retarget,
+preserving the mounted-rows-< 200-at-10k guarantee). This is the CR's central implementation decision,
+settled here per CR-CRU-029 §S1's "mechanism is a gap-analysis decision" pattern.
 
 **Surfaces (verified 2026-07-21):** `public/app.js` — `SuiteLeafList` (`[data-testid="tree-scroll"]`,
 `.app-tree-scroll.app-leaf-list`, the `onscroll`→`suiteWindow` virtualization), `FailuresFooter`
@@ -85,8 +94,11 @@ re-introduce the CR-029 bug *inside* the drill-down).
 - [ ] **Vertical scroll operable.** At 1024×640 with ≥2 tall failures, the run-detail body scrolls
   vertically to reveal the LAST failure and the footer (footer reachable/visible after scroll); the
   vertical scrollbar affordance is within the viewport.
+- [ ] **Multi-suite.** A run with ≥2 **failing suites** (each auto-expanded per CR-CRU-007 §S4 item 1)
+  scrolls as the SAME single bounded scroller — no per-suite 60vh box stacks; the last suite's last
+  failure and the footer are reachable by one vertical scroll.
 - [ ] **Footer jump.** "▸ N more failures" advances to + focus-opens the next failing leaf's box and
-  scrolls that row into the SAME bounded scroller's viewport (CR-CRU-028 §S2 focus-model contract,
+  scrolls that row into the SAME bounded scroller's viewport (CR-CRU-016 §S2 footer-jump focus-model,
   now on the unified scroller).
 - [ ] **Raw toggle.** "toggle raw output" reveals/hides the raw `pre` within the same scroller with no
   layout jump into dead space; a subsequent footer jump still advances correctly.
@@ -98,8 +110,9 @@ re-introduce the CR-029 bug *inside* the drill-down).
 - [ ] **Both axes at once.** Driving a horizontal scroll after a vertical scroll (and vice-versa) both
   operate; neither bar leaves the viewport.
 - [ ] **No regressions.** CR-CRU-023 §S1 pane-floor pins (660px child min-width, testids intact),
-  CR-CRU-028 §S4.4 virtualization pins (window keyed off the surviving scroller's `scrollTop`),
-  CR-CRU-029 §S1/§S2 feed-pane pins + CR-CRU-016 scroll-restore all stay green.
+  CR-CRU-007 §S4 item 4 virtualization pins (`density.test.ts` §S4 item 4 — mounted rows < 200 at
+  10k leaves, window keyed off the surviving scroller's `scrollTop`), CR-CRU-029 §S1/§S2 feed-pane
+  pins + CR-CRU-016 scroll-restore all stay green.
 
 ## Estimated size
 
@@ -109,14 +122,16 @@ any assertion scoped to the retired 60vh inner scroll.
 
 ## Risk / open questions
 
-- The inner `.app-tree-scroll` currently owns overflow for CR-CRU-028 §S4.4 virtualization (its
-  `onscroll` drives `suiteWindow`). Moving scroll ownership to the bounded pane must keep the
-  virtualization window's `scrollTop` source consistent — point the window math at the surviving
-  scroller. Mitigation: keep exactly ONE scroller for the run-detail body and source virtualization
-  from it.
-- Existing unit/e2e assertions scoped to `[data-testid="tree-scroll"]`'s 60vh behaviour may need
-  retargeting onto the unified scroller — RED owns the retarget (stash-production → RED-retarget →
-  restore → GREEN when a contract line moves).
+- The inner `.app-tree-scroll` currently owns overflow for CR-CRU-007 §S4 item 4 virtualization (its
+  `onscroll` drives `suiteWindow`; `public/app.js` `SuiteLeafList`). Moving scroll ownership to the
+  bounded pane must keep the virtualization window's `scrollTop` source consistent — point the window
+  math at `pane-scroll` and offset each expanded suite. Mitigation: keep exactly ONE scroller for the
+  run-detail body and source virtualization from it.
+- The retarget is contained: `[data-testid="tree-scroll"]` has exactly ONE production render
+  (`public/app.js:3192`) and THREE test assertions (`tests/density.test.ts:11,52,723`, the §S4 item 4
+  virtualization scenario); **no e2e step references it**. RED owns the density.test retarget onto the
+  unified scroller (stash-production → RED-retarget → restore → GREEN when a contract line moves),
+  preserving every §S4 item 4 guarantee.
 
 ## Non-goals
 
