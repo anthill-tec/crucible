@@ -354,6 +354,20 @@ def _remove_agent_silent(project_dir, agent_id):
 
 def cmd_register(args):
     project_dir = _resolve_project_dir(args.project_dir)
+    # §S9 — resolve the active cycle the same way the ingest verbs do BEFORE the
+    # register POST: no active cycle (and no WORKFLOW_CYCLE_ID override) is a HARD
+    # ERROR — the agent must never come online against an untracked plan. The POST
+    # is withheld; the ok:false envelope (with help[]) goes to stdout, the human
+    # detail to stderr, and the exit code is non-zero.
+    hard_error, warnings = _register_cycle_guard(project_dir)
+    if hard_error:
+        for w in warnings:
+            print(f"error: {w['code']} — {w['detail']}", file=sys.stderr)
+        _emit_axi("register", False,
+                  {"agent": args.agent, "help": _HELP_STEPS["register"]},
+                  _axi_context(project_dir, agent_id=args.agent, cycle_id=None),
+                  warnings)
+        return 1
     resp = _register_agent(
         project_dir, args.agent,
         args.message or f"Starting {args.phase} phase",
@@ -362,7 +376,7 @@ def cmd_register(args):
     ok = bool(resp.get("ok", False))
     legacy = (f"register: ok={resp.get('ok', False)} agent={args.agent} "
               f"phase={args.phase} source={args.source}")
-    _emit_axi("register", ok, {"agent": args.agent},
+    _emit_axi("register", ok, {"agent": args.agent, "help": _HELP_STEPS["register"]},
               _axi_context(project_dir, agent_id=args.agent), [], legacy)
     return 0 if ok else 1
 
@@ -372,7 +386,8 @@ def cmd_unregister(args):
     resp = _unregister_agent(project_dir, args.agent)
     ok = bool(resp.get("ok", False))
     legacy = f"unregister: ok={resp.get('ok', False)} agent={args.agent}"
-    _emit_axi("unregister", ok, {"agent": args.agent},
+    _emit_axi("unregister", ok,
+              {"agent": args.agent, "help": _HELP_STEPS["unregister"]},
               _axi_context(project_dir, agent_id=args.agent), [], legacy)
     return 0 if ok else 1
 
@@ -830,15 +845,23 @@ def cmd_check(args):
     cmd = [bun, "x", "tsc", "--noEmit"]
     if os.path.exists(os.path.join(package_dir, "tsconfig.json")):
         cmd += ["-p", "tsconfig.json"]
-    print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})")
+    # §S1 — stdout is the TOON AXI channel; the human-readable run echo is
+    # interactive-only (stderr) so the envelope is the sole stdout content.
+    print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
     result = subprocess.run(cmd, cwd=package_dir, capture_output=True, text=True)
-    print(f"[crucible] tsc exit={result.returncode}")
+    print(f"[crucible] tsc exit={result.returncode}", file=sys.stderr)
     out = (result.stdout or "") + (result.stderr or "")
-    if result.returncode != 0:
+    ok = result.returncode == 0
+    if not ok:
         sys.stderr.write(out)
         if args.agent:
             _ingest_compile(project_dir, args.agent, out)
-    return result.returncode
+    # §S2/§S13/§S15 — the typecheck gate returns the §S1 envelope (verb=check,
+    # ok, exit code, help[]) on BOTH clean and error compile, not ad-hoc prints.
+    legacy = f"check: ok={ok} exit={result.returncode}"
+    _emit_axi("check", ok, {"exit": result.returncode, "help": _HELP_STEPS["check"]},
+              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+    return 0 if ok else 1
 
 
 def cmd_pre_merge_gate(args):
@@ -1021,14 +1044,16 @@ def cmd_cr_close(args):
     if len(open_plans) == 0:
         legacy = ("[crucible] ERROR: no OPEN plan to close"
                   + (f" for cr={args.cr}" if args.cr else ""))
-        _emit_axi("cr-close", False, {"commit": args.commit},
+        _emit_axi("cr-close", False,
+                  {"commit": args.commit, "help": _HELP_STEPS["cr-close"]},
                   _axi_context(project_dir, cr=args.cr), [], legacy)
         return 1
     if len(open_plans) > 1:
         names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in open_plans)
         legacy = (f"[crucible] ERROR: {len(open_plans)} open plans — ambiguous cr-close. "
                   f"Pass --cr to pick one of: {names}")
-        _emit_axi("cr-close", False, {"commit": args.commit},
+        _emit_axi("cr-close", False,
+                  {"commit": args.commit, "help": _HELP_STEPS["cr-close"]},
                   _axi_context(project_dir), [], legacy)
         return 1
     plan = open_plans[0]
@@ -1040,7 +1065,8 @@ def cmd_cr_close(args):
               f"commit={args.commit}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
     _emit_axi("cr-close", bool(ok),
-              {"plan": plan["planId"], "cr": cr_label, "commit": args.commit},
+              {"plan": plan["planId"], "cr": cr_label, "commit": args.commit,
+               "help": _HELP_STEPS["cr-close"]},
               _axi_context(project_dir, cr=cr_label), [], legacy)
     if not ok:
         return 1
@@ -1098,7 +1124,9 @@ def cmd_cycle_add(args):
     client-side pre-filter that would make the "closed plan" AC unreachable.
     The assigned numeric id stays machine-readable in the envelope."""
     project_dir = _resolve_project_dir(args.project_dir)
-    result_fields = {"label": args.label}
+    # §S15 — the next step after appending a cycle is to activate it; help[]
+    # rides both the resolve-failure envelope and the success envelope.
+    result_fields = {"label": args.label, "help": _HELP_STEPS["cycle-add"]}
     plan, rc = _resolve_plan_or_emit("cycle-add", project_dir, args.cr,
                                      result_fields, open_only=False)
     if plan is None:
@@ -1111,7 +1139,8 @@ def cmd_cycle_add(args):
               f"label={args.label} id={resp.get('id')}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
     _emit_axi("cycle-add", bool(ok),
-              {"plan": plan["planId"], "id": resp.get("id"), "label": args.label},
+              {"plan": plan["planId"], "id": resp.get("id"), "label": args.label,
+               "help": _HELP_STEPS["cycle-add"]},
               _axi_context(project_dir, cr=cr_label), [], legacy)
     return 0 if ok else 1
 
@@ -1122,7 +1151,8 @@ def cmd_checkpoint(args):
     emergency flow checkpoints the CURRENTLY open work, never a numeric id the
     caller doesn't have."""
     project_dir = _resolve_project_dir(args.project_dir)
-    plan, rc = _resolve_plan_or_emit("checkpoint", project_dir, args.cr, {}, open_only=True)
+    plan, rc = _resolve_plan_or_emit("checkpoint", project_dir, args.cr,
+                                     {"help": _HELP_STEPS["checkpoint"]}, open_only=True)
     if plan is None:
         return rc
     resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/checkpoint", {})
@@ -1130,7 +1160,8 @@ def cmd_checkpoint(args):
     legacy = (f"checkpoint: ok={ok} plan={plan['planId']}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
     _emit_axi("checkpoint", bool(ok),
-              {"plan": plan["planId"], "changed": resp.get("changed")},
+              {"plan": plan["planId"], "changed": resp.get("changed"),
+               "help": _HELP_STEPS["checkpoint"]},
               _axi_context(project_dir, cr=plan.get("cr")), [], legacy)
     return 0 if ok else 1
 
@@ -1143,7 +1174,8 @@ def cmd_stop(args):
     ok = resp.get("ok", False)
     legacy = (f"stop: ok={ok} checkpointed={resp.get('checkpointed')}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    _emit_axi("stop", bool(ok), {"checkpointed": resp.get("checkpointed")},
+    _emit_axi("stop", bool(ok),
+              {"checkpointed": resp.get("checkpointed"), "help": _HELP_STEPS["stop"]},
               _axi_context(project_dir), [], legacy)
     return 0 if ok else 1
 
@@ -1154,7 +1186,8 @@ def cmd_abort(args):
     so the server's discouraging 409 refusal stays reachable by default (and
     surfaces here as ok:false + non-zero, never a silent no-op)."""
     project_dir = _resolve_project_dir(args.project_dir)
-    plan, rc = _resolve_plan_or_emit("abort", project_dir, args.cr, {}, open_only=True)
+    plan, rc = _resolve_plan_or_emit("abort", project_dir, args.cr,
+                                     {"help": _HELP_STEPS["abort"]}, open_only=True)
     if plan is None:
         return rc
     resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/abort",
@@ -1163,7 +1196,8 @@ def cmd_abort(args):
     legacy = (f"abort: ok={ok} plan={plan['planId']} "
               f"userApproved={bool(args.user_approved)}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    _emit_axi("abort", bool(ok), {"plan": plan["planId"]},
+    _emit_axi("abort", bool(ok),
+              {"plan": plan["planId"], "help": _HELP_STEPS["abort"]},
               _axi_context(project_dir, cr=plan.get("cr")), [], legacy)
     return 0 if ok else 1
 
@@ -1180,7 +1214,8 @@ def cmd_status(args):
     resp = _get(_plans_path(project_dir))
     if not resp.get("ok"):
         legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
-        _emit_axi("status", False, {"plans": [], "lastRunCr": None},
+        _emit_axi("status", False,
+                  {"plans": [], "lastRunCr": None, "help": _HELP_STEPS["status"]},
                   _axi_context(project_dir), [], legacy)
         return 1
     plans = resp.get("plans", [])
@@ -1197,11 +1232,15 @@ def cmd_status(args):
     count = len(plans)
     if not rows:
         legacy = "status: ok=True — no plans filed for this project"
-        _emit_axi("status", True, {"plans": [], "lastRunCr": None, "count": 0},
+        _emit_axi("status", True,
+                  {"plans": [], "lastRunCr": None, "count": 0,
+                   "help": _HELP_STEPS["status"]},
                   _axi_context(project_dir), [], legacy)
         return 0
     legacy = f"status: ok=True plans={len(rows)} lastRunCr={last}"
-    _emit_axi("status", True, {"plans": rows, "lastRunCr": last, "count": count},
+    _emit_axi("status", True,
+              {"plans": rows, "lastRunCr": last, "count": count,
+               "help": _HELP_STEPS["status"]},
               _axi_context(project_dir), [], legacy)
     return 0
 
@@ -1297,6 +1336,28 @@ def _emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
     return _axi().emit_axi(verb, ok, result_fields, context, warnings, legacy_line)
 
 
+# §S15 — per-verb next-step command TEMPLATES: every envelope names the sane
+# next move (fixed disambiguating flags carried forward, runtime values as
+# `<placeholders>`), so the orchestrator never loses the process thread. The
+# plan-file/cycle-activate/cycle-done templates are wired inline at their call
+# sites (they carry runtime-derived ids); the rest are the fixed next-step
+# suggestions below.
+_HELP_STEPS = {
+    "register": ["test --agent <agentId>"],
+    "unregister": ["status"],
+    "test": ["cycle-done <id>", "status"],
+    "regression": ["cycle-done <id>", "status"],
+    "auto-ingest": ["cycle-done <id>", "status"],
+    "check": ["test --agent <agentId>"],
+    "cycle-add": ["cycle-activate <id>"],
+    "checkpoint": ["status"],
+    "stop": ["status"],
+    "abort": ["status"],
+    "status": ["cycle-activate <id>"],
+    "cr-close": ["status"],
+}
+
+
 def _active_cycle_id(project_dir):
     """First ACTIVE cycle id among the project's OPEN plans, or None. Tolerant
     of any lookup failure — the §S3 guard must never break an ingest. Delegates
@@ -1339,6 +1400,31 @@ def _resolve_ingest_cycle(project_dir):
     return None, [warning], True
 
 
+def _register_cycle_guard(project_dir):
+    """§S9 — register mirrors the ingest hard-error: with `WORKFLOW_CYCLE_ID`
+    unset AND a SUCCESSFULLY-read open plan carrying no `status:"active"` cycle,
+    registration hard-errors ("no active cycle — activate one first") rather than
+    bring an agent online against untracked work. An explicit `WORKFLOW_CYCLE_ID`
+    overrides (authoritative, like `_resolve_ingest_cycle`). A plans fetch that
+    itself FAILS (server error / unreachable → `_get` returns `ok:false`) is NOT
+    positive proof of "no active cycle", so register PROCEEDS instead of blocking
+    on an infra hiccup. Returns `(hard_error, warnings)`."""
+    raw = os.environ.get("WORKFLOW_CYCLE_ID")
+    if raw is not None:
+        try:
+            int(raw)
+            return False, []
+        except ValueError:
+            pass  # malformed override → fall through to server auto-resolution
+    resp = _get(_plans_path(project_dir))
+    if not isinstance(resp, dict) or not resp.get("ok"):
+        return False, []
+    if _axi().resolve_active_cycle_id(resp.get("plans", [])) is not None:
+        return False, []
+    return True, [{"code": "no-active-cycle",
+                   "detail": "no active cycle — activate one first"}]
+
+
 def _emit_ingest_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
     """Emit the §S1 envelope for a SUCCESSFUL ingest verb
     (test/regression/auto-ingest): run{passed,failed,total} + cycle-aware
@@ -1348,7 +1434,11 @@ def _emit_ingest_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings
     context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
     for w in warnings:
         print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
-    _emit_axi(verb, bool(resp.get("ok")), {"run": run}, context, warnings)
+    # §S15 — the ingest envelope names the next step (mark the cycle done once
+    # the run is green, else re-list the queue).
+    _emit_axi(verb, bool(resp.get("ok")),
+              {"run": run, "help": _HELP_STEPS.get(verb, ["status"])},
+              context, warnings)
 
 
 def _emit_ingest_hard_error(verb, project_dir, agent, warnings):
