@@ -910,8 +910,12 @@ def cmd_plan_file(args):
     ids = " ".join(f"{c.get('label')}={c.get('id')}" for c in cycles)
     legacy = (f"plan-file: ok=True planId={resp.get('planId')} cr={resp.get('cr')} "
               f"cycles: {ids}")
+    # §S15 — the next step after filing a plan is to activate one of its
+    # freshly-assigned cycles; help[] carries the literal `cycle-activate <id>`
+    # placeholder template (runtime id filled from the `cycles` table above).
     _emit_axi("plan-file", True,
-              {"planId": resp.get("planId"), "cr": resp.get("cr"), "cycles": cycles},
+              {"planId": resp.get("planId"), "cr": resp.get("cr"), "cycles": cycles,
+               "help": ["cycle-activate <id>"]},
               _axi_context(project_dir), [], legacy)
     return 0
 
@@ -972,6 +976,13 @@ def _cycle_transition(args, status):
         None,
     )
     verb = "cycle-activate" if status == "active" else "cycle-done"
+    # §S13/§S15 — every cycle-transition envelope carries a `help[]` of concrete
+    # next-step command templates (fixed flags forward, runtime values as
+    # placeholders): after `cycle-activate` run the cycle then `cycle-done <id>`;
+    # after `cycle-done` close the CR with `cr-close --commit <sha>`. `status`
+    # is the fallback next-step (e.g. to re-list valid cycle ids after a miss).
+    help_steps = (["cycle-done <id>", "status"] if status == "active"
+                  else ["cr-close --commit <sha>", "status"])
     if target is None:
         known = "; ".join(
             f"plan {p.get('planId')} ({p.get('cr')}): "
@@ -980,7 +991,7 @@ def _cycle_transition(args, status):
         ) or "none"
         legacy = (f"[crucible] ERROR: cycle {cycle_id} is not in any OPEN plan. "
                   f"Open plans' cycle ids: {known}")
-        _emit_axi(verb, False, {"cycle": cycle_id},
+        _emit_axi(verb, False, {"cycle": cycle_id, "help": help_steps},
                   _axi_context(project_dir), [], legacy)
         return 1
     resp = _patch(f"{_plans_path(project_dir)}/{target['planId']}/cycles/{cycle_id}",
@@ -988,7 +999,8 @@ def _cycle_transition(args, status):
     ok = resp.get("ok", False)
     legacy = (f"{verb}: ok={ok} cycle={cycle_id} plan={target['planId']}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    _emit_axi(verb, bool(ok), {"cycle": cycle_id, "plan": target["planId"]},
+    _emit_axi(verb, bool(ok),
+              {"cycle": cycle_id, "plan": target["planId"], "help": help_steps},
               _axi_context(project_dir), [], legacy)
     return 0 if ok else 1
 
@@ -1172,15 +1184,24 @@ def cmd_status(args):
                   _axi_context(project_dir), [], legacy)
         return 1
     plans = resp.get("plans", [])
-    rows = _axi().build_status_rows(plans)
+    full_rows = _axi().build_status_rows(plans)
     last = _axi().last_run_cr(plans)
+    # §S10 — the DEFAULT projection is the minimal base column set
+    # (cr,wave,status,activeCycleId); `--fields a,b,c` ADDS the requested extras
+    # (activeCycleLabel,mergeCommit,…) to that base, never replaces it.
+    fields = getattr(args, "fields", None)
+    requested = [f.strip() for f in fields.split(",") if f.strip()] if fields else []
+    rows = _axi().select_status_fields(full_rows, requested)
+    # §S12 — the pre-computed `count` is the TOTAL plans available (unaffected by
+    # the --fields column projection), emitted even on an empty queue.
+    count = len(plans)
     if not rows:
         legacy = "status: ok=True — no plans filed for this project"
-        _emit_axi("status", True, {"plans": [], "lastRunCr": None},
+        _emit_axi("status", True, {"plans": [], "lastRunCr": None, "count": 0},
                   _axi_context(project_dir), [], legacy)
         return 0
     legacy = f"status: ok=True plans={len(rows)} lastRunCr={last}"
-    _emit_axi("status", True, {"plans": rows, "lastRunCr": last},
+    _emit_axi("status", True, {"plans": rows, "lastRunCr": last, "count": count},
               _axi_context(project_dir), [], legacy)
     return 0
 
@@ -1483,7 +1504,13 @@ def cmd_gate_report(args):
     ok = resp.get("ok", False)
     legacy = (f"gate-report: ok={ok} outcome={args.outcome}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    _emit_axi("gate-report", bool(ok), {"outcome": args.outcome}, context, warnings, legacy)
+    # §S11 — a failed POST can carry a large server error/detail string; surface
+    # it as a truncated `error` field (size-hint suffix), verbatim under --full.
+    result_fields = {"outcome": args.outcome}
+    err = resp.get("error")
+    if err is not None:
+        result_fields["error"] = _axi().truncate_field(err, full=getattr(args, "full", False))
+    _emit_axi("gate-report", bool(ok), result_fields, context, warnings, legacy)
     return 0 if ok else 1
 
 
@@ -1608,10 +1635,36 @@ def _add_log_arg(p):
                                  "in addition to streaming it.")
 
 
+# §S14 — content-first: the one-line tool purpose printed by a bare invocation
+# (the no-arg live dashboard), alongside the ~-abbreviated executable path.
+_DASHBOARD_PURPOSE_LINE = (
+    "bun-crucible.py -- Bun/TypeScript Crucible CLI "
+    "(agent lifecycle, test/ingest, plan/cycle verbs)."
+)
+
+
+def _abbrev_home(path):
+    """Render an absolute path with `~` for the home dir (§S14)."""
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home) else path
+
+
+def cmd_dashboard():
+    """§S14 — a bare invocation (no args) returns the LIVE board: the §S6
+    `status` dashboard envelope on stdout (the machine channel), plus a one-line
+    tool purpose and the ~-abbreviated executable path on stderr (interactive) —
+    NOT argparse's required-subcommand usage error."""
+    print(_DASHBOARD_PURPOSE_LINE, file=sys.stderr)
+    print(_abbrev_home(os.path.abspath(__file__)), file=sys.stderr)
+    return cmd_status(argparse.Namespace(project_dir=None, fields=None))
+
+
 def main():
     p = argparse.ArgumentParser(prog="bun-crucible", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = p.add_subparsers(dest="cmd", required=True)
+    # §S14 — subcommand is OPTIONAL: a bare invocation falls through to the
+    # no-arg live dashboard (below), never argparse's required-subcommand error.
+    sub = p.add_subparsers(dest="cmd", required=False)
 
     r = sub.add_parser("register", help="Register / heartbeat an agent.")
     r.add_argument("--agent", required=True,
@@ -1754,6 +1807,10 @@ def main():
         sv = sub.add_parser(_name,
                             help="Read the plan queue (GET …/plans) as a TOON-AXI table "
                                  "+ lastRunCr. Read-only; `plans` is an alias of `status`.")
+        sv.add_argument("--fields",
+                        help="Comma-separated EXTRA columns to add to the minimal "
+                             "cr,wave,status,activeCycleId set (§S10), e.g. "
+                             "activeCycleLabel,mergeCommit.")
         _add_project_dir_arg(sv)
         sv.set_defaults(func=cmd_status)
 
@@ -1774,6 +1831,8 @@ def main():
     grp.add_argument("--steps", help='Comma-separated "name:status" step results.')
     grp.add_argument("--intent", help="Gate intent (default: derived from --outcome).")
     grp.add_argument("--agent", help="Agent id (default: $WORKFLOW_ROLE).")
+    grp.add_argument("--full", action="store_true",
+                     help="Emit large text fields (e.g. a server error detail) untruncated (§S11).")
     _add_project_dir_arg(grp)
     grp.set_defaults(func=cmd_gate_report)
 
@@ -1788,6 +1847,9 @@ def main():
     ms.set_defaults(func=cmd_milestone)
 
     args = p.parse_args()
+    # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.
+    if getattr(args, "func", None) is None:
+        sys.exit(cmd_dashboard())
     sys.exit(args.func(args))
 
 

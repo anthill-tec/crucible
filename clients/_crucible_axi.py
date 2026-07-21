@@ -139,6 +139,43 @@ def build_status_rows(plans):
     return rows
 
 
+# §S10 — the minimal default column set for the §S6 status/plans table: 3–4
+# fields per item (`--fields` adds the rest of the full set, never replaces the
+# base). Kept next to `build_status_rows` (which produces the FULL row) so the
+# projection and the source rows stay in one place.
+STATUS_BASE_FIELDS = ("cr", "wave", "status", "activeCycleId")
+
+
+def select_status_fields(rows, extra_fields):
+    """§S10 (PURE) — project the full status rows (`build_status_rows`) onto the
+    minimal base column set PLUS any requested extra columns, preserving a
+    uniform (TOON-table-safe) key set across every row. Requested fields ADD to
+    the base set (never replace it); an unknown requested field surfaces as a
+    null column (the source row simply has no such key)."""
+    keys = list(STATUS_BASE_FIELDS)
+    for f in extra_fields or []:
+        if f not in keys:
+            keys.append(f)
+    return [{k: r.get(k) for k in keys} for r in rows]
+
+
+# §S11 — the visible-content limit before a large text field is truncated in
+# the envelope. The CR gives no number; the CR-CRU-030 C1 slice-3 RED contract
+# pins 200 chars of visible content before the size-hint suffix.
+TRUNCATE_LIMIT = 200
+
+
+def truncate_field(value, full=False, limit=TRUNCATE_LIMIT):
+    """§S11 (PURE) — truncate a large text field to `limit` visible chars with a
+    `(truncated, <N> chars total — use --full)` size hint naming the TOTAL
+    original length. `full=True` (the `--full` flag) returns the value verbatim;
+    a value at or under the limit (or a non-str/None) is returned unchanged —
+    content that was never cut never carries a fabricated hint."""
+    if full or not isinstance(value, str) or len(value) <= limit:
+        return value
+    return value[:limit] + f" (truncated, {len(value)} chars total — use --full)"
+
+
 def last_run_cr(plans):
     """§S6 — the `cr` of the plan with the LATEST `closedAt` (the last CR to
     merge), or None when no plan has closed yet — never a fabricated guess."""
