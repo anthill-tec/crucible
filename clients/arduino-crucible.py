@@ -12,9 +12,11 @@ CR-CRU-030 §S1/§S2: every AXI verb prints a clients/toon.py-encoded envelope
 channel); human-readable lines move to STDERR (interactive only). The envelope
 machinery is factored into the shared clients/_crucible_axi.py module so every
 client emits a byte-identical §S1 envelope. §S9: the ingest verb (`test`) and
-`register` auto-attach to the open plan's ACTIVE cycle when WORKFLOW_CYCLE_ID is
-unset; no active cycle is a HARD ERROR (ok:false, non-zero exit, no POST), never a
-silent orphan. Arduino has NO separate `auto-ingest` verb, so §S9 rides its `test`
+`register` auto-attach to the open plan's ACTIVE cycle resolved FROM THE SERVER
+(CR-CRU-036 removed every env override). An OPEN plan with no active cycle WARNS +
+WITHHOLDS (ok:false, non-zero exit, no POST — never a silent orphan); a
+plans-fetch failure or no open plan at all is tolerant (proceeds). Arduino has NO
+separate `auto-ingest` verb, so §S9 rides its `test`
 verb (the CR forbids adding new verbs beyond cycle-add/status/checkpoint/stop/abort).
 
 The subproject dir (holding `.env` + `tests/native/`) is resolved:
@@ -24,8 +26,9 @@ It must contain a `.env`. Examples:
   (cd sheetal-firmware && arduino-crucible.py check --agent <id>)
 
 Run context (CR-CRU-008 §S2): when any WORKFLOW_* env var is set
-(WORKFLOW_CYCLE_ID / WORKFLOW_CYCLE / WORKFLOW_WAVE / WORKFLOW_ROLE), ingests carry
-a `context` object {cycleId, cycle, wave, orchestrator, git:{branch,commit}}.
+(WORKFLOW_CYCLE / WORKFLOW_WAVE / WORKFLOW_ROLE — CR-CRU-036 removed the cycle-id
+env read), ingests carry a `context` object {cycle, wave, orchestrator,
+git:{branch,commit}} plus the SERVER-resolved cycleId.
 
 Env overrides: CRUCIBLE_URL (legacy alias CRUCIBLE_BASE), ARDUINO_CLI, ARDUINO_FQBN,
 AGENT_ID.
@@ -211,19 +214,14 @@ def _emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
 def _run_context():
     """CR-CRU-008 §S2 — env + git → run context for declared cycle linkage.
 
-    Reads WORKFLOW_CYCLE_ID (int-coerced; invalid → omitted), WORKFLOW_CYCLE,
-    WORKFLOW_WAVE and WORKFLOW_ROLE. When at least one is set, attaches
+    Reads WORKFLOW_CYCLE, WORKFLOW_WAVE and WORKFLOW_ROLE (CR-CRU-036 removed the
+    cycle-id env read — the cycle is resolved from the server's active cycle,
+    never from the environment). When at least one is set, attaches
     git {branch, commit} from a cheap `git rev-parse` (tolerant of a
     non-repo cwd → omitted). Returns the context dict, or None when no
     workflow env is set.
     """
     context = {}
-    cycle_id_raw = os.environ.get("WORKFLOW_CYCLE_ID")
-    if cycle_id_raw is not None:
-        try:
-            context["cycleId"] = int(cycle_id_raw)
-        except ValueError:
-            pass
     cycle = os.environ.get("WORKFLOW_CYCLE")
     if cycle:
         context["cycle"] = cycle
@@ -274,61 +272,44 @@ def _open_plans(project_dir):
     return [p for p in resp.get("plans", []) if p.get("status") == "open"]
 
 
-def _active_cycle_id(project_dir):
-    """First ACTIVE cycle id among the project's OPEN plans, or None. Tolerant of
-    any lookup failure — the §S9 guard must never break an ingest."""
+def _plans_response(project_dir):
+    """Raw `GET .../plans` response, tolerant of any transport failure (a raised
+    exception / non-dict is normalised to a not-ok dict so `resolve_attach_cycle`
+    treats it as the tolerant fetch-failure case, never a definitive withhold)."""
     try:
         resp = _get(_plans_path(project_dir))
     except Exception:
-        return None
-    if not isinstance(resp, dict) or not resp.get("ok"):
-        return None
-    return _axi().resolve_active_cycle_id(resp.get("plans", []))
+        return {"ok": False, "error": "plans fetch raised"}
+    return resp if isinstance(resp, dict) else {"ok": False, "error": "non-dict plans response"}
 
 
 def _resolve_ingest_cycle(project_dir):
-    """§S9 — resolve the cycle an --agent ingest attaches to. An explicit valid
-    WORKFLOW_CYCLE_ID is authoritative; otherwise the open plan's single
-    `status:"active"` cycle is auto-resolved. Returns (cycle_id, warnings,
-    hard_error)."""
-    raw = os.environ.get("WORKFLOW_CYCLE_ID")
-    if raw is not None:
-        try:
-            return int(raw), [], False
-        except ValueError:
-            pass
-    active = _active_cycle_id(project_dir)
-    if active is not None:
-        return active, [], False
-    warning = {"code": "no-active-cycle", "detail": "no active cycle — activate one first"}
-    return None, [warning], True
+    """CR-CRU-036 §S9 — resolve the cycle an --agent ingest attaches to FROM THE
+    SERVER (the open plan's single `status:"active"` cycle); no cycle-id env
+    override is read. Returns (cycle_id, warnings, withhold): a valid cycle or a
+    tolerant (None,[],False) proceed; (None,[warning],True) ONLY when an OPEN plan
+    carries no active cycle — the caller MUST emit ok:false and SKIP the POST."""
+    return _axi().resolve_attach_cycle(_plans_response(project_dir))
 
 
 def _register_cycle_guard(project_dir):
-    """§S9 — register mirrors the ingest hard-error: with WORKFLOW_CYCLE_ID unset AND
-    a successfully-read open plan carrying no active cycle, registration hard-errors.
-    A plans fetch that itself FAILS is NOT proof of "no active cycle"."""
-    raw = os.environ.get("WORKFLOW_CYCLE_ID")
-    if raw is not None:
-        try:
-            int(raw)
-            return False, []
-        except ValueError:
-            pass
-    resp = _get(_plans_path(project_dir))
-    if not isinstance(resp, dict) or not resp.get("ok"):
-        return False, []
-    if _axi().resolve_active_cycle_id(resp.get("plans", [])) is not None:
-        return False, []
-    return True, [{"code": "no-active-cycle",
-                   "detail": "no active cycle — activate one first"}]
+    """CR-CRU-036 §S9 — register mirrors the ingest withhold: an OPEN plan with no
+    active cycle withholds registration. A plans-fetch failure or no open plan at
+    all is TOLERANT (register proceeds). Returns (withhold, warnings)."""
+    _cycle, warnings, withhold = _axi().resolve_attach_cycle(_plans_response(project_dir))
+    return withhold, warnings
 
 
 def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
     """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path)."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "total": summary["total"]}
-    context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
+    # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
+    # the cycleId key rather than emit an orphan-signalling explicit null.
+    if cycle_id is not None:
+        context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
+    else:
+        context = _axi_context(project_dir, agent_id=agent)
     for w in warnings:
         print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
     _emit_axi(verb, bool(resp.get("ok")),
@@ -337,11 +318,12 @@ def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent, cycle_id, 
 
 
 def _emit_ingest_hard_error(verb, project_dir, agent, warnings):
-    """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when
-    there is no active cycle to attach an ingest to. The run is NOT POSTed."""
+    """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when an
+    OPEN plan carries no active cycle to attach an ingest to. The run is NOT POSTed
+    (no cycleId=NONE orphan)."""
     context = _axi_context(project_dir, agent_id=agent, cycle_id=None)
     for w in warnings:
-        print(f"error: {w['code']} — {w['detail']}", file=sys.stderr)
+        print(_axi().withhold_stderr_line(w), file=sys.stderr)
     _emit_axi(verb, False, {}, context, warnings)
 
 
@@ -394,16 +376,17 @@ def _ingest_compile(project_dir, key, agent_id, errors, context=None):
 
 
 def cmd_register(args):
-    """Register / heartbeat. §S9: no active cycle (and no WORKFLOW_CYCLE_ID
-    override) is a HARD ERROR — the agent must never come online against an
-    untracked plan; the heartbeat is withheld and the exit code is non-zero."""
+    """Register / heartbeat. CR-CRU-036 §S9: an OPEN plan with no active cycle
+    WARNS + WITHHOLDS — the agent must never come online against an untracked
+    plan; the heartbeat is withheld and the exit code is non-zero. A plans-fetch
+    failure or no open plan at all is tolerant (register proceeds)."""
     pd = _project_dir(args)
     key, name = _load_env(pd)
     agent_id, display = _agent(name)
-    hard_error, warnings = _register_cycle_guard(pd)
-    if hard_error:
+    withhold, warnings = _register_cycle_guard(pd)
+    if withhold:
         for w in warnings:
-            print(f"error: {w['code']} — {w['detail']}", file=sys.stderr)
+            print(_axi().withhold_stderr_line(w), file=sys.stderr)
         _emit_axi("register", False,
                   {"agent": agent_id, "help": _axi().HELP_STEPS["register"]},
                   _axi_context(pd, agent_id=agent_id, cycle_id=None), warnings)
