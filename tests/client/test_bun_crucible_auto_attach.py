@@ -343,5 +343,108 @@ class NoActiveCycleHardErrorTest(_BaseAutoAttachTest):
         self._assert_hard_error(code, out, err, post_mock)
 
 
+class RegisterHardErrorTest(_BaseAutoAttachTest):
+    """CR-CRU-030 C2 (cycle 84) -- §S9's HARD ERROR text names `register`
+    explicitly alongside the ingest verbs (spec lines 195/263: "No active
+    cycle ... is a HARD ERROR on `register`/ingest"), but `cmd_register`
+    (`clients/bun-crucible.py` ~L355) never checks -- confirmed by reading the
+    function directly: it POSTs unconditionally with no `_get`/plans lookup
+    at all. An agent that registers before any cycle is active must fail
+    loudly (never come online against an untracked plan), mirroring the
+    ingest hard-error contract `NoActiveCycleHardErrorTest` above already
+    pins for test/regression/auto-ingest."""
+
+    ACTIVE_CYCLE_ID = 909
+
+    def _active_cycle_plans(self):
+        return _open_plans_response([
+            {"planId": "plan-active", "cr": "CR-CRU-030", "status": "open",
+             "cycles": [{"id": self.ACTIVE_CYCLE_ID, "status": "active"},
+                        {"id": 900, "status": "done"}]},
+        ])
+
+    def _no_active_cycle_plans(self):
+        return _open_plans_response([
+            {"planId": "plan-quiet", "cr": "CR-CRU-030", "status": "open",
+             "cycles": [{"id": 10, "status": "pending"}, {"id": 11, "status": "done"}]},
+        ])
+
+    def _no_plans_at_all(self):
+        return _open_plans_response([])
+
+    def _run_register(self, agent="CR-CRU-030-C2-register-test"):
+        return _run_main(self.module, [
+            "register", "--agent", agent, "--project-dir", self.tmpdir,
+        ])
+
+    def test_register_hard_errors_when_no_active_cycle_and_env_unset(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
+            code, out, _err = self._run_register()
+
+        self.assertNotEqual(
+            code, 0, "no active cycle -- register must hard-error with a non-zero exit")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), False)
+        warnings_list = axi.get("warnings", [])
+        warning_details = " ".join(w.get("detail", "") for w in warnings_list).lower()
+        self.assertIn(
+            "no active cycle", warning_details,
+            f"the ok:false envelope on STDOUT must carry a 'no active cycle' "
+            f"message; got warnings={warnings_list!r}")
+        self.assertIn("activate one first", warning_details)
+
+        register_call = _post_call_for_path(post_mock, "/api/v2/agents/register")
+        self.assertIsNone(
+            register_call,
+            "the register POST must NOT fire when there is no active cycle to attach to",
+        )
+
+    def test_register_hard_errors_when_no_open_plans_at_all(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=self._no_plans_at_all()):
+            code, out, _err = self._run_register()
+
+        self.assertNotEqual(code, 0)
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), False)
+        warnings_list = axi.get("warnings", [])
+        warning_details = " ".join(w.get("detail", "") for w in warnings_list).lower()
+        self.assertIn("no active cycle", warning_details)
+
+        register_call = _post_call_for_path(post_mock, "/api/v2/agents/register")
+        self.assertIsNone(register_call)
+
+    def test_register_succeeds_when_active_cycle_present_and_env_unset(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans()):
+            code, out, _err = self._run_register()
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        register_call = _post_call_for_path(post_mock, "/api/v2/agents/register")
+        self.assertIsNotNone(
+            register_call, "an active cycle is present -- register must actually POST")
+
+    def test_register_succeeds_with_explicit_workflow_cycle_id_override(self):
+        os.environ["WORKFLOW_CYCLE_ID"] = "51"
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
+            code, out, _err = self._run_register()
+
+        self.assertEqual(
+            code, 0,
+            "an explicit WORKFLOW_CYCLE_ID must override the active-cycle check "
+            f"even with no active cycle present; stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        register_call = _post_call_for_path(post_mock, "/api/v2/agents/register")
+        self.assertIsNotNone(register_call)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -82,6 +82,7 @@ import importlib.util
 import io
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -90,6 +91,37 @@ from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
+
+# CR-CRU-030 C2 (cycle 84) -- fixtures for HelpArrayCoverageTest's ingest-verb
+# help[] tests below (test/regression need a fake `bun` executable, same
+# technique as test_bun_crucible_auto_attach.py / test_bun_crucible_toon_envelope.py).
+_HELP_COVERAGE_PASS_JUNIT_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+<testsuite name="toon.test.ts" tests="1" failures="0">
+<testcase name="passes" time="0.001"></testcase>
+</testsuite>
+</testsuites>
+"""
+
+_HELP_COVERAGE_FAKE_BUN_SCRIPT_TEMPLATE = """#!{python}
+import os
+import sys
+
+outfile = None
+for a in sys.argv[1:]:
+    if a.startswith("--reporter-outfile="):
+        outfile = a.split("=", 1)[1]
+
+content = os.environ.get("FAKE_BUN_JUNIT_CONTENT", "")
+if outfile and content:
+    d = os.path.dirname(outfile)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(outfile, "w") as f:
+        f.write(content)
+
+sys.exit(int(os.environ.get("FAKE_BUN_EXIT_CODE", "0")))
+"""
 
 # §S14 -- the exact one-line purpose string this slice pins (GREEN must print
 # this verbatim as part of the no-arg dashboard's human-readable output).
@@ -493,6 +525,235 @@ class HelpNextStepTemplatesTest(_BaseAxiConventionsTest):
             f"§S15: cycle-done's help[] must suggest the literal "
             f"`cr-close --commit <sha>` template (the CR's own verbatim example); "
             f"got help={help_list!r}"
+        )
+
+
+# ── §S15 gap coverage (CR-CRU-030 C2, cycle 84) -- "every envelope carries a
+# help[] array", but only plan-file/cycle-activate/cycle-done do today
+# (confirmed by reading every cmd_* / _emit_axi call site directly). This
+# class extends coverage to the verbs still missing help[] entirely.
+
+
+class HelpArrayCoverageTest(_BaseAxiConventionsTest):
+    """§S15 verbatim: "Every envelope carries a `help[]` array of concrete
+    next-step command TEMPLATES ... The envelope always names the sane next
+    move, so the orchestrator cannot lose the process thread." Today
+    `register`, `unregister`, `cycle-add`, `checkpoint`, `stop`, `abort`,
+    `status`, `cr-close`, `check`, and the three ingest verbs (`test`/
+    `regression`/`auto-ingest`) never set a `help` result field at all, so
+    `axi.get("help")` is always None/absent for them -- a real behavioral
+    RED (not a missing-symbol accident): each test below would still fail
+    against a no-op stub that merely returns ok:True."""
+
+    PROJECT_KEY = "test-key-help-coverage"
+
+    def _open_plan(self, plan_id="plan-help", cr="CR-HELP", cycles=None):
+        return _plans_response([
+            {"planId": plan_id, "cr": cr, "status": "open", "cycles": cycles or []},
+        ])
+
+    def _help_list(self, out):
+        axi = self._decode_axi(out)
+        return axi, (axi.get("help") or [])
+
+    def test_register_help_suggests_the_test_agent_placeholder_template(self):
+        os.environ["WORKFLOW_CYCLE_ID"] = "77"
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}):
+            code, out, err = _run_main(self.module, [
+                "register", "--agent", "CR-HELP-1", "--project-dir", self.tmpdir,
+            ])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        _axi, help_list = self._help_list(out)
+        self.assertIn(
+            "test --agent <agentId>", help_list,
+            f"§S15: register's help[] must suggest the next-step "
+            f"`test --agent <agentId>` template; got help={help_list!r}"
+        )
+
+    def test_unregister_help_is_present_and_nonempty(self):
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}):
+            code, out, err = _run_main(self.module, [
+                "unregister", "--agent", "CR-HELP-1", "--project-dir", self.tmpdir,
+            ])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        axi, help_list = self._help_list(out)
+        self.assertGreater(
+            len(help_list), 0,
+            f"§S15: unregister's envelope must carry a non-empty help[]; got axi={axi!r}"
+        )
+
+    def test_cycle_add_help_suggests_the_cycle_activate_placeholder_template(self):
+        plans = self._open_plan(cycles=[])
+        resp = {"ok": True, "id": 42, "label": "newlabel", "kind": "red-green",
+                "status": "pending"}
+        with mock.patch.object(self.module, "_get", return_value=plans), \
+             mock.patch.object(self.module, "_post", return_value=resp):
+            code, out, err = _run_main(self.module, [
+                "cycle-add", "newlabel", "--project-dir", self.tmpdir,
+            ])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        _axi, help_list = self._help_list(out)
+        self.assertIn(
+            "cycle-activate <id>", help_list,
+            f"§S15: cycle-add's help[] must suggest the `cycle-activate <id>` "
+            f"template (the CR's own example); got help={help_list!r}"
+        )
+
+    def test_checkpoint_help_is_present_and_nonempty(self):
+        plans = self._open_plan()
+        with mock.patch.object(self.module, "_get", return_value=plans), \
+             mock.patch.object(self.module, "_post",
+                               return_value={"ok": True, "changed": True}):
+            code, out, err = _run_main(self.module, ["checkpoint", "--project-dir", self.tmpdir])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        axi, help_list = self._help_list(out)
+        self.assertGreater(
+            len(help_list), 0,
+            f"§S15: checkpoint's envelope must carry a non-empty help[]; got axi={axi!r}"
+        )
+
+    def test_stop_help_is_present_and_nonempty(self):
+        with mock.patch.object(self.module, "_post",
+                               return_value={"ok": True, "checkpointed": 1}):
+            code, out, err = _run_main(self.module, ["stop", "--project-dir", self.tmpdir])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        axi, help_list = self._help_list(out)
+        self.assertGreater(
+            len(help_list), 0,
+            f"§S15: stop's envelope must carry a non-empty help[]; got axi={axi!r}"
+        )
+
+    def test_abort_help_is_present_and_nonempty(self):
+        plans = self._open_plan()
+        with mock.patch.object(self.module, "_get", return_value=plans), \
+             mock.patch.object(self.module, "_post",
+                               return_value={"ok": True, "changed": True,
+                                             "plan": {"planId": "plan-help",
+                                                       "status": "aborted"}}):
+            code, out, err = _run_main(self.module, [
+                "abort", "--user-approved", "--project-dir", self.tmpdir,
+            ])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        axi, help_list = self._help_list(out)
+        self.assertGreater(
+            len(help_list), 0,
+            f"§S15: abort's envelope must carry a non-empty help[]; got axi={axi!r}"
+        )
+
+    def test_status_help_is_present_and_nonempty(self):
+        plans = self._open_plan()
+        with mock.patch.object(self.module, "_get", return_value=plans):
+            code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        axi, help_list = self._help_list(out)
+        self.assertGreater(
+            len(help_list), 0,
+            f"§S15: status's envelope must carry a non-empty help[]; got axi={axi!r}"
+        )
+
+    def test_cr_close_help_is_present_and_nonempty(self):
+        plans = self._open_plan()
+        with mock.patch.object(self.module, "_get", return_value=plans), \
+             mock.patch.object(self.module, "_patch", return_value={"ok": True}), \
+             mock.patch.object(self.module, "_post", return_value={"ok": True}):
+            code, out, err = _run_main(self.module, [
+                "cr-close", "--commit", "abc123", "--project-dir", self.tmpdir,
+            ])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        axi, help_list = self._help_list(out)
+        self.assertGreater(
+            len(help_list), 0,
+            f"§S15: cr-close's envelope must carry a non-empty help[]; got axi={axi!r}"
+        )
+
+    def test_check_help_is_present_and_nonempty(self):
+        result = subprocess.CompletedProcess(
+            args=["bun", "x", "tsc", "--noEmit"], returncode=0, stdout="", stderr="")
+        with mock.patch.object(self.module.subprocess, "run", return_value=result):
+            code, out, err = _run_main(self.module, [
+                "check", "--project-dir", self.tmpdir, "--package-dir", self.tmpdir,
+            ])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        axi, help_list = self._help_list(out)
+        self.assertGreater(
+            len(help_list), 0,
+            f"§S15: check's envelope must carry a non-empty help[]; got axi={axi!r}"
+        )
+
+    def _write_fake_bun(self):
+        fake_bun = os.path.join(self.tmpdir, "fake_bun.py")
+        with open(fake_bun, "w") as f:
+            f.write(_HELP_COVERAGE_FAKE_BUN_SCRIPT_TEMPLATE.format(python=sys.executable))
+        os.chmod(fake_bun, 0o755)
+        os.environ["FAKE_BUN_JUNIT_CONTENT"] = _HELP_COVERAGE_PASS_JUNIT_XML
+        os.environ["FAKE_BUN_EXIT_CODE"] = "0"
+        return fake_bun
+
+    def test_test_verb_help_is_present_and_nonempty(self):
+        os.environ["WORKFLOW_CYCLE_ID"] = "77"
+        fake_bun = self._write_fake_bun()
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}):
+            code, out, err = _run_main(self.module, [
+                "test", "--bun", fake_bun, "--project-dir", self.tmpdir,
+                "--package-dir", self.tmpdir, "--reports", "reports",
+                "--agent", "CR-HELP-test",
+            ])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        axi, help_list = self._help_list(out)
+        self.assertGreater(
+            len(help_list), 0,
+            f"§S15: the `test` ingest verb's envelope must carry a non-empty "
+            f"help[]; got axi={axi!r}"
+        )
+
+    def test_regression_verb_help_is_present_and_nonempty(self):
+        os.environ["WORKFLOW_CYCLE_ID"] = "77"
+        fake_bun = self._write_fake_bun()
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}):
+            code, out, err = _run_main(self.module, [
+                "regression", "--bun", fake_bun, "--project-dir", self.tmpdir,
+                "--package-dir", self.tmpdir, "--reports", "reports",
+                "--agent", "CR-HELP-regression",
+            ])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        axi, help_list = self._help_list(out)
+        self.assertGreater(
+            len(help_list), 0,
+            f"§S15: the `regression` ingest verb's envelope must carry a "
+            f"non-empty help[]; got axi={axi!r}"
+        )
+
+    def test_auto_ingest_verb_help_is_present_and_nonempty(self):
+        os.environ["WORKFLOW_CYCLE_ID"] = "77"
+        reports_dir = os.path.join(self.tmpdir, "reports")
+        os.makedirs(reports_dir, exist_ok=True)
+        with open(os.path.join(reports_dir, "junit.xml"), "w") as f:
+            f.write(_HELP_COVERAGE_PASS_JUNIT_XML)
+
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}):
+            code, out, err = _run_main(self.module, [
+                "auto-ingest", "--agent", "CR-HELP-auto",
+                "--project-dir", self.tmpdir, "--package-dir", self.tmpdir,
+                "--reports", "reports",
+            ])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        axi, help_list = self._help_list(out)
+        self.assertGreater(
+            len(help_list), 0,
+            f"§S15: the `auto-ingest` verb's envelope must carry a non-empty "
+            f"help[]; got axi={axi!r}"
         )
 
 
