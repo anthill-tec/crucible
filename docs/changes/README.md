@@ -169,3 +169,11 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   added a ≥2-failing-suites AC. Confirmed the fix completes CR-029 §S1's own mechanism (a) and
   scroll-restore already targets pane-scroll (§S2 stays green). Retarget contained to
   `density.test.ts` §S4 item 4 (no e2e coupling). Ready for feature branch + RED.
+- 2026-07-21 (merge) — CR-CRU-034 shipped on develop (merge 8c2bdc0): pane-scroll is the
+  run-detail body's sole bounded dual-axis scroller (60vh `.app-tree-scroll` trap retired;
+  CR-007 §S4 virtualization re-sourced off pane-scroll via `handlePaneScroll` + per-suite
+  offset windowing; covers home RunDetail + WorkspaceRunDetail); CR-029 horizontal contract
+  preserved. VERIFY APPROVE; 979/979 unit · e2e 40/40 · lines 85.8% · tsc 0; cycles 81-82.
+  Follow-up (VERIFY suggestion, non-blocking, NOT filed as a CR): `handlePaneScroll` runs an
+  un-debounced `querySelectorAll('[data-testid="tree-scroll"]')` per scroll tick — harmless at
+  realistic suite counts; revisit only if a run ever auto-expands dozens of failing suites.
