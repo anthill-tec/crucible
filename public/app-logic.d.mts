@@ -302,3 +302,28 @@ export declare function digestFailures<T extends DigestLeafLike>(
 export type PhaseRole = "red" | "green" | "verify" | "fix" | null;
 
 export declare function phaseRole(agentId: string): PhaseRole;
+
+// CR-CRU-028 §S1 — auto-coarsening level-colored coverage-trend buckets (pure).
+export declare const COVERAGE_LEVEL_ORANGE_MAX: number;
+export declare const COVERAGE_LEVEL_YELLOW_MAX: number;
+
+export type CoverageLevelClass = "orange" | "yellow" | "green";
+
+export declare function coverageLevelClass(percent: number): CoverageLevelClass;
+
+export interface CoverageTrendPoint {
+  day: string;
+  percent: number;
+}
+
+export interface CoarsenedCoverageBucket {
+  level: "day" | "week" | "month";
+  bucketKey: string;
+  day: string;
+  percent: number;
+  isLatest: boolean;
+}
+
+export declare function coarsenCoverageTrend(
+  points: CoverageTrendPoint[],
+): CoarsenedCoverageBucket[];

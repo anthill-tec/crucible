@@ -1701,34 +1701,32 @@
       const project = currentProject();
       const percent = project?.latestGreenCoverage?.lines?.percent;
       if (typeof percent !== "number") return null;
-      // CR-CRU-027 §S2 — window to the MOST RECENT 16 points (chronological,
-      // latest last); the caption reads the first WINDOWED point so text and
-      // bars always agree.
-      // CR-CRU-033 §S3 — entries are now { day, percent } objects (was a
-      // flat number[]); read `.percent` for both the caption and bar height.
-      const points = (project?.coverageTrend ?? []).slice(-16);
+      // CR-CRU-028 §S1 — auto-coarsen the date-keyed { day, percent }[] series
+      // (CR-CRU-033 §S3) into ≤16 zoom-level bucket bars: day/week/month width
+      // hints, orange/yellow/green level color, latest bucket emphasized. The
+      // caption reads the first/last BUCKET percent so text and bars agree.
+      const buckets = L.coarsenCoverageTrend(project?.coverageTrend ?? []);
       const caption =
-        points.length >= 2
-          ? `${points[0].percent} → ${points[points.length - 1].percent}% lines`
-          : `latest green coverage ${points.length === 1 ? points[0].percent : percent}%`;
+        buckets.length >= 2
+          ? `${buckets[0].percent} → ${buckets[buckets.length - 1].percent}% lines`
+          : `latest green coverage ${buckets.length === 1 ? buckets[0].percent : percent}%`;
       return div(
         { "data-testid": "coverage-trend-card", class: "app-card app-vitals-card" },
         div(
           { "data-testid": "vitals-card-label", class: "app-vitals-label" },
           "COVERAGE TREND (green regressions)",
         ),
-        // §S2 — bars render whenever the series is non-empty (the old
-        // `>= 2` gate was the defect: 1 point must render 1 bar).
-        points.length > 0
+        // §S1 — bars render whenever the series coarsens to ≥1 bucket.
+        buckets.length > 0
           ? div(
               { "data-testid": "coverage-trend-bars", class: "app-trend-bars" },
-              points.map((p, i) =>
+              buckets.map((b) =>
                 div({
                   "data-testid": "coverage-trend-bar",
-                  class: `app-trend-bar ${
-                    i === points.length - 1 ? "app-trend-bar-latest" : "app-trend-bar-dim"
-                  }`,
-                  style: `height:${p.percent}%;`,
+                  class: `app-trend-bar app-trend-bar-${b.level} app-trend-bar-${L.coverageLevelClass(
+                    b.percent,
+                  )}${b.isLatest ? " app-trend-bar-latest" : ""}`,
+                  style: `height:${b.percent}%;`,
                 }),
               ),
             )

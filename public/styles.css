@@ -328,11 +328,20 @@ body {
   margin: 6px 0 4px;
 }
 .app-trend-bar {
-  flex: 0 0 9px;
   border-radius: 2px 2px 0 0;
 }
-.app-trend-bar-dim { background: var(--ember-dim); }
-.app-trend-bar-latest { background: var(--ember); }
+/* CR-CRU-028 §S1 — per-level fixed-slice widths (month < week < day), F8
+   mock lines 535-541; no level stretches. */
+.app-trend-bar-month { flex: 0 0 6px; }
+.app-trend-bar-week { flex: 0 0 9px; }
+.app-trend-bar-day { flex: 0 0 12px; }
+/* §S1 — level color ramp (DN §3.2). */
+.app-trend-bar-orange { background: var(--ember); }
+.app-trend-bar-yellow { background: #eab308; }
+.app-trend-bar-green { background: var(--pass); }
+/* §S1 — latest bucket composes emphasis WITH its level color (outline, not a
+   background override). */
+.app-trend-bar-latest { outline: 1px solid var(--ink-faint); }
 /* §S5.2 (b) — the F8 mock `.meter`: 6px tall, fully rounded, BORDERLESS
    track, ember-gradient fill sized to the lines percent. */
 .app-meter {
