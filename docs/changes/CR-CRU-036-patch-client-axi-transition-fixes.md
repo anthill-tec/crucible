@@ -106,3 +106,7 @@ five clients expose the SAME AXI surface (only the backend command differs):
 - Orchestration consequence: with `WORKFLOW_CYCLE_ID` gone, the orchestrator's
   only cycle input is `cycle-activate` — phase agents auto-attach; the
   orchestrator stops hand-passing the env var entirely.
+- **On merge — PING Model-B** (`Mainline - ModelB`, Sandesh): per their reply
+  (msg 1331, 2026-07-21, commit bf56613) they deferred their client-bundle +
+  hook-template sync until the final contract lands here, and asked to be
+  notified on the 036 merge so they run that single sync.
