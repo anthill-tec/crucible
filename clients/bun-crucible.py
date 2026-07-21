@@ -784,7 +784,11 @@ def cmd_auto_ingest(args):
         print(f"[crucible] no {junit_path} — nothing to ingest", file=sys.stderr)
         return 1
     summary, tree = _parse_junit_file(junit_path)
-    resp = _ingest_parsed(project_dir, args.agent, summary, tree)
+    # CR-CRU-030 §S9 — attach the run context (cycleId/wave/orchestrator) like
+    # cmd_test does; without it the ingested e2e run orphans (cycleId=NONE) even
+    # though the envelope below reports the resolved cycle id.
+    resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="e2e",
+                          context=_run_context())
     cycle_id, warnings = _cycle_id_and_warnings(project_dir)
     _emit_ingest_axi("auto-ingest", resp, summary, project_dir, args.agent,
                      cycle_id, warnings)
