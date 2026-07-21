@@ -47,10 +47,15 @@
       // A vanX reactive array (mutated via vanX.replace, like collapsedCycles)
       // so the Workflow binding re-runs and the pill flips dim on confirm.
       prunedCycles: [],
-      // CR-CRU-028 §S2 — the single OPEN coverage-trend drill bucketKey (the
-      // accordion: at most one branch open per card). null = nothing unfolded.
-      // A reactive scalar so clicking a bar re-renders the CoverageTrendCard.
-      coverageDrillKey: null,
+      // CR-CRU-028 §S2 — the OPEN coverage-trend drill PATH: the representative
+      // `day` of the open bucket at each depth (index 0 = the top-level bar,
+      // index 1 = the revealed bar unfolded inside it, …), so the drill-down
+      // CASCADES month→week→day→heat strip (DN §3.3). Accordion PER DEPTH: at
+      // most one branch open at each depth (opening a sibling at depth d
+      // truncates the path to d and drops anything deeper). [] = nothing
+      // unfolded. A reactive array (reassigned wholesale, like a scalar) so a
+      // click re-renders the CoverageTrendCard.
+      coverageDrillPath: [],
     });
 
     // ── Routing (§S2 — hash-free History routing, parse in app-logic) ───
@@ -1722,56 +1727,84 @@
       const dayIsDim = (b) =>
         b.level === "day" &&
         L.coverageHeatSlices(state.events, projectKey, b.day).length === 0;
-      // §S2 — accordion: at most ONE branch open per card. Clicking a bar sets
-      // (or toggles off) the single open bucketKey; opening one closes any
-      // other. Reactive state field so the card re-renders on change.
-      const toggleDrill = (b) => {
-        state.coverageDrillKey =
-          state.coverageDrillKey === b.bucketKey ? null : b.bucketKey;
+      // §S2 — accordion PER DEPTH over a drill PATH (state.coverageDrillPath):
+      // path[d] is the representative `day` of the open bucket at depth d.
+      // Clicking a bar at depth d opens it (path truncated to d, then this
+      // node appended — replacing any sibling at d and dropping deeper), or
+      // toggles it shut when it is already the open node at d. A reactive
+      // array reassigned wholesale, so the card re-renders on change.
+      const toggleAt = (depth, nodeDay) => {
+        const p = state.coverageDrillPath;
+        state.coverageDrillPath =
+          p[depth] === nodeDay ? p.slice(0, depth) : [...p.slice(0, depth), nodeDay];
       };
-      const openBucket =
-        state.coverageDrillKey === null
+      // The top-level open bucket (depth 0), keyed by its representative day
+      // (unique per bucket). null = nothing unfolded.
+      const openTop =
+        state.coverageDrillPath.length === 0
           ? null
-          : buckets.find((b) => b.bucketKey === state.coverageDrillKey) ?? null;
-      // §S2 — the single open drill row, rendered BENEATH the top bars (a
-      // sibling of the bars container, so its inner bars are never counted as
-      // top-level bars). Month/week bars unfold to finer bars; a day bar
-      // unfolds to a per-run heat strip.
-      const DrillRow = () => {
-        if (openBucket === null) return null;
-        if (openBucket.level === "day") {
-          const slices = L.coverageHeatSlices(state.events, projectKey, openBucket.day);
-          if (slices.length === 0) return null;
-          return div(
-            { "data-testid": "coverage-drill-row", class: "app-drill-row" },
-            div(
-              { "data-testid": "coverage-heat-strip", class: "app-cov-heat-strip" },
-              slices.map((s) =>
-                div({
-                  "data-testid": "coverage-heat-slice",
-                  "data-event-id": s.eventId,
-                  class: `app-cov-heat-slice app-heat-slice-${s.level}`,
-                  onclick: () => openDrillin(s.eventId),
-                }),
-              ),
+          : buckets.find((b) => b.day === state.coverageDrillPath[0]) ?? null;
+      // §S2/§3.4 — a day bar (top OR revealed) with no matching within-
+      // retention event unfolds no heat strip; used both to dim the affordance
+      // and to suppress a dead strip.
+      const heatStrip = (day) => {
+        const slices = L.coverageHeatSlices(state.events, projectKey, day);
+        if (slices.length === 0) return null;
+        return div(
+          { "data-testid": "coverage-drill-row", class: "app-drill-row" },
+          div(
+            { "data-testid": "coverage-heat-strip", class: "app-cov-heat-strip" },
+            slices.map((s) =>
+              div({
+                "data-testid": "coverage-heat-slice",
+                "data-event-id": s.eventId,
+                class: `app-cov-heat-slice app-heat-slice-${s.level}`,
+                onclick: () => openDrillin(s.eventId),
+              }),
             ),
-          );
-        }
-        const finer = L.unfoldCoverageBucket(points, openBucket.bucketKey, openBucket.level);
+          ),
+        );
+      };
+      // §S2 — the open drill row for the bucket/bar at `depth`, rendered
+      // BENEATH the top bars (a sibling of the bars container, so its inner
+      // bars are never counted as top-level bars). A day node unfolds a per-run
+      // heat strip; a month/week node unfolds its finer bars — and each revealed
+      // bar CASCADES one level deeper (month→week→day→heat strip, DN §3.3) by
+      // re-scoping onto the `members` the unfold carries. Accordion per depth:
+      // the child open below is whichever finer bar's day matches
+      // coverageDrillPath[depth + 1].
+      const DrillNode = (node, depth) => {
+        if (node.level === "day") return heatStrip(node.day);
+        const finer =
+          depth === 0
+            ? L.unfoldCoverageBucket(points, node.bucketKey, node.level)
+            : L.unfoldCoverageSubset(node.members, node.level);
+        const childDay = state.coverageDrillPath[depth + 1];
+        const childNode =
+          childDay === undefined ? null : finer.find((f) => f.day === childDay) ?? null;
         return div(
           { "data-testid": "coverage-drill-row", class: "app-drill-row" },
           div(
             { class: "app-trend-bars app-drill-bars" },
-            finer.map((f) =>
-              div({
+            finer.map((f) => {
+              const dim = dayIsDim(f);
+              const attrs = {
                 "data-testid": "coverage-trend-bar",
                 class: `app-trend-bar app-trend-bar-${f.level} app-trend-bar-${L.coverageLevelClass(
                   f.percent,
-                )}`,
+                )}${dim ? " app-trend-bar-retention-dim" : ""}`,
                 style: `height:${f.percent}%;`,
-              }),
-            ),
+              };
+              // A revealed DAY bar with no within-retention event is inert
+              // (dim + aria-disabled, no onclick, no heat strip) — same rule as
+              // the top day bars (DN §3.4). Every other revealed bar drills one
+              // level deeper.
+              if (dim) attrs["aria-disabled"] = "true";
+              else attrs.onclick = () => toggleAt(depth + 1, f.day);
+              return div(attrs);
+            }),
           ),
+          childNode === null ? null : DrillNode(childNode, depth + 1),
         );
       };
       return div(
@@ -1798,12 +1831,12 @@
                 // §S2 — a dimmed day bar is inert (aria-disabled, no onclick):
                 // clicking it never opens a drill row or a dead heat strip.
                 if (dim) attrs["aria-disabled"] = "true";
-                else attrs.onclick = () => toggleDrill(b);
+                else attrs.onclick = () => toggleAt(0, b.day);
                 return div(attrs);
               }),
             )
           : null,
-        () => DrillRow() ?? span(),
+        () => (openTop === null ? null : DrillNode(openTop, 0)) ?? span(),
         div({ "data-testid": "vitals-card-value", class: "app-vitals-value" }, caption),
       );
     };

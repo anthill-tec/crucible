@@ -333,12 +333,20 @@ export interface UnfoldedCoverageBar {
   level: "day" | "week";
   day: string;
   percent: number;
+  /** The raw points this finer bar groups — carried so the drill-down can
+   * CASCADE (re-scope onto them to unfold a revealed bar one level deeper). */
+  members: CoverageTrendPoint[];
 }
 
 export declare function unfoldCoverageBucket(
   points: CoverageTrendPoint[],
   bucketKey: string,
   level: "day" | "week" | "month",
+): UnfoldedCoverageBar[];
+
+export declare function unfoldCoverageSubset(
+  members: CoverageTrendPoint[],
+  parentLevel: "day" | "week" | "month",
 ): UnfoldedCoverageBar[];
 
 export interface CoverageHeatSliceLike {
