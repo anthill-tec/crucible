@@ -182,10 +182,13 @@ async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: stri
 }
 
 /**
- * Files a real OPEN plan so ingests carrying WORKFLOW_CYCLE_ID reference a
- * cycle that actually exists in THIS project. CR-CRU-024 §S7 refuses an
- * unlinkable cycleId (400, event dropped) — Crucible is the source of truth —
- * so a synthetic env cycleId must map to a genuinely-filed cycle.
+ * Files a real OPEN plan with two cycles (both start `pending`, neither
+ * active). CR-CRU-036 §S1: the client auto-attaches ingests to the open
+ * plan's single `status:"active"` cycle resolved FROM THE SERVER —
+ * `WORKFLOW_CYCLE_ID` is removed and read by no client — so a filed-but-
+ * unactivated plan is exactly the "open plan, no active cycle" fixture,
+ * and `activateCycle` below is what actually makes one of its cycles the
+ * auto-attach target.
  */
 async function filePlan(baseUrl: string, key: string, cr: string): Promise<PlanWire> {
   const res = await fetch(`${baseUrl}/api/v2/projects/${key}/plans`, {
@@ -194,6 +197,22 @@ async function filePlan(baseUrl: string, key: string, cr: string): Promise<PlanW
     body: JSON.stringify({ cr, cycles: [{ label: "A" }, { label: "B" }] }),
   });
   return (await res.json()) as PlanWire;
+}
+
+/**
+ * CR-CRU-036 §S1 fixture primitive: PATCHes a plan's cycle to
+ * `status:"active"` directly against the plans API (never through the
+ * script's own `cycle-activate` verb, to keep the auto-attach fixtures
+ * independent of the verb under test elsewhere in this file) — the
+ * "seed an active cycle on the test server" step (project → plan-file →
+ * cycle-activate) the CR calls for.
+ */
+async function activateCycle(baseUrl: string, key: string, planId: number, cycleId: number): Promise<void> {
+  await fetch(`${baseUrl}/api/v2/projects/${key}/plans/${planId}/cycles/${cycleId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status: "active" }),
+  });
 }
 
 interface EventLeaf {
@@ -385,7 +404,7 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
   let projectKey = "";
   let runResult: RunResult | undefined;
   let event: FullEvent | undefined;
-  let filedCycleId = 0;
+  let activeCycleId = 0;
   const branch = "cr-cru-008-c2-fixture-branch";
 
   function scratchDir(prefix: string): string {
@@ -398,10 +417,16 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
     handle = startServer({ port: 0, dbPath: ":memory:" });
     baseUrl = `http://localhost:${handle.server.port}`;
     projectKey = await createProject(baseUrl, "clients-bc-test-ingest");
-    // §S7: file a real plan so WORKFLOW_CYCLE_ID maps to an existing cycle
-    // (an unlinkable id would be refused 400 and the event never stored).
+    // CR-CRU-036 §S1: seed an ACTIVE cycle on the test server (plan-file +
+    // activate cycles[0]) so the ingest auto-attaches to it FROM THE
+    // SERVER. cycles[1] stays pending and is fed to WORKFLOW_CYCLE_ID below
+    // — a REAL, linkable, but NOT-active cycle — proving the env var is
+    // read by nobody: if it still won the attach, context.cycleId would
+    // come back as cycles[1]'s id instead of the active cycles[0]'s.
     const plan = await filePlan(baseUrl, projectKey, "CR-CRU-008-C2-FIXTURE");
-    filedCycleId = plan.cycles[0]!.id;
+    activeCycleId = plan.cycles[0]!.id;
+    const otherCycleId = plan.cycles[1]!.id;
+    await activateCycle(baseUrl, projectKey, plan.planId, activeCycleId);
     const dir = scratchDir("bun-crucible-fixture-");
     writeFixtureBunProject(dir, projectKey);
     runGit(["init", "-q"], dir);
@@ -426,7 +451,7 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
         cwd: dir,
         crucibleUrl: proxy.url,
         env: {
-          WORKFLOW_CYCLE_ID: String(filedCycleId),
+          WORKFLOW_CYCLE_ID: String(otherCycleId),
           WORKFLOW_CYCLE: "clients source of truth fixture",
           WORKFLOW_WAVE: "wave-9",
           WORKFLOW_ROLE: "track-2",
@@ -460,8 +485,8 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
     expect(proxy?.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
-  test("records full run context: cycleId + cycle (WORKFLOW_CYCLE_ID/WORKFLOW_CYCLE), wave (WORKFLOW_WAVE), orchestrator (WORKFLOW_ROLE), and auto-detected git branch/commit", () => {
-    expect(event?.context?.cycleId).toBe(filedCycleId);
+  test("records full run context: cycleId AUTO-ATTACHED from the server's active cycle (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing), cycle (WORKFLOW_CYCLE), wave (WORKFLOW_WAVE), orchestrator (WORKFLOW_ROLE), and auto-detected git branch/commit", () => {
+    expect(event?.context?.cycleId).toBe(activeCycleId);
     expect(event?.context?.cycle).toBe("clients source of truth fixture");
     expect(event?.context?.wave).toBe("wave-9");
     expect(event?.context?.orchestrator).toBe("track-2");
@@ -648,6 +673,72 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
     const plans = await getPlans(baseUrl, key);
     expect(plans[0]!.status).toBe("closed");
     expect(plans[0]!.merge?.commit).toBe("abc1234");
+  });
+});
+
+// ── CR-CRU-036 §S1 — server-active-cycle auto-attach: warn+withhold vs tolerant ──
+
+describe("clients/bun-crucible.py — §S1 auto-attach: no-active-cycle warns+withholds, no plan at all is tolerant", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratchDirs: string[] = [];
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  function scratchDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    scratchDirs.push(dir);
+    return dir;
+  }
+
+  function fixtureProjectDir(key: string): string {
+    const dir = scratchDir("bun-crucible-cycle-guard-");
+    writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
+    return dir;
+  }
+
+  test("register: an OPEN plan with NO active cycle warns[] 'no-active-cycle'/'activate a cycle first' + stderr, posts NO agent, exits non-zero — WORKFLOW_CYCLE_ID set is ignored", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-no-active-cycle");
+    // Files an open plan whose two cycles are both `pending` — never activated.
+    const plan = await filePlan(baseUrl, key, "CR-CRU-036-NO-ACTIVE-CYCLE");
+    const projectDir = fixtureProjectDir(key);
+
+    const res = await runScript(
+      ["register", "--agent", "bc-no-active-cycle-agent", "--phase", "RED", "--project-dir", projectDir],
+      // A stale WORKFLOW_CYCLE_ID pointing at a REAL (but pending) cycle in
+      // this very plan must change NOTHING — §S1 removes the env var
+      // entirely, so it can't rescue the withheld run.
+      { cwd: projectDir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stderr).toContain("no-active-cycle");
+    expect(res.stderr).toContain("activate a cycle first");
+    expect(res.stdout).toContain("no-active-cycle");
+    expect(await getAgentIds(baseUrl, key)).not.toContain("bc-no-active-cycle-agent");
+  });
+
+  test("register: NO open plan at all is tolerant — proceeds with no warning and no withhold (the lightweight-project default)", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-tolerant-no-plan");
+    const projectDir = fixtureProjectDir(key);
+
+    const res = await runScript(
+      ["register", "--agent", "bc-tolerant-agent", "--phase", "RED", "--project-dir", projectDir],
+      { cwd: projectDir, crucibleUrl: baseUrl },
+    );
+
+    expect(res.code).toBe(0);
+    expect(res.stdout).not.toContain("no-active-cycle");
+    expect(await getAgentIds(baseUrl, key)).toContain("bc-tolerant-agent");
   });
 });
 

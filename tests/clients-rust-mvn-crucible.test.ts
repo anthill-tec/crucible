@@ -180,19 +180,31 @@ async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: stri
 }
 
 /**
- * Files a real OPEN plan and returns its first cycle id so a synthetic
- * WORKFLOW_CYCLE_ID references a cycle that actually exists in THIS project.
- * CR-CRU-024 §S7 refuses an unlinkable cycleId (400, event dropped) — Crucible
- * is the source of truth — so the env cycleId must map to a genuinely-filed cycle.
+ * Files a real OPEN plan with two `pending` cycles (neither active) — the
+ * CR-CRU-036 §S1 fixture primitive: "open plan, no active cycle" until
+ * `activateCycle` below promotes one of them.
  */
-async function filePlanCycleId(baseUrl: string, key: string, cr: string): Promise<number> {
+async function filePlan(baseUrl: string, key: string, cr: string): Promise<{ planId: number; cycles: Array<{ id: number }> }> {
   const res = await fetch(`${baseUrl}/api/v2/projects/${key}/plans`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ cr, cycles: [{ label: "A" }, { label: "B" }] }),
   });
-  const body = (await res.json()) as { cycles: Array<{ id: number }> };
-  return body.cycles[0]!.id;
+  return (await res.json()) as { planId: number; cycles: Array<{ id: number }> };
+}
+
+/**
+ * CR-CRU-036 §S1: PATCHes a plan's cycle to `status:"active"` directly
+ * against the plans API — the "seed an active cycle on the test server"
+ * step (project → plan-file → cycle-activate) so the client's server-side
+ * auto-attach resolver has a real target.
+ */
+async function activateCycle(baseUrl: string, key: string, planId: number, cycleId: number): Promise<void> {
+  await fetch(`${baseUrl}/api/v2/projects/${key}/plans/${planId}/cycles/${cycleId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status: "active" }),
+  });
 }
 
 interface FullEvent {
@@ -403,6 +415,47 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
     expect(agent).toBeDefined();
     expect(agent!.message.toLowerCase()).toContain("report");
   });
+
+  test("CR-CRU-036 §S1: register with an OPEN plan but NO active cycle warns[] 'no-active-cycle'/'activate a cycle first' + stderr, posts NO agent, exits non-zero — WORKFLOW_CYCLE_ID set is ignored", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-rc-no-active-cycle");
+    // Files an open plan whose two cycles are both `pending` — never activated.
+    const plan = await filePlan(baseUrl, key, "CR-RC-NO-ACTIVE-CYCLE");
+    const dir = scratch.dir("rust-crucible-proj-");
+    writeEnvFile(dir, key);
+
+    const res = await runScript(
+      RUST_SCRIPT_PATH,
+      ["register", "--agent", "r-no-cycle", "--phase", "RED", "--project-dir", dir],
+      // A stale WORKFLOW_CYCLE_ID pointing at a REAL (but pending) cycle in
+      // this very plan must change NOTHING — §S1 removes the env var.
+      { cwd: dir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stderr).toContain("no-active-cycle");
+    expect(res.stderr).toContain("activate a cycle first");
+    expect(res.stdout).toContain("no-active-cycle");
+    expect(await getAgentIds(baseUrl, key)).not.toContain("r-no-cycle");
+  });
+
+  test("CR-CRU-036 §S1: register with NO open plan at all is tolerant — proceeds with no warning and no withhold", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-rc-tolerant-no-plan");
+    const dir = scratch.dir("rust-crucible-proj-");
+    writeEnvFile(dir, key);
+
+    const res = await runScript(RUST_SCRIPT_PATH, ["register", "--agent", "r-tolerant", "--project-dir", dir], {
+      cwd: dir,
+      crucibleUrl: baseUrl,
+    });
+
+    expect(res.code).toBe(0);
+    expect(res.stdout).not.toContain("no-active-cycle");
+    expect(await getAgentIds(baseUrl, key)).toContain("r-tolerant");
+  });
 });
 
 describe("clients/rust-crucible.py — auto-ingest: /api/v2/runs, tier:'unit', full context enrichment (CR-CRU-008 §S2)", () => {
@@ -465,12 +518,16 @@ describe("clients/rust-crucible.py — auto-ingest: /api/v2/runs, tier:'unit', f
     expect(proxy.calls.some((c) => c.path === "/api/ingest")).toBe(false);
   });
 
-  test("with WORKFLOW_CYCLE_ID/WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set, records full context: cycleId, cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
+  test("with an ACTIVE cycle seeded server-side + WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set, records full context: cycleId AUTO-ATTACHED from the server (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing), cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-auto-ingest-context");
-    // §S7: file a real plan so WORKFLOW_CYCLE_ID maps to an existing cycle.
-    const cycleId = await filePlanCycleId(baseUrl, key, "CR-RC-CONTEXT");
+    // CR-CRU-036 §S1: seed an ACTIVE cycle server-side; feed the OTHER
+    // (real, but pending) cycle to WORKFLOW_CYCLE_ID to prove it's ignored.
+    const plan = await filePlan(baseUrl, key, "CR-RC-CONTEXT");
+    const activeCycleId = plan.cycles[0]!.id;
+    const otherCycleId = plan.cycles[1]!.id;
+    await activateCycle(baseUrl, key, plan.planId, activeCycleId);
     const dir = fixtureDir(key);
 
     await runScript(
@@ -480,7 +537,7 @@ describe("clients/rust-crucible.py — auto-ingest: /api/v2/runs, tier:'unit', f
         cwd: dir,
         crucibleUrl: baseUrl,
         env: {
-          WORKFLOW_CYCLE_ID: String(cycleId),
+          WORKFLOW_CYCLE_ID: String(otherCycleId),
           WORKFLOW_CYCLE: "rust-crucible + mvn-crucible v2 upgrade",
           WORKFLOW_WAVE: "wave-4",
           WORKFLOW_ROLE: "track-3",
@@ -491,7 +548,7 @@ describe("clients/rust-crucible.py — auto-ingest: /api/v2/runs, tier:'unit', f
     const events = await getEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
-    expect(event.context?.cycleId).toBe(cycleId);
+    expect(event.context?.cycleId).toBe(activeCycleId);
     expect(event.context?.cycle).toBe("rust-crucible + mvn-crucible v2 upgrade");
     expect(event.context?.wave).toBe("wave-4");
     expect(event.context?.orchestrator).toBe("track-3");
@@ -708,6 +765,47 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
     expect(agent).toBeDefined();
     expect(agent!.message.toLowerCase()).toContain("report");
   });
+
+  test("CR-CRU-036 §S1: register with an OPEN plan but NO active cycle warns[] 'no-active-cycle'/'activate a cycle first' + stderr, posts NO agent, exits non-zero — WORKFLOW_CYCLE_ID set is ignored", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-mc-no-active-cycle");
+    // Files an open plan whose two cycles are both `pending` — never activated.
+    const plan = await filePlan(baseUrl, key, "CR-MC-NO-ACTIVE-CYCLE");
+    const dir = scratch.dir("mvn-crucible-proj-");
+    writeEnvFile(dir, key);
+
+    const res = await runScript(
+      MVN_SCRIPT_PATH,
+      ["register", "--agent", "m-no-cycle", "--phase", "RED", "--project-dir", dir],
+      // A stale WORKFLOW_CYCLE_ID pointing at a REAL (but pending) cycle in
+      // this very plan must change NOTHING — §S1 removes the env var.
+      { cwd: dir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stderr).toContain("no-active-cycle");
+    expect(res.stderr).toContain("activate a cycle first");
+    expect(res.stdout).toContain("no-active-cycle");
+    expect(await getAgentIds(baseUrl, key)).not.toContain("m-no-cycle");
+  });
+
+  test("CR-CRU-036 §S1: register with NO open plan at all is tolerant — proceeds with no warning and no withhold", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-mc-tolerant-no-plan");
+    const dir = scratch.dir("mvn-crucible-proj-");
+    writeEnvFile(dir, key);
+
+    const res = await runScript(MVN_SCRIPT_PATH, ["register", "--agent", "m-tolerant", "--project-dir", dir], {
+      cwd: dir,
+      crucibleUrl: baseUrl,
+    });
+
+    expect(res.code).toBe(0);
+    expect(res.stdout).not.toContain("no-active-cycle");
+    expect(await getAgentIds(baseUrl, key)).toContain("m-tolerant");
+  });
 });
 
 describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/regression (fake mvnw stub, CR-CRU-008 §S2)", () => {
@@ -870,12 +968,16 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
-  test("with WORKFLOW_CYCLE_ID/WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set, the 'unit' tier ingest records full context; unset, the event has no context key", async () => {
+  test("with an ACTIVE cycle seeded server-side + WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set, the 'unit' tier ingest records full context: cycleId AUTO-ATTACHED from the server (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing)", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-mc-unit-context");
-    // §S7: file a real plan so WORKFLOW_CYCLE_ID maps to an existing cycle.
-    const cycleId = await filePlanCycleId(baseUrl, key, "CR-MC-CONTEXT");
+    // CR-CRU-036 §S1: seed an ACTIVE cycle server-side; feed the OTHER
+    // (real, but pending) cycle to WORKFLOW_CYCLE_ID to prove it's ignored.
+    const plan = await filePlan(baseUrl, key, "CR-MC-CONTEXT");
+    const activeCycleId = plan.cycles[0]!.id;
+    const otherCycleId = plan.cycles[1]!.id;
+    await activateCycle(baseUrl, key, plan.planId, activeCycleId);
     const dir = fixtureDir(key);
     const reportsDir = join(dir, "target", "surefire-reports");
     Bun.spawnSync({ cmd: ["mkdir", "-p", reportsDir] });
@@ -893,7 +995,7 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
         cwd: dir,
         crucibleUrl: baseUrl,
         env: {
-          WORKFLOW_CYCLE_ID: String(cycleId),
+          WORKFLOW_CYCLE_ID: String(otherCycleId),
           WORKFLOW_CYCLE: "rust-crucible + mvn-crucible v2 upgrade",
           WORKFLOW_WAVE: "wave-4",
           WORKFLOW_ROLE: "track-3",
@@ -904,23 +1006,32 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
     const eventsWithContext = await getEvents(baseUrl, key);
     expect(eventsWithContext.length).toBe(1);
     const eventWithContext = await getFullEvent(baseUrl, eventsWithContext[0]!.id);
-    expect(eventWithContext.context?.cycleId).toBe(cycleId);
+    expect(eventWithContext.context?.cycleId).toBe(activeCycleId);
     expect(eventWithContext.context?.cycle).toBe("rust-crucible + mvn-crucible v2 upgrade");
     expect(eventWithContext.context?.wave).toBe("wave-4");
     expect(eventWithContext.context?.orchestrator).toBe("track-3");
     expect(eventWithContext.context?.git?.branch).toBe("cr-cru-008-c3-mvn-fixture-branch");
     expect(typeof eventWithContext.context?.git?.commit).toBe("string");
+  });
 
-    // Second run, same fixture, NO WORKFLOW_* env — must have no context key.
+  test("CR-CRU-036 §S1 tolerant path: NO open plan at all + no WORKFLOW_* env — the 'unit' tier ingest proceeds and the event has no context key", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-mc-unit-no-context");
+    const dir = fixtureDir(key);
+    const reportsDir = join(dir, "target", "surefire-reports");
+    Bun.spawnSync({ cmd: ["mkdir", "-p", reportsDir] });
+    writeJunitXml(join(reportsDir, "TEST-FooTest.xml"), "FooTest", [{ name: "testOne" }]);
+
     await runScript(
       MVN_SCRIPT_PATH,
       ["unit", "--test", "FooTest", "--agent", "mvn-no-context-agent", "--project-dir", dir],
       { cwd: dir, crucibleUrl: baseUrl },
     );
-    const eventsAfter = await getEvents(baseUrl, key);
-    expect(eventsAfter.length).toBe(2);
-    const secondEvent = await getFullEvent(baseUrl, eventsAfter[0]!.id);
-    expect(secondEvent.context).toBeUndefined();
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+    expect(event.context).toBeUndefined();
   });
 });
 

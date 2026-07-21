@@ -218,19 +218,31 @@ async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: stri
 }
 
 /**
- * Files a real OPEN plan and returns its first cycle id so a synthetic
- * WORKFLOW_CYCLE_ID references a cycle that actually exists in THIS project.
- * CR-CRU-024 §S7 refuses an unlinkable cycleId (400, event dropped) — Crucible
- * is the source of truth — so the env cycleId must map to a genuinely-filed cycle.
+ * Files a real OPEN plan with two `pending` cycles (neither active) — the
+ * CR-CRU-036 §S1 fixture primitive: "open plan, no active cycle" until
+ * `activateCycle` below promotes one of them.
  */
-async function filePlanCycleId(baseUrl: string, key: string, cr: string): Promise<number> {
+async function filePlan(baseUrl: string, key: string, cr: string): Promise<{ planId: number; cycles: Array<{ id: number }> }> {
   const res = await fetch(`${baseUrl}/api/v2/projects/${key}/plans`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ cr, cycles: [{ label: "A" }, { label: "B" }] }),
   });
-  const body = (await res.json()) as { cycles: Array<{ id: number }> };
-  return body.cycles[0]!.id;
+  return (await res.json()) as { planId: number; cycles: Array<{ id: number }> };
+}
+
+/**
+ * CR-CRU-036 §S1: PATCHes a plan's cycle to `status:"active"` directly
+ * against the plans API — the "seed an active cycle on the test server"
+ * step (project → plan-file → cycle-activate) so the client's server-side
+ * auto-attach resolver has a real target.
+ */
+async function activateCycle(baseUrl: string, key: string, planId: number, cycleId: number): Promise<void> {
+  await fetch(`${baseUrl}/api/v2/projects/${key}/plans/${planId}/cycles/${cycleId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status: "active" }),
+  });
 }
 
 interface FullEvent {
@@ -500,6 +512,48 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
     expect(agent).toBeDefined();
     expect(agent!.message.toLowerCase()).toContain("report");
   });
+
+  test("CR-CRU-036 §S1: register with an OPEN plan but NO active cycle warns[] 'no-active-cycle'/'activate a cycle first' + stderr, posts NO agent, exits non-zero — WORKFLOW_CYCLE_ID set is ignored", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-pc-no-active-cycle");
+    // Files an open plan whose two cycles are both `pending` — never activated.
+    const plan = await filePlan(baseUrl, key, "CR-PC-NO-ACTIVE-CYCLE");
+    const dir = scratch.dir("python-crucible-proj-");
+    writeEnvFile(dir, key);
+
+    const res = await runScript(
+      PYTHON_SCRIPT_PATH,
+      ["register", "--agent", "p-no-cycle", "--phase", "RED", "--project-dir", dir],
+      // A stale WORKFLOW_CYCLE_ID pointing at a REAL (but pending) cycle in
+      // this very plan must change NOTHING — §S1 removes the env var.
+      { cwd: dir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stderr).toContain("no-active-cycle");
+    expect(res.stderr).toContain("activate a cycle first");
+    expect(res.stdout).toContain("no-active-cycle");
+    expect(await getAgentIds(baseUrl, key)).not.toContain("p-no-cycle");
+  });
+
+  test("CR-CRU-036 §S1: register with NO open plan at all is tolerant — proceeds with no warning and no withhold", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-pc-tolerant-no-plan");
+    const dir = scratch.dir("python-crucible-proj-");
+    writeEnvFile(dir, key);
+
+    const res = await runScript(
+      PYTHON_SCRIPT_PATH,
+      ["register", "--agent", "p-tolerant", "--phase", "RED", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    expect(res.code).toBe(0);
+    expect(res.stdout).not.toContain("no-active-cycle");
+    expect(await getAgentIds(baseUrl, key)).toContain("p-tolerant");
+  });
 });
 
 describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'unit', context enrichment (fake xmlrunner, CR-CRU-008 §S2)", () => {
@@ -561,12 +615,18 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
-  test("with WORKFLOW_CYCLE_ID/WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set + a git repo, records full context: cycleId, cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
+  test("with an ACTIVE cycle seeded server-side + WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set + a git repo, records full context: cycleId AUTO-ATTACHED from the server (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing), cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-test-context");
-    // §S7: file a real plan so WORKFLOW_CYCLE_ID maps to an existing cycle.
-    const cycleId = await filePlanCycleId(baseUrl, key, "CR-PC-CONTEXT");
+    // CR-CRU-036 §S1: seed an ACTIVE cycle server-side (plan-file + activate
+    // cycles[0]). cycles[1] stays pending and is fed to WORKFLOW_CYCLE_ID —
+    // a REAL, linkable, but NOT-active cycle — proving the env var is read
+    // by nobody: if it still won, context.cycleId would be cycles[1]'s id.
+    const plan = await filePlan(baseUrl, key, "CR-PC-CONTEXT");
+    const activeCycleId = plan.cycles[0]!.id;
+    const otherCycleId = plan.cycles[1]!.id;
+    await activateCycle(baseUrl, key, plan.planId, activeCycleId);
     const { dir, pythonPath } = fixtureDir(key);
     runGit(["init", "-q"], dir);
     runGit(["symbolic-ref", "HEAD", `refs/heads/${branch}`], dir);
@@ -584,7 +644,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
           PYTHONPATH: pythonPath,
           FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("fixture", [{ name: "one" }]),
           FAKE_XMLRUNNER_EXIT_CODE: "0",
-          WORKFLOW_CYCLE_ID: String(cycleId),
+          WORKFLOW_CYCLE_ID: String(otherCycleId),
           WORKFLOW_CYCLE: "python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix",
           WORKFLOW_WAVE: "wave-4",
           WORKFLOW_ROLE: "track-4",
@@ -595,7 +655,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     const events = await getEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
-    expect(event.context?.cycleId).toBe(cycleId);
+    expect(event.context?.cycleId).toBe(activeCycleId);
     expect(event.context?.cycle).toBe("python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix");
     expect(event.context?.wave).toBe("wave-4");
     expect(event.context?.orchestrator).toBe("track-4");
@@ -893,6 +953,48 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
     ).toBe(true);
     expect(proxy.calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
   });
+
+  test("CR-CRU-036 §S1: register with an OPEN plan but NO active cycle warns[] 'no-active-cycle'/'activate a cycle first' + stderr, posts NO agent, exits non-zero — WORKFLOW_CYCLE_ID set is ignored", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-no-active-cycle");
+    // Files an open plan whose two cycles are both `pending` — never activated.
+    const plan = await filePlan(baseUrl, key, "CR-AC-NO-ACTIVE-CYCLE");
+    const dir = scratch.dir("arduino-crucible-proj-");
+    writeArduinoEnvFile(dir, key, "clients-ac-no-active-cycle");
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["register", "--agent", "a-no-cycle", "--phase", "RED", "--project-dir", dir],
+      // A stale WORKFLOW_CYCLE_ID pointing at a REAL (but pending) cycle in
+      // this very plan must change NOTHING — §S1 removes the env var.
+      { cwd: dir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stderr).toContain("no-active-cycle");
+    expect(res.stderr).toContain("activate a cycle first");
+    expect(res.stdout).toContain("no-active-cycle");
+    expect(await getAgentIds(baseUrl, key)).not.toContain("a-no-cycle");
+  });
+
+  test("CR-CRU-036 §S1: register with NO open plan at all is tolerant — proceeds with no warning and no withhold", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-tolerant-no-plan");
+    const dir = scratch.dir("arduino-crucible-proj-");
+    writeArduinoEnvFile(dir, key, "clients-ac-tolerant-no-plan");
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["register", "--agent", "a-tolerant", "--phase", "RED", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    expect(res.code).toBe(0);
+    expect(res.stdout).not.toContain("no-active-cycle");
+    expect(await getAgentIds(baseUrl, key)).toContain("a-tolerant");
+  });
 });
 
 describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:'unit', context enrichment (fake no-op make, CR-CRU-008 §S2)", () => {
@@ -959,12 +1061,16 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
-  test("with WORKFLOW_CYCLE_ID/WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set + a git repo, records full context: cycleId, cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
+  test("with an ACTIVE cycle seeded server-side + WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set + a git repo, records full context: cycleId AUTO-ATTACHED from the server (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing), cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-unit-context");
-    // §S7: file a real plan so WORKFLOW_CYCLE_ID maps to an existing cycle.
-    const cycleId = await filePlanCycleId(baseUrl, key, "CR-AC-CONTEXT");
+    // CR-CRU-036 §S1: seed an ACTIVE cycle server-side; feed the OTHER
+    // (real, but pending) cycle to WORKFLOW_CYCLE_ID to prove it's ignored.
+    const plan = await filePlan(baseUrl, key, "CR-AC-CONTEXT");
+    const activeCycleId = plan.cycles[0]!.id;
+    const otherCycleId = plan.cycles[1]!.id;
+    await activateCycle(baseUrl, key, plan.planId, activeCycleId);
     const { dir, path } = fixtureDirWithFakeMake(key, "clients-ac-unit-context", [{ name: "led_on" }]);
     runGit(["init", "-q"], dir);
     runGit(["symbolic-ref", "HEAD", `refs/heads/${branch}`], dir);
@@ -979,7 +1085,7 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
       crucibleUrl: baseUrl,
       env: {
         PATH: path,
-        WORKFLOW_CYCLE_ID: String(cycleId),
+        WORKFLOW_CYCLE_ID: String(otherCycleId),
         WORKFLOW_CYCLE: "python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix",
         WORKFLOW_WAVE: "wave-4",
         WORKFLOW_ROLE: "track-4",
@@ -989,7 +1095,7 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
     const events = await getEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
-    expect(event.context?.cycleId).toBe(cycleId);
+    expect(event.context?.cycleId).toBe(activeCycleId);
     expect(event.context?.cycle).toBe("python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix");
     expect(event.context?.wave).toBe("wave-4");
     expect(event.context?.orchestrator).toBe("track-4");
