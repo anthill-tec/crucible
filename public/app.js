@@ -3523,9 +3523,11 @@
         div({ class: "app-drillin-inhead" }, DetailHeadContent(eventId)),
         // CR-CRU-023 §S1 — same shared pane-content wrapper as the
         // workspace's WorkspaceRunDetail form: the run detail is one of the
-        // seven floored pane surfaces wherever it renders. paneSwap's
-        // scroll save/restore reads the OUTER timeline `.app-center`
-        // (detailDom.parentElement), untouched by this inner wrapper.
+        // seven floored pane surfaces wherever it renders. Post CR-CRU-029
+        // §S1/§S2, paneSwap's scroll save/restore reads the run-detail's OWN
+        // inner `pane-scroll` box (detailDom.querySelector('[data-testid=
+        // "pane-scroll"]')) — this wrapper — not the outer timeline
+        // `.app-center` (see the paneSwap comment at ~1059-1063).
         div(
           { "data-testid": "pane-scroll", class: "app-pane-content" },
           RunDetailBody(eventId),
