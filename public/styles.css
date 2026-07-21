@@ -225,15 +225,44 @@ body {
   border-radius: 12px;
   padding: 10px 12px;
   min-width: 0;
-  /* CR-CRU-016 §S1 — every pane is its own scroller. */
   min-height: 0;
-  overflow-y: auto;
 }
-/* CR-CRU-016 AC2 — feed scroll runway: a central pane's content reserves
-   extra scroll room beyond the pane height so a restored reading position
-   (closing an in-pane run detail) is always reachable, however short the
-   feed currently is. */
-.app-center > .app-pane-content { min-height: calc(100% + 260px); }
+/* CR-CRU-029 §S1 — the right rail keeps being its own vertical scroller
+   (unchanged from CR-016). */
+.app-pane { overflow-y: auto; }
+/* CR-CRU-029 §S1 (mechanism a) — a central pane is a HEIGHT-BOUNDED,
+   NON-scrolling flex column: it delegates BOTH scroll axes to its
+   `.app-pane-content` child so that child stays viewport-sized and both
+   scrollbars pin to ITS edges, reachable at any scroll position. (Was a
+   vertical scroller whose overflowing height carried the horizontal bar
+   off-screen — CR-CRU-029 the bug.) */
+.app-center {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* CR-CRU-029 §S1 — the home in-pane run overlay is likewise a bounded flex
+   column so its own `.app-pane-content` scroller fills it. */
+.app-drillin.app-inpane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* CR-CRU-029 §S1 — the pane-scroll box: the dual-axis scroller, flex-filled
+   to the bounded pane height so it never grows past the viewport. */
+.app-center > .app-pane-content,
+.app-inpane > .app-pane-content {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* CR-CRU-016 AC2 — feed scroll runway RELOCATED (CR-CRU-029 §S1) off the
+   pane-scroll box (where `min-height: calc(100% + 260px)` un-bounded the
+   scroller, pushing its horizontal bar out of view) ONTO its content child:
+   the runway reserves extra scroll room INSIDE the now-bounded pane so a
+   restored reading position (closing an in-pane run detail) stays reachable,
+   however short the feed. */
+.app-pane-content > .app-pane-runway { min-height: calc(100% + 260px); }
 /* CR-CRU-023 §S1 — global pane scroll floor (min supported screen
    1024×640): the shared content wrapper is each central pane's own
    horizontal scroll boundary. Its children carry a min-width floor, so
@@ -243,8 +272,9 @@ body {
    (1024 − 2×12 frame padding − 260px right-rail minimum − 12px grid gap −
    2×12 pane padding − 2px borders), so standard content stays scroll-free
    at 1024×640 with headroom for a scrollbar gutter; home's full-width
-   timeline is far wider still. */
-.app-pane-content { overflow-x: auto; }
+   timeline is far wider still. CR-CRU-029 §S1 — overflow-x stays on the
+   pane-scroll box (now paired with overflow-y so it owns BOTH axes). */
+.app-pane-content { overflow-x: auto; overflow-y: auto; }
 .app-pane-content > * { min-width: 660px; }
 .app-rail-title {
   font: 600 11px/1.4 var(--mono);

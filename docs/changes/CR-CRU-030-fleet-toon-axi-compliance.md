@@ -146,11 +146,28 @@ proxy exists. Both gate verbs return the §S1 envelope like every other verb.
 migrated, notify Model-B (via Sandesh) that the expected gate use case is
 **streaming** (`gate-run`), not `gate-report`.
 
+### §S9 Auto-attach ingests to the ACTIVE cycle (no hand-passed `WORKFLOW_CYCLE_ID`)
+The ingest verbs (`test`/`regression`/`auto-ingest`) resolve the cycle to attach
+to FROM THE SERVER, not solely from the `WORKFLOW_CYCLE_ID` env var. When the env
+var is unset, the client resolves the open plan (existing `_open_plans` path) and
+reads its cycles via the existing `GET /api/v2/projects/<key>/plans`, then attaches
+the run to the plan's single **`status:"active"`** cycle (the CR-024 guard keeps
+exactly one). So attachment becomes automatic from `cycle-activate` alone — the
+orchestrator's activation is the only input; `WORKFLOW_CYCLE_ID` is demoted to an
+optional explicit override. **No active cycle** (all cycles terminal, or none
+activated → the query yields none) is a **HARD ERROR** on `register`/ingest
+("no active cycle — activate one first"), never a silent orphan. This SUPERSEDES
+§S3's soft `no-cycle-id` warning for the cycle-attach case: the client now attaches
+(active present) or errors (none), instead of warning-and-proceeding-orphaned.
+Rationale: manual `WORKFLOW_CYCLE_ID` passing repeatedly orphaned runs
+(`cycleId=NONE`); making the client read the active cycle the orchestrator already
+sets removes the whole failure mode. Applies to all five clients.
+
 ## Acceptance criteria
 - [ ] A shared envelope builder emits the §S1 schema; `clients/toon.py` decodes every verb's stdout back to a dict with `verb` + `ok`.
 - [ ] For EACH of `python`/`rust`/`mvn`/`arduino`-crucible.py: `register`, `unregister`, `plan-file`, `cycle-activate`, `cycle-done`, `cr-close`, `cycle-add`, and the ingest result print a `toon.py`-decodable envelope carrying `ok` + result fields (one assertion set per client).
 - [ ] Ingest-verb envelopes include `context.cycleId` (value when `WORKFLOW_CYCLE_ID` set; explicit null when unset) for all five clients.
-- [ ] `test --agent …` with `WORKFLOW_CYCLE_ID` unset + an active cycle → `no-cycle-id` warning (envelope + stderr) naming the active id, for all five clients; set → no warning.
+- [ ] §S9: `test`/`regression`/`auto-ingest` with `WORKFLOW_CYCLE_ID` unset AUTO-ATTACHES the run to the open plan's `status:"active"` cycle — assert the ingested run's `context.cycleId` equals the active cycle id, for all five clients; with NO active cycle, `register`/ingest HARD-ERRORS (`ok:false` + "no active cycle", non-zero exit) and never orphans (`cycleId=NONE`); an explicit `WORKFLOW_CYCLE_ID` still overrides the auto-resolution.
 - [ ] `cycle-add "<label>"` posts `POST …/plans/<planId>/cycles` and returns the assigned id in the envelope; appending to a CLOSED/absent plan → non-zero + an error envelope.
 - [ ] `plan-file`'s assigned cycle ids stay machine-readable via the envelope (the "never guess ids" contract holds under TOON).
 - [ ] `context` is REQUIRED in the envelope of every classification-carrying verb; `wave` + `cr` present on plan/run-scoped verbs, `cycleId` on cycle-scoped ingests, `track` when `WORKFLOW_ROLE` set — asserted per client.

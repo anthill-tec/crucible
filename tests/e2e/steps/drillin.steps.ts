@@ -88,15 +88,31 @@ Step("the workspace is visible", async ({ page }) => {
 // "the page scrollY is 0" step, which no longer applies — see
 // docs/changes/CR-CRU-016-inpane-drill-in.md Gap analysis ("Scroll
 // restore").
+// CR-CRU-029 §S1 — the pane's OWN scroller is now the bounded
+// `[data-testid="pane-scroll"]` box (mechanism a), not the outer
+// `workspace-runs` `.app-center` (which no longer scrolls). The CR-016 AC2
+// restore contract acts on pane-scroll (see viewport-dual-axis-scroll.feature
+// §S2), so these shared steps read/write scrollTop on it. The pane-scroll
+// handle is SCOPED under `workspace-runs` (a testid unique to the mounted Runs
+// pane) rather than a bare page-level `getByTestId("pane-scroll")`: pane-scroll
+// exists on EVERY central pane, so a bare lookup right after a tab click can
+// grab the outgoing tab's still-mounted pane-scroll before VanJS swaps it in
+// (the same one-tick race pane-scroll.steps.ts's `waitForRunsPaneMounted`
+// absorbs). Nesting under workspace-runs reuses the auto-retrying wait that
+// made the original `workspace-runs` step reliable.
 Step("I scroll the workspace Runs pane down by {int}px", async ({ page }, amount: number) => {
-  await page.getByTestId("workspace-runs").evaluate((el, amt) => {
-    (el as HTMLElement).scrollTop = amt;
-  }, amount);
+  await page
+    .getByTestId("workspace-runs")
+    .getByTestId("pane-scroll")
+    .evaluate((el, amt) => {
+      (el as HTMLElement).scrollTop = amt;
+    }, amount);
 });
 
 Step("the workspace Runs pane's scrollTop is {int}", async ({ page }, expected: number) => {
   const scrollTop = await page
     .getByTestId("workspace-runs")
+    .getByTestId("pane-scroll")
     .evaluate((el) => (el as HTMLElement).scrollTop);
   expect(scrollTop).toBe(expected);
 });

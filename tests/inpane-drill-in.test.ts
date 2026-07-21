@@ -489,7 +489,10 @@ describe("AC2 — closing the detail restores the pane's own scroller's EXACT pr
     await settle();
     expect(runsTab!.classList.contains("on")).toBe(true);
 
-    const runsPaneBefore = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement;
+    // CR-CRU-029 §S1 — the pane's own scroller is the bounded
+    // `[data-testid="pane-scroll"]` box now (not the outer `workspace-runs`
+    // `.app-center`, which no longer scrolls).
+    const runsPaneBefore = document.querySelector('[data-testid="pane-scroll"]') as HTMLElement;
     expect(runsPaneBefore).not.toBeNull();
     // The user scrolled the FEED itself (the pane's own scroller) — the
     // gap-analysis trap is a mechanism that instead tracks window.scrollY,
@@ -511,7 +514,7 @@ describe("AC2 — closing the detail restores the pane's own scroller's EXACT pr
     await settle();
 
     expect(location.pathname).toBe(`/p/${projectKey}`);
-    const runsPaneAfter = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement;
+    const runsPaneAfter = document.querySelector('[data-testid="pane-scroll"]') as HTMLElement;
     expect(runsPaneAfter.querySelector('[data-testid="event-card"]')).not.toBeNull();
     expect(runsPaneAfter.scrollTop).toBe(240);
   });
@@ -1074,7 +1077,7 @@ describe("§S1 tabs-hide + tab-in-header — workspace-tabs ABSENT while a detai
     const marker = document.querySelector('[data-testid="transition-marker"]') as HTMLElement | null;
     expect(marker).not.toBeNull();
 
-    const runsPaneBefore = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement;
+    const runsPaneBefore = document.querySelector('[data-testid="pane-scroll"]') as HTMLElement;
     runsPaneBefore.scrollTop = 90;
 
     marker!.click();
@@ -1098,7 +1101,7 @@ describe("§S1 tabs-hide + tab-in-header — workspace-tabs ABSENT while a detai
     const runsTab = findByText(document, '[data-testid="workspace-tab"]', "Runs");
     expect(runsTab).toBeDefined();
     expect(runsTab!.classList.contains("on")).toBe(true);
-    const runsPaneAfter = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement;
+    const runsPaneAfter = document.querySelector('[data-testid="pane-scroll"]') as HTMLElement;
     expect(runsPaneAfter.scrollTop).toBe(90);
   });
 
@@ -1152,7 +1155,7 @@ describe("§S1 tabs-hide + tab-in-header — closing (chip / Escape / browser ba
     await settle();
     expect(runsTabBefore!.classList.contains("on")).toBe(true);
 
-    const runsPaneBefore = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement;
+    const runsPaneBefore = document.querySelector('[data-testid="pane-scroll"]') as HTMLElement;
     runsPaneBefore.scrollTop = 150;
 
     const card = document.querySelector('[data-testid="event-card"]') as HTMLElement;
@@ -1171,7 +1174,7 @@ describe("§S1 tabs-hide + tab-in-header — closing (chip / Escape / browser ba
     expect(runsTab).toBeDefined();
     expect(runsTab!.classList.contains("on")).toBe(true);
 
-    const runsPaneAfter = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement;
+    const runsPaneAfter = document.querySelector('[data-testid="pane-scroll"]') as HTMLElement;
     expect(runsPaneAfter.scrollTop).toBe(150);
   });
 

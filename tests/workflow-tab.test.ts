@@ -579,8 +579,11 @@ describe("Workflow tab — CR-016 bindings: clicking a linked run swaps the WORK
 
     await openWorkflowTab();
 
-    const paneBefore = document.querySelector('[data-testid="workspace-body"]')!
-      .firstElementChild as HTMLElement;
+    // CR-CRU-029 §S1 — the pane's own scroller is the bounded
+    // `[data-testid="pane-scroll"]` box now (mechanism a), not the outer
+    // `.app-center` (workspace-body.firstElementChild), which no longer
+    // scrolls. CR-016 AC2 restore acts on pane-scroll (§S2).
+    const paneBefore = document.querySelector('[data-testid="pane-scroll"]') as HTMLElement;
     expect(paneBefore).not.toBeNull();
     paneBefore.scrollTop = 175;
 
@@ -605,8 +608,7 @@ describe("Workflow tab — CR-016 bindings: clicking a linked run swaps the WORK
     const active = document.querySelector('[data-testid="workflow-active"]');
     expect(active).not.toBeNull();
 
-    const paneAfter = document.querySelector('[data-testid="workspace-body"]')!
-      .firstElementChild as HTMLElement;
+    const paneAfter = document.querySelector('[data-testid="pane-scroll"]') as HTMLElement;
     expect(paneAfter.scrollTop).toBe(175);
   });
 
