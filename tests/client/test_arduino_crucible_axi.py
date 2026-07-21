@@ -106,6 +106,119 @@ else:
     sys.exit(1)
 '''
 
+# ── C6 VERIFY-fix: §S8 interim-snapshot fixture (mirrors
+# test_bun_crucible_gates.py::GateRunAxiProxyTest exactly) -- a PROGRESSIVE
+# fake `no-mistakes` that writes 3 in-flight snapshots to a shared state file
+# over ~3 real seconds (comfortably past the >=2s §S2b cadence) before the
+# final resolved snapshot, so a correctly-throttled gate-run has exactly one
+# legitimate window to POST an interim gate before the unconditional final
+# seal.
+_INTERIM_RELAY_MARKER = "arduino-gate-axi-interim-relay-marker-555"
+_INTERIM_SNAPSHOT_1 = (
+    'run:\n'
+    '  id: "gate-axi-arduino-interim-001"\n'
+    f'  branch: {_INTERIM_RELAY_MARKER}\n'
+    '  status: running\n'
+    '  head: cc33dd4\n'
+    '  findings: 0\n'
+    '  steps[3]{step,status,findings,duration_ms}:\n'
+    '    intent,completed,0,100\n'
+    '    rebase,completed,0,50\n'
+    '    review,completed,1,200\n'
+)
+_INTERIM_SNAPSHOT_2 = (
+    'run:\n'
+    '  id: "gate-axi-arduino-interim-001"\n'
+    f'  branch: {_INTERIM_RELAY_MARKER}\n'
+    '  status: running\n'
+    '  head: cc33dd4\n'
+    '  findings: 1\n'
+    '  steps[6]{step,status,findings,duration_ms}:\n'
+    '    intent,completed,0,100\n'
+    '    rebase,completed,0,50\n'
+    '    review,completed,1,200\n'
+    '    test,completed,0,300\n'
+    '    document,completed,0,150\n'
+    '    lint,completed,0,80\n'
+)
+_INTERIM_SNAPSHOT_3 = (
+    'run:\n'
+    '  id: "gate-axi-arduino-interim-001"\n'
+    f'  branch: {_INTERIM_RELAY_MARKER}\n'
+    '  status: running\n'
+    '  head: cc33dd4\n'
+    '  findings: 1\n'
+    '  steps[8]{step,status,findings,duration_ms}:\n'
+    '    intent,completed,0,100\n'
+    '    rebase,completed,0,50\n'
+    '    review,completed,1,200\n'
+    '    test,completed,0,300\n'
+    '    document,completed,0,150\n'
+    '    lint,completed,0,80\n'
+    '    push,completed,0,40\n'
+    '    pr,skipped,0,10\n'
+)
+_INTERIM_SNAPSHOT_FINAL = (
+    'run:\n'
+    '  id: "gate-axi-arduino-interim-001"\n'
+    f'  branch: {_INTERIM_RELAY_MARKER}\n'
+    '  status: completed\n'
+    '  head: cc33dd4\n'
+    '  findings: 1\n'
+    '  steps[9]{step,status,findings,duration_ms}:\n'
+    '    intent,completed,0,100\n'
+    '    rebase,completed,0,50\n'
+    '    review,completed,1,200\n'
+    '    test,completed,0,300\n'
+    '    document,completed,0,150\n'
+    '    lint,completed,0,80\n'
+    '    push,completed,0,40\n'
+    '    pr,skipped,0,10\n'
+    '    ci,skipped,0,10\n'
+    'outcome: passed\n'
+)
+_FAKE_NO_MISTAKES_INTERIM_BODY = '''
+import json
+import os
+import sys
+import time
+
+argv = sys.argv[1:]
+state_file = os.environ.get("GATE_RUN_FAKE_STATE")
+
+
+def _write_state(text):
+    if state_file:
+        with open(state_file, "w") as f:
+            f.write(text)
+
+
+if len(argv) >= 2 and argv[0] == "axi" and argv[1] == "run":
+    argv_file = os.environ.get("GATE_RUN_FAKE_ARGV_FILE")
+    if argv_file:
+        with open(argv_file, "w") as f:
+            json.dump(argv, f)
+    _write_state({s1!r})
+    time.sleep(1.0)
+    _write_state({s2!r})
+    time.sleep(1.5)
+    _write_state({s3!r})
+    time.sleep(0.8)
+    _write_state({sf!r})
+    sys.stdout.write({sf!r})
+    sys.exit(0)
+elif len(argv) >= 2 and argv[0] == "axi" and argv[1] == "status":
+    content = ""
+    if state_file and os.path.exists(state_file):
+        with open(state_file) as f:
+            content = f.read()
+    sys.stdout.write(content or {s1!r})
+    sys.exit(0)
+else:
+    sys.stderr.write("fake no-mistakes: unsupported invocation: " + repr(argv) + "\\n")
+    sys.exit(1)
+'''.format(s1=_INTERIM_SNAPSHOT_1, s2=_INTERIM_SNAPSHOT_2, s3=_INTERIM_SNAPSHOT_3, sf=_INTERIM_SNAPSHOT_FINAL)
+
 # A fake `arduino-cli` substituted for the real (heavy, not always installed)
 # toolchain: always fails compilation with a recognizable error line.
 _FAKE_ARDUINO_CLI_BODY = '''#!/usr/bin/env python3
@@ -485,6 +598,174 @@ class ArduinoCrucibleVerbEnvelopeTest(_BaseArduinoAxiTest):
         self.assertNotIn("prefer-gate-run", codes,
                           "gate-run is itself the streaming standard -- it must never "
                           "carry the prefer-gate-run discouragement")
+
+    def test_gate_run_posts_interim_snapshot_before_final_sealed_gate(self):
+        """§S8 (CR-CRU-030 AC line 270, C6 VERIFY-fix): `gate-run` must POST
+        >=1 interim gate snapshot (from polling `axi status` while `axi run`
+        is still in flight) BEFORE the final sealed gate -- mirrors
+        test_bun_crucible_gates.py::GateRunAxiProxyTest.
+        test_gate_run_polls_status_for_interim_gates_and_seals_final_from_run_outcome
+        against the SAME `while proc.poll() is None:` polling loop
+        arduino-crucible.py's `cmd_gate_run` already wires up (confirmed by
+        reading the function body at arduino-crucible.py:868)."""
+        saved_path = os.environ.get("PATH", "")
+        fake_bin_dir = tempfile.mkdtemp(prefix="fake-no-mistakes-arduino-interim-")
+        fake_path = os.path.join(fake_bin_dir, "no-mistakes")
+        _write_fake_executable(fake_path, _FAKE_NO_MISTAKES_INTERIM_BODY)
+
+        state_file = os.path.join(self.tmpdir, "interim-state.toon")
+        argv_file = os.path.join(self.tmpdir, "interim-argv.json")
+        os.environ["PATH"] = fake_bin_dir + os.pathsep + saved_path
+        os.environ["GATE_RUN_FAKE_STATE"] = state_file
+        os.environ["GATE_RUN_FAKE_ARGV_FILE"] = argv_file
+
+        calls = []
+
+        def fake_post(path, payload):
+            calls.append((path, dict(payload) if isinstance(payload, dict) else payload))
+            return {"ok": True}
+
+        try:
+            with mock.patch.object(self.module, "_post", side_effect=fake_post, create=True):
+                code, out, _err = _run_main(self.module, [
+                    "gate-run", "--intent", "verify the interim polling path",
+                    "--project-dir", self.tmpdir,
+                ])
+        finally:
+            os.environ["PATH"] = saved_path
+            os.environ.pop("GATE_RUN_FAKE_STATE", None)
+            os.environ.pop("GATE_RUN_FAKE_ARGV_FILE", None)
+            shutil.rmtree(fake_bin_dir, ignore_errors=True)
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        self.assertIn(_INTERIM_RELAY_MARKER, out,
+                      "gate-run must relay the no-mistakes axi detail to its own stdout")
+
+        gate_calls = [c for c in calls if c[0] == "/api/v2/gates"]
+        self.assertGreaterEqual(len(gate_calls), 2,
+                                 f"expected >=1 interim + 1 final gate POST, got {calls}")
+        self.assertEqual(calls, gate_calls,
+                          "gate-run owns ALL Crucible plumbing -- no other endpoint "
+                          "should ever be hit")
+
+        *interim, final = gate_calls
+        self.assertGreaterEqual(len(interim), 1,
+                                 "gate-run must POST at least ONE interim snapshot "
+                                 "before the final sealed gate")
+
+        final_gate = final[1].get("gate", {})
+        self.assertEqual(final_gate.get("outcome"), "passed",
+                          "the final gate's outcome must match `axi run`'s resolved outcome")
+        self.assertEqual(len(final_gate.get("steps", [])), 9)
+
+        for _path, payload in interim:
+            interim_gate = payload.get("gate", {})
+            self.assertLess(len(interim_gate.get("steps", [])), 9,
+                             f"an interim gate must be a PARTIAL snapshot, got {interim_gate}")
+            self.assertIn(interim_gate.get("outcome"), ("checks-passed", "passed",
+                                                          "failed", "cancelled"),
+                           "gate.outcome is REQUIRED by the server even for an interim "
+                           "snapshot")
+
+
+# ── C6 VERIFY-fix: §S3 `no-wave` warning (CR-CRU-030 AC line 267) ──────────
+
+
+class ArduinoCrucibleNoWaveWarningTest(_BaseArduinoAxiTest):
+    """A `plan-file` with neither `--wave` nor `WORKFLOW_WAVE` resolvable must
+    emit a `no-wave` warning (envelope `warnings[]` + stderr) naming the CR
+    being filed; with either resolvable -> no `no-wave` warning, and the wave
+    is still carried. `--wave` still overrides `WORKFLOW_WAVE`.
+
+    RED: `cmd_plan_file` in arduino-crucible.py (confirmed by reading the
+    function body) builds `warnings = []` unconditionally -- there is no
+    no-wave detection at all, so the warning-presence assertion below fails
+    against the CURRENT baseline."""
+
+    def test_neither_wave_nor_env_emits_no_wave_warning_naming_the_cr(self):
+        resp = {"ok": True, "planId": "plan-90", "cr": "CR-CRU-090",
+                "cycles": [{"label": "a", "id": 900}]}
+        code, out, err, post_mock, _g, _pa = self._run_plan_file(resp)
+
+        self.assertEqual(code, 0,
+                          f"a wave-less plan-file must still file (no hard block); "
+                          f"stdout={out!r} stderr={err!r}")
+        payload = post_mock.call_args[0][1]
+        self.assertNotIn("wave", payload,
+                          "with neither --wave nor WORKFLOW_WAVE resolvable, the "
+                          "payload must still carry NO wave key at all")
+
+        axi = self._decode_axi(out)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertIn("no-wave", codes,
+                      f"plan-file with no resolvable wave must carry a `no-wave` "
+                      f"warning; got {axi!r}")
+        detail = " ".join(w.get("detail", "") for w in axi.get("warnings", [])
+                           if w.get("code") == "no-wave")
+        self.assertIn("CR-CRU-090", detail,
+                      f"the no-wave warning must NAME the CR being filed; "
+                      f"got detail={detail!r}")
+        self.assertIn("no-wave", err, "the no-wave warning must also surface on stderr")
+        self.assertIn("CR-CRU-090", err,
+                       "stderr must name the CR being filed, not just the code")
+
+    def test_wave_flag_present_omits_no_wave_warning(self):
+        resp = {"ok": True, "planId": "plan-91", "cr": "CR-CRU-091",
+                "cycles": [{"label": "a", "id": 901}]}
+        code, out, err, post_mock, _g, _pa = self._run_plan_file(resp, wave_flag="5")
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        payload = post_mock.call_args[0][1]
+        self.assertEqual(str(payload.get("wave")), "5")
+        axi = self._decode_axi(out)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertNotIn("no-wave", codes,
+                          f"--wave resolves the wave -- no no-wave warning should "
+                          f"fire; got {axi!r}")
+        self.assertNotIn("no-wave", err)
+
+    def test_workflow_wave_env_present_omits_no_wave_warning(self):
+        os.environ["WORKFLOW_WAVE"] = "4"
+        resp = {"ok": True, "planId": "plan-92", "cr": "CR-CRU-092",
+                "cycles": [{"label": "a", "id": 902}]}
+        code, out, err, post_mock, _g, _pa = self._run_plan_file(resp)
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        payload = post_mock.call_args[0][1]
+        self.assertEqual(str(payload.get("wave")), "4")
+        axi = self._decode_axi(out)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertNotIn("no-wave", codes,
+                          f"WORKFLOW_WAVE resolves the wave -- no no-wave warning "
+                          f"should fire; got {axi!r}")
+        self.assertNotIn("no-wave", err)
+
+    def test_wave_flag_overrides_env_and_still_omits_no_wave_warning(self):
+        os.environ["WORKFLOW_WAVE"] = "9"
+        resp = {"ok": True, "planId": "plan-93", "cr": "CR-CRU-093",
+                "cycles": [{"label": "a", "id": 903}]}
+        code, out, err, post_mock, _g, _pa = self._run_plan_file(resp, wave_flag="5")
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        payload = post_mock.call_args[0][1]
+        self.assertEqual(str(payload.get("wave")), "5", "--wave must win over WORKFLOW_WAVE")
+        self.assertNotEqual(str(payload.get("wave")), "9")
+        axi = self._decode_axi(out)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertNotIn("no-wave", codes)
+        self.assertNotIn("no-wave", err)
+
+    def _run_plan_file(self, post_return, wave_flag=None):
+        argv = ["plan-file", "--cr", post_return["cr"], "--cycles", "a",
+                "--project-dir", self.tmpdir]
+        if wave_flag is not None:
+            argv += ["--wave", wave_flag]
+        with mock.patch.object(self.module, "_post", return_value=post_return,
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=None, create=True) as get_mock, \
+             mock.patch.object(self.module, "_patch", return_value=None, create=True) as patch_mock:
+            code, out, err = _run_main(self.module, argv)
+        return code, out, err, post_mock, get_mock, patch_mock
 
 
 # ── §S9 auto-attach + hard error (via the `test` verb -- arduino has no ────
