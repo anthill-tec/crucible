@@ -149,7 +149,7 @@ class StatusQueueTableTest(_BaseStatusTest):
         self.assertEqual(len(rows), 2)
 
         row_a = self._row_for_cr(rows, "CR-A")
-        self.assertEqual(row_a.get("wave"), "3")
+        self.assertEqual(str(row_a.get("wave")), "3")
         self.assertEqual(row_a.get("status"), "open")
         self.assertEqual(row_a.get("activeCycleId"), 11,
                           f"activeCycleId must identify the plan's single ACTIVE cycle's id "
