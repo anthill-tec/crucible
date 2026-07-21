@@ -1156,6 +1156,35 @@ def cmd_abort(args):
     return 0 if ok else 1
 
 
+def cmd_status(args):
+    """§S6 — the plan/status READ verb (alias `plans`, no --agent). GET …/plans
+    and return the queue as a uniform-table §S1 envelope
+    (`plans[]{cr,wave,status,activeCycleId,activeCycleLabel,mergeCommit}`) plus
+    a top-level `lastRunCr` (the plan with the latest `closedAt`). Read-only —
+    the counterpart to the write/lifecycle verbs. An empty queue is an EXPLICIT
+    ok:true empty-queue envelope with a definitive message, never bare stdout;
+    a failed GET surfaces as ok:false + non-zero."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    resp = _get(_plans_path(project_dir))
+    if not resp.get("ok"):
+        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
+        _emit_axi("status", False, {"plans": [], "lastRunCr": None},
+                  _axi_context(project_dir), [], legacy)
+        return 1
+    plans = resp.get("plans", [])
+    rows = _axi().build_status_rows(plans)
+    last = _axi().last_run_cr(plans)
+    if not rows:
+        legacy = "status: ok=True — no plans filed for this project"
+        _emit_axi("status", True, {"plans": [], "lastRunCr": None},
+                  _axi_context(project_dir), [], legacy)
+        return 0
+    legacy = f"status: ok=True plans={len(rows)} lastRunCr={last}"
+    _emit_axi("status", True, {"plans": rows, "lastRunCr": last},
+              _axi_context(project_dir), [], legacy)
+    return 0
+
+
 # ── CR-CRU-013 §S5 — fleet gate / milestone verbs ──────────────────────────
 #
 # `gate-run`    axi PROXY: launch `no-mistakes axi run`, poll `axi status`
@@ -1719,6 +1748,14 @@ def main():
     ab.add_argument("--cr", help="Disambiguate when multiple plans are open.")
     _add_project_dir_arg(ab)
     ab.set_defaults(func=cmd_abort)
+
+    # ── CR-CRU-030 §S6 — the plan/status READ verb (alias `plans`, no --agent) ──
+    for _name in ("status", "plans"):
+        sv = sub.add_parser(_name,
+                            help="Read the plan queue (GET …/plans) as a TOON-AXI table "
+                                 "+ lastRunCr. Read-only; `plans` is an alias of `status`.")
+        _add_project_dir_arg(sv)
+        sv.set_defaults(func=cmd_status)
 
     # ── CR-CRU-013 §S5 — fleet gate / milestone verbs ──
     gr = sub.add_parser("gate-run",

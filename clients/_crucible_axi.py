@@ -113,6 +113,41 @@ def resolve_single_plan(plans, cr=None, open_only=False):
     return candidates[0], None
 
 
+def build_status_rows(plans):
+    """§S6 — the plan queue as uniform-table-safe rows (PURE): one dict per
+    plan with the SAME scalar-only key-set, so the list round-trips as a TOON
+    Construct-3 table (the subset cannot round-trip a nested-dict cell, so the
+    active cycle is FLATTENED to `activeCycleId`/`activeCycleLabel` scalar
+    columns). `activeCycle*` come from the plan's single `status:"active"`
+    cycle (null when none — a closed/pending plan); `mergeCommit` from
+    `plan.merge.commit` (null when open/unmerged)."""
+    rows = []
+    for p in plans or []:
+        active = None
+        for c in p.get("cycles", []):
+            if c.get("status") == "active":
+                active = c
+                break
+        rows.append({
+            "cr": p.get("cr"),
+            "wave": p.get("wave"),
+            "status": p.get("status"),
+            "activeCycleId": active.get("id") if active else None,
+            "activeCycleLabel": active.get("label") if active else None,
+            "mergeCommit": (p.get("merge") or {}).get("commit"),
+        })
+    return rows
+
+
+def last_run_cr(plans):
+    """§S6 — the `cr` of the plan with the LATEST `closedAt` (the last CR to
+    merge), or None when no plan has closed yet — never a fabricated guess."""
+    closed = [p for p in (plans or []) if p.get("closedAt") is not None]
+    if not closed:
+        return None
+    return max(closed, key=lambda p: p.get("closedAt")).get("cr")
+
+
 def resolve_active_cycle_id(plans):
     """§S9 auto-attach resolver (PURE): the single `status:"active"` cycle id
     among the OPEN plans of a `GET .../plans` payload, or None when there is
