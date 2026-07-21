@@ -1803,9 +1803,11 @@ describe("F4 anatomy — failures-footer (jump + raw-output, test events)", () =
 
     // Jump: the SECOND failing leaf-row (f2) is the "next" failure — stub
     // scrollIntoView (happy-dom has no real layout) and assert it fires on
-    // exactly that row.
-    const f2Row = findByText(overlay, '[data-testid="leaf-row"]', "f2") as HTMLElement;
-    expect(f2Row).toBeDefined();
+    // that leaf's row identified by its stable `data-leaf-key`. VanJS rebuilds
+    // the whole TestBody tree when focusedLeaf changes on the jump, so the
+    // freshly-rendered f2 row is a NEW DOM node — pre-render node identity can
+    // never survive that rebuild; key identity is the correct, layout-safe
+    // contract (mirrors inpane-drill-in.test.ts's §S2 focus-model pattern).
     const scrollCalls: HTMLElement[] = [];
     (HTMLElement.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView =
       function (this: HTMLElement) {
@@ -1816,7 +1818,7 @@ describe("F4 anatomy — failures-footer (jump + raw-output, test events)", () =
     jump!.click();
     await settle();
     expect(scrollCalls.length).toBe(1);
-    expect(scrollCalls[0]).toBe(f2Row);
+    expect((scrollCalls[0] as HTMLElement).getAttribute("data-leaf-key")).toBe("SuiteFooter::f2");
 
     // Raw toggle — test events too (not compile-only).
     expect(overlay.querySelector('[data-testid="raw-output"]')).toBeNull();
