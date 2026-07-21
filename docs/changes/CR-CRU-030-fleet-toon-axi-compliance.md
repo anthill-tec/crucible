@@ -16,6 +16,14 @@ unset, mis-grouping it into a phantom unnumbered "HISTORY — WAVE" band separat
 from Wave 4 — user 2026-07-18: "this essential information is mandatory for
 Crucible to display classifications correctly"). Same defect family: an
 essential classification value not attached, no guard, no visibility.
++ the **AXI manifesto** (https://axi.md) — the 10-principle Agent eXperience
+Interface standard this CR brings the whole fleet into full CLI-compliance with
+(§S10–§S15); principle 7 (ambient-context session hooks) splits to CR-CRU-035.
+
+**Applies to ALL FIVE clients including `bun-crucible.py`** — gap analysis
+(2026-07-21) confirmed the net-new verbs (§S4/§S6/§S7/§S9) and the AXI-CLI
+conventions (§S10–§S15) are absent even in bun. bun is the reference for §S1/§S2/§S3
+only; its own gaps are fixed here alongside the other four.
 
 ## Context
 The fleet clients (`bun`/`python`/`rust`/`mvn`/`arduino`-crucible.py — all
@@ -62,10 +70,15 @@ classification — `wave` and `cr` are mandatory for any plan/run-scoped verb;
 is set. A field that would classify the record but resolves empty is emitted as
 explicit null AND raises a `warnings[]` entry (§S3), never silently dropped —
 because a dropped classification value is precisely what Crucible cannot detect.
-Factor the envelope builder into the shared client code (the clients already
-share lifecycle/`.env`/context helpers) so all five emit an identical shape.
-Human-readable stderr lines may remain for interactive use; **stdout is the
-TOON AXI channel**.
+Factor the envelope builder into a **NEW shared module `clients/_crucible_axi.py`**
+(the five clients do NOT currently share code — each standalone client duplicates
+its own lifecycle/`.env`/context helpers; `_emit_axi`/`_axi_context` exist only in
+`bun-crucible.py`). This CR introduces the shared module and all five clients import
+it, so all five emit an identical envelope. The module also hosts the shared verb
+logic for the net-new verbs (§S4/§S6/§S7/§S9) and the AXI-CLI conventions
+(§S10–§S15). Human-readable stderr lines may remain for interactive use; **stdout is
+the TOON AXI channel** — and per AXI principle 6, STRUCTURED ERRORS go on stdout too
+(§S13), not only stderr.
 
 ### §S2 Migrate the four remaining clients
 Apply CR-013's bun-client pattern (cycle 51) to `python-crucible.py`, `rust-crucible.py`,
@@ -74,6 +87,16 @@ Apply CR-013's bun-client pattern (cycle 51) to `python-crucible.py`, `rust-cruc
 test/regression/auto-ingest ingest result, plus each stack's typecheck/compile
 gate) returns the §S1 envelope. The ingest-verb envelopes carry `context`
 (cycleId included).
+
+**Build sequence (gap analysis 2026-07-21 — the "reference" is incomplete):** bun is
+the reference ONLY for §S1/§S2/§S3. Verified: `cycle-add` (§S4), `status`/`plans`
+(§S6), `checkpoint`/`stop`/`abort` (§S7), the `prefer-gate-run` warning (§S8), §S9
+auto-attach, and the AXI-CLI conventions (§S10–§S15) are **absent even in bun**
+(`_run_context` reads `WORKFLOW_CYCLE_ID` from env only; `_active_cycle_id` is used
+solely to name the cycle in the §S3 warning, never to attach). So these are NET-NEW:
+build them in the shared `_crucible_axi.py` + wire the **bun reference first** (proven
+via its existing suite), THEN import + wire the other four. This is not "mechanical
+replication" of a complete reference; size re-estimated to **L** accordingly.
 
 ### §S3 Missing mandatory-classification-context guard (all clients)
 Every client warns (envelope `warnings[]` + stderr) when a mandatory
@@ -163,6 +186,62 @@ Rationale: manual `WORKFLOW_CYCLE_ID` passing repeatedly orphaned runs
 (`cycleId=NONE`); making the client read the active cycle the orchestrator already
 sets removes the whole failure mode. Applies to all five clients.
 
+---
+
+*The following sections (§S10–§S15) bring the fleet into full **AXI-manifesto** CLI
+compliance (https://axi.md — the 10-principle Agent eXperience Interface). §S1 already
+satisfies principle 1 (TOON); argparse `--help` satisfies principle 10; principle 7
+(ambient-context session hooks) is split to CR-CRU-035 (a coordinated Crucible↔Model-B
+effort). §S10–§S15 cover principles 2, 3, 4, 5, 6, 8, 9 — the robustness +
+discoverability principles that make the interface self-explanatory and stop an
+orchestrator from losing context or process accuracy.*
+
+### §S10 Minimal default schemas + `--fields` (AXI principle 2)
+List/table verbs (§S6 `status`/`plans`, the `cycles[]` result of `plan-file`, any
+multi-item result) return a MINIMAL default of 3–4 fields per item, with a
+`--fields <a,b,c>` flag to request more. The full field set stays reachable but is
+never the default (e.g. `status` defaults to `cr,wave,status,activeCycle`; `--fields`
+adds `mergeCommit,closedAt,cycleCount`). Shared in `_crucible_axi.py`.
+
+### §S11 Content truncation + `--full` (AXI principle 3)
+Large text fields (failure traces, compile output, raw logs, long labels) are
+truncated to a configurable limit in the envelope with a size hint
+`(truncated, <N> chars total — use --full)`, and a `--full` flag emits the
+untruncated value. Applies to the ingest / gate / status envelopes across all five
+clients.
+
+### §S12 Pre-computed aggregates + definitive empty states (AXI principles 4, 5)
+Every list/table envelope carries a pre-computed `count` — the TOTAL available, not a
+page size (e.g. `plans[<count>]{...}`). Every verb that can return nothing emits an
+EXPLICIT zero-result envelope (`ok:true` + a definitive empty message, e.g.
+`plans[0] — no plans filed for this project`), never empty stdout: an agent must be
+able to distinguish "no results" from "command failed silently".
+
+### §S13 Structured errors on stdout + clean exit codes + idempotency (AXI principle 6)
+Errors are STRUCTURED and written to STDOUT as an `ok:false` envelope (carrying
+`warnings[]` + `help[]`), not only to human stderr — so an agent parsing stdout always
+sees the failure. Exit codes: `0` success, `1` error, `2` unknown/malformed flag.
+Mutating verbs are IDEMPOTENT where the server allows (re-running
+`cycle-activate`/`cr-close`/`register` converges, never double-applies or errors
+spuriously). No verb prompts for interactive input. This generalizes §S9's hard-error
+to the WHOLE verb set: every failure is a structured stdout envelope + a clean exit
+code.
+
+### §S14 Content-first: no-arg live dashboard + executable path (AXI principle 8)
+Invoking a client with NO arguments returns the live board — the §S6 `status`
+dashboard as a TOON-AXI envelope, NOT argparse help — plus a one-line tool purpose and
+the executable path (with `~` for home). So an orchestrator that runs the bare client
+immediately sees the project's queue, active cycle, and last-run CR (the anti-context-
+loss default view) before taking any action.
+
+### §S15 Contextual disclosure: per-verb `help[]` next-step templates (AXI principle 9)
+Every envelope carries a `help[]` array of concrete next-step command TEMPLATES —
+fixed disambiguating flags carried forward, runtime values as placeholders
+(`<id>`/`<label>`/`<sha>`) — appended after the result. E.g. after `plan-file`,
+`help[]` suggests `cycle-activate <id>`; after `cycle-done`, `cr-close --commit <sha>`;
+after a failing gate, the fix path. The envelope always names the sane next move, so
+the orchestrator cannot lose the process thread.
+
 ## Acceptance criteria
 - [ ] A shared envelope builder emits the §S1 schema; `clients/toon.py` decodes every verb's stdout back to a dict with `verb` + `ok`.
 - [ ] For EACH of `python`/`rust`/`mvn`/`arduino`-crucible.py: `register`, `unregister`, `plan-file`, `cycle-activate`, `cycle-done`, `cr-close`, `cycle-add`, and the ingest result print a `toon.py`-decodable envelope carrying `ok` + result fields (one assertion set per client).
@@ -176,9 +255,19 @@ sets removes the whole failure mode. Applies to all five clients.
 - [ ] §S7 re-pointed verbs: `checkpoint`, `stop`, `abort` (`--user-approved`) exist on all five clients, each POSTing the CR-024 server route and returning a `toon.py`-decodable envelope; `abort` without `--user-approved` surfaces the server's discouraging 409 (envelope `ok:false` + help), with it executes.
 - [ ] §S8 gate verbs: `gate-run` and `gate-report` return the §S1 envelope on all five clients; `gate-report` additionally emits a `prefer-gate-run` warning (envelope `warnings[]` + stderr) naming `gate-run` as the streaming standard; `gate-run` emits no such warning and POSTs ≥1 interim snapshot before the final sealed gate (asserted per client).
 - [ ] Golden fixture per verb per client; the `~/.claude/scripts` mirror is re-synced from `clients/` (CR-008 source-of-truth rule).
+- [ ] §S10 `--fields`: a list/table verb (e.g. `status`) defaults to 3–4 fields per item; `--fields <a,b,c>` returns the requested superset; asserted on ≥1 verb per client.
+- [ ] §S11 `--full`: a verb with a large text field truncates it with a `(truncated, <N> chars total — use --full)` hint by default, and `--full` emits the untruncated value; asserted per client.
+- [ ] §S12 aggregates + empty states: every list/table envelope carries a `count` = total items; every verb that can return nothing emits an explicit `ok:true` zero-result envelope (definitive empty message), NEVER empty stdout — asserted per client.
+- [ ] §S13 structured errors + exit codes: a forced error (unknown plan, bad flag) prints an `ok:false` envelope on STDOUT (not only stderr) and exits `1` (error) / `2` (unknown flag), `0` on success; re-running a mutating verb (`cycle-activate`/`register`) is idempotent (converges, no spurious error); no verb prompts interactively — asserted per client.
+- [ ] §S14 content-first: invoking a client with NO args prints the `status` dashboard envelope (queue + active cycle + `lastRunCr`) + a one-line purpose + the executable path (`~`-abbreviated), NOT argparse help — asserted per client.
+- [ ] §S15 `help[]`: every verb's envelope carries a `help[]` array of concrete next-step command templates (placeholders for runtime values) — e.g. `plan-file` → `cycle-activate <id>`, `cycle-done` → `cr-close --commit <sha>` — asserted per client.
 
 ## Estimated size
-M–L (five clients × verb set, but mechanical once the bun reference + shared builder exist).
+**L** — five clients × the full verb set, and the reference is INCOMPLETE (gap analysis
+2026-07-21): the net-new verbs (§S4/§S6/§S7/§S9) + AXI-CLI conventions (§S10–§S15) are
+absent even in bun, so they are built in the shared `_crucible_axi.py` + bun reference
+first (proven), then imported by the other four. Not "mechanical replication of a
+complete reference".
 
 ## Non-goals
 Changing the server INGEST contract (`/api/v2/runs/*`, gate/milestone POST
@@ -189,4 +278,9 @@ gate model + the `gate-pane` UI rendering (CR-013 §S4/§S5) — are untouched (
 the CLIENT gate verbs `gate-run`/`gate-report` are standardized, per §S8);
 adding NEW verbs beyond `cycle-add`, the §S6 `status`/`plans` read verb, and the §S7 re-pointed `checkpoint`/`stop`/`abort` verbs; a full History-lens
 redesign (only the defensive "unclassified" label is in scope, and only if
-cheap).
+cheap). **AXI principle 7 (ambient-context session hooks — a `setup` that installs
+into the agent session so board+active-cycle state is visible at session start) is OUT
+of this CR → CR-CRU-035**, a coordinated Crucible↔Model-B effort: Crucible builds the
+core python scripts (the client `setup` + board-state surfacing), then intimates
+Model-B, which owns the hook TEMPLATES + generation (session-hook integration is a
+Model-B harness responsibility; some responsibilities may be shared).

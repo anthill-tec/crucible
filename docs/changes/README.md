@@ -28,7 +28,8 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-012](CR-CRU-012-projects-manager.md) | Projects manager: add + edit + archive | feature | COMPLETED | 004, 007 | 4 (before 009) |
 | [CR-CRU-013](CR-CRU-013-gate-events.md) | Workflow events: gates (no-mistakes) + milestones | feature | COMPLETED (merged c7660b1) | 008, 011 | 4 |
 | [CR-CRU-031](CR-CRU-031-wave-classification-fix.md) | Wave-classification fix: server wave-backfill + plan-file --wave + CR-021 correction | patch | COMPLETED | 011, 013 | 4 (right after 013) |
-| [CR-CRU-030](CR-CRU-030-fleet-toon-axi-compliance.md) | Fleet TOON-AXI conversion + mandatory classification context (client verbs) | patch | PENDING (P1 — after 031) | 013 | 4 (before 009) |
+| [CR-CRU-030](CR-CRU-030-fleet-toon-axi-compliance.md) | Fleet TOON-AXI conversion + full AXI-CLI compliance + mandatory classification context (all 5 clients, shared module) | patch | PENDING (P1 — next; AXI-complete per gap analysis) | 013 | 4 (before 009) |
+| [CR-CRU-035](CR-CRU-035-ambient-context-session-hooks.md) | Ambient-context session hooks (AXI principle 7) — coordinated Crucible↔Model-B | feature | PENDING (P2 — after 030; Model-B coordinated) | 030 | 4 |
 | [CR-CRU-024](CR-CRU-024-patch-cycle-activation-guards.md) | Patch: cycle activation guards · sanctioned mid-plan mutation (insert/edit, active locked) · AXI invalid-action responses | patch | COMPLETED | 011 | 4 |
 | [CR-CRU-025](CR-CRU-025-cycle-run-boundary-navigation.md) | Cycle ↔ run-boundary navigation (bidirectional, locate blink) | feature | COMPLETED | 011, 012 | 4 |
 | [CR-CRU-026](CR-CRU-026-patch-workspace-plan-scoping.md) | Patch: workspace plan scoping — remove hidden navigation state, marker parity (P0) | patch | COMPLETED | 011, 021 | 4 |
@@ -177,3 +178,17 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   Follow-up (VERIFY suggestion, non-blocking, NOT filed as a CR): `handlePaneScroll` runs an
   un-debounced `querySelectorAll('[data-testid="tree-scroll"]')` per scroll tick — harmless at
   realistic suite counts; revisit only if a run ever auto-expands dozens of failing suites.
+- 2026-07-21 (CR-030 gap analysis + AXI expansion) — verdict SPEC_UPDATE_NEEDED (no
+  blocker, no prerequisite CR — server routes for §S4/§S6/§S7 exist). Corrected framing:
+  the net-new verbs (§S4 cycle-add, §S6 status/plans, §S7 checkpoint/stop/abort, §S8
+  prefer-gate-run warning, §S9 auto-attach) + the AXI-CLI conventions are ABSENT even in
+  the bun "reference" — built in a NEW shared module `clients/_crucible_axi.py` (the 5
+  clients don't currently share code; user decision), bun reference first, then the other
+  four; bun's own gaps fixed here too (user directive). Checked the fleet against the AXI
+  manifesto (https://axi.md, 10 principles) — added §S10–§S15 for principles 2,3,4,5,6,8,9
+  (minimal schemas/--fields, truncation/--full, aggregates+empty-states, structured
+  errors on stdout+exit codes, content-first no-arg dashboard, help[] next-steps). Size
+  re-estimated M–L → L. Principle 7 (ambient-context session hooks) SPLIT to CR-CRU-035,
+  a coordinated Crucible↔Model-B effort: Crucible builds core python scripts (`setup` +
+  interface contract) → intimates Model-B → Model-B owns hook templates + generation
+  (shared responsibilities negotiated at handoff).
