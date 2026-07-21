@@ -36,6 +36,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-033](CR-CRU-033-coverage-by-day-series.md) | Date-keyed coverage-by-day series (CR-028 data prerequisite) — fold re-key + merge rollups & live events | feature | COMPLETED | 023, 032 | 4 |
 | [CR-CRU-028](CR-CRU-028-patch-coverage-trend-semantics.md) | Coverage trend: auto-coarsening health hierarchy (DN-locked) | feature | COMPLETED | 033, 027 | 4 |
 | [CR-CRU-029](CR-CRU-029-patch-dual-axis-scroll-visibility.md) | Patch: dual-axis scroll always operable in narrow viewports | patch | COMPLETED | 023 | 4 |
+| [CR-CRU-034](CR-CRU-034-patch-drilldown-dual-axis-scroll.md) | Patch: run-detail drill-down inherits CR-029 dual-axis operability (multi-failure vertical scroll trap + dead space) | patch | PENDING (P1 — regression; before 030) | 029, 028, 023 | 4 |
 | [CR-CRU-032](CR-CRU-032-runs-boundary-anchor-fetch.md) | Patch: Runs-window governance + project-settings integrity — retention governs the display limit (kills hardcoded 50), anchor-fetch beyond-window (025 b), settings-form labels + run-deletion toggle F12 sync | patch | COMPLETED | 025, 012, 008 | 4 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 · track-1) | 011, 013 | 5 (0.2.0) |
 | [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Playwright runner + codec + tab | feature | PENDING (0.2.0 · track-2) | 004, 007 | 5 (0.2.0) |
@@ -152,3 +153,12 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   retention fold+delete is one transaction; `Store.hasAgent` backs the v2 `changed`
   flags. CR-CRU-010's Context re-baselined (the `parseJunitPath` special-case now lives
   in `parseRunBody`, not `src/server.ts`/`src/v2.ts`).
+- 2026-07-21 — CR-CRU-034 filed (P1 regression, Wave 4, before 030). Eyes-on the
+  dog-food run detail (`crucible_drilldown.jpg`) surfaced a CR-CRU-029 regression:
+  the run-detail drill-down kept its CR-CRU-028 §S4.4 inner `.app-tree-scroll`
+  (`max-height:60vh`) while CR-029 made `pane-scroll` flex-fill the viewport — so a
+  run with ≥2 failures traps the vertical scroll in a cramped inner box, leaves
+  ~290px dead space below the footer, and (on shorter viewports) hides the footer.
+  034 unifies the run-detail body onto CR-029's one-bounded-scroller-owns-both-axes
+  model while PRESERVING CR-029's horizontal contract (user directive: the vertical
+  fix must match the narrow-viewport horizontal requirement).
