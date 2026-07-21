@@ -1046,6 +1046,116 @@ def cmd_cr_close(args):
     return 0
 
 
+# ── CR-CRU-030 §S4/§S7 — append-cycle + CR-024 workflow client verbs ────────
+
+
+def _resolve_plan_or_emit(verb, project_dir, cr, result_fields, open_only):
+    """Shared prelude for the plan-targeting write verbs (cycle-add /
+    checkpoint / abort): GET the plans, resolve exactly ONE target via the
+    shared `resolve_single_plan`, and on any failure (GET error, zero, or
+    ambiguous) emit the ok:false envelope + return `(None, 1)`. On success
+    returns `(plan, None)`."""
+    resp = _get(_plans_path(project_dir))
+    if not resp.get("ok"):
+        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
+        _emit_axi(verb, False, result_fields, _axi_context(project_dir, cr=cr), [], legacy)
+        return None, 1
+    plans = resp.get("plans", [])
+    plan, reason = _axi().resolve_single_plan(plans, cr=cr, open_only=open_only)
+    if reason is not None:
+        scope = "open plan" if open_only else "plan"
+        if reason == "none":
+            legacy = (f"[crucible] ERROR: no {scope} to {verb}"
+                      + (f" for cr={cr}" if cr else ""))
+        else:
+            candidates = [p for p in plans
+                          if (not open_only or p.get("status") == "open")]
+            names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in candidates)
+            legacy = (f"[crucible] ERROR: {len(candidates)} {scope}s — ambiguous {verb}. "
+                      f"Pass --cr to pick one of: {names}")
+        _emit_axi(verb, False, result_fields, _axi_context(project_dir, cr=cr), [], legacy)
+        return None, 1
+    return plan, None
+
+
+def cmd_cycle_add(args):
+    """§S4 — append a cycle to a plan (the append-cycle verb no client exposed;
+    CR-013 had to curl it). Resolve the target plan exactly like plan-backfill
+    (ALL plans, optional --cr), POST …/plans/<planId>/cycles with ONLY the
+    label, and let the SERVER reject a CLOSED/absent plan (400) — never a
+    client-side pre-filter that would make the "closed plan" AC unreachable.
+    The assigned numeric id stays machine-readable in the envelope."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    result_fields = {"label": args.label}
+    plan, rc = _resolve_plan_or_emit("cycle-add", project_dir, args.cr,
+                                     result_fields, open_only=False)
+    if plan is None:
+        return rc
+    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/cycles",
+                 {"label": args.label})
+    ok = resp.get("ok", False)
+    cr_label = plan.get("cr")
+    legacy = (f"cycle-add: ok={ok} plan={plan['planId']} cr={cr_label} "
+              f"label={args.label} id={resp.get('id')}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("cycle-add", bool(ok),
+              {"plan": plan["planId"], "id": resp.get("id"), "label": args.label},
+              _axi_context(project_dir, cr=cr_label), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_checkpoint(args):
+    """§S7 — checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint).
+    Resolves the single open plan, or --cr among several — the /shutdown
+    emergency flow checkpoints the CURRENTLY open work, never a numeric id the
+    caller doesn't have."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    plan, rc = _resolve_plan_or_emit("checkpoint", project_dir, args.cr, {}, open_only=True)
+    if plan is None:
+        return rc
+    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/checkpoint", {})
+    ok = resp.get("ok", False)
+    legacy = (f"checkpoint: ok={ok} plan={plan['planId']}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("checkpoint", bool(ok),
+              {"plan": plan["planId"], "changed": resp.get("changed")},
+              _axi_context(project_dir, cr=plan.get("cr")), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_stop(args):
+    """§S7 — project-level stop (POST …/projects/<key>/stop). No plan targeting;
+    checkpoints every open plan server-side and reports the count."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    resp = _post(f"/api/v2/projects/{_project_key(project_dir)}/stop", {})
+    ok = resp.get("ok", False)
+    legacy = (f"stop: ok={ok} checkpointed={resp.get('checkpointed')}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("stop", bool(ok), {"checkpointed": resp.get("checkpointed")},
+              _axi_context(project_dir), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_abort(args):
+    """§S7 — abort the resolved OPEN plan (POST …/plans/<id>/abort). The body's
+    `userApproved` maps from --user-approved; WITHOUT the flag it is `false`,
+    so the server's discouraging 409 refusal stays reachable by default (and
+    surfaces here as ok:false + non-zero, never a silent no-op)."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    plan, rc = _resolve_plan_or_emit("abort", project_dir, args.cr, {}, open_only=True)
+    if plan is None:
+        return rc
+    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/abort",
+                 {"userApproved": bool(args.user_approved)})
+    ok = resp.get("ok", False)
+    legacy = (f"abort: ok={ok} plan={plan['planId']} "
+              f"userApproved={bool(args.user_approved)}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("abort", bool(ok), {"plan": plan["planId"]},
+              _axi_context(project_dir, cr=plan.get("cr")), [], legacy)
+    return 0 if ok else 1
+
+
 # ── CR-CRU-013 §S5 — fleet gate / milestone verbs ──────────────────────────
 #
 # `gate-run`    axi PROXY: launch `no-mistakes axi run`, poll `axi status`
@@ -1304,13 +1414,35 @@ def _post_milestone(project_dir, agent_id, mtype, label=None, commit=None, conte
     return _post("/api/v2/milestones", payload)
 
 
+# §S8 (CR-CRU-030): gate-run is the AXI streaming standard; gate-report is
+# discouraged. EVERY gate-report invocation emits this warning — in the §S1
+# envelope's warnings[] AND on stderr — regardless of the POST outcome (the
+# discouragement is a property of using gate-report at all).
+_PREFER_GATE_RUN_WARNING = {
+    "code": "prefer-gate-run",
+    "detail": ("gate-run is the AXI streaming standard (it posts throttled "
+               "interim snapshots while the run is in flight then a final sealed "
+               "gate); gate-report posts a single one-shot gate and is "
+               "discouraged wherever an axi proxy exists"),
+}
+
+
 def cmd_gate_report(args):
-    """Report a single already-run gate (flags path). AC 147."""
+    """Report a single already-run gate (flags path). AC 147.
+
+    §S8 — emits the §S1 TOON-AXI envelope on stdout (verb/ok/outcome +
+    warnings) plus the interactive line on stderr, and always raises the
+    `prefer-gate-run` discouragement warning (envelope + stderr)."""
     project_dir = _resolve_project_dir(args.project_dir)
+    warnings = [dict(_PREFER_GATE_RUN_WARNING)]
+    print(f"warning: {_PREFER_GATE_RUN_WARNING['code']} — "
+          f"{_PREFER_GATE_RUN_WARNING['detail']}", file=sys.stderr)
+    context = _axi_context(project_dir, agent_id=_agent_id(args))
     try:
         steps = _parse_steps_flag(args.steps) if args.steps else []
     except ValueError as e:
-        print(f"gate-report: ERROR: {e}", file=sys.stderr)
+        legacy = f"gate-report: ERROR: {e}"
+        _emit_axi("gate-report", False, {"outcome": args.outcome}, context, warnings, legacy)
         return 1
     # gate.intent is REQUIRED server-side (400 if missing/empty); when no
     # explicit intent is given, derive a non-empty one from the outcome.
@@ -1318,11 +1450,11 @@ def cmd_gate_report(args):
     gate = {"intent": intent, "outcome": args.outcome, "steps": steps}
     if args.commit:
         gate["push"] = {"commit": args.commit}
-    context = _fleet_context()
-    resp = _post_gate(project_dir, _agent_id(args), gate, context or None)
+    resp = _post_gate(project_dir, _agent_id(args), gate, _fleet_context() or None)
     ok = resp.get("ok", False)
-    print(f"gate-report: ok={ok} outcome={args.outcome}"
-          + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    legacy = (f"gate-report: ok={ok} outcome={args.outcome}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("gate-report", bool(ok), {"outcome": args.outcome}, context, warnings, legacy)
     return 0 if ok else 1
 
 
@@ -1396,9 +1528,16 @@ def cmd_gate_run(args):
     final_gate, _ = _gate_from_axi(final_decoded, intent, final=True)
     resp = _post_gate(project_dir, agent_id, final_gate, context or None)
     ok = resp.get("ok", False)
-    print(f"gate-run: ok={ok} outcome={final_gate.get('outcome')} exit={proc.returncode}"
-          + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    return 0 if (ok and proc.returncode == 0) else 1
+    overall = bool(ok and proc.returncode == 0)
+    # §S8 — gate-run emits its OWN §S1 envelope on stdout ALONGSIDE the relayed
+    # axi detail (already written above), with NO prefer-gate-run warning: it is
+    # itself the streaming standard. The interactive line moves to stderr.
+    legacy = (f"gate-run: ok={ok} outcome={final_gate.get('outcome')} "
+              f"exit={proc.returncode}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("gate-run", overall, {"outcome": final_gate.get("outcome")},
+              _axi_context(project_dir, agent_id=agent_id), [], legacy)
+    return 0 if overall else 1
 
 
 def cmd_milestone(args):
@@ -1550,6 +1689,36 @@ def main():
     cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
     _add_project_dir_arg(cc)
     cc.set_defaults(func=cmd_cr_close)
+
+    # ── CR-CRU-030 §S4/§S7 — append-cycle + CR-024 workflow verbs ──
+    cad = sub.add_parser("cycle-add",
+                         help="Append a cycle to a plan (POST …/plans/<id>/cycles); "
+                              "prints the ASSIGNED numeric id.")
+    cad.add_argument("label", help="Label for the new cycle.")
+    cad.add_argument("--cr", help="Disambiguate when multiple plans exist.")
+    _add_project_dir_arg(cad)
+    cad.set_defaults(func=cmd_cycle_add)
+
+    cp = sub.add_parser("checkpoint",
+                        help="Checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint).")
+    cp.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _add_project_dir_arg(cp)
+    cp.set_defaults(func=cmd_checkpoint)
+
+    st = sub.add_parser("stop",
+                        help="Stop the project — checkpoint every open plan "
+                             "(POST …/projects/<key>/stop).")
+    _add_project_dir_arg(st)
+    st.set_defaults(func=cmd_stop)
+
+    ab = sub.add_parser("abort",
+                        help="Abort the resolved OPEN plan (POST …/plans/<id>/abort). "
+                             "Requires --user-approved to pass the server's 409 gate.")
+    ab.add_argument("--user-approved", action="store_true",
+                    help="Map to body userApproved:true (the server refuses without it).")
+    ab.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _add_project_dir_arg(ab)
+    ab.set_defaults(func=cmd_abort)
 
     # ── CR-CRU-013 §S5 — fleet gate / milestone verbs ──
     gr = sub.add_parser("gate-run",

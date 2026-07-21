@@ -86,6 +86,33 @@ def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
         print(legacy_line, file=sys.stderr)
 
 
+def resolve_single_plan(plans, cr=None, open_only=False):
+    """Resolve exactly ONE target plan from a `GET .../plans` payload's plans
+    list (PURE — no I/O), the shared resolution the client write-verbs
+    (`cycle-add`, `checkpoint`, `abort`) apply before POSTing.
+
+    - `open_only=True` restricts candidates to `status:"open"` plans first
+      (checkpoint/abort target live work); `False` considers open AND closed
+      (cycle-add, mirroring plan-backfill — the SERVER is the authority on a
+      closed plan's rejection, never a client-side pre-filter).
+    - `cr` filters the candidates to that CR (the disambiguator).
+
+    Returns `(plan, reason)`: exactly one is non-None. `reason` is None on a
+    unique match, else `"none"` (zero candidates) or `"ambiguous"` (>1, no
+    unique pick) — the caller maps each to a non-zero ok:false envelope and
+    issues NO POST."""
+    candidates = list(plans or [])
+    if open_only:
+        candidates = [p for p in candidates if p.get("status") == "open"]
+    if cr:
+        candidates = [p for p in candidates if p.get("cr") == cr]
+    if len(candidates) == 0:
+        return None, "none"
+    if len(candidates) > 1:
+        return None, "ambiguous"
+    return candidates[0], None
+
+
 def resolve_active_cycle_id(plans):
     """§S9 auto-attach resolver (PURE): the single `status:"active"` cycle id
     among the OPEN plans of a `GET .../plans` payload, or None when there is
