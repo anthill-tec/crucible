@@ -1223,13 +1223,36 @@ describe("§S5 fidelity #5c — F8 Vitals card anatomy: coverage-trend bars + la
       expect(heights[i]).toBeGreaterThan(heights[i - 1]!);
     }
 
+    // CR-CRU-028 §S1 RE-TARGET — color now conveys LEVEL, not recency (DN
+    // §3.2 ramp: orange var(--ember) <65 · yellow #eab308 [65,80) · green
+    // var(--pass) >=80, mock-pinned .lavish/crucible-v2-design.html:541).
+    // Every fixture percent here (82.1, 84.0, 86.2, 87.3) is
+    // >=COVERAGE_LEVEL_YELLOW_MAX(80), so all four bars are GREEN — the
+    // latest bar additionally COMPOSES the app-trend-bar-latest outline
+    // (1px solid var(--ink-faint)) on top of its green level color, never
+    // replacing it. The retired CR-023-era flat-ember/"-dim"-by-recency
+    // contract (bright ember latest, ember-dim earlier) must never appear.
     const lastBar = bars[bars.length - 1] as HTMLElement;
     const earlierBars = Array.from(bars).slice(0, -1) as HTMLElement[];
+    for (const bar of Array.from(bars) as HTMLElement[]) {
+      const evidence = colorEvidence(bar);
+      // Positive: every bar's OWN level color (all four points are green).
+      expect(evidence).toContain("var(--pass)");
+      // Negative/bound: the retired recency-based ember contract is gone —
+      // neither the dim class/color nor the flat bright-ember-on-latest
+      // color (which this all-green fixture must never show) appears.
+      expect(evidence).not.toContain("var(--ember-dim)");
+      expect(evidence).not.toContain("var(--ember)");
+      expect((bar.className ?? "").toString()).not.toMatch(/\bapp-trend-bar-dim\b/);
+    }
+    // Positive: the latest bar composes BOTH — its green level color AND
+    // the emphasis outline — one does not replace the other.
     const lastEvidence = colorEvidence(lastBar);
-    expect(lastEvidence).toContain("var(--ember)");
-    expect(lastEvidence).not.toContain("var(--ember-dim)");
+    expect(lastEvidence).toMatch(/outline:\s*1px\s+solid\s+var\(--ink-faint\)/);
+    // Negative/bound: the outline is emphasis-only — earlier (non-latest)
+    // bars never carry it.
     for (const bar of earlierBars) {
-      expect(colorEvidence(bar)).toContain("var(--ember-dim)");
+      expect(colorEvidence(bar)).not.toMatch(/outline:\s*1px\s+solid\s+var\(--ink-faint\)/);
     }
 
     expect(trendCard!.textContent ?? "").toContain("82.1 → 87.3% lines");
