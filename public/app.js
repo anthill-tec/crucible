@@ -3341,30 +3341,52 @@
           };
         }
         focusedLeaf.val = target;
-        // CR-CRU-034 §S1 — DEFER the row lookup + scroll until AFTER VanJS
-        // re-renders. Setting focusedLeaf/openGroups above schedules a
-        // microtask re-render: the previously-focused box (mounted ABOVE the
-        // target) closes and the target's box opens, shifting the layout. A
-        // SYNCHRONOUS query/scroll here would measure & scroll the STALE
-        // pre-render layout, leaving the target row scrolled above the pane
-        // top. requestAnimationFrame fires after VanJS's render flush, so we
-        // re-query the freshly-mounted `[data-leaf-key]` row and scroll THAT
-        // (block:"start" — its failure box opens directly below the row) into
-        // the SAME bounded pane-scroll viewport.
-        const scrollFocusedRowIntoView = () => {
+        // CR-CRU-034 §S1 — DEFER **and CONVERGE** the row scroll until AFTER
+        // VanJS has actually finished re-rendering. Setting focusedLeaf/
+        // openGroups above only SCHEDULES an async VanJS render: the
+        // previously-focused failure box (mounted ABOVE the target) is removed
+        // and the target's own box opens directly below its row, which shifts
+        // every offsetTop below the old box. A single requestAnimationFrame
+        // RACES that render — it can fire before VanJS flushes and scroll the
+        // STALE pre-render layout, leaving the focused row stuck above the
+        // pane top (a longer fixed delay "fixes" it only by luck). Polling on
+        // offsetTop-stability is unsafe too: the stale offsetTop reads
+        // "stable" until the render lands. So, like `revealDeclaredMarker`,
+        // retry on a bounded real-timer loop, re-querying the fresh
+        // `[data-leaf-key]` row each attempt, and only scroll ONCE the render
+        // has SETTLED — detected by the target row's OWN failure box being
+        // mounted as its next sibling. The CR-016 one-box-at-a-time focus
+        // model guarantees that signal flips false→true exactly when the old
+        // box has been removed and the layout is final, so the scroll always
+        // measures the settled positions regardless of VanJS's scheduler
+        // timing. A bounded attempt cap falls back to a best-effort scroll so
+        // the jump can never silently stall. scrollIntoView still fires on the
+        // target row (block:"start") into the SAME bounded pane-scroll
+        // viewport, exactly once.
+        const scrollFocusedRowIntoView = (attempts = 0) => {
+          let row = null;
           const rows = document.querySelectorAll('[data-testid="leaf-row"]');
-          for (const row of rows) {
-            if (row.getAttribute("data-leaf-key") !== target) continue;
-            if (typeof row.scrollIntoView === "function") {
-              row.scrollIntoView({ block: "start" });
+          for (const r of rows) {
+            if (r.getAttribute("data-leaf-key") === target) {
+              row = r;
+              break;
             }
-            break;
+          }
+          const box = row === null ? null : row.nextElementSibling;
+          const settled =
+            box !== null && box.getAttribute("data-testid") === "failure-box";
+          if (!settled && attempts < 30) {
+            setTimeout(() => scrollFocusedRowIntoView(attempts + 1), 5);
+            return;
+          }
+          if (row !== null && typeof row.scrollIntoView === "function") {
+            row.scrollIntoView({ block: "start" });
           }
         };
         if (typeof requestAnimationFrame === "function") {
-          requestAnimationFrame(scrollFocusedRowIntoView);
+          requestAnimationFrame(() => scrollFocusedRowIntoView(0));
         } else {
-          queueMicrotask(scrollFocusedRowIntoView);
+          queueMicrotask(() => scrollFocusedRowIntoView(0));
         }
       }
 
