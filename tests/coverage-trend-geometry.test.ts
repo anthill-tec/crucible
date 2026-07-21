@@ -101,6 +101,27 @@ function datedTrend(percents: number[], start = "2026-02-01"): { day: string; pe
   return percents.map((percent, i) => ({ day: days[i]!, percent }));
 }
 
+/** CR-CRU-028 §S1 — the "YYYY-MM-DD" day string `daysAgo` whole days before
+ * `latestISO`. Same boundary-scheme helper as tests/coverage-trend-coarsening.test.ts
+ * (day <7 / week [7,63) / month >=63, relative to the SERIES' OWN latest
+ * point, never wall-clock "today") — used here to build fixtures that
+ * deliberately land in a specific coarsening level for render-level (DOM)
+ * assertions. */
+function dayAt(latestISO: string, daysAgo: number): string {
+  const latestMs = Date.parse(`${latestISO}T00:00:00.000Z`);
+  return new Date(latestMs - daysAgo * 86_400_000).toISOString().slice(0, 10);
+}
+
+function pointAt(
+  latestISO: string,
+  daysAgo: number,
+  percent: number,
+): { day: string; percent: number } {
+  return { day: dayAt(latestISO, daysAgo), percent };
+}
+
+const S1_LATEST = "2026-06-01";
+
 interface MountOpts {
   pathname?: string;
   projects?: ProjectFixture[];
@@ -162,13 +183,32 @@ function barHeight(bar: HTMLElement): number {
 // ── §S1 — bar geometry: fixed 9px width, no stretch, 26px cluster ──
 
 describe("§S1 — .app-trend-bar / .app-trend-bars geometry (styles.css source-assertion, F8 mock fidelity)", () => {
-  test(".app-trend-bar declares a FIXED width via `flex: 0 0 9px` (no grow/shrink) — NOT the shipped `flex: 1 1 0` stretch defect", () => {
-    const body = ruleBody(".app-trend-bar");
-    expect(body).toBeDefined();
-    // Positive: the mock-exact fixed-width contract.
-    expect(body ?? "").toMatch(/flex:\s*0\s+0\s+9px/);
-    // Negative/bound: the shipped stretch declaration must be GONE.
-    expect(body ?? "").not.toMatch(/flex:\s*1\s+1\s+0/);
+  // CR-CRU-028 §S1 CONTRACT CHANGE (noted per RED dispatch instruction):
+  // CR-027 pinned a single UNIFORM `.app-trend-bar { flex: 0 0 9px }` — every
+  // bar in the flat sparkline was the same width. §S1 replaces the flat
+  // sparkline with auto-coarsening bucket bars whose width hints the ZOOM
+  // LEVEL and must STRICTLY INCREASE month < week < day (CR text, DN §3.1,
+  // F8 mock lines 535-541: month bars 6px, week bars 9px, day bars 12px). A
+  // single bare `.app-trend-bar` rule can no longer carry one fixed width
+  // for every bar — the width moves to three level-specific modifier
+  // classes. This test replaces (not extends) the old CR-027 uniform-9px
+  // pin, which is no longer a valid contract once per-level widths exist.
+  test("§S1 — .app-trend-bar-month / -week / -day each declare a FIXED, STRICTLY INCREASING width (6px < 9px < 12px, F8 mock lines 535-541) — replaces the CR-027 uniform-9px-for-every-bar contract", () => {
+    const monthBody = ruleBody(".app-trend-bar-month");
+    const weekBody = ruleBody(".app-trend-bar-week");
+    const dayBody = ruleBody(".app-trend-bar-day");
+    expect(monthBody).toBeDefined();
+    expect(weekBody).toBeDefined();
+    expect(dayBody).toBeDefined();
+    // Positive: the exact mock-pinned per-level widths.
+    expect(monthBody ?? "").toMatch(/flex:\s*0\s+0\s+6px/);
+    expect(weekBody ?? "").toMatch(/flex:\s*0\s+0\s+9px/);
+    expect(dayBody ?? "").toMatch(/flex:\s*0\s+0\s+12px/);
+    // Negative/bound: none of the three levels stretch (CR-027's fixed-slice
+    // discipline holds at every level, per the CR's non-goal text).
+    for (const body of [monthBody, weekBody, dayBody]) {
+      expect(body ?? "").not.toMatch(/flex:\s*1\s+1\s+0/);
+    }
   });
 
   test(".app-trend-bars cluster height is 26px — NOT the shipped 36px container", () => {
@@ -253,26 +293,42 @@ describe("§S1 — rendered bar count at low point counts (CR-023's >=1-point re
   });
 });
 
-// ── §S2 — last-16 windowing + window-consistent caption ──
+// ── §S1 — CR-CRU-028 CONTRACT CHANGE (noted per RED dispatch instruction) ──
+//
+// The CR-027 "§S2 windowing" describe block that lived here asserted a flat
+// one-bar-per-raw-point contract (a 20-point series renders the most recent
+// 16 RAW points as 16 bars, non-latest bars all carrying `app-trend-bar-dim`).
+// §S1 replaces bars with BUCKETS: older points COARSEN into week/month
+// buckets instead of rendering one bar each, and the generic "-dim" class is
+// retired entirely — every bar (latest or not) now carries a LEVEL color
+// class instead. The old block's literal assertions (16 bars from a 20-point
+// series; `-dim` present) are therefore FALSE under the new contract and are
+// replaced below with the auto-coarsening equivalents (same underlying
+// `datedTrend` 20-point fixture reused where it still demonstrates the
+// point — the CR-027 fixture no longer produces 16 bars, it produces 9,
+// which is itself the behavioural proof that coarsening replaced windowing).
 
-describe("§S2 — coverage-trend series windowing: renders only the MOST RECENT 16 points", () => {
+describe("§S1 — coverage-trend rendering coarsens buckets instead of windowing raw points (replaces CR-027 §S2's flat last-16-raw-points contract)", () => {
   afterEach(async () => {
     await GlobalRegistrator.unregister();
   });
 
-  test("20-point series renders exactly 16 bars (the most recent 16, chronological, latest-last), NOT all 20", async () => {
-    const key = "trend-geom-20";
-    // 20 distinct, monotonically increasing points (indices 0..19, values
-    // 10..29) so window membership is unambiguous: the most-recent-16
-    // window is indices 4..19 (values 14..29); indices 0..3 (values
-    // 10..13) must be DROPPED.
+  test("the SAME 20 consecutive-day, monotonically increasing points (values 10..29) that CR-027 windowed to 16 raw bars now coarsen to exactly 9 bucket bars (2 week + 7 day) — proof bars are buckets, not a raw-point window", async () => {
+    const key = "trend-geom-20-coarsened";
+    // Reuses the CR-027 fixture verbatim (20 consecutive days, values
+    // 10..29) — under §S1's boundary scheme (relative to the series' own
+    // latest day, 2026-02-20): indices 13..19 (daysAgo 0..6) stay DAY
+    // buckets (values 23..29); indices 6..12 (daysAgo 7..13) collapse into
+    // ONE week bucket valued by the most-recent point in range (index 12,
+    // value 22); indices 0..5 (daysAgo 14..19) collapse into a second week
+    // bucket valued by index 5 (value 15).
     const points = Array.from({ length: 20 }, (_, i) => 10 + i);
     await mountApp({
       pathname: `/p/${key}`,
       projects: [
         {
           key,
-          name: "Geometry Twenty-Point Project",
+          name: "Geometry Twenty-Point Coarsened Project",
           type: "backend",
           agentsOnline: 1,
           agentsTotal: 1,
@@ -285,61 +341,36 @@ describe("§S2 — coverage-trend series windowing: renders only the MOST RECENT
     const card = trendCard();
     expect(card).not.toBeNull();
     const bars = trendBars(card!);
-    expect(bars.length).toBe(16);
+    expect(bars.length).toBe(9);
 
     const heights = bars.map(barHeight);
-    // Positive: exactly the windowed slice, in chronological order.
-    expect(heights).toEqual([14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
-    // Bound: the 4 oldest (dropped) points never appear among rendered bars.
-    for (const dropped of [10, 11, 12, 13]) {
-      expect(heights).not.toContain(dropped);
-    }
+    // Positive: the coarsened bucket values, oldest -> newest.
+    expect(heights).toEqual([15, 22, 23, 24, 25, 26, 27, 28, 29]);
+    // Bound: the raw dropped/merged-away values (10..14, 16..21, except
+    // where they coincide with a surviving day value) never appear as their
+    // OWN bar — in particular the un-coarsened literal 16-bar window this
+    // series used to produce is gone.
+    expect(bars.length).not.toBe(16);
+    expect(bars.length).not.toBe(20);
+
+    // Every bar carries its level's width class (day for the recent 7,
+    // week for the 2 coarsened buckets) — never the retired "-dim" class.
+    const dayBars = bars.slice(-7);
+    const weekBars = bars.slice(0, 2);
+    for (const bar of dayBars) expect(bar.className).toMatch(/\bapp-trend-bar-day\b/);
+    for (const bar of weekBars) expect(bar.className).toMatch(/\bapp-trend-bar-week\b/);
+    for (const bar of bars) expect(bar.className).not.toMatch(/\bapp-trend-bar-dim\b/);
   });
 
-  test("20-point series: latest (last-rendered) bar carries app-trend-bar-latest, the other 15 windowed bars carry app-trend-bar-dim", async () => {
-    const key = "trend-geom-20-classes";
+  test("caption reads the coarsened FIRST BUCKET's value -> the LATEST bucket's value (15 -> 29), not the raw full-series points[0] (10) and not the old windowed points[4] (14)", async () => {
+    const key = "trend-geom-20-coarsened-caption";
     const points = Array.from({ length: 20 }, (_, i) => 10 + i);
     await mountApp({
       pathname: `/p/${key}`,
       projects: [
         {
           key,
-          name: "Geometry Twenty-Point Classes Project",
-          type: "backend",
-          agentsOnline: 1,
-          agentsTotal: 1,
-          latestGreenCoverage: { lines: { covered: 29, total: 100, percent: 29 } },
-          coverageTrend: datedTrend(points),
-        },
-      ],
-    });
-
-    const card = trendCard();
-    expect(card).not.toBeNull();
-    const bars = trendBars(card!);
-    expect(bars.length).toBe(16);
-
-    const lastBar = bars[bars.length - 1]!;
-    expect(lastBar.className).toMatch(/\bapp-trend-bar-latest\b/);
-    expect(lastBar.className).not.toMatch(/\bapp-trend-bar-dim\b/);
-
-    const earlierBars = bars.slice(0, -1);
-    expect(earlierBars.length).toBe(15);
-    for (const bar of earlierBars) {
-      expect(bar.className).toMatch(/\bapp-trend-bar-dim\b/);
-      expect(bar.className).not.toMatch(/\bapp-trend-bar-latest\b/);
-    }
-  });
-
-  test("20-point series caption reads the WINDOW-CONSISTENT first value (points[4] -> points[19]), NOT the full-series points[0]", async () => {
-    const key = "trend-geom-20-caption";
-    const points = Array.from({ length: 20 }, (_, i) => 10 + i);
-    await mountApp({
-      pathname: `/p/${key}`,
-      projects: [
-        {
-          key,
-          name: "Geometry Twenty-Point Caption Project",
+          name: "Geometry Twenty-Point Coarsened Caption Project",
           type: "backend",
           agentsOnline: 1,
           agentsTotal: 1,
@@ -352,11 +383,193 @@ describe("§S2 — coverage-trend series windowing: renders only the MOST RECENT
     const card = trendCard();
     expect(card).not.toBeNull();
     const text = card!.textContent ?? "";
-    // Positive: first RENDERED point (index 4, value 14) -> last point
-    // (index 19, value 29) — window-consistent, matching what the bars show.
-    expect(text).toContain("14 → 29% lines");
-    // Bound: never the un-windowed full-series first value (points[0] = 10).
+    expect(text).toContain("15 → 29% lines");
     expect(text).not.toContain("10 → 29% lines");
+    expect(text).not.toContain("14 → 29% lines");
+  });
+});
+
+describe("§S1 — a fixture spanning 3 months renders <=16 mixed-level bucket bars, oldest -> newest, each carrying its level's width class (CR-CRU-028 §S1 bucketing AC)", () => {
+  afterEach(async () => {
+    await GlobalRegistrator.unregister();
+  });
+
+  test("90 consecutive daily points (spanning ~3 calendar months) render exactly 16 coverage-trend-bar elements: 1 month bar + 8 week bars + 7 day bars, in that oldest -> newest order", async () => {
+    const key = "trend-geom-90-buckets";
+    // Identical fixture/derivation to
+    // tests/coverage-trend-coarsening.test.ts's pure-logic pin: percent(i) =
+    // i for i in 0..89, daysAgo = 89-i, so the bucket composition and exact
+    // representative values are the same 16 numbers pinned there.
+    const points = Array.from({ length: 90 }, (_, i) => pointAt(S1_LATEST, 89 - i, i));
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        {
+          key,
+          name: "Geometry Ninety-Point Bucket Project",
+          type: "backend",
+          agentsOnline: 1,
+          agentsTotal: 1,
+          latestGreenCoverage: { lines: { covered: 89, total: 100, percent: 89 } },
+          coverageTrend: points,
+        },
+      ],
+    });
+
+    const card = trendCard();
+    expect(card).not.toBeNull();
+    const bars = trendBars(card!);
+    expect(bars.length).toBe(16);
+    // Bound: never one bar per raw point (90), never the pre-cap raw count.
+    expect(bars.length).not.toBe(90);
+
+    const heights = bars.map(barHeight);
+    expect(heights).toEqual([26, 33, 40, 47, 54, 61, 68, 75, 82, 83, 84, 85, 86, 87, 88, 89]);
+
+    // Positive: per-level width class, in the pinned oldest->newest order —
+    // 1 month, then 8 week, then 7 day.
+    expect(bars[0]!.className).toMatch(/\bapp-trend-bar-month\b/);
+    for (const bar of bars.slice(1, 9)) {
+      expect(bar.className).toMatch(/\bapp-trend-bar-week\b/);
+    }
+    for (const bar of bars.slice(9)) {
+      expect(bar.className).toMatch(/\bapp-trend-bar-day\b/);
+    }
+    // Bound: no bar carries more than one level-width class.
+    for (const bar of bars) {
+      const levelClasses = ["month", "week", "day"].filter((lvl) =>
+        new RegExp(`\\bapp-trend-bar-${lvl}\\b`).test(bar.className),
+      );
+      expect(levelClasses.length).toBe(1);
+    }
+  });
+});
+
+describe("§S1 — level color classes (orange/yellow/green ramp, boundary-pinned; DN §3.2, named constants COVERAGE_LEVEL_ORANGE_MAX=65/COVERAGE_LEVEL_YELLOW_MAX=80)", () => {
+  afterEach(async () => {
+    await GlobalRegistrator.unregister();
+  });
+
+  async function mountSinglePointCard(key: string, percent: number): Promise<Element> {
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        {
+          key,
+          name: `Level Color ${percent} Project`,
+          type: "backend",
+          agentsOnline: 1,
+          agentsTotal: 1,
+          latestGreenCoverage: { lines: { covered: percent, total: 100, percent } },
+          coverageTrend: datedTrend([percent]),
+        },
+      ],
+    });
+    const card = trendCard();
+    expect(card).not.toBeNull();
+    return card!;
+  }
+
+  test("a bucket valued 64 (< COVERAGE_LEVEL_ORANGE_MAX) carries app-trend-bar-orange, never -yellow/-green", async () => {
+    const card = await mountSinglePointCard("trend-geom-level-64", 64);
+    const bar = trendBars(card)[0]!;
+    expect(bar.className).toMatch(/\bapp-trend-bar-orange\b/);
+    expect(bar.className).not.toMatch(/\bapp-trend-bar-yellow\b/);
+    expect(bar.className).not.toMatch(/\bapp-trend-bar-green\b/);
+  });
+
+  test("a bucket valued 65 (== COVERAGE_LEVEL_ORANGE_MAX, boundary) carries app-trend-bar-yellow, never -orange", async () => {
+    const card = await mountSinglePointCard("trend-geom-level-65", 65);
+    const bar = trendBars(card)[0]!;
+    expect(bar.className).toMatch(/\bapp-trend-bar-yellow\b/);
+    expect(bar.className).not.toMatch(/\bapp-trend-bar-orange\b/);
+  });
+
+  test("a bucket valued 79 (upper edge of [65,80)) still carries app-trend-bar-yellow, never -green", async () => {
+    const card = await mountSinglePointCard("trend-geom-level-79", 79);
+    const bar = trendBars(card)[0]!;
+    expect(bar.className).toMatch(/\bapp-trend-bar-yellow\b/);
+    expect(bar.className).not.toMatch(/\bapp-trend-bar-green\b/);
+  });
+
+  test("a bucket valued 80 (== COVERAGE_LEVEL_YELLOW_MAX) carries app-trend-bar-green, never -yellow", async () => {
+    const card = await mountSinglePointCard("trend-geom-level-80", 80);
+    const bar = trendBars(card)[0]!;
+    expect(bar.className).toMatch(/\bapp-trend-bar-green\b/);
+    expect(bar.className).not.toMatch(/\bapp-trend-bar-yellow\b/);
+  });
+
+  test("a monotone-high series (5 points, all >=80) renders EVERY bar app-trend-bar-green (the user's screenshot case) — none orange/yellow", async () => {
+    const key = "trend-geom-monotone-high";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        {
+          key,
+          name: "Monotone High Project",
+          type: "backend",
+          agentsOnline: 1,
+          agentsTotal: 1,
+          latestGreenCoverage: { lines: { covered: 95, total: 100, percent: 95 } },
+          coverageTrend: datedTrend([85, 88, 90, 92, 95]),
+        },
+      ],
+    });
+    const card = trendCard();
+    expect(card).not.toBeNull();
+    const bars = trendBars(card!);
+    expect(bars.length).toBe(5);
+    for (const bar of bars) {
+      expect(bar.className).toMatch(/\bapp-trend-bar-green\b/);
+      expect(bar.className).not.toMatch(/\bapp-trend-bar-orange\b/);
+      expect(bar.className).not.toMatch(/\bapp-trend-bar-yellow\b/);
+    }
+  });
+});
+
+describe("§S1 — the latest bucket composes emphasis with its level color (both classes present, not one replacing the other); the retired app-trend-bar-dim class never appears", () => {
+  afterEach(async () => {
+    await GlobalRegistrator.unregister();
+  });
+
+  test("a 2-point series (orange then green) renders the latest bar with BOTH app-trend-bar-latest AND app-trend-bar-green; the earlier bar carries app-trend-bar-orange and NEVER app-trend-bar-latest", async () => {
+    const key = "trend-geom-latest-composition";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        {
+          key,
+          name: "Latest Composition Project",
+          type: "backend",
+          agentsOnline: 1,
+          agentsTotal: 1,
+          latestGreenCoverage: { lines: { covered: 90, total: 100, percent: 90 } },
+          coverageTrend: datedTrend([50, 90]),
+        },
+      ],
+    });
+
+    const card = trendCard();
+    expect(card).not.toBeNull();
+    const bars = trendBars(card!);
+    expect(bars.length).toBe(2);
+
+    const earlier = bars[0]!;
+    const latest = bars[1]!;
+
+    // Positive: latest bar composes BOTH classes together.
+    expect(latest.className).toMatch(/\bapp-trend-bar-latest\b/);
+    expect(latest.className).toMatch(/\bapp-trend-bar-green\b/);
+    // Positive: earlier bar carries its own level color.
+    expect(earlier.className).toMatch(/\bapp-trend-bar-orange\b/);
+    // Negative/bound: emphasis never appears on the earlier bar; the level
+    // color is never REPLACED by the emphasis marker on the latest bar.
+    expect(earlier.className).not.toMatch(/\bapp-trend-bar-latest\b/);
+    expect(latest.className).not.toMatch(/\bapp-trend-bar-orange\b/);
+    // Bound: the retired CR-023-era "-dim" class appears on NEITHER bar
+    // under the §S1 contract (color now conveys level, not recency).
+    expect(earlier.className).not.toMatch(/\bapp-trend-bar-dim\b/);
+    expect(latest.className).not.toMatch(/\bapp-trend-bar-dim\b/);
   });
 });
 

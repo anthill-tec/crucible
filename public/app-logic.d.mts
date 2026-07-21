@@ -302,3 +302,69 @@ export declare function digestFailures<T extends DigestLeafLike>(
 export type PhaseRole = "red" | "green" | "verify" | "fix" | null;
 
 export declare function phaseRole(agentId: string): PhaseRole;
+
+// CR-CRU-028 §S1 — auto-coarsening level-colored coverage-trend buckets (pure).
+export declare const COVERAGE_LEVEL_ORANGE_MAX: number;
+export declare const COVERAGE_LEVEL_YELLOW_MAX: number;
+
+export type CoverageLevelClass = "orange" | "yellow" | "green";
+
+export declare function coverageLevelClass(percent: number): CoverageLevelClass;
+
+export interface CoverageTrendPoint {
+  day: string;
+  percent: number;
+}
+
+export interface CoarsenedCoverageBucket {
+  level: "day" | "week" | "month";
+  bucketKey: string;
+  day: string;
+  percent: number;
+  isLatest: boolean;
+}
+
+export declare function coarsenCoverageTrend(
+  points: CoverageTrendPoint[],
+): CoarsenedCoverageBucket[];
+
+// CR-CRU-028 §S2 — drill-down accordion + per-run heat strip (pure).
+export interface UnfoldedCoverageBar {
+  level: "day" | "week";
+  day: string;
+  percent: number;
+  /** The raw points this finer bar groups — carried so the drill-down can
+   * CASCADE (re-scope onto them to unfold a revealed bar one level deeper). */
+  members: CoverageTrendPoint[];
+}
+
+export declare function unfoldCoverageBucket(
+  points: CoverageTrendPoint[],
+  bucketKey: string,
+  level: "day" | "week" | "month",
+): UnfoldedCoverageBar[];
+
+export declare function unfoldCoverageSubset(
+  members: CoverageTrendPoint[],
+  parentLevel: "day" | "week" | "month",
+): UnfoldedCoverageBar[];
+
+export interface CoverageHeatSliceLike {
+  id: string;
+  projectKey: string;
+  tier: string;
+  timestamp: number;
+  coverageLines?: number;
+}
+
+export interface CoverageHeatSlice {
+  eventId: string;
+  percent: number;
+  level: CoverageLevelClass;
+}
+
+export declare function coverageHeatSlices(
+  events: CoverageHeatSliceLike[],
+  projectKey: string,
+  day: string,
+): CoverageHeatSlice[];

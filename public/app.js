@@ -47,6 +47,15 @@
       // A vanX reactive array (mutated via vanX.replace, like collapsedCycles)
       // so the Workflow binding re-runs and the pill flips dim on confirm.
       prunedCycles: [],
+      // CR-CRU-028 §S2 — the OPEN coverage-trend drill PATH: the representative
+      // `day` of the open bucket at each depth (index 0 = the top-level bar,
+      // index 1 = the revealed bar unfolded inside it, …), so the drill-down
+      // CASCADES month→week→day→heat strip (DN §3.3). Accordion PER DEPTH: at
+      // most one branch open at each depth (opening a sibling at depth d
+      // truncates the path to d and drops anything deeper). [] = nothing
+      // unfolded. A reactive array (reassigned wholesale, like a scalar) so a
+      // click re-renders the CoverageTrendCard.
+      coverageDrillPath: [],
     });
 
     // ── Routing (§S2 — hash-free History routing, parse in app-logic) ───
@@ -100,6 +109,12 @@
     // steady-state refresh; navigation no longer depends on it.
     function scopeChanged() {
       vanX.replace(state.plans, () => []);
+      // CR-CRU-028 §S2 — bucket keys (YYYY-MM-DD / week-N / month-YYYY-MM) are
+      // deterministic and collide across projects, so a leftover open drill
+      // path would render a row pre-unfolded on the newly-navigated project.
+      // Reset the coverage drill closed on every scope change (both click-nav
+      // and popstate route here), symmetric with the plan-data clear above.
+      state.coverageDrillPath = [];
       // CR-CRU-026 §S3.2 — refetchPlans is surface-aware (home → the global
       // route, workspace → the scoped one), so EVERY scope change refetches
       // the landing surface's plan slice. CR-CRU-032 §S4 made state.events
@@ -1701,38 +1716,133 @@
       const project = currentProject();
       const percent = project?.latestGreenCoverage?.lines?.percent;
       if (typeof percent !== "number") return null;
-      // CR-CRU-027 §S2 — window to the MOST RECENT 16 points (chronological,
-      // latest last); the caption reads the first WINDOWED point so text and
-      // bars always agree.
-      // CR-CRU-033 §S3 — entries are now { day, percent } objects (was a
-      // flat number[]); read `.percent` for both the caption and bar height.
-      const points = (project?.coverageTrend ?? []).slice(-16);
+      // CR-CRU-028 §S1 — auto-coarsen the date-keyed { day, percent }[] series
+      // (CR-CRU-033 §S3) into ≤16 zoom-level bucket bars: day/week/month width
+      // hints, orange/yellow/green level color, latest bucket emphasized. The
+      // caption reads the first/last BUCKET percent so text and bars agree.
+      const buckets = L.coarsenCoverageTrend(project?.coverageTrend ?? []);
+      const projectKey = project?.key;
+      const points = project?.coverageTrend ?? [];
       const caption =
-        points.length >= 2
-          ? `${points[0].percent} → ${points[points.length - 1].percent}% lines`
-          : `latest green coverage ${points.length === 1 ? points[0].percent : percent}%`;
+        buckets.length >= 2
+          ? `${buckets[0].percent} → ${buckets[buckets.length - 1].percent}% lines`
+          : `latest green coverage ${buckets.length === 1 ? buckets[0].percent : percent}%`;
+      // CR-CRU-028 §S2 — a DAY bar with no matching within-retention regression
+      // coverage event is retention-dimmed (DN §3.4): its rollup value still
+      // renders, but the drill affordance is gone (no dead heat strip).
+      const dayIsDim = (b) =>
+        b.level === "day" &&
+        L.coverageHeatSlices(state.events, projectKey, b.day).length === 0;
+      // §S2 — accordion PER DEPTH over a drill PATH (state.coverageDrillPath):
+      // path[d] is the representative `day` of the open bucket at depth d.
+      // Clicking a bar at depth d opens it (path truncated to d, then this
+      // node appended — replacing any sibling at d and dropping deeper), or
+      // toggles it shut when it is already the open node at d. A reactive
+      // array reassigned wholesale, so the card re-renders on change.
+      const toggleAt = (depth, nodeDay) => {
+        const p = state.coverageDrillPath;
+        state.coverageDrillPath =
+          p[depth] === nodeDay ? p.slice(0, depth) : [...p.slice(0, depth), nodeDay];
+      };
+      // The top-level open bucket (depth 0), keyed by its representative day
+      // (unique per bucket). null = nothing unfolded.
+      const openTop =
+        state.coverageDrillPath.length === 0
+          ? null
+          : buckets.find((b) => b.day === state.coverageDrillPath[0]) ?? null;
+      // §S2/§3.4 — a day bar (top OR revealed) with no matching within-
+      // retention event unfolds no heat strip; used both to dim the affordance
+      // and to suppress a dead strip.
+      const heatStrip = (day) => {
+        const slices = L.coverageHeatSlices(state.events, projectKey, day);
+        if (slices.length === 0) return null;
+        return div(
+          { "data-testid": "coverage-drill-row", class: "app-drill-row" },
+          div(
+            { "data-testid": "coverage-heat-strip", class: "app-cov-heat-strip" },
+            slices.map((s) =>
+              div({
+                "data-testid": "coverage-heat-slice",
+                "data-event-id": s.eventId,
+                class: `app-cov-heat-slice app-heat-slice-${s.level}`,
+                onclick: () => openDrillin(s.eventId),
+              }),
+            ),
+          ),
+        );
+      };
+      // §S2 — the open drill row for the bucket/bar at `depth`, rendered
+      // BENEATH the top bars (a sibling of the bars container, so its inner
+      // bars are never counted as top-level bars). A day node unfolds a per-run
+      // heat strip; a month/week node unfolds its finer bars — and each revealed
+      // bar CASCADES one level deeper (month→week→day→heat strip, DN §3.3) by
+      // re-scoping onto the `members` the unfold carries. Accordion per depth:
+      // the child open below is whichever finer bar's day matches
+      // coverageDrillPath[depth + 1].
+      const DrillNode = (node, depth) => {
+        if (node.level === "day") return heatStrip(node.day);
+        const finer =
+          depth === 0
+            ? L.unfoldCoverageBucket(points, node.bucketKey, node.level)
+            : L.unfoldCoverageSubset(node.members, node.level);
+        const childDay = state.coverageDrillPath[depth + 1];
+        const childNode =
+          childDay === undefined ? null : finer.find((f) => f.day === childDay) ?? null;
+        return div(
+          { "data-testid": "coverage-drill-row", class: "app-drill-row" },
+          div(
+            { class: "app-trend-bars app-drill-bars" },
+            finer.map((f) => {
+              const dim = dayIsDim(f);
+              const attrs = {
+                "data-testid": "coverage-trend-bar",
+                class: `app-trend-bar app-trend-bar-${f.level} app-trend-bar-${L.coverageLevelClass(
+                  f.percent,
+                )}${dim ? " app-trend-bar-retention-dim" : ""}`,
+                style: `height:${f.percent}%;`,
+              };
+              // A revealed DAY bar with no within-retention event is inert
+              // (dim + aria-disabled, no onclick, no heat strip) — same rule as
+              // the top day bars (DN §3.4). Every other revealed bar drills one
+              // level deeper.
+              if (dim) attrs["aria-disabled"] = "true";
+              else attrs.onclick = () => toggleAt(depth + 1, f.day);
+              return div(attrs);
+            }),
+          ),
+          childNode === null ? null : DrillNode(childNode, depth + 1),
+        );
+      };
       return div(
         { "data-testid": "coverage-trend-card", class: "app-card app-vitals-card" },
         div(
           { "data-testid": "vitals-card-label", class: "app-vitals-label" },
           "COVERAGE TREND (green regressions)",
         ),
-        // §S2 — bars render whenever the series is non-empty (the old
-        // `>= 2` gate was the defect: 1 point must render 1 bar).
-        points.length > 0
+        // §S1 — bars render whenever the series coarsens to ≥1 bucket.
+        buckets.length > 0
           ? div(
               { "data-testid": "coverage-trend-bars", class: "app-trend-bars" },
-              points.map((p, i) =>
-                div({
+              buckets.map((b) => {
+                const dim = dayIsDim(b);
+                const attrs = {
                   "data-testid": "coverage-trend-bar",
-                  class: `app-trend-bar ${
-                    i === points.length - 1 ? "app-trend-bar-latest" : "app-trend-bar-dim"
+                  class: `app-trend-bar app-trend-bar-${b.level} app-trend-bar-${L.coverageLevelClass(
+                    b.percent,
+                  )}${b.isLatest ? " app-trend-bar-latest" : ""}${
+                    dim ? " app-trend-bar-retention-dim" : ""
                   }`,
-                  style: `height:${p.percent}%;`,
-                }),
-              ),
+                  style: `height:${b.percent}%;`,
+                };
+                // §S2 — a dimmed day bar is inert (aria-disabled, no onclick):
+                // clicking it never opens a drill row or a dead heat strip.
+                if (dim) attrs["aria-disabled"] = "true";
+                else attrs.onclick = () => toggleAt(0, b.day);
+                return div(attrs);
+              }),
             )
           : null,
+        () => (openTop === null ? null : DrillNode(openTop, 0)) ?? span(),
         div({ "data-testid": "vitals-card-value", class: "app-vitals-value" }, caption),
       );
     };
