@@ -598,6 +598,18 @@ def _run_context():
     return context
 
 
+def _ingest_context(cycle_id):
+    """§S9 — the ingest payload's `context`: the env/git `_run_context()`
+    enriched with the RESOLVED cycleId, so the SERVER-recorded run carries the
+    attach cycle (not just the printed envelope). When `WORKFLOW_CYCLE_ID` is
+    unset (auto-resolved case) `_run_context()` is None, so the cycleId is the
+    sole classifying field. Returns None only when there is nothing to attach."""
+    context = _run_context() or {}
+    if cycle_id is not None:
+        context["cycleId"] = cycle_id
+    return context or None
+
+
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
                    context=None):
     payload = {
@@ -690,9 +702,15 @@ def cmd_test(args):
             summary, tree = _parse_junit_file(junit_path)
             # §S2c — the captured run log IS the failure-detail source.
             _marry_failures(tree, getattr(result, "stdout", None))
+            # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run
+            # hard-errors WITHOUT ever ingesting a cycleId=null orphan.
+            cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
+            if hard_error:
+                _emit_ingest_hard_error("test", project_dir, args.agent, warnings)
+                return 1
             resp = _ingest_parsed(project_dir, args.agent, summary, tree,
-                                  tier="unit", context=_run_context())
-            cycle_id, warnings = _cycle_id_and_warnings(project_dir)
+                                  tier="unit",
+                                  context=_ingest_context(cycle_id))
             _emit_ingest_axi("test", resp, summary, project_dir, args.agent,
                              cycle_id, warnings)
             # A failing run exits non-zero even when the ingest succeeded —
@@ -762,9 +780,14 @@ def cmd_regression(args):
             if coverage is None:
                 print(f"[crucible] WARN: lcov coverage unavailable at {lcov_path}",
                       file=sys.stderr)
+        # §S9 — resolve/attach the active cycle before the POST (hard-error
+        # when none, never a cycleId=null orphan).
+        cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
+        if hard_error:
+            _emit_ingest_hard_error("regression", project_dir, args.agent, warnings)
+            return 1
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                              tier="regression", context=_run_context())
-        cycle_id, warnings = _cycle_id_and_warnings(project_dir)
+                              tier="regression", context=_ingest_context(cycle_id))
         _emit_ingest_axi("regression", resp, summary, project_dir, args.agent,
                          cycle_id, warnings)
         return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
@@ -784,12 +807,15 @@ def cmd_auto_ingest(args):
         print(f"[crucible] no {junit_path} — nothing to ingest", file=sys.stderr)
         return 1
     summary, tree = _parse_junit_file(junit_path)
-    # CR-CRU-030 §S9 — attach the run context (cycleId/wave/orchestrator) like
-    # cmd_test does; without it the ingested e2e run orphans (cycleId=NONE) even
-    # though the envelope below reports the resolved cycle id.
+    # CR-CRU-030 §S9 — resolve/attach the active cycle BEFORE the POST so the
+    # ingested e2e run carries the resolved cycleId in the SERVER record (not
+    # just the envelope); no active cycle → hard error, never a cycleId=null orphan.
+    cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
+    if hard_error:
+        _emit_ingest_hard_error("auto-ingest", project_dir, args.agent, warnings)
+        return 1
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="e2e",
-                          context=_run_context())
-    cycle_id, warnings = _cycle_id_and_warnings(project_dir)
+                          context=_ingest_context(cycle_id))
     _emit_ingest_axi("auto-ingest", resp, summary, project_dir, args.agent,
                      cycle_id, warnings)
     return 0 if resp.get("ok") else 1
@@ -1073,92 +1099,106 @@ def _toon():
 # (interactive only). §S3: an unresolved classifying field (cycleId) is emitted
 # as an EXPLICIT null AND raises a `warnings[]` entry — never silently dropped.
 
-_AXI_UNSET = object()
+_AXI_MOD = None
+
+
+def _axi():
+    """Lazily load the shared `clients/_crucible_axi.py` envelope module (§S1)
+    by file path — like `_toon()`, it sits next to this hyphen-named script and
+    is not guaranteed to be on `sys.path` for a plain `import`."""
+    global _AXI_MOD
+    if _AXI_MOD is None:
+        import importlib.util
+        axi_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_crucible_axi.py")
+        spec = importlib.util.spec_from_file_location("bun_crucible_axi_shared", axi_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"could not load shared AXI module at {axi_path}")
+        _AXI_MOD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_AXI_MOD)
+    return _AXI_MOD
+
+
+# §S1: the envelope + context builders now live in the shared module; the
+# bun-local wrappers keep bun's project_dir-based signatures (resolving the key
+# from `.env` first) and DELEGATE, so extraction is byte-identical.
+_AXI_UNSET = _axi().AXI_UNSET
 
 
 def _axi_context(project_dir, agent_id=None, cr=None, cycle_id=_AXI_UNSET):
     """§S1 envelope context: { projectKey, agentId?, cycleId?, wave, cr, track? }.
-    Absent env keys are OMITTED; a supplied cycle_id of None is kept as an
-    EXPLICIT null (the §S3 orphan signal)."""
-    ctx = {"projectKey": _project_key(project_dir)}
-    if agent_id:
-        ctx["agentId"] = agent_id
-    if cycle_id is not _AXI_UNSET:
-        ctx["cycleId"] = cycle_id
-    wave = os.environ.get("WORKFLOW_WAVE")
-    if wave:
-        ctx["wave"] = wave
-    if cr:
-        ctx["cr"] = cr
-    role = os.environ.get("WORKFLOW_ROLE")
-    if role:
-        ctx["track"] = role
-    return ctx
+    Resolves the project_key from `.env`, then delegates to the shared
+    `_crucible_axi.axi_context`."""
+    return _axi().axi_context(
+        _project_key(project_dir), agent_id=agent_id, cr=cr, cycle_id=cycle_id)
 
 
 def _emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
-    """Write the §S1 TOON AXI envelope to stdout (the AXI channel) and the
-    optional human-readable line to stderr (interactive only)."""
-    axi = {"verb": verb, "ok": ok}
-    axi.update(result_fields)
-    axi["context"] = context
-    axi["warnings"] = warnings
-    sys.stdout.write(_toon().encode({"axi": axi}) + "\n")
-    if legacy_line is not None:
-        print(legacy_line, file=sys.stderr)
+    """Write the §S1 TOON AXI envelope (delegates to the shared module)."""
+    return _axi().emit_axi(verb, ok, result_fields, context, warnings, legacy_line)
 
 
 def _active_cycle_id(project_dir):
     """First ACTIVE cycle id among the project's OPEN plans, or None. Tolerant
-    of any lookup failure — the §S3 guard must never break an ingest."""
+    of any lookup failure — the §S3 guard must never break an ingest. Delegates
+    the pure resolution to the shared `_crucible_axi.resolve_active_cycle_id`."""
     try:
         resp = _get(_plans_path(project_dir))
     except Exception:
         return None
     if not isinstance(resp, dict) or not resp.get("ok"):
         return None
-    for p in resp.get("plans", []):
-        if p.get("status") != "open":
-            continue
-        for c in p.get("cycles", []):
-            if c.get("status") == "active":
-                return c.get("id")
-    return None
+    return _axi().resolve_active_cycle_id(resp.get("plans", []))
 
 
-def _cycle_id_and_warnings(project_dir):
-    """(cycleId, warnings) for an --agent ingest. WORKFLOW_CYCLE_ID (int) when
-    set; otherwise an EXPLICIT null cycleId, plus a single `no-cycle-id` warning
-    NAMING the active cycle when the open plan has one (§S3)."""
+def _resolve_ingest_cycle(project_dir):
+    """§S9 — resolve the cycle an --agent ingest attaches to.
+
+    An explicit `WORKFLOW_CYCLE_ID` (valid int) is authoritative — the optional
+    override. Otherwise the open plan's single `status:"active"` cycle is
+    auto-resolved from the server (the orchestrator's `cycle-activate` is then
+    the only input). Returns `(cycle_id, warnings, hard_error)`:
+      - `(int, [], False)`  — explicit override, or an auto-resolved active cycle
+      - `(None, [warning], True)`  — NO active cycle: a HARD ERROR. The caller
+        MUST emit the ok:false envelope and SKIP the ingest POST rather than
+        orphan the run (cycleId=null). §S9 supersedes §S3's soft `no-cycle-id`
+        warn-and-proceed for the cycle-attach case.
+    """
     raw = os.environ.get("WORKFLOW_CYCLE_ID")
-    cycle_id = None
     if raw is not None:
         try:
-            cycle_id = int(raw)
+            return int(raw), [], False
         except ValueError:
-            cycle_id = None
-    warnings = []
-    if cycle_id is None:
-        active = _active_cycle_id(project_dir)
-        if active is not None:
-            warnings.append({
-                "code": "no-cycle-id",
-                "detail": (f"WORKFLOW_CYCLE_ID unset while cycle {active} is ACTIVE; "
-                           f"this ingest will orphan (cycleId=null)"),
-            })
-    return cycle_id, warnings
+            pass  # malformed override → fall through to server auto-resolution
+    active = _active_cycle_id(project_dir)
+    if active is not None:
+        return active, [], False
+    warning = {
+        "code": "no-active-cycle",
+        "detail": "no active cycle — activate one first",
+    }
+    return None, [warning], True
 
 
 def _emit_ingest_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
-    """Emit the §S1 envelope for an ingest verb (test/regression/auto-ingest):
-    run{passed,failed,total} + cycle-aware context + §S3 warnings. Each warning
-    is also surfaced on stderr."""
+    """Emit the §S1 envelope for a SUCCESSFUL ingest verb
+    (test/regression/auto-ingest): run{passed,failed,total} + cycle-aware
+    context. Any warnings are also surfaced on stderr."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "total": summary["total"]}
     context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
     for w in warnings:
         print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
     _emit_axi(verb, bool(resp.get("ok")), {"run": run}, context, warnings)
+
+
+def _emit_ingest_hard_error(verb, project_dir, agent, warnings):
+    """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when
+    there is no active cycle to attach an ingest to. The run is NOT POSTed, so
+    it can never land as a silent orphan; the caller returns non-zero."""
+    context = _axi_context(project_dir, agent_id=agent, cycle_id=None)
+    for w in warnings:
+        print(f"error: {w['code']} — {w['detail']}", file=sys.stderr)
+    _emit_axi(verb, False, {}, context, warnings)
 
 
 def _agent_id(args):
