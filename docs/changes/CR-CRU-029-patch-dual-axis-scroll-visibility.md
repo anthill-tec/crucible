@@ -1,6 +1,6 @@
 # CR-CRU-029 — Patch: dual-axis scroll always operable in narrow viewports
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-07-21)
 **Type:** patch
 **Priority:** P2
 **Depends on:** CR-CRU-023 (the pane horizontal-scroll floor)
