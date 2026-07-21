@@ -151,16 +151,25 @@ class StatusQueueTableTest(_BaseStatusTest):
         row_a = self._row_for_cr(rows, "CR-A")
         self.assertEqual(row_a.get("wave"), "3")
         self.assertEqual(row_a.get("status"), "open")
-        self.assertEqual(row_a.get("activeCycle"), {"id": 11, "label": "c2"},
-                          f"activeCycle must identify the plan's single ACTIVE cycle; got {row_a!r}")
+        self.assertEqual(row_a.get("activeCycleId"), 11,
+                          f"activeCycleId must identify the plan's single ACTIVE cycle's id "
+                          f"as a flat scalar column (the TOON table subset cannot round-trip "
+                          f"a nested dict cell); got {row_a!r}")
+        self.assertEqual(row_a.get("activeCycleLabel"), "c2",
+                          f"activeCycleLabel must identify the plan's single ACTIVE cycle's "
+                          f"label as a flat scalar column; got {row_a!r}")
         self.assertIsNone(row_a.get("mergeCommit"),
                            "an OPEN plan (never closed) must not fabricate a mergeCommit")
 
         row_b = self._row_for_cr(rows, "CR-B")
         self.assertEqual(row_b.get("status"), "closed")
         self.assertEqual(row_b.get("mergeCommit"), "deadbee")
-        self.assertIsNone(row_b.get("activeCycle"),
-                           "a CLOSED plan (all cycles terminal) must not report an activeCycle")
+        self.assertIsNone(row_b.get("activeCycleId"),
+                           "a CLOSED plan (all cycles terminal) must report activeCycleId "
+                           "as null, not fabricate one")
+        self.assertIsNone(row_b.get("activeCycleLabel"),
+                           "a CLOSED plan (all cycles terminal) must report activeCycleLabel "
+                           "as null, not fabricate one")
 
     def test_status_lastruncr_is_the_plan_with_latest_closedat(self):
         plans = _plans_response([
