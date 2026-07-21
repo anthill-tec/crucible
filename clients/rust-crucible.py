@@ -68,14 +68,17 @@ Examples:
 """
 
 import argparse
+import atexit
+import importlib.util
 import json
 import os
+import re
+import shutil
+import signal
 import subprocess
 import sys
 import time
-import signal
-import atexit
-import re
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -176,13 +179,87 @@ def _resolve_services(arg_value, project_dir):
     return parsed or None
 
 
-def _post(path, payload):
+def _request(method, path, payload=None):
+    """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error."""
     req = urllib.request.Request(
         f"{CRUCIBLE_URL}{path}",
-        data=json.dumps(payload).encode(),
+        data=json.dumps(payload).encode() if payload is not None else None,
         headers={"Content-Type": "application/json"},
+        method=method,
     )
-    return json.loads(urllib.request.urlopen(req).read())
+    try:
+        return json.loads(urllib.request.urlopen(req).read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        return {"ok": False, "error": f"HTTP {e.code}: {body}"}
+    except urllib.error.URLError as e:
+        return {"ok": False, "error": f"connection failed: {e.reason} "
+                                      f"(is Crucible running at {CRUCIBLE_URL}?)"}
+
+
+def _post(path, payload):
+    return _request("POST", path, payload)
+
+
+def _get(path):
+    return _request("GET", path)
+
+
+def _patch(path, payload):
+    return _request("PATCH", path, payload)
+
+
+# ── §S1 shared TOON-AXI envelope module + toon codec (loaded by file path) ──
+
+_TOON_MOD = None
+_AXI_MOD = None
+
+# §S2b cadence (CR-CRU-008) reused by gate-run's interim poll.
+_GATE_POLL_CADENCE_S = 2.0
+_GATE_POLL_TICK_S = 0.4
+
+
+def _toon():
+    """Lazily load the sibling clients/toon.py TOON codec by file path (the
+    hyphen-named client is itself loaded by path, so toon.py is not on sys.path)."""
+    global _TOON_MOD
+    if _TOON_MOD is None:
+        toon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "toon.py")
+        spec = importlib.util.spec_from_file_location("rust_crucible_toon", toon_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"could not load TOON codec at {toon_path}")
+        _TOON_MOD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_TOON_MOD)
+    return _TOON_MOD
+
+
+def _axi():
+    """Lazily load the shared clients/_crucible_axi.py envelope module (§S1) by path."""
+    global _AXI_MOD
+    if _AXI_MOD is None:
+        axi_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_crucible_axi.py")
+        spec = importlib.util.spec_from_file_location("rust_crucible_axi_shared", axi_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"could not load shared AXI module at {axi_path}")
+        _AXI_MOD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_AXI_MOD)
+    return _AXI_MOD
+
+
+_AXI_UNSET = _axi().AXI_UNSET
+
+
+def _axi_context(project_dir, agent_id=None, cr=None, cycle_id=_AXI_UNSET):
+    """§S1 envelope context: { projectKey, agentId?, cycleId?, wave, cr, track? }.
+    Resolves the project_key from `.env`, then delegates to the shared
+    _crucible_axi.axi_context so the output is byte-identical across clients."""
+    return _axi().axi_context(
+        _project_key(project_dir), agent_id=agent_id, cr=cr, cycle_id=cycle_id)
+
+
+def _emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
+    """Write the §S1 TOON-AXI envelope (delegates to the shared module)."""
+    return _axi().emit_axi(verb, ok, result_fields, context, warnings, legacy_line)
 
 
 def _run_context():
@@ -226,6 +303,102 @@ def _run_context():
     except (OSError, subprocess.CalledProcessError):
         pass
     return context
+
+
+def _ingest_context(cycle_id):
+    """§S9 — the ingest payload's `context`: the env/git `_run_context()` enriched
+    with the RESOLVED cycleId so the SERVER-recorded run carries the attach cycle
+    (not just the printed envelope). Returns None only when there is nothing to attach."""
+    context = _run_context() or {}
+    if cycle_id is not None:
+        context["cycleId"] = cycle_id
+    return context or None
+
+
+# ── §S9 — active-cycle resolution + register guard + ingest envelopes ────────
+
+
+def _plans_path(project_dir):
+    return f"/api/v2/projects/{_project_key(project_dir)}/plans"
+
+
+def _open_plans(project_dir):
+    resp = _get(_plans_path(project_dir))
+    if not resp.get("ok"):
+        sys.exit(f"[crucible] ERROR: could not list plans: {resp.get('error')}")
+    return [p for p in resp.get("plans", []) if p.get("status") == "open"]
+
+
+def _active_cycle_id(project_dir):
+    """First ACTIVE cycle id among the project's OPEN plans, or None. Tolerant of any
+    lookup failure — delegates the pure resolution to the shared module."""
+    try:
+        resp = _get(_plans_path(project_dir))
+    except Exception:
+        return None
+    if not isinstance(resp, dict) or not resp.get("ok"):
+        return None
+    return _axi().resolve_active_cycle_id(resp.get("plans", []))
+
+
+def _resolve_ingest_cycle(project_dir):
+    """§S9 — resolve the cycle an --agent ingest attaches to. An explicit valid
+    WORKFLOW_CYCLE_ID is authoritative; otherwise the open plan's single active
+    cycle is auto-resolved. Returns (cycle_id, warnings, hard_error)."""
+    raw = os.environ.get("WORKFLOW_CYCLE_ID")
+    if raw is not None:
+        try:
+            return int(raw), [], False
+        except ValueError:
+            pass
+    active = _active_cycle_id(project_dir)
+    if active is not None:
+        return active, [], False
+    warning = {"code": "no-active-cycle", "detail": "no active cycle — activate one first"}
+    return None, [warning], True
+
+
+def _register_cycle_guard(project_dir):
+    """§S9 — register mirrors the ingest hard-error: with WORKFLOW_CYCLE_ID unset AND
+    a successfully-read open plan carrying no active cycle, registration hard-errors.
+    A plans fetch that itself FAILS is NOT proof of "no active cycle", so register
+    proceeds. Returns (hard_error, warnings)."""
+    raw = os.environ.get("WORKFLOW_CYCLE_ID")
+    if raw is not None:
+        try:
+            int(raw)
+            return False, []
+        except ValueError:
+            pass
+    resp = _get(_plans_path(project_dir))
+    if not isinstance(resp, dict) or not resp.get("ok"):
+        return False, []
+    if _axi().resolve_active_cycle_id(resp.get("plans", [])) is not None:
+        return False, []
+    return True, [{"code": "no-active-cycle",
+                   "detail": "no active cycle — activate one first"}]
+
+
+def _emit_ingest_axi(verb, resp, project_dir, agent, cycle_id, warnings):
+    """Emit the §S1 envelope for a SUCCESSFUL ingest verb: run{passed,failed,total}
+    (from the SERVER-parsed response) + cycle-aware context."""
+    s = resp.get("run", {}) or {}
+    run = {"passed": s.get("passed"), "failed": s.get("failed"), "total": s.get("total")}
+    context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
+    for w in warnings:
+        print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
+    _emit_axi(verb, bool(resp.get("ok")),
+              {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])},
+              context, warnings)
+
+
+def _emit_ingest_hard_error(verb, project_dir, agent, warnings):
+    """§S9 — emit the ok:false envelope (cycleId=null) when there is no active cycle
+    to attach an ingest to. The run is NOT POSTed."""
+    context = _axi_context(project_dir, agent_id=agent, cycle_id=None)
+    for w in warnings:
+        print(f"error: {w['code']} — {w['detail']}", file=sys.stderr)
+    _emit_axi(verb, False, {}, context, warnings)
 
 
 def _gate_lock_path(project_dir):
@@ -403,7 +576,18 @@ def _run_logged(cmd, cwd, env, log_path):
 
 
 def cmd_register(args):
+    """Register / heartbeat. §S9: no active cycle (and no WORKFLOW_CYCLE_ID override)
+    is a HARD ERROR — the agent must never come online against an untracked plan."""
     project_dir = _resolve_project_dir(args.project_dir)
+    hard_error, warnings = _register_cycle_guard(project_dir)
+    if hard_error:
+        for w in warnings:
+            print(f"error: {w['code']} — {w['detail']}", file=sys.stderr)
+        _emit_axi("register", False,
+                  {"agent": args.agent, "help": _axi().HELP_STEPS["register"]},
+                  _axi_context(project_dir, agent_id=args.agent, cycle_id=None),
+                  warnings)
+        return 1
     payload = {
         "agentId": args.agent,
         "projectKey": _project_key(project_dir),
@@ -413,8 +597,12 @@ def cmd_register(args):
         "identity": {"displayName": args.agent, "source": "openclaw"},
     }
     resp = _post("/api/v2/agents/register", payload)
-    print(f"register: ok={resp.get('ok', False)} agent={args.agent} phase={args.phase}")
-    return 0 if resp.get("ok") else 1
+    ok = bool(resp.get("ok", False))
+    legacy = f"register: ok={resp.get('ok', False)} agent={args.agent} phase={args.phase}"
+    _emit_axi("register", ok,
+              {"agent": args.agent, "help": _axi().HELP_STEPS["register"]},
+              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+    return 0 if ok else 1
 
 
 def cmd_unregister(args):
@@ -423,8 +611,12 @@ def cmd_unregister(args):
         "/api/v2/agents/unregister",
         {"agentId": args.agent, "projectKey": _project_key(project_dir)},
     )
-    print(f"unregister: ok={resp.get('ok', False)} agent={args.agent}")
-    return 0 if resp.get("ok") else 1
+    ok = bool(resp.get("ok", False))
+    legacy = f"unregister: ok={resp.get('ok', False)} agent={args.agent}"
+    _emit_axi("unregister", ok,
+              {"agent": args.agent, "help": _axi().HELP_STEPS["unregister"]},
+              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+    return 0 if ok else 1
 
 
 def _remove_agent_silent(project_dir, agent_id):
@@ -467,23 +659,19 @@ def cmd_auto_ingest(args):
     junit_path = ci if os.path.exists(ci) else (default if os.path.exists(default) else None)
 
     if junit_path:
-        payload = {
-            "projectKey": _project_key(project_dir),
-            "codec": "junit",
-            "dataPath": junit_path,
-            "agentId": args.agent,
-            "tier": "unit",
-        }
-        context = _run_context()
-        if context:
-            payload["context"] = context
-        resp = _post("/api/v2/runs", payload)
-        s = resp.get("run", {})
-        print(
-            f"ingest junit: ok={resp.get('ok')} "
-            f"passed={s.get('passed')} failed={s.get('failed')} total={s.get('total')}"
-        )
-        return 0 if (resp.get("ok") and s.get("failed", 0) == 0) else 1
+        # §S9 — resolve/attach the active cycle BEFORE the POST so the ingested run
+        # carries the resolved cycleId in the SERVER record; no active cycle → hard
+        # error, never a cycleId=null orphan.
+        cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
+        if hard_error:
+            _emit_ingest_hard_error("auto-ingest", project_dir, args.agent, warnings)
+            return 1
+        resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier="unit",
+                                 context=_ingest_context(cycle_id))
+        _emit_ingest_axi("auto-ingest", resp, project_dir, args.agent,
+                         cycle_id, warnings)
+        s = resp.get("run", {}) or {}
+        return 0 if (resp.get("ok") and (s.get("failed") or 0) == 0) else 1
 
     # No junit — compile failure path
     cmd = ["cargo", "check", "-p", args.crate]
@@ -639,10 +827,9 @@ def _regression_ingest_run(args):
     return 0 if resp.get("ok") else 1
 
 
-def _ingest_junit(project_dir, agent_id, profile=None):
-    """Helper: ingest the freshest junit xml. Profile-aware — nextest writes to
-    target/nextest/<profile>/junit.xml, so prefer the run's own profile path
-    (e.g. e2e) before falling back to ci/default."""
+def _resolve_junit_path(project_dir, profile=None):
+    """The freshest junit xml path — profile-aware (nextest writes to
+    target/nextest/<profile>/junit.xml), or None if none present."""
     candidates = []
     if profile:
         candidates.append(f"{project_dir}/target/nextest/{profile}/junit.xml")
@@ -650,26 +837,32 @@ def _ingest_junit(project_dir, agent_id, profile=None):
         f"{project_dir}/target/nextest/ci/junit.xml",
         f"{project_dir}/target/nextest/default/junit.xml",
     ]
-    path = next((p for p in candidates if os.path.exists(p)), None)
-    if not path:
-        print(f"[crucible] no junit.xml at any of {candidates} — skipping ingest")
-        return 1
+    return next((p for p in candidates if os.path.exists(p)), None)
+
+
+def _ingest_junit_axi(project_dir, agent_id, junit_path, tier=None, context=None):
+    """Ingest a junit XML to /api/v2/runs (server-side codec=junit parse) and return
+    the parsed response dict (the caller emits the §S1 envelope). The human-readable
+    ingest line is interactive-only (stderr) — stdout is the machine channel."""
     payload = {
         "projectKey": _project_key(project_dir),
         "codec": "junit",
-        "dataPath": path,
+        "dataPath": junit_path,
         "agentId": agent_id,
     }
-    context = _run_context()
+    if tier:
+        payload["tier"] = tier
     if context:
         payload["context"] = context
     resp = _post("/api/v2/runs", payload)
-    s = resp.get("run", {})
+    s = resp.get("run", {}) or {}
     print(
         f"ingest junit: ok={resp.get('ok')} "
         f"passed={s.get('passed')} failed={s.get('failed')} total={s.get('total')}"
+        + (f" error={resp.get('error')}" if resp.get("error") else ""),
+        file=sys.stderr,
     )
-    return 0 if resp.get("ok") else 1
+    return resp
 
 
 def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check"):
@@ -688,7 +881,8 @@ def _ingest_rustc_stderr(project_dir, agent_id, stderr_text, kind="check"):
     resp = _post("/api/v2/runs/compile", payload)
     print(
         f"ingest compile ({kind}): ok={resp.get('ok')} "
-        f"errors={err_count} warnings={warn_count}"
+        f"errors={err_count} warnings={warn_count}",
+        file=sys.stderr,
     )
     return 0 if resp.get("ok") else 1
 
@@ -711,24 +905,36 @@ def cmd_test(args):
     env.setdefault("CARGO_BUILD_JOBS", "12")
     print(f"[crucible] running: {' '.join(cmd)}")
     result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
-    print(f"[crucible] cargo nextest exit={result.returncode}")
+    print(f"[crucible] cargo nextest exit={result.returncode}", file=sys.stderr)
     if args.agent:
         # Test may have failed; ingest result regardless (junit captures fail state).
-        # Profile-aware: nextest writes junit to target/nextest/<profile>/junit.xml
-        # (e.g. `-P e2e` → target/nextest/e2e/junit.xml). Crucible ingests the nextest
-        # junit format for ALL profiles incl. e2e — earlier `cmd_test` only scanned the
-        # ci/default paths, so e2e runs were mislabeled as "test-compile" (CR-266 fix).
-        prof = f"{project_dir}/target/nextest/{args.profile}/junit.xml"
-        ci = f"{project_dir}/target/nextest/ci/junit.xml"
-        default = f"{project_dir}/target/nextest/default/junit.xml"
-        if os.path.exists(prof) or os.path.exists(ci) or os.path.exists(default):
-            return _ingest_junit(project_dir, args.agent, profile=args.profile)
-        # If tests didn't even compile, capture cargo check stderr
+        # Profile-aware: nextest writes junit to target/nextest/<profile>/junit.xml.
+        junit_path = _resolve_junit_path(project_dir, args.profile)
+        if junit_path:
+            # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run
+            # hard-errors WITHOUT ever ingesting a cycleId=null orphan.
+            cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
+            if hard_error:
+                _emit_ingest_hard_error("test", project_dir, args.agent, warnings)
+                return 1
+            resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier="unit",
+                                     context=_ingest_context(cycle_id))
+            _emit_ingest_axi("test", resp, project_dir, args.agent, cycle_id, warnings)
+            s = resp.get("run", {}) or {}
+            if (s.get("failed") or 0) > 0:
+                return 1
+            return 0 if resp.get("ok") else 1
+        # If tests didn't even compile, capture cargo check stderr → ingest compile
+        # and emit an ok:false test envelope (no junit run to report).
         check_cmd = ["cargo", "check", "-p", args.crate, "--tests"]
         if args.features:
             check_cmd += ["--features", args.features]
-        check_result = subprocess.run(check_cmd, capture_output=True, text=True, cwd=project_dir, env=env)
-        return _ingest_rustc_stderr(project_dir, args.agent, check_result.stderr, kind="test-compile")
+        check_result = subprocess.run(check_cmd, capture_output=True, text=True,
+                                      cwd=project_dir, env=env)
+        _ingest_rustc_stderr(project_dir, args.agent, check_result.stderr, kind="test-compile")
+        _emit_axi("test", False, {"help": _axi().HELP_STEPS["test"]},
+                  _axi_context(project_dir, agent_id=args.agent), [])
+        return result.returncode or 1
     return result.returncode
 
 
@@ -742,14 +948,22 @@ def cmd_check(args):
         cmd += ["--features", args.features]
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", "12")
-    print(f"[crucible] running: {' '.join(cmd)}")
+    print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=project_dir, env=env)
     err_count = result.stderr.count("error[E") + result.stderr.count("error: ")
     warn_count = result.stderr.count("warning:")
-    print(f"[crucible] cargo check exit={result.returncode} errors={err_count} warnings={warn_count}")
-    if args.agent:
-        return _ingest_rustc_stderr(project_dir, args.agent, result.stderr, kind="check")
-    return result.returncode
+    print(f"[crucible] cargo check exit={result.returncode} "
+          f"errors={err_count} warnings={warn_count}", file=sys.stderr)
+    ok = result.returncode == 0
+    # §S2/§S13/§S15 — the compile gate returns the §S1 envelope on BOTH clean and
+    # error compile; a failing check ingests the rustc errors (with run context).
+    if args.agent and not ok:
+        _ingest_rustc_stderr(project_dir, args.agent, result.stderr, kind="check")
+    legacy = f"check: ok={ok} exit={result.returncode}"
+    _emit_axi("check", ok,
+              {"exit": result.returncode, "help": _axi().HELP_STEPS["check"]},
+              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+    return 0 if ok else (result.returncode or 1)
 
 
 def cmd_clippy(args):
@@ -1303,6 +1517,477 @@ def cmd_docker_e2e_gate(args):
     return cmd_smoke_test(smoke_args)
 
 
+# ── CR-CRU-030 §S2/§S4/§S6/§S7 — plan / cycle / status verbs ────────────────
+
+
+def cmd_plan_file(args):
+    project_dir = _resolve_project_dir(args.project_dir)
+    labels = [label.strip() for label in args.cycles.split(",") if label.strip()]
+    if not labels:
+        sys.exit("[crucible] ERROR: --cycles must name at least one cycle")
+    payload = {"cr": args.cr, "cycles": [{"label": label} for label in labels]}
+    if args.title:
+        payload["title"] = args.title
+    wave = args.wave if getattr(args, "wave", None) is not None else os.environ.get("WORKFLOW_WAVE")
+    warnings = []
+    if wave:
+        payload["wave"] = wave
+    else:
+        w = _axi().no_wave_warning(args.cr)
+        warnings.append(w)
+        print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
+    track = os.environ.get("WORKFLOW_ROLE")
+    if track:
+        payload["track"] = track
+    orchestrator = args.orchestrator or os.environ.get("WORKFLOW_ORCHESTRATOR")
+    if orchestrator:
+        payload["orchestrator"] = orchestrator
+    resp = _post(_plans_path(project_dir), payload)
+    if not resp.get("ok"):
+        legacy = f"plan-file: ok=False error={resp.get('error')}"
+        _emit_axi("plan-file", False, {"cr": args.cr}, _axi_context(project_dir), warnings, legacy)
+        return 1
+    cycles = resp.get("cycles", [])
+    ids = " ".join(f"{c.get('label')}={c.get('id')}" for c in cycles)
+    legacy = (f"plan-file: ok=True planId={resp.get('planId')} cr={resp.get('cr')} "
+              f"cycles: {ids}")
+    _emit_axi("plan-file", True,
+              {"planId": resp.get("planId"), "cr": resp.get("cr"), "cycles": cycles,
+               "help": ["cycle-activate <id>"]},
+              _axi_context(project_dir, cr=resp.get("cr") or args.cr), warnings, legacy)
+    return 0
+
+
+def cmd_plan_backfill(args):
+    """§S2 — resolve the target plan (single, or --cr) and PATCH its wave (wave-only
+    body is closed-plan-safe, so the resolver considers ALL plans)."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    resp = _get(_plans_path(project_dir))
+    if not resp.get("ok"):
+        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
+        _emit_axi("plan-backfill", False, {"wave": args.wave},
+                  _axi_context(project_dir, cr=args.cr), [], legacy)
+        return 1
+    plans = resp.get("plans", [])
+    if args.cr:
+        plans = [p for p in plans if p.get("cr") == args.cr]
+    if len(plans) == 0:
+        legacy = ("[crucible] ERROR: no plan to backfill"
+                  + (f" for cr={args.cr}" if args.cr else ""))
+        _emit_axi("plan-backfill", False, {"wave": args.wave},
+                  _axi_context(project_dir, cr=args.cr), [], legacy)
+        return 1
+    if len(plans) > 1:
+        names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in plans)
+        legacy = (f"[crucible] ERROR: {len(plans)} plans — ambiguous plan-backfill. "
+                  f"Pass --cr to pick one of: {names}")
+        _emit_axi("plan-backfill", False, {"wave": args.wave},
+                  _axi_context(project_dir, cr=args.cr), [], legacy)
+        return 1
+    plan = plans[0]
+    patch_resp = _patch(f"{_plans_path(project_dir)}/{plan['planId']}", {"wave": args.wave})
+    ok = patch_resp.get("ok", False)
+    cr_label = plan.get("cr")
+    legacy = (f"plan-backfill: ok={ok} plan={plan['planId']} cr={cr_label} wave={args.wave}"
+              + (f" error={patch_resp.get('error')}" if patch_resp.get("error") else ""))
+    _emit_axi("plan-backfill", bool(ok),
+              {"plan": plan["planId"], "cr": cr_label, "wave": args.wave},
+              _axi_context(project_dir, cr=cr_label), [], legacy)
+    return 0 if ok else 1
+
+
+def _cycle_transition(args, status):
+    """Cycle ids are unique per PROJECT — resolve the owning OPEN plan by scanning
+    GET …/plans, then PATCH that plan's cycle."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    cycle_id = args.cycle_id
+    open_plans = _open_plans(project_dir)
+    target = next(
+        (p for p in open_plans
+         if any(c.get("id") == cycle_id for c in p.get("cycles", []))),
+        None,
+    )
+    verb = "cycle-activate" if status == "active" else "cycle-done"
+    help_steps = (["cycle-done <id>", "status"] if status == "active"
+                  else ["cr-close --commit <sha>", "status"])
+    if target is None:
+        known = "; ".join(
+            f"plan {p.get('planId')} ({p.get('cr')}): "
+            + ", ".join(str(c.get("id")) for c in p.get("cycles", []))
+            for p in open_plans
+        ) or "none"
+        legacy = (f"[crucible] ERROR: cycle {cycle_id} is not in any OPEN plan. "
+                  f"Open plans' cycle ids: {known}")
+        _emit_axi(verb, False, {"cycle": cycle_id, "help": help_steps},
+                  _axi_context(project_dir), [], legacy)
+        return 1
+    resp = _patch(f"{_plans_path(project_dir)}/{target['planId']}/cycles/{cycle_id}",
+                  {"status": status})
+    ok = resp.get("ok", False)
+    legacy = (f"{verb}: ok={ok} cycle={cycle_id} plan={target['planId']}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi(verb, bool(ok),
+              {"cycle": cycle_id, "plan": target["planId"], "help": help_steps},
+              _axi_context(project_dir), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_cycle_activate(args):
+    return _cycle_transition(args, "active")
+
+
+def cmd_cycle_done(args):
+    return _cycle_transition(args, "done")
+
+
+def cmd_cr_close(args):
+    project_dir = _resolve_project_dir(args.project_dir)
+    open_plans = _open_plans(project_dir)
+    if args.cr:
+        open_plans = [p for p in open_plans if p.get("cr") == args.cr]
+    if len(open_plans) == 0:
+        legacy = ("[crucible] ERROR: no OPEN plan to close"
+                  + (f" for cr={args.cr}" if args.cr else ""))
+        _emit_axi("cr-close", False,
+                  {"commit": args.commit, "help": _axi().HELP_STEPS["cr-close"]},
+                  _axi_context(project_dir, cr=args.cr), [], legacy)
+        return 1
+    if len(open_plans) > 1:
+        names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in open_plans)
+        legacy = (f"[crucible] ERROR: {len(open_plans)} open plans — ambiguous cr-close. "
+                  f"Pass --cr to pick one of: {names}")
+        _emit_axi("cr-close", False,
+                  {"commit": args.commit, "help": _axi().HELP_STEPS["cr-close"]},
+                  _axi_context(project_dir), [], legacy)
+        return 1
+    plan = open_plans[0]
+    resp = _patch(f"{_plans_path(project_dir)}/{plan['planId']}",
+                  {"status": "closed", "merge": {"commit": args.commit}})
+    ok = resp.get("ok", False)
+    cr_label = plan.get("cr")
+    legacy = (f"cr-close: ok={ok} plan={plan['planId']} cr={cr_label} commit={args.commit}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("cr-close", bool(ok),
+              {"plan": plan["planId"], "cr": cr_label, "commit": args.commit,
+               "help": _axi().HELP_STEPS["cr-close"]},
+              _axi_context(project_dir, cr=cr_label), [], legacy)
+    if not ok:
+        return 1
+    ms_resp = _post_milestone(
+        project_dir, _agent_id(args), "cr-merged",
+        label=cr_label, commit=args.commit,
+        context=_axi().fleet_context(cr=cr_label) or None,
+    )
+    print(f"cr-merged: ok={ms_resp.get('ok', False)} cr={cr_label} commit={args.commit}"
+          + (f" error={ms_resp.get('error')}" if ms_resp.get("error") else ""),
+          file=sys.stderr)
+    return 0
+
+
+def _resolve_plan_or_emit(verb, project_dir, cr, result_fields, open_only):
+    """Shared prelude for the plan-targeting write verbs (cycle-add / checkpoint /
+    abort): GET the plans, resolve exactly ONE target via the shared
+    resolve_single_plan, and on any failure emit ok:false + return (None, 1)."""
+    resp = _get(_plans_path(project_dir))
+    if not resp.get("ok"):
+        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
+        _emit_axi(verb, False, result_fields, _axi_context(project_dir, cr=cr), [], legacy)
+        return None, 1
+    plans = resp.get("plans", [])
+    plan, reason = _axi().resolve_single_plan(plans, cr=cr, open_only=open_only)
+    if reason is not None:
+        scope = "open plan" if open_only else "plan"
+        if reason == "none":
+            legacy = (f"[crucible] ERROR: no {scope} to {verb}"
+                      + (f" for cr={cr}" if cr else ""))
+        else:
+            candidates = [p for p in plans
+                          if (not open_only or p.get("status") == "open")]
+            names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in candidates)
+            legacy = (f"[crucible] ERROR: {len(candidates)} {scope}s — ambiguous {verb}. "
+                      f"Pass --cr to pick one of: {names}")
+        _emit_axi(verb, False, result_fields, _axi_context(project_dir, cr=cr), [], legacy)
+        return None, 1
+    return plan, None
+
+
+def cmd_cycle_add(args):
+    """§S4 — append a cycle to a plan. Resolve the target plan (ALL plans, optional
+    --cr), POST …/plans/<planId>/cycles with ONLY the label, and let the SERVER
+    reject a CLOSED/absent plan. The assigned numeric id stays machine-readable."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    result_fields = {"label": args.label, "help": _axi().HELP_STEPS["cycle-add"]}
+    plan, rc = _resolve_plan_or_emit("cycle-add", project_dir, args.cr,
+                                     result_fields, open_only=False)
+    if plan is None:
+        return rc
+    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/cycles",
+                 {"label": args.label})
+    ok = resp.get("ok", False)
+    cr_label = plan.get("cr")
+    legacy = (f"cycle-add: ok={ok} plan={plan['planId']} cr={cr_label} "
+              f"label={args.label} id={resp.get('id')}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("cycle-add", bool(ok),
+              {"plan": plan["planId"], "id": resp.get("id"), "label": args.label,
+               "help": _axi().HELP_STEPS["cycle-add"]},
+              _axi_context(project_dir, cr=cr_label), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_checkpoint(args):
+    """§S7 — checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint)."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    plan, rc = _resolve_plan_or_emit("checkpoint", project_dir, args.cr,
+                                     {"help": _axi().HELP_STEPS["checkpoint"]}, open_only=True)
+    if plan is None:
+        return rc
+    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/checkpoint", {})
+    ok = resp.get("ok", False)
+    legacy = (f"checkpoint: ok={ok} plan={plan['planId']}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("checkpoint", bool(ok),
+              {"plan": plan["planId"], "changed": resp.get("changed"),
+               "help": _axi().HELP_STEPS["checkpoint"]},
+              _axi_context(project_dir, cr=plan.get("cr")), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_stop(args):
+    """§S7 — project-level stop (POST …/projects/<key>/stop). No plan targeting."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    resp = _post(f"/api/v2/projects/{_project_key(project_dir)}/stop", {})
+    ok = resp.get("ok", False)
+    legacy = (f"stop: ok={ok} checkpointed={resp.get('checkpointed')}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("stop", bool(ok),
+              {"checkpointed": resp.get("checkpointed"), "help": _axi().HELP_STEPS["stop"]},
+              _axi_context(project_dir), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_abort(args):
+    """§S7 — abort the resolved OPEN plan (POST …/plans/<id>/abort). WITHOUT
+    --user-approved the body's userApproved is false, so the server's discouraging
+    409 refusal stays reachable (surfaced as ok:false + non-zero)."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    plan, rc = _resolve_plan_or_emit("abort", project_dir, args.cr,
+                                     {"help": _axi().HELP_STEPS["abort"]}, open_only=True)
+    if plan is None:
+        return rc
+    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/abort",
+                 {"userApproved": bool(args.user_approved)})
+    ok = resp.get("ok", False)
+    legacy = (f"abort: ok={ok} plan={plan['planId']} userApproved={bool(args.user_approved)}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("abort", bool(ok),
+              {"plan": plan["planId"], "help": _axi().HELP_STEPS["abort"]},
+              _axi_context(project_dir, cr=plan.get("cr")), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_status(args):
+    """§S6 — the plan/status READ verb (alias `plans`, no --agent). GET …/plans and
+    return the queue as a uniform-table §S1 envelope plus a top-level lastRunCr."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    resp = _get(_plans_path(project_dir))
+    if not resp.get("ok"):
+        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
+        _emit_axi("status", False,
+                  {"plans": [], "lastRunCr": None, "help": _axi().HELP_STEPS["status"]},
+                  _axi_context(project_dir), [], legacy)
+        return 1
+    plans = resp.get("plans", [])
+    full_rows = _axi().build_status_rows(plans)
+    last = _axi().last_run_cr(plans)
+    fields = getattr(args, "fields", None)
+    requested = [f.strip() for f in fields.split(",") if f.strip()] if fields else []
+    rows = _axi().select_status_fields(full_rows, requested)
+    count = len(plans)
+    if not rows:
+        legacy = "status: ok=True — no plans filed for this project"
+        _emit_axi("status", True,
+                  {"plans": [], "lastRunCr": None, "count": 0,
+                   "help": _axi().HELP_STEPS["status"]},
+                  _axi_context(project_dir), [], legacy)
+        return 0
+    legacy = f"status: ok=True plans={len(rows)} lastRunCr={last}"
+    _emit_axi("status", True,
+              {"plans": rows, "lastRunCr": last, "count": count,
+               "help": _axi().HELP_STEPS["status"]},
+              _axi_context(project_dir), [], legacy)
+    return 0
+
+
+# ── CR-CRU-013 §S5 — fleet gate / milestone verbs ───────────────────────────
+
+
+def _agent_id(args):
+    """The agentId for a fleet event. Explicit --agent > $WORKFLOW_ROLE > a stable
+    fallback (these verbs never assert on the id, but the server requires one)."""
+    explicit = getattr(args, "agent", None)
+    if explicit:
+        return explicit
+    return os.environ.get("WORKFLOW_ROLE") or "rust-crucible"
+
+
+def _post_gate(project_dir, agent_id, gate, context=None):
+    payload = {"projectKey": _project_key(project_dir), "agentId": agent_id, "gate": gate}
+    if context:
+        payload["context"] = context
+    return _post("/api/v2/gates", payload)
+
+
+def _post_milestone(project_dir, agent_id, mtype, label=None, commit=None, context=None):
+    payload = {"projectKey": _project_key(project_dir), "agentId": agent_id, "type": mtype}
+    if label:
+        payload["label"] = label
+    if commit:
+        payload["commit"] = commit
+    if context:
+        payload["context"] = context
+    return _post("/api/v2/milestones", payload)
+
+
+def cmd_gate_report(args):
+    """§S8 — report a single already-run gate (flags path). Emits the §S1 envelope
+    plus the interactive line on stderr, and always raises the prefer-gate-run
+    discouragement warning (envelope + stderr)."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    prefer = _axi().PREFER_GATE_RUN_WARNING
+    warnings = [dict(prefer)]
+    print(f"warning: {prefer['code']} — {prefer['detail']}", file=sys.stderr)
+    context = _axi_context(project_dir, agent_id=_agent_id(args))
+    try:
+        steps = _axi().parse_steps_flag(args.steps) if args.steps else []
+    except ValueError as e:
+        legacy = f"gate-report: ERROR: {e}"
+        _emit_axi("gate-report", False, {"outcome": args.outcome}, context, warnings, legacy)
+        return 1
+    intent = args.intent or f"{args.outcome} gate"
+    gate = {"intent": intent, "outcome": args.outcome, "steps": steps}
+    if args.commit:
+        gate["push"] = {"commit": args.commit}
+    resp = _post_gate(project_dir, _agent_id(args), gate, _axi().fleet_context() or None)
+    ok = resp.get("ok", False)
+    legacy = (f"gate-report: ok={ok} outcome={args.outcome}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    result_fields = {"outcome": args.outcome}
+    err = resp.get("error")
+    if err is not None:
+        result_fields["error"] = _axi().truncate_field(err, full=getattr(args, "full", False))
+    _emit_axi("gate-report", bool(ok), result_fields, context, warnings, legacy)
+    return 0 if ok else 1
+
+
+def cmd_gate_run(args):
+    """§S8 — axi PROXY wrapper: launch `no-mistakes axi run`, poll `axi status` for
+    throttled interim gates, seal a final gate from the run's outcome, and relay the
+    axi detail to the caller. The caller issues NO POST itself; no prefer-gate-run
+    warning (it is itself the streaming standard)."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    nm = shutil.which("no-mistakes")
+    if not nm:
+        print("gate-run: ERROR: `no-mistakes` not found on PATH — cannot proxy axi run",
+              file=sys.stderr)
+        return 1
+
+    intent = args.intent
+    agent_id = _agent_id(args)
+    context = _axi().fleet_context()
+
+    try:
+        proc = subprocess.Popen(
+            [nm, "axi", "run", "--intent", intent],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except OSError as e:
+        print(f"gate-run: ERROR: could not launch `no-mistakes axi run`: {e}",
+              file=sys.stderr)
+        return 1
+
+    last_post = None
+    while proc.poll() is None:
+        now = time.monotonic()
+        if last_post is None or (now - last_post) >= _GATE_POLL_CADENCE_S:
+            status = subprocess.run([nm, "axi", "status"], capture_output=True, text=True)
+            snap = (status.stdout or "").strip()
+            if snap:
+                try:
+                    decoded = _toon().decode(snap)
+                except Exception:
+                    decoded = None
+                if isinstance(decoded, dict):
+                    run = decoded.get("run") or {}
+                    in_flight = (str(run.get("status")) != "completed"
+                                 and "outcome" not in decoded)
+                    gate, nsteps = _axi().gate_from_axi(decoded, intent, final=False)
+                    if in_flight and 0 < nsteps < 9:
+                        _post_gate(project_dir, agent_id, gate, context or None)
+                        last_post = now
+        time.sleep(_GATE_POLL_TICK_S)
+
+    out, _err = proc.communicate()
+    if out:
+        sys.stdout.write(out)
+
+    final_snap = (out or "").strip()
+    final_decoded = None
+    if final_snap:
+        try:
+            final_decoded = _toon().decode(final_snap)
+        except Exception:
+            final_decoded = None
+    if not isinstance(final_decoded, dict):
+        print("gate-run: ERROR: `axi run` produced no parseable final snapshot",
+              file=sys.stderr)
+        return 1
+
+    final_gate, _ = _axi().gate_from_axi(final_decoded, intent, final=True)
+    resp = _post_gate(project_dir, agent_id, final_gate, context or None)
+    ok = resp.get("ok", False)
+    overall = bool(ok and proc.returncode == 0)
+    legacy = (f"gate-run: ok={ok} outcome={final_gate.get('outcome')} exit={proc.returncode}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("gate-run", overall, {"outcome": final_gate.get("outcome")},
+              _axi_context(project_dir, agent_id=agent_id), [], legacy)
+    return 0 if overall else 1
+
+
+def cmd_milestone(args):
+    """POST a workflow milestone. §S4b."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    context = _axi().fleet_context(cr=args.cr)
+    resp = _post_milestone(project_dir, _agent_id(args), args.type,
+                           label=args.label, commit=getattr(args, "commit", None),
+                           context=context or None)
+    ok = resp.get("ok", False)
+    print(f"milestone: ok={ok} type={args.type}"
+          + (f" label={args.label}" if args.label else "")
+          + (f" error={resp.get('error')}" if resp.get("error") else ""),
+          file=sys.stderr)
+    return 0 if ok else 1
+
+
+_DASHBOARD_PURPOSE_LINE = (
+    "rust-crucible.py -- Rust/Cargo Crucible CLI "
+    "(agent lifecycle, test/ingest, plan/cycle verbs)."
+)
+
+
+def _abbrev_home(path):
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home) else path
+
+
+def cmd_dashboard():
+    """§S14 — a bare invocation (no args) returns the LIVE board: the §S6 status
+    dashboard on stdout, plus a one-line tool purpose + the executable path on stderr."""
+    print(_DASHBOARD_PURPOSE_LINE, file=sys.stderr)
+    print(_abbrev_home(os.path.abspath(__file__)), file=sys.stderr)
+    return cmd_status(argparse.Namespace(project_dir=None, fields=None))
+
+
 def _add_project_dir_arg(p):
     p.add_argument(
         "--project-dir",
@@ -1323,7 +2008,9 @@ def _add_log_arg(p):
 
 def main():
     p = argparse.ArgumentParser(prog="rust-crucible", description=__doc__)
-    sub = p.add_subparsers(dest="cmd", required=True)
+    # §S14 — subcommand is OPTIONAL: a bare invocation falls through to the
+    # no-arg live dashboard (below), never argparse's required-subcommand error.
+    sub = p.add_subparsers(dest="cmd", required=False)
 
     r = sub.add_parser("register", help="Register / heartbeat an agent")
     r.add_argument("--agent", required=True, help="Agent id, e.g. CR-NAI-203-C5-RED")
@@ -1608,7 +2295,119 @@ def main():
     _add_project_dir_arg(e2e)
     e2e.set_defaults(func=cmd_docker_e2e_gate)
 
+    # ── CR-CRU-030 §S2/§S4/§S6/§S7 — plan / cycle / status / gate verbs ──
+    pf = sub.add_parser("plan-file",
+                        help="File a cycle plan; prints the ASSIGNED numeric cycle ids.")
+    pf.add_argument("--cr", required=True, help="CR id, e.g. CR-NAI-203.")
+    pf.add_argument("--title", help="Optional plan title.")
+    pf.add_argument("--cycles", required=True,
+                    help='Comma-separated cycle labels, e.g. "a,b,c".')
+    pf.add_argument("--orchestrator",
+                    help="Orchestrator name (default: $WORKFLOW_ORCHESTRATOR when set).")
+    pf.add_argument("--wave",
+                    help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")
+    _add_project_dir_arg(pf)
+    pf.set_defaults(func=cmd_plan_file)
+
+    pb = sub.add_parser("plan-backfill",
+                        help="Backfill a plan's wave (PATCH wave-only; open OR closed).")
+    pb.add_argument("--wave", required=True, help="Wave number to assign.")
+    pb.add_argument("--cr", help="Disambiguate when multiple plans exist.")
+    _add_project_dir_arg(pb)
+    pb.set_defaults(func=cmd_plan_backfill)
+
+    ca = sub.add_parser("cycle-activate", help="Transition a plan cycle to active.")
+    ca.add_argument("cycle_id", type=int, help="Numeric cycle id (unique per project).")
+    _add_project_dir_arg(ca)
+    ca.set_defaults(func=cmd_cycle_activate)
+
+    cdn = sub.add_parser("cycle-done", help="Transition an ACTIVE plan cycle to done.")
+    cdn.add_argument("cycle_id", type=int, help="Numeric cycle id (unique per project).")
+    _add_project_dir_arg(cdn)
+    cdn.set_defaults(func=cmd_cycle_done)
+
+    cc = sub.add_parser("cr-close",
+                        help="Close the single OPEN plan (PATCH status=closed + merge.commit).")
+    cc.add_argument("--commit", required=True, help="Merge commit sha.")
+    cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    cc.add_argument("--agent", help="Agent id for the cr-merged milestone (default: $WORKFLOW_ROLE).")
+    _add_project_dir_arg(cc)
+    cc.set_defaults(func=cmd_cr_close)
+
+    cad = sub.add_parser("cycle-add",
+                         help="Append a cycle to a plan (POST …/plans/<id>/cycles); "
+                              "prints the ASSIGNED numeric id.")
+    cad.add_argument("label", help="Label for the new cycle.")
+    cad.add_argument("--cr", help="Disambiguate when multiple plans exist.")
+    _add_project_dir_arg(cad)
+    cad.set_defaults(func=cmd_cycle_add)
+
+    cp = sub.add_parser("checkpoint",
+                        help="Checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint).")
+    cp.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _add_project_dir_arg(cp)
+    cp.set_defaults(func=cmd_checkpoint)
+
+    stp = sub.add_parser("stop",
+                         help="Stop the project — checkpoint every open plan "
+                              "(POST …/projects/<key>/stop).")
+    _add_project_dir_arg(stp)
+    stp.set_defaults(func=cmd_stop)
+
+    ab = sub.add_parser("abort",
+                        help="Abort the resolved OPEN plan (POST …/plans/<id>/abort). "
+                             "Requires --user-approved to pass the server's 409 gate.")
+    ab.add_argument("--user-approved", action="store_true",
+                    help="Map to body userApproved:true (the server refuses without it).")
+    ab.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _add_project_dir_arg(ab)
+    ab.set_defaults(func=cmd_abort)
+
+    for _name in ("status", "plans"):
+        sv = sub.add_parser(_name,
+                            help="Read the plan queue (GET …/plans) as a TOON-AXI table "
+                                 "+ lastRunCr. Read-only; `plans` is an alias of `status`.")
+        sv.add_argument("--fields",
+                        help="Comma-separated EXTRA columns to add to the minimal "
+                             "cr,wave,status,activeCycleId set (§S10).")
+        _add_project_dir_arg(sv)
+        sv.set_defaults(func=cmd_status)
+
+    gr = sub.add_parser("gate-run",
+                        help="axi PROXY: run `no-mistakes axi run`, post throttled interim "
+                             "+ final gates, relay the axi detail to the caller.")
+    gr.add_argument("--intent", required=True, help="The intent/goal passed down to `axi run`.")
+    gr.add_argument("--agent", help="Agent id for the gate events (default: $WORKFLOW_ROLE).")
+    _add_project_dir_arg(gr)
+    gr.set_defaults(func=cmd_gate_run)
+
+    grp = sub.add_parser("gate-report",
+                         help="Report a single already-run gate → POST /api/v2/gates.")
+    grp.add_argument("--outcome", required=True,
+                     help="Gate outcome (checks-passed|passed|failed|cancelled).")
+    grp.add_argument("--commit", help="The pushed commit sha (gate.push.commit).")
+    grp.add_argument("--steps", help='Comma-separated "name:status" step results.')
+    grp.add_argument("--intent", help="Gate intent (default: derived from --outcome).")
+    grp.add_argument("--agent", help="Agent id (default: $WORKFLOW_ROLE).")
+    grp.add_argument("--full", action="store_true",
+                     help="Emit large text fields (e.g. a server error detail) untruncated (§S11).")
+    _add_project_dir_arg(grp)
+    grp.set_defaults(func=cmd_gate_report)
+
+    ms = sub.add_parser("milestone", help="POST a workflow milestone → /api/v2/milestones.")
+    ms.add_argument("--type", required=True,
+                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged).")
+    ms.add_argument("--label", help="Human-readable milestone label.")
+    ms.add_argument("--cr", help="CR id (rides context.cr).")
+    ms.add_argument("--commit", help="Optional commit sha.")
+    ms.add_argument("--agent", help="Agent id (default: $WORKFLOW_ROLE).")
+    _add_project_dir_arg(ms)
+    ms.set_defaults(func=cmd_milestone)
+
     args = p.parse_args()
+    # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.
+    if getattr(args, "func", None) is None:
+        sys.exit(cmd_dashboard())
     sys.exit(args.func(args))
 
 

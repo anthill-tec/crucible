@@ -12,19 +12,30 @@ leaves NO agent row in the fleet after exit (register→ingest→unregister
 bracketed; asserted via the Python client contract harness + a lifecycle-event
 pair check); `test --agent X` identical; omitted `--agent` unchanged."
 
-RED phase: as of this writing `cmd_test` (bun-crucible.py:~382) and
-`cmd_regression` (bun-crucible.py:~420) never call `_post("/api/agents/heartbeat"
-, ...)` or `_post("/api/agents/remove", ...)` at all — the ONLY `_post` call
-either makes is the ingest. Every "with --agent" test below therefore fails on
-the register/unregister call-count assertions (0 calls found, not 1) — a real
-behavioral RED, not a missing-symbol RED.
+CR-CRU-030 C1 retarget note: the ORIGINAL cycle-16 RED pinned a literal
+THREE-call bracket (`_post("/api/agents/heartbeat")` → ingest →
+`_post("/api/agents/remove")`). The `--agent` gated-run bracket has since been
+redesigned into the documented "v2 model" (see `_remove_agent_silent`'s
+docstring in bun-crucible.py verbatim: "Under v2, a gated run needs NO
+explicit register: the run's ingest IS the registration (implicit heartbeat —
+creates the agent row with NO lifecycle event)."): there is NO separate
+`/api/v2/agents/register` POST for a gated `test`/`regression` run — the
+ingest call (`/api/v2/runs/parsed`) implicitly registers, and the bracket's
+closing half is a SILENT v2 unregister (`/api/v2/agents/unregister` with
+`{"silent": true}`, CR-CRU-008 §S4). The pins below are retargeted to that
+real two-call (ingest-implicitly-registers → silent-unregister) bracket, plus
+the CR-CRU-030 §S9 cycle-resolution precondition that now gates every
+`--agent` ingest (see `setUp`). Endpoint literals are also corrected: the
+register/unregister verbs live at `/api/v2/agents/register|unregister` (not
+the retired `/api/agents/heartbeat|remove` shim), and ingest lives at
+`/api/v2/runs/parsed` (not `/api/ingest/*`).
 
-Technique: this repo's only existing Python client harness
-(test_bun_crucible_context.py) loads bun-crucible.py by file path via
-importlib (its filename has a hyphen) and exercises a pure helper directly —
-it does not fake the Crucible server, because the function it targets
-(`_run_context`) never calls `_post`. This file extends that SAME
-module-loading technique but additionally patches the module's single HTTP
+Technique: loads bun-crucible.py by file path via importlib (its filename has
+a hyphen), REPO_ROOT-relative to `clients/bun-crucible.py` (the in-repo
+SOURCE OF TRUTH, CR-CRU-008 Risk section — we test and fix the scripts we
+OWN, not the deployed `~/.claude/scripts` mirror), same convention as the
+sibling test_bun_crucible_gates.py / test_bun_crucible_toon_envelope.py
+harnesses. This file additionally patches the module's single HTTP
 transport seam, `_post(path, payload)` (bun-crucible.py's only function that
 touches urllib), recording every `(path, payload)` call in order. This is
 strictly more deterministic than hitting the live server on :3849 (no
@@ -63,7 +74,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-SCRIPT_PATH = Path.home() / ".claude" / "scripts" / "bun-crucible.py"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_PATH = REPO_ROOT / "clients" / "bun-crucible.py"
 
 PASS_JUNIT_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <testsuites>
@@ -108,8 +120,11 @@ sys.exit(int(os.environ.get("FAKE_BUN_EXIT_CODE", "0")))
 
 def _load_bun_crucible_module():
     """Load bun-crucible.py by file path — its filename has a hyphen, so it
-    cannot be `import`ed as a normal module name. Same technique as
-    test_bun_crucible_context.py."""
+    cannot be `import`ed as a normal module name. REPO_ROOT-relative load of
+    `clients/bun-crucible.py` (the in-repo SOURCE OF TRUTH, CR-CRU-008 Risk
+    section) — we test and fix the scripts we OWN, not the deployed
+    `~/.claude/scripts` mirror. Same technique as the sibling
+    test_bun_crucible_gates.py / test_bun_crucible_toon_envelope.py harnesses."""
     if not SCRIPT_PATH.exists():
         raise unittest.SkipTest(f"bun-crucible.py not found at {SCRIPT_PATH}")
     spec = importlib.util.spec_from_file_location("bun_crucible_under_test_lifecycle", SCRIPT_PATH)
@@ -120,8 +135,10 @@ def _load_bun_crucible_module():
 
 
 class GateRunLifecycleBracketTest(unittest.TestCase):
-    """CR-CRU-021 §S5 — register→ingest→unregister bracket for `test`/`regression`
-    with `--agent`, asserted via the ONLY HTTP seam bun-crucible.py has: `_post`."""
+    """CR-CRU-021 §S5 — ingest(implicit-register)→silent-unregister bracket for
+    `test`/`regression` with `--agent` (the real v2 model — see the module
+    docstring's CR-CRU-030 C1 retarget note), asserted via the ONLY HTTP seam
+    bun-crucible.py has: `_post`."""
 
     ENV_KEYS = ("WORKFLOW_CYCLE_ID", "WORKFLOW_CYCLE",
                 "FAKE_BUN_JUNIT_CONTENT", "FAKE_BUN_EXIT_CODE")
@@ -140,11 +157,19 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
 
         # WORKFLOW_CYCLE_ID/WORKFLOW_CYCLE feed _run_context(), which rides
         # the ingest payload's `context` field — unrelated to this CR's
-        # lifecycle-bracket pins, so keep it deterministically unset (as the
-        # sibling harness does) rather than let ambient env leak in.
+        # lifecycle-bracket pins, so start deterministically unset (no
+        # ambient env leak) same as the sibling harness.
         self._saved_env = {k: os.environ.get(k) for k in self.ENV_KEYS}
         for k in self.ENV_KEYS:
             os.environ.pop(k, None)
+        # CR-CRU-030 §S9 — an --agent ingest now resolves a cycle to attach
+        # to BEFORE the POST, hard-erroring (no ingest, no bracket) when none
+        # can be resolved. This class's tmpdir `.env` project key is not a
+        # real UUID, so the auto-resolution GET would 400 server-side; an
+        # explicit WORKFLOW_CYCLE_ID override is authoritative and skips that
+        # lookup entirely (`_get` stays unmocked — untouched by this CR's
+        # bracket pins either way).
+        os.environ["WORKFLOW_CYCLE_ID"] = "16"
 
     def tearDown(self):
         for k, v in self._saved_env.items():
@@ -178,38 +203,29 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
             log=None,
         )
 
-    # -- shape assertions, per cmd_register/cmd_unregister's existing verb shape --
-
-    def _assert_register_payload(self, payload, agent):
-        self.assertEqual(payload.get("agentId"), agent)
-        self.assertEqual(payload.get("projectKey"), "test-key-123")
-        self.assertEqual(payload.get("status"), "online")
-        self.assertIsInstance(payload.get("message"), str)
-        self.assertGreater(len(payload.get("message") or ""), 0)
-        identity = payload.get("identity")
-        self.assertIsInstance(identity, dict)
-        self.assertEqual(identity.get("displayName"), agent)
-        self.assertEqual(identity.get("repoPath"), self.project_dir)
-        self.assertIn("source", identity)
+    # -- shape assertions, per the real v2 ingest/_remove_agent_silent verb shape --
 
     def _assert_unregister_payload(self, payload, agent):
         self.assertEqual(payload.get("agentId"), agent)
         self.assertEqual(payload.get("projectKey"), "test-key-123")
-        # negative: an unregister call must NOT carry register-only fields
+        # the gated-run cleanup is the SILENT v2 unregister (CR-CRU-008 §S4):
+        # no lifecycle event journaled, unlike a plain `unregister` verb call.
+        self.assertIs(payload.get("silent"), True)
+        # negative: the silent unregister must NOT carry register-only fields
         self.assertNotIn("status", payload)
         self.assertNotIn("identity", payload)
 
     def _patched_post(self, calls, raise_on_ingest=False):
         def fake_post(path, payload):
             calls.append((path, copy.deepcopy(payload)))
-            if raise_on_ingest and path.startswith("/api/ingest/"):
+            if raise_on_ingest and path.startswith("/api/v2/runs/"):
                 raise RuntimeError("simulated ingest network failure")
             return {"ok": True}
         return fake_post
 
-    # ---- Pin 1: `test --agent X` brackets register -> ingest -> unregister ----
+    # ---- Pin 1: `test --agent X` brackets ingest(implicit-register) -> unregister ----
 
-    def test_test_command_with_agent_registers_before_ingest_and_unregisters_after(self):
+    def test_test_command_with_agent_ingest_implicitly_registers_then_unregisters(self):
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
         os.environ["FAKE_BUN_EXIT_CODE"] = "0"
         agent = "CR-CRU-021-C16-test-agent"
@@ -219,33 +235,32 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         paths = [c[0] for c in calls]
-        register_idx = [i for i, p in enumerate(paths) if p == "/api/agents/heartbeat"]
-        unregister_idx = [i for i, p in enumerate(paths) if p == "/api/agents/remove"]
-        ingest_idx = [i for i, p in enumerate(paths) if p.startswith("/api/ingest/")]
+        ingest_idx = [i for i, p in enumerate(paths) if p.startswith("/api/v2/runs/")]
+        unregister_idx = [i for i, p in enumerate(paths) if p == "/api/v2/agents/unregister"]
 
-        self.assertEqual(len(register_idx), 1,
-                          f"expected exactly ONE register call, got paths={paths}")
-        self.assertEqual(len(unregister_idx), 1,
-                          f"expected exactly ONE unregister call, got paths={paths}")
         self.assertEqual(len(ingest_idx), 1,
                           f"expected exactly ONE ingest call, got paths={paths}")
+        self.assertEqual(len(unregister_idx), 1,
+                          f"expected exactly ONE unregister call, got paths={paths}")
+        self.assertNotIn("/api/v2/agents/register", paths,
+                          "the v2 model has NO separate register POST — the "
+                          "ingest itself implicitly registers the agent")
 
-        self.assertEqual(register_idx[0], 0, "register must be the FIRST call made")
+        self.assertEqual(ingest_idx[0], 0,
+                          "the ingest (implicit register) must be the FIRST call")
         self.assertEqual(unregister_idx[0], len(calls) - 1,
                           "unregister must be the LAST call made")
-        self.assertLess(register_idx[0], ingest_idx[0], "register must precede the ingest")
-        self.assertGreater(unregister_idx[0], ingest_idx[0], "unregister must follow the ingest")
-
-        self._assert_register_payload(calls[register_idx[0]][1], agent)
-        self._assert_unregister_payload(calls[unregister_idx[0]][1], agent)
 
         ingest_payload = calls[ingest_idx[0]][1]
+        self.assertEqual(ingest_payload.get("agentId"), agent)
         self.assertEqual(ingest_payload.get("summary", {}).get("passed"), 1)
         self.assertEqual(ingest_payload.get("summary", {}).get("failed"), 0)
 
+        self._assert_unregister_payload(calls[unregister_idx[0]][1], agent)
+
     # ---- Pin 2: `regression --agent X` — identical bracket ----
 
-    def test_regression_command_with_agent_registers_before_ingest_and_unregisters_after(self):
+    def test_regression_command_with_agent_ingest_implicitly_registers_then_unregisters(self):
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
         os.environ["FAKE_BUN_EXIT_CODE"] = "0"
         agent = "CR-CRU-021-C16-regression-agent"
@@ -255,30 +270,29 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         paths = [c[0] for c in calls]
-        register_idx = [i for i, p in enumerate(paths) if p == "/api/agents/heartbeat"]
-        unregister_idx = [i for i, p in enumerate(paths) if p == "/api/agents/remove"]
-        ingest_idx = [i for i, p in enumerate(paths) if p.startswith("/api/ingest/")]
+        ingest_idx = [i for i, p in enumerate(paths) if p.startswith("/api/v2/runs/")]
+        unregister_idx = [i for i, p in enumerate(paths) if p == "/api/v2/agents/unregister"]
 
-        self.assertEqual(len(register_idx), 1,
-                          f"expected exactly ONE register call, got paths={paths}")
-        self.assertEqual(len(unregister_idx), 1,
-                          f"expected exactly ONE unregister call, got paths={paths}")
         self.assertEqual(len(ingest_idx), 1,
                           f"expected exactly ONE ingest call, got paths={paths}")
+        self.assertEqual(len(unregister_idx), 1,
+                          f"expected exactly ONE unregister call, got paths={paths}")
+        self.assertNotIn("/api/v2/agents/register", paths,
+                          "the v2 model has NO separate register POST — the "
+                          "ingest itself implicitly registers the agent")
 
-        self.assertEqual(register_idx[0], 0, "register must be the FIRST call made")
+        self.assertEqual(ingest_idx[0], 0,
+                          "the ingest (implicit register) must be the FIRST call")
         self.assertEqual(unregister_idx[0], len(calls) - 1,
                           "unregister must be the LAST call made")
-        self.assertLess(register_idx[0], ingest_idx[0], "register must precede the ingest")
-        self.assertGreater(unregister_idx[0], ingest_idx[0], "unregister must follow the ingest")
-
-        self._assert_register_payload(calls[register_idx[0]][1], agent)
-        self._assert_unregister_payload(calls[unregister_idx[0]][1], agent)
 
         ingest_payload = calls[ingest_idx[0]][1]
+        self.assertEqual(ingest_payload.get("agentId"), agent)
         self.assertEqual(ingest_payload.get("tier"), "regression")
         self.assertEqual(ingest_payload.get("summary", {}).get("passed"), 1)
         self.assertEqual(ingest_payload.get("summary", {}).get("failed"), 0)
+
+        self._assert_unregister_payload(calls[unregister_idx[0]][1], agent)
 
     # ---- Pin 3: `test` WITHOUT --agent — unchanged (no register/unregister at all) ----
 
@@ -296,7 +310,7 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
 
     # ---- Pin 4: a FAILING run still unregisters (try/finally, unconditional on outcome) ----
 
-    def test_test_command_failing_run_still_registers_and_unregisters(self):
+    def test_test_command_failing_run_still_ingests_and_unregisters(self):
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = FAIL_JUNIT_XML
         os.environ["FAKE_BUN_EXIT_CODE"] = "1"
         agent = "CR-CRU-021-C16-test-agent-fail"
@@ -305,18 +319,20 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
             self.module.cmd_test(self._test_args(agent))
 
         paths = [c[0] for c in calls]
-        self.assertIn("/api/agents/heartbeat", paths,
-                       "a failing test run must still REGISTER")
-        self.assertIn("/api/agents/remove", paths,
+        self.assertTrue(any(p.startswith("/api/v2/runs/") for p in paths),
+                         f"a failing test run must still INGEST (implicit "
+                         f"register), got paths={paths}")
+        self.assertIn("/api/v2/agents/unregister", paths,
                        "a failing test run must still UNREGISTER (unconditional bracket)")
-        self.assertEqual(paths[0], "/api/agents/heartbeat")
-        self.assertEqual(paths[-1], "/api/agents/remove")
+        self.assertTrue(paths[0].startswith("/api/v2/runs/"),
+                         "the ingest (implicit register) must be the FIRST call")
+        self.assertEqual(paths[-1], "/api/v2/agents/unregister")
 
-        ingest_payload = next(p for path, p in calls if path.startswith("/api/ingest/"))
+        ingest_payload = next(p for path, p in calls if path.startswith("/api/v2/runs/"))
         self.assertEqual(ingest_payload.get("summary", {}).get("failed"), 1)
         self.assertEqual(ingest_payload.get("summary", {}).get("passed"), 0)
 
-    def test_regression_command_failing_run_still_registers_and_unregisters(self):
+    def test_regression_command_failing_run_still_ingests_and_unregisters(self):
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = FAIL_JUNIT_XML
         os.environ["FAKE_BUN_EXIT_CODE"] = "1"
         agent = "CR-CRU-021-C16-regression-agent-fail"
@@ -325,14 +341,16 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
             self.module.cmd_regression(self._regression_args(agent))
 
         paths = [c[0] for c in calls]
-        self.assertIn("/api/agents/heartbeat", paths,
-                       "a failing regression run must still REGISTER")
-        self.assertIn("/api/agents/remove", paths,
+        self.assertTrue(any(p.startswith("/api/v2/runs/") for p in paths),
+                         f"a failing regression run must still INGEST (implicit "
+                         f"register), got paths={paths}")
+        self.assertIn("/api/v2/agents/unregister", paths,
                        "a failing regression run must still UNREGISTER (unconditional bracket)")
-        self.assertEqual(paths[0], "/api/agents/heartbeat")
-        self.assertEqual(paths[-1], "/api/agents/remove")
+        self.assertTrue(paths[0].startswith("/api/v2/runs/"),
+                         "the ingest (implicit register) must be the FIRST call")
+        self.assertEqual(paths[-1], "/api/v2/agents/unregister")
 
-        ingest_payload = next(p for path, p in calls if path.startswith("/api/ingest/"))
+        ingest_payload = next(p for path, p in calls if path.startswith("/api/v2/runs/"))
         self.assertEqual(ingest_payload.get("summary", {}).get("failed"), 1)
 
     # ---- Bonus: an exception mid-ingest must not skip the unregister (real try/finally) ----
@@ -348,12 +366,12 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
                 self.module.cmd_test(self._test_args(agent))
 
         paths = [c[0] for c in calls]
-        self.assertIn("/api/agents/heartbeat", paths,
-                       "register must fire before the ingest that later raises")
-        self.assertIn("/api/agents/remove", paths,
+        self.assertTrue(any(p.startswith("/api/v2/runs/") for p in paths),
+                         "the ingest (implicit register) must fire before it raises")
+        self.assertIn("/api/v2/agents/unregister", paths,
                        "unregister must STILL fire despite the ingest exception "
                        "(the bracket is a try/finally, not a try/except-success-only)")
-        self.assertEqual(paths[-1], "/api/agents/remove",
+        self.assertEqual(paths[-1], "/api/v2/agents/unregister",
                           "unregister must be the LAST call even after an exception mid-run")
 
 

@@ -405,5 +405,114 @@ class PlanFileWaveTest(_BaseWaveTest):
         self.assertEqual(str(payload.get("wave")), "7")
 
 
+# == C6 VERIFY-fix: §S3 `no-wave` warning (CR-CRU-030 AC line 267) ===========
+
+
+class PlanFileNoWaveWarningTest(_BaseWaveTest):
+    """§S3 `no-wave` warning (CR-CRU-030 C6 VERIFY-fix, AC line 267): a
+    `plan-file` with neither `--wave` nor `WORKFLOW_WAVE` resolvable must emit
+    a `no-wave` warning (envelope `warnings[]` + stderr) naming the CR being
+    filed; with either resolvable -> no `no-wave` warning fires, and the wave
+    is still carried exactly as `PlanFileWaveTest` above already proves.
+
+    RED: `cmd_plan_file` in bun-crucible.py (confirmed by reading the function
+    body) builds `warnings = []` unconditionally and passes that empty list to
+    `_emit_axi` on EVERY call -- there is no no-wave detection at all, so the
+    warning-presence assertions below fail against the CURRENT baseline (an
+    always-empty `warnings[]` and no matching stderr line)."""
+
+    PROJECT_KEY = "test-key-wave-no-wave-warning"
+
+    def test_neither_wave_nor_env_emits_no_wave_warning_naming_the_cr(self):
+        server_resp = {"ok": True, "planId": "plan-90", "cr": "CR-CRU-090",
+                        "cycles": [{"label": "a", "id": 900}]}
+        with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
+            code, out, err = _run_main(self.module, [
+                "plan-file", "--cr", "CR-CRU-090", "--cycles", "a",
+                "--project-dir", self.tmpdir,
+            ])
+
+        self.assertEqual(code, 0,
+                          f"a wave-less plan-file must still file (no hard block); "
+                          f"stdout={out!r} stderr={err!r}")
+        mock_post.assert_called_once()
+        payload = mock_post.call_args[0][1]
+        self.assertNotIn("wave", payload,
+                          "with neither --wave nor WORKFLOW_WAVE resolvable, the "
+                          "payload must still carry NO wave key at all")
+
+        axi = self._decode_axi(out)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertIn("no-wave", codes,
+                      f"plan-file with no resolvable wave must carry a `no-wave` "
+                      f"warning; got {axi!r}")
+        detail = " ".join(w.get("detail", "") for w in axi.get("warnings", [])
+                           if w.get("code") == "no-wave")
+        self.assertIn("CR-CRU-090", detail,
+                      f"the no-wave warning must NAME the CR being filed; "
+                      f"got detail={detail!r}")
+        self.assertIn("no-wave", err, "the no-wave warning must also surface on stderr")
+        self.assertIn("CR-CRU-090", err,
+                       "stderr must name the CR being filed, not just the code")
+
+    def test_wave_flag_present_omits_no_wave_warning(self):
+        server_resp = {"ok": True, "planId": "plan-91", "cr": "CR-CRU-091",
+                        "cycles": [{"label": "a", "id": 901}]}
+        with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
+            code, out, err = _run_main(self.module, [
+                "plan-file", "--cr", "CR-CRU-091", "--cycles", "a", "--wave", "5",
+                "--project-dir", self.tmpdir,
+            ])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        payload = mock_post.call_args[0][1]
+        self.assertEqual(str(payload.get("wave")), "5")
+        axi = self._decode_axi(out)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertNotIn("no-wave", codes,
+                          f"--wave resolves the wave -- no no-wave warning should "
+                          f"fire; got {axi!r}")
+        self.assertNotIn("no-wave", err)
+
+    def test_workflow_wave_env_present_omits_no_wave_warning(self):
+        os.environ["WORKFLOW_WAVE"] = "4"
+        server_resp = {"ok": True, "planId": "plan-92", "cr": "CR-CRU-092",
+                        "cycles": [{"label": "a", "id": 902}]}
+        with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
+            code, out, err = _run_main(self.module, [
+                "plan-file", "--cr", "CR-CRU-092", "--cycles", "a",
+                "--project-dir", self.tmpdir,
+            ])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        payload = mock_post.call_args[0][1]
+        self.assertEqual(str(payload.get("wave")), "4")
+        axi = self._decode_axi(out)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertNotIn("no-wave", codes,
+                          f"WORKFLOW_WAVE resolves the wave -- no no-wave warning "
+                          f"should fire; got {axi!r}")
+        self.assertNotIn("no-wave", err)
+
+    def test_wave_flag_overrides_env_and_still_omits_no_wave_warning(self):
+        os.environ["WORKFLOW_WAVE"] = "9"
+        server_resp = {"ok": True, "planId": "plan-93", "cr": "CR-CRU-093",
+                        "cycles": [{"label": "a", "id": 903}]}
+        with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
+            code, out, err = _run_main(self.module, [
+                "plan-file", "--cr", "CR-CRU-093", "--cycles", "a", "--wave", "5",
+                "--project-dir", self.tmpdir,
+            ])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        payload = mock_post.call_args[0][1]
+        self.assertEqual(str(payload.get("wave")), "5", "--wave must win over WORKFLOW_WAVE")
+        self.assertNotEqual(str(payload.get("wave")), "9")
+        axi = self._decode_axi(out)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertNotIn("no-wave", codes)
+        self.assertNotIn("no-wave", err)
+
+
 if __name__ == "__main__":
     unittest.main()

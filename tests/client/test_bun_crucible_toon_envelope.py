@@ -541,10 +541,17 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         self.assertNotIn(legacy_line, out)
 
     def test_auto_ingest_emits_toon_envelope_with_run_summary(self):
+        """CR-CRU-030 §S9 retarget: an env-unset ingest with NO active cycle
+        is now a HARD ERROR (see test_bun_crucible_auto_attach.py), so this
+        envelope/run-summary pin needs a resolvable cycle to reach the
+        ok:True envelope it was written to verify -- an explicit
+        WORKFLOW_CYCLE_ID override is the simplest way to satisfy §S9 while
+        keeping the original intent (envelope shape / run summary) intact."""
         reports_dir = os.path.join(self.tmpdir, "reports")
         os.makedirs(reports_dir, exist_ok=True)
         with open(os.path.join(reports_dir, "junit.xml"), "w") as f:
             f.write(PASS_JUNIT_XML)
+        os.environ["WORKFLOW_CYCLE_ID"] = "51"
 
         with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
              mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
@@ -563,6 +570,7 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         self.assertEqual(run.get("total"), 1)
         context = axi.get("context")
         self.assertEqual(context.get("agentId"), "CR-CRU-013-C51-auto")
+        self.assertEqual(context.get("cycleId"), 51)
 
         legacy_line = "ingest: ok=True passed=1 failed=0 total=1"
         self.assertIn(legacy_line, err)
@@ -604,7 +612,12 @@ class NoCycleIdWarningTest(_BaseEnvelopeTest):
             "--package-dir", self.tmpdir, "--reports", "reports", "--agent", agent,
         ])
 
-    def test_no_cycle_id_env_unset_with_active_cycle_warns_in_envelope_and_stderr(self):
+    def test_no_cycle_id_env_unset_with_active_cycle_auto_attaches_without_warning(self):
+        """CR-CRU-030 §S9 SUPERSEDES the old soft no-cycle-id warn-and-proceed
+        behavior pinned here originally: when WORKFLOW_CYCLE_ID is unset but
+        the open plan has exactly one ACTIVE cycle, the ingest now
+        AUTO-ATTACHES to it silently -- no cycleId=null orphan, no
+        `no-cycle-id` warning on either channel."""
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
              mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans()):
@@ -614,20 +627,13 @@ class NoCycleIdWarningTest(_BaseEnvelopeTest):
         axi = self._decode_axi(out)
 
         context = axi.get("context")
-        self.assertIn("cycleId", context,
-                       "an unresolved classifying field must be emitted as an "
-                       "EXPLICIT null, never silently dropped")
-        self.assertIsNone(context.get("cycleId"))
+        self.assertEqual(context.get("cycleId"), self.ACTIVE_CYCLE_ID,
+                          "the run must auto-attach to the plan's single "
+                          "ACTIVE cycle when WORKFLOW_CYCLE_ID is unset")
 
-        warnings = axi.get("warnings")
-        self.assertEqual(len(warnings), 1, f"expected exactly one warning, got {warnings!r}")
-        self.assertEqual(warnings[0].get("code"), "no-cycle-id")
-        self.assertIn(str(self.ACTIVE_CYCLE_ID), warnings[0].get("detail", ""),
-                       "the warning detail must NAME the active cycle id")
-
-        self.assertIn("no-cycle-id", err)
-        self.assertIn(str(self.ACTIVE_CYCLE_ID), err,
-                       "the stderr warning must also name the active cycle id")
+        self.assertEqual(axi.get("warnings"), [],
+                          "auto-attach succeeded -- no no-cycle-id warning should be emitted")
+        self.assertNotIn("no-cycle-id", err)
 
     def test_no_cycle_id_env_set_suppresses_warning_even_with_active_cycle(self):
         os.environ["WORKFLOW_CYCLE_ID"] = "51"
@@ -642,19 +648,39 @@ class NoCycleIdWarningTest(_BaseEnvelopeTest):
         self.assertEqual(axi.get("warnings"), [])
         self.assertNotIn("no-cycle-id", err)
 
-    def test_no_cycle_id_env_unset_without_any_active_cycle_no_warning(self):
+    def test_no_cycle_id_env_unset_without_any_active_cycle_hard_errors(self):
+        """CR-CRU-030 §S9 SUPERSEDES the old soft no-cycle-id warn-and-proceed
+        behavior for exactly this scenario (no ACTIVE cycle at all, env
+        unset): it is now a HARD ERROR, never a silent orphan. Full coverage
+        of the §S9 auto-attach/hard-error contract (test/regression/
+        auto-ingest, the explicit-override case, and the exact stdout
+        message) lives in tests/client/test_bun_crucible_auto_attach.py --
+        this method only pins that the OLD assertion here (code==0,
+        warnings==[]) no longer holds."""
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
              mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
             code, out, err = self._run_test_verb()
 
-        self.assertEqual(code, 0)
+        self.assertNotEqual(code, 0,
+                             "no ACTIVE cycle exists -- §S9 requires a HARD "
+                             "ERROR, not a silent success")
         axi = self._decode_axi(out)
-        self.assertEqual(axi.get("warnings"), [],
-                          "no ACTIVE cycle exists, so no-cycle-id must not fire")
-        self.assertNotIn("no-cycle-id", err)
+        self.assertIs(axi.get("ok"), False)
+        warnings_list = axi.get("warnings", [])
+        warning_details = " ".join(w.get("detail", "") for w in warnings_list).lower()
+        self.assertIn("no active cycle", warning_details)
+        for call in post_mock.call_args_list:
+            args, kwargs = call
+            path = args[0] if args else kwargs.get("path")
+            self.assertNotEqual(
+                path, "/api/v2/runs/parsed",
+                "the run must never be POSTed as a silent orphan when there "
+                "is no active cycle to attach it to")
 
-    def test_regression_also_warns_no_cycle_id_when_env_unset_and_cycle_active(self):
+    def test_regression_also_auto_attaches_to_active_cycle_when_env_unset_no_warning(self):
+        """CR-CRU-030 §S9 retarget of the `regression` sibling to the same
+        auto-attach contract as the `test` verb above."""
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
              mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans()):
@@ -666,11 +692,13 @@ class NoCycleIdWarningTest(_BaseEnvelopeTest):
 
         self.assertEqual(code, 0)
         axi = self._decode_axi(out)
-        warnings = axi.get("warnings")
-        self.assertEqual(len(warnings), 1)
-        self.assertEqual(warnings[0].get("code"), "no-cycle-id")
-        self.assertIn(str(self.ACTIVE_CYCLE_ID), warnings[0].get("detail", ""))
-        self.assertIn("no-cycle-id", err)
+        context = axi.get("context")
+        self.assertEqual(context.get("cycleId"), self.ACTIVE_CYCLE_ID,
+                          "the run must auto-attach to the plan's single "
+                          "ACTIVE cycle when WORKFLOW_CYCLE_ID is unset")
+        self.assertEqual(axi.get("warnings"), [],
+                          "auto-attach succeeded -- no no-cycle-id warning should be emitted")
+        self.assertNotIn("no-cycle-id", err)
 
 
 if __name__ == "__main__":
