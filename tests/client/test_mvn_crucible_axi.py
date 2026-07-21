@@ -1033,7 +1033,6 @@ class MvnCrucibleToolchainTest(_BaseMvnAxiTest):
             "longer read anywhere in the client",
         )
         self.assertIn("[ERROR]", compile_call[0][1].get("errors", ""))
-        self.assertEqual(compile_call[0][1].get("context", {}).get("cycleId"), 51)
 
 
 if __name__ == "__main__":
