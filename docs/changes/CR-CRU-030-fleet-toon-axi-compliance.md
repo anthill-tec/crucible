@@ -117,12 +117,26 @@ plan) but NO client exposes it — CR-013 had to append cycle 51 via raw curl.
 Add a `cycle-add <label>` verb to the shared client verb set (all five),
 returning the §S1 envelope with the assigned id.
 
-### §S5 Golden envelope fixtures + compat
-A golden-TOON fixture per verb per client (round-trips through `toon.py`
-decode). If any consumer still parses the old plain-text stdout, migrate it to
-decode the envelope (or provide a `--format {toon,text}` shim with `toon` the
-default). Grep the repo + `~/.claude/scripts` mirror for plain-text parsers of
-client stdout and update them.
+### §S5 Golden envelope fixtures + ownership boundary (Crucible tests; Model-B installs)
+A golden-TOON fixture per verb per client (round-trips through `toon.py` decode) —
+Crucible's validation that every client's envelope matches spec. If any consumer still
+parses the old plain-text stdout, migrate it to decode the envelope (or provide a
+`--format {toon,text}` shim with `toon` the default).
+
+**Ownership boundary (user-decided 2026-07-21).** `clients/` is the TESTED SOURCE OF
+TRUTH — Crucible develops, TESTS, and FIXES the scripts here. (Model-B asked Crucible to
+own coding + testing because Crucible owns the SERVER side, so the client↔server contract
+lives in one place.) **Crucible does NOT deploy** — there is NO `~/.claude/scripts`
+mirror-sync or chezmoi step on our side; installing the scripts into agent sessions is the
+**Model-B installer framework's** responsibility (a Crucible↔Model-B seam). This
+**SUPERSEDES the old CR-008 `~/.claude/scripts`-mirror source-of-truth rule** — mirroring
+→ install is now Model-B's. Tests must load the REPO copy (`clients/…`), never the deployed
+mirror (the `test_bun_crucible_lifecycle` dog-food trap, fixed this cycle).
+
+**Close-out handoff (Sandesh → `Mainline - ModelB`).** On CR-030 completion — once we are
+satisfied the scripts meet spec — Crucible notifies Model-B of TWO things: (1) the
+`clients/` folder path to bundle the scripts from (installer seam), and (2) that
+`gate-run` STREAMING is the expected gate use, `gate-report` discouraged (§S8).
 
 ### §S6 Expose the plan/status READ verb (client gap — required all along)
 The server exposes `GET /api/v2/projects/<key>/plans` (the full queue: every
@@ -254,7 +268,7 @@ the orchestrator cannot lose the process thread.
 - [ ] §S6 read verb: `status` (alias `plans`, no `--agent`) GETs `…/plans` and returns a `toon.py`-decodable envelope with the queue table (`cr`, `wave`, `status`, active cycle, `mergeCommit`) plus a `lastRunCr` field (the plan with the latest `closedAt`), for all five clients; a project with no plans → an empty-queue envelope (`ok:true`), not an error.
 - [ ] §S7 re-pointed verbs: `checkpoint`, `stop`, `abort` (`--user-approved`) exist on all five clients, each POSTing the CR-024 server route and returning a `toon.py`-decodable envelope; `abort` without `--user-approved` surfaces the server's discouraging 409 (envelope `ok:false` + help), with it executes.
 - [ ] §S8 gate verbs: `gate-run` and `gate-report` return the §S1 envelope on all five clients; `gate-report` additionally emits a `prefer-gate-run` warning (envelope `warnings[]` + stderr) naming `gate-run` as the streaming standard; `gate-run` emits no such warning and POSTs ≥1 interim snapshot before the final sealed gate (asserted per client).
-- [ ] Golden fixture per verb per client; the `~/.claude/scripts` mirror is re-synced from `clients/` (CR-008 source-of-truth rule).
+- [ ] Golden fixture per verb per client (Crucible-tested); tests load the REPO copy (`clients/…`), never the deployed mirror. NO Crucible deploy/mirror-sync — installation is the Model-B installer framework's job. On completion, Model-B is notified via Sandesh of the `clients/` bundle path + the §S8 gate-run-streaming guidance.
 - [ ] §S10 `--fields`: a list/table verb (e.g. `status`) defaults to 3–4 fields per item; `--fields <a,b,c>` returns the requested superset; asserted on ≥1 verb per client.
 - [ ] §S11 `--full`: a verb with a large text field truncates it with a `(truncated, <N> chars total — use --full)` hint by default, and `--full` emits the untruncated value; asserted per client.
 - [ ] §S12 aggregates + empty states: every list/table envelope carries a `count` = total items; every verb that can return nothing emits an explicit `ok:true` zero-result envelope (definitive empty message), NEVER empty stdout — asserted per client.
