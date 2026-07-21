@@ -36,7 +36,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-033](CR-CRU-033-coverage-by-day-series.md) | Date-keyed coverage-by-day series (CR-028 data prerequisite) — fold re-key + merge rollups & live events | feature | COMPLETED | 023, 032 | 4 |
 | [CR-CRU-028](CR-CRU-028-patch-coverage-trend-semantics.md) | Coverage trend: auto-coarsening health hierarchy (DN-locked) | feature | COMPLETED | 033, 027 | 4 |
 | [CR-CRU-029](CR-CRU-029-patch-dual-axis-scroll-visibility.md) | Patch: dual-axis scroll always operable in narrow viewports | patch | COMPLETED | 023 | 4 |
-| [CR-CRU-034](CR-CRU-034-patch-drilldown-dual-axis-scroll.md) | Patch: run-detail drill-down inherits CR-029 dual-axis operability (multi-failure vertical scroll trap + dead space) | patch | PENDING (P1 — regression; before 030) | 029, 007, 016, 023 | 4 |
+| [CR-CRU-034](CR-CRU-034-patch-drilldown-dual-axis-scroll.md) | Patch: run-detail drill-down inherits CR-029 dual-axis operability (multi-failure vertical scroll trap + dead space) | patch | COMPLETED | 029, 007, 016, 023 | 4 |
 | [CR-CRU-032](CR-CRU-032-runs-boundary-anchor-fetch.md) | Patch: Runs-window governance + project-settings integrity — retention governs the display limit (kills hardcoded 50), anchor-fetch beyond-window (025 b), settings-form labels + run-deletion toggle F12 sync | patch | COMPLETED | 025, 012, 008 | 4 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 · track-1) | 011, 013 | 5 (0.2.0) |
 | [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Playwright runner + codec + tab | feature | PENDING (0.2.0 · track-2) | 004, 007 | 5 (0.2.0) |
