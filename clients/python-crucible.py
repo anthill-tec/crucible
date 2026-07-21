@@ -4,12 +4,21 @@ FIX/VERIFY agent lifecycle ops AND for running Python test targets (unittest via
 xmlrunner → JUnit XML, optional coverage.py). Replaces inline python / loose curl so
 each invocation has a stable command signature.
 
-Modelled exactly on rust-crucible.py (same agent lifecycle, .env project-key resolution,
-/api/v2/* ingest contract) — only the toolchain differs: Cargo/nextest/llvm-cov → a
-venv Python interpreter + unittest-xml-reporting (xmlrunner) + coverage.py.
+Modelled exactly on bun-crucible.py / rust-crucible.py (same agent lifecycle,
+.env project-key resolution, /api/v2/* ingest contract, and — CR-CRU-030 §S1/§S2 —
+the shared TOON-AXI envelope module clients/_crucible_axi.py) — only the toolchain
+differs: Cargo/nextest/llvm-cov or bun test → a venv Python interpreter +
+unittest-xml-reporting (xmlrunner) + coverage.py, with py_compile as the syntax gate.
 
 This script is tool-specific (unittest / xmlrunner / JUnit-XML / coverage.py), not
 project-specific — the project path and interpreter are parameterizable.
+
+Every AXI verb prints a clients/toon.py-encoded envelope
+`{"axi": {verb, ok, <result fields>, context, warnings}}` on STDOUT (the machine
+channel); the human-readable line moves to STDERR (interactive only). §S9: ingest
+verbs (and register) auto-attach to the open plan's ACTIVE cycle when
+WORKFLOW_CYCLE_ID is unset; no active cycle is a HARD ERROR (ok:false, non-zero
+exit, no POST), never a silent orphan.
 
 Subcommands:
   register, unregister  Agent lifecycle.
@@ -18,18 +27,26 @@ Subcommands:
                         RED/GREEN workhorse. The reports dir is wiped first so only THIS
                         run's XML is ingested. If --agent omitted, just runs (exit code
                         only). If NO XML is produced (import/collection failure), the
-                        CAPTURED runner output is ingested to /api/v2/runs/compile so
-                        the RED is reported instead of silently lost.
+                        CAPTURED runner output is ingested to /api/v2/runs/compile.
   regression            Run the FULL suite (discover) via xmlrunner (tier regression).
-                        With --coverage (needs coverage.py), runs under coverage and
-                        posts /api/v2/runs/parsed with line/function coverage.
-                        Orchestrator pre-merge gate path. The no-XML fallback applies
-                        here too.
+                        With --coverage (coverage.py), posts /api/v2/runs/parsed with
+                        line/function coverage. Orchestrator pre-merge gate path.
   auto-ingest           Ingest only: post an already-produced reports dir (parsed).
   check                 python -m py_compile over given paths (default app/ + tests/);
-                        ingest any errors to /api/v2/runs/compile. Best-effort syntax
-                        gate (most Python RED failures surface as junit errors at
-                        import time).
+                        ingest any errors to /api/v2/runs/compile. Syntax gate.
+  pre-merge-gate        ORCHESTRATOR gate: fail-fast check → regression --coverage.
+  plan-file             File a cycle plan → the assigned NUMERIC cycle ids.
+  plan-backfill         Backfill a plan's wave (PATCH wave-only; open OR closed).
+  cycle-activate <id>   Transition a cycle to active.
+  cycle-done <id>       Transition an ACTIVE cycle to done.
+  cr-close --commit <sha> [--cr <CR>]
+                        Close the single OPEN plan (PATCH status=closed + merge.commit).
+  cycle-add <label>     Append a cycle to a plan (§S4).
+  status / plans        Read the plan queue (§S6) as a TOON-AXI table.
+  checkpoint / stop / abort
+                        CR-024 workflow verbs (§S7).
+  gate-run / gate-report / milestone
+                        Fleet gate + milestone verbs (§S8).
 
 Project + Crucible endpoint:
   Reads CRUCIBLE_PROJECT_KEY from <project-dir>/.env.
@@ -39,47 +56,34 @@ Project + Crucible endpoint:
   (if present) > the interpreter running this script. The venv must have xmlrunner
   (and, for --coverage, coverage.py) plus any imports the code-under-test needs.
   Posts to $CRUCIBLE_URL (default http://localhost:3849), v2 endpoints ONLY:
-  /api/v2/agents/register|unregister, /api/v2/runs/parsed, /api/v2/runs/compile.
+  /api/v2/agents/register|unregister, /api/v2/runs/parsed, /api/v2/runs/compile,
+  /api/v2/projects/<key>/plans, /api/v2/gates, /api/v2/milestones.
 
-Run context (CR-CRU-008 §S2): when any WORKFLOW_* env var is set
-(WORKFLOW_CYCLE_ID / WORKFLOW_CYCLE / WORKFLOW_WAVE / WORKFLOW_ROLE), every ingest
-carries a `context` object {cycleId, cycle, wave, orchestrator, git:{branch,commit}}.
-With no WORKFLOW_* env, no context key is sent at all.
-
-Examples:
-  # Targeted RED/GREEN run + ingest in one call
-  python-crucible.py test --tests tests.test_mcp_server --agent CR-SAN-001-A-RED
-
-  # A single test case/method
-  python-crucible.py test --tests tests.test_mcp_server.McpServerTest.test_setup_tool --agent CR-SAN-001-A-GREEN
-
-  # Discover everything under tests/ without ingest (just see if it passes)
-  python-crucible.py test
-
-  # Full regression + ingest (orchestrator gate); add --coverage for coverage.py
-  python-crucible.py regression --agent claude-sandesh
-
-  # Override project path / interpreter
-  python-crucible.py register --project-dir /path/to/repo --agent claude-sandesh --phase ORCHESTRATOR
-  PY_CRUCIBLE_PYTHON=/path/.venv/bin/python python-crucible.py test --tests tests.test_x --agent CR-SAN-001-A-RED
-
-Agent naming (agent-protocol): agentId = `<agent-type>-<project>` (e.g. claude-sandesh) for
-the orchestrator, or `CR-<PROJ>-NNN-<cycle>-<PHASE>` (e.g. CR-SAN-001-A-RED) for TDD-phase
-agents. Identity carries displayName + source (default claude-md) + repoPath, inside the
-`identity` object.
+Agent naming (agent-protocol): agentId = `<agent-type>-<project>` (e.g. claude-sandesh)
+for the orchestrator, or `CR-<PROJ>-NNN-<cycle>-<PHASE>` (e.g. CR-SAN-001-A-RED) for
+TDD-phase agents. Identity carries displayName + source (default claude-md) + repoPath,
+inside the `identity` object.
 """
 
 import argparse
+import glob
+import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
 CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
 DEFAULT_REPORTS = "test-reports"
+
+# §S2b cadence (CR-CRU-008 _Narrator default) reused by gate-run's interim poll.
+_GATE_POLL_CADENCE_S = 2.0
+_GATE_POLL_TICK_S = 0.4
 
 
 def _resolve_project_dir(arg_value):
@@ -137,13 +141,16 @@ def _resolve_python(arg_value, project_dir):
     return sys.executable or "python3"
 
 
-def _post(path, payload):
-    """POST JSON to Crucible. Returns the parsed JSON, or an {ok:False,error} dict on
-    HTTP error (so a bad format/endpoint surfaces a message instead of a traceback)."""
+# ── HTTP transport seam (mocked in-process by the client test harnesses) ────
+
+
+def _request(method, path, payload=None):
+    """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error."""
     req = urllib.request.Request(
         f"{CRUCIBLE_URL}{path}",
-        data=json.dumps(payload).encode(),
+        data=json.dumps(payload).encode() if payload is not None else None,
         headers={"Content-Type": "application/json"},
+        method=method,
     )
     try:
         return json.loads(urllib.request.urlopen(req).read())
@@ -155,6 +162,70 @@ def _post(path, payload):
                                       f"(is Crucible running at {CRUCIBLE_URL}?)"}
 
 
+def _post(path, payload):
+    return _request("POST", path, payload)
+
+
+def _get(path):
+    return _request("GET", path)
+
+
+def _patch(path, payload):
+    return _request("PATCH", path, payload)
+
+
+# ── §S1 shared TOON-AXI envelope module + toon codec (loaded by file path) ──
+
+_TOON_MOD = None
+_AXI_MOD = None
+
+
+def _toon():
+    """Lazily load the sibling clients/toon.py TOON codec by file path (the
+    hyphen-named client is itself loaded by path, so toon.py is not on sys.path)."""
+    global _TOON_MOD
+    if _TOON_MOD is None:
+        toon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "toon.py")
+        spec = importlib.util.spec_from_file_location("python_crucible_toon", toon_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"could not load TOON codec at {toon_path}")
+        _TOON_MOD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_TOON_MOD)
+    return _TOON_MOD
+
+
+def _axi():
+    """Lazily load the shared clients/_crucible_axi.py envelope module (§S1) by path."""
+    global _AXI_MOD
+    if _AXI_MOD is None:
+        axi_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_crucible_axi.py")
+        spec = importlib.util.spec_from_file_location("python_crucible_axi_shared", axi_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"could not load shared AXI module at {axi_path}")
+        _AXI_MOD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_AXI_MOD)
+    return _AXI_MOD
+
+
+_AXI_UNSET = _axi().AXI_UNSET
+
+
+def _axi_context(project_dir, agent_id=None, cr=None, cycle_id=_AXI_UNSET):
+    """§S1 envelope context: { projectKey, agentId?, cycleId?, wave, cr, track? }.
+    Resolves the project_key from `.env`, then delegates to the shared
+    _crucible_axi.axi_context so the output is byte-identical across clients."""
+    return _axi().axi_context(
+        _project_key(project_dir), agent_id=agent_id, cr=cr, cycle_id=cycle_id)
+
+
+def _emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
+    """Write the §S1 TOON-AXI envelope (delegates to the shared module)."""
+    return _axi().emit_axi(verb, ok, result_fields, context, warnings, legacy_line)
+
+
+# ── run context (declared cycle linkage) ────────────────────────────────────
+
+
 def _run_context():
     """CR-CRU-008 §S2 — env + git → run context for declared cycle linkage.
 
@@ -162,7 +233,7 @@ def _run_context():
     WORKFLOW_WAVE and WORKFLOW_ROLE. When at least one is set, attaches
     git {branch, commit} from a cheap `git rev-parse` (tolerant of a
     non-repo cwd → omitted). Returns the context dict, or None when no
-    workflow env is set. Same pattern as clients/rust-crucible.py.
+    workflow env is set.
     """
     context = {}
     cycle_id_raw = os.environ.get("WORKFLOW_CYCLE_ID")
@@ -198,10 +269,20 @@ def _run_context():
     return context
 
 
+def _ingest_context(cycle_id):
+    """§S9 — the ingest payload's `context`: the env/git `_run_context()` enriched
+    with the RESOLVED cycleId so the SERVER-recorded run carries the attach cycle
+    (not just the printed envelope). Returns None only when there is nothing to attach."""
+    context = _run_context() or {}
+    if cycle_id is not None:
+        context["cycleId"] = cycle_id
+    return context or None
+
+
 def _run_logged(cmd, cwd, env, log_path):
     """Run `cmd` with combined stdout+stderr ALWAYS captured (the no-XML compile
-    fallback needs the real runner output — CR-CRU-008 Implementation Notes), echoed
-    to this process's stdout so the run stays visible, and additionally written to
+    fallback needs the real runner output), echoed to STDERR so the machine
+    stdout channel stays the TOON-AXI envelope, and additionally written to
     `log_path` when set. Returns CompletedProcess (`.stdout` holds the capture)."""
     result = subprocess.run(
         cmd, cwd=cwd, env=env,
@@ -212,51 +293,44 @@ def _run_logged(cmd, cwd, env, log_path):
         try:
             with open(log_path, "w") as f:
                 f.write(out)
-            print(f"[crucible] run log → {log_path} ({len(out)} bytes)")
+            print(f"[crucible] run log → {log_path} ({len(out)} bytes)", file=sys.stderr)
         except OSError as e:
-            print(f"[crucible] WARN: could not write run log to {log_path}: {e}")
-    sys.stdout.write(out)
+            print(f"[crucible] WARN: could not write run log to {log_path}: {e}",
+                  file=sys.stderr)
+    sys.stderr.write(out)
     return result
 
 
-def cmd_register(args):
-    """Register / heartbeat. agentId follows `<agent-type>-<project>` (agent-protocol),
-    or the TDD-phase form `CR-<PROJ>-NNN-<cycle>-<PHASE>` for RED/GREEN/FIX/VERIFY agents.
-    Identity fields (displayName/source/repoPath) go INSIDE `identity` — top-level is
-    ignored by Crucible."""
-    project_dir = _resolve_project_dir(args.project_dir)
+# ── Agent lifecycle ─────────────────────────────────────────────────────────
+
+
+def _register_agent(project_dir, agent_id, message, display_name=None, source="claude-md"):
+    """POST the agent-online heartbeat. Shared by cmd_register."""
     payload = {
-        "agentId": args.agent,
+        "agentId": agent_id,
         "projectKey": _project_key(project_dir),
         "status": "online",
-        "message": args.message or f"Starting {args.phase} phase",
+        "message": message,
         "identity": {
-            "displayName": args.display_name or args.agent,
-            "source": args.source,
+            "displayName": display_name or agent_id,
+            "source": source,
             "repoPath": project_dir,
         },
     }
-    resp = _post("/api/v2/agents/register", payload)
-    print(f"register: ok={resp.get('ok', False)} agent={args.agent} "
-          f"phase={args.phase} source={args.source}")
-    return 0 if resp.get("ok") else 1
+    return _post("/api/v2/agents/register", payload)
 
 
-def cmd_unregister(args):
-    project_dir = _resolve_project_dir(args.project_dir)
-    resp = _post(
+def _unregister_agent(project_dir, agent_id):
+    return _post(
         "/api/v2/agents/unregister",
-        {"agentId": args.agent, "projectKey": _project_key(project_dir)},
+        {"agentId": agent_id, "projectKey": _project_key(project_dir)},
     )
-    print(f"unregister: ok={resp.get('ok', False)} agent={args.agent}")
-    return 0 if resp.get("ok") else 1
 
 
 def _remove_agent_silent(project_dir, agent_id):
     """CR-CRU-008 §S4 anti-ghost cleanup for a gated run: remove the agent row
-    WITHOUT journaling a lifecycle event (the run's ingest was the implicit
-    registration). Best-effort: never raises, never pollutes the run verdict or
-    stdout. Mirrors clients/bun-crucible.py's _remove_agent_silent."""
+    WITHOUT journaling a lifecycle event. Best-effort: never raises, never
+    pollutes the run verdict or stdout."""
     try:
         _post(
             "/api/v2/agents/unregister",
@@ -264,6 +338,138 @@ def _remove_agent_silent(project_dir, agent_id):
         )
     except Exception:
         pass
+
+
+# ── §S9 — active-cycle resolution + register guard + ingest envelopes ────────
+
+
+def _plans_path(project_dir):
+    return f"/api/v2/projects/{_project_key(project_dir)}/plans"
+
+
+def _open_plans(project_dir):
+    resp = _get(_plans_path(project_dir))
+    if not resp.get("ok"):
+        sys.exit(f"[crucible] ERROR: could not list plans: {resp.get('error')}")
+    return [p for p in resp.get("plans", []) if p.get("status") == "open"]
+
+
+def _active_cycle_id(project_dir):
+    """First ACTIVE cycle id among the project's OPEN plans, or None. Tolerant of
+    any lookup failure — the §S9 guard must never break an ingest. Delegates the
+    pure resolution to the shared _crucible_axi.resolve_active_cycle_id."""
+    try:
+        resp = _get(_plans_path(project_dir))
+    except Exception:
+        return None
+    if not isinstance(resp, dict) or not resp.get("ok"):
+        return None
+    return _axi().resolve_active_cycle_id(resp.get("plans", []))
+
+
+def _resolve_ingest_cycle(project_dir):
+    """§S9 — resolve the cycle an --agent ingest attaches to. An explicit valid
+    WORKFLOW_CYCLE_ID is authoritative; otherwise the open plan's single
+    `status:"active"` cycle is auto-resolved. Returns (cycle_id, warnings,
+    hard_error): (int, [], False) on success; (None, [warning], True) when there
+    is NO active cycle — the caller MUST emit ok:false and SKIP the POST."""
+    raw = os.environ.get("WORKFLOW_CYCLE_ID")
+    if raw is not None:
+        try:
+            return int(raw), [], False
+        except ValueError:
+            pass
+    active = _active_cycle_id(project_dir)
+    if active is not None:
+        return active, [], False
+    warning = {"code": "no-active-cycle", "detail": "no active cycle — activate one first"}
+    return None, [warning], True
+
+
+def _register_cycle_guard(project_dir):
+    """§S9 — register mirrors the ingest hard-error: with WORKFLOW_CYCLE_ID unset
+    AND a successfully-read open plan carrying no active cycle, registration
+    hard-errors rather than bring an agent online against untracked work. A plans
+    fetch that itself FAILS is NOT proof of "no active cycle", so register
+    proceeds. Returns (hard_error, warnings)."""
+    raw = os.environ.get("WORKFLOW_CYCLE_ID")
+    if raw is not None:
+        try:
+            int(raw)
+            return False, []
+        except ValueError:
+            pass
+    resp = _get(_plans_path(project_dir))
+    if not isinstance(resp, dict) or not resp.get("ok"):
+        return False, []
+    if _axi().resolve_active_cycle_id(resp.get("plans", [])) is not None:
+        return False, []
+    return True, [{"code": "no-active-cycle",
+                   "detail": "no active cycle — activate one first"}]
+
+
+def _emit_ingest_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
+    """Emit the §S1 envelope for a SUCCESSFUL ingest verb: run{passed,failed,total}
+    + cycle-aware context. Any warnings are also surfaced on stderr."""
+    run = {"passed": summary["passed"], "failed": summary["failed"],
+           "total": summary["total"]}
+    context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
+    for w in warnings:
+        print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
+    _emit_axi(verb, bool(resp.get("ok")),
+              {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])},
+              context, warnings)
+
+
+def _emit_ingest_hard_error(verb, project_dir, agent, warnings):
+    """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when
+    there is no active cycle to attach an ingest to. The run is NOT POSTed."""
+    context = _axi_context(project_dir, agent_id=agent, cycle_id=None)
+    for w in warnings:
+        print(f"error: {w['code']} — {w['detail']}", file=sys.stderr)
+    _emit_axi(verb, False, {}, context, warnings)
+
+
+def cmd_register(args):
+    """Register / heartbeat. §S9: no active cycle (and no WORKFLOW_CYCLE_ID
+    override) is a HARD ERROR — the agent must never come online against an
+    untracked plan; the POST is withheld and the exit code is non-zero."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    hard_error, warnings = _register_cycle_guard(project_dir)
+    if hard_error:
+        for w in warnings:
+            print(f"error: {w['code']} — {w['detail']}", file=sys.stderr)
+        _emit_axi("register", False,
+                  {"agent": args.agent, "help": _axi().HELP_STEPS["register"]},
+                  _axi_context(project_dir, agent_id=args.agent, cycle_id=None),
+                  warnings)
+        return 1
+    resp = _register_agent(
+        project_dir, args.agent,
+        args.message or f"Starting {args.phase} phase",
+        display_name=args.display_name, source=args.source,
+    )
+    ok = bool(resp.get("ok", False))
+    legacy = (f"register: ok={resp.get('ok', False)} agent={args.agent} "
+              f"phase={args.phase} source={args.source}")
+    _emit_axi("register", ok,
+              {"agent": args.agent, "help": _axi().HELP_STEPS["register"]},
+              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_unregister(args):
+    project_dir = _resolve_project_dir(args.project_dir)
+    resp = _unregister_agent(project_dir, args.agent)
+    ok = bool(resp.get("ok", False))
+    legacy = f"unregister: ok={resp.get('ok', False)} agent={args.agent}"
+    _emit_axi("unregister", ok,
+              {"agent": args.agent, "help": _axi().HELP_STEPS["unregister"]},
+              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+    return 0 if ok else 1
+
+
+# ── Toolchain: unittest/xmlrunner test + regression + auto-ingest + check ────
 
 
 def _reports_dir(project_dir, arg_value):
@@ -292,9 +498,7 @@ def _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir):
 
 def _parse_junit_dir(reports_dir):
     """Parse every TEST-*.xml in reports_dir into (summary, tree) with per-method leaf
-    names. Mirrors rust-crucible's parser; used for the /api/v2/runs/parsed path so the
-    Crucible tree shows real test-method names."""
-    import glob
+    names for the /api/v2/runs/parsed path so the Crucible tree shows real names."""
     tree_nodes = []
     total = passed = failed = 0
     duration_ms = 0
@@ -331,32 +535,6 @@ def _parse_junit_dir(reports_dir):
     return summary, tree_nodes
 
 
-def _ingest_parsed_dir(project_dir, agent_id, reports_dir, tier):
-    """Parse the reports dir client-side (per-method leaf names) and POST to
-    /api/v2/runs/parsed with the given tier + run context. The server-side codec=junit
-    parser historically labeled leaves by classname, so the local parser is the
-    reliable path for real test-method names. No coverage (that stays the
-    pre-merge-gate's job)."""
-    summary, tree = _parse_junit_dir(reports_dir)
-    payload = {
-        "projectKey": _project_key(project_dir),
-        "agentId": agent_id,
-        "summary": summary,
-        "tree": tree,
-        "tier": tier,
-    }
-    context = _run_context()
-    if context:
-        payload["context"] = context
-    resp = _post("/api/v2/runs/parsed", payload)
-    print(
-        f"ingest parsed: ok={resp.get('ok')} "
-        f"passed={summary['passed']} failed={summary['failed']} total={summary['total']}"
-        + (f" error={resp['error']}" if resp.get("error") else "")
-    )
-    return 0 if resp.get("ok") else 1
-
-
 def _produced_xml(reports_dir):
     return os.path.isdir(reports_dir) and any(
         e.startswith("TEST-") and e.endswith(".xml") for e in os.listdir(reports_dir)
@@ -365,102 +543,25 @@ def _produced_xml(reports_dir):
 
 def _no_xml_errors_text(result):
     """The REAL captured runner output for the no-XML compile fallback — never the
-    empty string /api/v2/runs/compile 400s on (CR-CRU-008 Implementation Notes:
-    the 'no-XML fallback 400 bug')."""
+    empty string /api/v2/runs/compile 400s on."""
     out = (result.stdout or "").strip() if hasattr(result, "stdout") else ""
     return out or "xmlrunner produced no JUnit XML (import/syntax failure, no output captured)"
 
 
-def cmd_test(args):
-    """Targeted/discover unittest via xmlrunner → JUnit XML → /api/v2/runs/parsed
-    (tier unit). With --agent the result is ingested regardless of pass/fail. Exit
-    code reflects the runner (non-zero on failing tests / collection failure)."""
-    project_dir = _resolve_project_dir(args.project_dir)
-    python = _resolve_python(args.python, project_dir)
-    reports_dir = _reports_dir(project_dir, args.reports)
-    os.makedirs(reports_dir, exist_ok=True)
-    _wipe(reports_dir)
-
-    cmd = _xmlrunner_cmd(python, args.tests, args.start_dir, args.pattern, reports_dir)
-    env = os.environ.copy()
-    print(f"[crucible] running: {' '.join(cmd)}")
-    result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
-    print(f"[crucible] xmlrunner exit={result.returncode}")
-
-    if not args.agent:
-        return result.returncode
-
-    if _produced_xml(reports_dir):
-        rc = _ingest_parsed_dir(project_dir, args.agent, reports_dir, "unit")
-        return rc if rc != 0 else result.returncode
-    # No XML at all → a hard collection/syntax failure. Ingest the CAPTURED runner
-    # output as compile so the RED is still reported rather than silently lost —
-    # and exit non-zero regardless of ingest success.
-    _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result), tier="unit")
-    return result.returncode or 1
-
-
-def cmd_regression(args):
-    """Gated regression run — wraps the ingest body in an anti-ghost silent
-    cleanup (CR-CRU-008 §S4): even a failed/raising run removes the implicitly
-    registered agent, and never touches the retired /api/agents/remove shim."""
-    project_dir = _resolve_project_dir(args.project_dir)
-    try:
-        return _regression_run(args)
-    finally:
-        if getattr(args, "agent", None):
-            _remove_agent_silent(project_dir, args.agent)
-
-
-def _regression_run(args):
-    """Full-suite discover via xmlrunner (tier regression). With --coverage: run under
-    coverage.py and post /api/v2/runs/parsed with coverage. Ingests regardless of
-    pass/fail. Returns non-zero if any test failed or ingest failed. A no-XML run
-    posts the captured output to /api/v2/runs/compile before exiting non-zero."""
-    project_dir = _resolve_project_dir(args.project_dir)
-    python = _resolve_python(args.python, project_dir)
-    reports_dir = _reports_dir(project_dir, args.reports)
-    os.makedirs(reports_dir, exist_ok=True)
-    _wipe(reports_dir)
-    env = os.environ.copy()
-
-    run_cmd = _xmlrunner_cmd(python, None, args.start_dir, args.pattern, reports_dir)
-    coverage_on = bool(args.coverage)
-    if coverage_on:
-        # coverage run -m xmlrunner discover ... — drop the leading interpreter.
-        run_cmd = [python, "-m", "coverage", "run", "--source", args.cov_source,
-                   "-m", "xmlrunner", "discover", "-s", args.start_dir,
-                   "-p", args.pattern, "-o", reports_dir]
-
-    print(f"[crucible] running: {' '.join(run_cmd)}")
-    result = _run_logged(run_cmd, project_dir, env, getattr(args, "log", None))
-    print(f"[crucible] xmlrunner exit={result.returncode}")
-
-    if not _produced_xml(reports_dir):
-        # Same no-XML compile fallback as `test` — never a silent return 1 with
-        # no ingest at all (CR-CRU-008 Implementation Notes).
-        print("[crucible] ERROR: no JUnit XML produced — ingesting captured output as compile")
-        _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result),
-                        tier="regression")
-        return result.returncode or 1
-
-    if not coverage_on:
-        rc = _ingest_parsed_dir(project_dir, args.agent, reports_dir, "regression")
-        return rc
-
-    # Coverage path: parse junit locally + coverage lcov → /api/v2/runs/parsed.
-    summary, tree = _parse_junit_dir(reports_dir)
-    coverage = _collect_coverage(python, project_dir, env)
+def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
+                   context=None):
+    """POST the client-parsed run (per-method leaf names) to /api/v2/runs/parsed.
+    Returns the parsed response dict (the caller emits the §S1 envelope)."""
     payload = {
         "projectKey": _project_key(project_dir),
-        "agentId": args.agent,
+        "agentId": agent_id,
         "summary": summary,
         "tree": tree,
-        "tier": "regression",
     }
     if coverage:
         payload["coverage"] = coverage
-    context = _run_context()
+    if tier:
+        payload["tier"] = tier
     if context:
         payload["context"] = context
     resp = _post("/api/v2/runs/parsed", payload)
@@ -469,11 +570,32 @@ def _regression_run(args):
         cov_line = (f" lines={coverage['lines']['percent']}%"
                     f" funcs={coverage['functions']['percent']}%")
     print(
-        f"regression: ok={resp.get('ok')} passed={summary['passed']} "
+        f"ingest parsed: ok={resp.get('ok')} passed={summary['passed']} "
         f"failed={summary['failed']} total={summary['total']}{cov_line}"
-        + (f" error={resp['error']}" if resp.get("error") else "")
+        + (f" error={resp['error']}" if resp.get("error") else ""),
+        file=sys.stderr,
     )
-    return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
+    return resp
+
+
+def _ingest_compile(project_dir, agent_id, errors_text, tier=None):
+    """Ingest a syntax/collection failure to /api/v2/runs/compile (with run context)."""
+    payload = {
+        "projectKey": _project_key(project_dir),
+        "format": "python",
+        "errors": errors_text,
+        "agentId": agent_id,
+    }
+    if tier:
+        payload["tier"] = tier
+    context = _run_context()
+    if context:
+        payload["context"] = context
+    resp = _post("/api/v2/runs/compile", payload)
+    print(f"ingest compile (python): ok={resp.get('ok')}"
+          + (f" error={resp['error']}" if resp.get("error") else ""),
+          file=sys.stderr)
+    return 0 if resp.get("ok") else 1
 
 
 def _collect_coverage(python, project_dir, env):
@@ -483,7 +605,8 @@ def _collect_coverage(python, project_dir, env):
     r = subprocess.run([python, "-m", "coverage", "lcov", "-o", lcov_path],
                        cwd=project_dir, env=env, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(lcov_path):
-        print(f"[crucible] WARN: coverage lcov unavailable ({r.stderr.strip()[:120]})")
+        print(f"[crucible] WARN: coverage lcov unavailable ({r.stderr.strip()[:120]})",
+              file=sys.stderr)
         return None
     lf = lh = ff = fh = 0
     with open(lcov_path) as f:
@@ -504,39 +627,123 @@ def _collect_coverage(python, project_dir, env):
     }
 
 
+def cmd_test(args):
+    """Targeted/discover unittest via xmlrunner → JUnit XML → /api/v2/runs/parsed
+    (tier unit). With --agent the result is ingested (regardless of pass/fail) and
+    §S9 auto-attaches it to the active cycle. Exit code reflects the runner."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    python = _resolve_python(args.python, project_dir)
+    reports_dir = _reports_dir(project_dir, args.reports)
+    os.makedirs(reports_dir, exist_ok=True)
+    _wipe(reports_dir)
+
+    cmd = _xmlrunner_cmd(python, args.tests, args.start_dir, args.pattern, reports_dir)
+    env = os.environ.copy()
+    print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
+    result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
+    print(f"[crucible] xmlrunner exit={result.returncode}", file=sys.stderr)
+
+    if not args.agent:
+        return result.returncode
+
+    if _produced_xml(reports_dir):
+        summary, tree = _parse_junit_dir(reports_dir)
+        # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run
+        # hard-errors WITHOUT ever ingesting a cycleId=null orphan.
+        cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
+        if hard_error:
+            _emit_ingest_hard_error("test", project_dir, args.agent, warnings)
+            return 1
+        resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
+                              context=_ingest_context(cycle_id))
+        _emit_ingest_axi("test", resp, summary, project_dir, args.agent,
+                         cycle_id, warnings)
+        if summary["failed"] > 0:
+            return 1
+        return 0 if resp.get("ok") else 1
+    # No XML at all → a hard collection/syntax failure. Ingest the CAPTURED runner
+    # output as compile so the RED is still reported rather than silently lost.
+    _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result), tier="unit")
+    return result.returncode or 1
+
+
+def cmd_regression(args):
+    """Gated regression run — wraps the ingest body in an anti-ghost silent
+    cleanup (CR-CRU-008 §S4)."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    try:
+        return _regression_run(args)
+    finally:
+        if getattr(args, "agent", None):
+            _remove_agent_silent(project_dir, args.agent)
+
+
+def _regression_run(args):
+    """Full-suite discover via xmlrunner (tier regression). With --coverage: run under
+    coverage.py and post /api/v2/runs/parsed with coverage. §S9 auto-attaches."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    python = _resolve_python(args.python, project_dir)
+    reports_dir = _reports_dir(project_dir, args.reports)
+    os.makedirs(reports_dir, exist_ok=True)
+    _wipe(reports_dir)
+    env = os.environ.copy()
+
+    run_cmd = _xmlrunner_cmd(python, None, args.start_dir, args.pattern, reports_dir)
+    coverage_on = bool(args.coverage)
+    if coverage_on:
+        run_cmd = [python, "-m", "coverage", "run", "--source", args.cov_source,
+                   "-m", "xmlrunner", "discover", "-s", args.start_dir,
+                   "-p", args.pattern, "-o", reports_dir]
+
+    print(f"[crucible] running: {' '.join(run_cmd)}", file=sys.stderr)
+    result = _run_logged(run_cmd, project_dir, env, getattr(args, "log", None))
+    print(f"[crucible] xmlrunner exit={result.returncode}", file=sys.stderr)
+
+    if not _produced_xml(reports_dir):
+        print("[crucible] ERROR: no JUnit XML produced — ingesting captured output as compile",
+              file=sys.stderr)
+        _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result),
+                        tier="regression")
+        return result.returncode or 1
+
+    summary, tree = _parse_junit_dir(reports_dir)
+    coverage = _collect_coverage(python, project_dir, env) if coverage_on else None
+    # §S9 — resolve/attach the active cycle before the POST (hard-error when none).
+    cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
+    if hard_error:
+        _emit_ingest_hard_error("regression", project_dir, args.agent, warnings)
+        return 1
+    resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
+                          tier="regression", context=_ingest_context(cycle_id))
+    _emit_ingest_axi("regression", resp, summary, project_dir, args.agent,
+                     cycle_id, warnings)
+    return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
+
+
 def cmd_auto_ingest(args):
-    """Ingest an already-produced reports dir (client-parsed → per-method names). For when
-    the caller ran xmlrunner separately."""
+    """Ingest an already-produced reports dir (client-parsed → per-method names).
+    §S9 auto-attaches the run to the active cycle."""
     project_dir = _resolve_project_dir(args.project_dir)
     reports_dir = _reports_dir(project_dir, args.reports)
     if not _produced_xml(reports_dir):
-        print(f"[crucible] no TEST-*.xml in {reports_dir} — nothing to ingest")
+        print(f"[crucible] no TEST-*.xml in {reports_dir} — nothing to ingest",
+              file=sys.stderr)
         return 1
-    return _ingest_parsed_dir(project_dir, args.agent, reports_dir, "unit")
-
-
-def _ingest_compile(project_dir, agent_id, errors_text, tier=None):
-    """Ingest a syntax/collection failure to /api/v2/runs/compile."""
-    payload = {
-        "projectKey": _project_key(project_dir),
-        "format": "python",
-        "errors": errors_text,
-        "agentId": agent_id,
-    }
-    if tier:
-        payload["tier"] = tier
-    context = _run_context()
-    if context:
-        payload["context"] = context
-    resp = _post("/api/v2/runs/compile", payload)
-    print(f"ingest compile (python): ok={resp.get('ok')}"
-          + (f" error={resp['error']}" if resp.get("error") else ""))
+    summary, tree = _parse_junit_dir(reports_dir)
+    cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
+    if hard_error:
+        _emit_ingest_hard_error("auto-ingest", project_dir, args.agent, warnings)
+        return 1
+    resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
+                          context=_ingest_context(cycle_id))
+    _emit_ingest_axi("auto-ingest", resp, summary, project_dir, args.agent,
+                     cycle_id, warnings)
     return 0 if resp.get("ok") else 1
 
 
 def cmd_check(args):
     """python -m py_compile over the given paths (default app/ + tests/). With --agent,
-    ingest any errors as a compile failure. Best-effort syntax gate."""
+    ingest any errors as a compile failure. §S2/§S15 — returns the §S1 envelope."""
     project_dir = _resolve_project_dir(args.project_dir)
     python = _resolve_python(args.python, project_dir)
     paths = args.paths or ["app", "tests"]
@@ -549,22 +756,24 @@ def cmd_check(args):
         elif ap.endswith(".py"):
             files.append(ap)
     cmd = [python, "-m", "py_compile", *files]
-    print(f"[crucible] running: py_compile on {len(files)} file(s)")
+    print(f"[crucible] running: py_compile on {len(files)} file(s)", file=sys.stderr)
     result = subprocess.run(cmd, cwd=project_dir, capture_output=True, text=True)
-    print(f"[crucible] py_compile exit={result.returncode}")
-    if result.returncode != 0:
+    print(f"[crucible] py_compile exit={result.returncode}", file=sys.stderr)
+    ok = result.returncode == 0
+    if not ok:
         sys.stderr.write(result.stderr)
-    if args.agent and result.returncode != 0:
-        _ingest_compile(project_dir, args.agent, result.stderr)
-    return result.returncode
+        if args.agent:
+            _ingest_compile(project_dir, args.agent, result.stderr)
+    legacy = f"check: ok={ok} exit={result.returncode}"
+    _emit_axi("check", ok,
+              {"exit": result.returncode, "help": _axi().HELP_STEPS["check"]},
+              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+    return 0 if ok else (result.returncode or 1)
 
 
 def cmd_pre_merge_gate(args):
-    """ORCHESTRATOR pre-merge gate — the ONLY path that measures coverage (project
-    policy: coverage is reserved for the pre-merge gate, never per-cycle). Steps:
-    fail-fast `check` (py_compile syntax gate) → full `regression --coverage` (junit +
-    coverage.py lcov → /api/v2/runs/parsed). A check failure aborts before the suite."""
-    project_dir = _resolve_project_dir(args.project_dir)
+    """ORCHESTRATOR pre-merge gate — the ONLY path that measures coverage. Steps:
+    fail-fast `check` (py_compile) → full `regression --coverage`."""
     if not getattr(args, "skip_check", False):
         check_args = argparse.Namespace(
             paths=None, agent=args.agent, python=args.python, project_dir=args.project_dir,
@@ -572,7 +781,8 @@ def cmd_pre_merge_gate(args):
         rc = cmd_check(check_args)
         if rc != 0:
             print("[crucible] pre-merge gate FAILED at the py_compile check step — "
-                  "skipped the regression. Fix syntax first (or --skip-check to bypass).")
+                  "skipped the regression. Fix syntax first (or --skip-check to bypass).",
+                  file=sys.stderr)
             return rc
     reg_args = argparse.Namespace(
         agent=args.agent, coverage=True, cov_source=args.cov_source,
@@ -580,6 +790,465 @@ def cmd_pre_merge_gate(args):
         python=args.python, project_dir=args.project_dir, log=getattr(args, "log", None),
     )
     return cmd_regression(reg_args)
+
+
+# ── CR-CRU-008/030 — plan verbs ─────────────────────────────────────────────
+
+
+def cmd_plan_file(args):
+    project_dir = _resolve_project_dir(args.project_dir)
+    labels = [label.strip() for label in args.cycles.split(",") if label.strip()]
+    if not labels:
+        sys.exit("[crucible] ERROR: --cycles must name at least one cycle")
+    payload = {"cr": args.cr, "cycles": [{"label": label} for label in labels]}
+    if args.title:
+        payload["title"] = args.title
+    wave = args.wave if getattr(args, "wave", None) is not None else os.environ.get("WORKFLOW_WAVE")
+    if wave:
+        payload["wave"] = wave
+    track = os.environ.get("WORKFLOW_ROLE")
+    if track:
+        payload["track"] = track
+    orchestrator = args.orchestrator or os.environ.get("WORKFLOW_ORCHESTRATOR")
+    if orchestrator:
+        payload["orchestrator"] = orchestrator
+    resp = _post(_plans_path(project_dir), payload)
+    if not resp.get("ok"):
+        legacy = f"plan-file: ok=False error={resp.get('error')}"
+        _emit_axi("plan-file", False, {"cr": args.cr},
+                  _axi_context(project_dir), [], legacy)
+        return 1
+    cycles = resp.get("cycles", [])
+    ids = " ".join(f"{c.get('label')}={c.get('id')}" for c in cycles)
+    legacy = (f"plan-file: ok=True planId={resp.get('planId')} cr={resp.get('cr')} "
+              f"cycles: {ids}")
+    _emit_axi("plan-file", True,
+              {"planId": resp.get("planId"), "cr": resp.get("cr"), "cycles": cycles,
+               "help": ["cycle-activate <id>"]},
+              _axi_context(project_dir, cr=resp.get("cr") or args.cr), [], legacy)
+    return 0
+
+
+def cmd_plan_backfill(args):
+    """§S2 — resolve the target plan (single, or --cr) and PATCH its wave (wave-only
+    body is closed-plan-safe, so the resolver considers ALL plans)."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    resp = _get(_plans_path(project_dir))
+    if not resp.get("ok"):
+        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
+        _emit_axi("plan-backfill", False, {"wave": args.wave},
+                  _axi_context(project_dir, cr=args.cr), [], legacy)
+        return 1
+    plans = resp.get("plans", [])
+    if args.cr:
+        plans = [p for p in plans if p.get("cr") == args.cr]
+    if len(plans) == 0:
+        legacy = ("[crucible] ERROR: no plan to backfill"
+                  + (f" for cr={args.cr}" if args.cr else ""))
+        _emit_axi("plan-backfill", False, {"wave": args.wave},
+                  _axi_context(project_dir, cr=args.cr), [], legacy)
+        return 1
+    if len(plans) > 1:
+        names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in plans)
+        legacy = (f"[crucible] ERROR: {len(plans)} plans — ambiguous plan-backfill. "
+                  f"Pass --cr to pick one of: {names}")
+        _emit_axi("plan-backfill", False, {"wave": args.wave},
+                  _axi_context(project_dir, cr=args.cr), [], legacy)
+        return 1
+    plan = plans[0]
+    patch_resp = _patch(f"{_plans_path(project_dir)}/{plan['planId']}",
+                        {"wave": args.wave})
+    ok = patch_resp.get("ok", False)
+    cr_label = plan.get("cr")
+    legacy = (f"plan-backfill: ok={ok} plan={plan['planId']} cr={cr_label} "
+              f"wave={args.wave}"
+              + (f" error={patch_resp.get('error')}" if patch_resp.get("error") else ""))
+    _emit_axi("plan-backfill", bool(ok),
+              {"plan": plan["planId"], "cr": cr_label, "wave": args.wave},
+              _axi_context(project_dir, cr=cr_label), [], legacy)
+    return 0 if ok else 1
+
+
+def _cycle_transition(args, status):
+    """Cycle ids are unique per PROJECT — resolve the owning OPEN plan by scanning
+    GET …/plans, then PATCH that plan's cycle."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    cycle_id = args.cycle_id
+    open_plans = _open_plans(project_dir)
+    target = next(
+        (p for p in open_plans
+         if any(c.get("id") == cycle_id for c in p.get("cycles", []))),
+        None,
+    )
+    verb = "cycle-activate" if status == "active" else "cycle-done"
+    help_steps = (["cycle-done <id>", "status"] if status == "active"
+                  else ["cr-close --commit <sha>", "status"])
+    if target is None:
+        known = "; ".join(
+            f"plan {p.get('planId')} ({p.get('cr')}): "
+            + ", ".join(str(c.get("id")) for c in p.get("cycles", []))
+            for p in open_plans
+        ) or "none"
+        legacy = (f"[crucible] ERROR: cycle {cycle_id} is not in any OPEN plan. "
+                  f"Open plans' cycle ids: {known}")
+        _emit_axi(verb, False, {"cycle": cycle_id, "help": help_steps},
+                  _axi_context(project_dir), [], legacy)
+        return 1
+    resp = _patch(f"{_plans_path(project_dir)}/{target['planId']}/cycles/{cycle_id}",
+                  {"status": status})
+    ok = resp.get("ok", False)
+    legacy = (f"{verb}: ok={ok} cycle={cycle_id} plan={target['planId']}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi(verb, bool(ok),
+              {"cycle": cycle_id, "plan": target["planId"], "help": help_steps},
+              _axi_context(project_dir), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_cycle_activate(args):
+    return _cycle_transition(args, "active")
+
+
+def cmd_cycle_done(args):
+    return _cycle_transition(args, "done")
+
+
+def cmd_cr_close(args):
+    project_dir = _resolve_project_dir(args.project_dir)
+    open_plans = _open_plans(project_dir)
+    if args.cr:
+        open_plans = [p for p in open_plans if p.get("cr") == args.cr]
+    if len(open_plans) == 0:
+        legacy = ("[crucible] ERROR: no OPEN plan to close"
+                  + (f" for cr={args.cr}" if args.cr else ""))
+        _emit_axi("cr-close", False,
+                  {"commit": args.commit, "help": _axi().HELP_STEPS["cr-close"]},
+                  _axi_context(project_dir, cr=args.cr), [], legacy)
+        return 1
+    if len(open_plans) > 1:
+        names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in open_plans)
+        legacy = (f"[crucible] ERROR: {len(open_plans)} open plans — ambiguous cr-close. "
+                  f"Pass --cr to pick one of: {names}")
+        _emit_axi("cr-close", False,
+                  {"commit": args.commit, "help": _axi().HELP_STEPS["cr-close"]},
+                  _axi_context(project_dir), [], legacy)
+        return 1
+    plan = open_plans[0]
+    resp = _patch(f"{_plans_path(project_dir)}/{plan['planId']}",
+                  {"status": "closed", "merge": {"commit": args.commit}})
+    ok = resp.get("ok", False)
+    cr_label = plan.get("cr")
+    legacy = (f"cr-close: ok={ok} plan={plan['planId']} cr={cr_label} "
+              f"commit={args.commit}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("cr-close", bool(ok),
+              {"plan": plan["planId"], "cr": cr_label, "commit": args.commit,
+               "help": _axi().HELP_STEPS["cr-close"]},
+              _axi_context(project_dir, cr=cr_label), [], legacy)
+    if not ok:
+        return 1
+    ms_resp = _post_milestone(
+        project_dir, _agent_id(args), "cr-merged",
+        label=cr_label, commit=args.commit,
+        context=_axi().fleet_context(cr=cr_label) or None,
+    )
+    print(f"cr-merged: ok={ms_resp.get('ok', False)} cr={cr_label} commit={args.commit}"
+          + (f" error={ms_resp.get('error')}" if ms_resp.get("error") else ""),
+          file=sys.stderr)
+    return 0
+
+
+# ── CR-CRU-030 §S4/§S7 — append-cycle + CR-024 workflow verbs ────────────────
+
+
+def _resolve_plan_or_emit(verb, project_dir, cr, result_fields, open_only):
+    """Shared prelude for the plan-targeting write verbs (cycle-add / checkpoint /
+    abort): GET the plans, resolve exactly ONE target via the shared
+    resolve_single_plan, and on any failure emit ok:false + return (None, 1)."""
+    resp = _get(_plans_path(project_dir))
+    if not resp.get("ok"):
+        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
+        _emit_axi(verb, False, result_fields, _axi_context(project_dir, cr=cr), [], legacy)
+        return None, 1
+    plans = resp.get("plans", [])
+    plan, reason = _axi().resolve_single_plan(plans, cr=cr, open_only=open_only)
+    if reason is not None:
+        scope = "open plan" if open_only else "plan"
+        if reason == "none":
+            legacy = (f"[crucible] ERROR: no {scope} to {verb}"
+                      + (f" for cr={cr}" if cr else ""))
+        else:
+            candidates = [p for p in plans
+                          if (not open_only or p.get("status") == "open")]
+            names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in candidates)
+            legacy = (f"[crucible] ERROR: {len(candidates)} {scope}s — ambiguous {verb}. "
+                      f"Pass --cr to pick one of: {names}")
+        _emit_axi(verb, False, result_fields, _axi_context(project_dir, cr=cr), [], legacy)
+        return None, 1
+    return plan, None
+
+
+def cmd_cycle_add(args):
+    """§S4 — append a cycle to a plan. Resolve the target plan (ALL plans, optional
+    --cr), POST …/plans/<planId>/cycles with ONLY the label, and let the SERVER
+    reject a CLOSED/absent plan. The assigned numeric id stays machine-readable."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    result_fields = {"label": args.label, "help": _axi().HELP_STEPS["cycle-add"]}
+    plan, rc = _resolve_plan_or_emit("cycle-add", project_dir, args.cr,
+                                     result_fields, open_only=False)
+    if plan is None:
+        return rc
+    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/cycles",
+                 {"label": args.label})
+    ok = resp.get("ok", False)
+    cr_label = plan.get("cr")
+    legacy = (f"cycle-add: ok={ok} plan={plan['planId']} cr={cr_label} "
+              f"label={args.label} id={resp.get('id')}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("cycle-add", bool(ok),
+              {"plan": plan["planId"], "id": resp.get("id"), "label": args.label,
+               "help": _axi().HELP_STEPS["cycle-add"]},
+              _axi_context(project_dir, cr=cr_label), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_checkpoint(args):
+    """§S7 — checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint)."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    plan, rc = _resolve_plan_or_emit("checkpoint", project_dir, args.cr,
+                                     {"help": _axi().HELP_STEPS["checkpoint"]}, open_only=True)
+    if plan is None:
+        return rc
+    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/checkpoint", {})
+    ok = resp.get("ok", False)
+    legacy = (f"checkpoint: ok={ok} plan={plan['planId']}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("checkpoint", bool(ok),
+              {"plan": plan["planId"], "changed": resp.get("changed"),
+               "help": _axi().HELP_STEPS["checkpoint"]},
+              _axi_context(project_dir, cr=plan.get("cr")), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_stop(args):
+    """§S7 — project-level stop (POST …/projects/<key>/stop). No plan targeting."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    resp = _post(f"/api/v2/projects/{_project_key(project_dir)}/stop", {})
+    ok = resp.get("ok", False)
+    legacy = (f"stop: ok={ok} checkpointed={resp.get('checkpointed')}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("stop", bool(ok),
+              {"checkpointed": resp.get("checkpointed"), "help": _axi().HELP_STEPS["stop"]},
+              _axi_context(project_dir), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_abort(args):
+    """§S7 — abort the resolved OPEN plan (POST …/plans/<id>/abort). WITHOUT
+    --user-approved the body's userApproved is false, so the server's discouraging
+    409 refusal stays reachable (surfaced as ok:false + non-zero)."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    plan, rc = _resolve_plan_or_emit("abort", project_dir, args.cr,
+                                     {"help": _axi().HELP_STEPS["abort"]}, open_only=True)
+    if plan is None:
+        return rc
+    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/abort",
+                 {"userApproved": bool(args.user_approved)})
+    ok = resp.get("ok", False)
+    legacy = (f"abort: ok={ok} plan={plan['planId']} "
+              f"userApproved={bool(args.user_approved)}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("abort", bool(ok),
+              {"plan": plan["planId"], "help": _axi().HELP_STEPS["abort"]},
+              _axi_context(project_dir, cr=plan.get("cr")), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_status(args):
+    """§S6 — the plan/status READ verb (alias `plans`, no --agent). GET …/plans and
+    return the queue as a uniform-table §S1 envelope plus a top-level lastRunCr."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    resp = _get(_plans_path(project_dir))
+    if not resp.get("ok"):
+        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
+        _emit_axi("status", False,
+                  {"plans": [], "lastRunCr": None, "help": _axi().HELP_STEPS["status"]},
+                  _axi_context(project_dir), [], legacy)
+        return 1
+    plans = resp.get("plans", [])
+    full_rows = _axi().build_status_rows(plans)
+    last = _axi().last_run_cr(plans)
+    fields = getattr(args, "fields", None)
+    requested = [f.strip() for f in fields.split(",") if f.strip()] if fields else []
+    rows = _axi().select_status_fields(full_rows, requested)
+    count = len(plans)
+    if not rows:
+        legacy = "status: ok=True — no plans filed for this project"
+        _emit_axi("status", True,
+                  {"plans": [], "lastRunCr": None, "count": 0,
+                   "help": _axi().HELP_STEPS["status"]},
+                  _axi_context(project_dir), [], legacy)
+        return 0
+    legacy = f"status: ok=True plans={len(rows)} lastRunCr={last}"
+    _emit_axi("status", True,
+              {"plans": rows, "lastRunCr": last, "count": count,
+               "help": _axi().HELP_STEPS["status"]},
+              _axi_context(project_dir), [], legacy)
+    return 0
+
+
+# ── CR-CRU-013 §S5 — fleet gate / milestone verbs ───────────────────────────
+
+
+def _agent_id(args):
+    """The agentId for a fleet event. Explicit --agent > $WORKFLOW_ROLE > a stable
+    fallback (these verbs never assert on the id, but the server requires one)."""
+    explicit = getattr(args, "agent", None)
+    if explicit:
+        return explicit
+    return os.environ.get("WORKFLOW_ROLE") or "python-crucible"
+
+
+def _post_gate(project_dir, agent_id, gate, context=None):
+    payload = {"projectKey": _project_key(project_dir), "agentId": agent_id, "gate": gate}
+    if context:
+        payload["context"] = context
+    return _post("/api/v2/gates", payload)
+
+
+def _post_milestone(project_dir, agent_id, mtype, label=None, commit=None, context=None):
+    payload = {"projectKey": _project_key(project_dir), "agentId": agent_id, "type": mtype}
+    if label:
+        payload["label"] = label
+    if commit:
+        payload["commit"] = commit
+    if context:
+        payload["context"] = context
+    return _post("/api/v2/milestones", payload)
+
+
+def cmd_gate_report(args):
+    """§S8 — report a single already-run gate (flags path). Emits the §S1 envelope
+    plus the interactive line on stderr, and always raises the prefer-gate-run
+    discouragement warning (envelope + stderr)."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    prefer = _axi().PREFER_GATE_RUN_WARNING
+    warnings = [dict(prefer)]
+    print(f"warning: {prefer['code']} — {prefer['detail']}", file=sys.stderr)
+    context = _axi_context(project_dir, agent_id=_agent_id(args))
+    try:
+        steps = _axi().parse_steps_flag(args.steps) if args.steps else []
+    except ValueError as e:
+        legacy = f"gate-report: ERROR: {e}"
+        _emit_axi("gate-report", False, {"outcome": args.outcome}, context, warnings, legacy)
+        return 1
+    intent = args.intent or f"{args.outcome} gate"
+    gate = {"intent": intent, "outcome": args.outcome, "steps": steps}
+    if args.commit:
+        gate["push"] = {"commit": args.commit}
+    resp = _post_gate(project_dir, _agent_id(args), gate, _axi().fleet_context() or None)
+    ok = resp.get("ok", False)
+    legacy = (f"gate-report: ok={ok} outcome={args.outcome}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    result_fields = {"outcome": args.outcome}
+    err = resp.get("error")
+    if err is not None:
+        result_fields["error"] = _axi().truncate_field(err, full=getattr(args, "full", False))
+    _emit_axi("gate-report", bool(ok), result_fields, context, warnings, legacy)
+    return 0 if ok else 1
+
+
+def cmd_gate_run(args):
+    """§S8 — axi PROXY wrapper: launch `no-mistakes axi run`, poll `axi status` for
+    throttled interim gates, seal a final gate from the run's outcome, and relay the
+    axi detail to the caller. The caller issues NO POST itself; no prefer-gate-run
+    warning (it is itself the streaming standard)."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    nm = shutil.which("no-mistakes")
+    if not nm:
+        print("gate-run: ERROR: `no-mistakes` not found on PATH — cannot proxy axi run",
+              file=sys.stderr)
+        return 1
+
+    intent = args.intent
+    agent_id = _agent_id(args)
+    context = _axi().fleet_context()
+
+    try:
+        proc = subprocess.Popen(
+            [nm, "axi", "run", "--intent", intent],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except OSError as e:
+        print(f"gate-run: ERROR: could not launch `no-mistakes axi run`: {e}",
+              file=sys.stderr)
+        return 1
+
+    last_post = None
+    while proc.poll() is None:
+        now = time.monotonic()
+        if last_post is None or (now - last_post) >= _GATE_POLL_CADENCE_S:
+            status = subprocess.run([nm, "axi", "status"], capture_output=True, text=True)
+            snap = (status.stdout or "").strip()
+            if snap:
+                try:
+                    decoded = _toon().decode(snap)
+                except Exception:
+                    decoded = None
+                if isinstance(decoded, dict):
+                    run = decoded.get("run") or {}
+                    in_flight = (str(run.get("status")) != "completed"
+                                 and "outcome" not in decoded)
+                    gate, nsteps = _axi().gate_from_axi(decoded, intent, final=False)
+                    if in_flight and 0 < nsteps < 9:
+                        _post_gate(project_dir, agent_id, gate, context or None)
+                        last_post = now
+        time.sleep(_GATE_POLL_TICK_S)
+
+    out, _err = proc.communicate()
+    if out:
+        sys.stdout.write(out)
+
+    final_snap = (out or "").strip()
+    final_decoded = None
+    if final_snap:
+        try:
+            final_decoded = _toon().decode(final_snap)
+        except Exception:
+            final_decoded = None
+    if not isinstance(final_decoded, dict):
+        print("gate-run: ERROR: `axi run` produced no parseable final snapshot",
+              file=sys.stderr)
+        return 1
+
+    final_gate, _ = _axi().gate_from_axi(final_decoded, intent, final=True)
+    resp = _post_gate(project_dir, agent_id, final_gate, context or None)
+    ok = resp.get("ok", False)
+    overall = bool(ok and proc.returncode == 0)
+    legacy = (f"gate-run: ok={ok} outcome={final_gate.get('outcome')} "
+              f"exit={proc.returncode}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    _emit_axi("gate-run", overall, {"outcome": final_gate.get("outcome")},
+              _axi_context(project_dir, agent_id=agent_id), [], legacy)
+    return 0 if overall else 1
+
+
+def cmd_milestone(args):
+    """POST a workflow milestone. §S4b."""
+    project_dir = _resolve_project_dir(args.project_dir)
+    context = _axi().fleet_context(cr=args.cr)
+    resp = _post_milestone(project_dir, _agent_id(args), args.type,
+                           label=args.label, commit=getattr(args, "commit", None),
+                           context=context or None)
+    ok = resp.get("ok", False)
+    print(f"milestone: ok={ok} type={args.type}"
+          + (f" label={args.label}" if args.label else "")
+          + (f" error={resp.get('error')}" if resp.get("error") else ""),
+          file=sys.stderr)
+    return 0 if ok else 1
+
+
+# ── argparse helpers + no-arg dashboard + main ──────────────────────────────
 
 
 def _add_project_dir_arg(p):
@@ -616,23 +1285,41 @@ def _add_log_arg(p):
     )
 
 
+_DASHBOARD_PURPOSE_LINE = (
+    "python-crucible.py -- Python/unittest Crucible CLI "
+    "(agent lifecycle, test/ingest, plan/cycle verbs)."
+)
+
+
+def _abbrev_home(path):
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home) else path
+
+
+def cmd_dashboard():
+    """§S14 — a bare invocation (no args) returns the LIVE board: the §S6 status
+    dashboard on stdout, plus a one-line tool purpose + the executable path on stderr."""
+    print(_DASHBOARD_PURPOSE_LINE, file=sys.stderr)
+    print(_abbrev_home(os.path.abspath(__file__)), file=sys.stderr)
+    return cmd_status(argparse.Namespace(project_dir=None, fields=None))
+
+
 def main():
     p = argparse.ArgumentParser(prog="python-crucible", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = p.add_subparsers(dest="cmd", required=True)
+    # §S14 — subcommand is OPTIONAL: a bare invocation falls through to the
+    # no-arg live dashboard, never argparse's required-subcommand error.
+    sub = p.add_subparsers(dest="cmd", required=False)
 
     r = sub.add_parser(
         "register",
         help="Register / heartbeat an agent. agentId convention: `<agent-type>-<project>` "
-             "(e.g. claude-sandesh) or TDD-phase `CR-<PROJ>-NNN-<cycle>-<PHASE>` "
-             "(e.g. CR-SAN-001-A-RED).",
+             "(e.g. claude-sandesh) or TDD-phase `CR-<PROJ>-NNN-<cycle>-<PHASE>`.",
     )
     r.add_argument("--agent", required=True,
-                   help="Agent id — `<type>-<project>` (claude-sandesh) or "
-                        "`CR-<PROJ>-NNN-<cycle>-<PHASE>` (CR-SAN-001-A-RED)")
+                   help="Agent id — `<type>-<project>` or `CR-<PROJ>-NNN-<cycle>-<PHASE>`")
     r.add_argument("--phase", default="report",
-                   help="Phase label (RED/GREEN/FIX/VERIFY/ORCHESTRATOR; "
-                        "default: report)")
+                   help="Phase label (RED/GREEN/FIX/VERIFY/ORCHESTRATOR; default: report)")
     r.add_argument("--display-name", help="Human-readable name (default: the agentId)")
     r.add_argument("--source", default="claude-md",
                    choices=["claude-md", "package-json", "git-repo", "manual"],
@@ -707,7 +1394,118 @@ def main():
     _add_log_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
+    pf = sub.add_parser("plan-file",
+                        help="File a cycle plan; prints the ASSIGNED numeric cycle ids.")
+    pf.add_argument("--cr", required=True, help="CR id, e.g. CR-CRU-008.")
+    pf.add_argument("--title", help="Optional plan title.")
+    pf.add_argument("--cycles", required=True,
+                    help='Comma-separated cycle labels, e.g. "a,b,c".')
+    pf.add_argument("--orchestrator",
+                    help="Orchestrator name (default: $WORKFLOW_ORCHESTRATOR when set).")
+    pf.add_argument("--wave",
+                    help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")
+    _add_project_dir_arg(pf)
+    pf.set_defaults(func=cmd_plan_file)
+
+    pb = sub.add_parser("plan-backfill",
+                        help="Backfill a plan's wave (PATCH wave-only; open OR closed).")
+    pb.add_argument("--wave", required=True, help="Wave number to assign.")
+    pb.add_argument("--cr", help="Disambiguate when multiple plans exist.")
+    _add_project_dir_arg(pb)
+    pb.set_defaults(func=cmd_plan_backfill)
+
+    ca = sub.add_parser("cycle-activate", help="Transition a plan cycle to active.")
+    ca.add_argument("cycle_id", type=int, help="Numeric cycle id (unique per project).")
+    _add_project_dir_arg(ca)
+    ca.set_defaults(func=cmd_cycle_activate)
+
+    cdn = sub.add_parser("cycle-done", help="Transition an ACTIVE plan cycle to done.")
+    cdn.add_argument("cycle_id", type=int, help="Numeric cycle id (unique per project).")
+    _add_project_dir_arg(cdn)
+    cdn.set_defaults(func=cmd_cycle_done)
+
+    cc = sub.add_parser("cr-close",
+                        help="Close the single OPEN plan (PATCH status=closed + merge.commit).")
+    cc.add_argument("--commit", required=True, help="Merge commit sha.")
+    cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    cc.add_argument("--agent", help="Agent id for the cr-merged milestone (default: $WORKFLOW_ROLE).")
+    _add_project_dir_arg(cc)
+    cc.set_defaults(func=cmd_cr_close)
+
+    cad = sub.add_parser("cycle-add",
+                         help="Append a cycle to a plan (POST …/plans/<id>/cycles); "
+                              "prints the ASSIGNED numeric id.")
+    cad.add_argument("label", help="Label for the new cycle.")
+    cad.add_argument("--cr", help="Disambiguate when multiple plans exist.")
+    _add_project_dir_arg(cad)
+    cad.set_defaults(func=cmd_cycle_add)
+
+    cp = sub.add_parser("checkpoint",
+                        help="Checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint).")
+    cp.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _add_project_dir_arg(cp)
+    cp.set_defaults(func=cmd_checkpoint)
+
+    stp = sub.add_parser("stop",
+                         help="Stop the project — checkpoint every open plan "
+                              "(POST …/projects/<key>/stop).")
+    _add_project_dir_arg(stp)
+    stp.set_defaults(func=cmd_stop)
+
+    ab = sub.add_parser("abort",
+                        help="Abort the resolved OPEN plan (POST …/plans/<id>/abort). "
+                             "Requires --user-approved to pass the server's 409 gate.")
+    ab.add_argument("--user-approved", action="store_true",
+                    help="Map to body userApproved:true (the server refuses without it).")
+    ab.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _add_project_dir_arg(ab)
+    ab.set_defaults(func=cmd_abort)
+
+    for _name in ("status", "plans"):
+        sv = sub.add_parser(_name,
+                            help="Read the plan queue (GET …/plans) as a TOON-AXI table "
+                                 "+ lastRunCr. Read-only; `plans` is an alias of `status`.")
+        sv.add_argument("--fields",
+                        help="Comma-separated EXTRA columns to add to the minimal "
+                             "cr,wave,status,activeCycleId set (§S10).")
+        _add_project_dir_arg(sv)
+        sv.set_defaults(func=cmd_status)
+
+    gr = sub.add_parser("gate-run",
+                        help="axi PROXY: run `no-mistakes axi run`, post throttled interim "
+                             "+ final gates, relay the axi detail to the caller.")
+    gr.add_argument("--intent", required=True, help="The intent/goal passed down to `axi run`.")
+    gr.add_argument("--agent", help="Agent id for the gate events (default: $WORKFLOW_ROLE).")
+    _add_project_dir_arg(gr)
+    gr.set_defaults(func=cmd_gate_run)
+
+    grp = sub.add_parser("gate-report",
+                         help="Report a single already-run gate → POST /api/v2/gates.")
+    grp.add_argument("--outcome", required=True,
+                     help="Gate outcome (checks-passed|passed|failed|cancelled).")
+    grp.add_argument("--commit", help="The pushed commit sha (gate.push.commit).")
+    grp.add_argument("--steps", help='Comma-separated "name:status" step results.')
+    grp.add_argument("--intent", help="Gate intent (default: derived from --outcome).")
+    grp.add_argument("--agent", help="Agent id (default: $WORKFLOW_ROLE).")
+    grp.add_argument("--full", action="store_true",
+                     help="Emit large text fields (e.g. a server error detail) untruncated (§S11).")
+    _add_project_dir_arg(grp)
+    grp.set_defaults(func=cmd_gate_report)
+
+    ms = sub.add_parser("milestone", help="POST a workflow milestone → /api/v2/milestones.")
+    ms.add_argument("--type", required=True,
+                    help="Milestone type (gap-analysis|design-review|stage-flip|custom|cr-merged).")
+    ms.add_argument("--label", help="Human-readable milestone label.")
+    ms.add_argument("--cr", help="CR id (rides context.cr).")
+    ms.add_argument("--commit", help="Optional commit sha.")
+    ms.add_argument("--agent", help="Agent id (default: $WORKFLOW_ROLE).")
+    _add_project_dir_arg(ms)
+    ms.set_defaults(func=cmd_milestone)
+
     args = p.parse_args()
+    # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.
+    if getattr(args, "func", None) is None:
+        sys.exit(cmd_dashboard())
     sys.exit(args.func(args))
 
 

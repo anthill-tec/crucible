@@ -197,3 +197,122 @@ def resolve_active_cycle_id(plans):
             if c.get("status") == "active":
                 return c.get("id")
     return None
+
+
+# ── §S15 next-step templates + §S7/§S8 gate constants + gate helpers ────────
+#
+# These are the TOOLCHAIN-AGNOSTIC verb helpers shared by every client (they
+# historically lived only in bun-crucible.py). Lifting them here (CR-CRU-030
+# §S2) lets python-crucible.py and rust-crucible.py drive the same plan/cycle/
+# gate verbs from ONE source of truth rather than re-implementing the logic.
+
+# §S15 — per-verb next-step command TEMPLATES: every envelope names the sane
+# next move (fixed disambiguating flags carried forward, runtime values as
+# `<placeholders>`), so the orchestrator never loses the process thread.
+HELP_STEPS = {
+    "register": ["test --agent <agentId>"],
+    "unregister": ["status"],
+    "test": ["cycle-done <id>", "status"],
+    "regression": ["cycle-done <id>", "status"],
+    "auto-ingest": ["cycle-done <id>", "status"],
+    "check": ["test --agent <agentId>"],
+    "cycle-add": ["cycle-activate <id>"],
+    "checkpoint": ["status"],
+    "stop": ["status"],
+    "abort": ["status"],
+    "status": ["cycle-activate <id>"],
+    "cr-close": ["status"],
+}
+
+# Valid server-side gate outcomes (CR-CRU-013 §S1). An interim (in-flight)
+# snapshot has no resolved outcome of its own, so gate-run synthesises one from
+# the current step set — it must still be a member of this set (server 400s
+# otherwise).
+GATE_OUTCOMES = ("checks-passed", "passed", "failed", "cancelled")
+
+# §S8 — gate-run is the AXI streaming standard; gate-report is discouraged.
+# EVERY gate-report invocation emits this warning (envelope warnings[] + stderr)
+# regardless of the POST outcome (the discouragement is a property of using
+# gate-report at all).
+PREFER_GATE_RUN_WARNING = {
+    "code": "prefer-gate-run",
+    "detail": ("gate-run is the AXI streaming standard (it posts throttled "
+               "interim snapshots while the run is in flight then a final sealed "
+               "gate); gate-report posts a single one-shot gate and is "
+               "discouraged wherever an axi proxy exists"),
+}
+
+
+def fleet_context(cr=None):
+    """Env auto-context shared by gates + milestones: `cr` (when supplied),
+    `wave` from $WORKFLOW_WAVE, `track` from $WORKFLOW_ROLE. Absent env keys are
+    OMITTED (never fabricated) so an unset WORKFLOW_WAVE yields no `wave` key."""
+    ctx = {}
+    if cr:
+        ctx["cr"] = cr
+    wave = os.environ.get("WORKFLOW_WAVE")
+    if wave:
+        ctx["wave"] = wave
+    role = os.environ.get("WORKFLOW_ROLE")
+    if role:
+        ctx["track"] = role
+    return ctx
+
+
+def parse_steps_flag(steps_raw):
+    """Parse a `--steps "name:status,name:status"` flag into gate step dicts.
+    A malformed entry (no colon, or an empty name/status) raises ValueError —
+    the caller must surface it as a non-zero exit WITHOUT posting garbage."""
+    steps = []
+    for entry in steps_raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if ":" not in entry:
+            raise ValueError(
+                f"malformed --steps entry (expected name:status): {entry!r}")
+        name, status = entry.split(":", 1)
+        name, status = name.strip(), status.strip()
+        if not name or not status:
+            raise ValueError(
+                f"malformed --steps entry (empty name or status): {entry!r}")
+        steps.append({"name": name, "status": status})
+    return steps
+
+
+def map_axi_step_status(status):
+    """Map a no-mistakes axi step status onto a gate step status."""
+    return {
+        "completed": "passed",
+        "skipped": "skipped",
+        "failed": "failed",
+        "running": "running",
+    }.get(status, status or "passed")
+
+
+def gate_from_axi(decoded, intent, final):
+    """Build a `gate` object from a decoded `no-mistakes axi` TOON snapshot.
+
+    An in-flight snapshot (`final=False`) synthesises a valid interim outcome
+    from its steps; the sealing snapshot (`final=True`) takes the run's own
+    resolved top-level `outcome`. Returns (gate_dict, step_count)."""
+    run = decoded.get("run") if isinstance(decoded, dict) else None
+    run = run or {}
+    axi_steps = run.get("steps") or []
+    steps = []
+    any_failed = False
+    for s in axi_steps:
+        st = s.get("status")
+        if st == "failed":
+            any_failed = True
+        steps.append({"name": s.get("step"), "status": map_axi_step_status(st)})
+    if final:
+        raw = decoded.get("outcome")
+        outcome = raw if raw in GATE_OUTCOMES else ("failed" if any_failed else "passed")
+    else:
+        outcome = "failed" if any_failed else "checks-passed"
+    gate = {"intent": intent, "outcome": outcome, "steps": steps}
+    head = run.get("head")
+    if final and head:
+        gate["push"] = {"commit": head}
+    return gate, len(steps)
