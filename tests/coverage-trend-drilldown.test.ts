@@ -557,3 +557,379 @@ describe("§S2 — retention honesty: a day bar with NO matching within-retentio
     expect(slices[0]!.getAttribute("data-event-id")).toBe("run-live");
   });
 });
+
+// ── CR-CRU-028 §S2 FIX (ee5cb44) — the cascade: a REVEALED bar drills deeper ──
+// (state.coverageDrillPath + DrillNode + unfoldCoverageSubset/finerBarsOf
+// `members`). Everything above this line locks ONE level of unfold (top bar
+// -> its immediate children). The FIX let a revealed (non-top) bar ITSELF be
+// clicked and drill one level finer again, cascading month -> week -> day ->
+// heat strip, with a per-depth accordion (state.coverageDrillPath[d]) and
+// retention-dim applying to a revealed day bar exactly as it does to a top
+// one. Nothing above exercises drilling PAST the first revealed level — these
+// tests do.
+
+describe("§S2 cascade — clicking a REVEALED bar drills one level deeper (DN §3.3 continuous drill)", () => {
+  afterEach(async () => {
+    await GlobalRegistrator.unregister();
+  });
+
+  test("a top-level WEEK bar unfolds to 2 revealed day bars; clicking the revealed day bar backed by 2 same-day events opens its heat strip with exactly 2 slices, chronologically ordered", async () => {
+    const key = "drill-cascade-week";
+    // Two points 8/10 days ago land in the SAME week-0 bucket (top level
+    // coarsens them to one week bar, representative = the more recent, day8
+    // percent 55); a third point at day0 is an unrelated top-level day bar.
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        {
+          key,
+          name: "Cascade Week Project",
+          type: "backend",
+          agentsOnline: 1,
+          agentsTotal: 1,
+          latestGreenCoverage: { lines: { covered: 80, total: 100, percent: 80 } },
+          coverageTrend: [
+            pointAt(LATEST, 10, 45),
+            pointAt(LATEST, 8, 55),
+            pointAt(LATEST, 0, 80),
+          ],
+        },
+      ],
+      events: [
+        // Qualifying events on day8 (the day bar we'll drill into), ascending.
+        eventAt({
+          id: "week-cascade-a",
+          projectKey: key,
+          timestamp: Date.parse(`${dayAt(LATEST, 8)}T00:00:00.000Z`) + 8 * 3_600_000,
+          coverageLines: 90,
+        }),
+        eventAt({
+          id: "week-cascade-b",
+          projectKey: key,
+          timestamp: Date.parse(`${dayAt(LATEST, 8)}T00:00:00.000Z`) + 12 * 3_600_000,
+          coverageLines: 60,
+        }),
+        // On the OTHER revealed day (day10) — must never leak into day8's strip.
+        eventAt({
+          id: "week-cascade-other-day",
+          projectKey: key,
+          timestamp: Date.parse(`${dayAt(LATEST, 10)}T00:00:00.000Z`) + 9 * 3_600_000,
+          coverageLines: 70,
+        }),
+      ],
+    });
+
+    const card = trendCard();
+    expect(card).not.toBeNull();
+    const bars = topBars(card!);
+    expect(bars.length).toBe(2);
+    expect(bars.map(barHeight)).toEqual([55, 80]);
+    expect(bars[0]!.className).toMatch(/\bapp-trend-bar-week\b/);
+
+    // Click the top-level WEEK bar — reveals its 2 hidden day bars.
+    bars[0]!.click();
+    await settle();
+
+    let rows = drillRows(trendCard()!);
+    expect(rows.length).toBe(1);
+    let weekRow = rows[0]!;
+    const dayBars = drillBars(weekRow);
+    expect(dayBars.length).toBe(2);
+    expect(dayBars.map(barHeight)).toEqual([45, 55]);
+    for (const b of dayBars) {
+      expect(b.className).toMatch(/\bapp-trend-bar-day\b/);
+      expect(b.className).not.toMatch(/\bapp-trend-bar-week\b/);
+    }
+    // Neither revealed day bar is dimmed yet-checked here — the day8 one
+    // (percent 55, index 1) has qualifying events so must NOT be dim.
+    expect(dayBars[1]!.className).not.toMatch(/\bapp-trend-bar-retention-dim\b/);
+
+    // Click the REVEALED day bar (percent 55 = day8) — this is the cascade:
+    // a bar inside a drill row, itself clickable, drilling one level deeper.
+    dayBars[1]!.click();
+    await settle();
+
+    // The week's row now contains a NESTED heat-strip row (cascade), not a
+    // second top-level row. VanJS re-renders the subtree on state change, so
+    // re-query fresh nodes rather than reuse the pre-click reference.
+    rows = drillRows(trendCard()!);
+    expect(rows.length).toBe(2);
+    weekRow = rows[0]!;
+    const slices = heatSlices(weekRow);
+    // Positive + bound: exactly the 2 day8 events, never the day10 one.
+    expect(slices.length).toBe(2);
+    const sliceIds = slices.map((s) => s.getAttribute("data-event-id"));
+    expect(sliceIds).toEqual(["week-cascade-a", "week-cascade-b"]);
+    expect(sliceIds).not.toContain("week-cascade-other-day");
+  });
+});
+
+describe("§S2 cascade — full month -> week -> day -> heat-strip chain (DN §3.3, each revealed bar drills deeper)", () => {
+  afterEach(async () => {
+    await GlobalRegistrator.unregister();
+  });
+
+  test("clicking a month bar reveals weeks; clicking the 2-point week reveals days; clicking the day opens its heat strip — the complete 4-level cascade", async () => {
+    const key = "drill-cascade-full-chain";
+    // Month bucket built from 3 points (65/68/85 days ago — all >=63 so
+    // top-level MONTH, all sharing the same YYYY-MM so they merge into ONE
+    // top-level month bar, representative = 65-days-ago, percent 40). Inside
+    // the month: 65 and 68 days ago land in the SAME 7-day window (3 days
+    // apart, re-anchored to the subset's own latest day) -> one week bar
+    // with 2 members that can itself be drilled to 2 day bars; 85 days ago
+    // is a lone sibling week (1 member) proving the month has >1 week.
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        {
+          key,
+          name: "Full Chain Project",
+          type: "backend",
+          agentsOnline: 1,
+          agentsTotal: 1,
+          latestGreenCoverage: { lines: { covered: 80, total: 100, percent: 80 } },
+          coverageTrend: [
+            pointAt(LATEST, 85, 50),
+            pointAt(LATEST, 68, 45),
+            pointAt(LATEST, 65, 40),
+            pointAt(LATEST, 0, 80),
+          ],
+        },
+      ],
+      events: [
+        eventAt({
+          id: "chain-run-a",
+          projectKey: key,
+          timestamp: Date.parse(`${dayAt(LATEST, 65)}T00:00:00.000Z`) + 8 * 3_600_000,
+          coverageLines: 90,
+        }),
+        eventAt({
+          id: "chain-run-b",
+          projectKey: key,
+          timestamp: Date.parse(`${dayAt(LATEST, 65)}T00:00:00.000Z`) + 12 * 3_600_000,
+          coverageLines: 60,
+        }),
+      ],
+    });
+
+    const card = trendCard();
+    expect(card).not.toBeNull();
+    const bars = topBars(card!);
+    expect(bars.length).toBe(2);
+    expect(bars.map(barHeight)).toEqual([40, 80]);
+    expect(bars[0]!.className).toMatch(/\bapp-trend-bar-month\b/);
+
+    // Depth 0 -> 1: click the MONTH bar, reveals 2 WEEK bars.
+    bars[0]!.click();
+    await settle();
+    let row0 = drillRows(trendCard()!)[0]!;
+    let weekBars = drillBars(row0);
+    expect(weekBars.length).toBe(2);
+    expect(weekBars.map(barHeight)).toEqual([50, 40]);
+    for (const b of weekBars) expect(b.className).toMatch(/\bapp-trend-bar-week\b/);
+
+    // Depth 1 -> 2: click the 2-member week bar (percent 40) — the CASCADE —
+    // reveals 2 DAY bars hidden inside it.
+    weekBars[1]!.click();
+    await settle();
+    row0 = drillRows(trendCard()!)[0]!;
+    const dayBars = drillBars(row0).filter(
+      (b) => b.className.includes("app-trend-bar-day"),
+    );
+    expect(dayBars.length).toBe(2);
+    expect(dayBars.map(barHeight)).toEqual([45, 40]);
+
+    // Depth 2 -> 3: click the revealed day bar (percent 40) — the SECOND
+    // cascade hop — opens its heat strip. Re-query fresh after the click —
+    // VanJS replaces the subtree, so the pre-click `row0` reference is stale.
+    dayBars[1]!.click();
+    await settle();
+    row0 = drillRows(trendCard()!)[0]!;
+
+    const slices = heatSlices(row0);
+    expect(slices.length).toBe(2);
+    const sliceIds = slices.map((s) => s.getAttribute("data-event-id"));
+    expect(sliceIds).toEqual(["chain-run-a", "chain-run-b"]);
+    // Bound: the whole card now nests 3 drill rows (month's, week's, day's) —
+    // never a flat/duplicated top-level accumulation.
+    expect(drillRows(trendCard()!).length).toBe(3);
+  });
+});
+
+describe("§S2 cascade — per-depth accordion (a sibling at any depth closes the other branch and drops everything deeper)", () => {
+  afterEach(async () => {
+    await GlobalRegistrator.unregister();
+  });
+
+  test("after drilling month -> week -> day -> heat-strip, clicking the SIBLING week bar at depth 1 closes that whole branch — the day bars and heat slices it contained vanish, and the sibling's own single day bar is what's shown", async () => {
+    const key = "drill-cascade-accordion-depth1";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        {
+          key,
+          name: "Depth Accordion Project",
+          type: "backend",
+          agentsOnline: 1,
+          agentsTotal: 1,
+          latestGreenCoverage: { lines: { covered: 80, total: 100, percent: 80 } },
+          coverageTrend: [
+            pointAt(LATEST, 85, 50),
+            pointAt(LATEST, 68, 45),
+            pointAt(LATEST, 65, 40),
+            pointAt(LATEST, 0, 80),
+          ],
+        },
+      ],
+      events: [
+        eventAt({
+          id: "accordion-run-a",
+          projectKey: key,
+          timestamp: Date.parse(`${dayAt(LATEST, 65)}T00:00:00.000Z`) + 8 * 3_600_000,
+          coverageLines: 90,
+        }),
+        eventAt({
+          id: "accordion-run-b",
+          projectKey: key,
+          timestamp: Date.parse(`${dayAt(LATEST, 65)}T00:00:00.000Z`) + 12 * 3_600_000,
+          coverageLines: 60,
+        }),
+      ],
+    });
+
+    const card = trendCard();
+    expect(card).not.toBeNull();
+    const bars = topBars(card!);
+    expect(bars.length).toBe(2);
+
+    // Drive the SAME 4-level chain as the previous describe block: month ->
+    // 2-member week -> 2 day bars -> heat strip (2 slices).
+    bars[0]!.click();
+    await settle();
+    let row0 = drillRows(trendCard()!)[0]!;
+    let weekBars = drillBars(row0);
+    expect(weekBars.length).toBe(2);
+    weekBars[1]!.click(); // the 2-member week (percent 40)
+    await settle();
+    row0 = drillRows(trendCard()!)[0]!;
+    let dayBars = drillBars(row0).filter((b) => b.className.includes("app-trend-bar-day"));
+    expect(dayBars.length).toBe(2);
+    dayBars[1]!.click(); // opens the heat strip
+    await settle();
+    row0 = drillRows(trendCard()!)[0]!; // re-query — VanJS replaced the subtree
+    expect(heatSlices(row0).length).toBe(2);
+    expect(drillRows(trendCard()!).length).toBe(3);
+
+    // Now click the SIBLING week bar at depth 1 (percent 50, 1 member) — this
+    // must close the percent-40 branch (its day bars AND its heat strip)
+    // entirely, per-depth accordion. `row0`'s subtree now also nests the
+    // already-revealed day bars, so filter to week-level bars specifically
+    // (drillBars alone would return all 4: the 2 week bars PLUS the 2 nested
+    // day bars).
+    row0 = drillRows(trendCard()!)[0]!;
+    weekBars = drillBars(row0).filter((b) => b.className.includes("app-trend-bar-week"));
+    expect(weekBars.length).toBe(2);
+    weekBars[0]!.click(); // sibling, percent 50
+    await settle();
+
+    // Bound: the old branch's content is completely gone — no heat slices
+    // anywhere in the card, and neither old-branch event id survives.
+    expect(document.querySelectorAll('[data-testid="coverage-heat-slice"]').length).toBe(0);
+    expect(
+      document.querySelectorAll('[data-event-id="accordion-run-a"]').length,
+    ).toBe(0);
+    expect(
+      document.querySelectorAll('[data-event-id="accordion-run-b"]').length,
+    ).toBe(0);
+
+    // Positive: the sibling's own branch is what's now open — its single
+    // member unfolds to exactly 1 day bar (percent 50), nothing deeper yet.
+    row0 = drillRows(trendCard()!)[0]!;
+    dayBars = drillBars(row0).filter((b) => b.className.includes("app-trend-bar-day"));
+    expect(dayBars.length).toBe(1);
+    expect(barHeight(dayBars[0]!)).toBe(50);
+    // Only 2 rows now (month's + the sibling week's) — the day/heat-strip
+    // rows that existed under the OLD sibling are gone, never accumulated.
+    expect(drillRows(trendCard()!).length).toBe(2);
+  });
+});
+
+describe("§S2 cascade — retention honesty applies to a REVEALED (non-top) day bar too (DN §3.4)", () => {
+  afterEach(async () => {
+    await GlobalRegistrator.unregister();
+  });
+
+  test("a week bar unfolds 2 day bars; the one with NO matching within-retention event is dimmed and produces no drill row on click, while its sibling with a matching event opens exactly 1 heat slice", async () => {
+    const key = "drill-cascade-retention-depth1";
+    // 9/11 days ago land in the same week-0 bucket (distinct from the other
+    // cascade tests' 8/10 pair, so fixtures never alias). A day0 anchor point
+    // is required so the series' OWN latest day is LATEST itself — without
+    // it, day9 (the more recent of the pair) would BE the series latest and
+    // both points would coarsen to DAY buckets instead of one WEEK bucket.
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [
+        {
+          key,
+          name: "Depth Retention Project",
+          type: "backend",
+          agentsOnline: 1,
+          agentsTotal: 1,
+          latestGreenCoverage: { lines: { covered: 90, total: 100, percent: 90 } },
+          coverageTrend: [pointAt(LATEST, 11, 58), pointAt(LATEST, 9, 42), pointAt(LATEST, 0, 85)],
+        },
+      ],
+      events: [
+        // Only day9 (the more recent of the pair) has a qualifying event.
+        eventAt({
+          id: "depth-retention-live",
+          projectKey: key,
+          timestamp: Date.parse(`${dayAt(LATEST, 9)}T00:00:00.000Z`) + 8 * 3_600_000,
+          coverageLines: 88,
+        }),
+      ],
+    });
+
+    const card = trendCard();
+    expect(card).not.toBeNull();
+    const bars = topBars(card!);
+    // The 9/11-days-ago points fold into a single top-level WEEK bucket; the
+    // day0 anchor is its own (unrelated) top-level DAY bucket.
+    expect(bars.length).toBe(2);
+    expect(bars[0]!.className).toMatch(/\bapp-trend-bar-week\b/);
+    expect(barHeight(bars[0]!)).toBe(42);
+
+    bars[0]!.click();
+    await settle();
+
+    const row = drillRows(trendCard()!)[0]!;
+    const dayBars = drillBars(row);
+    expect(dayBars.length).toBe(2);
+    // Oldest (day11, no event) first, then day9 (has the event).
+    expect(dayBars.map(barHeight)).toEqual([58, 42]);
+
+    const [dimBar, liveBar] = dayBars;
+    // Positive: the event-less revealed day bar carries the dim/disabled
+    // affordance markers.
+    expect(dimBar!.className).toMatch(/\bapp-trend-bar-retention-dim\b/);
+    expect(dimBar!.getAttribute("aria-disabled")).toBe("true");
+    // Bound: its sibling (backed by a live event) carries neither.
+    expect(liveBar!.className).not.toMatch(/\bapp-trend-bar-retention-dim\b/);
+    expect(liveBar!.getAttribute("aria-disabled")).not.toBe("true");
+
+    // Negative/bound: clicking the dimmed revealed bar produces NO new drill
+    // row and NO heat slices anywhere — never a dead click at depth either.
+    dimBar!.click();
+    await settle();
+    expect(drillRows(trendCard()!).length).toBe(1); // still only the week's row
+    expect(document.querySelectorAll('[data-testid="coverage-heat-slice"]').length).toBe(0);
+
+    // Contrast: the live revealed bar drills normally — exactly 1 heat slice
+    // for its 1 matching event.
+    liveBar!.click();
+    await settle();
+    const slices = heatSlices(drillRows(trendCard()!)[0]!);
+    expect(slices.length).toBe(1);
+    expect(slices[0]!.getAttribute("data-event-id")).toBe("depth-retention-live");
+  });
+});
