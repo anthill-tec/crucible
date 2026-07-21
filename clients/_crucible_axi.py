@@ -242,6 +242,23 @@ PREFER_GATE_RUN_WARNING = {
                "discouraged wherever an axi proxy exists"),
 }
 
+# §S3 — wave resolution is `--wave` > $WORKFLOW_WAVE. A plan-file that resolves
+# NEITHER files un-waved (no hard block; the flag/env is the prevention lever),
+# but must carry this `no-wave` warning (envelope warnings[] + stderr) NAMING the
+# CR so an orchestrator can backfill the wave (plan-backfill --wave) rather than
+# silently losing the wave attribution. One source of truth for all five clients.
+
+
+def no_wave_warning(cr):
+    """Build the §S3 `no-wave` warning for a plan-file that resolved no wave.
+    The detail NAMES the CR being filed so the omission is actionable."""
+    return {
+        "code": "no-wave",
+        "detail": (f"plan filed for {cr} with no wave — neither --wave nor "
+                   f"$WORKFLOW_WAVE resolved; backfill it with "
+                   f"`plan-backfill --cr {cr} --wave <n>`"),
+    }
+
 
 def fleet_context(cr=None):
     """Env auto-context shared by gates + milestones: `cr` (when supplied),

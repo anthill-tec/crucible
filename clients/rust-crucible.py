@@ -1529,8 +1529,13 @@ def cmd_plan_file(args):
     if args.title:
         payload["title"] = args.title
     wave = args.wave if getattr(args, "wave", None) is not None else os.environ.get("WORKFLOW_WAVE")
+    warnings = []
     if wave:
         payload["wave"] = wave
+    else:
+        w = _axi().no_wave_warning(args.cr)
+        warnings.append(w)
+        print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
     track = os.environ.get("WORKFLOW_ROLE")
     if track:
         payload["track"] = track
@@ -1540,7 +1545,7 @@ def cmd_plan_file(args):
     resp = _post(_plans_path(project_dir), payload)
     if not resp.get("ok"):
         legacy = f"plan-file: ok=False error={resp.get('error')}"
-        _emit_axi("plan-file", False, {"cr": args.cr}, _axi_context(project_dir), [], legacy)
+        _emit_axi("plan-file", False, {"cr": args.cr}, _axi_context(project_dir), warnings, legacy)
         return 1
     cycles = resp.get("cycles", [])
     ids = " ".join(f"{c.get('label')}={c.get('id')}" for c in cycles)
@@ -1549,7 +1554,7 @@ def cmd_plan_file(args):
     _emit_axi("plan-file", True,
               {"planId": resp.get("planId"), "cr": resp.get("cr"), "cycles": cycles,
                "help": ["cycle-activate <id>"]},
-              _axi_context(project_dir, cr=resp.get("cr") or args.cr), [], legacy)
+              _axi_context(project_dir, cr=resp.get("cr") or args.cr), warnings, legacy)
     return 0
 
 
