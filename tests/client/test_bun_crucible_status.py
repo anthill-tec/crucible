@@ -12,9 +12,16 @@ docs/changes/CR-CRU-030-fleet-toon-axi-compliance.md:
 
   Dispatch note: "Full `--fields`/`count` AXI-CLI polish is a later slice --
   this slice pins the core status verb + the empty-state." -- so this file
-  does NOT assert a `count` field or `--fields` narrowing (§S10/§S12, out of
-  scope here); it pins only the core `plans[]` table + `lastRunCr` + the
-  explicit (never-empty-stdout) empty-queue case.
+  does NOT assert a `count` field (§S12, out of scope here); it pins the core
+  `plans[]` table + `lastRunCr` + the explicit (never-empty-stdout) empty-queue
+  case.
+
+  CR-CRU-030-C1-RED (cycle 83) alignment fix: the core-fields test below was
+  split so its `activeCycleLabel`/`mergeCommit` assertions run under
+  `--fields` (per the §S10 minimal-default contract: plain `status` returns
+  ONLY `cr,wave,status,activeCycleId`) -- keeping this file consistent with
+  test_bun_crucible_axi_conventions.py's `MinimalDefaultFieldsTest`, which
+  pins the same §S10 default/`--fields` split.
 
 Server response shape confirmed by reading src/v2.ts (`handlePlansList`) +
 src/types.ts (`Plan`) directly: `GET …/plans` -> `{ok:true, plans: Plan[]}`
@@ -155,18 +162,52 @@ class StatusQueueTableTest(_BaseStatusTest):
                           f"activeCycleId must identify the plan's single ACTIVE cycle's id "
                           f"as a flat scalar column (the TOON table subset cannot round-trip "
                           f"a nested dict cell); got {row_a!r}")
+
+        row_b = self._row_for_cr(rows, "CR-B")
+        self.assertEqual(row_b.get("status"), "closed")
+        self.assertIsNone(row_b.get("activeCycleId"),
+                           "a CLOSED plan (all cycles terminal) must report activeCycleId "
+                           "as null, not fabricate one")
+
+    def test_status_fields_flag_adds_activecyclelabel_and_mergecommit(self):
+        """§S10: `activeCycleLabel`/`mergeCommit` are NOT part of the minimal
+        default 4-field row (`cr,wave,status,activeCycleId` -- asserted above
+        against plain `status`); they only surface when requested via
+        `--fields`. Split out of the old
+        test_status_returns_queue_table_with_core_fields_per_plan during the
+        CR-CRU-030-C1-RED alignment fix (cycle 83), which had asserted these
+        two fields against plain `status`, contradicting the §S10
+        minimal-default contract."""
+        plans = _plans_response([
+            {"planId": "plan-1", "cr": "CR-A", "wave": "3", "status": "open",
+             "cycles": [{"id": 10, "label": "c1", "kind": "red-green", "status": "pending"},
+                        {"id": 11, "label": "c2", "kind": "red-green", "status": "active"}]},
+            {"planId": "plan-2", "cr": "CR-B", "wave": "2", "status": "closed",
+             "cycles": [{"id": 20, "label": "c1", "kind": "red-green", "status": "done"}],
+             "merge": {"commit": "deadbee"}, "closedAt": 1000},
+        ])
+        with mock.patch.object(self.module, "_get", return_value=plans):
+            code, out, err = _run_main(
+                self.module,
+                ["status", "--fields", "activeCycleLabel,mergeCommit", "--project-dir", self.tmpdir],
+            )
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        axi = self._decode_axi(out)
+        rows = axi.get("plans")
+        self.assertIsInstance(rows, list)
+        self.assertEqual(len(rows), 2)
+
+        row_a = self._row_for_cr(rows, "CR-A")
         self.assertEqual(row_a.get("activeCycleLabel"), "c2",
                           f"activeCycleLabel must identify the plan's single ACTIVE cycle's "
                           f"label as a flat scalar column; got {row_a!r}")
         self.assertIsNone(row_a.get("mergeCommit"),
-                           "an OPEN plan (never closed) must not fabricate a mergeCommit")
+                           "an OPEN plan (never closed) must not fabricate a mergeCommit, "
+                           "even under --fields")
 
         row_b = self._row_for_cr(rows, "CR-B")
-        self.assertEqual(row_b.get("status"), "closed")
         self.assertEqual(row_b.get("mergeCommit"), "deadbee")
-        self.assertIsNone(row_b.get("activeCycleId"),
-                           "a CLOSED plan (all cycles terminal) must report activeCycleId "
-                           "as null, not fabricate one")
         self.assertIsNone(row_b.get("activeCycleLabel"),
                            "a CLOSED plan (all cycles terminal) must report activeCycleLabel "
                            "as null, not fabricate one")
