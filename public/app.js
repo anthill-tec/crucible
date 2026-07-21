@@ -3372,9 +3372,27 @@
               break;
             }
           }
-          const box = row === null ? null : row.nextElementSibling;
+          // CR-CRU-034 §S1 — the focus collapse is COMPLETE only when exactly
+          // ONE `[data-testid="failure-box"]` remains in the run-overlay AND it
+          // is the TARGET's own box (its `previousElementSibling` is the target
+          // `[data-leaf-key]` row). The old signal ("the target row has a
+          // failure-box next sibling") is TRUE too early: in tier-"unit" Detail
+          // mode every failing leaf renders its box while nothing is focused, so
+          // the target's own box already sits below its row BEFORE VanJS removes
+          // the OTHER boxes. Scrolling then measures the STALE tall content and
+          // the scrollTop is CLAMPED away once the collapse shrinks the content
+          // to its final height. Waiting for the single-box terminal state
+          // guarantees the content is at its final height, so scrollIntoView
+          // lands (and is not clamped). Holds for the one-box→one-box move
+          // (old box removed, new mounted) and the multi-suite case alike.
+          const overlay = document.querySelector('[data-testid="run-overlay"]');
+          const boxes = (overlay ?? document).querySelectorAll(
+            '[data-testid="failure-box"]',
+          );
           const settled =
-            box !== null && box.getAttribute("data-testid") === "failure-box";
+            row !== null &&
+            boxes.length === 1 &&
+            boxes[0].previousElementSibling === row;
           if (!settled && attempts < 30) {
             setTimeout(() => scrollFocusedRowIntoView(attempts + 1), 5);
             return;
