@@ -1,6 +1,6 @@
 # CR-CRU-028 — Coverage trend: auto-coarsening health hierarchy (DN-locked)
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-07-21)
 **Type:** feature (grew from patch — the locked DN model supersedes the
 flat-bar card)
 **Priority:** P2
