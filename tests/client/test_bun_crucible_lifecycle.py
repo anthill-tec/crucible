@@ -162,16 +162,24 @@ class GateRunLifecycleBracketTest(unittest.TestCase):
         self._saved_env = {k: os.environ.get(k) for k in self.ENV_KEYS}
         for k in self.ENV_KEYS:
             os.environ.pop(k, None)
-        # CR-CRU-030 §S9 — an --agent ingest now resolves a cycle to attach
-        # to BEFORE the POST, hard-erroring (no ingest, no bracket) when none
-        # can be resolved. This class's tmpdir `.env` project key is not a
-        # real UUID, so the auto-resolution GET would 400 server-side; an
-        # explicit WORKFLOW_CYCLE_ID override is authoritative and skips that
-        # lookup entirely (`_get` stays unmocked — untouched by this CR's
-        # bracket pins either way).
-        os.environ["WORKFLOW_CYCLE_ID"] = "16"
+        # CR-CRU-036 §S1 — an --agent ingest resolves a cycle to attach to
+        # BEFORE the POST, warning + withholding (no ingest, no bracket) when
+        # the server DEFINITIVELY reports an open plan with no active cycle.
+        # This class's tmpdir `.env` project key is not a real UUID, so the
+        # auto-resolution GET would 400 server-side -- exactly the §S1
+        # TOLERANT case (a plans-fetch failure is not proof of "no active
+        # cycle"), so the ingest proceeds. `WORKFLOW_CYCLE_ID` no longer
+        # exists to short-circuit this lookup, so `_get` is mocked here
+        # (module-wide for this bracket-only test class) to return that
+        # tolerant failure deterministically, never touching the live server.
+        self._get_patcher = mock.patch.object(
+            self.module, "_get",
+            return_value={"ok": False,
+                          "error": "connection failed: mock (non-UUID project key)"})
+        self._get_patcher.start()
 
     def tearDown(self):
+        self._get_patcher.stop()
         for k, v in self._saved_env.items():
             if v is None:
                 os.environ.pop(k, None)

@@ -311,6 +311,19 @@ class _BasePythonAxiTest(unittest.TestCase):
              "cycles": [{"id": 10, "status": "pending"}, {"id": 11, "status": "done"}]},
         ])
 
+    def _no_open_plans_at_all(self):
+        """CR-CRU-036 §S1 tolerant case: no open plan exists at all (a
+        lightweight project) — the query is DEFINITIVE (ok:True, empty plans
+        list), not a failure, but there is simply no open plan to carry an
+        active cycle. The guard must PROCEED, never withhold."""
+        return _open_plans_response([])
+
+    def _plans_fetch_failure(self):
+        """CR-CRU-036 §S1 tolerant case: the plans GET itself fails (infra
+        hiccup / a non-UUID project key 400ing server-side) — NOT proof of
+        "no active cycle", so the guard must PROCEED, never withhold."""
+        return {"ok": False, "error": "connection failed: mock plans-fetch failure"}
+
 
 # ── §S1 wiring: python-crucible.py must delegate to the shared module ──────
 
@@ -737,6 +750,13 @@ class PythonCrucibleNoWaveWarningTest(_BasePythonAxiTest):
 
 
 class PythonCrucibleAutoAttachTest(_BasePythonAxiTest):
+    """CR-CRU-036 §S1 corrected §S9: `WORKFLOW_CYCLE_ID` is REMOVED entirely
+    (no client reads it — setting it changes NOTHING); the active cycle to
+    attach to is resolved SOLELY from the server. An open plan with NO active
+    cycle WARNS + WITHHOLDS (ok:false, `warnings[]` `no-active-cycle`, no
+    POST, non-zero exit) — never a silent orphan. No open plan at all, or a
+    plans-fetch failure, is TOLERATED (the verb proceeds silently)."""
+
     def _write_auto_ingest_reports(self):
         reports_dir = os.path.join(self.tmpdir, "test-reports")
         os.makedirs(reports_dir, exist_ok=True)
@@ -748,6 +768,15 @@ class PythonCrucibleAutoAttachTest(_BasePythonAxiTest):
                 '</testsuite>'
             )
         return reports_dir
+
+    def test_source_never_reads_workflow_cycle_id_env_var(self):
+        occurrences = SCRIPT_PATH.read_text().count("WORKFLOW_CYCLE_ID")
+        self.assertEqual(
+            occurrences, 0,
+            f"python-crucible.py must not reference WORKFLOW_CYCLE_ID anywhere "
+            f"(CR-CRU-036 §S1 removes it -- the server's active cycle is the "
+            f"single source of truth); found {occurrences} occurrence(s)",
+        )
 
     def test_auto_ingest_verb_auto_attaches_run_to_the_single_active_cycle_when_env_unset(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
@@ -770,7 +799,35 @@ class PythonCrucibleAutoAttachTest(_BasePythonAxiTest):
             "the SERVER-recorded run context must carry the resolved active cycle id",
         )
 
-    def test_auto_ingest_verb_hard_errors_when_no_active_cycle_and_env_unset(self):
+    def test_setting_workflow_cycle_id_env_has_no_effect_on_ingest_attachment(self):
+        """CR-CRU-036 §S1: an explicit WORKFLOW_CYCLE_ID no longer overrides
+        anything -- the server's active cycle (707) is attached even though
+        the env var names a DIFFERENT id (51), proving the env is ignored."""
+        os.environ["WORKFLOW_CYCLE_ID"] = "51"
+        self._write_auto_ingest_reports()
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._active_cycle_plans(707),
+                                create=True):
+            code, out, _err = _run_main(self.module, [
+                "auto-ingest", "--agent", "CR-X-auto", "--project-dir", self.tmpdir,
+            ])
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertEqual(
+            axi.get("context", {}).get("cycleId"), 707,
+            "WORKFLOW_CYCLE_ID=51 must NOT override the server-resolved active "
+            "cycle (707) -- the env var is no longer read at all",
+        )
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertEqual(
+            ingest_call[0][1].get("context", {}).get("cycleId"), 707,
+            "the SERVER-recorded run context must carry the server-resolved "
+            "cycle id, never the ignored env override",
+        )
+
+    def test_auto_ingest_verb_warns_and_withholds_when_open_plan_has_no_active_cycle(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         self._write_auto_ingest_reports()
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
@@ -781,33 +838,116 @@ class PythonCrucibleAutoAttachTest(_BasePythonAxiTest):
             code, out, err = _run_main(self.module, [
                 "auto-ingest", "--agent", "CR-X-auto", "--project-dir", self.tmpdir,
             ])
-        self.assertNotEqual(code, 0, "no active cycle must hard-error non-zero")
+        self.assertNotEqual(code, 0, "no active cycle must withhold with a non-zero exit")
         axi = self._decode_axi(out)
         self.assertIs(axi.get("ok"), False)
-        detail = " ".join(w.get("detail", "") for w in axi.get("warnings", [])).lower()
-        self.assertIn("no active cycle", detail)
+        warnings_list = axi.get("warnings", [])
+        codes = [w.get("code") for w in warnings_list]
+        self.assertIn("no-active-cycle", codes,
+                       f"expected a no-active-cycle warning; got {warnings_list!r}")
         self.assertIn("no active cycle", err.lower())
         self.assertIsNone(
             _post_call_for_path(post_mock, "/api/v2/runs/parsed"),
             "the run must NEVER be POSTed as a silent cycleId=NONE orphan",
         )
 
-    def test_register_hard_errors_when_no_active_cycle_and_env_unset(self):
+    def test_auto_ingest_verb_proceeds_when_no_open_plan_at_all(self):
+        """CR-CRU-036 §S1 tolerant path: a lightweight project with no open
+        plan must NOT withhold -- it proceeds and posts the run normally."""
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        self._write_auto_ingest_reports()
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._no_open_plans_at_all(),
+                                create=True):
+            code, out, _err = _run_main(self.module, [
+                "auto-ingest", "--agent", "CR-X-auto", "--project-dir", self.tmpdir,
+            ])
+        self.assertEqual(code, 0, f"no open plan at all must be TOLERATED; stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertNotIn("no-active-cycle", codes)
+        self.assertIsNotNone(
+            _post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+            "the tolerant path must still post the run",
+        )
+
+    def test_auto_ingest_verb_proceeds_when_plans_fetch_fails(self):
+        """CR-CRU-036 §S1 tolerant path: a plans-fetch failure (infra hiccup /
+        non-UUID key 400) is NOT proof of "no active cycle" -- proceeds."""
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        self._write_auto_ingest_reports()
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._plans_fetch_failure(),
+                                create=True):
+            code, out, _err = _run_main(self.module, [
+                "auto-ingest", "--agent", "CR-X-auto", "--project-dir", self.tmpdir,
+            ])
+        self.assertEqual(code, 0, f"a plans-fetch failure must be TOLERATED; stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertNotIn("no-active-cycle", codes)
+        self.assertIsNotNone(
+            _post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+            "the tolerant path must still post the run",
+        )
+
+    def test_register_warns_and_withholds_when_open_plan_has_no_active_cycle(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
              mock.patch.object(self.module, "_get",
                                 return_value=self._no_active_cycle_plans(),
                                 create=True):
-            code, out, _err = _run_main(self.module, [
+            code, out, err = _run_main(self.module, [
                 "register", "--agent", "CR-X-reg", "--project-dir", self.tmpdir,
             ])
         self.assertNotEqual(code, 0)
         axi = self._decode_axi(out)
         self.assertIs(axi.get("ok"), False)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertIn("no-active-cycle", codes)
+        self.assertIn("no active cycle", err.lower())
         self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/agents/register"))
 
-    def test_register_succeeds_with_explicit_workflow_cycle_id_override(self):
+    def test_register_proceeds_when_no_open_plan_at_all(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._no_open_plans_at_all(),
+                                create=True):
+            code, out, _err = _run_main(self.module, [
+                "register", "--agent", "CR-X-reg", "--project-dir", self.tmpdir,
+            ])
+        self.assertEqual(code, 0, f"no open plan at all must be TOLERATED; stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertIsNotNone(_post_call_for_path(post_mock, "/api/v2/agents/register"))
+
+    def test_register_proceeds_when_plans_fetch_fails(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._plans_fetch_failure(),
+                                create=True):
+            code, out, _err = _run_main(self.module, [
+                "register", "--agent", "CR-X-reg", "--project-dir", self.tmpdir,
+            ])
+        self.assertEqual(code, 0, f"a plans-fetch failure must be TOLERATED; stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertIsNotNone(_post_call_for_path(post_mock, "/api/v2/agents/register"))
+
+    def test_setting_workflow_cycle_id_env_has_no_effect_on_register_withhold(self):
+        """CR-CRU-036 §S1: WORKFLOW_CYCLE_ID=51 must NOT rescue a register
+        against an open plan with no active cycle -- the env var is dead."""
         os.environ["WORKFLOW_CYCLE_ID"] = "51"
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
@@ -817,10 +957,14 @@ class PythonCrucibleAutoAttachTest(_BasePythonAxiTest):
             code, out, _err = _run_main(self.module, [
                 "register", "--agent", "CR-X-reg", "--project-dir", self.tmpdir,
             ])
-        self.assertEqual(code, 0, f"stdout={out!r}")
+        self.assertNotEqual(
+            code, 0,
+            "WORKFLOW_CYCLE_ID must have NO effect -- the withhold still fires")
         axi = self._decode_axi(out)
-        self.assertIs(axi.get("ok"), True)
-        self.assertIsNotNone(_post_call_for_path(post_mock, "/api/v2/agents/register"))
+        self.assertIs(axi.get("ok"), False)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertIn("no-active-cycle", codes)
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/agents/register"))
 
 
 # ── Toolchain-specific: real xmlrunner / py_compile still work ─────────────
@@ -880,7 +1024,7 @@ class PythonCrucibleToolchainTest(_BasePythonAxiTest):
         os.makedirs(app_dir, exist_ok=True)
         with open(os.path.join(app_dir, "bad.py"), "w") as f:
             f.write("def bad(:\n    pass\n")
-        os.environ["WORKFLOW_CYCLE_ID"] = "51"
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock:
             code, out, _err = _run_main(self.module, [
@@ -893,7 +1037,29 @@ class PythonCrucibleToolchainTest(_BasePythonAxiTest):
         self.assertIs(axi.get("ok"), False)
         compile_call = _post_call_for_path(post_mock, "/api/v2/runs/compile")
         self.assertIsNotNone(compile_call, "a failing check must ingest the compile error")
-        self.assertEqual(compile_call[0][1].get("context", {}).get("cycleId"), 51)
+
+    def test_setting_workflow_cycle_id_env_has_no_effect_on_check_verb_ingest(self):
+        """CR-CRU-036 §S1: WORKFLOW_CYCLE_ID is REMOVED -- setting it must not
+        make a cycleId appear in the compile-error ingest context."""
+        app_dir = os.path.join(self.tmpdir, "app")
+        os.makedirs(app_dir, exist_ok=True)
+        with open(os.path.join(app_dir, "bad.py"), "w") as f:
+            f.write("def bad(:\n    pass\n")
+        os.environ["WORKFLOW_CYCLE_ID"] = "51"
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock:
+            code, out, _err = _run_main(self.module, [
+                "check", "--project-dir", self.tmpdir, "--python", sys.executable,
+                "--paths", "app", "--agent", "CR-X-check",
+            ])
+        self.assertNotEqual(code, 0, "a real py_compile syntax error must exit non-zero")
+        compile_call = _post_call_for_path(post_mock, "/api/v2/runs/compile")
+        self.assertIsNotNone(compile_call, "a failing check must ingest the compile error")
+        self.assertIsNone(
+            (compile_call[0][1].get("context") or {}).get("cycleId"),
+            "WORKFLOW_CYCLE_ID=51 must have NO EFFECT -- the env var is no "
+            "longer read anywhere in the client",
+        )
 
 
 if __name__ == "__main__":
