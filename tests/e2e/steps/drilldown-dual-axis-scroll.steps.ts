@@ -177,10 +177,16 @@ Step(
     const pane = overlay.getByTestId("pane-scroll");
     const footer = overlay.getByTestId("failures-footer");
     await expect(footer).toHaveCount(1);
-    const [paneBox, footerBox] = await Promise.all([pane.boundingBox(), footer.boundingBox()]);
-    expect(paneBox).not.toBeNull();
-    expect(footerBox).not.toBeNull();
-    expect(withinVerticalSpan(footerBox!, paneBox!)).toBe(true);
+    await expect(footer).toBeVisible();
+    // Under full-suite load the app's live-poll can briefly re-render the
+    // footer node (VanJS swap), racing boundingBox() to a transient null —
+    // retry the measure+assert instead of hard-failing on that race.
+    await expect(async () => {
+      const [paneBox, footerBox] = await Promise.all([pane.boundingBox(), footer.boundingBox()]);
+      expect(paneBox).not.toBeNull();
+      expect(footerBox).not.toBeNull();
+      expect(withinVerticalSpan(footerBox!, paneBox!)).toBe(true);
+    }).toPass();
   },
 );
 
@@ -236,10 +242,16 @@ Step(
     const pane = overlay.getByTestId("pane-scroll");
     const box = overlay.getByTestId("failure-box");
     await expect(box).toHaveCount(1);
-    const [paneBox, failBox] = await Promise.all([pane.boundingBox(), box.boundingBox()]);
-    expect(paneBox).not.toBeNull();
-    expect(failBox).not.toBeNull();
-    expect(withinVerticalSpan(failBox!, paneBox!)).toBe(true);
+    await expect(box).toBeVisible();
+    // Same transient-re-render race as the failures-footer step above —
+    // retry the measure+assert so a live-poll swap under full-suite load
+    // doesn't hard-fail on a momentary null boundingBox().
+    await expect(async () => {
+      const [paneBox, failBox] = await Promise.all([pane.boundingBox(), box.boundingBox()]);
+      expect(paneBox).not.toBeNull();
+      expect(failBox).not.toBeNull();
+      expect(withinVerticalSpan(failBox!, paneBox!)).toBe(true);
+    }).toPass();
   },
 );
 
