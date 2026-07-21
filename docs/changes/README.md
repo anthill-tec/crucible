@@ -27,7 +27,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-023](CR-CRU-023-patch-pane-min-width-scroll.md) | Patch: gate-review defects — pane scroll floor · vitals trend chart · timer restart semantics | patch | COMPLETED | 021 | 4 |
 | [CR-CRU-012](CR-CRU-012-projects-manager.md) | Projects manager: add + edit + archive | feature | COMPLETED | 004, 007 | 4 (before 009) |
 | [CR-CRU-013](CR-CRU-013-gate-events.md) | Workflow events: gates (no-mistakes) + milestones | feature | COMPLETED (merged c7660b1) | 008, 011 | 4 |
-| [CR-CRU-031](CR-CRU-031-wave-classification-fix.md) | Wave-classification fix: server wave-backfill + plan-file --wave + CR-021 correction | patch | PENDING (P1 — next; split from 030) | 011, 013 | 4 (right after 013) |
+| [CR-CRU-031](CR-CRU-031-wave-classification-fix.md) | Wave-classification fix: server wave-backfill + plan-file --wave + CR-021 correction | patch | COMPLETED | 011, 013 | 4 (right after 013) |
 | [CR-CRU-030](CR-CRU-030-fleet-toon-axi-compliance.md) | Fleet TOON-AXI conversion + mandatory classification context (client verbs) | patch | PENDING (P1 — after 031) | 013 | 4 (before 009) |
 | [CR-CRU-024](CR-CRU-024-patch-cycle-activation-guards.md) | Patch: cycle activation guards · sanctioned mid-plan mutation (insert/edit, active locked) · AXI invalid-action responses | patch | COMPLETED | 011 | 4 |
 | [CR-CRU-025](CR-CRU-025-cycle-run-boundary-navigation.md) | Cycle ↔ run-boundary navigation (bidirectional, locate blink) | feature | COMPLETED | 011, 012 | 4 |
