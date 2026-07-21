@@ -2903,16 +2903,25 @@
       div(
         { "data-testid": "run-overlay", class: "app-drillin app-inpane app-detail-col" },
         div({ class: "app-drillin-head app-top" }, DetailHeadContent(eventId)),
-        div(
-          { "data-testid": "workspace-runs", class: greyed("app-center") },
-          // CR-CRU-023 §S1 — the in-pane run detail renders inside the SAME
-          // shared pane-content wrapper as every other central pane, so the
-          // horizontal scroll floor is one mechanism, not a per-pane one-off.
-          div(
-            { "data-testid": "pane-scroll", class: "app-pane-content" },
-            RunDetailBody(eventId),
-          ),
-        ),
+        (() => {
+          // CR-CRU-034 §S1 — the pane-scroll box owns the run-detail body's
+          // vertical scroll AND sources §S4.4 virtualization (onscroll).
+          const detailBody = RunDetailBody(eventId);
+          return div(
+            { "data-testid": "workspace-runs", class: greyed("app-center") },
+            // CR-CRU-023 §S1 — the in-pane run detail renders inside the SAME
+            // shared pane-content wrapper as every other central pane, so the
+            // horizontal scroll floor is one mechanism, not a per-pane one-off.
+            div(
+              {
+                "data-testid": "pane-scroll",
+                class: "app-pane-content",
+                onscroll: detailBody.handlePaneScroll,
+              },
+              detailBody.body,
+            ),
+          );
+        })(),
       );
 
     // AC2 — the feed pane returns at its exact prior scrollTop after a
@@ -3190,13 +3199,8 @@
         return div(
           {
             "data-testid": "tree-scroll",
+            "data-suite": suiteName, // §S1 — window offset lookup off pane-scroll
             class: "app-tree-scroll app-leaf-list",
-            onscroll: (e) => {
-              suiteWindow.val = {
-                ...suiteWindow.val,
-                [suiteName]: Math.floor((e.target.scrollTop ?? 0) / VIRT_ROW_HEIGHT),
-              };
-            },
           },
           div({ class: "app-virt-spacer", style: `height:${start * VIRT_ROW_HEIGHT}px;` }),
           rows,
@@ -3493,7 +3497,33 @@
       const GateBody = (d) =>
         div({ class: "app-drillin-gate" }, gateBodyContent(d.gate ?? {}));
 
-      return div({ class: "app-drillin-body" }, () => {
+      // CR-CRU-034 §S1 — virtualization re-sourced off the bounded pane
+      // scroller. The retired per-suite `.app-tree-scroll` no longer owns a
+      // scroll listener; instead the ONE `[data-testid="pane-scroll"]` box
+      // (this body's ancestor) drives every expanded suite's window. Each
+      // suite's window start = the pane's scroll depth INTO that suite
+      // (pane.scrollTop − the suite list's offsetTop within the pane), in
+      // rows; SuiteLeafList clamps it to the suite's own bounds.
+      const handlePaneScroll = (e) => {
+        const pane = e.target;
+        if (pane === null || pane === undefined) return;
+        const scrollTop = pane.scrollTop ?? 0;
+        const lists = pane.querySelectorAll('[data-testid="tree-scroll"]');
+        let next = null;
+        for (const list of lists) {
+          const name = list.getAttribute("data-suite");
+          if (name === null) continue;
+          const into = scrollTop - (list.offsetTop ?? 0);
+          const start = Math.max(0, Math.floor(into / VIRT_ROW_HEIGHT));
+          if ((suiteWindow.val[name] ?? 0) !== start) {
+            if (next === null) next = { ...suiteWindow.val };
+            next[name] = start;
+          }
+        }
+        if (next !== null) suiteWindow.val = next;
+      };
+
+      const body = div({ class: "app-drillin-body" }, () => {
         if (loadError.val !== null)
           return div({ class: "app-empty" }, loadError.val);
         const d = detail.val;
@@ -3505,6 +3535,8 @@
             ? CompileBody(d)
             : TestBody(d);
       });
+
+      return { body, handlePaneScroll };
     };
 
     // CR-CRU-016 §S1 — home's pane-state container: the detail renders
@@ -3517,8 +3549,11 @@
     // title + density) for the pre-C5 overlay-scoped assertions — the
     // VISIBLE home header is the band Home() pins above this pane's
     // scroller (§S1 header-always-visible).
-    const RunDetail = (eventId) =>
-      div(
+    const RunDetail = (eventId) => {
+      // CR-CRU-034 §S1 — the pane-scroll box owns the run-detail body's
+      // vertical scroll AND sources §S4.4 virtualization (onscroll).
+      const detailBody = RunDetailBody(eventId);
+      return div(
         { "data-testid": "run-overlay", class: "app-drillin app-inpane" },
         div({ class: "app-drillin-inhead" }, DetailHeadContent(eventId)),
         // CR-CRU-023 §S1 — same shared pane-content wrapper as the
@@ -3529,10 +3564,15 @@
         // "pane-scroll"]')) — this wrapper — not the outer timeline
         // `.app-center` (see the paneSwap comment at ~1059-1063).
         div(
-          { "data-testid": "pane-scroll", class: "app-pane-content" },
-          RunDetailBody(eventId),
+          {
+            "data-testid": "pane-scroll",
+            class: "app-pane-content",
+            onscroll: detailBody.handlePaneScroll,
+          },
+          detailBody.body,
         ),
       );
+    };
 
     // §S5.1/§S5.3 — home chrome is title bar + projects row; the workspace
     // swaps in its own top bar (← projects + project chip + Health Pill).

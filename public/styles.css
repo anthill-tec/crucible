@@ -274,7 +274,12 @@ body {
    at 1024×640 with headroom for a scrollbar gutter; home's full-width
    timeline is far wider still. CR-CRU-029 §S1 — overflow-x stays on the
    pane-scroll box (now paired with overflow-y so it owns BOTH axes). */
-.app-pane-content { overflow-x: auto; overflow-y: auto; }
+/* CR-CRU-034 §S1 — position:relative makes the pane-scroll box the
+   offsetParent for the run-detail body, so a virtualized suite leaf-list's
+   offsetTop reads as its position WITHIN this one scroller (the re-sourced
+   §S4.4 window math offsets each expanded suite by it). No absolute-positioned
+   descendants live inside a pane-scroll, so this is layout-neutral. */
+.app-pane-content { overflow-x: auto; overflow-y: auto; position: relative; }
 .app-pane-content > * { min-width: 660px; }
 .app-rail-title {
   font: 600 11px/1.4 var(--mono);
@@ -788,11 +793,11 @@ body {
 }
 .app-digest-expander { font: 9.5px var(--mono); }
 
-/* §S4.4 — virtualized tree: windowed scroll container + honest spacers. */
-.app-tree-scroll {
-  max-height: 60vh;
-  overflow-y: auto;
-}
+/* §S4.4 virtualization + CR-CRU-034 §S1 — the per-suite leaf list is NO
+   LONGER its own scroll container: the bounded `[data-testid="pane-scroll"]`
+   (`.app-pane-content`) owns the run-detail body's vertical AND horizontal
+   scroll (retiring the 60vh inner trap). The honest spacers still reserve the
+   full windowed height, now inside that one bounded scroller. */
 .app-virt-spacer { flex: none; }
 
 /* §S1/§nav — clickable drill-down spots (run cards, transition markers,
