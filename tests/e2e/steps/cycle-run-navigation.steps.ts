@@ -71,12 +71,16 @@ Step(
     await expect(marker).toHaveClass(/app-locate-blink/);
     // Real pane-scroll proof (not the page): the marker was seeded below the
     // fold by the filler runs above it in the newest-first feed, so a
-    // non-zero scrollTop on the pane's OWN scroller (workspace-runs, the
-    // `overflow-y:auto` element) after the click proves `scrollIntoView` ran
-    // against the pane, exactly as drillin.steps.ts pins for the run-detail
-    // restore path.
+    // non-zero scrollTop on the pane's OWN scroller after the click proves
+    // `scrollIntoView` ran against the pane. CR-CRU-029 §S1 — that scroller is
+    // now the bounded `[data-testid="pane-scroll"]` box (mechanism a), not the
+    // outer `workspace-runs` `.app-center` (now `overflow:hidden`); the marker
+    // card sits inside pane-scroll, so `scrollIntoView` scrolls pane-scroll.
+    // Scoped under workspace-runs (unique to the mounted Runs pane) so the
+    // handle resolves the Runs feed's pane-scroll, not another tab's.
     const scrollTop = await page
       .getByTestId("workspace-runs")
+      .getByTestId("pane-scroll")
       .evaluate((el) => (el as HTMLElement).scrollTop);
     expect(scrollTop).toBeGreaterThan(0);
   },

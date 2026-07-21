@@ -67,12 +67,13 @@
 
     // The active central pane's scroller element: the home timeline pane on
     // "/", else whichever tab pane currently fills the workspace body.
+    // CR-CRU-029 §S1 — the active pane's SCROLLER is now the bounded
+    // `[data-testid="pane-scroll"]` box itself (mechanism a), not the outer
+    // `.app-center` wrapper (which no longer scrolls). Exactly one pane-scroll
+    // renders per route, so its scrollTop is the reading position CR-016 AC2
+    // saves/restores.
     function activePaneEl() {
-      if (state.route.page === "workspace") {
-        const body = document.querySelector('[data-testid="workspace-body"]');
-        return body !== null ? body.firstElementChild : null;
-      }
-      return document.querySelector('[data-testid="timeline"]');
+      return document.querySelector('[data-testid="pane-scroll"]');
     }
 
     function navigate(pathname) {
@@ -1032,6 +1033,15 @@
     ];
 
     // CR-CRU-016 §S1 — pane-state swap: a central pane renders EITHER its
+    // CR-CRU-029 §S1 — the CR-CRU-016 AC2 scroll runway, RELOCATED from the
+    // pane-scroll box itself onto its CONTENT: a single wrapper inside the
+    // now-bounded pane-scroll reserving `calc(100% + 260px)` (styles.css
+    // `.app-pane-content > .app-pane-runway`) so a restored reading position
+    // stays reachable however short the feed. It is also the CR-CRU-023 660px
+    // floor child (`.app-pane-content > *`). Central FEED panes wrap their
+    // content in it; the run detail (opens at top, no restore) does not.
+    const paneRunway = (...children) => div({ class: "app-pane-runway" }, ...children);
+
     // own feed content or the run detail, never both. The pane CONTAINER
     // node stays mounted (marker/no-remount contract); only its content
     // swaps. The scroll discipline lives here so it runs exactly when the
@@ -1046,8 +1056,10 @@
           if (!showingDetail) {
             showingDetail = true;
             queueMicrotask(() => {
-              const pane = detailDom.parentElement;
-              if (pane !== null) pane.scrollTop = 0;
+              // CR-CRU-029 §S1 — the detail's OWN pane-scroll box is the
+              // scroller now; open it at the top.
+              const sc = detailDom.querySelector('[data-testid="pane-scroll"]');
+              if (sc !== null) sc.scrollTop = 0;
             });
           }
           return detailDom;
@@ -1056,8 +1068,9 @@
         if (showingDetail) {
           showingDetail = false;
           queueMicrotask(() => {
-            const pane = feedDom.parentElement;
-            if (pane !== null) pane.scrollTop = savedPaneScroll;
+            // CR-CRU-029 §S1 — Feed() returns the pane-scroll box itself (the
+            // bounded scroller); restore its exact prior scrollTop (AC2).
+            feedDom.scrollTop = savedPaneScroll;
           });
         }
         return feedDom;
@@ -1069,22 +1082,24 @@
     const TimelineFeed = () =>
       div(
         { "data-testid": "pane-scroll", class: "app-pane-content" },
-        div(
-          { class: "app-timeline-head" },
-          // §S5 fidelity #4 — "Run timeline — <scope>": all projects, or the
-          // filter pulldown's selected project.
-          div({ "data-testid": "pane-heading", class: "app-rail-title" }, () => {
-            const selected = state.projects.find((p) => p.key === state.selectedProject);
-            return selected !== undefined
-              ? `Run timeline — ${selected.name || selected.key}`
-              : "Run timeline — all projects";
-          }),
-          // §S5 fidelity #3 — density toggle next to the filter pulldown.
-          div({ class: "app-pane-controls" }, DensityToggle(), () => FilterPulldown()),
+        paneRunway(
+          div(
+            { class: "app-timeline-head" },
+            // §S5 fidelity #4 — "Run timeline — <scope>": all projects, or the
+            // filter pulldown's selected project.
+            div({ "data-testid": "pane-heading", class: "app-rail-title" }, () => {
+              const selected = state.projects.find((p) => p.key === state.selectedProject);
+              return selected !== undefined
+                ? `Run timeline — ${selected.name || selected.key}`
+                : "Run timeline — all projects";
+            }),
+            // §S5 fidelity #3 — density toggle next to the filter pulldown.
+            div({ class: "app-pane-controls" }, DensityToggle(), () => FilterPulldown()),
+          ),
+          () =>
+            state.backendUp ? span() : span({ class: "app-synced" }, syncedStamp()),
+          () => EmptyState() ?? div(runFeed(visibleEvents(), "home")),
         ),
-        () =>
-          state.backendUp ? span() : span({ class: "app-synced" }, syncedStamp()),
-        () => EmptyState() ?? div(runFeed(visibleEvents(), "home")),
       );
 
     const Timeline = () =>
@@ -1623,22 +1638,24 @@
     const WorkspaceRunsFeed = () =>
       div(
         { "data-testid": "pane-scroll", class: "app-pane-content" },
-        div(
-          { class: "app-timeline-head" },
-          // §S5 fidelity #4 — workspace Runs pane label; #3 — density toggle
-          // in this pane's header.
-          div({ "data-testid": "pane-heading", class: "app-rail-title" }, () => {
-            const p = currentProject();
-            return `Run timeline — ${p ? p.name || p.key : state.route.projectKey}`;
-          }),
-          div({ class: "app-pane-controls" }, DensityToggle()),
+        paneRunway(
+          div(
+            { class: "app-timeline-head" },
+            // §S5 fidelity #4 — workspace Runs pane label; #3 — density toggle
+            // in this pane's header.
+            div({ "data-testid": "pane-heading", class: "app-rail-title" }, () => {
+              const p = currentProject();
+              return `Run timeline — ${p ? p.name || p.key : state.route.projectKey}`;
+            }),
+            div({ class: "app-pane-controls" }, DensityToggle()),
+          ),
+          () => {
+            const runs = visibleEvents();
+            return runs.length === 0
+              ? div({ class: "app-empty" }, "no runs yet — ingest a run to light the forge")
+              : div(runFeed(runs, "workspace"));
+          },
         ),
-        () => {
-          const runs = visibleEvents();
-          return runs.length === 0
-            ? div({ class: "app-empty" }, "no runs yet — ingest a run to light the forge")
-            : div(runFeed(runs, "workspace"));
-        },
       );
 
     // CR-CRU-016 §S1 (C5) — the workspace detail is hosted by WorkspaceBody
@@ -1961,34 +1978,36 @@
       const eventId = p?.latestCoverageEventId;
       return div(
         { "data-testid": "pane-scroll", class: "app-pane-content" },
-        div(
-          { "data-testid": "coverage-panel", class: "app-coverage-panel" },
-          div({ class: "app-rail-title" }, "Coverage — latest green regression"),
-          lines !== undefined && lines !== null
-            ? div(
-                { class: "app-coverage-row" },
-                `lines ${lines.covered}/${lines.total} · ${lines.percent}%`,
-              )
-            : null,
-          fns !== undefined && fns !== null
-            ? div(
-                { class: "app-coverage-row" },
-                `functions ${fns.covered}/${fns.total} · ${fns.percent}%`,
-              )
-            : null,
-          eventId !== undefined && eventId !== null
-            ? button(
-                {
-                  "data-testid": "coverage-view-run",
-                  class: "app-chip",
-                  onclick: () =>
-                    navigate(
-                      `/p/${encodeURIComponent(p.key)}/run/${encodeURIComponent(eventId)}`,
-                    ),
-                },
-                "view run",
-              )
-            : null,
+        paneRunway(
+          div(
+            { "data-testid": "coverage-panel", class: "app-coverage-panel" },
+            div({ class: "app-rail-title" }, "Coverage — latest green regression"),
+            lines !== undefined && lines !== null
+              ? div(
+                  { class: "app-coverage-row" },
+                  `lines ${lines.covered}/${lines.total} · ${lines.percent}%`,
+                )
+              : null,
+            fns !== undefined && fns !== null
+              ? div(
+                  { class: "app-coverage-row" },
+                  `functions ${fns.covered}/${fns.total} · ${fns.percent}%`,
+                )
+              : null,
+            eventId !== undefined && eventId !== null
+              ? button(
+                  {
+                    "data-testid": "coverage-view-run",
+                    class: "app-chip",
+                    onclick: () =>
+                      navigate(
+                        `/p/${encodeURIComponent(p.key)}/run/${encodeURIComponent(eventId)}`,
+                      ),
+                  },
+                  "view run",
+                )
+              : null,
+          ),
         ),
       );
     };
@@ -2003,19 +2022,21 @@
     const CompileFeed = () =>
       div(
         { "data-testid": "pane-scroll", class: "app-pane-content" },
-        div(
-          { class: "app-timeline-head" },
-          div({ class: "app-rail-title" }, () => {
-            const p = currentProject();
-            return `Compile — ${p ? p.name || p.key : state.route.projectKey}`;
-          }),
+        paneRunway(
+          div(
+            { class: "app-timeline-head" },
+            div({ class: "app-rail-title" }, () => {
+              const p = currentProject();
+              return `Compile — ${p ? p.name || p.key : state.route.projectKey}`;
+            }),
+          ),
+          () => {
+            const compiles = visibleEvents().filter((e) => e.kind === "compile");
+            return compiles.length === 0
+              ? div({ class: "app-empty" }, "no compile events yet")
+              : div(compiles.map(EventCard));
+          },
         ),
-        () => {
-          const compiles = visibleEvents().filter((e) => e.kind === "compile");
-          return compiles.length === 0
-            ? div({ class: "app-empty" }, "no compile events yet")
-            : div(compiles.map(EventCard));
-        },
       );
 
     // CR-CRU-016 ONE RULE — a Compile-tab card swaps the content region to
@@ -2027,10 +2048,12 @@
     const BddFeed = () =>
       div(
         { "data-testid": "pane-scroll", class: "app-pane-content" },
-        div(
-          { class: "app-empty" },
-          "BDD run results already stream into the Runs timeline — " +
-            "the dedicated BDD surface lands in CR-CRU-015 (0.2.0)",
+        paneRunway(
+          div(
+            { class: "app-empty" },
+            "BDD run results already stream into the Runs timeline — " +
+              "the dedicated BDD surface lands in CR-CRU-015 (0.2.0)",
+          ),
         ),
       );
 
@@ -2858,12 +2881,14 @@
     const WorkflowFeed = () =>
       div(
         { "data-testid": "pane-scroll", class: "app-pane-content" },
-        div(
-          { class: "app-workflow-cols" },
-          () => WorkflowPrimary(),
+        paneRunway(
+          div(
+            { class: "app-workflow-cols" },
+            () => WorkflowPrimary(),
+          ),
+          // §S3 history lens — the grouped Wave → [Track] → CR → Cycle tree.
+          () => WorkflowHistory(),
         ),
-        // §S3 history lens — the grouped Wave → [Track] → CR → Cycle tree.
-        () => WorkflowHistory(),
       );
 
     const WorkflowPanel = () =>
@@ -2914,7 +2939,10 @@
       if (wsShowingDetail) {
         wsShowingDetail = false;
         queueMicrotask(() => {
-          pane.scrollTop = savedPaneScroll;
+          // CR-CRU-029 §S1 — the pane's `[data-testid="pane-scroll"]` box is
+          // the scroller now (not the `.app-center` wrapper); restore onto it.
+          const sc = pane.querySelector('[data-testid="pane-scroll"]');
+          if (sc !== null) sc.scrollTop = savedPaneScroll;
         });
       }
       return pane;

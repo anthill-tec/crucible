@@ -242,8 +242,12 @@ function findBackChip(): HTMLElement {
   return chip!;
 }
 
+// CR-CRU-029 §S1 — the pane's own scroller is the bounded
+// `[data-testid="pane-scroll"]` box now (mechanism a), not the outer
+// `.app-center` (workspace-body.firstElementChild), which no longer scrolls.
+// The CR-016 AC2 scroll-restore contract acts on pane-scroll (§S2).
 function paneEl(): HTMLElement {
-  const el = document.querySelector('[data-testid="workspace-body"]')!.firstElementChild as HTMLElement;
+  const el = document.querySelector('[data-testid="pane-scroll"]') as HTMLElement;
   expect(el).not.toBeNull();
   return el;
 }
