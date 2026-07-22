@@ -28,13 +28,26 @@ sub-agent procedure (never skipped).
 This RED slice pins the exact package layout + API GREEN must build:
 
     pyproject.toml (repo root)
+        [build-system]
+        requires = ["hatchling", "hatch-vcs"]   # (Sandesh house model:
+        build-backend = "hatchling.build"        # ~/Documents/data_projects/
+                                                  # sandesh/pyproject.toml)
         [project]
         name = "crucible-axi"
-        version = "0.0.0"                      # dev placeholder; 0.1.0 is
-                                                # set on the release branch
-                                                # (S6), never this branch.
+        dynamic = ["version"]                  # HATCH-VCS dynamic version
+                                                # from git tags -- NO
+                                                # hardcoded version = "..."
+                                                # anywhere in [project]; 0.1.0
+                                                # is a git TAG cut on the
+                                                # release branch (S6), never a
+                                                # literal in this file.
         [project.scripts]
         crucible-axi = "crucible_axi.cli:main"
+        [tool.hatch.version]
+        source = "vcs"
+        raw-options = { local_scheme = "no-local-version" }  # Test PyPI-safe
+                                                              # (no PEP 440
+                                                              # +local segment)
         # package-data / include references BOTH "clients" (the fleet) and
         # "STATUS-CONTRACT.md".
 
@@ -139,16 +152,47 @@ class PyprojectPackageEntryPointTest(unittest.TestCase):
             text, r'(?m)^name\s*=\s*"crucible-axi"\s*$',
             "expected name = \"crucible-axi\" under [project]")
 
-    def test_pyproject_version_is_a_dev_placeholder_not_the_release_version(self):
+    def test_pyproject_uses_hatch_vcs_dynamic_versioning_no_hardcoded_version(self):
+        """House release model (Sandesh, ~/Documents/data_projects/sandesh/
+        pyproject.toml): version comes from git tags via hatch-vcs, NEVER a
+        hardcoded literal -- so 0.1.0 (S6) is a git tag cut on the release
+        branch, not a string anyone edits in this file."""
         text = PYPROJECT_PATH.read_text()
-        m = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', text)
-        self.assertIsNotNone(m, "expected version = \"...\" under [project]")
-        self.assertNotEqual(
-            m.group(1), "0.1.0",
-            "0.1.0 is set on the release branch per S6 -- not this feature branch")
-        self.assertEqual(
-            m.group(1), "0.0.0",
-            "expected the dev/placeholder version 0.0.0")
+
+        self.assertRegex(
+            text, r'(?m)^\[build-system\]',
+            "expected a [build-system] table")
+        requires_match = re.search(
+            r'(?ms)^\[build-system\].*?^requires\s*=\s*\[([^\]]*)\]', text)
+        self.assertIsNotNone(
+            requires_match, 'expected requires = [...] under [build-system]')
+        requires_text = requires_match.group(1)
+        self.assertIn("hatchling", requires_text)
+        self.assertIn("hatch-vcs", requires_text)
+        self.assertRegex(
+            text, r'(?m)^build-backend\s*=\s*"hatchling\.build"\s*$',
+            'expected build-backend = "hatchling.build"')
+
+        self.assertRegex(
+            text, r'(?m)^dynamic\s*=\s*\[\s*"version"\s*\]\s*$',
+            'expected dynamic = ["version"] under [project]')
+        self.assertNotRegex(
+            text, r'(?m)^version\s*=\s*"[^"]+"\s*$',
+            "no hardcoded version = \"...\" literal may appear anywhere -- "
+            "hatch-vcs derives it from git tags")
+
+        self.assertRegex(
+            text, r'(?m)^\[tool\.hatch\.version\]',
+            "expected a [tool.hatch.version] table")
+        version_table_match = re.search(
+            r'(?ms)^\[tool\.hatch\.version\](.*?)(?:^\[|\Z)', text)
+        self.assertIsNotNone(version_table_match)
+        version_table_text = version_table_match.group(1)
+        self.assertRegex(
+            version_table_text, r'(?m)^source\s*=\s*"vcs"\s*$',
+            'expected source = "vcs" under [tool.hatch.version]')
+        self.assertIn("local_scheme", version_table_text)
+        self.assertIn("no-local-version", version_table_text)
 
     def test_pyproject_declares_console_script_entry_point(self):
         text = PYPROJECT_PATH.read_text()
