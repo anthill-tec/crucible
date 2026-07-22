@@ -1,96 +1,95 @@
-# CR-CRU-035 — Ambient-context session hooks (AXI principle 7) — coordinated Crucible↔Model-B
+# CR-CRU-035 — Ambient-context read-path contract (AXI principle 7) — coordinated Crucible↔Model-B
 
-**Status:** PENDING — **coordinated Crucible↔Model-B.** Crucible builds the core python
-scripts (the client `setup` command + the board-state surfacing / interface contract);
-once those land, Crucible **intimates Model-B** (via Sandesh — `Mainline - ModelB`,
-project key `019f7eb8-8cad-7000-9838-854eca8e7c20`), which owns the session-hook
-**templates + generation** (a Model-B harness responsibility). Some responsibilities may
-be shared; the exact division is negotiated at the handoff.
+**Status:** PENDING — **RE-SCOPED 2026-07-22 after Model-B coordination (Sandesh msg
+1333→1334).** Crucible ships NO hook installer and NO client `setup` command. Crucible's
+side of AXI principle 7 is the **read-path contract only**: a stable, versioned `status`
+envelope + tolerant/bounded behavior so Model-B's generated session hook can surface the
+board safely at session start.
 **Type:** feature
 **Priority:** P2
-**Depends on:** CR-CRU-030 (the fleet AXI client interface — the `status`/§S6 read verb + §S14 content-first that the hook surfaces)
-**Labels:** feature, axi, ambient-context, session-hooks, dx, cross-project, model-b-coordination
+**Depends on:** CR-CRU-030 (the fleet AXI client interface + the §S6 `status` read verb this hardens)
+**Labels:** feature, axi, ambient-context, read-path, contract, dx, cross-project, model-b-coordination
 **Phase:** Wave 4 (0.1.0)
-**Design reference:** AXI manifesto principle 7 "Ambient context" (https://axi.md —
-"Install into the agent's session hooks or plugin system from an explicit setup command
-so that every conversation starts with relevant state already visible — before the agent
-takes any action") + user direction 2026-07-21 (split from CR-CRU-030 at gap analysis:
-hook install/generation touches the Model-B orchestration harness, so it is a coordinated
-effort, not a solo Crucible build).
+**Design reference:** AXI manifesto principle 7 "Ambient context" (https://axi.md — every
+conversation starts with relevant state already visible, before the agent acts) + user
+direction 2026-07-21/22 + Model-B coordination reply (Sandesh msg 1334, 2026-07-22).
 
 ## Context
-AXI principle 7 is the strongest anti-context-loss lever: rather than an orchestrator
-having to REMEMBER to read the board, the board state (queue, active cycle, wave,
-last-run CR) is surfaced into the agent's session automatically at session start, before
-any action. CR-CRU-030 delivers the *write-path* context guards (§S3/§S9) and the
-*read-path* verbs (§S6 `status`, §S14 content-first) that make the interface
-self-explanatory; this CR closes the loop with the *ambient* path — the state is visible
-without the orchestrator asking.
+AXI principle 7 surfaces board state (queue, active cycle, wave, last-run CR) into the
+agent's session at start, before any action — the strongest anti-context-loss lever.
+Delivering it end-to-end spans two projects, and the **ownership boundary is now settled**:
 
-Principle 7 is split from CR-030 because installing into the agent's session hooks is not
-a pure-CLI concern: it touches the orchestration harness, whose session-hook mechanics
-are a **Model-B** responsibility. So this CR defines the CRUCIBLE core (the `setup`
-command + the interface contract the hook consumes) and hands the hook TEMPLATES +
-GENERATION to Model-B, coordinated over Sandesh.
+- **Crucible owns** the server + the client-side scripts, and MAY install its own tooling
+  via the AXI model (the client installer — CR-CRU-009). It does **NOT** build hooks.
+- **Model-B owns** hook creation + per-project DEPLOY **and skill generation** per project
+  stack/needs. Its scaffold (CR-MDB-013, shipped) already emits a per-project hooks seam;
+  CR-MDB-015 (Model-B's next CR) compiles a neutral hook schema to per-harness wiring and
+  deploys it via Model-B's universal installer.
+
+So the session hook that runs `status` at session start is **entirely Model-B's** to
+generate + deploy. Crucible's ONLY responsibility for principle 7 is to make its
+**read-path** something a hook can safely depend on: a stable, versioned `status` contract
+that returns fast and never blocks a session start. This CR delivers exactly that — no
+`setup` command, no hook writing.
 
 ## Scope
 
-### §S1 Client `setup` command (Crucible core)
-Add a `setup` verb to the shared client (`_crucible_axi.py`, CR-030 §S1) that installs
-the ambient-context session hook for the project. `setup` registers a session-start hook
-which runs the `status` read verb (CR-030 §S6) and surfaces the board — queue, the single
-`status:"active"` cycle, wave, and `lastRunCr` — into the agent's session context BEFORE
-the agent takes any action. `setup` returns the §S1 TOON-AXI envelope (install result +
-the installed path, `~`-abbreviated) and is IDEMPOTENT (re-running converges, never
-double-installs).
+### §S1 `status` is hook-safe: TOLERANT + BOUNDED (all 5 clients)
+The `status` read verb (CR-030 §S6) must be safe to invoke from a session-start hook —
+it can never hang, error out, or block the session on board state. Today `cmd_status`
+already degrades on **no open plan** (exit 0, `ok:true`, empty envelope) — that is kept.
+The gap is the **server-unreachable / plans-fetch-failure** path, which currently emits
+`ok:false` and **exits non-zero** (e.g. `python-crucible.py cmd_status` `return 1`). Fix
+it fleet-wide:
+- **Server unreachable / plans fetch fails →** emit a well-formed envelope with `ok:true`
+  and a `warnings[]` entry `{code:"status-unavailable", detail:"…"}` (+ a stderr line),
+  empty `plans[]` and `lastRunCr:null`, and **exit 0**. Never non-zero, never a raw
+  traceback, never a hang.
+- **Bounded:** the plans fetch uses a short connect/read timeout (never the default
+  unbounded socket wait) so an unreachable/slow server fails fast; `status` returns
+  promptly regardless of server state.
+- Applies to all five clients' `status` path (`_crucible_axi.py` shared resolvers +
+  each client's `cmd_status`); the tolerant behavior is uniform across the fleet.
 
-**Concrete install (settled at gap-analysis 2026-07-22):** the harness is Claude Code,
-whose hooks live in a settings file under `hooks.SessionStart[].hooks[].command`.
-`setup` installs into the PROJECT's `.claude/settings.local.json` (per-project, personal
-— not the committed repo, not global) a `SessionStart` hook whose `command` runs the
-project's client `status` verb (e.g. `python3 clients/<stack>-crucible.py status`), so
-its board output is surfaced as ambient context at session start. Idempotency: `setup`
-MUST detect an already-present crucible ambient hook (match on the command / a stable
-marker) and converge (update-in-place, never append a duplicate); it creates
-`.claude/settings.local.json` (and the `hooks.SessionStart` array) if absent, and
-preserves any pre-existing unrelated hooks/keys in that file. This baseline working
-install is Crucible's; Model-B's TEMPLATE FORMAT + generation (§S2) refine it for the
-harness.
-
-### §S2 Interface contract for Model-B (the coordination seam)
-Define + document the contract at the Crucible↔Model-B seam: WHAT `setup` invokes and
-WHAT the installed hook calls — the `status` envelope shape (CR-030 §S6) is the stable
-payload the hook renders at session start. Crucible owns this contract + the `status`
-verb; **Model-B owns the hook TEMPLATE format + its generation** (how the hook file is
-authored/generated for the Model-B harness). Crucible intimates Model-B once §S1 lands.
-
-### §S3 Coordination protocol
-Crucible builds §S1 → **intimates Model-B via Sandesh** (`Mainline - ModelB`) that the
-core scripts are ready → Model-B builds §S2's template + generation on its side. The
-division of any shared responsibilities is negotiated at that handoff. (Cross-project
-Sandesh sending may require the one-time per-project admin grant — flag to the human if
-the send is blocked.)
+### §S2 Stable, versioned `status` envelope contract (docs committed with the clients)
+Document the `status` output contract that Model-B's generated hook consumes, committed
+alongside the clients so it versions with them:
+- The envelope carries `ok`, `context`, `warnings[]`, and the board payload: `plans[]`
+  rows (`cr`, `wave`, `status`, `activeCycleId`), the single `status:"active"` cycle
+  (id + label), and top-level `lastRunCr`.
+- Assign the contract a **version** so Model-B can pin what its hook renders; note the
+  tolerant-degrade shape (§S1) as part of the contract (a hook that gets `ok:true` +
+  `warnings[]` `status-unavailable` renders "board unavailable", never fails).
+- The doc lives with the clients (`clients/` — e.g. the report-skill docs / a
+  `STATUS-CONTRACT.md`), so it ships and versions with the code Model-B invokes.
 
 ## Acceptance criteria
-- [ ] §S1: `setup` installs the session-start ambient-context hook, returns a `toon.py`-decodable envelope carrying `ok` + the installed path (`~`-abbreviated); re-running is idempotent (no duplicate install, `ok:true`).
-- [ ] §S1: the installed hook, at session start, surfaces the CR-030 §S6 `status` board (queue with `cr`/`wave`/`status`, the active cycle id/label, `lastRunCr`) into the session BEFORE any agent action.
-- [ ] §S2: the Crucible↔Model-B interface contract is documented (what `setup` invokes; the `status` envelope the hook consumes) — Model-B owns the template format + generation; Crucible owns `setup` + `status`.
-- [ ] §S3: on §S1 completion, Model-B is intimated via Sandesh with the ready core + the interface contract; the coordination handoff is recorded.
+- [ ] §S1: with the server UNREACHABLE (or the plans fetch failing), every client's
+      `status` emits `ok:true` + `warnings[]` `status-unavailable`, empty `plans[]` +
+      `lastRunCr:null`, and exits 0 — asserted per client. No traceback, no non-zero exit.
+- [ ] §S1: `status` with NO open plan still exits 0 with `ok:true` + empty board
+      (existing behavior preserved).
+- [ ] §S1: the plans fetch is bounded by a short timeout (asserted — a slow/unreachable
+      endpoint returns promptly, never hangs).
+- [ ] §S2: the versioned `status` envelope contract is documented + committed with the
+      clients (envelope shape, the board fields, the version, and the tolerant-degrade
+      shape).
+- [ ] Crucible ships NO `setup`/hook-install command and NO hook file (the re-scope holds
+      — grep confirms no session-hook-writing code in `clients/`).
 
-## Estimated size
-M (Crucible core: `setup` + the interface contract) + coordinated Model-B work (external
-— hook templates + generation, tracked as a Model-B Wave-4 dependency).
-
-## Risk / open questions
-- Cross-project coordination dependency: Model-B must build the hook templates +
-  generation; the shared-responsibility split is settled at the handoff, not pre-decided
-  here.
-- Sandesh cross-project sending may need the per-project admin grant (CLI-only, human
-  action) — surface to the user if the intimation send is blocked.
-- The session-hook mechanism is harness-specific (Model-B); the Crucible core must keep
-  the `status` payload harness-agnostic so the contract holds across harnesses.
+## Coordination
+- Division CONFIRMED with Model-B (msg 1334): Model-B owns hook creation/deploy + skill
+  generation (CR-MDB-013 scaffold seam + CR-MDB-015 templates/generation + installer);
+  Crucible = read-path contract only.
+- Client DISCOVERY (a stable machine-readable client location for Model-B's installer to
+  capture at pre-flight) is deferred to the **Crucible installer, CR-CRU-009** — NOT this
+  CR. Note it on CR-009.
+- On CR-035 merge: intimate Model-B (msg thread 1333/1334) that the stable, versioned
+  `status` contract has landed, so CR-MDB-015 can pin it. (User-gated send.)
 
 ## Non-goals
-The AXI-CLI conventions (those are CR-CRU-030 §S10–§S15); the client verb interface +
-the `status` verb itself (CR-CRU-030); Model-B's harness internals and its hook-template
-implementation (owned by Model-B).
+- Any `setup` command, hook installation, hook templates/generation, or skill generation
+  — those are **Model-B's** (CR-MDB-015).
+- The Crucible client installer + the client-discovery manifest — those are **CR-CRU-009**.
+- New `status` fields or a redesign of the §S6 verb — only tolerance/bounding + the
+  contract doc; the field set is CR-030 §S6's.
