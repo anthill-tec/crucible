@@ -249,4 +249,51 @@ describe("§S5 docs — RUNBOOK", () => {
     expect(runbook).toContain("CRUCIBLE_HOST");
     expect(lower).toMatch(/127\.0\.0\.1|loopback/);
   });
+
+  test("docs/RUNBOOK.md documents corrupt-db recovery (moves aside + fresh boot)", () => {
+    const runbook = readText(join("docs", "RUNBOOK.md"));
+    const lower = runbook.toLowerCase();
+
+    // §S5: corrupt-db behavior — the real src/store.ts Store.open path.
+    expect(lower).toContain("corrupt");
+    // Documents the aside-rename pattern (<path>.corrupt-<epoch>) accurately.
+    expect(runbook).toMatch(/\.corrupt-<?epoch>?/i);
+  });
+
+  test("docs/RUNBOOK.md documents retention (default 100 + override knob)", () => {
+    const runbook = readText(join("docs", "RUNBOOK.md"));
+    const lower = runbook.toLowerCase();
+
+    // §S5: retention — real src/store.ts DEFAULT_RETENTION = 100, overridable
+    // via project.retention.
+    expect(lower).toContain("retention");
+    expect(runbook).toContain("100");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §S1 — install.sh bootstrap (the one-line curl … | sh entrypoint)
+// ---------------------------------------------------------------------------
+
+describe("§S1 install.sh bootstrap", () => {
+  test("install.sh exists at repo root as a shell script", () => {
+    expect(existsSync(join(REPO_ROOT, "install.sh"))).toBe(true);
+
+    const script = readText("install.sh");
+    // A real shell script leads with a shebang.
+    expect(script).toMatch(/^#!\s*\/(usr\/)?bin\/(env\s+)?sh/);
+  });
+
+  test("install.sh implements the §S1 uv → crucible-axi flow", () => {
+    const script = readText("install.sh");
+
+    // Ensures uv is present (checked, and installed via Astral's canonical
+    // bootstrap when absent).
+    expect(script).toContain("uv");
+    expect(script).toMatch(/command\s+-v\s+uv/);
+    expect(script).toContain("astral.sh/uv/install.sh");
+
+    // Installs the PyPI primary orchestrator.
+    expect(script).toContain("uv tool install crucible-axi");
+  });
 });
