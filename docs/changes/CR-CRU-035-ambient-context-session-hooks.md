@@ -44,6 +44,19 @@ the agent takes any action. `setup` returns the §S1 TOON-AXI envelope (install 
 the installed path, `~`-abbreviated) and is IDEMPOTENT (re-running converges, never
 double-installs).
 
+**Concrete install (settled at gap-analysis 2026-07-22):** the harness is Claude Code,
+whose hooks live in a settings file under `hooks.SessionStart[].hooks[].command`.
+`setup` installs into the PROJECT's `.claude/settings.local.json` (per-project, personal
+— not the committed repo, not global) a `SessionStart` hook whose `command` runs the
+project's client `status` verb (e.g. `python3 clients/<stack>-crucible.py status`), so
+its board output is surfaced as ambient context at session start. Idempotency: `setup`
+MUST detect an already-present crucible ambient hook (match on the command / a stable
+marker) and converge (update-in-place, never append a duplicate); it creates
+`.claude/settings.local.json` (and the `hooks.SessionStart` array) if absent, and
+preserves any pre-existing unrelated hooks/keys in that file. This baseline working
+install is Crucible's; Model-B's TEMPLATE FORMAT + generation (§S2) refine it for the
+harness.
+
 ### §S2 Interface contract for Model-B (the coordination seam)
 Define + document the contract at the Crucible↔Model-B seam: WHAT `setup` invokes and
 WHAT the installed hook calls — the `status` envelope shape (CR-030 §S6) is the stable
