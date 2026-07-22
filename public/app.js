@@ -2552,7 +2552,9 @@
                     plan.cr,
                   ),
                   plan.title !== undefined ? ` · ${plan.title}` : null,
-                  plan.orchestrator !== undefined ? ` — ${plan.orchestrator}` : null,
+                  plan.title !== undefined && plan.orchestrator !== undefined
+                    ? ` — ${plan.orchestrator}`
+                    : null,
                 ),
                 div(
                   { class: "app-cr-root-cycles" },

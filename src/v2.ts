@@ -294,7 +294,7 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
     const active = ageMs <= inactiveMs;
     return {
       ...project,
-      agentsOnline: agents.filter((a) => a.liveness === "online").length,
+      agentsOnline: agents.filter((a) => a.liveness !== "tombstoned").length,
       agentsTotal: agents.length,
       // §S0 (CR-CRU-006) — same flattened brief shape as the events list.
       lastEvent: last !== undefined ? eventBrief(last) : null,
