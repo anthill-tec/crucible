@@ -133,6 +133,10 @@
     // by paneSwap when the feed re-mounts (also covers browser-back).
     function closeDetail() {
       if (state.route.overlay === undefined) return;
+      // CR-CRU-038 §S3 — drop the shared RunDetailBody so a reopen builds a
+      // fresh body (fresh ?depth=suites fetch + fresh showRaw/expand state).
+      openDetailKey = undefined;
+      openDetailBody = null;
       const base = location.pathname.replace(/\/run\/[^/]+\/?$/, "") || "/";
       history.pushState(null, "", base);
       state.route = L.routeParse(base);
@@ -1111,6 +1115,23 @@
     const Timeline = () =>
       div({ "data-testid": "timeline", class: greyed("app-center") }, paneSwap(TimelineFeed));
 
+    // CR-CRU-038 §S3 — ONE shared RunDetailBody per open detail, keyed by
+    // eventId (mirrors paneSwap's showingDetail memo idiom). Home's VISIBLE
+    // pinned band and RunDetail()'s body/inhead both consume the SAME
+    // instance, so the relocated header controls (failure-jump/raw-toggle)
+    // are wired to one body state — no duplicate build, no second
+    // ?depth=suites fetch, no stale showRaw/expand between the band and the
+    // body. closeDetail() clears it so a reopen builds fresh.
+    let openDetailKey;
+    let openDetailBody = null;
+    const detailBodyFor = (eventId) => {
+      if (openDetailBody === null || openDetailKey !== eventId) {
+        openDetailKey = eventId;
+        openDetailBody = RunDetailBody(eventId);
+      }
+      return openDetailBody;
+    };
+
     // CR-CRU-016 §S1 header-always-visible — with a detail open, home pins
     // the detail header ABOVE the timeline pane's scroller in its own band;
     // scrolling a long drill-down never moves it. Closed: the band is empty.
@@ -1121,7 +1142,13 @@
           state.route.overlay !== undefined
             ? div(
                 { class: "app-drillin-head app-top" },
-                DetailHeadContent(state.route.overlay),
+                // CR-CRU-038 §S3 — thread the SHARED body's headerControls
+                // into the VISIBLE band (failure-jump + raw-toggle sit beside
+                // the density chip here, not only in the hidden inhead copy).
+                DetailHeadContent(
+                  state.route.overlay,
+                  detailBodyFor(state.route.overlay).headerControls,
+                ),
               )
             : "",
         Timeline(),
@@ -3695,7 +3722,9 @@
     const RunDetail = (eventId) => {
       // CR-CRU-034 §S1 — the pane-scroll box owns the run-detail body's
       // vertical scroll AND sources §S4.4 virtualization (onscroll).
-      const detailBody = RunDetailBody(eventId);
+      // CR-CRU-038 §S3 — SHARED instance: the home visible band consumes the
+      // same body's headerControls, so this build happens once per open.
+      const detailBody = detailBodyFor(eventId);
       return div(
         { "data-testid": "run-overlay", class: "app-drillin app-inpane" },
         div(

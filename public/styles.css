@@ -649,6 +649,10 @@ body {
   gap: 8px;
   margin-bottom: 8px;
 }
+/* CR-CRU-038 §S3 — header action chips (failure-jump + raw-toggle) sit beside
+   the density chip in the drill-in header; tighter padding keeps them compact
+   against it. */
+.app-drillin-headchip { padding: 1px 7px; }
 /* F4 anatomy — flat mono TREE LINES: status is text color alone; NO
    border/outline on any tree row (the failure box below is the only boxed
    element inside the tree). */
@@ -746,19 +750,6 @@ body {
   padding: 4px 8px;
   margin-bottom: 6px;
 }
-
-/* F4 — failures-footer: `▸ N more failures · toggle raw output`. */
-.app-failures-footer {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  font: 10.5px var(--mono);
-  color: var(--ink-dim);
-  padding: 6px 8px;
-  margin-top: 4px;
-  border-top: 1px solid var(--line);
-}
-.app-footer-chip { cursor: pointer; }
 
 /* §S4.2 — heat-strip minimap: one cell per test, wrap at any run size. */
 .app-heat-strip {
