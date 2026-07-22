@@ -54,6 +54,29 @@ scroller (no layout dead-space regression; honor CR-034 §S1's single-scroller r
 - **Discoverable:** an evident, labeled control (not bare footer text) — see §S3
   (it moves to the header).
 
+### §S2b Server-side raw-output CAPTURE (scope expansion, user-approved 2026-07-22)
+Gap-analysis (VERIFY + close-out e2e) found the raw-output field does NOT exist in
+the data model — `RunEvent` (`src/types.ts`) carries no `raw`, and no ingest path
+stores one — so §S2's toggle correctly HIDES for every real run (nothing to reveal).
+That IS the original "raw toggle not working" report. Per the user's decision to make
+the toggle surface REAL data, capture raw output end-to-end (run-level first;
+per-test forward-compat):
+- **Schema (`src/types.ts`):** add `RunEvent.raw?: string` — the run-level captured
+  runner output (stdout/stderr). `TestLeaf.raw?: string` stays forward-compat
+  (`resolveRaw` already prefers it; populated from JUnit `<system-out>`/`<system-err>`
+  when a later cycle wires per-test raw).
+- **Ingest + store + serve (`src/v2.ts` + `src/store.ts`):** `POST /api/v2/runs/parsed`
+  accepts `body.raw`; `recordTestEvent` persists it; the event GET + timeline serve
+  it (subject to the existing raw-event retention).
+- **Codec (`src/codecs/junit.ts`):** the `/runs/raw` path extracts run-level
+  `<system-out>`/`<system-err>` into `raw`.
+- **Clients (`_crucible_axi.py` + all 5 clients):** include the captured runner output
+  as `raw` in the parsed-ingest payload (already captured for the no-XML fallback) —
+  uniform across the fleet.
+- **Frontend:** `resolveRaw` (built in §S2/C2) surfaces real `d.raw`; the toggle shows
+  for runs that carry raw and hides for those that don't. The e2e ingest helper sends
+  `raw` so the dual-axis raw-toggle-click scenario exercises real data.
+
 ### §S3 Relocate failure-jump + raw-toggle to the drill-in HEADER
 Both the failure-jump (`▸ N more failures`) and the raw-output toggle move OUT of
 the footer and into the drill-in **header bar, adjacent to the density chip**
@@ -82,6 +105,16 @@ failure-jump + raw-output controls, and the per-test-preferred raw resolution.
       scroller with no dead-space/layout break (CR-034 §S1 single-scroller intact).
 - [ ] The raw-output toggle is HIDDEN entirely when the run has NO raw output
       (neither per-test nor run-level) — no empty/dead toggle.
+- [ ] (§S2b) `RunEvent` carries `raw?: string`; `POST /api/v2/runs/parsed` accepts +
+      `recordTestEvent` persists `body.raw`; the event GET serves it; raw-event
+      retention covers it.
+- [ ] (§S2b) All 5 clients include the captured runner output as `raw` in the
+      parsed-ingest payload — a real ingested failing run carries `raw`, so the toggle
+      SHOWS and reveals it.
+- [ ] (§S2b) The `src/codecs/junit.ts` `/runs/raw` path extracts run-level
+      `<system-out>`/`<system-err>` into `raw`.
+- [ ] (§S2b) The dual-axis-scroll e2e raw-toggle-click scenario passes against a real
+      ingested run that carries raw.
 - [ ] Both the failure-jump and raw-output controls render in the drill-in HEADER
       adjacent to the density chip, and NOT in the footer; they remain visible while
       the drill-in body scrolls.
