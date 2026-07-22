@@ -443,6 +443,22 @@ def cmd_unregister(args):
     return 0 if ok else 1
 
 
+def _remove_agent_silent(project_dir, agent_id):
+    """CR-CRU-008 §S4 anti-ghost cleanup for a gated run: remove the agent row
+    WITHOUT journaling a lifecycle event (the run's ingest was the implicit
+    registration — a plain unregister would journal an 'unregistered' event and
+    bury the run just ingested). Best-effort: never raises, never pollutes the
+    run verdict or stdout. Mirrors clients/rust-crucible.py's _remove_agent_silent
+    (v2 silent unregister, never the retired /api/agents/remove shim)."""
+    try:
+        _post(
+            "/api/v2/agents/unregister",
+            {"agentId": agent_id, "projectKey": _project_key(project_dir), "silent": True},
+        )
+    except Exception:
+        pass
+
+
 # ── Toolchain: native host tests + arduino-cli compile ───────────────────────
 
 
@@ -452,8 +468,19 @@ def _run_native_tests(args, verb, tier, want_coverage):
     auto-attaching to the server's active cycle. `unit`/`test` ride tier `unit`;
     `regression` rides tier `regression` and, with `want_coverage`, attaches
     lcov coverage from `<native_dir>/coverage/lcov.info`. A no-active-cycle run
-    withholds WITHOUT ingesting a cycleId=null orphan."""
+    withholds WITHOUT ingesting a cycleId=null orphan. A gated run (agent set)
+    wraps the body in an anti-ghost silent cleanup (CR-CRU-008 §S4): even a
+    failed/raising/withheld run removes the implicitly registered agent via the
+    v2 silent unregister, and never touches the retired /api/agents/remove shim."""
     pd = _project_dir(args)
+    try:
+        return _run_native_tests_body(args, verb, tier, want_coverage, pd)
+    finally:
+        if getattr(args, "agent", None):
+            _remove_agent_silent(pd, args.agent)
+
+
+def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     key, name = _load_env(pd)
     agent_id, _ = _agent(name)
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
