@@ -42,6 +42,13 @@ SERVER**: the client resolves the open plan and reads its cycles via
 - **`WORKFLOW_CYCLE_ID` is REMOVED** from all five clients + `_crucible_axi.py`.
   No client reads the env var; the server's active cycle is the single source of
   truth. `resolve_active_cycle_id(plans)` stays the pure resolver.
+- **Bundled skill docs synced (C4):** `clients/skills/crucible-report-*/SKILL.md`
+  drop every `WORKFLOW_CYCLE_ID` reference (context tables + examples, and the
+  vscode doc's inline `os.environ.get("WORKFLOW_CYCLE_ID")` snippet) so the
+  client-facing reference matches the shipped auto-attach contract.
+- **Naming cleanup (C4):** the internal `hard_error` variable / `_emit_ingest_hard_error`
+  helper that now implement WARN+WITHHOLD are renamed `withhold`-based fleet-wide
+  (behavior unchanged; the names stop lying).
 - **No active cycle** — an open plan exists but the server query yields no
   `status:"active"` cycle (all terminal / none activated) — the client **WARNS
   and WITHHOLDS**:
@@ -109,6 +116,15 @@ the stack's per-target test verb:
       returning the §S1 TOON-AXI envelope, asserted per client; `arduino` (the only
       client that lacked them) gains all three; `coverage.py` present; the
       `coverage/` dir shadow is resolved.
+- [ ] `arduino` `auto-ingest` has a real-server BEHAVIORAL test (not just `--help`)
+      asserting a pre-existing report dir ingests with the right `tier` and
+      auto-attached `context.cycleId`.
+- [ ] The `coverage/` directory shadow is proven fixed by a test: coverage still
+      collects when a `coverage/` dir is present on the interpreter's path.
+- [ ] No `clients/skills/*/SKILL.md` references `WORKFLOW_CYCLE_ID` (all five docs
+      synced to the removed-env contract).
+- [ ] No production client defines `hard_error` / `_emit_ingest_hard_error`; the
+      warn+withhold path uses `withhold`-named symbols fleet-wide.
 
 ## Notes
 - Multi-stack coverage rendered as the MEDIAN of all sub-coverage runs (scaled)
