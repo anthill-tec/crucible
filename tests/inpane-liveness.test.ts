@@ -261,8 +261,9 @@ function unitFixture(eventId: string, projectKey: string, agentId: string, now: 
   return { detail, brief };
 }
 
-// Two-suite fixture (one failing/auto-expands, one passing/stays folded
-// until manually clicked) for the negative-bound §S2-internal-state test.
+// Two-suite fixture (both start collapsed — CR-CRU-038 §S1 minimized
+// default — and are expanded manually in the test) for the negative-bound
+// §S2-internal-state test.
 function twoSuiteFixture(eventId: string, projectKey: string, agentId: string, now: number) {
   const detail: EventDetailFixture = {
     id: eventId,
@@ -569,8 +570,14 @@ describe("the feed behind the open detail also absorbs the new run — closing t
 // internal state (an expanded failing/passing suite must stay expanded) ──
 
 describe("negative bound — the SSE-driven poll refetch does not reset the open detail's own internal expand/collapse state", () => {
+  // CR-CRU-038 §S1 RETARGET (2026-07-22): was "a suite the user manually
+  // expanded (not auto-expanded — an all-passing suite) stays expanded" —
+  // auto-expand-on-open is retired, so BOTH SuiteFail and SuitePass now
+  // start collapsed; the test manually expands BOTH (not just the
+  // all-pass one) to keep exercising the same "manual expand survives an
+  // unrelated poll-tick refetch" contract.
   test(
-    "a suite the user manually expanded (not auto-expanded — an all-passing suite) stays expanded across a poll-tick refetch triggered while the detail is open",
+    "suites the user manually expands (both start collapsed now — neither auto-expands) stay expanded across a poll-tick refetch triggered while the detail is open",
     async () => {
       const now = Date.now();
       const eventId = "evt-focus-persist-1";
@@ -596,15 +603,26 @@ describe("negative bound — the SSE-driven poll refetch does not reset the open
       expect(suiteFailRow).toBeDefined();
       expect(suitePassRow).toBeDefined();
 
-      // Precondition: SuiteFail auto-expanded (failing suites float open on
-      // every open); SuitePass starts folded (all-pass suites are never
-      // fetched until clicked — public/app.js autoExpandFailing/foldSuites).
-      expect(suiteFailRow.querySelector('[data-testid="tree-toggle"]')!.textContent).toBe("▾");
+      // CR-CRU-038 §S1 — precondition: BOTH suites start collapsed (▸);
+      // neither auto-expands on open, error run or not (public/app.js no
+      // longer auto-fetches any suite from `?depth=suites`'s response).
+      expect(suiteFailRow.querySelector('[data-testid="tree-toggle"]')!.textContent).toBe("▸");
       expect(suitePassRow.querySelector('[data-testid="tree-toggle"]')!.textContent).toBe("▸");
+      expect(pane.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+
+      // User manually expands BOTH suites.
+      suiteFailRow.click();
+      await settle();
+      const suiteFailRowAfterClick = Array.from(pane.querySelectorAll('[data-testid="suite-row"]')).find((r) =>
+        (r.textContent ?? "").includes("SuiteFail"),
+      )!;
+      expect(suiteFailRowAfterClick.querySelector('[data-testid="tree-toggle"]')!.textContent).toBe("▾");
       expect(pane.querySelectorAll('[data-testid="leaf-row"]').length).toBe(2); // only SuiteFail's 2 leaves
 
-      // User manually expands the passing suite.
-      suitePassRow.click();
+      const suitePassRowToClick = Array.from(pane.querySelectorAll<HTMLElement>('[data-testid="suite-row"]')).find(
+        (r) => (r.textContent ?? "").includes("SuitePass"),
+      )!;
+      suitePassRowToClick.click();
       await settle();
 
       const suitePassRowAfterClick = Array.from(pane.querySelectorAll('[data-testid="suite-row"]')).find((r) =>
