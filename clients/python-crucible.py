@@ -799,6 +799,10 @@ def cmd_plan_file(args):
         w = _axi().no_wave_warning(args.cr)
         warnings.append(w)
         print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
+    if not args.title:
+        wt = _axi().no_title_warning(args.cr)
+        warnings.append(wt)
+        print(f"warning: {wt['code']} — {wt['detail']}", file=sys.stderr)
     track = os.environ.get("WORKFLOW_ROLE")
     if track:
         payload["track"] = track
