@@ -545,33 +545,6 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
     expect(root!.textContent ?? "").not.toContain("—");
   });
 
-  test('a plan with an ORCHESTRATOR but NO title renders `<cr> — <orchestrator>` (id-only root plus the orchestrator segment, no " · <title>")', async () => {
-    const key = "f13-fidelity-orch-only";
-    const plan: PlanFixture = {
-      planId: 9104,
-      cr: "CR-ORCH-ONLY-1",
-      projectKey: "f13-fidelity-orch-only",
-      status: "open",
-      track: "track-1",
-      wave: "1",
-      orchestrator: "vidushi",
-      cycles: [{ id: 5202, label: "c1", status: "pending" }],
-    };
-    await mountApp({
-      pathname: `/p/${key}`,
-      projects: [project({ key, name: "Orchestrator Only Project" })],
-      events: [],
-      plans: [plan],
-    });
-    await openWorkflowTab();
-
-    const root = active().querySelector(
-      '[data-testid="workflow-cr-root"][data-cr="CR-ORCH-ONLY-1"]',
-    );
-    expect(root).not.toBeNull();
-    expect(norm(root!.textContent)).toBe("CR-ORCH-ONLY-1 — vidushi");
-  });
-
   // ── CR-CRU-037 §S3 — untitled plan renders as its CR, no orchestrator suffix ──
   // The ` — <orchestrator>` suffix must render ONLY when the plan carries a
   // real title; on an untitled plan (title null/undefined) the CR root must
