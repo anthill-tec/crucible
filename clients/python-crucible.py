@@ -154,7 +154,7 @@ def _request(method, path, payload=None):
         method=method,
     )
     try:
-        return json.loads(urllib.request.urlopen(req).read())
+        return json.loads(urllib.request.urlopen(req, timeout=10).read())
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
         return {"ok": False, "error": f"HTTP {e.code}: {body}"}
@@ -1070,11 +1070,24 @@ def cmd_status(args):
     project_dir = _resolve_project_dir(args.project_dir)
     resp = _get(_plans_path(project_dir))
     if not resp.get("ok"):
-        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
-        _emit_axi("status", False,
-                  {"plans": [], "lastRunCr": None, "help": _axi().HELP_STEPS["status"]},
-                  _axi_context(project_dir), [], legacy)
-        return 1
+        # CR-CRU-035 §S1 — hook-safe tolerant degrade: a plans-fetch failure
+        # (server unreachable / non-ok) is a DEFINITIVE unavailable data-state
+        # (AXI principle 5), NOT a command error. Emit ok:true + a structured
+        # status-unavailable warning + an empty board + a concrete help[]
+        # next-step, and exit 0 so a session-start hook can never hang or fail.
+        # This state is DISTINCT from the no-plan empty state below (that one
+        # carries NO warning) — the status-unavailable warning is the signal.
+        detail = (f"could not reach the Crucible server to read the board: "
+                  f"{resp.get('error')}")
+        legacy = f"[crucible] status: board unavailable — {resp.get('error')}"
+        _emit_axi("status", True,
+                  {"plans": [], "lastRunCr": None, "count": 0,
+                   "help": [f"check the Crucible server is running / reachable "
+                            f"at {CRUCIBLE_URL}"]},
+                  _axi_context(project_dir),
+                  [{"code": "status-unavailable", "detail": detail}],
+                  legacy)
+        return 0
     plans = resp.get("plans", [])
     full_rows = _axi().build_status_rows(plans)
     last = _axi().last_run_cr(plans)
