@@ -58,6 +58,7 @@ Fallback:
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import shutil
 import stat
@@ -672,6 +673,109 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
                                                           "failed", "cancelled"),
                            "gate.outcome is REQUIRED by the server even for an interim "
                            "snapshot")
+
+
+# ── CR-CRU-035 §S1: `status` is hook-safe -- tolerant + bounded ────────────
+
+
+class MvnCrucibleStatusHookSafeTest(_BaseMvnAxiTest):
+    """CR-CRU-035 §S1 -- `status` must be safe for a session-start hook: a
+    server-unreachable/plans-fetch-failure path must become a DEFINITIVE
+    degraded data-state (`ok:true` + `warnings[]` `status-unavailable` +
+    empty board + `help[]`), exiting 0 -- never today's `ok:false`/exit-1
+    command-error path. The no-open-plan empty state (existing behavior)
+    must stay DISTINCT from that degrade (AXI principle 5), and the
+    underlying plans fetch must be bounded by a short `timeout=`."""
+
+    def _run(self, argv, post_return=None, get_return=None, patch_return=None):
+        post_return = post_return if post_return is not None else {"ok": True}
+        with mock.patch.object(self.module, "_post", return_value=post_return,
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=get_return,
+                                create=True) as get_mock, \
+             mock.patch.object(self.module, "_patch", return_value=patch_return,
+                                create=True) as patch_mock:
+            code, out, err = _run_main(self.module, argv)
+        return code, out, err, post_mock, get_mock, patch_mock
+
+    def test_status_tolerant_when_plans_fetch_fails_emits_ok_true_status_unavailable_and_exits_zero(self):
+        code, out, _err, _p, _g, _pa = self._run(
+            ["status", "--project-dir", self.tmpdir],
+            get_return=self._plans_fetch_failure())
+
+        self.assertEqual(
+            code, 0,
+            f"a server-unreachable status must exit 0 (hook-safe), not the "
+            f"command-error path; stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertEqual(axi.get("verb"), "status")
+        self.assertIs(
+            axi.get("ok"), True,
+            "the unreachable degrade is a DEFINITIVE DATA state (AXI principle "
+            "5), not a command failure -- ok must be True")
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertIn("status-unavailable", codes,
+                      f"must carry a structured status-unavailable warning; got {axi!r}")
+        unavailable = next(w for w in axi.get("warnings", [])
+                            if w.get("code") == "status-unavailable")
+        self.assertTrue(unavailable.get("detail"),
+                         "the status-unavailable warning must carry a non-empty detail")
+        self.assertEqual(axi.get("plans"), [],
+                          "the unavailable state must report an EMPTY board, never "
+                          "fabricated/stale plan rows")
+        self.assertIsNone(axi.get("lastRunCr"))
+        help_steps = axi.get("help") or []
+        self.assertTrue(help_steps, "the unavailable envelope must carry a help[] "
+                                     "next-step hint (AXI principle 9)")
+        self.assertTrue(
+            any("server" in str(h).lower() or "crucible" in str(h).lower()
+                for h in help_steps),
+            f"the help[] hint must point at reaching/starting the Crucible "
+            f"server; got {help_steps!r}")
+
+    def test_status_no_open_plan_still_exits_zero_with_definitive_empty_state(self):
+        """Characterization -- existing behavior preserved: a REACHABLE server
+        with no open plan is the OTHER definitive empty state (`count:0`),
+        and it must stay DISTINCT from the status-unavailable degrade above
+        (AXI principle 5 -- never an ambiguous/conflated empty state)."""
+        code, out, _err, _p, _g, _pa = self._run(
+            ["status", "--project-dir", self.tmpdir],
+            get_return=self._no_open_plans_at_all())
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(axi.get("count"), 0)
+        self.assertEqual(
+            axi.get("warnings"), [],
+            "the no-plan empty state must NOT carry the status-unavailable "
+            "warning -- it is a DIFFERENT definitive state than the "
+            "server-unreachable degrade")
+
+    def test_status_plans_fetch_is_bounded_by_a_short_timeout(self):
+        """§S1 bounded fetch -- the underlying urlopen call must pass a short
+        `timeout=` so an unreachable/slow server can't hang a session-start
+        hook forever."""
+        fake_response = mock.MagicMock()
+        fake_response.read.return_value = json.dumps({"ok": True, "plans": []}).encode()
+
+        with mock.patch("urllib.request.urlopen", return_value=fake_response) as urlopen_mock:
+            result = self.module._get(self.module._plans_path(self.tmpdir))
+
+        self.assertTrue(urlopen_mock.called,
+                         "the fetch must go through urllib.request.urlopen")
+        _args, kwargs = urlopen_mock.call_args
+        timeout = kwargs.get("timeout")
+        self.assertIsNotNone(
+            timeout,
+            "urlopen must be called WITH a timeout= kwarg (bounded fetch) -- an "
+            "unbounded call can hang a session-start hook forever")
+        self.assertIsInstance(timeout, (int, float))
+        self.assertGreater(timeout, 0)
+        self.assertLessEqual(timeout, 15,
+                              f"the fetch timeout must be SHORT (hook-safe), got {timeout}")
+        self.assertTrue(result.get("ok"))
 
 
 # ── C6 VERIFY-fix: §S3 `no-wave` warning (CR-CRU-030 AC line 267) ──────────

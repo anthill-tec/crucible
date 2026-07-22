@@ -57,6 +57,7 @@ import contextlib
 import importlib.util
 import io
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -357,6 +358,79 @@ class SharedAxiNoTitleWarningTest(unittest.TestCase):
         self.assertNotIn("CR-BBB-002", warning_a.get("detail", ""),
                           "the detail must name ONLY the CR it was built for, "
                           "not a different CR")
+
+
+STATUS_CONTRACT_PATH = REPO_ROOT / "clients" / "STATUS-CONTRACT.md"
+
+
+class StatusContractDocTest(unittest.TestCase):
+    """CR-CRU-035 §S2 -- a versioned `status` envelope contract doc must live
+    WITH the clients (`clients/STATUS-CONTRACT.md`) so it ships and versions
+    with the code Model-B's generated session-start hook invokes.
+
+    RED: `clients/STATUS-CONTRACT.md` does not exist yet (confirmed by `ls
+    clients/`) -- reading it below raises FileNotFoundError, a valid
+    missing-SUT-doc RED (same convention as the missing-module RED above)."""
+
+    def _read_contract(self):
+        self.assertTrue(
+            STATUS_CONTRACT_PATH.exists(),
+            f"§S2 requires a versioned status contract doc committed at "
+            f"{STATUS_CONTRACT_PATH} (alongside the clients), so Model-B's "
+            f"generated hook can pin a version -- file does not exist")
+        return STATUS_CONTRACT_PATH.read_text()
+
+    def test_contract_doc_exists_and_documents_the_core_envelope_fields(self):
+        text = self._read_contract()
+        for field in ("ok", "context", "warnings", "plans", "lastRunCr"):
+            self.assertIn(
+                field, text,
+                f"the contract doc must name the top-level envelope field "
+                f"{field!r}; it is part of the §S2-pinned shape")
+        for row_field in ("cr", "wave", "status", "activeCycleId"):
+            self.assertIn(
+                row_field, text,
+                f"the contract doc must name the plans[] row field "
+                f"{row_field!r} (the §S6 base row schema)")
+
+    def test_contract_doc_names_the_active_cycle_id_and_label(self):
+        text = self._read_contract().lower()
+        self.assertIn(
+            "active cycle", text,
+            "the contract doc must document the single status:\"active\" "
+            "cycle (id + label) the plans[] row carries")
+        self.assertIn(
+            "label", text,
+            "the contract doc must document the active cycle's label field, "
+            "not just its id")
+
+    def test_contract_doc_carries_a_version_string(self):
+        text = self._read_contract()
+        self.assertTrue(
+            re.search(r"version[^\n]{0,40}\d", text, re.IGNORECASE),
+            f"the contract doc must assign the envelope a VERSION string "
+            f"(so Model-B's hook can pin what it renders); no "
+            f"'version ... <digit>' pattern found in {STATUS_CONTRACT_PATH}")
+
+    def test_contract_doc_documents_the_tolerant_status_unavailable_degrade_shape(self):
+        text = self._read_contract()
+        self.assertIn(
+            "status-unavailable", text,
+            "the contract doc must note the §S1 tolerant-degrade shape -- a "
+            "hook getting ok:true + warnings[] status-unavailable renders "
+            "'board unavailable', never fails")
+        normalized = text.lower().replace(" ", "").replace("`", "")
+        self.assertIn(
+            "ok:true", normalized,
+            "the contract doc must show the tolerant-degrade envelope is "
+            "ok:true (a definitive data-state, never a command failure)")
+
+    def test_contract_doc_names_axi_principles_satisfied_by_fields_and_behavior(self):
+        text = self._read_contract()
+        self.assertIn(
+            "principle", text.lower(),
+            "the contract doc must name the AXI principles (axi.md) each "
+            "field/behavior satisfies, per §S2's explicit requirement")
 
 
 if __name__ == "__main__":

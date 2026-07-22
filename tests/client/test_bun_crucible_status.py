@@ -51,6 +51,7 @@ Fallback:
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import shutil
 import sys
@@ -243,6 +244,10 @@ class StatusQueueTableTest(_BaseStatusTest):
                            "never a fabricated guess")
 
     def test_status_empty_queue_is_explicit_ok_true_not_error(self):
+        """CR-CRU-035 §S1: this NO-OPEN-PLAN empty state (a reachable server,
+        zero plans filed) must stay DISTINCT from the status-unavailable
+        degrade (AXI principle 5) -- it carries NO status-unavailable
+        warning, unlike a plans-fetch failure."""
         with mock.patch.object(self.module, "_get", return_value=_plans_response([])):
             code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
 
@@ -250,20 +255,81 @@ class StatusQueueTableTest(_BaseStatusTest):
         axi = self._decode_axi(out)
         self.assertIs(axi.get("ok"), True)
         self.assertEqual(axi.get("plans"), [])
+        self.assertEqual(
+            axi.get("warnings"), [],
+            "the no-plan empty state must NOT carry the status-unavailable "
+            "warning -- it is a DIFFERENT definitive state than the "
+            "server-unreachable degrade")
         combined = (out + err).lower()
         self.assertIn("no plan", combined,
                       f"an empty queue must carry a DEFINITIVE empty-state message "
                       f"(never bare empty stdout); got stdout={out!r} stderr={err!r}")
 
-    def test_status_surfaces_get_failure_as_ok_false(self):
+    def test_status_tolerant_when_plans_fetch_fails_emits_ok_true_status_unavailable_and_exits_zero(self):
+        """CR-CRU-035 §S1 RETARGET (was
+        `test_status_surfaces_get_failure_as_ok_false`, which pinned the OLD
+        ok:false/exit-1 command-error contract): `status` must be safe for a
+        session-start hook, so a plans-fetch failure (server unreachable) is
+        now a DEFINITIVE degraded data-state -- ok:true, a structured
+        `status-unavailable` warning, empty board, help[], exit 0 -- never a
+        command error."""
         with mock.patch.object(self.module, "_get",
                                 return_value={"ok": False, "error": "connection failed"}):
             code, out, err = _run_main(self.module, ["status", "--project-dir", self.tmpdir])
 
-        self.assertNotEqual(code, 0, "a failed GET must surface as a non-zero exit")
+        self.assertEqual(
+            code, 0,
+            f"a server-unreachable status must exit 0 (hook-safe), not the "
+            f"command-error path; stdout={out!r}")
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "status")
-        self.assertIs(axi.get("ok"), False)
+        self.assertIs(
+            axi.get("ok"), True,
+            "the unreachable degrade is a DEFINITIVE DATA state (AXI principle "
+            "5), not a command failure -- ok must be True")
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertIn("status-unavailable", codes,
+                      f"must carry a structured status-unavailable warning; got {axi!r}")
+        unavailable = next(w for w in axi.get("warnings", [])
+                            if w.get("code") == "status-unavailable")
+        self.assertTrue(unavailable.get("detail"),
+                         "the status-unavailable warning must carry a non-empty detail")
+        self.assertEqual(axi.get("plans"), [],
+                          "the unavailable state must report an EMPTY board, never "
+                          "fabricated/stale plan rows")
+        self.assertIsNone(axi.get("lastRunCr"))
+        help_steps = axi.get("help") or []
+        self.assertTrue(help_steps, "the unavailable envelope must carry a help[] "
+                                     "next-step hint (AXI principle 9)")
+        self.assertTrue(
+            any("server" in str(h).lower() or "crucible" in str(h).lower()
+                for h in help_steps),
+            f"the help[] hint must point at reaching/starting the Crucible "
+            f"server; got {help_steps!r}")
+
+    def test_status_plans_fetch_is_bounded_by_a_short_timeout(self):
+        """§S1 bounded fetch -- the underlying urlopen call must pass a short
+        `timeout=` so an unreachable/slow server can't hang a session-start
+        hook forever."""
+        fake_response = mock.MagicMock()
+        fake_response.read.return_value = json.dumps({"ok": True, "plans": []}).encode()
+
+        with mock.patch("urllib.request.urlopen", return_value=fake_response) as urlopen_mock:
+            result = self.module._get(self.module._plans_path(self.tmpdir))
+
+        self.assertTrue(urlopen_mock.called,
+                         "the fetch must go through urllib.request.urlopen")
+        _args, kwargs = urlopen_mock.call_args
+        timeout = kwargs.get("timeout")
+        self.assertIsNotNone(
+            timeout,
+            "urlopen must be called WITH a timeout= kwarg (bounded fetch) -- an "
+            "unbounded call can hang a session-start hook forever")
+        self.assertIsInstance(timeout, (int, float))
+        self.assertGreater(timeout, 0)
+        self.assertLessEqual(timeout, 15,
+                              f"the fetch timeout must be SHORT (hook-safe), got {timeout}")
+        self.assertTrue(result.get("ok"))
 
     def test_plans_alias_invokes_the_same_status_verb(self):
         plans = _plans_response([
