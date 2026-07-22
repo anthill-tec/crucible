@@ -3039,12 +3039,12 @@
             return;
           }
           detail.val = ev;
-          // §S4.1/F4 (§S3: no cold-load carve-out) — failures float:
-          // auto-expand ONLY the failing suites (fetch their leaves) on
-          // EVERY open — in-app clicks AND cold deep-link mounts, both
-          // presentations; all-pass suites stay folded and are never
-          // fetched until clicked.
-          autoExpandFailing(ev);
+          // CR-CRU-038 §S1 — an error run opens MINIMIZED: NO suite (failing
+          // or not) is auto-expanded/fetched on open. Every suite renders as
+          // a collapsed header (▸) carrying its inline ✗/✓ counts; leaves
+          // load only on an explicit suite-row click or when the failure-jump
+          // walks to a failing leaf. All-pass runs are unchanged (they never
+          // had a failing suite to auto-expand).
         } catch (err) {
           loadError.val = `run detail failed to load — ${String(err)}`;
         }
@@ -3071,12 +3071,6 @@
       async function expandSuite(name) {
         if (suiteLeaves.val[name] !== undefined) return;
         await loadSuite(name);
-      }
-
-      // §S4.1 — fetch (and thereby expand) exactly the failing suites.
-      function autoExpandFailing(ev) {
-        if (ev === null || ev === undefined || ev.kind !== "test") return;
-        for (const name of L.foldSuites(ev.tree ?? [])) void loadSuite(name);
       }
 
       // F4 — a failed leaf's failure box: inline (no click) in Detail until
@@ -3239,7 +3233,31 @@
           "data-testid": "heat-cell",
           class: `app-heat-cell app-heat-${status}`,
           title: suiteName,
-          onclick: () => void loadSuite(suiteName),
+          onclick: async () => {
+            // CR-CRU-038 §S1 — a heat cell on a suite that is still collapsed
+            // (the minimized-error-run default) is synthetic. Clicking it
+            // EXPANDS the suite (loads its leaves); a red cell additionally
+            // focus-opens the suite's first failing leaf's failure box (the
+            // CR-016 one-box focus model), so the click takes the user
+            // straight to that failure instead of just unfolding the tree.
+            await loadSuite(suiteName);
+            if (status !== "fail") return;
+            const leaves = suiteLeaves.val[suiteName] ?? [];
+            const failIdx = leaves.findIndex((l) => l.status === "fail");
+            if (failIdx < 0) return;
+            suiteWindow.val = {
+              ...suiteWindow.val,
+              [suiteName]: Math.max(0, failIdx - Math.floor(VIRT_WINDOW / 2)),
+            };
+            const leaf = leaves[failIdx];
+            if (leaf.failure !== undefined) {
+              openGroups.val = {
+                ...openGroups.val,
+                [`${suiteName}::${leaf.failure.message}`]: true,
+              };
+            }
+            focusedLeaf.val = `${suiteName}::${leaf.name}`;
+          },
         });
 
       const HeatStrip = (d) => {
@@ -3326,7 +3344,12 @@
       // box opens (focusedLeaf keeps ONE box open at a time — repeated
       // jumps move the box, they never accumulate) and its row scrolls
       // into the pane's viewport.
-      function jumpToNextFailure(d) {
+      async function jumpToNextFailure(d) {
+        // CR-CRU-038 §S1 — from the minimized default the failing suites'
+        // leaves aren't loaded yet, so failingLeafKeys() would be empty. Load
+        // (and thereby expand ▾) the failing suites on demand so the walk can
+        // reach every failing leaf; then advance the one-box focus cursor.
+        for (const name of L.foldSuites(d.tree ?? [])) await loadSuite(name);
         const keys = failingLeafKeys(d);
         if (keys.length === 0) return;
         jumpPos = (jumpPos + 1) % keys.length;
