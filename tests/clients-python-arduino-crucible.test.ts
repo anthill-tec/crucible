@@ -805,7 +805,7 @@ describe("clients/python-crucible.py — the no-XML fallback fix (headline bug, 
     const res = await runScript(PYTHON_SCRIPT_PATH, ["test", "--agent", "python-no-xml-agent", "--project-dir", dir], {
       cwd: dir,
       crucibleUrl: proxy.url,
-      env: { PYTHONPATH: "" },
+      env: { PYTHONPATH: "", PYTHONNOUSERSITE: "1" },
     });
 
     expect(res.code).not.toBe(0);
@@ -834,7 +834,7 @@ describe("clients/python-crucible.py — the no-XML fallback fix (headline bug, 
     const res = await runScript(
       PYTHON_SCRIPT_PATH,
       ["regression", "--agent", "python-no-xml-regression-agent", "--project-dir", dir],
-      { cwd: dir, crucibleUrl: proxy.url, env: { PYTHONPATH: "" } },
+      { cwd: dir, crucibleUrl: proxy.url, env: { PYTHONPATH: "", PYTHONNOUSERSITE: "1" } },
     );
 
     expect(res.code).not.toBe(0);
