@@ -779,6 +779,56 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
     expect(event.coverage?.functions?.total).toBe(6);
     expect(event.coverage?.functions?.covered).toBe(5);
   });
+
+  // CR-CRU-036 C4 FIX round — VERIFY finding: `_collect_coverage` runs
+  // `python -m coverage lcov -o <path>` with `cwd=project_dir`
+  // (clients/python-crucible.py:583). For a `-m` invocation Python prepends
+  // the CURRENT WORKING DIRECTORY to sys.path AHEAD of PYTHONPATH, so a
+  // `coverage/` subdirectory sitting directly in project_dir (e.g. a bogus
+  // namespace package with no `__main__.py`) is found FIRST — shadowing
+  // BOTH the real installed coverage.py and this fixture's own
+  // PYTHONPATH-supplied fake `coverage/__main__.py` — and
+  // `python -m coverage ...` fails outright ("No module named
+  // coverage.__main__; 'coverage' is a package and cannot be directly
+  // executed"), breaking collection. Empirically confirmed standalone
+  // before writing this test (see C4 RED report). This MUST fail today.
+  test("CR-CRU-036 C4: a `coverage/` directory present in project_dir does NOT shadow coverage.py collection — event.coverage STILL reflects the fake lcov output", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-pc-regression-coverage-dir-shadow");
+    const { dir, pythonPath } = fixtureDir(key);
+    // The shadow trigger: an otherwise-inert `coverage/` subdirectory
+    // living directly in project_dir (project_dir IS the subprocess cwd).
+    const shadowDir = join(dir, "coverage");
+    mkdirSync(shadowDir, { recursive: true });
+    writeFileSync(join(shadowDir, "__init__.py"), "");
+
+    const res = await runScript(
+      PYTHON_SCRIPT_PATH,
+      ["regression", "--coverage", "--agent", "python-coverage-shadow-agent", "--project-dir", dir],
+      {
+        cwd: dir,
+        crucibleUrl: baseUrl,
+        env: {
+          PYTHONPATH: pythonPath,
+          FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("regression_fixture", [{ name: "alpha" }]),
+          FAKE_XMLRUNNER_EXIT_CODE: "0",
+          FAKE_COVERAGE_LCOV: "SF:app/lib.py\nFNF:6\nFNH:5\nLF:20\nLH:17\nend_of_record\n",
+        },
+      },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+
+    expect(res.code).toBe(0);
+    expect(event.tier).toBe("regression");
+    expect(event.coverage?.lines?.total).toBe(20);
+    expect(event.coverage?.lines?.covered).toBe(17);
+    expect(event.coverage?.functions?.total).toBe(6);
+    expect(event.coverage?.functions?.covered).toBe(5);
+  });
 });
 
 describe("clients/python-crucible.py — the no-XML fallback fix (headline bug, CR-CRU-008 Implementation Notes): test AND regression carry REAL captured runner output, never the dead empty-string 400", () => {
@@ -1369,6 +1419,72 @@ describe("clients/arduino-crucible.py — pre-merge-gate: check (arduino-cli com
     expect(event.tier).not.toBe("regression");
     expect(event.compile?.raw).toBeDefined();
     expect(event.compile?.raw).toContain("FakeCompileError");
+  });
+});
+
+// CR-CRU-036 C4 FIX round — VERIFY finding: `auto-ingest` (clients/arduino-crucible.py:571-609)
+// was wired but only `--help`-tested; no real-server behavioral coverage
+// existed for it. This is a CHARACTERIZATION test — it drives the real
+// no-toolchain ingest path end to end and is expected to PASS on today's
+// code (a real bug here would be a genuine regression to report, not paper
+// over).
+describe("clients/arduino-crucible.py — auto-ingest subcommand: behavioral, no-toolchain ingest of a PRE-EXISTING native reports dir, tier:'unit', cycle auto-attach (CR-CRU-036 C4 FIX round)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  let proxy: ReturnType<typeof startCapturingProxy> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    proxy?.stop();
+    proxy = undefined;
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test("ingests a PRE-EXISTING tests/native/reports JUnit fixture with NO toolchain invoked (no fake make/arduino-cli on PATH) → posts to /api/v2/runs/parsed (never v1 /api/ingest/parsed) with tier:'unit'; with an active cycle seeded server-side (plan-file → cycle-activate), context.cycleId AUTO-ATTACHES", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-auto-ingest-behavioral");
+    // CR-CRU-036 §S9 fixture primitive: file a real OPEN plan, activate one
+    // of its two cycles, so the server has an active cycle to auto-attach.
+    const plan = await filePlan(baseUrl, key, "CR-AC-AUTO-INGEST");
+    const activeCycleId = plan.cycles[0]!.id;
+    await activateCycle(baseUrl, key, plan.planId, activeCycleId);
+
+    const dir = scratch.dir("arduino-crucible-auto-ingest-");
+    writeArduinoEnvFile(dir, key, "clients-ac-auto-ingest-behavioral");
+    // The arduino native reports convention (mirrors fixtureDirWithFakeMake
+    // above): <project_dir>/tests/native/reports/TEST-*.xml. Pre-placed and
+    // never touched — auto-ingest shells to NO toolchain at all.
+    const reportsDir = join(dir, "tests", "native", "reports");
+    mkdirSync(reportsDir, { recursive: true });
+    writeJunitXml(join(reportsDir, "TEST-native_fixture.xml"), "native_fixture", [
+      { name: "led_on" },
+      { name: "led_off" },
+    ]);
+    proxy = startCapturingProxy(baseUrl);
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["auto-ingest", "--agent", "arduino-auto-ingest-agent", "--project-dir", dir],
+      // Deliberately NO PATH override — no fake `make`/`arduino-cli` is
+      // needed (or wanted): a bug that shelled to a real toolchain here
+      // would be exactly the regression this test guards against.
+      { cwd: dir, crucibleUrl: proxy.url },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+
+    expect(res.code).toBe(0);
+    expect(event.tier).toBe("unit");
+    expect(event.summary?.total).toBe(2);
+    expect(event.summary?.passed).toBe(2);
+    expect(event.summary?.failed).toBe(0);
+    expect(event.context?.cycleId).toBe(activeCycleId);
+    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed")).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 });
 
