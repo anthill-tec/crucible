@@ -25,7 +25,16 @@ function longTrace(label: string, lines = 60): string {
   return rows.join("\n");
 }
 
-/** One `<testsuite>` with `failCount` tall failing leaves + 1 passing leaf. */
+/**
+ * One `<testsuite>` with `failCount` tall failing leaves + 1 passing leaf.
+ *
+ * CR-CRU-038 §S2b — carries a `<system-out>`/`<system-err>` pair so the
+ * ingested run has real captured raw output once the server stores+serves
+ * `RunEvent.raw` (this cycle's server-side work): without this, the
+ * frontend raw-toggle has nothing to reveal and the "I click the raw-toggle
+ * chip" scenario step in drilldown-dual-axis-scroll.feature exercises a
+ * dead control instead of real data.
+ */
 function suiteWithTallFailures(suiteName: string, failCount: number): string {
   const cases: string[] = [];
   for (let i = 1; i <= failCount; i++) {
@@ -34,6 +43,8 @@ function suiteWithTallFailures(suiteName: string, failCount: number): string {
     );
   }
   cases.push(`<testcase name="${suiteName}-pass" time="0.01"/>`);
+  cases.push(`<system-out>${suiteName} captured stdout output</system-out>`);
+  cases.push(`<system-err>${suiteName} captured stderr output</system-err>`);
   return [`<testsuite name="${suiteName}" tests="${failCount + 1}">`, ...cases, "</testsuite>"].join("\n");
 }
 
