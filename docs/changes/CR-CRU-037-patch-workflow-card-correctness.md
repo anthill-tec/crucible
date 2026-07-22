@@ -11,14 +11,18 @@
 Surfaced 2026-07-21 while running two **parallel** RED agents against the same
 active cycle (a valid, first-class Crucible pattern). Three related defects:
 
-1. **Parallel-agent liveness dimming is wrong.** The PROJECT card de-highlighted
-   one of two concurrently-registered, running agents. A registered agent that has
-   NOT unregistered must stay highlighted; only an agent that has **died without
-   unregistering** should be dimmed — and only that agent's own entry, never a
-   sibling. (Observed: `-ts` highlighted "seen just now" while `-py`, equally
-   valid, showed "died 6m ago / 0ms" and was dimmed. The `0ms`/orphan artifact
-   was a *reporting* problem, but the dimming rule itself must not punish a live
-   parallel agent.)
+1. **Parallel-agent liveness — the `agents online` COUNT disagrees with the
+   highlight rule.** The PROJECT card read a low online count while both agents
+   were valid, and one (`-py`) showed "died 6m ago / 0ms" dimmed. Root cause of the
+   *dimming*: `-py` genuinely crossed the tombstone window because its runs
+   **orphaned** through the stale `~/.claude/scripts/` mirror (its `lastSeen` never
+   updated) — an out-of-scope reporting problem (see Notes), NOT the dim rule
+   punishing parallels. The per-agent dim rule is in fact correct (a `tombstoned`
+   agent dims, that entry only; `online`/`stale` stay highlighted, siblings never
+   read). The real in-scope defect is the **`agentsOnline` count**: it counts only
+   `liveness === "online"` while the highlight boundary is `tombstoned`, so a
+   still-highlighted `stale` agent is not counted — the count disagrees with what
+   is highlighted.
 
 2. **`plan-file` does not warn when no title is given.** A plan filed without a
    title is silently untitled; the board then has nothing to show (see defect 3).
@@ -32,20 +36,22 @@ active cycle (a valid, first-class Crucible pattern). Three related defects:
 
 ## Scope
 
-### §S1 Agent-card liveness dimming — highlight the living, dim only the dead
-The PROJECT/agent card must derive an agent's highlighted-vs-dimmed state ONLY
-from liveness, per-agent and independent of siblings:
-- **Registered AND alive** (heartbeating / within the agent-inactive window, not
-  unregistered) → **highlighted**, whether or not it has reported a run yet, and
-  whether or not other agents are concurrently registered. Parallel agents are all
-  first-class — none is demoted for being one of several.
-- **Died without unregistering** (past the agent-inactive window with no
-  unregister) → **dimmed**, that entry ONLY.
-- **Unregistered cleanly** → per existing lifecycle rendering (not dimmed-as-dead).
-A "0 runs reported yet" state is NOT death — an agent that has registered but not
-yet ingested a run stays highlighted while alive. Fix the classification wherever
-it lives (server liveness/`online` computation and/or `public/app.js` agent-card
-dim class); the `1/N agents online` count must reflect the same rule.
+### §S1 Agent-card liveness — the count reflects the highlighted (non-tombstoned) set
+The per-agent dim rule is already correct and MUST be preserved (locked by
+regression tests): an agent's highlighted-vs-dimmed state derives ONLY from its own
+liveness (`store.livenessOf` on that agent's `lastSeen` silence), independent of
+siblings — `online`/`stale` → **highlighted**, `tombstoned` → **dimmed** (that
+entry ONLY), regardless of run count or how many agents are concurrently
+registered. Parallel agents are all first-class; a "0 runs yet" agent that is alive
+stays highlighted; an unregistered-cleanly agent renders per existing lifecycle
+(not dimmed-as-dead).
+
+The in-scope fix is the **`agentsOnline` count**: today it counts only
+`liveness === "online"` (`src/v2.ts` project summary) while the highlight/dim
+boundary is `tombstoned`, so a `stale` (still-highlighted) agent is not counted.
+Change the count to the **highlighted set = every non-tombstoned agent**
+(`online` + `stale`), so `N agents online` ≡ the number of highlighted agent rows.
+(Pruned agents are already removed from the list, so they never count.)
 
 ### §S2 `plan-file` no-title warning (client — all five clients / shared module)
 `plan-file` invoked without a resolvable title (`--title` unset) emits a
@@ -55,23 +61,30 @@ files (title is optional), but the orchestrator is told, so an untitled workflow
 is a deliberate choice, not an accident. Lands in `_crucible_axi.py` + all five
 clients' `plan-file` path.
 
-### §S3 Null-title board fallback → the CR
-Where the workflow/plan card resolves its display title, the fallback order is
-`title` → **`cr`** → (last resort) a neutral placeholder. The `orchestrator`
-field is NEVER used as the title. Applies to the workflow card + any list/roadmap
-row that titles a plan.
+### §S3 Untitled plan renders as its CR — no orchestrator suffix
+On the workflow CR-root card (`public/app.js` — currently
+`plan.cr` `· <title>?` `— <orchestrator>?`) and any list/roadmap row that titles a
+plan: the CR is always the primary identity (already rendered). The
+` — <orchestrator>` suffix renders **only when the plan carries a real title**; on
+an **untitled** plan (`title` null/undefined) the card renders **just the CR** (with
+its cycles), with NO orchestrator suffix — so an untitled workflow reads as its CR,
+never as the orchestrator's name. The `orchestrator` field is never the title nor
+the sole descriptor of an untitled plan.
 
 ## Acceptance criteria
-- [ ] Two agents registered concurrently against one project, both alive → BOTH
-      render highlighted; the `agents online` count == 2.
-- [ ] An agent that dies without unregistering (crosses the inactive window) → its
-      entry dims; a concurrently-alive sibling stays highlighted.
-- [ ] A registered agent that has reported zero runs but is alive → highlighted
-      (not dimmed as dead).
+- [ ] Two agents registered concurrently against one project, both alive
+      (online/stale) → BOTH render highlighted; the agents-online count == 2.
+- [ ] An agent that dies without unregistering (crosses the tombstone window) → its
+      entry dims (that entry ONLY); a concurrently-alive sibling stays highlighted.
+- [ ] A registered agent that has reported zero runs but is alive → highlighted.
+- [ ] The agents-online count == the number of non-tombstoned (highlighted) agent
+      rows — a `stale` (highlighted-but-quiet) agent IS counted; only `tombstoned`
+      agents are excluded.
 - [ ] `plan-file` with no `--title` → `warnings[]` carries `no-title` (+ stderr
       naming the CR); with `--title` → no warning; asserted for all five clients.
-- [ ] A plan with `title=null` renders the CR as the workflow-card title (never
-      the orchestrator); a titled plan renders its title.
+- [ ] A plan with `title` null/undefined renders as its CR alone (no
+      ` — orchestrator` suffix); a titled plan renders `CR · <title> — <orchestrator>`
+      (the orchestrator suffix appears ONLY with a title).
 
 ## Notes
 - The orphaned RED runs that made this visible came from agents reporting through
