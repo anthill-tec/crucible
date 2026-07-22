@@ -118,8 +118,13 @@ def _project_key(pd):
 # ── HTTP transport seam (mocked in-process by the client test harnesses) ─────
 
 
-def _request(method, path, payload=None):
-    """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error."""
+def _request(method, path, payload=None, timeout=None):
+    """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error.
+
+    CR-CRU-035 §S1 — `timeout=None` (the default) is UNBOUNDED: ingest POSTs
+    (`/api/v2/runs/parsed`) for a large regression/coverage run can legitimately
+    take the server >10s, and a short bound there is a false-negative. The short
+    hook-safe bound is applied ONLY on the status/plans read path via `_get`."""
     req = urllib.request.Request(
         CRUCIBLE + path,
         data=json.dumps(payload).encode() if payload is not None else None,
@@ -127,7 +132,7 @@ def _request(method, path, payload=None):
         method=method,
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             body = r.read().decode()
         return json.loads(body) if body else {"ok": True}
     except urllib.error.HTTPError as e:
@@ -142,8 +147,10 @@ def _post(path, payload):
     return _request("POST", path, payload)
 
 
-def _get(path):
-    return _request("GET", path)
+def _get(path, timeout=10):
+    # §S1 — the read path (status/plans) is bounded by a SHORT hook-safe timeout
+    # so an unreachable/slow server can't hang a session-start hook forever.
+    return _request("GET", path, timeout=timeout)
 
 
 def _patch(path, payload):
@@ -899,11 +906,24 @@ def cmd_status(args):
     project_dir = _project_dir(args)
     resp = _get(_plans_path(project_dir))
     if not resp.get("ok"):
-        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
-        _emit_axi("status", False,
-                  {"plans": [], "lastRunCr": None, "help": _axi().HELP_STEPS["status"]},
-                  _axi_context(project_dir), [], legacy)
-        return 1
+        # CR-CRU-035 §S1 — hook-safe tolerant degrade: a plans-fetch failure
+        # (server unreachable / non-ok) is a DEFINITIVE unavailable data-state
+        # (AXI principle 5), NOT a command error. Emit ok:true + a structured
+        # status-unavailable warning + an empty board + a concrete help[]
+        # next-step, and exit 0 so a session-start hook can never hang or fail.
+        # This state is DISTINCT from the no-plan empty state below (that one
+        # carries NO warning) — the status-unavailable warning is the signal.
+        detail = (f"could not reach the Crucible server to read the board: "
+                  f"{resp.get('error')}")
+        legacy = f"[crucible] status: board unavailable — {resp.get('error')}"
+        _emit_axi("status", True,
+                  {"plans": [], "lastRunCr": None, "count": 0,
+                   "help": [f"check the Crucible server is running / reachable "
+                            f"at {CRUCIBLE}"]},
+                  _axi_context(project_dir),
+                  [{"code": "status-unavailable", "detail": detail}],
+                  legacy)
+        return 0
     plans = resp.get("plans", [])
     full_rows = _axi().build_status_rows(plans)
     last = _axi().last_run_cr(plans)

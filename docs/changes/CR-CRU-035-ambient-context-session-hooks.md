@@ -41,10 +41,20 @@ already degrades on **no open plan** (exit 0, `ok:true`, empty envelope) — tha
 The gap is the **server-unreachable / plans-fetch-failure** path, which currently emits
 `ok:false` and **exits non-zero** (e.g. `python-crucible.py cmd_status` `return 1`). Fix
 it fleet-wide:
-- **Server unreachable / plans fetch fails →** emit a well-formed envelope with `ok:true`
-  and a `warnings[]` entry `{code:"status-unavailable", detail:"…"}` (+ a stderr line),
-  empty `plans[]` and `lastRunCr:null`, and **exit 0**. Never non-zero, never a raw
-  traceback, never a hang.
+The degraded output MUST stay AXI-compliant (axi.md): a TOON-AXI envelope on stdout
+(principle 1), a **definitive** unavailable state (principle 5 — never ambiguous empty
+output), structured on stdout not stderr (principle 6), with a next-step `help[]` hint
+(principle 9).
+- **Server unreachable / plans fetch fails →** a **DEFINITIVE degraded data-state**
+  (AXI principle 5), NOT a command error — so it stays exit 0 for hook-safety while
+  remaining AXI-honest. Emit the well-formed TOON-AXI envelope on STDOUT with `ok:true`,
+  a structured `warnings[]` entry `{code:"status-unavailable", detail:"…"}` (AXI
+  principle 6 — structured, on stdout), empty `plans[]` + `lastRunCr:null`, and a
+  `help[]` next-step hint (AXI principle 9, e.g. "check the Crucible server is running"),
+  and **exit 0**. The envelope EXPLICITLY signals unavailable (principle 5) — it must NOT
+  read like the "0 plans filed" empty state. A stderr line is supplementary debug ONLY
+  (AXI: stderr = debug/log), never the contract. Never non-zero, never a raw traceback,
+  never a hang.
 - **Bounded:** the plans fetch uses a short connect/read timeout (never the default
   unbounded socket wait) so an unreachable/slow server fails fast; `status` returns
   promptly regardless of server state.
@@ -60,6 +70,15 @@ alongside the clients so it versions with them:
 - Assign the contract a **version** so Model-B can pin what its hook renders; note the
   tolerant-degrade shape (§S1) as part of the contract (a hook that gets `ok:true` +
   `warnings[]` `status-unavailable` renders "board unavailable", never fails).
+- **AXI conventions (axi.md), modeled on the reference gh-axi CLI:** the envelope is
+  TOON (principle 1); the row schema stays minimal (principle 2 — the `cr,wave,status,
+  activeCycleId` base, `--fields` to extend); empty/unavailable states are DEFINITIVE
+  (principle 5 — explicit `count:0` "no plans" vs. an explicit `status-unavailable`
+  warning, never an ambiguous blank); structured output + warnings live on STDOUT, stderr
+  is debug only (principle 6); and every terminal state carries a `help[]` block of
+  CONCRETE next-step command templates (principle 9 — e.g. the unavailable state suggests
+  starting/reaching the Crucible server, the empty state suggests `plan-file`). The
+  contract doc names the principles each field/behavior satisfies.
 - The doc lives with the clients (`clients/` — e.g. the report-skill docs / a
   `STATUS-CONTRACT.md`), so it ships and versions with the code Model-B invokes.
 
