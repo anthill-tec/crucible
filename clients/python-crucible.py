@@ -533,6 +533,19 @@ def _no_xml_errors_text(result):
     return out or "xmlrunner produced no JUnit XML (import/syntax failure, no output captured)"
 
 
+def _is_zero_discovery(result):
+    """CR-CRU-039 §S2 — distinguish an HONEST empty discovery (the start_dir/pattern
+    matched nothing → "Ran 0 tests", no traceback) from a GENUINE import/collection
+    failure (the runner capture carries a Traceback). Only the former is a definitive
+    `no-tests-discovered` AXI error; the latter still routes to the compile-tier
+    ingest. Reads the combined runner capture (`result.stdout`, with stderr folded in
+    by `_run_logged`)."""
+    out = ((result.stdout or "") if hasattr(result, "stdout") else "").strip()
+    if "Traceback (most recent call last)" in out:
+        return False
+    return out == "" or "Ran 0 tests" in out
+
+
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
                    context=None, raw=None):
     """POST the client-parsed run (per-method leaf names) to /api/v2/runs/parsed.
@@ -698,6 +711,20 @@ def _regression_run(args):
     print(f"[crucible] xmlrunner exit={result.returncode}", file=sys.stderr)
 
     if not _produced_xml(reports_dir):
+        if _is_zero_discovery(result):
+            # §S2 — a discovery that COLLECTED ZERO TESTS (start_dir/pattern matched
+            # nothing) is a DEFINITIVE `no-tests-discovered` AXI error, NOT a masked
+            # compile ingest. The compile path below is reserved for a genuine
+            # import/collection failure (its capture carries a traceback).
+            detail = (f"0 tests discovered — start_dir={args.start_dir!r} "
+                      f"pattern={args.pattern!r} matched nothing")
+            warning = {"code": "no-tests-discovered", "detail": detail}
+            print(f"[crucible] ERROR: no-tests-discovered — {detail}", file=sys.stderr)
+            _emit_axi("regression", False,
+                      {"help": ["check --start-dir / --pattern; ensure the test dir "
+                                "is a package (has __init__.py)"]},
+                      _axi_context(project_dir, agent_id=args.agent), [warning])
+            return result.returncode or 1
         print("[crucible] ERROR: no JUnit XML produced — ingesting captured output as compile",
               file=sys.stderr)
         _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result),

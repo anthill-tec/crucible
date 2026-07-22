@@ -110,9 +110,20 @@ class RegressionDiscoversFullSuiteFromDefaultStartDirTest(unittest.TestCase):
         shutil.rmtree(self.reports_dir, ignore_errors=True)
 
     def test_default_start_dir_discovers_and_collects_the_full_suite(self):
+        # This test shells out to a full `discover -s tests` run, which — once
+        # tests/ is a package (§S1) — CORRECTLY collects this very test file. Left
+        # unguarded, the nested copy would spawn yet another full discovery, and so
+        # on without bound (a fork bomb). "Don't run the discovery-driver test
+        # inside its own discovery": the outer run marks the child process with an
+        # env sentinel so the nested copy skips itself, terminating the recursion
+        # at depth 1 while the rest of the suite (~374 tests) still runs.
+        if os.environ.get("CR039_S1_INNER_DISCOVERY"):
+            self.skipTest("inner discovery pass — skip the self-recursive driver")
         python = self.module._resolve_python(None, str(REPO_ROOT))
         cmd = self.module._xmlrunner_cmd(python, None, "tests", "test_*.py", self.reports_dir)
-        result = subprocess.run(cmd, cwd=str(REPO_ROOT), capture_output=True, text=True)
+        child_env = dict(os.environ, CR039_S1_INNER_DISCOVERY="1")
+        result = subprocess.run(
+            cmd, cwd=str(REPO_ROOT), capture_output=True, text=True, env=child_env)
 
         self.assertTrue(
             self.module._produced_xml(self.reports_dir),
