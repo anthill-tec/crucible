@@ -94,3 +94,22 @@ failure-jump + raw-output controls, and the per-test-preferred raw resolution.
   before the branch/RED — the density/drill-in test suite pins the current footer +
   auto-expand behavior and must be retargeted (RED owns the retarget) to the new
   minimized-default + header-control contract.
+
+## Implementation notes (gap-analysis, 2026-07-22)
+- **§S1 mechanism:** today a suite renders expanded iff its leaves are loaded
+  (`expanded = suiteLeaves[name] !== undefined`, `public/app.js` TestBody ~3455), and
+  `autoExpandFailing` (app.js:3077) load-expands every failing suite on drill-in
+  open. A minimized default therefore needs a suite-COLLAPSE UI state (mirror
+  `state.collapsedCycles`, app.js:36) DECOUPLED from leaves-loaded — the
+  failure-jump (`jumpToNextFailure`, app.js:3329) still needs the failing leaves
+  reachable, so it loads/expands its target suite on demand as it walks.
+- **§S2 reality:** the raw toggle reveals `d.raw` — a RUN-LEVEL blob (app.js:3477);
+  there is NO per-test raw field in the data model (only `d.raw` + `compile.raw`).
+  So "per-test-preferred" is FORWARD-COMPATIBLE only (resolve a per-leaf `raw` first
+  if/when present, else `d.raw`); today's effective behavior is run-level-or-hidden.
+  The "not working / not evident" root cause: the toggle BUTTON renders whenever
+  `failed ≥ 1` (`FailuresFooter`, app.js:3415) even when `d.raw` is absent, so it
+  reveals nothing — hence the hide-when-empty requirement.
+- **§S3:** relocate the `failure-jump` + `raw-toggle` buttons (`FailuresFooter`,
+  app.js:3413) to the drill-in header beside `DensityToggle` (app.js:1031); the raw
+  `<pre>` OUTPUT (app.js:3477) stays in the body scroller.
