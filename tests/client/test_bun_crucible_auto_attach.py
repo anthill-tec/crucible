@@ -297,6 +297,70 @@ class AutoAttachToActiveCycleTest(_BaseAutoAttachTest):
             ingest_call[0][1].get("context", {}).get("cycleId"), self.ACTIVE_CYCLE_ID)
 
 
+class RawCaptureInParsedPayloadTest(_BaseAutoAttachTest):
+    """CR-CRU-038 §S2b -- `_run_logged` already captures the wrapped bun
+    test runner's combined stdout+stderr (used today for §S2c
+    failure-marrying, `_marry_failures(tree, result.stdout)`); that SAME
+    captured output must ALSO flow into the /api/v2/runs/parsed payload as
+    `raw` so a real ingested run carries real output for the run-detail
+    raw-toggle to reveal. Fails today -- `_ingest_parsed` never builds a
+    `raw` key, regardless of what `_run_logged` captured."""
+
+    ACTIVE_CYCLE_ID = 910
+    RAW_MARKER = "BUN_RAW_CAPTURE_MARKER_9182"
+
+    FAKE_BUN_SCRIPT_WITH_STDOUT_TEMPLATE = """#!{python}
+import os
+import sys
+
+outfile = None
+for a in sys.argv[1:]:
+    if a.startswith("--reporter-outfile="):
+        outfile = a.split("=", 1)[1]
+
+content = os.environ.get("FAKE_BUN_JUNIT_CONTENT", "")
+if outfile and content:
+    d = os.path.dirname(outfile)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(outfile, "w") as f:
+        f.write(content)
+
+print("{marker}")
+sys.exit(int(os.environ.get("FAKE_BUN_EXIT_CODE", "0")))
+"""
+
+    def setUp(self):
+        super().setUp()
+        with open(self.fake_bun, "w") as f:
+            f.write(self.FAKE_BUN_SCRIPT_WITH_STDOUT_TEMPLATE.format(
+                python=sys.executable, marker=self.RAW_MARKER))
+        os.chmod(self.fake_bun, 0o755)
+
+    def _active_cycle_plans(self):
+        return _open_plans_response([
+            {"planId": "plan-active", "cr": "CR-CRU-030", "status": "open",
+             "cycles": [{"id": self.ACTIVE_CYCLE_ID, "status": "active"},
+                        {"id": self.ACTIVE_CYCLE_ID - 1, "status": "done"}]},
+        ])
+
+    def test_test_verb_includes_captured_runner_output_as_raw_in_parsed_payload(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans()):
+            code, out, _err = self._run_test_verb()
+
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNotNone(ingest_call, "the run must actually be POSTed")
+        payload = ingest_call[0][1]
+        self.assertIn(
+            self.RAW_MARKER, payload.get("raw") or "",
+            f"the real captured bun-test runner output must flow into the "
+            f"parsed ingest payload's `raw` field; got payload keys={sorted(payload)!r}",
+        )
+
+
 class NoActiveCycleHardErrorTest(_BaseAutoAttachTest):
     """CR-CRU-036 §S1 corrected §S9: WORKFLOW_CYCLE_ID unset + an OPEN plan
     definitively carrying NO active cycle -> WARN + WITHHOLD (ok:false,

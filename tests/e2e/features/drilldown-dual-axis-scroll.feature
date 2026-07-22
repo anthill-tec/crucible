@@ -33,7 +33,7 @@ Feature: CR-CRU-034 §S1+§S2 — the run-detail drill-down inherits CR-029's du
   this suite's fixed 640px viewport height) regardless of exact
   chrome/header pixel budgets.
 
-  Scenario: §S1 a run detail with ONE suite holding several tall failing leaves scrolls as a single bounded scroller — no inner 60vh trap, no dead space, footer and last failure reachable, jump and raw toggle keep working
+  Scenario: §S1 a run detail with ONE suite holding several tall failing leaves scrolls as a single bounded scroller — no inner 60vh trap, no dead space, header controls and last failure reachable, jump and raw toggle keep working
     Given the viewport is 1024x640
     And a project named "DDA Single Suite Project" is registered
     And a failing run with 3 tall failing leaves in one suite is ingested for agent "dda-single-suite"
@@ -41,19 +41,26 @@ Feature: CR-CRU-034 §S1+§S2 — the run-detail drill-down inherits CR-029's du
     And I click the "Runs" workspace tab
     And I click the event card for "dda-single-suite"
     Then the run overlay is visible
+    When I expand each of the 1 failing suites in the run detail
     And no suite-leaf scroll box in the run detail acts as an independent ~60vh scroller
-    And there is no dead space below the failures footer within the pane-scroll element
+    And there is no dead space below the last suite in the run detail within the pane-scroll element
     When I scroll the pane-scroll element to its maximum
     Then the last failing leaf's row is fully within the pane-scroll element's visible box
-    And the failures footer is fully within the pane-scroll element's visible box
+    And the failure-jump control is visible in the run-detail header
     When I click the failure-jump chip
     Then the focused failing leaf's failure box is fully within the pane-scroll element's visible box
     When I click the raw-toggle chip
-    Then there is no dead space below the failures footer within the pane-scroll element
+    Then there is no dead space below the last suite in the run detail within the pane-scroll element
     When I click the failure-jump chip
     Then clicking the failure-jump chip again advances to a different failing leaf
 
-  Scenario: §S1 Multi-suite — a run detail with 3 auto-expanded failing suites scrolls as the SAME single bounded scroller, no per-suite 60vh box stacks
+  # CR-CRU-038 §S1 RETARGET (2026-07-22): the run detail no longer
+  # auto-expands failing suites on open (they open MINIMIZED — header +
+  # counts only). This scenario's real intent is CR-034's dual-axis
+  # single-scroller behavior with the 3 suites' leaves actually on screen,
+  # so the 3 failing suites are now expanded EXPLICITLY (one click each)
+  # before the same scroll/no-60vh-trap assertions run.
+  Scenario: §S1 Multi-suite — a run detail with 3 failing suites expanded scrolls as the SAME single bounded scroller, no per-suite 60vh box stacks
     Given the viewport is 1024x640
     And a project named "DDA Multi Suite Project" is registered
     And a failing run with 3 failing suites, each with a tall failure, is ingested for agent "dda-multi-suite"
@@ -61,10 +68,11 @@ Feature: CR-CRU-034 §S1+§S2 — the run-detail drill-down inherits CR-029's du
     And I click the "Runs" workspace tab
     And I click the event card for "dda-multi-suite"
     Then the run overlay is visible
-    And each of the 3 failing suites in the run detail is auto-expanded
+    When I expand each of the 3 failing suites in the run detail
+    Then each of the 3 failing suites in the run detail is expanded
     And no suite-leaf scroll box in the run detail acts as an independent ~60vh scroller
     When I scroll the pane-scroll element to its maximum
-    Then the failures footer is fully within the pane-scroll element's visible box
+    Then the failure-jump control is visible in the run-detail header
 
   # §S2 — CR-CRU-029's own horizontal-affordance contract, now exercised
   # against the run-detail body specifically (its own e2e never covered

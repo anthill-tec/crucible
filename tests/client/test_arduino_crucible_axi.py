@@ -1070,6 +1070,47 @@ class ArduinoCrucibleToolchainTest(_BaseArduinoAxiTest):
             "the real native test run's ingest payload must carry the resolved cycle id",
         )
 
+    def test_test_verb_includes_captured_runner_output_as_raw_in_parsed_payload(self):
+        """CR-CRU-038 §S2b -- `_run_native_tests_body` captures `make junit`'s
+        combined output via `capture_output=True` (`run.stdout + run.stderr`,
+        already used for the no-reports error path); that captured output
+        must ALSO flow into the /api/v2/runs/parsed payload as `raw` for a
+        successful run. Fails today -- the payload built there has no `raw`
+        key at all."""
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        marker = "ARDUINO_RAW_CAPTURE_MARKER_3390"
+        native_dir = os.path.join(self.tmpdir, "tests", "native")
+        os.makedirs(native_dir, exist_ok=True)
+        with open(os.path.join(native_dir, "write_junit.py"), "w") as f:
+            f.write(
+                "import os\n"
+                "os.makedirs('reports', exist_ok=True)\n"
+                "with open('reports/TEST-Fixture.xml', 'w') as fh:\n"
+                f"    fh.write({PASS_NATIVE_JUNIT_XML!r})\n"
+            )
+        with open(os.path.join(native_dir, "Makefile"), "w") as f:
+            f.write(f"junit:\n\t@echo {marker}\n\t{sys.executable} write_junit.py\n")
+        with mock.patch.object(self.module, "_post",
+                                return_value={"ok": True,
+                                               "run": {"passed": 1, "failed": 0, "total": 1}},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._active_cycle_plans(51),
+                                create=True):
+            code, out, _err = _run_main(self.module, [
+                "test", "--project-dir", self.tmpdir, "--agent", "CR-A-raw",
+            ])
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNotNone(ingest_call, "the native make-junit run must actually be POSTed")
+        payload = ingest_call[0][1]
+        self.assertIn(
+            marker, payload.get("raw") or "",
+            f"the real captured native make-junit runner output must flow "
+            f"into the parsed ingest payload's `raw` field; got payload "
+            f"keys={sorted(payload)!r}",
+        )
+
     def test_check_verb_runs_arduino_cli_compile_and_ingests_compile_errors(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         fake_cli_dir = tempfile.mkdtemp(prefix="fake-arduino-cli-")

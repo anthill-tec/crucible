@@ -106,6 +106,8 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     agentId?: string;
     summary?: Partial<RunSummary>;
     coverage?: Coverage;
+    // CR-CRU-038 §S2b — optional run-level captured raw output.
+    raw?: string;
   }) {
     return {
       projectKey: overrides.projectKey,
@@ -126,6 +128,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
         },
       ],
       ...(overrides.coverage !== undefined ? { coverage: overrides.coverage } : {}),
+      ...(overrides.raw !== undefined ? { raw: overrides.raw } : {}),
     };
   }
 
@@ -286,6 +289,88 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
       expect(project!.agentsTotal).toBeGreaterThanOrEqual(1);
       expect(project!.lastEvent).not.toBeNull();
       expect(project!.latestGreenCoverage).not.toBeNull();
+    });
+  });
+
+  // CR-CRU-038 §S2b — server-side raw-output capture: `RunEvent.raw?: string`
+  // is stored by both ingest paths and served verbatim on the event GET.
+  // Neither ingest path accepts/stores/serves `raw` today (gap-analysis
+  // finding), so every test below FAILS until GREEN wires it through
+  // src/types.ts (RunEvent.raw) + src/store.ts (recordTestEvent) + src/v2.ts
+  // (handleRunsParsed / handleRuns already pass `run` through unchanged) +
+  // src/codecs/junit.ts (system-out/err extraction, see junit-codec.test.ts).
+  describe("raw-output capture — POST /api/v2/runs/parsed + POST /api/v2/runs (junit) → GET /api/v2/events/:id (CR-CRU-038 §S2b)", () => {
+    async function fetchEventRaw(eventId: string): Promise<Record<string, unknown>> {
+      const res = await getJson(`/api/v2/events/${eventId}`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: true; event: Record<string, unknown> };
+      return body.event;
+    }
+
+    test("POST .../runs/parsed with body.raw set → the stored event, fetched via GET /api/v2/events/:id, carries raw with that EXACT text", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject("raw-parsed-present");
+      const raw = "captured stdout line\ncaptured stderr line";
+
+      const ingestRes = await postJson("/api/v2/runs/parsed", parsedBody({ projectKey: key, raw }));
+      expect(ingestRes.status).toBe(200);
+      const ingestBody = (await ingestRes.json()) as OkResponse & { event: string };
+
+      const event = await fetchEventRaw(ingestBody.event);
+      expect(event.raw).toBe(raw);
+    });
+
+    test("POST .../runs/parsed WITHOUT a raw field → the stored event carries NO raw key at all (not fabricated as an empty string)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject("raw-parsed-absent");
+
+      const ingestRes = await postJson("/api/v2/runs/parsed", parsedBody({ projectKey: key }));
+      expect(ingestRes.status).toBe(200);
+      const ingestBody = (await ingestRes.json()) as OkResponse & { event: string };
+
+      const event = await fetchEventRaw(ingestBody.event);
+      expect(Object.prototype.hasOwnProperty.call(event, "raw")).toBe(false);
+    });
+
+    test("raw persists on a FAILING parsed ingest — unlike coverage, raw is never discarded on fail", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject("raw-parsed-failing");
+      const raw = "failure diagnostics blob";
+
+      const ingestRes = await postJson(
+        "/api/v2/runs/parsed",
+        parsedBody({ projectKey: key, raw, summary: { total: 5, passed: 4, failed: 1 } }),
+      );
+      expect(ingestRes.status).toBe(200);
+      const ingestBody = (await ingestRes.json()) as OkResponse & { event: string };
+
+      const event = await fetchEventRaw(ingestBody.event);
+      expect(event.raw).toBe(raw);
+    });
+
+    test("POST /api/v2/runs (codec:'junit') with <system-out>/<system-err> in the XML → the stored event carries raw containing both captured texts", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject("raw-junit-ingest");
+      const xml = [
+        '<testsuite name="RawSuite" tests="1">',
+        '<testcase name="t1" time="0.01"/>',
+        "<system-out>junit stdout capture</system-out>",
+        "<system-err>junit stderr capture</system-err>",
+        "</testsuite>",
+      ].join("\n");
+
+      const ingestRes = await postJson("/api/v2/runs", {
+        projectKey: key,
+        agentId: "junit-raw-agent",
+        codec: "junit",
+        data: xml,
+      });
+      expect(ingestRes.status).toBe(200);
+      const ingestBody = (await ingestRes.json()) as OkResponse & { event: string };
+
+      const event = await fetchEventRaw(ingestBody.event);
+      expect(event.raw).toContain("junit stdout capture");
+      expect(event.raw).toContain("junit stderr capture");
     });
   });
 

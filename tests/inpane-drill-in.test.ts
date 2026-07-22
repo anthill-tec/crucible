@@ -65,6 +65,11 @@ interface LeafFixture {
   status: "pass" | "fail" | "pending";
   duration_ms: number;
   failure?: FailureFixture;
+  /** CR-CRU-038 §S2 forward-compat — a per-leaf captured raw blob; when
+   * present it is preferred over the run-level `EventDetailFixture.raw`
+   * (no real reporter sets this yet — see Implementation notes in
+   * docs/changes/CR-CRU-038-patch-run-detail-controls.md). */
+  raw?: string;
 }
 interface SuiteFixture {
   name: string;
@@ -1490,7 +1495,12 @@ describe("§S2 focus-model contract — failures-footer jump focus-opens each ta
     };
 
     try {
-      const jumpBtn = pane!.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
+      // CR-CRU-038 §S3 RETARGET (2026-07-22): failure-jump moved OUT of the
+      // pane's own body (`workspace-runs`) into the drill-in HEADER — a
+      // SIBLING of `workspace-runs` inside `run-overlay`, not a descendant
+      // of it. Query at `document` (was `pane!.querySelector`, which would
+      // now find nothing since the jump chip no longer lives in the pane).
+      const jumpBtn = document.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
       expect(jumpBtn).not.toBeNull();
 
       jumpBtn!.click();
@@ -1521,5 +1531,203 @@ describe("§S2 focus-model contract — failures-footer jump focus-opens each ta
     } finally {
       HTMLElementCtor.prototype.scrollIntoView = originalScrollIntoView;
     }
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// CR-CRU-038 C2 §S2 — raw-output toggle: hidden entirely when the run has
+// NO raw (neither per-leaf nor run-level), and per-failing-test raw
+// preferred over the run-level blob when both exist
+// (docs/changes/CR-CRU-038-patch-run-detail-controls.md §S2).
+//
+// RED phase: expected to FAIL against the CURRENT public/app.js —
+// `FailuresFooter` (app.js:3436) renders `[data-testid="raw-toggle"]`
+// whenever `d.summary.failed >= 1`, with NO check that `d.raw` (or any
+// per-leaf raw) actually exists, so "hidden when empty" fails (the button
+// renders anyway, revealing nothing on click). And `TestBody`'s reveal
+// (`showRaw.val && typeof d.raw === "string"`, app.js:3500) only ever
+// looks at the run-level `d.raw` — there is no per-leaf raw concept at
+// all today — so the preference test fails too (today it would show the
+// RUN-level blob's text, never the leaf's).
+// ────────────────────────────────────────────────────────────────────────
+
+function rawPreferenceFixture(
+  eventId: string,
+  projectKey: string,
+  now: number,
+  opts: { runRaw?: string; leafRaw?: string },
+) {
+  const failLeaf: LeafFixture = {
+    name: "rawFail",
+    status: "fail",
+    duration_ms: 6,
+    failure: { message: "raw fixture failed" },
+  };
+  if (opts.leafRaw !== undefined) failLeaf.raw = opts.leafRaw;
+  const detail: EventDetailFixture = {
+    id: eventId,
+    projectKey,
+    agentId: "raw-agent",
+    kind: "test",
+    tier: "unit",
+    codec: "junit",
+    timestamp: now,
+    summary: { total: 2, passed: 1, failed: 1, pending: 0, duration_ms: 300 },
+    tree: [
+      {
+        name: "SuiteRaw",
+        status: "fail",
+        children: [{ name: "rawPass", status: "pass", duration_ms: 5 }, failLeaf],
+      },
+    ],
+  };
+  if (opts.runRaw !== undefined) detail.raw = opts.runRaw;
+  const brief: EventBriefFixture = {
+    id: eventId,
+    projectKey,
+    agentId: "raw-agent",
+    kind: "test",
+    tier: "unit",
+    codec: "junit",
+    timestamp: now,
+    total: 2,
+    passed: 1,
+    failed: 1,
+    pending: 0,
+    duration_ms: 300,
+    hasCoverage: false,
+  };
+  return { detail, brief };
+}
+
+describe("§S2 (CR-CRU-038) — raw-output toggle hidden when empty; per-failing-test raw preferred over the run-level blob", () => {
+  test("an error run with NEITHER a per-leaf raw NOR a run-level raw blob renders NO raw-toggle control at all, though the failure-jump still renders", async () => {
+    const now = Date.now();
+    const eventId = "evt-s2-raw-empty-1";
+    const projectKey = "proj-s2-raw-empty-1";
+    const fx = rawPreferenceFixture(eventId, projectKey, now, {});
+    await mountApp({
+      pathname: `/p/${projectKey}/run/${eventId}`,
+      projects: [project({ key: projectKey, name: "Raw Empty Project" })],
+      events: [fx.brief],
+      eventDetails: { [eventId]: fx.detail },
+    });
+
+    // Bound: the absence is specific to raw, not a wholesale "nothing
+    // renders because there are no controls at all" — the failing run
+    // still has a failure-jump (unaffected by raw availability).
+    expect(document.querySelector('[data-testid="failure-jump"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="raw-toggle"]')).toBeNull();
+    expect(document.querySelector('[data-testid="raw-output"]')).toBeNull();
+  });
+
+  test("a per-leaf raw is preferred over the run-level raw blob when both are present; the raw-toggle reveals it inside the body scroller and a second click hides it again", async () => {
+    const now = Date.now();
+    const eventId = "evt-s2-raw-pref-1";
+    const projectKey = "proj-s2-raw-pref-1";
+    const fx = rawPreferenceFixture(eventId, projectKey, now, {
+      runRaw: "RUN-LEVEL BLOB — must NOT surface once a per-leaf raw exists",
+      leafRaw: "LEAF-LEVEL RAW — the preferred capture for the failing test",
+    });
+    await mountApp({
+      pathname: `/p/${projectKey}/run/${eventId}`,
+      projects: [project({ key: projectKey, name: "Raw Preference Project" })],
+      events: [fx.brief],
+      eventDetails: { [eventId]: fx.detail },
+    });
+
+    // Load the failing suite's leaves (§S1 minimized default) so the
+    // per-leaf raw is actually reachable before resolving preference.
+    const suiteRow = findByText(document, '[data-testid="suite-row"]', "SuiteRaw");
+    expect(suiteRow).toBeDefined();
+    suiteRow!.click();
+    await settle();
+    expect(document.querySelector('[data-testid="leaf-row"]')).not.toBeNull();
+
+    const rawToggle = document.querySelector('[data-testid="raw-toggle"]') as HTMLElement | null;
+    expect(rawToggle).not.toBeNull();
+    expect(document.querySelector('[data-testid="raw-output"]')).toBeNull();
+
+    rawToggle!.click();
+    await settle();
+    const runsPane = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement | null;
+    expect(runsPane).not.toBeNull();
+    const rawOutputEl = runsPane!.querySelector('[data-testid="raw-output"]');
+    expect(rawOutputEl).not.toBeNull();
+    expect((rawOutputEl!.textContent ?? "")).toContain(
+      "LEAF-LEVEL RAW — the preferred capture for the failing test",
+    );
+    expect((rawOutputEl!.textContent ?? "")).not.toContain("RUN-LEVEL BLOB");
+
+    rawToggle!.click();
+    await settle();
+    expect(document.querySelector('[data-testid="raw-output"]')).toBeNull();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// CR-CRU-038 C2 §S3 — failure-jump + raw-toggle relocate to the drill-in
+// HEADER, adjacent to the density chip; the footer that used to carry
+// both is retired entirely (nothing else lived there)
+// (docs/changes/CR-CRU-038-patch-run-detail-controls.md §S3).
+//
+// RED phase: expected to FAIL against the CURRENT public/app.js —
+// `FailuresFooter` (app.js:3436) mounts both controls at the BOTTOM of
+// `TestBody`, inside `workspace-runs`'s own `pane-scroll` body, and
+// `[data-testid="failures-footer"]` still exists in the DOM (so the
+// footer-absence assertion fails), and neither control is a sibling of
+// `[data-testid="density-toggle"]` (so the parentElement-adjacency
+// assertions fail too).
+// ────────────────────────────────────────────────────────────────────────
+
+describe("§S3 (CR-CRU-038) — failure-jump + raw-toggle relocated to the header, adjacent to the density chip; footer retired", () => {
+  test("both controls render as siblings of the density chip in the header; the failures-footer element no longer exists anywhere, and neither control is a descendant of the body pane", async () => {
+    const now = Date.now();
+    const eventId = "evt-s3-header-1";
+    const projectKey = "proj-s3-header-1";
+    const fx = regressionTwoFailuresFixture(eventId, projectKey, now);
+    const detailWithRaw: EventDetailFixture = {
+      ...fx.detail,
+      raw: "raw output for the header-placement fixture",
+    };
+    await mountApp({
+      pathname: `/p/${projectKey}/run/${eventId}`,
+      projects: [project({ key: projectKey, name: "Header Placement Project" })],
+      events: [fx.brief],
+      eventDetails: { [eventId]: detailWithRaw },
+    });
+
+    // The footer carried ONLY the jump + raw-toggle; both moved to the
+    // header, so the footer itself no longer exists at all.
+    expect(document.querySelector('[data-testid="failures-footer"]')).toBeNull();
+
+    const densityToggle = document.querySelector('[data-testid="density-toggle"]') as HTMLElement | null;
+    expect(densityToggle).not.toBeNull();
+    const jump = document.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
+    expect(jump).not.toBeNull();
+    const rawToggle = document.querySelector('[data-testid="raw-toggle"]') as HTMLElement | null;
+    expect(rawToggle).not.toBeNull();
+
+    // "Adjacent to the density chip" — both new controls share the
+    // density chip's own immediate parent container (the header).
+    expect(jump!.parentElement).toBe(densityToggle!.parentElement);
+    expect(rawToggle!.parentElement).toBe(densityToggle!.parentElement);
+
+    // Neither control is a descendant of the body pane any more — that is
+    // where FailuresFooter used to mount them, at the bottom of the tree.
+    const runsPane = document.querySelector('[data-testid="workspace-runs"]') as HTMLElement | null;
+    expect(runsPane).not.toBeNull();
+    expect(runsPane!.querySelector('[data-testid="failure-jump"]')).toBeNull();
+    expect(runsPane!.querySelector('[data-testid="raw-toggle"]')).toBeNull();
+
+    // §S2 — the raw <pre> OUTPUT itself still renders inside the body
+    // scroller (not the header) once the header's toggle is clicked.
+    rawToggle!.click();
+    await settle();
+    const rawOutputEl = document.querySelector('[data-testid="raw-output"]');
+    expect(rawOutputEl).not.toBeNull();
+    expect((rawOutputEl!.textContent ?? "")).toContain("raw output for the header-placement fixture");
+    expect(runsPane!.contains(rawOutputEl!)).toBe(true);
+    expect(densityToggle!.parentElement!.contains(rawOutputEl!)).toBe(false);
   });
 });

@@ -521,6 +521,11 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     context = _ingest_context(cycle_id)
     if context:
         payload["context"] = context
+    # CR-CRU-038 §S2b — the captured make-junit output rides along as `raw` so
+    # the server-stored run carries real output for the run-detail raw-toggle.
+    raw = (run.stdout or "") + (run.stderr or "")
+    if raw:
+        payload["raw"] = raw
     resp = _post("/api/v2/runs/parsed", payload)
     print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed (ingest ok={resp.get('ok')})", file=sys.stderr)

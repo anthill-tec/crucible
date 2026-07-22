@@ -792,6 +792,12 @@ def _regression_ingest_run(args):
     context = _run_context()
     if context:
         payload["context"] = context
+    # CR-CRU-038 §S2b — the captured llvm-cov nextest output rides along as
+    # `raw` so the server-stored run carries real output for the run-detail
+    # raw-toggle to reveal.
+    raw = (result.stdout or "") + (result.stderr or "")
+    if raw:
+        payload["raw"] = raw
 
     resp = _post("/api/v2/runs/parsed", payload)
     cov_line = ""

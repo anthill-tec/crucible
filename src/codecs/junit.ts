@@ -175,6 +175,23 @@ function collectSuites(testsuite: XmlElement, out: SuiteNode[]): void {
   }
 }
 
+/**
+ * CR-CRU-038 §S2b — recursively collect run-level captured output:
+ * <system-out>/<system-err> at the <testsuites> wrapper level AND aggregated
+ * across nested <testsuite> elements. Text already has entities/CDATA decoded
+ * by parseXml, so it is used verbatim.
+ */
+function collectRawOutput(el: XmlElement, out: string[]): void {
+  for (const child of el.children) {
+    if (child.name === "system-out" || child.name === "system-err") {
+      const text = child.text.trim();
+      if (text.length > 0) out.push(text);
+    } else if (child.name === "testsuite" || child.name === "testsuites") {
+      collectRawOutput(child, out);
+    }
+  }
+}
+
 export function parseJunit(xml: string): RunSchema {
   const root = parseXml(xml);
   let suites: XmlElement[];
@@ -189,7 +206,11 @@ export function parseJunit(xml: string): RunSchema {
   for (const suite of suites) {
     collectSuites(suite, tree);
   }
-  return { summary: summarize(tree), tree };
+  const rawParts: string[] = [];
+  collectRawOutput(root, rawParts);
+  const result: RunSchema = { summary: summarize(tree), tree };
+  if (rawParts.length > 0) result.raw = rawParts.join("\n");
+  return result;
 }
 
 export async function parseJunitPath(path: string): Promise<RunSchema> {

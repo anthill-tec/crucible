@@ -346,11 +346,24 @@ describe("§S3 — test-run drill-in body (suite tree + failure box)", () => {
     const overlay = document.querySelector('[data-testid="run-overlay"]');
     expect(overlay).not.toBeNull();
 
-    // RECONCILED (F4 anatomy, both-modes auto-expand — approved 2026-07-15):
-    // the FAILING suite (SuiteA) is fetched and its leaves rendered on OPEN,
-    // no suite-row click needed — was: "no leaves yet ... suiteARow!.click()".
+    // CR-CRU-038 §S1 RETARGET (2026-07-22): was "the FAILING suite (SuiteA)
+    // is fetched and its leaves rendered on OPEN, no suite-row click
+    // needed" — auto-expand-on-open is retired; the run opens MINIMIZED
+    // (matching this test's own title: "expanding the failing suite ...
+    // reveals failure.message + trace" — an explicit expand action).
     const suiteRows = overlay!.querySelectorAll('[data-testid="suite-row"]');
     expect(suiteRows.length).toBe(2);
+
+    expect(
+      fetchLog.some((u) => u.includes(`/api/v2/events/${eventId}`) && u.includes("suite=SuiteA")),
+    ).toBe(false);
+    expect(overlay!.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+
+    const suiteARow = findByText(overlay!, '[data-testid="suite-row"]', "SuiteA");
+    expect(suiteARow).toBeDefined();
+    expect(suiteARow!.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
+    suiteARow!.click();
+    await settle();
 
     const suiteAFetch = fetchLog.find(
       (u) => u.includes(`/api/v2/events/${eventId}`) && u.includes("suite=SuiteA"),
@@ -876,20 +889,15 @@ describe("§S3 — cold load of /p/<key>/run/<id>", () => {
     expect((overlay!.textContent ?? "")).toContain("ColdSuite");
   });
 
-  // CR-CRU-007 VERIFY-findings fix (2026-07-15) — FINDING 2: §S3 states
-  // "failing suites auto-expand in BOTH modes" with NO cold-load carve-out,
-  // but public/app.js:802-847 gates the Detail-mode auto-expand behind
-  // `openedInApp` (captured from `overlayViaNavigate`, which is only true
-  // for an in-app card/marker click) — `presentationOf(ev) === "Density" ||
-  // openedInApp`. A cold mount at `/p/<key>/run/<id>` never sets
-  // `overlayViaNavigate`, so a Detail-mode (unit/module/integration) cold
-  // deep-link into a FAILING run renders collapsed, contradicting the spec.
-  // The test above only asserted suite-row COUNT + suite name text (true
-  // even with the failing suite collapsed) and stayed green through this
-  // bug — these two tests pin the real rendered outcome: the failing
-  // suite's leaves + inline failure box must appear on cold mount with NO
-  // click, in Detail presentation, exactly as a warm (in-app) open does.
-  test("cold-mounting /p/<key>/run/<id> for a unit-tier (Detail) run with a FAILING suite auto-expands it: fetches ?suite=<failing> with no click and renders the failed leaf's failure-box inline", async () => {
+  // CR-CRU-038 §S1 RETARGET (2026-07-22): was "... a FAILING suite
+  // auto-expands it: fetches ?suite=<failing> with no click and renders
+  // the failed leaf's failure-box inline" — auto-expand-on-open is retired
+  // (both warm in-app opens and cold deep-links now share the SAME
+  // minimized default: header + counts only, leaves collapsed). This test
+  // now pins that a cold deep-link into a FAILING run renders MINIMIZED
+  // exactly like a warm open would, and that the suite is still reachable
+  // via an explicit suite-row click.
+  test("cold-mounting /p/<key>/run/<id> for a unit-tier (Detail) run with a FAILING suite renders it MINIMIZED (no auto-fetch, no leaf-row); an explicit suite-row click still fetches ?suite=<failing> and renders the failed leaf's failure-box inline", async () => {
     const now = Date.now();
     const eventId = "evt-cold-autoexpand-fail";
     const projectKey = "proj-cold-autoexpand";
@@ -953,23 +961,34 @@ describe("§S3 — cold load of /p/<key>/run/<id>", () => {
     const overlay = document.querySelector('[data-testid="run-overlay"]');
     expect(overlay).not.toBeNull();
 
-    // The FAILING suite's leaves fetch fired with NO click on the suite-row.
+    // CR-CRU-038 §S1 — the FAILING suite's leaves are NOT fetched on cold
+    // mount; it renders MINIMIZED (header + counts, collapsed toggle).
+    expect(fetchLog.some((u) => u.includes(`suite=${encodeURIComponent("ColdFailSuite")}`))).toBe(false);
+    expect(overlay!.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+    expect(overlay!.querySelector('[data-testid="failure-box"]')).toBeNull();
+    const coldFailSuiteRow = findByText(overlay!, '[data-testid="suite-row"]', "ColdFailSuite");
+    expect(coldFailSuiteRow).toBeDefined();
+    expect(coldFailSuiteRow!.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
+
+    // Bound: the PASSING suite stays collapsed on cold load too (folded
+    // rule is unaffected by this fix) — never fetched, no leaf-row.
+    expect(fetchLog.some((u) => u.includes(`suite=${encodeURIComponent("ColdPassSuite")}`))).toBe(false);
+    expect(findByText(overlay!, '[data-testid="leaf-row"]', "coldOkLeaf2")).toBeUndefined();
+
+    // The suite is still reachable on demand: an explicit click fetches +
+    // renders its leaves and the failed leaf's inline failure box.
+    coldFailSuiteRow!.click();
+    await settle();
     expect(fetchLog.some((u) => u.includes(`suite=${encodeURIComponent("ColdFailSuite")}`))).toBe(true);
     const badLeafRow = findByText(overlay!, '[data-testid="leaf-row"]', "coldBadLeaf");
     expect(badLeafRow).toBeDefined();
     const okLeafRow = findByText(overlay!, '[data-testid="leaf-row"]', "coldOkLeaf");
     expect(okLeafRow).toBeDefined();
 
-    // The inline failure box renders with no click on the failed leaf-row.
     const failureBox = overlay!.querySelector('[data-testid="failure-box"]');
     expect(failureBox).not.toBeNull();
     expect((failureBox!.textContent ?? "")).toContain("cold deep-link failure");
     expect((failureBox!.textContent ?? "")).toContain("at file.ts:9:1");
-
-    // Bound: the PASSING suite stays collapsed on cold load too (folded
-    // rule is unaffected by this fix) — never fetched, no leaf-row.
-    expect(fetchLog.some((u) => u.includes(`suite=${encodeURIComponent("ColdPassSuite")}`))).toBe(false);
-    expect(findByText(overlay!, '[data-testid="leaf-row"]', "coldOkLeaf2")).toBeUndefined();
   });
 
   test("cold-mounting /p/<key>/run/<id> for an ALL-PASS unit-tier run fetches nothing beyond ?depth=suites (no ?suite= fetch, no leaf-row) — protects §S4.5 progressive paging", async () => {
@@ -1343,9 +1362,19 @@ describe("§S4.5 — progressive payload (suites-first paging)", () => {
     const overlay = document.querySelector('[data-testid="run-overlay"]');
     expect(overlay).not.toBeNull();
 
-    // RECONCILED (F4 anatomy, both-modes auto-expand — approved 2026-07-15):
-    // ProgSuiteC (failing) is fetched and expanded ON OPEN, no suite-row
-    // click needed — was: "suiteCRow!.click()" before asserting the fetch.
+    // CR-CRU-038 §S1 RETARGET (2026-07-22): was "ProgSuiteC (failing) is
+    // fetched and expanded ON OPEN, no suite-row click needed" —
+    // auto-expand-on-open is retired; ProgSuiteC opens MINIMIZED exactly
+    // like ProgSuiteD, matching this test's own title ("expanding a
+    // suite..."). Restore the explicit suite-row click this test's title
+    // always described.
+    expect(fetchLog.some((u) => u.includes("suite=ProgSuiteC"))).toBe(false);
+    expect(overlay!.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+    const suiteCRow = findByText(overlay!, '[data-testid="suite-row"]', "ProgSuiteC");
+    expect(suiteCRow).toBeDefined();
+    suiteCRow!.click();
+    await settle();
+
     const suiteCFetch = fetchLog.find(
       (u) => u.includes(`/api/v2/events/${eventId}`) && u.includes("suite=ProgSuiteC"),
     );
@@ -1356,8 +1385,8 @@ describe("§S4.5 — progressive payload (suites-first paging)", () => {
     const leafTexts = Array.from(leafRows).map((l) => l.textContent ?? "");
     expect(leafTexts.some((t) => t.includes("cFail"))).toBe(true);
     expect(leafTexts.some((t) => t.includes("cPass"))).toBe(true);
-    // bound: ProgSuiteD (passing) was never AUTO-expanded — none of its
-    // leaves fetched/rendered until clicked.
+    // bound: ProgSuiteD (passing) still not fetched — only ITS OWN click
+    // loads it; ProgSuiteC's click above didn't spill over.
     expect(leafTexts.some((t) => t.includes("dPass"))).toBe(false);
     expect(fetchLog.some((u) => u.includes("suite=ProgSuiteD"))).toBe(false);
 
@@ -1411,7 +1440,12 @@ describe("§S4.5 — progressive payload (suites-first paging)", () => {
 //     `[data-testid="raw-output"]` containing the event detail's stored
 //     `raw` field (test events get a `raw` field too now, not just compile).
 describe("F4 anatomy — tree lines, ▾/▸ affordance, fail-first counts", () => {
-  test("suite/leaf rows are tree-line elements with a ▾/▸ affordance and fail-first `F ✗ P ✓` counts; a failing suite auto-expands on open in Detail mode with no click", async () => {
+  // CR-CRU-038 §S1 RETARGET (2026-07-22): was "... a failing suite
+  // auto-expands on open in Detail mode with no click" — auto-expand-on-
+  // open is retired; SuiteFail now opens MINIMIZED (▸) exactly like
+  // SuitePass and is expanded via an explicit suite-row click before the
+  // per-leaf/failure-box assertions below run.
+  test("suite/leaf rows are tree-line elements with a ▾/▸ affordance and fail-first `F ✗ P ✓` counts; a failing suite opens MINIMIZED (▸) and expands on an explicit suite-row click", async () => {
     const now = Date.now();
     const eventId = "evt-anatomy-1";
     const projectKey = "proj-anatomy-1";
@@ -1491,10 +1525,11 @@ describe("F4 anatomy — tree lines, ▾/▸ affordance, fail-first counts", () 
     expect(suitePassRow).toBeDefined();
     expect(suitePassRow.className).toMatch(/\bapp-tree-line\b/);
 
-    // ▾/▸ affordance: SuiteFail auto-expanded (▾), SuitePass collapsed (▸).
+    // CR-CRU-038 §S1 — ▾/▸ affordance: BOTH suites open collapsed (▸);
+    // SuiteFail no longer auto-expands just because it has failures.
     const failToggle = suiteFailRow.querySelector('[data-testid="tree-toggle"]');
     expect(failToggle).not.toBeNull();
-    expect((failToggle!.textContent ?? "").trim()).toBe("▾");
+    expect((failToggle!.textContent ?? "").trim()).toBe("▸");
     const passToggle = suitePassRow.querySelector('[data-testid="tree-toggle"]');
     expect(passToggle).not.toBeNull();
     expect((passToggle!.textContent ?? "").trim()).toBe("▸");
@@ -1524,8 +1559,13 @@ describe("F4 anatomy — tree lines, ▾/▸ affordance, fail-first counts", () 
     expect(suitePassPassCountSpan).not.toBeNull();
     expect(suitePassPassCountSpan!.className).toMatch(/\bapp-count-pass\b/);
 
-    // Auto-expand in DETAIL mode (unit tier, no click on suite-row): badLeaf's
-    // leaf-row is ALREADY rendered.
+    // CR-CRU-038 §S1 — MINIMIZED default: no leaves/fetch until expanded.
+    expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+    expect(fetchLog.some((u) => u.includes("suite=SuiteFail"))).toBe(false);
+    suiteFailRow.click();
+    await settle();
+
+    // Now expanded via the explicit click: badLeaf's leaf-row renders.
     const badLeafRow = findByText(overlay, '[data-testid="leaf-row"]', "badLeaf");
     expect(badLeafRow).toBeDefined();
     expect(badLeafRow!.className).toMatch(/\bapp-tree-line\b/);
@@ -1699,6 +1739,13 @@ describe("Failure-box degradation (user defect 2026-07-15)", () => {
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
     expect(overlay).not.toBeNull();
 
+    // CR-CRU-038 §S1 — the error run opens MINIMIZED; expand DegradeSuite via
+    // its suite-row click before the per-leaf failure-box assertions.
+    const degradeSuiteRow = findByText(overlay, '[data-testid="suite-row"]', "DegradeSuite");
+    expect(degradeSuiteRow).toBeDefined();
+    degradeSuiteRow!.click();
+    await settle();
+
     // 1. failure = {type:"AssertionError"} (no message) — box text contains
     //    "AssertionError" AND the reporter note; never empty; no trace node
     //    (trace absent).
@@ -1738,8 +1785,14 @@ describe("Failure-box degradation (user defect 2026-07-15)", () => {
   });
 });
 
-describe("F4 anatomy — failures-footer (jump + raw-output, test events)", () => {
-  test("renders '▸ N more failures · toggle raw output'; the jump calls scrollIntoView on the next failing leaf; the raw toggle reveals the event's stored raw output", async () => {
+// CR-CRU-038 §S3 RETARGET (2026-07-22): was "F4 anatomy — failures-footer
+// (jump + raw-output, test events)" — the footer is retired, both
+// controls now live in the header (see the §S3 describe block in
+// tests/inpane-drill-in.test.ts for dedicated header-placement coverage);
+// this test keeps its original jump/raw-reveal behavioral assertions,
+// retargeted to query the controls at their new location.
+describe("F4 anatomy — failure-jump + raw-output (header controls, test events)", () => {
+  test("renders '▸ N more failures'; the jump calls scrollIntoView on the next failing leaf; the raw toggle reveals the event's stored raw output", async () => {
     const now = Date.now();
     const eventId = "evt-anatomy-footer-1";
     const projectKey = "proj-anatomy-footer-1";
@@ -1797,9 +1850,18 @@ describe("F4 anatomy — failures-footer (jump + raw-output, test events)", () =
     await settle();
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
 
-    const footer = overlay.querySelector('[data-testid="failures-footer"]');
-    expect(footer).not.toBeNull();
-    expect((footer!.textContent ?? "")).toMatch(/▸ 2 more failures · toggle raw output/);
+    // CR-CRU-038 §S1 — the run opens MINIMIZED: SuiteFooter's leaves are
+    // NOT auto-fetched despite having 3 failures; the header's failure-jump
+    // (driven off the run-level summary counts, not the loaded leaves)
+    // still renders (§S3 — no longer a footer).
+    expect(fetchLog.some((u) => u.includes("suite=SuiteFooter"))).toBe(false);
+    expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+
+    // CR-CRU-038 §S3 RETARGET (2026-07-22): the failure-jump + raw-toggle
+    // moved OUT of the footer into the drill-in header — the footer is
+    // retired entirely (it carried nothing else); assert its absence, and
+    // query the relocated controls at `document`.
+    expect(document.querySelector('[data-testid="failures-footer"]')).toBeNull();
 
     // Jump: the SECOND failing leaf-row (f2) is the "next" failure — stub
     // scrollIntoView (happy-dom has no real layout) and assert it fires on
@@ -1813,16 +1875,22 @@ describe("F4 anatomy — failures-footer (jump + raw-output, test events)", () =
       function (this: HTMLElement) {
         scrollCalls.push(this);
       };
-    const jump = footer!.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
+    const jump = document.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
     expect(jump).not.toBeNull();
+    expect((jump!.textContent ?? "")).toContain("▸ 2 more failures");
     jump!.click();
     await settle();
+    // CR-CRU-038 §S1 — the jump works from the COLLAPSED default: it loads
+    // SuiteFooter on demand (no precondition that it was already fetched).
+    expect(fetchLog.some((u) => u.includes("suite=SuiteFooter"))).toBe(true);
     expect(scrollCalls.length).toBe(1);
     expect((scrollCalls[0] as HTMLElement).getAttribute("data-leaf-key")).toBe("SuiteFooter::f2");
 
-    // Raw toggle — test events too (not compile-only).
+    // Raw toggle — test events too (not compile-only). CR-CRU-038 §S3
+    // RETARGET: relocated to the header, query at `document` (was
+    // `footer!.querySelector`, which no longer exists).
     expect(overlay.querySelector('[data-testid="raw-output"]')).toBeNull();
-    const rawToggle = footer!.querySelector('[data-testid="raw-toggle"]') as HTMLElement | null;
+    const rawToggle = document.querySelector('[data-testid="raw-toggle"]') as HTMLElement | null;
     expect(rawToggle).not.toBeNull();
     rawToggle!.click();
     await settle();

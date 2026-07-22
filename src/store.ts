@@ -751,6 +751,9 @@ export class Store {
       ...(run.coverage !== undefined && run.summary.failed === 0
         ? { coverage: run.coverage }
         : {}),
+      // CR-CRU-038 §S2b — run-level raw output; UNLIKE coverage, retained even
+      // on a failing ingest (failure diagnostics matter most on red runs).
+      ...(run.raw !== undefined ? { raw: run.raw } : {}),
       ...(meta?.stack !== undefined ? { stack: meta.stack } : {}),
       ...(meta?.codec !== undefined ? { codec: meta.codec } : {}),
       ...(meta?.name !== undefined ? { name: meta.name } : {}),
@@ -978,6 +981,8 @@ export class Store {
       ...(event.type !== undefined ? { type: event.type } : {}),
       ...(event.label !== undefined ? { label: event.label } : {}),
       ...(event.commit !== undefined ? { commit: event.commit } : {}),
+      // CR-CRU-038 §S2b — run-level raw output rides the generic payload blob.
+      ...(event.raw !== undefined ? { raw: event.raw } : {}),
     };
     const payload = Object.keys(payloadObj).length > 0 ? JSON.stringify(payloadObj) : null;
     this.db
@@ -1038,6 +1043,8 @@ export class Store {
       ...(typeof payload.type === "string" ? { type: payload.type } : {}),
       ...(typeof payload.label === "string" ? { label: payload.label } : {}),
       ...(typeof payload.commit === "string" ? { commit: payload.commit } : {}),
+      // CR-CRU-038 §S2b — run-level raw output served verbatim from the payload.
+      ...(typeof payload.raw === "string" ? { raw: payload.raw } : {}),
       ...(row.action !== null ? { action: row.action as "registered" | "unregistered" } : {}),
       ...(row.first_seen !== null ? { firstSeen: row.first_seen } : {}),
       ...(row.stack !== null ? { stack: row.stack } : {}),

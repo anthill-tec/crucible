@@ -21,6 +21,16 @@
 //       `?suite=<name>`); all-pass suites stay collapsed to their counted
 //       row and are NEVER auto-fetched.
 //     - Detail mode renders the plain tree — nothing auto-expands.
+//
+//   CR-CRU-038 §S1 UPDATE (2026-07-22, patch cycle): the "auto-expands ONLY
+//   the failing suite(s)" behavior above is RETIRED for OPEN — a run with
+//   ≥1 failure now opens MINIMIZED: every suite (failing or not) renders
+//   its header + counts only, leaves collapsed, nothing auto-fetched. The
+//   failure-jump control now does the on-demand load+expand+focus that
+//   auto-expand used to do eagerly on open. Tests below that pinned the old
+//   auto-expand-on-open behavior are retargeted in place (see inline
+//   "CR-CRU-038 §S1" notes at each site); a 0-failure run's default is
+//   UNCHANGED.
 //   §S4 item 2 (heat-strip minimap — Density mode only):
 //     - `[data-testid="heat-strip"]` renders one `[data-testid="heat-cell"]`
 //       per leaf in the run, any run size (no count threshold). A failing
@@ -116,6 +126,10 @@ interface EventDetailFixture {
   timestamp: number;
   summary?: { total: number; passed: number; failed: number; pending: number; duration_ms: number };
   tree?: SuiteFixture[];
+  /** CR-CRU-038 §S3 C3 — run-level raw blob, used to exercise the
+   * header-relocated raw-toggle from this file's HOME-route harness
+   * (`mountAtRunCold` below always mounts at `/run/<id>`, no `/p/` prefix). */
+  raw?: string;
 }
 interface EventBriefFixture {
   id: string;
@@ -303,9 +317,21 @@ describe("§S4.1 — failures float, green folds (Density mode)", () => {
 
     // bound: nothing was auto-fetched since every suite folded.
     expect(fetchLog.some((u) => u.includes("suite="))).toBe(false);
+
+    // CR-CRU-038 §S1 AC — "an all-pass run's tree default is unchanged":
+    // this 0-failure run's collapsed (▸) default predates and is UNAFFECTED
+    // by the §S1 minimized-error-tree change (there is nothing to minimize
+    // further — it was always collapsed).
+    expect(suiteP1!.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
+    expect(suiteP2!.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
   });
 
-  test("a run with failures opens with ONLY failing suites auto-expanded; all-pass suites stay collapsed and never auto-fetch", async () => {
+  // CR-CRU-038 §S1 RETARGET (2026-07-22): was "a run with failures opens
+  // with ONLY failing suites auto-expanded" — auto-expand-on-open is
+  // retired. A failing run now opens MINIMIZED: the failing suite's
+  // HEADER (with its `1 ✗ 1 ✓` counts) is visible but its leaves stay
+  // collapsed exactly like an all-pass suite, and nothing auto-fetches.
+  test("a run with failures opens MINIMIZED: the failing suite's header (with counts) renders but its leaves stay collapsed and un-fetched, same as an all-pass suite", async () => {
     const now = Date.now();
     const eventId = "evt-fold-with-fail";
     const detail: EventDetailFixture = {
@@ -341,37 +367,44 @@ describe("§S4.1 — failures float, green folds (Density mode)", () => {
 
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
 
-    // SuiteFailing's leaves are visible without any click.
-    expect(fetchLog.some((u) => u.includes(`/api/v2/events/${eventId}`) && u.includes("suite=SuiteFailing"))).toBe(true);
-    const leafRows = overlay.querySelectorAll('[data-testid="leaf-row"]');
-    expect(leafRows.length).toBe(2);
-    expect(Array.from(leafRows).some((r) => (r.textContent ?? "").includes("okLeaf"))).toBe(true);
-    expect(Array.from(leafRows).some((r) => (r.textContent ?? "").includes("badLeaf"))).toBe(true);
+    // CR-CRU-038 §S1 — the FAILING suite's leaves are NOT auto-fetched;
+    // its header renders with its `1 ✗ 1 ✓` counts, collapsed (▸).
+    expect(fetchLog.some((u) => u.includes(`/api/v2/events/${eventId}`) && u.includes("suite=SuiteFailing"))).toBe(false);
+    expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+    const suiteFailingRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteFailing");
+    expect(suiteFailingRow).toBeDefined();
+    expect(suiteFailingRow!.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
+    expect(suiteFailingRow!.textContent ?? "").toContain("1 ✗");
 
-    // SuitePassing stays collapsed to its counted row and was never fetched.
+    // SuitePassing stays collapsed to its counted row and was never fetched
+    // (unchanged bound — this was already true and still is).
     expect(fetchLog.some((u) => u.includes("suite=SuitePassing"))).toBe(false);
     const suitePassingRow = findByText(overlay, '[data-testid="suite-row"]', "SuitePassing");
     expect(suitePassingRow).toBeDefined();
     expect(suitePassingRow!.textContent ?? "").toContain("✓2");
+
+    // The suite is still reachable on demand: clicking its header expands
+    // it exactly like any collapsed suite (failing or not).
+    suiteFailingRow!.click();
+    await settle();
+    const suiteFailingRowAfter = findByText(overlay, '[data-testid="suite-row"]', "SuiteFailing")!;
+    expect(fetchLog.some((u) => u.includes(`/api/v2/events/${eventId}`) && u.includes("suite=SuiteFailing"))).toBe(true);
+    expect(suiteFailingRowAfter.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▾");
+    const leafRowsAfter = overlay.querySelectorAll('[data-testid="leaf-row"]');
+    expect(leafRowsAfter.length).toBe(2);
+    expect(Array.from(leafRowsAfter).some((r) => (r.textContent ?? "").includes("okLeaf"))).toBe(true);
+    expect(Array.from(leafRowsAfter).some((r) => (r.textContent ?? "").includes("badLeaf"))).toBe(true);
   });
 
-  // CR-CRU-007 VERIFY-findings fix 2 (2026-07-15) — re-targeted. §S3 was
-  // corrected to remove the cold-load carve-out: failing suites now
-  // auto-expand in BOTH Detail and Density (public/app.js's RunOverlay
-  // calls `autoExpandFailing(ev)` unconditionally, no `openedInApp` gate).
-  // "Nothing auto-expands in Detail mode" is no longer true for ANY
-  // fixture, so this test is re-targeted to the bound that's STILL true and
-  // still distinguishes Detail from Density post-fix: Detail auto-expands
-  // failing suites exactly like Density does, but renders NONE of the
-  // Density-only presentation additions (heat-strip / status-chips /
-  // failure-digest) — those, not auto-expand, are what "Detail mode" now
-  // uniquely means. Kept the FAILING fixture (rather than switching to an
-  // all-pass one) because an all-pass "nothing fetched" bound would no
-  // longer be Detail-specific — Density behaves identically for an
-  // all-pass run — so it would not actually test anything about Detail
-  // mode; asserting the absent Density-only elements on a failing,
-  // auto-expanded fixture is the strongest bound left standing.
-  test("Detail mode bound: the same failing fixture auto-expands (like Density) but renders NONE of the Density-only elements (heat-strip / status-chips / digest-row)", async () => {
+  // CR-CRU-038 §S1 RETARGET (2026-07-22): was "Detail mode bound: the same
+  // failing fixture auto-expands (like Density) but renders NONE of the
+  // Density-only elements" — auto-expand-on-open is retired for BOTH
+  // presentations. Detail mode now opens this failing fixture MINIMIZED
+  // exactly like Density does (no leaf-row, no fetch, no inline failure
+  // box); the still-valid Detail-vs-Density bound (no heat-strip/status-
+  // chips/digest-row) is kept, plus a manual-expand check proving the
+  // suite's leaves + failure box are still reachable on click.
+  test("Detail mode bound: the same failing fixture opens MINIMIZED (no auto-expand) and renders NONE of the Density-only elements (heat-strip / status-chips / digest-row)", async () => {
     const now = Date.now();
     const eventId = "evt-fold-detail-bound";
     const detail: EventDetailFixture = {
@@ -403,8 +436,26 @@ describe("§S4.1 — failures float, green folds (Density mode)", () => {
     expect(document.querySelector('[data-testid="drillin-mode"]')).toBeNull();
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
 
-    // §S3 (no cold-load carve-out): the failing suite auto-expands in
-    // Detail mode too — its leaves fetched and rendered with no click.
+    // CR-CRU-038 §S1 — the failing suite stays MINIMIZED on open in Detail
+    // mode too: no auto-fetch, no leaf-row, no inline failure box.
+    expect(fetchLog.some((u) => u.includes("suite=SuiteFailingDetail"))).toBe(false);
+    expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+    expect(findByText(overlay, '[data-testid="leaf-row"]', "badLeaf")).toBeUndefined();
+    expect(findByText(overlay, '[data-testid="leaf-row"]', "okLeaf")).toBeUndefined();
+    expect(overlay.querySelector('[data-testid="failure-box"]')).toBeNull();
+    const suiteFailingDetailRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteFailingDetail");
+    expect(suiteFailingDetailRow).toBeDefined();
+    expect(suiteFailingDetailRow!.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
+
+    // Bound: Density-only presentation additions are absent in Detail mode.
+    expect(overlay.querySelector('[data-testid="heat-strip"]')).toBeNull();
+    expect(overlay.querySelector('[data-testid="density-status-chips"]')).toBeNull();
+    expect(overlay.querySelectorAll('[data-testid="digest-row"]').length).toBe(0);
+
+    // The suite is still reachable on demand: clicking it fetches + renders
+    // its leaves and the failed leaf's inline failure box, same as before.
+    suiteFailingDetailRow!.click();
+    await settle();
     expect(fetchLog.some((u) => u.includes("suite=SuiteFailingDetail"))).toBe(true);
     const leafRows = overlay.querySelectorAll('[data-testid="leaf-row"]');
     expect(leafRows.length).toBe(2);
@@ -413,12 +464,230 @@ describe("§S4.1 — failures float, green folds (Density mode)", () => {
     const failureBox = overlay.querySelector('[data-testid="failure-box"]');
     expect(failureBox).not.toBeNull();
     expect((failureBox!.textContent ?? "")).toContain("boom detail");
+  });
+});
 
-    // Bound: Density-only presentation additions are absent in Detail mode
-    // — auto-expand is now shared, but these remain Density-exclusive.
-    expect(overlay.querySelector('[data-testid="heat-strip"]')).toBeNull();
-    expect(overlay.querySelector('[data-testid="density-status-chips"]')).toBeNull();
-    expect(overlay.querySelectorAll('[data-testid="digest-row"]').length).toBe(0);
+// ── CR-CRU-038 §S1 — error runs open MINIMIZED; failure-jump expands from
+// collapsed (docs/changes/CR-CRU-038-patch-run-detail-controls.md) ─────────
+//
+// RED phase: expected to FAIL against the CURRENT public/app.js — a run
+// with ≥1 failure still auto-expands its failing suite(s) on open
+// (`autoExpandFailing`, app.js:3077, called unconditionally from the
+// `?depth=suites` load at app.js:3047), and `jumpToNextFailure`
+// (app.js:3329) computes its candidate leaves from `suiteLeaves.val`
+// (app.js:3312-3322) — which stays empty when nothing auto-fetched, so a
+// jump click from a truly collapsed default currently finds ZERO
+// candidates and does nothing (the walk described below does not yet
+// happen). Contract this block defines for GREEN:
+//   - a run with ≥1 failure opens with every suite's HEADER visible (with
+//     its inline `✗/✓` counts) but its leaf rows collapsed — a failing
+//     suite is rendered identically to an all-pass suite on open.
+//   - clicking `[data-testid="failure-jump"]` from that collapsed default
+//     still advances to + focus-opens the next failing leaf (the suite
+//     gets loaded/expanded on demand as part of the jump).
+describe("§S1 (CR-CRU-038) — error run opens minimized; failure-jump expands from collapsed", () => {
+  test("opening a run with failures renders every suite's header (with counts) but collapses ALL leaf rows — a failing suite looks identical to a passing one until clicked", async () => {
+    const now = Date.now();
+    const eventId = "evt-s1-minimized-open";
+    const detail: EventDetailFixture = {
+      id: eventId,
+      projectKey: "proj-s1-minimized",
+      agentId: "s1-agent",
+      kind: "test",
+      tier: "unit",
+      codec: "junit",
+      timestamp: now,
+      summary: { total: 3, passed: 2, failed: 1, pending: 0, duration_ms: 40 },
+      tree: [
+        {
+          name: "SuiteAlpha",
+          status: "fail",
+          children: [
+            { name: "okA", status: "pass", duration_ms: 5 },
+            { name: "badA", status: "fail", duration_ms: 5, failure: { message: "boom alpha" } },
+          ],
+        },
+        {
+          name: "SuiteBeta",
+          status: "pass",
+          children: [{ name: "okB", status: "pass", duration_ms: 5 }],
+        },
+      ],
+    };
+    const brief: EventBriefFixture = { id: eventId, projectKey: "proj-s1-minimized", agentId: "s1-agent", kind: "test", tier: "unit", codec: "junit", timestamp: now, total: 3, passed: 2, failed: 1, pending: 0, duration_ms: 40, hasCoverage: false };
+    await mountAtRunCold(eventId, "unit", detail, brief);
+
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    expect(overlay.querySelectorAll('[data-testid="suite-row"]').length).toBe(2);
+    // Nothing fetched: neither suite auto-expanded, failing or not.
+    expect(fetchLog.some((u) => u.includes("suite="))).toBe(false);
+    expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+    expect(overlay.querySelector('[data-testid="failure-box"]')).toBeNull();
+
+    const suiteAlphaRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteAlpha");
+    expect(suiteAlphaRow).toBeDefined();
+    expect(suiteAlphaRow!.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
+    expect(suiteAlphaRow!.textContent ?? "").toContain("1 ✗");
+    expect(suiteAlphaRow!.textContent ?? "").toContain("1 ✓");
+
+    const suiteBetaRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteBeta");
+    expect(suiteBetaRow).toBeDefined();
+    expect(suiteBetaRow!.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
+    // CR-CRU-038 §S1 — unit-tier (Detail) run: the collapsed all-pass suite
+    // shows the FULL `0 ✗ 1 ✓` counts (the `✓N` green-fold is Density-only),
+    // matching SuiteAlpha's full form above and drill-in.test.ts:1540.
+    expect(suiteBetaRow!.textContent ?? "").toContain("0 ✗ 1 ✓");
+  });
+
+  test("clicking the failure-jump from the collapsed default still expands the target suite and focus-opens the failing leaf's failure box", async () => {
+    const now = Date.now();
+    const eventId = "evt-s1-jump-from-collapsed";
+    const detail: EventDetailFixture = {
+      id: eventId,
+      projectKey: "proj-s1-jump",
+      agentId: "s1-jump-agent",
+      kind: "test",
+      tier: "unit",
+      codec: "junit",
+      timestamp: now,
+      summary: { total: 2, passed: 0, failed: 2, pending: 0, duration_ms: 20 },
+      tree: [
+        {
+          name: "SuiteJump",
+          status: "fail",
+          children: [
+            { name: "j1", status: "fail", duration_ms: 5, failure: { message: "boom j1" } },
+            { name: "j2", status: "fail", duration_ms: 5, failure: { message: "boom j2" } },
+          ],
+        },
+      ],
+    };
+    const brief: EventBriefFixture = { id: eventId, projectKey: "proj-s1-jump", agentId: "s1-jump-agent", kind: "test", tier: "unit", codec: "junit", timestamp: now, total: 2, passed: 0, failed: 2, pending: 0, duration_ms: 20, hasCoverage: false };
+    await mountAtRunCold(eventId, "unit", detail, brief);
+
+    const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    // Precondition: fully collapsed, nothing fetched (the §S1 default).
+    expect(fetchLog.some((u) => u.includes("suite=SuiteJump"))).toBe(false);
+    expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+    const suiteJumpRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteJump")!;
+    expect(suiteJumpRow.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
+
+    // CR-CRU-038 §S3 RETARGET (2026-07-22): failure-jump moved OUT of the
+    // footer into the drill-in header — the footer is retired entirely
+    // (it carried nothing else). Query at `document` (was scoped inside
+    // `[data-testid="failures-footer"]`, which no longer exists).
+    expect(document.querySelector('[data-testid="failures-footer"]')).toBeNull();
+    const jump = document.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
+    expect(jump).not.toBeNull();
+    jump!.click();
+    await settle();
+
+    // The jump loaded/expanded SuiteJump on demand — its leaves are now
+    // reachable and the toggle flips to expanded.
+    expect(fetchLog.some((u) => u.includes("suite=SuiteJump"))).toBe(true);
+    const suiteJumpRowAfter = findByText(overlay, '[data-testid="suite-row"]', "SuiteJump")!;
+    expect(suiteJumpRowAfter.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▾");
+
+    // jumpPos starts at 0 and advances by 1 on the first click, so with 2
+    // failing leaves in input order [j1, j2] the target is j2 (index 1) —
+    // matching the existing jump-cursor convention (drill-in.test.ts's
+    // footer-anatomy test: 3 leaves, first click lands on the 2nd).
+    const j2Row = overlay.querySelector('[data-leaf-key="SuiteJump::j2"]');
+    expect(j2Row).not.toBeNull();
+    const failureBox = j2Row!.nextElementSibling;
+    expect(failureBox?.getAttribute("data-testid")).toBe("failure-box");
+    expect((failureBox?.textContent ?? "")).toContain("boom j2");
+  });
+});
+
+// ── CR-CRU-038 §S3 / AC5 — HOME-surface control visibility (VERIFY
+// close-out FIX round, C3 gap) — docs/changes/CR-CRU-038-patch-run-detail-
+// controls.md AC5: "Both the failure-jump and raw-output controls render in
+// the drill-in HEADER adjacent to the density chip, ... they remain visible
+// while the drill-in body scrolls." On the WORKSPACE route
+// (tests/inpane-drill-in.test.ts's `describe("§S3 (CR-CRU-038) —
+// failure-jump + raw-toggle relocated to the header...")`) this already
+// passes. On the HOME route (this file's `mountAtRunCold` mounts at
+// `/run/<id>`, no `/p/` prefix) it does NOT: `Home()`'s VISIBLE pinned band
+// (`div.app-drillin-head.app-top`, app.js:1117-1128) calls
+// `DetailHeadContent(state.route.overlay)` with NO `controls` argument, so
+// `...(controls ?? [])` is empty there — the controls only ever mount into
+// `RunDetail()`'s `div.app-drillin-inhead` (app.js:3701-3703), which
+// styles.css:211 hides with `display:none`. happy-dom parses no stylesheet
+// in this harness and computes no layout, so a bare
+// `document.querySelector('[data-testid="failure-jump"]')` is satisfied by
+// the hidden inhead copy alone and would pass even though nothing is
+// visible on screen. This test instead asserts DOM ANCESTRY: the controls
+// must be reachable as descendants of the VISIBLE
+// `.app-drillin-head.app-top` band (siblings of that band's own
+// `[data-testid="density-toggle"]`), not merely present somewhere in the
+// document.
+//
+// RED phase: expected to FAIL against the CURRENT public/app.js — the
+// visible band's `[data-testid="failure-jump"]` / `[data-testid="raw-
+// toggle"]` queries below resolve to null (only the hidden inhead copy
+// exists), so the `.not.toBeNull()` assertions fail.
+describe("§S3 (CR-CRU-038) — home-surface control placement (AC5 visible-band gap)", () => {
+  test("failure-jump and raw-toggle render inside the VISIBLE home pinned band (sibling of its density chip), not only the hidden inhead copy", async () => {
+    const now = Date.now();
+    const eventId = "evt-s3-home-visible-band";
+    const detail: EventDetailFixture = {
+      id: eventId,
+      projectKey: "proj-s3-home",
+      agentId: "s3-home-agent",
+      kind: "test",
+      tier: "unit",
+      codec: "junit",
+      timestamp: now,
+      summary: { total: 2, passed: 1, failed: 1, pending: 0, duration_ms: 20 },
+      tree: [
+        {
+          name: "SuiteHomeVis",
+          status: "fail",
+          children: [
+            { name: "okH", status: "pass", duration_ms: 5 },
+            { name: "badH", status: "fail", duration_ms: 5, failure: { message: "boom home" } },
+          ],
+        },
+      ],
+      raw: "raw output for the home-visible-band fixture",
+    };
+    const brief: EventBriefFixture = { id: eventId, projectKey: "proj-s3-home", agentId: "s3-home-agent", kind: "test", tier: "unit", codec: "junit", timestamp: now, total: 2, passed: 1, failed: 1, pending: 0, duration_ms: 20, hasCoverage: false };
+    // `mountAtRunCold` mounts at `/run/${eventId}` — the HOME route (no
+    // `/p/` prefix); see its definition above.
+    await mountAtRunCold(eventId, "unit", detail, brief);
+
+    // The VISIBLE band is `Home()`'s own pinned header
+    // (`div.app-drillin-head.app-top`) — distinct from RunDetail()'s hidden
+    // `div.app-drillin-inhead` compat copy.
+    const visibleBand = document.querySelector(".app-drillin-head.app-top");
+    expect(visibleBand).not.toBeNull();
+
+    // Sanity/positive control: the density chip DOES render in the visible
+    // band today (it is an unconditional DetailHeadContent element) — this
+    // confirms the selector itself is correct and the band is populated.
+    const densityToggle = visibleBand!.querySelector('[data-testid="density-toggle"]');
+    expect(densityToggle).not.toBeNull();
+
+    // AC5 — the failure-jump must be reachable INSIDE the visible band,
+    // as a sibling of that same density chip.
+    const jumpInVisibleBand = visibleBand!.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
+    expect(jumpInVisibleBand).not.toBeNull();
+    expect(jumpInVisibleBand!.textContent ?? "").toContain("more failures");
+    expect(jumpInVisibleBand!.parentElement).toBe(densityToggle!.parentElement);
+
+    // AC5 — the raw-toggle (raw exists via `detail.raw` above) must also be
+    // reachable inside the visible band.
+    const rawToggleInVisibleBand = visibleBand!.querySelector('[data-testid="raw-toggle"]') as HTMLElement | null;
+    expect(rawToggleInVisibleBand).not.toBeNull();
+    expect(rawToggleInVisibleBand!.parentElement).toBe(densityToggle!.parentElement);
+
+    // Bound: the controls are not confined to the hidden inhead copy alone —
+    // at least one failure-jump node must be reachable OUTSIDE
+    // `.app-drillin-inhead` (i.e. exactly the visible-band node just found).
+    const allJumps = document.querySelectorAll('[data-testid="failure-jump"]');
+    const inheadJumps = document.querySelectorAll('.app-drillin-inhead [data-testid="failure-jump"]');
+    expect(allJumps.length - inheadJumps.length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -554,7 +823,16 @@ describe("§S4.3 — failure digest (Density mode)", () => {
     await mountAtRunCold(eventId, "regression", detail, brief);
 
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
-    // SuiteDigest is the only (failing) suite — auto-expanded per §S4.1.
+    // CR-CRU-038 §S1 — SuiteDigest no longer auto-expands on open (the run
+    // has failures, so it opens MINIMIZED); expand it explicitly via its
+    // suite-row click to reach the digest grouping this test exercises.
+    expect(overlay.querySelectorAll('[data-testid="digest-row"]').length).toBe(0);
+    const suiteDigestRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteDigest");
+    expect(suiteDigestRow).toBeDefined();
+    expect(suiteDigestRow!.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
+    suiteDigestRow!.click();
+    await settle();
+
     const digestRows = overlay.querySelectorAll('[data-testid="digest-row"]');
     expect(digestRows.length).toBe(1);
     expect((digestRows[0]!.textContent ?? "")).toContain("identical boom");
@@ -604,6 +882,15 @@ describe("§S4.3 — failure digest (Density mode)", () => {
     await mountAtRunCold(eventId, "regression", detail, brief);
 
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    // CR-CRU-038 §S1 — the run opens MINIMIZED; expand SuiteDigestDiff via its
+    // suite-row click (mirroring the retargeted identical-message sibling
+    // above) to reach the leaves this test exercises.
+    const suiteDiffRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteDigestDiff");
+    expect(suiteDiffRow).toBeDefined();
+    expect(suiteDiffRow!.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
+    suiteDiffRow!.click();
+    await settle();
+
     expect(overlay.querySelectorAll('[data-testid="digest-row"]').length).toBe(0);
     const leafRows = overlay.querySelectorAll('[data-testid="leaf-row"]');
     expect(leafRows.length).toBe(3);
@@ -749,8 +1036,15 @@ describe("§S4.4 — virtualized tree (always-on, both modes)", () => {
     20_000,
   );
 
+  // CR-CRU-038 §S1 RETARGET (2026-07-22): was "... largest (failing) suite
+  // auto-expands and still keeps mounted tree-row nodes under 200" —
+  // auto-expand-on-open is retired at ANY scale: SuiteBig (the failing,
+  // largest suite) now stays collapsed/un-fetched on open just like every
+  // other suite, so the "mounted rows < 200" bound is nearly trivial here
+  // (only suite-row headers mount) — the real virtualized-expand case is
+  // covered by the sibling Detail-mode test above, which clicks to expand.
   test(
-    "Density mode: a 10 000-leaf run's largest (failing) suite auto-expands and still keeps mounted tree-row nodes under 200",
+    "Density mode: a 10 000-leaf run's largest (failing) suite stays collapsed/un-fetched on open (minimized default, at scale) and mounted tree-row nodes stay under 200",
     async () => {
       const now = Date.now();
       const eventId = "evt-virt-density";
@@ -759,23 +1053,25 @@ describe("§S4.4 — virtualized tree (always-on, both modes)", () => {
       await mountAtRunCold(eventId, "regression", detail, brief);
 
       const overlay = document.querySelector('[data-testid="run-overlay"]')!;
-      expect(fetchLog.some((u) => u.includes("suite=SuiteBig"))).toBe(true);
+      expect(fetchLog.some((u) => u.includes("suite=SuiteBig"))).toBe(false);
       expect(fetchLog.some((u) => u.includes("suite=SuiteOther0"))).toBe(false);
+      expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+      const bigSuiteRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteBig");
+      expect(bigSuiteRow).toBeDefined();
+      expect(bigSuiteRow!.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
       expect(mountedTreeRowCount(overlay)).toBeLessThan(200);
     },
     20_000,
   );
 
-  // CR-CRU-007 VERIFY-findings fix 2 — the `leaf-row` count MUST be 0
-  // assertion assumed the removed cold-load carve-out (unit-tier cold
-  // mount used to render collapsed, so a "no leaves yet" payload check
-  // doubled as a DOM check). §S3 now auto-expands SuiteBig (it has a
-  // failing leaf) on this very cold mount, so leaf-rows are expected —
-  // windowed by virtualization, not absent. Dropped ONLY that assertion;
-  // the paging intent (`?depth=suites` fetched FIRST, before any
-  // `?suite=`) and the virtualization intent (mounted rows stay < 200 even
-  // though SuiteBig auto-expanded) both still hold and are asserted below.
-  test("the initial drill-in fetch for a 10 000-leaf run is suites-first (?depth=suites before any ?suite=); SuiteBig auto-expands but stays windowed under 200 mounted rows", async () => {
+  // CR-CRU-038 §S1 RETARGET (2026-07-22): the title/comment previously said
+  // "SuiteBig auto-expands but stays windowed" — auto-expand-on-open is
+  // retired, so SuiteBig (like every suite) stays collapsed/un-fetched on
+  // this cold mount; the assertions below never actually depended on
+  // auto-expand (they only check paging order + a mounted-row ceiling, both
+  // trivially true when everything is collapsed too), so only the stale
+  // wording is corrected here — no behavior change to assert.
+  test("the initial drill-in fetch for a 10 000-leaf run is suites-first (?depth=suites before any ?suite=); SuiteBig stays collapsed/un-fetched (minimized default) and mounted rows stay under 200", async () => {
     const now = Date.now();
     const eventId = "evt-virt-payload";
     const { detail, brief, total } = manyLeavesFixture(eventId, "unit", now);

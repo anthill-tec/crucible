@@ -10,6 +10,13 @@ function freshDir(): string {
   return mkdtempSync(join(tmpdir(), "codec-junit-"));
 }
 
+// CR-CRU-038 §S2b — RunSchema does not yet declare `raw` (GREEN adds it);
+// this local forward-compat type lets RED assert the field's real presence
+// without fighting tsc over a not-yet-existing production property. The
+// runtime behavior is unaffected: `result.raw` is genuinely `undefined`
+// until the codec is updated, so the assertions below are real RED.
+type RunSchemaWithRaw = RunSchema & { raw?: string };
+
 // AC1 — 3-case suite: 1 failure (message="boom" type="AssertionError" body "line1\nline2" time=0.5),
 // 1 skipped (time=0), 1 pass (time=0.084) → summary {total:3, passed:1, failed:1, pending:1, duration_ms:584}
 const XML_THREE_CASE = [
@@ -167,6 +174,82 @@ describe("parseJunit — suite node status aggregation (AC5)", () => {
 
     const result: RunSchema = parseJunit(xml);
     expect(result.tree[0].status).toBe("pass");
+  });
+});
+
+// CR-CRU-038 §S2b — run-level raw-output capture: the /runs/raw ingest path
+// (codec="junit") extracts <system-out>/<system-err> into RunSchema.raw so
+// the server can persist+serve it and the frontend raw-toggle has real data
+// to reveal. Per-test raw (TestLeaf.raw) stays forward-compat, not this cycle.
+describe("parseJunit — run-level raw-output capture (§S2b)", () => {
+  test("bare <testsuite> root with <system-out> AND <system-err> children → result.raw contains both captured texts", () => {
+    const xml = [
+      '<testsuite name="Suite4" tests="1">',
+      '<testcase name="t1" time="0.01"/>',
+      "<system-out>stdout line one</system-out>",
+      "<system-err>stderr line one</system-err>",
+      "</testsuite>",
+    ].join("\n");
+
+    const result: RunSchemaWithRaw = parseJunit(xml);
+
+    expect(result.raw).toContain("stdout line one");
+    expect(result.raw).toContain("stderr line one");
+  });
+
+  test("a testsuite with NEITHER <system-out> NOR <system-err> → result.raw is absent (no fabricated empty raw)", () => {
+    const result: RunSchemaWithRaw = parseJunit(XML_THREE_CASE);
+
+    expect(result.raw).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(result, "raw")).toBe(false);
+  });
+
+  test("<testsuites> wrapper carrying <system-out> at the OUTER (run) level, not nested in any <testsuite> → result.raw contains it", () => {
+    const xml = [
+      "<testsuites>",
+      "<system-out>outer run-level stdout</system-out>",
+      '<testsuite name="Suite5" tests="1">',
+      '<testcase name="t1" time="0.01"/>',
+      "</testsuite>",
+      "</testsuites>",
+    ].join("\n");
+
+    const result: RunSchemaWithRaw = parseJunit(xml);
+
+    expect(result.raw).toContain("outer run-level stdout");
+  });
+
+  test("raw output is aggregated across MULTIPLE <testsuite> elements, each carrying its own <system-out>", () => {
+    const xml = [
+      "<testsuites>",
+      '<testsuite name="SuiteA" tests="1">',
+      '<testcase name="a1" time="0.01"/>',
+      "<system-out>suite A captured output</system-out>",
+      "</testsuite>",
+      '<testsuite name="SuiteB" tests="1">',
+      '<testcase name="b1" time="0.01"/>',
+      "<system-out>suite B captured output</system-out>",
+      "</testsuite>",
+      "</testsuites>",
+    ].join("\n");
+
+    const result: RunSchemaWithRaw = parseJunit(xml);
+
+    expect(result.raw).toContain("suite A captured output");
+    expect(result.raw).toContain("suite B captured output");
+  });
+
+  test("<system-out> wrapped in CDATA decodes to its inner text (mirrors AC3's CDATA handling)", () => {
+    const xml = [
+      '<testsuite name="Suite6" tests="1">',
+      '<testcase name="t1" time="0.01"/>',
+      "<system-out><![CDATA[cdata stdout content]]></system-out>",
+      "</testsuite>",
+    ].join("\n");
+
+    const result: RunSchemaWithRaw = parseJunit(xml);
+
+    expect(result.raw).toContain("cdata stdout content");
   });
 });
 

@@ -1060,6 +1060,49 @@ class RustCrucibleToolchainTest(_BaseRustAxiTest):
             "the nextest run's ingest payload must carry the resolved cycle id",
         )
 
+    def test_regression_ingest_verb_includes_captured_runner_output_as_raw_in_parsed_payload(self):
+        """CR-CRU-038 §S2b -- `regression-ingest` is the rust verb that
+        ALWAYS ingests through `_ingest_parsed`/POST /api/v2/runs/parsed
+        (the `test` verb instead uses the server-side codec=junit /api/v2/runs
+        path, which the server does not extend with `raw`). Its `cargo
+        llvm-cov nextest` subprocess call is captured with
+        `capture_output=True`; that captured output must flow into the
+        parsed-ingest payload as `raw`. Fails today -- the payload built in
+        `_regression_ingest_run` has no `raw` key at all."""
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        nextest_dir = os.path.join(self.tmpdir, "target", "nextest", "ci")
+        os.makedirs(nextest_dir, exist_ok=True)
+        marker = "RUST_RAW_CAPTURE_MARKER_6624"
+
+        def fake_subprocess_run(cmd, *args, **kwargs):
+            if len(cmd) >= 2 and cmd[0] == "cargo" and cmd[1] == "llvm-cov":
+                with open(os.path.join(nextest_dir, "junit.xml"), "w") as f:
+                    f.write(PASS_JUNIT_XML)
+                return subprocess.CompletedProcess(cmd, 0, stdout=marker + "\n", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with mock.patch.object(self.module.subprocess, "run",
+                                side_effect=fake_subprocess_run), \
+             mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._active_cycle_plans(51),
+                                create=True):
+            code, out, _err = _run_main(self.module, [
+                "regression-ingest", "--project-dir", self.tmpdir,
+                "--crates", "some-crate", "--agent", "CR-Y-raw",
+            ])
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNotNone(ingest_call,
+                             "the regression-ingest run must actually be POSTed to /runs/parsed")
+        payload = ingest_call[0][1]
+        self.assertIn(
+            marker, payload.get("raw") or "",
+            f"the real captured cargo llvm-cov nextest output must flow into "
+            f"the parsed ingest payload's `raw` field; got payload keys={sorted(payload)!r}",
+        )
+
     def test_check_verb_runs_cargo_check_and_ingests_compile_errors(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         rustc_stderr = "error[E0999]: mismatched types\n --> src/lib.rs:1:1\n"

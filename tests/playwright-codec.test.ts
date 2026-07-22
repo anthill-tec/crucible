@@ -494,18 +494,17 @@ async function mountAppWithPlaywrightRun(eventId: string, tree: DomSuiteNode[]):
   for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 20));
 }
 
-// NOTE: this test currently PASSES against the CURRENT public/app.js — the
-// suite-row/leaf-row tree renderer is already codec-agnostic (drives off
-// RunSchema.tree/SuiteNode/TestLeaf shape, not the codec string) and the
-// e2e-tier drill-in already auto-expands a failing suite under the
-// PRE-EXISTING Density-mode folding logic (§S4.1, landed before this
-// cycle). It is kept as a REGRESSION GUARD proving the drill-in needs NO
-// playwright-specific UI work — Given/When/Then step names render exactly
-// like any other leaf name, and the codec badge passes `e.codec` through
-// verbatim — same "expected to PASS immediately, not something to loosen"
-// convention as tests/cross-surface-400s.test.ts's §S2 cross-surface pair.
-// The genuinely RED half of this AC (codec resolution + tree storage) is
-// covered by the "v2 ingest with codec:'playwright'" describe block above.
+// CR-CRU-038 §S1 RETARGET (2026-07-22): this test previously PASSED
+// against production because the e2e-tier drill-in auto-expanded the
+// failing scenario on open (§S4.1's now-retired auto-expand). That default
+// is gone — a failing run (any tier) now opens MINIMIZED — so this test
+// now FAILS until GREEN lands, expanding the failing scenario via an
+// explicit suite-row click instead. It still proves the drill-in needs NO
+// playwright-specific UI work: Given/When/Then step names render exactly
+// like any other leaf name once expanded, and the codec badge passes
+// `e.codec` through verbatim. The genuinely RED half of this AC (codec
+// resolution + tree storage) is covered by the "v2 ingest with
+// codec:'playwright'" describe block above.
 describe("drill-in renders scenario/step rows for a playwright-coded run (DOM, happy-dom harness)", () => {
   afterEach(async () => {
     if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
@@ -548,13 +547,21 @@ describe("drill-in renders scenario/step rows for a playwright-coded run (DOM, h
     const overlay = document.querySelector('[data-testid="run-overlay"]');
     expect(overlay).not.toBeNull();
 
-    // e2e is a BROAD tier -> Density presentation: the failing scenario
-    // auto-expands (its Given/When steps visible with no click); the
-    // all-pass scenario stays folded to its counted row.
+    // CR-CRU-038 §S1 — e2e is a BROAD tier -> Density presentation, but the
+    // run opens MINIMIZED regardless: NEITHER scenario's steps render until
+    // expanded, and nothing auto-fetches.
     const failScenarioRow = Array.from(overlay!.querySelectorAll('[data-testid="suite-row"]')).find(
       (el) => (el.textContent ?? "").includes("Scenario B failing"),
     );
     expect(failScenarioRow).toBeDefined();
+    expect(overlay!.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
+    expect(
+      (failScenarioRow as HTMLElement).querySelector('[data-testid="tree-toggle"]')!.textContent?.trim(),
+    ).toBe("▸");
+
+    // Expand the failing scenario explicitly — its steps render on click.
+    (failScenarioRow as HTMLElement).click();
+    await new Promise((r) => setTimeout(r, 200));
 
     const whenBreaksLeaf = Array.from(overlay!.querySelectorAll('[data-testid="leaf-row"]')).find((el) =>
       (el.textContent ?? "").includes("When it breaks"),
@@ -566,7 +573,8 @@ describe("drill-in renders scenario/step rows for a playwright-coded run (DOM, h
     );
     expect(givenLeaf).toBeDefined();
 
-    // Bound: the passing scenario's steps never rendered (folded/collapsed).
+    // Bound: the passing scenario's steps never rendered (folded/collapsed,
+    // never clicked).
     const whenHappensLeaf = Array.from(overlay!.querySelectorAll('[data-testid="leaf-row"]')).find((el) =>
       (el.textContent ?? "").includes("When it happens"),
     );
