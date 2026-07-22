@@ -571,6 +571,76 @@ describe("§S6 F13 exact fidelity — Active section + History header (F13 mock 
     expect(root).not.toBeNull();
     expect(norm(root!.textContent)).toBe("CR-ORCH-ONLY-1 — vidushi");
   });
+
+  // ── CR-CRU-037 §S3 — untitled plan renders as its CR, no orchestrator suffix ──
+  // The ` — <orchestrator>` suffix must render ONLY when the plan carries a
+  // real title; on an untitled plan (title null/undefined) the CR root must
+  // render JUST the CR, even when `orchestrator` is set. Today public/app.js
+  // (~line 2555) gates the suffix on `plan.orchestrator !== undefined` alone,
+  // independent of title — so this currently FAILS (renders the suffix).
+  test('CR-CRU-037 §S3 — a plan with NO title but an orchestrator set renders the CR alone, with NO " — <orchestrator>" suffix (untitled reads as its CR, never the orchestrator)', async () => {
+    const key = "f13-fidelity-untitled-with-orch";
+    const plan: PlanFixture = {
+      planId: 9105,
+      cr: "CR-UNTITLED-ORCH-1",
+      projectKey: "f13-fidelity-untitled-with-orch",
+      status: "open",
+      track: "track-1",
+      wave: "1",
+      orchestrator: "vidushi",
+      cycles: [{ id: 5301, label: "c1", status: "pending" }],
+    };
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Untitled With Orchestrator Project" })],
+      events: [],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const root = active().querySelector(
+      '[data-testid="workflow-cr-root"][data-cr="CR-UNTITLED-ORCH-1"]',
+    );
+    expect(root).not.toBeNull();
+    // Currently FAILS: production renders "CR-UNTITLED-ORCH-1 — vidushi"
+    // because the orchestrator suffix is gated only on
+    // `plan.orchestrator !== undefined`, not on title presence.
+    expect(norm(root!.textContent)).toBe("CR-UNTITLED-ORCH-1");
+    expect(root!.textContent ?? "").not.toContain("—");
+    expect(root!.textContent ?? "").not.toContain("vidushi");
+  });
+
+  // Characterization (locks the OTHER half of the rule): a TITLED plan with
+  // an orchestrator still renders the full `<cr> · <title> — <orchestrator>`
+  // form — the suffix is gated on title presence, not suppressed outright.
+  // Expected to PASS already (mirrors the main §S6 fixture test above).
+  test('CR-CRU-037 §S3 characterization — a plan WITH a title AND an orchestrator renders "<cr> · <title> — <orchestrator>" (suffix present only when a title IS given)', async () => {
+    const key = "f13-fidelity-titled-with-orch";
+    const plan: PlanFixture = {
+      planId: 9106,
+      cr: "CR-TITLED-ORCH-1",
+      projectKey: "f13-fidelity-titled-with-orch",
+      status: "open",
+      track: "track-1",
+      wave: "1",
+      title: "Has A Title",
+      orchestrator: "vidushi",
+      cycles: [{ id: 5302, label: "c1", status: "pending" }],
+    };
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Titled With Orchestrator Project" })],
+      events: [],
+      plans: [plan],
+    });
+    await openWorkflowTab();
+
+    const root = active().querySelector(
+      '[data-testid="workflow-cr-root"][data-cr="CR-TITLED-ORCH-1"]',
+    );
+    expect(root).not.toBeNull();
+    expect(norm(root!.textContent)).toBe("CR-TITLED-ORCH-1 · Has A Title — vidushi");
+  });
 });
 
 // ── §S6 #2 — RE-BASELINED 2026-07-17: bare done rows carry NO narration ────
