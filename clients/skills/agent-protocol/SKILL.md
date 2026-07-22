@@ -1,6 +1,9 @@
 ---
 name: agent-protocol
 description: Standard protocol for AI coding agents working in the MDX dev platform (CodeForge, Crucible, Velocity). Covers agent registration, liveness through run ingests, identity, and service discovery. Use when an agent starts work on any registered project, connects to platform services, or needs to maintain liveness with CodeForge/Crucible/Velocity.
+metadata:
+  author: Crucible
+  version: 0.1.0
 ---
 
 # Agent Protocol

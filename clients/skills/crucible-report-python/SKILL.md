@@ -1,6 +1,9 @@
 ---
 name: crucible-report-python
 description: Ingest Python test results (pytest/unittest → JUnit XML + coverage.py) and import/syntax errors to Crucible. Use after every Python test run — RED, GREEN, or regression.
+metadata:
+  author: Crucible
+  version: 0.1.0
 ---
 
 # Crucible Report — Python

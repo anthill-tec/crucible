@@ -1,6 +1,9 @@
 ---
 name: crucible-report-java
 description: Ingest Quarkus/Java test results (surefire + JaCoCo) to Crucible. Use after every Maven test run — RED, GREEN, or regression.
+metadata:
+  author: Crucible
+  version: 0.1.0
 ---
 
 # Crucible Report — Quarkus / Java

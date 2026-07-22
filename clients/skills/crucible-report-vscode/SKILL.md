@@ -1,6 +1,9 @@
 ---
 name: crucible-report-vscode
 description: Ingest VS Code extension TypeScript test results (Vitest JUnit XML + Mocha JUnit XML + lcov) to Crucible. Use after every test run — RED, GREEN, or regression.
+metadata:
+  author: Crucible
+  version: 0.1.0
 ---
 
 # Crucible Report — VS Code Extension / TypeScript

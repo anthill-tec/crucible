@@ -1,0 +1,196 @@
+# CR-CRU-009 §S4/§S6 — CI-automated publish on release.
+#
+# Single consolidated workflow (per the CR's §S4 text: "Publishing is a CI
+# workflow (.github/workflows/release.yml)") carrying BOTH publish stages as
+# gated jobs, modelled on Sandesh's publish-pypi.yml + publish-npm.yml:
+#   - build           : sdist/wheel for crucible-axi (hatchling/hatch-vcs) — always
+#   - create-release  : tag→GitHub-Release bridge on master (idempotent)
+#   - publish-pypi    : real PyPI via Trusted Publishing (OIDC), release-gated
+#   - publish-testpypi: Test-PyPI dry-run on workflow_dispatch (safe validation)
+#   - publish-npm     : the bun/node server to npm (--provenance), release-gated
+#
+# §S6: PyPI is validated against Test PyPI FIRST (workflow_dispatch), then the
+# real publish fires on the 0.1.0 GitHub Release.
+name: Release — publish crucible-axi (PyPI) + server (npm)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:        # manual Test-PyPI dry-run / npm dry-run
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # hatch-vcs needs tags for the dynamic version
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Build crucible-axi sdist + wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  create-release:
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # need full tag history to detect the tag at HEAD
+      - name: Create GitHub Release for version tag at HEAD (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}   # PAT so 'release: published' re-fires
+        run: |
+          TAG=$(git tag --points-at HEAD | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          if [ -z "$TAG" ]; then
+            echo "::notice::no version tag at HEAD — nothing to release"
+            exit 0
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release exists for $TAG — nothing to do"
+            exit 0
+          fi
+          gh release create "$TAG" --generate-notes
+
+  publish-pypi:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write           # OIDC trusted publishing (no long-lived token)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # guard needs origin/master history for the ancestry check
+      - name: Guard — tag ref + on-master ancestry
+        run: |
+          if ! [[ "$GITHUB_REF" =~ ^refs/tags/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::refusing to publish: $GITHUB_REF is not a clean version tag (^refs/tags/[0-9]+.[0-9]+.[0-9]+$)"
+            exit 1
+          fi
+          git fetch --no-tags origin master
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "::error::refusing to publish: $GITHUB_SHA is not an ancestor of origin/master"
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        # no password / no token — trusted publishing; attestations default-on
+
+  publish-testpypi:
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # hatch-vcs needs tags to derive the version
+      - name: Version sanity — reject PEP 440 local segment ('+')
+        run: |
+          python -m pip install --upgrade build
+          python -m build --sdist --no-isolation >/dev/null 2>&1 || true
+          VER=$(ls dist/*.tar.gz 2>/dev/null | sed -E 's#.*/[a-z_-]+-(.+)\.tar\.gz#\1#' | head -1)
+          echo "derived version: $VER"
+          if echo "$VER" | grep -q '+'; then
+            echo "::error::version '$VER' contains a '+' local segment — TestPyPI rejects PEP 440 local versions"
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-npm:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write          # OIDC trusted publishing / provenance attestation
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # guard needs origin/master history for the ancestry check
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - name: Guard — tag ref + on-master ancestry
+        run: |
+          if ! [[ "$GITHUB_REF" =~ ^refs/tags/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::refusing to publish: $GITHUB_REF is not a clean version tag (^refs/tags/[0-9]+.[0-9]+.[0-9]+$)"
+            exit 1
+          fi
+          git fetch --no-tags origin master
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "::error::refusing to publish: $GITHUB_SHA is not an ancestor of origin/master"
+            exit 1
+          fi
+      - name: Verify release tag matches package.json version
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "release tag: $VERSION / package.json: $PKG_VERSION"
+          if [ "$VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) != release tag ($VERSION)"
+            exit 1
+          fi
+      - name: Detect NPM_TOKEN (skip npm publish if absent)
+        id: npmtok
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::notice::NPM_TOKEN not set — skipping npm publish (deferred until token configured). PyPI is unaffected."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upgrade npm (>= 11.5.1 for OIDC trusted publishing)
+        if: steps.npmtok.outputs.publish == 'true'
+        run: npm install -g npm@latest
+      - name: Publish server to npm
+        if: steps.npmtok.outputs.publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
+
+  dry-run-npm:
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - name: npm pack dry-run (server package)
+        run: npm publish --dry-run --access public
