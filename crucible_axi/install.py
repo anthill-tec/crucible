@@ -16,21 +16,86 @@ drives the real manifest module.
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 
 from crucible_axi import manifest
 
 STAGE_ORDER = ("server", "skills", "manifest")
 
+# Placeholder external sources for the concrete sub-installers. GREEN wires these
+# to the real published names once S4/S6 open-source the repo + publish the npm
+# server package; until then they remain clearly-named constants so the release
+# swap is a single-line change.
+SERVER_NPM_PACKAGE = "crucible-server"  # TODO(S4): real published npm package name
+SKILLS_CLI_SOURCE = "crucible-dev/crucible"  # TODO(S6): real public owner/repo source
+
+# The Bun curl-bootstrap the [server] stage runs when Bun is absent from PATH.
+_BUN_INSTALL_COMMAND = "curl -fsSL https://bun.sh/install | bash"
+
+
+def _server_already_installed(target_dir: str) -> bool:
+    """Idempotency detection seam for the [server] sub-installer -- True when the
+    server has already been laid down under `target_dir`. Tests patch this
+    directly; the on-disk probe is a simple marker-directory check."""
+    return os.path.isdir(os.path.join(target_dir, "server"))
+
+
+def _skills_already_installed(target_dir: str) -> bool:
+    """Idempotency detection seam for the [skills] sub-installer -- True when the
+    Crucible skill set has already been synced. Tests patch this directly; the
+    on-disk probe is a simple marker-directory check."""
+    return os.path.isdir(os.path.join(target_dir, "skills"))
+
 
 def _server_stage(target_dir: str, force: bool) -> dict:
-    """C1 placeholder for the [server] sub-installer (real npx/uv delegation is
-    C2). Reports the path the server would be laid down at."""
-    return {"path": os.path.join(target_dir, "server"), "converged": False}
+    """[server] sub-installer -- `npx -y <SERVER_NPM_PACKAGE>` fetches + runs the
+    bun/node server, bootstrapping Bun via the curl installer first if absent.
+
+    Idempotent: an already-installed server (and not `force`) short-circuits to
+    converged=True without shelling out.
+    """
+    server_path = os.path.join(target_dir, "server")
+
+    if not force and _server_already_installed(target_dir):
+        return {"path": server_path, "converged": True}
+
+    if shutil.which("bun") is None:
+        subprocess.run(_BUN_INSTALL_COMMAND, shell=True, check=False)
+
+    completed = subprocess.run(
+        ["npx", "-y", SERVER_NPM_PACKAGE], check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"server stage failed: `npx -y {SERVER_NPM_PACKAGE}` exited with "
+            f"returncode {completed.returncode}")
+
+    return {"path": server_path, "converged": False}
 
 
 def _skills_stage(target_dir: str, force: bool) -> dict:
-    """C1 placeholder for the [skills] sub-installer (real skills sync is C2)."""
-    return {"path": os.path.join(target_dir, "skills"), "converged": False}
+    """[skills] sub-installer -- `npx skills add <SKILLS_CLI_SOURCE> --skill '*'
+    --agent '*' -g -y` installs the Crucible skill set into every detected
+    harness (global scope, non-interactive).
+
+    Idempotent: an already-installed skill set (and not `force`) short-circuits
+    to converged=True without shelling out.
+    """
+    skills_path = os.path.join(target_dir, "skills")
+
+    if not force and _skills_already_installed(target_dir):
+        return {"path": skills_path, "converged": True}
+
+    completed = subprocess.run(
+        ["npx", "skills", "add", SKILLS_CLI_SOURCE,
+         "--skill", "*", "--agent", "*", "-g", "-y"],
+        check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"skills stage failed: `npx skills add {SKILLS_CLI_SOURCE}` exited "
+            f"with returncode {completed.returncode}")
+
+    return {"path": skills_path, "converged": False}
 
 
 # Module-level, in-place-mutable stage table (patched by tests via
