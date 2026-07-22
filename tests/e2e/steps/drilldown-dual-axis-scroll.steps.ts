@@ -59,8 +59,29 @@ Step(
   },
 );
 
+// CR-CRU-038 §S1 RETARGET (2026-07-22): the run detail no longer
+// auto-expands failing suites on open — they open MINIMIZED (header +
+// counts only, leaves collapsed). This action step explicitly expands
+// each failing suite (one suite-row click each, waiting for that suite's
+// OWN toggle to flip to "▾" before moving to the next) so the dual-axis
+// single-scroller assertions below have real, on-screen leaf content to
+// measure, exactly like the old auto-expanded default used to provide.
 Step(
-  "each of the {int} failing suites in the run detail is auto-expanded",
+  "I expand each of the {int} failing suites in the run detail",
+  async ({ page }, suiteCount: number) => {
+    const overlay = page.getByTestId("run-overlay");
+    const suiteRows = overlay.getByTestId("suite-row");
+    await expect(suiteRows).toHaveCount(suiteCount);
+    for (let i = 0; i < suiteCount; i++) {
+      const row = suiteRows.nth(i);
+      await row.click();
+      await expect(row.getByTestId("tree-toggle")).toHaveText("▾");
+    }
+  },
+);
+
+Step(
+  "each of the {int} failing suites in the run detail is expanded",
   async ({ page }, suiteCount: number) => {
     const overlay = page.getByTestId("run-overlay");
     await expect(overlay.getByTestId("leaf-row").first()).toBeVisible();
