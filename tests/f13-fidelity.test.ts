@@ -637,6 +637,7 @@ describe("§S6 #2 (re-baselined 2026-07-17) — bare done rows carry NO narratio
       status: "open",
       track: "track-1",
       wave: "1",
+      title: "Narration Plan",
       orchestrator: "vidushi",
       cycles: [{ id: 6001, label: "checkpoint persistence", status: "done" }],
     };
