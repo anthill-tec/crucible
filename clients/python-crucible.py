@@ -1407,8 +1407,8 @@ def main():
     g.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     g.add_argument("--coverage", action="store_true",
                    help="Run under coverage.py and post /api/v2/runs/parsed with coverage")
-    g.add_argument("--cov-source", default="app",
-                   help="coverage --source package/dir (default: app)")
+    g.add_argument("--cov-source", default="crucible_axi,clients",
+                   help="coverage --source package/dir (default: crucible_axi,clients)")
     _add_discover_args(g)
     _add_python_arg(g)
     _add_project_dir_arg(g)
@@ -1437,8 +1437,8 @@ def main():
              "coverage.py (the only coverage path; coverage is reserved for this gate).",
     )
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
-    pmg.add_argument("--cov-source", default="app",
-                     help="coverage --source package/dir (default: app)")
+    pmg.add_argument("--cov-source", default="crucible_axi,clients",
+                     help="coverage --source package/dir (default: crucible_axi,clients)")
     pmg.add_argument("--skip-check", action="store_true",
                      help="Bypass the fail-fast py_compile check step")
     _add_discover_args(pmg)
