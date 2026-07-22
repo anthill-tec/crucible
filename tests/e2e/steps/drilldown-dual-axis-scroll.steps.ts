@@ -142,13 +142,13 @@ function withinVerticalSpan(
 
 // §S1 AC1 bullet 3 / Multi-suite bullet — REACHABILITY, not "already on
 // screen at max scroll". The AC's real guarantee is "reveal the last
-// failure AND the footer BY SCROLLING" — the footer-reachable half is
-// covered by the next step below. Each fixture failing leaf carries a
-// 60-line trace (~840px), taller than the pane (~530px at this suite's
-// 640px viewport), so at MAX scroll the pane legitimately shows the
-// failures-footer + the tail of the last box, with that box's own leading
-// ROW scrolled above the fold — that is correct dual-axis behaviour, not a
-// trap, and must not be asserted away.
+// failure BY SCROLLING" (CR-CRU-038 §S3 — the header controls need no such
+// scroll-reveal any more; they're always visible). Each fixture failing
+// leaf carries a 60-line trace (~840px), taller than the pane (~530px at
+// this suite's 640px viewport), so at MAX scroll the pane legitimately
+// shows the tail of the last box, with that box's own leading ROW scrolled
+// above the fold — that is correct dual-axis behaviour, not a trap, and
+// must not be asserted away.
 //
 // So this step asks a pure geometry question instead of relying on
 // whatever scrollTop the PREVIOUS step happened to leave pane-scroll at:
@@ -156,10 +156,10 @@ function withinVerticalSpan(
 // exist that puts the row's own row fully inside pane-scroll's visible
 // clientHeight? It computes this from the row's CURRENT layout position —
 // never assigns scrollTop, so it can't perturb pane's actual scroll state
-// for the downstream "the failures footer is fully within..." step (or
-// trigger a virtualization re-render mid-check, which a real scrollTop
-// mutation here previously did and made the row's own elementHandle go
-// stale). A leaf stacked inside the retired `.app-tree-scroll` capped box
+// for the downstream dead-space/header checks (or trigger a virtualization
+// re-render mid-check, which a real scrollTop mutation here previously did
+// and made the row's own elementHandle go stale). A leaf stacked inside
+// the retired `.app-tree-scroll` capped box
 // would still fail this: nothing (here or anywhere in the app) ever moves
 // that inner box's own scrollTop, so the row's real layout position stays
 // clipped past the cap no matter what pane-scroll value is hypothesized —
@@ -191,44 +191,63 @@ Step(
   },
 );
 
+// CR-CRU-038 §S3 RETARGET (2026-07-22): was "the failures footer is fully
+// within the pane-scroll element's visible box" — the footer is GONE
+// entirely; the failure-jump (+ raw-toggle, when raw exists) now live in
+// the drill-in HEADER, adjacent to the density chip, precisely so they
+// stay visible regardless of scroll depth (the whole point of §S3). The
+// geometry question this step used to ask ("is it within the pane's
+// visible box after scrolling to max?") is replaced by the stronger
+// header guarantee: the jump chip shares the density chip's own immediate
+// parent (same header container) and is NOT a descendant of pane-scroll
+// at all, so it never needs to be "within" the scrolled viewport — it sits
+// above the scroller.
 Step(
-  "the failures footer is fully within the pane-scroll element's visible box",
+  "the failure-jump control is visible in the run-detail header",
   async ({ page }) => {
     const overlay = page.getByTestId("run-overlay");
+    const jump = overlay.getByTestId("failure-jump");
+    await expect(jump).toHaveCount(1);
+    await expect(jump).toBeVisible();
+    const sameParentAsDensityChip = await overlay.evaluate((root) => {
+      const jumpEl = root.querySelector('[data-testid="failure-jump"]');
+      const densityEl = root.querySelector('[data-testid="density-toggle"]');
+      return jumpEl !== null && densityEl !== null && jumpEl.parentElement === densityEl.parentElement;
+    });
+    expect(sameParentAsDensityChip).toBe(true);
     const pane = overlay.getByTestId("pane-scroll");
-    const footer = overlay.getByTestId("failures-footer");
-    await expect(footer).toHaveCount(1);
-    await expect(footer).toBeVisible();
-    // Under full-suite load the app's live-poll can briefly re-render the
-    // footer node (VanJS swap), racing boundingBox() to a transient null —
-    // retry the measure+assert instead of hard-failing on that race.
-    await expect(async () => {
-      const [paneBox, footerBox] = await Promise.all([pane.boundingBox(), footer.boundingBox()]);
-      expect(paneBox).not.toBeNull();
-      expect(footerBox).not.toBeNull();
-      expect(withinVerticalSpan(footerBox!, paneBox!)).toBe(true);
-    }).toPass();
+    const jumpInsidePane = await pane.evaluate(
+      (el) => el.querySelector('[data-testid="failure-jump"]') !== null,
+    );
+    expect(jumpInsidePane).toBe(false);
   },
 );
 
-// §S1 AC1 bullet 2 — "no dead space": the gap between the footer's own
-// bottom edge (translated into pane-scroll's CONTENT coordinate space, i.e.
-// independent of the current scrollTop) and pane-scroll's scrollHeight must
-// not exceed pane-scroll's own bottom padding.
+// §S1 AC1 bullet 2 (CR-CRU-038 §S3 RE-ANCHOR, 2026-07-22): was "no dead
+// space below the FOOTER" — the footer is retired, so the CR-034
+// single-bounded-scroller guarantee re-anchors onto the LAST rendered
+// drill-in content block instead (the last suite-group, or the raw `<pre>`
+// when the (now header-resident) raw-toggle has revealed it — both are the
+// last element child of TestBody's own `.app-drillin-tree` wrapper,
+// whichever renders last in DOM order). The gap between that element's own
+// bottom edge (translated into pane-scroll's CONTENT coordinate space,
+// i.e. independent of the current scrollTop) and pane-scroll's
+// scrollHeight must not exceed pane-scroll's own bottom padding.
 Step(
-  "there is no dead space below the failures footer within the pane-scroll element",
+  "there is no dead space below the last suite in the run detail within the pane-scroll element",
   async ({ page }) => {
     const overlay = page.getByTestId("run-overlay");
     const pane = overlay.getByTestId("pane-scroll");
-    await expect(overlay.getByTestId("failures-footer")).toHaveCount(1);
+    await expect(overlay.getByTestId("suite-row").first()).toBeVisible();
     const result = await pane.evaluate((el) => {
-      const footer = el.querySelector('[data-testid="failures-footer"]') as HTMLElement | null;
-      if (footer === null) return null;
+      const tree = el.querySelector(".app-drillin-tree") as HTMLElement | null;
+      const last = tree?.lastElementChild as HTMLElement | null | undefined;
+      if (last === null || last === undefined) return null;
       const paneRect = el.getBoundingClientRect();
-      const footerRect = footer.getBoundingClientRect();
-      const footerBottomInContent = footerRect.bottom - paneRect.top + el.scrollTop;
+      const lastRect = last.getBoundingClientRect();
+      const lastBottomInContent = lastRect.bottom - paneRect.top + el.scrollTop;
       const paddingBottom = parseFloat(getComputedStyle(el).paddingBottom) || 0;
-      return { gap: el.scrollHeight - footerBottomInContent, paddingBottom };
+      return { gap: el.scrollHeight - lastBottomInContent, paddingBottom };
     });
     expect(result).not.toBeNull();
     expect(result!.gap).toBeLessThanOrEqual(result!.paddingBottom + 2);
@@ -276,7 +295,7 @@ Step(
   },
 );
 
-// §S1 AC1 bullet 6 tail — "a subsequent footer jump still advances
+// §S1 AC1 bullet 6 tail — "a subsequent header jump still advances
 // correctly" even after the raw toggle has rendered/removed content.
 Step(
   "clicking the failure-jump chip again advances to a different failing leaf",
