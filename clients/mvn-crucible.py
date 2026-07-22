@@ -762,7 +762,7 @@ def _ingest_compile(project_dir, agent, output, context=None):
     return 0 if resp.get("ok") else 1
 
 
-def _smart_ingest(project_dir, agent, dirs, tier=None):
+def _smart_ingest(project_dir, agent, dirs, tier=None, context=None):
     """One reports dir with XML → fast junit-dir path. Many → parse + parsed.
     None → return False so the caller can run the compile fallback.
     """
@@ -771,10 +771,10 @@ def _smart_ingest(project_dir, agent, dirs, tier=None):
         return False
     _warn_if_stale(existing)
     if len(existing) == 1:
-        _ingest_junit_dir(project_dir, agent, existing[0], tier=tier)
+        _ingest_junit_dir(project_dir, agent, existing[0], tier=tier, context=context)
     else:
         summary, tree = _parse_junit(existing)
-        _ingest_parsed(project_dir, agent, summary, tree, tier=tier)
+        _ingest_parsed(project_dir, agent, summary, tree, tier=tier, context=context)
     return True
 
 
@@ -821,8 +821,18 @@ def _run_surefire_tier(args, goal_extra, label):
     if not args.agent:
         return result.returncode
     dirs = _report_dirs(maven_dir, getattr(args, "module", None), "surefire")
+    # CR-CRU-036 §S9 — resolve the attach cycle BEFORE ingesting so a
+    # no-active-cycle run withholds WITHOUT posting a cycleId=null orphan, and a
+    # tracked run carries the SERVER-resolved cycleId in its context.
+    cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
+    if hard_error:
+        _emit_ingest_hard_error(label, project_dir, args.agent, warnings)
+        if narrator is not None:
+            narrator.finish()
+        return 1
+    ctx = _ingest_context(cycle_id)
     # CR-CRU-008 §S2 tier map: the subcommand name IS the tier (unit/module).
-    if _smart_ingest(project_dir, args.agent, dirs, tier=label):
+    if _smart_ingest(project_dir, args.agent, dirs, tier=label, context=ctx):
         rc = 0
     else:
         rc = _compile_fallback(maven_dir, project_dir, args.agent, common)
@@ -1069,7 +1079,7 @@ def cmd_auto_ingest(args):
         _emit_ingest_hard_error("auto-ingest", project_dir, args.agent, warnings)
         return 1
     ctx = _ingest_context(cycle_id)
-    if len(dirs) == 1:
+    if len(dirs) == 1 and not args.coverage:
         resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier="unit", context=ctx)
         _emit_ingest_axi_resp("auto-ingest", resp, project_dir, args.agent, cycle_id, warnings)
     else:

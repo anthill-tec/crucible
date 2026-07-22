@@ -360,6 +360,31 @@ def _parse_junit(path):
     return summary, tree
 
 
+def _collect_lcov(path):
+    """Sum an lcov `.info` file's LF/LH (lines) and FNF/FNH (functions) into a
+    Crucible coverage object. Returns None when the file is absent (a --coverage
+    run with no coverage output ingests WITHOUT coverage rather than fabricating)."""
+    if not os.path.exists(path):
+        return None
+    lf = lh = ff = fh = 0
+    with open(path) as f:
+        for line in f:
+            if line.startswith("LF:"):
+                lf += int(line[3:].strip() or 0)
+            elif line.startswith("LH:"):
+                lh += int(line[3:].strip() or 0)
+            elif line.startswith("FNF:"):
+                ff += int(line[4:].strip() or 0)
+            elif line.startswith("FNH:"):
+                fh += int(line[4:].strip() or 0)
+    return {
+        "lines": {"total": lf, "covered": lh,
+                  "percent": round(lh / lf * 100, 1) if lf else 0},
+        "functions": {"total": ff, "covered": fh,
+                      "percent": round(fh / ff * 100, 1) if ff else 0},
+    }
+
+
 def _ingest_compile(project_dir, key, agent_id, errors, context=None):
     """Ingest an arduino-cli compile failure to /api/v2/runs/compile (with run context)."""
     payload = {"projectKey": key, "agentId": agent_id, "errors": errors}
@@ -421,11 +446,13 @@ def cmd_unregister(args):
 # ── Toolchain: native host tests + arduino-cli compile ───────────────────────
 
 
-def cmd_test(args):
-    """§S2 fleet-uniform test verb — run native host tests (`make junit`) → parse →
-    /api/v2/runs/parsed (§S9 auto-attach). Arduino has no separate `auto-ingest`
-    verb, so §S9 rides here. A no-active-cycle run hard-errors WITHOUT ingesting a
-    cycleId=null orphan."""
+def _run_native_tests(args, verb, tier, want_coverage):
+    """§S2/§S3 fleet-uniform native-test workhorse — run native host tests
+    (`make junit`) → parse → /api/v2/runs/parsed under the given `tier`, §S9
+    auto-attaching to the server's active cycle. `unit`/`test` ride tier `unit`;
+    `regression` rides tier `regression` and, with `want_coverage`, attaches
+    lcov coverage from `<native_dir>/coverage/lcov.info`. A no-active-cycle run
+    hard-errors WITHOUT ingesting a cycleId=null orphan."""
     pd = _project_dir(args)
     key, name = _load_env(pd)
     agent_id, _ = _agent(name)
@@ -445,9 +472,17 @@ def cmd_test(args):
             summary[k] += s[k]
         tree.extend(t)
 
+    coverage = None
+    if want_coverage:
+        coverage = _collect_lcov(os.path.join(native_dir, "coverage", "lcov.info"))
+        if coverage is None:
+            print(f"[crucible] WARN: --coverage set but no lcov at "
+                  f"{native_dir}/coverage/lcov.info — ingesting WITHOUT coverage",
+                  file=sys.stderr)
+
     if not args.agent and not os.environ.get("AGENT_ID"):
         # No ingest requested — just report the run outcome.
-        print(f"[crucible] test -> '{name}': {summary['passed']}/{summary['total']} passed, "
+        print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
               f"{summary['failed']} failed", file=sys.stderr)
         return 1 if summary["failed"] else 0
 
@@ -455,25 +490,47 @@ def cmd_test(args):
     # WITHOUT ever ingesting a cycleId=null orphan.
     cycle_id, warnings, hard_error = _resolve_ingest_cycle(pd)
     if hard_error:
-        _emit_ingest_hard_error("test", pd, agent_id, warnings)
+        _emit_ingest_hard_error(verb, pd, agent_id, warnings)
         return 1
     payload = {"projectKey": key, "name": name, "agentId": agent_id,
-               "summary": summary, "tree": tree, "tier": "unit"}
+               "summary": summary, "tree": tree, "tier": tier}
+    if coverage:
+        payload["coverage"] = coverage
     context = _ingest_context(cycle_id)
     if context:
         payload["context"] = context
     resp = _post("/api/v2/runs/parsed", payload)
-    print(f"[crucible] test -> '{name}': {summary['passed']}/{summary['total']} passed, "
+    print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed (ingest ok={resp.get('ok')})", file=sys.stderr)
-    _emit_ingest_summary_axi("test", resp, summary, pd, agent_id, cycle_id, warnings)
+    _emit_ingest_summary_axi(verb, resp, summary, pd, agent_id, cycle_id, warnings)
     if summary["failed"]:
         return 1
     return 0 if resp.get("ok") else 1
 
 
-def cmd_check(args):
-    """§S2 fleet-uniform compile gate — arduino-cli compile; on failure ingest the
-    build output to /api/v2/runs/compile. Returns the §S1 envelope."""
+def cmd_test(args):
+    """§S2 fleet-uniform test verb — native host tests (`make junit`) → tier
+    `unit`. Retained (byte-compatible verb + envelope) alongside the `unit` alias."""
+    return _run_native_tests(args, "test", "unit", False)
+
+
+def cmd_unit(args):
+    """§S3 fleet-uniform `unit` verb — native host tests (`make junit`) → tier
+    `unit`. The RED/GREEN workhorse; identical toolchain to `test`."""
+    return _run_native_tests(args, "unit", "unit", False)
+
+
+def cmd_regression(args):
+    """§S3 fleet-uniform `regression` verb — full native suite → tier
+    `regression`; with `--coverage`, attach lcov coverage from
+    `<native_dir>/coverage/lcov.info` (uniform with bun/python/mvn/rust)."""
+    return _run_native_tests(args, "regression", "regression", bool(getattr(args, "coverage", False)))
+
+
+def _compile_gate(args, verb):
+    """§S2/§S3 shared arduino-cli compile gate — compile; on failure ingest the
+    build output to /api/v2/runs/compile. Returns the §S1 envelope under `verb`
+    (`check` and `compile` expose the SAME gate under fleet-uniform names)."""
     pd = _project_dir(args)
     key, name = _load_env(pd)
     agent_id, _ = _agent(name)
@@ -491,11 +548,84 @@ def cmd_check(args):
             sys.stderr.write(errors + "\n")
     else:
         print("[crucible] compile OK", file=sys.stderr)
-    legacy = f"check: ok={ok} exit={run.returncode}"
-    _emit_axi("check", ok,
-              {"exit": run.returncode, "help": _axi().HELP_STEPS["check"]},
+    legacy = f"{verb}: ok={ok} exit={run.returncode}"
+    _emit_axi(verb, ok,
+              {"exit": run.returncode, "help": _axi().HELP_STEPS.get(verb, ["status"])},
               _axi_context(pd, agent_id=agent_id), [], legacy)
     return 0 if ok else (run.returncode or 1)
+
+
+def cmd_check(args):
+    """§S2 fleet-uniform compile gate — arduino-cli compile; on failure ingest the
+    build output to /api/v2/runs/compile. Returns the §S1 envelope."""
+    return _compile_gate(args, "check")
+
+
+def cmd_compile(args):
+    """§S3 fleet-uniform `compile` verb — arduino-cli compile; on failure ingest
+    the captured build output to /api/v2/runs/compile (never the v1 shim). The
+    firmware-compile counterpart of the fleet's `compile`/`check` gate."""
+    return _compile_gate(args, "compile")
+
+
+def cmd_auto_ingest(args):
+    """§S3 fleet-uniform `auto-ingest` verb — ingest a PRE-EXISTING native reports
+    dir (default `<native_dir>/reports`) with NO toolchain invocation, §S9
+    auto-attaching to the server's active cycle. Uniform with bun/python/mvn/rust."""
+    pd = _project_dir(args)
+    key, name = _load_env(pd)
+    agent_id, _ = _agent(name)
+    sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
+    native_dir = os.path.join(pd, *sub.split("/"))
+    reports_dir = args.reports or os.path.join(native_dir, "reports")
+    if not os.path.isabs(reports_dir):
+        reports_dir = os.path.join(pd, reports_dir)
+    reports = sorted(glob.glob(os.path.join(reports_dir, "TEST-*.xml")))
+    if not reports:
+        sys.exit(f"[crucible] no JUnit (TEST-*.xml) under {reports_dir} — nothing to ingest")
+    _ensure_project(key, name, pd)
+    summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
+    tree = []
+    for junit in reports:
+        s, t = _parse_junit(junit)
+        for k in ("total", "passed", "failed"):
+            summary[k] += s[k]
+        tree.extend(t)
+    cycle_id, warnings, hard_error = _resolve_ingest_cycle(pd)
+    if hard_error:
+        _emit_ingest_hard_error("auto-ingest", pd, agent_id, warnings)
+        return 1
+    payload = {"projectKey": key, "name": name, "agentId": agent_id,
+               "summary": summary, "tree": tree, "tier": "unit"}
+    context = _ingest_context(cycle_id)
+    if context:
+        payload["context"] = context
+    resp = _post("/api/v2/runs/parsed", payload)
+    print(f"[crucible] auto-ingest -> '{name}': {summary['passed']}/{summary['total']} passed, "
+          f"{summary['failed']} failed (ingest ok={resp.get('ok')})", file=sys.stderr)
+    _emit_ingest_summary_axi("auto-ingest", resp, summary, pd, agent_id, cycle_id, warnings)
+    if summary["failed"]:
+        return 1
+    return 0 if resp.get("ok") else 1
+
+
+def cmd_pre_merge_gate(args):
+    """§S3 ORCHESTRATOR pre-merge gate — fail-fast arduino-cli `compile` →
+    `regression --coverage`. On compile failure the compile-failure event is
+    posted and regression is SKIPPED (non-zero exit); on compile success the
+    regression run posts the tier:'regression' event with coverage attached."""
+    if not getattr(args, "skip_check", False):
+        check_args = argparse.Namespace(agent=args.agent, project_dir=args.project_dir)
+        rc = _compile_gate(check_args, "compile")
+        if rc != 0:
+            print("[crucible] pre-merge gate FAILED at the arduino-cli compile step — "
+                  "skipped the regression. Fix the compile first (or --skip-check to bypass).",
+                  file=sys.stderr)
+            return rc
+    reg_args = argparse.Namespace(
+        agent=args.agent, project_dir=args.project_dir,
+        dir=getattr(args, "dir", None), coverage=True)
+    return cmd_regression(reg_args)
 
 
 # ── CR-CRU-030 §S4/§S6/§S7/§S8 — plan / cycle / status / gate verbs ──────────
@@ -948,16 +1078,47 @@ def main():
     # no-arg live dashboard, never argparse's required-subcommand error.
     sub = p.add_subparsers(dest="cmd", required=False)
 
+    _dir_help = ("test-target subdir under the project (default tests/native; "
+                 "e.g. tests/native-mock for the ArduinoFake L2 tier)")
+
     t = sub.add_parser("test", parents=[common],
                        help="run native host tests (make junit) -> /api/v2/runs/parsed (§S9)")
-    t.add_argument("--dir", default="tests/native",
-                   help="test-target subdir under the project (default tests/native; "
-                        "e.g. tests/native-mock for the ArduinoFake L2 tier)")
+    t.add_argument("--dir", default="tests/native", help=_dir_help)
     t.set_defaults(func=cmd_test)
+
+    un = sub.add_parser("unit", parents=[common],
+                        help="run native host tests (make junit) -> /api/v2/runs/parsed, tier unit (§S9)")
+    un.add_argument("--dir", default="tests/native", help=_dir_help)
+    un.set_defaults(func=cmd_unit)
+
+    rg = sub.add_parser("regression", parents=[common],
+                        help="full native suite -> /api/v2/runs/parsed, tier regression (§S3)")
+    rg.add_argument("--dir", default="tests/native", help=_dir_help)
+    rg.add_argument("--coverage", action="store_true",
+                    help="attach lcov coverage from <native_dir>/coverage/lcov.info")
+    rg.set_defaults(func=cmd_regression)
+
+    ai = sub.add_parser("auto-ingest", parents=[common],
+                        help="ingest a PRE-EXISTING native reports dir (no toolchain) (§S3)")
+    ai.add_argument("--dir", default="tests/native", help=_dir_help)
+    ai.add_argument("--reports",
+                    help="reports dir holding TEST-*.xml (default <native_dir>/reports)")
+    ai.set_defaults(func=cmd_auto_ingest)
 
     ck = sub.add_parser("check", parents=[common],
                         help="arduino-cli compile -> /api/v2/runs/compile on failure")
     ck.set_defaults(func=cmd_check)
+
+    cpl = sub.add_parser("compile", parents=[common],
+                         help="arduino-cli compile -> /api/v2/runs/compile on failure (§S3)")
+    cpl.set_defaults(func=cmd_compile)
+
+    pmg = sub.add_parser("pre-merge-gate", parents=[common],
+                         help="fail-fast compile -> regression --coverage (§S3)")
+    pmg.add_argument("--dir", default="tests/native", help=_dir_help)
+    pmg.add_argument("--skip-check", action="store_true",
+                     help="skip the fail-fast arduino-cli compile step")
+    pmg.set_defaults(func=cmd_pre_merge_gate)
 
     r = sub.add_parser("register", parents=[common], help="register/heartbeat the agent")
     r.add_argument("--phase", help="phase label (RED/GREEN/VERIFY/FIX)")
