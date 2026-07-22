@@ -1,6 +1,9 @@
 ---
 name: crucible-report-rust
 description: Ingest Rust/Cargo test results (nextest JUnit XML + llvm-cov lcov) and compile errors (rustc parser) to Crucible. Use after every cargo test or check run.
+metadata:
+  author: Crucible
+  version: 0.1.0
 ---
 
 # Crucible Report — Rust / Cargo

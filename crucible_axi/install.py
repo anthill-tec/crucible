@@ -1,0 +1,150 @@
+"""CR-CRU-009 §S2 — the staged install orchestrator framework.
+
+`run_install` sequences the server -> skills -> manifest sub-installers through
+an INJECTABLE stage-runner table (no real subprocess/network in this cycle) and
+aggregates each stage's result into `(ok, stages, warnings)`. Stages run in
+`STAGE_ORDER`; a stage exception is FAIL-FAST (remaining stages are skipped and
+`ok` is False). Each returned stage path is `~`-abbreviated by `run_install`.
+
+`DEFAULT_STAGE_RUNNERS` is a module-level, in-place-mutable dict (tests patch it
+via `mock.patch.dict`); `run_install` reads it by name at call time so a patch
+is always observed. In C1 the server/skills default runners are minimal
+placeholders — the real delegation is C2 — while the manifest runner already
+drives the real manifest module.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+
+from crucible_axi import manifest
+
+STAGE_ORDER = ("server", "skills", "manifest")
+
+# Placeholder external sources for the concrete sub-installers. GREEN wires these
+# to the real published names once S4/S6 open-source the repo + publish the npm
+# server package; until then they remain clearly-named constants so the release
+# swap is a single-line change.
+SERVER_NPM_PACKAGE = "crucible-server"  # TODO(S4): real published npm package name
+SKILLS_CLI_SOURCE = "crucible-dev/crucible"  # TODO(S6): real public owner/repo source
+
+# The Bun curl-bootstrap the [server] stage runs when Bun is absent from PATH.
+_BUN_INSTALL_COMMAND = "curl -fsSL https://bun.sh/install | bash"
+
+
+def _server_already_installed(target_dir: str) -> bool:
+    """Idempotency detection seam for the [server] sub-installer -- True when the
+    server has already been laid down under `target_dir`. Tests patch this
+    directly; the on-disk probe is a simple marker-directory check."""
+    return os.path.isdir(os.path.join(target_dir, "server"))
+
+
+def _skills_already_installed(target_dir: str) -> bool:
+    """Idempotency detection seam for the [skills] sub-installer -- True when the
+    Crucible skill set has already been synced. Tests patch this directly; the
+    on-disk probe is a simple marker-directory check."""
+    return os.path.isdir(os.path.join(target_dir, "skills"))
+
+
+def _server_stage(target_dir: str, force: bool) -> dict:
+    """[server] sub-installer -- `npx -y <SERVER_NPM_PACKAGE>` fetches + runs the
+    bun/node server, bootstrapping Bun via the curl installer first if absent.
+
+    Idempotent: an already-installed server (and not `force`) short-circuits to
+    converged=True without shelling out.
+    """
+    server_path = os.path.join(target_dir, "server")
+
+    if not force and _server_already_installed(target_dir):
+        return {"path": server_path, "converged": True}
+
+    if shutil.which("bun") is None:
+        subprocess.run(_BUN_INSTALL_COMMAND, shell=True, check=False)
+
+    completed = subprocess.run(
+        ["npx", "-y", SERVER_NPM_PACKAGE], check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"server stage failed: `npx -y {SERVER_NPM_PACKAGE}` exited with "
+            f"returncode {completed.returncode}")
+
+    return {"path": server_path, "converged": False}
+
+
+def _skills_stage(target_dir: str, force: bool) -> dict:
+    """[skills] sub-installer -- `npx skills add <SKILLS_CLI_SOURCE> --skill '*'
+    --agent '*' -g -y` installs the Crucible skill set into every detected
+    harness (global scope, non-interactive).
+
+    Idempotent: an already-installed skill set (and not `force`) short-circuits
+    to converged=True without shelling out.
+    """
+    skills_path = os.path.join(target_dir, "skills")
+
+    if not force and _skills_already_installed(target_dir):
+        return {"path": skills_path, "converged": True}
+
+    completed = subprocess.run(
+        ["npx", "skills", "add", SKILLS_CLI_SOURCE,
+         "--skill", "*", "--agent", "*", "-g", "-y"],
+        check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"skills stage failed: `npx skills add {SKILLS_CLI_SOURCE}` exited "
+            f"with returncode {completed.returncode}")
+
+    return {"path": skills_path, "converged": False}
+
+
+# Module-level, in-place-mutable stage table (patched by tests via
+# mock.patch.dict). `run_install` reads this name at call time.
+DEFAULT_STAGE_RUNNERS: dict = {
+    "server": _server_stage,
+    "skills": _skills_stage,
+    "manifest": manifest.run_manifest_stage,
+}
+
+
+def _abbreviate_home(path: str) -> str:
+    """Abbreviate a $HOME-rooted path to `~/...` (identity otherwise)."""
+    home = os.path.expanduser("~")
+    if path == home:
+        return "~"
+    if path.startswith(home + os.sep):
+        return "~" + path[len(home):]
+    return path
+
+
+def run_install(target_dir, stage_runners=None, force=False):
+    """Run the staged install; return `(ok, stages, warnings)`.
+
+    `stages` is a list of `{"name", "path" (~-abbreviated), "converged"}` in
+    `STAGE_ORDER` up to (and excluding) the first failing stage. A stage
+    exception halts the sequence and surfaces as `ok=False` plus a warning —
+    the failure is recorded visibly, never swallowed.
+    """
+    runners = stage_runners if stage_runners is not None else DEFAULT_STAGE_RUNNERS
+    stages: list[dict] = []
+    warnings: list[dict] = []
+    ok = True
+
+    for name in STAGE_ORDER:
+        runner = runners[name]
+        try:
+            result = runner(target_dir, force)
+        except Exception as exc:  # noqa: BLE001 — fail-fast: record + halt
+            ok = False
+            warnings.append({
+                "code": "stage-failed",
+                "detail": f"{name} stage failed: {exc}",
+            })
+            break
+        stages.append({
+            "name": name,
+            "path": _abbreviate_home(str(result.get("path", ""))),
+            "converged": bool(result.get("converged", False)),
+        })
+
+    return ok, stages, warnings

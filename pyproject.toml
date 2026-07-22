@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.27", "hatch-vcs>=0.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "crucible-axi"
+dynamic = ["version"]
+description = "Crucible install orchestrator — ships the *-crucible.py client fleet and stages server/skills/manifest sub-installers behind one TOON-AXI envelope"
+requires-python = ">=3.10"
+license = "GPL-3.0-only"
+authors = [{ name = "Antony John" }]
+keywords = ["crucible", "axi", "orchestration", "model-b", "testing"]
+classifiers = [
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: POSIX",
+]
+
+[project.scripts]
+crucible-axi = "crucible_axi.cli:main"
+
+[tool.hatch.version]
+source = "vcs"
+raw-options = { local_scheme = "no-local-version" }
+
+[tool.hatch.build.targets.wheel]
+packages = ["crucible_axi"]
+
+# The client fleet + its status contract ship as package data so the installed
+# `crucible-axi` orchestrator carries the clients it lays down (S1).
+[tool.hatch.build.targets.wheel.force-include]
+"clients" = "crucible_axi/clients"
+"clients/STATUS-CONTRACT.md" = "crucible_axi/clients/STATUS-CONTRACT.md"

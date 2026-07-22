@@ -3,6 +3,9 @@
   "version": "2.0.0-alpha.1",
   "type": "module",
   "private": true,
+  "bin": {
+    "crucible-server": "bin/crucible-server.mjs"
+  },
   "engines": {
     "bun": ">=1.2"
   },

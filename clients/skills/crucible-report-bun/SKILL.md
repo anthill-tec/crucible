@@ -1,6 +1,9 @@
 ---
 name: crucible-report-bun
 description: Ingest Bun/TypeScript test results (JUnit XML + lcov) to Crucible. Use after every Bun test run — RED, GREEN, or regression.
+metadata:
+  author: Crucible
+  version: 0.1.0
 ---
 
 # Crucible Report — Bun / TypeScript

@@ -1,6 +1,9 @@
 ---
 name: crucible-register
 description: Register agent with Crucible on start, keep liveness through run ingests, unregister on completion.
+metadata:
+  author: Crucible
+  version: 0.1.0
 ---
 
 # Crucible Register — Agent Lifecycle
