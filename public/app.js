@@ -1025,11 +1025,17 @@
     // The chip closes exactly like Escape (same closeDetail — same
     // route/pane-scroll restore). §S4.0 FINAL — no mode switch here (or
     // anywhere): presentation is purely tier-contextual.
-    const DetailHeadContent = (eventId) => [
+    // CR-CRU-038 §S3 — `controls` (RunDetailBody.headerControls) mounts the
+    // failure-jump + raw-toggle as SIBLINGS of the density chip in the header
+    // (retired from the body's FailuresFooter). Absent for headers with no
+    // body handle (the visible home band); the drill-in suites scope the
+    // controls to the overlay's inhead copy / the workspace header.
+    const DetailHeadContent = (eventId, controls) => [
       button({ class: "app-chip", onclick: () => closeDetail() }, () => backChipLabel()),
       span({ class: "app-rail-title" }, `Run detail · ${eventId}`),
       // §S5 fidelity #3 — the density toggle renders in the drill-in header.
       DensityToggle(),
+      ...(controls ?? []),
     ];
 
     // CR-CRU-016 §S1 — pane-state swap: a central pane renders EITHER its
@@ -2901,30 +2907,34 @@
     // RUN DETAIL · density) sits ABOVE the scrolling content and never moves
     // with it (header-always-visible), while the overlay container still
     // carries the chip/anatomy for the drill-in contracts.
-    const WorkspaceRunDetail = (eventId) =>
-      div(
+    const WorkspaceRunDetail = (eventId) => {
+      // CR-CRU-034 §S1 — the pane-scroll box owns the run-detail body's
+      // vertical scroll AND sources §S4.4 virtualization (onscroll).
+      // CR-CRU-038 §S3 — build the body FIRST so the header can mount its
+      // failure-jump + raw-toggle controls (wired to this body's state).
+      const detailBody = RunDetailBody(eventId);
+      return div(
         { "data-testid": "run-overlay", class: "app-drillin app-inpane app-detail-col" },
-        div({ class: "app-drillin-head app-top" }, DetailHeadContent(eventId)),
-        (() => {
-          // CR-CRU-034 §S1 — the pane-scroll box owns the run-detail body's
-          // vertical scroll AND sources §S4.4 virtualization (onscroll).
-          const detailBody = RunDetailBody(eventId);
-          return div(
-            { "data-testid": "workspace-runs", class: greyed("app-center") },
-            // CR-CRU-023 §S1 — the in-pane run detail renders inside the SAME
-            // shared pane-content wrapper as every other central pane, so the
-            // horizontal scroll floor is one mechanism, not a per-pane one-off.
-            div(
-              {
-                "data-testid": "pane-scroll",
-                class: "app-pane-content",
-                onscroll: detailBody.handlePaneScroll,
-              },
-              detailBody.body,
-            ),
-          );
-        })(),
+        div(
+          { class: "app-drillin-head app-top" },
+          ...DetailHeadContent(eventId, detailBody.headerControls),
+        ),
+        div(
+          { "data-testid": "workspace-runs", class: greyed("app-center") },
+          // CR-CRU-023 §S1 — the in-pane run detail renders inside the SAME
+          // shared pane-content wrapper as every other central pane, so the
+          // horizontal scroll floor is one mechanism, not a per-pane one-off.
+          div(
+            {
+              "data-testid": "pane-scroll",
+              class: "app-pane-content",
+              onscroll: detailBody.handlePaneScroll,
+            },
+            detailBody.body,
+          ),
+        ),
       );
+    };
 
     // AC2 — the feed pane returns at its exact prior scrollTop after a
     // detail closes (same discipline as home's paneSwap, hoisted to the
@@ -3433,32 +3443,78 @@
         }
       }
 
-      const FailuresFooter = (d) => {
-        const failed = d.summary?.failed ?? 0;
-        if (failed < 1) return null;
-        return div(
-          { "data-testid": "failures-footer", class: "app-failures-footer" },
-          button(
+      // CR-CRU-038 §S2 — resolve the raw blob to surface: the focused/failing
+      // leaf's own `raw` capture (a forward-compat per-leaf field) is PREFERRED
+      // over the run-level `d.raw` blob; when neither exists the raw content is
+      // absent (and the raw-toggle control is withheld entirely — no more
+      // "toggle that reveals nothing"). Reads suiteLeaves.val / focusedLeaf.val
+      // so it re-resolves reactively as suites load.
+      function resolveRaw(d) {
+        const focused = focusedLeaf.val;
+        const leavesMap = suiteLeaves.val;
+        const leafRawOf = (predicate) => {
+          for (const suite of d.tree ?? []) {
+            const leaves = leavesMap[suite.name];
+            if (leaves === undefined) continue;
+            for (const leaf of leaves) {
+              const key = `${suite.name}::${leaf.name}`;
+              if (!predicate(leaf, key)) continue;
+              if (typeof leaf.raw === "string" && leaf.raw.length > 0) return leaf.raw;
+            }
+          }
+          return null;
+        };
+        // 1) the focused leaf's raw, 2) any failing leaf's raw, 3) the run blob.
+        const focusedRaw =
+          focused !== null ? leafRawOf((_leaf, key) => key === focused) : null;
+        if (focusedRaw !== null) return focusedRaw;
+        const failingRaw = leafRawOf((leaf) => leaf.status === "fail");
+        if (failingRaw !== null) return failingRaw;
+        if (typeof d.raw === "string" && d.raw.length > 0) return d.raw;
+        return null;
+      }
+
+      // CR-CRU-038 §S3 — the failure-jump + raw-toggle relocate to the drill-in
+      // HEADER (siblings of the density chip via DetailHeadContent's `controls`
+      // slot); the FailuresFooter that used to carry them in the body is
+      // retired. Each control is an independent reactive child so both sit
+      // directly under the header container. failure-jump: test kind, ≥1
+      // failure. raw-toggle: only when raw content EXISTS (§S2).
+      const headerControls = [
+        // CR-CRU-038 §S3 — each control is a standalone reactive child of the
+        // header; it must return "" (not null) when withheld — a null-returning
+        // derived child is dropped as static and never re-renders when detail
+        // loads (matches the App-level `manage ? … : ""` idiom).
+        () => {
+          const d = detail.val;
+          if (d === null || d.kind !== "test") return "";
+          const failed = d.summary?.failed ?? 0;
+          if (failed < 1) return "";
+          return button(
             {
               "data-testid": "failure-jump",
-              class: "app-chip app-footer-chip",
+              class: "app-chip app-drillin-headchip",
               onclick: () => jumpToNextFailure(d),
             },
             `▸ ${failed - 1} more failures`,
-          ),
-          " · ",
-          button(
+          );
+        },
+        () => {
+          const d = detail.val;
+          if (d === null || d.kind !== "test") return "";
+          if (resolveRaw(d) === null) return "";
+          return button(
             {
               "data-testid": "raw-toggle",
-              class: "app-chip app-footer-chip",
+              class: "app-chip app-drillin-headchip",
               onclick: () => {
                 showRaw.val = !showRaw.val;
               },
             },
             "toggle raw output",
-          ),
-        );
-      };
+          );
+        },
+      ];
 
       // Suite tree — §S4.0 FINAL: the tier decides everything. Detail (unit/
       // module/integration) renders the plain tree; Density (regression/e2e)
@@ -3496,9 +3552,13 @@
               expanded ? SuiteLeafList(suite.name, leaves, presentation) : null,
             );
           }),
-          FailuresFooter(d),
-          showRaw.val && typeof d.raw === "string"
-            ? pre({ "data-testid": "raw-output", class: "app-raw-output" }, d.raw)
+          // CR-CRU-038 §S2/§S3 — the failure-jump + raw-toggle moved to the
+          // header; only the raw <pre> OUTPUT stays in the body scroller,
+          // showing the RESOLVED raw (per-leaf preferred over the run blob).
+          // Read synchronously so the enclosing body derivation tracks showRaw
+          // and rebuilds TestBody on toggle.
+          showRaw.val && resolveRaw(d) !== null
+            ? pre({ "data-testid": "raw-output", class: "app-raw-output" }, resolveRaw(d))
             : null,
         );
       };
@@ -3619,7 +3679,7 @@
             : TestBody(d);
       });
 
-      return { body, handlePaneScroll };
+      return { body, handlePaneScroll, headerControls };
     };
 
     // CR-CRU-016 §S1 — home's pane-state container: the detail renders
@@ -3638,7 +3698,10 @@
       const detailBody = RunDetailBody(eventId);
       return div(
         { "data-testid": "run-overlay", class: "app-drillin app-inpane" },
-        div({ class: "app-drillin-inhead" }, DetailHeadContent(eventId)),
+        div(
+          { class: "app-drillin-inhead" },
+          DetailHeadContent(eventId, detailBody.headerControls),
+        ),
         // CR-CRU-023 §S1 — same shared pane-content wrapper as the
         // workspace's WorkspaceRunDetail form: the run detail is one of the
         // seven floored pane surfaces wherever it renders. Post CR-CRU-029
