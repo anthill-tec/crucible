@@ -47,6 +47,8 @@ interface V2Body {
   summary?: unknown;
   tree?: unknown;
   coverage?: unknown;
+  // CR-CRU-038 §S2b — optional run-level captured raw output.
+  raw?: unknown;
   errors?: unknown;
   format?: unknown;
   // §S2 run context (graceful)
@@ -528,6 +530,8 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     tree: body.tree as SuiteNode[],
     // §S4 (CR-CRU-001) discard-on-fail is applied by the store; pass coverage through.
     ...(hasCoverage ? { coverage: body.coverage as Coverage } : {}),
+    // CR-CRU-038 §S2b — run-level raw output; retained even on a failing ingest.
+    ...(typeof body.raw === "string" ? { raw: body.raw } : {}),
   };
 
   // CR-CRU-024 §S7 — reject an unlinkable context.cycleId BEFORE the event is

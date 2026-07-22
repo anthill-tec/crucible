@@ -84,6 +84,9 @@ export interface RunSchema {
   summary: RunSummary;
   tree: SuiteNode[];
   coverage?: Coverage;
+  // CR-CRU-038 §S2b — run-level captured runner output (stdout/stderr),
+  // threaded codec→ingest→event so the frontend raw-toggle has real data.
+  raw?: string;
 }
 
 export interface RunContext {
@@ -127,6 +130,9 @@ export interface RunEvent {
   summary?: RunSummary;
   tree?: SuiteNode[];
   coverage?: Coverage;
+  // CR-CRU-038 §S2b — run-level captured runner output; persisted and served
+  // verbatim, and (unlike coverage) retained even on a failing ingest.
+  raw?: string;
   compile?: unknown;
   // CR-CRU-013 §S1 (gate) — the full no-mistakes gate object, stored verbatim
   // (forward-tolerant: fields outside the ladder round-trip untouched).
