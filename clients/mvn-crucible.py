@@ -183,8 +183,13 @@ def _common_mvn_flags(args):
 # --------------------------------------------------------------------------- #
 # HTTP + process helpers
 # --------------------------------------------------------------------------- #
-def _request(method, path, payload=None):
-    """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error."""
+def _request(method, path, payload=None, timeout=None):
+    """JSON request to Crucible. Returns parsed JSON, or {ok:False,error} on HTTP/conn error.
+
+    CR-CRU-035 §S1 — `timeout=None` (the default) is UNBOUNDED: ingest POSTs
+    (`/api/v2/runs/parsed`) for a large regression/coverage run can legitimately
+    take the server >10s, and a short bound there is a false-negative. The short
+    hook-safe bound is applied ONLY on the status/plans read path via `_get`."""
     req = urllib.request.Request(
         f"{CRUCIBLE_URL}{path}",
         data=json.dumps(payload).encode() if payload is not None else None,
@@ -192,7 +197,7 @@ def _request(method, path, payload=None):
         method=method,
     )
     try:
-        return json.loads(urllib.request.urlopen(req, timeout=10).read())
+        return json.loads(urllib.request.urlopen(req, timeout=timeout).read())
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
         return {"ok": False, "error": f"HTTP {e.code}: {body}"}
@@ -205,8 +210,10 @@ def _post(path, payload):
     return _request("POST", path, payload)
 
 
-def _get(path):
-    return _request("GET", path)
+def _get(path, timeout=10):
+    # §S1 — the read path (status/plans) is bounded by a SHORT hook-safe timeout
+    # so an unreachable/slow server can't hang a session-start hook forever.
+    return _request("GET", path, timeout=timeout)
 
 
 def _patch(path, payload):
