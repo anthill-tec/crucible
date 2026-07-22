@@ -1067,6 +1067,44 @@ class MvnCrucibleToolchainTest(_BaseMvnAxiTest):
             "the real maven surefire run's ingest payload must carry the resolved cycle id",
         )
 
+    def test_regression_verb_includes_captured_runner_output_as_raw_in_parsed_payload(self):
+        """CR-CRU-038 §S2b -- the `regression` verb ALWAYS ingests through
+        `_ingest_parsed` (never the single-dir server-parse fast path). Its
+        `_run_logged` call captures the combined mvn stdout+stderr whenever
+        `--log` (or a narrator) forces the streaming capture branch; that
+        captured output must flow into the /api/v2/runs/parsed payload as
+        `raw`. Fails today -- `_ingest_parsed` builds no `raw` key at all."""
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        marker = "MVN_RAW_CAPTURE_MARKER_5533"
+        fake_mvnw_body = (
+            "#!/usr/bin/env python3\n"
+            "import os\n"
+            "os.makedirs(os.path.join('target', 'surefire-reports'), exist_ok=True)\n"
+            "with open(os.path.join('target', 'surefire-reports', 'TEST-FixtureTest.xml'), 'w') as f:\n"
+            f"    f.write({PASS_SUREFIRE_XML!r})\n"
+            f"print({marker!r})\n"
+        )
+        _write_fake_mvnw(self.tmpdir, fake_mvnw_body)
+        log_path = os.path.join(self.tmpdir, "run.log")
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._active_cycle_plans(51),
+                                create=True):
+            code, out, _err = _run_main(self.module, [
+                "regression", "--project-dir", self.tmpdir, "--agent", "CR-M-raw",
+                "--log", log_path,
+            ])
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNotNone(ingest_call, "the regression run must actually be POSTed to /runs/parsed")
+        payload = ingest_call[0][1]
+        self.assertIn(
+            marker, payload.get("raw") or "",
+            f"the real captured mvn regression runner output must flow into "
+            f"the parsed ingest payload's `raw` field; got payload keys={sorted(payload)!r}",
+        )
+
     def test_check_verb_runs_real_maven_compile_and_ingests_compile_errors(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         _write_fake_mvnw(self.tmpdir, _FAKE_MVNW_CHECK_BODY)

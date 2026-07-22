@@ -1087,6 +1087,45 @@ class PythonCrucibleToolchainTest(_BasePythonAxiTest):
             "active cycle id",
         )
 
+    def test_test_verb_includes_captured_runner_output_as_raw_in_parsed_payload(self):
+        """CR-CRU-038 §S2b -- `_run_logged` (python-crucible.py:279-287)
+        ALWAYS captures the real xmlrunner combined stdout+stderr; that
+        captured output must flow into the /api/v2/runs/parsed payload as
+        `raw` so the server-stored run carries real output for the
+        run-detail raw-toggle to reveal. Fails today: `_ingest_parsed`
+        builds no `raw` key at all, regardless of what was captured."""
+        marker = "PYTHON_RAW_CAPTURE_MARKER_4471"
+        marker_module = FIXTURE_TEST_MODULE.replace(
+            "self.assertTrue(True)",
+            f'print({marker!r})\n        self.assertTrue(True)',
+        )
+        pkg_dir = os.path.join(self.tmpdir, self.FIXTURE_PKG)
+        os.makedirs(pkg_dir, exist_ok=True)
+        with open(os.path.join(pkg_dir, "__init__.py"), "w") as f:
+            f.write("")
+        with open(os.path.join(pkg_dir, "test_fixture.py"), "w") as f:
+            f.write(marker_module)
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._active_cycle_plans(707),
+                                create=True):
+            code, out, _err = _run_main(self.module, [
+                "test", "--project-dir", self.tmpdir, "--python", sys.executable,
+                "--tests", f"{self.FIXTURE_PKG}.test_fixture", "--reports", "reports",
+                "--agent", "CR-X-raw",
+            ])
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNotNone(ingest_call, "the real unittest run must actually be POSTed")
+        payload = ingest_call[0][1]
+        self.assertIn(
+            marker, payload.get("raw") or "",
+            f"the real captured xmlrunner output must flow into the parsed "
+            f"ingest payload's `raw` field; got payload keys={sorted(payload)!r}",
+        )
+
     def test_check_verb_runs_py_compile_and_ingests_compile_errors(self):
         app_dir = os.path.join(self.tmpdir, "app")
         os.makedirs(app_dir, exist_ok=True)
