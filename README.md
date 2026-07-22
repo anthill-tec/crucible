@@ -41,6 +41,16 @@ crucible-server                 # loopback default; see docs/RUNBOOK.md
 curl -fsSL http://127.0.0.1:3849/api/health
 ```
 
+## Development
+
+Working on the Python client? Install the dev extras into your `.venv` so the
+Python coverage gate (`python-crucible.py regression --coverage`) has
+`coverage.py` available:
+
+```sh
+pip install -e '.[dev]'
+```
+
 ## Documentation
 
 - [docs/RUNBOOK.md](docs/RUNBOOK.md) — operating the server (start/stop, db

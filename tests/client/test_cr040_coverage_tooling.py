@@ -225,6 +225,38 @@ class CoverageRunEnvTest(unittest.TestCase):
             "grandchild test subprocesses",
         )
 
+    def test_collect_coverage_env_does_not_set_pythonsafepath(self):
+        """Same lock-in for the sibling `coverage lcov` step: the env
+        `_collect_coverage` builds for its subprocess must ALSO carry no
+        PYTHONSAFEPATH key. Patches the `subprocess.run` seam and aborts before
+        any real work via a sentinel, mirroring the run-step test above."""
+        module = _load_client_module()
+        captured = {}
+
+        def _capture_env(_cmd, **kwargs):
+            captured["env"] = kwargs.get("env")
+            # Abort before the real `coverage lcov` subprocess -- we only need the
+            # env that _collect_coverage built for it.
+            raise CoverageRunEnvTest._AbortAfterCapture()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base_env = dict(os.environ)
+            with mock.patch.object(module.subprocess, "run",
+                                    side_effect=_capture_env):
+                with self.assertRaises(CoverageRunEnvTest._AbortAfterCapture):
+                    module._collect_coverage(sys.executable, tmp, base_env)
+
+        self.assertIn("env", captured, "subprocess.run was never reached")
+        self.assertIsNotNone(
+            captured["env"], "_collect_coverage must pass an explicit env"
+        )
+        self.assertNotIn(
+            "PYTHONSAFEPATH", captured["env"],
+            "the `coverage lcov` env must NOT set PYTHONSAFEPATH -- same obsolete "
+            "rationale as the coverage-run step (real coverage.py beats the "
+            "namespace-dir shadow)",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

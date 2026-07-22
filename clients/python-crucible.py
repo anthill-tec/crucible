@@ -608,12 +608,12 @@ def _collect_coverage(python, project_dir, env):
     """Run `coverage lcov` and sum LF/LH/FNF/FNH into a Crucible coverage object.
     Returns None if coverage.py or the lcov output is unavailable."""
     lcov_path = os.path.join(project_dir, "coverage.lcov")
-    # PYTHONSAFEPATH=1 keeps cwd (project_dir) OFF sys.path for this `-m coverage`
-    # subprocess, so a stray `coverage/` directory in project_dir cannot shadow the
-    # installed coverage.py. cwd stays project_dir (to find .coverage/source) and
-    # PYTHONPATH is still honored.
+    # NOTE: no PYTHONSAFEPATH here (CR-CRU-040 §S1) — matches _regression_run. A real
+    # coverage.py install wins over the stray top-level `coverage/` (bun lcov)
+    # namespace-dir shadow on its own — a regular package beats a namespace package
+    # regardless of cwd on sys.path — so the flag is unnecessary. cwd stays
+    # project_dir (to find .coverage) and PYTHONPATH is still honored.
     cov_env = dict(env)
-    cov_env["PYTHONSAFEPATH"] = "1"
     r = subprocess.run([python, "-m", "coverage", "lcov", "-o", lcov_path],
                        cwd=project_dir, env=cov_env, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(lcov_path):
