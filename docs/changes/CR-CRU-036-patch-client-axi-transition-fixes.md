@@ -74,9 +74,19 @@ The 34 failing tests (`tests/clients-python-arduino-crucible.test.ts`,
 
 ### §S3 Fleet coverage-uniformity — every client exposes the full endpoint set
 `rust`/`mvn`/`arduino`-crucible.py gain the endpoints they currently lack so all
-five clients expose the SAME AXI surface (only the backend command differs):
+five clients expose the SAME complete AXI verb surface (only the backend command
+differs) — the uniform ingest/gate set being `regression [--coverage]`,
+`auto-ingest`, `check`, and `pre-merge-gate` alongside `register`/`unregister` and
+the stack's per-target test verb:
 - `pre-merge-gate` — the streaming no-mistakes/gate run (§S8 semantics).
 - `regression --coverage` — full-suite regression with coverage, TOON-AXI result.
+- `auto-ingest` — ingest a pre-existing report/coverage dir with NO toolchain
+  invocation, TOON-AXI result (uniform with bun/python/mvn/rust).
+- **Per-client reality:** `rust`/`mvn` already expose the surface; their CR-008-suite
+  failures are §S2 auto-attach mechanics fixed by this cycle's GREEN, NOT missing
+  endpoints. **`arduino` is the only client genuinely lacking it** — it gains
+  `regression [--coverage]`, `pre-merge-gate`, and `auto-ingest` here (plus the
+  §S2 `unit`/`compile` v2-ingest + auto-attach fixes).
 - Install/require `coverage.py` where the Python-driven stacks need it; fix the
   `coverage/` directory shadow of `python -m coverage` (dir on path shadows the
   module).
@@ -94,9 +104,11 @@ five clients expose the SAME AXI surface (only the backend command differs):
 - [ ] The CR-008 TS integration suite (`tests/clients-*.test.ts`) is GREEN under
       the real server, seeding cycles server-side (no `WORKFLOW_CYCLE_ID`).
 - [ ] The full pre-merge gate (tsc → suite + coverage) is GREEN.
-- [ ] `rust`/`mvn`/`arduino`-crucible.py expose `pre-merge-gate` and
-      `regression --coverage`, returning the §S1 TOON-AXI envelope, asserted per
-      client; `coverage.py` present; the `coverage/` dir shadow is resolved.
+- [ ] All three of `rust`/`mvn`/`arduino`-crucible.py expose the uniform verb
+      surface — `pre-merge-gate`, `regression [--coverage]`, and `auto-ingest` —
+      returning the §S1 TOON-AXI envelope, asserted per client; `arduino` (the only
+      client that lacked them) gains all three; `coverage.py` present; the
+      `coverage/` dir shadow is resolved.
 
 ## Notes
 - Multi-stack coverage rendered as the MEDIAN of all sub-coverage runs (scaled)
