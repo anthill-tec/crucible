@@ -317,7 +317,7 @@ def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent, cycle_id, 
               context, warnings)
 
 
-def _emit_ingest_hard_error(verb, project_dir, agent, warnings):
+def _emit_ingest_withhold(verb, project_dir, agent, warnings):
     """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when an
     OPEN plan carries no active cycle to attach an ingest to. The run is NOT POSTed
     (no cycleId=NONE orphan)."""
@@ -452,7 +452,7 @@ def _run_native_tests(args, verb, tier, want_coverage):
     auto-attaching to the server's active cycle. `unit`/`test` ride tier `unit`;
     `regression` rides tier `regression` and, with `want_coverage`, attaches
     lcov coverage from `<native_dir>/coverage/lcov.info`. A no-active-cycle run
-    hard-errors WITHOUT ingesting a cycleId=null orphan."""
+    withholds WITHOUT ingesting a cycleId=null orphan."""
     pd = _project_dir(args)
     key, name = _load_env(pd)
     agent_id, _ = _agent(name)
@@ -486,11 +486,11 @@ def _run_native_tests(args, verb, tier, want_coverage):
               f"{summary['failed']} failed", file=sys.stderr)
         return 1 if summary["failed"] else 0
 
-    # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run hard-errors
+    # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run withholds
     # WITHOUT ever ingesting a cycleId=null orphan.
-    cycle_id, warnings, hard_error = _resolve_ingest_cycle(pd)
-    if hard_error:
-        _emit_ingest_hard_error(verb, pd, agent_id, warnings)
+    cycle_id, warnings, withhold = _resolve_ingest_cycle(pd)
+    if withhold:
+        _emit_ingest_withhold(verb, pd, agent_id, warnings)
         return 1
     payload = {"projectKey": key, "name": name, "agentId": agent_id,
                "summary": summary, "tree": tree, "tier": tier}
@@ -591,9 +591,9 @@ def cmd_auto_ingest(args):
         for k in ("total", "passed", "failed"):
             summary[k] += s[k]
         tree.extend(t)
-    cycle_id, warnings, hard_error = _resolve_ingest_cycle(pd)
-    if hard_error:
-        _emit_ingest_hard_error("auto-ingest", pd, agent_id, warnings)
+    cycle_id, warnings, withhold = _resolve_ingest_cycle(pd)
+    if withhold:
+        _emit_ingest_withhold("auto-ingest", pd, agent_id, warnings)
         return 1
     payload = {"projectKey": key, "name": name, "agentId": agent_id,
                "summary": summary, "tree": tree, "tier": "unit"}

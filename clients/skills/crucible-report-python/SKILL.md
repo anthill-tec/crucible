@@ -23,7 +23,6 @@ workflow context read from the environment:
 
 | Env var | Meaning |
 |---------|---------|
-| `WORKFLOW_CYCLE_ID` | Numeric cycle id → `context.cycleId` |
 | `WORKFLOW_CYCLE` | Cycle label string → `context.cycle` |
 | `WORKFLOW_WAVE` | Optional wave number |
 | `WORKFLOW_ROLE` | Optional role/track label |
@@ -36,10 +35,10 @@ VENV=$PWD/.venv/bin/python
 # register / unregister the agent
 python3 clients/python-crucible.py register --agent CR-OA-002-A-RED --phase RED --project-dir $PWD
 # targeted RED/GREEN run + ingest (dotted test path; tier: unit)
-WORKFLOW_CYCLE_ID=3 WORKFLOW_CYCLE="my cycle label" PY_CRUCIBLE_PYTHON=$VENV \
+WORKFLOW_CYCLE="my cycle label" PY_CRUCIBLE_PYTHON=$VENV \
 python3 clients/python-crucible.py test --tests tests.test_mongo_connection --agent CR-OA-002-A-RED --project-dir $PWD
 # full regression + coverage.py (orchestrator gate; tier: regression)
-WORKFLOW_CYCLE_ID=3 WORKFLOW_CYCLE="my cycle label" PY_CRUCIBLE_PYTHON=$VENV \
+WORKFLOW_CYCLE="my cycle label" PY_CRUCIBLE_PYTHON=$VENV \
 python3 clients/python-crucible.py regression --coverage --agent verify-office-assistant --project-dir $PWD
 # syntax gate (py_compile → /api/v2/runs/compile)
 python3 clients/python-crucible.py check

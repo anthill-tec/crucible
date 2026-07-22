@@ -21,7 +21,6 @@ environment — set these on every call so runs land on the right cycle:
 
 | Env var | Meaning |
 |---------|---------|
-| `WORKFLOW_CYCLE_ID` | Numeric cycle id → `context.cycleId` |
 | `WORKFLOW_CYCLE` | Cycle label string → `context.cycle` |
 | `WORKFLOW_WAVE` | Optional wave number |
 | `WORKFLOW_ROLE` | Optional role/track label |
@@ -39,7 +38,7 @@ python3 clients/bun-crucible.py unregister --agent AGENT_ID
 ### Targeted Run (RED or GREEN — no coverage; tier: unit)
 
 ```bash
-WORKFLOW_CYCLE_ID=7 WORKFLOW_CYCLE="my cycle label" \
+WORKFLOW_CYCLE="my cycle label" \
 python3 clients/bun-crucible.py test --tests tests/my-feature.test.ts --agent AGENT_ID
 ```
 
@@ -49,7 +48,7 @@ Runs `bun test` with a JUnit reporter, parses the XML, and POSTs
 ### Regression Run (full suite — with lcov coverage; tier: regression)
 
 ```bash
-WORKFLOW_CYCLE_ID=7 WORKFLOW_CYCLE="my cycle label" \
+WORKFLOW_CYCLE="my cycle label" \
 python3 clients/bun-crucible.py regression --coverage --agent AGENT_ID
 ```
 

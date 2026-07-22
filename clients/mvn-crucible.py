@@ -385,7 +385,7 @@ def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent, cycle_id, 
               context, warnings)
 
 
-def _emit_ingest_hard_error(verb, project_dir, agent, warnings):
+def _emit_ingest_withhold(verb, project_dir, agent, warnings):
     """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when an
     OPEN plan carries no active cycle to attach an ingest to. The run is NOT POSTed
     (no cycleId=NONE orphan)."""
@@ -824,9 +824,9 @@ def _run_surefire_tier(args, goal_extra, label):
     # CR-CRU-036 §S9 — resolve the attach cycle BEFORE ingesting so a
     # no-active-cycle run withholds WITHOUT posting a cycleId=null orphan, and a
     # tracked run carries the SERVER-resolved cycleId in its context.
-    cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-    if hard_error:
-        _emit_ingest_hard_error(label, project_dir, args.agent, warnings)
+    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+    if withhold:
+        _emit_ingest_withhold(label, project_dir, args.agent, warnings)
         if narrator is not None:
             narrator.finish()
         return 1
@@ -988,10 +988,10 @@ def _regression_run(args):
         print(f"[regression] {summary['failed']} failure(s) — NOT publishing coverage "
               "(JaCoCo from a failing run is incomplete).", file=sys.stderr)
 
-    # §S9 — resolve/attach the active cycle before the POST (hard-error when none).
-    cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-    if hard_error:
-        _emit_ingest_hard_error("regression", project_dir, args.agent, warnings)
+    # §S9 — resolve/attach the active cycle before the POST (withhold when none).
+    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+    if withhold:
+        _emit_ingest_withhold("regression", project_dir, args.agent, warnings)
         return 1
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                           tier="regression", context=_ingest_context(cycle_id))
@@ -1003,7 +1003,7 @@ def _regression_run(args):
 def cmd_test(args):
     """§S2 fleet-uniform test verb — `mvn clean test [-Dtest=…]` → surefire
     junit-dir ingest (/api/v2/runs). With --agent §S9 auto-attaches to the active
-    cycle; a no-active-cycle run hard-errors WITHOUT ingesting a cycleId=null orphan."""
+    cycle; a no-active-cycle run withholds WITHOUT ingesting a cycleId=null orphan."""
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
@@ -1020,9 +1020,9 @@ def cmd_test(args):
         # No reports → tests didn't compile. Ingest the build output as compile.
         return _compile_fallback(maven_dir, project_dir, args.agent, common)
     _warn_if_stale(dirs)
-    cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-    if hard_error:
-        _emit_ingest_hard_error("test", project_dir, args.agent, warnings)
+    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+    if withhold:
+        _emit_ingest_withhold("test", project_dir, args.agent, warnings)
         return 1
     ctx = _ingest_context(cycle_id)
     if len(dirs) == 1:
@@ -1074,9 +1074,9 @@ def cmd_auto_ingest(args):
         print("[auto-ingest] no reports found", file=sys.stderr)
         return _compile_fallback(maven_dir, project_dir, args.agent, _common_mvn_flags(args))
     _warn_if_stale(dirs)
-    cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-    if hard_error:
-        _emit_ingest_hard_error("auto-ingest", project_dir, args.agent, warnings)
+    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+    if withhold:
+        _emit_ingest_withhold("auto-ingest", project_dir, args.agent, warnings)
         return 1
     ctx = _ingest_context(cycle_id)
     if len(dirs) == 1 and not args.coverage:

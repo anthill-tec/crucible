@@ -370,7 +370,7 @@ def _emit_ingest_axi(verb, resp, project_dir, agent, cycle_id, warnings):
               context, warnings)
 
 
-def _emit_ingest_hard_error(verb, project_dir, agent, warnings):
+def _emit_ingest_withhold(verb, project_dir, agent, warnings):
     """§S9 — emit the ok:false envelope (cycleId=null) when an OPEN plan carries no
     active cycle to attach an ingest to. The run is NOT POSTed (no cycleId=NONE
     orphan)."""
@@ -642,9 +642,9 @@ def cmd_auto_ingest(args):
         # §S9 — resolve/attach the active cycle BEFORE the POST so the ingested run
         # carries the resolved cycleId in the SERVER record; no active cycle → hard
         # error, never a cycleId=null orphan.
-        cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-        if hard_error:
-            _emit_ingest_hard_error("auto-ingest", project_dir, args.agent, warnings)
+        cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+        if withhold:
+            _emit_ingest_withhold("auto-ingest", project_dir, args.agent, warnings)
             return 1
         resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier="unit",
                                  context=_ingest_context(cycle_id))
@@ -892,10 +892,10 @@ def cmd_test(args):
         junit_path = _resolve_junit_path(project_dir, args.profile)
         if junit_path:
             # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run
-            # hard-errors WITHOUT ever ingesting a cycleId=null orphan.
-            cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-            if hard_error:
-                _emit_ingest_hard_error("test", project_dir, args.agent, warnings)
+            # withholds WITHOUT ever ingesting a cycleId=null orphan.
+            cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+            if withhold:
+                _emit_ingest_withhold("test", project_dir, args.agent, warnings)
                 return 1
             resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier="unit",
                                      context=_ingest_context(cycle_id))

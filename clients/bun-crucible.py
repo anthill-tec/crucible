@@ -714,10 +714,10 @@ def cmd_test(args):
             # §S2c — the captured run log IS the failure-detail source.
             _marry_failures(tree, getattr(result, "stdout", None))
             # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run
-            # hard-errors WITHOUT ever ingesting a cycleId=null orphan.
-            cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-            if hard_error:
-                _emit_ingest_hard_error("test", project_dir, args.agent, warnings)
+            # withholds WITHOUT ever ingesting a cycleId=null orphan.
+            cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+            if withhold:
+                _emit_ingest_withhold("test", project_dir, args.agent, warnings)
                 return 1
             resp = _ingest_parsed(project_dir, args.agent, summary, tree,
                                   tier="unit",
@@ -791,11 +791,11 @@ def cmd_regression(args):
             if coverage is None:
                 print(f"[crucible] WARN: lcov coverage unavailable at {lcov_path}",
                       file=sys.stderr)
-        # §S9 — resolve/attach the active cycle before the POST (hard-error
+        # §S9 — resolve/attach the active cycle before the POST (withhold
         # when none, never a cycleId=null orphan).
-        cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-        if hard_error:
-            _emit_ingest_hard_error("regression", project_dir, args.agent, warnings)
+        cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+        if withhold:
+            _emit_ingest_withhold("regression", project_dir, args.agent, warnings)
             return 1
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                               tier="regression", context=_ingest_context(cycle_id))
@@ -820,10 +820,10 @@ def cmd_auto_ingest(args):
     summary, tree = _parse_junit_file(junit_path)
     # CR-CRU-030 §S9 — resolve/attach the active cycle BEFORE the POST so the
     # ingested e2e run carries the resolved cycleId in the SERVER record (not
-    # just the envelope); no active cycle → hard error, never a cycleId=null orphan.
-    cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-    if hard_error:
-        _emit_ingest_hard_error("auto-ingest", project_dir, args.agent, warnings)
+    # just the envelope); no active cycle → withhold, never a cycleId=null orphan.
+    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+    if withhold:
+        _emit_ingest_withhold("auto-ingest", project_dir, args.agent, warnings)
         return 1
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="e2e",
                           context=_ingest_context(cycle_id))
@@ -1417,7 +1417,7 @@ def _emit_ingest_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings
               context, warnings)
 
 
-def _emit_ingest_hard_error(verb, project_dir, agent, warnings):
+def _emit_ingest_withhold(verb, project_dir, agent, warnings):
     """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when
     an OPEN plan carries no active cycle to attach an ingest to. The run is NOT
     POSTed, so it can never land as a silent cycleId=NONE orphan; the caller

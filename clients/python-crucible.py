@@ -397,7 +397,7 @@ def _emit_ingest_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings
               context, warnings)
 
 
-def _emit_ingest_hard_error(verb, project_dir, agent, warnings):
+def _emit_ingest_withhold(verb, project_dir, agent, warnings):
     """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when
     an OPEN plan carries no active cycle to attach an ingest to. The run is NOT
     POSTed, so it can never land as a silent cycleId=NONE orphan."""
@@ -580,8 +580,14 @@ def _collect_coverage(python, project_dir, env):
     """Run `coverage lcov` and sum LF/LH/FNF/FNH into a Crucible coverage object.
     Returns None if coverage.py or the lcov output is unavailable."""
     lcov_path = os.path.join(project_dir, "coverage.lcov")
+    # PYTHONSAFEPATH=1 keeps cwd (project_dir) OFF sys.path for this `-m coverage`
+    # subprocess, so a stray `coverage/` directory in project_dir cannot shadow the
+    # installed coverage.py. cwd stays project_dir (to find .coverage/source) and
+    # PYTHONPATH is still honored.
+    cov_env = dict(env)
+    cov_env["PYTHONSAFEPATH"] = "1"
     r = subprocess.run([python, "-m", "coverage", "lcov", "-o", lcov_path],
-                       cwd=project_dir, env=env, capture_output=True, text=True)
+                       cwd=project_dir, env=cov_env, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(lcov_path):
         print(f"[crucible] WARN: coverage lcov unavailable ({r.stderr.strip()[:120]})",
               file=sys.stderr)
@@ -627,10 +633,10 @@ def cmd_test(args):
     if _produced_xml(reports_dir):
         summary, tree = _parse_junit_dir(reports_dir)
         # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run
-        # hard-errors WITHOUT ever ingesting a cycleId=null orphan.
-        cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-        if hard_error:
-            _emit_ingest_hard_error("test", project_dir, args.agent, warnings)
+        # withholds WITHOUT ever ingesting a cycleId=null orphan.
+        cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+        if withhold:
+            _emit_ingest_withhold("test", project_dir, args.agent, warnings)
             return 1
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
                               context=_ingest_context(cycle_id))
@@ -672,6 +678,10 @@ def _regression_run(args):
         run_cmd = [python, "-m", "coverage", "run", "--source", args.cov_source,
                    "-m", "xmlrunner", "discover", "-s", args.start_dir,
                    "-p", args.pattern, "-o", reports_dir]
+        # PYTHONSAFEPATH=1 keeps cwd (project_dir) OFF sys.path for this `-m coverage`
+        # subprocess, so a stray `coverage/` directory in project_dir cannot shadow
+        # the installed coverage.py. cwd stays project_dir and PYTHONPATH is honored.
+        env["PYTHONSAFEPATH"] = "1"
 
     print(f"[crucible] running: {' '.join(run_cmd)}", file=sys.stderr)
     result = _run_logged(run_cmd, project_dir, env, getattr(args, "log", None))
@@ -686,10 +696,10 @@ def _regression_run(args):
 
     summary, tree = _parse_junit_dir(reports_dir)
     coverage = _collect_coverage(python, project_dir, env) if coverage_on else None
-    # §S9 — resolve/attach the active cycle before the POST (hard-error when none).
-    cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-    if hard_error:
-        _emit_ingest_hard_error("regression", project_dir, args.agent, warnings)
+    # §S9 — resolve/attach the active cycle before the POST (withhold when none).
+    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+    if withhold:
+        _emit_ingest_withhold("regression", project_dir, args.agent, warnings)
         return 1
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                           tier="regression", context=_ingest_context(cycle_id))
@@ -708,9 +718,9 @@ def cmd_auto_ingest(args):
               file=sys.stderr)
         return 1
     summary, tree = _parse_junit_dir(reports_dir)
-    cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-    if hard_error:
-        _emit_ingest_hard_error("auto-ingest", project_dir, args.agent, warnings)
+    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+    if withhold:
+        _emit_ingest_withhold("auto-ingest", project_dir, args.agent, warnings)
         return 1
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
                           context=_ingest_context(cycle_id))
