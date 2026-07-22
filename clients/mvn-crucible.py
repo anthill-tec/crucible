@@ -969,7 +969,24 @@ def _regression_run(args):
     cmd = _mvn_base(maven_dir) + ["clean", args.goal] + common
     env = os.environ.copy()
     print(f"[regression] running: {' '.join(cmd)}  (cwd={maven_dir})")
-    result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None))
+    narrator = None
+    if args.agent:
+        # §S2b — tail the run and narrate class-level progress heartbeats. This
+        # also forces _run_logged's streaming-capture branch so result.stdout is
+        # populated for a bare `regression --agent X` (no --log) — the captured
+        # runner output rides along as `raw` uniformly, matching _run_surefire_tier.
+        def _xml_total():
+            return sum(
+                len(glob.glob(os.path.join(d, "TEST-*.xml")))
+                for d in (_report_dirs(maven_dir, None, "surefire")
+                          + _report_dirs(maven_dir, None, "failsafe"))
+            )
+
+        narrator = _Narrator(
+            lambda message: _narrate_heartbeat(project_dir, args.agent, message),
+            _xml_total,
+        )
+    result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None), narrator)
     print(f"[regression] mvn exit={result.returncode}")
 
     su = _dirs_with_xml(_report_dirs(maven_dir, None, "surefire"))
