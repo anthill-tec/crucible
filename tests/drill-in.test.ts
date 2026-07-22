@@ -1739,6 +1739,13 @@ describe("Failure-box degradation (user defect 2026-07-15)", () => {
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
     expect(overlay).not.toBeNull();
 
+    // CR-CRU-038 §S1 — the error run opens MINIMIZED; expand DegradeSuite via
+    // its suite-row click before the per-leaf failure-box assertions.
+    const degradeSuiteRow = findByText(overlay, '[data-testid="suite-row"]', "DegradeSuite");
+    expect(degradeSuiteRow).toBeDefined();
+    degradeSuiteRow!.click();
+    await settle();
+
     // 1. failure = {type:"AssertionError"} (no message) — box text contains
     //    "AssertionError" AND the reporter note; never empty; no trace node
     //    (trace absent).

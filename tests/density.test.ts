@@ -529,7 +529,10 @@ describe("§S1 (CR-CRU-038) — error run opens minimized; failure-jump expands 
     const suiteBetaRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteBeta");
     expect(suiteBetaRow).toBeDefined();
     expect(suiteBetaRow!.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
-    expect(suiteBetaRow!.textContent ?? "").toContain("✓1");
+    // CR-CRU-038 §S1 — unit-tier (Detail) run: the collapsed all-pass suite
+    // shows the FULL `0 ✗ 1 ✓` counts (the `✓N` green-fold is Density-only),
+    // matching SuiteAlpha's full form above and drill-in.test.ts:1540.
+    expect(suiteBetaRow!.textContent ?? "").toContain("0 ✗ 1 ✓");
   });
 
   test("clicking the failure-jump from the collapsed default still expands the target suite and focus-opens the failing leaf's failure box", async () => {
@@ -781,6 +784,15 @@ describe("§S4.3 — failure digest (Density mode)", () => {
     await mountAtRunCold(eventId, "regression", detail, brief);
 
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
+    // CR-CRU-038 §S1 — the run opens MINIMIZED; expand SuiteDigestDiff via its
+    // suite-row click (mirroring the retargeted identical-message sibling
+    // above) to reach the leaves this test exercises.
+    const suiteDiffRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteDigestDiff");
+    expect(suiteDiffRow).toBeDefined();
+    expect(suiteDiffRow!.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
+    suiteDiffRow!.click();
+    await settle();
+
     expect(overlay.querySelectorAll('[data-testid="digest-row"]').length).toBe(0);
     const leafRows = overlay.querySelectorAll('[data-testid="leaf-row"]');
     expect(leafRows.length).toBe(3);
