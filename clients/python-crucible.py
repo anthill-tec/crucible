@@ -543,7 +543,13 @@ def _is_zero_discovery(result):
     out = ((result.stdout or "") if hasattr(result, "stdout") else "").strip()
     if "Traceback (most recent call last)" in out:
         return False
-    return out == "" or "Ran 0 tests" in out
+    # A bare-empty capture is NOT an honest zero-discovery: a genuine silent
+    # crash (OOM/SIGKILL/interpreter abort) produces NO output either, and must
+    # NOT be misclassified as the benign `no-tests-discovered`. Only a capture
+    # that positively shows an empty collection ("Ran 0 tests", no traceback)
+    # is a definitive zero-discovery; a truly empty capture falls through to the
+    # compile-tier ingest path (§S2).
+    return "Ran 0 tests" in out
 
 
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,

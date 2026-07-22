@@ -49,7 +49,6 @@ import importlib.util
 import io
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -102,43 +101,25 @@ class RegressionDiscoversFullSuiteFromDefaultStartDirTest(unittest.TestCase):
     """Sec S1 -- `regression`'s default `--start-dir tests` must recurse into
     `tests/client/` (20+ files) and collect the whole suite, not 0 tests."""
 
-    def setUp(self):
-        self.module = _load_client_module()
-        self.reports_dir = tempfile.mkdtemp(prefix="cr039-s1-reports-")
-
-    def tearDown(self):
-        shutil.rmtree(self.reports_dir, ignore_errors=True)
-
     def test_default_start_dir_discovers_and_collects_the_full_suite(self):
-        # This test shells out to a full `discover -s tests` run, which — once
-        # tests/ is a package (§S1) — CORRECTLY collects this very test file. Left
-        # unguarded, the nested copy would spawn yet another full discovery, and so
-        # on without bound (a fork bomb). "Don't run the discovery-driver test
-        # inside its own discovery": the outer run marks the child process with an
-        # env sentinel so the nested copy skips itself, terminating the recursion
-        # at depth 1 while the rest of the suite (~374 tests) still runs.
-        if os.environ.get("CR039_S1_INNER_DISCOVERY"):
-            self.skipTest("inner discovery pass — skip the self-recursive driver")
-        python = self.module._resolve_python(None, str(REPO_ROOT))
-        cmd = self.module._xmlrunner_cmd(python, None, "tests", "test_*.py", self.reports_dir)
-        child_env = dict(os.environ, CR039_S1_INNER_DISCOVERY="1")
-        result = subprocess.run(
-            cmd, cwd=str(REPO_ROOT), capture_output=True, text=True, env=child_env)
-
-        self.assertTrue(
-            self.module._produced_xml(self.reports_dir),
-            f"expected `discover -s tests -p test_*.py` (the client's DEFAULT "
-            f"start_dir) to produce TEST-*.xml for the full suite under "
-            f"tests/client/; got no XML at all -- combined output="
-            f"{(result.stdout or '') + (result.stderr or '')!r}",
-        )
-        summary, _tree = self.module._parse_junit_dir(self.reports_dir)
+        # Pure in-process COLLECTION check: `discover` IMPORTS the test modules
+        # (so this still fails RED on a tree where `tests/` / `tests/client/`
+        # lack `__init__.py` -- discover then won't recurse into the non-package
+        # subdir and collects 0) but `.countTestCases()` EXECUTES nothing. No
+        # subprocess, no recursion, no XML -- ~0.08s instead of a full second
+        # discovery run.
+        start_dir = str(REPO_ROOT / "tests")
+        pattern = "test_*.py"
+        count = unittest.TestLoader().discover(
+            start_dir, pattern=pattern, top_level_dir=str(REPO_ROOT),
+        ).countTestCases()
         self.assertGreaterEqual(
-            summary["total"], 300,
-            f"expected the default start_dir discovery to collect the full "
-            f"Python suite (>=300 tests, ~374 as of authoring); got only "
-            f"{summary['total']} -- tests/client/ is not being recursed into "
-            f"from the default 'tests' start_dir",
+            count, 300,
+            f"expected `discover(start_dir={start_dir!r}, pattern={pattern!r})` "
+            f"to collect the full Python suite (>=300 tests, ~374 as of "
+            f"authoring); got only {count} -- tests/client/ is not being "
+            f"recursed into from the 'tests' start_dir (ensure tests/ AND "
+            f"tests/client/ are packages with __init__.py)",
         )
 
 
