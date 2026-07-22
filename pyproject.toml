@@ -20,6 +20,11 @@ classifiers = [
   "Operating System :: POSIX",
 ]
 
+[project.optional-dependencies]
+# Coverage tooling for the pre-merge / regression coverage gate (CR-CRU-040 §S1).
+# coverage.py is the only supported coverage path for `python-crucible.py`.
+dev = ["coverage>=7"]
+
 [project.scripts]
 crucible-axi = "crucible_axi.cli:main"
 

@@ -608,12 +608,12 @@ def _collect_coverage(python, project_dir, env):
     """Run `coverage lcov` and sum LF/LH/FNF/FNH into a Crucible coverage object.
     Returns None if coverage.py or the lcov output is unavailable."""
     lcov_path = os.path.join(project_dir, "coverage.lcov")
-    # PYTHONSAFEPATH=1 keeps cwd (project_dir) OFF sys.path for this `-m coverage`
-    # subprocess, so a stray `coverage/` directory in project_dir cannot shadow the
-    # installed coverage.py. cwd stays project_dir (to find .coverage/source) and
-    # PYTHONPATH is still honored.
+    # NOTE: no PYTHONSAFEPATH here (CR-CRU-040 §S1) — matches _regression_run. A real
+    # coverage.py install wins over the stray top-level `coverage/` (bun lcov)
+    # namespace-dir shadow on its own — a regular package beats a namespace package
+    # regardless of cwd on sys.path — so the flag is unnecessary. cwd stays
+    # project_dir (to find .coverage) and PYTHONPATH is still honored.
     cov_env = dict(env)
-    cov_env["PYTHONSAFEPATH"] = "1"
     r = subprocess.run([python, "-m", "coverage", "lcov", "-o", lcov_path],
                        cwd=project_dir, env=cov_env, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(lcov_path):
@@ -707,10 +707,13 @@ def _regression_run(args):
         run_cmd = [python, "-m", "coverage", "run", "--source", args.cov_source,
                    "-m", "xmlrunner", "discover", "-s", args.start_dir,
                    "-p", args.pattern, "-o", reports_dir]
-        # PYTHONSAFEPATH=1 keeps cwd (project_dir) OFF sys.path for this `-m coverage`
-        # subprocess, so a stray `coverage/` directory in project_dir cannot shadow
-        # the installed coverage.py. cwd stays project_dir and PYTHONPATH is honored.
-        env["PYTHONSAFEPATH"] = "1"
+        # NOTE: no PYTHONSAFEPATH here. A real coverage.py install (CR-CRU-040 §S1)
+        # wins over the stray top-level `coverage/` (bun lcov) namespace-dir shadow
+        # on its own — a regular package beats a namespace package regardless of cwd
+        # on sys.path. Setting PYTHONSAFEPATH would leak into grandchild test
+        # subprocesses (the suite's own subprocess-spawning tests), breaking their
+        # tmpdir-cwd dotted-name imports; cwd (project_dir) stays on sys.path so
+        # discovery still works.
 
     print(f"[crucible] running: {' '.join(run_cmd)}", file=sys.stderr)
     result = _run_logged(run_cmd, project_dir, env, getattr(args, "log", None))
@@ -1407,8 +1410,8 @@ def main():
     g.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     g.add_argument("--coverage", action="store_true",
                    help="Run under coverage.py and post /api/v2/runs/parsed with coverage")
-    g.add_argument("--cov-source", default="app",
-                   help="coverage --source package/dir (default: app)")
+    g.add_argument("--cov-source", default="crucible_axi,clients",
+                   help="coverage --source package/dir (default: crucible_axi,clients)")
     _add_discover_args(g)
     _add_python_arg(g)
     _add_project_dir_arg(g)
@@ -1437,8 +1440,8 @@ def main():
              "coverage.py (the only coverage path; coverage is reserved for this gate).",
     )
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
-    pmg.add_argument("--cov-source", default="app",
-                     help="coverage --source package/dir (default: app)")
+    pmg.add_argument("--cov-source", default="crucible_axi,clients",
+                     help="coverage --source package/dir (default: crucible_axi,clients)")
     pmg.add_argument("--skip-check", action="store_true",
                      help="Bypass the fail-fast py_compile check step")
     _add_discover_args(pmg)
