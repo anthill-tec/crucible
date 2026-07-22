@@ -477,7 +477,12 @@ def _run_native_tests(args, verb, tier, want_coverage):
         return _run_native_tests_body(args, verb, tier, want_coverage, pd)
     finally:
         if getattr(args, "agent", None):
-            _remove_agent_silent(pd, args.agent)
+            # Remove the SAME id the run ingested under. The body registers via
+            # `agent_id, _ = _agent(name)`; resolve the cleanup id through the
+            # identical `_agent()` derivation so a plain raw --agent can never
+            # drift from the registered row and orphan a ghost. (main() mirrors
+            # --agent into AGENT_ID, so `_agent()` returns it verbatim here.)
+            _remove_agent_silent(pd, _agent(args.agent)[0])
 
 
 def _run_native_tests_body(args, verb, tier, want_coverage, pd):
