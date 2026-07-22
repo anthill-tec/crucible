@@ -305,6 +305,17 @@ def no_wave_warning(cr):
     }
 
 
+def no_title_warning(cr):
+    """Build the §S2 `no-title` warning for a plan-file filed with no title.
+    The title is optional (the plan still files), but the detail NAMES the CR
+    being filed so the omission is actionable — mirroring `no_wave_warning`."""
+    return {
+        "code": "no-title",
+        "detail": (f"plan filed for {cr} with no title — --title was unset; "
+                   f"the plan is title-less until one is supplied"),
+    }
+
+
 def fleet_context(cr=None):
     """Env auto-context shared by gates + milestones: `cr` (when supplied),
     `wave` from $WORKFLOW_WAVE, `track` from $WORKFLOW_ROLE. Absent env keys are

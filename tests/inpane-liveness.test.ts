@@ -641,3 +641,112 @@ describe("negative bound — the SSE-driven poll refetch does not reset the open
     POLL_TEST_TIMEOUT_MS,
   );
 });
+
+// ── CR-CRU-037 §S1 characterization — per-agent dim rule is ALREADY correct ──
+// The per-agent dim rule (store.livenessOf on that agent's OWN lastSeen
+// silence, independent of siblings) is locked here as a regression guard —
+// these are expected to PASS against CURRENT production. Only the
+// agentsOnline COUNT (tests/v2-core.test.ts) is the in-scope defect for this
+// CR; if any of the following unexpectedly fails, that is a real bug, not
+// something to paper over.
+describe("CR-CRU-037 §S1 characterization — per-agent liveness dimming has no sibling coupling", () => {
+  test("two concurrently-registered alive agents (one online, one stale) BOTH render highlighted — neither gets the 'tombstoned' dim treatment", async () => {
+    const projectKey = "proj-s1-both-alive";
+    const opts: MountOpts = {
+      pathname: `/p/${projectKey}`,
+      projects: [project({ key: projectKey, name: "Both Alive Project", agentsOnline: 2, agentsTotal: 2 })],
+      agents: [
+        agent({ agentId: "online-agent", projectKey, liveness: "online", message: "busy" }),
+        agent({ agentId: "stale-agent", projectKey, liveness: "stale", message: "quiet" }),
+      ],
+      events: [],
+      eventDetails: {},
+    };
+    await mountApp(opts);
+
+    const pane = document.querySelector('[data-testid="project-pane"]') as HTMLElement;
+    expect(pane).not.toBeNull();
+
+    const onlineRow = findByText(pane, '[data-testid="agent-row"]', "online-agent");
+    const staleRow = findByText(pane, '[data-testid="agent-row"]', "stale-agent");
+    expect(onlineRow).toBeDefined();
+    expect(staleRow).toBeDefined();
+
+    expect(onlineRow!.className).not.toContain("tombstoned");
+    expect(staleRow!.className).not.toContain("tombstoned");
+
+    const onlineDot = onlineRow!.querySelector(".app-dot");
+    expect(onlineDot).not.toBeNull();
+    expect(onlineDot!.className).toContain(" g");
+
+    const staleDot = staleRow!.querySelector(".app-dot");
+    expect(staleDot).not.toBeNull();
+    expect(staleDot!.className).toContain(" y");
+  });
+
+  test("a registered agent that has reported zero runs (no runtime_ms) but is alive still renders highlighted, not dimmed", async () => {
+    const projectKey = "proj-s1-zero-runs";
+    const opts: MountOpts = {
+      pathname: `/p/${projectKey}`,
+      projects: [project({ key: projectKey, name: "Zero Runs Project", agentsOnline: 1, agentsTotal: 1 })],
+      agents: [
+        agent({ agentId: "fresh-agent", projectKey, liveness: "online", message: "idle" }),
+      ],
+      events: [],
+      eventDetails: {},
+    };
+    await mountApp(opts);
+
+    const pane = document.querySelector('[data-testid="project-pane"]') as HTMLElement;
+    expect(pane).not.toBeNull();
+    const row = findByText(pane, '[data-testid="agent-row"]', "fresh-agent");
+    expect(row).toBeDefined();
+    expect(row!.className).not.toContain("tombstoned");
+    const dot = row!.querySelector(".app-dot");
+    expect(dot).not.toBeNull();
+    expect(dot!.className).toContain(" g");
+  });
+
+  test("only a tombstoned agent gets the dim/tombstoned treatment — that entry ONLY; a concurrently-alive sibling is unaffected (no sibling coupling)", async () => {
+    const projectKey = "proj-s1-mixed-tomb";
+    const now = Date.now();
+    const opts: MountOpts = {
+      pathname: `/p/${projectKey}`,
+      projects: [project({ key: projectKey, name: "Mixed Tombstone Project", agentsOnline: 1, agentsTotal: 2 })],
+      agents: [
+        agent({
+          agentId: "dead-agent",
+          projectKey,
+          liveness: "tombstoned",
+          lastSeen: now - 7_200_000,
+          message: "died mid-run",
+        }),
+        agent({ agentId: "alive-sibling", projectKey, liveness: "online", message: "still going" }),
+      ],
+      events: [],
+      eventDetails: {},
+    };
+    await mountApp(opts);
+
+    const pane = document.querySelector('[data-testid="project-pane"]') as HTMLElement;
+    expect(pane).not.toBeNull();
+
+    const deadRow = findByText(pane, '[data-testid="agent-row"]', "dead-agent");
+    const aliveRow = findByText(pane, '[data-testid="agent-row"]', "alive-sibling");
+    expect(deadRow).toBeDefined();
+    expect(aliveRow).toBeDefined();
+
+    // Only the tombstoned entry dims — the class carries "tombstoned" and
+    // its glyph renders the died-ago marker instead of a live dot.
+    expect(deadRow!.className).toContain("tombstoned");
+    expect(deadRow!.textContent ?? "").toContain("died 2h ago");
+    expect(deadRow!.querySelector(".app-dot")).toBeNull();
+
+    // Bound: the live sibling is completely unaffected — no "tombstoned"
+    // class, and it still carries a live dot (not the tombstone glyph).
+    expect(aliveRow!.className).not.toContain("tombstoned");
+    const aliveDot = aliveRow!.querySelector(".app-dot");
+    expect(aliveDot).not.toBeNull();
+    expect(aliveDot!.className).toContain(" g");
+  });
+});

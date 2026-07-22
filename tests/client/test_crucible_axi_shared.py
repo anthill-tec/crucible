@@ -325,5 +325,39 @@ class BunCrucibleImportsSharedAxiModuleTest(unittest.TestCase):
         )
 
 
+# ── CR-CRU-037 §S2 -- `no_title_warning` builder (mirrors `no_wave_warning`) ─
+
+
+class SharedAxiNoTitleWarningTest(unittest.TestCase):
+    """CR-CRU-037 §S2 -- a `plan-file` invoked without a resolvable title
+    (`--title` unset) must carry a `no-title` warning -- envelope `warnings[]`
+    `{code:"no-title", detail:"..."}` naming the CR being filed, mirroring the
+    §S3 `no_wave_warning` builder pinned above (line 297) so all five clients
+    share one source of truth for the warning text.
+
+    RED: `clients/_crucible_axi.py` does not define `no_title_warning` at all
+    (confirmed by reading the module source) -- calling it below raises an
+    AttributeError, a valid missing-SUT-symbol RED."""
+
+    def test_no_title_warning_returns_no_title_code_and_detail_naming_the_cr(self):
+        axi_mod = _load_axi_module()
+        warning = axi_mod.no_title_warning("CR-CRU-090")
+        self.assertEqual(warning.get("code"), "no-title",
+                          f"no_title_warning must return code='no-title'; got {warning!r}")
+        self.assertIn("CR-CRU-090", warning.get("detail", ""),
+                      f"the no-title warning detail must NAME the CR being filed; "
+                      f"got {warning!r}")
+
+    def test_no_title_warning_detail_names_the_specific_cr_supplied(self):
+        axi_mod = _load_axi_module()
+        warning_a = axi_mod.no_title_warning("CR-AAA-001")
+        warning_b = axi_mod.no_title_warning("CR-BBB-002")
+        self.assertIn("CR-AAA-001", warning_a.get("detail", ""))
+        self.assertIn("CR-BBB-002", warning_b.get("detail", ""))
+        self.assertNotIn("CR-BBB-002", warning_a.get("detail", ""),
+                          "the detail must name ONLY the CR it was built for, "
+                          "not a different CR")
+
+
 if __name__ == "__main__":
     unittest.main()

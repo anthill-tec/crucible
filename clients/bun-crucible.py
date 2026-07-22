@@ -916,6 +916,13 @@ def cmd_plan_file(args):
         w = _axi().no_wave_warning(args.cr)
         warnings.append(w)
         print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
+    # §S2: title is optional — a title-less plan STILL files, but carries a
+    # `no-title` warning (envelope + stderr) naming the CR so the omission is
+    # visible; --title present resolves the title and suppresses the warning.
+    if not args.title:
+        wt = _axi().no_title_warning(args.cr)
+        warnings.append(wt)
+        print(f"warning: {wt['code']} — {wt['detail']}", file=sys.stderr)
     # Track identity comes from the workflow env; the orchestrator NAME is a
     # separate concept — explicit flag or $WORKFLOW_ORCHESTRATOR.
     track = os.environ.get("WORKFLOW_ROLE")

@@ -4,6 +4,7 @@
 // phase), so every v2 route currently 404s through the existing catch-all in src/server.ts
 // (`{ok:false, error}` at HTTP 404) until GREEN wires it in.
 import { describe, test, expect, afterEach } from "bun:test";
+import { setSystemTime } from "bun:test";
 import { startServer } from "../src/server.ts";
 import type { Coverage, RunSummary } from "../src/types.ts";
 
@@ -79,6 +80,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
   afterEach(() => {
     handle?.stop();
     handle = undefined;
+    setSystemTime(); // reset the injected clock so it never leaks to other files
   });
 
   async function postJson(path: string, body: unknown): Promise<Response> {
@@ -285,6 +287,85 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
       expect(project!.lastEvent).not.toBeNull();
       expect(project!.latestGreenCoverage).not.toBeNull();
     });
+  });
+
+  // CR-CRU-037 §S1 — `agentsOnline` must equal the HIGHLIGHTED set (every
+  // non-tombstoned agent: online + stale), not just `liveness === "online"`.
+  // Today src/v2.ts (~line 297) filters on "online" only, so a still-
+  // highlighted "stale" agent silently drops out of the count while its row
+  // stays lit in the UI — the count disagrees with what is on screen.
+  describe("GET /api/v2/projects — agentsOnline counts the highlighted (non-tombstoned) set (CR-CRU-037 §S1)", () => {
+    test(
+      "one online agent + one stale agent (both highlighted, neither tombstoned) → agentsOnline == 2; " +
+        "a third tombstoned agent is excluded from the count (currently FAILS: production counts only " +
+        "liveness === 'online' and returns 1)",
+      async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const T0 = 1_700_000_000_000;
+        setSystemTime(T0);
+        const key = await createProject("s1-agents-online-count");
+
+        // Registered first so it ages all the way to "tombstoned" (silence
+        // >= 300_000ms, tests/liveness.test.ts's default T2) by the time the
+        // other two agents are checked.
+        await postJson("/api/v2/agents/register", {
+          projectKey: key,
+          agentId: "tomb-agent",
+          message: "m",
+        });
+
+        // 240s later: register the two agents that must stay highlighted.
+        setSystemTime(T0 + 240_000);
+        await postJson("/api/v2/agents/register", {
+          projectKey: key,
+          agentId: "stale-agent",
+          message: "m",
+        });
+        await postJson("/api/v2/agents/register", {
+          projectKey: key,
+          agentId: "online-agent",
+          message: "m",
+        });
+
+        // 60s later still (T0+300_000 total): tomb-agent's silence is
+        // exactly 300_000ms → tombstoned. stale-agent's silence is exactly
+        // 60_000ms (T0+300_000 - T0+240_000) → stale (closed-open T1
+        // boundary, tests/liveness.test.ts). online-agent is heartbeat at
+        // this exact instant → silence 0 → online.
+        setSystemTime(T0 + 300_000);
+        await postJson("/api/v2/agents/heartbeat", {
+          projectKey: key,
+          agentId: "online-agent",
+          message: "m2",
+        });
+
+        // Confirm the fixture actually landed on the intended liveness
+        // states before asserting the count — the count assertion is
+        // meaningless if the fixture drifted off its intended boundaries.
+        const agentsRes = await getJson(`/api/v2/agents?project=${key}`);
+        const agentsBody = (await agentsRes.json()) as AgentsListResponse;
+        expect(agentsBody.agents.find((a) => a.agentId === "online-agent")?.liveness).toBe(
+          "online",
+        );
+        expect(agentsBody.agents.find((a) => a.agentId === "stale-agent")?.liveness).toBe("stale");
+        expect(agentsBody.agents.find((a) => a.agentId === "tomb-agent")?.liveness).toBe(
+          "tombstoned",
+        );
+
+        const res = await getJson("/api/v2/projects");
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as ProjectsRollupResponse;
+        const project = body.projects.find((p) => p.key === key);
+        expect(project).toBeDefined();
+        // online + stale are BOTH highlighted (non-tombstoned) → count == 2.
+        // Current production (`agents.filter(a => a.liveness === "online")`)
+        // excludes the stale agent and returns 1.
+        expect(project!.agentsOnline).toBe(2);
+        // Bound: the tombstoned agent is still counted in agentsTotal (every
+        // registered, non-pruned agent) — only the highlighted count changes.
+        expect(project!.agentsTotal).toBe(3);
+      },
+    );
   });
 
   // ── POST /api/v2/agents/register ────────────────────────────────────────

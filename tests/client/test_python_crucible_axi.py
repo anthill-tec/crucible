@@ -746,6 +746,74 @@ class PythonCrucibleNoWaveWarningTest(_BasePythonAxiTest):
         return code, out, err, post_mock, get_mock, patch_mock
 
 
+# ── CR-CRU-037 §S2 -- `no-title` warning (mirrors §S3 `no-wave` guard) ─────
+
+
+class PythonCrucibleNoTitleWarningTest(_BasePythonAxiTest):
+    """CR-CRU-037 §S2: a `plan-file` invoked with NO `--title` must emit a
+    `no-title` warning (envelope `warnings[]` + stderr) naming the CR being
+    filed, mirroring `PythonCrucibleNoWaveWarningTest` above -- the plan
+    STILL files (title is optional; the orchestrator is just warned). With
+    `--title` supplied -> no `no-title` warning fires.
+
+    RED: `cmd_plan_file` in python-crucible.py (confirmed by reading the
+    function body) has no no-title detection at all, so the warning-presence
+    assertion below fails against the CURRENT baseline."""
+
+    def test_no_title_flag_emits_no_title_warning_naming_the_cr(self):
+        resp = {"ok": True, "planId": "plan-94", "cr": "CR-CRU-094",
+                "cycles": [{"label": "a", "id": 904}]}
+        code, out, err, post_mock, _g, _pa = self._run_plan_file(resp)
+
+        self.assertEqual(code, 0,
+                          f"a title-less plan-file must still file (no hard block); "
+                          f"stdout={out!r} stderr={err!r}")
+        payload = post_mock.call_args[0][1]
+        self.assertNotIn("title", payload,
+                          "with no --title, the payload must carry NO title key at all")
+
+        axi = self._decode_axi(out)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertIn("no-title", codes,
+                      f"plan-file with no --title must carry a `no-title` "
+                      f"warning; got {axi!r}")
+        detail = " ".join(w.get("detail", "") for w in axi.get("warnings", [])
+                           if w.get("code") == "no-title")
+        self.assertIn("CR-CRU-094", detail,
+                      f"the no-title warning must NAME the CR being filed; "
+                      f"got detail={detail!r}")
+        self.assertIn("no-title", err, "the no-title warning must also surface on stderr")
+        self.assertIn("CR-CRU-094", err,
+                       "stderr must name the CR being filed, not just the code")
+
+    def test_title_flag_present_omits_no_title_warning(self):
+        resp = {"ok": True, "planId": "plan-95", "cr": "CR-CRU-095",
+                "cycles": [{"label": "a", "id": 905}]}
+        code, out, err, post_mock, _g, _pa = self._run_plan_file(resp, title="Some Title")
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        payload = post_mock.call_args[0][1]
+        self.assertEqual(payload.get("title"), "Some Title")
+        axi = self._decode_axi(out)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertNotIn("no-title", codes,
+                          f"--title resolves the title -- no no-title warning "
+                          f"should fire; got {axi!r}")
+        self.assertNotIn("no-title", err)
+
+    def _run_plan_file(self, post_return, title=None):
+        argv = ["plan-file", "--cr", post_return["cr"], "--cycles", "a",
+                "--project-dir", self.tmpdir]
+        if title is not None:
+            argv += ["--title", title]
+        with mock.patch.object(self.module, "_post", return_value=post_return,
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=None, create=True) as get_mock, \
+             mock.patch.object(self.module, "_patch", return_value=None, create=True) as patch_mock:
+            code, out, err = _run_main(self.module, argv)
+        return code, out, err, post_mock, get_mock, patch_mock
+
+
 # ── §S9 auto-attach + hard error ────────────────────────────────────────────
 
 
