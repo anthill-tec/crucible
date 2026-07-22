@@ -225,14 +225,21 @@ Step(
 
 // §S1 AC1 bullet 2 (CR-CRU-038 §S3 RE-ANCHOR, 2026-07-22): was "no dead
 // space below the FOOTER" — the footer is retired, so the CR-034
-// single-bounded-scroller guarantee re-anchors onto the LAST rendered
-// drill-in content block instead (the last suite-group, or the raw `<pre>`
-// when the (now header-resident) raw-toggle has revealed it — both are the
-// last element child of TestBody's own `.app-drillin-tree` wrapper,
-// whichever renders last in DOM order). The gap between that element's own
-// bottom edge (translated into pane-scroll's CONTENT coordinate space,
-// i.e. independent of the current scrollTop) and pane-scroll's
-// scrollHeight must not exceed pane-scroll's own bottom padding.
+// single-bounded-scroller guarantee re-anchors onto TestBody's own
+// `.app-drillin-tree` wrapper's LAST rendered content instead (the last
+// suite-group, or the raw `<pre>` when the now header-resident raw-toggle
+// has revealed it — whichever renders last in DOM order).
+//
+// `pane-scroll` (`.app-pane-content`) sets `overflow: auto`, which
+// establishes its own block-formatting context — a KNOWN CSS consequence
+// (not a layout defect) is that a trailing child's own `margin-bottom`
+// (e.g. `.app-suite-group`'s deliberate 4px inter-group spacing) does NOT
+// collapse OUT through that boundary and instead gets counted into
+// `scrollHeight`, unlike the retired footer (which carried no such
+// margin). So the last element's own declared `margin-bottom` is added
+// back into its measured content-bottom before comparing — real,
+// unaccounted dead space (a stale virtualization box, a leftover 60vh
+// trap) still fails this; the element's own intentional spacing does not.
 Step(
   "there is no dead space below the last suite in the run detail within the pane-scroll element",
   async ({ page }) => {
@@ -245,7 +252,8 @@ Step(
       if (last === null || last === undefined) return null;
       const paneRect = el.getBoundingClientRect();
       const lastRect = last.getBoundingClientRect();
-      const lastBottomInContent = lastRect.bottom - paneRect.top + el.scrollTop;
+      const lastMarginBottom = parseFloat(getComputedStyle(last).marginBottom) || 0;
+      const lastBottomInContent = lastRect.bottom - paneRect.top + el.scrollTop + lastMarginBottom;
       const paddingBottom = parseFloat(getComputedStyle(el).paddingBottom) || 0;
       return { gap: el.scrollHeight - lastBottomInContent, paddingBottom };
     });

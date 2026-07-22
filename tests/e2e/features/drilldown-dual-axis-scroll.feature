@@ -41,6 +41,7 @@ Feature: CR-CRU-034 §S1+§S2 — the run-detail drill-down inherits CR-029's du
     And I click the "Runs" workspace tab
     And I click the event card for "dda-single-suite"
     Then the run overlay is visible
+    When I expand each of the 1 failing suites in the run detail
     And no suite-leaf scroll box in the run detail acts as an independent ~60vh scroller
     And there is no dead space below the last suite in the run detail within the pane-scroll element
     When I scroll the pane-scroll element to its maximum
