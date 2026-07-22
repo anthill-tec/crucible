@@ -1785,8 +1785,14 @@ describe("Failure-box degradation (user defect 2026-07-15)", () => {
   });
 });
 
-describe("F4 anatomy — failures-footer (jump + raw-output, test events)", () => {
-  test("renders '▸ N more failures · toggle raw output'; the jump calls scrollIntoView on the next failing leaf; the raw toggle reveals the event's stored raw output", async () => {
+// CR-CRU-038 §S3 RETARGET (2026-07-22): was "F4 anatomy — failures-footer
+// (jump + raw-output, test events)" — the footer is retired, both
+// controls now live in the header (see the §S3 describe block in
+// tests/inpane-drill-in.test.ts for dedicated header-placement coverage);
+// this test keeps its original jump/raw-reveal behavioral assertions,
+// retargeted to query the controls at their new location.
+describe("F4 anatomy — failure-jump + raw-output (header controls, test events)", () => {
+  test("renders '▸ N more failures'; the jump calls scrollIntoView on the next failing leaf; the raw toggle reveals the event's stored raw output", async () => {
     const now = Date.now();
     const eventId = "evt-anatomy-footer-1";
     const projectKey = "proj-anatomy-footer-1";
@@ -1845,14 +1851,17 @@ describe("F4 anatomy — failures-footer (jump + raw-output, test events)", () =
     const overlay = document.querySelector('[data-testid="run-overlay"]')!;
 
     // CR-CRU-038 §S1 — the run opens MINIMIZED: SuiteFooter's leaves are
-    // NOT auto-fetched despite having 3 failures; the footer (driven off
-    // the run-level summary counts, not the loaded leaves) still renders.
+    // NOT auto-fetched despite having 3 failures; the header's failure-jump
+    // (driven off the run-level summary counts, not the loaded leaves)
+    // still renders (§S3 — no longer a footer).
     expect(fetchLog.some((u) => u.includes("suite=SuiteFooter"))).toBe(false);
     expect(overlay.querySelectorAll('[data-testid="leaf-row"]').length).toBe(0);
 
-    const footer = overlay.querySelector('[data-testid="failures-footer"]');
-    expect(footer).not.toBeNull();
-    expect((footer!.textContent ?? "")).toMatch(/▸ 2 more failures · toggle raw output/);
+    // CR-CRU-038 §S3 RETARGET (2026-07-22): the failure-jump + raw-toggle
+    // moved OUT of the footer into the drill-in header — the footer is
+    // retired entirely (it carried nothing else); assert its absence, and
+    // query the relocated controls at `document`.
+    expect(document.querySelector('[data-testid="failures-footer"]')).toBeNull();
 
     // Jump: the SECOND failing leaf-row (f2) is the "next" failure — stub
     // scrollIntoView (happy-dom has no real layout) and assert it fires on
@@ -1866,8 +1875,9 @@ describe("F4 anatomy — failures-footer (jump + raw-output, test events)", () =
       function (this: HTMLElement) {
         scrollCalls.push(this);
       };
-    const jump = footer!.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
+    const jump = document.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
     expect(jump).not.toBeNull();
+    expect((jump!.textContent ?? "")).toContain("▸ 2 more failures");
     jump!.click();
     await settle();
     // CR-CRU-038 §S1 — the jump works from the COLLAPSED default: it loads
@@ -1876,9 +1886,11 @@ describe("F4 anatomy — failures-footer (jump + raw-output, test events)", () =
     expect(scrollCalls.length).toBe(1);
     expect((scrollCalls[0] as HTMLElement).getAttribute("data-leaf-key")).toBe("SuiteFooter::f2");
 
-    // Raw toggle — test events too (not compile-only).
+    // Raw toggle — test events too (not compile-only). CR-CRU-038 §S3
+    // RETARGET: relocated to the header, query at `document` (was
+    // `footer!.querySelector`, which no longer exists).
     expect(overlay.querySelector('[data-testid="raw-output"]')).toBeNull();
-    const rawToggle = footer!.querySelector('[data-testid="raw-toggle"]') as HTMLElement | null;
+    const rawToggle = document.querySelector('[data-testid="raw-toggle"]') as HTMLElement | null;
     expect(rawToggle).not.toBeNull();
     rawToggle!.click();
     await settle();

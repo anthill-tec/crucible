@@ -568,9 +568,12 @@ describe("§S1 (CR-CRU-038) — error run opens minimized; failure-jump expands 
     const suiteJumpRow = findByText(overlay, '[data-testid="suite-row"]', "SuiteJump")!;
     expect(suiteJumpRow.querySelector('[data-testid="tree-toggle"]')!.textContent?.trim()).toBe("▸");
 
-    const footer = overlay.querySelector('[data-testid="failures-footer"]');
-    expect(footer).not.toBeNull();
-    const jump = footer!.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
+    // CR-CRU-038 §S3 RETARGET (2026-07-22): failure-jump moved OUT of the
+    // footer into the drill-in header — the footer is retired entirely
+    // (it carried nothing else). Query at `document` (was scoped inside
+    // `[data-testid="failures-footer"]`, which no longer exists).
+    expect(document.querySelector('[data-testid="failures-footer"]')).toBeNull();
+    const jump = document.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
     expect(jump).not.toBeNull();
     jump!.click();
     await settle();
