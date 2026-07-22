@@ -514,5 +514,73 @@ class PlanFileNoWaveWarningTest(_BaseWaveTest):
         self.assertNotIn("no-wave", err)
 
 
+# == CR-CRU-037 §S2 -- `no-title` warning (mirrors §S3 `no-wave` guard) ======
+
+
+class PlanFileNoTitleWarningTest(_BaseWaveTest):
+    """CR-CRU-037 §S2: a `plan-file` invoked with NO `--title` must emit a
+    `no-title` warning (envelope `warnings[]` + stderr) naming the CR being
+    filed, mirroring `PlanFileNoWaveWarningTest` above -- the plan STILL
+    files (title is optional; the orchestrator is just warned). With
+    `--title` supplied -> no `no-title` warning fires.
+
+    RED: `cmd_plan_file` in bun-crucible.py (confirmed by reading the
+    function body) builds `warnings = []` and only ever appends a `no-wave`
+    entry -- there is no no-title detection at all, so the warning-presence
+    assertion below fails against the CURRENT baseline (an empty/no-title-free
+    `warnings[]` and no matching stderr line)."""
+
+    PROJECT_KEY = "test-key-wave-no-title-warning"
+
+    def test_no_title_flag_emits_no_title_warning_naming_the_cr(self):
+        server_resp = {"ok": True, "planId": "plan-94", "cr": "CR-CRU-094",
+                        "cycles": [{"label": "a", "id": 904}]}
+        with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
+            code, out, err = _run_main(self.module, [
+                "plan-file", "--cr", "CR-CRU-094", "--cycles", "a",
+                "--project-dir", self.tmpdir,
+            ])
+
+        self.assertEqual(code, 0,
+                          f"a title-less plan-file must still file (no hard block); "
+                          f"stdout={out!r} stderr={err!r}")
+        payload = mock_post.call_args[0][1]
+        self.assertNotIn("title", payload,
+                          "with no --title, the payload must carry NO title key at all")
+
+        axi = self._decode_axi(out)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertIn("no-title", codes,
+                      f"plan-file with no --title must carry a `no-title` "
+                      f"warning; got {axi!r}")
+        detail = " ".join(w.get("detail", "") for w in axi.get("warnings", [])
+                           if w.get("code") == "no-title")
+        self.assertIn("CR-CRU-094", detail,
+                      f"the no-title warning must NAME the CR being filed; "
+                      f"got detail={detail!r}")
+        self.assertIn("no-title", err, "the no-title warning must also surface on stderr")
+        self.assertIn("CR-CRU-094", err,
+                       "stderr must name the CR being filed, not just the code")
+
+    def test_title_flag_present_omits_no_title_warning(self):
+        server_resp = {"ok": True, "planId": "plan-95", "cr": "CR-CRU-095",
+                        "cycles": [{"label": "a", "id": 905}]}
+        with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
+            code, out, err = _run_main(self.module, [
+                "plan-file", "--cr", "CR-CRU-095", "--cycles", "a",
+                "--title", "Some Title", "--project-dir", self.tmpdir,
+            ])
+
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        payload = mock_post.call_args[0][1]
+        self.assertEqual(payload.get("title"), "Some Title")
+        axi = self._decode_axi(out)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertNotIn("no-title", codes,
+                          f"--title resolves the title -- no no-title warning "
+                          f"should fire; got {axi!r}")
+        self.assertNotIn("no-title", err)
+
+
 if __name__ == "__main__":
     unittest.main()
