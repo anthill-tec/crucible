@@ -126,6 +126,10 @@ interface EventDetailFixture {
   timestamp: number;
   summary?: { total: number; passed: number; failed: number; pending: number; duration_ms: number };
   tree?: SuiteFixture[];
+  /** CR-CRU-038 §S3 C3 — run-level raw blob, used to exercise the
+   * header-relocated raw-toggle from this file's HOME-route harness
+   * (`mountAtRunCold` below always mounts at `/run/<id>`, no `/p/` prefix). */
+  raw?: string;
 }
 interface EventBriefFixture {
   id: string;
@@ -593,6 +597,97 @@ describe("§S1 (CR-CRU-038) — error run opens minimized; failure-jump expands 
     const failureBox = j2Row!.nextElementSibling;
     expect(failureBox?.getAttribute("data-testid")).toBe("failure-box");
     expect((failureBox?.textContent ?? "")).toContain("boom j2");
+  });
+});
+
+// ── CR-CRU-038 §S3 / AC5 — HOME-surface control visibility (VERIFY
+// close-out FIX round, C3 gap) — docs/changes/CR-CRU-038-patch-run-detail-
+// controls.md AC5: "Both the failure-jump and raw-output controls render in
+// the drill-in HEADER adjacent to the density chip, ... they remain visible
+// while the drill-in body scrolls." On the WORKSPACE route
+// (tests/inpane-drill-in.test.ts's `describe("§S3 (CR-CRU-038) —
+// failure-jump + raw-toggle relocated to the header...")`) this already
+// passes. On the HOME route (this file's `mountAtRunCold` mounts at
+// `/run/<id>`, no `/p/` prefix) it does NOT: `Home()`'s VISIBLE pinned band
+// (`div.app-drillin-head.app-top`, app.js:1117-1128) calls
+// `DetailHeadContent(state.route.overlay)` with NO `controls` argument, so
+// `...(controls ?? [])` is empty there — the controls only ever mount into
+// `RunDetail()`'s `div.app-drillin-inhead` (app.js:3701-3703), which
+// styles.css:211 hides with `display:none`. happy-dom parses no stylesheet
+// in this harness and computes no layout, so a bare
+// `document.querySelector('[data-testid="failure-jump"]')` is satisfied by
+// the hidden inhead copy alone and would pass even though nothing is
+// visible on screen. This test instead asserts DOM ANCESTRY: the controls
+// must be reachable as descendants of the VISIBLE
+// `.app-drillin-head.app-top` band (siblings of that band's own
+// `[data-testid="density-toggle"]`), not merely present somewhere in the
+// document.
+//
+// RED phase: expected to FAIL against the CURRENT public/app.js — the
+// visible band's `[data-testid="failure-jump"]` / `[data-testid="raw-
+// toggle"]` queries below resolve to null (only the hidden inhead copy
+// exists), so the `.not.toBeNull()` assertions fail.
+describe("§S3 (CR-CRU-038) — home-surface control placement (AC5 visible-band gap)", () => {
+  test("failure-jump and raw-toggle render inside the VISIBLE home pinned band (sibling of its density chip), not only the hidden inhead copy", async () => {
+    const now = Date.now();
+    const eventId = "evt-s3-home-visible-band";
+    const detail: EventDetailFixture = {
+      id: eventId,
+      projectKey: "proj-s3-home",
+      agentId: "s3-home-agent",
+      kind: "test",
+      tier: "unit",
+      codec: "junit",
+      timestamp: now,
+      summary: { total: 2, passed: 1, failed: 1, pending: 0, duration_ms: 20 },
+      tree: [
+        {
+          name: "SuiteHomeVis",
+          status: "fail",
+          children: [
+            { name: "okH", status: "pass", duration_ms: 5 },
+            { name: "badH", status: "fail", duration_ms: 5, failure: { message: "boom home" } },
+          ],
+        },
+      ],
+      raw: "raw output for the home-visible-band fixture",
+    };
+    const brief: EventBriefFixture = { id: eventId, projectKey: "proj-s3-home", agentId: "s3-home-agent", kind: "test", tier: "unit", codec: "junit", timestamp: now, total: 2, passed: 1, failed: 1, pending: 0, duration_ms: 20, hasCoverage: false };
+    // `mountAtRunCold` mounts at `/run/${eventId}` — the HOME route (no
+    // `/p/` prefix); see its definition above.
+    await mountAtRunCold(eventId, "unit", detail, brief);
+
+    // The VISIBLE band is `Home()`'s own pinned header
+    // (`div.app-drillin-head.app-top`) — distinct from RunDetail()'s hidden
+    // `div.app-drillin-inhead` compat copy.
+    const visibleBand = document.querySelector(".app-drillin-head.app-top");
+    expect(visibleBand).not.toBeNull();
+
+    // Sanity/positive control: the density chip DOES render in the visible
+    // band today (it is an unconditional DetailHeadContent element) — this
+    // confirms the selector itself is correct and the band is populated.
+    const densityToggle = visibleBand!.querySelector('[data-testid="density-toggle"]');
+    expect(densityToggle).not.toBeNull();
+
+    // AC5 — the failure-jump must be reachable INSIDE the visible band,
+    // as a sibling of that same density chip.
+    const jumpInVisibleBand = visibleBand!.querySelector('[data-testid="failure-jump"]') as HTMLElement | null;
+    expect(jumpInVisibleBand).not.toBeNull();
+    expect(jumpInVisibleBand!.textContent ?? "").toContain("more failures");
+    expect(jumpInVisibleBand!.parentElement).toBe(densityToggle!.parentElement);
+
+    // AC5 — the raw-toggle (raw exists via `detail.raw` above) must also be
+    // reachable inside the visible band.
+    const rawToggleInVisibleBand = visibleBand!.querySelector('[data-testid="raw-toggle"]') as HTMLElement | null;
+    expect(rawToggleInVisibleBand).not.toBeNull();
+    expect(rawToggleInVisibleBand!.parentElement).toBe(densityToggle!.parentElement);
+
+    // Bound: the controls are not confined to the hidden inhead copy alone —
+    // at least one failure-jump node must be reachable OUTSIDE
+    // `.app-drillin-inhead` (i.e. exactly the visible-band node just found).
+    const allJumps = document.querySelectorAll('[data-testid="failure-jump"]');
+    const inheadJumps = document.querySelectorAll('.app-drillin-inhead [data-testid="failure-jump"]');
+    expect(allJumps.length - inheadJumps.length).toBeGreaterThanOrEqual(1);
   });
 });
 
