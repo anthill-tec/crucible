@@ -115,16 +115,6 @@ def _project_key(pd):
     return _load_env(pd)[0]
 
 
-def _agent(name):
-    # A dispatched phase agent passes --agent (e.g. CR-SHE-005-C1-RED) and shows
-    # by that convention id. The default (orchestrator/standalone) is Vidushi - <NAME>.
-    override = os.environ.get("AGENT_ID")
-    if override:
-        return override, override
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return f"vidushi-{slug}", f"Vidushi - {name}"
-
-
 # ── HTTP transport seam (mocked in-process by the client test harnesses) ─────
 
 
@@ -407,7 +397,7 @@ def cmd_register(args):
     failure or no open plan at all is tolerant (register proceeds)."""
     pd = _project_dir(args)
     key, name = _load_env(pd)
-    agent_id, display = _agent(name)
+    agent_id = _agent_id(args)
     withhold, warnings = _register_cycle_guard(pd)
     if withhold:
         for w in warnings:
@@ -421,9 +411,9 @@ def cmd_register(args):
     msg = f"{phase} phase" if phase else "online"
     resp = _post("/api/v2/agents/register", {
         "agentId": agent_id, "projectKey": key, "status": "online", "message": msg,
-        "identity": {"displayName": display, "source": "openclaw"}})
+        "identity": {"displayName": agent_id, "source": "openclaw"}})
     ok = bool(resp.get("ok", False))
-    legacy = f"[crucible] register: {display} ({agent_id}) online — {msg}"
+    legacy = f"[crucible] register: {agent_id} online — {msg}"
     _emit_axi("register", ok,
               {"agent": agent_id, "help": _axi().HELP_STEPS["register"]},
               _axi_context(pd, agent_id=agent_id), [], legacy)
@@ -433,7 +423,7 @@ def cmd_register(args):
 def cmd_unregister(args):
     pd = _project_dir(args)
     key, name = _load_env(pd)
-    agent_id, _ = _agent(name)
+    agent_id = _agent_id(args)
     resp = _post("/api/v2/agents/unregister", {"agentId": agent_id, "projectKey": key})
     ok = bool(resp.get("ok", False))
     legacy = f"[crucible] unregister: {agent_id} removed (ok={ok})"
@@ -477,17 +467,17 @@ def _run_native_tests(args, verb, tier, want_coverage):
         return _run_native_tests_body(args, verb, tier, want_coverage, pd)
     finally:
         if getattr(args, "agent", None):
-            # Remove the SAME id the run ingested under. The body registers via
-            # `agent_id, _ = _agent(name)`; resolve the cleanup id through the
-            # identical `_agent()` derivation so a plain raw --agent can never
-            # drift from the registered row and orphan a ghost. (main() mirrors
-            # --agent into AGENT_ID, so `_agent()` returns it verbatim here.)
-            _remove_agent_silent(pd, _agent(args.agent)[0])
+            # Remove the SAME id the run ingested under. The body resolves via
+            # `_agent_id(args)` (raw --agent > $WORKFLOW_ROLE > "arduino-crucible",
+            # fleet-uniform with python/rust/mvn); resolve the cleanup id through
+            # the identical derivation so a run can never drift from the
+            # registered row and orphan a ghost.
+            _remove_agent_silent(pd, _agent_id(args))
 
 
 def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     key, name = _load_env(pd)
-    agent_id, _ = _agent(name)
+    agent_id = _agent_id(args)
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))
     _ensure_project(key, name, pd)
@@ -565,7 +555,7 @@ def _compile_gate(args, verb):
     (`check` and `compile` expose the SAME gate under fleet-uniform names)."""
     pd = _project_dir(args)
     key, name = _load_env(pd)
-    agent_id, _ = _agent(name)
+    agent_id = _agent_id(args)
     _ensure_project(key, name, pd)
     run = subprocess.run(
         [ARDUINO_CLI, "compile", "--fqbn", FQBN,
@@ -606,7 +596,7 @@ def cmd_auto_ingest(args):
     auto-attaching to the server's active cycle. Uniform with bun/python/mvn/rust."""
     pd = _project_dir(args)
     key, name = _load_env(pd)
-    agent_id, _ = _agent(name)
+    agent_id = _agent_id(args)
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))
     reports_dir = args.reports or os.path.join(native_dir, "reports")
