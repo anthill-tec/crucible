@@ -266,23 +266,44 @@ class AutoAttachToActiveCycleTest(_BaseAutoAttachTest):
         self.assertEqual(
             ingest_call[0][1].get("context", {}).get("cycleId"), self.ACTIVE_CYCLE_ID)
 
-    # NOTE: an "explicit WORKFLOW_CYCLE_ID overrides auto-resolution" case was
-    # deliberately NOT added here -- the existing `_run_context()`/
-    # `_cycle_id_and_warnings()` short-circuit already treats an explicit
-    # WORKFLOW_CYCLE_ID as authoritative today (before this CR), so any such
-    # test passes unchanged against current code (not real RED; a no-op
-    # GREEN already satisfies it). That AC bullet is already covered as a
-    # regression guard by the PRE-EXISTING
-    # `IngestEnvelopeTest.test_test_command_emits_toon_envelope_with_run_summary_and_cycleid_context`
-    # in test_bun_crucible_toon_envelope.py, which pins WORKFLOW_CYCLE_ID=51
-    # -> context.cycleId==51 and must keep passing unmodified through GREEN.
+    def test_source_never_reads_workflow_cycle_id_env_var(self):
+        occurrences = SCRIPT_PATH.read_text().count("WORKFLOW_CYCLE_ID")
+        self.assertEqual(
+            occurrences, 0,
+            f"bun-crucible.py must not reference WORKFLOW_CYCLE_ID anywhere "
+            f"(CR-CRU-036 §S1 removes it -- the server's active cycle is the "
+            f"single source of truth); found {occurrences} occurrence(s)",
+        )
+
+    def test_setting_workflow_cycle_id_env_has_no_effect_on_test_verb_attachment(self):
+        """CR-CRU-036 §S1: WORKFLOW_CYCLE_ID=51 must NOT override the
+        server-resolved active cycle -- the env var is no longer read at
+        all, so the SERVER active cycle id wins even though it differs."""
+        os.environ["WORKFLOW_CYCLE_ID"] = "51"
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans()):
+            code, out, _err = self._run_test_verb()
+
+        self.assertEqual(code, 0)
+        axi = self._decode_axi(out)
+        context = axi.get("context")
+        self.assertEqual(
+            context.get("cycleId"), self.ACTIVE_CYCLE_ID,
+            "WORKFLOW_CYCLE_ID=51 must NOT override the server-resolved "
+            f"active cycle ({self.ACTIVE_CYCLE_ID})",
+        )
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertEqual(
+            ingest_call[0][1].get("context", {}).get("cycleId"), self.ACTIVE_CYCLE_ID)
 
 
 class NoActiveCycleHardErrorTest(_BaseAutoAttachTest):
-    """§S9 hard-error: WORKFLOW_CYCLE_ID unset + no active cycle to attach
-    to (all terminal, or no plans at all) -> a HARD ERROR, never a silent
-    cycleId=NONE orphan. This SUPERSEDES the old soft `no-cycle-id`
-    warn-and-proceed behavior for exactly this scenario (§S9 spec text)."""
+    """CR-CRU-036 §S1 corrected §S9: WORKFLOW_CYCLE_ID unset + an OPEN plan
+    definitively carrying NO active cycle -> WARN + WITHHOLD (ok:false,
+    `warnings[]` `no-active-cycle`, no POST, non-zero exit), never a silent
+    cycleId=NONE orphan. No open plan AT ALL, or a plans-fetch failure, is
+    the TOLERANT case (the verb proceeds) -- NOT a withhold, which SUPERSEDES
+    the CR-CRU-030 interim behavior that (wrongly) withheld both."""
 
     def _no_active_cycle_plans(self):
         return _open_plans_response([
@@ -293,18 +314,22 @@ class NoActiveCycleHardErrorTest(_BaseAutoAttachTest):
     def _no_plans_at_all(self):
         return _open_plans_response([])
 
-    def _assert_hard_error(self, code, out, err, post_mock):
+    def _plans_fetch_failure(self):
+        return {"ok": False, "error": "connection failed: mock plans-fetch failure"}
+
+    def _assert_warns_and_withholds(self, code, out, err, post_mock):
         self.assertNotEqual(code, 0,
-                             "a hard error must exit non-zero, never a silent orphan")
+                             "a withhold must exit non-zero, never a silent orphan")
         axi = self._decode_axi(out)
         self.assertIs(axi.get("ok"), False)
         warnings_list = axi.get("warnings", [])
-        warning_details = " ".join(w.get("detail", "") for w in warnings_list).lower()
+        codes = [w.get("code") for w in warnings_list]
         self.assertIn(
-            "no active cycle", warning_details,
-            f"the ok:false envelope on STDOUT must carry a 'no active cycle' "
-            f"message; got warnings={warnings_list!r}")
-        self.assertIn("activate one first", warning_details)
+            "no-active-cycle", codes,
+            f"the ok:false envelope on STDOUT must carry a no-active-cycle "
+            f"warning; got warnings={warnings_list!r}")
+        warning_details = " ".join(w.get("detail", "") for w in warnings_list).lower()
+        self.assertIn("activate", warning_details)
         self.assertIn("no active cycle", err.lower())
 
         ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
@@ -314,33 +339,77 @@ class NoActiveCycleHardErrorTest(_BaseAutoAttachTest):
             "when there is no active cycle to attach it to",
         )
 
-    def test_test_verb_hard_errors_when_no_active_cycle_and_env_unset(self):
+    def _assert_tolerated(self, code, out, post_mock):
+        self.assertEqual(code, 0, f"the tolerant path must proceed; stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertNotIn("no-active-cycle", codes)
+        self.assertIsNotNone(
+            _post_call_for_path(post_mock, "/api/v2/runs/parsed"),
+            "the tolerant path must still post the run",
+        )
+
+    def test_test_verb_warns_and_withholds_when_open_plan_has_no_active_cycle(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
              mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
             code, out, err = self._run_test_verb()
-        self._assert_hard_error(code, out, err, post_mock)
+        self._assert_warns_and_withholds(code, out, err, post_mock)
 
-    def test_test_verb_hard_errors_when_no_open_plans_at_all(self):
+    def test_test_verb_proceeds_when_no_open_plans_at_all(self):
+        """CR-CRU-036 §S1 tolerant path: a lightweight project with no open
+        plan must NOT withhold -- this SUPERSEDES the CR-CRU-030 interim
+        assertion that this scenario hard-errored."""
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
              mock.patch.object(self.module, "_get", return_value=self._no_plans_at_all()):
-            code, out, err = self._run_test_verb()
-        self._assert_hard_error(code, out, err, post_mock)
+            code, out, _err = self._run_test_verb()
+        self._assert_tolerated(code, out, post_mock)
 
-    def test_regression_verb_hard_errors_when_no_active_cycle_and_env_unset(self):
+    def test_test_verb_proceeds_when_plans_fetch_fails(self):
+        """CR-CRU-036 §S1 tolerant path: a plans-fetch failure (infra hiccup
+        / non-UUID key 400) is NOT proof of "no active cycle" -- proceeds."""
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=self._plans_fetch_failure()):
+            code, out, _err = self._run_test_verb()
+        self._assert_tolerated(code, out, post_mock)
+
+    def test_regression_verb_warns_and_withholds_when_open_plan_has_no_active_cycle(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
              mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
             code, out, err = self._run_regression_verb()
-        self._assert_hard_error(code, out, err, post_mock)
+        self._assert_warns_and_withholds(code, out, err, post_mock)
 
-    def test_auto_ingest_verb_hard_errors_when_no_active_cycle_and_env_unset(self):
+    def test_regression_verb_proceeds_when_no_open_plans_at_all(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=self._no_plans_at_all()):
+            code, out, _err = self._run_regression_verb()
+        self._assert_tolerated(code, out, post_mock)
+
+    def test_auto_ingest_verb_warns_and_withholds_when_open_plan_has_no_active_cycle(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
              mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
             code, out, err = self._run_auto_ingest_verb()
-        self._assert_hard_error(code, out, err, post_mock)
+        self._assert_warns_and_withholds(code, out, err, post_mock)
+
+    def test_auto_ingest_verb_proceeds_when_no_open_plans_at_all(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=self._no_plans_at_all()):
+            code, out, _err = self._run_auto_ingest_verb()
+        self._assert_tolerated(code, out, post_mock)
+
+    def test_auto_ingest_verb_proceeds_when_plans_fetch_fails(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=self._plans_fetch_failure()):
+            code, out, _err = self._run_auto_ingest_verb()
+        self._assert_tolerated(code, out, post_mock)
 
 
 class RegisterHardErrorTest(_BaseAutoAttachTest):
@@ -377,23 +446,25 @@ class RegisterHardErrorTest(_BaseAutoAttachTest):
             "register", "--agent", agent, "--project-dir", self.tmpdir,
         ])
 
-    def test_register_hard_errors_when_no_active_cycle_and_env_unset(self):
+    def _plans_fetch_failure(self):
+        return {"ok": False, "error": "connection failed: mock plans-fetch failure"}
+
+    def test_register_warns_and_withholds_when_open_plan_has_no_active_cycle(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
              mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
             code, out, _err = self._run_register()
 
         self.assertNotEqual(
-            code, 0, "no active cycle -- register must hard-error with a non-zero exit")
+            code, 0, "no active cycle -- register must withhold with a non-zero exit")
         axi = self._decode_axi(out)
         self.assertIs(axi.get("ok"), False)
         warnings_list = axi.get("warnings", [])
-        warning_details = " ".join(w.get("detail", "") for w in warnings_list).lower()
+        codes = [w.get("code") for w in warnings_list]
         self.assertIn(
-            "no active cycle", warning_details,
-            f"the ok:false envelope on STDOUT must carry a 'no active cycle' "
-            f"message; got warnings={warnings_list!r}")
-        self.assertIn("activate one first", warning_details)
+            "no-active-cycle", codes,
+            f"the ok:false envelope on STDOUT must carry a no-active-cycle "
+            f"warning; got warnings={warnings_list!r}")
 
         register_call = _post_call_for_path(post_mock, "/api/v2/agents/register")
         self.assertIsNone(
@@ -401,21 +472,32 @@ class RegisterHardErrorTest(_BaseAutoAttachTest):
             "the register POST must NOT fire when there is no active cycle to attach to",
         )
 
-    def test_register_hard_errors_when_no_open_plans_at_all(self):
+    def test_register_proceeds_when_no_open_plans_at_all(self):
+        """CR-CRU-036 §S1 tolerant path: a lightweight project with no open
+        plan must NOT withhold -- this SUPERSEDES the CR-CRU-030 interim
+        assertion that this scenario hard-errored."""
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
              mock.patch.object(self.module, "_get", return_value=self._no_plans_at_all()):
             code, out, _err = self._run_register()
 
-        self.assertNotEqual(code, 0)
+        self.assertEqual(code, 0, f"no open plan at all must be TOLERATED; stdout={out!r}")
         axi = self._decode_axi(out)
-        self.assertIs(axi.get("ok"), False)
-        warnings_list = axi.get("warnings", [])
-        warning_details = " ".join(w.get("detail", "") for w in warnings_list).lower()
-        self.assertIn("no active cycle", warning_details)
-
+        self.assertIs(axi.get("ok"), True)
         register_call = _post_call_for_path(post_mock, "/api/v2/agents/register")
-        self.assertIsNone(register_call)
+        self.assertIsNotNone(register_call, "the tolerant path must still register")
+
+    def test_register_proceeds_when_plans_fetch_fails(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=self._plans_fetch_failure()):
+            code, out, _err = self._run_register()
+
+        self.assertEqual(code, 0, f"a plans-fetch failure must be TOLERATED; stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        register_call = _post_call_for_path(post_mock, "/api/v2/agents/register")
+        self.assertIsNotNone(register_call)
 
     def test_register_succeeds_when_active_cycle_present_and_env_unset(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
@@ -430,20 +512,22 @@ class RegisterHardErrorTest(_BaseAutoAttachTest):
         self.assertIsNotNone(
             register_call, "an active cycle is present -- register must actually POST")
 
-    def test_register_succeeds_with_explicit_workflow_cycle_id_override(self):
+    def test_setting_workflow_cycle_id_env_has_no_effect_on_register_withhold(self):
+        """CR-CRU-036 §S1: WORKFLOW_CYCLE_ID=51 must NOT rescue a register
+        against an open plan with no active cycle -- the env var is dead."""
         os.environ["WORKFLOW_CYCLE_ID"] = "51"
         with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
              mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
             code, out, _err = self._run_register()
 
-        self.assertEqual(
+        self.assertNotEqual(
             code, 0,
-            "an explicit WORKFLOW_CYCLE_ID must override the active-cycle check "
-            f"even with no active cycle present; stdout={out!r}")
+            "WORKFLOW_CYCLE_ID must have NO effect -- the withhold still fires; "
+            f"stdout={out!r}")
         axi = self._decode_axi(out)
-        self.assertIs(axi.get("ok"), True)
+        self.assertIs(axi.get("ok"), False)
         register_call = _post_call_for_path(post_mock, "/api/v2/agents/register")
-        self.assertIsNotNone(register_call)
+        self.assertIsNone(register_call)
 
 
 if __name__ == "__main__":

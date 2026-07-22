@@ -458,12 +458,21 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
              "cycles": [{"id": 10, "status": "pending"}, {"id": 11, "status": "done"}]},
         ])
 
+    def _active_cycle_plans(self, active_id=51):
+        return _open_plans_response([
+            {"planId": "plan-active", "cr": "CR-Q", "status": "open",
+             "cycles": [{"id": active_id, "status": "active"},
+                        {"id": active_id - 1, "status": "done"}]},
+        ])
+
     def test_test_command_emits_toon_envelope_with_run_summary_and_cycleid_context(self):
+        """CR-CRU-036 §S1 retarget: WORKFLOW_CYCLE_ID no longer exists -- the
+        cycleId comes from the server's active cycle instead."""
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
         os.environ["FAKE_BUN_EXIT_CODE"] = "0"
-        os.environ["WORKFLOW_CYCLE_ID"] = "51"
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
-             mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
+             mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans(51)):
             code, out, err = _run_main(self.module, [
                 "test", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
                 "--package-dir", self.tmpdir, "--reports", "reports",
@@ -516,9 +525,9 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
     def test_regression_command_emits_toon_envelope_with_run_summary(self):
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
         os.environ["FAKE_BUN_EXIT_CODE"] = "0"
-        os.environ["WORKFLOW_CYCLE_ID"] = "51"
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
-             mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
+             mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans(51)):
             code, out, err = _run_main(self.module, [
                 "regression", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
                 "--package-dir", self.tmpdir, "--reports", "reports",
@@ -541,20 +550,19 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         self.assertNotIn(legacy_line, out)
 
     def test_auto_ingest_emits_toon_envelope_with_run_summary(self):
-        """CR-CRU-030 §S9 retarget: an env-unset ingest with NO active cycle
-        is now a HARD ERROR (see test_bun_crucible_auto_attach.py), so this
+        """CR-CRU-036 §S1 retarget: an env-unset ingest with NO active cycle
+        WARNS+WITHHOLDS (see test_bun_crucible_auto_attach.py), so this
         envelope/run-summary pin needs a resolvable cycle to reach the
-        ok:True envelope it was written to verify -- an explicit
-        WORKFLOW_CYCLE_ID override is the simplest way to satisfy §S9 while
-        keeping the original intent (envelope shape / run summary) intact."""
+        ok:True envelope it was written to verify -- a SERVER active cycle
+        (never WORKFLOW_CYCLE_ID, which no longer exists) supplies it."""
         reports_dir = os.path.join(self.tmpdir, "reports")
         os.makedirs(reports_dir, exist_ok=True)
         with open(os.path.join(reports_dir, "junit.xml"), "w") as f:
             f.write(PASS_JUNIT_XML)
-        os.environ["WORKFLOW_CYCLE_ID"] = "51"
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
 
         with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
-             mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
+             mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans(51)):
             code, out, err = _run_main(self.module, [
                 "auto-ingest", "--agent", "CR-CRU-013-C51-auto",
                 "--project-dir", self.tmpdir, "--package-dir", self.tmpdir,
@@ -635,7 +643,10 @@ class NoCycleIdWarningTest(_BaseEnvelopeTest):
                           "auto-attach succeeded -- no no-cycle-id warning should be emitted")
         self.assertNotIn("no-cycle-id", err)
 
-    def test_no_cycle_id_env_set_suppresses_warning_even_with_active_cycle(self):
+    def test_setting_workflow_cycle_id_env_has_no_effect_when_active_cycle_present(self):
+        """CR-CRU-036 §S1: WORKFLOW_CYCLE_ID no longer overrides anything --
+        the server's active cycle (self.ACTIVE_CYCLE_ID) is attached even
+        though the env var names a DIFFERENT id (51), proving it is ignored."""
         os.environ["WORKFLOW_CYCLE_ID"] = "51"
         with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
              mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans()):
@@ -644,32 +655,37 @@ class NoCycleIdWarningTest(_BaseEnvelopeTest):
         self.assertEqual(code, 0)
         axi = self._decode_axi(out)
         context = axi.get("context")
-        self.assertEqual(context.get("cycleId"), 51)
+        self.assertEqual(
+            context.get("cycleId"), self.ACTIVE_CYCLE_ID,
+            "WORKFLOW_CYCLE_ID=51 must NOT override the server-resolved "
+            f"active cycle ({self.ACTIVE_CYCLE_ID})",
+        )
         self.assertEqual(axi.get("warnings"), [])
         self.assertNotIn("no-cycle-id", err)
 
-    def test_no_cycle_id_env_unset_without_any_active_cycle_hard_errors(self):
-        """CR-CRU-030 §S9 SUPERSEDES the old soft no-cycle-id warn-and-proceed
+    def test_no_active_cycle_at_all_warns_and_withholds(self):
+        """CR-CRU-036 §S1 SUPERSEDES the old soft no-cycle-id warn-and-proceed
         behavior for exactly this scenario (no ACTIVE cycle at all, env
-        unset): it is now a HARD ERROR, never a silent orphan. Full coverage
-        of the §S9 auto-attach/hard-error contract (test/regression/
-        auto-ingest, the explicit-override case, and the exact stdout
-        message) lives in tests/client/test_bun_crucible_auto_attach.py --
-        this method only pins that the OLD assertion here (code==0,
-        warnings==[]) no longer holds."""
+        unset): it is now a WARN + WITHHOLD (ok:false, non-zero exit, no
+        POST), never a silent orphan. Full coverage of the §S1 corrected
+        §S9 auto-attach/warn-withhold contract (test/regression/auto-ingest,
+        the tolerant paths, and the exact stdout message) lives in
+        tests/client/test_bun_crucible_auto_attach.py -- this method only
+        pins that the OLD assertion here (code==0, warnings==[]) no longer
+        holds."""
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
              mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
             code, out, err = self._run_test_verb()
 
         self.assertNotEqual(code, 0,
-                             "no ACTIVE cycle exists -- §S9 requires a HARD "
-                             "ERROR, not a silent success")
+                             "no ACTIVE cycle exists -- §S1 requires a WARN + "
+                             "WITHHOLD, not a silent success")
         axi = self._decode_axi(out)
         self.assertIs(axi.get("ok"), False)
         warnings_list = axi.get("warnings", [])
-        warning_details = " ".join(w.get("detail", "") for w in warnings_list).lower()
-        self.assertIn("no active cycle", warning_details)
+        codes = [w.get("code") for w in warnings_list]
+        self.assertIn("no-active-cycle", codes)
         for call in post_mock.call_args_list:
             args, kwargs = call
             path = args[0] if args else kwargs.get("path")

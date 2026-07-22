@@ -17,7 +17,6 @@ environment — set these on every call so runs land on the right cycle:
 
 | Env var | Meaning |
 |---------|---------|
-| `WORKFLOW_CYCLE_ID` | Numeric cycle id → `context.cycleId` |
 | `WORKFLOW_CYCLE` | Cycle label string → `context.cycle` |
 | `WORKFLOW_WAVE` | Optional wave number |
 | `WORKFLOW_ROLE` | Optional role/track label |
@@ -39,7 +38,7 @@ The client runs `mvn clean test` scoped to your SUT — `clean` wipes
 accurate. A compile failure is auto-routed to `/api/v2/runs/compile`.
 
 ```bash
-WORKFLOW_CYCLE_ID=7 WORKFLOW_CYCLE="my cycle label" \
+WORKFLOW_CYCLE="my cycle label" \
 python3 clients/mvn-crucible.py unit --test MyServiceTest --module backend --agent AGENT_ID
 ```
 
@@ -56,7 +55,7 @@ python3 clients/mvn-crucible.py e2e --agent AGENT_ID
 ### Regression Run (full suite — with JaCoCo coverage; tier: regression)
 
 ```bash
-WORKFLOW_CYCLE_ID=7 WORKFLOW_CYCLE="my cycle label" \
+WORKFLOW_CYCLE="my cycle label" \
 python3 clients/mvn-crucible.py regression --agent AGENT_ID
 ```
 

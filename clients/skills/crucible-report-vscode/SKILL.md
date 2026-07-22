@@ -16,7 +16,6 @@ the full-suite gate) and the workflow context, read from the environment:
 
 | Env var | Meaning |
 |---------|---------|
-| `WORKFLOW_CYCLE_ID` | Numeric cycle id → `context.cycleId` |
 | `WORKFLOW_CYCLE` | Cycle label string → `context.cycle` |
 | `WORKFLOW_WAVE` | Optional wave number |
 | `WORKFLOW_ROLE` | Optional role/track label |
@@ -49,8 +48,7 @@ if os.path.exists(env_path):
 
 def workflow_context():
     ctx = {}
-    cid = os.environ.get("WORKFLOW_CYCLE_ID")
-    if cid and cid.isdigit(): ctx["cycleId"] = int(cid)
+    # No client-side cycle-id plumbing: the active cycle auto-attaches server-side.
     for var, key in [("WORKFLOW_CYCLE", "cycle"), ("WORKFLOW_WAVE", "wave"), ("WORKFLOW_ROLE", "role")]:
         if os.environ.get(var): ctx[key] = os.environ[var]
     return ctx

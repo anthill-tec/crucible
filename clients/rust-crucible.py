@@ -265,19 +265,14 @@ def _emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
 def _run_context():
     """CR-CRU-008 §S2 — env + git → run context for declared cycle linkage.
 
-    Reads WORKFLOW_CYCLE_ID (int-coerced; invalid → omitted), WORKFLOW_CYCLE,
-    WORKFLOW_WAVE and WORKFLOW_ROLE. When at least one is set, attaches
+    Reads WORKFLOW_CYCLE, WORKFLOW_WAVE and WORKFLOW_ROLE (CR-CRU-036 removed the
+    cycle-id env read — the cycle is resolved from the server's active cycle,
+    never from the environment). When at least one is set, attaches
     git {branch, commit} from a cheap `git rev-parse` (tolerant of a
     non-repo cwd → omitted). Returns the context dict, or None when no
     workflow env is set. Same pattern as clients/bun-crucible.py.
     """
     context = {}
-    cycle_id_raw = os.environ.get("WORKFLOW_CYCLE_ID")
-    if cycle_id_raw is not None:
-        try:
-            context["cycleId"] = int(cycle_id_raw)
-        except ValueError:
-            pass
     cycle = os.environ.get("WORKFLOW_CYCLE")
     if cycle:
         context["cycle"] = cycle
@@ -329,54 +324,32 @@ def _open_plans(project_dir):
     return [p for p in resp.get("plans", []) if p.get("status") == "open"]
 
 
-def _active_cycle_id(project_dir):
-    """First ACTIVE cycle id among the project's OPEN plans, or None. Tolerant of any
-    lookup failure — delegates the pure resolution to the shared module."""
+def _plans_response(project_dir):
+    """Raw `GET .../plans` response, tolerant of any transport failure (a raised
+    exception / non-dict is normalised to a not-ok dict so `resolve_attach_cycle`
+    treats it as the tolerant fetch-failure case, never a definitive withhold)."""
     try:
         resp = _get(_plans_path(project_dir))
     except Exception:
-        return None
-    if not isinstance(resp, dict) or not resp.get("ok"):
-        return None
-    return _axi().resolve_active_cycle_id(resp.get("plans", []))
+        return {"ok": False, "error": "plans fetch raised"}
+    return resp if isinstance(resp, dict) else {"ok": False, "error": "non-dict plans response"}
 
 
 def _resolve_ingest_cycle(project_dir):
-    """§S9 — resolve the cycle an --agent ingest attaches to. An explicit valid
-    WORKFLOW_CYCLE_ID is authoritative; otherwise the open plan's single active
-    cycle is auto-resolved. Returns (cycle_id, warnings, hard_error)."""
-    raw = os.environ.get("WORKFLOW_CYCLE_ID")
-    if raw is not None:
-        try:
-            return int(raw), [], False
-        except ValueError:
-            pass
-    active = _active_cycle_id(project_dir)
-    if active is not None:
-        return active, [], False
-    warning = {"code": "no-active-cycle", "detail": "no active cycle — activate one first"}
-    return None, [warning], True
+    """CR-CRU-036 §S9 — resolve the cycle an --agent ingest attaches to FROM THE
+    SERVER (the open plan's single `status:"active"` cycle); no cycle-id env
+    override is read. Returns (cycle_id, warnings, withhold): a valid cycle or a
+    tolerant (None, [], False) proceed; (None, [warning], True) ONLY when an OPEN
+    plan carries no active cycle — the caller MUST emit ok:false and SKIP the POST."""
+    return _axi().resolve_attach_cycle(_plans_response(project_dir))
 
 
 def _register_cycle_guard(project_dir):
-    """§S9 — register mirrors the ingest hard-error: with WORKFLOW_CYCLE_ID unset AND
-    a successfully-read open plan carrying no active cycle, registration hard-errors.
-    A plans fetch that itself FAILS is NOT proof of "no active cycle", so register
-    proceeds. Returns (hard_error, warnings)."""
-    raw = os.environ.get("WORKFLOW_CYCLE_ID")
-    if raw is not None:
-        try:
-            int(raw)
-            return False, []
-        except ValueError:
-            pass
-    resp = _get(_plans_path(project_dir))
-    if not isinstance(resp, dict) or not resp.get("ok"):
-        return False, []
-    if _axi().resolve_active_cycle_id(resp.get("plans", [])) is not None:
-        return False, []
-    return True, [{"code": "no-active-cycle",
-                   "detail": "no active cycle — activate one first"}]
+    """CR-CRU-036 §S9 — register mirrors the ingest withhold: an OPEN plan with no
+    active cycle withholds registration. A plans-fetch failure or no open plan at
+    all is TOLERANT (register proceeds). Returns (withhold, warnings)."""
+    _cycle, warnings, withhold = _axi().resolve_attach_cycle(_plans_response(project_dir))
+    return withhold, warnings
 
 
 def _emit_ingest_axi(verb, resp, project_dir, agent, cycle_id, warnings):
@@ -384,7 +357,12 @@ def _emit_ingest_axi(verb, resp, project_dir, agent, cycle_id, warnings):
     (from the SERVER-parsed response) + cycle-aware context."""
     s = resp.get("run", {}) or {}
     run = {"passed": s.get("passed"), "failed": s.get("failed"), "total": s.get("total")}
-    context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
+    # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
+    # the cycleId key rather than emit an orphan-signalling explicit null.
+    if cycle_id is not None:
+        context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
+    else:
+        context = _axi_context(project_dir, agent_id=agent)
     for w in warnings:
         print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
     _emit_axi(verb, bool(resp.get("ok")),
@@ -392,12 +370,13 @@ def _emit_ingest_axi(verb, resp, project_dir, agent, cycle_id, warnings):
               context, warnings)
 
 
-def _emit_ingest_hard_error(verb, project_dir, agent, warnings):
-    """§S9 — emit the ok:false envelope (cycleId=null) when there is no active cycle
-    to attach an ingest to. The run is NOT POSTed."""
+def _emit_ingest_withhold(verb, project_dir, agent, warnings):
+    """§S9 — emit the ok:false envelope (cycleId=null) when an OPEN plan carries no
+    active cycle to attach an ingest to. The run is NOT POSTed (no cycleId=NONE
+    orphan)."""
     context = _axi_context(project_dir, agent_id=agent, cycle_id=None)
     for w in warnings:
-        print(f"error: {w['code']} — {w['detail']}", file=sys.stderr)
+        print(_axi().withhold_stderr_line(w), file=sys.stderr)
     _emit_axi(verb, False, {}, context, warnings)
 
 
@@ -576,13 +555,14 @@ def _run_logged(cmd, cwd, env, log_path):
 
 
 def cmd_register(args):
-    """Register / heartbeat. §S9: no active cycle (and no WORKFLOW_CYCLE_ID override)
-    is a HARD ERROR — the agent must never come online against an untracked plan."""
+    """Register / heartbeat. CR-CRU-036 §S9: an OPEN plan with no active cycle
+    WARNS + WITHHOLDS — the agent must never come online against an untracked
+    plan; a plans-fetch failure or no open plan at all is tolerant (proceeds)."""
     project_dir = _resolve_project_dir(args.project_dir)
-    hard_error, warnings = _register_cycle_guard(project_dir)
-    if hard_error:
+    withhold, warnings = _register_cycle_guard(project_dir)
+    if withhold:
         for w in warnings:
-            print(f"error: {w['code']} — {w['detail']}", file=sys.stderr)
+            print(_axi().withhold_stderr_line(w), file=sys.stderr)
         _emit_axi("register", False,
                   {"agent": args.agent, "help": _axi().HELP_STEPS["register"]},
                   _axi_context(project_dir, agent_id=args.agent, cycle_id=None),
@@ -662,9 +642,9 @@ def cmd_auto_ingest(args):
         # §S9 — resolve/attach the active cycle BEFORE the POST so the ingested run
         # carries the resolved cycleId in the SERVER record; no active cycle → hard
         # error, never a cycleId=null orphan.
-        cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-        if hard_error:
-            _emit_ingest_hard_error("auto-ingest", project_dir, args.agent, warnings)
+        cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+        if withhold:
+            _emit_ingest_withhold("auto-ingest", project_dir, args.agent, warnings)
             return 1
         resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier="unit",
                                  context=_ingest_context(cycle_id))
@@ -912,10 +892,10 @@ def cmd_test(args):
         junit_path = _resolve_junit_path(project_dir, args.profile)
         if junit_path:
             # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run
-            # hard-errors WITHOUT ever ingesting a cycleId=null orphan.
-            cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-            if hard_error:
-                _emit_ingest_hard_error("test", project_dir, args.agent, warnings)
+            # withholds WITHOUT ever ingesting a cycleId=null orphan.
+            cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+            if withhold:
+                _emit_ingest_withhold("test", project_dir, args.agent, warnings)
                 return 1
             resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier="unit",
                                      context=_ingest_context(cycle_id))

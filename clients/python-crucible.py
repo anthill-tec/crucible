@@ -16,9 +16,10 @@ project-specific — the project path and interpreter are parameterizable.
 Every AXI verb prints a clients/toon.py-encoded envelope
 `{"axi": {verb, ok, <result fields>, context, warnings}}` on STDOUT (the machine
 channel); the human-readable line moves to STDERR (interactive only). §S9: ingest
-verbs (and register) auto-attach to the open plan's ACTIVE cycle when
-WORKFLOW_CYCLE_ID is unset; no active cycle is a HARD ERROR (ok:false, non-zero
-exit, no POST), never a silent orphan.
+verbs (and register) auto-attach to the open plan's ACTIVE cycle resolved FROM THE
+SERVER (CR-CRU-036 removed every env override). An OPEN plan with no active cycle
+WARNS + WITHHOLDS (ok:false, non-zero exit, no POST — never a silent orphan); a
+plans-fetch failure or no open plan at all is tolerant (the verb proceeds).
 
 Subcommands:
   register, unregister  Agent lifecycle.
@@ -229,19 +230,14 @@ def _emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
 def _run_context():
     """CR-CRU-008 §S2 — env + git → run context for declared cycle linkage.
 
-    Reads WORKFLOW_CYCLE_ID (int-coerced; invalid → omitted), WORKFLOW_CYCLE,
-    WORKFLOW_WAVE and WORKFLOW_ROLE. When at least one is set, attaches
+    Reads WORKFLOW_CYCLE, WORKFLOW_WAVE and WORKFLOW_ROLE (CR-CRU-036 removed the
+    cycle-id env read — the cycle is resolved from the server's active cycle,
+    never from the environment). When at least one is set, attaches
     git {branch, commit} from a cheap `git rev-parse` (tolerant of a
     non-repo cwd → omitted). Returns the context dict, or None when no
     workflow env is set.
     """
     context = {}
-    cycle_id_raw = os.environ.get("WORKFLOW_CYCLE_ID")
-    if cycle_id_raw is not None:
-        try:
-            context["cycleId"] = int(cycle_id_raw)
-        except ValueError:
-            pass
     cycle = os.environ.get("WORKFLOW_CYCLE")
     if cycle:
         context["cycle"] = cycle
@@ -354,58 +350,33 @@ def _open_plans(project_dir):
     return [p for p in resp.get("plans", []) if p.get("status") == "open"]
 
 
-def _active_cycle_id(project_dir):
-    """First ACTIVE cycle id among the project's OPEN plans, or None. Tolerant of
-    any lookup failure — the §S9 guard must never break an ingest. Delegates the
-    pure resolution to the shared _crucible_axi.resolve_active_cycle_id."""
+def _plans_response(project_dir):
+    """Raw `GET .../plans` response, tolerant of any transport failure (a raised
+    exception / non-dict is normalised to a not-ok dict so `resolve_attach_cycle`
+    treats it as the tolerant fetch-failure case, never a definitive withhold)."""
     try:
         resp = _get(_plans_path(project_dir))
     except Exception:
-        return None
-    if not isinstance(resp, dict) or not resp.get("ok"):
-        return None
-    return _axi().resolve_active_cycle_id(resp.get("plans", []))
+        return {"ok": False, "error": "plans fetch raised"}
+    return resp if isinstance(resp, dict) else {"ok": False, "error": "non-dict plans response"}
 
 
 def _resolve_ingest_cycle(project_dir):
-    """§S9 — resolve the cycle an --agent ingest attaches to. An explicit valid
-    WORKFLOW_CYCLE_ID is authoritative; otherwise the open plan's single
-    `status:"active"` cycle is auto-resolved. Returns (cycle_id, warnings,
-    hard_error): (int, [], False) on success; (None, [warning], True) when there
-    is NO active cycle — the caller MUST emit ok:false and SKIP the POST."""
-    raw = os.environ.get("WORKFLOW_CYCLE_ID")
-    if raw is not None:
-        try:
-            return int(raw), [], False
-        except ValueError:
-            pass
-    active = _active_cycle_id(project_dir)
-    if active is not None:
-        return active, [], False
-    warning = {"code": "no-active-cycle", "detail": "no active cycle — activate one first"}
-    return None, [warning], True
+    """CR-CRU-036 §S9 — resolve the cycle an --agent ingest attaches to FROM THE
+    SERVER (the open plan's single `status:"active"` cycle); no cycle-id env
+    override is read. Returns (cycle_id, warnings, withhold): a valid cycle or a
+    tolerant (None, [], False) proceed; (None, [warning], True) ONLY when an OPEN
+    plan carries no active cycle — the caller MUST emit ok:false and SKIP the POST."""
+    return _axi().resolve_attach_cycle(_plans_response(project_dir))
 
 
 def _register_cycle_guard(project_dir):
-    """§S9 — register mirrors the ingest hard-error: with WORKFLOW_CYCLE_ID unset
-    AND a successfully-read open plan carrying no active cycle, registration
-    hard-errors rather than bring an agent online against untracked work. A plans
-    fetch that itself FAILS is NOT proof of "no active cycle", so register
-    proceeds. Returns (hard_error, warnings)."""
-    raw = os.environ.get("WORKFLOW_CYCLE_ID")
-    if raw is not None:
-        try:
-            int(raw)
-            return False, []
-        except ValueError:
-            pass
-    resp = _get(_plans_path(project_dir))
-    if not isinstance(resp, dict) or not resp.get("ok"):
-        return False, []
-    if _axi().resolve_active_cycle_id(resp.get("plans", [])) is not None:
-        return False, []
-    return True, [{"code": "no-active-cycle",
-                   "detail": "no active cycle — activate one first"}]
+    """CR-CRU-036 §S9 — register mirrors the ingest withhold: an OPEN plan with no
+    active cycle withholds registration rather than bring an agent online against
+    untracked work. A plans-fetch failure or no open plan at all is TOLERANT
+    (register proceeds). Returns (withhold, warnings)."""
+    _cycle, warnings, withhold = _axi().resolve_attach_cycle(_plans_response(project_dir))
+    return withhold, warnings
 
 
 def _emit_ingest_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
@@ -413,7 +384,12 @@ def _emit_ingest_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings
     + cycle-aware context. Any warnings are also surfaced on stderr."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "total": summary["total"]}
-    context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
+    # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
+    # the cycleId key rather than emit an orphan-signalling explicit null.
+    if cycle_id is not None:
+        context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
+    else:
+        context = _axi_context(project_dir, agent_id=agent)
     for w in warnings:
         print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
     _emit_axi(verb, bool(resp.get("ok")),
@@ -421,24 +397,26 @@ def _emit_ingest_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings
               context, warnings)
 
 
-def _emit_ingest_hard_error(verb, project_dir, agent, warnings):
+def _emit_ingest_withhold(verb, project_dir, agent, warnings):
     """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when
-    there is no active cycle to attach an ingest to. The run is NOT POSTed."""
+    an OPEN plan carries no active cycle to attach an ingest to. The run is NOT
+    POSTed, so it can never land as a silent cycleId=NONE orphan."""
     context = _axi_context(project_dir, agent_id=agent, cycle_id=None)
     for w in warnings:
-        print(f"error: {w['code']} — {w['detail']}", file=sys.stderr)
+        print(_axi().withhold_stderr_line(w), file=sys.stderr)
     _emit_axi(verb, False, {}, context, warnings)
 
 
 def cmd_register(args):
-    """Register / heartbeat. §S9: no active cycle (and no WORKFLOW_CYCLE_ID
-    override) is a HARD ERROR — the agent must never come online against an
-    untracked plan; the POST is withheld and the exit code is non-zero."""
+    """Register / heartbeat. CR-CRU-036 §S9: an OPEN plan with no active cycle
+    WARNS + WITHHOLDS — the agent must never come online against an untracked
+    plan; the POST is withheld and the exit code is non-zero. A plans-fetch
+    failure or no open plan at all is tolerant (register proceeds)."""
     project_dir = _resolve_project_dir(args.project_dir)
-    hard_error, warnings = _register_cycle_guard(project_dir)
-    if hard_error:
+    withhold, warnings = _register_cycle_guard(project_dir)
+    if withhold:
         for w in warnings:
-            print(f"error: {w['code']} — {w['detail']}", file=sys.stderr)
+            print(_axi().withhold_stderr_line(w), file=sys.stderr)
         _emit_axi("register", False,
                   {"agent": args.agent, "help": _axi().HELP_STEPS["register"]},
                   _axi_context(project_dir, agent_id=args.agent, cycle_id=None),
@@ -602,8 +580,14 @@ def _collect_coverage(python, project_dir, env):
     """Run `coverage lcov` and sum LF/LH/FNF/FNH into a Crucible coverage object.
     Returns None if coverage.py or the lcov output is unavailable."""
     lcov_path = os.path.join(project_dir, "coverage.lcov")
+    # PYTHONSAFEPATH=1 keeps cwd (project_dir) OFF sys.path for this `-m coverage`
+    # subprocess, so a stray `coverage/` directory in project_dir cannot shadow the
+    # installed coverage.py. cwd stays project_dir (to find .coverage/source) and
+    # PYTHONPATH is still honored.
+    cov_env = dict(env)
+    cov_env["PYTHONSAFEPATH"] = "1"
     r = subprocess.run([python, "-m", "coverage", "lcov", "-o", lcov_path],
-                       cwd=project_dir, env=env, capture_output=True, text=True)
+                       cwd=project_dir, env=cov_env, capture_output=True, text=True)
     if r.returncode != 0 or not os.path.exists(lcov_path):
         print(f"[crucible] WARN: coverage lcov unavailable ({r.stderr.strip()[:120]})",
               file=sys.stderr)
@@ -649,10 +633,10 @@ def cmd_test(args):
     if _produced_xml(reports_dir):
         summary, tree = _parse_junit_dir(reports_dir)
         # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run
-        # hard-errors WITHOUT ever ingesting a cycleId=null orphan.
-        cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-        if hard_error:
-            _emit_ingest_hard_error("test", project_dir, args.agent, warnings)
+        # withholds WITHOUT ever ingesting a cycleId=null orphan.
+        cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+        if withhold:
+            _emit_ingest_withhold("test", project_dir, args.agent, warnings)
             return 1
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
                               context=_ingest_context(cycle_id))
@@ -694,6 +678,10 @@ def _regression_run(args):
         run_cmd = [python, "-m", "coverage", "run", "--source", args.cov_source,
                    "-m", "xmlrunner", "discover", "-s", args.start_dir,
                    "-p", args.pattern, "-o", reports_dir]
+        # PYTHONSAFEPATH=1 keeps cwd (project_dir) OFF sys.path for this `-m coverage`
+        # subprocess, so a stray `coverage/` directory in project_dir cannot shadow
+        # the installed coverage.py. cwd stays project_dir and PYTHONPATH is honored.
+        env["PYTHONSAFEPATH"] = "1"
 
     print(f"[crucible] running: {' '.join(run_cmd)}", file=sys.stderr)
     result = _run_logged(run_cmd, project_dir, env, getattr(args, "log", None))
@@ -708,10 +696,10 @@ def _regression_run(args):
 
     summary, tree = _parse_junit_dir(reports_dir)
     coverage = _collect_coverage(python, project_dir, env) if coverage_on else None
-    # §S9 — resolve/attach the active cycle before the POST (hard-error when none).
-    cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-    if hard_error:
-        _emit_ingest_hard_error("regression", project_dir, args.agent, warnings)
+    # §S9 — resolve/attach the active cycle before the POST (withhold when none).
+    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+    if withhold:
+        _emit_ingest_withhold("regression", project_dir, args.agent, warnings)
         return 1
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                           tier="regression", context=_ingest_context(cycle_id))
@@ -730,9 +718,9 @@ def cmd_auto_ingest(args):
               file=sys.stderr)
         return 1
     summary, tree = _parse_junit_dir(reports_dir)
-    cycle_id, warnings, hard_error = _resolve_ingest_cycle(project_dir)
-    if hard_error:
-        _emit_ingest_hard_error("auto-ingest", project_dir, args.agent, warnings)
+    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
+    if withhold:
+        _emit_ingest_withhold("auto-ingest", project_dir, args.agent, warnings)
         return 1
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
                           context=_ingest_context(cycle_id))

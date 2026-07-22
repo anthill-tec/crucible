@@ -270,9 +270,9 @@ describe("clients/skills — dedicated-ping guidance removed (ingest is the hear
   });
 });
 
-// ── 5. Tier + WORKFLOW_CYCLE_ID/WORKFLOW_CYCLE env context documented ───────
+// ── 5. Tier + WORKFLOW_CYCLE (no WORKFLOW_CYCLE_ID — removed in CR-036) ─────
 
-describe("clients/skills — tier + WORKFLOW_CYCLE_ID/WORKFLOW_CYCLE env context documented", () => {
+describe("clients/skills — tier + WORKFLOW_CYCLE (no WORKFLOW_CYCLE_ID — removed in CR-036) documented", () => {
   const reportSkills: ReadonlyArray<{ label: string; path: string }> = [
     { label: "crucible-report-rust", path: PATHS.reportRust },
     { label: "crucible-report-java", path: PATHS.reportJava },
@@ -282,13 +282,14 @@ describe("clients/skills — tier + WORKFLOW_CYCLE_ID/WORKFLOW_CYCLE env context
   ];
 
   for (const { label, path } of reportSkills) {
-    test(`${label}/SKILL.md mentions tier and both WORKFLOW_CYCLE_ID and WORKFLOW_CYCLE (distinct env vars)`, () => {
+    test(`${label}/SKILL.md mentions tier and WORKFLOW_CYCLE, but never the removed WORKFLOW_CYCLE_ID`, () => {
       const content = readSkill(path);
       expect(content).toMatch(/\btier\b/i);
-      // WORKFLOW_CYCLE_ID (the numeric id → context.cycleId) — exact literal.
-      expect(content).toContain("WORKFLOW_CYCLE_ID");
+      // WORKFLOW_CYCLE_ID was removed in CR-036 (server auto-attaches the
+      // cycle) — regression guard that it never reappears in the docs.
+      expect(content).not.toContain("WORKFLOW_CYCLE_ID");
       // WORKFLOW_CYCLE (the label string → context.cycle) as its OWN token —
-      // not merely satisfied by WORKFLOW_CYCLE_ID's prefix.
+      // still a valid, documented env var.
       expect(content).toMatch(/WORKFLOW_CYCLE(?!_ID)\b/);
     });
   }

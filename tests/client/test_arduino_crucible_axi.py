@@ -354,6 +354,17 @@ class _BaseArduinoAxiTest(unittest.TestCase):
              "cycles": [{"id": 60, "status": "pending"}, {"id": 61, "status": "done"}]},
         ])
 
+    def _no_open_plans_at_all(self):
+        """CR-CRU-036 §S1 tolerant case: no open plan exists at all (a
+        lightweight project) — the guard must PROCEED, never withhold."""
+        return _open_plans_response([])
+
+    def _plans_fetch_failure(self):
+        """CR-CRU-036 §S1 tolerant case: the plans GET itself fails (infra
+        hiccup / a non-UUID project key 400ing server-side) — not proof of
+        "no active cycle", so the guard must PROCEED, never withhold."""
+        return {"ok": False, "error": "connection failed: mock plans-fetch failure"}
+
 
 # ── §S1 wiring: arduino-crucible.py must delegate to the shared module ─────
 
@@ -775,6 +786,20 @@ class ArduinoCrucibleNoWaveWarningTest(_BaseArduinoAxiTest):
 
 
 class ArduinoCrucibleAutoAttachTest(_BaseArduinoAxiTest):
+    """CR-CRU-036 §S1 corrected §S9: `WORKFLOW_CYCLE_ID` is REMOVED entirely
+    (setting it changes NOTHING); the active cycle is resolved SOLELY from
+    the server. An open plan with NO active cycle WARNS + WITHHOLDS; no open
+    plan at all, or a plans-fetch failure, is TOLERATED (proceeds)."""
+
+    def test_source_never_reads_workflow_cycle_id_env_var(self):
+        occurrences = SCRIPT_PATH.read_text().count("WORKFLOW_CYCLE_ID")
+        self.assertEqual(
+            occurrences, 0,
+            f"arduino-crucible.py must not reference WORKFLOW_CYCLE_ID anywhere "
+            f"(CR-CRU-036 §S1 removes it -- the server's active cycle is the "
+            f"single source of truth); found {occurrences} occurrence(s)",
+        )
+
     def test_test_verb_auto_attaches_run_to_the_single_active_cycle_when_env_unset(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         _write_native_make_junit_fixture(self.tmpdir)
@@ -796,7 +821,28 @@ class ArduinoCrucibleAutoAttachTest(_BaseArduinoAxiTest):
             "the SERVER-recorded run context must carry the resolved active cycle id",
         )
 
-    def test_test_verb_hard_errors_when_no_active_cycle_and_env_unset(self):
+    def test_setting_workflow_cycle_id_env_has_no_effect_on_ingest_attachment(self):
+        os.environ["WORKFLOW_CYCLE_ID"] = "51"
+        _write_native_make_junit_fixture(self.tmpdir)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._active_cycle_plans(1101),
+                                create=True):
+            code, out, _err = _run_main(self.module, [
+                "test", "--agent", "CR-A-auto", "--project-dir", self.tmpdir,
+            ])
+        self.assertEqual(code, 0, f"stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertEqual(
+            axi.get("context", {}).get("cycleId"), 1101,
+            "WORKFLOW_CYCLE_ID=51 must NOT override the server-resolved active "
+            "cycle (1101) -- the env var is no longer read at all",
+        )
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertEqual(ingest_call[0][1].get("context", {}).get("cycleId"), 1101)
+
+    def test_test_verb_warns_and_withholds_when_open_plan_has_no_active_cycle(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         _write_native_make_junit_fixture(self.tmpdir)
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
@@ -807,33 +853,102 @@ class ArduinoCrucibleAutoAttachTest(_BaseArduinoAxiTest):
             code, out, err = _run_main(self.module, [
                 "test", "--agent", "CR-A-auto", "--project-dir", self.tmpdir,
             ])
-        self.assertNotEqual(code, 0, "no active cycle must hard-error non-zero")
+        self.assertNotEqual(code, 0, "no active cycle must withhold with a non-zero exit")
         axi = self._decode_axi(out)
         self.assertIs(axi.get("ok"), False)
-        detail = " ".join(w.get("detail", "") for w in axi.get("warnings", [])).lower()
-        self.assertIn("no active cycle", detail)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertIn("no-active-cycle", codes)
         self.assertIn("no active cycle", err.lower())
         self.assertIsNone(
             _post_call_for_path(post_mock, "/api/v2/runs/parsed"),
             "the run must NEVER be POSTed as a silent cycleId=NONE orphan",
         )
 
-    def test_register_hard_errors_when_no_active_cycle_and_env_unset(self):
+    def test_test_verb_proceeds_when_no_open_plan_at_all(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        _write_native_make_junit_fixture(self.tmpdir)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._no_open_plans_at_all(),
+                                create=True):
+            code, out, _err = _run_main(self.module, [
+                "test", "--agent", "CR-A-auto", "--project-dir", self.tmpdir,
+            ])
+        self.assertEqual(code, 0, f"no open plan at all must be TOLERATED; stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertNotIn("no-active-cycle", codes)
+        self.assertIsNotNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"))
+
+    def test_test_verb_proceeds_when_plans_fetch_fails(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        _write_native_make_junit_fixture(self.tmpdir)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._plans_fetch_failure(),
+                                create=True):
+            code, out, _err = _run_main(self.module, [
+                "test", "--agent", "CR-A-auto", "--project-dir", self.tmpdir,
+            ])
+        self.assertEqual(code, 0, f"a plans-fetch failure must be TOLERATED; stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertNotIn("no-active-cycle", codes)
+        self.assertIsNotNone(_post_call_for_path(post_mock, "/api/v2/runs/parsed"))
+
+    def test_register_warns_and_withholds_when_open_plan_has_no_active_cycle(self):
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
              mock.patch.object(self.module, "_get",
                                 return_value=self._no_active_cycle_plans(),
                                 create=True):
-            code, out, _err = _run_main(self.module, [
+            code, out, err = _run_main(self.module, [
                 "register", "--agent", "CR-A-reg", "--project-dir", self.tmpdir,
             ])
         self.assertNotEqual(code, 0)
         axi = self._decode_axi(out)
         self.assertIs(axi.get("ok"), False)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertIn("no-active-cycle", codes)
+        self.assertIn("no active cycle", err.lower())
         self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/agents/register"))
 
-    def test_register_succeeds_with_explicit_workflow_cycle_id_override(self):
+    def test_register_proceeds_when_no_open_plan_at_all(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._no_open_plans_at_all(),
+                                create=True):
+            code, out, _err = _run_main(self.module, [
+                "register", "--agent", "CR-A-reg", "--project-dir", self.tmpdir,
+            ])
+        self.assertEqual(code, 0, f"no open plan at all must be TOLERATED; stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertIsNotNone(_post_call_for_path(post_mock, "/api/v2/agents/register"))
+
+    def test_register_proceeds_when_plans_fetch_fails(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
+        with mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._plans_fetch_failure(),
+                                create=True):
+            code, out, _err = _run_main(self.module, [
+                "register", "--agent", "CR-A-reg", "--project-dir", self.tmpdir,
+            ])
+        self.assertEqual(code, 0, f"a plans-fetch failure must be TOLERATED; stdout={out!r}")
+        axi = self._decode_axi(out)
+        self.assertIs(axi.get("ok"), True)
+        self.assertIsNotNone(_post_call_for_path(post_mock, "/api/v2/agents/register"))
+
+    def test_setting_workflow_cycle_id_env_has_no_effect_on_register_withhold(self):
         os.environ["WORKFLOW_CYCLE_ID"] = "51"
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock, \
@@ -843,10 +958,14 @@ class ArduinoCrucibleAutoAttachTest(_BaseArduinoAxiTest):
             code, out, _err = _run_main(self.module, [
                 "register", "--agent", "CR-A-reg", "--project-dir", self.tmpdir,
             ])
-        self.assertEqual(code, 0, f"stdout={out!r}")
+        self.assertNotEqual(
+            code, 0,
+            "WORKFLOW_CYCLE_ID must have NO effect -- the withhold still fires")
         axi = self._decode_axi(out)
-        self.assertIs(axi.get("ok"), True)
-        self.assertIsNotNone(_post_call_for_path(post_mock, "/api/v2/agents/register"))
+        self.assertIs(axi.get("ok"), False)
+        codes = [w.get("code") for w in axi.get("warnings", [])]
+        self.assertIn("no-active-cycle", codes)
+        self.assertIsNone(_post_call_for_path(post_mock, "/api/v2/agents/register"))
 
 
 # ── Toolchain-specific: `test` runs real native `make junit`; `check` runs ──
@@ -855,13 +974,16 @@ class ArduinoCrucibleAutoAttachTest(_BaseArduinoAxiTest):
 
 
 class ArduinoCrucibleToolchainTest(_BaseArduinoAxiTest):
-    def test_test_verb_runs_real_native_make_junit_and_ingests_with_explicit_cycle_id_context(self):
-        os.environ["WORKFLOW_CYCLE_ID"] = "51"
+    def test_test_verb_runs_real_native_make_junit_and_ingests_with_active_cycle_context(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
         _write_native_make_junit_fixture(self.tmpdir)
         with mock.patch.object(self.module, "_post",
                                 return_value={"ok": True,
                                                "run": {"passed": 1, "failed": 0, "total": 1}},
-                                create=True) as post_mock:
+                                create=True) as post_mock, \
+             mock.patch.object(self.module, "_get",
+                                return_value=self._active_cycle_plans(51),
+                                create=True):
             code, out, _err = _run_main(self.module, [
                 "test", "--project-dir", self.tmpdir, "--agent", "CR-A-toolchain",
             ])
@@ -880,8 +1002,8 @@ class ArduinoCrucibleToolchainTest(_BaseArduinoAxiTest):
             "the real native test run's ingest payload must carry the resolved cycle id",
         )
 
-    def test_check_verb_runs_arduino_cli_compile_and_ingests_compile_errors_with_cycle_id_context(self):
-        os.environ["WORKFLOW_CYCLE_ID"] = "51"
+    def test_check_verb_runs_arduino_cli_compile_and_ingests_compile_errors(self):
+        os.environ.pop("WORKFLOW_CYCLE_ID", None)
         fake_cli_dir = tempfile.mkdtemp(prefix="fake-arduino-cli-")
         fake_cli_path = os.path.join(fake_cli_dir, "arduino-cli")
         _write_fake_executable(fake_cli_path, _FAKE_ARDUINO_CLI_BODY)
@@ -901,7 +1023,31 @@ class ArduinoCrucibleToolchainTest(_BaseArduinoAxiTest):
         compile_call = _post_call_for_path(post_mock, "/api/v2/runs/compile")
         self.assertIsNotNone(compile_call, "a failing check must ingest the compile error")
         self.assertIn("expected ';'", compile_call[0][1].get("errors", ""))
-        self.assertEqual(compile_call[0][1].get("context", {}).get("cycleId"), 51)
+
+    def test_setting_workflow_cycle_id_env_has_no_effect_on_check_verb_ingest(self):
+        """CR-CRU-036 §S1: WORKFLOW_CYCLE_ID is REMOVED -- setting it must not
+        make a cycleId appear in the compile-error ingest context."""
+        os.environ["WORKFLOW_CYCLE_ID"] = "51"
+        fake_cli_dir = tempfile.mkdtemp(prefix="fake-arduino-cli-")
+        fake_cli_path = os.path.join(fake_cli_dir, "arduino-cli")
+        _write_fake_executable(fake_cli_path, _FAKE_ARDUINO_CLI_BODY)
+        with mock.patch.object(self.module, "ARDUINO_CLI", fake_cli_path), \
+             mock.patch.object(self.module, "_post", return_value={"ok": True},
+                                create=True) as post_mock:
+            try:
+                code, out, _err = _run_main(self.module, [
+                    "check", "--project-dir", self.tmpdir, "--agent", "CR-A-check",
+                ])
+            finally:
+                shutil.rmtree(fake_cli_dir, ignore_errors=True)
+        self.assertNotEqual(code, 0, "a failing arduino-cli compile must exit non-zero")
+        compile_call = _post_call_for_path(post_mock, "/api/v2/runs/compile")
+        self.assertIsNotNone(compile_call, "a failing check must ingest the compile error")
+        self.assertIsNone(
+            (compile_call[0][1].get("context") or {}).get("cycleId"),
+            "WORKFLOW_CYCLE_ID=51 must have NO EFFECT -- the env var is no "
+            "longer read anywhere in the client",
+        )
 
 
 if __name__ == "__main__":

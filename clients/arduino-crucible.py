@@ -12,9 +12,11 @@ CR-CRU-030 §S1/§S2: every AXI verb prints a clients/toon.py-encoded envelope
 channel); human-readable lines move to STDERR (interactive only). The envelope
 machinery is factored into the shared clients/_crucible_axi.py module so every
 client emits a byte-identical §S1 envelope. §S9: the ingest verb (`test`) and
-`register` auto-attach to the open plan's ACTIVE cycle when WORKFLOW_CYCLE_ID is
-unset; no active cycle is a HARD ERROR (ok:false, non-zero exit, no POST), never a
-silent orphan. Arduino has NO separate `auto-ingest` verb, so §S9 rides its `test`
+`register` auto-attach to the open plan's ACTIVE cycle resolved FROM THE SERVER
+(CR-CRU-036 removed every env override). An OPEN plan with no active cycle WARNS +
+WITHHOLDS (ok:false, non-zero exit, no POST — never a silent orphan); a
+plans-fetch failure or no open plan at all is tolerant (proceeds). Arduino has NO
+separate `auto-ingest` verb, so §S9 rides its `test`
 verb (the CR forbids adding new verbs beyond cycle-add/status/checkpoint/stop/abort).
 
 The subproject dir (holding `.env` + `tests/native/`) is resolved:
@@ -24,8 +26,9 @@ It must contain a `.env`. Examples:
   (cd sheetal-firmware && arduino-crucible.py check --agent <id>)
 
 Run context (CR-CRU-008 §S2): when any WORKFLOW_* env var is set
-(WORKFLOW_CYCLE_ID / WORKFLOW_CYCLE / WORKFLOW_WAVE / WORKFLOW_ROLE), ingests carry
-a `context` object {cycleId, cycle, wave, orchestrator, git:{branch,commit}}.
+(WORKFLOW_CYCLE / WORKFLOW_WAVE / WORKFLOW_ROLE — CR-CRU-036 removed the cycle-id
+env read), ingests carry a `context` object {cycle, wave, orchestrator,
+git:{branch,commit}} plus the SERVER-resolved cycleId.
 
 Env overrides: CRUCIBLE_URL (legacy alias CRUCIBLE_BASE), ARDUINO_CLI, ARDUINO_FQBN,
 AGENT_ID.
@@ -110,16 +113,6 @@ def _load_env(pd):
 
 def _project_key(pd):
     return _load_env(pd)[0]
-
-
-def _agent(name):
-    # A dispatched phase agent passes --agent (e.g. CR-SHE-005-C1-RED) and shows
-    # by that convention id. The default (orchestrator/standalone) is Vidushi - <NAME>.
-    override = os.environ.get("AGENT_ID")
-    if override:
-        return override, override
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return f"vidushi-{slug}", f"Vidushi - {name}"
 
 
 # ── HTTP transport seam (mocked in-process by the client test harnesses) ─────
@@ -211,19 +204,14 @@ def _emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
 def _run_context():
     """CR-CRU-008 §S2 — env + git → run context for declared cycle linkage.
 
-    Reads WORKFLOW_CYCLE_ID (int-coerced; invalid → omitted), WORKFLOW_CYCLE,
-    WORKFLOW_WAVE and WORKFLOW_ROLE. When at least one is set, attaches
+    Reads WORKFLOW_CYCLE, WORKFLOW_WAVE and WORKFLOW_ROLE (CR-CRU-036 removed the
+    cycle-id env read — the cycle is resolved from the server's active cycle,
+    never from the environment). When at least one is set, attaches
     git {branch, commit} from a cheap `git rev-parse` (tolerant of a
     non-repo cwd → omitted). Returns the context dict, or None when no
     workflow env is set.
     """
     context = {}
-    cycle_id_raw = os.environ.get("WORKFLOW_CYCLE_ID")
-    if cycle_id_raw is not None:
-        try:
-            context["cycleId"] = int(cycle_id_raw)
-        except ValueError:
-            pass
     cycle = os.environ.get("WORKFLOW_CYCLE")
     if cycle:
         context["cycle"] = cycle
@@ -274,61 +262,44 @@ def _open_plans(project_dir):
     return [p for p in resp.get("plans", []) if p.get("status") == "open"]
 
 
-def _active_cycle_id(project_dir):
-    """First ACTIVE cycle id among the project's OPEN plans, or None. Tolerant of
-    any lookup failure — the §S9 guard must never break an ingest."""
+def _plans_response(project_dir):
+    """Raw `GET .../plans` response, tolerant of any transport failure (a raised
+    exception / non-dict is normalised to a not-ok dict so `resolve_attach_cycle`
+    treats it as the tolerant fetch-failure case, never a definitive withhold)."""
     try:
         resp = _get(_plans_path(project_dir))
     except Exception:
-        return None
-    if not isinstance(resp, dict) or not resp.get("ok"):
-        return None
-    return _axi().resolve_active_cycle_id(resp.get("plans", []))
+        return {"ok": False, "error": "plans fetch raised"}
+    return resp if isinstance(resp, dict) else {"ok": False, "error": "non-dict plans response"}
 
 
 def _resolve_ingest_cycle(project_dir):
-    """§S9 — resolve the cycle an --agent ingest attaches to. An explicit valid
-    WORKFLOW_CYCLE_ID is authoritative; otherwise the open plan's single
-    `status:"active"` cycle is auto-resolved. Returns (cycle_id, warnings,
-    hard_error)."""
-    raw = os.environ.get("WORKFLOW_CYCLE_ID")
-    if raw is not None:
-        try:
-            return int(raw), [], False
-        except ValueError:
-            pass
-    active = _active_cycle_id(project_dir)
-    if active is not None:
-        return active, [], False
-    warning = {"code": "no-active-cycle", "detail": "no active cycle — activate one first"}
-    return None, [warning], True
+    """CR-CRU-036 §S9 — resolve the cycle an --agent ingest attaches to FROM THE
+    SERVER (the open plan's single `status:"active"` cycle); no cycle-id env
+    override is read. Returns (cycle_id, warnings, withhold): a valid cycle or a
+    tolerant (None,[],False) proceed; (None,[warning],True) ONLY when an OPEN plan
+    carries no active cycle — the caller MUST emit ok:false and SKIP the POST."""
+    return _axi().resolve_attach_cycle(_plans_response(project_dir))
 
 
 def _register_cycle_guard(project_dir):
-    """§S9 — register mirrors the ingest hard-error: with WORKFLOW_CYCLE_ID unset AND
-    a successfully-read open plan carrying no active cycle, registration hard-errors.
-    A plans fetch that itself FAILS is NOT proof of "no active cycle"."""
-    raw = os.environ.get("WORKFLOW_CYCLE_ID")
-    if raw is not None:
-        try:
-            int(raw)
-            return False, []
-        except ValueError:
-            pass
-    resp = _get(_plans_path(project_dir))
-    if not isinstance(resp, dict) or not resp.get("ok"):
-        return False, []
-    if _axi().resolve_active_cycle_id(resp.get("plans", [])) is not None:
-        return False, []
-    return True, [{"code": "no-active-cycle",
-                   "detail": "no active cycle — activate one first"}]
+    """CR-CRU-036 §S9 — register mirrors the ingest withhold: an OPEN plan with no
+    active cycle withholds registration. A plans-fetch failure or no open plan at
+    all is TOLERANT (register proceeds). Returns (withhold, warnings)."""
+    _cycle, warnings, withhold = _axi().resolve_attach_cycle(_plans_response(project_dir))
+    return withhold, warnings
 
 
 def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
     """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path)."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "total": summary["total"]}
-    context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
+    # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
+    # the cycleId key rather than emit an orphan-signalling explicit null.
+    if cycle_id is not None:
+        context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
+    else:
+        context = _axi_context(project_dir, agent_id=agent)
     for w in warnings:
         print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
     _emit_axi(verb, bool(resp.get("ok")),
@@ -336,12 +307,13 @@ def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent, cycle_id, 
               context, warnings)
 
 
-def _emit_ingest_hard_error(verb, project_dir, agent, warnings):
-    """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when
-    there is no active cycle to attach an ingest to. The run is NOT POSTed."""
+def _emit_ingest_withhold(verb, project_dir, agent, warnings):
+    """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when an
+    OPEN plan carries no active cycle to attach an ingest to. The run is NOT POSTed
+    (no cycleId=NONE orphan)."""
     context = _axi_context(project_dir, agent_id=agent, cycle_id=None)
     for w in warnings:
-        print(f"error: {w['code']} — {w['detail']}", file=sys.stderr)
+        print(_axi().withhold_stderr_line(w), file=sys.stderr)
     _emit_axi(verb, False, {}, context, warnings)
 
 
@@ -378,6 +350,31 @@ def _parse_junit(path):
     return summary, tree
 
 
+def _collect_lcov(path):
+    """Sum an lcov `.info` file's LF/LH (lines) and FNF/FNH (functions) into a
+    Crucible coverage object. Returns None when the file is absent (a --coverage
+    run with no coverage output ingests WITHOUT coverage rather than fabricating)."""
+    if not os.path.exists(path):
+        return None
+    lf = lh = ff = fh = 0
+    with open(path) as f:
+        for line in f:
+            if line.startswith("LF:"):
+                lf += int(line[3:].strip() or 0)
+            elif line.startswith("LH:"):
+                lh += int(line[3:].strip() or 0)
+            elif line.startswith("FNF:"):
+                ff += int(line[4:].strip() or 0)
+            elif line.startswith("FNH:"):
+                fh += int(line[4:].strip() or 0)
+    return {
+        "lines": {"total": lf, "covered": lh,
+                  "percent": round(lh / lf * 100, 1) if lf else 0},
+        "functions": {"total": ff, "covered": fh,
+                      "percent": round(fh / ff * 100, 1) if ff else 0},
+    }
+
+
 def _ingest_compile(project_dir, key, agent_id, errors, context=None):
     """Ingest an arduino-cli compile failure to /api/v2/runs/compile (with run context)."""
     payload = {"projectKey": key, "agentId": agent_id, "errors": errors}
@@ -394,16 +391,17 @@ def _ingest_compile(project_dir, key, agent_id, errors, context=None):
 
 
 def cmd_register(args):
-    """Register / heartbeat. §S9: no active cycle (and no WORKFLOW_CYCLE_ID
-    override) is a HARD ERROR — the agent must never come online against an
-    untracked plan; the heartbeat is withheld and the exit code is non-zero."""
+    """Register / heartbeat. CR-CRU-036 §S9: an OPEN plan with no active cycle
+    WARNS + WITHHOLDS — the agent must never come online against an untracked
+    plan; the heartbeat is withheld and the exit code is non-zero. A plans-fetch
+    failure or no open plan at all is tolerant (register proceeds)."""
     pd = _project_dir(args)
     key, name = _load_env(pd)
-    agent_id, display = _agent(name)
-    hard_error, warnings = _register_cycle_guard(pd)
-    if hard_error:
+    agent_id = _agent_id(args)
+    withhold, warnings = _register_cycle_guard(pd)
+    if withhold:
         for w in warnings:
-            print(f"error: {w['code']} — {w['detail']}", file=sys.stderr)
+            print(_axi().withhold_stderr_line(w), file=sys.stderr)
         _emit_axi("register", False,
                   {"agent": agent_id, "help": _axi().HELP_STEPS["register"]},
                   _axi_context(pd, agent_id=agent_id, cycle_id=None), warnings)
@@ -413,9 +411,9 @@ def cmd_register(args):
     msg = f"{phase} phase" if phase else "online"
     resp = _post("/api/v2/agents/register", {
         "agentId": agent_id, "projectKey": key, "status": "online", "message": msg,
-        "identity": {"displayName": display, "source": "openclaw"}})
+        "identity": {"displayName": agent_id, "source": "openclaw"}})
     ok = bool(resp.get("ok", False))
-    legacy = f"[crucible] register: {display} ({agent_id}) online — {msg}"
+    legacy = f"[crucible] register: {agent_id} online — {msg}"
     _emit_axi("register", ok,
               {"agent": agent_id, "help": _axi().HELP_STEPS["register"]},
               _axi_context(pd, agent_id=agent_id), [], legacy)
@@ -425,7 +423,7 @@ def cmd_register(args):
 def cmd_unregister(args):
     pd = _project_dir(args)
     key, name = _load_env(pd)
-    agent_id, _ = _agent(name)
+    agent_id = _agent_id(args)
     resp = _post("/api/v2/agents/unregister", {"agentId": agent_id, "projectKey": key})
     ok = bool(resp.get("ok", False))
     legacy = f"[crucible] unregister: {agent_id} removed (ok={ok})"
@@ -435,17 +433,51 @@ def cmd_unregister(args):
     return 0 if ok else 1
 
 
+def _remove_agent_silent(project_dir, agent_id):
+    """CR-CRU-008 §S4 anti-ghost cleanup for a gated run: remove the agent row
+    WITHOUT journaling a lifecycle event (the run's ingest was the implicit
+    registration — a plain unregister would journal an 'unregistered' event and
+    bury the run just ingested). Best-effort: never raises, never pollutes the
+    run verdict or stdout. Mirrors clients/rust-crucible.py's _remove_agent_silent
+    (v2 silent unregister, never the retired /api/agents/remove shim)."""
+    try:
+        _post(
+            "/api/v2/agents/unregister",
+            {"agentId": agent_id, "projectKey": _project_key(project_dir), "silent": True},
+        )
+    except Exception:
+        pass
+
+
 # ── Toolchain: native host tests + arduino-cli compile ───────────────────────
 
 
-def cmd_test(args):
-    """§S2 fleet-uniform test verb — run native host tests (`make junit`) → parse →
-    /api/v2/runs/parsed (§S9 auto-attach). Arduino has no separate `auto-ingest`
-    verb, so §S9 rides here. A no-active-cycle run hard-errors WITHOUT ingesting a
-    cycleId=null orphan."""
+def _run_native_tests(args, verb, tier, want_coverage):
+    """§S2/§S3 fleet-uniform native-test workhorse — run native host tests
+    (`make junit`) → parse → /api/v2/runs/parsed under the given `tier`, §S9
+    auto-attaching to the server's active cycle. `unit`/`test` ride tier `unit`;
+    `regression` rides tier `regression` and, with `want_coverage`, attaches
+    lcov coverage from `<native_dir>/coverage/lcov.info`. A no-active-cycle run
+    withholds WITHOUT ingesting a cycleId=null orphan. A gated run (agent set)
+    wraps the body in an anti-ghost silent cleanup (CR-CRU-008 §S4): even a
+    failed/raising/withheld run removes the implicitly registered agent via the
+    v2 silent unregister, and never touches the retired /api/agents/remove shim."""
     pd = _project_dir(args)
+    try:
+        return _run_native_tests_body(args, verb, tier, want_coverage, pd)
+    finally:
+        if getattr(args, "agent", None):
+            # Remove the SAME id the run ingested under. The body resolves via
+            # `_agent_id(args)` (raw --agent > $WORKFLOW_ROLE > "arduino-crucible",
+            # fleet-uniform with python/rust/mvn); resolve the cleanup id through
+            # the identical derivation so a run can never drift from the
+            # registered row and orphan a ghost.
+            _remove_agent_silent(pd, _agent_id(args))
+
+
+def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     key, name = _load_env(pd)
-    agent_id, _ = _agent(name)
+    agent_id = _agent_id(args)
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))
     _ensure_project(key, name, pd)
@@ -462,38 +494,68 @@ def cmd_test(args):
             summary[k] += s[k]
         tree.extend(t)
 
+    coverage = None
+    if want_coverage:
+        coverage = _collect_lcov(os.path.join(native_dir, "coverage", "lcov.info"))
+        if coverage is None:
+            print(f"[crucible] WARN: --coverage set but no lcov at "
+                  f"{native_dir}/coverage/lcov.info — ingesting WITHOUT coverage",
+                  file=sys.stderr)
+
     if not args.agent and not os.environ.get("AGENT_ID"):
         # No ingest requested — just report the run outcome.
-        print(f"[crucible] test -> '{name}': {summary['passed']}/{summary['total']} passed, "
+        print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
               f"{summary['failed']} failed", file=sys.stderr)
         return 1 if summary["failed"] else 0
 
-    # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run hard-errors
+    # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run withholds
     # WITHOUT ever ingesting a cycleId=null orphan.
-    cycle_id, warnings, hard_error = _resolve_ingest_cycle(pd)
-    if hard_error:
-        _emit_ingest_hard_error("test", pd, agent_id, warnings)
+    cycle_id, warnings, withhold = _resolve_ingest_cycle(pd)
+    if withhold:
+        _emit_ingest_withhold(verb, pd, agent_id, warnings)
         return 1
     payload = {"projectKey": key, "name": name, "agentId": agent_id,
-               "summary": summary, "tree": tree, "tier": "unit"}
+               "summary": summary, "tree": tree, "tier": tier}
+    if coverage:
+        payload["coverage"] = coverage
     context = _ingest_context(cycle_id)
     if context:
         payload["context"] = context
     resp = _post("/api/v2/runs/parsed", payload)
-    print(f"[crucible] test -> '{name}': {summary['passed']}/{summary['total']} passed, "
+    print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed (ingest ok={resp.get('ok')})", file=sys.stderr)
-    _emit_ingest_summary_axi("test", resp, summary, pd, agent_id, cycle_id, warnings)
+    _emit_ingest_summary_axi(verb, resp, summary, pd, agent_id, cycle_id, warnings)
     if summary["failed"]:
         return 1
     return 0 if resp.get("ok") else 1
 
 
-def cmd_check(args):
-    """§S2 fleet-uniform compile gate — arduino-cli compile; on failure ingest the
-    build output to /api/v2/runs/compile. Returns the §S1 envelope."""
+def cmd_test(args):
+    """§S2 fleet-uniform test verb — native host tests (`make junit`) → tier
+    `unit`. Retained (byte-compatible verb + envelope) alongside the `unit` alias."""
+    return _run_native_tests(args, "test", "unit", False)
+
+
+def cmd_unit(args):
+    """§S3 fleet-uniform `unit` verb — native host tests (`make junit`) → tier
+    `unit`. The RED/GREEN workhorse; identical toolchain to `test`."""
+    return _run_native_tests(args, "unit", "unit", False)
+
+
+def cmd_regression(args):
+    """§S3 fleet-uniform `regression` verb — full native suite → tier
+    `regression`; with `--coverage`, attach lcov coverage from
+    `<native_dir>/coverage/lcov.info` (uniform with bun/python/mvn/rust)."""
+    return _run_native_tests(args, "regression", "regression", bool(getattr(args, "coverage", False)))
+
+
+def _compile_gate(args, verb):
+    """§S2/§S3 shared arduino-cli compile gate — compile; on failure ingest the
+    build output to /api/v2/runs/compile. Returns the §S1 envelope under `verb`
+    (`check` and `compile` expose the SAME gate under fleet-uniform names)."""
     pd = _project_dir(args)
     key, name = _load_env(pd)
-    agent_id, _ = _agent(name)
+    agent_id = _agent_id(args)
     _ensure_project(key, name, pd)
     run = subprocess.run(
         [ARDUINO_CLI, "compile", "--fqbn", FQBN,
@@ -508,11 +570,84 @@ def cmd_check(args):
             sys.stderr.write(errors + "\n")
     else:
         print("[crucible] compile OK", file=sys.stderr)
-    legacy = f"check: ok={ok} exit={run.returncode}"
-    _emit_axi("check", ok,
-              {"exit": run.returncode, "help": _axi().HELP_STEPS["check"]},
+    legacy = f"{verb}: ok={ok} exit={run.returncode}"
+    _emit_axi(verb, ok,
+              {"exit": run.returncode, "help": _axi().HELP_STEPS.get(verb, ["status"])},
               _axi_context(pd, agent_id=agent_id), [], legacy)
     return 0 if ok else (run.returncode or 1)
+
+
+def cmd_check(args):
+    """§S2 fleet-uniform compile gate — arduino-cli compile; on failure ingest the
+    build output to /api/v2/runs/compile. Returns the §S1 envelope."""
+    return _compile_gate(args, "check")
+
+
+def cmd_compile(args):
+    """§S3 fleet-uniform `compile` verb — arduino-cli compile; on failure ingest
+    the captured build output to /api/v2/runs/compile (never the v1 shim). The
+    firmware-compile counterpart of the fleet's `compile`/`check` gate."""
+    return _compile_gate(args, "compile")
+
+
+def cmd_auto_ingest(args):
+    """§S3 fleet-uniform `auto-ingest` verb — ingest a PRE-EXISTING native reports
+    dir (default `<native_dir>/reports`) with NO toolchain invocation, §S9
+    auto-attaching to the server's active cycle. Uniform with bun/python/mvn/rust."""
+    pd = _project_dir(args)
+    key, name = _load_env(pd)
+    agent_id = _agent_id(args)
+    sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
+    native_dir = os.path.join(pd, *sub.split("/"))
+    reports_dir = args.reports or os.path.join(native_dir, "reports")
+    if not os.path.isabs(reports_dir):
+        reports_dir = os.path.join(pd, reports_dir)
+    reports = sorted(glob.glob(os.path.join(reports_dir, "TEST-*.xml")))
+    if not reports:
+        sys.exit(f"[crucible] no JUnit (TEST-*.xml) under {reports_dir} — nothing to ingest")
+    _ensure_project(key, name, pd)
+    summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
+    tree = []
+    for junit in reports:
+        s, t = _parse_junit(junit)
+        for k in ("total", "passed", "failed"):
+            summary[k] += s[k]
+        tree.extend(t)
+    cycle_id, warnings, withhold = _resolve_ingest_cycle(pd)
+    if withhold:
+        _emit_ingest_withhold("auto-ingest", pd, agent_id, warnings)
+        return 1
+    payload = {"projectKey": key, "name": name, "agentId": agent_id,
+               "summary": summary, "tree": tree, "tier": "unit"}
+    context = _ingest_context(cycle_id)
+    if context:
+        payload["context"] = context
+    resp = _post("/api/v2/runs/parsed", payload)
+    print(f"[crucible] auto-ingest -> '{name}': {summary['passed']}/{summary['total']} passed, "
+          f"{summary['failed']} failed (ingest ok={resp.get('ok')})", file=sys.stderr)
+    _emit_ingest_summary_axi("auto-ingest", resp, summary, pd, agent_id, cycle_id, warnings)
+    if summary["failed"]:
+        return 1
+    return 0 if resp.get("ok") else 1
+
+
+def cmd_pre_merge_gate(args):
+    """§S3 ORCHESTRATOR pre-merge gate — fail-fast arduino-cli `compile` →
+    `regression --coverage`. On compile failure the compile-failure event is
+    posted and regression is SKIPPED (non-zero exit); on compile success the
+    regression run posts the tier:'regression' event with coverage attached."""
+    if not getattr(args, "skip_check", False):
+        check_args = argparse.Namespace(agent=args.agent, project_dir=args.project_dir)
+        rc = _compile_gate(check_args, "compile")
+        if rc != 0:
+            print("[crucible] pre-merge gate FAILED at the arduino-cli compile step — "
+                  "skipped the regression. Fix the compile first (or --skip-check to bypass).",
+                  file=sys.stderr)
+            return rc
+    reg_args = argparse.Namespace(
+        agent=args.agent, project_dir=args.project_dir,
+        dir=getattr(args, "dir", None), coverage=True)
+    return cmd_regression(reg_args)
 
 
 # ── CR-CRU-030 §S4/§S6/§S7/§S8 — plan / cycle / status / gate verbs ──────────
@@ -965,16 +1100,47 @@ def main():
     # no-arg live dashboard, never argparse's required-subcommand error.
     sub = p.add_subparsers(dest="cmd", required=False)
 
+    _dir_help = ("test-target subdir under the project (default tests/native; "
+                 "e.g. tests/native-mock for the ArduinoFake L2 tier)")
+
     t = sub.add_parser("test", parents=[common],
                        help="run native host tests (make junit) -> /api/v2/runs/parsed (§S9)")
-    t.add_argument("--dir", default="tests/native",
-                   help="test-target subdir under the project (default tests/native; "
-                        "e.g. tests/native-mock for the ArduinoFake L2 tier)")
+    t.add_argument("--dir", default="tests/native", help=_dir_help)
     t.set_defaults(func=cmd_test)
+
+    un = sub.add_parser("unit", parents=[common],
+                        help="run native host tests (make junit) -> /api/v2/runs/parsed, tier unit (§S9)")
+    un.add_argument("--dir", default="tests/native", help=_dir_help)
+    un.set_defaults(func=cmd_unit)
+
+    rg = sub.add_parser("regression", parents=[common],
+                        help="full native suite -> /api/v2/runs/parsed, tier regression (§S3)")
+    rg.add_argument("--dir", default="tests/native", help=_dir_help)
+    rg.add_argument("--coverage", action="store_true",
+                    help="attach lcov coverage from <native_dir>/coverage/lcov.info")
+    rg.set_defaults(func=cmd_regression)
+
+    ai = sub.add_parser("auto-ingest", parents=[common],
+                        help="ingest a PRE-EXISTING native reports dir (no toolchain) (§S3)")
+    ai.add_argument("--dir", default="tests/native", help=_dir_help)
+    ai.add_argument("--reports",
+                    help="reports dir holding TEST-*.xml (default <native_dir>/reports)")
+    ai.set_defaults(func=cmd_auto_ingest)
 
     ck = sub.add_parser("check", parents=[common],
                         help="arduino-cli compile -> /api/v2/runs/compile on failure")
     ck.set_defaults(func=cmd_check)
+
+    cpl = sub.add_parser("compile", parents=[common],
+                         help="arduino-cli compile -> /api/v2/runs/compile on failure (§S3)")
+    cpl.set_defaults(func=cmd_compile)
+
+    pmg = sub.add_parser("pre-merge-gate", parents=[common],
+                         help="fail-fast compile -> regression --coverage (§S3)")
+    pmg.add_argument("--dir", default="tests/native", help=_dir_help)
+    pmg.add_argument("--skip-check", action="store_true",
+                     help="skip the fail-fast arduino-cli compile step")
+    pmg.set_defaults(func=cmd_pre_merge_gate)
 
     r = sub.add_parser("register", parents=[common], help="register/heartbeat the agent")
     r.add_argument("--phase", help="phase label (RED/GREEN/VERIFY/FIX)")

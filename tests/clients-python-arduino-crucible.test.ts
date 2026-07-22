@@ -218,19 +218,31 @@ async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: stri
 }
 
 /**
- * Files a real OPEN plan and returns its first cycle id so a synthetic
- * WORKFLOW_CYCLE_ID references a cycle that actually exists in THIS project.
- * CR-CRU-024 §S7 refuses an unlinkable cycleId (400, event dropped) — Crucible
- * is the source of truth — so the env cycleId must map to a genuinely-filed cycle.
+ * Files a real OPEN plan with two `pending` cycles (neither active) — the
+ * CR-CRU-036 §S1 fixture primitive: "open plan, no active cycle" until
+ * `activateCycle` below promotes one of them.
  */
-async function filePlanCycleId(baseUrl: string, key: string, cr: string): Promise<number> {
+async function filePlan(baseUrl: string, key: string, cr: string): Promise<{ planId: number; cycles: Array<{ id: number }> }> {
   const res = await fetch(`${baseUrl}/api/v2/projects/${key}/plans`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ cr, cycles: [{ label: "A" }, { label: "B" }] }),
   });
-  const body = (await res.json()) as { cycles: Array<{ id: number }> };
-  return body.cycles[0]!.id;
+  return (await res.json()) as { planId: number; cycles: Array<{ id: number }> };
+}
+
+/**
+ * CR-CRU-036 §S1: PATCHes a plan's cycle to `status:"active"` directly
+ * against the plans API — the "seed an active cycle on the test server"
+ * step (project → plan-file → cycle-activate) so the client's server-side
+ * auto-attach resolver has a real target.
+ */
+async function activateCycle(baseUrl: string, key: string, planId: number, cycleId: number): Promise<void> {
+  await fetch(`${baseUrl}/api/v2/projects/${key}/plans/${planId}/cycles/${cycleId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status: "active" }),
+  });
 }
 
 interface FullEvent {
@@ -500,6 +512,48 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
     expect(agent).toBeDefined();
     expect(agent!.message.toLowerCase()).toContain("report");
   });
+
+  test("CR-CRU-036 §S1: register with an OPEN plan but NO active cycle warns[] 'no-active-cycle'/'activate a cycle first' + stderr, posts NO agent, exits non-zero — WORKFLOW_CYCLE_ID set is ignored", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-pc-no-active-cycle");
+    // Files an open plan whose two cycles are both `pending` — never activated.
+    const plan = await filePlan(baseUrl, key, "CR-PC-NO-ACTIVE-CYCLE");
+    const dir = scratch.dir("python-crucible-proj-");
+    writeEnvFile(dir, key);
+
+    const res = await runScript(
+      PYTHON_SCRIPT_PATH,
+      ["register", "--agent", "p-no-cycle", "--phase", "RED", "--project-dir", dir],
+      // A stale WORKFLOW_CYCLE_ID pointing at a REAL (but pending) cycle in
+      // this very plan must change NOTHING — §S1 removes the env var.
+      { cwd: dir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stderr).toContain("no-active-cycle");
+    expect(res.stderr).toContain("activate a cycle first");
+    expect(res.stdout).toContain("no-active-cycle");
+    expect(await getAgentIds(baseUrl, key)).not.toContain("p-no-cycle");
+  });
+
+  test("CR-CRU-036 §S1: register with NO open plan at all is tolerant — proceeds with no warning and no withhold", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-pc-tolerant-no-plan");
+    const dir = scratch.dir("python-crucible-proj-");
+    writeEnvFile(dir, key);
+
+    const res = await runScript(
+      PYTHON_SCRIPT_PATH,
+      ["register", "--agent", "p-tolerant", "--phase", "RED", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    expect(res.code).toBe(0);
+    expect(res.stdout).not.toContain("no-active-cycle");
+    expect(await getAgentIds(baseUrl, key)).toContain("p-tolerant");
+  });
 });
 
 describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'unit', context enrichment (fake xmlrunner, CR-CRU-008 §S2)", () => {
@@ -561,12 +615,18 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
-  test("with WORKFLOW_CYCLE_ID/WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set + a git repo, records full context: cycleId, cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
+  test("with an ACTIVE cycle seeded server-side + WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set + a git repo, records full context: cycleId AUTO-ATTACHED from the server (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing), cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-test-context");
-    // §S7: file a real plan so WORKFLOW_CYCLE_ID maps to an existing cycle.
-    const cycleId = await filePlanCycleId(baseUrl, key, "CR-PC-CONTEXT");
+    // CR-CRU-036 §S1: seed an ACTIVE cycle server-side (plan-file + activate
+    // cycles[0]). cycles[1] stays pending and is fed to WORKFLOW_CYCLE_ID —
+    // a REAL, linkable, but NOT-active cycle — proving the env var is read
+    // by nobody: if it still won, context.cycleId would be cycles[1]'s id.
+    const plan = await filePlan(baseUrl, key, "CR-PC-CONTEXT");
+    const activeCycleId = plan.cycles[0]!.id;
+    const otherCycleId = plan.cycles[1]!.id;
+    await activateCycle(baseUrl, key, plan.planId, activeCycleId);
     const { dir, pythonPath } = fixtureDir(key);
     runGit(["init", "-q"], dir);
     runGit(["symbolic-ref", "HEAD", `refs/heads/${branch}`], dir);
@@ -584,7 +644,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
           PYTHONPATH: pythonPath,
           FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("fixture", [{ name: "one" }]),
           FAKE_XMLRUNNER_EXIT_CODE: "0",
-          WORKFLOW_CYCLE_ID: String(cycleId),
+          WORKFLOW_CYCLE_ID: String(otherCycleId),
           WORKFLOW_CYCLE: "python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix",
           WORKFLOW_WAVE: "wave-4",
           WORKFLOW_ROLE: "track-4",
@@ -595,7 +655,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     const events = await getEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
-    expect(event.context?.cycleId).toBe(cycleId);
+    expect(event.context?.cycleId).toBe(activeCycleId);
     expect(event.context?.cycle).toBe("python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix");
     expect(event.context?.wave).toBe("wave-4");
     expect(event.context?.orchestrator).toBe("track-4");
@@ -719,6 +779,56 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
     expect(event.coverage?.functions?.total).toBe(6);
     expect(event.coverage?.functions?.covered).toBe(5);
   });
+
+  // CR-CRU-036 C4 FIX round — VERIFY finding: `_collect_coverage` runs
+  // `python -m coverage lcov -o <path>` with `cwd=project_dir`
+  // (clients/python-crucible.py:583). For a `-m` invocation Python prepends
+  // the CURRENT WORKING DIRECTORY to sys.path AHEAD of PYTHONPATH, so a
+  // `coverage/` subdirectory sitting directly in project_dir (e.g. a bogus
+  // namespace package with no `__main__.py`) is found FIRST — shadowing
+  // BOTH the real installed coverage.py and this fixture's own
+  // PYTHONPATH-supplied fake `coverage/__main__.py` — and
+  // `python -m coverage ...` fails outright ("No module named
+  // coverage.__main__; 'coverage' is a package and cannot be directly
+  // executed"), breaking collection. Empirically confirmed standalone
+  // before writing this test (see C4 RED report). This MUST fail today.
+  test("CR-CRU-036 C4: a `coverage/` directory present in project_dir does NOT shadow coverage.py collection — event.coverage STILL reflects the fake lcov output", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-pc-regression-coverage-dir-shadow");
+    const { dir, pythonPath } = fixtureDir(key);
+    // The shadow trigger: an otherwise-inert `coverage/` subdirectory
+    // living directly in project_dir (project_dir IS the subprocess cwd).
+    const shadowDir = join(dir, "coverage");
+    mkdirSync(shadowDir, { recursive: true });
+    writeFileSync(join(shadowDir, "__init__.py"), "");
+
+    const res = await runScript(
+      PYTHON_SCRIPT_PATH,
+      ["regression", "--coverage", "--agent", "python-coverage-shadow-agent", "--project-dir", dir],
+      {
+        cwd: dir,
+        crucibleUrl: baseUrl,
+        env: {
+          PYTHONPATH: pythonPath,
+          FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("regression_fixture", [{ name: "alpha" }]),
+          FAKE_XMLRUNNER_EXIT_CODE: "0",
+          FAKE_COVERAGE_LCOV: "SF:app/lib.py\nFNF:6\nFNH:5\nLF:20\nLH:17\nend_of_record\n",
+        },
+      },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+
+    expect(res.code).toBe(0);
+    expect(event.tier).toBe("regression");
+    expect(event.coverage?.lines?.total).toBe(20);
+    expect(event.coverage?.lines?.covered).toBe(17);
+    expect(event.coverage?.functions?.total).toBe(6);
+    expect(event.coverage?.functions?.covered).toBe(5);
+  });
 });
 
 describe("clients/python-crucible.py — the no-XML fallback fix (headline bug, CR-CRU-008 Implementation Notes): test AND regression carry REAL captured runner output, never the dead empty-string 400", () => {
@@ -745,7 +855,7 @@ describe("clients/python-crucible.py — the no-XML fallback fix (headline bug, 
     const res = await runScript(PYTHON_SCRIPT_PATH, ["test", "--agent", "python-no-xml-agent", "--project-dir", dir], {
       cwd: dir,
       crucibleUrl: proxy.url,
-      env: { PYTHONPATH: "" },
+      env: { PYTHONPATH: "", PYTHONNOUSERSITE: "1" },
     });
 
     expect(res.code).not.toBe(0);
@@ -774,7 +884,7 @@ describe("clients/python-crucible.py — the no-XML fallback fix (headline bug, 
     const res = await runScript(
       PYTHON_SCRIPT_PATH,
       ["regression", "--agent", "python-no-xml-regression-agent", "--project-dir", dir],
-      { cwd: dir, crucibleUrl: proxy.url, env: { PYTHONPATH: "" } },
+      { cwd: dir, crucibleUrl: proxy.url, env: { PYTHONPATH: "", PYTHONNOUSERSITE: "1" } },
     );
 
     expect(res.code).not.toBe(0);
@@ -893,6 +1003,48 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
     ).toBe(true);
     expect(proxy.calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
   });
+
+  test("CR-CRU-036 §S1: register with an OPEN plan but NO active cycle warns[] 'no-active-cycle'/'activate a cycle first' + stderr, posts NO agent, exits non-zero — WORKFLOW_CYCLE_ID set is ignored", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-no-active-cycle");
+    // Files an open plan whose two cycles are both `pending` — never activated.
+    const plan = await filePlan(baseUrl, key, "CR-AC-NO-ACTIVE-CYCLE");
+    const dir = scratch.dir("arduino-crucible-proj-");
+    writeArduinoEnvFile(dir, key, "clients-ac-no-active-cycle");
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["register", "--agent", "a-no-cycle", "--phase", "RED", "--project-dir", dir],
+      // A stale WORKFLOW_CYCLE_ID pointing at a REAL (but pending) cycle in
+      // this very plan must change NOTHING — §S1 removes the env var.
+      { cwd: dir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
+    );
+
+    expect(res.code).not.toBe(0);
+    expect(res.stderr).toContain("no-active-cycle");
+    expect(res.stderr).toContain("activate a cycle first");
+    expect(res.stdout).toContain("no-active-cycle");
+    expect(await getAgentIds(baseUrl, key)).not.toContain("a-no-cycle");
+  });
+
+  test("CR-CRU-036 §S1: register with NO open plan at all is tolerant — proceeds with no warning and no withhold", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-tolerant-no-plan");
+    const dir = scratch.dir("arduino-crucible-proj-");
+    writeArduinoEnvFile(dir, key, "clients-ac-tolerant-no-plan");
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["register", "--agent", "a-tolerant", "--phase", "RED", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    expect(res.code).toBe(0);
+    expect(res.stdout).not.toContain("no-active-cycle");
+    expect(await getAgentIds(baseUrl, key)).toContain("a-tolerant");
+  });
 });
 
 describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:'unit', context enrichment (fake no-op make, CR-CRU-008 §S2)", () => {
@@ -959,12 +1111,16 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
-  test("with WORKFLOW_CYCLE_ID/WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set + a git repo, records full context: cycleId, cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
+  test("with an ACTIVE cycle seeded server-side + WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set + a git repo, records full context: cycleId AUTO-ATTACHED from the server (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing), cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-unit-context");
-    // §S7: file a real plan so WORKFLOW_CYCLE_ID maps to an existing cycle.
-    const cycleId = await filePlanCycleId(baseUrl, key, "CR-AC-CONTEXT");
+    // CR-CRU-036 §S1: seed an ACTIVE cycle server-side; feed the OTHER
+    // (real, but pending) cycle to WORKFLOW_CYCLE_ID to prove it's ignored.
+    const plan = await filePlan(baseUrl, key, "CR-AC-CONTEXT");
+    const activeCycleId = plan.cycles[0]!.id;
+    const otherCycleId = plan.cycles[1]!.id;
+    await activateCycle(baseUrl, key, plan.planId, activeCycleId);
     const { dir, path } = fixtureDirWithFakeMake(key, "clients-ac-unit-context", [{ name: "led_on" }]);
     runGit(["init", "-q"], dir);
     runGit(["symbolic-ref", "HEAD", `refs/heads/${branch}`], dir);
@@ -979,7 +1135,7 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
       crucibleUrl: baseUrl,
       env: {
         PATH: path,
-        WORKFLOW_CYCLE_ID: String(cycleId),
+        WORKFLOW_CYCLE_ID: String(otherCycleId),
         WORKFLOW_CYCLE: "python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix",
         WORKFLOW_WAVE: "wave-4",
         WORKFLOW_ROLE: "track-4",
@@ -989,7 +1145,7 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
     const events = await getEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
-    expect(event.context?.cycleId).toBe(cycleId);
+    expect(event.context?.cycleId).toBe(activeCycleId);
     expect(event.context?.cycle).toBe("python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix");
     expect(event.context?.wave).toBe("wave-4");
     expect(event.context?.orchestrator).toBe("track-4");
@@ -1063,13 +1219,286 @@ describe("clients/arduino-crucible.py — compile subcommand: v2-only ingest on 
   });
 });
 
+// CR-CRU-036 §S3 — fleet coverage-uniformity: arduino-crucible.py currently
+// has NEITHER `regression` nor `pre-merge-gate` at all (only
+// register/unregister/test/check/plan-verbs exist today — confirmed by
+// reading `main()`'s `sub.add_parser(...)` calls directly), while
+// bun/python/mvn/rust all expose both. These describe blocks assert the
+// SAME complete AXI endpoint surface for arduino: `regression`
+// (+ `--coverage`) and `pre-merge-gate`, returning the shared §S1 TOON-AXI
+// envelope — mirroring the fixture technique already proven for `unit`
+// (fake no-op `make` on PATH so a pre-placed JUnit/lcov fixture survives
+// untouched, exactly like C3's fake cargo/mvnw and C4's fake xmlrunner).
+describe("clients/arduino-crucible.py — regression subcommand: tier:'regression', lcov coverage passthrough (fake no-op make, CR-CRU-036 §S3)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  let proxy: ReturnType<typeof startCapturingProxy> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    proxy?.stop();
+    proxy = undefined;
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  /** Mirrors `fixtureDirWithFakeMake` (the `unit` subcommand's fixture,
+   * above): a no-op `make` on PATH so a pre-placed JUnit XML — and, for the
+   * coverage variant, a pre-placed `tests/native/coverage/lcov.info` — both
+   * survive untouched. `cmd_regression` must not wipe those dirs before
+   * shelling to `make`, exactly like `cmd_unit` today. */
+  function fixtureDirWithFakeMakeAndLcov(
+    key: string,
+    name: string,
+    cases: Array<{ name: string; fail?: boolean }>,
+    lcov?: { lf: number; lh: number; ff: number; fh: number },
+  ): { dir: string; path: string } {
+    const dir = scratch.dir("arduino-crucible-regression-");
+    writeArduinoEnvFile(dir, key, name);
+    const reportsDir = join(dir, "tests", "native", "reports");
+    mkdirSync(reportsDir, { recursive: true });
+    writeJunitXml(join(reportsDir, "TEST-native_fixture.xml"), "native_fixture", cases);
+    if (lcov) {
+      const coverageDir = join(dir, "tests", "native", "coverage");
+      mkdirSync(coverageDir, { recursive: true });
+      writeFileSync(
+        join(coverageDir, "lcov.info"),
+        `SF:src/blink.cpp\nFNF:${lcov.ff}\nFNH:${lcov.fh}\nLF:${lcov.lf}\nLH:${lcov.lh}\nend_of_record\n`,
+      );
+    }
+
+    const binDir = scratch.dir("fake-make-bin-");
+    writeExecutable(join(binDir, "make"), NOOP_SCRIPT);
+    const path = `${binDir}:${process.env.PATH ?? ""}`;
+    return { dir, path };
+  }
+
+  test("'regression' (no --coverage) posts to /api/v2/runs/parsed (never v1 /api/ingest/parsed) with tier:'regression'", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-regression-tier");
+    const { dir, path } = fixtureDirWithFakeMakeAndLcov(key, "clients-ac-regression-tier", [
+      { name: "alpha" },
+      { name: "beta" },
+    ]);
+    proxy = startCapturingProxy(baseUrl);
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["regression", "--agent", "arduino-regression-agent", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: proxy.url, env: { PATH: path } },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+
+    expect(res.code).toBe(0);
+    expect(event.tier).toBe("regression");
+    expect(event.summary?.total).toBe(2);
+    expect(event.summary?.passed).toBe(2);
+    expect(event.summary?.failed).toBe(0);
+    expect(event.coverage).toBeUndefined();
+    expect(
+      proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed"),
+    ).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
+  });
+
+  test("'regression --coverage' attaches event.coverage lines/functions from the fixture's fake lcov.info", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-regression-coverage");
+    const { dir, path } = fixtureDirWithFakeMakeAndLcov(
+      key,
+      "clients-ac-regression-coverage",
+      [{ name: "alpha" }],
+      { lf: 20, lh: 17, ff: 6, fh: 5 },
+    );
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["regression", "--coverage", "--agent", "arduino-coverage-agent", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+
+    expect(res.code).toBe(0);
+    expect(event.tier).toBe("regression");
+    expect(event.coverage?.lines?.total).toBe(20);
+    expect(event.coverage?.lines?.covered).toBe(17);
+    expect(event.coverage?.functions?.total).toBe(6);
+    expect(event.coverage?.functions?.covered).toBe(5);
+  });
+});
+
+describe("clients/arduino-crucible.py — pre-merge-gate: check (arduino-cli compile) fail-fast → regression --coverage, TOON-AXI envelope (fake ARDUINO_CLI + fake no-op make, CR-CRU-036 §S3)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test("a PASSING fake ARDUINO_CLI compile + fake no-op make regression run → posts tier:'regression' to /api/v2/runs/parsed with coverage attached, stdout carries the ok:true TOON-AXI envelope, exits 0", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-pre-merge-gate-pass");
+    const dir = scratch.dir("arduino-crucible-pmg-pass-");
+    writeArduinoEnvFile(dir, key, "clients-ac-pre-merge-gate-pass");
+    const reportsDir = join(dir, "tests", "native", "reports");
+    mkdirSync(reportsDir, { recursive: true });
+    writeJunitXml(join(reportsDir, "TEST-native_fixture.xml"), "native_fixture", [{ name: "alpha" }]);
+    const coverageDir = join(dir, "tests", "native", "coverage");
+    mkdirSync(coverageDir, { recursive: true });
+    writeFileSync(
+      join(coverageDir, "lcov.info"),
+      "SF:src/blink.cpp\nFNF:6\nFNH:5\nLF:20\nLH:17\nend_of_record\n",
+    );
+
+    const binDir = scratch.dir("fake-make-bin-");
+    writeExecutable(join(binDir, "make"), NOOP_SCRIPT);
+    const fakeCliPath = join(binDir, "fake-arduino-cli-ok");
+    writeExecutable(fakeCliPath, NOOP_SCRIPT);
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["pre-merge-gate", "--agent", "arduino-pmg-agent", "--project-dir", dir],
+      {
+        cwd: dir,
+        crucibleUrl: baseUrl,
+        env: { PATH: `${binDir}:${process.env.PATH ?? ""}`, ARDUINO_CLI: fakeCliPath },
+      },
+    );
+
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain("ok: true");
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+    expect(event.tier).toBe("regression");
+    expect(event.coverage?.lines?.total).toBe(20);
+    expect(event.coverage?.lines?.covered).toBe(17);
+  });
+
+  test("a FAILING fake ARDUINO_CLI compile step aborts BEFORE the regression run — no tier:'regression' event ever posted, non-zero exit", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-pre-merge-gate-fail");
+    const dir = scratch.dir("arduino-crucible-pmg-fail-");
+    writeArduinoEnvFile(dir, key, "clients-ac-pre-merge-gate-fail");
+    // Deliberately NO tests/native/reports fixture and NO fake `make` on
+    // PATH at all — the gate must never reach the regression step, so it
+    // must fail even if a real `make` invocation would blow up.
+    const fakeCliDir = scratch.dir("fake-arduino-cli-fail-");
+    const fakeCliPath = join(fakeCliDir, "fake-arduino-cli-fail");
+    writeExecutable(
+      fakeCliPath,
+      '#!/bin/sh\necho "FakeCompileError: undefined reference to foo" 1>&2\nexit 1\n',
+    );
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["pre-merge-gate", "--agent", "arduino-pmg-fail-agent", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl, env: { ARDUINO_CLI: fakeCliPath } },
+    );
+
+    expect(res.code).not.toBe(0);
+    const events = await getEvents(baseUrl, key);
+    // Positive: the check step DID run and ingest its failure (proves the
+    // gate actually executed the compile step, not a no-op stub that just
+    // exits non-zero without touching either sub-step). Bound: exactly one
+    // event, and it is never a 'regression'-tier row.
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+    expect(event.tier).not.toBe("regression");
+    expect(event.compile?.raw).toBeDefined();
+    expect(event.compile?.raw).toContain("FakeCompileError");
+  });
+});
+
+// CR-CRU-036 C4 FIX round — VERIFY finding: `auto-ingest` (clients/arduino-crucible.py:571-609)
+// was wired but only `--help`-tested; no real-server behavioral coverage
+// existed for it. This is a CHARACTERIZATION test — it drives the real
+// no-toolchain ingest path end to end and is expected to PASS on today's
+// code (a real bug here would be a genuine regression to report, not paper
+// over).
+describe("clients/arduino-crucible.py — auto-ingest subcommand: behavioral, no-toolchain ingest of a PRE-EXISTING native reports dir, tier:'unit', cycle auto-attach (CR-CRU-036 C4 FIX round)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  let proxy: ReturnType<typeof startCapturingProxy> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    proxy?.stop();
+    proxy = undefined;
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test("ingests a PRE-EXISTING tests/native/reports JUnit fixture with NO toolchain invoked (no fake make/arduino-cli on PATH) → posts to /api/v2/runs/parsed (never v1 /api/ingest/parsed) with tier:'unit'; with an active cycle seeded server-side (plan-file → cycle-activate), context.cycleId AUTO-ATTACHES", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-auto-ingest-behavioral");
+    // CR-CRU-036 §S9 fixture primitive: file a real OPEN plan, activate one
+    // of its two cycles, so the server has an active cycle to auto-attach.
+    const plan = await filePlan(baseUrl, key, "CR-AC-AUTO-INGEST");
+    const activeCycleId = plan.cycles[0]!.id;
+    await activateCycle(baseUrl, key, plan.planId, activeCycleId);
+
+    const dir = scratch.dir("arduino-crucible-auto-ingest-");
+    writeArduinoEnvFile(dir, key, "clients-ac-auto-ingest-behavioral");
+    // The arduino native reports convention (mirrors fixtureDirWithFakeMake
+    // above): <project_dir>/tests/native/reports/TEST-*.xml. Pre-placed and
+    // never touched — auto-ingest shells to NO toolchain at all.
+    const reportsDir = join(dir, "tests", "native", "reports");
+    mkdirSync(reportsDir, { recursive: true });
+    writeJunitXml(join(reportsDir, "TEST-native_fixture.xml"), "native_fixture", [
+      { name: "led_on" },
+      { name: "led_off" },
+    ]);
+    proxy = startCapturingProxy(baseUrl);
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["auto-ingest", "--agent", "arduino-auto-ingest-agent", "--project-dir", dir],
+      // Deliberately NO PATH override — no fake `make`/`arduino-cli` is
+      // needed (or wanted): a bug that shelled to a real toolchain here
+      // would be exactly the regression this test guards against.
+      { cwd: dir, crucibleUrl: proxy.url },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+
+    expect(res.code).toBe(0);
+    expect(event.tier).toBe("unit");
+    expect(event.summary?.total).toBe(2);
+    expect(event.summary?.passed).toBe(2);
+    expect(event.summary?.failed).toBe(0);
+    expect(event.context?.cycleId).toBe(activeCycleId);
+    expect(proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed")).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
+  });
+});
+
 describe("clients/arduino-crucible.py — byte-compatible CLI surface (existing flags unchanged post-upgrade)", () => {
-  test("register/unregister/unit/compile --help still expose today's exact flag names", async () => {
+  test("register/unregister/unit/compile/regression/auto-ingest/check/pre-merge-gate --help still expose today's exact flag names", async () => {
     const cases: Array<[string, string[]]> = [
       ["register", ["--agent", "--project-dir", "--phase"]],
       ["unregister", ["--agent", "--project-dir"]],
       ["unit", ["--agent", "--project-dir", "--dir"]],
       ["compile", ["--agent", "--project-dir"]],
+      ["regression", ["--agent", "--project-dir", "--coverage"]],
+      ["auto-ingest", ["--agent", "--project-dir", "--reports"]],
+      ["check", ["--agent", "--project-dir"]],
+      ["pre-merge-gate", ["--agent", "--project-dir", "--skip-check"]],
     ];
     for (const [subcommand, flags] of cases) {
       const proc = Bun.spawn({

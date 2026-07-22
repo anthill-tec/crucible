@@ -23,7 +23,6 @@ environment — set these on every call so runs land on the right cycle:
 
 | Env var | Meaning |
 |---------|---------|
-| `WORKFLOW_CYCLE_ID` | Numeric cycle id → `context.cycleId` |
 | `WORKFLOW_CYCLE` | Cycle label string → `context.cycle` |
 | `WORKFLOW_WAVE` | Optional wave number |
 | `WORKFLOW_ROLE` | Optional role/track label |
@@ -41,7 +40,7 @@ python3 clients/rust-crucible.py unregister --agent red-nai-042
 ### 1. After/for any targeted run (RED / GREEN / FIX — tier: unit)
 
 ```bash
-WORKFLOW_CYCLE_ID=7 WORKFLOW_CYCLE="my cycle label" \
+WORKFLOW_CYCLE="my cycle label" \
 python3 clients/rust-crucible.py test --crate nai_runtime --agent red-nai-042
 ```
 
@@ -58,7 +57,7 @@ RED agents with compile failures get their errors tracked correctly.
 ### 2. After a full regression (VERIFY / post-merge / orchestrator — tier: regression)
 
 ```bash
-WORKFLOW_CYCLE_ID=7 WORKFLOW_CYCLE="my cycle label" \
+WORKFLOW_CYCLE="my cycle label" \
 python3 clients/rust-crucible.py regression-ingest --agent vd-orchestrator --crates nai_ast,nai_runtime
 ```
 
