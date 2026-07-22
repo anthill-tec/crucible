@@ -63,22 +63,35 @@ on **skills.sh**). Each report skill's command list is **generated from / valida
 against the client's own `--help`** (the gh-axi no-drift model), and the skills are
 AXI-compliant (TOON examples, content-first, self-explanatory).
 
-### §S4 Publishing targets
-- Python client fleet + `crucible-axi` CLI → **PyPI**.
-- Bun/node server → **npm** (an `npx`-runnable package).
-- Skill set → a **Vercel Skills source** (repo, listed on skills.sh).
-- (0.1.0 may stage via a local/test index; the release ceremony pins the public publish —
-  human-gated credentials.)
+### §S4 Publishing — CI-automated on release (open-source prerequisite)
+Publishing is a **CI workflow** (`.github/workflows/release.yml`), triggered POST-RELEASE
+(on the `0.1.0` tag / GitHub Release) — NOT a manual step:
+- **PyPI** — the `crucible-axi` Python package (client fleet + CLI), via **PyPI Trusted
+  Publishing (OIDC)** where possible (no long-lived token), else a `PYPI_API_TOKEN` secret.
+- **npm** — the bun/node server (`npx`-runnable), via `npm publish` (npm token / OIDC).
+- **Vercel Skills** — the skill source IS the public repo (`npx skills add <owner>/crucible`);
+  listed on skills.sh.
+- **PREREQUISITE — open-source the repo:** the release CI + public installability require the
+  repository to be PUBLIC (Actions on a public repo, public PyPI/npm packages, `skills add`
+  fetching a public repo). Open-sourcing (add a LICENSE + flip the repo public) + configuring
+  the publish OIDC/secrets are **human-gated release prerequisites**. The workflow YAML itself
+  is authored + validated in the build cycles.
 
 ### §S5 Docs
 `README.md` (what Crucible is; quick start = the one-line `curl … | sh` bootstrap; version
 0.1.0 + link scheme); `docs/RUNBOOK.md` (start/stop, db path, corrupt-db behavior,
 retention, health, port/bind config — loopback-only default).
 
-### §S6 Version + release ceremony
-`pyproject.toml`/`package.json` version `0.1.0`; git-flow release per house workflow
-(release branch → master + tag `0.1.0` → back-merge develop); README version + tag link
-updated on the release branch.
+### §S6 Release — a SEPARATE phase AFTER this CR completes
+This CR BUILDS the installer/orchestrator/packaging/manifest/skills + the CI `release.yml`
+and merges to `develop`. **The RELEASE is then a separate git-flow phase (NOT on the feature
+branch):** cut a **release branch** → **run the no-mistakes gate + QC on the release branch**
+→ set `pyproject.toml`/`package.json` version `0.1.0` + README version/tag link → tag `0.1.0`
+on master → back-merge `develop`. The tag TRIGGERS the §S4 CI publish workflow. **PyPI is
+validated against Test PyPI first** (a safe publish target), then the real PyPI publish.
+Open-sourcing (LICENSE + public repo flip) + OIDC/secrets are the human-gated prerequisites
+the release depends on. (The `crucible-axi`/`package.json` version stays `0.1.0` set during
+the release branch, not this feature branch.)
 
 ## Acceptance criteria
 - [ ] **Distro-agnostic bootstrap:** on a scratch env with only `curl`+`sh` (no
