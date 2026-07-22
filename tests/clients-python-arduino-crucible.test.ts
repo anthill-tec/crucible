@@ -1169,13 +1169,220 @@ describe("clients/arduino-crucible.py — compile subcommand: v2-only ingest on 
   });
 });
 
+// CR-CRU-036 §S3 — fleet coverage-uniformity: arduino-crucible.py currently
+// has NEITHER `regression` nor `pre-merge-gate` at all (only
+// register/unregister/test/check/plan-verbs exist today — confirmed by
+// reading `main()`'s `sub.add_parser(...)` calls directly), while
+// bun/python/mvn/rust all expose both. These describe blocks assert the
+// SAME complete AXI endpoint surface for arduino: `regression`
+// (+ `--coverage`) and `pre-merge-gate`, returning the shared §S1 TOON-AXI
+// envelope — mirroring the fixture technique already proven for `unit`
+// (fake no-op `make` on PATH so a pre-placed JUnit/lcov fixture survives
+// untouched, exactly like C3's fake cargo/mvnw and C4's fake xmlrunner).
+describe("clients/arduino-crucible.py — regression subcommand: tier:'regression', lcov coverage passthrough (fake no-op make, CR-CRU-036 §S3)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  let proxy: ReturnType<typeof startCapturingProxy> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    proxy?.stop();
+    proxy = undefined;
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  /** Mirrors `fixtureDirWithFakeMake` (the `unit` subcommand's fixture,
+   * above): a no-op `make` on PATH so a pre-placed JUnit XML — and, for the
+   * coverage variant, a pre-placed `tests/native/coverage/lcov.info` — both
+   * survive untouched. `cmd_regression` must not wipe those dirs before
+   * shelling to `make`, exactly like `cmd_unit` today. */
+  function fixtureDirWithFakeMakeAndLcov(
+    key: string,
+    name: string,
+    cases: Array<{ name: string; fail?: boolean }>,
+    lcov?: { lf: number; lh: number; ff: number; fh: number },
+  ): { dir: string; path: string } {
+    const dir = scratch.dir("arduino-crucible-regression-");
+    writeArduinoEnvFile(dir, key, name);
+    const reportsDir = join(dir, "tests", "native", "reports");
+    mkdirSync(reportsDir, { recursive: true });
+    writeJunitXml(join(reportsDir, "TEST-native_fixture.xml"), "native_fixture", cases);
+    if (lcov) {
+      const coverageDir = join(dir, "tests", "native", "coverage");
+      mkdirSync(coverageDir, { recursive: true });
+      writeFileSync(
+        join(coverageDir, "lcov.info"),
+        `SF:src/blink.cpp\nFNF:${lcov.ff}\nFNH:${lcov.fh}\nLF:${lcov.lf}\nLH:${lcov.lh}\nend_of_record\n`,
+      );
+    }
+
+    const binDir = scratch.dir("fake-make-bin-");
+    writeExecutable(join(binDir, "make"), NOOP_SCRIPT);
+    const path = `${binDir}:${process.env.PATH ?? ""}`;
+    return { dir, path };
+  }
+
+  test("'regression' (no --coverage) posts to /api/v2/runs/parsed (never v1 /api/ingest/parsed) with tier:'regression'", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-regression-tier");
+    const { dir, path } = fixtureDirWithFakeMakeAndLcov(key, "clients-ac-regression-tier", [
+      { name: "alpha" },
+      { name: "beta" },
+    ]);
+    proxy = startCapturingProxy(baseUrl);
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["regression", "--agent", "arduino-regression-agent", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: proxy.url, env: { PATH: path } },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+
+    expect(res.code).toBe(0);
+    expect(event.tier).toBe("regression");
+    expect(event.summary?.total).toBe(2);
+    expect(event.summary?.passed).toBe(2);
+    expect(event.summary?.failed).toBe(0);
+    expect(event.coverage).toBeUndefined();
+    expect(
+      proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/parsed"),
+    ).toBe(true);
+    expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
+  });
+
+  test("'regression --coverage' attaches event.coverage lines/functions from the fixture's fake lcov.info", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-regression-coverage");
+    const { dir, path } = fixtureDirWithFakeMakeAndLcov(
+      key,
+      "clients-ac-regression-coverage",
+      [{ name: "alpha" }],
+      { lf: 20, lh: 17, ff: 6, fh: 5 },
+    );
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["regression", "--coverage", "--agent", "arduino-coverage-agent", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+
+    expect(res.code).toBe(0);
+    expect(event.tier).toBe("regression");
+    expect(event.coverage?.lines?.total).toBe(20);
+    expect(event.coverage?.lines?.covered).toBe(17);
+    expect(event.coverage?.functions?.total).toBe(6);
+    expect(event.coverage?.functions?.covered).toBe(5);
+  });
+});
+
+describe("clients/arduino-crucible.py — pre-merge-gate: check (arduino-cli compile) fail-fast → regression --coverage, TOON-AXI envelope (fake ARDUINO_CLI + fake no-op make, CR-CRU-036 §S3)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test("a PASSING fake ARDUINO_CLI compile + fake no-op make regression run → posts tier:'regression' to /api/v2/runs/parsed with coverage attached, stdout carries the ok:true TOON-AXI envelope, exits 0", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-pre-merge-gate-pass");
+    const dir = scratch.dir("arduino-crucible-pmg-pass-");
+    writeArduinoEnvFile(dir, key, "clients-ac-pre-merge-gate-pass");
+    const reportsDir = join(dir, "tests", "native", "reports");
+    mkdirSync(reportsDir, { recursive: true });
+    writeJunitXml(join(reportsDir, "TEST-native_fixture.xml"), "native_fixture", [{ name: "alpha" }]);
+    const coverageDir = join(dir, "tests", "native", "coverage");
+    mkdirSync(coverageDir, { recursive: true });
+    writeFileSync(
+      join(coverageDir, "lcov.info"),
+      "SF:src/blink.cpp\nFNF:6\nFNH:5\nLF:20\nLH:17\nend_of_record\n",
+    );
+
+    const binDir = scratch.dir("fake-make-bin-");
+    writeExecutable(join(binDir, "make"), NOOP_SCRIPT);
+    const fakeCliPath = join(binDir, "fake-arduino-cli-ok");
+    writeExecutable(fakeCliPath, NOOP_SCRIPT);
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["pre-merge-gate", "--agent", "arduino-pmg-agent", "--project-dir", dir],
+      {
+        cwd: dir,
+        crucibleUrl: baseUrl,
+        env: { PATH: `${binDir}:${process.env.PATH ?? ""}`, ARDUINO_CLI: fakeCliPath },
+      },
+    );
+
+    expect(res.code).toBe(0);
+    expect(res.stdout).toContain("ok: true");
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+    expect(event.tier).toBe("regression");
+    expect(event.coverage?.lines?.total).toBe(20);
+    expect(event.coverage?.lines?.covered).toBe(17);
+  });
+
+  test("a FAILING fake ARDUINO_CLI compile step aborts BEFORE the regression run — no tier:'regression' event ever posted, non-zero exit", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-pre-merge-gate-fail");
+    const dir = scratch.dir("arduino-crucible-pmg-fail-");
+    writeArduinoEnvFile(dir, key, "clients-ac-pre-merge-gate-fail");
+    // Deliberately NO tests/native/reports fixture and NO fake `make` on
+    // PATH at all — the gate must never reach the regression step, so it
+    // must fail even if a real `make` invocation would blow up.
+    const fakeCliDir = scratch.dir("fake-arduino-cli-fail-");
+    const fakeCliPath = join(fakeCliDir, "fake-arduino-cli-fail");
+    writeExecutable(
+      fakeCliPath,
+      '#!/bin/sh\necho "FakeCompileError: undefined reference to foo" 1>&2\nexit 1\n',
+    );
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["pre-merge-gate", "--agent", "arduino-pmg-fail-agent", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl, env: { ARDUINO_CLI: fakeCliPath } },
+    );
+
+    expect(res.code).not.toBe(0);
+    const events = await getEvents(baseUrl, key);
+    // Positive: the check step DID run and ingest its failure (proves the
+    // gate actually executed the compile step, not a no-op stub that just
+    // exits non-zero without touching either sub-step). Bound: exactly one
+    // event, and it is never a 'regression'-tier row.
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+    expect(event.tier).not.toBe("regression");
+    expect(event.compile?.raw).toBeDefined();
+    expect(event.compile?.raw).toContain("FakeCompileError");
+  });
+});
+
 describe("clients/arduino-crucible.py — byte-compatible CLI surface (existing flags unchanged post-upgrade)", () => {
-  test("register/unregister/unit/compile --help still expose today's exact flag names", async () => {
+  test("register/unregister/unit/compile/regression/auto-ingest/check/pre-merge-gate --help still expose today's exact flag names", async () => {
     const cases: Array<[string, string[]]> = [
       ["register", ["--agent", "--project-dir", "--phase"]],
       ["unregister", ["--agent", "--project-dir"]],
       ["unit", ["--agent", "--project-dir", "--dir"]],
       ["compile", ["--agent", "--project-dir"]],
+      ["regression", ["--agent", "--project-dir", "--coverage"]],
+      ["auto-ingest", ["--agent", "--project-dir", "--reports"]],
+      ["check", ["--agent", "--project-dir"]],
+      ["pre-merge-gate", ["--agent", "--project-dir", "--skip-check"]],
     ];
     for (const [subcommand, flags] of cases) {
       const proc = Bun.spawn({
