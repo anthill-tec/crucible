@@ -527,7 +527,7 @@ def _no_xml_errors_text(result):
 
 
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
-                   context=None):
+                   context=None, raw=None):
     """POST the client-parsed run (per-method leaf names) to /api/v2/runs/parsed.
     Returns the parsed response dict (the caller emits the §S1 envelope)."""
     payload = {
@@ -542,6 +542,8 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
         payload["tier"] = tier
     if context:
         payload["context"] = context
+    if raw:
+        payload["raw"] = raw
     resp = _post("/api/v2/runs/parsed", payload)
     cov_line = ""
     if coverage:
@@ -639,7 +641,8 @@ def cmd_test(args):
             _emit_ingest_withhold("test", project_dir, args.agent, warnings)
             return 1
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
-                              context=_ingest_context(cycle_id))
+                              context=_ingest_context(cycle_id),
+                              raw=result.stdout)
         _emit_ingest_axi("test", resp, summary, project_dir, args.agent,
                          cycle_id, warnings)
         if summary["failed"] > 0:

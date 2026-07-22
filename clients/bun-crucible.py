@@ -622,7 +622,7 @@ def _ingest_context(cycle_id):
 
 
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
-                   context=None):
+                   context=None, raw=None):
     payload = {
         "projectKey": _project_key(project_dir),
         "agentId": agent_id,
@@ -639,6 +639,10 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     # payload verbatim when present (server passthrough on the v1 shim).
     if context:
         payload["context"] = context
+    # CR-CRU-038 §S2b — the captured runner output rides along as `raw` so the
+    # server-stored run carries real output for the run-detail raw-toggle.
+    if raw:
+        payload["raw"] = raw
     resp = _post("/api/v2/runs/parsed", payload)
     cov_line = ""
     if coverage:
@@ -721,7 +725,8 @@ def cmd_test(args):
                 return 1
             resp = _ingest_parsed(project_dir, args.agent, summary, tree,
                                   tier="unit",
-                                  context=_ingest_context(cycle_id))
+                                  context=_ingest_context(cycle_id),
+                                  raw=getattr(result, "stdout", None))
             _emit_ingest_axi("test", resp, summary, project_dir, args.agent,
                              cycle_id, warnings)
             # A failing run exits non-zero even when the ingest succeeded —

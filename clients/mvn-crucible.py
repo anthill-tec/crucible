@@ -717,7 +717,7 @@ def _ingest_junit_dir(project_dir, agent, report_dir, tier=None, context=None):
 
 
 def _ingest_parsed(project_dir, agent, summary, tree, coverage=None, tier=None,
-                   context=None):
+                   context=None, raw=None):
     """POST a client-parsed run to /api/v2/runs/parsed. Returns the response dict."""
     payload = {
         "projectKey": _project_key(project_dir),
@@ -732,6 +732,10 @@ def _ingest_parsed(project_dir, agent, summary, tree, coverage=None, tier=None,
     ctx = context if context is not None else _run_context()
     if ctx:
         payload["context"] = ctx
+    # CR-CRU-038 §S2b — the captured runner output rides along as `raw` so the
+    # server-stored run carries real output for the run-detail raw-toggle.
+    if raw:
+        payload["raw"] = raw
     resp = _post("/api/v2/runs/parsed", payload)
     cov = ""
     if coverage:
@@ -994,7 +998,8 @@ def _regression_run(args):
         _emit_ingest_withhold("regression", project_dir, args.agent, warnings)
         return 1
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                          tier="regression", context=_ingest_context(cycle_id))
+                          tier="regression", context=_ingest_context(cycle_id),
+                          raw=getattr(result, "stdout", None))
     _emit_ingest_summary_axi("regression", resp, summary, project_dir, args.agent,
                              cycle_id, warnings)
     return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
