@@ -26,9 +26,12 @@ Fallback:
     python3 tests/client/test_cr040_coverage_tooling.py
 """
 
+import argparse
 import importlib.util
+import os
 import subprocess
 import sys
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -172,6 +175,54 @@ class CoverageDevDependencyTest(unittest.TestCase):
             f"coverage.py is installed in the gate venv; got returncode="
             f"{result.returncode} stdout={result.stdout!r} "
             f"stderr={result.stderr!r}",
+        )
+
+
+class CoverageRunEnvTest(unittest.TestCase):
+    """§S2 lock-in -- the coverage-run subprocess env must NOT set
+    PYTHONSAFEPATH. A real coverage.py install already wins over the stray
+    top-level `coverage/` namespace-dir shadow, so the flag is obsolete; and
+    setting it leaks into the suite's own subprocess-spawning tests (their
+    grandchildren inherit it, breaking tmpdir-cwd dotted-name imports). This
+    pins the regression: the env `_regression_run` builds for `coverage run`
+    must carry no PYTHONSAFEPATH key."""
+
+    class _AbortAfterCapture(Exception):
+        pass
+
+    def test_coverage_run_env_does_not_set_pythonsafepath(self):
+        module = _load_client_module()
+        captured = {}
+
+        def _capture_env(_cmd, _cwd, env, _log_path):
+            captured["env"] = env
+            # Abort before any real subprocess/network work -- we only need the
+            # env that _regression_run built for the coverage `run` subprocess.
+            raise CoverageRunEnvTest._AbortAfterCapture()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            args = argparse.Namespace(
+                project_dir=tmp,
+                python=sys.executable,
+                reports="reports",
+                coverage=True,
+                cov_source="crucible_axi,clients",
+                start_dir="tests",
+                pattern="test_*.py",
+                agent="cr040-env-probe",
+                log=None,
+            )
+            with mock.patch.object(module, "_run_logged",
+                                    side_effect=_capture_env):
+                with self.assertRaises(CoverageRunEnvTest._AbortAfterCapture):
+                    module._regression_run(args)
+
+        self.assertIn("env", captured, "_run_logged was never reached")
+        self.assertNotIn(
+            "PYTHONSAFEPATH", captured["env"],
+            "the coverage-run env must NOT set PYTHONSAFEPATH -- it is obsolete "
+            "(real coverage.py beats the namespace-dir shadow) and leaks into "
+            "grandchild test subprocesses",
         )
 
 

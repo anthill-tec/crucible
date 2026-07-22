@@ -707,10 +707,13 @@ def _regression_run(args):
         run_cmd = [python, "-m", "coverage", "run", "--source", args.cov_source,
                    "-m", "xmlrunner", "discover", "-s", args.start_dir,
                    "-p", args.pattern, "-o", reports_dir]
-        # PYTHONSAFEPATH=1 keeps cwd (project_dir) OFF sys.path for this `-m coverage`
-        # subprocess, so a stray `coverage/` directory in project_dir cannot shadow
-        # the installed coverage.py. cwd stays project_dir and PYTHONPATH is honored.
-        env["PYTHONSAFEPATH"] = "1"
+        # NOTE: no PYTHONSAFEPATH here. A real coverage.py install (CR-CRU-040 §S1)
+        # wins over the stray top-level `coverage/` (bun lcov) namespace-dir shadow
+        # on its own — a regular package beats a namespace package regardless of cwd
+        # on sys.path. Setting PYTHONSAFEPATH would leak into grandchild test
+        # subprocesses (the suite's own subprocess-spawning tests), breaking their
+        # tmpdir-cwd dotted-name imports; cwd (project_dir) stays on sys.path so
+        # discovery still works.
 
     print(f"[crucible] running: {' '.join(run_cmd)}", file=sys.stderr)
     result = _run_logged(run_cmd, project_dir, env, getattr(args, "log", None))
