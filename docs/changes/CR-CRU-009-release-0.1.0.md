@@ -128,4 +128,19 @@ updated on the release branch.
   human-gated, release-branch step; 0.1.0 may validate against a local/test index first.
 - `install.sh` / global skill install touching a shared harness config — idempotent +
   managed-marker + `--force`-gated, never clobbering unmanaged entries.
+
+## Implementation notes (gap-analysis 2026-07-23)
+- **Version:** the first public release is **0.1.0** (user-decided); reconcile the internal
+  `2.0.0-alpha.1` marker → `0.1.0` in `package.json` + the new `pyproject.toml`, tag `0.1.0`.
+- **Build vs human-gated (publish is credentialed):** these cycles BUILD + unit-test the
+  `crucible-axi` package + `install` orchestrator (stage sequencing, idempotency, TOON-AXI
+  stage envelopes), the `crucible-clients.json` manifest, the skills-conform + arduino skill,
+  the server `bin`, and docs — with the external tools (`uv`/`npx`/`skills`/Bun) and the
+  registries **MOCKED / dry-run** in tests. The ACTUAL PyPI/npm/skills.sh PUBLISH, the real
+  end-to-end networked install, the git-flow release ceremony (tag `0.1.0`), and the Model-B
+  intimation are **HUMAN-GATED** release steps run post-merge with credentials — not in the
+  build cycles.
+- **Skills conform is small:** the report skills already carry `name` + trigger-`description`
+  (vercel/skills core); conform = add the `metadata:` (author/version) block + add
+  `crucible-report-arduino`.
 </content>
