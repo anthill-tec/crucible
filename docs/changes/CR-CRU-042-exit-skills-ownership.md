@@ -44,6 +44,13 @@ and the `"skills"` entry in `DEFAULT_STAGE_RUNNERS`. The TOON-AXI envelope from
 `crucible-axi install` reports exactly two stages; fail-fast sequencing and idempotency
 semantics are otherwise unchanged. Update the tests that assert the three-stage order.
 
+Also retire the now-void skills assertions in the bun suite:
+`tests/cr009-release-bundle.test.ts` carries `describe("§S3 skills Vercel-Skills
+conformance")` (:67–103) and `describe("§S3 arduino skill reconcile")` (:104–133), which
+assert SKILL.md frontmatter and the arduino skill's body — contracts Crucible no longer
+owns. Remove those describes with the stage. The §S4/§S5/§S1 describes in that file
+(release.yml, docs, install.sh) are unaffected and must stay green.
+
 ### §S2 — Freeze `clients/skills/`, pending Model B's import confirmation
 Model B copies the current 8-bundle package into the model-b repo as the new canonical
 source. Until they confirm that import on the Sandesh thread, `clients/skills/` stays in
