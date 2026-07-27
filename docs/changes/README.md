@@ -17,7 +17,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-006](CR-CRU-006-spa-shell.md) | Dashboard shell + navigation | feature | COMPLETED (2026-07-15) | 004 | 3 |
 | [CR-CRU-007](CR-CRU-007-timeline-drill-in.md) | Timeline + density drill-in | feature | COMPLETED (2026-07-16) | 006 | 3 |
 | [CR-CRU-008](CR-CRU-008-cli-fleet-upgrade.md) | crucible-axi CLI + fleet upgrade + plan verbs | feature | COMPLETED | 005, 007, 011 | 4 (after 011) |
-| [CR-CRU-009](CR-CRU-009-release-0.1.0.md) | Release 0.1.0 skill bundle | feature | PENDING | 007, 008, 011, 012, 013, 016 | 4 |
+| [CR-CRU-009](CR-CRU-009-release-0.1.0.md) | Release 0.1.0 skill bundle | feature | COMPLETED (2026-07-23 — merged 9eb0bec; staged distro-agnostic installer + skill bundle + release CI. The release CEREMONY itself is a separate human-gated phase, NOT started) | 007, 008, 011, 012, 013, 016 | 4 |
 | [CR-CRU-010](CR-CRU-010-codec-path-interface-hardening.md) | Codec parsePath + shim hardening | maintenance | COMPLETED (2026-07-15) | 006 | 3 (after 006, before 007) |
 | [CR-CRU-016](CR-CRU-016-inpane-drill-in.md) | In-pane drill-in (replaces slide-over) | feature | COMPLETED (2026-07-16) | 007 | 4 (first after 007) |
 | [CR-CRU-019](CR-CRU-019-patch-workflow-tweaks.md) | Patch: workflow-review tweak accumulator | patch | COMPLETED (2026-07-16) | 011 | 4 (after 011) |
@@ -42,6 +42,8 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-029](CR-CRU-029-patch-dual-axis-scroll-visibility.md) | Patch: dual-axis scroll always operable in narrow viewports | patch | COMPLETED | 023 | 4 |
 | [CR-CRU-034](CR-CRU-034-patch-drilldown-dual-axis-scroll.md) | Patch: run-detail drill-down inherits CR-029 dual-axis operability (multi-failure vertical scroll trap + dead space) | patch | COMPLETED | 029, 007, 016, 023 | 4 |
 | [CR-CRU-032](CR-CRU-032-runs-boundary-anchor-fetch.md) | Patch: Runs-window governance + project-settings integrity — retention governs the display limit (kills hardcoded 50), anchor-fetch beyond-window (025 b), settings-form labels + run-deletion toggle F12 sync | patch | COMPLETED | 025, 012, 008 | 4 |
+| [CR-CRU-039](CR-CRU-039-python-regression-discovery.md) | Patch: python-client `regression` discovers 0 tests (silent gate gap) — tests packages + definitive `no-tests-discovered` AXI error | patch | COMPLETED (2026-07-23 — merged f13a5d0; Python gate 0 → 376 tests) | 036 | 4 |
+| [CR-CRU-040](CR-CRU-040-python-coverage-tooling.md) | Patch: python-client coverage tooling — `coverage` dev dep + `--cov-source` default `crucible_axi,clients` (was nonexistent `app`) | patch | COMPLETED (2026-07-23 — merged 5b516e2; regression 382/382 with real coverage 72.8% ln / 79.7% fn) | 039 | 4 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 · track-1) | 011, 013 | 5 (0.2.0) |
 | [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Playwright runner + codec + tab | feature | PENDING (0.2.0 · track-2) | 004, 007 | 5 (0.2.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end + Aborted state | feature | PENDING (0.2.0 · track-3 cand.) | 008, 011 | 5 (0.2.0) |
@@ -195,3 +197,23 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   a coordinated Crucible↔Model-B effort: Crucible builds core python scripts (`setup` +
   interface contract) → intimates Model-B → Model-B owns hook templates + generation
   (shared responsibilities negotiated at handoff).
+- 2026-07-23 (WAVE 4 CLOSE — every 0.1.0 CR is COMPLETED) — CR-CRU-009 shipped the
+  release machinery (curl→uv→`crucible-axi install` staged installer, 8 skills conformed +
+  new arduino skill, `crucible-server` bin shim, RUNBOOK, consolidated
+  `.github/workflows/release.yml` with PyPI OIDC + Test-PyPI dry-run + npm provenance).
+  Its close-out gate then exposed TWO silent Python-gate defects, filed and shipped as
+  patches the same day: **CR-CRU-039** — `regression` discovered 0 tests (all tests live
+  under `tests/client/`, which was not a package, so `discover -s tests` never recursed);
+  a zero-discovery run was misreported as a "compile" ingest. Fixed by making the suite
+  discoverable + emitting a definitive `no-tests-discovered` AXI error instead of a false
+  green. **CR-CRU-040** — even once running, coverage was unobtainable: `coverage.py` was
+  not a declared/installed dev dependency and `--cov-source` defaulted to a nonexistent
+  `app` package. Fixed by declaring the `dev` extra and defaulting the source to
+  `crucible_axi,clients` (both `regression` and `pre-merge-gate`); the obsolete
+  `PYTHONSAFEPATH=1` guard was dropped since it leaked into grandchild test subprocesses.
+  Net: the Python close-out gate went from silently running NOTHING to 382 tests with
+  real coverage-on-green.
+  **The 0.1.0 RELEASE CEREMONY is NOT started** — it is a distinct, human-gated phase
+  (CR-009 §S6: release branch → no-mistakes gate + QC → version 0.1.0 → tag → CI publish,
+  Test PyPI first; also requires open-sourcing the repo + publish credentials). It must
+  never be inferred from a CR completing; it needs its own explicit go.
