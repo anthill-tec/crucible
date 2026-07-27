@@ -1,0 +1,125 @@
+# CR-CRU-041 — Release mechanism: branch-gated driver + publishable server package
+
+**Status:** PENDING
+**Type:** feature (release engineering)
+**Priority:** P1 — 0.1.0 cannot be cut: the auto-release chain does not fire and the npm arm cannot publish
+**Depends on:** CR-CRU-009 (built `pyproject.toml`, `release.yml`, the `crucible-axi` package + server `bin` shim)
+**Labels:** release, packaging, ci, git-flow, npm, pypi
+**Phase:** Wave 4 (0.1.0 blocker)
+**Design reference:** the Sandesh release pipeline (`sandesh/RELEASING.md`,
+`scripts/release.sh` per CR-SAN-034, `publish-pypi.yml` + `publish-npm.yml`) — the proven
+two-registry shape carrying a tag-derived Python package plus a hand-versioned JS manifest.
+Two-registry staged delegation confirmed by the user 2026-07-27 over the single-artifact
+compiled alternative.
+
+## Context
+CR-CRU-009 built the release machinery — `pyproject.toml` (hatchling + hatch-vcs,
+`local_scheme = "no-local-version"`), a consolidated `.github/workflows/release.yml`
+modelled on Sandesh's two workflows, the `crucible-axi` package, and the
+`bin/crucible-server.mjs` shim. git-flow is initialised with an EMPTY
+`gitflow.prefix.versiontag`, so tags are bare `X.Y.Z` and the workflow's guards already
+match that scheme.
+
+Four defects block an actual release:
+
+1. **The auto-release chain does not exist.** `release.yml`'s `on:` block has NO `push:`
+   trigger, and `create-release` is gated `if: github.event_name == 'workflow_dispatch'`.
+   Pushing `master` carrying the version tag fires nothing. Worse, `create-release`,
+   `publish-testpypi` and `dry-run-npm` are ALL gated on `workflow_dispatch`, so the one
+   dispatch that would create the Release also fires a Test-PyPI upload.
+2. **The npm arm cannot publish.** `package.json` is `"private": true` (npm refuses to
+   publish), the name is unscoped `crucible`, there is no `files`/`publishConfig`, and
+   `crucible_axi/install.py:30` still reads
+   `SERVER_NPM_PACKAGE = "crucible-server"  # TODO(S4): real published npm package name`.
+3. **The version guard sits on the wrong side of the tag.** `publish-npm` checks
+   `package.json` version == tag, but that runs AFTER the tag is cut, the Release created,
+   and PyPI possibly already published — leaving a half-released state. Sandesh moved this
+   guard left into `release.sh finish`; its 0.3.1 → 0.3.2 version-sync hotfix exists
+   precisely to make that unnecessary.
+4. **No release driver and no written procedure** — no `scripts/release.sh`, no
+   `RELEASING.md`, so no rehearsal path and no recorded prerequisites.
+
+## Scope
+
+### §S1 — Make the server package publishable
+In `package.json`: remove `"private": true`; rename `crucible` →
+**`@anthill-tec/crucible-server`**; add `publishConfig.access = "public"`; add a `files`
+whitelist shipping only what the server needs to run (`bin/`, `src/`, `public/`) and
+excluding repo working state (`tests/`, `data/`, `crucible.db`, `coverage/`,
+`test-reports/`, `test-results/`, `.features-gen/`). Resolve
+`crucible_axi/install.py`'s `SERVER_NPM_PACKAGE` to the published name, retiring the
+`TODO(S4)`.
+
+### §S2 — Repair the `release.yml` trigger topology
+Add `on: push: branches: [develop, master]` and `on: pull_request`, so `build` runs
+continuously and packaging breakage surfaces on PRs rather than on release day. Re-gate
+`create-release` to `github.event_name == 'push' && github.ref == 'refs/heads/master'`
+(the Sandesh chain: push master carrying a version tag → Release → guarded publish).
+`workflow_dispatch` is then reserved for rehearsal only (Test-PyPI + npm dry-run),
+resolving the three-way dispatch collision.
+
+### §S3 — `scripts/release.sh` — branch-gated release driver
+A driver allowed ONLY on `release/*` or `hotfix/*` branches, with `--dry-run`,
+`--verbose`, `-h/--help`, and subcommands:
+- `set-version <X.Y.Z>` — rewrite + commit the **manual manifest**, `package.json`
+  (format-preserving; the Python version stays hatch-vcs tag-derived and is never
+  hand-edited).
+- `checkpoint` — `gh workflow run release.yml --ref <branch>` for the Test-PyPI rehearsal.
+- `finish <X.Y.Z>` — **preflight manifest guard first**: refuse (non-zero) if
+  `package.json` version != `X.Y.Z`, instructing the operator to run `set-version`. Then
+  `git flow <release|hotfix> finish` (with `-m` so the annotated-tag editor cannot hang a
+  non-interactive run) and `git push origin master develop --tags`.
+- `status` — current branch + tag-derived version.
+
+### §S4 — `RELEASING.md`
+Document: the tag-driven version model (bare `X.Y.Z`, hatch-vcs, no hand-edited Python
+version); the one-time prerequisites (PyPI + TestPyPI **pending** Trusted Publishers; the
+`pypi` / `testpypi` / `npm` GitHub Environments, with a required reviewer on `pypi` as the
+human gate; `RELEASE_PAT`, needed because a Release created with the default `GITHUB_TOKEN`
+does not re-fire `on: release`; `NPM_TOKEN` for the inaugural scoped publish, since npm has
+no pending-publisher equivalent, then the flip to OIDC); the TestPyPI rehearsal loop; and
+the `set-version` → `finish` → push-master → publish order.
+
+### §S5 — Drop the vestigial `v`-strip
+`publish-npm`'s `VERSION="${GITHUB_REF_NAME#v}"` strips a prefix that cannot be present
+under the confirmed bare-tag scheme. Match the tag scheme exactly.
+
+## Acceptance criteria
+- [ ] `npm pack --dry-run` on the server package emits a tarball whose file list contains
+      `bin/`, `src/`, `public/` and contains NONE of `tests/`, `data/`, `crucible.db`,
+      `coverage/`, `test-reports/`, `test-results/` — asserted by a test, not by eye.
+- [ ] `package.json` has no `private` field, `name == "@anthill-tec/crucible-server"`, and
+      `publishConfig.access == "public"`.
+- [ ] `grep -c 'TODO(S4)' crucible_axi/install.py` is 0 and `SERVER_NPM_PACKAGE` equals the
+      `package.json` name — asserted, so the two cannot drift.
+- [ ] `release.sh set-version 9.9.9` on a `release/*` branch sets `package.json` to `9.9.9`
+      and commits; on `develop` it exits 2 without writing.
+- [ ] `release.sh finish 9.9.9` **refuses with non-zero** when `package.json` is any other
+      version, naming `set-version` in the error — the guard fires BEFORE any git-flow or
+      push command runs (verified via `--dry-run` as a true preflight).
+- [ ] `release.sh checkpoint` and `finish` both exit 2 on a non-`release/*`/`hotfix/*`
+      branch.
+- [ ] `release.yml` parses as valid workflow YAML; `create-release` is gated on
+      push-to-master; `build` has `pull_request` and `push` triggers; no job other than
+      `publish-testpypi` and the npm dry-run is reachable from `workflow_dispatch`.
+- [ ] `RELEASING.md` exists and names every prerequisite in §S4.
+
+## Non-goals
+- **Running the release.** Cutting the branch, tagging `0.1.0`, and publishing remain a
+  separate human-gated phase (CR-CRU-009 §S6) requiring its own explicit go.
+- Creating the npm org / PyPI publishers / GitHub Environments / secrets — owner actions on
+  external services, documented in §S4 but performed by the user. Tests mock or dry-run all
+  registry interaction, per CR-CRU-009's implementation notes.
+- Open-sourcing the repo (LICENSE + public flip) — a human-gated release prerequisite.
+- The single-artifact compiled fusion (`bun build --compile` into platform wheels) — the
+  user selected two-registry staged delegation for 0.1.0; the compiled path stays a
+  post-0.1.0 option and would also close CR-CRU-009's noted air-gap follow-up.
+
+## Risk
+- **npm org prerequisite:** `@anthill-tec` does not exist yet (user confirmed 2026-07-28).
+  The scoped publish cannot succeed until it is created and `NPM_TOKEN` is set. This blocks
+  the RELEASE, not this CR — but a PyPI-only 0.1.0 would ship a `crucible-axi` whose
+  `[server]` stage has nothing to fetch, so the org is a hard precondition for a meaningful
+  release.
+- The existing "skip npm publish when `NPM_TOKEN` is absent" branch keeps CI green while the
+  org is pending; it must not be mistaken for a successful npm release.
