@@ -1,6 +1,6 @@
 # CR-CRU-043 — Patch: installed server misplaces its database (CWD-relative default)
 
-**Status:** PENDING
+**Status:** COMPLETED — merged `d1e57a8` (2026-07-28)
 **Type:** patch (runtime correctness)
 **Priority:** P1 — a published 0.1.0 server writes its data to whatever directory it was launched from
 **Depends on:** CR-CRU-009 (the `bin/crucible-server.mjs` shim + the installable package)

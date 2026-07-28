@@ -1,6 +1,6 @@
 # CR-CRU-041 — Release mechanism: branch-gated driver + publishable server package
 
-**Status:** PENDING
+**Status:** COMPLETED — merged `3ac8d6e` (2026-07-28)
 **Type:** feature (release engineering)
 **Priority:** P1 — 0.1.0 cannot be cut: the auto-release chain does not fire and the npm arm cannot publish
 **Depends on:** CR-CRU-009 (built `pyproject.toml`, `release.yml`, the `crucible-axi` package + server `bin` shim)

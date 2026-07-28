@@ -1,6 +1,6 @@
 # CR-CRU-047 — Bun gate integrity: narration tests fail deterministically + an unexplained test-count drop
 
-**Status:** PENDING
+**Status:** COMPLETED — merged `f610653` (2026-07-28)
 **Type:** patch (gate correctness — investigation + fix)
 **Priority:** P1 — the bun gate is currently red on `develop`, and its TOTAL is unexplained
 **Depends on:** CR-CRU-008 (§S2b in-run progress narration — the actual owner), CR-CRU-039 (the zero-discovery precedent)

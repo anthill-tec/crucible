@@ -1,6 +1,6 @@
 # CR-CRU-048 — AXI `help[]` must be state-derived, and `cr-close` must refuse an incomplete plan
 
-**Status:** PENDING
+**Status:** COMPLETED — merged `1baf013` (2026-07-28)
 **Type:** patch (AXI correctness — the self-describing contract)
 **Priority:** P1 — the surface actively recommends closing a CR whose VERIFY has not run
 **Depends on:** CR-CRU-011 (cycle plans), CR-CRU-024 (cycle activation guards), CR-CRU-030 (AXI-CLI compliance), CR-CRU-036 (the warn+withhold precedent)

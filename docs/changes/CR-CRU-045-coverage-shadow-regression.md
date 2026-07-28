@@ -1,6 +1,6 @@
 # CR-CRU-045 — Patch: the `coverage/` shadow test over-specifies its contract
 
-**Status:** PENDING
+**Status:** COMPLETED — merged `b7a5b87` (2026-07-28)
 **Type:** patch (test correctness)
 **Priority:** P2 — a red test on `develop`; the specified guarantee itself is intact
 **Depends on:** CR-CRU-036 (owns the guarantee), CR-CRU-040 (surfaced the mismatch)

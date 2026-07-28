@@ -1,6 +1,6 @@
 # CR-CRU-042 — Patch: Crucible exits skills (ownership transferred to Model B)
 
-**Status:** PENDING
+**Status:** COMPLETED — merged `8d3e113` (2026-07-28)
 **Type:** patch (ownership/contract correction)
 **Priority:** P1 — 0.1.0 must not ship an installer stage that deploys what Crucible no longer owns
 **Depends on:** CR-CRU-009 (built the `[skills]` install stage), CR-CRU-035 (settled the original boundary)
