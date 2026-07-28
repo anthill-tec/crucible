@@ -1077,13 +1077,13 @@ def _cycle_transition(args, status):
         None,
     )
     verb = "cycle-activate" if status == "active" else "cycle-done"
-    # §S13/§S15 — every cycle-transition envelope carries a `help[]` of concrete
-    # next-step command templates (fixed flags forward, runtime values as
-    # placeholders): after `cycle-activate` run the cycle then `cycle-done <id>`;
-    # after `cycle-done` close the CR with `cr-close --commit <sha>`. `status`
-    # is the fallback next-step (e.g. to re-list valid cycle ids after a miss).
-    help_steps = (["cycle-done <id>", "status"] if status == "active"
-                  else ["cr-close --commit <sha>", "status"])
+    # §S13/§S15 + CR-CRU-048 §S1/§S3 — every cycle-transition envelope carries a
+    # `help[]` of concrete next-step commands, DERIVED from the resolved plan's
+    # own cycle state by the shared `_crucible_axi.cycle_transition_help` (ONE
+    # implementation for the whole fleet — the hardcoded per-client ternary is
+    # exactly how this defect reached five clients). `status` is the fallback
+    # next-step (e.g. to re-list valid cycle ids after a miss).
+    help_steps = _axi().cycle_transition_help(status, target, cycle_id)
     if target is None:
         known = "; ".join(
             f"plan {p.get('planId')} ({p.get('cr')}): "

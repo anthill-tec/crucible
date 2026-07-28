@@ -316,6 +316,50 @@ def no_title_warning(cr):
     }
 
 
+def next_pending_cycle_id(plan, exclude_cycle_id=None):
+    """CR-CRU-048 §S1 (PURE) — the id of the NEXT cycle still awaiting work in
+    `plan` (a plan dict from a `GET .../plans` payload), or None when none
+    remains.
+
+    "Next" is the FIRST `status:"pending"` cycle in the plan's OWN
+    `cycles[]` order — the order the plan was filed in IS the execution order,
+    so no sorting or id-arithmetic is invented here. `exclude_cycle_id` drops
+    the cycle currently being transitioned (its server-side status in the
+    already-fetched payload is stale by the time the hint is built). When
+    several cycles are pending the FIRST in plan order wins — the one the
+    orchestrator should activate now; the rest surface on the next transition.
+    A missing/None plan yields None (no plan → nothing to derive)."""
+    if not plan:
+        return None
+    for cycle in plan.get("cycles", []) or []:
+        if exclude_cycle_id is not None and cycle.get("id") == exclude_cycle_id:
+            continue
+        if cycle.get("status") == "pending":
+            return cycle.get("id")
+    return None
+
+
+def cycle_transition_help(status, plan, cycle_id=None):
+    """CR-CRU-048 §S1/§S3 (PURE) — the `help[]` next-step hint for a
+    cycle-activate/cycle-done transition, DERIVED from the owning plan's state
+    instead of the hardcoded ternary each client used to carry.
+
+    - `status == "active"` (cycle-activate) → the literal `cycle-done <id>`
+      placeholder template (UNCHANGED — the cycle just activated is the work
+      to finish).
+    - `status == "done"` (cycle-done) with a cycle still PENDING in the plan →
+      `cycle-activate <that concrete id>`: the plan itself names the next move,
+      so the orchestrator is never walked toward closing a CR with cycles unrun.
+    - `status == "done"` with nothing pending left (or no resolved plan) →
+      `cr-close --commit <sha>`."""
+    if status == "active":
+        return ["cycle-done <id>", "status"]
+    next_id = next_pending_cycle_id(plan, exclude_cycle_id=cycle_id)
+    if next_id is not None:
+        return [f"cycle-activate {next_id}", "status"]
+    return ["cr-close --commit <sha>", "status"]
+
+
 def fleet_context(cr=None):
     """Env auto-context shared by gates + milestones: `cr` (when supplied),
     `wave` from $WORKFLOW_WAVE, `track` from $WORKFLOW_ROLE. Absent env keys are

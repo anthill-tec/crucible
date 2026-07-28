@@ -1291,8 +1291,11 @@ def _cycle_transition(args, status):
         None,
     )
     verb = "cycle-activate" if status == "active" else "cycle-done"
-    help_steps = (["cycle-done <id>", "status"] if status == "active"
-                  else ["cr-close --commit <sha>", "status"])
+    # CR-CRU-048 §S1/§S3 — the `help[]` next step is DERIVED from the resolved
+    # plan's own cycle state by the shared `_crucible_axi.cycle_transition_help`
+    # (ONE implementation for the whole fleet — the hardcoded per-client ternary
+    # is exactly how this defect reached five clients).
+    help_steps = _axi().cycle_transition_help(status, target, cycle_id)
     if target is None:
         known = "; ".join(
             f"plan {p.get('planId')} ({p.get('cr')}): "
