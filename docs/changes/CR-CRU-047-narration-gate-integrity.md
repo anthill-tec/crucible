@@ -3,7 +3,7 @@
 **Status:** PENDING
 **Type:** patch (gate correctness — investigation + fix)
 **Priority:** P1 — the bun gate is currently red on `develop`, and its TOTAL is unexplained
-**Depends on:** CR-CRU-038 (§S2b in-run progress narration), CR-CRU-039 (the zero-discovery precedent)
+**Depends on:** CR-CRU-008 (§S2b in-run progress narration — the actual owner), CR-CRU-039 (the zero-discovery precedent)
 **Labels:** patch, gate-correctness, bun, client, narration, test-discovery
 **Phase:** Wave 4
 **Design reference:** found by the CR-CRU-042 C1 orchestrator gate (2026-07-28). CR-CRU-039
@@ -61,33 +61,40 @@ Any bisect must run in a tree with the full environment present, or its results 
 Symptom-A conclusions in the table above were corroborated by a MAIN-tree run (2 pass / 2 fail)
 and stand; anything else derived from worktree runs must be re-established.
 
-### Symptom B — the bun total dropped by more than the deletions explain
-| Gate | Total |
-|---|---|
-| CR-CRU-043 (green) | **1098** |
-| CR-CRU-042 C1 | **1045** |
+### Symptom B — RESOLVED during gap-analysis: not a collection failure
+The bun total is fully accounted for. `bun test` reports **1045 tests across 87 files**; there are
+**91** `.test.ts` files on disk. The four absent ones are all under `tests/archive/`, excluded
+DELIBERATELY by `bunfig.toml` (`[test] pathIgnorePatterns = ["tests/archive/**"]`). Nothing fails
+to collect.
 
-CR-042 deleted `tests/clients-skills.test.ts` (22 tests) and two `§S3` describes from
-`tests/cr009-release-bundle.test.ts` (4 tests) = **26**. Expected ≈ 1072; observed 1045 — about
-**11 tests unaccounted for** (allowing a few for the reworked Python-side stage cases, which do
-not affect the bun total).
+My earlier "~11 unaccounted" figure came from comparing a **static `test(` grep against a runtime
+total** — an unsound comparison (the grep counts occurrences in comments and strings). No defect
+here. §S1 below therefore changes from "reconcile the count" to "delete the dead weight that made
+it unreconcilable".
 
-A file that fails to COLLECT drops its tests from the total silently rather than reporting a
-failure. That is exactly the CR-CRU-039 defect class, and it is more dangerous than a red test:
-a green gate over a shrinking suite reads as success.
+### Symptom C — 2,235 lines of unrunnable dead test code
+`tests/archive/` holds four suites pinning the **v1 shim**, which is RETIRED:
+- `src/server.ts:222` — *"CR-CRU-008 §S4 — the v1 shim is RETIRED: no legacy /api/\* routes"*; there is no `src/shim*` module at all.
+- The archived files test an API that no longer exists, and can never run (excluded from discovery).
+- Their own header still declares itself *"the PERMANENT regression gate for the shim's wire contract… forever"* — false since the shim was removed.
+- The contract that still matters is already covered by a LIVE test: `tests/shim-retirement.test.ts` asserts legacy `/api/*` returns 404.
+
+"Kept for historical reference" is what git history is for. This is accumulation, and it is what
+made the test count unexplainable and cost an investigation.
 
 ## Scope
 
-### §S1 — Account for every test in the bun total
-Establish the authoritative per-file test inventory and reconcile it against the gate's reported
-total. Identify whether any file fails to collect, is skipped, or silently contributes zero.
-The deliverable is a reconciled number, not a guess: deletions + current total must equal the
-prior total, or the difference must be named.
+### §S1 — DELETE `tests/archive/` and its exclusion
+Remove the four retired-shim suites (2,235 lines) and the now-pointless
+`pathIgnorePatterns = ["tests/archive/**"]` from `bunfig.toml`. Git history preserves them; the
+working tree should not. After this, on-disk `.test.ts` files and files bun runs must be EQUAL —
+no permanently-excluded directory.
 
 ### §S2 — Make a shrinking suite impossible to miss
-Whatever §S1 finds, the gate must not be able to report success over a suite that quietly stopped
-running tests. Surface the collected-file/test count in the client's regression envelope so a
-drop is visible in the gate output itself — the CR-CRU-039 treatment, applied to the bun side.
+Surface the collected file/test count in the client's regression envelope so a drop is visible in
+the gate output itself — the CR-CRU-039 treatment applied to the bun side. With §S1 landed, a
+divergence between on-disk test files and files run has no legitimate cause, so it can be
+asserted rather than merely reported.
 
 ### §S3 — Root-cause and fix the narration failure
 Determine why `clients/bun-crucible.py` emits no `running N/M` narration in this environment when
@@ -105,8 +112,9 @@ CR-CRU-045 §S3 rule applies: any change here needs BOTH gates before close-out.
       INTACT — narration must actually occur, not be asserted away.
 - [ ] `tests/clients-bun-crucible.test.ts` is 15/15 green — the `§S2c` failure-marrying test
       passes with its console-stream assertion intact (Symptom A2).
-- [ ] The bun total is reconciled: a documented per-file inventory whose sum equals the gate's
-      reported total, with any previously-missing tests named and restored.
+- [ ] `tests/archive/` no longer exists and `bunfig.toml` carries no `pathIgnorePatterns`
+      exclusion; the count of on-disk `.test.ts` files EQUALS the file count bun reports —
+      asserted, so a future permanently-excluded directory fails the gate.
 - [ ] A test asserts the collected-test count is surfaced in the regression envelope, so a future
       silent drop fails the gate rather than passing it (§S2).
 - [ ] Root cause of the narration failure is stated in the commit message — not merely "fixed".
