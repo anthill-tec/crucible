@@ -41,20 +41,41 @@ span ~3s (test duration measured at 3014 ms).
 | bun was upgraded | **No — REFUTED.** `/usr/bin/bun` is 1.3.14, binary mtime **2026-05-17**, unchanged today. The version did NOT move |
 | Concurrent Python+bun gates starved it | **No** — fails identically when run alone |
 
-**MECHANISM ESTABLISHED, TEMPORAL DELTA NOT.** Two separate things:
-1. **Why it fails now** — settled. `_COMPLETION_LINE` (`clients/bun-crucible.py:180`) matches
-   `^\((?:pass|fail|skip|todo)\)`, but bun 1.3.14 piped prints **no per-test line for passes at
-   all** (failures use `✗`). The narrator counts zero completions, so it never narrates.
-2. **Why the SAME code gated green hours earlier** — still unexplained, and both obvious
-   explanations are refuted above. Do not assume a bun upgrade; do not assume concurrency. This
-   delta is the one genuinely open question, and it matters: if the trigger is state we do not
-   understand, the same class of silent flip can hit any gate. §S3 must explain it or explicitly
-   record that it could not be reproduced.
+**ROOT CAUSE — fully established (2026-07-28). TWO independent faults:**
 
-**The unexplained part:** those same commits gated **GREEN hours earlier the same day** — CR-041
-at bun 1081/1082 (the single failure being CR-045's coverage-shadow test) and CR-043 at bun
-1098/1098. Same code, same machine, opposite result. So the trigger is environmental/state-based
-and is NOT in the commit graph. Finding it is the point.
+**Fault 1 — the regex is stale.** `_COMPLETION_LINE` (`clients/bun-crucible.py:180`) matches
+`^\((?:pass|fail|skip|todo)\)`. bun 1.3.14 emits `✓ <name>` / `✗ <name>`. Even with FULL output
+the narrator matches **0** lines.
+
+**Fault 2 — `CLAUDECODE=1` makes bun suppress per-test output entirely.** bun detects
+agent environments (`CLAUDECODE`, `AGENT`, `REPL_ID`) and switches to "quieter output". Measured
+on the same file, same bun binary:
+
+| Environment | per-test lines |
+|---|---|
+| `CLAUDECODE` unset | `✓ <test name>`, one per test |
+| `CLAUDECODE=1` (this session) | **none** |
+
+This is the temporal delta — an ENVIRONMENT VARIABLE, not the commit graph and not a bun upgrade
+(binary unchanged since 2026-05-17). It is the more alarming half: a variable outside the repo
+silently changes test-runner output, so a gate can flip green→red with no code change at all.
+
+**THE FIX — `--dots`, and it is immune to both faults.** bun's reporter list is only `junit` and
+`dots` (confirmed against `bun test --help` AND the official docs — there is no JSON, no TAP, no
+streaming reporter, and no custom/programmatic reporter API). `--dots` streams ONE CHARACTER PER
+COMPLETED TEST, live, which is exactly the `N` narration needs — it never needed test names.
+Verified:
+
+| Check | Result |
+|---|---|
+| `--dots` + `--reporter=junit --reporter-outfile` together | **both work** — dots stream AND the junit file is written (ingest unaffected) |
+| dot granularity across 3 files | **35 tests → 35 dots** — per test, not per file |
+| failure detail preserved under `--dots` | **yes** — source excerpt, error, and `✗ <name>` all still emitted, so §S2c's console-stream marrying survives |
+| `--dots` under `CLAUDECODE=1` | **11 dots — unaffected**; an explicitly requested reporter is not subject to agent-quieting |
+
+**Note the user's correction that shaped this:** JUnit XML cannot drive live narration — it is
+written only when the run ENDS. Narration and ingest are different needs; `--dots` serves the
+live one, `junit` the post-run one, and they compose.
 
 ### Symptom A2 — a third failure, in a different file
 `tests/clients-bun-crucible.test.ts` — 1 of 15 fails:
@@ -109,12 +130,21 @@ the gate output itself — the CR-CRU-039 treatment applied to the bun side. Wit
 divergence between on-disk test files and files run has no legitimate cause, so it can be
 asserted rather than merely reported.
 
-### §S3 — Root-cause and fix the narration failure
-Determine why `clients/bun-crucible.py` emits no `running N/M` narration in this environment when
-it did hours earlier on identical code. The environmental dimension is the lead — bun's version
-(`bun test v1.3.14-canary.1` observed), its reporter/streaming output format, or an interaction
-with the throttle window (≥~2s or ≥10 completions). Fix the cause; if the narration contract
-itself is wrong, correct the contract and say so explicitly rather than relaxing the assertion.
+### §S3 — Narrate from `--dots`, not from the human console stream
+Root cause is established above; this section is now implementation, not investigation.
+
+Add `--dots` to the bun invocation (it composes with the existing
+`--reporter=junit --reporter-outfile=…`) and count **dot characters** as completions instead of
+matching console text. Retire `_COMPLETION_LINE`. The `M` prescan (`_prescan_test_total`) and the
+throttle (≥~2s or ≥10 completions) are unchanged — only the completion SIGNAL changes.
+
+This closes the class, not just the instance: `--dots` is a documented reporter whose output is a
+contract, whereas the default console format has none and is additionally mutated by
+agent-detection env vars outside our control.
+
+Do NOT simply update the regex to match `✓`/`✗`. That would fix Fault 1 and leave Fault 2 — the
+narrator would still see nothing whenever `CLAUDECODE`/`AGENT`/`REPL_ID` is set, which is every
+agent-run gate, i.e. all of them.
 
 ### §S4 — Cross-stack gate note
 `clients/bun-crucible.py` is Python whose observable contract is asserted by bun tests — the
@@ -130,7 +160,10 @@ CR-CRU-045 §S3 rule applies: any change here needs BOTH gates before close-out.
       asserted, so a future permanently-excluded directory fails the gate.
 - [ ] A test asserts the collected-test count is surfaced in the regression envelope, so a future
       silent drop fails the gate rather than passing it (§S2).
-- [ ] Root cause of the narration failure is stated in the commit message — not merely "fixed".
+- [ ] Narration is driven by `--dots`; `_COMPLETION_LINE` no longer exists — asserted.
+- [ ] The narration tests pass BOTH with `CLAUDECODE=1` set and unset — asserted explicitly,
+      since agent-quieting is Fault 2 and a fix that only works in one environment is not a fix.
+- [ ] The junit file is still written when `--dots` is added — ingest must be unaffected.
 - [ ] Full bun regression green AND full Python regression green.
 
 ## Non-goals
