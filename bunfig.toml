@@ -1,4 +1,5 @@
-[test]
-# tests/archive/ holds retired-contract suites (CR-CRU-008 §S4) — historical
-# reference only, excluded from `bun test` discovery.
-pathIgnorePatterns = ["tests/archive/**"]
+# CR-CRU-047 §S1 — no test-discovery exclusions. `tests/archive/` (the retired
+# v1 shim suites) is DELETED, not excluded, so every `.test.ts` on disk is a
+# file `bun test` runs. Do not reintroduce `[test] pathIgnorePatterns` for the
+# tests/ tree: a permanently-excluded directory makes the suite size
+# unreconcilable. Guarded by tests/suite-integrity.test.ts.

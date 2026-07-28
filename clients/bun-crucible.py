@@ -438,16 +438,26 @@ def _bun_test_cmd(bun, targets, junit_path, coverage, coverage_dir):
 
 
 def _parse_junit_file(junit_path):
-    """Parse a bun JUnit XML file into (summary, tree) with per-test leaf names."""
+    """Parse a bun JUnit XML file into (summary, tree, files) with per-test leaf
+    names. `files` (CR-CRU-047 §S2) is the number of DISTINCT test FILES the run
+    collected — bun stamps each `<testcase>` with `file="tests/..."`; a case
+    missing that attribute falls back to its `classname`, then to its suite
+    name, so the count degrades to "distinct suites" rather than to zero. It
+    rides the printed run envelope only, never the ingest payload, so a
+    shrinking suite is visible in the gate output itself."""
     tree_nodes = []
     total = passed = failed = 0
     duration_ms = 0
+    files = set()
     root = ET.parse(junit_path).getroot()
     suites = root.findall(".//testsuite") or [root]
     for suite in suites:
         children = []
         suite_fail = False
         for tc in suite.findall("testcase"):
+            source = tc.get("file") or tc.get("classname") or suite.get("name")
+            if source:
+                files.add(source.replace("\\", "/"))
             tc_time = int(float(tc.get("time", 0)) * 1000)
             fail = tc.find("failure") is not None or tc.find("error") is not None
             status = "fail" if fail else "pass"
@@ -495,7 +505,7 @@ def _parse_junit_file(junit_path):
             })
     summary = {"total": total, "passed": passed, "failed": failed,
                "pending": 0, "duration_ms": duration_ms}
-    return summary, tree_nodes
+    return summary, tree_nodes, len(files)
 
 
 _FAIL_LINE = re.compile(r"^\(fail\)\s+(?P<name>.*?)(?:\s+\[[0-9.]+m?s\])?\s*$")
@@ -730,7 +740,7 @@ def cmd_test(args):
             return result.returncode
 
         if os.path.exists(junit_path):
-            summary, tree = _parse_junit_file(junit_path)
+            summary, tree, files = _parse_junit_file(junit_path)
             # §S2c — the captured run log IS the failure-detail source.
             _marry_failures(tree, getattr(result, "stdout", None))
             # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run
@@ -743,7 +753,7 @@ def cmd_test(args):
                                   tier="unit",
                                   context=_ingest_context(cycle_id),
                                   raw=getattr(result, "stdout", None))
-            _emit_ingest_axi("test", resp, summary, project_dir, args.agent,
+            _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent,
                              cycle_id, warnings)
             # A failing run exits non-zero even when the ingest succeeded —
             # the exit code carries the RUNNER verdict, not the POST's.
@@ -805,7 +815,7 @@ def cmd_regression(args):
                   file=sys.stderr)
             return 1
 
-        summary, tree = _parse_junit_file(junit_path)
+        summary, tree, files = _parse_junit_file(junit_path)
         _marry_failures(tree, getattr(result, "stdout", None))
         coverage = None
         if coverage_on:
@@ -822,7 +832,7 @@ def cmd_regression(args):
             return 1
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                               tier="regression", context=_ingest_context(cycle_id))
-        _emit_ingest_axi("regression", resp, summary, project_dir, args.agent,
+        _emit_ingest_axi("regression", resp, summary, files, project_dir, args.agent,
                          cycle_id, warnings)
         return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
     finally:
@@ -840,7 +850,7 @@ def cmd_auto_ingest(args):
     if not os.path.exists(junit_path):
         print(f"[crucible] no {junit_path} — nothing to ingest", file=sys.stderr)
         return 1
-    summary, tree = _parse_junit_file(junit_path)
+    summary, tree, files = _parse_junit_file(junit_path)
     # CR-CRU-030 §S9 — resolve/attach the active cycle BEFORE the POST so the
     # ingested e2e run carries the resolved cycleId in the SERVER record (not
     # just the envelope); no active cycle → withhold, never a cycleId=null orphan.
@@ -850,7 +860,7 @@ def cmd_auto_ingest(args):
         return 1
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="e2e",
                           context=_ingest_context(cycle_id))
-    _emit_ingest_axi("auto-ingest", resp, summary, project_dir, args.agent,
+    _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
                      cycle_id, warnings)
     return 0 if resp.get("ok") else 1
 
@@ -1439,12 +1449,16 @@ def _register_cycle_guard(project_dir):
     return withhold, warnings
 
 
-def _emit_ingest_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
+def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, cycle_id,
+                     warnings):
     """Emit the §S1 envelope for a SUCCESSFUL ingest verb
-    (test/regression/auto-ingest): run{passed,failed,total} + cycle-aware
-    context. Any warnings are also surfaced on stderr."""
+    (test/regression/auto-ingest): run{passed,failed,total,files} + cycle-aware
+    context. `files` (CR-CRU-047 §S2) is the distinct test-FILE count from
+    `_parse_junit_file`, a sibling of the test counts, so a suite that silently
+    shrinks is visible in the gate output. Any warnings are also surfaced on
+    stderr."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
-           "total": summary["total"]}
+           "total": summary["total"], "files": files}
     # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
     # the cycleId key rather than emit an orphan-signalling explicit null.
     if cycle_id is not None:
