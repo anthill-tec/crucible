@@ -83,7 +83,7 @@
 // something to tail live, and the run spans long enough to cross the
 // throttle's time bound at least once.
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
@@ -143,6 +143,33 @@ function spawnScript(
     cmd: ["python3", scriptPath, ...args],
     cwd: opts.cwd,
     env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl, ...(opts.env ?? {}) },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
+/**
+ * CR-CRU-047 §S3 — identical to `spawnScript` except it explicitly DELETES
+ * `CLAUDECODE` from the child's environment rather than merging an override
+ * on top. `spawnScript`'s `env` option can only ADD/override keys with a
+ * string value; it cannot remove a key the ambient session already set
+ * (this session runs with `CLAUDECODE=1`). The two narration-under-both-
+ * states tests need a genuine unset, not "unset unless already set".
+ */
+function spawnScriptWithClaudecodeUnset(
+  scriptPath: string,
+  args: string[],
+  opts: { cwd: string; crucibleUrl: string },
+) {
+  const baseEnv: Record<string, string | undefined> = { ...process.env };
+  for (const k of Object.keys(baseEnv)) {
+    if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
+  }
+  delete baseEnv.CLAUDECODE;
+  return Bun.spawn({
+    cmd: ["python3", scriptPath, ...args],
+    cwd: opts.cwd,
+    env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -490,6 +517,148 @@ describe("§S2b in-run progress narration — clients/bun-crucible.py (fine-grai
       expect(extractNarration(log, NARRATION_RE).length).toBe(0);
     },
     15000,
+  );
+});
+
+// ── CR-CRU-047 §S3 — narrate from `--dots`, not the human console stream ──
+//
+// ROOT CAUSE (established by the CR-CRU-047 investigation; NOT re-derived
+// here). TWO independent faults: (1) `_COMPLETION_LINE`
+// (`^\((?:pass|fail|skip|todo)\)`) matches bun's OLD parenthesized
+// completion-line format; bun 1.3.14 emits `✓ <name>` / `✗ <name>` instead,
+// so the narrator's regex matches ZERO lines regardless of environment.
+// (2) `CLAUDECODE=1` (set in EVERY agent-run gate, including this session)
+// makes bun suppress per-test output entirely — a fix that only works with
+// the var unset is not a fix. The chosen remedy: `--dots`. bun's only two
+// reporters are `junit` and `dots`; `--dots` streams one character per
+// COMPLETED test, composes with `--reporter=junit --reporter-outfile=…`,
+// and is unaffected by CLAUDECODE. These tests pin that contract from the
+// client's OBSERVABLE behavior — the stderr echo of the built invocation,
+// the junit file actually on disk, and the narration signal itself under
+// both CLAUDECODE states — never by importing Python internals into a bun
+// test (the SUT stays a subprocess wrapper here, same as the rest of this
+// file).
+describe("§S3 (CR-CRU-047) — bun narration driven by --dots, not console-text scraping", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test(
+    "the bun invocation includes --dots alongside the existing junit reporter flags, and the junit XML is still written correctly (ingest unaffected) — no --agent/server needed, the '[crucible] running:' echo and the junit write both happen unconditionally",
+    async () => {
+      const dir = scratch.dir("narration-argv-dots-");
+      writeNarrationBunProject(dir, "unused-project-key", 3, 0);
+      const proc = spawnScript(
+        BUN_SCRIPT_PATH,
+        ["test", "--tests", "narration.test.ts", "--project-dir", dir, "--package-dir", dir],
+        { cwd: dir, crucibleUrl: "http://localhost:1" },
+      );
+      const [, stderr, code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      expect(code).toBe(0); // all 3 fixture tests pass
+
+      const runningLine = stderr.split("\n").find((l) => l.startsWith("[crucible] running:"));
+      expect(runningLine).toBeDefined();
+      // POSITIVE: --dots (or the --reporter=dots spelling) is in the built argv.
+      expect(runningLine).toMatch(/(^|\s)--dots(\s|$)|--reporter=dots\b/);
+      // NEGATIVE/regression bound: --dots is ADDITIVE — the existing junit
+      // reporter flags must still be present, not replaced.
+      expect(runningLine).toContain("--reporter=junit");
+      expect(runningLine).toMatch(/--reporter-outfile=\S*junit\.xml/);
+
+      // The junit XML must actually land on disk with --dots present —
+      // ingest must not regress just because a second reporter joined the
+      // invocation.
+      const junitPath = join(dir, "test-reports", "junit.xml");
+      expect(existsSync(junitPath)).toBe(true);
+      const xml = readFileSync(junitPath, "utf-8");
+      const caseCount = (xml.match(/<testcase\b/g) ?? []).length;
+      expect(caseCount).toBe(3);
+    },
+    15000,
+  );
+
+  test("_COMPLETION_LINE (the stale console-text completion regex) no longer exists in clients/bun-crucible.py — a future revert to console-scraping fails this suite", () => {
+    const source = readFileSync(BUN_SCRIPT_PATH, "utf-8");
+    expect(source).not.toContain("_COMPLETION_LINE");
+  });
+
+  test(
+    "narration still posts 'running N/M' when CLAUDECODE=1 is explicitly SET in the runner's environment (Fault 2 regression guard — every agent-run gate sets this var)",
+    async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const baseUrl = `http://localhost:${handle.server.port}`;
+      const key = await createProject(baseUrl, "clients-narration-bun-cc-set");
+      const dir = scratch.dir("narration-bun-cc-set-");
+      writeNarrationBunProject(dir, key, 24, 120);
+      const agentId = "narration-bun-cc-set-agent";
+
+      let done = false;
+      const pollPromise = pollAgentUntil(baseUrl, key, agentId, () => done);
+      const proc = spawnScript(
+        BUN_SCRIPT_PATH,
+        ["test", "--agent", agentId, "--tests", "narration.test.ts", "--project-dir", dir, "--package-dir", dir],
+        { cwd: dir, crucibleUrl: baseUrl, env: { CLAUDECODE: "1" } },
+      );
+      const [, , code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      done = true;
+      const log = await pollPromise;
+
+      expect(code).toBe(0); // all 24 fixture tests pass
+
+      const matches = extractNarration(log, NARRATION_RE);
+      // Non-vacuous precondition, same discipline as the §S2b tests above:
+      // narration must actually be OBSERVED, not merely asserted away.
+      expect(matches.length).toBeGreaterThan(0);
+      for (const m of matches) expect(m.m).toBe(24);
+    },
+    20000,
+  );
+
+  test(
+    "narration still posts 'running N/M' when CLAUDECODE is explicitly UNSET in the runner's environment",
+    async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const baseUrl = `http://localhost:${handle.server.port}`;
+      const key = await createProject(baseUrl, "clients-narration-bun-cc-unset");
+      const dir = scratch.dir("narration-bun-cc-unset-");
+      writeNarrationBunProject(dir, key, 24, 120);
+      const agentId = "narration-bun-cc-unset-agent";
+
+      let done = false;
+      const pollPromise = pollAgentUntil(baseUrl, key, agentId, () => done);
+      const proc = spawnScriptWithClaudecodeUnset(
+        BUN_SCRIPT_PATH,
+        ["test", "--agent", agentId, "--tests", "narration.test.ts", "--project-dir", dir, "--package-dir", dir],
+        { cwd: dir, crucibleUrl: baseUrl },
+      );
+      const [, , code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      done = true;
+      const log = await pollPromise;
+
+      expect(code).toBe(0);
+
+      const matches = extractNarration(log, NARRATION_RE);
+      expect(matches.length).toBeGreaterThan(0);
+      for (const m of matches) expect(m.m).toBe(24);
+    },
+    20000,
   );
 });
 
