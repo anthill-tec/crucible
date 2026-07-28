@@ -56,6 +56,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-050](CR-CRU-050-skip-folds-into-passed.md) | Skipped/todo tests counted as PASSED in the ingest envelope — `_parse_junit_file` never checks `<skipped/>`; reproduced live (bun 29 pass/1 skip → envelope passed=30) | patch | PENDING | 039, 047 | 4 |
 | [CR-CRU-051](CR-CRU-051-files-count-fleet-parity.md) | Propagate the run-envelope `files` count (CR-047 §S2) to python/rust×2/mvn/arduino — fleet parity on the shrinking-suite signal | patch | PENDING | 047, 050 | 4 |
 | [CR-CRU-052](CR-CRU-052-project-teardown.md) | Projects can be created but never deleted — guarded `DELETE /api/v2/projects/<key>` with cascade + harness teardown/ephemeral-target guard; purge the 6 residue projects | feature | PENDING | 012, 032 | 4 |
+| [CR-CRU-053](CR-CRU-053-retired-mirror-references.md) | Test headers still present the retired `~/.claude/scripts` mirror as the client source (one hands out a `grep` command against it) — running it orphans runs | patch | PENDING | 008, 009, 042 | 4 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 · track-1) | 011, 013 | 5 (0.2.0) |
 | [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Playwright runner + codec + tab | feature | PENDING (0.2.0 · track-2) | 004, 007 | 5 (0.2.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end + Aborted state | feature | PENDING (0.2.0 · track-3 cand.) | 008, 011 | 5 (0.2.0) |
