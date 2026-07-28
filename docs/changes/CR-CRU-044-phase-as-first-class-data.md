@@ -56,6 +56,37 @@ payload. `--phase` becomes **required** (no `default="report"`) and enum-constra
 uniformly — `arduino-crucible.py`'s free-text `--phase PHASE` is brought onto the same enum.
 A missing `--phase` fails argument parsing with the accepted values listed.
 
+### §S5 — An agent identity must never be fabricated from the script's own filename
+**Found live 2026-07-28: a phantom agent named `bun-crucible` appeared in the dashboard's agent
+rail on the dog-food project.**
+
+`clients/bun-crucible.py:1530`:
+
+```python
+explicit = getattr(args, "agent", None)
+if explicit:
+    return explicit
+return os.environ.get("WORKFLOW_ROLE") or "bun-crucible"
+```
+
+When a gate/milestone verb runs without `--agent` and `WORKFLOW_ROLE` is unset, the client invents
+an agent identity equal to its own program name. The docstring is candid about why — *"these verbs
+never assert on the id, but the server requires a non-empty agentId"* — i.e. a filler value chosen
+to satisfy a required field.
+
+The result is an entity in the agent rail that is not an agent. It has no phase, no lifecycle, and
+no owner; it goes `online` then `stale` and sits there. That is the same failure this CR exists to
+correct — identity inferred from a string instead of declared — and it actively misleads anyone
+reading the board.
+
+Fix: a fleet event with no declared agent must NOT silently mint one. Either require `--agent` on
+those verbs (consistent with §S3 making `--phase` required), or have the server reject a missing
+agentId rather than the client fabricate a satisfying value. **Do not simply pick a nicer default
+string** — a better-looking fabricated identity is the same defect.
+
+Check the other four clients for the same pattern (`rust`, `mvn`, `arduino`, `python`) — the shared
+`_crucible_axi.py` module makes a copied fallback likely.
+
 ### §S4 — The agentId stops being a phase channel
 With phase declared, the id no longer needs to encode it. Document in the client `--help`
 and the STATUS-CONTRACT that phase comes from `--phase`, and that the agentId is a free-form
@@ -77,6 +108,10 @@ identifier. Any remaining id-shape guidance must not be load-bearing for classif
       asserted per client (including `arduino`, whose free-text flag is now constrained).
 - [ ] Historical records with no stored phase still render via the `phaseRole` fallback —
       existing `tests/phase-role.test.ts` stays green, unmodified.
+- [ ] **No client fabricates an agent identity from its own filename** — a gate/milestone verb with
+      no `--agent` and no `WORKFLOW_ROLE` FAILS with a definitive error rather than registering a
+      phantom; `grep -rn '"bun-crucible"' clients/` finds no id fallback — asserted (§S5).
+- [ ] The same fallback pattern is absent from all five clients — asserted per client.
 - [ ] Full bun + Python regression green.
 
 ## Non-goals
