@@ -236,6 +236,19 @@ and never unregistered. That is dispatch hygiene, not a Crucible defect, and it 
 The empty `identity` on `bun-crucible` is itself corroboration: no displayName, no source, because
 nothing ever declared it. §S5's hard stop is exactly right and its ACs stand unchanged.
 
+**Third sighting 2026-07-28 — it CAME BACK, during this CR.** The dog-food board was purged of all
+residue earlier the same day (CR-CRU-052 §S4: 6 projects, 2 phantom agents, verified zero orphan
+rows). Within hours, while CR-CRU-044 itself was executing, `SELECT agent_id FROM agents` returned
+**`bun-crucible` again** — the only agent on the board.
+
+This is the strongest available evidence for §S5 and it should be treated as the section's live
+regression case: the phantom is not historical residue, it is **continuously regenerated**. Purging
+removes the symptom for as long as it takes the next un-`--agent`'d verb to run. Only deleting the
+fallback stops it.
+
+It also confirms §S5's closing note about residue: nothing sweeps the rail, so each regeneration
+leaves a permanent row until manually removed.
+
 Both linger because neither unregistered — the liveness threshold ages a row to stale/dead in the
 UI while the row itself persists as `online`. **That is worth a look during this CR**: a registered
 agent that never unregisters leaves a permanent rail entry, so the fabricated-identity fix removes
