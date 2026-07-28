@@ -937,6 +937,19 @@ describe("clients/bun-crucible.py — CR-CRU-050 §S1/§S1b: <skipped/> (test.sk
     expect(block).toContain("total: 4");
     expect(block).toContain("pending: 2");
   });
+
+  // §S2 (extended after C1 GREEN) — the plain human-readable "ingest: ..."
+  // stderr line (bun-crucible.py:721-726) prints passed/failed/total but NOT
+  // pending. C1 GREEN correctly declined to touch this untested surface and
+  // escalated it instead — this is that RED. Post-fix the line must read
+  // "passed=1 failed=1 pending=2 total=4"; today it omits pending entirely,
+  // so "passed=1 failed=1 total=4" no longer sums (2 tests unaccounted for),
+  // which is the exact "worse than an under-report" artifact the CR warns
+  // about.
+  test("§S2 (extended): the plain 'ingest: ...' stderr line also carries pending=2, not just the TOON run: block", () => {
+    expect(runResult?.stderr ?? "").toContain("ingest:");
+    expect(runResult?.stderr ?? "").toContain("pending=2");
+  });
 });
 
 describe("clients/bun-crucible.py — CR-CRU-050 E2E repro: 'N pass / 1 skip / 0 fail' produces passed=N pending=1, not passed=N+1", () => {
