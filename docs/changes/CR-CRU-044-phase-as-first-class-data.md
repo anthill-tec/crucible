@@ -79,10 +79,16 @@ no owner; it goes `online` then `stale` and sits there. That is the same failure
 correct — identity inferred from a string instead of declared — and it actively misleads anyone
 reading the board.
 
-Fix: a fleet event with no declared agent must NOT silently mint one. Either require `--agent` on
-those verbs (consistent with §S3 making `--phase` required), or have the server reject a missing
-agentId rather than the client fabricate a satisfying value. **Do not simply pick a nicer default
-string** — a better-looking fabricated identity is the same defect.
+**Fix — HARD STOP (user directive 2026-07-28): the agent identity must be DEFINED or the verb
+FAILS.** There is no fallback, no default, and no fabricated value:
+- `--agent` explicit wins;
+- else `$WORKFLOW_ROLE`;
+- else **hard stop** — `ok:false`, non-zero exit, a definitive AXI error naming both ways to supply
+  it. Nothing is registered, so no phantom can reach the rail.
+
+Delete the `or "bun-crucible"` fallback outright. **Do not replace it with a nicer default string**
+— a better-looking fabricated identity is the same defect. An agent that cannot say who it is has
+no business appearing on the board.
 
 Check the other four clients for the same pattern (`rust`, `mvn`, `arduino`, `python`) — the shared
 `_crucible_axi.py` module makes a copied fallback likely.
@@ -108,9 +114,11 @@ identifier. Any remaining id-shape guidance must not be load-bearing for classif
       asserted per client (including `arduino`, whose free-text flag is now constrained).
 - [ ] Historical records with no stored phase still render via the `phaseRole` fallback —
       existing `tests/phase-role.test.ts` stays green, unmodified.
-- [ ] **No client fabricates an agent identity from its own filename** — a gate/milestone verb with
-      no `--agent` and no `WORKFLOW_ROLE` FAILS with a definitive error rather than registering a
-      phantom; `grep -rn '"bun-crucible"' clients/` finds no id fallback — asserted (§S5).
+- [ ] **HARD STOP on an undefined identity** — a gate/milestone verb with no `--agent` and no
+      `WORKFLOW_ROLE` exits NON-ZERO with `ok:false`, registers NOTHING, and the error names both
+      ways to supply the id — asserted (§S5). No agent may appear on the rail from that path.
+- [ ] No filename-derived fallback survives: `grep -rn 'or "\(bun\|python\|rust\|mvn\|arduino\)-crucible"' clients/`
+      finds nothing — asserted.
 - [ ] The same fallback pattern is absent from all five clients — asserted per client.
 - [ ] Full bun + Python regression green.
 
