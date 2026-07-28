@@ -2,10 +2,10 @@
 
 **Status:** PENDING
 **Type:** patch (contract correctness — client fleet + server + UI)
-**Priority:** P2 — misclassifies agents silently; not a 0.1.0 release blocker
+**Priority:** P1 — 0.1.0 BLOCKER (promoted 2026-07-28). Misclassifies agents silently AND fabricates fictitious agent identities onto the dashboard (§S5) — unacceptable in a tool whose subject is agent observability
 **Depends on:** CR-CRU-030 (fleet AXI-CLI compliance), CR-CRU-036 (register cycle guard)
 **Labels:** patch, client-fleet, server, api, dashboard, axi-compliance, agent-lifecycle
-**Phase:** Wave 4
+**Phase:** Wave 4 (0.1.0 blocker)
 **Design reference:** the AXI manifesto (axi.md) — self-explanatory surfaces that prevent
 orchestrator context loss. Found in CR-CRU-041 C1 (2026-07-28) when correctly-registered
 agents rendered unphased; user direction the same day: *"the server should require the phase
