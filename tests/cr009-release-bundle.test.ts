@@ -297,3 +297,115 @@ describe("§S1 install.sh bootstrap", () => {
     expect(script).toContain("uv tool install crucible-axi");
   });
 });
+
+// CR-CRU-041 §S1 — Make the server package publishable
+//
+// Spec: docs/changes/CR-CRU-041-release-mechanism.md §S1 + Acceptance criteria
+//   - package.json: no `private` field, name ==
+//     "@anthill-tec/crucible-server", `publishConfig.access == "public"`, a
+//     `files` whitelist (bin/, src/, public/).
+//   - `npm pack --dry-run` on the resulting tarball MUST contain bin/, src/,
+//     public/ and MUST NOT contain tests/, data/, crucible.db, coverage/,
+//     test-reports/, test-results/, .features-gen/ — asserted by parsing the
+//     real `npm pack --dry-run --json` file list, not by eyeballing it.
+//
+// RED phase: root package.json is currently `"private": true`, named
+// unscoped `"crucible"`, with no `publishConfig` and no `files` whitelist —
+// every assertion below is expected to FAIL against that state.
+
+/**
+ * Runs `npm pack --dry-run --json` against the real repo package.json and
+ * returns the flat list of file paths npm would actually publish. Exercises
+ * the real npm packaging engine (respecting `files`/`.gitignore`/.npmignore
+ * precedence) rather than re-deriving the whitelist logic by hand, so a
+ * `files` array that npm itself would ignore (typo'd glob, wrong casing)
+ * still fails the test.
+ */
+function npmPackDryRunFiles(): string[] {
+  const res = Bun.spawnSync({
+    cmd: ["npm", "pack", "--dry-run", "--json"],
+    cwd: REPO_ROOT,
+  });
+  if (res.exitCode !== 0) {
+    throw new Error(`npm pack --dry-run --json failed: ${res.stderr.toString()}`);
+  }
+  const parsed = JSON.parse(res.stdout.toString()) as Array<{
+    files?: Array<{ path: string }>;
+  }> | Record<string, { files?: Array<{ path: string }> }>;
+
+  const entry = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
+  const files = entry?.files ?? [];
+  return files.map((f) => f.path);
+}
+
+describe("§S1 publishable server package.json", () => {
+  test("package.json has no private field (or false), scoped public name, and publishConfig.access", () => {
+    const pkg = JSON.parse(readText("package.json")) as {
+      name?: string;
+      private?: boolean;
+      publishConfig?: { access?: string };
+    };
+
+    // POSITIVE — exact required values, not mere presence.
+    expect(pkg.private).not.toBe(true);
+    expect(pkg.name).toBe("@anthill-tec/crucible-server");
+    expect(pkg.publishConfig).toBeDefined();
+    expect(pkg.publishConfig?.access).toBe("public");
+  });
+
+  test("package.json declares a files whitelist covering bin/, src/, public/", () => {
+    const pkg = JSON.parse(readText("package.json")) as { files?: string[] };
+
+    expect(Array.isArray(pkg.files)).toBe(true);
+    const files = pkg.files as string[];
+    expect(files.length).toBeGreaterThan(0);
+
+    // Each required runtime path must be covered by some whitelist entry
+    // (exact dir entry like "bin/" or a "bin/**" style glob).
+    for (const required of ["bin", "src", "public"]) {
+      const covered = files.some((f) => f === required || f.startsWith(`${required}/`));
+      expect(covered).toBe(true);
+    }
+  });
+});
+
+describe("§S1 npm pack --dry-run tarball contents", () => {
+  test("published tarball contains bin/, src/, and public/", () => {
+    const files = npmPackDryRunFiles();
+
+    // POSITIVE — the runtime paths the server actually needs (src/server.ts
+    // resolves PUBLIC_DIR package-relative and reads package.json for
+    // pkg.version at :92/:15; there are no runtime deps to worry about).
+    for (const required of ["bin/", "src/", "public/"]) {
+      const present = files.some((f) => f === required || f.startsWith(required));
+      expect(present).toBe(true);
+    }
+
+    // Bound: this is not "at least these three dirs exist somewhere in a
+    // sprawling everything-goes tarball" — file count should be small
+    // (a curated whitelist, not the whole repo).
+    expect(files.length).toBeLessThan(200);
+  });
+
+  test("published tarball excludes repo working state (tests/, data/, crucible.db, coverage/, test-reports/, test-results/, .features-gen/)", () => {
+    const files = npmPackDryRunFiles();
+
+    // NEGATIVE — the point of the whitelist. A leaky `files` array that
+    // falls back to shipping the whole repo (or forgets one exclusion) must
+    // fail here, specifically because it would ship the dev database.
+    const forbiddenPrefixes = [
+      "tests/",
+      "data/",
+      "crucible.db",
+      "coverage/",
+      "test-reports/",
+      "test-results/",
+      ".features-gen/",
+    ];
+
+    for (const forbidden of forbiddenPrefixes) {
+      const leaked = files.filter((f) => f === forbidden || f.startsWith(forbidden));
+      expect(leaked).toEqual([]);
+    }
+  });
+});

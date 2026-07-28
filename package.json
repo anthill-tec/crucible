@@ -1,8 +1,15 @@
 {
-  "name": "crucible",
+  "name": "@anthill-tec/crucible-server",
   "version": "2.0.0-alpha.1",
   "type": "module",
-  "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "public/"
+  ],
   "bin": {
     "crucible-server": "bin/crucible-server.mjs"
   },

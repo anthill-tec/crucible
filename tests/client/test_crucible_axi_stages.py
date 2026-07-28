@@ -129,8 +129,16 @@ class ServerStageTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_server_stage_invokes_npx_with_server_package_when_bun_present(self):
+        """Patches `crucible_axi.__version__` to a realistic installed-release
+        value -- the live value in a source checkout is the
+        `_SOURCE_CHECKOUT_VERSION` sentinel (CR-CRU-041 S6), which is a
+        separate, dedicated fail-fast contract covered by
+        ServerStageFailsFastOnUnresolvedVersionTest, not this stage-delegation
+        test."""
         install = _import_fresh("crucible_axi.install")
-        with mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
+        axi = _import_fresh("crucible_axi")
+        with mock.patch.object(axi, "__version__", "0.1.0"), \
+                mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
                 mock.patch("crucible_axi.install.shutil.which",
                            return_value="/usr/bin/bun"), \
                 mock.patch("crucible_axi.install._server_already_installed",
@@ -167,8 +175,16 @@ class ServerStageTest(unittest.TestCase):
             "Bun is present on PATH -- the curl bootstrap must be skipped")
 
     def test_server_stage_bootstraps_bun_via_curl_installer_before_npx_when_bun_absent(self):
+        """Patches `crucible_axi.__version__` to a realistic installed-release
+        value -- the live value in a source checkout is the
+        `_SOURCE_CHECKOUT_VERSION` sentinel (CR-CRU-041 S6), which is a
+        separate, dedicated fail-fast contract covered by
+        ServerStageFailsFastOnUnresolvedVersionTest, not this stage-delegation
+        test."""
         install = _import_fresh("crucible_axi.install")
-        with mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
+        axi = _import_fresh("crucible_axi")
+        with mock.patch.object(axi, "__version__", "0.1.0"), \
+                mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
                 mock.patch("crucible_axi.install.shutil.which",
                            return_value=None), \
                 mock.patch("crucible_axi.install._server_already_installed",
@@ -198,9 +214,18 @@ class ServerStageTest(unittest.TestCase):
     def test_server_stage_raises_when_npx_exits_nonzero(self):
         """Negative/error path -- a non-zero npx exit must surface as a
         raised, structured exception (so run_install's fail-fast + ok:false
-        engages), never be swallowed."""
+        engages), never be swallowed.
+
+        Patches `crucible_axi.__version__` to a realistic installed-release
+        value -- the live value in a source checkout is the
+        `_SOURCE_CHECKOUT_VERSION` sentinel (CR-CRU-041 S6), which is a
+        separate, dedicated fail-fast contract covered by
+        ServerStageFailsFastOnUnresolvedVersionTest, not this test (which
+        must reach the npx call to exercise ITS OWN error path)."""
         install = _import_fresh("crucible_axi.install")
-        with mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
+        axi = _import_fresh("crucible_axi")
+        with mock.patch.object(axi, "__version__", "0.1.0"), \
+                mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
                 mock.patch("crucible_axi.install.shutil.which",
                            return_value="/usr/bin/bun"), \
                 mock.patch("crucible_axi.install._server_already_installed",
@@ -309,8 +334,16 @@ class StagedInstallEndToEndMockedTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_run_install_default_runners_server_skills_manifest_all_ok_true_with_subprocess_mocked(self):
+        """Patches `crucible_axi.__version__` to a realistic installed-release
+        value -- the live value in a source checkout is the
+        `_SOURCE_CHECKOUT_VERSION` sentinel (CR-CRU-041 S6), which is a
+        separate, dedicated fail-fast contract covered by
+        ServerStageFailsFastOnUnresolvedVersionTest, not this end-to-end
+        stage-sequencing test."""
         install = _import_fresh("crucible_axi.install")
-        with mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
+        axi = _import_fresh("crucible_axi")
+        with mock.patch.object(axi, "__version__", "0.1.0"), \
+                mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
                 mock.patch("crucible_axi.install.shutil.which",
                            return_value="/usr/bin/bun"), \
                 mock.patch("crucible_axi.install._server_already_installed",

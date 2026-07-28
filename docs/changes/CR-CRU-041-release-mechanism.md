@@ -80,9 +80,56 @@ does not re-fire `on: release`; `NPM_TOKEN` for the inaugural scoped publish, si
 no pending-publisher equivalent, then the flip to OIDC); the TestPyPI rehearsal loop; and
 the `set-version` → `finish` → push-master → publish order.
 
-### §S5 — Drop the vestigial `v`-strip
-`publish-npm`'s `VERSION="${GITHUB_REF_NAME#v}"` strips a prefix that cannot be present
-under the confirmed bare-tag scheme. Match the tag scheme exactly.
+### §S5 — Adopt Sandesh's `vX.Y.Z` tag scheme (REVISED 2026-07-28, user decision)
+Crucible must tally with Sandesh: the git tag is **`vX.Y.Z`**, and hatch-vcs strips the `v`
+so the published PyPI version is exactly `X.Y.Z`. Sandesh runs
+`gitflow.prefix.versiontag = v` with tags `v0.3.0`…`v0.3.5`; Crucible's prefix is currently
+**empty**, so `git flow release finish` would cut a bare `0.1.0`. **Crucible has no tags
+yet**, so this is a free change now and an expensive one after the first release.
+
+- `publish-pypi` and `publish-npm` guards: `^refs/tags/[0-9]+\.[0-9]+\.[0-9]+$` →
+  `^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$`.
+- `create-release` tag detection: `grep -E '^[0-9]+\.[0-9]+\.[0-9]+$'` →
+  `'^v[0-9]+\.[0-9]+\.[0-9]+$'`.
+- **KEEP** `publish-npm`'s `VERSION="${GITHUB_REF_NAME#v}"` — under this scheme it is
+  correct and load-bearing (it derives the bare version the `package.json` comparison
+  needs). The earlier "drop the vestigial strip" item is **withdrawn**.
+- `gitflow.prefix.versiontag` lives in `.git/config`, which is **not version-controlled**,
+  so it cannot be fixed by a committed file. `release.sh finish` therefore **preflight-
+  asserts** `git config --get gitflow.prefix.versiontag` equals `v` and refuses otherwise,
+  naming the one-time `git config gitflow.prefix.versiontag v` fix; `RELEASING.md` lists it
+  as a clone-setup prerequisite. (Sandesh depends on this config silently; asserting it is
+  a deliberate improvement — an unset prefix would otherwise cut a tag that every publish
+  guard then rejects, after the merge has already happened.)
+- CR-CRU-009 §S6's "tag `0.1.0`" is superseded: the 0.1.0 tag is **`v0.1.0`**.
+
+### §S6 — Composite release strategy: one repo, two artifacts, ONE version
+Crucible ships a **Python** orchestrator + client fleet (`crucible-axi`, PyPI) and a
+**Bun/TS** server (`@anthill-tec/crucible-server`, npm) from a single repo. They release in
+**lockstep**: one `vX.Y.Z` tag publishes both at `X.Y.Z`. This mirrors Sandesh
+(`sandesh-relay` on PyPI + `@anthill-tec/sandesh-pi` on npm, both pinned to the same tag).
+
+Version authority per artifact:
+- **Python — DERIVED.** hatch-vcs reads the tag; `pyproject.toml` has no version field and
+  is never hand-edited.
+- **npm — MANUAL MANIFEST.** `package.json` carries a literal version, bumped by
+  `release.sh set-version` (§S3) and guarded pre-tag by `finish` (§S3) and again at publish
+  time by the CI tag-vs-`package.json` check.
+
+**Version-pin the cross-artifact fetch.** The two are not merely co-released — the Python
+side FETCHES the npm side at install time, so lockstep must be enforced at runtime, not
+just at publish. Currently `crucible_axi/install.py` runs
+`subprocess.run(["npx", "-y", SERVER_NPM_PACKAGE])` with **no version**, which resolves to
+`latest`: a pinned `crucible-axi X.Y.Z` would pull whatever server is newest. Fix:
+- Expose `crucible_axi.__version__` via `importlib.metadata.version("crucible-axi")`.
+- The `[server]` stage fetches `<SERVER_NPM_PACKAGE>@<that version>`, so the orchestrator
+  always provisions the server it was released with.
+- Provide one documented escape hatch (`CRUCIBLE_SERVER_VERSION`) for development and for
+  recovering from a bad server publish; unset means the pinned version, never `latest`.
+
+(This is a difference from Sandesh worth naming: its Pi extension does not bundle or fetch
+sandesh-core — it shells to whatever `sandesh` CLI is on PATH. Crucible's Python side
+actively provisions its server, so the pin carries weight there that it does not there.)
 
 ## Acceptance criteria
 - [ ] `npm pack --dry-run` on the server package emits a tarball whose file list contains
@@ -102,7 +149,19 @@ under the confirmed bare-tag scheme. Match the tag scheme exactly.
 - [ ] `release.yml` parses as valid workflow YAML; `create-release` is gated on
       push-to-master; `build` has `pull_request` and `push` triggers; no job other than
       `publish-testpypi` and the npm dry-run is reachable from `workflow_dispatch`.
-- [ ] `RELEASING.md` exists and names every prerequisite in §S4.
+- [ ] `RELEASING.md` exists and names every prerequisite in §S4, including the one-time
+      `git config gitflow.prefix.versiontag v`.
+- [ ] **Tag scheme (§S5):** both publish guards and the `create-release` tag detection match
+      `v`-prefixed tags only — a bare `0.1.0` tag is REJECTED by the guard, and `v0.1.0` is
+      accepted — asserted against the workflow text.
+- [ ] **Tag-prefix preflight (§S5):** `release.sh finish` exits non-zero when
+      `gitflow.prefix.versiontag` is unset or not `v`, naming the fix, before any git-flow
+      or push command runs.
+- [ ] **Composite pin (§S6):** `crucible_axi.__version__` resolves via
+      `importlib.metadata`, and the `[server]` stage's npx argv contains
+      `<pkg>@<__version__>` — never a bare package name — asserted on the invoked command.
+- [ ] **Composite escape hatch (§S6):** `CRUCIBLE_SERVER_VERSION` overrides the pin; unset
+      yields the pinned version and never `latest` — asserted.
 
 ## Non-goals
 - **Running the release.** Cutting the branch, tagging `0.1.0`, and publishing remain a
