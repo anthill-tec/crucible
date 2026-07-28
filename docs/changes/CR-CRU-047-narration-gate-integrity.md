@@ -130,21 +130,42 @@ the gate output itself — the CR-CRU-039 treatment applied to the bun side. Wit
 divergence between on-disk test files and files run has no legitimate cause, so it can be
 asserted rather than merely reported.
 
-### §S3 — Narrate from `--dots`, not from the human console stream
-Root cause is established above; this section is now implementation, not investigation.
+### §S3 — Fix the completion regex (ANSI-tolerant); extend the existing env strip
+**REVISED TWICE. Read the correction — it changes what the defect actually is.**
 
-Add `--dots` to the bun invocation (it composes with the existing
-`--reporter=junit --reporter-outfile=…`) and count **dot characters** as completions instead of
-matching console text. Retire `_COMPLETION_LINE`. The `M` prescan (`_prescan_test_total`) and the
-throttle (≥~2s or ≥10 completions) are unchanged — only the completion SIGNAL changes.
+**CORRECTION (2026-07-28): "Fault 2" does NOT apply to the client.**
+`clients/bun-crucible.py:712` and `:784` ALREADY do `env.pop("CLAUDECODE", None)` before
+`_run_logged`, with a comment stating it is there so the narrator's line family streams. The
+agent-quieting measurements in the Context section were taken against **raw `bun` invocations**,
+not against the client — the two were conflated. The client already defends itself. What remains
+is a real but smaller gap: only `CLAUDECODE` is popped, not `AGENT` or `REPL_ID`.
 
-This closes the class, not just the instance: `--dots` is a documented reporter whose output is a
-contract, whereas the default console format has none and is additionally mutated by
-agent-detection env vars outside our control.
+**So the defect is Fault 1 alone: the completion regex is stale.**
+`_COMPLETION_LINE` matches `^\((?:pass|fail|skip|todo)\)`; bun 1.3.14 emits `✓`/`✗` lines.
 
-Do NOT simply update the regex to match `✓`/`✗`. That would fix Fault 1 and leave Fault 2 — the
-narrator would still see nothing whenever `CLAUDECODE`/`AGENT`/`REPL_ID` is set, which is every
-agent-run gate, i.e. all of them.
+**🚨 The trap that would silently reproduce the bug.** bun's per-test lines are **ANSI-colourised
+even through a pipe**. Measured raw bytes of a passing line:
+
+```
+\x1b[0m\x1b[32m\xe2\x9c\x93\x1b[0m \x1b[0mapp-logic — phaseRole(...)
+```
+
+An anchored `^✓` matches **zero** lines. The new pattern MUST either allow a leading
+`(?:\x1b\[[0-9;]*m)*` run or strip ANSI before matching. A naive `^✓` "fix" fails exactly as
+silently as the original — same defect, new spelling. `_FILE_HEADER_LINE` is unaffected
+(`narration.test.ts:` arrives with no escapes).
+
+Scope: make `_COMPLETION_LINE` match bun's current per-test lines ANSI-tolerantly; add `AGENT`
+and `REPL_ID` to the existing `env.pop` at both call sites. `_prescan_test_total`, the throttle,
+and `_run_logged` are all UNCHANGED — the tick lines are newline-terminated, so line-based
+reading already delivers them live and the byte-identity risk never arises.
+
+**Why NOT `--dots` (withdrawn, with a new disqualifying fact).** It is documented and
+quieting-immune, but: dots carry no newlines, forcing `_run_logged` to character-level reading of
+a stream whose capture must stay byte-identical for the `§S2c` parser. Worse — measured — **bun
+emits NO dot for a failing test**, printing the failure block and a `✗` line instead, so a dot
+count silently under-reports on exactly the runs that matter most. Dots are not a viable
+completion signal.
 
 ### §S4 — Cross-stack gate note
 `clients/bun-crucible.py` is Python whose observable contract is asserted by bun tests — the
@@ -160,10 +181,16 @@ CR-CRU-045 §S3 rule applies: any change here needs BOTH gates before close-out.
       asserted, so a future permanently-excluded directory fails the gate.
 - [ ] A test asserts the collected-test count is surfaced in the regression envelope, so a future
       silent drop fails the gate rather than passing it (§S2).
-- [ ] Narration is driven by `--dots`; `_COMPLETION_LINE` no longer exists — asserted.
+- [ ] `AGENT` and `REPL_ID` join `CLAUDECODE` in the `env.pop` at BOTH call sites (`:712`, `:784`)
+      — asserted on the env handed to the child.
+- [ ] The completion regex matches a REAL ANSI-colourised bun tick line (use captured raw bytes as
+      the fixture, not a hand-typed `✓`) — asserted. This is the anti-trap test.
 - [ ] The narration tests pass BOTH with `CLAUDECODE=1` set and unset — asserted explicitly,
       since agent-quieting is Fault 2 and a fix that only works in one environment is not a fix.
-- [ ] The junit file is still written when `--dots` is added — ingest must be unaffected.
+- [ ] The junit file is still written — ingest must be unaffected.
+- [ ] `tests/clients-bun-crucible.test.ts` stays green — the `§S2c` parser consumes
+      `result.stdout`, and stripping the vars makes bun MORE verbose, so the capture changes
+      shape even though the reader does not.
 - [ ] Full bun regression green AND full Python regression green.
 
 ## Non-goals

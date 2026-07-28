@@ -177,8 +177,16 @@ def _patch(path, payload):
 
 # ── §S2b (CR-CRU-008) — in-run progress narration ──────────────────────────
 
-# bun's per-test completion line family (piped, non-quiet mode).
-_COMPLETION_LINE = re.compile(r"^\((?:pass|fail|skip|todo)\)")
+# bun's per-test completion line family (piped, non-quiet mode). bun ≥1.3
+# marks each finished test with a tick/cross glyph — and colourises it EVEN
+# THROUGH A PIPE, so the real captured bytes are
+# `\x1b[0m\x1b[32m✓\x1b[0m\x1b[0m\x1b[1m <name>…`. An anchored bare `^✓`
+# therefore matches ZERO real output; the SGR runs around the glyph must be
+# tolerated on both sides. Pass (✓) and fail (✗) both count as completions.
+_ANSI_SGR_RUN = r"(?:\x1b\[[0-9;]*m)*"
+_COMPLETION_LINE = re.compile(
+    r"^" + _ANSI_SGR_RUN + r"[✓✗]" + _ANSI_SGR_RUN + r"\s"
+)
 # bun's per-file section header, e.g. `narration.test.ts:`.
 _FILE_HEADER_LINE = re.compile(r"^(\S+\.[cm]?[jt]sx?):$")
 # A test declaration call site in a test source (`test(`/`it(`, with optional
@@ -224,7 +232,7 @@ class _Narrator:
     """§S2b (CR-CRU-008) — throttled in-run 'running N/M' narration.
 
     Fed the runner's streamed combined output line-by-line; counts bun's
-    per-test completion lines ((pass)/(fail)/(skip)/(todo)) and posts progress
+    per-test completion lines (the ANSI-colourised ✓/✗ family) and posts progress
     as a heartbeat `message` through the v2 register/heartbeat verb — no new
     API, and it prints NOTHING (the stdout data pipe stays pure; heartbeats on
     an already-existing agent journal no lifecycle event server-side).
@@ -430,16 +438,26 @@ def _bun_test_cmd(bun, targets, junit_path, coverage, coverage_dir):
 
 
 def _parse_junit_file(junit_path):
-    """Parse a bun JUnit XML file into (summary, tree) with per-test leaf names."""
+    """Parse a bun JUnit XML file into (summary, tree, files) with per-test leaf
+    names. `files` (CR-CRU-047 §S2) is the number of DISTINCT test FILES the run
+    collected — bun stamps each `<testcase>` with `file="tests/..."`; a case
+    missing that attribute falls back to its `classname`, then to its suite
+    name, so the count degrades to "distinct suites" rather than to zero. It
+    rides the printed run envelope only, never the ingest payload, so a
+    shrinking suite is visible in the gate output itself."""
     tree_nodes = []
     total = passed = failed = 0
     duration_ms = 0
+    files = set()
     root = ET.parse(junit_path).getroot()
     suites = root.findall(".//testsuite") or [root]
     for suite in suites:
         children = []
         suite_fail = False
         for tc in suite.findall("testcase"):
+            source = tc.get("file") or tc.get("classname") or suite.get("name")
+            if source:
+                files.add(source.replace("\\", "/"))
             tc_time = int(float(tc.get("time", 0)) * 1000)
             fail = tc.find("failure") is not None or tc.find("error") is not None
             status = "fail" if fail else "pass"
@@ -487,26 +505,60 @@ def _parse_junit_file(junit_path):
             })
     summary = {"total": total, "passed": passed, "failed": failed,
                "pending": 0, "duration_ms": duration_ms}
-    return summary, tree_nodes
+    return summary, tree_nodes, len(files)
 
 
-_FAIL_LINE = re.compile(r"^\(fail\)\s+(?P<name>.*?)(?:\s+\[[0-9.]+m?s\])?\s*$")
+# bun's per-test RESULT-line family — the same ANSI trap `_COMPLETION_LINE`
+# documents above, and the identical stale-pattern defect. bun colourises these
+# lines EVEN THROUGH A PIPE; the real captured bytes of a failing line are
+#   \x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m mismatched expectation\x1b[0m \x1b[0m\x1b[2m[0.13ms\x1b[0m\x1b[2m]\x1b[0m
+# so SGR runs sit on BOTH sides of the glyph, INSIDE the name (a nested
+# describe renders as `suite\x1b[2m >\x1b[0m\x1b[1m name`) and all through the
+# `[0.13ms]` duration tail — whose `[` is itself followed by an SGR run. An
+# anchored `^\(fail\)` matches ZERO real output; so would a naive `^✗`.
+# Matching therefore happens on the WIRE form, while everything STORED (name,
+# message, trace) is stripped clean — junit leaf names carry no escapes, so a
+# married key must not either.
+_ANSI_SGR_RE = re.compile(_ANSI_SGR_RUN)
+_DURATION_TAIL = (r"(?:\s+" + _ANSI_SGR_RUN + r"\[" + _ANSI_SGR_RUN
+                  + r"[0-9.]+\s*m?s" + _ANSI_SGR_RUN + r"\])?")
+_FAIL_LINE = re.compile(
+    r"^" + _ANSI_SGR_RUN + r"✗" + _ANSI_SGR_RUN + r"\s+(?P<name>.*?)"
+    + _ANSI_SGR_RUN + _DURATION_TAIL + _ANSI_SGR_RUN + r"\s*$"
+)
+# The non-failing result glyphs — pass (✓), skip (»), todo (✎). Each ends the
+# preceding detail block, so an `error:` block can never cross a finished test
+# and marry onto the wrong leaf. (Skip/todo lines carry no duration tail.)
+_RESULT_BOUNDARY_LINE = re.compile(
+    r"^" + _ANSI_SGR_RUN + r"[✓»✎]" + _ANSI_SGR_RUN + r"\s"
+)
+
+
+def _strip_ansi(text):
+    """Drop SGR escape runs. bun colourises its stream even through a pipe, so
+    every value lifted off that stream is cleaned before it is stored."""
+    return _ANSI_SGR_RE.sub("", text)
 
 
 def _parse_console_failures(log_text):
-    """§S2c (CR-CRU-008) — marry bun's console failure detail to leaf names.
+    r"""§S2c (CR-CRU-008) — marry bun's console failure detail to leaf names.
 
     bun's JUnit reporter writes a BARE `<failure type="..."/>` for EVERY
     failure kind (assertion mismatch, thrown Error, timeout alike) — the human
     detail exists only on the console stream. For assertion mismatches and
     thrown Errors an `error: <detail>` block appears IMMEDIATELY BEFORE the
-    `(fail) <name>` line; that block is captured here, keyed by leaf name.
+    `✗ <name>` result line; that block is captured here, keyed by leaf name.
     Detail printed AFTER the fail line (e.g. a timeout's `^ this test timed
     out after Nms.`) is structurally NOT a preceding block and stays
     unmatched — the leaf degrades to type-only.
+
+    Every line is ANSI-colourised — including the `error:` prefix, which
+    arrives as `\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m ` — so the block is
+    accumulated in its stripped form and the result lines are matched on the
+    wire form.
     """
     details = {}
-    block = []        # lines accumulated since the last result-line boundary
+    block = []        # stripped lines since the last result-line boundary
     error_idx = None  # index in `block` of the most recent "error:" line
     for line in log_text.splitlines():
         m = _FAIL_LINE.match(line)
@@ -518,19 +570,20 @@ def _parse_console_failures(log_text):
                 trace = "\n".join(detail).rstrip()
                 if trace:
                     married["trace"] = trace[:8000]
-                name = m.group("name").strip()
+                name = _strip_ansi(m.group("name")).strip()
                 details[name] = married
                 # Nested describes print "suite > name"; junit leaves carry
                 # the bare test name — index the last segment too.
                 details.setdefault(name.split(" > ")[-1], married)
             block, error_idx = [], None
             continue
-        if line.startswith(("(pass)", "(skip)", "(todo)")):
+        if _RESULT_BOUNDARY_LINE.match(line):
             block, error_idx = [], None
             continue
-        if line.startswith("error:"):
+        plain = _strip_ansi(line)
+        if plain.startswith("error:"):
             error_idx = len(block)
-        block.append(line)
+        block.append(plain)
     return details
 
 
@@ -705,11 +758,12 @@ def cmd_test(args):
             log_path = os.path.join(reports_dir, "run.log")
         narrator = None
         if args.agent:
-            # bun ≥1.3 hides per-test (pass) lines when it detects Claude Code
-            # (CLAUDECODE env). Drop it for the wrapped runner so the full
-            # (pass)/(fail) line family streams: §S2b counts it live and the
-            # §S2c run.log keeps its result-line block boundaries.
-            env.pop("CLAUDECODE", None)
+            # bun ≥1.3 hides per-test completion lines when it detects an agent
+            # session (CLAUDECODE / AGENT / REPL_ID env). Drop them all for the
+            # wrapped runner so the full ✓/✗ line family streams: §S2b counts it
+            # live and the §S2c run.log keeps its result-line block boundaries.
+            for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID"):
+                env.pop(_quieting_var, None)
             narrator = _Narrator(
                 lambda message: _register_agent(project_dir, args.agent, message),
                 total_hint=_prescan_test_total(package_dir, args.tests),
@@ -721,7 +775,7 @@ def cmd_test(args):
             return result.returncode
 
         if os.path.exists(junit_path):
-            summary, tree = _parse_junit_file(junit_path)
+            summary, tree, files = _parse_junit_file(junit_path)
             # §S2c — the captured run log IS the failure-detail source.
             _marry_failures(tree, getattr(result, "stdout", None))
             # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run
@@ -734,7 +788,7 @@ def cmd_test(args):
                                   tier="unit",
                                   context=_ingest_context(cycle_id),
                                   raw=getattr(result, "stdout", None))
-            _emit_ingest_axi("test", resp, summary, project_dir, args.agent,
+            _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent,
                              cycle_id, warnings)
             # A failing run exits non-zero even when the ingest succeeded —
             # the exit code carries the RUNNER verdict, not the POST's.
@@ -780,8 +834,10 @@ def cmd_regression(args):
             log_path = os.path.join(reports_dir, "run.log")
         narrator = None
         if args.agent:
-            # Same §S2b setup as cmd_test (whole-suite M via package walk).
-            env.pop("CLAUDECODE", None)
+            # Same §S2b setup as cmd_test (whole-suite M via package walk),
+            # including the agent-quieting env strip.
+            for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID"):
+                env.pop(_quieting_var, None)
             narrator = _Narrator(
                 lambda message: _register_agent(project_dir, args.agent, message),
                 total_hint=_prescan_test_total(package_dir, None),
@@ -794,7 +850,7 @@ def cmd_regression(args):
                   file=sys.stderr)
             return 1
 
-        summary, tree = _parse_junit_file(junit_path)
+        summary, tree, files = _parse_junit_file(junit_path)
         _marry_failures(tree, getattr(result, "stdout", None))
         coverage = None
         if coverage_on:
@@ -811,7 +867,7 @@ def cmd_regression(args):
             return 1
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                               tier="regression", context=_ingest_context(cycle_id))
-        _emit_ingest_axi("regression", resp, summary, project_dir, args.agent,
+        _emit_ingest_axi("regression", resp, summary, files, project_dir, args.agent,
                          cycle_id, warnings)
         return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
     finally:
@@ -829,7 +885,7 @@ def cmd_auto_ingest(args):
     if not os.path.exists(junit_path):
         print(f"[crucible] no {junit_path} — nothing to ingest", file=sys.stderr)
         return 1
-    summary, tree = _parse_junit_file(junit_path)
+    summary, tree, files = _parse_junit_file(junit_path)
     # CR-CRU-030 §S9 — resolve/attach the active cycle BEFORE the POST so the
     # ingested e2e run carries the resolved cycleId in the SERVER record (not
     # just the envelope); no active cycle → withhold, never a cycleId=null orphan.
@@ -839,7 +895,7 @@ def cmd_auto_ingest(args):
         return 1
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="e2e",
                           context=_ingest_context(cycle_id))
-    _emit_ingest_axi("auto-ingest", resp, summary, project_dir, args.agent,
+    _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
                      cycle_id, warnings)
     return 0 if resp.get("ok") else 1
 
@@ -1428,12 +1484,16 @@ def _register_cycle_guard(project_dir):
     return withhold, warnings
 
 
-def _emit_ingest_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
+def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, cycle_id,
+                     warnings):
     """Emit the §S1 envelope for a SUCCESSFUL ingest verb
-    (test/regression/auto-ingest): run{passed,failed,total} + cycle-aware
-    context. Any warnings are also surfaced on stderr."""
+    (test/regression/auto-ingest): run{passed,failed,total,files} + cycle-aware
+    context. `files` (CR-CRU-047 §S2) is the distinct test-FILE count from
+    `_parse_junit_file`, a sibling of the test counts, so a suite that silently
+    shrinks is visible in the gate output. Any warnings are also surfaced on
+    stderr."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
-           "total": summary["total"]}
+           "total": summary["total"], "files": files}
     # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
     # the cycleId key rather than emit an orphan-signalling explicit null.
     if cycle_id is not None:

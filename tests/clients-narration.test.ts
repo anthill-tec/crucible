@@ -83,7 +83,7 @@
 // something to tail live, and the run spans long enough to cross the
 // throttle's time bound at least once.
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
@@ -143,6 +143,33 @@ function spawnScript(
     cmd: ["python3", scriptPath, ...args],
     cwd: opts.cwd,
     env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl, ...(opts.env ?? {}) },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
+/**
+ * CR-CRU-047 §S3 — identical to `spawnScript` except it explicitly DELETES
+ * `CLAUDECODE` from the child's environment rather than merging an override
+ * on top. `spawnScript`'s `env` option can only ADD/override keys with a
+ * string value; it cannot remove a key the ambient session already set
+ * (this session runs with `CLAUDECODE=1`). The two narration-under-both-
+ * states tests need a genuine unset, not "unset unless already set".
+ */
+function spawnScriptWithClaudecodeUnset(
+  scriptPath: string,
+  args: string[],
+  opts: { cwd: string; crucibleUrl: string },
+) {
+  const baseEnv: Record<string, string | undefined> = { ...process.env };
+  for (const k of Object.keys(baseEnv)) {
+    if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
+  }
+  delete baseEnv.CLAUDECODE;
+  return Bun.spawn({
+    cmd: ["python3", scriptPath, ...args],
+    cwd: opts.cwd,
+    env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -490,6 +517,389 @@ describe("§S2b in-run progress narration — clients/bun-crucible.py (fine-grai
       expect(extractNarration(log, NARRATION_RE).length).toBe(0);
     },
     15000,
+  );
+});
+
+// ── CR-CRU-047 §S3 — SECOND PASS. `--dots` is WITHDRAWN. ───────────────────
+//
+// ROOT CAUSE, corrected (2026-07-28, read this before the tests below).
+// `clients/bun-crucible.py:712`/`:784` ALREADY `env.pop("CLAUDECODE", None)`
+// before running the wrapped `bun test` — the client already defends itself
+// against bun's agent-quieting. The remaining gap is narrower: only
+// `CLAUDECODE` is popped, not `AGENT`/`REPL_ID` (also agent-quieting
+// triggers). So the ONLY real defect is Fault 1 — `_COMPLETION_LINE`
+// (`^\((?:pass|fail|skip|todo)\)`) matches bun's OLD parenthesized
+// completion-line format; bun 1.3.14 emits `✓ <name>` / `✗ <name>` instead,
+// and — the trap — ANSI-colourised even through a pipe:
+//   \x1b[0m\x1b[32m\xe2\x9c\x93\x1b[0m \x1b[0m<name>
+// An anchored `^✓` (no escape tolerance) is the SAME bug with new spelling —
+// it matches zero real bun output. `--dots` is WITHDRAWN as the fix: it
+// carries no newlines (forcing character-level reading, breaking §S2c's
+// byte-identical stdout capture) and — measured — bun emits NO dot for a
+// FAILING test, so a dot count silently under-reports on exactly the runs
+// that matter. The fix is: make `_COMPLETION_LINE` ANSI-tolerant, and add
+// `AGENT`/`REPL_ID` to the existing `env.pop` at both call sites.
+//
+// Technique, unchanged from the first pass: pin the contract from the
+// client's OBSERVABLE behavior only — the stderr echo of the built
+// invocation, the junit file actually on disk, and the narration signal
+// itself — never by importing Python internals into a bun test (the SUT
+// stays a subprocess wrapper here, same as the rest of this file). The
+// anti-trap and env-strip tests below drive the REAL `clients/bun-crucible.py`
+// against a FAKE `bun` binary (mirrors the fake `mvnw` technique already
+// used in this file) so the fixture bytes are fully controlled while the
+// client's own subprocess-wrapper contract stays real.
+
+// Captured VERBATIM (2026-07-28) from a real `bun test` v1.3.14 run with
+// CLAUDECODE/AGENT/REPL_ID unset, redirected to a file, on a throwaway
+// 2-test fixture (one passing, one failing) — NOT hand-typed. This is
+// exactly the trap CR-CRU-047 documents: a hand-typed bare `✓`/`✗` would
+// falsely validate a regex that matches ZERO real bun output.
+const REAL_BUN_PASS_LINE =
+  "\x1b[0m\x1b[32m✓\x1b[0m\x1b[0m\x1b[1m a passing sample test\x1b[0m \x1b[0m\x1b[2m[0.06ms\x1b[0m\x1b[2m]\x1b[0m";
+const REAL_BUN_FAIL_LINE =
+  "\x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m a failing sample test\x1b[0m \x1b[0m\x1b[2m[0.12ms\x1b[0m\x1b[2m]\x1b[0m";
+
+/**
+ * A fake `bun` binary (same technique as `STREAMING_MVNW_SCRIPT` above) that
+ * never runs real tests — it streams the REAL captured ANSI tick lines
+ * above (2× pass, 2× fail) with real `sleep` gaps so the client's 2s
+ * throttle fires twice, and writes a matching junit XML to whatever
+ * `--reporter-outfile=` the client passed. This isolates the
+ * completion-line MATCHING contract from bun's own live behavior
+ * (version/terminal-detection drift) while still driving the real
+ * `clients/bun-crucible.py` subprocess wrapper end-to-end.
+ */
+function writeFakeAnsiTickBun(path: string): void {
+  const junitXml =
+    '<?xml version="1.0"?><testsuite name="narration.test.ts" tests="4">' +
+    '<testcase name="pass one" time="0.01"/>' +
+    '<testcase name="pass two" time="0.01"/>' +
+    '<testcase name="fail one" time="0.01"><failure message="expected 2 to be 3">AssertionError</failure></testcase>' +
+    '<testcase name="fail two" time="0.01"><failure message="expected 2 to be 3">AssertionError</failure></testcase>' +
+    "</testsuite>";
+  const lines = [
+    "#!/bin/sh",
+    'outfile=""',
+    'for arg in "$@"; do',
+    '  case "$arg" in',
+    '    --reporter-outfile=*) outfile="${arg#--reporter-outfile=}" ;;',
+    "  esac",
+    "done",
+    "cat > \"$outfile\" <<'JUNITXML'",
+    junitXml,
+    "JUNITXML",
+    `printf '%s\\n' '${REAL_BUN_PASS_LINE}'`,
+    "sleep 2.2",
+    `printf '%s\\n' '${REAL_BUN_PASS_LINE}'`,
+    `printf '%s\\n' '${REAL_BUN_FAIL_LINE}'`,
+    "sleep 2.2",
+    `printf '%s\\n' '${REAL_BUN_FAIL_LINE}'`,
+    "sleep 2.5",
+    "exit 1",
+    "",
+  ];
+  writeExecutable(path, lines.join("\n"));
+}
+
+/**
+ * A fake `bun` binary for the env-strip assertions (§S3 item C): it never
+ * runs real tests either — it just dumps the AGENT/REPL_ID/CLAUDECODE
+ * values it actually SEES into `env-capture.txt` (relative to its cwd,
+ * which is the client's `--package-dir`) and writes a trivially-passing
+ * junit file so the wrapping run completes cleanly.
+ */
+function writeFakeEnvCaptureBun(path: string): void {
+  const junitXml =
+    '<?xml version="1.0"?><testsuite name="narration.test.ts" tests="1">' +
+    '<testcase name="ok" time="0.01"/></testsuite>';
+  const lines = [
+    "#!/bin/sh",
+    'outfile=""',
+    'for arg in "$@"; do',
+    '  case "$arg" in',
+    '    --reporter-outfile=*) outfile="${arg#--reporter-outfile=}" ;;',
+    "  esac",
+    "done",
+    "cat > \"$outfile\" <<'JUNITXML'",
+    junitXml,
+    "JUNITXML",
+    "{",
+    '  echo "AGENT=${AGENT:-<unset>}"',
+    '  echo "REPL_ID=${REPL_ID:-<unset>}"',
+    '  echo "CLAUDECODE=${CLAUDECODE:-<unset>}"',
+    "} > env-capture.txt",
+    "exit 0",
+    "",
+  ];
+  writeExecutable(path, lines.join("\n"));
+}
+
+function readEnvCapture(dir: string): Record<string, string> {
+  const text = readFileSync(join(dir, "env-capture.txt"), "utf-8");
+  const out: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const eq = line.indexOf("=");
+    if (eq === -1) continue;
+    out[line.slice(0, eq)] = line.slice(eq + 1).trim();
+  }
+  return out;
+}
+
+describe("§S3 (CR-CRU-047) — bun narration survives bun's real ANSI tick lines; env-quieting strip covers AGENT/REPL_ID too", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test(
+    "the bun invocation still carries the junit reporter flags and the junit XML is still written correctly (ingest unaffected) — --dots is WITHDRAWN, not part of this contract — no --agent/server needed, the '[crucible] running:' echo and the junit write both happen unconditionally",
+    async () => {
+      const dir = scratch.dir("narration-argv-junit-");
+      writeNarrationBunProject(dir, "unused-project-key", 3, 0);
+      const proc = spawnScript(
+        BUN_SCRIPT_PATH,
+        ["test", "--tests", "narration.test.ts", "--project-dir", dir, "--package-dir", dir],
+        { cwd: dir, crucibleUrl: "http://localhost:1" },
+      );
+      const [, stderr, code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      expect(code).toBe(0); // all 3 fixture tests pass
+
+      const runningLine = stderr.split("\n").find((l) => l.startsWith("[crucible] running:"));
+      expect(runningLine).toBeDefined();
+      // POSITIVE: the existing junit reporter flags are present in the built argv.
+      expect(runningLine).toContain("--reporter=junit");
+      expect(runningLine).toMatch(/--reporter-outfile=\S*junit\.xml/);
+      // NEGATIVE — the withdrawn --dots contract must not silently reappear
+      // (it was ruled out: it strips newlines, breaking §S2c's byte-identical
+      // stdout capture, and bun emits no dot for a failing test).
+      expect(runningLine).not.toMatch(/(^|\s)--dots(\s|$)|--reporter=dots\b/);
+
+      // The junit XML must actually land on disk — ingest must not regress.
+      const junitPath = join(dir, "test-reports", "junit.xml");
+      expect(existsSync(junitPath)).toBe(true);
+      const xml = readFileSync(junitPath, "utf-8");
+      const caseCount = (xml.match(/<testcase\b/g) ?? []).length;
+      expect(caseCount).toBe(3);
+    },
+    15000,
+  );
+
+  test("_COMPLETION_LINE (the completion-line matcher symbol) SURVIVES in clients/bun-crucible.py — the fix changes what it MATCHES, not whether the mechanism exists", () => {
+    const source = readFileSync(BUN_SCRIPT_PATH, "utf-8");
+    // POSITIVE: the symbol survives — GREEN must repair its regex in place,
+    // never delete the console-scraping mechanism outright (that would be
+    // console-scraping REMOVED, not FIXED, and would silently kill narration).
+    expect(source).toContain("_COMPLETION_LINE");
+    // NEGATIVE: the stale, non-ANSI-tolerant pattern — bun's OLD
+    // `(pass)/(fail)/(skip)/(todo)` format, which bun 1.3.14 never emits —
+    // must be gone. A survival check on the symbol NAME alone would pass an
+    // untouched regex; this pins that the literal old pattern text changed.
+    expect(source).not.toContain(String.raw`^\((?:pass|fail|skip|todo)\)`);
+  });
+
+  test(
+    "the completion pattern matches REAL captured ANSI-colourised bun tick lines — a passing (✓, green) line AND a failing (✗, red) line both register as completions (the anti-trap test: a hand-typed bare glyph would NOT reproduce bun's real, escape-wrapped bytes)",
+    async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const baseUrl = `http://localhost:${handle.server.port}`;
+      const key = await createProject(baseUrl, "clients-narration-ansi-anti-trap");
+      const dir = scratch.dir("narration-ansi-fake-bun-");
+      writeNarrationBunProject(dir, key, 4, 0); // 4 real `test(` decls → prescan total_hint = 4
+      const fakeBunPath = join(dir, "fake-bun-ansi.sh");
+      writeFakeAnsiTickBun(fakeBunPath);
+      const agentId = "narration-ansi-anti-trap-agent";
+
+      let done = false;
+      const pollPromise = pollAgentUntil(baseUrl, key, agentId, () => done, 150);
+      const proc = spawnScript(
+        BUN_SCRIPT_PATH,
+        [
+          "test",
+          "--agent", agentId,
+          "--tests", "narration.test.ts",
+          "--project-dir", dir,
+          "--package-dir", dir,
+          "--bun", fakeBunPath,
+        ],
+        { cwd: dir, crucibleUrl: baseUrl },
+      );
+      const [, , code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      done = true;
+      const log = await pollPromise;
+
+      expect(code).toBe(1); // 2 of the fixture's 4 synthetic testcases are failing
+
+      const matches = extractNarration(log, NARRATION_RE);
+      // Non-vacuous precondition, same discipline as every other narration
+      // test in this file: narration must actually be OBSERVED.
+      expect(matches.length).toBeGreaterThan(0);
+      for (const m of matches) expect(m.m).toBe(4);
+
+      const distinct = distinctNarrationValues(matches);
+      // The FIRST throttled post can only reach n=2 if BOTH real captured ✓
+      // lines were recognized as completions (the throttle posts using the
+      // count AT THE MOMENT it crosses the 2s bound — the 2nd ✓ completion).
+      expect(distinct.some((p) => p.n === 2)).toBe(true);
+      // The SECOND throttled post can only reach n=4 if BOTH real captured ✗
+      // lines were ALSO recognized — proving the pattern matches the
+      // failing (red, ✗) variant independently of the passing (green, ✓) one.
+      expect(distinct.some((p) => p.n === 4)).toBe(true);
+    },
+    20000,
+  );
+
+  test(
+    "`test` strips AGENT and REPL_ID (alongside CLAUDECODE) from the wrapped bun runner's environment — the env.pop at clients/bun-crucible.py:712 extends beyond CLAUDECODE",
+    async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const baseUrl = `http://localhost:${handle.server.port}`;
+      const key = await createProject(baseUrl, "clients-narration-env-strip-test");
+      const dir = scratch.dir("narration-env-strip-test-");
+      writeNarrationBunProject(dir, key, 1, 0);
+      const fakeBunPath = join(dir, "fake-bun-envcapture.sh");
+      writeFakeEnvCaptureBun(fakeBunPath);
+      const agentId = "narration-env-strip-test-agent";
+
+      const proc = spawnScript(
+        BUN_SCRIPT_PATH,
+        [
+          "test",
+          "--agent", agentId,
+          "--tests", "narration.test.ts",
+          "--project-dir", dir,
+          "--package-dir", dir,
+          "--bun", fakeBunPath,
+        ],
+        {
+          cwd: dir,
+          crucibleUrl: baseUrl,
+          env: { AGENT: "codex-cli", REPL_ID: "codex-repl-42", CLAUDECODE: "1" },
+        },
+      );
+      await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+
+      const captured = readEnvCapture(dir);
+      // POSITIVE (parent process truly had them set) + NEGATIVE (the
+      // wrapped runner must NEVER see them) in one assertion each.
+      expect(captured.AGENT).toBe("<unset>");
+      expect(captured.REPL_ID).toBe("<unset>");
+      expect(captured.CLAUDECODE).toBe("<unset>");
+    },
+    15000,
+  );
+
+  test(
+    "`regression` strips AGENT and REPL_ID (alongside CLAUDECODE) from the wrapped bun runner's environment — the env.pop at clients/bun-crucible.py:784 extends beyond CLAUDECODE",
+    async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const baseUrl = `http://localhost:${handle.server.port}`;
+      const key = await createProject(baseUrl, "clients-narration-env-strip-regression");
+      const dir = scratch.dir("narration-env-strip-regression-");
+      writeNarrationBunProject(dir, key, 1, 0);
+      const fakeBunPath = join(dir, "fake-bun-envcapture-regression.sh");
+      writeFakeEnvCaptureBun(fakeBunPath);
+      const agentId = "narration-env-strip-regression-agent";
+
+      const proc = spawnScript(
+        BUN_SCRIPT_PATH,
+        ["regression", "--agent", agentId, "--project-dir", dir, "--package-dir", dir, "--bun", fakeBunPath],
+        {
+          cwd: dir,
+          crucibleUrl: baseUrl,
+          env: { AGENT: "codex-cli", REPL_ID: "codex-repl-42", CLAUDECODE: "1" },
+        },
+      );
+      await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+
+      const captured = readEnvCapture(dir);
+      expect(captured.AGENT).toBe("<unset>");
+      expect(captured.REPL_ID).toBe("<unset>");
+      expect(captured.CLAUDECODE).toBe("<unset>");
+    },
+    15000,
+  );
+
+  test(
+    "narration still posts 'running N/M' when CLAUDECODE=1 is explicitly SET in the runner's environment (Fault 2 regression guard — every agent-run gate sets this var)",
+    async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const baseUrl = `http://localhost:${handle.server.port}`;
+      const key = await createProject(baseUrl, "clients-narration-bun-cc-set");
+      const dir = scratch.dir("narration-bun-cc-set-");
+      writeNarrationBunProject(dir, key, 24, 120);
+      const agentId = "narration-bun-cc-set-agent";
+
+      let done = false;
+      const pollPromise = pollAgentUntil(baseUrl, key, agentId, () => done);
+      const proc = spawnScript(
+        BUN_SCRIPT_PATH,
+        ["test", "--agent", agentId, "--tests", "narration.test.ts", "--project-dir", dir, "--package-dir", dir],
+        { cwd: dir, crucibleUrl: baseUrl, env: { CLAUDECODE: "1" } },
+      );
+      const [, , code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      done = true;
+      const log = await pollPromise;
+
+      expect(code).toBe(0); // all 24 fixture tests pass
+
+      const matches = extractNarration(log, NARRATION_RE);
+      // Non-vacuous precondition, same discipline as the §S2b tests above:
+      // narration must actually be OBSERVED, not merely asserted away.
+      expect(matches.length).toBeGreaterThan(0);
+      for (const m of matches) expect(m.m).toBe(24);
+    },
+    20000,
+  );
+
+  test(
+    "narration still posts 'running N/M' when CLAUDECODE is explicitly UNSET in the runner's environment",
+    async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const baseUrl = `http://localhost:${handle.server.port}`;
+      const key = await createProject(baseUrl, "clients-narration-bun-cc-unset");
+      const dir = scratch.dir("narration-bun-cc-unset-");
+      writeNarrationBunProject(dir, key, 24, 120);
+      const agentId = "narration-bun-cc-unset-agent";
+
+      let done = false;
+      const pollPromise = pollAgentUntil(baseUrl, key, agentId, () => done);
+      const proc = spawnScriptWithClaudecodeUnset(
+        BUN_SCRIPT_PATH,
+        ["test", "--agent", agentId, "--tests", "narration.test.ts", "--project-dir", dir, "--package-dir", dir],
+        { cwd: dir, crucibleUrl: baseUrl },
+      );
+      const [, , code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      done = true;
+      const log = await pollPromise;
+
+      expect(code).toBe(0);
+
+      const matches = extractNarration(log, NARRATION_RE);
+      expect(matches.length).toBeGreaterThan(0);
+      for (const m of matches) expect(m.m).toBe(24);
+    },
+    20000,
   );
 });
 
