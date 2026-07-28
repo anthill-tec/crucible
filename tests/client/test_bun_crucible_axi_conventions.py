@@ -285,7 +285,8 @@ class TruncationFullTest(_BaseAxiConventionsTest):
 
     def _base_gate_report_argv(self, extra=None):
         argv = ["gate-report", "--outcome", "failed", "--commit", "sha1",
-                "--steps", "test:failed", "--project-dir", self.tmpdir]
+                "--steps", "test:failed", "--agent", "test-agent",
+                "--project-dir", self.tmpdir]
         return argv + (extra or [])
 
     def test_gate_report_large_error_field_is_truncated_by_default_with_size_hint(self):

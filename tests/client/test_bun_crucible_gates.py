@@ -194,7 +194,8 @@ class GateReportClientVerbTest(_BaseClientVerbTest):
 
     def _base_argv(self, extra=None):
         argv = ["gate-report", "--outcome", "passed", "--commit", "abc1234",
-                "--steps", "review:passed,test:passed", "--project-dir", self.tmpdir]
+                "--steps", "review:passed,test:passed", "--agent", "test-agent",
+                "--project-dir", self.tmpdir]
         return argv + (extra or [])
 
     def test_gate_report_posts_valid_gate_with_wave_context_from_env(self):
@@ -253,7 +254,8 @@ class GateReportClientVerbTest(_BaseClientVerbTest):
 
     def test_gate_report_malformed_steps_flag_does_not_post_garbage(self):
         argv = ["gate-report", "--outcome", "passed", "--commit", "abc1234",
-                "--steps", "not-a-valid-step-entry-missing-colon", "--project-dir", self.tmpdir]
+                "--steps", "not-a-valid-step-entry-missing-colon", "--agent", "test-agent",
+                "--project-dir", self.tmpdir]
         calls = []
         code, err = 1, ""
         try:
@@ -300,7 +302,7 @@ class MilestoneClientVerbTest(_BaseClientVerbTest):
     def test_milestone_posts_type_label_and_cr_context(self):
         calls = []
         argv = ["milestone", "--type", "gap-analysis", "--label", "CR-NAI-043 gap-analysis",
-                "--cr", "CR-NAI-043", "--project-dir", self.tmpdir]
+                "--cr", "CR-NAI-043", "--agent", "test-agent", "--project-dir", self.tmpdir]
         with mock.patch.object(self.module, "_post", side_effect=self._post_recorder(calls)):
             code, _out, _err = _run_main(self.module, argv)
 
@@ -317,7 +319,7 @@ class MilestoneClientVerbTest(_BaseClientVerbTest):
     def test_milestone_without_cr_flag_omits_context_cr(self):
         calls = []
         argv = ["milestone", "--type", "stage-flip", "--label", "wave 3 -> gated",
-                "--project-dir", self.tmpdir]
+                "--agent", "test-agent", "--project-dir", self.tmpdir]
         with mock.patch.object(self.module, "_post", side_effect=self._post_recorder(calls)):
             code, _out, _err = _run_main(self.module, argv)
 
@@ -333,7 +335,7 @@ class MilestoneClientVerbTest(_BaseClientVerbTest):
     def test_milestone_surfaces_server_failure_as_nonzero_exit(self):
         calls = []
         argv = ["milestone", "--type", "deploy", "--label", "bogus",
-                "--project-dir", self.tmpdir]
+                "--agent", "test-agent", "--project-dir", self.tmpdir]
         with mock.patch.object(self.module, "_post",
                                 side_effect=self._post_recorder(
                                     calls, ok=False, error="type must be one of: ...")):
@@ -633,7 +635,7 @@ class GateRunAxiProxyTest(_BaseClientVerbTest):
             return {"ok": True}
 
         argv = ["gate-run", "--intent", "verify the auth flow refactor",
-                "--project-dir", self.tmpdir]
+                "--agent", "test-agent", "--project-dir", self.tmpdir]
         with mock.patch.object(self.module, "_post", side_effect=fake_post):
             code, out, _err = _run_main(self.module, argv)
 
