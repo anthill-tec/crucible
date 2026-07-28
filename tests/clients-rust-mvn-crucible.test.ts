@@ -1,4 +1,4 @@
-// CR-CRU-008 C3 — clients/rust-crucible.py + clients/mvn-crucible.py v2 contract (RED).
+// CR-CRU-008 C3 — clients/rust-crucible.py + clients/mvn-crucible.py v2 contract.
 //
 // Spec: docs/changes/CR-CRU-008-cli-fleet-upgrade.md — §S2 script fleet
 // upgrade (v2 endpoints, tier per subcommand, git/wave/orchestrator/cycle
@@ -7,13 +7,17 @@
 // TRUTH ... VERIFY tests run against clients/ copies." This cycle (C3)
 // upgrades rust-crucible.py and mvn-crucible.py.
 //
-// RED phase: neither `clients/rust-crucible.py` nor `clients/mvn-crucible.py`
-// exists yet on this branch (only the LIVE v1 scripts at
-// ~/.claude/scripts/*.py exist — copied into clients/ and upgraded there by
-// GREEN). Every test spawns `python3 clients/<script>.py ...` against a REAL
-// live test server and fails because the file is missing — python3 exits 2
-// with "can't open file" on stderr. That is expected RED, exactly mirroring
-// C2's clients/bun-crucible.py RED file (tests/clients-bun-crucible.test.ts).
+// Current state: BOTH `clients/rust-crucible.py` and `clients/mvn-crucible.py`
+// EXIST in-repo and are exactly what these tests drive — every test spawns
+// `python3 clients/<script>.py ...` against a REAL live test server. The
+// in-repo `clients/` copies are the SOURCE OF TRUTH. The old
+// `~/.claude/scripts/*.py` mirror is RETIRED: do NOT run it, point tests at
+// it, or treat it as the client source — running the mirror ORPHANS Crucible
+// runs. (History, for context only: this file first landed as C3's RED, when
+// neither client existed on the branch yet and every spawn failed with
+// python3 exit 2 "can't open file" — mirroring C2's clients/bun-crucible.py
+// RED file, tests/clients-bun-crucible.test.ts. GREEN created both clients
+// under clients/. That is how the file began, not how it reads today.)
 //
 // Technique reused verbatim from C2: a real `startServer({port:0,
 // dbPath:":memory:"})` instance + `Bun.spawn`, plus a tiny CAPTURING PROXY
