@@ -54,6 +54,13 @@ this. Every assertion below targets content Crucible no longer owns, and once §
 | `tests/clients-skills.test.ts` | **419 lines, 22 tests** — SKILL.md v2-endpoint references per skill, no-unmarked-v1-legacy, heartbeat guidance, `WORKFLOW_CYCLE_ID` absence, example script paths | **delete the file** |
 | `tests/cr009-release-bundle.test.ts` | `describe("§S3 skills Vercel-Skills conformance")` (:67–103) + `describe("§S3 arduino skill reconcile")` (:104–133) — 4 tests | delete those two describes only |
 | `tests/client/test_crucible_axi_stages.py` | 4 skills-stage tests (`:267`, `:296`, `:309`, `:336`) + ~35 skills references incl. the module docstring | retire the skills cases, keep the server/manifest ones |
+| `tests/client/test_crucible_axi_install.py` | **25 skills references**: 3 three-stage assertions (`:243` call-order, `:344` envelope `stage_names`, `:487` `len(stages) == 3`), the `:58` + `:233` docstrings, `_patched_server_skills_fakes` (`:416-430`), and `"skills"` keys in injected fakes at `:253`/`:283`/`:300` | retire the three-stage assertions; keep the orchestrator-framework and idempotency coverage |
+
+**Enumeration note (2026-07-28):** the fourth file above was MISSED in the first pass because
+the Dimension-6 symbol grep was piped through `head`, truncating a completeness check. Re-run
+untruncated, the full set of files referencing skills is exactly: `crucible_axi/install.py`,
+`tests/client/test_crucible_axi_install.py`, `tests/client/test_crucible_axi_stages.py`,
+`tests/cr009-release-bundle.test.ts`.
 
 The `§S1/§S4/§S5` describes in `cr009-release-bundle.test.ts` (install.sh, release.yml, docs)
 are unaffected and must stay green. `crucible_axi/__init__.py:4`'s docstring mentions

@@ -1,6 +1,6 @@
 """CR-CRU-009 §S2 — the staged install orchestrator framework.
 
-`run_install` sequences the server -> skills -> manifest sub-installers through
+`run_install` sequences the server -> manifest sub-installers through
 an INJECTABLE stage-runner table (no real subprocess/network in this cycle) and
 aggregates each stage's result into `(ok, stages, warnings)`. Stages run in
 `STAGE_ORDER`; a stage exception is FAIL-FAST (remaining stages are skipped and
@@ -8,9 +8,11 @@ aggregates each stage's result into `(ok, stages, warnings)`. Stages run in
 
 `DEFAULT_STAGE_RUNNERS` is a module-level, in-place-mutable dict (tests patch it
 via `mock.patch.dict`); `run_install` reads it by name at call time so a patch
-is always observed. In C1 the server/skills default runners are minimal
-placeholders — the real delegation is C2 — while the manifest runner already
-drives the real manifest module.
+is always observed.
+
+CR-CRU-042 §S1 — the `[skills]` stage is retired: skill content is Model B's
+scope now, so Crucible ships no `npx skills` invocation and the envelope
+reports exactly the two surviving stages.
 """
 
 from __future__ import annotations
@@ -21,14 +23,13 @@ import subprocess
 
 from crucible_axi import manifest
 
-STAGE_ORDER = ("server", "skills", "manifest")
+STAGE_ORDER = ("server", "manifest")
 
 # External sources for the concrete sub-installers. `SERVER_NPM_PACKAGE` is the
 # published npm package name and MUST stay equal to the repo package.json's
 # `name` field (CR-CRU-041 §S1 — asserted by a test so the two artifacts cannot
 # silently drift apart).
 SERVER_NPM_PACKAGE = "@anthill-tec/crucible-server"
-SKILLS_CLI_SOURCE = "crucible-dev/crucible"  # TODO(S6): real public owner/repo source
 
 # Environment escape hatch for the version-pinned server fetch (CR-CRU-041 §S6)
 # — for development and for recovering from a bad server publish. Unset means
@@ -44,13 +45,6 @@ def _server_already_installed(target_dir: str) -> bool:
     server has already been laid down under `target_dir`. Tests patch this
     directly; the on-disk probe is a simple marker-directory check."""
     return os.path.isdir(os.path.join(target_dir, "server"))
-
-
-def _skills_already_installed(target_dir: str) -> bool:
-    """Idempotency detection seam for the [skills] sub-installer -- True when the
-    Crucible skill set has already been synced. Tests patch this directly; the
-    on-disk probe is a simple marker-directory check."""
-    return os.path.isdir(os.path.join(target_dir, "skills"))
 
 
 def _resolve_server_version() -> str:
@@ -135,36 +129,10 @@ def _server_stage(target_dir: str, force: bool) -> dict:
     return {"path": server_path, "converged": False}
 
 
-def _skills_stage(target_dir: str, force: bool) -> dict:
-    """[skills] sub-installer -- `npx skills add <SKILLS_CLI_SOURCE> --skill '*'
-    --agent '*' -g -y` installs the Crucible skill set into every detected
-    harness (global scope, non-interactive).
-
-    Idempotent: an already-installed skill set (and not `force`) short-circuits
-    to converged=True without shelling out.
-    """
-    skills_path = os.path.join(target_dir, "skills")
-
-    if not force and _skills_already_installed(target_dir):
-        return {"path": skills_path, "converged": True}
-
-    completed = subprocess.run(
-        ["npx", "skills", "add", SKILLS_CLI_SOURCE,
-         "--skill", "*", "--agent", "*", "-g", "-y"],
-        check=False)
-    if completed.returncode != 0:
-        raise RuntimeError(
-            f"skills stage failed: `npx skills add {SKILLS_CLI_SOURCE}` exited "
-            f"with returncode {completed.returncode}")
-
-    return {"path": skills_path, "converged": False}
-
-
 # Module-level, in-place-mutable stage table (patched by tests via
 # mock.patch.dict). `run_install` reads this name at call time.
 DEFAULT_STAGE_RUNNERS: dict = {
     "server": _server_stage,
-    "skills": _skills_stage,
     "manifest": manifest.run_manifest_stage,
 }
 

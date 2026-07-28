@@ -55,7 +55,7 @@ This RED slice pins the exact package layout + API GREEN must build:
         main(argv=None) -> int                 # console-script entry point
 
     crucible_axi/install.py
-        STAGE_ORDER = ("server", "skills", "manifest")
+        STAGE_ORDER = ("server", "manifest")
         DEFAULT_STAGE_RUNNERS: dict[str, callable]   # module-level, mutable
                                                       # in place (tests patch
                                                       # it via mock.patch.dict)
@@ -201,15 +201,22 @@ class PyprojectPackageEntryPointTest(unittest.TestCase):
             text, r'(?m)^crucible-axi\s*=\s*"crucible_axi\.cli:main"\s*$',
             'expected crucible-axi = "crucible_axi.cli:main"')
 
-    def test_pyproject_declares_client_fleet_and_status_contract_as_package_data(self):
+    def test_pyproject_declares_client_fleet_as_package_data(self):
+        """The clients/ fleet must be declared as package data. This checks the
+        DECLARATION only -- deliberately NOT that STATUS-CONTRACT.md is named
+        here. A separate force-include entry for it duplicated the archive path
+        already covered by the clients/ tree and made `python -m build` fail with
+        a duplicate-archive-path ValueError. What actually matters -- that
+        crucible_axi/clients/STATUS-CONTRACT.md is PRESENT IN THE BUILT WHEEL --
+        is asserted by tests/client/test_crucible_axi_wheel_packaging.py, which
+        is strictly stronger than a substring match on this config file. Do not
+        "restore" a STATUS-CONTRACT.md assertion here; it would re-encode the
+        build break."""
         text = PYPROJECT_PATH.read_text()
         self.assertIn(
             "clients", text,
             "expected the pyproject.toml packaging config to reference the "
             "clients/ fleet as package data")
-        self.assertIn(
-            "STATUS-CONTRACT.md", text,
-            "expected STATUS-CONTRACT.md to be referenced as package data")
 
     def test_console_script_entry_point_target_resolves_to_a_real_callable(self):
         """Cross-check: the dotted target the entry point NAMES
@@ -230,9 +237,9 @@ class PyprojectPackageEntryPointTest(unittest.TestCase):
 
 
 class InstallOrchestratorFrameworkTest(unittest.TestCase):
-    """S2 -- `run_install` sequences [server] -> [skills] -> [manifest] via
-    INJECTABLE stage callables (no real subprocess), aggregating results into
-    one TOON-AXI envelope with ok + each stage's `~`-abbreviated path."""
+    """S2 -- `run_install` sequences [server] -> [manifest] via INJECTABLE
+    stage callables (no real subprocess), aggregating results into one
+    TOON-AXI envelope with ok + each stage's `~`-abbreviated path."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="crucible-axi-install-")
@@ -240,7 +247,7 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_run_install_executes_server_skills_manifest_stages_in_order(self):
+    def test_run_install_executes_server_manifest_stages_in_order(self):
         install = _import_fresh("crucible_axi.install")
         call_order = []
 
@@ -250,15 +257,15 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
                 return {"path": os.path.join(target_dir, name), "converged": False}
             return _runner
 
-        fakes = {name: make_fake(name) for name in ("server", "skills", "manifest")}
+        fakes = {name: make_fake(name) for name in ("server", "manifest")}
         ok, stages, warnings = install.run_install(self.tmp, stage_runners=fakes)
 
         self.assertEqual(
-            call_order, ["server", "skills", "manifest"],
+            call_order, ["server", "manifest"],
             "stages must run in the exact S2 sequence")
         self.assertTrue(ok)
         self.assertEqual(
-            [s["name"] for s in stages], ["server", "skills", "manifest"])
+            [s["name"] for s in stages], ["server", "manifest"])
 
     def test_run_install_stops_calling_further_stages_once_a_stage_raises(self):
         """Negative/bound path: a stage failure must NOT silently continue to
@@ -271,23 +278,17 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
             call_order.append("server")
             raise RuntimeError("server stage boom")
 
-        def skills_runner(target_dir, force):
-            call_order.append("skills")
-            return {"path": os.path.join(target_dir, "skills"), "converged": False}
-
         def manifest_runner(target_dir, force):
             call_order.append("manifest")
             return {"path": os.path.join(target_dir, "crucible-clients.json"),
                      "converged": False}
 
-        fakes = {"server": failing_server, "skills": skills_runner,
-                 "manifest": manifest_runner}
+        fakes = {"server": failing_server, "manifest": manifest_runner}
         ok, stages, warnings = install.run_install(self.tmp, stage_runners=fakes)
 
         self.assertNotIn(
-            "skills", call_order,
-            "a failing [server] stage must not be followed by [skills]")
-        self.assertNotIn("manifest", call_order)
+            "manifest", call_order,
+            "a failing [server] stage must not be followed by [manifest]")
         self.assertFalse(ok, "a stage failure must surface as ok:false")
 
     def test_run_install_stage_results_carry_tilde_abbreviated_installed_path(self):
@@ -297,8 +298,6 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         fakes = {
             "server": lambda target_dir, force: {
                 "path": fake_server_path, "converged": False},
-            "skills": lambda target_dir, force: {
-                "path": os.path.join(target_dir, "skills"), "converged": False},
             "manifest": lambda target_dir, force: {
                 "path": os.path.join(target_dir, "crucible-clients.json"),
                 "converged": False},
@@ -341,7 +340,7 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         self.assertEqual(axi["verb"], "install")
         self.assertIs(axi["ok"], True)
         stage_names = [s["name"] for s in axi["stages"]]
-        self.assertEqual(stage_names, ["server", "skills", "manifest"])
+        self.assertEqual(stage_names, ["server", "manifest"])
         for stage in axi["stages"]:
             self.assertIn("path", stage)
             self.assertTrue(stage["path"])
@@ -413,12 +412,12 @@ class InstallIdempotencyTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _patched_server_skills_fakes(self):
-        """[server]/[skills] stay mocked (no real npx/uv/subprocess); the
-        REAL default [manifest] stage runs both times so idempotency of the
+    def _patched_server_fakes(self):
+        """[server] stays mocked (no real npx/uv/subprocess); the REAL
+        default [manifest] stage runs both times so idempotency of the
         actual manifest-writing code path is exercised, not a fake's own
         bookkeeping."""
-        calls = {"server": 0, "skills": 0}
+        calls = {"server": 0}
 
         def make(name):
             def _runner(target_dir, force):
@@ -427,11 +426,11 @@ class InstallIdempotencyTest(unittest.TestCase):
                         "converged": calls[name] > 1}
             return _runner
 
-        return {"server": make("server"), "skills": make("skills")}
+        return {"server": make("server")}
 
     def test_running_install_twice_does_not_duplicate_the_manifest_file(self):
         install = _import_fresh("crucible_axi.install")
-        fakes = self._patched_server_skills_fakes()
+        fakes = self._patched_server_fakes()
         manifest_path = os.path.join(self.tmp, "crucible-clients.json")
 
         with mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
@@ -456,7 +455,7 @@ class InstallIdempotencyTest(unittest.TestCase):
 
     def test_running_install_twice_reports_manifest_stage_converged_on_second_run(self):
         install = _import_fresh("crucible_axi.install")
-        fakes = self._patched_server_skills_fakes()
+        fakes = self._patched_server_fakes()
 
         with mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
             ok1, stages1, _w1 = install.run_install(self.tmp)
@@ -476,7 +475,7 @@ class InstallIdempotencyTest(unittest.TestCase):
 
     def test_running_install_twice_both_runs_are_ok_true_for_every_stage(self):
         install = _import_fresh("crucible_axi.install")
-        fakes = self._patched_server_skills_fakes()
+        fakes = self._patched_server_fakes()
 
         with mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
             ok1, stages1, _w1 = install.run_install(self.tmp)
@@ -484,8 +483,8 @@ class InstallIdempotencyTest(unittest.TestCase):
 
         self.assertTrue(ok1)
         self.assertTrue(ok2)
-        self.assertEqual(len(stages1), 3)
-        self.assertEqual(len(stages2), 3)
+        self.assertEqual(len(stages1), 2)
+        self.assertEqual(len(stages2), 2)
 
 
 if __name__ == "__main__":

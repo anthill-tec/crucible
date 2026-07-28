@@ -1,25 +1,21 @@
-"""CR-CRU-009 C2 -- the CONCRETE `[server]` + `[skills]` sub-installer stage
-delegation (§S2), pinned against C1's placeholder `_server_stage`/
-`_skills_stage` in `crucible_axi/install.py`.
+"""CR-CRU-009 C2 -- the CONCRETE `[server]` sub-installer stage delegation
+(§S2), pinned against C1's placeholder `_server_stage` in
+`crucible_axi/install.py`.
 
-Contract pinned from docs/changes/CR-CRU-009-release-0.1.0.md §S2:
+CR-CRU-042 §S1/§S1b flipped this file's contract to the TWO-stage
+installer: `STAGE_ORDER == ("server", "manifest")`. The `[skills]` stage
+(`_skills_stage`, `_skills_already_installed`, `SKILLS_CLI_SOURCE`) is
+Model-B's scope now (Sandesh 1337/1342) and is retired from this suite --
+Crucible no longer ships an `npx skills` invocation, and no envelope this
+suite exercises may carry a `skills` key.
+
+Contract pinned from docs/changes/CR-CRU-009-release-0.1.0.md §S2, as
+narrowed by CR-CRU-042:
 
     - **[server]** `npx -y <crucible-server-npm-pkg>` fetches + runs the
       bun/node server; bootstrap Bun via
       `curl -fsSL https://bun.sh/install | bash` if absent.
-    - **[skills]** `npx skills add <crucible-skills-source> --skill '*'
-      --agent '*' -g -y` -- installs the Crucible skill set into every
-      detected harness, global scope, non-interactive.
     - Idempotent + scope-parameterized.
-
-RED phase: `_server_stage`/`_skills_stage` in `crucible_axi/install.py` are
-C1 PLACEHOLDERS -- they never shell out. Every test below either fails a
-plain assertion (no subprocess call recorded) or errors at `mock.patch(...)`
-entry (`crucible_axi.install.subprocess`/`.shutil` do not exist as module
-attributes yet, nor do `_server_already_installed`/`_skills_already_installed`
-or the `SERVER_NPM_PACKAGE`/`SKILLS_CLI_SOURCE` constants) -- a
-missing-SUT-symbol error, valid RED per the sub-agent procedure (never
-skipped).
 
 This RED slice PINS the exact stage-runner contract GREEN must build:
 
@@ -32,20 +28,19 @@ This RED slice PINS the exact stage-runner contract GREEN must build:
                                                 # subprocess.run` and
                                                 # `...install.shutil.which`.
 
+        STAGE_ORDER: tuple                      # == ("server", "manifest")
+                                                 # exactly -- two stages, in
+                                                 # this order (CR-CRU-042
+                                                 # §S1).
+
         SERVER_NPM_PACKAGE: str                 # placeholder npm package
                                                  # name for the bun/node
                                                  # server (GREEN wires the
                                                  # real published name).
-        SKILLS_CLI_SOURCE: str                  # placeholder `skills add`
-                                                 # source (owner/repo form;
-                                                 # GREEN wires the real
-                                                 # public source once S4/S6
-                                                 # open-source the repo).
 
         _server_already_installed(target_dir) -> bool
-        _skills_already_installed(target_dir) -> bool
-            Idempotency detection seams -- tests patch these directly
-            rather than pinning an on-disk marker layout.
+            Idempotency detection seam -- tests patch this directly rather
+            than pinning an on-disk marker layout.
 
         _server_stage(target_dir, force) -> {"path": str, "converged": bool}
             1. If not force and `_server_already_installed(...)`: return
@@ -60,17 +55,12 @@ This RED slice PINS the exact stage-runner contract GREEN must build:
                engages.
             5. Otherwise return {"path": ..., "converged": False}.
 
-        _skills_stage(target_dir, force) -> {"path": str, "converged": bool}
-            Same shape: already-installed short-circuit, else
-            `npx skills add <SKILLS_CLI_SOURCE> --skill '*' --agent '*'
-            -g -y` via subprocess.run; non-zero returncode raises
-            RuntimeError mentioning "skills" and "npx".
-
-    DEFAULT_STAGE_RUNNERS unchanged (`_server_stage`/`_skills_stage` are
-    already wired in by name from C1) -- `run_install(target_dir)` with NO
-    injected `stage_runners` must, with subprocess/shutil/already-installed
-    all mocked to "fresh success", execute server -> skills -> manifest and
-    return `ok=True` with all three stage names present.
+    DEFAULT_STAGE_RUNNERS carries EXACTLY `{"server": ..., "manifest": ...}`
+    -- no `"skills"` key -- so `run_install(target_dir)` with NO injected
+    `stage_runners` must, with subprocess/shutil/already-installed all
+    mocked to "fresh success", execute server -> manifest and return
+    `ok=True` with exactly the two stage names present, and must never
+    invoke any command containing `npx skills`.
 
 Invocation:
     python3 -m pytest tests/client/test_crucible_axi_stages.py -q
@@ -254,78 +244,31 @@ class ServerStageTest(unittest.TestCase):
             "npx/bun subprocess call")
 
 
-class SkillsStageTest(unittest.TestCase):
-    """§S2 [skills] -- real `npx skills add <SKILLS_CLI_SOURCE> --skill '*'
-    --agent '*' -g -y` delegation (Vercel Skills CLI, multi-harness fan-out)."""
+class StageOrderContractTest(unittest.TestCase):
+    """CR-CRU-042 §S1 -- `STAGE_ORDER` is exactly the two surviving stages,
+    in order. The `[skills]` stage is retired (Model-B scope now)."""
 
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="crucible-axi-skills-stage-")
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def test_skills_stage_invokes_npx_skills_add_with_all_skills_all_agents_global_noninteractive_flags(self):
+    def test_stage_order_is_exactly_server_then_manifest(self):
         install = _import_fresh("crucible_axi.install")
-        with mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
-                mock.patch("crucible_axi.install._skills_already_installed",
-                           return_value=False):
-            mock_run.return_value.returncode = 0
-            result = install._skills_stage(self.tmp, False)
-
-        self.assertIn("path", result)
-        self.assertFalse(
-            result["converged"],
-            "a fresh (non-already-installed) skills stage run must not "
-            "report converged:True")
-
         self.assertEqual(
-            mock_run.call_count, 1,
-            f"expected exactly one subprocess call, got "
-            f"calls={mock_run.call_args_list}")
-        command_text = _call_command_text(mock_run.call_args_list[0])
-        for token in ("npx", "skills", "add", install.SKILLS_CLI_SOURCE,
-                      "-g", "-y", "--skill", "--agent"):
-            self.assertIn(
-                token, command_text,
-                f"expected {token!r} in the skills-add invocation: "
-                f"{command_text!r}")
-        self.assertIn(
-            "*", command_text,
-            "expected the all-skills/all-agents wildcard in the invocation")
-
-    def test_skills_stage_raises_when_npx_skills_exits_nonzero(self):
-        install = _import_fresh("crucible_axi.install")
-        with mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
-                mock.patch("crucible_axi.install._skills_already_installed",
-                           return_value=False):
-            mock_run.return_value.returncode = 1
-            with self.assertRaises(RuntimeError) as ctx:
-                install._skills_stage(self.tmp, False)
-
-        message = str(ctx.exception).lower()
-        self.assertIn("skills", message)
-        self.assertIn("npx", message)
-
-    def test_skills_stage_reports_converged_true_when_already_installed_without_invoking_subprocess(self):
-        install = _import_fresh("crucible_axi.install")
-        with mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
-                mock.patch("crucible_axi.install._skills_already_installed",
-                           return_value=True):
-            result = install._skills_stage(self.tmp, False)
-
-        self.assertTrue(result["converged"])
-        self.assertFalse(
-            mock_run.called,
-            "an already-installed skills stage must not re-invoke `npx "
-            "skills add`")
+            install.STAGE_ORDER, ("server", "manifest"),
+            "STAGE_ORDER must be exactly the two-stage (server, manifest) "
+            "order -- the [skills] stage is Model-B's scope now "
+            "(CR-CRU-042)")
 
 
 class StagedInstallEndToEndMockedTest(unittest.TestCase):
     """§S2 end-to-end (mocked externals) -- `run_install` with NO injected
     `stage_runners` (i.e. `DEFAULT_STAGE_RUNNERS`) must drive the REAL
-    `_server_stage`/`_skills_stage` -> `manifest.run_manifest_stage` chain
-    and aggregate `ok:True`, complementing C1's injected-stub coverage by
-    exercising the DEFAULT runners with subprocess/Bun mocked."""
+    `_server_stage` -> `manifest.run_manifest_stage` chain and aggregate
+    `ok:True`, complementing C1's injected-stub coverage by exercising the
+    DEFAULT runners with subprocess/Bun mocked.
+
+    CR-CRU-042 narrows this to the two-stage contract: no `skills` key in
+    the envelope, and no invoked command may contain `npx skills` -- the
+    anti-regression assertion the CR requires, checked against the actual
+    captured command set so a re-introduction of the skills stage fails
+    this suite."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="crucible-axi-stages-e2e-")
@@ -333,7 +276,7 @@ class StagedInstallEndToEndMockedTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_run_install_default_runners_server_skills_manifest_all_ok_true_with_subprocess_mocked(self):
+    def test_run_install_default_runners_server_manifest_all_ok_true_with_subprocess_mocked(self):
         """Patches `crucible_axi.__version__` to a realistic installed-release
         value -- the live value in a source checkout is the
         `_SOURCE_CHECKOUT_VERSION` sentinel (CR-CRU-041 S6), which is a
@@ -347,8 +290,6 @@ class StagedInstallEndToEndMockedTest(unittest.TestCase):
                 mock.patch("crucible_axi.install.shutil.which",
                            return_value="/usr/bin/bun"), \
                 mock.patch("crucible_axi.install._server_already_installed",
-                           return_value=False), \
-                mock.patch("crucible_axi.install._skills_already_installed",
                            return_value=False):
             mock_run.return_value.returncode = 0
             ok, stages, warnings = install.run_install(self.tmp)
@@ -357,20 +298,61 @@ class StagedInstallEndToEndMockedTest(unittest.TestCase):
             ok, f"expected ok:True with every sub-installer mocked to "
                 f"success, warnings={warnings}")
         self.assertEqual(
-            [s["name"] for s in stages], ["server", "skills", "manifest"])
+            [s["name"] for s in stages], ["server", "manifest"],
+            "expected exactly the two surviving stages, in order -- no "
+            "'skills' key anywhere in the envelope")
         for stage in stages:
             self.assertTrue(stage["path"], f"empty path for stage {stage}")
         self.assertEqual(warnings, [])
 
-        # server + skills each drove exactly one real subprocess.run() call
-        # via the (unmocked-except-for-subprocess) DEFAULT_STAGE_RUNNERS.
-        self.assertGreaterEqual(mock_run.call_count, 2)
+        # server drove at least one real subprocess.run() call via the
+        # (unmocked-except-for-subprocess) DEFAULT_STAGE_RUNNERS.
+        self.assertGreaterEqual(mock_run.call_count, 1)
+
+        # Anti-regression: no invoked command may shell out to `npx
+        # skills` -- a re-introduction of the retired [skills] stage must
+        # fail this suite, not silently pass.
+        skills_calls = [c for c in mock_run.call_args_list
+                        if "npx skills" in _call_command_text(c)]
+        self.assertEqual(
+            skills_calls, [],
+            f"no invoked command may contain 'npx skills' -- the [skills] "
+            f"stage is retired (CR-CRU-042); found calls={skills_calls}")
 
         # manifest ran for real (not mocked) -- the file lands on disk.
         manifest_path = os.path.join(self.tmp, "crucible-clients.json")
         self.assertTrue(
             os.path.exists(manifest_path),
             "the real manifest stage must still write crucible-clients.json")
+
+    def test_run_install_default_runners_never_invoke_npx_skills_even_when_stage_already_installed(self):
+        """Idempotent re-run path: with the server stage reporting
+        already-installed (converged:True, no subprocess call), the
+        installer must still never touch `npx skills` -- covering the
+        converged branch of the anti-regression contract, not just the
+        fresh-install branch above."""
+        install = _import_fresh("crucible_axi.install")
+        axi = _import_fresh("crucible_axi")
+        with mock.patch.object(axi, "__version__", "0.1.0"), \
+                mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
+                mock.patch("crucible_axi.install.shutil.which",
+                           return_value="/usr/bin/bun"), \
+                mock.patch("crucible_axi.install._server_already_installed",
+                           return_value=True):
+            mock_run.return_value.returncode = 0
+            ok, stages, warnings = install.run_install(self.tmp)
+
+        self.assertTrue(ok, f"expected ok:True on the converged re-run, "
+                             f"warnings={warnings}")
+        self.assertEqual([s["name"] for s in stages], ["server", "manifest"])
+
+        skills_calls = [c for c in mock_run.call_args_list
+                        if "npx skills" in _call_command_text(c)]
+        self.assertEqual(
+            skills_calls, [],
+            f"no invoked command may contain 'npx skills' on the "
+            f"already-installed/idempotent path either; found "
+            f"calls={skills_calls}")
 
 
 if __name__ == "__main__":
