@@ -1,4 +1,4 @@
-// CR-CRU-008 C3 — clients/rust-crucible.py + clients/mvn-crucible.py v2 contract (RED).
+// CR-CRU-008 C3 — clients/rust-crucible.py + clients/mvn-crucible.py v2 contract.
 //
 // Spec: docs/changes/CR-CRU-008-cli-fleet-upgrade.md — §S2 script fleet
 // upgrade (v2 endpoints, tier per subcommand, git/wave/orchestrator/cycle
@@ -7,13 +7,17 @@
 // TRUTH ... VERIFY tests run against clients/ copies." This cycle (C3)
 // upgrades rust-crucible.py and mvn-crucible.py.
 //
-// RED phase: neither `clients/rust-crucible.py` nor `clients/mvn-crucible.py`
-// exists yet on this branch (only the LIVE v1 scripts at
-// ~/.claude/scripts/*.py exist — copied into clients/ and upgraded there by
-// GREEN). Every test spawns `python3 clients/<script>.py ...` against a REAL
-// live test server and fails because the file is missing — python3 exits 2
-// with "can't open file" on stderr. That is expected RED, exactly mirroring
-// C2's clients/bun-crucible.py RED file (tests/clients-bun-crucible.test.ts).
+// Current state: BOTH `clients/rust-crucible.py` and `clients/mvn-crucible.py`
+// EXIST in-repo and are exactly what these tests drive — every test spawns
+// `python3 clients/<script>.py ...` against a REAL live test server. The
+// in-repo `clients/` copies are the SOURCE OF TRUTH. The old
+// `~/.claude/scripts/*.py` mirror is RETIRED: do NOT run it, point tests at
+// it, or treat it as the client source — running the mirror ORPHANS Crucible
+// runs. (History, for context only: this file first landed as C3's RED, when
+// neither client existed on the branch yet and every spawn failed with
+// python3 exit 2 "can't open file" — mirroring C2's clients/bun-crucible.py
+// RED file, tests/clients-bun-crucible.test.ts. GREEN created both clients
+// under clients/. That is how the file began, not how it reads today.)
 //
 // Technique reused verbatim from C2: a real `startServer({port:0,
 // dbPath:":memory:"})` instance + `Bun.spawn`, plus a tiny CAPTURING PROXY
@@ -217,7 +221,7 @@ interface FullEvent {
     cycle?: string;
     cycleId?: number;
   };
-  summary?: { total: number; passed: number; failed: number };
+  summary?: { total: number; passed: number; failed: number; pending?: number };
   tree?: Array<{ name: string; status: string; children: Array<{ name: string; status: string }> }>;
   coverage?: {
     lines?: { total: number; covered: number; percent: number };
@@ -265,23 +269,37 @@ function writeEnvFile(dir: string, projectKey: string): void {
 
 /** Minimal JUnit XML (`<testsuite><testcase>...`) — the shared format both
  * nextest (rust) and surefire/failsafe (maven) emit and Crucible's junit
- * codec parses identically (src/codecs/junit.ts). */
+ * codec parses identically (src/codecs/junit.ts). CR-CRU-050 §S1/§S1b —
+ * `skip` emits a bare `<skipped/>` child (nextest's and surefire's real
+ * shape for a skipped/ignored testcase), which the defective client-side
+ * parsers fold into `passed` today via a bare `else:`. */
 function writeJunitXml(
   path: string,
   suiteName: string,
-  cases: Array<{ name: string; fail?: boolean }>,
+  cases: Array<{ name: string; fail?: boolean; skip?: boolean }>,
 ): void {
   const testcases = cases
-    .map((c) =>
-      c.fail
-        ? `<testcase name="${c.name}" time="0.01"><failure message="boom">boom</failure></testcase>`
-        : `<testcase name="${c.name}" time="0.01"/>`,
-    )
+    .map((c) => {
+      if (c.fail) return `<testcase name="${c.name}" time="0.01"><failure message="boom">boom</failure></testcase>`;
+      if (c.skip) return `<testcase name="${c.name}" time="0.01"><skipped/></testcase>`;
+      return `<testcase name="${c.name}" time="0.01"/>`;
+    })
     .join("");
   writeFileSync(
     path,
     `<?xml version="1.0"?><testsuite name="${suiteName}" tests="${cases.length}">${testcases}</testsuite>`,
   );
+}
+
+/**
+ * Extracts the 4-space-indented body of the TOON `  run:` block from a
+ * client's stdout envelope (the §S2 printed run: block under `axi:`),
+ * without depending on key ORDER — the fix may insert `pending` anywhere.
+ * Mirrors tests/clients-bun-crucible.test.ts's helper of the same name.
+ */
+function extractRunBlock(stdout: string): string | undefined {
+  const match = stdout.match(/ {2}run:\n((?: {4}.*\n)*)/);
+  return match?.[1];
 }
 
 function writeLcovInfo(
@@ -677,6 +695,277 @@ describe("clients/rust-crucible.py — byte-compatible CLI surface (existing fla
         expect(stdout.includes(flag)).toBe(true);
       }
     }
+  });
+});
+
+// CR-CRU-050 §S1/§S1b — rust has TWO client-side JUnit parse sites, both
+// with the identical unguarded `status = "fail" if fail else "pass"` / bare
+// `else: passed += 1` and a hardcoded `"pending": 0`:
+//   site 1: `_regression_ingest_run` (rust-crucible.py:700-763), driving the
+//           `regression-ingest` verb.
+//   site 2: `_workspace_regression_run` (rust-crucible.py:1246-1307), driving
+//           `workspace-regression` — the ORCHESTRATOR PRE-MERGE-GATE path.
+// A fix touching only site 1 is the likely partial fix the CR calls out —
+// both are covered here, each with its own fixture and its own assertions.
+describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 1 (regression-ingest): <skipped/> counts as pending, never passed (fake cargo stub)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  function fixtureDirWithFakeCargoCr050(
+    key: string,
+    cases: Array<{ name: string; fail?: boolean; skip?: boolean }>,
+  ): { dir: string; path: string } {
+    const dir = scratch.dir("rust-crucible-cr050-regression-");
+    writeEnvFile(dir, key);
+    const junitDir = join(dir, "target", "nextest", "ci");
+    Bun.spawnSync({ cmd: ["mkdir", "-p", junitDir] });
+    writeJunitXml(join(junitDir, "junit.xml"), "cr050_regression_fixture", cases);
+    const binDir = scratch.dir("fake-cargo-bin-cr050-");
+    writeExecutable(join(binDir, "cargo"), NOOP_SCRIPT);
+    const path = `${binDir}:${process.env.PATH ?? ""}`;
+    return { dir, path };
+  }
+
+  test("§S1/§S1b: counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), pass/fail leaves unaffected; §S2 (extended): the plain 'regression: ...' stdout line (rust-crucible.py:818) also carries pending=1", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-rc-cr050-regression-ingest");
+    const { dir, path } = fixtureDirWithFakeCargoCr050(key, [
+      { name: "alpha" },
+      { name: "beta", fail: true },
+      { name: "gamma", skip: true },
+    ]);
+
+    const res = await runScript(
+      RUST_SCRIPT_PATH,
+      ["regression-ingest", "--agent", "rust-cr050-regression-agent", "--crates", "demo-crate", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+
+    // §S1 — counts.
+    expect(event.summary?.total).toBe(3);
+    expect(event.summary?.failed).toBe(1);
+    expect(event.summary?.passed).toBe(1);
+    expect(event.summary?.passed).not.toBe(2); // the defect's fold-into-passed reading
+    expect(event.summary?.pending).toBe(1);
+    const s = event.summary!;
+    expect((s.passed ?? 0) + (s.failed ?? 0) + (s.pending ?? 0)).toBe(s.total);
+
+    // §S1b — leaf status, not just counts.
+    const leaves = (event.tree ?? []).flatMap((suite) => suite.children);
+    const skipLeaf = leaves.find((l) => l.name === "gamma");
+    const passLeaf = leaves.find((l) => l.name === "alpha");
+    const failLeaf = leaves.find((l) => l.name === "beta");
+    expect(skipLeaf?.status).toBe("pending");
+    expect(skipLeaf?.status).not.toBe("pass");
+    expect(passLeaf?.status).toBe("pass");
+    expect(failLeaf?.status).toBe("fail");
+
+    // §S2 (extended) — the plain "regression: ..." stdout line (no TOON
+    // envelope exists for this verb — it prints its own summary directly).
+    expect(res.stdout).toContain("regression:");
+    expect(res.stdout).toContain("pending=1");
+  });
+});
+
+describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 2 (workspace-regression, the pre-merge-gate path): <skipped/> counts as pending, never passed (fake cargo stub)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test("§S1/§S1b: counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), pass/fail leaves unaffected; §S2 (extended): the plain 'workspace regression: ...' stdout line (rust-crucible.py:1352) also carries pending=1", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-rc-cr050-workspace-regression");
+    const dir = scratch.dir("rust-crucible-cr050-workspace-");
+    writeEnvFile(dir, key);
+    // `_acquire_gate_lock` resolves the lock path via `git rev-parse
+    // --git-common-dir` — a real (even if empty) git repo is required.
+    runGit(["init", "-q"], dir);
+    writeFileSync(join(dir, ".gitkeep"), "");
+    runGit(["add", "."], dir);
+    runGit(["commit", "-q", "-m", "initial"], dir);
+    const junitDir = join(dir, "target", "nextest", "ci"); // default --profile
+    Bun.spawnSync({ cmd: ["mkdir", "-p", junitDir] });
+    writeJunitXml(join(junitDir, "junit.xml"), "cr050_workspace_fixture", [
+      { name: "delta" },
+      { name: "epsilon", fail: true },
+      { name: "zeta", skip: true },
+    ]);
+    const binDir = scratch.dir("fake-cargo-bin-cr050-ws-");
+    writeExecutable(join(binDir, "cargo"), NOOP_SCRIPT);
+    const path = `${binDir}:${process.env.PATH ?? ""}`;
+
+    const res = await runScript(
+      RUST_SCRIPT_PATH,
+      [
+        "workspace-regression",
+        "--agent", "rust-cr050-workspace-agent",
+        "--project-dir", dir,
+        "--min-free-g", "0", // bypass the real disk guard in this sandbox
+        "--keep-target", // skip the post-run reclaim cargo clean (irrelevant with a fake cargo, kept minimal)
+      ],
+      { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+
+    // §S1 — counts.
+    expect(event.summary?.total).toBe(3);
+    expect(event.summary?.failed).toBe(1);
+    expect(event.summary?.passed).toBe(1);
+    expect(event.summary?.passed).not.toBe(2); // the defect's fold-into-passed reading
+    expect(event.summary?.pending).toBe(1);
+    const s = event.summary!;
+    expect((s.passed ?? 0) + (s.failed ?? 0) + (s.pending ?? 0)).toBe(s.total);
+
+    // §S1b — leaf status, not just counts.
+    const leaves = (event.tree ?? []).flatMap((suite) => suite.children);
+    const skipLeaf = leaves.find((l) => l.name === "zeta");
+    const passLeaf = leaves.find((l) => l.name === "delta");
+    const failLeaf = leaves.find((l) => l.name === "epsilon");
+    expect(skipLeaf?.status).toBe("pending");
+    expect(skipLeaf?.status).not.toBe("pass");
+    expect(passLeaf?.status).toBe("pass");
+    expect(failLeaf?.status).toBe("fail");
+
+    // §S2 (extended) — the plain "workspace regression: ..." stdout line.
+    expect(res.stdout).toContain("workspace regression:");
+    expect(res.stdout).toContain("pending=1");
+  });
+});
+
+// CR-CRU-050 §S2 — the auto-ingest / test verbs' SINGLE-report-dir path
+// (`_ingest_junit_axi`, rust-crucible.py:836-858) hands the junit XML to the
+// SERVER's codec (POST /api/v2/runs) rather than the client's own
+// `_parse_junit` — the server already classifies `<skipped/>` as pending
+// correctly (§S4 — no server change in this CR's scope), so the counts here
+// are a POSITIVE pin, never a RED. What this CR DID fix client-side is purely
+// the PRINTING: the TOON `run:` block (`_emit_ingest_axi`,
+// rust-crucible.py:362-377) and the plain "ingest junit: ..." stderr line
+// (rust-crucible.py:852-855) both build from `resp.get("run")` — which the
+// server response already carried `pending` on — yet dropped the key when
+// printing. Both now carry it, which is what the test below pins.
+describe("clients/rust-crucible.py — CR-CRU-050 §S2: auto-ingest's junit-dir path (server-parsed, correct counts) carries pending in the TOON run: block and the 'ingest junit:' print line", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+  const branch = "cr-cru-050-rust-auto-ingest-fixture-branch";
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test("event.summary.pending=1 is already correct (server-side junit codec, confirmed not assumed); the TOON run: block and the plain stderr print both carry pending=1 too", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-rc-cr050-auto-ingest-pending");
+    const dir = scratch.dir("rust-crucible-cr050-auto-ingest-");
+    writeEnvFile(dir, key);
+    runGit(["init", "-q"], dir);
+    runGit(["symbolic-ref", "HEAD", `refs/heads/${branch}`], dir);
+    writeFileSync(join(dir, ".gitkeep"), "");
+    runGit(["add", "."], dir);
+    runGit(["commit", "-q", "-m", "initial"], dir);
+    const junitDir = join(dir, "target", "nextest", "ci");
+    Bun.spawnSync({ cmd: ["mkdir", "-p", junitDir] });
+    writeJunitXml(join(junitDir, "junit.xml"), "cr050_auto_ingest_fixture", [
+      { name: "one" },
+      { name: "two", skip: true },
+    ]);
+
+    const res = await runScript(
+      RUST_SCRIPT_PATH,
+      ["auto-ingest", "--agent", "rust-cr050-auto-ingest-agent", "--crate", "demo-crate", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+
+    // Positive pin — the server's junit codec already gets this right.
+    expect(event.summary?.total).toBe(2);
+    expect(event.summary?.passed).toBe(1);
+    expect(event.summary?.failed).toBe(0);
+    expect(event.summary?.pending).toBe(1);
+    expect(res.code).toBe(0); // no real failures — a pass and a skip only
+
+    // §S2 — the TOON run: block.
+    const block = extractRunBlock(res.stdout);
+    expect(block).toBeDefined();
+    expect(block).toContain("pending: 1");
+
+    // §S2 (extended) — the plain "ingest junit: ..." stderr line.
+    expect(res.stderr).toContain("ingest junit:");
+    expect(res.stderr).toContain("pending=1");
+  });
+});
+
+describe("clients/rust-crucible.py — CR-CRU-050 §S2 (extended): smoke-test's inline 'smoke-test: ...' stdout print line (rust-crucible.py:1199-1202) also carries pending", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test("with a real skipped testcase pre-placed at target/nextest/ci/junit.xml and a fake no-op cargo, 'smoke-test' (--clean/--all-features/--with-docker all default-off) ingests via the server's junit codec (event.summary.pending=1 confirmed) and its own print line carries pending=1", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-rc-cr050-smoke-test");
+    const dir = scratch.dir("rust-crucible-cr050-smoke-");
+    writeEnvFile(dir, key);
+    runGit(["init", "-q"], dir); // required for the gate-lock path resolution
+    writeFileSync(join(dir, ".gitkeep"), "");
+    runGit(["add", "."], dir);
+    runGit(["commit", "-q", "-m", "initial"], dir);
+    const junitDir = join(dir, "target", "nextest", "ci"); // default --profile
+    Bun.spawnSync({ cmd: ["mkdir", "-p", junitDir] });
+    writeJunitXml(join(junitDir, "junit.xml"), "cr050_smoke_fixture", [
+      { name: "smoke-one" },
+      { name: "smoke-two", skip: true },
+    ]);
+    const binDir = scratch.dir("fake-cargo-bin-cr050-smoke-");
+    writeExecutable(join(binDir, "cargo"), NOOP_SCRIPT);
+    const path = `${binDir}:${process.env.PATH ?? ""}`;
+
+    const res = await runScript(
+      RUST_SCRIPT_PATH,
+      ["smoke-test", "--agent", "rust-cr050-smoke-agent", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+    expect(event.summary?.total).toBe(2);
+    expect(event.summary?.passed).toBe(1);
+    expect(event.summary?.pending).toBe(1);
+    expect(res.code).toBe(0);
+
+    expect(res.stdout).toContain("smoke-test:");
+    expect(res.stdout).toContain("pending=1");
   });
 });
 
@@ -1116,5 +1405,137 @@ describe("clients/mvn-crucible.py — byte-compatible CLI surface (existing flag
         expect(stdout.includes(flag)).toBe(true);
       }
     }
+  });
+});
+
+// CR-CRU-050 §S1/§S1b/§S3/§S2 — mvn-crucible.py:641 (`_parse_junit`) is the
+// REFERENCE implementation this whole CR fixed the other four clients
+// toward, and MUST NOT CHANGE. `regression` (cmd_regression → _regression_run)
+// ALWAYS routes through `_parse_junit` regardless of report-dir count, so it
+// is the deterministic way to pin that reference behaviour directly. mvn's
+// COUNTING was therefore already correct before this CR; what this CR DID
+// change on mvn, per the dispatch's Part C, is purely its PRINT surfaces: the
+// TOON `run:` block (`_emit_ingest_summary_axi`, mvn-crucible.py:377-392)
+// dropped `pending` from the printed envelope even though the summary it's
+// built from already carried the real count, and — separately — the
+// single-report-dir path's OWN TOON block (`_emit_ingest_axi_resp`,
+// mvn-crucible.py:361-374) and its "ingest junit: ..." stderr line
+// (mvn-crucible.py:720-722) did the same for the SERVER-parsed junit-dir path.
+// All three now carry `pending`, which is what the tests below pin.
+describe("clients/mvn-crucible.py — CR-CRU-050: _parse_junit (mvn-crucible.py:641) is CONFIRMED correct (counts AND leaf status) — pinned, not assumed; its TOON run: block carries pending (fake mvnw)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  function fixtureDirCr050(key: string): string {
+    const dir = scratch.dir("mvn-crucible-cr050-regression-");
+    writeEnvFile(dir, key);
+    writeExecutable(join(dir, "mvnw"), NOOP_SCRIPT);
+    return dir;
+  }
+
+  test("'regression' (client-side _parse_junit, the reference impl): a skipped surefire testcase is CONFIRMED pending=1 (never folded into passed), and its leaf CONFIRMED status 'pending' (not 'pass') — mvn's counting was already correct and is UNCHANGED, not assumed; the TOON run: block (§S2) now carries pending too", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-mc-cr050-regression-reference");
+    const dir = fixtureDirCr050(key);
+    const reportsDir = join(dir, "target", "surefire-reports");
+    Bun.spawnSync({ cmd: ["mkdir", "-p", reportsDir] });
+    writeJunitXml(join(reportsDir, "TEST-CR050Test.xml"), "CR050Test", [
+      { name: "testAlpha" },
+      { name: "testBeta", fail: true },
+      { name: "testGamma", skip: true },
+    ]);
+
+    const res = await runScript(
+      MVN_SCRIPT_PATH,
+      ["regression", "--agent", "mvn-cr050-regression-agent", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+
+    // CONFIRMATION (not a RED) — mvn-crucible.py:641 already gets this right.
+    expect(event.summary?.total).toBe(3);
+    expect(event.summary?.failed).toBe(1);
+    expect(event.summary?.passed).toBe(1);
+    expect(event.summary?.pending).toBe(1);
+    const s = event.summary!;
+    expect((s.passed ?? 0) + (s.failed ?? 0) + (s.pending ?? 0)).toBe(s.total);
+    const leaves = (event.tree ?? []).flatMap((suite) => suite.children);
+    const skipLeaf = leaves.find((l) => l.name === "testGamma");
+    expect(skipLeaf?.status).toBe("pending");
+    expect(skipLeaf?.status).not.toBe("pass");
+
+    // §S2 — the TOON run: block (_emit_ingest_summary_axi) now carries pending.
+    const block = extractRunBlock(res.stdout);
+    expect(block).toBeDefined();
+    expect(block).toContain("pending: 1");
+
+    // CONFIRMATION — mvn's OWN "ingest parsed: ..." stderr line (mvn:752-754)
+    // already prints pending — it was never broken, unlike the other clients'
+    // equivalent lines.
+    expect(res.stderr).toContain("ingest parsed:");
+    expect(res.stderr).toContain("pending=1");
+  });
+});
+
+describe("clients/mvn-crucible.py — CR-CRU-050 §S2: the single-surefire-dir path ('test', server-parsed via the junit codec) carries pending in its TOON run: block and its 'ingest junit: ...' print line (fake mvnw)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test("event.summary.pending=1 is already correct (server-side junit codec, confirmed not assumed); the TOON run: block and the plain 'ingest junit: ...' stderr line both carry pending=1 too", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-mc-cr050-unit-junit-dir");
+    const dir = scratch.dir("mvn-crucible-cr050-unit-");
+    writeEnvFile(dir, key);
+    writeExecutable(join(dir, "mvnw"), NOOP_SCRIPT);
+    const reportsDir = join(dir, "target", "surefire-reports");
+    Bun.spawnSync({ cmd: ["mkdir", "-p", reportsDir] });
+    writeJunitXml(join(reportsDir, "TEST-CR050UnitTest.xml"), "CR050UnitTest", [
+      { name: "testOne" },
+      { name: "testTwo", skip: true },
+    ]);
+
+    const res = await runScript(
+      MVN_SCRIPT_PATH,
+      ["test", "--agent", "mvn-cr050-unit-agent", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+
+    // Positive pin — the server's junit codec already gets this right.
+    expect(event.summary?.total).toBe(2);
+    expect(event.summary?.passed).toBe(1);
+    expect(event.summary?.failed).toBe(0);
+    expect(event.summary?.pending).toBe(1);
+    expect(res.code).toBe(0);
+
+    // §S2 — the TOON run: block (_emit_ingest_axi_resp).
+    const block = extractRunBlock(res.stdout);
+    expect(block).toBeDefined();
+    expect(block).toContain("pending: 1");
+
+    // §S2 (extended) — the plain "ingest junit: ..." stderr line
+    // (mvn-crucible.py:720-722).
+    expect(res.stderr).toContain("ingest junit:");
+    expect(res.stderr).toContain("pending=1");
   });
 });

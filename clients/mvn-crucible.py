@@ -360,9 +360,11 @@ def _register_cycle_guard(project_dir):
 
 def _emit_ingest_axi_resp(verb, resp, project_dir, agent, cycle_id, warnings):
     """Emit the §S1 envelope for a SERVER-parsed ingest (junit-dir path): run fields
-    come from the server response `run`."""
+    come from the server response `run`. CR-CRU-050 §S2 — `pending` is printed
+    alongside, so the line always sums."""
     s = resp.get("run", {}) or {}
-    run = {"passed": s.get("passed"), "failed": s.get("failed"), "total": s.get("total")}
+    run = {"passed": s.get("passed"), "failed": s.get("failed"),
+           "pending": s.get("pending", 0), "total": s.get("total")}
     if cycle_id is not None:
         context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
     else:
@@ -376,8 +378,10 @@ def _emit_ingest_axi_resp(verb, resp, project_dir, agent, cycle_id, warnings):
 
 def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
     """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path): run fields
-    come from the client-computed summary."""
+    come from the client-computed summary. CR-CRU-050 §S2 — `pending` is
+    printed alongside, so the line always sums."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
+           "pending": summary.get("pending", 0),
            "total": summary["total"]}
     # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
     # the cycleId key rather than emit an orphan-signalling explicit null.
@@ -718,7 +722,8 @@ def _ingest_junit_dir(project_dir, agent, report_dir, tier=None, context=None):
     resp = _post("/api/v2/runs", payload)
     s = resp.get("run", {})
     print(f"ingest junit: ok={resp.get('ok')} dir={report_dir} "
-          f"passed={s.get('passed')} failed={s.get('failed')} total={s.get('total')}",
+          f"passed={s.get('passed')} failed={s.get('failed')} "
+          f"pending={s.get('pending', 0)} total={s.get('total')}",
           file=sys.stderr)
     return resp
 

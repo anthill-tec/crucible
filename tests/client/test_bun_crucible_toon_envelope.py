@@ -497,7 +497,9 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
 
         self.assertEqual(axi.get("warnings"), [])
 
-        legacy_line = "ingest: ok=True passed=1 failed=0 total=1"
+        # CR-CRU-050 §S2 — the plain stderr line now also carries `pending`, so
+        # a line that omits a skip count can never be misread as summing.
+        legacy_line = "ingest: ok=True passed=1 failed=0 pending=0 total=1"
         self.assertIn(legacy_line, err)
         self.assertNotIn(legacy_line, out)
 
@@ -545,7 +547,9 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         self.assertEqual(context.get("agentId"), "CR-CRU-013-C51-regression")
         self.assertEqual(context.get("cycleId"), 51)
 
-        legacy_line = "ingest: ok=True passed=1 failed=0 total=1"
+        # CR-CRU-050 §S2 — the plain stderr line now also carries `pending`, so
+        # a line that omits a skip count can never be misread as summing.
+        legacy_line = "ingest: ok=True passed=1 failed=0 pending=0 total=1"
         self.assertIn(legacy_line, err)
         self.assertNotIn(legacy_line, out)
 
@@ -580,7 +584,9 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         self.assertEqual(context.get("agentId"), "CR-CRU-013-C51-auto")
         self.assertEqual(context.get("cycleId"), 51)
 
-        legacy_line = "ingest: ok=True passed=1 failed=0 total=1"
+        # CR-CRU-050 §S2 — the plain stderr line now also carries `pending`, so
+        # a line that omits a skip count can never be misread as summing.
+        legacy_line = "ingest: ok=True passed=1 failed=0 pending=0 total=1"
         self.assertIn(legacy_line, err)
         self.assertNotIn(legacy_line, out)
 

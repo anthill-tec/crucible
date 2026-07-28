@@ -446,7 +446,7 @@ def _parse_junit_file(junit_path):
     rides the printed run envelope only, never the ingest payload, so a
     shrinking suite is visible in the gate output itself."""
     tree_nodes = []
-    total = passed = failed = 0
+    total = passed = failed = pending = 0
     duration_ms = 0
     files = set()
     root = ET.parse(junit_path).getroot()
@@ -460,11 +460,19 @@ def _parse_junit_file(junit_path):
                 files.add(source.replace("\\", "/"))
             tc_time = int(float(tc.get("time", 0)) * 1000)
             fail = tc.find("failure") is not None or tc.find("error") is not None
-            status = "fail" if fail else "pass"
+            # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase (bun emits it for
+            # BOTH `test.skip` and `test.todo`) is PENDING, never passed. Order
+            # matters: failure/error first, then skipped, then pass. A skip does
+            # NOT fail its suite. Mirrors mvn-crucible.py:641, the reference.
             if fail:
+                status = "fail"
                 failed += 1
                 suite_fail = True
+            elif tc.find("skipped") is not None:
+                status = "pending"
+                pending += 1
             else:
+                status = "pass"
                 passed += 1
             total += 1
             duration_ms += tc_time
@@ -504,7 +512,7 @@ def _parse_junit_file(junit_path):
                 "children": children,
             })
     summary = {"total": total, "passed": passed, "failed": failed,
-               "pending": 0, "duration_ms": duration_ms}
+               "pending": pending, "duration_ms": duration_ms}
     return summary, tree_nodes, len(files)
 
 
@@ -712,7 +720,8 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     # channel is the §S1 TOON AXI envelope the caller emits on stdout.
     print(
         f"ingest: ok={resp.get('ok')} passed={summary['passed']} "
-        f"failed={summary['failed']} total={summary['total']}{cov_line}"
+        f"failed={summary['failed']} pending={summary.get('pending', 0)} "
+        f"total={summary['total']}{cov_line}"
         + (f" error={resp['error']}" if resp.get("error") else ""),
         file=sys.stderr,
     )
@@ -1487,12 +1496,14 @@ def _register_cycle_guard(project_dir):
 def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, cycle_id,
                      warnings):
     """Emit the §S1 envelope for a SUCCESSFUL ingest verb
-    (test/regression/auto-ingest): run{passed,failed,total,files} + cycle-aware
+    (test/regression/auto-ingest): run{passed,failed,pending,total,files} +
+    cycle-aware
     context. `files` (CR-CRU-047 §S2) is the distinct test-FILE count from
     `_parse_junit_file`, a sibling of the test counts, so a suite that silently
     shrinks is visible in the gate output. Any warnings are also surfaced on
     stderr."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
+           "pending": summary.get("pending", 0),
            "total": summary["total"], "files": files}
     # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
     # the cycleId key rather than emit an orphan-signalling explicit null.

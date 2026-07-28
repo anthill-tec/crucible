@@ -93,6 +93,47 @@ no business appearing on the board.
 Check the other four clients for the same pattern (`rust`, `mvn`, `arduino`, `python`) — the shared
 `_crucible_axi.py` module makes a copied fallback likely.
 
+**Second sighting 2026-07-28 (user screenshot, `crucible_spurious_agents.jpg`) — TWO phantoms on
+the Crucible v2 card, and they are NOT the same defect.** The board showed `0/2 agents online`
+with:
+
+| rail entry | message | state |
+|---|---|---|
+| `bun-crucible` | *(none)* | died 40m ago |
+| `probe` | "Starting RED phase" | died 22m ago |
+
+`bun-crucible` is this section's defect exactly — nothing more to establish.
+
+**`probe` is not — and it is NOT a product defect.** Investigated 2026-07-28 (user pressed for an
+answer rather than waiting). The stored record settles it:
+
+```
+agent_id   = probe-tmp
+identity   = {"displayName":"probe","source":"claude-md","repoPath":".../data_projects/crucible"}
+message    = "Starting RED phase"
+```
+
+`probe` is a **displayName**, which is what the rail renders — the id is `probe-tmp`. An earlier
+guess in this section that it was the sibling `Probe` PROJECT leaking across was WRONG; the
+`repoPath` is this repo. It was a throwaway registration made by an orchestrator sub-agent while
+probing client behaviour against the LIVE dog-food project instead of an ephemeral test server,
+and never unregistered. That is dispatch hygiene, not a Crucible defect, and it needs no CR.
+
+**The two phantoms therefore have different natures**, which matters for what this CR must fix:
+
+| rail entry | id | identity | nature |
+|---|---|---|---|
+| `bun-crucible` | `bun-crucible` | `{}` — empty | **product defect** — the §S5 filename fallback |
+| `probe` | `probe-tmp` | populated, real repoPath | operator error — a sub-agent's stray registration |
+
+The empty `identity` on `bun-crucible` is itself corroboration: no displayName, no source, because
+nothing ever declared it. §S5's hard stop is exactly right and its ACs stand unchanged.
+
+Both linger because neither unregistered — the liveness threshold ages a row to stale/dead in the
+UI while the row itself persists as `online`. **That is worth a look during this CR**: a registered
+agent that never unregisters leaves a permanent rail entry, so the fabricated-identity fix removes
+the cause but not the residue.
+
 ### §S4 — The agentId stops being a phase channel
 With phase declared, the id no longer needs to encode it. Document in the client `--help`
 and the STATUS-CONTRACT that phase comes from `--phase`, and that the agentId is a free-form

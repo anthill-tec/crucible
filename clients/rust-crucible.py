@@ -360,10 +360,14 @@ def _register_cycle_guard(project_dir):
 
 
 def _emit_ingest_axi(verb, resp, project_dir, agent, cycle_id, warnings):
-    """Emit the §S1 envelope for a SUCCESSFUL ingest verb: run{passed,failed,total}
-    (from the SERVER-parsed response) + cycle-aware context."""
+    """Emit the §S1 envelope for a SUCCESSFUL ingest verb:
+    run{passed,failed,pending,total} (from the SERVER-parsed response) +
+    cycle-aware context. CR-CRU-050 §S2 — the server's junit codec already
+    classifies `<skipped/>` as pending; the key was simply dropped when
+    printing."""
     s = resp.get("run", {}) or {}
-    run = {"passed": s.get("passed"), "failed": s.get("failed"), "total": s.get("total")}
+    run = {"passed": s.get("passed"), "failed": s.get("failed"),
+           "pending": s.get("pending", 0), "total": s.get("total")}
     # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
     # the cycleId key rather than emit an orphan-signalling explicit null.
     if cycle_id is not None:
@@ -727,7 +731,7 @@ def _regression_ingest_run(args):
 
     root = ET.parse(junit_path).getroot()
     tree_nodes = []
-    total = passed = failed = 0
+    total = passed = failed = pending = 0
     duration_ms = 0
     # A JUnit root can be <testsuites> (nextest's wrapper) OR a bare
     # <testsuite> — handle both, like the server's junit codec.
@@ -738,11 +742,19 @@ def _regression_ingest_run(args):
         for tc in suite.findall("testcase"):
             tc_time = int(float(tc.get("time", 0)) * 1000)
             fail = tc.find("failure") is not None or tc.find("error") is not None
-            status = "fail" if fail else "pass"
+            # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase (nextest emits it
+            # for `#[ignore]`d tests) is PENDING, never passed. Order matters:
+            # failure/error first, then skipped, then pass. A skip does NOT
+            # fail its suite. Mirrors mvn-crucible.py:641, the reference.
             if fail:
+                status = "fail"
                 failed += 1
                 suite_fail = True
+            elif tc.find("skipped") is not None:
+                status = "pending"
+                pending += 1
             else:
+                status = "pass"
                 passed += 1
             total += 1
             duration_ms += tc_time
@@ -759,7 +771,7 @@ def _regression_ingest_run(args):
 
     summary = {
         "total": total, "passed": passed, "failed": failed,
-        "pending": 0, "duration_ms": duration_ms,
+        "pending": pending, "duration_ms": duration_ms,
     }
 
     coverage = None
@@ -815,7 +827,7 @@ def _regression_ingest_run(args):
         )
     print(
         f"regression: ok={resp.get('ok')} "
-        f"passed={passed} failed={failed} total={total}{cov_line}"
+        f"passed={passed} failed={failed} pending={pending} total={total}{cov_line}"
     )
     return 0 if resp.get("ok") else 1
 
@@ -851,7 +863,8 @@ def _ingest_junit_axi(project_dir, agent_id, junit_path, tier=None, context=None
     s = resp.get("run", {}) or {}
     print(
         f"ingest junit: ok={resp.get('ok')} "
-        f"passed={s.get('passed')} failed={s.get('failed')} total={s.get('total')}"
+        f"passed={s.get('passed')} failed={s.get('failed')} "
+        f"pending={s.get('pending', 0)} total={s.get('total')}"
         + (f" error={resp.get('error')}" if resp.get("error") else ""),
         file=sys.stderr,
     )
@@ -1198,7 +1211,8 @@ def cmd_smoke_test(args):
         s = resp.get("run", {})
         print(
             f"smoke-test: ok={resp.get('ok')} "
-            f"passed={s.get('passed')} failed={s.get('failed')} total={s.get('total')}"
+            f"passed={s.get('passed')} failed={s.get('failed')} "
+            f"pending={s.get('pending', 0)} total={s.get('total')}"
         )
         smoke_rc = 0 if (resp.get("ok") and s.get("failed", 0) == 0) else 1
     finally:
@@ -1275,7 +1289,7 @@ def _workspace_regression_run(args, project_dir):
 
     root = ET.parse(junit_path).getroot()
     tree_nodes = []
-    total = passed = failed = 0
+    total = passed = failed = pending = 0
     duration_ms = 0
     # A JUnit root can be <testsuites> (nextest's wrapper) OR a bare
     # <testsuite> — handle both, like the server's junit codec.
@@ -1286,11 +1300,19 @@ def _workspace_regression_run(args, project_dir):
         for tc in suite.findall("testcase"):
             tc_time = int(float(tc.get("time", 0)) * 1000)
             fail = tc.find("failure") is not None or tc.find("error") is not None
-            status = "fail" if fail else "pass"
+            # CR-CRU-050 §S1/§S1b — the pre-merge-gate parse site. A
+            # `<skipped/>` testcase is PENDING, never passed; order matters
+            # (failure/error, then skipped, then pass) and a skip does NOT
+            # fail its suite. Mirrors mvn-crucible.py:641, the reference.
             if fail:
+                status = "fail"
                 failed += 1
                 suite_fail = True
+            elif tc.find("skipped") is not None:
+                status = "pending"
+                pending += 1
             else:
+                status = "pass"
                 passed += 1
             total += 1
             duration_ms += tc_time
@@ -1303,7 +1325,7 @@ def _workspace_regression_run(args, project_dir):
 
     summary = {
         "total": total, "passed": passed, "failed": failed,
-        "pending": 0, "duration_ms": duration_ms,
+        "pending": pending, "duration_ms": duration_ms,
     }
 
     coverage = None
@@ -1349,7 +1371,7 @@ def _workspace_regression_run(args, project_dir):
         cov_line = f" lines={coverage['lines']['percent']}% funcs={coverage['functions']['percent']}%"
     print(
         f"workspace regression: ok={resp.get('ok')} "
-        f"passed={passed} failed={failed} total={total}{cov_line}"
+        f"passed={passed} failed={failed} pending={pending} total={total}{cov_line}"
     )
     return 0 if resp.get("ok") else 1
 

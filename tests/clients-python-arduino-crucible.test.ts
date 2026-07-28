@@ -256,7 +256,7 @@ interface FullEvent {
     cycle?: string;
     cycleId?: number;
   };
-  summary?: { total: number; passed: number; failed: number };
+  summary?: { total: number; passed: number; failed: number; pending?: number };
   tree?: Array<{ name: string; status: string; children: Array<{ name: string; status: string }> }>;
   coverage?: {
     lines?: { total: number; covered: number; percent: number };
@@ -316,20 +316,41 @@ function writeArduinoEnvFile(dir: string, projectKey: string, projectName: strin
 
 /** Minimal JUnit XML (`<testsuite><testcase>...`) — the shape both
  * python-crucible's `_parse_junit_dir` and arduino-crucible's `_parse_junit`
- * parse (both use xml.etree.ElementTree over testsuite/testcase/failure). */
-function junitXmlString(suiteName: string, cases: Array<{ name: string; fail?: boolean }>): string {
+ * parse (both use xml.etree.ElementTree over testsuite/testcase/failure).
+ * CR-CRU-050 §S1/§S1b — `skip` emits a bare `<skipped/>` child (xmlrunner's
+ * and the native-harness's real shape for a skipped testcase), which the
+ * defective parsers fold into `passed` today via a bare `else:`. */
+function junitXmlString(
+  suiteName: string,
+  cases: Array<{ name: string; fail?: boolean; skip?: boolean }>,
+): string {
   const testcases = cases
-    .map((c) =>
-      c.fail
-        ? `<testcase name="${c.name}" time="0.01"><failure message="boom">boom</failure></testcase>`
-        : `<testcase name="${c.name}" time="0.01"/>`,
-    )
+    .map((c) => {
+      if (c.fail) return `<testcase name="${c.name}" time="0.01"><failure message="boom">boom</failure></testcase>`;
+      if (c.skip) return `<testcase name="${c.name}" time="0.01"><skipped/></testcase>`;
+      return `<testcase name="${c.name}" time="0.01"/>`;
+    })
     .join("");
   return `<?xml version="1.0"?><testsuite name="${suiteName}" tests="${cases.length}">${testcases}</testsuite>`;
 }
 
-function writeJunitXml(path: string, suiteName: string, cases: Array<{ name: string; fail?: boolean }>): void {
+function writeJunitXml(
+  path: string,
+  suiteName: string,
+  cases: Array<{ name: string; fail?: boolean; skip?: boolean }>,
+): void {
   writeFileSync(path, junitXmlString(suiteName, cases));
+}
+
+/**
+ * Extracts the 4-space-indented body of the TOON `  run:` block from a
+ * client's stdout envelope (the §S2 printed run: block under `axi:`),
+ * without depending on key ORDER — the fix may insert `pending` anywhere.
+ * Mirrors tests/clients-bun-crucible.test.ts's helper of the same name.
+ */
+function extractRunBlock(stdout: string): string | undefined {
+  const match = stdout.match(/ {2}run:\n((?: {4}.*\n)*)/);
+  return match?.[1];
 }
 
 /**
@@ -950,6 +971,94 @@ describe("clients/python-crucible.py — byte-compatible CLI surface (existing f
   });
 });
 
+// CR-CRU-050 §S1/§S1b/§S2 — `_parse_junit_dir` (python-crucible.py:484-520)
+// today checks only `tc.find("failure")`/`tc.find("error")`; a bare
+// `else: passed += 1` folds every `<skipped/>` testcase into `passed`, and
+// the summary hardcodes `"pending": 0`. mvn-crucible.py:641 is the correct
+// precedent this fixes toward. `_emit_ingest_axi` (python-crucible.py:389-
+// 404) also drops `pending` from the printed `run:` TOON block, and
+// `_ingest_parsed`'s plain "ingest parsed: ..." stderr line (python-
+// crucible.py:578-583) drops it too — both are §S2 surfaces.
+describe("clients/python-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> testcases count as pending, never passed (fake xmlrunner)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+  let runResult: RunResult | undefined;
+  let event: FullEvent | undefined;
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  function fixtureDir(key: string): { dir: string; pythonPath: string } {
+    const dir = scratch.dir("python-crucible-cr050-");
+    writeEnvFile(dir, key);
+    const pythonPath = writeFakePyModules(scratch.dir("python-crucible-cr050-fakepy-"));
+    return { dir, pythonPath };
+  }
+
+  test("§S1/§S1b/§S2: ingested summary counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), the real pass/fail leaves are unaffected, and BOTH the TOON run: block and the plain 'ingest parsed: ...' stderr line carry pending=1", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-pc-cr050-pending");
+    const { dir, pythonPath } = fixtureDir(key);
+
+    runResult = await runScript(
+      PYTHON_SCRIPT_PATH,
+      ["test", "--agent", "python-cr050-agent", "--project-dir", dir],
+      {
+        cwd: dir,
+        crucibleUrl: baseUrl,
+        env: {
+          PYTHONPATH: pythonPath,
+          FAKE_XMLRUNNER_JUNIT_XML: junitXmlString("cr050_fixture", [
+            { name: "passes" },
+            { name: "fails", fail: true },
+            { name: "skipped_case", skip: true },
+          ]),
+          FAKE_XMLRUNNER_EXIT_CODE: "1",
+        },
+      },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    event = await getFullEvent(baseUrl, events[0]!.id);
+
+    // §S1 — counts.
+    expect(event.summary?.total).toBe(3);
+    expect(event.summary?.failed).toBe(1);
+    expect(event.summary?.passed).toBe(1);
+    expect(event.summary?.passed).not.toBe(2); // the defect's fold-into-passed reading
+    expect(event.summary?.pending).toBe(1);
+    const s = event.summary!;
+    expect((s.passed ?? 0) + (s.failed ?? 0) + (s.pending ?? 0)).toBe(s.total);
+
+    // §S1b — leaf status, not just counts.
+    const leaves = (event.tree ?? []).flatMap((suite) => suite.children);
+    const skipLeaf = leaves.find((l) => l.name === "skipped_case");
+    const passLeaf = leaves.find((l) => l.name === "passes");
+    const failLeaf = leaves.find((l) => l.name === "fails");
+    expect(skipLeaf?.status).toBe("pending");
+    expect(skipLeaf?.status).not.toBe("pass");
+    expect(passLeaf?.status).toBe("pass");
+    expect(failLeaf?.status).toBe("fail");
+
+    // §S2 — the TOON run: block carries pending.
+    const block = extractRunBlock(runResult.stdout);
+    expect(block).toBeDefined();
+    expect(block).toContain("passed: 1");
+    expect(block).toContain("failed: 1");
+    expect(block).toContain("total: 3");
+    expect(block).toContain("pending: 1");
+
+    // §S2 (extended) — the plain "ingest parsed: ..." stderr line too.
+    expect(runResult.stderr).toContain("ingest parsed:");
+    expect(runResult.stderr).toContain("pending=1");
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════════════
 // clients/arduino-crucible.py
 // ═══════════════════════════════════════════════════════════════════════
@@ -1529,5 +1638,148 @@ describe("clients/arduino-crucible.py — byte-compatible CLI surface (existing 
         expect(stdout.includes(flag)).toBe(true);
       }
     }
+  });
+});
+
+// CR-CRU-050 §S1/§S1b/§S2 — `_parse_junit` (arduino-crucible.py:335-357)
+// today checks only `tc.find("failure")`/`tc.find("error")`; a bare
+// `else: passed += 1` folds every `<skipped/>` testcase into `passed`, and
+// the summary hardcodes `"pending": 0`. `_emit_ingest_summary_axi`
+// (arduino-crucible.py:300-314) also drops `pending` from the printed
+// `run:` TOON block, and the plain "[crucible] <verb> -> '<name>': N/M
+// passed, F failed" stderr lines (arduino-crucible.py:514, 537, 638) drop
+// it too — three separate print call sites (the no-`--agent` report path,
+// the `--agent` ingest path, and `auto-ingest`), all §S2 surfaces.
+describe("clients/arduino-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> testcases count as pending, never passed (fake no-op make)", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  /** Mirrors `fixtureDirWithFakeMake` above — a no-op `make` on PATH so a
+   * pre-placed JUnit XML fixture (here carrying a `<skipped/>` testcase)
+   * survives `cmd_unit`'s (and `auto-ingest`'s) reports-dir read untouched. */
+  function fixtureDirCr050(
+    key: string,
+    name: string,
+    cases: Array<{ name: string; fail?: boolean; skip?: boolean }>,
+  ): { dir: string; path: string } {
+    const dir = scratch.dir("arduino-crucible-cr050-");
+    writeArduinoEnvFile(dir, key, name);
+    const reportsDir = join(dir, "tests", "native", "reports");
+    mkdirSync(reportsDir, { recursive: true });
+    writeJunitXml(join(reportsDir, "TEST-native_fixture.xml"), "native_fixture", cases);
+    const binDir = scratch.dir("fake-make-bin-cr050-");
+    writeExecutable(join(binDir, "make"), NOOP_SCRIPT);
+    const path = `${binDir}:${process.env.PATH ?? ""}`;
+    return { dir, path };
+  }
+
+  test("§S1/§S1b/§S2: with --agent, 'unit' counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), the real pass/fail leaves are unaffected, and BOTH the TOON run: block and the plain '[crucible] unit -> ...' stderr line (arduino-crucible.py:537) carry pending=1", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-cr050-pending");
+    const { dir, path } = fixtureDirCr050(key, "clients-ac-cr050-pending", [
+      { name: "led_on" },
+      { name: "led_off", fail: true },
+      { name: "led_blink", skip: true },
+    ]);
+
+    const res = await runScript(ARDUINO_SCRIPT_PATH, ["unit", "--agent", "arduino-cr050-agent", "--project-dir", dir], {
+      cwd: dir,
+      crucibleUrl: baseUrl,
+      env: { PATH: path },
+    });
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+
+    // §S1 — counts.
+    expect(event.summary?.total).toBe(3);
+    expect(event.summary?.failed).toBe(1);
+    expect(event.summary?.passed).toBe(1);
+    expect(event.summary?.passed).not.toBe(2); // the defect's fold-into-passed reading
+    expect(event.summary?.pending).toBe(1);
+    const s = event.summary!;
+    expect((s.passed ?? 0) + (s.failed ?? 0) + (s.pending ?? 0)).toBe(s.total);
+
+    // §S1b — leaf status, not just counts.
+    const leaves = (event.tree ?? []).flatMap((suite) => suite.children);
+    const skipLeaf = leaves.find((l) => l.name === "led_blink");
+    const passLeaf = leaves.find((l) => l.name === "led_on");
+    const failLeaf = leaves.find((l) => l.name === "led_off");
+    expect(skipLeaf?.status).toBe("pending");
+    expect(skipLeaf?.status).not.toBe("pass");
+    expect(passLeaf?.status).toBe("pass");
+    expect(failLeaf?.status).toBe("fail");
+
+    // §S2 — the TOON run: block carries pending.
+    const block = extractRunBlock(res.stdout);
+    expect(block).toBeDefined();
+    expect(block).toContain("passed: 1");
+    expect(block).toContain("failed: 1");
+    expect(block).toContain("total: 3");
+    expect(block).toContain("pending: 1");
+
+    // §S2 (extended) — arduino-crucible.py:537's plain stderr line too. That
+    // line's own sentence style is "X/Y passed, Z failed" (not key=value),
+    // so the natural parallel extension is "W pending", matching "Z failed".
+    expect(res.stderr).toContain("passed,");
+    expect(res.stderr).toContain("1 pending");
+  });
+
+  test("§S2 (extended): WITHOUT --agent, the no-ingest report line (arduino-crucible.py:514) also carries 1 pending", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-cr050-no-agent-report");
+    const { dir, path } = fixtureDirCr050(key, "clients-ac-cr050-no-agent-report", [
+      { name: "led_on" },
+      { name: "led_blink", skip: true },
+    ]);
+
+    const res = await runScript(ARDUINO_SCRIPT_PATH, ["unit", "--project-dir", dir], {
+      cwd: dir,
+      crucibleUrl: baseUrl,
+      env: { PATH: path },
+    });
+
+    expect(res.code).toBe(0); // no real failures — only a pass and a skip
+    expect(res.stderr).toContain("passed,");
+    expect(res.stderr).toContain("1 pending");
+  });
+
+  test("§S2 (extended): 'auto-ingest' (arduino-crucible.py:638) also carries 1 pending in its stderr line, alongside pending=1 in the ingested summary", async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-ac-cr050-auto-ingest");
+    const dir = scratch.dir("arduino-crucible-cr050-auto-");
+    writeArduinoEnvFile(dir, key, "clients-ac-cr050-auto-ingest");
+    const reportsDir = join(dir, "tests", "native", "reports");
+    mkdirSync(reportsDir, { recursive: true });
+    writeJunitXml(join(reportsDir, "TEST-native_fixture.xml"), "native_fixture", [
+      { name: "led_on" },
+      { name: "led_blink", skip: true },
+    ]);
+
+    const res = await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["auto-ingest", "--agent", "arduino-cr050-auto-agent", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+    expect(event.summary?.total).toBe(2);
+    expect(event.summary?.passed).toBe(1);
+    expect(event.summary?.pending).toBe(1);
+    expect(res.code).toBe(0);
+    expect(res.stderr).toContain("passed,");
+    expect(res.stderr).toContain("1 pending");
   });
 });

@@ -59,6 +59,17 @@ in the tree** — 2 of the 99 reports under `test-reports/` carry `<skipped`:
 | `junit.xml` (bun, whole suite) | `tests="1061" skipped="1"` | `passed=1061` | 1060 ran, 1 skipped |
 | `TEST-…RunContextHelperContractTest…xml` (python) | `tests="2" skipped="2"` | `passed=2` | **0 ran**, an entire test class skipped |
 
+Confirmed again on the live Python gate during C1 (2026-07-28) — the runner and the envelope
+disagree in the same breath:
+
+```
+OK (skipped=2)                                        <- unittest: 2 skipped
+ingest parsed: ok=True passed=412 failed=0 total=412  <- envelope: 412 passed, no pending
+```
+
+410 tests ran. The "412/412 green" figure carried in this project's close-out reports has never
+been true.
+
 The python case is the sharper one: a test class in which *nothing executed* is indistinguishable
 from one that fully passed. This also means the "1061/1061" and "412/412" figures quoted in this
 project's own close-out reports are inflated — the defect contaminates the gate numbers this
@@ -109,12 +120,25 @@ via `:3251`). Today a skipped leaf is emitted as `"pass"`, so the run drill-in p
 **Counts alone leave this visible defect in place** — a fix that only touches the summary would
 satisfy a naive count assertion while the drill-in stays wrong.
 
-### §S2 — Surface `pending` in the printed run envelope
+### §S2 — Surface `pending` in EVERY printed count line, not just the AXI envelope
 Add `pending` to the `run:` block alongside `passed`/`failed`/`total`/`files`
 (`clients/bun-crucible.py:1495-1496`, and the equivalent in each other client), so a skip is
 visible where the orchestrator already reads. A count that exists but is never shown does not
 prevent the misreading this CR is about. Use the name `pending` — matching the PRD, the DB column
 and the dashboard label — not `skipped`.
+
+**This extends to the plain human-readable count lines too** — e.g. `bun-crucible.py:714`
+(`ingest: ok=… passed=… failed=… total=…`), `rust-crucible.py:818/854/1201/1352`, and the
+equivalents in the python and arduino clients. Raised by C1 GREEN, which correctly declined to
+touch an untested surface and escalated instead.
+
+This is not scope growth — it repairs a confusion **this CR itself introduces**. Before the fix
+those lines read `passed=1067 failed=0 total=1067`: wrong, but internally consistent. After it
+they read `passed=1066 failed=0 total=1067`, which no longer sums and invites the reader to hunt
+for a missing failure. A count line that does not add up is a worse artifact than the honest
+under-report it replaced, so every line that prints `passed`/`failed`/`total` must also print
+`pending`. Each such line needs a RED assertion — they are currently untested, which is precisely
+why the omission was invisible.
 
 ### §S3 — Per-client audit: DONE (see the §S1 table)
 Recorded above rather than deferred into implementation. The formats do differ (surefire,
