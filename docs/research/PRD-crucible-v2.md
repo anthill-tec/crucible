@@ -65,7 +65,10 @@ around two commitments:
 - **TOON (decided 2026-07-14):** agent-facing reads first (`GET /api/v2` orientation,
   events, status, agents) via `?fmt=toon` / `Accept`; JSON default everywhere.
 - **Persistence (decided 2026-07-14): embedded SQLite via Bun's built-in
-  `bun:sqlite`** (WAL mode, `data/crucible.db`) — no DB server (§7 holds), zero deps,
+  `bun:sqlite`** (WAL mode; one machine-scoped db file resolved in order — an explicit
+  `startServer` path, then `CRUCIBLE_DB`, then an already-existing `./data/crucible.db`
+  adopted but never created, then `$XDG_DATA_HOME/crucible/crucible.db` falling back to
+  `~/.local/share/crucible/crucible.db`) — no DB server (§7 holds), zero deps,
   transactional crash-safety, and real queries (per-project timelines, coverage
   trends, agent history) that a rewrite-the-file JSON snapshot cannot do. Decisive
   for the **skill-bundle deployment target** (client scripts + server + skill,
