@@ -577,3 +577,137 @@ describe("§S5 release.yml v-prefixed tag scheme", () => {
     expect(raw).toContain('VERSION="${GITHUB_REF_NAME#v}"');
   });
 });
+
+// ---------------------------------------------------------------------------
+// CR-CRU-041 §S4 — RELEASING.md
+//
+// Spec: docs/changes/CR-CRU-041-release-mechanism.md §S4 + Acceptance
+// criteria: "RELEASING.md exists and names every prerequisite in §S4,
+// including the one-time `git config gitflow.prefix.versiontag v`."
+//
+// Extends this file rather than starting a new one — it is the established
+// home for CR-CRU-041's doc-contract assertions (see the §S1/§S2/§S5
+// describes above), following the same pattern §S5 docs — RUNBOOK already
+// set for CR-CRU-009: assert on real identifiers/command names pulled from
+// the actual production files (scripts/release.sh, release.yml,
+// pyproject.toml), not on prose wording, so a RELEASING.md that merely
+// "sounds right" but omits a load-bearing name still fails.
+//
+// RED phase: RELEASING.md does not exist at the repo root on this branch —
+// every assertion below is expected to FAIL (file-not-found) against that
+// state.
+// ---------------------------------------------------------------------------
+
+describe("§S4 docs — RELEASING.md", () => {
+  const relPath = "RELEASING.md";
+
+  test("RELEASING.md exists at the repo root", () => {
+    expect(existsSync(join(REPO_ROOT, relPath))).toBe(true);
+  });
+
+  test("documents the tag-driven version model: v-prefixed tag, hatch-vcs strips the v, Python version never hand-edited", () => {
+    const doc = readText(relPath);
+    const lower = doc.toLowerCase();
+
+    // The tag shape itself (vX.Y.Z) and hatch-vcs as the derivation mechanism.
+    expect(doc).toMatch(/v[Xx]\.[Yy]\.[Zz]|v<?major>?\.<?minor>?\.<?patch>?/);
+    expect(lower).toContain("hatch-vcs");
+    // The Python version is DERIVED, never hand-edited — pyproject.toml is
+    // dynamic (real identifier from the actual pyproject.toml).
+    expect(lower).toContain("dynamic");
+    expect(lower).toMatch(/never (?:be )?(?:hand|manually)[- ]edit/);
+  });
+
+  test("documents the one-time prerequisites: PyPI + TestPyPI pending Trusted Publishers, the pypi/testpypi/npm Environments, and a required reviewer on pypi", () => {
+    const doc = readText(relPath);
+    const lower = doc.toLowerCase();
+
+    expect(lower).toContain("trusted publisher");
+    expect(lower).toContain("testpypi");
+
+    // The three real GitHub Environment names, and the required-reviewer
+    // human gate specifically on `pypi`.
+    expect(doc).toContain("pypi");
+    expect(doc).toContain("npm");
+    expect(lower).toMatch(/environment/);
+    expect(lower).toMatch(/required reviewer/);
+  });
+
+  test("documents RELEASE_PAT and why it is needed (default GITHUB_TOKEN does not re-fire on: release)", () => {
+    const doc = readText(relPath);
+    const lower = doc.toLowerCase();
+
+    // Exact secret name, matching release.yml:57's actual usage.
+    expect(doc).toContain("RELEASE_PAT");
+    expect(lower).toContain("github_token");
+    // The specific reason: default token release does not re-trigger the
+    // release-published workflow.
+    expect(lower).toMatch(/re-?fire|re-?trigger/);
+    expect(lower).toContain("on: release");
+  });
+
+  test("documents NPM_TOKEN for the inaugural scoped publish (no pending-publisher equivalent), then the flip to OIDC", () => {
+    const doc = readText(relPath);
+    const lower = doc.toLowerCase();
+
+    // Exact secret name, matching release.yml:170's actual usage.
+    expect(doc).toContain("NPM_TOKEN");
+    expect(lower).toContain("oidc");
+    // npm has no pending-publisher equivalent to PyPI's — named explicitly,
+    // not merely implied.
+    expect(lower).toMatch(/no pending[- ]publisher|does not have.*pending[- ]publisher/);
+  });
+
+  test("documents the one-time git config gitflow.prefix.versiontag v fix, and that it lives in .git/config (not version-controlled)", () => {
+    const doc = readText(relPath);
+    const lower = doc.toLowerCase();
+
+    // Exact command, matching scripts/release.sh:176's error-message fix.
+    expect(doc).toContain("git config gitflow.prefix.versiontag v");
+    expect(doc).toContain(".git/config");
+    expect(lower).toMatch(/not version-controlled|not (?:be )?committed|not tracked/);
+  });
+
+  test("documents the TestPyPI rehearsal loop via scripts/release.sh checkpoint, and that an untagged checkpoint derives a clean X.Y.Z.devN via no-local-version", () => {
+    const doc = readText(relPath);
+    const lower = doc.toLowerCase();
+
+    expect(doc).toContain("checkpoint");
+    expect(doc).toContain("release.sh");
+    // Exact hatch-vcs config identifier, matching pyproject.toml:33.
+    expect(doc).toContain("no-local-version");
+    // The devN suffix shape produced by an untagged checkpoint upload.
+    expect(doc).toMatch(/\.dev[Nn]?\b|devN/);
+  });
+
+  test("documents the release order: set-version -> finish -> push master -> CI publish chain", () => {
+    const doc = readText(relPath);
+
+    // Exact subcommand names, matching scripts/release.sh's actual verbs.
+    const setVersionIdx = doc.indexOf("set-version");
+    const finishIdx = doc.indexOf("finish");
+    const masterIdx = doc.toLowerCase().indexOf("master");
+
+    expect(setVersionIdx).toBeGreaterThan(-1);
+    expect(finishIdx).toBeGreaterThan(-1);
+    expect(masterIdx).toBeGreaterThan(-1);
+
+    // The order matters: set-version precedes finish precedes the master
+    // push in the documented sequence.
+    expect(setVersionIdx).toBeLessThan(finishIdx);
+    expect(finishIdx).toBeLessThan(masterIdx);
+  });
+
+  test("documents the composite/lockstep model: one tag publishes both crucible-axi (PyPI, derived) and @anthill-tec/crucible-server (npm, manual manifest) at the same version", () => {
+    const doc = readText(relPath);
+    const lower = doc.toLowerCase();
+
+    expect(doc).toContain("crucible-axi");
+    // Exact scoped npm package name, matching package.json's real "name".
+    expect(doc).toContain("@anthill-tec/crucible-server");
+    expect(lower).toMatch(/lockstep|composite/);
+    // Distinguishes the two version-authority mechanisms by name.
+    expect(lower).toMatch(/derived/);
+    expect(lower).toMatch(/manual manifest|manually[- ]versioned|hand[- ]versioned/);
+  });
+});
