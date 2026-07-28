@@ -1,6 +1,6 @@
 # CR-CRU-044 — Agent phase must be declared data, not an agentId naming convention
 
-**Status:** PENDING
+**Status:** COMPLETED — merged `d5180a3` (2026-07-28)
 **Type:** patch (contract correctness — client fleet + server + UI)
 **Priority:** P1 — 0.1.0 BLOCKER (promoted 2026-07-28). Misclassifies agents silently AND fabricates fictitious agent identities onto the dashboard (§S5) — unacceptable in a tool whose subject is agent observability
 **Depends on:** CR-CRU-030 (fleet AXI-CLI compliance), CR-CRU-036 (register cycle guard)
