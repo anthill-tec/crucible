@@ -228,6 +228,21 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   Test PyPI first; also requires open-sourcing the repo + publish credentials). It must
   never be inferred from a CR completing; it needs its own explicit go.
 
+- 2026-07-28 (CR-CRU-050 gap analysis) — verdict SPEC_UPDATE_NEEDED; no prerequisite CR. Two
+  material corrections. **(1) The CR reuses `pending`, it does not add `skipped`.** PRD:121 fixes
+  `summary {total, passed, failed, pending, duration_ms}` and PRD:179 already mandates the mapping
+  verbatim — *"skipped → pending"*. It is implemented end to end (`types.ts:49/55/66`,
+  `store.ts:299/1014/1065`) and rendered end to end (`app.js:3324/3310/3251/3347/3026`), and
+  `mvn-crucible.py:641` already populates it correctly. The draft's new `skipped` field would have
+  forked terminology against the PRD, the DB column, the dashboard and the one correct client.
+  **(2) Scope is four clients across five parse sites, not one** — bun `:506`, python `:518`,
+  arduino `:357`, rust `:762` AND `:1306`; all hardcode `"pending": 0`. Added §S1b: the tree LEAF
+  status is wrong too (a skipped test is emitted as `"pass"`, so the drill-in paints it green) —
+  count-only ACs would pass while the visible defect remained. §S4 closed as already-decided: no
+  server/schema/UI work is in scope. Reproduced live from artifacts in the tree: bun `junit.xml`
+  `tests="1061" skipped="1"` ingested as `passed=1061`, and a python report `tests="2" skipped="2"`
+  (an entire class where nothing ran) ingested as `passed=2` — so this project's own published
+  gate figures are inflated, the failure mode CR-039/CR-047 exist to prevent.
 - 2026-07-28 (CR-CRU-045 §S3 — **cross-stack gate rule for the client fleet**) — a change to
   `clients/*-crucible.py` requires **BOTH** the Python gate and the bun gate before close-out.
   Those clients are Python programs whose observable contract is asserted by **bun** tests
