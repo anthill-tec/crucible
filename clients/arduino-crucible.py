@@ -1143,7 +1143,10 @@ def cmd_dashboard():
 
 def main():
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--agent", help="override the derived agent id")
+    common.add_argument("--agent",
+                        help="override the derived agent id — a free-form identifier. "
+                             "The phase is declared by --phase and is never inferred "
+                             "from the agentId's shape.")
     common.add_argument("--project-dir",
                         help="subproject dir with .env + tests/native "
                              "(default: $ARDUINO_CRUCIBLE_PROJECT_DIR or CWD)")
@@ -1195,7 +1198,12 @@ def main():
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     r = sub.add_parser("register", parents=[common], help="register/heartbeat the agent")
-    r.add_argument("--phase", help="phase label (RED/GREEN/VERIFY/FIX)")
+    # CR-CRU-044 §S3 — phase is first-class DATA: --phase is REQUIRED and
+    # enum-constrained (it was unconstrained free text before).
+    r.add_argument("--phase", required=True,
+                   choices=["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"],
+                   help="Declared phase — the ONLY phase channel. Use `report` for a "
+                        "registration that is not exercising a TDD phase.")
     r.set_defaults(func=cmd_register)
 
     u = sub.add_parser("unregister", parents=[common], help="remove the agent")

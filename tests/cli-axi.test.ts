@@ -268,7 +268,7 @@ describe("crucible-axi CLI (CR-CRU-008 §S1)", () => {
     const { calls, fetchImpl } = capturingFetch();
 
     const registerCode = await runCli({
-      argv: ["register", "--project-key", key, "--agent", "cli-a1"],
+      argv: ["register", "--project-key", key, "--agent", "cli-a1", "--phase", "report"],
       baseUrl,
       cwd: process.cwd(),
       stdout: captureStream(),
@@ -316,7 +316,7 @@ describe("crucible-axi CLI (CR-CRU-008 §S1)", () => {
     const { calls, fetchImpl } = capturingFetch();
 
     await runCli({
-      argv: ["register", "--project-key", key, "--agent", "cli-hb-1"],
+      argv: ["register", "--project-key", key, "--agent", "cli-hb-1", "--phase", "report"],
       baseUrl,
       cwd: process.cwd(),
       stdout: captureStream(),

@@ -515,17 +515,18 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
     expect(proxy.calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
   });
 
-  test("register --agent X WITHOUT --phase succeeds (ergonomics fix: python's --phase is currently required=True — defaults to report phase instead)", async () => {
+  test("register --agent X --phase report succeeds and records the declared report phase", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-phase-optional");
     const dir = scratch.dir("python-crucible-proj-");
     writeEnvFile(dir, key);
 
-    const res = await runScript(PYTHON_SCRIPT_PATH, ["register", "--agent", "p3", "--project-dir", dir], {
-      cwd: dir,
-      crucibleUrl: baseUrl,
-    });
+    const res = await runScript(
+      PYTHON_SCRIPT_PATH,
+      ["register", "--agent", "p3", "--phase", "report", "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
 
     expect(res.code).toBe(0);
     const agents = await getAgents(baseUrl, key);

@@ -176,7 +176,7 @@ class PhaseBecomesRequiredTest(_BasePhaseFlagTest):
                 f"in stderr={err_clean!r}",
             )
         self.assertIsNone(
-            post_mock.call_args_list and _post_call_for_path(post_mock, "/api/v2/agents/register"),
+            _post_call_for_path(post_mock, "/api/v2/agents/register"),
             "a rejected argument parse must never reach the register POST",
         )
 

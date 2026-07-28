@@ -417,7 +417,7 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
 
     def test_register_prints_toon_envelope(self):
         code, out, _err, _p, _g, _pa = self._run(
-            ["register", "--agent", "CR-M-1", "--project-dir", self.tmpdir],
+            ["register", "--phase", "report", "--agent", "CR-M-1", "--project-dir", self.tmpdir],
             get_return=self._active_cycle_plans())
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
@@ -1079,7 +1079,7 @@ class MvnCrucibleAutoAttachTest(_BaseMvnAxiTest):
                                 return_value=self._no_active_cycle_plans(),
                                 create=True):
             code, out, err = _run_main(self.module, [
-                "register", "--agent", "CR-M-reg", "--project-dir", self.tmpdir,
+                "register", "--phase", "report", "--agent", "CR-M-reg", "--project-dir", self.tmpdir,
             ])
         self.assertNotEqual(code, 0)
         axi = self._decode_axi(out)
@@ -1097,7 +1097,7 @@ class MvnCrucibleAutoAttachTest(_BaseMvnAxiTest):
                                 return_value=self._no_open_plans_at_all(),
                                 create=True):
             code, out, _err = _run_main(self.module, [
-                "register", "--agent", "CR-M-reg", "--project-dir", self.tmpdir,
+                "register", "--phase", "report", "--agent", "CR-M-reg", "--project-dir", self.tmpdir,
             ])
         self.assertEqual(code, 0, f"no open plan at all must be TOLERATED; stdout={out!r}")
         axi = self._decode_axi(out)
@@ -1112,7 +1112,7 @@ class MvnCrucibleAutoAttachTest(_BaseMvnAxiTest):
                                 return_value=self._plans_fetch_failure(),
                                 create=True):
             code, out, _err = _run_main(self.module, [
-                "register", "--agent", "CR-M-reg", "--project-dir", self.tmpdir,
+                "register", "--phase", "report", "--agent", "CR-M-reg", "--project-dir", self.tmpdir,
             ])
         self.assertEqual(code, 0, f"a plans-fetch failure must be TOLERATED; stdout={out!r}")
         axi = self._decode_axi(out)
@@ -1127,7 +1127,7 @@ class MvnCrucibleAutoAttachTest(_BaseMvnAxiTest):
                                 return_value=self._no_active_cycle_plans(),
                                 create=True):
             code, out, _err = _run_main(self.module, [
-                "register", "--agent", "CR-M-reg", "--project-dir", self.tmpdir,
+                "register", "--phase", "report", "--agent", "CR-M-reg", "--project-dir", self.tmpdir,
             ])
         self.assertNotEqual(
             code, 0,

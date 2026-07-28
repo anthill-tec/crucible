@@ -95,6 +95,27 @@ unavailable" and continue, never fail (CR-CRU-035 §S1):
 A hook that receives `ok:true` together with a `status-unavailable` warning renders
 "board unavailable" and moves on — it never fails on it.
 
+## Agent identity and phase (CR-CRU-044 §S4)
+
+The `context.agentId` this envelope reports — and the `--agent` value every client's
+`register` verb takes — is a **free-form identifier**. It carries no structure the
+system reads: it is a label for humans and for joining rows together, nothing more.
+
+The **`--phase` flag declares the agent's phase**, and that stored declaration is what
+classifies the agent everywhere (the dashboard's agent rail, the phase filters, the
+run attribution). Phase is never inferred from the agentId's shape.
+
+- `--phase` is **required** on `register` across all five `*-crucible.py` clients and
+  `cli/crucible-axi.ts`, and is constrained to the enumeration
+  `RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report`. Omitting it, or passing a value
+  outside the enumeration, fails argument parsing with a non-zero exit and the accepted
+  values listed — no registration is sent.
+- Use `--phase report` for a registration that is not exercising a TDD phase.
+- Naming conventions such as `<agent-type>-<project>` or
+  `CR-<PROJ>-NNN-<cycle>-<PHASE>` remain useful as **habits for readability only**. They
+  are not load-bearing: an agentId ending in `-GREEN` registered with `--phase RED`
+  classifies as **RED**, because the declaration beats the label.
+
 ## Bounded fetch
 
 The plans GET is bounded by a short `timeout=` on the underlying `urlopen` call across

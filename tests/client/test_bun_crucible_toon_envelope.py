@@ -217,7 +217,7 @@ class RegisterUnregisterEnvelopeTest(_BaseEnvelopeTest):
         with mock.patch.object(self.module, "_post",
                                 return_value={"ok": False, "error": "boom"}):
             code, out, _err = _run_main(self.module, [
-                "register", "--agent", "CR-X-2-RED", "--project-dir", self.tmpdir,
+                "register", "--phase", "report", "--agent", "CR-X-2-RED", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 1)

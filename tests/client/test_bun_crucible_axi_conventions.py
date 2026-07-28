@@ -400,10 +400,10 @@ class StructuredErrorsExitCodesIdempotencyTest(_BaseAxiConventionsTest):
         # no client-side guard against re-registration).
         with mock.patch.object(self.module, "_post", return_value={"ok": True}):
             code1, _out1, _err1 = _run_main(
-                self.module, ["register", "--agent", "CR-TEST-1", "--project-dir", self.tmpdir]
+                self.module, ["register", "--phase", "report", "--agent", "CR-TEST-1", "--project-dir", self.tmpdir]
             )
             code2, _out2, _err2 = _run_main(
-                self.module, ["register", "--agent", "CR-TEST-1", "--project-dir", self.tmpdir]
+                self.module, ["register", "--phase", "report", "--agent", "CR-TEST-1", "--project-dir", self.tmpdir]
             )
         self.assertEqual(code1, 0)
         self.assertEqual(code2, 0,
@@ -560,7 +560,7 @@ class HelpArrayCoverageTest(_BaseAxiConventionsTest):
         os.environ["WORKFLOW_CYCLE_ID"] = "77"
         with mock.patch.object(self.module, "_post", return_value={"ok": True}):
             code, out, err = _run_main(self.module, [
-                "register", "--agent", "CR-HELP-1", "--project-dir", self.tmpdir,
+                "register", "--phase", "report", "--agent", "CR-HELP-1", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")

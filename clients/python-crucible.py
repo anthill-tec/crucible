@@ -1405,13 +1405,20 @@ def main():
 
     r = sub.add_parser(
         "register",
-        help="Register / heartbeat an agent. agentId convention: `<agent-type>-<project>` "
-             "(e.g. claude-sandesh) or TDD-phase `CR-<PROJ>-NNN-<cycle>-<PHASE>`.",
+        help="Register / heartbeat an agent. The phase is declared by --phase; the "
+             "agentId is a free-form identifier.",
     )
     r.add_argument("--agent", required=True,
-                   help="Agent id — `<type>-<project>` or `CR-<PROJ>-NNN-<cycle>-<PHASE>`")
-    r.add_argument("--phase", default="report",
-                   help="Phase label (RED/GREEN/FIX/VERIFY/ORCHESTRATOR; default: report)")
+                   help="Agent id — a free-form identifier. The phase is declared by "
+                        "--phase and is never inferred from the agentId's shape; any "
+                        "`<type>-<project>` / `CR-<PROJ>-NNN-<cycle>-<PHASE>` convention "
+                        "is a naming habit only.")
+    # CR-CRU-044 §S3 — phase is first-class DATA: --phase is REQUIRED and
+    # enum-constrained (it was free text with a "report" default before).
+    r.add_argument("--phase", required=True,
+                   choices=["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"],
+                   help="Declared phase — the ONLY phase channel. Use `report` for a "
+                        "registration that is not exercising a TDD phase.")
     r.add_argument("--display-name", help="Human-readable name (default: the agentId)")
     r.add_argument("--source", default="claude-md",
                    choices=["claude-md", "package-json", "git-repo", "manual"],

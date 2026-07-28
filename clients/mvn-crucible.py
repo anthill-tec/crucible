@@ -1739,11 +1739,18 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=False)
 
     r = sub.add_parser("register", help="Register / heartbeat an agent")
-    r.add_argument("--agent", required=True, help="Agent id, e.g. CR-ES-12-C1-RED")
-    # CR-CRU-008 register ergonomics: --phase optional, defaulting to "report".
+    r.add_argument("--agent", required=True,
+                   help="Agent id — a free-form identifier. The phase is declared by "
+                        "--phase and is never inferred from the agentId's shape; any "
+                        "CR-<PROJ>-NNN-<cycle>-<PHASE> convention is a naming habit only.")
+    # CR-CRU-044 §S3 — phase is first-class DATA: --phase is REQUIRED and
+    # enum-constrained (supersedes CR-CRU-008's `default="report"`; pass
+    # `--phase report` for a non-TDD registration).
     r.add_argument("--phase",
                    choices=["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"],
-                   default="report")
+                   required=True,
+                   help="Declared phase — the ONLY phase channel. Use `report` for a "
+                        "registration that is not exercising a TDD phase.")
     r.add_argument("--message", help="Optional status message")
     _add_project_args(r)
     r.set_defaults(func=cmd_register)

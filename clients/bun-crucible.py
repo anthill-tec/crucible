@@ -1849,12 +1849,16 @@ def main():
 
     r = sub.add_parser("register", help="Register / heartbeat an agent.")
     r.add_argument("--agent", required=True,
-                   help="Agent id — `<type>-<project>` or `CR-<PROJ>-NNN-<cycle>-<PHASE>`.")
-    # Ergonomics fix (CR-CRU-008 §S2): --phase is OPTIONAL, defaulting to
-    # "report" — the old hard requirement forced orchestrator-side
-    # implicit-heartbeat workarounds.
-    r.add_argument("--phase", default="report",
-                   choices=["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"])
+                   help="Agent id — a free-form identifier. The phase is declared by "
+                        "--phase and is never inferred from the agentId's shape; any "
+                        "`CR-<PROJ>-NNN-<cycle>-<PHASE>` convention is a naming habit only.")
+    # CR-CRU-044 §S3 — phase is first-class DATA: --phase is REQUIRED and
+    # enum-constrained (this supersedes CR-CRU-008 §S2's `default="report"`
+    # ergonomics; pass `--phase report` for a non-TDD registration).
+    r.add_argument("--phase", required=True,
+                   choices=["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"],
+                   help="Declared phase — the ONLY phase channel. Use `report` for a "
+                        "registration that is not exercising a TDD phase.")
     r.add_argument("--display-name", help="Human-readable name (default: the agentId)")
     r.add_argument("--source", default="claude-md",
                    choices=["claude-md", "package-json", "git-repo", "manual"])
