@@ -43,6 +43,24 @@ at bun 1081/1082 (the single failure being CR-045's coverage-shadow test) and CR
 1098/1098. Same code, same machine, opposite result. So the trigger is environmental/state-based
 and is NOT in the commit graph. Finding it is the point.
 
+### Symptom A2 — a third failure, in a different file
+`tests/clients-bun-crucible.test.ts` — 1 of 15 fails:
+
+> `§S2c: matched failing leaves carry failure.message married from the console stream`
+
+Established: that file is **byte-identical to `develop`** (`git diff develop..HEAD` empty), and in
+the MAIN tree it runs **14 pass / 1 fail** — so it is not caused by CR-CRU-042. It shares the
+`clients/bun-crucible.py` console-stream parsing surface with Symptom A, so a common cause is
+plausible but NOT established. This CR owns it outright; do not leave it unattributed.
+
+### 🚨 Methodology warning — do NOT bisect with `git worktree`
+Fresh worktrees do not contain `node_modules`, `.venv`, `.env` or `data` (all gitignored), and the
+client tests spawn the Python client, which needs `.venv` + `.env`. A worktree run of
+`tests/clients-bun-crucible.test.ts` reports **43 failures** that are pure environment artifacts.
+Any bisect must run in a tree with the full environment present, or its results are noise. The
+Symptom-A conclusions in the table above were corroborated by a MAIN-tree run (2 pass / 2 fail)
+and stand; anything else derived from worktree runs must be re-established.
+
 ### Symptom B — the bun total dropped by more than the deletions explain
 | Gate | Total |
 |---|---|
@@ -85,6 +103,8 @@ CR-CRU-045 §S3 rule applies: any change here needs BOTH gates before close-out.
 ## Acceptance criteria
 - [ ] `tests/clients-narration.test.ts` is 4/4 green, with the `matches.length > 0` precondition
       INTACT — narration must actually occur, not be asserted away.
+- [ ] `tests/clients-bun-crucible.test.ts` is 15/15 green — the `§S2c` failure-marrying test
+      passes with its console-stream assertion intact (Symptom A2).
 - [ ] The bun total is reconciled: a documented per-file inventory whose sum equals the gate's
       reported total, with any previously-missing tests named and restored.
 - [ ] A test asserts the collected-test count is surfaced in the regression envelope, so a future
@@ -97,8 +117,7 @@ CR-CRU-045 §S3 rule applies: any change here needs BOTH gates before close-out.
   precondition exists specifically so the purity/journal invariants below it are non-vacuous;
   removing it would make the remaining assertions trivially true.
 - Re-testing the hypotheses already eliminated in the Context table.
-- The `§S2c failure-marrying` test that also failed in the same gate run — include it if §S3's
-  root cause explains it, otherwise record it as a separate observation.
+- Nothing outside the three failures and the count reconciliation named above.
 
 ## Risk
 - **The tempting wrong fix is to relax `toBeGreaterThan(0)`.** That converts a real signal into a
