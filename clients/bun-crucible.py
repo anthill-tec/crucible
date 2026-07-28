@@ -177,8 +177,16 @@ def _patch(path, payload):
 
 # ── §S2b (CR-CRU-008) — in-run progress narration ──────────────────────────
 
-# bun's per-test completion line family (piped, non-quiet mode).
-_COMPLETION_LINE = re.compile(r"^\((?:pass|fail|skip|todo)\)")
+# bun's per-test completion line family (piped, non-quiet mode). bun ≥1.3
+# marks each finished test with a tick/cross glyph — and colourises it EVEN
+# THROUGH A PIPE, so the real captured bytes are
+# `\x1b[0m\x1b[32m✓\x1b[0m\x1b[0m\x1b[1m <name>…`. An anchored bare `^✓`
+# therefore matches ZERO real output; the SGR runs around the glyph must be
+# tolerated on both sides. Pass (✓) and fail (✗) both count as completions.
+_ANSI_SGR_RUN = r"(?:\x1b\[[0-9;]*m)*"
+_COMPLETION_LINE = re.compile(
+    r"^" + _ANSI_SGR_RUN + r"[✓✗]" + _ANSI_SGR_RUN + r"\s"
+)
 # bun's per-file section header, e.g. `narration.test.ts:`.
 _FILE_HEADER_LINE = re.compile(r"^(\S+\.[cm]?[jt]sx?):$")
 # A test declaration call site in a test source (`test(`/`it(`, with optional
@@ -224,7 +232,7 @@ class _Narrator:
     """§S2b (CR-CRU-008) — throttled in-run 'running N/M' narration.
 
     Fed the runner's streamed combined output line-by-line; counts bun's
-    per-test completion lines ((pass)/(fail)/(skip)/(todo)) and posts progress
+    per-test completion lines (the ANSI-colourised ✓/✗ family) and posts progress
     as a heartbeat `message` through the v2 register/heartbeat verb — no new
     API, and it prints NOTHING (the stdout data pipe stays pure; heartbeats on
     an already-existing agent journal no lifecycle event server-side).
@@ -705,11 +713,12 @@ def cmd_test(args):
             log_path = os.path.join(reports_dir, "run.log")
         narrator = None
         if args.agent:
-            # bun ≥1.3 hides per-test (pass) lines when it detects Claude Code
-            # (CLAUDECODE env). Drop it for the wrapped runner so the full
-            # (pass)/(fail) line family streams: §S2b counts it live and the
-            # §S2c run.log keeps its result-line block boundaries.
-            env.pop("CLAUDECODE", None)
+            # bun ≥1.3 hides per-test completion lines when it detects an agent
+            # session (CLAUDECODE / AGENT / REPL_ID env). Drop them all for the
+            # wrapped runner so the full ✓/✗ line family streams: §S2b counts it
+            # live and the §S2c run.log keeps its result-line block boundaries.
+            for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID"):
+                env.pop(_quieting_var, None)
             narrator = _Narrator(
                 lambda message: _register_agent(project_dir, args.agent, message),
                 total_hint=_prescan_test_total(package_dir, args.tests),
@@ -780,8 +789,10 @@ def cmd_regression(args):
             log_path = os.path.join(reports_dir, "run.log")
         narrator = None
         if args.agent:
-            # Same §S2b setup as cmd_test (whole-suite M via package walk).
-            env.pop("CLAUDECODE", None)
+            # Same §S2b setup as cmd_test (whole-suite M via package walk),
+            # including the agent-quieting env strip.
+            for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID"):
+                env.pop(_quieting_var, None)
             narrator = _Narrator(
                 lambda message: _register_agent(project_dir, args.agent, message),
                 total_hint=_prescan_test_total(package_dir, None),
