@@ -508,23 +508,57 @@ def _parse_junit_file(junit_path):
     return summary, tree_nodes, len(files)
 
 
-_FAIL_LINE = re.compile(r"^\(fail\)\s+(?P<name>.*?)(?:\s+\[[0-9.]+m?s\])?\s*$")
+# bun's per-test RESULT-line family — the same ANSI trap `_COMPLETION_LINE`
+# documents above, and the identical stale-pattern defect. bun colourises these
+# lines EVEN THROUGH A PIPE; the real captured bytes of a failing line are
+#   \x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m mismatched expectation\x1b[0m \x1b[0m\x1b[2m[0.13ms\x1b[0m\x1b[2m]\x1b[0m
+# so SGR runs sit on BOTH sides of the glyph, INSIDE the name (a nested
+# describe renders as `suite\x1b[2m >\x1b[0m\x1b[1m name`) and all through the
+# `[0.13ms]` duration tail — whose `[` is itself followed by an SGR run. An
+# anchored `^\(fail\)` matches ZERO real output; so would a naive `^✗`.
+# Matching therefore happens on the WIRE form, while everything STORED (name,
+# message, trace) is stripped clean — junit leaf names carry no escapes, so a
+# married key must not either.
+_ANSI_SGR_RE = re.compile(_ANSI_SGR_RUN)
+_DURATION_TAIL = (r"(?:\s+" + _ANSI_SGR_RUN + r"\[" + _ANSI_SGR_RUN
+                  + r"[0-9.]+\s*m?s" + _ANSI_SGR_RUN + r"\])?")
+_FAIL_LINE = re.compile(
+    r"^" + _ANSI_SGR_RUN + r"✗" + _ANSI_SGR_RUN + r"\s+(?P<name>.*?)"
+    + _ANSI_SGR_RUN + _DURATION_TAIL + _ANSI_SGR_RUN + r"\s*$"
+)
+# The non-failing result glyphs — pass (✓), skip (»), todo (✎). Each ends the
+# preceding detail block, so an `error:` block can never cross a finished test
+# and marry onto the wrong leaf. (Skip/todo lines carry no duration tail.)
+_RESULT_BOUNDARY_LINE = re.compile(
+    r"^" + _ANSI_SGR_RUN + r"[✓»✎]" + _ANSI_SGR_RUN + r"\s"
+)
+
+
+def _strip_ansi(text):
+    """Drop SGR escape runs. bun colourises its stream even through a pipe, so
+    every value lifted off that stream is cleaned before it is stored."""
+    return _ANSI_SGR_RE.sub("", text)
 
 
 def _parse_console_failures(log_text):
-    """§S2c (CR-CRU-008) — marry bun's console failure detail to leaf names.
+    r"""§S2c (CR-CRU-008) — marry bun's console failure detail to leaf names.
 
     bun's JUnit reporter writes a BARE `<failure type="..."/>` for EVERY
     failure kind (assertion mismatch, thrown Error, timeout alike) — the human
     detail exists only on the console stream. For assertion mismatches and
     thrown Errors an `error: <detail>` block appears IMMEDIATELY BEFORE the
-    `(fail) <name>` line; that block is captured here, keyed by leaf name.
+    `✗ <name>` result line; that block is captured here, keyed by leaf name.
     Detail printed AFTER the fail line (e.g. a timeout's `^ this test timed
     out after Nms.`) is structurally NOT a preceding block and stays
     unmatched — the leaf degrades to type-only.
+
+    Every line is ANSI-colourised — including the `error:` prefix, which
+    arrives as `\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m ` — so the block is
+    accumulated in its stripped form and the result lines are matched on the
+    wire form.
     """
     details = {}
-    block = []        # lines accumulated since the last result-line boundary
+    block = []        # stripped lines since the last result-line boundary
     error_idx = None  # index in `block` of the most recent "error:" line
     for line in log_text.splitlines():
         m = _FAIL_LINE.match(line)
@@ -536,19 +570,20 @@ def _parse_console_failures(log_text):
                 trace = "\n".join(detail).rstrip()
                 if trace:
                     married["trace"] = trace[:8000]
-                name = m.group("name").strip()
+                name = _strip_ansi(m.group("name")).strip()
                 details[name] = married
                 # Nested describes print "suite > name"; junit leaves carry
                 # the bare test name — index the last segment too.
                 details.setdefault(name.split(" > ")[-1], married)
             block, error_idx = [], None
             continue
-        if line.startswith(("(pass)", "(skip)", "(todo)")):
+        if _RESULT_BOUNDARY_LINE.match(line):
             block, error_idx = [], None
             continue
-        if line.startswith("error:"):
+        plain = _strip_ansi(line)
+        if plain.startswith("error:"):
             error_idx = len(block)
-        block.append(line)
+        block.append(plain)
     return details
 
 
