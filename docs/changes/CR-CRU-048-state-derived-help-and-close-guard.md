@@ -31,16 +31,31 @@ Plan 49 still had cycle 126 (`C2 VERIFY`) pending. The correct hint was
 `cycle-activate 126`. An orchestrator following the surface is walked directly into skipping
 VERIFY, which is precisely the context loss the AXI model exists to prevent.
 
-### Defect 2 — `cr-close` does not guard on an incomplete plan
-There is no pending-cycle check anywhere in the close path. `cr-close` will close a plan whose
-cycles are still `pending`/`active`, transitioning the CR's TRACKING STATE to COMPLETED while a
-declared cycle never ran. Close-out is defined as "transition the tracking state via the stack's
-finish/close tool" — so a CR can be recorded COMPLETED with its VERIFY unexecuted, and nothing
-anywhere says otherwise. That is a silent workflow-integrity failure, worse than a loud one.
+### Defect 2 — CORRECTED: the guard EXISTS; only its MESSAGE is deficient
+**My original claim — "`cr-close` does not guard on an incomplete plan" — was WRONG.** I grepped
+the CLIENT for a guard, found none, and concluded the system was unguarded without checking the
+server. Verified 2026-07-28:
 
-CR-CRU-036 already established the correct shape for exactly this class of problem: when the
-state is wrong for the verb, **warn + withhold** with a definitive AXI error rather than
-proceeding.
+- `Store.closePlan()` (`src/store.ts:~1511`) filters cycles not in
+  `Store.CYCLE_TERMINAL` (`:1170` = `done | skipped | failed`) and refuses with
+  `cannot close plan <id>: non-terminal cycles: <ids>`, returning `openCycleIds`.
+- `src/v2.ts:964` surfaces that as `{ openCycles, help: hints.nonTerminalCycles }`.
+- It has shipped since CR-CRU-011 C1 (`e77d3b4`), and `tests/plans.test.ts` already pins both
+  "pending blocks close" and "all-terminal closes".
+- The `skipped`/`failed` precision I thought this CR needed to ADD is already correct.
+
+Consequence worth stating: when the orchestrator nearly closed CR-CRU-042 with its VERIFY cycle
+unrun, **the server would have refused**. The tool was safer than the CR claimed.
+
+**What is genuinely missing is narrow — two message defects, both required by the ACs:**
+1. The refusal names the blocking cycle's **id only**, never its **label** — `openCycles: [2]`
+   tells an orchestrator nothing about what it forgot.
+2. `hints.nonTerminalCycles` (`src/hints.ts:133`) suggests transitioning cycles or `GET`-ing to
+   inspect them, but never names `POST …/plans/<planId>/abort` — the sanctioned route for closing
+   out a plan with cycles that will not run.
+
+So §S2 is a MESSAGE-QUALITY fix, not a new guard. Defect 1 (static `help[]`) is unaffected and
+remains the substantive defect in this CR.
 
 ## Scope
 
@@ -53,7 +68,7 @@ looked up in a table:
 Static entries in `_HELP_STEPS` that cannot be state-derived (e.g. `register` → `test`) stay as
 they are — this is not a rewrite of the whole table, only of the hints that have state to consult.
 
-### §S2 — the SERVER refuses to close a plan with incomplete cycles
+### §S2 — improve the EXISTING server refusal (guard already correct)
 **Gap-analysis 2026-07-28 answered the spec's open question. Decisions, with evidence:**
 
 **The guard lives SERVER-side.** `PATCH …/plans/<planId>` (`src/v2.ts:895`) IS the CR close and
