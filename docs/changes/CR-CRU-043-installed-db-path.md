@@ -51,6 +51,16 @@ when `XDG_DATA_HOME` is unset. Stable across invocations regardless of CWD, pers
 across `npx` cache clears, and needs no privileges. Directory creation keeps the existing
 `mkdirSync(..., { recursive: true })` behaviour.
 
+**This mirrors Sandesh exactly** — `sandesh/sandesh_db.py:119-126` resolves
+`data_home() = $XDG_DATA_HOME or ~/.local/share` and stores
+`<data_home>/sandesh/sandesh.db`, described in its own header as *"the ONE global DB, WAL —
+all projects"*. Live on this machine at `~/.local/share/sandesh/sandesh.db`. Crucible has the
+same architecture — a single machine-wide instance whose dashboard serves many projects at
+once (Crucible v2, Model B, dbg, Probe, Sandesh) — so the database is **machine-scoped, not
+project-scoped**, and a CWD-relative default was conceptually wrong, not merely inconvenient.
+Note the store is three files under WAL (`.db`, `.db-shm`, `.db-wal`), which independently
+rules out the `npx` package directory (an ephemeral cache).
+
 ### §S3 — Repo-development continuity (no migration, no data loss)
 The resolution order is, first match wins:
 
@@ -67,8 +77,19 @@ creates one CWD-relative, which is what causes the scattering.
 ### §S4 — RUNBOOK
 Update `docs/RUNBOOK.md` §"Database path" to state the resolution order, document
 `CRUCIBLE_DB` in the environment table alongside `CRUCIBLE_PORT`/`CRUCIBLE_HOST`, and
-replace the "relative to the working directory" sentence, which will no longer be true for
-an installed server.
+replace the "relative to the working directory" sentence (`:40`), which will no longer be
+true for an installed server. Also refresh the corrupt-db example path (`:56`) for
+consistency — the recovery behaviour itself is unchanged and location-independent (it renames
+to `<path>.corrupt-<epoch>` and reopens at the original path).
+
+### §S5 — PRD §2 storage paragraph (design surface — user-approved 2026-07-28)
+`docs/research/PRD-crucible-v2.md:68` currently names the literal path: *"embedded SQLite via
+Bun's built-in `bun:sqlite` (WAL mode, `data/crucible.db`)"*. That was a deliberate original
+decision (`CR-CRU-001` §"Store backed by `bun:sqlite`, WAL mode, db path `data/crucible.db`"),
+so this CR is a **design change**, not only a defect fix — the PRD must move with the code
+rather than be left contradicting it. Replace the bare path with the §S3 resolution order,
+preserving the surrounding rationale (embedded SQLite, no DB server, portable-bundle intent),
+which is unaffected. Edit approved by the user as a cross-CR design surface.
 
 ## Acceptance criteria
 - [ ] With `CRUCIBLE_DB=<tmp>/x.db` set and no explicit opts, the server opens exactly that
@@ -84,7 +105,9 @@ an installed server.
 - [ ] `opts.dbPath = ":memory:"` still bypasses all directory creation (existing test
       behaviour preserved; the whole suite uses it).
 - [ ] `docs/RUNBOOK.md` documents the resolution order and lists `CRUCIBLE_DB` in the env
-      table.
+      table; the "relative to the working directory" sentence is gone.
+- [ ] `docs/research/PRD-crucible-v2.md` §2 no longer names a bare `data/crucible.db` as the
+      store location — it states the resolution order (§S5).
 - [ ] Full bun suite green; the live dog-food server, restarted from the repo root, still
       shows its existing run history.
 
