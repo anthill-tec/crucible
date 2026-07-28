@@ -39,4 +39,3 @@ packages = ["crucible_axi"]
 # `crucible-axi` orchestrator carries the clients it lays down (S1).
 [tool.hatch.build.targets.wheel.force-include]
 "clients" = "crucible_axi/clients"
-"clients/STATUS-CONTRACT.md" = "crucible_axi/clients/STATUS-CONTRACT.md"
