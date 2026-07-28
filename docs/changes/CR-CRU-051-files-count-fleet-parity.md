@@ -1,8 +1,9 @@
 # CR-CRU-051 — Propagate the run-envelope `files` count to the other four clients
 
-**Status:** PENDING (0.2.0 — promotable, see Release membership)
+**Status:** PENDING
 **Type:** patch (fleet parity — gate visibility)
-**Priority:** P2 — an absent signal, not a wrong one; no client misreports today
+**Priority:** P2 — an absent signal, not a wrong one; no client misreports today. Wave 4, i.e.
+0.1.0, per the queue's convention (Wave 4 = 0.1.0; only Wave 5 rows carry a 0.2.0 qualifier)
 **Depends on:** CR-CRU-047 (§S2 introduced `files` in the bun client), CR-CRU-050 (touches the same envelope builders — land after it to avoid a collision)
 **Labels:** patch, client-fleet, gate-correctness, axi-compliance, fleet-parity
 **Phase:** Wave 4
@@ -82,13 +83,6 @@ blind.
 - Per-file granularity where the report format only carries per-class (surefire, xmlrunner).
 - The narration defect class — that is CR-CRU-049, and it applies only to mvn (bun and mvn are the
   only clients with narrators; python, rust and arduino have none — verified).
-
-## Release membership
-Filed against 0.2.0 because it adds a missing signal rather than correcting a false one. **Promote
-to 0.1.0 if fleet parity is wanted at first release** — the fleet is meant to be uniformly
-AXI-compliant, and a `run:` block whose shape differs per client is exactly the kind of
-inconsistency that costs an orchestrator context. The work is mechanical and small; the argument
-for holding it is scope discipline, not difficulty.
 
 ## Risk
 - Landing this concurrently with CR-CRU-050 would collide — both edit the same envelope builders
