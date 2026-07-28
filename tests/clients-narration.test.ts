@@ -595,6 +595,7 @@ function writeFakeAnsiTickBun(path: string): void {
     `printf '%s\\n' '${REAL_BUN_FAIL_LINE}'`,
     "sleep 2.2",
     `printf '%s\\n' '${REAL_BUN_FAIL_LINE}'`,
+    "sleep 2.5",
     "exit 1",
     "",
   ];
