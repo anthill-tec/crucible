@@ -237,7 +237,7 @@ interface FullEvent {
     cycle?: string;
     cycleId?: number;
   };
-  summary?: { total: number; passed: number; failed: number };
+  summary?: { total: number; passed: number; failed: number; pending?: number };
   tree?: EventSuite[];
 }
 
@@ -294,6 +294,75 @@ function writeFixtureBunProject(dir: string, projectKey: string): void {
   );
   writeFileSync(join(dir, "sample.test.ts"), FIXTURE_TEST_SOURCE);
   writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${projectKey}\n`);
+}
+
+// CR-CRU-050 §S1/§S1b/§S2 — a `<skipped/>` testcase must be classified as
+// pending, never folded into passed. Same source-file writer as
+// writeFixtureBunProject but with a caller-supplied test source, so each
+// CR-CRU-050 fixture below can pin its own exact pass/fail/skip shape.
+function writeBunProjectWithSource(dir: string, projectKey: string, source: string): void {
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({ name: "clients-bun-crucible-fixture", version: "0.0.0", private: true }),
+  );
+  writeFileSync(join(dir, "sample.test.ts"), source);
+  writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${projectKey}\n`);
+}
+
+// CR-CRU-050 mixed fixture: 1 pass, 1 fail, 1 `test.skip`, 1 `test.todo`.
+// Probed directly against the installed bun binary (1.3.14-canary): BOTH
+// `test.skip` and `test.todo` emit a bare/`message="TODO"` `<skipped/>`
+// child element in the JUnit XML — bun's own console summary for this
+// fixture reads "1 pass / 2 skip / 1 fail". The defect under test folds
+// both skipped cases into `passed` (reading `passed=3`) instead of leaving
+// them out of `passed` and counting them as `pending=2`.
+const FIXTURE_PENDING_MIXED_SOURCE = `import { test, expect } from "bun:test";
+
+test("adds numbers correctly", () => {
+  expect(1 + 1).toBe(2);
+});
+
+test("mismatched expectation", () => {
+  expect(1 + 1).toBe(3);
+});
+
+test.skip("skipped via test.skip", () => {
+  expect(1).toBe(1);
+});
+
+test.todo("skipped via test.todo");
+`;
+
+// CR-CRU-050 acceptance-criteria E2E reproduction, matching the spec's own
+// table verbatim in shape: bun's own output reads "N pass / 1 skip / 0
+// fail" and the ingest envelope must read passed=N pending=1 — never
+// passed=N+1. N=2 here (2 passing tests, 1 `test.skip`, 0 failures).
+const FIXTURE_PENDING_REPRO_SOURCE = `import { test, expect } from "bun:test";
+
+test("first passing test", () => {
+  expect(1 + 1).toBe(2);
+});
+
+test("second passing test", () => {
+  expect("a" + "b").toBe("ab");
+});
+
+test.skip("the skipped corroboration case", () => {
+  expect(true).toBe(true);
+});
+`;
+
+/**
+ * Extracts the 4-space-indented body of the TOON `  run:` block from a
+ * bun-crucible.py stdout envelope (the §S2 printed run: block under
+ * `axi:`), without depending on key ORDER inside it — the fix may insert
+ * `pending` anywhere in the `run` dict. Returns the raw block text (each
+ * line still carries its 4-space indent) or `undefined` if no `run:` key
+ * is present at all.
+ */
+function extractRunBlock(stdout: string): string | undefined {
+  const match = stdout.match(/ {2}run:\n((?: {4}.*\n)*)/);
+  return match?.[1];
 }
 
 // ── §S2 — v2-only endpoints + CRUCIBLE_URL + register ergonomics ─────────
@@ -782,5 +851,149 @@ describe("clients/bun-crucible.py — byte-compatible CLI surface (existing verb
     const event = await getFullEvent(baseUrl, events[0]!.id);
     expect(event.tier).toBe("regression");
     expect(await getAgentIds(baseUrl, key)).not.toContain("regression-agent"); // unregistered after the gated run
+  });
+});
+
+// ── CR-CRU-050 §S1/§S1b/§S2 — <skipped/> testcases fold into `pending`, ───
+// never `passed` ────────────────────────────────────────────────────────────
+//
+// `_parse_junit_file` (clients/bun-crucible.py:506) today checks only
+// `tc.find("failure")`/`tc.find("error")`; a bare `else: passed += 1` folds
+// every `<skipped/>` testcase (bun's real shape for BOTH `test.skip` and
+// `test.todo` — probed above) into `passed`, and the summary hardcodes
+// `"pending": 0`. `mvn-crucible.py:641` is the correct precedent this fixes
+// toward: `<skipped>` → `status="pending"`, `pending` incremented, `passed`
+// left untouched.
+
+describe("clients/bun-crucible.py — CR-CRU-050 §S1/§S1b: <skipped/> (test.skip AND test.todo) count as pending, never passed", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratchDirs: string[] = [];
+  let runResult: RunResult | undefined;
+  let event: FullEvent | undefined;
+
+  function scratchDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    scratchDirs.push(dir);
+    return dir;
+  }
+
+  beforeAll(async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-cr050-mixed");
+    const dir = scratchDir("bun-crucible-cr050-mixed-");
+    writeBunProjectWithSource(dir, key, FIXTURE_PENDING_MIXED_SOURCE);
+
+    runResult = await runScript(
+      ["test", "--agent", "cr050-mixed-agent", "--tests", "sample.test.ts", "--project-dir", dir, "--package-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+    const events = await getEvents(baseUrl, key);
+    event = events.length > 0 ? await getFullEvent(baseUrl, events[0]!.id) : undefined;
+  });
+
+  afterAll(() => {
+    handle?.stop();
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  test("§S1: ingested summary counts the 2 skipped/todo testcases as pending=2 (never folded into passed=3), and passed+failed+pending==total holds", () => {
+    expect(event?.summary?.total).toBe(4);
+    expect(event?.summary?.failed).toBe(1);
+    // The defect: a bare `else: passed += 1` reads this as passed=3. The
+    // fix must leave the two skipped/todo cases OUT of passed.
+    expect(event?.summary?.passed).toBe(1);
+    expect(event?.summary?.passed).not.toBe(3);
+    expect(event?.summary?.pending).toBe(2);
+    const s = event!.summary!;
+    expect((s.passed ?? 0) + (s.failed ?? 0) + (s.pending ?? 0)).toBe(s.total);
+  });
+
+  test("§S1b: the test.skip leaf AND the test.todo leaf both carry tree status 'pending' (not 'pass'); the real pass/fail leaves are unaffected", () => {
+    const leaves = (event?.tree ?? []).flatMap((suite) => suite.children);
+    const skipLeaf = leaves.find((l) => l.name === "skipped via test.skip");
+    const todoLeaf = leaves.find((l) => l.name === "skipped via test.todo");
+    const passLeaf = leaves.find((l) => l.name === "adds numbers correctly");
+    const failLeaf = leaves.find((l) => l.name === "mismatched expectation");
+
+    expect(skipLeaf?.status).toBe("pending");
+    expect(skipLeaf?.status).not.toBe("pass");
+    expect(todoLeaf?.status).toBe("pending");
+    expect(todoLeaf?.status).not.toBe("pass");
+    // A count-only assertion would pass while the drill-in stayed green —
+    // pin the unaffected leaves too, as a negative bound on this fix.
+    expect(passLeaf?.status).toBe("pass");
+    expect(failLeaf?.status).toBe("fail");
+  });
+
+  test("§S2: the printed run: envelope block carries pending:2 alongside passed:1/failed:1/total:4", () => {
+    expect(runResult?.code).not.toBe(0); // 1 real failure among the 4 fixture tests
+    const block = extractRunBlock(runResult?.stdout ?? "");
+    expect(block).toBeDefined();
+    expect(block).toContain("passed: 1");
+    expect(block).toContain("failed: 1");
+    expect(block).toContain("total: 4");
+    expect(block).toContain("pending: 2");
+  });
+});
+
+describe("clients/bun-crucible.py — CR-CRU-050 E2E repro: 'N pass / 1 skip / 0 fail' produces passed=N pending=1, not passed=N+1", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratchDirs: string[] = [];
+  let runResult: RunResult | undefined;
+  let event: FullEvent | undefined;
+
+  function scratchDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    scratchDirs.push(dir);
+    return dir;
+  }
+
+  beforeAll(async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-cr050-repro");
+    const dir = scratchDir("bun-crucible-cr050-repro-");
+    writeBunProjectWithSource(dir, key, FIXTURE_PENDING_REPRO_SOURCE);
+
+    runResult = await runScript(
+      ["test", "--agent", "cr050-repro-agent", "--tests", "sample.test.ts", "--project-dir", dir, "--package-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+    const events = await getEvents(baseUrl, key);
+    event = events.length > 0 ? await getFullEvent(baseUrl, events[0]!.id) : undefined;
+  });
+
+  afterAll(() => {
+    handle?.stop();
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  test("ground truth: bun's own console summary for this fixture reads exactly '2 pass' / '1 skip' / '0 fail'", () => {
+    expect(runResult?.stderr).toContain("2 pass");
+    expect(runResult?.stderr).toContain("1 skip");
+    expect(runResult?.stderr).toContain("0 fail");
+  });
+
+  test("the ingest envelope reads passed=2 pending=1 failed=0 total=3 — the skipped corroboration case is NOT folded into passed as N+1", () => {
+    expect(runResult?.code).toBe(0); // 0 real failures — the run itself is green
+    expect(event?.summary?.total).toBe(3);
+    expect(event?.summary?.failed).toBe(0);
+    expect(event?.summary?.pending).toBe(1);
+    expect(event?.summary?.passed).toBe(2);
+    expect(event?.summary?.passed).not.toBe(3); // the defect's N+1 reading
+  });
+
+  test("§S2: the printed run: envelope block for the repro carries pending:1 alongside passed:2/failed:0/total:3", () => {
+    const block = extractRunBlock(runResult?.stdout ?? "");
+    expect(block).toBeDefined();
+    expect(block).toContain("passed: 2");
+    expect(block).toContain("failed: 0");
+    expect(block).toContain("total: 3");
+    expect(block).toContain("pending: 1");
   });
 });
