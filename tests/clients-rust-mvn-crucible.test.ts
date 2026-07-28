@@ -1415,7 +1415,7 @@ describe("clients/mvn-crucible.py — byte-compatible CLI surface (existing flag
 // single-report-dir path's OWN TOON block (`_emit_ingest_axi_resp`,
 // mvn-crucible.py:361-374) and its "ingest junit: ..." stderr line
 // (mvn-crucible.py:720-722) do the same for the SERVER-parsed junit-dir path.
-describe("clients/mvn-crucible.py — CR-CRU-050: _parse_junit (mvn-crucible.py:641) is CONFIRMED correct (counts AND leaf status) — pinned, not assumed; its TOON run: block still drops pending (fake mvnw)", () => {
+describe("clients/mvn-crucible.py — CR-CRU-050: _parse_junit (mvn-crucible.py:641) is CONFIRMED correct (counts AND leaf status) — pinned, not assumed; its TOON run: block carries pending (fake mvnw)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
 
@@ -1432,7 +1432,7 @@ describe("clients/mvn-crucible.py — CR-CRU-050: _parse_junit (mvn-crucible.py:
     return dir;
   }
 
-  test("'regression' (client-side _parse_junit, the reference impl): a skipped surefire testcase is CONFIRMED pending=1 (never folded into passed), and its leaf CONFIRMED status 'pending' (not 'pass') — mvn is UNCHANGED, not assumed; the TOON run: block (§S2) still omits pending — RED", async () => {
+  test("'regression' (client-side _parse_junit, the reference impl): a skipped surefire testcase is CONFIRMED pending=1 (never folded into passed), and its leaf CONFIRMED status 'pending' (not 'pass') — mvn's counting was already correct and is UNCHANGED, not assumed; the TOON run: block (§S2) now carries pending too", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-mc-cr050-regression-reference");
@@ -1480,7 +1480,7 @@ describe("clients/mvn-crucible.py — CR-CRU-050: _parse_junit (mvn-crucible.py:
   });
 });
 
-describe("clients/mvn-crucible.py — CR-CRU-050 §S2: the single-surefire-dir path ('test', server-parsed via the junit codec) drops pending from its TOON run: block and its 'ingest junit: ...' print line (fake mvnw)", () => {
+describe("clients/mvn-crucible.py — CR-CRU-050 §S2: the single-surefire-dir path ('test', server-parsed via the junit codec) carries pending in its TOON run: block and its 'ingest junit: ...' print line (fake mvnw)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
 
@@ -1490,7 +1490,7 @@ describe("clients/mvn-crucible.py — CR-CRU-050 §S2: the single-surefire-dir p
     scratch.cleanup();
   });
 
-  test("event.summary.pending=1 is already correct (server-side junit codec, confirmed not assumed); the TOON run: block and the plain 'ingest junit: ...' stderr line both still omit pending — RED", async () => {
+  test("event.summary.pending=1 is already correct (server-side junit codec, confirmed not assumed); the TOON run: block and the plain 'ingest junit: ...' stderr line both carry pending=1 too", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-mc-cr050-unit-junit-dir");
