@@ -201,15 +201,22 @@ class PyprojectPackageEntryPointTest(unittest.TestCase):
             text, r'(?m)^crucible-axi\s*=\s*"crucible_axi\.cli:main"\s*$',
             'expected crucible-axi = "crucible_axi.cli:main"')
 
-    def test_pyproject_declares_client_fleet_and_status_contract_as_package_data(self):
+    def test_pyproject_declares_client_fleet_as_package_data(self):
+        """The clients/ fleet must be declared as package data. This checks the
+        DECLARATION only -- deliberately NOT that STATUS-CONTRACT.md is named
+        here. A separate force-include entry for it duplicated the archive path
+        already covered by the clients/ tree and made `python -m build` fail with
+        a duplicate-archive-path ValueError. What actually matters -- that
+        crucible_axi/clients/STATUS-CONTRACT.md is PRESENT IN THE BUILT WHEEL --
+        is asserted by tests/client/test_crucible_axi_wheel_packaging.py, which
+        is strictly stronger than a substring match on this config file. Do not
+        "restore" a STATUS-CONTRACT.md assertion here; it would re-encode the
+        build break."""
         text = PYPROJECT_PATH.read_text()
         self.assertIn(
             "clients", text,
             "expected the pyproject.toml packaging config to reference the "
             "clients/ fleet as package data")
-        self.assertIn(
-            "STATUS-CONTRACT.md", text,
-            "expected STATUS-CONTRACT.md to be referenced as package data")
 
     def test_console_script_entry_point_target_resolves_to_a_real_callable(self):
         """Cross-check: the dotted target the entry point NAMES
