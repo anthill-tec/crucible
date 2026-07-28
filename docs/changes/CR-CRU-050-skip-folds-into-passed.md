@@ -1,6 +1,6 @@
 # CR-CRU-050 — Skipped/todo tests are counted as PASSED in the ingest envelope
 
-**Status:** PENDING
+**Status:** COMPLETED — merged `80ef478` (2026-07-28)
 **Type:** patch (gate correctness — reporting fidelity)
 **Priority:** P1 — a green gate over-reports what actually ran
 **Depends on:** CR-CRU-039 (the zero-discovery precedent), CR-CRU-047 (found it)

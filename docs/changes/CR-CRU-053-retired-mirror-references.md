@@ -43,6 +43,25 @@ for this CR rather than growing CR-050's scope.
 prose a reader might believe; this one is an **executable command** offered as a verification step,
 against the retired path. Following the file's own instructions runs the mirror.
 
+**That file is worse than a mirror reference — its docstring carries THREE false facts**, and it is
+what an agent reads to orient itself before touching the bun client:
+
+| line | says | reality |
+|---|---|---|
+| `:9` | *"it is the project-agnostic client script at `~/.claude/scripts/bun-crucible.py`"* | `clients/bun-crucible.py` is the source of truth; the mirror is retired and running it orphans runs |
+| `:21-22` | *"bun-crucible.py does not define `_run_context` at all today (confirmed: `grep -n "_run_context" ~/.claude/scripts/…`)"* | it does define it; and the "confirmation" is a command aimed at the retired path |
+| `:13-14` | *"`test`/`regression` attach `context.cycleId` from **WORKFLOW_CYCLE_ID**"* | **CR-CRU-036 removed `WORKFLOW_CYCLE_ID`.** The client auto-attaches from the server, and hand-passing it is explicitly forbidden |
+
+The third is independent of the mirror and arguably the worst: the docstring instructs a reader to
+use a mechanism this project deliberately deleted. **§S1 must correct all three**, not only the
+`.claude/scripts` strings — a grep-driven fix keyed on the mirror path would leave the
+`WORKFLOW_CYCLE_ID` sentence standing.
+
+Whoever takes this CR should read each flagged docstring WHOLE rather than patching the matched
+line, and report any further stale claim found the same way. The lesson generalises: these files
+accumulated RED-phase narration that was true for one commit and has been quietly wrong ever
+since.
+
 ## Scope
 
 ### §S1 — Correct the four misleading references
