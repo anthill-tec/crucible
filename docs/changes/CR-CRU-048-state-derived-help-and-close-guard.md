@@ -53,17 +53,28 @@ looked up in a table:
 Static entries in `_HELP_STEPS` that cannot be state-derived (e.g. `register` → `test`) stay as
 they are — this is not a rewrite of the whole table, only of the hints that have state to consult.
 
-### §S2 — `cr-close` refuses an incomplete plan
-`cr-close` must REFUSE when the target plan has any cycle not in a done state, emitting a
-definitive AXI error that NAMES the offending cycles (id + label) and the remedy. Follow the
-CR-CRU-036 warn+withhold pattern: `ok:false`, non-zero exit, human detail on stderr, the machine
-envelope on stdout. An explicit override flag MAY be provided for the genuine exception case, but
-it must be explicit — never the default path.
+### §S2 — the SERVER refuses to close a plan with incomplete cycles
+**Gap-analysis 2026-07-28 answered the spec's open question. Decisions, with evidence:**
 
-**Decide and record where the guard lives.** The SERVER owns plan state, so a server-side refusal
-is authoritative for every client and cannot be bypassed by an out-of-date script; the client
-then surfaces it. A client-only guard is weaker. Justify the choice in the CR's implementation
-notes rather than defaulting to whichever is easier.
+**The guard lives SERVER-side.** `PATCH …/plans/<planId>` (`src/v2.ts:895`) IS the CR close and
+already validates there — status must be `closed`, `merge.commit` must be non-empty, an
+already-closed plan → 400. Adding a cycle-state check to that route is authoritative for every
+client and cannot be bypassed by an out-of-date vendored script. A client-only guard is strictly
+weaker. The client then surfaces the refusal as an AXI error.
+
+**Only `pending` and `active` block the close.** `CYCLE_STATUSES` (`src/v2.ts:677`) is
+`pending | active | done | skipped | failed`. `skipped` and `failed` are legitimate TERMINAL
+states — a plan carrying them must still close, or a failed cycle would strand the CR forever.
+Guarding on "not done" would be wrong.
+
+**No `--force` override — the sanctioned path already exists.** `handlePlanAbort` (`:1000`)
+transitions the active cycle → `failed` and pending cycles → `skipped` behind a
+`userApproved: true` gate. Deliberate abandonment is therefore already modelled; adding an
+override flag would duplicate it with weaker semantics and give two ways to bypass one guard. The
+refusal message should NAME this route as the remedy.
+
+The refusal follows the CR-CRU-036 shape: `ok:false`, non-zero exit, human detail on stderr, the
+machine envelope on stdout, and the message NAMES the blocking cycle ids and labels.
 
 ### §S3 — Apply fleet-wide
 All five clients share this workflow surface. Whatever §S1/§S2 land must hold for
@@ -74,9 +85,13 @@ All five clients share this workflow surface. Whatever §S1/§S2 land must hold 
       `cycle-activate <that cycle's id>` and NOT `cr-close` — asserted.
 - [ ] `cycle-done` closing the final cycle returns `help[]` naming `cr-close --commit <sha>` —
       asserted, so the hint is genuinely conditional and not merely reworded.
-- [ ] `cr-close` against a plan with a pending or active cycle **fails** (`ok:false`, non-zero
+- [ ] `cr-close` against a plan with a `pending` or `active` cycle **fails** (`ok:false`, non-zero
       exit) and the message NAMES the blocking cycle id(s) and label(s) — asserted. **This is the
       defect's regression test.**
+- [ ] A plan whose remaining cycles are `skipped` or `failed` STILL CLOSES — asserted. Those are
+      terminal states; guarding on "not done" would strand a CR with a failed cycle forever.
+- [ ] The refusal is enforced by the SERVER (`PATCH …/plans/<planId>`), not only by the client —
+      asserted against the endpoint, so a stale vendored client cannot bypass it.
 - [ ] `cr-close` against a fully-closed plan still succeeds exactly as today — asserted, so the
       guard cannot be satisfied by breaking the happy path.
 - [ ] Both behaviours asserted for all five clients (§S3).
