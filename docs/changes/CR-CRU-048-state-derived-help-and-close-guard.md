@@ -121,6 +121,18 @@ All five clients share this workflow surface. Whatever §S1/§S2 land must hold 
 - Enforcing that a plan MUST contain a VERIFY cycle — this CR makes the declared plan binding, it
   does not dictate plan shape.
 
+## Deferred (found by C3 VERIFY, 2026-07-28 — pre-existing, not introduced here)
+- **The cycle-not-found ERROR path still recommends `cr-close`.** When `_cycle_transition` cannot
+  resolve the cycle to an open plan, `target` is `None`, `next_pending_cycle_id` returns `None`, and
+  the envelope falls through to `["cr-close --commit <sha>", "status"]` — on a response where the
+  transition never happened. Pre-existing (the old hardcoded ternary did the same unconditionally),
+  and outside §S1's "plan resolved" scope, but it is the SAME defect class this CR fixes: a hint
+  recommending an action the state does not support. Worth a follow-up.
+- **No direct unit test of the pure helpers.** `next_pending_cycle_id` / `cycle_transition_help` are
+  exercised only through the five per-client integration tests. Coverage is adequate, but a
+  pure-function test would pin the several-pending and earlier-pending cases explicitly rather than
+  by inference.
+
 ## Risk
 - **A guard that is too strict blocks legitimate closes** (e.g. a plan whose final cycle was
   abandoned deliberately). Hence the explicit-override allowance in §S2 — but it must be opt-in,
