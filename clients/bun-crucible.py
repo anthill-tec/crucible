@@ -62,10 +62,13 @@ Examples:
   # Full regression + coverage + ingest (orchestrator gate)
   bun-crucible.py pre-merge-gate --agent claude-sandesh
 
-Agent naming (agent-protocol): agentId = `<agent-type>-<project>` (e.g. claude-sandesh) for
-the orchestrator, or `CR-<PROJ>-NNN-<cycle>-<PHASE>` (e.g. CR-SAN-013-C1-RED) for TDD-phase
-agents. Identity carries displayName + source (default claude-md) + repoPath, inside the
-`identity` object.
+Agent naming (CR-CRU-044 §S4/§S5): the agentId is a FREE-FORM identifier carrying no
+structure the system reads. It is DECLARED with `--agent` or the verb fails — there is no
+filename default and no env fallback ($WORKFLOW_ROLE is the track lane, not an identity).
+The phase comes from `--phase` alone and is never inferred from the agentId's shape, so
+`<agent-type>-<project>` (e.g. claude-sandesh) and `CR-<PROJ>-NNN-<cycle>-<PHASE>` (e.g.
+CR-SAN-013-C1-RED) are readability habits only. Identity carries displayName + source
+(default claude-md) + repoPath, inside the `identity` object.
 """
 
 import argparse

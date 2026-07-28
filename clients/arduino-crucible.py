@@ -433,8 +433,10 @@ def cmd_register(args):
     resp = _post("/api/v2/agents/register", {
         "agentId": agent_id, "projectKey": key, "status": "online", "message": msg,
         # CR-CRU-044 §S1 — the declared phase is part of the registration wire
-        # contract; this client's --phase is optional, so an undeclared phase
-        # registers as "report" (the same default the other clients carry).
+        # contract, and §S3 makes --phase REQUIRED + enum-constrained on the
+        # `register` subparser (this function's only caller), so a phase is
+        # always declared by the time we build the payload. The `or "report"`
+        # is a defensive floor for a hand-built Namespace, not a usable default.
         "phase": phase or "report",
         "identity": {"displayName": agent_id, "source": "openclaw"}})
     ok = bool(resp.get("ok", False))
@@ -493,10 +495,12 @@ def _run_native_tests(args, verb, tier, want_coverage):
     finally:
         if getattr(args, "agent", None):
             # Remove the SAME id the run ingested under. The body resolves via
-            # `_agent_id(args)` (raw --agent > $WORKFLOW_ROLE > "arduino-crucible",
-            # fleet-uniform with python/rust/mvn); resolve the cleanup id through
-            # the identical derivation so a run can never drift from the
-            # registered row and orphan a ghost.
+            # `_agent_id(args)`, the CR-CRU-044 §S5 declared-identity resolver:
+            # the explicit `--agent` value or a hard stop. There is no
+            # $WORKFLOW_ROLE branch and no `"arduino-crucible"` filename default
+            # — both were deleted, and neither may be reinstated. Resolve the
+            # cleanup id through that identical call so a run can never drift
+            # from the registered row and orphan a ghost.
             _remove_agent_silent(pd, _agent_id(args))
 
 
@@ -1168,7 +1172,9 @@ def cmd_dashboard():
 def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--agent",
-                        help="override the derived agent id — a free-form identifier. "
+                        help="Agent id — a free-form identifier. Nothing derives one: "
+                             "there is no filename default and no env fallback, so any "
+                             "verb that POSTs under an agentId hard-stops without it. "
                              "The phase is declared by --phase and is never inferred "
                              "from the agentId's shape.")
     common.add_argument("--project-dir",

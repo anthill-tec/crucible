@@ -60,10 +60,13 @@ Project + Crucible endpoint:
   /api/v2/agents/register|unregister, /api/v2/runs/parsed, /api/v2/runs/compile,
   /api/v2/projects/<key>/plans, /api/v2/gates, /api/v2/milestones.
 
-Agent naming (agent-protocol): agentId = `<agent-type>-<project>` (e.g. claude-sandesh)
-for the orchestrator, or `CR-<PROJ>-NNN-<cycle>-<PHASE>` (e.g. CR-SAN-001-A-RED) for
-TDD-phase agents. Identity carries displayName + source (default claude-md) + repoPath,
-inside the `identity` object.
+Agent naming (CR-CRU-044 §S4/§S5): the agentId is a FREE-FORM identifier carrying no
+structure the system reads. It is DECLARED with `--agent` or the verb fails — there is no
+filename default and no env fallback ($WORKFLOW_ROLE is the track lane, not an identity).
+The phase comes from `--phase` alone and is never inferred from the agentId's shape, so
+`<agent-type>-<project>` (e.g. claude-sandesh) and `CR-<PROJ>-NNN-<cycle>-<PHASE>` (e.g.
+CR-SAN-001-A-RED) are readability habits only. Identity carries displayName + source
+(default claude-md) + repoPath, inside the `identity` object.
 """
 
 import argparse
