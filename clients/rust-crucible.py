@@ -1666,6 +1666,10 @@ def cmd_cycle_done(args):
 
 
 def cmd_cr_close(args):
+    # CR-CRU-044 §S5 — cr-close ends by POSTing a `cr-merged` MILESTONE, so it
+    # needs a declared identity. Resolve it FIRST: a hard stop must happen
+    # before the plan GET/PATCH, never after the CR has already been closed.
+    _agent_id(args)
     project_dir = _resolve_project_dir(args.project_dir)
     open_plans = _open_plans(project_dir)
     if args.cr:
@@ -1861,12 +1865,17 @@ def cmd_status(args):
 
 
 def _agent_id(args):
-    """The agentId for a fleet event. Explicit --agent > $WORKFLOW_ROLE > a stable
-    fallback (these verbs never assert on the id, but the server requires one)."""
-    explicit = getattr(args, "agent", None)
-    if explicit:
-        return explicit
-    return os.environ.get("WORKFLOW_ROLE") or "rust-crucible"
+    """CR-CRU-044 §S5 — the agentId for a fleet event: the identity is
+    DECLARED (`--agent`) or the verb FAILS. Delegates to the shared fleet
+    resolver so all five clients cannot drift apart again.
+
+    There is no fallback: the old filename-derived default
+    (`"rust-crucible"`) fabricated an identity from this script's own
+    filename and planted a phantom row on the dashboard agent rail, and
+    $WORKFLOW_ROLE is the TRACK LANE (mainline | track-n), not an identity.
+    Raises `_crucible_axi.AgentIdentityRequired`, which `main` converts into
+    the ok:false hard-stop envelope + a non-zero exit, POSTing nothing."""
+    return _axi().require_agent_id(args)
 
 
 def _post_gate(project_dir, agent_id, gate, context=None):
@@ -2376,7 +2385,8 @@ def main():
                         help="Close the single OPEN plan (PATCH status=closed + merge.commit).")
     cc.add_argument("--commit", required=True, help="Merge commit sha.")
     cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
-    cc.add_argument("--agent", help="Agent id for the cr-merged milestone (default: $WORKFLOW_ROLE).")
+    cc.add_argument("--agent", help="Agent id for the cr-merged milestone — REQUIRED (§S5): the "
+                        "identity is declared or the verb fails; there is no fallback.")
     _add_project_dir_arg(cc)
     cc.set_defaults(func=cmd_cr_close)
 
@@ -2423,7 +2433,9 @@ def main():
                         help="axi PROXY: run `no-mistakes axi run`, post throttled interim "
                              "+ final gates, relay the axi detail to the caller.")
     gr.add_argument("--intent", required=True, help="The intent/goal passed down to `axi run`.")
-    gr.add_argument("--agent", help="Agent id for the gate events (default: $WORKFLOW_ROLE).")
+    gr.add_argument("--agent", help="Agent id for the gate events — REQUIRED (§S5): the "
+                          "identity is declared or the verb fails; there is "
+                          "no fallback.")
     _add_project_dir_arg(gr)
     gr.set_defaults(func=cmd_gate_run)
 
@@ -2434,7 +2446,8 @@ def main():
     grp.add_argument("--commit", help="The pushed commit sha (gate.push.commit).")
     grp.add_argument("--steps", help='Comma-separated "name:status" step results.')
     grp.add_argument("--intent", help="Gate intent (default: derived from --outcome).")
-    grp.add_argument("--agent", help="Agent id (default: $WORKFLOW_ROLE).")
+    grp.add_argument("--agent", help="Agent id — REQUIRED (§S5): the identity is declared or "
+                         "the verb fails; there is no fallback.")
     grp.add_argument("--full", action="store_true",
                      help="Emit large text fields (e.g. a server error detail) untruncated (§S11).")
     _add_project_dir_arg(grp)
@@ -2446,7 +2459,8 @@ def main():
     ms.add_argument("--label", help="Human-readable milestone label.")
     ms.add_argument("--cr", help="CR id (rides context.cr).")
     ms.add_argument("--commit", help="Optional commit sha.")
-    ms.add_argument("--agent", help="Agent id (default: $WORKFLOW_ROLE).")
+    ms.add_argument("--agent", help="Agent id — REQUIRED (§S5): the identity is declared or "
+                         "the verb fails; there is no fallback.")
     _add_project_dir_arg(ms)
     ms.set_defaults(func=cmd_milestone)
 
@@ -2454,7 +2468,12 @@ def main():
     # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.
     if getattr(args, "func", None) is None:
         sys.exit(cmd_dashboard())
-    sys.exit(args.func(args))
+    # CR-CRU-044 §S5 — dispatch through the shared `run_verb`, which turns an
+    # UNDECLARED agent identity into the ok:false hard-stop envelope + a
+    # non-zero exit (POSTing nothing) instead of an unhandled traceback.
+    sys.exit(_axi().run_verb(
+        args.func, args,
+        lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None)))))
 
 
 if __name__ == "__main__":

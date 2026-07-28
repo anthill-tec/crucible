@@ -30,8 +30,13 @@ Run context (CR-CRU-008 §S2): when any WORKFLOW_* env var is set
 env read), ingests carry a `context` object {cycle, wave, orchestrator,
 git:{branch,commit}} plus the SERVER-resolved cycleId.
 
-Env overrides: CRUCIBLE_URL (legacy alias CRUCIBLE_BASE), ARDUINO_CLI, ARDUINO_FQBN,
-AGENT_ID.
+Env overrides: CRUCIBLE_URL (legacy alias CRUCIBLE_BASE), ARDUINO_CLI, ARDUINO_FQBN.
+
+CR-CRU-044 §S5 — the agent identity comes from `--agent` ONLY: no env var supplies
+one, and there is no fallback. A verb that would POST under an agentId without a
+declared identity HARD-STOPS (ok:false, non-zero exit) rather than inventing one.
+$AGENT_ID is set FROM `--agent` for child processes; it is not an identity source,
+and neither is $WORKFLOW_ROLE (that is the track lane, reported as context.track).
 
 Subcommands:
   register, unregister  Agent lifecycle (§S9 register guard).
@@ -497,7 +502,10 @@ def _run_native_tests(args, verb, tier, want_coverage):
 
 def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     key, name = _load_env(pd)
-    agent_id = _agent_id(args)
+    # CR-CRU-044 §S5 — a run with no `--agent` INGESTS NOTHING (see the
+    # no-ingest early return below), so it needs no declared identity; the id is
+    # REQUIRED only on the POSTing path, resolved there. Never fabricated either way.
+    agent_id = _axi().optional_agent_id(args)
     sub = (getattr(args, "dir", None) or "tests/native").replace("\\", "/")
     native_dir = os.path.join(pd, *sub.split("/"))
     _ensure_project(key, name, pd)
@@ -532,6 +540,9 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
               file=sys.stderr)
         return 1 if summary["failed"] else 0
 
+    # §S5 — past this point the run IS ingested under an agentId, so the
+    # identity must be DECLARED (hard stop when it is not).
+    agent_id = _agent_id(args)
     # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run withholds
     # WITHOUT ever ingesting a cycleId=null orphan.
     cycle_id, warnings, withhold = _resolve_ingest_cycle(pd)
@@ -585,7 +596,10 @@ def _compile_gate(args, verb):
     (`check` and `compile` expose the SAME gate under fleet-uniform names)."""
     pd = _project_dir(args)
     key, name = _load_env(pd)
-    agent_id = _agent_id(args)
+    # CR-CRU-044 §S5 — the gate only INGESTS when an identity was declared, so
+    # the id is optional here (omitted from the envelope context when absent)
+    # and REQUIRED only on the ingest branch below. Never fabricated either way.
+    agent_id = _axi().optional_agent_id(args)
     _ensure_project(key, name, pd)
     run = subprocess.run(
         [ARDUINO_CLI, "compile", "--fqbn", FQBN,
@@ -595,6 +609,7 @@ def _compile_gate(args, verb):
     if not ok:
         errors = re.sub(r"\x1b\[[0-9;]*m", "", (run.stdout + run.stderr).strip())
         if args.agent or os.environ.get("AGENT_ID"):
+            agent_id = _agent_id(args)
             _ingest_compile(pd, key, agent_id, errors)
         else:
             sys.stderr.write(errors + "\n")
@@ -776,6 +791,10 @@ def cmd_cycle_done(args):
 
 
 def cmd_cr_close(args):
+    # CR-CRU-044 §S5 — cr-close ends by POSTing a `cr-merged` MILESTONE, so it
+    # needs a declared identity. Resolve it FIRST: a hard stop must happen
+    # before the plan GET/PATCH, never after the CR has already been closed.
+    _agent_id(args)
     project_dir = _project_dir(args)
     open_plans = _open_plans(project_dir)
     if args.cr:
@@ -973,12 +992,17 @@ def cmd_status(args):
 
 
 def _agent_id(args):
-    """The agentId for a fleet event. Explicit --agent > $WORKFLOW_ROLE > a stable
-    fallback (these verbs never assert on the id, but the server requires one)."""
-    explicit = getattr(args, "agent", None)
-    if explicit:
-        return explicit
-    return os.environ.get("WORKFLOW_ROLE") or "arduino-crucible"
+    """CR-CRU-044 §S5 — the agentId for a fleet event: the identity is
+    DECLARED (`--agent`) or the verb FAILS. Delegates to the shared fleet
+    resolver so all five clients cannot drift apart again.
+
+    There is no fallback: the old filename-derived default
+    (`"arduino-crucible"`) fabricated an identity from this script's own
+    filename and planted a phantom row on the dashboard agent rail, and
+    $WORKFLOW_ROLE is the TRACK LANE (mainline | track-n), not an identity.
+    Raises `_crucible_axi.AgentIdentityRequired`, which `main` converts into
+    the ok:false hard-stop envelope + a non-zero exit, POSTing nothing."""
+    return _axi().require_agent_id(args)
 
 
 def _post_gate(project_dir, agent_id, gate, context=None):
@@ -1292,7 +1316,11 @@ def main():
     # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.
     if getattr(args, "func", None) is None:
         sys.exit(cmd_dashboard())
-    sys.exit(args.func(args) or 0)
+    # CR-CRU-044 §S5 — dispatch through the shared `run_verb`, which turns an
+    # UNDECLARED agent identity into the ok:false hard-stop envelope + a
+    # non-zero exit (POSTing nothing) instead of an unhandled traceback.
+    sys.exit(_axi().run_verb(
+        args.func, args, lambda a: _project_key(_project_dir(a))) or 0)
 
 
 if __name__ == "__main__":

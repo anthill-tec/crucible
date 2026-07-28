@@ -116,6 +116,22 @@ run attribution). Phase is never inferred from the agentId's shape.
   are not load-bearing: an agentId ending in `-GREEN` registered with `--phase RED`
   classifies as **RED**, because the declaration beats the label.
 
+## The agent identity is declared, never fabricated (CR-CRU-044 §S5)
+
+An agent identity is **declared with `--agent` or the verb FAILS**. There is no
+fallback and no default anywhere in the fleet.
+
+- The gate/milestone verbs (`gate-run`, `gate-report`, `milestone`, and `cr-close`,
+  which seals a `cr-merged` milestone) hard-stop when no `--agent` is given: `ok:false`,
+  a non-zero exit, and an `agent-identity-required` warning naming `--agent` as how to
+  supply it. **Nothing is posted** from that path, so no phantom can reach the agent rail.
+- **`$WORKFLOW_ROLE` does not supply an identity.** It carries the track lane
+  (`mainline` | `track-n`) and is reported as `context.track`; an agent named after a
+  lane is the same category error as one named after the script's filename.
+- The resolution lives once, in `clients/_crucible_axi.py` (`require_agent_id`), and
+  every client delegates to it — the per-client `_agent_id()` helpers are thin wrappers,
+  not independent copies.
+
 ## Bounded fetch
 
 The plans GET is bounded by a short `timeout=` on the underlying `urlopen` call across

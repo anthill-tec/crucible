@@ -665,7 +665,7 @@ class HelpArrayCoverageTest(_BaseAxiConventionsTest):
              mock.patch.object(self.module, "_patch", return_value={"ok": True}), \
              mock.patch.object(self.module, "_post", return_value={"ok": True}):
             code, out, err = _run_main(self.module, [
-                "cr-close", "--commit", "abc123", "--project-dir", self.tmpdir,
+                "cr-close", "--commit", "abc123", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")

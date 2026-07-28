@@ -374,7 +374,7 @@ class CrCloseCrMergedMilestoneHookTest(_BaseClientVerbTest):
         def fake_patch(path, payload):
             return {"ok": True}
 
-        argv = ["cr-close", "--commit", "abc1234", "--cr", self.CR_ID,
+        argv = ["cr-close", "--commit", "abc1234", "--agent", "test-agent", "--cr", self.CR_ID,
                 "--project-dir", self.tmpdir]
         with mock.patch.object(self.module, "_get", side_effect=self._get_recorder()), \
              mock.patch.object(self.module, "_patch", side_effect=fake_patch), \
@@ -403,7 +403,7 @@ class CrCloseCrMergedMilestoneHookTest(_BaseClientVerbTest):
         cannot pass by simply never wiring the hook up -- the success path
         (already covered standalone above) must ALSO fire here, proving the
         zero-on-failure count is a genuine GUARD, not just permanent absence."""
-        argv = ["cr-close", "--commit", "abc1234", "--cr", self.CR_ID,
+        argv = ["cr-close", "--commit", "abc1234", "--agent", "test-agent", "--cr", self.CR_ID,
                 "--project-dir", self.tmpdir]
 
         # -- failure half: PATCH close fails -> must NOT emit cr-merged --

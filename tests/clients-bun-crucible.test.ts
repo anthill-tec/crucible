@@ -733,10 +733,12 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
       });
     }
 
-    const res = await runScript(["cr-close", "--commit", "abc1234", "--project-dir", projectDir], {
-      cwd: projectDir,
-      crucibleUrl: baseUrl,
-    });
+    // CR-CRU-044 §S5 — cr-close POSTs a cr-merged milestone, so it needs a
+    // DECLARED identity; there is no fabricated fallback any more.
+    const res = await runScript(
+      ["cr-close", "--commit", "abc1234", "--agent", "test-agent", "--project-dir", projectDir],
+      { cwd: projectDir, crucibleUrl: baseUrl },
+    );
 
     expect(res.code).toBe(0);
     const plans = await getPlans(baseUrl, key);

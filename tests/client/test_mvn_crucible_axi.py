@@ -482,7 +482,7 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
             {"planId": "plan-9", "cr": "CR-CRU-030", "status": "open", "cycles": []},
         ])
         code, out, _err, _p, _g, _pa = self._run(
-            ["cr-close", "--commit", "abc1234", "--project-dir", self.tmpdir],
+            ["cr-close", "--commit", "abc1234", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans, patch_return={"ok": True})
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)

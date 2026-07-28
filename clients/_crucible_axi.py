@@ -360,6 +360,103 @@ def cycle_transition_help(status, plan, cycle_id=None):
     return ["cr-close --commit <sha>", "status"]
 
 
+# ── CR-CRU-044 §S5 — the agent identity is DECLARED or the verb FAILS ───────
+#
+# Historically each client carried its OWN `_agent_id()` with a filename-derived
+# fallback — the script's own filename (`"bun-crucible"`, `"rust-crucible"`,
+# `"python-crucible"` and friends). That fabricated an identity for any verb run
+# without `--agent` and planted a phantom row on the dashboard's agent rail — an
+# entity that is not an agent, with no phase, no lifecycle and no owner. The
+# fallback is GONE and the resolver lives here ONCE so the fleet cannot drift
+# apart again.
+#
+# `$WORKFLOW_ROLE` is deliberately NOT part of the chain: it carries the TRACK
+# LANE (`mainline` | `track-n`; PRD-crucible-v2.md:291, DN-model-b-language.md:53)
+# and is read into `ctx["track"]` by `axi_context`/`fleet_context` — registering
+# an agent named after a lane is the same category error as `bun-crucible`,
+# merely with a tidier-looking value.
+
+AGENT_IDENTITY_REQUIRED_CODE = "agent-identity-required"
+AGENT_IDENTITY_REQUIRED_DETAIL = (
+    "no agent identity was declared — supply it with `--agent <agentId>`. There "
+    "is no fallback and no default: $WORKFLOW_ROLE carries the track lane "
+    "(mainline | track-n), not an identity, and a filename-derived default "
+    "would plant a phantom row on the agent rail. Nothing was posted.")
+
+
+class AgentIdentityRequired(Exception):
+    """§S5 — raised by `require_agent_id` when no `--agent` was declared.
+
+    Carries no fallback value by design: the caller MUST convert it into an
+    `ok:false` envelope + non-zero exit (see `run_verb` /
+    `emit_agent_identity_hard_stop`) and issue NO POST."""
+
+    def __init__(self, detail=AGENT_IDENTITY_REQUIRED_DETAIL):
+        super().__init__(detail)
+        self.detail = detail
+
+
+def agent_identity_warning():
+    """The §S5 warning dict for a hard-stopped verb (fresh copy per call, so a
+    caller mutating its warnings[] can never corrupt the constant)."""
+    return {"code": AGENT_IDENTITY_REQUIRED_CODE,
+            "detail": AGENT_IDENTITY_REQUIRED_DETAIL}
+
+
+def require_agent_id(args):
+    """§S5 — the ONE fleet-wide agent-identity resolver. Returns the explicit
+    `--agent` value; raises `AgentIdentityRequired` when there is none.
+
+    No fallback, no default, no `$WORKFLOW_ROLE` — an agent that cannot say who
+    it is has no business appearing on the board."""
+    explicit = getattr(args, "agent", None)
+    if explicit:
+        return explicit
+    raise AgentIdentityRequired()
+
+
+def optional_agent_id(args):
+    """§S5 companion for the paths that DECORATE an envelope with an agentId but
+    POST nothing under it (e.g. a no-ingest local test run): the explicit
+    `--agent` value, else None so the key is simply OMITTED.
+
+    Still no fabrication — the difference from `require_agent_id` is only that
+    an absent identity is legal here, because nothing reaches the agent rail."""
+    return getattr(args, "agent", None) or None
+
+
+def emit_agent_identity_hard_stop(verb, context=None):
+    """§S5 — emit the `ok:false` hard-stop envelope (stdout) plus the human
+    error line (stderr) for an undeclared identity, and return the NON-ZERO exit
+    code the client's `main` must exit with. Nothing is posted from this path."""
+    warning = agent_identity_warning()
+    emit_axi(verb or "unknown", False, {}, context or {}, [warning],
+             legacy_line=(f"error: {AGENT_IDENTITY_REQUIRED_CODE} — "
+                          f"{AGENT_IDENTITY_REQUIRED_DETAIL}"))
+    return 2
+
+
+def run_verb(func, args, project_key_fn=None):
+    """Fleet-uniform subcommand dispatch: run the resolved verb and convert an
+    undeclared agent identity (§S5) into the `ok:false` hard-stop envelope and a
+    non-zero exit code instead of an unhandled traceback.
+
+    `project_key_fn(args)` is the client's own `.env` key resolver (project-dir
+    resolution stays client-specific per this module's scope boundary); it is
+    best-effort only — a project whose key cannot be resolved still hard-stops,
+    just with a bare context."""
+    try:
+        return func(args)
+    except AgentIdentityRequired:
+        context = {}
+        if project_key_fn is not None:
+            try:
+                context = axi_context(project_key_fn(args))
+            except Exception:
+                context = {}
+        return emit_agent_identity_hard_stop(getattr(args, "cmd", None), context)
+
+
 def fleet_context(cr=None):
     """Env auto-context shared by gates + milestones: `cr` (when supplied),
     `wave` from $WORKFLOW_WAVE, `track` from $WORKFLOW_ROLE. Absent env keys are
