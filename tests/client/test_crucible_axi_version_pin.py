@@ -169,14 +169,21 @@ class ServerStageNpxArgvVersionPinTest(unittest.TestCase):
         return mock_run
 
     def test_server_stage_npx_argv_pins_to_own_version_when_override_unset(self):
+        """Uses a realistic INSTALLED-RELEASE version (patched), not the live
+        `crucible_axi.__version__` -- in a source checkout the live value IS
+        the `_SOURCE_CHECKOUT_VERSION` sentinel, which is a separate,
+        dedicated contract covered by
+        ServerStageFailsFastOnUnresolvedVersionTest. This test's job is the
+        own-version pin behaviour for a genuine installed release."""
         install = _import_fresh("crucible_axi.install")
         axi = _import_fresh("crucible_axi")
-        mock_run = self._run_server_stage(install)
+        with mock.patch.object(axi, "__version__", "0.1.0"):
+            mock_run = self._run_server_stage(install)
 
         argv = _server_npx_argv(mock_run)
         self.assertIsNotNone(
             argv, f"expected an npx argv list, calls={mock_run.call_args_list}")
-        expected_pin = f"{install.SERVER_NPM_PACKAGE}@{axi.__version__}"
+        expected_pin = f"{install.SERVER_NPM_PACKAGE}@0.1.0"
         self.assertIn(
             expected_pin, argv,
             f"expected {expected_pin!r} as a single argv token, got {argv}")
