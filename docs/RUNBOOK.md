@@ -37,10 +37,24 @@ clean `stop` is always preferred.
 
 ## Database path
 
-The server persists to a SQLite file at **`data/crucible.db`** (relative to the
-working directory) by default. The parent directory is created automatically on
-boot (`mkdirSync(..., { recursive: true })`). Use `:memory:` for an ephemeral,
-non-persistent store (tests only).
+Crucible is a single machine-wide server serving every project, so its SQLite
+database is machine-scoped, not project-scoped. The path is resolved on boot in
+this order — **first match wins**:
+
+1. an **explicit** path passed to `startServer` (`opts.dbPath`); the test suite
+   passes `:memory:` here for an ephemeral, non-persistent store;
+2. the **`CRUCIBLE_DB`** environment variable, when set — an absolute or
+   relative file path to use verbatim;
+3. an **already-existing `./data/crucible.db`** under the process working
+   directory — *adopted only, never created*. This is the compatibility rule
+   that keeps an existing repo-local database working with no migration step;
+   if no such file is present, nothing is created there and resolution falls
+   through;
+4. **`$XDG_DATA_HOME/crucible/crucible.db`**, falling back to
+   **`~/.local/share/crucible/crucible.db`** when `XDG_DATA_HOME` is unset.
+
+The parent directory of the resolved path is created automatically on boot
+(`mkdirSync(..., { recursive: true })`), except for `:memory:`.
 
 ## Corrupt database recovery
 
@@ -53,7 +67,7 @@ If that probe throws — a truncated, malformed, or otherwise unreadable SQLite
 file — the server does **not** crash. It:
 
 1. renames the bad file aside to **`<path>.corrupt-<epoch>`** (e.g.
-   `data/crucible.db.corrupt-1737600000000`, where `<epoch>` is the
+   `~/.local/share/crucible/crucible.db.corrupt-1737600000000`, where `<epoch>` is the
    `Date.now()` millisecond timestamp), preserving it for later inspection;
 2. logs a `[crucible] CORRUPT DATABASE …` line to stderr naming both paths and
    the underlying error; and
@@ -94,17 +108,18 @@ curl -fsSL http://127.0.0.1:3849/api/health
 uptime, and counts of projects/agents/events). Poll it after start to confirm
 the server is up.
 
-## Port / bind configuration
+## Environment variables (port / bind / database)
 
 The server is **loopback-only by default** — the API is unauthenticated and
 `dataPath` ingest reads server-side files, so it binds to `127.0.0.1` unless you
-explicitly opt into wider exposure. Two environment variables control the
-listener:
+explicitly opt into wider exposure. Three environment variables configure the listener and
+the store:
 
 | Env var | Default | Meaning |
 |---------|---------|---------|
 | `CRUCIBLE_PORT` | `3849` | TCP port the server listens on |
 | `CRUCIBLE_HOST` | `127.0.0.1` | Bind address (loopback default) |
+| `CRUCIBLE_DB` | *(see "Database path")* | SQLite database file to open; overrides both the adopt-an-existing-`./data/crucible.db` rule and the `$XDG_DATA_HOME` / `~/.local/share` default |
 
 ```sh
 # custom port, still loopback

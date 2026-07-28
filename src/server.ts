@@ -5,7 +5,7 @@
 // lives in src/v2.ts. The retired contract is archived in
 // tests/archive/v1-contract.test.ts.
 
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Store } from "./store.ts";
@@ -19,6 +19,49 @@ export interface StartServerOpts {
   port?: number;
   hostname?: string;
   dbPath?: string;
+}
+
+/** CR-CRU-043 §S1-§S3 — inputs to the DB path resolver (all defaulted). */
+export interface ResolveDbPathOpts {
+  /** Base directory for the rule-3 `./data/crucible.db` probe; defaults to `process.cwd()`. */
+  cwd?: string;
+  /** Environment to read `CRUCIBLE_DB` / `XDG_DATA_HOME` / `HOME` from; defaults to `process.env`. */
+  env?: NodeJS.ProcessEnv;
+  /** An explicit path (including `":memory:"`), which outranks everything else. */
+  dbPath?: string;
+}
+
+/**
+ * CR-CRU-043 §S1-§S3 — resolve the store path, first match wins:
+ *   1. explicit `opts.dbPath` (returned verbatim, `":memory:"` included);
+ *   2. `CRUCIBLE_DB`;
+ *   3. an ALREADY-EXISTING `<cwd>/data/crucible.db` — adopt only, never created here,
+ *      which is what keeps the live dog-food instance in use from the repo root;
+ *   4. `<XDG_DATA_HOME or <HOME>/.local/share>/crucible/crucible.db`.
+ *
+ * Pure: computes a string and never touches the filesystem beyond the rule-3
+ * existence probe. The `HOME` fallback deliberately reads `env.HOME` rather than
+ * `os.homedir()` — Bun caches `HOME` at process startup, so `os.homedir()` cannot
+ * observe an injected env and the contract would be untestable.
+ */
+export function resolveDbPath(opts?: ResolveDbPathOpts): string {
+  if (opts?.dbPath !== undefined) {
+    return opts.dbPath;
+  }
+  const env = opts?.env ?? process.env;
+  const fromEnv = env.CRUCIBLE_DB;
+  if (fromEnv !== undefined && fromEnv !== "") {
+    return fromEnv;
+  }
+  const cwd = opts?.cwd ?? process.cwd();
+  const cwdDb = path.join(cwd, "data", "crucible.db");
+  if (existsSync(cwdDb)) {
+    return cwdDb;
+  }
+  const xdg = env.XDG_DATA_HOME;
+  const dataHome =
+    xdg !== undefined && xdg !== "" ? xdg : path.join(env.HOME ?? "", ".local", "share");
+  return path.join(dataHome, "crucible", "crucible.db");
 }
 
 export interface ServerHandle {
@@ -144,7 +187,9 @@ async function handleStatic(url: URL): Promise<Response> {
 }
 
 export function startServer(opts?: StartServerOpts): ServerHandle {
-  const dbPath = opts?.dbPath ?? "data/crucible.db";
+  // CR-CRU-043 §S1-§S3 — no CWD-relative default: explicit opts, then CRUCIBLE_DB,
+  // then an existing ./data/crucible.db, then the user data directory.
+  const dbPath = resolveDbPath({ dbPath: opts?.dbPath });
   if (dbPath !== ":memory:") {
     mkdirSync(path.dirname(dbPath), { recursive: true });
   }
