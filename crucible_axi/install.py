@@ -64,9 +64,11 @@ def _resolve_server_version() -> str:
     override = os.environ.get(SERVER_VERSION_ENV_VAR)
     if override:
         return override
-    # Deferred import: resolves the package's CURRENT `__version__` at call
-    # time rather than binding the module object at import time (and keeps this
-    # module free of a package-level circular import).
+    # Deferred import: reads the package's CURRENT `__version__` at call time.
+    # A module-level `from crucible_axi import __version__` would bind a COPY of
+    # the value at import time, so neither a later reassignment nor a test's
+    # `mock.patch.object(crucible_axi, "__version__", ...)` would ever be seen
+    # here.
     from crucible_axi import __version__ as axi_version
     return axi_version
 

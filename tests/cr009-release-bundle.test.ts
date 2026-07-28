@@ -409,3 +409,305 @@ describe("§S1 npm pack --dry-run tarball contents", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// CR-CRU-041 §S2/§S5 — release.yml trigger topology + v-prefixed tag scheme
+//
+// Spec: docs/changes/CR-CRU-041-release-mechanism.md §S2 + §S5 + Acceptance
+// criteria.
+//
+// §S2 — Repair the trigger topology:
+//   - on: push: branches: [develop, master] + on: pull_request (build runs
+//     continuously; packaging breakage surfaces on PRs, not release day).
+//   - create-release re-gated to a PUSH TO MASTER
+//     (github.event_name == 'push' && github.ref == 'refs/heads/master'),
+//     NOT workflow_dispatch.
+//   - workflow_dispatch reserved for rehearsal ONLY: no job other than
+//     publish-testpypi and dry-run-npm may be gated on workflow_dispatch —
+//     this is the assertion that kills the current three-way collision
+//     (create-release + publish-testpypi + dry-run-npm all firing off one
+//     dispatch).
+//
+// §S5 — Adopt Sandesh's vX.Y.Z tag scheme:
+//   - publish-pypi / publish-npm guards match ONLY v-prefixed tags
+//     (^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$); a bare 0.1.0 tag is REJECTED,
+//     v0.1.0 is accepted.
+//   - create-release's tag-detection grep matches ^v[0-9]+\.[0-9]+\.[0-9]+$.
+//   - publish-npm KEEPS VERSION="${GITHUB_REF_NAME#v}" — still load-bearing
+//     under the v-scheme (derives the bare version for the package.json
+//     comparison). The earlier "drop it" item was WITHDRAWN — do not assert
+//     its removal.
+//
+// RED phase: on the current branch release.yml's `on:` has ONLY
+// `release: types:[published]` + `workflow_dispatch` (no push/pull_request);
+// create-release is gated on workflow_dispatch; every guard uses the BARE
+// `^refs/tags/[0-9]+\.[0-9]+\.[0-9]+$` pattern; the tag-detection grep is
+// bare `^[0-9]+\.[0-9]+\.[0-9]+$`. Every assertion below is expected to FAIL
+// against that state.
+// ---------------------------------------------------------------------------
+
+type ReleaseWorkflow = {
+  on?: {
+    push?: { branches?: string[] };
+    pull_request?: unknown;
+    release?: { types?: string[] };
+    workflow_dispatch?: unknown;
+  };
+  jobs?: Record<string, { if?: string }>;
+};
+
+function readReleaseWorkflow(): { raw: string; parsed: ReleaseWorkflow } {
+  const relPath = join(".github", "workflows", "release.yml");
+  const raw = readText(relPath);
+  const parsed = Bun.YAML.parse(raw) as ReleaseWorkflow;
+  return { raw, parsed };
+}
+
+describe("§S2 release.yml trigger topology", () => {
+  test("on.push.branches includes both develop and master", () => {
+    const { parsed } = readReleaseWorkflow();
+
+    expect(parsed.on?.push).toBeDefined();
+    expect(Array.isArray(parsed.on?.push?.branches)).toBe(true);
+    const branches = parsed.on?.push?.branches as string[];
+
+    expect(branches).toContain("develop");
+    expect(branches).toContain("master");
+  });
+
+  test("on declares a pull_request trigger", () => {
+    const { parsed } = readReleaseWorkflow();
+    expect(parsed.on).toHaveProperty("pull_request");
+  });
+
+  test("create-release is gated on a push to master, not on workflow_dispatch", () => {
+    const { parsed } = readReleaseWorkflow();
+    const createRelease = parsed.jobs?.["create-release"];
+    expect(createRelease).toBeDefined();
+    expect(typeof createRelease?.if).toBe("string");
+
+    const cond = createRelease?.if as string;
+    // POSITIVE — exact required guard.
+    expect(cond).toContain("github.event_name == 'push'");
+    expect(cond).toContain("github.ref == 'refs/heads/master'");
+    // NEGATIVE — must NOT still be gated on workflow_dispatch.
+    expect(cond).not.toContain("workflow_dispatch");
+  });
+
+  test("workflow_dispatch is rehearsal-only: no job other than publish-testpypi and dry-run-npm is gated on it", () => {
+    const { parsed } = readReleaseWorkflow();
+    const jobs = parsed.jobs as Record<string, { if?: string }>;
+    expect(jobs).toBeDefined();
+
+    const allowed = new Set(["publish-testpypi", "dry-run-npm"]);
+    const gatedOnDispatch = Object.entries(jobs)
+      .filter(([, job]) => typeof job.if === "string" && job.if.includes("workflow_dispatch"))
+      .map(([name]) => name);
+
+    // Bound: exactly the two rehearsal jobs, nothing else (kills the
+    // three-way collision where create-release also fired on dispatch).
+    for (const name of gatedOnDispatch) {
+      expect(allowed.has(name)).toBe(true);
+    }
+    expect(gatedOnDispatch).toContain("publish-testpypi");
+    expect(gatedOnDispatch).toContain("dry-run-npm");
+    expect(gatedOnDispatch.length).toBe(2);
+  });
+});
+
+describe("§S5 release.yml v-prefixed tag scheme", () => {
+  const V_TAG_REGEX_SOURCE = "^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$";
+  const V_TAG_REGEX = /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+$/;
+
+  test("publish-pypi guard matches only v-prefixed tag refs (regex text)", () => {
+    const { raw } = readReleaseWorkflow();
+
+    // Isolate the publish-pypi job body so we don't accidentally match
+    // publish-npm's identical guard text.
+    const pypiJobMatch = raw.match(/publish-pypi:[\s\S]*?(?=\n {2}\S|\n$)/);
+    expect(pypiJobMatch).not.toBeNull();
+    const pypiJob = pypiJobMatch?.[0] ?? "";
+
+    expect(pypiJob).toContain(V_TAG_REGEX_SOURCE);
+    // NEGATIVE — the old bare-tag pattern must be gone from this job.
+    expect(pypiJob).not.toContain("^refs/tags/[0-9]+\\.[0-9]+\\.[0-9]+$");
+  });
+
+  test("publish-npm guard matches only v-prefixed tag refs (regex text)", () => {
+    const { raw } = readReleaseWorkflow();
+
+    const npmJobMatch = raw.match(/publish-npm:[\s\S]*?(?=\n {2}\S|\n$)/);
+    expect(npmJobMatch).not.toBeNull();
+    const npmJob = npmJobMatch?.[0] ?? "";
+
+    expect(npmJob).toContain(V_TAG_REGEX_SOURCE);
+    expect(npmJob).not.toContain("^refs/tags/[0-9]+\\.[0-9]+\\.[0-9]+$");
+  });
+
+  test("the guard regex extracted from publish-pypi rejects a bare X.Y.Z tag ref and accepts a v-prefixed one", () => {
+    // Exercises the ACTUAL regex found in the file (not a hand-maintained
+    // duplicate) against the exact ref shapes GitHub Actions supplies via
+    // GITHUB_REF — so a guard that merely LOOKS right (e.g. an unescaped
+    // 'v' that doesn't anchor correctly) is still caught behaviourally.
+    const { raw } = readReleaseWorkflow();
+    const pypiJobMatch = raw.match(/publish-pypi:[\s\S]*?(?=\n {2}\S|\n$)/);
+    const pypiJob = pypiJobMatch?.[0] ?? "";
+
+    const guardMatch = pypiJob.match(/GITHUB_REF"\s*=~\s*(\S+)\s*\]\]/);
+    expect(guardMatch).not.toBeNull();
+    const extractedSource = guardMatch?.[1] ?? "";
+
+    const extractedRegex = new RegExp(extractedSource);
+    expect(extractedRegex.test("refs/tags/0.1.0")).toBe(false);
+    expect(extractedRegex.test("refs/tags/v0.1.0")).toBe(true);
+  });
+
+  test("create-release's tag-detection grep matches v-prefixed semver tags", () => {
+    const { raw } = readReleaseWorkflow();
+    expect(raw).toContain("^v[0-9]+\\.[0-9]+\\.[0-9]+$");
+    // NEGATIVE — the old bare grep pattern must be gone.
+    expect(raw).not.toContain("grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+$'");
+  });
+
+  test("publish-npm keeps the GITHUB_REF_NAME v-strip for the package.json version comparison", () => {
+    const { raw } = readReleaseWorkflow();
+    // This strip is still load-bearing under the v-scheme — the earlier
+    // "drop it" item from an earlier §S5 draft was WITHDRAWN. Do not assert
+    // its removal.
+    expect(raw).toContain('VERSION="${GITHUB_REF_NAME#v}"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CR-CRU-041 §S4 — RELEASING.md
+//
+// Spec: docs/changes/CR-CRU-041-release-mechanism.md §S4 + Acceptance
+// criteria: "RELEASING.md exists and names every prerequisite in §S4,
+// including the one-time `git config gitflow.prefix.versiontag v`."
+//
+// Extends this file rather than starting a new one — it is the established
+// home for CR-CRU-041's doc-contract assertions (see the §S1/§S2/§S5
+// describes above), following the same pattern §S5 docs — RUNBOOK already
+// set for CR-CRU-009: assert on real identifiers/command names pulled from
+// the actual production files (scripts/release.sh, release.yml,
+// pyproject.toml), not on prose wording, so a RELEASING.md that merely
+// "sounds right" but omits a load-bearing name still fails.
+//
+// RED phase: RELEASING.md does not exist at the repo root on this branch —
+// every assertion below is expected to FAIL (file-not-found) against that
+// state.
+// ---------------------------------------------------------------------------
+
+describe("§S4 docs — RELEASING.md", () => {
+  const relPath = "RELEASING.md";
+
+  test("RELEASING.md exists at the repo root", () => {
+    expect(existsSync(join(REPO_ROOT, relPath))).toBe(true);
+  });
+
+  test("documents the tag-driven version model: v-prefixed tag, hatch-vcs strips the v, Python version never hand-edited", () => {
+    const doc = readText(relPath);
+    const lower = doc.toLowerCase();
+
+    // The tag shape itself (vX.Y.Z) and hatch-vcs as the derivation mechanism.
+    expect(doc).toMatch(/v[Xx]\.[Yy]\.[Zz]|v<?major>?\.<?minor>?\.<?patch>?/);
+    expect(lower).toContain("hatch-vcs");
+    // The Python version is DERIVED, never hand-edited — pyproject.toml is
+    // dynamic (real identifier from the actual pyproject.toml).
+    expect(lower).toContain("dynamic");
+    expect(lower).toMatch(/never (?:be )?(?:hand|manually)[- ]edit/);
+  });
+
+  test("documents the one-time prerequisites: PyPI + TestPyPI pending Trusted Publishers, the pypi/testpypi/npm Environments, and a required reviewer on pypi", () => {
+    const doc = readText(relPath);
+    const lower = doc.toLowerCase();
+
+    expect(lower).toContain("trusted publisher");
+    expect(lower).toContain("testpypi");
+
+    // The three real GitHub Environment names, and the required-reviewer
+    // human gate specifically on `pypi`.
+    expect(doc).toContain("pypi");
+    expect(doc).toContain("npm");
+    expect(lower).toMatch(/environment/);
+    expect(lower).toMatch(/required reviewer/);
+  });
+
+  test("documents RELEASE_PAT and why it is needed (default GITHUB_TOKEN does not re-fire on: release)", () => {
+    const doc = readText(relPath);
+    const lower = doc.toLowerCase();
+
+    // Exact secret name, matching release.yml:57's actual usage.
+    expect(doc).toContain("RELEASE_PAT");
+    expect(lower).toContain("github_token");
+    // The specific reason: default token release does not re-trigger the
+    // release-published workflow.
+    expect(lower).toMatch(/re-?fire|re-?trigger/);
+    expect(lower).toContain("on: release");
+  });
+
+  test("documents NPM_TOKEN for the inaugural scoped publish (no pending-publisher equivalent), then the flip to OIDC", () => {
+    const doc = readText(relPath);
+    const lower = doc.toLowerCase();
+
+    // Exact secret name, matching release.yml:170's actual usage.
+    expect(doc).toContain("NPM_TOKEN");
+    expect(lower).toContain("oidc");
+    // npm has no pending-publisher equivalent to PyPI's — named explicitly,
+    // not merely implied.
+    expect(lower).toMatch(/no pending[- ]publisher|does not have.*pending[- ]publisher/);
+  });
+
+  test("documents the one-time git config gitflow.prefix.versiontag v fix, and that it lives in .git/config (not version-controlled)", () => {
+    const doc = readText(relPath);
+    const lower = doc.toLowerCase();
+
+    // Exact command, matching scripts/release.sh:176's error-message fix.
+    expect(doc).toContain("git config gitflow.prefix.versiontag v");
+    expect(doc).toContain(".git/config");
+    expect(lower).toMatch(/not version-controlled|not (?:be )?committed|not tracked/);
+  });
+
+  test("documents the TestPyPI rehearsal loop via scripts/release.sh checkpoint, and that an untagged checkpoint derives a clean X.Y.Z.devN via no-local-version", () => {
+    const doc = readText(relPath);
+    const lower = doc.toLowerCase();
+
+    expect(doc).toContain("checkpoint");
+    expect(doc).toContain("release.sh");
+    // Exact hatch-vcs config identifier, matching pyproject.toml:33.
+    expect(doc).toContain("no-local-version");
+    // The devN suffix shape produced by an untagged checkpoint upload.
+    expect(doc).toMatch(/\.dev[Nn]?\b|devN/);
+  });
+
+  test("documents the release order: set-version -> finish -> push master -> CI publish chain", () => {
+    const doc = readText(relPath);
+
+    // Exact subcommand names, matching scripts/release.sh's actual verbs.
+    const setVersionIdx = doc.indexOf("set-version");
+    const finishIdx = doc.indexOf("finish");
+    const masterIdx = doc.toLowerCase().indexOf("master");
+
+    expect(setVersionIdx).toBeGreaterThan(-1);
+    expect(finishIdx).toBeGreaterThan(-1);
+    expect(masterIdx).toBeGreaterThan(-1);
+
+    // The order matters: set-version precedes finish precedes the master
+    // push in the documented sequence.
+    expect(setVersionIdx).toBeLessThan(finishIdx);
+    expect(finishIdx).toBeLessThan(masterIdx);
+  });
+
+  test("documents the composite/lockstep model: one tag publishes both crucible-axi (PyPI, derived) and @anthill-tec/crucible-server (npm, manual manifest) at the same version", () => {
+    const doc = readText(relPath);
+    const lower = doc.toLowerCase();
+
+    expect(doc).toContain("crucible-axi");
+    // Exact scoped npm package name, matching package.json's real "name".
+    expect(doc).toContain("@anthill-tec/crucible-server");
+    expect(lower).toMatch(/lockstep|composite/);
+    // Distinguishes the two version-authority mechanisms by name.
+    expect(lower).toMatch(/derived/);
+    expect(lower).toMatch(/manual manifest|manually[- ]versioned|hand[- ]versioned/);
+  });
+});
