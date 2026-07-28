@@ -584,6 +584,9 @@ def cmd_register(args):
         "projectKey": _project_key(project_dir),
         "status": "online",
         "message": args.message or f"Starting {args.phase} phase",
+        # CR-CRU-044 §S1 — the declared phase is part of the registration wire
+        # contract (the server rejects a registration that carries none).
+        "phase": args.phase,
         # displayName MUST go inside `identity` — top-level is ignored by v2.
         "identity": {"displayName": args.agent, "source": "openclaw"},
     }

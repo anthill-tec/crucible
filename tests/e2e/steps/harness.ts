@@ -25,7 +25,7 @@ export async function registerAgent(
   message: string,
 ): Promise<void> {
   const res = await request.post("/api/v2/agents/register", {
-    data: { projectKey, agentId, message, status: "online" },
+    data: { projectKey, agentId, message, status: "online", phase: "report" },
   });
   expect(res.ok()).toBe(true);
 }

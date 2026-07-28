@@ -6,6 +6,7 @@ import { DEFAULT_LIVENESS } from "./types.ts";
 import type {
   Agent,
   AgentIdentity,
+  AgentPhase,
   CommitBoundary,
   Coverage,
   CycleKind,
@@ -59,12 +60,20 @@ interface AgentRow {
   identity: string;
   first_seen: number;
   last_seen: number;
+  // CR-CRU-044 §S1 — NULL for pre-CR-044 rows (retrofitted column).
+  phase: string | null;
 }
 
 export interface TouchAgentOpts {
   status?: Agent["status"];
   message?: string;
   identity?: AgentIdentity;
+  /**
+   * CR-CRU-044 §S1(b) — OPTIONAL here on purpose: touchAgent is the ingest
+   * path (recordTestEvent et al call it with no options), so the *required*
+   * phase lives at the register route boundary, never in the store.
+   */
+  phase?: AgentPhase;
 }
 
 interface EventRow {
@@ -280,6 +289,7 @@ export class Store {
         identity TEXT NOT NULL,
         first_seen INTEGER NOT NULL,
         last_seen INTEGER NOT NULL,
+        phase TEXT,
         PRIMARY KEY (project_key, agent_id)
       );
 
@@ -429,6 +439,18 @@ export class Store {
     // files lack it (same PRAGMA-checked retrofit pattern as above).
     if (!projectCols.has("allow_run_deletion")) {
       this.db.exec(`ALTER TABLE projects ADD COLUMN allow_run_deletion INTEGER`);
+    }
+    // CR-CRU-044 §S1(d) — additive declared-phase column; pre-044 db files
+    // lack it (same PRAGMA-checked retrofit pattern as above). No back-fill:
+    // historical rows keep a NULL phase and read back as absent.
+    const agentCols = new Set(
+      this.db
+        .query<{ name: string }, []>(`PRAGMA table_info(agents)`)
+        .all()
+        .map((col) => col.name),
+    );
+    if (!agentCols.has("phase")) {
+      this.db.exec(`ALTER TABLE agents ADD COLUMN phase TEXT`);
     }
   }
 
@@ -622,11 +644,14 @@ export class Store {
         identity: opts?.identity ?? {},
         firstSeen: now,
         lastSeen: now,
+        // CR-CRU-044 §S1 — key ABSENT when never declared (a phase-less
+        // ingest that creates the row must not fabricate one).
+        ...(opts?.phase !== undefined ? { phase: opts.phase } : {}),
       };
       this.db
         .query(
-          `INSERT INTO agents (project_key, agent_id, status, message, identity, first_seen, last_seen)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO agents (project_key, agent_id, status, message, identity, first_seen, last_seen, phase)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           agent.projectKey,
@@ -636,6 +661,7 @@ export class Store {
           JSON.stringify(agent.identity),
           agent.firstSeen,
           agent.lastSeen,
+          agent.phase ?? null,
         );
       this.emit("agents", projectKey);
       return agent;
@@ -650,13 +676,29 @@ export class Store {
       identity: opts?.identity !== undefined ? { ...storedIdentity, ...opts.identity } : storedIdentity,
       firstSeen: existing.first_seen,
       lastSeen: now,
+      // CR-CRU-044 §S1(c) — PRESERVE on update (same precedent as identity
+      // above): a phase-less touch (every ingest, every heartbeat) must never
+      // blank the phase the agent declared at registration.
+      ...(opts?.phase !== undefined
+        ? { phase: opts.phase }
+        : existing.phase !== null && existing.phase !== undefined
+          ? { phase: existing.phase as AgentPhase }
+          : {}),
     };
     this.db
       .query(
-        `UPDATE agents SET status = ?, message = ?, identity = ?, last_seen = ?
+        `UPDATE agents SET status = ?, message = ?, identity = ?, last_seen = ?, phase = ?
          WHERE project_key = ? AND agent_id = ?`,
       )
-      .run(agent.status, agent.message, JSON.stringify(agent.identity), agent.lastSeen, projectKey, agentId);
+      .run(
+        agent.status,
+        agent.message,
+        JSON.stringify(agent.identity),
+        agent.lastSeen,
+        agent.phase ?? null,
+        projectKey,
+        agentId,
+      );
     this.emit("agents", projectKey);
     return agent;
   }
@@ -1953,6 +1995,11 @@ export class Store {
       identity: JSON.parse(row.identity) as AgentIdentity,
       firstSeen: row.first_seen,
       lastSeen: row.last_seen,
+      // CR-CRU-044 §S1(d) — absent for historical rows (NULL column), never
+      // back-filled or fabricated.
+      ...(row.phase !== null && row.phase !== undefined
+        ? { phase: row.phase as AgentPhase }
+        : {}),
     };
   }
 }

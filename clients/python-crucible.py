@@ -307,8 +307,13 @@ def _run_logged(cmd, cwd, env, log_path):
 # ── Agent lifecycle ─────────────────────────────────────────────────────────
 
 
-def _register_agent(project_dir, agent_id, message, display_name=None, source="claude-md"):
-    """POST the agent-online heartbeat. Shared by cmd_register."""
+def _register_agent(project_dir, agent_id, message, display_name=None, source="claude-md",
+                    phase=None):
+    """POST the agent-online heartbeat. Shared by cmd_register.
+
+    CR-CRU-044 §S1 — `phase` is part of the registration wire contract; the
+    server rejects a registration that declares none.
+    """
     payload = {
         "agentId": agent_id,
         "projectKey": _project_key(project_dir),
@@ -320,6 +325,8 @@ def _register_agent(project_dir, agent_id, message, display_name=None, source="c
             "repoPath": project_dir,
         },
     }
+    if phase is not None:
+        payload["phase"] = phase
     return _post("/api/v2/agents/register", payload)
 
 
@@ -435,6 +442,7 @@ def cmd_register(args):
         project_dir, args.agent,
         args.message or f"Starting {args.phase} phase",
         display_name=args.display_name, source=args.source,
+        phase=args.phase,
     )
     ok = bool(resp.get("ok", False))
     legacy = (f"register: ok={resp.get('ok', False)} agent={args.agent} "

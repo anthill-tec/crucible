@@ -5,6 +5,7 @@
 export const hints: Record<
   | "orientation"
   | "registered"
+  | "phaseRequired"
   | "afterRed"
   | "afterCompile"
   | "unknownProject"
@@ -35,8 +36,14 @@ export const hints: Record<
   orientation: [
     "POST /api/v2/projects {name, key?, type?, sutRoot?} — create a project (key auto-generated when omitted)",
     "GET /api/v2/projects — projects with rollups (agentsOnline, agentsTotal, lastEvent, latestGreenCoverage)",
-    "POST /api/v2/agents/register {projectKey, agentId} — register an agent",
+    "POST /api/v2/agents/register {projectKey, agentId, phase} — register an agent (phase: RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report)",
     "GET /api/v2/health — service health",
+  ],
+  /** CR-CRU-044 §S1 — a registration that declared no usable phase. */
+  phaseRequired: [
+    "POST /api/v2/agents/register {projectKey, agentId, phase} — phase must be exactly one of RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report",
+    "phase declares WHAT the agent is doing; it is never guessed from the agentId's shape",
+    "POST /api/v2/agents/heartbeat {projectKey, agentId} — heartbeat needs no phase; it never re-declares (or blanks) the registered one",
   ],
   /** After register (and heartbeat): ingest hint + implicit-heartbeat note + unregister reminder. */
   registered: [

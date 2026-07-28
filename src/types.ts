@@ -32,6 +32,15 @@ export interface AgentIdentity {
   repoPath?: string;
 }
 
+/**
+ * CR-CRU-044 §S1 — the enumeration an agent registration must declare. Phase
+ * is WHAT the agent is doing (identity stays WHO it is), so it is its own
+ * first-class field rather than a guess from the agentId's shape.
+ */
+export const AGENT_PHASES = ["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"] as const;
+
+export type AgentPhase = (typeof AGENT_PHASES)[number];
+
 export interface Agent {
   agentId: string;
   projectKey: string;
@@ -40,6 +49,11 @@ export interface Agent {
   identity: AgentIdentity;
   firstSeen: number;
   lastSeen: number;
+  /**
+   * CR-CRU-044 §S1 — declared at registration. ABSENT for historical
+   * (pre-CR-044) rows: no back-fill, never fabricated.
+   */
+  phase?: AgentPhase;
 }
 
 export interface RunSummary {

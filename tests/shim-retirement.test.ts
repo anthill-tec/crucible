@@ -368,7 +368,7 @@ describe("v2 silent unregister — §S4 precondition 4 (C2 GREEN finding)", () =
     await fetch(`${baseUrl}/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectKey: key, agentId }),
+      body: JSON.stringify({ projectKey: key, agentId, phase: "report" }),
     });
   }
 

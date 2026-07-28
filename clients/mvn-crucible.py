@@ -419,7 +419,10 @@ def _narrate_heartbeat(project_dir, agent_id, message):
     prints — the stdout data pipe stays pure and the run can never fail on a
     narration hiccup."""
     try:
-        _post("/api/v2/agents/register", {
+        # CR-CRU-044 §S1(a) — narration is a liveness ping, not a
+        # re-registration: it goes to the phase-optional heartbeat verb so it
+        # never has to re-declare (nor can it blank) the registered phase.
+        _post("/api/v2/agents/heartbeat", {
             "agentId": agent_id,
             "projectKey": _project_key(project_dir),
             "status": "online",
@@ -547,6 +550,9 @@ def cmd_register(args):
         "projectKey": _project_key(project_dir),
         "status": "online",
         "message": args.message or f"Starting {args.phase} phase",
+        # CR-CRU-044 §S1 — the declared phase is part of the registration wire
+        # contract (the server rejects a registration that carries none).
+        "phase": args.phase,
         # displayName MUST go inside `identity` — top-level is silently ignored.
         "identity": {"displayName": args.agent, "source": "openclaw"},
     }

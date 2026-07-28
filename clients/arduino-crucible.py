@@ -427,6 +427,10 @@ def cmd_register(args):
     msg = f"{phase} phase" if phase else "online"
     resp = _post("/api/v2/agents/register", {
         "agentId": agent_id, "projectKey": key, "status": "online", "message": msg,
+        # CR-CRU-044 §S1 — the declared phase is part of the registration wire
+        # contract; this client's --phase is optional, so an undeclared phase
+        # registers as "report" (the same default the other clients carry).
+        "phase": phase or "report",
         "identity": {"displayName": agent_id, "source": "openclaw"}})
     ok = bool(resp.get("ok", False))
     legacy = f"[crucible] register: {agent_id} online — {msg}"

@@ -195,7 +195,13 @@ async function commandAgentVerb(
     opts.stderr.write(`error: ${verb} requires --agent <id>\n`);
     return 1;
   }
-  return postJson(fetchImpl, `${opts.baseUrl}/api/v2/agents/${verb}`, { projectKey, agentId }, opts);
+  // CR-CRU-044 §S1 — a registration must DECLARE its phase (the server
+  // rejects one that carries none); heartbeat/unregister never re-declare it.
+  const body =
+    verb === "register"
+      ? { projectKey, agentId, phase: parsed.flags["phase"] ?? "report" }
+      : { projectKey, agentId };
+  return postJson(fetchImpl, `${opts.baseUrl}/api/v2/agents/${verb}`, body, opts);
 }
 
 async function commandIngest(
