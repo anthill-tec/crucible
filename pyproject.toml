@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "crucible-axi"
 dynamic = ["version"]
-description = "Crucible install orchestrator — ships the *-crucible.py client fleet and stages server/skills/manifest sub-installers behind one TOON-AXI envelope"
+description = "Crucible install orchestrator — ships the *-crucible.py client fleet and stages server/manifest sub-installers behind one TOON-AXI envelope"
 requires-python = ">=3.10"
 license = "GPL-3.0-only"
 authors = [{ name = "Antony John" }]
