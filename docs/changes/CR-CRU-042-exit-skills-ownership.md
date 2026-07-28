@@ -44,19 +44,33 @@ and the `"skills"` entry in `DEFAULT_STAGE_RUNNERS`. The TOON-AXI envelope from
 `crucible-axi install` reports exactly two stages; fail-fast sequencing and idempotency
 semantics are otherwise unchanged. Update the tests that assert the three-stage order.
 
-Also retire the now-void skills assertions in the bun suite:
-`tests/cr009-release-bundle.test.ts` carries `describe("§S3 skills Vercel-Skills
-conformance")` (:67–103) and `describe("§S3 arduino skill reconcile")` (:104–133), which
-assert SKILL.md frontmatter and the arduino skill's body — contracts Crucible no longer
-owns. Remove those describes with the stage. The §S4/§S5/§S1 describes in that file
-(release.yml, docs, install.sh) are unaffected and must stay green.
+### §S1b — The FULL test-retirement surface (enumerated by gap-analysis 2026-07-28)
+The original wording ("update the tests that assert the three-stage order") badly understated
+this. Every assertion below targets content Crucible no longer owns, and once §S2 deletes
+`clients/skills/` they assert against files that do not exist:
 
-### §S2 — Freeze `clients/skills/`, pending Model B's import confirmation
-Model B copies the current 8-bundle package into the model-b repo as the new canonical
-source. Until they confirm that import on the Sandesh thread, `clients/skills/` stays in
-place and unmodified — **it must not be deleted in this CR**. Mark it frozen (a short
-`clients/skills/README.md` stating the package is superseded, owned by Model B, and not to
-be edited here), so no future cycle "fixes" a file that is no longer ours.
+| File | Surface | Action |
+|---|---|---|
+| `tests/clients-skills.test.ts` | **419 lines, 22 tests** — SKILL.md v2-endpoint references per skill, no-unmarked-v1-legacy, heartbeat guidance, `WORKFLOW_CYCLE_ID` absence, example script paths | **delete the file** |
+| `tests/cr009-release-bundle.test.ts` | `describe("§S3 skills Vercel-Skills conformance")` (:67–103) + `describe("§S3 arduino skill reconcile")` (:104–133) — 4 tests | delete those two describes only |
+| `tests/client/test_crucible_axi_stages.py` | 4 skills-stage tests (`:267`, `:296`, `:309`, `:336`) + ~35 skills references incl. the module docstring | retire the skills cases, keep the server/manifest ones |
+
+The `§S1/§S4/§S5` describes in `cr009-release-bundle.test.ts` (install.sh, release.yml, docs)
+are unaffected and must stay green. `crucible_axi/__init__.py:4`'s docstring mentions
+"server/skills/manifest" and must be corrected to the two-stage order.
+
+### §S2 — DELETE `clients/skills/` (gate lifted 2026-07-28)
+Model B has confirmed the import: byte-identical at commit `74018ea`, now Model-B-canonical,
+with our cleanup explicitly green-lit (Sandesh 1342). The earlier freeze-instead-of-delete
+instruction is therefore **superseded** — remove `clients/skills/` outright. No frozen-marker
+README is needed; a deleted directory cannot be edited by mistake.
+
+**Hand the knowledge over, do not just delete it.** The 22 retired tests encode contracts Model
+B now owns but has no equivalent guard for — that skills must cite v2 endpoints, must never
+mention the removed `WORKFLOW_CYCLE_ID`, and must invoke real client script paths. Offer
+`tests/clients-skills.test.ts` to them on the Sandesh thread so they can carry it forward.
+Knowledge evaporating at a handover boundary is precisely what produced the 12 stale
+`WORKFLOW_CYCLE_ID` references this handover just cleaned up.
 
 ### §S3 — Retire the skills clauses of CR-CRU-009
 Record in the queue that CR-CRU-009 §S3 (Vercel-Skills conform + the `--help`-generated
@@ -72,15 +86,26 @@ covering the skills stage and multi-harness install no longer apply to 0.1.0.
       (idempotency preserved) — asserted.
 - [ ] No stage in `crucible-axi install` shells out to `npx skills` — asserted by
       inspecting the invoked command set, so a re-introduction fails the suite.
-- [ ] `clients/skills/` is unchanged and carries a README marking it frozen and
-      Model-B-owned.
-- [ ] Full Python regression green with coverage on `crucible_axi` + `clients`.
+- [ ] `clients/skills/` no longer exists; `grep -rn "clients/skills" tests/ crucible_axi/`
+      finds no live reference.
+- [ ] `tests/clients-skills.test.ts` is deleted (all 22 tests), and the two `§S3` describes are
+      gone from `tests/cr009-release-bundle.test.ts` while its `§S1/§S4/§S5` describes stay green.
+- [ ] The 4 skills-stage tests in `tests/client/test_crucible_axi_stages.py` are retired; the
+      server/manifest cases in that file still pass.
+- [ ] `crucible_axi/__init__.py`'s docstring no longer says "server/skills/manifest".
+- [ ] Full Python regression green AND full bun regression green — this CR deletes bun tests
+      and touches a client-adjacent package, so both gates apply (CR-CRU-045 §S3).
+- [ ] `python -m build` still produces a wheel containing the client fleet after the `skills/`
+      subtree is removed (`pyproject.toml` force-includes `clients`).
 
 ## Coordination
-- Model B confirmed full skills ownership and the one-time handover (Sandesh 1337). They
-  will intimate on that thread when the `clients/skills/` import is complete.
-- **Deleting `clients/skills/` is a FOLLOW-UP**, gated on that intimation — deliberately
-  not in this CR, so a Model-B delay cannot block the 0.1.0 installer correction.
+- Model B confirmed full skills ownership (Sandesh 1337) and then confirmed the IMPORT is
+  complete (Sandesh 1342): `clients/skills/` is byte-identical at commit `74018ea`, now
+  Model-B-canonical, and our cleanup is explicitly green-lit. **The deletion gate has lifted**,
+  which is why §S2 deletes rather than freezes.
+- **Offer `tests/clients-skills.test.ts` to Model B** on that thread as part of this CR — they
+  own the content but inherit no guard for it. This is also a standing-contract item: client and
+  skill changes are intimated to them so their bundle does not drift.
 
 ## Non-goals
 - Editing `~/.claude/skills/crucible` or `~/.claude/scripts/` — shared chezmoi-managed
@@ -92,5 +117,9 @@ covering the skills stage and multi-harness install no longer apply to 0.1.0.
 - The `[server]` and `[manifest]` stages must remain correct once the middle stage is
   removed — fail-fast ordering and the envelope shape are covered by existing tests, which
   this CR must update rather than weaken.
-- If Model B's import stalls, `clients/skills/` lingers as frozen dead weight in the 0.1.0
-  sdist. It ships as inert package data and is harmless; the follow-up deletion removes it.
+- **Deleting 22 tests plus a whole skill package is a large negative diff**, and a large
+  deletion is exactly where an unrelated assertion gets removed by accident. The ACs pin what
+  must SURVIVE (`cr009-release-bundle.test.ts`'s `§S1/§S4/§S5` describes, the server/manifest
+  stage tests) precisely so the diff can be checked for over-reach.
+- `pyproject.toml` force-includes `clients` as package data; confirm the wheel still builds and
+  ships the client fleet once the `skills/` subtree is gone.
