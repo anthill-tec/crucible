@@ -130,21 +130,36 @@ the gate output itself — the CR-CRU-039 treatment applied to the bun side. Wit
 divergence between on-disk test files and files run has no legitimate cause, so it can be
 asserted rather than merely reported.
 
-### §S3 — Narrate from `--dots`, not from the human console stream
-Root cause is established above; this section is now implementation, not investigation.
+### §S3 — Strip agent-detection vars from the bun subprocess; count bun's per-test lines
+**REVISED 2026-07-28 (user decision).** An earlier draft adopted `--dots`. Withdrawn — see the
+trade-off below.
 
-Add `--dots` to the bun invocation (it composes with the existing
-`--reporter=junit --reporter-outfile=…`) and count **dot characters** as completions instead of
-matching console text. Retire `_COMPLETION_LINE`. The `M` prescan (`_prescan_test_total`) and the
-throttle (≥~2s or ≥10 completions) are unchanged — only the completion SIGNAL changes.
+The client must **remove `CLAUDECODE`, `AGENT` and `REPL_ID` from the environment it hands the
+bun subprocess.** That fixes Fault 2 at its source: a tool shelling out to a test runner must not
+let ambient agent-detection change its child's behaviour. Measured on the same file and binary:
 
-This closes the class, not just the instance: `--dots` is a documented reporter whose output is a
-contract, whereas the default console format has none and is additionally mutated by
-agent-detection env vars outside our control.
+| child env | output lines | per-test lines |
+|---|---|---|
+| keeps `CLAUDECODE=1` | 5 | **0** |
+| agent vars stripped | 17 | **11 `✓` lines** |
 
-Do NOT simply update the regex to match `✓`/`✗`. That would fix Fault 1 and leave Fault 2 — the
-narrator would still see nothing whenever `CLAUDECODE`/`AGENT`/`REPL_ID` is set, which is every
-agent-run gate, i.e. all of them.
+Then fix Fault 1: update the completion signal to bun's current per-test format (`✓`/`✗`),
+replacing the stale `(pass)`/`(fail)` pattern. `_prescan_test_total` (the `M`) and the throttle
+(≥~2s or ≥10 completions) are unchanged.
+
+**Why not `--dots`.** It is a documented reporter and immune to agent-quieting, which is
+genuinely attractive. But dots carry **no newlines**, so consuming them live forces
+`_run_logged` (`clients/bun-crucible.py:282`) from line-based to character-level reading — and
+that stream's capture must remain **byte-identical**, because the `§S2c` failure-marrying parser
+consumes `result.stdout` and the function's own docstring guarantees it. That rework was the
+single most likely thing in this CR to be subtly wrong. Stripping the env vars achieves the same
+outcome with line reading untouched and no byte-identity risk, so it is preferred.
+
+**Residual risk, stated plainly:** this leaves narration parsing bun's HUMAN output format, which
+has no contract and has already changed once (`(pass)` → `✓`) — that is Fault 1. What makes it
+acceptable is not the format but the tests: the env-parity pair below fails LOUDLY if narration
+ever stops, whereas the original defect was silent. `--dots` remains the fallback if the console
+format proves unstable again.
 
 ### §S4 — Cross-stack gate note
 `clients/bun-crucible.py` is Python whose observable contract is asserted by bun tests — the
@@ -160,10 +175,16 @@ CR-CRU-045 §S3 rule applies: any change here needs BOTH gates before close-out.
       asserted, so a future permanently-excluded directory fails the gate.
 - [ ] A test asserts the collected-test count is surfaced in the regression envelope, so a future
       silent drop fails the gate rather than passing it (§S2).
-- [ ] Narration is driven by `--dots`; `_COMPLETION_LINE` no longer exists — asserted.
+- [ ] The client strips `CLAUDECODE`/`AGENT`/`REPL_ID` from the bun subprocess environment —
+      asserted on the env actually handed to the child.
+- [ ] The completion signal matches bun's current per-test format; a sample `✓` line is matched
+      and the stale `(pass)` form is not relied upon — asserted.
 - [ ] The narration tests pass BOTH with `CLAUDECODE=1` set and unset — asserted explicitly,
       since agent-quieting is Fault 2 and a fix that only works in one environment is not a fix.
-- [ ] The junit file is still written when `--dots` is added — ingest must be unaffected.
+- [ ] The junit file is still written — ingest must be unaffected.
+- [ ] `tests/clients-bun-crucible.test.ts` stays green — the `§S2c` parser consumes
+      `result.stdout`, and stripping the vars makes bun MORE verbose, so the capture changes
+      shape even though the reader does not.
 - [ ] Full bun regression green AND full Python regression green.
 
 ## Non-goals
