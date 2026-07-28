@@ -93,6 +93,33 @@ no business appearing on the board.
 Check the other four clients for the same pattern (`rust`, `mvn`, `arduino`, `python`) — the shared
 `_crucible_axi.py` module makes a copied fallback likely.
 
+**Second sighting 2026-07-28 (user screenshot, `crucible_spurious_agents.jpg`) — TWO phantoms on
+the Crucible v2 card, and they are NOT the same defect.** The board showed `0/2 agents online`
+with:
+
+| rail entry | message | state |
+|---|---|---|
+| `bun-crucible` | *(none)* | died 40m ago |
+| `probe` | "Starting RED phase" | died 22m ago |
+
+`bun-crucible` is this section's defect exactly — nothing more to establish.
+
+**`probe` is not.** `probe` is a SEPARATE PROJECT on the dog-food server, not a Crucible v2 agent,
+and unlike the filename fallback it registered with a genuine phase message, so something supplied
+that id deliberately. Candidate causes, none yet confirmed: a `WORKFLOW_ROLE=probe` value leaking
+from a sister-project session into a Crucible-scoped client invocation; a client resolving the
+wrong `CRUCIBLE_PROJECT_KEY` and cross-posting; or an agent id colliding with a project key.
+
+**Investigation deferred by user direction to after CR-CRU-050 merges.** The evidence is not at
+risk — agents are tombstoned rather than deleted, so both records persist in `crucible.db` with
+their `firstSeen`/`lastSeen` timestamps and their originating project key, which is the field that
+will discriminate between the candidate causes above.
+
+**If the `probe` root cause proves distinct from the filename fallback, it gets its OWN CR** —
+this section's fix (delete the fallback, hard stop) will not address a leak or a mis-scoped project
+key, and folding an unrelated root cause in here would be exactly the inline scope growth the
+patch-CR rule forbids. §S5's own ACs stay as written.
+
 ### §S4 — The agentId stops being a phase channel
 With phase declared, the id no longer needs to encode it. Document in the client `--help`
 and the STATUS-CONTRACT that phase comes from `--phase`, and that the agentId is a free-form
