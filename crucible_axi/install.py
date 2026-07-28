@@ -71,6 +71,37 @@ def _resolve_server_version() -> str:
     return axi_version
 
 
+def _resolved_server_version_or_fail() -> str:
+    """Return the server version to pin, or FAIL FAST when it is unusable
+    (CR-CRU-041 §S6).
+
+    The one unusable case is the source-checkout fallback: when crucible-axi is
+    not installed as a package, `crucible_axi.__version__` is the
+    `_SOURCE_CHECKOUT_VERSION` sentinel, which is not a valid npm version — a
+    pin built from it makes `npx` fail with an opaque error deep inside the
+    install. With `CRUCIBLE_SERVER_VERSION` set the operator has named the
+    version explicitly, so there is nothing to guard.
+    """
+    override = os.environ.get(SERVER_VERSION_ENV_VAR)
+    version = _resolve_server_version()
+    if override:
+        return version
+
+    # Deferred import for the same reasons as in `_resolve_server_version`.
+    from crucible_axi import _SOURCE_CHECKOUT_VERSION
+    if version == _SOURCE_CHECKOUT_VERSION:
+        raise RuntimeError(
+            "server stage failed: the Crucible server version could not be "
+            "resolved. crucible-axi is running from a source checkout, so it "
+            f"has no installed package version (it reports the placeholder "
+            f"{version!r}, which is not a valid npm version) and there is "
+            "nothing to pin the server fetch to. Remedy: set "
+            f"{SERVER_VERSION_ENV_VAR} to the server version to install "
+            f"(e.g. {SERVER_VERSION_ENV_VAR}=1.2.3), or run the installer "
+            "from an installed crucible-axi release.")
+    return version
+
+
 def _server_stage(target_dir: str, force: bool) -> dict:
     """[server] sub-installer -- `npx -y <SERVER_NPM_PACKAGE>@<version>` fetches +
     runs the bun/node server, bootstrapping Bun via the curl installer first if
@@ -84,10 +115,14 @@ def _server_stage(target_dir: str, force: bool) -> dict:
     if not force and _server_already_installed(target_dir):
         return {"path": server_path, "converged": True}
 
+    # Resolve (and validate) the pin BEFORE any side effect -- an unusable
+    # version must fail definitively, not after bootstrapping Bun.
+    server_version = _resolved_server_version_or_fail()
+
     if shutil.which("bun") is None:
         subprocess.run(_BUN_INSTALL_COMMAND, shell=True, check=False)
 
-    pinned_package = f"{SERVER_NPM_PACKAGE}@{_resolve_server_version()}"
+    pinned_package = f"{SERVER_NPM_PACKAGE}@{server_version}"
     completed = subprocess.run(
         ["npx", "-y", pinned_package], check=False)
     if completed.returncode != 0:
