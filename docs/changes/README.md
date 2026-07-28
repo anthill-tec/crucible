@@ -222,3 +222,13 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   (CR-009 §S6: release branch → no-mistakes gate + QC → version 0.1.0 → tag → CI publish,
   Test PyPI first; also requires open-sourcing the repo + publish credentials). It must
   never be inferred from a CR completing; it needs its own explicit go.
+
+- 2026-07-28 (CR-CRU-045 §S3 — **cross-stack gate rule for the client fleet**) — a change to
+  `clients/*-crucible.py` requires **BOTH** the Python gate and the bun gate before close-out.
+  Those clients are Python programs whose observable contract is asserted by **bun** tests
+  (`tests/clients-*.test.ts` drive them as subprocesses against a real server), so a
+  single-stack gate is not sufficient evidence for a client change. CR-CRU-040 gated on Python
+  only (382/0) and left `tests/clients-python-arduino-crucible.test.ts` red; that went
+  unnoticed until the CR-CRU-041 C1 orchestrator gate several CRs later. The same lineage had
+  already produced CR-039 (regression discovered 0 tests) and CR-040 (coverage unobtainable) —
+  each caught by the NEXT CR's gate rather than its own. Run both gates.
