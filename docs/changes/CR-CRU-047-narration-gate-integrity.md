@@ -37,6 +37,19 @@ span ~3s (test duration measured at 3014 ms).
 | Flaky/timing | **No** — 2 pass / 2 fail deterministically across repeated runs |
 | The dog-food server on `:3849` interfering | **No** — still fails with it stopped |
 | Client misrouted to the wrong server | **No** — the test injects `CRUCIBLE_URL` at its own `startServer({port:0, dbPath:":memory:"})` instance |
+| Caused by CR-CRU-042 (re-tested SOUNDLY) | **No** — at `d1e57a8` (pre-042) in the MAIN tree with the full environment: 2 pass / 2 fail, identical. The earlier worktree "evidence" was invalid; this run is not |
+| bun was upgraded | **No — REFUTED.** `/usr/bin/bun` is 1.3.14, binary mtime **2026-05-17**, unchanged today. The version did NOT move |
+| Concurrent Python+bun gates starved it | **No** — fails identically when run alone |
+
+**MECHANISM ESTABLISHED, TEMPORAL DELTA NOT.** Two separate things:
+1. **Why it fails now** — settled. `_COMPLETION_LINE` (`clients/bun-crucible.py:180`) matches
+   `^\((?:pass|fail|skip|todo)\)`, but bun 1.3.14 piped prints **no per-test line for passes at
+   all** (failures use `✗`). The narrator counts zero completions, so it never narrates.
+2. **Why the SAME code gated green hours earlier** — still unexplained, and both obvious
+   explanations are refuted above. Do not assume a bun upgrade; do not assume concurrency. This
+   delta is the one genuinely open question, and it matters: if the trigger is state we do not
+   understand, the same class of silent flip can hit any gate. §S3 must explain it or explicitly
+   record that it could not be reproduced.
 
 **The unexplained part:** those same commits gated **GREEN hours earlier the same day** — CR-041
 at bun 1081/1082 (the single failure being CR-045's coverage-shadow test) and CR-043 at bun
