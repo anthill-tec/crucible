@@ -80,11 +80,42 @@ terms.
 copied-into-a-live-call mistake is impossible rather than merely discouraged. The port
 (`39_877`) and the scratch cwd are both available to key off.
 
-### §S4 — Purge the existing residue
-The six residue projects and their events/agents/plans are removed via §S1 once it exists.
-**This is destructive and operates on the live dog-food database — it requires its own explicit
-user go, separately from approving this CR.** Record the exact keys and the row counts deleted.
-The three real projects (Crucible v2, Model B, Sandesh) are not touched.
+### §S4 — Purge the existing residue — ✅ DONE 2026-07-28 (user-approved, ahead of §S1)
+**Executed before §S1 existed**, by direct SQL in one transaction, on explicit user approval
+(*"Approved, purge all the residue projects and phantom agents"*). Recorded here because the AC
+requires the keys and row counts be captured.
+
+Backup taken first: `crucible-pre-purge.db` (9 projects / 406 events, 5.5 MB) via `sqlite3
+.backup`, so the operation is reversible.
+
+**Guard used, in-transaction:** the delete set was `residue MINUS any project holding a plan` —
+plans are the CR close-out record (`plans.cr` is CR-CRU-014's binding join key), so a target
+carrying one would have been silently spared and revealed by the post-check rather than destroyed.
+Pre-flight confirmed all six held **0 plans, 0 cycles, 0 rollups, 0 agents** — only events.
+
+| project | key | events deleted |
+|---|---|---|
+| `smoke` | `019f6223-b8c2-7000-893f-15d8db15417a` | 1 |
+| `verify-smoke` | `d11a16bb-4d0a-4a1a-a4f4-ade225e63b86` | 0 |
+| `verify-ratio-project` | `019f62c2-dc6f-7000-ac01-3ff0ed794b5a` | 50 |
+| `Probe Project` | `e8a8999c-b1c7-4703-85e4-fe0aa9d99526` | 8 |
+| `Probe` | `56b99e40-823f-4eb3-8212-65d6eb37039f` | 8 |
+| `dbg` | `e9fd8df6-5488-4f4e-8d7d-204e124be9dd` | 1 |
+
+Plus the two phantom AGENTS on the real Crucible v2 project: `bun-crucible` (CR-CRU-044 §S5
+fabricated identity, `identity {}`) and `probe-tmp` (a sub-agent's stray registration,
+`displayName "probe"`).
+
+**Totals: 6 projects, 68 events, 2 agents. 0 plans, 0 cycles, 0 rollups.**
+
+Verified after: 3 projects remain with counts unchanged (Crucible v2 200 events/35 plans, Model B
+100/15, Sandesh 38/1); **zero orphan rows** across `events`/`agents`/`plans`/`plan_cycles`/
+`rollups`; live server `/api/health` reports `{projects:3, agents:1, events:338}` (the one agent
+being the then-running VERIFY agent).
+
+**§S1 is still required.** This purge was a one-off manual repair, not a capability — the product
+still has no supported way to delete a project, so the next accidental project is equally
+permanent, and §S2's harness teardown still has nothing to call.
 
 ### §S5 — Correct the stale isolation comment
 `playwright.config.ts`'s header states *"no CRUCIBLE_DB env var exists to do this more directly
