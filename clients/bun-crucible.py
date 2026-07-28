@@ -720,7 +720,8 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     # channel is the §S1 TOON AXI envelope the caller emits on stdout.
     print(
         f"ingest: ok={resp.get('ok')} passed={summary['passed']} "
-        f"failed={summary['failed']} total={summary['total']}{cov_line}"
+        f"failed={summary['failed']} pending={summary.get('pending', 0)} "
+        f"total={summary['total']}{cov_line}"
         + (f" error={resp['error']}" if resp.get("error") else ""),
         file=sys.stderr,
     )

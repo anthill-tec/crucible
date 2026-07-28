@@ -300,6 +300,7 @@ def _register_cycle_guard(project_dir):
 def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
     """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path)."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
+           "pending": summary.get("pending", 0),
            "total": summary["total"]}
     # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
     # the cycleId key rather than emit an orphan-signalling explicit null.
@@ -336,24 +337,32 @@ def _parse_junit(path):
     """JUnit (the native harness shape) -> (summary, tree) for /api/v2/runs/parsed."""
     root = ET.parse(path).getroot()
     suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
-    total = passed = failed = 0
+    total = passed = failed = pending = 0
     tree = []
     for suite in suites:
         children, sfail = [], 0
         for tc in suite.findall("testcase"):
             bad = tc.find("failure") is not None or tc.find("error") is not None
             total += 1
+            # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase is PENDING, never
+            # passed. Order matters: failure/error first, then skipped, then
+            # pass. A skip does NOT fail its suite. Mirrors mvn-crucible.py:641.
             if bad:
+                status = "fail"
                 failed += 1
                 sfail += 1
+            elif tc.find("skipped") is not None:
+                status = "pending"
+                pending += 1
             else:
+                status = "pass"
                 passed += 1
             children.append({"name": tc.get("name", "?"),
-                             "status": "fail" if bad else "pass", "duration_ms": 0})
+                             "status": status, "duration_ms": 0})
         tree.append({"name": suite.get("name", "native"),
                      "status": "fail" if sfail else "pass", "children": children})
     summary = {"total": total, "passed": passed, "failed": failed,
-               "pending": 0, "duration_ms": 0}
+               "pending": pending, "duration_ms": 0}
     return summary, tree
 
 
@@ -497,7 +506,10 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     tree = []
     for junit in reports:
         s, t = _parse_junit(junit)
-        for k in ("total", "passed", "failed"):
+        # CR-CRU-050 §S1 — `pending` MUST be carried forward here too; without
+        # it the per-file parse fix is silently undone by the aggregation and
+        # the envelope still reports pending=0.
+        for k in ("total", "passed", "failed", "pending"):
             summary[k] += s[k]
         tree.extend(t)
 
@@ -512,7 +524,8 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     if not args.agent and not os.environ.get("AGENT_ID"):
         # No ingest requested — just report the run outcome.
         print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
-              f"{summary['failed']} failed", file=sys.stderr)
+              f"{summary['failed']} failed, {summary.get('pending', 0)} pending",
+              file=sys.stderr)
         return 1 if summary["failed"] else 0
 
     # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run withholds
@@ -535,7 +548,8 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
         payload["raw"] = raw
     resp = _post("/api/v2/runs/parsed", payload)
     print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
-          f"{summary['failed']} failed (ingest ok={resp.get('ok')})", file=sys.stderr)
+          f"{summary['failed']} failed, {summary.get('pending', 0)} pending "
+          f"(ingest ok={resp.get('ok')})", file=sys.stderr)
     _emit_ingest_summary_axi(verb, resp, summary, pd, agent_id, cycle_id, warnings)
     if summary["failed"]:
         return 1
@@ -622,7 +636,8 @@ def cmd_auto_ingest(args):
     tree = []
     for junit in reports:
         s, t = _parse_junit(junit)
-        for k in ("total", "passed", "failed"):
+        # CR-CRU-050 §S1 — carry `pending` through the aggregation too.
+        for k in ("total", "passed", "failed", "pending"):
             summary[k] += s[k]
         tree.extend(t)
     cycle_id, warnings, withhold = _resolve_ingest_cycle(pd)
@@ -636,7 +651,8 @@ def cmd_auto_ingest(args):
         payload["context"] = context
     resp = _post("/api/v2/runs/parsed", payload)
     print(f"[crucible] auto-ingest -> '{name}': {summary['passed']}/{summary['total']} passed, "
-          f"{summary['failed']} failed (ingest ok={resp.get('ok')})", file=sys.stderr)
+          f"{summary['failed']} failed, {summary.get('pending', 0)} pending "
+          f"(ingest ok={resp.get('ok')})", file=sys.stderr)
     _emit_ingest_summary_axi("auto-ingest", resp, summary, pd, agent_id, cycle_id, warnings)
     if summary["failed"]:
         return 1

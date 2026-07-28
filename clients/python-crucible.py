@@ -387,9 +387,11 @@ def _register_cycle_guard(project_dir):
 
 
 def _emit_ingest_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
-    """Emit the §S1 envelope for a SUCCESSFUL ingest verb: run{passed,failed,total}
-    + cycle-aware context. Any warnings are also surfaced on stderr."""
+    """Emit the §S1 envelope for a SUCCESSFUL ingest verb:
+    run{passed,failed,pending,total} + cycle-aware context. Any warnings are
+    also surfaced on stderr."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
+           "pending": summary.get("pending", 0),
            "total": summary["total"]}
     # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
     # the cycleId key rather than emit an orphan-signalling explicit null.
@@ -485,7 +487,7 @@ def _parse_junit_dir(reports_dir):
     """Parse every TEST-*.xml in reports_dir into (summary, tree) with per-method leaf
     names for the /api/v2/runs/parsed path so the Crucible tree shows real names."""
     tree_nodes = []
-    total = passed = failed = 0
+    total = passed = failed = pending = 0
     duration_ms = 0
     for xml_file in sorted(glob.glob(os.path.join(reports_dir, "TEST-*.xml"))):
         root = ET.parse(xml_file).getroot()
@@ -496,11 +498,20 @@ def _parse_junit_dir(reports_dir):
             for tc in suite.findall("testcase"):
                 tc_time = int(float(tc.get("time", 0)) * 1000)
                 fail = tc.find("failure") is not None or tc.find("error") is not None
-                status = "fail" if fail else "pass"
+                # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase (unittest's
+                # skip/skipIf/skipUnless, as emitted by xmlrunner) is PENDING,
+                # never passed. Order matters: failure/error first, then
+                # skipped, then pass. A skip does NOT fail its suite.
+                # Mirrors mvn-crucible.py:641, the reference implementation.
                 if fail:
+                    status = "fail"
                     failed += 1
                     suite_fail = True
+                elif tc.find("skipped") is not None:
+                    status = "pending"
+                    pending += 1
                 else:
+                    status = "pass"
                     passed += 1
                 total += 1
                 duration_ms += tc_time
@@ -516,7 +527,7 @@ def _parse_junit_dir(reports_dir):
                     "children": children,
                 })
     summary = {"total": total, "passed": passed, "failed": failed,
-               "pending": 0, "duration_ms": duration_ms}
+               "pending": pending, "duration_ms": duration_ms}
     return summary, tree_nodes
 
 
@@ -577,7 +588,8 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
                     f" funcs={coverage['functions']['percent']}%")
     print(
         f"ingest parsed: ok={resp.get('ok')} passed={summary['passed']} "
-        f"failed={summary['failed']} total={summary['total']}{cov_line}"
+        f"failed={summary['failed']} pending={summary.get('pending', 0)} "
+        f"total={summary['total']}{cov_line}"
         + (f" error={resp['error']}" if resp.get("error") else ""),
         file=sys.stderr,
     )
