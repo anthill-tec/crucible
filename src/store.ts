@@ -157,6 +157,12 @@ export interface PlanOpError {
   notFound?: boolean;
   openCycleIds?: number[];
   /**
+   * CR-CRU-048 §S2 — the same blocking cycles as `openCycleIds`, carried with
+   * their LABELS so the refusal tells an orchestrator WHAT it forgot, not just
+   * a bare numeric id. Additive: `openCycleIds` stays the id-only contract.
+   */
+  openCycleRefs?: { id: number; label: string }[];
+  /**
    * CR-CRU-024 §S4 — discriminator so the route attaches the matching help[]:
    * cross-cycle activation refusals ("out-of-order" / "already-active") and the
    * per-cycle illegal transition. `cycleRef` carries the sibling cycle the help
@@ -1520,13 +1526,17 @@ export class Store {
     if (row.status === "closed") {
       return { error: `plan ${planId} is already closed` };
     }
-    const openCycleIds = this.listCycleRows(projectKey, planId)
+    // CR-CRU-048 §S2 — the filtering (CYCLE_TERMINAL = done|skipped|failed) is
+    // unchanged; only the REPORTING gains each blocking cycle's label.
+    const openCycleRefs = this.listCycleRows(projectKey, planId)
       .filter((cycle) => !Store.CYCLE_TERMINAL.has(cycle.status))
-      .map((cycle) => cycle.cycle_id);
-    if (openCycleIds.length > 0) {
+      .map((cycle) => ({ id: cycle.cycle_id, label: cycle.label }));
+    if (openCycleRefs.length > 0) {
+      const named = openCycleRefs.map((c) => `${c.id} ("${c.label}")`).join(", ");
       return {
-        error: `cannot close plan ${planId}: non-terminal cycles: ${openCycleIds.join(", ")}`,
-        openCycleIds,
+        error: `cannot close plan ${planId}: non-terminal cycles: ${named}`,
+        openCycleIds: openCycleRefs.map((c) => c.id),
+        openCycleRefs,
       };
     }
     const closedAt = Date.now();

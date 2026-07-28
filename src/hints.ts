@@ -129,10 +129,15 @@ export const hints: Record<
     "this plan is closed — closed plans are immutable except retroactive wave backfill",
     "file a new plan for further work: POST …/plans {cr, cycles:[…]}",
   ],
-  /** CR-CRU-024 §S4 — a close blocked by cycles still non-terminal. */
+  /**
+   * CR-CRU-024 §S4 — a close blocked by cycles still non-terminal.
+   * CR-CRU-048 §S2 — names abort as the sanctioned remedy: there is no --force,
+   * so a plan whose remaining cycles will never run is abandoned via abort.
+   */
   nonTerminalCycles: [
     "transition every listed cycle to a terminal state (done | skipped | failed) before closing the plan",
     "GET …/plans?cr=<cr> — inspect the cycles still open",
+    "if the listed cycles will never run, abandon the plan instead: POST …/plans/<planId>/abort {userApproved: true} — present the abort to the user first and send it ONLY after explicit approval",
   ],
   /** CR-CRU-024 §S4 — an unparseable JSON request body on a plan/cycle route. */
   malformedBody: [

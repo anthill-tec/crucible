@@ -961,7 +961,13 @@ async function handlePlanClose(
       plan.notFound === true
         ? { help: hints.planCycleNotFound }
         : plan.openCycleIds !== undefined
-          ? { openCycles: plan.openCycleIds, help: hints.nonTerminalCycles }
+          ? {
+              openCycles: plan.openCycleIds,
+              // CR-CRU-048 §S2 — additive labelled form; `openCycles` stays the
+              // id-only list existing callers read.
+              blockingCycles: plan.openCycleRefs ?? [],
+              help: hints.nonTerminalCycles,
+            }
           : { help: hints.closedPlan },
     );
   }
