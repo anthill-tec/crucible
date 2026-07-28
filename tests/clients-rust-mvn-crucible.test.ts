@@ -853,12 +853,13 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 2 (worksp
 // SERVER's codec (POST /api/v2/runs) rather than the client's own
 // `_parse_junit` — the server already classifies `<skipped/>` as pending
 // correctly (§S4 — no server change in this CR's scope), so the counts here
-// are a POSITIVE pin, not a RED. What IS broken client-side: the TOON
-// `run:` block (`_emit_ingest_axi`, rust-crucible.py:362-377) and the plain
-// "ingest junit: ..." stderr line (rust-crucible.py:852-855) both build
-// from `resp.get("run")` — which the server response already carries
-// `pending` on — yet drop the key when printing.
-describe("clients/rust-crucible.py — CR-CRU-050 §S2: auto-ingest's junit-dir path (server-parsed, correct counts) still drops pending from the TOON run: block and the 'ingest junit:' print line", () => {
+// are a POSITIVE pin, never a RED. What this CR DID fix client-side is purely
+// the PRINTING: the TOON `run:` block (`_emit_ingest_axi`,
+// rust-crucible.py:362-377) and the plain "ingest junit: ..." stderr line
+// (rust-crucible.py:852-855) both build from `resp.get("run")` — which the
+// server response already carried `pending` on — yet dropped the key when
+// printing. Both now carry it, which is what the test below pins.
+describe("clients/rust-crucible.py — CR-CRU-050 §S2: auto-ingest's junit-dir path (server-parsed, correct counts) carries pending in the TOON run: block and the 'ingest junit:' print line", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
   const branch = "cr-cru-050-rust-auto-ingest-fixture-branch";
@@ -1404,17 +1405,19 @@ describe("clients/mvn-crucible.py — byte-compatible CLI surface (existing flag
 });
 
 // CR-CRU-050 §S1/§S1b/§S3/§S2 — mvn-crucible.py:641 (`_parse_junit`) is the
-// REFERENCE implementation this whole CR fixes the other four clients
+// REFERENCE implementation this whole CR fixed the other four clients
 // toward, and MUST NOT CHANGE. `regression` (cmd_regression → _regression_run)
 // ALWAYS routes through `_parse_junit` regardless of report-dir count, so it
-// is the deterministic way to pin that reference behaviour directly. Two
-// things this CR DOES still touch on mvn, per the dispatch's Part C: the
+// is the deterministic way to pin that reference behaviour directly. mvn's
+// COUNTING was therefore already correct before this CR; what this CR DID
+// change on mvn, per the dispatch's Part C, is purely its PRINT surfaces: the
 // TOON `run:` block (`_emit_ingest_summary_axi`, mvn-crucible.py:377-392)
-// drops `pending` from the printed envelope even though the summary it's
-// built from already carries the real count, and — separately — the
+// dropped `pending` from the printed envelope even though the summary it's
+// built from already carried the real count, and — separately — the
 // single-report-dir path's OWN TOON block (`_emit_ingest_axi_resp`,
 // mvn-crucible.py:361-374) and its "ingest junit: ..." stderr line
-// (mvn-crucible.py:720-722) do the same for the SERVER-parsed junit-dir path.
+// (mvn-crucible.py:720-722) did the same for the SERVER-parsed junit-dir path.
+// All three now carry `pending`, which is what the tests below pin.
 describe("clients/mvn-crucible.py — CR-CRU-050: _parse_junit (mvn-crucible.py:641) is CONFIRMED correct (counts AND leaf status) — pinned, not assumed; its TOON run: block carries pending (fake mvnw)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
@@ -1467,7 +1470,7 @@ describe("clients/mvn-crucible.py — CR-CRU-050: _parse_junit (mvn-crucible.py:
     expect(skipLeaf?.status).toBe("pending");
     expect(skipLeaf?.status).not.toBe("pass");
 
-    // RED — §S2's TOON run: block (_emit_ingest_summary_axi) drops pending.
+    // §S2 — the TOON run: block (_emit_ingest_summary_axi) now carries pending.
     const block = extractRunBlock(res.stdout);
     expect(block).toBeDefined();
     expect(block).toContain("pending: 1");
@@ -1521,12 +1524,12 @@ describe("clients/mvn-crucible.py — CR-CRU-050 §S2: the single-surefire-dir p
     expect(event.summary?.pending).toBe(1);
     expect(res.code).toBe(0);
 
-    // RED — §S2's TOON run: block (_emit_ingest_axi_resp).
+    // §S2 — the TOON run: block (_emit_ingest_axi_resp).
     const block = extractRunBlock(res.stdout);
     expect(block).toBeDefined();
     expect(block).toContain("pending: 1");
 
-    // RED — §S2 (extended) — the plain "ingest junit: ..." stderr line
+    // §S2 (extended) — the plain "ingest junit: ..." stderr line
     // (mvn-crucible.py:720-722).
     expect(res.stderr).toContain("ingest junit:");
     expect(res.stderr).toContain("pending=1");
