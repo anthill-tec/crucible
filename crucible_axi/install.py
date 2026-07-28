@@ -23,12 +23,17 @@ from crucible_axi import manifest
 
 STAGE_ORDER = ("server", "skills", "manifest")
 
-# Placeholder external sources for the concrete sub-installers. GREEN wires these
-# to the real published names once S4/S6 open-source the repo + publish the npm
-# server package; until then they remain clearly-named constants so the release
-# swap is a single-line change.
-SERVER_NPM_PACKAGE = "crucible-server"  # TODO(S4): real published npm package name
+# External sources for the concrete sub-installers. `SERVER_NPM_PACKAGE` is the
+# published npm package name and MUST stay equal to the repo package.json's
+# `name` field (CR-CRU-041 §S1 — asserted by a test so the two artifacts cannot
+# silently drift apart).
+SERVER_NPM_PACKAGE = "@anthill-tec/crucible-server"
 SKILLS_CLI_SOURCE = "crucible-dev/crucible"  # TODO(S6): real public owner/repo source
+
+# Environment escape hatch for the version-pinned server fetch (CR-CRU-041 §S6)
+# — for development and for recovering from a bad server publish. Unset means
+# the orchestrator's own version, never `latest`.
+SERVER_VERSION_ENV_VAR = "CRUCIBLE_SERVER_VERSION"
 
 # The Bun curl-bootstrap the [server] stage runs when Bun is absent from PATH.
 _BUN_INSTALL_COMMAND = "curl -fsSL https://bun.sh/install | bash"
@@ -48,9 +53,28 @@ def _skills_already_installed(target_dir: str) -> bool:
     return os.path.isdir(os.path.join(target_dir, "skills"))
 
 
+def _resolve_server_version() -> str:
+    """Return the npm server version the [server] stage fetches (CR-CRU-041 §S6).
+
+    `CRUCIBLE_SERVER_VERSION` wins when set; otherwise the orchestrator's own
+    `crucible_axi.__version__`, so a pinned `crucible-axi X.Y.Z` always
+    provisions the server it was released with — never `latest`. Read at call
+    time so the environment override is observed without re-importing.
+    """
+    override = os.environ.get(SERVER_VERSION_ENV_VAR)
+    if override:
+        return override
+    # Deferred import: resolves the package's CURRENT `__version__` at call
+    # time rather than binding the module object at import time (and keeps this
+    # module free of a package-level circular import).
+    from crucible_axi import __version__ as axi_version
+    return axi_version
+
+
 def _server_stage(target_dir: str, force: bool) -> dict:
-    """[server] sub-installer -- `npx -y <SERVER_NPM_PACKAGE>` fetches + runs the
-    bun/node server, bootstrapping Bun via the curl installer first if absent.
+    """[server] sub-installer -- `npx -y <SERVER_NPM_PACKAGE>@<version>` fetches +
+    runs the bun/node server, bootstrapping Bun via the curl installer first if
+    absent. The fetch is VERSION-PINNED (see `_resolve_server_version`).
 
     Idempotent: an already-installed server (and not `force`) short-circuits to
     converged=True without shelling out.
@@ -63,11 +87,12 @@ def _server_stage(target_dir: str, force: bool) -> dict:
     if shutil.which("bun") is None:
         subprocess.run(_BUN_INSTALL_COMMAND, shell=True, check=False)
 
+    pinned_package = f"{SERVER_NPM_PACKAGE}@{_resolve_server_version()}"
     completed = subprocess.run(
-        ["npx", "-y", SERVER_NPM_PACKAGE], check=False)
+        ["npx", "-y", pinned_package], check=False)
     if completed.returncode != 0:
         raise RuntimeError(
-            f"server stage failed: `npx -y {SERVER_NPM_PACKAGE}` exited with "
+            f"server stage failed: `npx -y {pinned_package}` exited with "
             f"returncode {completed.returncode}")
 
     return {"path": server_path, "converged": False}
