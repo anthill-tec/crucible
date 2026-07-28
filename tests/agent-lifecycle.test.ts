@@ -143,7 +143,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
         const key = seedProject(store);
         const agentId = "agent-lifecycle-1";
 
-        const regRes = await postJson("/api/v2/agents/register", { projectKey: key, agentId });
+        const regRes = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "report" });
         expect(regRes.status).toBe(200);
         const regBody = (await regRes.json()) as OkResponse;
         expect(regBody.ok).toBe(true);
@@ -200,7 +200,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       const key = seedProject(store);
       const agentId = "agent-lifecycle-2";
 
-      await postJson("/api/v2/agents/register", { projectKey: key, agentId });
+      await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "report" });
       expect(store.hasAgent(key, agentId)).toBe(true);
 
       await postJson("/api/v2/agents/unregister", { projectKey: key, agentId });
@@ -213,7 +213,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       const key = seedProject(store);
       const agentId = "agent-lifecycle-3";
 
-      await postJson("/api/v2/agents/register", { projectKey: key, agentId });
+      await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "report" });
       await postJson("/api/v2/agents/unregister", { projectKey: key, agentId });
       const second = await postJson("/api/v2/agents/unregister", { projectKey: key, agentId });
       const body = (await second.json()) as OkResponse;
@@ -227,7 +227,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       const key = seedProject(store);
       const agentId = "agent-lifecycle-4";
 
-      await postJson("/api/v2/agents/register", { projectKey: key, agentId });
+      await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "report" });
       // Second touch (heartbeat semantics) on the SAME agent — must not
       // fire a second "registered" lifecycle event.
       await postJson("/api/v2/agents/heartbeat", { projectKey: key, agentId });
@@ -268,7 +268,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
         // the raw-event count to 2 (cap 1) -> the real test run gets
         // evicted+folded into the rollup (runs:1, passed:1, failed:0).
         const agentId = "agent-rollup-1";
-        await postJson("/api/v2/agents/register", { projectKey: key, agentId });
+        await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "report" });
         expect(store.countEvents(key)).toBe(1);
 
         let rollups = store.listRollups(key);
@@ -315,7 +315,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       // Register+unregister AFTER the real run — chronologically newer, so
       // a naive "most recent event" read would pick a lifecycle event up.
       const agentId = "agent-rollup-3";
-      await postJson("/api/v2/agents/register", { projectKey: key, agentId });
+      await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "report" });
       await postJson("/api/v2/agents/unregister", { projectKey: key, agentId });
 
       const statusRes = await fetch(`${base()}/api/v2/status?project=${key}`);
@@ -336,7 +336,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
       const key = seedProject(store);
       const agentId = "agent-live-1";
 
-      await postJson("/api/v2/agents/register", { projectKey: key, agentId });
+      await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "report" });
       const firstSeen = Date.now() - 10_000;
       setAgentTimestamps(store, key, agentId, { firstSeen, lastSeen: Date.now() });
 
@@ -369,7 +369,7 @@ describe("CR-CRU-011 C2 — §S1 agent lifecycle events + §S2 agent runtime rul
         const key = seedProject(store);
         const agentId = "agent-tombstoned-1";
 
-        await postJson("/api/v2/agents/register", { projectKey: key, agentId });
+        await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "report" });
 
         const t0 = Date.now() - 500_000;
         const run1 = store.recordTestEvent(

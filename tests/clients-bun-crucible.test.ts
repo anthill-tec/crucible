@@ -441,24 +441,24 @@ describe("clients/bun-crucible.py — v2 endpoints + CRUCIBLE_URL honored (CR-CR
     expect(proxy.calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
   });
 
-  test("register --agent X WITHOUT --phase succeeds (ergonomics fix: defaults to report phase) instead of hard-failing", async () => {
+  test("register --agent X --phase report succeeds and records the declared report phase", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-bc-phase-optional");
     const projectDir = fixtureProjectDir(key);
 
-    const res = await runScript(["register", "--agent", "a3", "--project-dir", projectDir], {
-      cwd: projectDir,
-      crucibleUrl: baseUrl,
-    });
+    const res = await runScript(
+      ["register", "--agent", "a3", "--phase", "report", "--project-dir", projectDir],
+      { cwd: projectDir, crucibleUrl: baseUrl },
+    );
 
     expect(res.code).toBe(0);
     const agents = await getAgents(baseUrl, key);
     const agent = agents.find((a) => a.agentId === "a3");
     expect(agent).toBeDefined();
-    // Default phase is "report" (the pinned-away defect: --phase used to be
-    // a hard requirement, forcing orchestrator-side implicit-heartbeat
-    // workarounds — Implementation Notes, 2026-07-17).
+    // CR-CRU-044 §S3: `report` is the DECLARED phase for a registration that
+    // is not exercising a TDD phase — it is no longer an implicit default
+    // (--phase is required), but it still round-trips the same way.
     expect(agent!.message.toLowerCase()).toContain("report");
   });
 });
@@ -733,10 +733,12 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
       });
     }
 
-    const res = await runScript(["cr-close", "--commit", "abc1234", "--project-dir", projectDir], {
-      cwd: projectDir,
-      crucibleUrl: baseUrl,
-    });
+    // CR-CRU-044 §S5 — cr-close POSTs a cr-merged milestone, so it needs a
+    // DECLARED identity; there is no fabricated fallback any more.
+    const res = await runScript(
+      ["cr-close", "--commit", "abc1234", "--agent", "test-agent", "--project-dir", projectDir],
+      { cwd: projectDir, crucibleUrl: baseUrl },
+    );
 
     expect(res.code).toBe(0);
     const plans = await getPlans(baseUrl, key);

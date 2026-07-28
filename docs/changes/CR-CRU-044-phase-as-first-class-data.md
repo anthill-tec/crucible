@@ -90,14 +90,34 @@ wrong, and one of them has no flag at all:
 
 | client | `--phase` today | work required |
 |---|---|---|
-| bun `:1845` | `choices=[…]` enum, `default="report"` | drop the default → required |
-| mvn `:1738` | `choices=[…]` enum | make required |
-| python `:1405` | **free-text**, `default="report"` — NOT constrained | add the enum + drop the default |
-| arduino `:1194` | free-text, no default | add the enum + make required |
-| **rust `:2050`** | **NO `--phase` FLAG EXISTS** — the `register` subparser has none | **ADD the flag** entirely, enum-constrained and required |
+| bun `:1856` | `choices=[…]` enum, `default="report"` | drop the default → required |
+| rust `:2058` | `choices=[…]` enum, `default="report"` (**multi-line call form**) | drop the default → required |
+| mvn `:1744` | `choices=[…]` enum, `default="report"` | drop the default → required |
+| python `:1413` | **free-text** (help string only), `default="report"` | add the enum + drop the default |
+| arduino `:1198` | **free-text**, no default, not required | add the enum + make required |
 
-So this is *add-for-one, constrain-two, tighten-two* — not "constrain arduino". rust is the one that
-would be missed by a sweep that assumed the flag was merely unconstrained everywhere.
+So this is *constrain-two, tighten-five* — not "constrain arduino" as the Context above claims.
+
+**CORRECTION 2026-07-28 — an earlier revision of this table claimed rust had NO `--phase` flag.
+That was wrong**, caught by C1 GREEN. rust has had the full enum plus `default="report"` since
+CR-CRU-008's register-ergonomics change (see the comment above `clients/rust-crucible.py:2055`).
+
+The error is worth recording because the shape recurs: rust writes the call across multiple lines,
+```python
+r.add_argument(
+    "--phase",
+    choices=[...],
+    default="report",
+)
+```
+so **both** `grep -n 'add_argument("--phase"'` and a `grep … -A N | grep add_argument` pipeline miss
+it — the first because the flag name is not on the `add_argument` line, the second because the
+filter drops the continuation lines. A plain `grep -c phase clients/rust-crucible.py` returns 7 and
+would have contradicted the conclusion immediately. **Verify a "this does not exist" claim with an
+unfiltered read of the region, never with a filtered or piped grep.**
+
+A sixth register caller also exists that this CR's Context never listed: **`cli/crucible-axi.ts`**
+(found by C1 GREEN). Its `--phase` flag/help hardening belongs to §S3 alongside the five clients.
 
 ### §S5 — An agent identity must never be fabricated from the script's own filename
 **Found live 2026-07-28: a phantom agent named `bun-crucible` appeared in the dashboard's agent
@@ -215,6 +235,19 @@ and never unregistered. That is dispatch hygiene, not a Crucible defect, and it 
 
 The empty `identity` on `bun-crucible` is itself corroboration: no displayName, no source, because
 nothing ever declared it. §S5's hard stop is exactly right and its ACs stand unchanged.
+
+**Third sighting 2026-07-28 — it CAME BACK, during this CR.** The dog-food board was purged of all
+residue earlier the same day (CR-CRU-052 §S4: 6 projects, 2 phantom agents, verified zero orphan
+rows). Within hours, while CR-CRU-044 itself was executing, `SELECT agent_id FROM agents` returned
+**`bun-crucible` again** — the only agent on the board.
+
+This is the strongest available evidence for §S5 and it should be treated as the section's live
+regression case: the phantom is not historical residue, it is **continuously regenerated**. Purging
+removes the symptom for as long as it takes the next un-`--agent`'d verb to run. Only deleting the
+fallback stops it.
+
+It also confirms §S5's closing note about residue: nothing sweeps the rail, so each regeneration
+leaves a permanent row until manually removed.
 
 Both linger because neither unregistered — the liveness threshold ages a row to stale/dead in the
 UI while the row itself persists as `online`. **That is worth a look during this CR**: a registered

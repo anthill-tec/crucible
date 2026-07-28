@@ -194,7 +194,7 @@ describe("AXI negotiation, hints, truncation (CR-CRU-005 §S2+§S3+§S4)", () =>
     test("POST /api/v2/agents/heartbeat?fmt=toon → still application/json, never text/toon", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("post-stays-json");
-      await postJson("/api/v2/agents/register", { projectKey: key, agentId: "a1", message: "m" });
+      await postJson("/api/v2/agents/register", { projectKey: key, agentId: "a1", message: "m", phase: "report" });
 
       const res = await fetch(`http://localhost:${handle.server.port}/api/v2/agents/heartbeat?fmt=toon`, {
         method: "POST",
@@ -235,6 +235,7 @@ describe("AXI negotiation, hints, truncation (CR-CRU-005 §S2+§S3+§S4)", () =>
         projectKey: key,
         agentId: "a1",
         message: "m",
+        phase: "report",
         identity: { displayName: "A" },
       });
 
@@ -269,6 +270,7 @@ describe("AXI negotiation, hints, truncation (CR-CRU-005 §S2+§S3+§S4)", () =>
         projectKey: crypto.randomUUID(),
         agentId: "a1",
         message: "m",
+        phase: "report",
       });
 
       expect(res.status).toBe(404);

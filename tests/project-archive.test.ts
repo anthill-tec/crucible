@@ -237,6 +237,8 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
         const regRes = await postJson("/api/v2/agents/register", {
           projectKey: key,
           agentId: "agent-a",
+          // CR-CRU-044 §S1 — register now declares a phase.
+          phase: "report",
         });
         expect(regRes.status).toBe(200);
 

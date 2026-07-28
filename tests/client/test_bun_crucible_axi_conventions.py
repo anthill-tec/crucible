@@ -285,7 +285,8 @@ class TruncationFullTest(_BaseAxiConventionsTest):
 
     def _base_gate_report_argv(self, extra=None):
         argv = ["gate-report", "--outcome", "failed", "--commit", "sha1",
-                "--steps", "test:failed", "--project-dir", self.tmpdir]
+                "--steps", "test:failed", "--agent", "test-agent",
+                "--project-dir", self.tmpdir]
         return argv + (extra or [])
 
     def test_gate_report_large_error_field_is_truncated_by_default_with_size_hint(self):
@@ -400,10 +401,10 @@ class StructuredErrorsExitCodesIdempotencyTest(_BaseAxiConventionsTest):
         # no client-side guard against re-registration).
         with mock.patch.object(self.module, "_post", return_value={"ok": True}):
             code1, _out1, _err1 = _run_main(
-                self.module, ["register", "--agent", "CR-TEST-1", "--project-dir", self.tmpdir]
+                self.module, ["register", "--phase", "report", "--agent", "CR-TEST-1", "--project-dir", self.tmpdir]
             )
             code2, _out2, _err2 = _run_main(
-                self.module, ["register", "--agent", "CR-TEST-1", "--project-dir", self.tmpdir]
+                self.module, ["register", "--phase", "report", "--agent", "CR-TEST-1", "--project-dir", self.tmpdir]
             )
         self.assertEqual(code1, 0)
         self.assertEqual(code2, 0,
@@ -560,7 +561,7 @@ class HelpArrayCoverageTest(_BaseAxiConventionsTest):
         os.environ["WORKFLOW_CYCLE_ID"] = "77"
         with mock.patch.object(self.module, "_post", return_value={"ok": True}):
             code, out, err = _run_main(self.module, [
-                "register", "--agent", "CR-HELP-1", "--project-dir", self.tmpdir,
+                "register", "--phase", "report", "--agent", "CR-HELP-1", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -664,7 +665,7 @@ class HelpArrayCoverageTest(_BaseAxiConventionsTest):
              mock.patch.object(self.module, "_patch", return_value={"ok": True}), \
              mock.patch.object(self.module, "_post", return_value={"ok": True}):
             code, out, err = _run_main(self.module, [
-                "cr-close", "--commit", "abc123", "--project-dir", self.tmpdir,
+                "cr-close", "--commit", "abc123", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")

@@ -468,11 +468,21 @@ describe("§S2b in-run progress narration — clients/bun-crucible.py (fine-grai
         expect(NARRATION_RE.test(stdout)).toBe(false);
 
         // Evidence of periodic heartbeats hitting the v2 endpoint (no new
-        // API — CR-CRU-008 §S2b) — more than the single initial register.
+        // API — CR-CRU-008 §S2b) — more than the single initial touch.
+        // CR-CRU-044 §S1(a) split the two verbs: a narration tick is a
+        // liveness ping, so it rides the phase-optional
+        // /api/v2/agents/heartbeat and can never re-declare (or blank) the
+        // phase the agent registered with. Tightened, not relaxed: the
+        // heartbeat traffic is still required to be plural, AND narration is
+        // now required NOT to masquerade as a re-registration.
+        const heartbeatCalls = proxy.calls.filter(
+          (c) => c.method === "POST" && c.path === "/api/v2/agents/heartbeat",
+        );
+        expect(heartbeatCalls.length).toBeGreaterThan(1);
         const registerCalls = proxy.calls.filter(
           (c) => c.method === "POST" && c.path === "/api/v2/agents/register",
         );
-        expect(registerCalls.length).toBeGreaterThan(1);
+        expect(registerCalls.length).toBeLessThanOrEqual(1);
 
         // Yet the events journal gains NO MORE than the one 'registered'
         // lifecycle event for this agent — heartbeats against an agent that

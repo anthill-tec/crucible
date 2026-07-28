@@ -8,9 +8,11 @@ import type { CompileReport } from "./codecs/compile.ts";
 import { hints, cycleHints } from "./hints.ts";
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
+import { AGENT_PHASES } from "./types.ts";
 import type { ProjectPatch, RecordEventMeta, TouchAgentOpts } from "./store.ts";
 import type {
   AgentIdentity,
+  AgentPhase,
   Coverage,
   CycleKind,
   CycleStatus,
@@ -37,6 +39,8 @@ interface V2Body {
   sutRoot?: unknown;
   projectKey?: unknown;
   agentId?: unknown;
+  /** CR-CRU-044 §S1 — declared phase (required on register). */
+  phase?: unknown;
   status?: unknown;
   message?: unknown;
   identity?: unknown;
@@ -324,8 +328,18 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
   return reply(req, url, { ok: true, projects });
 }
 
-/** §S1 — register and heartbeat share these semantics (upsert via touchAgent). */
-async function handleAgentTouch(store: Store, req: Request): Promise<Response> {
+/**
+ * §S1 — register and heartbeat share these semantics (upsert via touchAgent),
+ * differing in ONE respect: CR-CRU-044 §S1(a) makes `phase` REQUIRED on
+ * register (`requirePhase`) but leaves it optional on heartbeat, which stays
+ * the idle-time liveness ping hints.ts documents — never a re-declaration of
+ * something the agent already declared when it registered.
+ */
+async function handleAgentTouch(
+  store: Store,
+  req: Request,
+  requirePhase: boolean,
+): Promise<Response> {
   const body = await readBody(req);
   if (body === null) return fail(400, "malformed JSON body");
   const pk = requireProject(store, body.projectKey);
@@ -333,6 +347,19 @@ async function handleAgentTouch(store: Store, req: Request): Promise<Response> {
   const agentId = body.agentId;
   if (typeof agentId !== "string" || agentId.length === 0) {
     return fail(400, "agentId is required");
+  }
+  // CR-CRU-044 §S1(b) — validated at the ROUTE boundary, before any write, so
+  // a rejected registration never leaves a partial agent row behind.
+  const phase = body.phase;
+  const phaseValid = typeof phase === "string" && (AGENT_PHASES as readonly string[]).includes(phase);
+  if (requirePhase && !phaseValid) {
+    return fail(
+      400,
+      `phase is required and must be one of ${AGENT_PHASES.join(" | ")} (got ${
+        phase === undefined ? "no phase field" : JSON.stringify(phase)
+      })`,
+      { help: hints.phaseRequired },
+    );
   }
 
   const existed = store.hasAgent(pk.key, agentId);
@@ -345,6 +372,11 @@ async function handleAgentTouch(store: Store, req: Request): Promise<Response> {
   }
   if (typeof body.identity === "object" && body.identity !== null) {
     opts.identity = body.identity as AgentIdentity;
+  }
+  // CR-CRU-044 §S1(c) — only a declared phase is passed through; omitting the
+  // option is what makes the store PRESERVE the stored value.
+  if (phaseValid) {
+    opts.phase = phase as AgentPhase;
   }
   store.touchAgent(pk.key, agentId, opts);
   // CR-CRU-011 §S1 — a REAL registration (row created) appends a lifecycle
@@ -1466,11 +1498,13 @@ export function handleV2(
       return handleProjectPatch(store, segments[0]!, req);
     }
   }
-  if (
-    req.method === "POST" &&
-    (pathname === "/api/v2/agents/register" || pathname === "/api/v2/agents/heartbeat")
-  ) {
-    return handleAgentTouch(store, req);
+  // CR-CRU-044 §S1(a) — the two routes SPLIT on one flag: register must
+  // declare a phase, heartbeat must not be forced to re-declare it.
+  if (req.method === "POST" && pathname === "/api/v2/agents/register") {
+    return handleAgentTouch(store, req, true);
+  }
+  if (req.method === "POST" && pathname === "/api/v2/agents/heartbeat") {
+    return handleAgentTouch(store, req, false);
   }
   if (req.method === "POST" && pathname === "/api/v2/agents/unregister") {
     return handleAgentUnregister(store, req);

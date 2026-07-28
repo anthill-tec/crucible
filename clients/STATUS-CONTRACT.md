@@ -95,6 +95,43 @@ unavailable" and continue, never fail (CR-CRU-035 §S1):
 A hook that receives `ok:true` together with a `status-unavailable` warning renders
 "board unavailable" and moves on — it never fails on it.
 
+## Agent identity and phase (CR-CRU-044 §S4)
+
+The `context.agentId` this envelope reports — and the `--agent` value every client's
+`register` verb takes — is a **free-form identifier**. It carries no structure the
+system reads: it is a label for humans and for joining rows together, nothing more.
+
+The **`--phase` flag declares the agent's phase**, and that stored declaration is what
+classifies the agent everywhere (the dashboard's agent rail, the phase filters, the
+run attribution). Phase is never inferred from the agentId's shape.
+
+- `--phase` is **required** on `register` across all five `*-crucible.py` clients and
+  `cli/crucible-axi.ts`, and is constrained to the enumeration
+  `RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report`. Omitting it, or passing a value
+  outside the enumeration, fails argument parsing with a non-zero exit and the accepted
+  values listed — no registration is sent.
+- Use `--phase report` for a registration that is not exercising a TDD phase.
+- Naming conventions such as `<agent-type>-<project>` or
+  `CR-<PROJ>-NNN-<cycle>-<PHASE>` remain useful as **habits for readability only**. They
+  are not load-bearing: an agentId ending in `-GREEN` registered with `--phase RED`
+  classifies as **RED**, because the declaration beats the label.
+
+## The agent identity is declared, never fabricated (CR-CRU-044 §S5)
+
+An agent identity is **declared with `--agent` or the verb FAILS**. There is no
+fallback and no default anywhere in the fleet.
+
+- The gate/milestone verbs (`gate-run`, `gate-report`, `milestone`, and `cr-close`,
+  which seals a `cr-merged` milestone) hard-stop when no `--agent` is given: `ok:false`,
+  a non-zero exit, and an `agent-identity-required` warning naming `--agent` as how to
+  supply it. **Nothing is posted** from that path, so no phantom can reach the agent rail.
+- **`$WORKFLOW_ROLE` does not supply an identity.** It carries the track lane
+  (`mainline` | `track-n`) and is reported as `context.track`; an agent named after a
+  lane is the same category error as one named after the script's filename.
+- The resolution lives once, in `clients/_crucible_axi.py` (`require_agent_id`), and
+  every client delegates to it — the per-client `_agent_id()` helpers are thin wrappers,
+  not independent copies.
+
 ## Bounded fetch
 
 The plans GET is bounded by a short `timeout=` on the underlying `urlopen` call across

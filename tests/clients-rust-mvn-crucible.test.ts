@@ -415,14 +415,14 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
     expect(proxy.calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
   });
 
-  test("register --agent X WITHOUT --phase succeeds (ergonomics fix: defaults to report phase) instead of hard-failing", async () => {
+  test("register --agent X --phase report succeeds and records the declared report phase", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-phase-optional");
     const dir = scratch.dir("rust-crucible-proj-");
     writeEnvFile(dir, key);
 
-    const res = await runScript(RUST_SCRIPT_PATH, ["register", "--agent", "r3", "--project-dir", dir], {
+    const res = await runScript(RUST_SCRIPT_PATH, ["register", "--agent", "r3", "--phase", "report", "--project-dir", dir], {
       cwd: dir,
       crucibleUrl: baseUrl,
     });
@@ -465,7 +465,7 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
     const dir = scratch.dir("rust-crucible-proj-");
     writeEnvFile(dir, key);
 
-    const res = await runScript(RUST_SCRIPT_PATH, ["register", "--agent", "r-tolerant", "--project-dir", dir], {
+    const res = await runScript(RUST_SCRIPT_PATH, ["register", "--agent", "r-tolerant", "--phase", "report", "--project-dir", dir], {
       cwd: dir,
       crucibleUrl: baseUrl,
     });
@@ -1036,14 +1036,14 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
     expect(proxy.calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
   });
 
-  test("register --agent X WITHOUT --phase succeeds (ergonomics fix: defaults to report phase) instead of hard-failing", async () => {
+  test("register --agent X --phase report succeeds and records the declared report phase", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-mc-phase-optional");
     const dir = scratch.dir("mvn-crucible-proj-");
     writeEnvFile(dir, key);
 
-    const res = await runScript(MVN_SCRIPT_PATH, ["register", "--agent", "m3", "--project-dir", dir], {
+    const res = await runScript(MVN_SCRIPT_PATH, ["register", "--agent", "m3", "--phase", "report", "--project-dir", dir], {
       cwd: dir,
       crucibleUrl: baseUrl,
     });
@@ -1086,7 +1086,7 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
     const dir = scratch.dir("mvn-crucible-proj-");
     writeEnvFile(dir, key);
 
-    const res = await runScript(MVN_SCRIPT_PATH, ["register", "--agent", "m-tolerant", "--project-dir", dir], {
+    const res = await runScript(MVN_SCRIPT_PATH, ["register", "--agent", "m-tolerant", "--phase", "report", "--project-dir", dir], {
       cwd: dir,
       crucibleUrl: baseUrl,
     });

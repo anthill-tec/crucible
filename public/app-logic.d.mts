@@ -303,6 +303,13 @@ export type PhaseRole = "red" | "green" | "verify" | "fix" | null;
 
 export declare function phaseRole(agentId: string): PhaseRole;
 
+// CR-CRU-044 §S2 — classification by the agent's STORED phase; `phaseRole`
+// is the fallback only when `phase` is absent (undefined) or null.
+export declare function agentRole(agent: {
+  agentId: string;
+  phase?: string | null;
+}): PhaseRole;
+
 // CR-CRU-028 §S1 — auto-coarsening level-colored coverage-trend buckets (pure).
 export declare const COVERAGE_LEVEL_ORANGE_MAX: number;
 export declare const COVERAGE_LEVEL_YELLOW_MAX: number;

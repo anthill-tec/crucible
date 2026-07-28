@@ -160,7 +160,8 @@ class GateReportAxiEnvelopeTest(_BaseGateAxiTest):
 
     def _base_argv(self):
         return ["gate-report", "--outcome", "passed", "--commit", "abc1234",
-                "--steps", "review:passed,test:passed", "--project-dir", self.tmpdir]
+                "--steps", "review:passed,test:passed", "--agent", "test-agent",
+                "--project-dir", self.tmpdir]
 
     def test_gate_report_envelope_decodes_with_verb_ok_and_outcome(self):
         calls = []
@@ -245,7 +246,8 @@ class GateRunAxiEnvelopeTest(_BaseGateAxiTest):
         calls = []
         with mock.patch.object(self.module, "_post", side_effect=self._post_recorder(calls)):
             code, out, err = _run_main(self.module, [
-                "gate-run", "--intent", "verify the refactor", "--project-dir", self.tmpdir,
+                "gate-run", "--intent", "verify the refactor", "--agent", "test-agent",
+                "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -266,7 +268,8 @@ class GateRunAxiEnvelopeTest(_BaseGateAxiTest):
         calls = []
         with mock.patch.object(self.module, "_post", side_effect=self._post_recorder(calls)):
             code, out, err = _run_main(self.module, [
-                "gate-run", "--intent", "verify the refactor", "--project-dir", self.tmpdir,
+                "gate-run", "--intent", "verify the refactor", "--agent", "test-agent",
+                "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")

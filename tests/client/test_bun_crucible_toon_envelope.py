@@ -217,7 +217,7 @@ class RegisterUnregisterEnvelopeTest(_BaseEnvelopeTest):
         with mock.patch.object(self.module, "_post",
                                 return_value={"ok": False, "error": "boom"}):
             code, out, _err = _run_main(self.module, [
-                "register", "--agent", "CR-X-2-RED", "--project-dir", self.tmpdir,
+                "register", "--phase", "report", "--agent", "CR-X-2-RED", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 1)
@@ -402,7 +402,7 @@ class CrCloseEnvelopeTest(_BaseEnvelopeTest):
              mock.patch.object(self.module, "_patch", return_value={"ok": True}), \
              mock.patch.object(self.module, "_post", return_value={"ok": True}):
             code, out, err = _run_main(self.module, [
-                "cr-close", "--commit", "abc1234", "--cr", self.CR_ID,
+                "cr-close", "--commit", "abc1234", "--agent", "test-agent", "--cr", self.CR_ID,
                 "--project-dir", self.tmpdir,
             ])
 
@@ -430,7 +430,7 @@ class CrCloseEnvelopeTest(_BaseEnvelopeTest):
         ])
         with mock.patch.object(self.module, "_get", return_value=two_open):
             code, out, err = _run_main(self.module, [
-                "cr-close", "--commit", "abc1234", "--project-dir", self.tmpdir,
+                "cr-close", "--commit", "abc1234", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 1)

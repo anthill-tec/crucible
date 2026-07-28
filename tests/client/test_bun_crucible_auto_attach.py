@@ -507,7 +507,7 @@ class RegisterHardErrorTest(_BaseAutoAttachTest):
 
     def _run_register(self, agent="CR-CRU-030-C2-register-test"):
         return _run_main(self.module, [
-            "register", "--agent", agent, "--project-dir", self.tmpdir,
+            "register", "--phase", "report", "--agent", agent, "--project-dir", self.tmpdir,
         ])
 
     def _plans_fetch_failure(self):

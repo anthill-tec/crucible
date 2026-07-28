@@ -430,7 +430,7 @@ class ArduinoCrucibleVerbEnvelopeTest(_BaseArduinoAxiTest):
 
     def test_register_prints_toon_envelope(self):
         code, out, _err, _p, _g, _pa = self._run(
-            ["register", "--agent", "CR-A-1", "--project-dir", self.tmpdir],
+            ["register", "--phase", "report", "--agent", "CR-A-1", "--project-dir", self.tmpdir],
             get_return=self._active_cycle_plans())
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
@@ -495,7 +495,7 @@ class ArduinoCrucibleVerbEnvelopeTest(_BaseArduinoAxiTest):
             {"planId": "plan-9", "cr": "CR-CRU-030", "status": "open", "cycles": []},
         ])
         code, out, _err, _p, _g, _pa = self._run(
-            ["cr-close", "--commit", "abc1234", "--project-dir", self.tmpdir],
+            ["cr-close", "--commit", "abc1234", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans, patch_return={"ok": True})
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
@@ -575,7 +575,8 @@ class ArduinoCrucibleVerbEnvelopeTest(_BaseArduinoAxiTest):
 
     def test_gate_report_prints_toon_envelope_with_prefer_gate_run_warning(self):
         code, out, err, _p, _g, _pa = self._run(
-            ["gate-report", "--outcome", "passed", "--project-dir", self.tmpdir],
+            ["gate-report", "--outcome", "passed", "--agent", "test-agent",
+             "--project-dir", self.tmpdir],
             post_return={"ok": True})
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
@@ -594,7 +595,7 @@ class ArduinoCrucibleVerbEnvelopeTest(_BaseArduinoAxiTest):
         os.environ["PATH"] = fake_bin_dir + os.pathsep + saved_path
         try:
             code, out, _err, _p, _g, _pa = self._run(
-                ["gate-run", "--intent", "verify the refactor",
+                ["gate-run", "--intent", "verify the refactor", "--agent", "test-agent",
                  "--project-dir", self.tmpdir], post_return={"ok": True})
         finally:
             os.environ["PATH"] = saved_path
@@ -641,7 +642,7 @@ class ArduinoCrucibleVerbEnvelopeTest(_BaseArduinoAxiTest):
             with mock.patch.object(self.module, "_post", side_effect=fake_post, create=True):
                 code, out, _err = _run_main(self.module, [
                     "gate-run", "--intent", "verify the interim polling path",
-                    "--project-dir", self.tmpdir,
+                    "--agent", "test-agent", "--project-dir", self.tmpdir,
                 ])
         finally:
             os.environ["PATH"] = saved_path
@@ -1090,7 +1091,7 @@ class ArduinoCrucibleAutoAttachTest(_BaseArduinoAxiTest):
                                 return_value=self._no_active_cycle_plans(),
                                 create=True):
             code, out, err = _run_main(self.module, [
-                "register", "--agent", "CR-A-reg", "--project-dir", self.tmpdir,
+                "register", "--phase", "report", "--agent", "CR-A-reg", "--project-dir", self.tmpdir,
             ])
         self.assertNotEqual(code, 0)
         axi = self._decode_axi(out)
@@ -1108,7 +1109,7 @@ class ArduinoCrucibleAutoAttachTest(_BaseArduinoAxiTest):
                                 return_value=self._no_open_plans_at_all(),
                                 create=True):
             code, out, _err = _run_main(self.module, [
-                "register", "--agent", "CR-A-reg", "--project-dir", self.tmpdir,
+                "register", "--phase", "report", "--agent", "CR-A-reg", "--project-dir", self.tmpdir,
             ])
         self.assertEqual(code, 0, f"no open plan at all must be TOLERATED; stdout={out!r}")
         axi = self._decode_axi(out)
@@ -1123,7 +1124,7 @@ class ArduinoCrucibleAutoAttachTest(_BaseArduinoAxiTest):
                                 return_value=self._plans_fetch_failure(),
                                 create=True):
             code, out, _err = _run_main(self.module, [
-                "register", "--agent", "CR-A-reg", "--project-dir", self.tmpdir,
+                "register", "--phase", "report", "--agent", "CR-A-reg", "--project-dir", self.tmpdir,
             ])
         self.assertEqual(code, 0, f"a plans-fetch failure must be TOLERATED; stdout={out!r}")
         axi = self._decode_axi(out)
@@ -1138,7 +1139,7 @@ class ArduinoCrucibleAutoAttachTest(_BaseArduinoAxiTest):
                                 return_value=self._no_active_cycle_plans(),
                                 create=True):
             code, out, _err = _run_main(self.module, [
-                "register", "--agent", "CR-A-reg", "--project-dir", self.tmpdir,
+                "register", "--phase", "report", "--agent", "CR-A-reg", "--project-dir", self.tmpdir,
             ])
         self.assertNotEqual(
             code, 0,

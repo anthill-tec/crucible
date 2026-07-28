@@ -62,10 +62,13 @@ Examples:
   # Full regression + coverage + ingest (orchestrator gate)
   bun-crucible.py pre-merge-gate --agent claude-sandesh
 
-Agent naming (agent-protocol): agentId = `<agent-type>-<project>` (e.g. claude-sandesh) for
-the orchestrator, or `CR-<PROJ>-NNN-<cycle>-<PHASE>` (e.g. CR-SAN-013-C1-RED) for TDD-phase
-agents. Identity carries displayName + source (default claude-md) + repoPath, inside the
-`identity` object.
+Agent naming (CR-CRU-044 §S4/§S5): the agentId is a FREE-FORM identifier carrying no
+structure the system reads. It is DECLARED with `--agent` or the verb fails — there is no
+filename default and no env fallback ($WORKFLOW_ROLE is the track lane, not an identity).
+The phase comes from `--phase` alone and is never inferred from the agentId's shape, so
+`<agent-type>-<project>` (e.g. claude-sandesh) and `CR-<PROJ>-NNN-<cycle>-<PHASE>` (e.g.
+CR-SAN-013-C1-RED) are readability habits only. Identity carries displayName + source
+(default claude-md) + repoPath, inside the `identity` object.
 """
 
 import argparse
@@ -323,9 +326,16 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None):
     return subprocess.CompletedProcess(cmd, returncode, stdout=out)
 
 
-def _register_agent(project_dir, agent_id, message, display_name=None, source="claude-md"):
+def _register_agent(project_dir, agent_id, message, display_name=None, source="claude-md",
+                    phase=None):
     """POST the agent-online heartbeat. Single payload builder shared by
-    cmd_register and the gate-run lifecycle brackets (CR-CRU-021 §S5)."""
+    cmd_register and the gate-run lifecycle brackets (CR-CRU-021 §S5).
+
+    CR-CRU-044 §S1 — a real REGISTRATION must declare its phase. The
+    phase-less callers here are the §S2b narration heartbeats, which route to
+    /api/v2/agents/heartbeat: the phase-optional liveness ping, so a narration
+    tick never re-declares — nor blanks — the phase the agent registered with.
+    """
     payload = {
         "agentId": agent_id,
         "projectKey": _project_key(project_dir),
@@ -337,6 +347,9 @@ def _register_agent(project_dir, agent_id, message, display_name=None, source="c
             "repoPath": project_dir,
         },
     }
+    if phase is None:
+        return _post("/api/v2/agents/heartbeat", payload)
+    payload["phase"] = phase
     return _post("/api/v2/agents/register", payload)
 
 
@@ -388,6 +401,7 @@ def cmd_register(args):
         project_dir, args.agent,
         args.message or f"Starting {args.phase} phase",
         display_name=args.display_name, source=args.source,
+        phase=args.phase,
     )
     ok = bool(resp.get("ok", False))
     legacy = (f"register: ok={resp.get('ok', False)} agent={args.agent} "
@@ -1124,6 +1138,10 @@ def cmd_cycle_done(args):
 
 
 def cmd_cr_close(args):
+    # CR-CRU-044 §S5 — cr-close ends by POSTing a `cr-merged` MILESTONE, so it
+    # needs a declared identity. Resolve it FIRST: a hard stop must happen
+    # before the plan GET/PATCH, never after the CR has already been closed.
+    _agent_id(args)
     project_dir = _resolve_project_dir(args.project_dir)
     open_plans = _open_plans(project_dir)
     if args.cr:
@@ -1532,13 +1550,17 @@ def _emit_ingest_withhold(verb, project_dir, agent, warnings):
 
 
 def _agent_id(args):
-    """The agentId for a fleet event. Explicit --agent > $WORKFLOW_ROLE >
-    a stable fallback (these verbs never assert on the id, but the server
-    requires a non-empty agentId)."""
-    explicit = getattr(args, "agent", None)
-    if explicit:
-        return explicit
-    return os.environ.get("WORKFLOW_ROLE") or "bun-crucible"
+    """CR-CRU-044 §S5 — the agentId for a fleet event: the identity is
+    DECLARED (`--agent`) or the verb FAILS. Delegates to the shared fleet
+    resolver so all five clients cannot drift apart again.
+
+    There is no fallback: the old filename-derived default
+    (`"bun-crucible"`) fabricated an identity from this script's own
+    filename and planted a phantom row on the dashboard agent rail, and
+    $WORKFLOW_ROLE is the TRACK LANE (mainline | track-n), not an identity.
+    Raises `_crucible_axi.AgentIdentityRequired`, which `main` converts into
+    the ok:false hard-stop envelope + a non-zero exit, POSTing nothing."""
+    return _axi().require_agent_id(args)
 
 
 def _fleet_context(cr=None):
@@ -1838,12 +1860,16 @@ def main():
 
     r = sub.add_parser("register", help="Register / heartbeat an agent.")
     r.add_argument("--agent", required=True,
-                   help="Agent id — `<type>-<project>` or `CR-<PROJ>-NNN-<cycle>-<PHASE>`.")
-    # Ergonomics fix (CR-CRU-008 §S2): --phase is OPTIONAL, defaulting to
-    # "report" — the old hard requirement forced orchestrator-side
-    # implicit-heartbeat workarounds.
-    r.add_argument("--phase", default="report",
-                   choices=["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"])
+                   help="Agent id — a free-form identifier. The phase is declared by "
+                        "--phase and is never inferred from the agentId's shape; any "
+                        "`CR-<PROJ>-NNN-<cycle>-<PHASE>` convention is a naming habit only.")
+    # CR-CRU-044 §S3 — phase is first-class DATA: --phase is REQUIRED and
+    # enum-constrained (this supersedes CR-CRU-008 §S2's `default="report"`
+    # ergonomics; pass `--phase report` for a non-TDD registration).
+    r.add_argument("--phase", required=True,
+                   choices=["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"],
+                   help="Declared phase — the ONLY phase channel. Use `report` for a "
+                        "registration that is not exercising a TDD phase.")
     r.add_argument("--display-name", help="Human-readable name (default: the agentId)")
     r.add_argument("--source", default="claude-md",
                    choices=["claude-md", "package-json", "git-repo", "manual"])
@@ -1939,6 +1965,12 @@ def main():
                         help="Close the single OPEN plan (PATCH status=closed + merge.commit).")
     cc.add_argument("--commit", required=True, help="Merge commit sha.")
     cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    # CR-CRU-044 §S5 — cr-close POSTs a `cr-merged` milestone, so it carries the
+    # same declared-identity requirement (and the same flag) as the other four
+    # clients, which already exposed --agent here.
+    cc.add_argument("--agent",
+                    help="Agent id for the cr-merged milestone — REQUIRED (§S5): the "
+                         "identity is declared or the verb fails; there is no fallback.")
     _add_project_dir_arg(cc)
     cc.set_defaults(func=cmd_cr_close)
 
@@ -1989,7 +2021,9 @@ def main():
                         help="axi PROXY: run `no-mistakes axi run`, post throttled interim "
                              "+ final gates, relay the axi detail to the caller.")
     gr.add_argument("--intent", required=True, help="The intent/goal passed down to `axi run`.")
-    gr.add_argument("--agent", help="Agent id for the gate events (default: $WORKFLOW_ROLE).")
+    gr.add_argument("--agent", help="Agent id for the gate events — REQUIRED (§S5): the "
+                          "identity is declared or the verb fails; there is "
+                          "no fallback.")
     _add_project_dir_arg(gr)
     gr.set_defaults(func=cmd_gate_run)
 
@@ -2000,7 +2034,8 @@ def main():
     grp.add_argument("--commit", help="The pushed commit sha (gate.push.commit).")
     grp.add_argument("--steps", help='Comma-separated "name:status" step results.')
     grp.add_argument("--intent", help="Gate intent (default: derived from --outcome).")
-    grp.add_argument("--agent", help="Agent id (default: $WORKFLOW_ROLE).")
+    grp.add_argument("--agent", help="Agent id — REQUIRED (§S5): the identity is declared or "
+                         "the verb fails; there is no fallback.")
     grp.add_argument("--full", action="store_true",
                      help="Emit large text fields (e.g. a server error detail) untruncated (§S11).")
     _add_project_dir_arg(grp)
@@ -2012,7 +2047,8 @@ def main():
     ms.add_argument("--label", help="Human-readable milestone label.")
     ms.add_argument("--cr", help="CR id (rides context.cr).")
     ms.add_argument("--commit", help="Optional commit sha.")
-    ms.add_argument("--agent", help="Agent id (default: $WORKFLOW_ROLE).")
+    ms.add_argument("--agent", help="Agent id — REQUIRED (§S5): the identity is declared or "
+                         "the verb fails; there is no fallback.")
     _add_project_dir_arg(ms)
     ms.set_defaults(func=cmd_milestone)
 
@@ -2020,7 +2056,12 @@ def main():
     # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.
     if getattr(args, "func", None) is None:
         sys.exit(cmd_dashboard())
-    sys.exit(args.func(args))
+    # CR-CRU-044 §S5 — dispatch through the shared `run_verb`, which turns an
+    # UNDECLARED agent identity into the ok:false hard-stop envelope + a
+    # non-zero exit (POSTing nothing) instead of an unhandled traceback.
+    sys.exit(_axi().run_verb(
+        args.func, args,
+        lambda a: _project_key(_resolve_project_dir(getattr(a, "project_dir", None)))))
 
 
 if __name__ == "__main__":
