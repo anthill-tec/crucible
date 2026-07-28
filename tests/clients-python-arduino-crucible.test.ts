@@ -780,28 +780,45 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
     expect(event.coverage?.functions?.covered).toBe(5);
   });
 
-  // CR-CRU-036 C4 FIX round — VERIFY finding: `_collect_coverage` runs
+  // CR-CRU-036 C4 contract, re-scoped by CR-CRU-045 (gap-analysis disproved
+  // the original C4 FIX-round reading): `_collect_coverage` runs
   // `python -m coverage lcov -o <path>` with `cwd=project_dir`
   // (clients/python-crucible.py:583). For a `-m` invocation Python prepends
   // the CURRENT WORKING DIRECTORY to sys.path AHEAD of PYTHONPATH, so a
-  // `coverage/` subdirectory sitting directly in project_dir (e.g. a bogus
-  // namespace package with no `__main__.py`) is found FIRST — shadowing
-  // BOTH the real installed coverage.py and this fixture's own
-  // PYTHONPATH-supplied fake `coverage/__main__.py` — and
-  // `python -m coverage ...` fails outright ("No module named
-  // coverage.__main__; 'coverage' is a package and cannot be directly
-  // executed"), breaking collection. Empirically confirmed standalone
-  // before writing this test (see C4 RED report). This MUST fail today.
-  test("CR-CRU-036 C4: a `coverage/` directory present in project_dir does NOT shadow coverage.py collection — event.coverage STILL reflects the fake lcov output", async () => {
+  // `coverage/` subdirectory sitting directly in project_dir is on the
+  // interpreter's path. The REAL hazard (this is bun's own lcov output
+  // directory — it holds `lcov.info` plus temp files and carries NO
+  // `__init__.py`) is a bare directory, i.e. a namespace package. A
+  // namespace package loses to a regular package regardless of sys.path
+  // order, so the real installed `coverage.py` (or, here, the fixture's
+  // PYTHONPATH-supplied fake `coverage/__main__.py`, itself a regular
+  // package) wins and collection proceeds normally — event.coverage still
+  // reflects the real lcov figures. Empirically confirmed against the
+  // project interpreter before re-pointing this test (see CR-CRU-045
+  // Context table). This is CR-036's actual, currently-held guarantee.
+  //
+  // OUT OF SCOPE (CR-CRU-045 §S2 — do NOT "restore" this): a `coverage/`
+  // directory that carries an `__init__.py` is a REGULAR package, not a
+  // namespace package, and WILL shadow the real module while cwd is on
+  // sys.path — that is inherent to running `python -m coverage` from any
+  // project whose tree contains a `coverage` package, is not specific to
+  // this client, and would cost a 3.11 floor (`python -P`) to defend
+  // against a scenario `pyproject.toml`'s `requires-python = ">=3.10"`
+  // does not support today. Deliberately left unguarded.
+  test("CR-CRU-036 C4: a bare `coverage/` directory (no `__init__.py`, bun's real lcov output shape) present in project_dir does NOT shadow coverage.py collection — event.coverage reflects the real lcov output", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-regression-coverage-dir-shadow");
     const { dir, pythonPath } = fixtureDir(key);
-    // The shadow trigger: an otherwise-inert `coverage/` subdirectory
-    // living directly in project_dir (project_dir IS the subprocess cwd).
+    // The real hazard, not the over-specified one: a BARE `coverage/`
+    // subdirectory (bun's actual lcov output shape — an lcov file, no
+    // `__init__.py`) living directly in project_dir (project_dir IS the
+    // subprocess cwd). No `__init__.py` here means this is a namespace
+    // package, which loses to the regular `coverage` package found later
+    // on sys.path (the fixture's fake, or a real install) — see CR-CRU-045.
     const shadowDir = join(dir, "coverage");
     mkdirSync(shadowDir, { recursive: true });
-    writeFileSync(join(shadowDir, "__init__.py"), "");
+    writeFileSync(join(shadowDir, "lcov.info"), "SF:app/other.ts\nLF:3\nLH:2\nend_of_record\n");
 
     const res = await runScript(
       PYTHON_SCRIPT_PATH,

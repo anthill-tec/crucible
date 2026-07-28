@@ -613,6 +613,13 @@ def _collect_coverage(python, project_dir, env):
     # namespace-dir shadow on its own — a regular package beats a namespace package
     # regardless of cwd on sys.path — so the flag is unnecessary. cwd stays
     # project_dir (to find .coverage) and PYTHONPATH is still honored.
+    # OUT OF SCOPE (CR-CRU-045 §S2): this only holds for a BARE `coverage/` dir
+    # (bun's real lcov shape, no `__init__.py` — a namespace package). A `coverage/`
+    # dir carrying its own `__init__.py` is a REGULAR package and WOULD shadow the
+    # real module while cwd is on sys.path; that is inherent to running
+    # `python -m coverage` from a project whose tree contains a `coverage` package,
+    # not specific to this client, and would cost a 3.11 floor (`python -P`) to
+    # defend — deliberately left unguarded.
     cov_env = dict(env)
     r = subprocess.run([python, "-m", "coverage", "lcov", "-o", lcov_path],
                        cwd=project_dir, env=cov_env, capture_output=True, text=True)
@@ -714,6 +721,12 @@ def _regression_run(args):
         # subprocesses (the suite's own subprocess-spawning tests), breaking their
         # tmpdir-cwd dotted-name imports; cwd (project_dir) stays on sys.path so
         # discovery still works.
+        # OUT OF SCOPE (CR-CRU-045 §S2): as above, this holds only for a BARE
+        # `coverage/` dir (no `__init__.py`). One carrying its own `__init__.py` is
+        # a regular package and WOULD shadow — inherent to running `python -m
+        # coverage` from a tree containing a `coverage` package, not specific to
+        # this client, and would cost a 3.11 floor (`python -P`) to defend.
+        # Deliberately left unguarded.
 
     print(f"[crucible] running: {' '.join(run_cmd)}", file=sys.stderr)
     result = _run_logged(run_cmd, project_dir, env, getattr(args, "log", None))
