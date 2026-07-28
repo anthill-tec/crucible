@@ -206,5 +206,117 @@ class ServerStageNpxArgvVersionPinTest(unittest.TestCase):
             f"argv must never resolve to 'latest': {argv}")
 
 
+class ServerStageFailsFastOnUnresolvedVersionTest(unittest.TestCase):
+    """S6 in-cycle addition -- the [server] stage FAILS FAST with a
+    definitive, actionable error when the resolved version is the
+    source-checkout fallback (`crucible_axi.__version__ ==
+    _SOURCE_CHECKOUT_VERSION`, i.e. crucible-axi is not installed) AND
+    `CRUCIBLE_SERVER_VERSION` is unset -- instead of shelling out to npx
+    with an unusable pin like `@anthill-tec/crucible-server@0.0.0.dev0+source`
+    (not valid npm semver, so npx fails with an opaque error). Mirrors
+    CR-CRU-039's `no-tests-discovered` pattern: replace a silent/masked
+    failure with a definitive error naming its own remedy.
+
+    RED phase: `crucible_axi/install.py`'s `_server_stage` has no such guard
+    yet, so it proceeds straight to `subprocess.run(["npx", ...])` regardless
+    of whether the resolved version is usable -- `assertRaises` fails with
+    "did not raise" and/or `mock_run.assert_not_called()` fails because the
+    npx call already happened.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="crucible-axi-version-guard-")
+        self._saved_override = os.environ.get("CRUCIBLE_SERVER_VERSION")
+        os.environ.pop("CRUCIBLE_SERVER_VERSION", None)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        if self._saved_override is None:
+            os.environ.pop("CRUCIBLE_SERVER_VERSION", None)
+        else:
+            os.environ["CRUCIBLE_SERVER_VERSION"] = self._saved_override
+
+    def test_server_stage_raises_before_any_subprocess_call_when_version_unresolved_and_override_unset(self):
+        install = _import_fresh("crucible_axi.install")
+        axi = _import_fresh("crucible_axi")
+
+        with mock.patch.object(axi, "__version__", axi._SOURCE_CHECKOUT_VERSION), \
+                mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
+                mock.patch("crucible_axi.install.shutil.which",
+                            return_value="/usr/bin/bun"), \
+                mock.patch("crucible_axi.install._server_already_installed",
+                            return_value=False):
+            with self.assertRaises(RuntimeError):
+                install._server_stage(self.tmp, False)
+            mock_run.assert_not_called()
+
+    def test_unresolved_version_error_message_names_crucible_server_version_as_the_remedy(self):
+        install = _import_fresh("crucible_axi.install")
+        axi = _import_fresh("crucible_axi")
+
+        with mock.patch.object(axi, "__version__", axi._SOURCE_CHECKOUT_VERSION), \
+                mock.patch("crucible_axi.install.subprocess.run"), \
+                mock.patch("crucible_axi.install.shutil.which",
+                            return_value="/usr/bin/bun"), \
+                mock.patch("crucible_axi.install._server_already_installed",
+                            return_value=False):
+            with self.assertRaises(RuntimeError) as ctx:
+                install._server_stage(self.tmp, False)
+
+        self.assertIn(
+            "CRUCIBLE_SERVER_VERSION", str(ctx.exception),
+            f"expected the remedy env var name in the error message, got: "
+            f"{ctx.exception!r}")
+
+    def test_server_stage_proceeds_when_override_set_despite_unresolved_source_checkout_version(self):
+        """The guard must not block the documented escape hatch -- setting
+        CRUCIBLE_SERVER_VERSION in the exact same source-checkout situation
+        lets the stage proceed normally and pins the argv to the override."""
+        install = _import_fresh("crucible_axi.install")
+        axi = _import_fresh("crucible_axi")
+        os.environ["CRUCIBLE_SERVER_VERSION"] = "7.8.9-escape-hatch-test"
+
+        with mock.patch.object(axi, "__version__", axi._SOURCE_CHECKOUT_VERSION), \
+                mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
+                mock.patch("crucible_axi.install.shutil.which",
+                            return_value="/usr/bin/bun"), \
+                mock.patch("crucible_axi.install._server_already_installed",
+                            return_value=False):
+            mock_run.return_value.returncode = 0
+            install._server_stage(self.tmp, False)
+
+        argv = _server_npx_argv(mock_run)
+        self.assertIsNotNone(
+            argv, f"expected an npx argv list, calls={mock_run.call_args_list}")
+        expected_pin = f"{install.SERVER_NPM_PACKAGE}@7.8.9-escape-hatch-test"
+        self.assertIn(
+            expected_pin, argv,
+            f"expected the escape hatch pin {expected_pin!r} in argv, got {argv}")
+
+    def test_server_stage_proceeds_when_a_real_installed_version_is_resolved(self):
+        """The guard must not fire for genuine releases -- a real installed
+        __version__ (not the source-checkout sentinel) proceeds normally
+        with no override needed."""
+        install = _import_fresh("crucible_axi.install")
+        axi = _import_fresh("crucible_axi")
+
+        with mock.patch.object(axi, "__version__", "0.1.0"), \
+                mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
+                mock.patch("crucible_axi.install.shutil.which",
+                            return_value="/usr/bin/bun"), \
+                mock.patch("crucible_axi.install._server_already_installed",
+                            return_value=False):
+            mock_run.return_value.returncode = 0
+            install._server_stage(self.tmp, False)
+
+        argv = _server_npx_argv(mock_run)
+        self.assertIsNotNone(
+            argv, f"expected an npx argv list, calls={mock_run.call_args_list}")
+        expected_pin = f"{install.SERVER_NPM_PACKAGE}@0.1.0"
+        self.assertIn(
+            expected_pin, argv,
+            f"expected {expected_pin!r} in argv, got {argv}")
+
+
 if __name__ == "__main__":
     unittest.main()
