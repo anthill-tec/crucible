@@ -319,6 +319,15 @@ def cycle_transition_help(status, plan, cycle_id=None):
 # fallback is GONE and the resolver lives here ONCE so the fleet cannot drift
 # apart again.
 #
+# CR-CRU-056 §S2b extends the hard stop to EVERY mutating workflow verb:
+# plan-file, plan-backfill, cycle-activate, cycle-done, cycle-add, cr-close,
+# checkpoint, stop, abort, milestone and the gate verbs all resolve the
+# identity through `require_agent_id` BEFORE any POST/PATCH and send it on the
+# wire as `agentId` — the server refuses an unregistered caller (409). The
+# plan verbs' free-text `--orchestrator` label (and its $WORKFLOW_ORCHESTRATOR
+# fallback) is retired: the registered `--agent` id is the caller AND the
+# plan's stored orchestrator.
+#
 # `$WORKFLOW_ROLE` is deliberately NOT part of the chain: it carries the TRACK
 # LANE (`mainline` | `track-n`; PRD-crucible-v2.md:291, DN-model-b-language.md:53)
 # and is read into `ctx["track"]` by `axi_context`/`fleet_context` — registering

@@ -651,11 +651,18 @@ def cmd_pre_merge_gate(args):
 
 
 def cmd_plan_file(args):
+    # CR-CRU-056 §S2b — plan-file mutates workflow state, so the registered
+    # caller identity is REQUIRED and rides the wire as `agentId`. The same
+    # registered id IS the plan's stored orchestrator (the free-text
+    # --orchestrator label and its $WORKFLOW_ORCHESTRATOR fallback are
+    # retired). Resolve it FIRST: the hard stop must happen before any POST.
+    agent_id = _agent_id(args)
     project_dir = _project_dir(args)
     labels = [label.strip() for label in args.cycles.split(",") if label.strip()]
     if not labels:
         sys.exit("[crucible] ERROR: --cycles must name at least one cycle")
-    payload = {"cr": args.cr, "cycles": [{"label": label} for label in labels]}
+    payload = {"cr": args.cr, "agentId": agent_id,
+               "cycles": [{"label": label} for label in labels]}
     if args.title:
         payload["title"] = args.title
     wave = args.wave if getattr(args, "wave", None) is not None else os.environ.get("WORKFLOW_WAVE")
@@ -673,14 +680,14 @@ def cmd_plan_file(args):
     track = os.environ.get("WORKFLOW_ROLE")
     if track:
         payload["track"] = track
-    orchestrator = args.orchestrator or os.environ.get("WORKFLOW_ORCHESTRATOR")
-    if orchestrator:
-        payload["orchestrator"] = orchestrator
+    # §S2b — the registered caller is the plan's orchestrator; no free text.
+    payload["orchestrator"] = agent_id
     resp = _post(_plans_path(project_dir), payload)
     if not resp.get("ok"):
         legacy = f"plan-file: ok=False error={resp.get('error')}"
         _emit_axi("plan-file", False, {"cr": args.cr},
-                  _axi_context(project_dir, cr=args.cr), warnings, legacy)
+                  _axi_context(project_dir, agent_id=agent_id, cr=args.cr),
+                  warnings, legacy)
         return 1
     cycles = resp.get("cycles", [])
     ids = " ".join(f"{c.get('label')}={c.get('id')}" for c in cycles)
@@ -689,13 +696,18 @@ def cmd_plan_file(args):
     _emit_axi("plan-file", True,
               {"planId": resp.get("planId"), "cr": resp.get("cr"), "cycles": cycles,
                "help": ["cycle-activate <id>"]},
-              _axi_context(project_dir, cr=resp.get("cr") or args.cr), warnings, legacy)
+              _axi_context(project_dir, agent_id=agent_id, cr=resp.get("cr") or args.cr),
+              warnings, legacy)
     return 0
 
 
 def _cycle_transition(args, status):
     """Cycle ids are unique per PROJECT — resolve the owning OPEN plan by scanning
-    GET …/plans, then PATCH that plan's cycle."""
+    GET …/plans, then PATCH that plan's cycle.
+
+    CR-CRU-056 §S2b — the cycle PATCH requires a live registered caller;
+    resolve the identity FIRST so the hard stop precedes any request."""
+    agent_id = _agent_id(args)
     project_dir = _project_dir(args)
     cycle_id = args.cycle_id
     open_plans = _open_plans(project_dir)
@@ -722,7 +734,7 @@ def _cycle_transition(args, status):
                   _axi_context(project_dir), [], legacy)
         return 1
     resp = _patch(f"{_plans_path(project_dir)}/{target['planId']}/cycles/{cycle_id}",
-                  {"status": status})
+                  {"status": status, "agentId": agent_id})
     ok = resp.get("ok", False)
     legacy = (f"{verb}: ok={ok} cycle={cycle_id} plan={target['planId']}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
@@ -741,10 +753,11 @@ def cmd_cycle_done(args):
 
 
 def cmd_cr_close(args):
-    # CR-CRU-044 §S5 — cr-close ends by POSTing a `cr-merged` MILESTONE, so it
-    # needs a declared identity. Resolve it FIRST: a hard stop must happen
-    # before the plan GET/PATCH, never after the CR has already been closed.
-    _agent_id(args)
+    # CR-CRU-044 §S5 + CR-CRU-056 §S2b — cr-close PATCHes the plan closed and
+    # ends by POSTing a `cr-merged` MILESTONE; both require the registered
+    # caller identity. Resolve it FIRST: a hard stop must happen before the
+    # plan GET/PATCH, never after the CR has already been closed.
+    agent_id = _agent_id(args)
     project_dir = _project_dir(args)
     open_plans = _open_plans(project_dir)
     if args.cr:
@@ -766,7 +779,8 @@ def cmd_cr_close(args):
         return 1
     plan = open_plans[0]
     resp = _patch(f"{_plans_path(project_dir)}/{plan['planId']}",
-                  {"status": "closed", "merge": {"commit": args.commit}})
+                  {"status": "closed", "merge": {"commit": args.commit},
+                   "agentId": agent_id})
     ok = resp.get("ok", False)
     cr_label = plan.get("cr")
     legacy = (f"cr-close: ok={ok} plan={plan['planId']} cr={cr_label} "
@@ -779,7 +793,7 @@ def cmd_cr_close(args):
     if not ok:
         return 1
     ms_resp = _post_milestone(
-        project_dir, _agent_id(args), "cr-merged",
+        project_dir, agent_id, "cr-merged",
         label=cr_label, commit=args.commit,
         context=_axi().fleet_context(cr=cr_label) or None,
     )
@@ -819,7 +833,11 @@ def _resolve_plan_or_emit(verb, project_dir, cr, result_fields, open_only):
 def cmd_cycle_add(args):
     """§S4 — append a cycle to a plan. Resolve the target plan (ALL plans, optional
     --cr), POST …/plans/<planId>/cycles with ONLY the label; the SERVER rejects a
-    CLOSED/absent plan. The assigned numeric id stays machine-readable."""
+    CLOSED/absent plan. The assigned numeric id stays machine-readable.
+
+    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
+    FIRST so the hard stop precedes any request."""
+    agent_id = _agent_id(args)
     project_dir = _project_dir(args)
     result_fields = {"label": args.label, "help": _axi().HELP_STEPS["cycle-add"]}
     plan, rc = _resolve_plan_or_emit("cycle-add", project_dir, args.cr,
@@ -827,7 +845,7 @@ def cmd_cycle_add(args):
     if plan is None:
         return rc
     resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/cycles",
-                 {"label": args.label})
+                 {"label": args.label, "agentId": agent_id})
     ok = resp.get("ok", False)
     cr_label = plan.get("cr")
     legacy = (f"cycle-add: ok={ok} plan={plan['planId']} cr={cr_label} "
@@ -841,13 +859,18 @@ def cmd_cycle_add(args):
 
 
 def cmd_checkpoint(args):
-    """§S7 — checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint)."""
+    """§S7 — checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint).
+
+    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
+    FIRST so the hard stop precedes any request."""
+    agent_id = _agent_id(args)
     project_dir = _project_dir(args)
     plan, rc = _resolve_plan_or_emit("checkpoint", project_dir, args.cr,
                                      {"help": _axi().HELP_STEPS["checkpoint"]}, open_only=True)
     if plan is None:
         return rc
-    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/checkpoint", {})
+    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/checkpoint",
+                 {"agentId": agent_id})
     ok = resp.get("ok", False)
     legacy = (f"checkpoint: ok={ok} plan={plan['planId']}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
@@ -859,9 +882,14 @@ def cmd_checkpoint(args):
 
 
 def cmd_stop(args):
-    """§S7 — project-level stop (POST …/projects/<key>/stop). No plan targeting."""
+    """§S7 — project-level stop (POST …/projects/<key>/stop). No plan targeting.
+
+    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
+    FIRST so the hard stop precedes any request."""
+    agent_id = _agent_id(args)
     project_dir = _project_dir(args)
-    resp = _post(f"/api/v2/projects/{_project_key(project_dir)}/stop", {})
+    resp = _post(f"/api/v2/projects/{_project_key(project_dir)}/stop",
+                 {"agentId": agent_id})
     ok = resp.get("ok", False)
     legacy = (f"stop: ok={ok} checkpointed={resp.get('checkpointed')}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
@@ -874,14 +902,18 @@ def cmd_stop(args):
 def cmd_abort(args):
     """§S7 — abort the resolved OPEN plan (POST …/plans/<id>/abort). WITHOUT
     --user-approved the body's userApproved is false, so the server's discouraging
-    409 refusal stays reachable (surfaced as ok:false + non-zero)."""
+    409 refusal stays reachable (surfaced as ok:false + non-zero).
+
+    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
+    FIRST so the hard stop precedes any request."""
+    agent_id = _agent_id(args)
     project_dir = _project_dir(args)
     plan, rc = _resolve_plan_or_emit("abort", project_dir, args.cr,
                                      {"help": _axi().HELP_STEPS["abort"]}, open_only=True)
     if plan is None:
         return rc
     resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/abort",
-                 {"userApproved": bool(args.user_approved)})
+                 {"userApproved": bool(args.user_approved), "agentId": agent_id})
     ok = resp.get("ok", False)
     legacy = (f"abort: ok={ok} plan={plan['planId']} "
               f"userApproved={bool(args.user_approved)}"
@@ -1196,45 +1228,56 @@ def main():
     u.set_defaults(func=cmd_unregister)
 
     pf = sub.add_parser("plan-file", parents=[common],
-                        help="File a cycle plan; prints the ASSIGNED numeric cycle ids.")
+                        help="File a cycle plan; prints the ASSIGNED numeric cycle ids. "
+                             "Requires --agent <registered id> (§S2b) — the registered id is "
+                             "also stored as the plan's orchestrator (the free-text "
+                             "--orchestrator label is retired).")
     pf.add_argument("--cr", required=True, help="CR id, e.g. CR-CRU-008.")
     pf.add_argument("--title", help="Optional plan title.")
     pf.add_argument("--cycles", required=True, help='Comma-separated cycle labels, e.g. "a,b,c".')
-    pf.add_argument("--orchestrator", help="Orchestrator name (default: $WORKFLOW_ORCHESTRATOR).")
     pf.add_argument("--wave", help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")
     pf.set_defaults(func=cmd_plan_file)
 
-    ca = sub.add_parser("cycle-activate", parents=[common], help="Transition a plan cycle to active.")
+    ca = sub.add_parser("cycle-activate", parents=[common],
+                        help="Transition a plan cycle to active. "
+                             "Requires --agent <registered id> (§S2b).")
     ca.add_argument("cycle_id", type=int, help="Numeric cycle id (unique per project).")
     ca.set_defaults(func=cmd_cycle_activate)
 
-    cdn = sub.add_parser("cycle-done", parents=[common], help="Transition an ACTIVE plan cycle to done.")
+    cdn = sub.add_parser("cycle-done", parents=[common],
+                         help="Transition an ACTIVE plan cycle to done. "
+                              "Requires --agent <registered id> (§S2b).")
     cdn.add_argument("cycle_id", type=int, help="Numeric cycle id (unique per project).")
     cdn.set_defaults(func=cmd_cycle_done)
 
     cc = sub.add_parser("cr-close", parents=[common],
-                        help="Close the single OPEN plan (PATCH status=closed + merge.commit).")
+                        help="Close the single OPEN plan (PATCH status=closed + merge.commit). "
+                             "Requires --agent <registered id> (§S2b).")
     cc.add_argument("--commit", required=True, help="Merge commit sha.")
     cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
     cc.set_defaults(func=cmd_cr_close)
 
     cad = sub.add_parser("cycle-add", parents=[common],
-                         help="Append a cycle to a plan (POST …/plans/<id>/cycles).")
+                         help="Append a cycle to a plan (POST …/plans/<id>/cycles). "
+                              "Requires --agent <registered id> (§S2b).")
     cad.add_argument("label", help="Label for the new cycle.")
     cad.add_argument("--cr", help="Disambiguate when multiple plans exist.")
     cad.set_defaults(func=cmd_cycle_add)
 
     cp = sub.add_parser("checkpoint", parents=[common],
-                        help="Checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint).")
+                        help="Checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint). "
+                             "Requires --agent <registered id> (§S2b).")
     cp.add_argument("--cr", help="Disambiguate when multiple plans are open.")
     cp.set_defaults(func=cmd_checkpoint)
 
     stp = sub.add_parser("stop", parents=[common],
-                         help="Stop the project — checkpoint every open plan.")
+                         help="Stop the project — checkpoint every open plan. "
+                              "Requires --agent <registered id> (§S2b).")
     stp.set_defaults(func=cmd_stop)
 
     ab = sub.add_parser("abort", parents=[common],
-                        help="Abort the resolved OPEN plan. Requires --user-approved.")
+                        help="Abort the resolved OPEN plan. Requires --user-approved "
+                             "and --agent <registered id> (§S2b).")
     ab.add_argument("--user-approved", action="store_true",
                     help="Map to body userApproved:true (the server refuses without it).")
     ab.add_argument("--cr", help="Disambiguate when multiple plans are open.")
