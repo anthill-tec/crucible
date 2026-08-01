@@ -58,6 +58,8 @@ interface RunsPostResponse {
   event?: string;
   help?: string[];
   error?: string;
+  // CR-CRU-056 C5 — the server's echo of the attachment it actually applied.
+  context?: { cycleId?: number };
   [key: string]: unknown;
 }
 
@@ -433,5 +435,118 @@ describe("§S3.6 — §S2's consumer sweep, second surface: gate-snapshot ingest
     expect(gateEvent).toBeDefined();
     // POSITIVE — the exact bound cycle id, stamped with no client input.
     expect(gateEvent!.context?.cycleId).toBe(cycleId);
+  });
+});
+
+// ── C5 (VERIFY fix round) — the ingest RESPONSE echoes the attachment ───────
+//
+// §S3 moved cycle attachment SERVER-side, but the ingest response only ever
+// returned {ok, changed, event, run, verdict, help}: an agent that had just
+// ingested could not tell from the response WHICH cycle absorbed its
+// evidence, and had to issue a second GET /api/v2/events to find out. That is
+// an observability regression against the pre-CR behavior (where the client
+// resolved the cycle itself and echoed it) and against the content-first
+// discipline the rest of this CR honours. The response now echoes the applied
+// attachment on `context.cycleId` — the SAME path the events read-side
+// already serves, so the echo is a drop-in for the follow-up GET.
+
+describe("§S3.7 (C5) — the ingest RESPONSE echoes the cycle the server attached the run to", () => {
+  test("BOUND agent, run ingest with no context at all -> the 200 response itself carries context.cycleId === the binding, matching the STORED event (no second GET needed)", async () => {
+    const handle_ = boot();
+    const key = seedProject(handle_.store);
+    const { cycleId } = await fileAndActivate(key, "CR-CRU-056-C5-echo-runs");
+    const agentId = "echo-bound-1";
+    await registerBound(key, agentId, "RED", cycleId);
+
+    const res = await postParsedRun(key, agentId, undefined);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as RunsPostResponse;
+    expect(body.ok).toBe(true);
+    // POSITIVE — the response NAMES the attachment the server applied.
+    expect(body.context?.cycleId).toBe(cycleId);
+
+    // ...and it agrees with what actually landed in the feed: the echo is a
+    // faithful read-back of the stored event, never an independent guess.
+    const events = await testEventsForProject(key);
+    expect(events.length).toBe(1);
+    expect(body.context?.cycleId).toBe(events[0]!.context!.cycleId!);
+    // Additive: the pre-existing envelope fields are untouched.
+    expect(body.changed).toBe(true);
+    expect(typeof body.event).toBe("string");
+    expect(body.run).toBeDefined();
+    expect(typeof body.verdict).toBe("string");
+  });
+
+  test("UNBOUND report-phase agent, cycle-less ingest -> 200 with NO cycle fabricated in the response echo (absence is stated by omission, never invented)", async () => {
+    const handle_ = boot();
+    const key = seedProject(handle_.store);
+    const agentId = "echo-unbound-1";
+    await registerUnbound(key, agentId, "report");
+
+    const res = await postParsedRun(key, agentId, undefined);
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as RunsPostResponse;
+    expect(body.ok).toBe(true);
+    // NEGATIVE — the event was stored cycle-less, so the echo carries no
+    // cycle: no null, no zero, no active-cycle guess.
+    expect(body.context?.cycleId).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain("cycleId");
+
+    const events = await testEventsForProject(key);
+    expect(events.length).toBe(1);
+    expect(events[0]!.context?.cycleId).toBeUndefined();
+  });
+
+  test("UNBOUND report-phase agent with an explicit VALID context.cycleId -> the response echoes THAT id (the echo reports what was applied, however it was applied)", async () => {
+    const handle_ = boot();
+    const key = seedProject(handle_.store);
+    const { cycleId } = await fileAndActivate(key, "CR-CRU-056-C5-echo-explicit");
+    const agentId = "echo-unbound-explicit-1";
+    await registerUnbound(key, agentId, "report");
+
+    const res = await postParsedRun(key, agentId, { cycleId });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as RunsPostResponse;
+    expect(body.context?.cycleId).toBe(cycleId);
+  });
+
+  test("BOUND agent, gate ingest -> the 201 response echoes context.cycleId on the SAME path as the run response (both stamped surfaces answer identically)", async () => {
+    const handle_ = boot();
+    const key = seedProject(handle_.store);
+    const { cycleId } = await fileAndActivate(key, "CR-CRU-056-C5-echo-gates");
+    const agentId = "echo-bound-gate-1";
+    await registerBound(key, agentId, "VERIFY", cycleId);
+
+    const res = await postJson("/api/v2/gates", {
+      projectKey: key,
+      agentId,
+      gate: { intent: "verify", outcome: "passed", steps: [] },
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as RunsPostResponse;
+    expect(body.ok).toBe(true);
+    expect(body.context?.cycleId).toBe(cycleId);
+  });
+
+  test("UNBOUND agent's gate ingest with no context -> 201 with no fabricated cycle in the echo", async () => {
+    const handle_ = boot();
+    const key = seedProject(handle_.store);
+    const agentId = "echo-unbound-gate-1";
+    await registerUnbound(key, agentId, "report");
+
+    const res = await postJson("/api/v2/gates", {
+      projectKey: key,
+      agentId,
+      gate: { intent: "verify", outcome: "passed", steps: [] },
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as RunsPostResponse;
+    expect(body.ok).toBe(true);
+    expect(body.context?.cycleId).toBeUndefined();
   });
 });

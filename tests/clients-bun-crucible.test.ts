@@ -399,6 +399,16 @@ function extractRunBlock(stdout: string): string | undefined {
   return match?.[1];
 }
 
+/**
+ * Same extraction for the envelope's `  context:` block (CR-CRU-056 C5) —
+ * key-order-independent, so an added `cycleId:` line is found wherever
+ * `axi_context` places it.
+ */
+function extractContextBlock(stdout: string): string | undefined {
+  const match = stdout.match(/ {2}context:\n((?: {4}.*\n)*)/);
+  return match?.[1];
+}
+
 // ── §S2 — v2-only endpoints + CRUCIBLE_URL + register ergonomics ─────────
 
 describe("clients/bun-crucible.py — v2 endpoints + CRUCIBLE_URL honored (CR-CRU-008 §S2)", () => {
@@ -650,6 +660,20 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
     expect(event?.context?.git?.branch).toBe(branch);
     expect(typeof event?.context?.git?.commit).toBe("string");
     expect((event?.context?.git?.commit ?? "").length).toBeGreaterThan(0);
+  });
+
+  test("CR-CRU-056 C5: the client's printed envelope context ECHOES the cycle the SERVER attached the run to — the agent learns where its evidence landed from the ingest output itself, with no follow-up GET /api/v2/events", () => {
+    const context = extractContextBlock(runResult?.stdout ?? "");
+    expect(context).toBeDefined();
+    expect(context).toContain(`cycleId: ${activeCycleId}`);
+    // The echo agrees with what the server actually stored...
+    expect(event?.context?.cycleId).toBe(activeCycleId);
+    // ...and it is an ECHO, never a client-side resolution: the client hit no
+    // plans endpoint at all during this ingest (the deleted §S3 resolver's
+    // only data source), so the id can only have come from the response.
+    expect(proxy?.calls.some((c) => c.method === "GET" && c.path.includes("/plans"))).toBe(
+      false,
+    );
   });
 
   test("§S2c: matched failing leaves carry failure.message married from the console stream (expect(...) / thrown detail)", () => {

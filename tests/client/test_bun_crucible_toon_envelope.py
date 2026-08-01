@@ -523,6 +523,63 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         self.assertIn(legacy_line, err)
         self.assertNotIn(legacy_line, out)
 
+    def test_test_command_envelope_echoes_the_cycle_the_SERVER_reported(self):
+        """CR-CRU-056 C5 (VERIFY fix round): attachment is server-stamped, so
+        the ingest RESPONSE now echoes it back on `context.cycleId`. The
+        client SURFACES that echo in its envelope context -- an agent reading
+        stdout sees which cycle absorbed its evidence without a second
+        `GET /api/v2/events`.
+
+        Crucially this is an ECHO, not a revival of the deleted client-side
+        resolver: the POSTED body still carries NO cycleId, and no plans GET
+        is issued -- the id printed comes exclusively from the server's
+        answer."""
+        os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
+        os.environ["FAKE_BUN_EXIT_CODE"] = "0"
+        server_response = {"ok": True, "context": {"cycleId": 152}}
+        with mock.patch.object(self.module, "_post", return_value=server_response) as post_mock, \
+             mock.patch.object(self.module, "_get", create=True) as get_mock:
+            code, out, _err = _run_main(self.module, [
+                "test", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
+                "--package-dir", self.tmpdir, "--reports", "reports",
+                "--agent", "CR-CRU-056-C5-echo",
+            ])
+
+        self.assertEqual(code, 0)
+        axi = self._decode_axi(out)
+        context = axi.get("context")
+        self.assertEqual(context.get("agentId"), "CR-CRU-056-C5-echo")
+        self.assertEqual(
+            context.get("cycleId"), 152,
+            f"the envelope context must carry the cycle the SERVER reported "
+            f"attaching this run to; got context={context!r}")
+
+        # NEGATIVE -- no client-side RESOLUTION anywhere: the ingest POST body
+        # still sends no cycleId, and no plans/active-cycle GET was made.
+        get_mock.assert_not_called()
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNotNone(ingest_call)
+        self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}))
+
+    def test_test_command_envelope_omits_cycle_when_the_server_reports_no_attachment(self):
+        """The mirror case: a cycle-less ingest (server echoed no context)
+        prints NO cycleId key -- absence is stated by omission, never
+        fabricated into a null or a guessed active cycle."""
+        os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
+        os.environ["FAKE_BUN_EXIT_CODE"] = "0"
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
+             mock.patch.object(self.module, "_get", create=True) as get_mock:
+            code, out, _err = _run_main(self.module, [
+                "test", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
+                "--package-dir", self.tmpdir, "--reports", "reports",
+                "--agent", "CR-CRU-056-C5-no-echo",
+            ])
+
+        self.assertEqual(code, 0)
+        get_mock.assert_not_called()
+        context = self._decode_axi(out).get("context")
+        self.assertNotIn("cycleId", context)
+
     def test_test_command_without_agent_emits_no_toon_envelope(self):
         """Nothing was ingested (no --agent), so there is nothing to report --
         the run's own plain output is unaffected, and NO TOON envelope (which

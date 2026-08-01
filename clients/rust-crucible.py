@@ -330,13 +330,17 @@ def _emit_ingest_axi(verb, resp, project_dir, agent):
     run{passed,failed,pending,total} (from the SERVER-parsed response).
     CR-CRU-050 §S2 — the server's junit codec already classifies `<skipped/>`
     as pending; the key was simply dropped when printing. CR-CRU-056 §S3 — the
-    client sends and echoes NO resolved cycle: a bound agent's run is
-    server-stamped with its registered cycle (a stale binding gets a 409,
-    surfaced via `error`)."""
+    client RESOLVES no cycle: a bound agent's run is server-stamped with its
+    registered cycle (a stale binding gets a 409, surfaced via `error`). C5 —
+    the envelope context ECHOES the attachment the SERVER reported
+    (`context.cycleId` on the ingest response), so the agent sees which cycle
+    absorbed its evidence without a second `GET /api/v2/events`; absent → the
+    key is omitted."""
     s = resp.get("run", {}) or {}
     run = {"passed": s.get("passed"), "failed": s.get("failed"),
            "pending": s.get("pending", 0), "total": s.get("total")}
-    context = _axi_context(project_dir, agent_id=agent)
+    context = _axi_context(project_dir, agent_id=agent,
+                           cycle_id=_axi().echoed_cycle_id(resp))
     result_fields = {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])}
     err = resp.get("error")
     if err is not None:

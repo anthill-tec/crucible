@@ -1502,13 +1502,17 @@ def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent):
     (test/regression/auto-ingest): run{passed,failed,pending,total,files}.
     `files` (CR-CRU-047 §S2) is the distinct test-FILE count from
     `_parse_junit_file`, a sibling of the test counts, so a suite that silently
-    shrinks is visible in the gate output. CR-CRU-056 §S3 — the client sends
-    and echoes NO resolved cycle: a bound agent's run is server-stamped with
-    its registered cycle (a stale binding gets a 409, surfaced via `error`)."""
+    shrinks is visible in the gate output. CR-CRU-056 §S3 — the client RESOLVES
+    no cycle: a bound agent's run is server-stamped with its registered cycle
+    (a stale binding gets a 409, surfaced via `error`). C5 — the envelope
+    context ECHOES the attachment the SERVER reported (`context.cycleId` on the
+    ingest response), so the agent sees which cycle absorbed its evidence
+    without a second `GET /api/v2/events`; absent → the key is omitted."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
            "total": summary["total"], "files": files}
-    context = _axi_context(project_dir, agent_id=agent)
+    context = _axi_context(project_dir, agent_id=agent,
+                           cycle_id=_axi().echoed_cycle_id(resp))
     # §S15 — the ingest envelope names the next step (mark the cycle done once
     # the run is green, else re-list the queue).
     result_fields = {"run": run, "help": _HELP_STEPS.get(verb, ["status"])}

@@ -74,6 +74,31 @@ def axi_context(project_key, agent_id=None, cr=None, cycle_id=AXI_UNSET):
     return ctx
 
 
+def echoed_cycle_id(resp):
+    """CR-CRU-056 §S3 (C5) — read the cycle the SERVER reports it attached an
+    ingest to, out of the ingest response's `context.cycleId` echo.
+
+    This is a PURE READ of the server's own answer — emphatically NOT a
+    revival of the client-side cycle RESOLUTION deleted in C2: no plans fetch,
+    no active-cycle picking, no env var. The server owns the binding and
+    stamps the attachment; the client only repeats what came back, so an agent
+    reading stdout sees where its run landed without a second
+    `GET /api/v2/events`.
+
+    Returns the echoed integer id, or `AXI_UNSET` when the server reported no
+    attachment (a cycle-less ingest) so `axi_context` OMITS the key rather
+    than fabricating a null."""
+    context = resp.get("context") if isinstance(resp, dict) else None
+    if not isinstance(context, dict):
+        return AXI_UNSET
+    cycle_id = context.get("cycleId")
+    # `bool` is an int subclass — exclude it so a stray True can never pose
+    # as a cycle id.
+    if isinstance(cycle_id, int) and not isinstance(cycle_id, bool):
+        return cycle_id
+    return AXI_UNSET
+
+
 def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
     """Write the §S1 TOON-AXI envelope to stdout (the machine channel) and the
     optional human-readable line to stderr (interactive only)."""

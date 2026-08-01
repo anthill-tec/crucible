@@ -684,13 +684,36 @@ function runVerdict(summary: RunSummary): string {
     : `GREEN — ${summary.passed}/${summary.total} passed`;
 }
 
-function runResponse(eventId: string, summary: RunSummary, help?: string[]): Response {
+/**
+ * CR-CRU-056 §S3 (C5) — ECHO the attachment the server actually applied, read
+ * straight back off the STORED event so the response can never disagree with
+ * what landed in the feed. Since C2 moved cycle attachment server-side, the
+ * poster no longer knows which cycle absorbed its evidence; without this echo
+ * an agent has to issue a second `GET /api/v2/events` to find out (an
+ * observability regression against the pre-CR client-resolved echo).
+ *
+ * Shape: `context: { cycleId }` — the SAME path the read side already serves
+ * (`eventBrief.context.cycleId` on GET /api/v2/events), so the echo is a
+ * drop-in for the follow-up GET rather than a second vocabulary, and it maps
+ * 1:1 onto the clients' envelope `context` block. Additive: existing consumers
+ * read `ok`/`event`/`run`/`verdict`/`help` unchanged.
+ *
+ * A cycle-less event yields NO `context` key at all — absence is never
+ * fabricated into a null or a guess (the `runMeta`/`axi_context` convention).
+ */
+function attachEcho(event: RunEvent): { context?: { cycleId: number } } {
+  const cycleId = event.context?.cycleId;
+  return typeof cycleId === "number" ? { context: { cycleId } } : {};
+}
+
+function runResponse(event: RunEvent, summary: RunSummary, help?: string[]): Response {
   return json({
     ok: true,
     changed: true,
-    event: eventId,
+    event: event.id,
     run: summary,
     verdict: runVerdict(summary),
+    ...attachEcho(event),
     ...(help !== undefined ? { help } : {}),
   });
 }
@@ -730,7 +753,7 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
     ...(run.summary.failed > 0 ? hints.afterRed : []),
     ...(attach.staleHelp ?? []),
   ];
-  return runResponse(event.id, run.summary, help.length > 0 ? help : undefined);
+  return runResponse(event, run.summary, help.length > 0 ? help : undefined);
 }
 
 async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
@@ -782,7 +805,7 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     ...(dropped ? hints.coverageDropped : []),
     ...(attach.staleHelp ?? []),
   ];
-  return runResponse(event.id, summary, help.length > 0 ? help : undefined);
+  return runResponse(event, summary, help.length > 0 ? help : undefined);
 }
 
 async function handleRunsCompile(store: Store, req: Request): Promise<Response> {
@@ -892,7 +915,9 @@ async function handleGates(store: Store, req: Request): Promise<Response> {
     gate,
     attach.context !== undefined ? { context: attach.context } : eventContext(body),
   );
-  return json({ ok: true, changed: true, event: event.id }, 201);
+  // CR-CRU-056 §S3 (C5) — the second stamped surface echoes its attachment on
+  // exactly the same `context.cycleId` path as the run-ingest response.
+  return json({ ok: true, changed: true, event: event.id, ...attachEcho(event) }, 201);
 }
 
 /** §S4b/§S4c — POST /api/v2/milestones: a workflow marker → a milestone event. */

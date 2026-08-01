@@ -268,6 +268,84 @@ class SharedAxiCycleResolverRetiredTest(unittest.TestCase):
             f"resolver any more; found {offenders!r}")
 
 
+class SharedAxiEchoedCycleIdTest(unittest.TestCase):
+    """CR-CRU-056 C5 (VERIFY fix round) -- `echoed_cycle_id` reads the cycle
+    the SERVER reports it attached an ingest to, out of the ingest response's
+    `context.cycleId` echo, so the client envelope can surface where the run
+    landed without a second `GET /api/v2/events`.
+
+    It is a PURE READ of the server's answer -- NOT a revival of the
+    client-side attach resolver deleted in §S3 (no plans fetch, no
+    active-cycle picking, no env var). Absence maps to `AXI_UNSET` so
+    `axi_context` OMITS the key rather than fabricating a null or a guess."""
+
+    def test_returns_the_integer_cycle_id_the_server_echoed(self):
+        axi_mod = _load_axi_module()
+        self.assertEqual(
+            axi_mod.echoed_cycle_id({"ok": True, "context": {"cycleId": 152}}), 152)
+
+    def test_returns_the_unset_sentinel_when_the_response_carries_no_context(self):
+        axi_mod = _load_axi_module()
+        self.assertIs(axi_mod.echoed_cycle_id({"ok": True}), axi_mod.AXI_UNSET)
+
+    def test_returns_the_unset_sentinel_when_the_context_carries_no_cycle_id(self):
+        axi_mod = _load_axi_module()
+        self.assertIs(
+            axi_mod.echoed_cycle_id({"ok": True, "context": {"projectKey": "k"}}),
+            axi_mod.AXI_UNSET)
+
+    def test_returns_the_unset_sentinel_for_a_non_integer_or_null_cycle_id(self):
+        axi_mod = _load_axi_module()
+        for bogus in (None, "152", 1.5, True, {"id": 152}):
+            self.assertIs(
+                axi_mod.echoed_cycle_id({"ok": True, "context": {"cycleId": bogus}}),
+                axi_mod.AXI_UNSET,
+                f"a non-integer cycleId echo ({bogus!r}) must never be surfaced "
+                f"as a cycle id")
+
+    def test_tolerates_a_malformed_or_missing_response_without_raising(self):
+        axi_mod = _load_axi_module()
+        for bogus in (None, "boom", [], {"context": "not-a-dict"}):
+            self.assertIs(axi_mod.echoed_cycle_id(bogus), axi_mod.AXI_UNSET)
+
+    def test_feeds_axi_context_so_the_envelope_carries_the_server_reported_cycle(self):
+        """End of the wire: the helper's output drops straight into
+        `axi_context(cycle_id=...)` -- present -> the key appears with the
+        server's id; absent -> the key is omitted entirely."""
+        axi_mod = _load_axi_module()
+        ctx = axi_mod.axi_context(
+            "proj-k", agent_id="A1",
+            cycle_id=axi_mod.echoed_cycle_id({"ok": True, "context": {"cycleId": 152}}))
+        self.assertEqual(ctx.get("cycleId"), 152)
+        bare = axi_mod.axi_context(
+            "proj-k", agent_id="A1", cycle_id=axi_mod.echoed_cycle_id({"ok": True}))
+        self.assertNotIn("cycleId", bare)
+
+
+class FleetIngestEnvelopeEchoesServerCycleTest(unittest.TestCase):
+    """CR-CRU-056 C5 -- the echo is a FLEET property, not a bun-only one: each
+    of the five clients' ingest-envelope emitter must feed
+    `echoed_cycle_id(resp)` into its `_axi_context(...)` call, so every stack
+    prints the cycle the server reported. Grep-sweep in the style of
+    `SharedAxiCycleResolverRetiredTest` (the AC pattern for fleet-wide
+    uniformity)."""
+
+    CLIENTS = ("bun-crucible.py", "python-crucible.py", "rust-crucible.py",
+               "mvn-crucible.py", "arduino-crucible.py")
+
+    def test_every_client_feeds_the_server_echo_into_its_ingest_envelope_context(self):
+        missing = []
+        for name in self.CLIENTS:
+            source = (REPO_ROOT / "clients" / name).read_text()
+            if "cycle_id=_axi().echoed_cycle_id(resp)" not in source:
+                missing.append(name)
+        self.assertEqual(
+            missing, [],
+            f"every client's ingest envelope must surface the SERVER-reported "
+            f"cycle (echoed_cycle_id(resp) -> _axi_context(cycle_id=...)); "
+            f"missing in {missing!r}")
+
+
 class BunCrucibleImportsSharedAxiModuleTest(unittest.TestCase):
     """§S1 regression guard: bun-crucible.py must be wired to the new shared
     module, not keep a standalone duplicate implementation, so extraction is
