@@ -49,7 +49,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-043](CR-CRU-043-installed-db-path.md) | Patch: installed server misplaces its DB (CWD-relative default) — `CRUCIBLE_DB` override + XDG user-data default + adopt-existing-`data/crucible.db` rule (dog-food continuity, no migration) | patch | COMPLETED | 009 | 4 |
 | [CR-CRU-044](CR-CRU-044-phase-as-first-class-data.md) | Patch: agent phase must be declared data, not an agentId naming convention — server REQUIRES the `phase` enum and classifies on it; `--phase` sent by all 5 clients (was discarded); UI reads stored phase, `phaseRole(agentId)` demoted to a history fallback | patch | COMPLETED | 030, 036 | 4 |
 | [CR-CRU-045](CR-CRU-045-coverage-shadow-regression.md) | Patch: the `coverage/` shadow test over-specifies its contract — re-pointed to a bare `coverage/` dir (bun's real lcov shape, per CR-036's actual wording); no production change | patch | COMPLETED | 036, 040 | 4 |
-| [CR-CRU-046](CR-CRU-046-toon-conformance.md) | Official TOON wire both stacks — server adopts `@toon-format/toon`; `clients/toon.py` rewritten as our spec-conformant port (PyPI `toon-format` is a stub), §S4 oracle-gated; PEP 723 + `uv run` | patch | IN PROGRESS (0.1.0 blocker) | 005, 030, 009 | 4 |
+| [CR-CRU-046](CR-CRU-046-toon-conformance.md) | Official TOON wire both stacks — server adopts `@toon-format/toon`; `clients/toon.py` rewritten as our spec-conformant port (PyPI `toon-format` is a stub), §S4 oracle-gated; PEP 723 + `uv run` | patch | COMPLETED | 005, 030, 009 | 4 |
 | [CR-CRU-047](CR-CRU-047-narration-gate-integrity.md) | Bun gate integrity: narration tests fail deterministically (`matches.length == 0`) + ~11 tests unaccounted for in the bun total | patch | COMPLETED | 038, 039 | 4 |
 | [CR-CRU-048](CR-CRU-048-state-derived-help-and-close-guard.md) | AXI `help[]` must be state-derived (`cycle-done` said `cr-close` with VERIFY pending) + `cr-close` must refuse an incomplete plan | patch | COMPLETED | 011, 024, 030, 036 | 4 |
 | [CR-CRU-049](CR-CRU-049-mvn-narration-hardening.md) | Audit + harden `mvn-crucible.py` narration against environment-dependent output (the CR-047 defect class, unaudited in the mvn client) | patch | PENDING | 008, 047 | 4 |
@@ -250,6 +250,14 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `tests="1061" skipped="1"` ingested as `passed=1061`, and a python report `tests="2" skipped="2"`
   (an entire class where nothing ran) ingested as `passed=2` — so this project's own published
   gate figures are inflated, the failure mode CR-039/CR-047 exist to prevent.
+- 2026-08-01 (CR-CRU-046 close) — deferred register: **(a)** rust stdout-purity siblings —
+  `cmd_clippy` (`clients/rust-crucible.py:994`) and the coverage/regression verb (`:1288`) still
+  print `[crucible] running:` to stdout (the `cmd_test` instance was fixed in-CR after the strict
+  conformant decoder exposed it; no failing test covers these two yet — candidates for CR-CRU-054's
+  DRY sweep or a micro-patch). **(b)** compile-ingest events carry no `cycleId` (silent
+  non-attachment) — input for CR-CRU-056's §S2 auto-attach-consumer enumeration. **(c)** THREE
+  pre-existing e2e failures on develop (`workspace-plan-scoping.feature`, CR-CRU-026 §S0 family,
+  `toBeVisible`) — baseline-proven independent of CR-046; disposition pending user decision.
 - 2026-07-28 (CR-CRU-045 §S3 — **cross-stack gate rule for the client fleet**) — a change to
   `clients/*-crucible.py` requires **BOTH** the Python gate and the bun gate before close-out.
   Those clients are Python programs whose observable contract is asserted by **bun** tests
