@@ -1,6 +1,6 @@
 # Crucible `status` envelope contract
 
-**Version: 1.0.0**
+**Version: 1.1.0**
 
 This is the stable, versioned contract for the `status` (alias `plans`) read verb
 emitted by every `*-crucible.py` client in this directory. It is committed WITH the
@@ -131,6 +131,27 @@ fallback and no default anywhere in the fleet.
 - The resolution lives once, in `clients/_crucible_axi.py` (`require_agent_id`), and
   every client delegates to it — the per-client `_agent_id()` helpers are thin wrappers,
   not independent copies.
+
+## The cycle binding is declared at registration (CR-CRU-056 §S1/§S2)
+
+Attachment to a cycle is a **registration binding**, declared with `--cycle` on
+`register`, never resolved by a client at ingest time. The server validates the binding
+when the registration is made, and STAMPS that cycle onto every run the bound agent
+ingests.
+
+- A TDD-phase registration — `--phase` one of `RED | GREEN | FIX | VERIFY` — **requires
+  `--cycle <id>`, bound to an ACTIVE cycle of an open plan**. Registering such a phase
+  with no binding is refused: `ok:false`, HTTP `409`, and a `help[]` naming `--cycle` as
+  how to supply it. No agent row is created.
+- `--phase ORCHESTRATOR` and `--phase report` **may register unbound** — they do not
+  execute a cycle, so they carry no cycle binding and their ingests are not stamped.
+- An INVALID binding is refused with a `409` whose message names the ACTUAL state —
+  an unknown cycle id, a cycle still `pending`, a cycle already `done`, or a cycle whose
+  plan is closed. The state is read from the server, never guessed by the client.
+- A bound agent's ingests are **server-stamped to its registered cycle**, even when
+  another plan's cycle is simultaneously active. The client sends no resolved cycle of
+  its own; an explicit per-ingest `context.cycleId` remains available for the unbound
+  phases.
 
 ## Bounded fetch
 
