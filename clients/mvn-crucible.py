@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["toon-format>=0.1,<0.2"]
+# ///
 """Maven + Quarkus Crucible CLI — single entry point for orchestrator + the
 java RED/GREEN/FIX/VERIFY agent lifecycle ops AND for running Maven test tiers
 (surefire unit, module reactor, failsafe e2e, full regression with JaCoCo).

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["toon-format>=0.1,<0.2"]
+# ///
 """arduino-crucible.py — Arduino-firmware stack script (global, like bun/rust-crucible.py).
 
 Runs native host tests / firmware compile and reports to Crucible via the v2 API
