@@ -37,13 +37,30 @@ help-quality convention). The binding is stored on the agent row.
 `RED | GREEN | FIX | VERIFY` registrations REQUIRE `cycleId` — an implementation agent with no
 workflow home is refused (409 + help). `ORCHESTRATOR` and `report` may register unbound.
 
-### §S3 — Ingest attaches by binding; auto-attach is DELETED
-A bound agent's run ingest attaches to ITS registered cycle, re-validated live: if that cycle is
-no longer active (done/plan closed), the ingest gets a 409 definitive error — it never spills
-into another cycle. CR-CRU-036 §S9's resolve-the-active-cycle attachment is deleted; no code path
-answers "which cycle is active" for attachment purposes (sweep-asserted). Unbound agents' runs
-attach ONLY via explicit per-ingest `context.cycleId` (validated per CR-CRU-024 §S7); otherwise
-they are stored cycle-less with the existing warning in the envelope.
+### §S3 — Ingest attaches by binding; the CLIENT-side resolver is DELETED (corrected at gap-analysis 2026-08-01)
+**Architecture correction:** the server has never resolved a cycle — it only VALIDATES an
+explicit `context.cycleId` (CR-CRU-024 §S7). The silent pick lives in the CLIENT:
+`_crucible_axi.resolve_attach_cycle` → `resolve_active_cycle_id`, which returns the FIRST open
+plan's active cycle (the exact mechanism of the 2026-08-01 mis-attach), called from the shared
+module plus two sites in each of the five clients before every run POST.
+
+New model: the binding lives on the AGENT ROW (§S1). A bound agent's ingest is stamped
+SERVER-side from its row — the client sends NO resolved cycle at all — re-validated live: if the
+bound cycle is no longer active (done/plan closed), the ingest gets a 409 definitive error and
+never spills into another cycle. The client-side resolver pair
+(`resolve_attach_cycle`, `resolve_active_cycle_id`) and the §S9 warn+withhold flow built on it
+are DELETED — a bound TDD agent cannot hit "no active cycle" (registration guaranteed it), and
+an unbound ORCHESTRATOR/report agent's runs attach ONLY via explicit `context.cycleId` (§S7
+validation unchanged) or are stored cycle-less with the envelope warning.
+
+### §S3c — Client resolver retirement surface (enumerated at gap-analysis)
+`resolve_attach_cycle`/`resolve_active_cycle_id` and the `_plans_response` pre-flight around them
+are consumed at 2 call sites per client × 5 clients plus the shared module, and their behavior
+(first-active pick, tolerant/withhold triage, the pinned `no-active-cycle` warning wording) is
+pinned by unit suites (`test_crucible_axi_shared.py` and the CR-036/CR-039-era files that assert
+withhold semantics). The RED sweep must enumerate every pinning test and re-point it to the new
+contract (bound-agent stamping; 409 on stale binding; unbound explicit-context path) — the
+withhold-wording assertions retire WITH the flow, not silently.
 
 ### §S2b — ONLY a registered agent communicates with the server — orchestrators included (user ruling 2026-08-01)
 Every MUTATING v2 surface — plan-file, cycle-activate, cycle-done, cycle-add, cr-close,
@@ -75,6 +92,13 @@ The shared register path (`_crucible_axi.py`) and all five clients gain `--cycle
 briefs supply it. Client-surface change → standing Model-B intimation. The orchestrator's own
 gate runs register bound to the VERIFY/regression cycle (no special casing).
 
+### §S4b — PRD sync (design surface — user-approved 2026-08-01)
+The PRD still documents the superseded model and carries CR-CRU-036 drift: `:278` ("attach
+`context.cycleId`"), `:285` ("clients auto-attach it"), and STALE `WORKFLOW_CYCLE_ID` references
+at `:292` and `:358` that CR-CRU-036 removed from the system but never from the PRD. Rewrite
+those clauses to the registration-binding model (agents register bound; the server stamps
+attachment; no client resolution; no `WORKFLOW_CYCLE_ID`), preserving surrounding content.
+
 ### §S5 — Multi-track becomes safe by construction (forward note, no extra work)
 With attachment always explicit and validated, parallel active cycles in one project stop being
 an ambiguity hazard — each track's agents bind their own cycle. This CR is the enabler the 0.2.0
@@ -88,8 +112,14 @@ multi-track wave was missing; no additional disambiguator design is needed there
 - [ ] A bound agent's ingest attaches to its registered cycle even when ANOTHER plan's cycle is
       also active — asserted (the 2026-08-01 failure scenario, inverted).
 - [ ] A bound agent's ingest AFTER its cycle is done → 409, run not stored, no spill — asserted.
-- [ ] No attachment code path resolves "the active cycle": the §S9 attach helpers are gone —
-      grep/sweep-asserted.
+- [ ] No attachment code path resolves "the active cycle" ANYWHERE: `resolve_attach_cycle` and
+      `resolve_active_cycle_id` are gone from `clients/` (grep-sweep-asserted), and no server
+      route selects a cycle the caller did not bind or explicitly send.
+- [ ] A bound agent's run POST carries NO client-resolved cycle; the stored event's cycle equals
+      the agent's registered binding (server-stamped) — asserted.
+- [ ] The mutating-verb wire payloads that today carry no identity (cycles PATCH, checkpoint,
+      stop, abort, milestones, gates) each gain and REQUIRE the calling `agentId` field —
+      enumerated per route at RED, asserted per route.
 - [ ] Ingest with an agentId that has NO live registered row → 409 `ok:false`, run NOT stored,
       `help[]` names registration as the next action — asserted (run, compile and gate-snapshot
       surfaces each).
