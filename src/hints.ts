@@ -237,4 +237,35 @@ export const cycleHints = {
     `plan ${cr} (id ${planId}) is ${planStatus} — its cycles take no new agents`,
     "bind to an ACTIVE cycle of an OPEN plan (GET …/plans to find one), or file a new plan first",
   ],
+  /**
+   * CR-CRU-056 §S2 — a TDD-phase (RED/GREEN/FIX/VERIFY) registration arrived
+   * UNBOUND. State-derived: name the project's actual ACTIVE cycle id(s) when
+   * any exist; otherwise say to activate one first. Always names `--cycle`.
+   */
+  unboundTddPhase: (phase: string, activeCycleIds: number[]): string[] =>
+    activeCycleIds.length > 0
+      ? [
+          `phase ${phase} must register bound to a cycle — this project's ACTIVE cycle id(s): ${activeCycleIds.join(", ")}`,
+          `retry the registration with --cycle ${activeCycleIds[0]} (wire: register {cycleId})`,
+        ]
+      : [
+          `phase ${phase} must register bound to a cycle — but NO cycle is active in this project`,
+          'activate one first (PATCH …/plans/<planId>/cycles/<id> {status: "active"}), then register with --cycle <id>',
+        ],
+  /**
+   * CR-CRU-056 §S3 — a BOUND agent's ingest carried an explicit
+   * context.cycleId CONFLICTING with its registered binding; name BOTH ids.
+   */
+  bindingConflict: (boundCycleId: number, explicitCycleId: number): string[] => [
+    `your registration is bound to cycle ${boundCycleId} but this ingest carried context.cycleId ${explicitCycleId} — the server stamps the binding, so a conflicting explicit id is refused`,
+    `omit context.cycleId (the server attaches cycle ${boundCycleId} for you), or re-register bound to cycle ${explicitCycleId} if that is really where this run belongs`,
+  ],
+  /**
+   * CR-CRU-056 §S3 — a BOUND agent ingested after its cycle left the active
+   * state (done/skipped/failed, or its plan closed): refuse, never spill.
+   */
+  staleBinding: (cycleId: number, state: string): string[] => [
+    `your bound cycle ${cycleId} is ${state} — the run was NOT stored (a stale binding never spills into another cycle)`,
+    "re-register bound to the cycle this run belongs to (an ACTIVE cycle of an OPEN plan), then re-ingest",
+  ],
 };

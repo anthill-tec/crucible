@@ -389,6 +389,20 @@ function validateCycleBinding(
   return {};
 }
 
+/** CR-CRU-056 §S2 — the phases that MUST register bound (ORCHESTRATOR/report are exempt). */
+const TDD_PHASES: ReadonlySet<string> = new Set(["RED", "GREEN", "FIX", "VERIFY"]);
+
+/**
+ * CR-CRU-056 §S2 — every ACTIVE cycle across the project's OPEN plans, so an
+ * unbound-registration refusal can name the concrete binding(s) available.
+ */
+function activeCycleIds(store: Store, projectKey: string): number[] {
+  return store
+    .listPlans(projectKey)
+    .filter((plan) => plan.status === "open")
+    .flatMap((plan) => plan.cycles.filter((c) => c.status === "active").map((c) => c.id));
+}
+
 async function handleAgentTouch(
   store: Store,
   req: Request,
@@ -413,6 +427,24 @@ async function handleAgentTouch(
         phase === undefined ? "no phase field" : JSON.stringify(phase)
       })`,
       { help: hints.phaseRequired },
+    );
+  }
+  // CR-CRU-056 §S2 — TDD phases MUST register bound: a RED/GREEN/FIX/VERIFY
+  // registration with no `cycleId` is refused at the ROUTE boundary, before
+  // any write (an implementation agent with no workflow home). The refusal
+  // help is STATE-derived: it names this project's actual ACTIVE cycle id(s)
+  // when any exist. ORCHESTRATOR/report stay exempt; the heartbeat path
+  // (`requirePhase === false`) is untouched.
+  if (
+    requirePhase &&
+    typeof phase === "string" &&
+    TDD_PHASES.has(phase) &&
+    body.cycleId === undefined
+  ) {
+    return fail(
+      409,
+      `phase ${phase} requires a cycle binding — register with --cycle <cycleId>`,
+      { help: cycleHints.unboundTddPhase(phase, activeCycleIds(store, pk.key)) },
     );
   }
 
@@ -559,6 +591,66 @@ function validateCycleRef(
   return {};
 }
 
+/**
+ * CR-CRU-056 §S3 — the ONE attach/validation seam every stamped ingest
+ * surface routes through, sitting exactly where CR-CRU-024 §S7 validation
+ * ran. Resolves the POSTING agent's stored binding:
+ *  - BOUND, no explicit context.cycleId → re-validate the binding LIVE and
+ *    STAMP it into the stored context (the client sends no resolved cycle);
+ *  - BOUND, explicit id equal to the binding → belt-and-braces, accepted;
+ *  - BOUND, explicit id differing → 409 naming BOTH ids, nothing stored;
+ *  - BOUND but the cycle is no longer active (done / plan closed) → 409,
+ *    nothing stored — a stale binding never spills into a sibling cycle;
+ *  - UNBOUND (or unknown poster) → behavior unchanged: §S7 explicit-context
+ *    validation where the surface already ran it (`validateUnbound: true` —
+ *    the run routes), verbatim pass-through otherwise (gates).
+ */
+function resolveIngestAttach(
+  store: Store,
+  projectKey: string,
+  agentId: string,
+  body: V2Body,
+  validateUnbound: boolean,
+): { fail?: Response; staleHelp?: string[]; context?: RunContext } {
+  const agent = store.getAgent(projectKey, agentId);
+  const bound = agent?.boundCycleId;
+  if (bound === undefined) {
+    return validateUnbound ? validateCycleRef(store, projectKey, body) : {};
+  }
+  const context =
+    typeof body.context === "object" && body.context !== null ? (body.context as RunContext) : {};
+  const explicit = (context as { cycleId?: unknown }).cycleId;
+  if (typeof explicit === "number" && explicit !== bound) {
+    return {
+      fail: fail(
+        409,
+        `context.cycleId ${explicit} conflicts with agent ${agentId}'s registered binding to cycle ${bound} — run NOT stored`,
+        { help: cycleHints.bindingConflict(bound, explicit) },
+      ),
+    };
+  }
+  // Re-validated LIVE: the binding was active at registration, but the cycle
+  // may since have transitioned or its plan closed.
+  const found = store.findCycle(projectKey, bound);
+  const plan =
+    found === null ? undefined : store.listPlans(projectKey).find((p) => p.planId === found.planId);
+  const planClosed = plan !== undefined && plan.status !== "open";
+  if (found === null || found.status !== "active" || planClosed) {
+    const state =
+      found === null
+        ? "unknown"
+        : planClosed
+          ? `in ${plan.status} plan ${plan.cr}`
+          : found.status;
+    return {
+      fail: fail(409, `bound cycle ${bound} is ${state} — ingest refused, run NOT stored`, {
+        help: cycleHints.staleBinding(bound, state),
+      }),
+    };
+  }
+  return { context: { ...context, cycleId: bound } };
+}
+
 /** §S1 — one-line run verdict: RED when failed>0, GREEN otherwise. */
 function runVerdict(summary: RunSummary): string {
   return summary.failed > 0
@@ -591,20 +683,22 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   if ("error" in parsed) return fail(400, parsed.error);
   const { run } = parsed;
 
-  // CR-CRU-024 §S7 — reject an unlinkable context.cycleId BEFORE the event is
-  // stored; a stale (terminal) cycle only adds a help note.
-  const cycleCheck = validateCycleRef(store, pk.key, body);
-  if (cycleCheck.fail !== undefined) return cycleCheck.fail;
-
+  // CR-CRU-056 §S3 — the single attach/validation seam: a BOUND agent's run
+  // is server-stamped from its row (or refused, 409, nothing stored); an
+  // UNBOUND agent keeps CR-CRU-024 §S7's explicit-context validation.
   const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
+  if (attach.fail !== undefined) return attach.fail;
+
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: codecName,
     ...runMeta(body),
+    ...(attach.context !== undefined ? { context: attach.context } : {}),
   });
   // §S3 — a RED ingest carries the transition hint; §S7 adds the stale note.
   const help = [
     ...(run.summary.failed > 0 ? hints.afterRed : []),
-    ...(cycleCheck.staleHelp ?? []),
+    ...(attach.staleHelp ?? []),
   ];
   return runResponse(event.id, run.summary, help.length > 0 ? help : undefined);
 }
@@ -633,16 +727,18 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     ...(typeof body.raw === "string" ? { raw: body.raw } : {}),
   };
 
-  // CR-CRU-024 §S7 — reject an unlinkable context.cycleId BEFORE the event is
-  // stored; a stale (terminal) cycle only adds a help note.
-  const cycleCheck = validateCycleRef(store, pk.key, body);
-  if (cycleCheck.fail !== undefined) return cycleCheck.fail;
-
+  // CR-CRU-056 §S3 — the single attach/validation seam: a BOUND agent's run
+  // is server-stamped from its row (or refused, 409, nothing stored); an
+  // UNBOUND agent keeps CR-CRU-024 §S7's explicit-context validation.
   const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
+  if (attach.fail !== undefined) return attach.fail;
+
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: "parsed",
     ...(typeof body.name === "string" ? { name: body.name } : {}),
     ...runMeta(body),
+    ...(attach.context !== undefined ? { context: attach.context } : {}),
   });
   // §S3 — RED transition hint; coverage arrived but the store dropped it
   // (failing run) — say so in help too. §S7 adds the stale-cycle note.
@@ -650,7 +746,7 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   const help = [
     ...(summary.failed > 0 ? hints.afterRed : []),
     ...(dropped ? hints.coverageDropped : []),
-    ...(cycleCheck.staleHelp ?? []),
+    ...(attach.staleHelp ?? []),
   ];
   return runResponse(event.id, summary, help.length > 0 ? help : undefined);
 }
@@ -741,7 +837,18 @@ async function handleGates(store: Store, req: Request): Promise<Response> {
     });
   }
   const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
-  const event = store.recordGateEvent(pk.key, agentId, gate, eventContext(body));
+  // CR-CRU-056 §S3 — gate snapshots are the second stamped surface: a BOUND
+  // agent's gate is server-stamped from its row (or refused, 409, nothing
+  // stored); an UNBOUND poster keeps today's verbatim context pass-through
+  // (this route never ran §S7 validation — validateUnbound stays false).
+  const attach = resolveIngestAttach(store, pk.key, agentId, body, false);
+  if (attach.fail !== undefined) return attach.fail;
+  const event = store.recordGateEvent(
+    pk.key,
+    agentId,
+    gate,
+    attach.context !== undefined ? { context: attach.context } : eventContext(body),
+  );
   return json({ ok: true, changed: true, event: event.id }, 201);
 }
 
