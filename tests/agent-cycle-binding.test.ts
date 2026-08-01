@@ -1,28 +1,21 @@
-// CR-CRU-056 C1 (server) — §S1: POST /api/v2/agents/register accepts an
-// OPTIONAL `cycleId` binding, validates it against stored plan state, and
-// stores it on the agent row. GET /api/v2/agents exposes the stored binding
-// as `boundCycleId`.
+// CR-CRU-056 — §S1 (C1, GREEN and merged): POST /api/v2/agents/register
+// accepts an OPTIONAL `cycleId` binding, validates it against stored plan
+// state, and stores it on the agent row. GET /api/v2/agents exposes the
+// stored binding as `boundCycleId`.
 //
-// SCOPE DISCIPLINE (per dispatch): C1 is ADDITIVE ONLY.
-//   - Nothing is REQUIRED yet: registering with no `cycleId` at all must
-//     still succeed for every phase, on today's baseline (§S2's "RED/GREEN/
-//     FIX/VERIFY MUST register bound" requirement is C2 — NOT asserted here;
-//     the describe block below explicitly PINS today's unbound-register
-//     baseline so C2 flipping it is a deliberate, reviewed diff against a
-//     test, not a silent behavior change).
-//   - No ingest/stamping changes (§S3 — client-side resolver retirement,
-//     server-side ingest re-validation) — out of scope for C1, not asserted.
-//   - No caller-auth on other mutating verbs (§S2b/§S3b) — out of scope.
+// C2 (server) RE-POINT (per dispatch — sanctioned): C1's own baseline pins
+// ("register with no cycleId still succeeds for every phase, today") are
+// flipped HERE into §S2's real contract: RED/GREEN/FIX/VERIFY registration
+// with no `cycleId` is now REFUSED (409); ORCHESTRATOR/report unbound
+// registration is UNCHANGED (still 200) — a real regression pin, not a RED
+// case. §S3 ingest-attach stamping is covered separately in
+// tests/ingest-binding-attach.test.ts, not here. No caller-auth on other
+// mutating verbs (§S2b/§S3b) — still out of scope for this cycle.
 //
-// RED phase: none of this exists in production yet — `cycleId` is silently
-// ignored by handleAgentTouch (src/v2.ts), there is no `boundCycleId` column
-// on the agents table, and GET /api/v2/agents never surfaces it. Every
-// assertion on `agent.boundCycleId` below reads back `undefined` today
-// (register with a cycleId is accepted with 200 but the value is thrown
-// away), and every "refused" (409) assertion below reads back 200 today
-// (the value is never validated). Two describe blocks below are DELIBERATE
-// EXCEPTIONS that are expected to PASS today (see their own comments) —
-// every other test is a genuine RED failure against the missing contract.
+// RED phase: handleAgentTouch (src/v2.ts) has NO per-phase cycleId
+// requirement yet — every RED/GREEN/FIX/VERIFY unbound-register case below
+// reads back 200 today (the C1 baseline this CR is deliberately flipping);
+// the ORCHESTRATOR/report block is expected to PASS today AND after GREEN.
 //
 // Harness: drives the REAL production server (startServer) + real HTTP, the
 // same pattern as tests/agent-phase.test.ts (register/heartbeat/GET agents)
@@ -347,18 +340,81 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
     });
   });
 
-  // ── §S4/additive baseline — unbound register still works TODAY ─────────
+  // ── §S2 — TDD phases MUST register bound; ORCHESTRATOR/report unaffected ──
   //
-  // DELIBERATE EXCEPTION: these sub-tests are expected to PASS on today's
-  // codebase (register with no `cycleId` is C1's additive baseline — §S2's
-  // "RED/GREEN/FIX/VERIFY MUST register bound" requirement is C2, not this
-  // cycle). Per the dispatch: "explicitly assert RED/GREEN register unbound
-  // succeeds TODAY so C2's flip is a deliberate, tested change of THIS
-  // baseline." A future C2 GREEN pass must revisit these tests deliberately,
-  // not discover the diff by surprise.
-  describe("§S4 additive baseline — register with NO cycleId still succeeds for every phase (today, pre-C2)", () => {
-    for (const phase of PHASE_ENUM) {
-      test(`register with phase:"${phase}" and no cycleId field at all succeeds (200, ok:true) and no boundCycleId is fabricated`, async () => {
+  // CR-CRU-056 C2 — SANCTIONED RE-POINT of this CR's own C1 baseline pins
+  // (per dispatch: these six tests were written as "today's baseline" to be
+  // consciously flipped by exactly this step). RED phase: handleAgentTouch
+  // has NO per-phase cycleId requirement yet — every RED/GREEN/FIX/VERIFY
+  // case below reads back 200 (unbound accepted) today; the flip to 409 is
+  // what C2 GREEN must build. The ORCHESTRATOR/report block is unchanged
+  // (still expected to PASS today AND after GREEN — a real regression pin).
+  const TDD_PHASES = PHASE_ENUM.filter(
+    (p): p is "RED" | "GREEN" | "FIX" | "VERIFY" => p !== "ORCHESTRATOR" && p !== "report",
+  );
+  const UNBOUND_OK_PHASES = PHASE_ENUM.filter(
+    (p): p is "ORCHESTRATOR" | "report" => p === "ORCHESTRATOR" || p === "report",
+  );
+
+  describe("§S2 register with NO cycleId — TDD phases (RED/GREEN/FIX/VERIFY) are REFUSED (409)", () => {
+    for (const phase of TDD_PHASES) {
+      test(`register with phase:"${phase}" and no cycleId field at all is REFUSED — 409, ok:false, non-empty help[] telling the caller to register with --cycle; agent row NOT created`, async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const store = handle.store;
+        const key = seedProject(store);
+        const agentId = `cycle-unbound-${phase}`;
+
+        const res = await postJson("/api/v2/agents/register", {
+          projectKey: key,
+          agentId,
+          phase,
+        });
+
+        expect(res.status).toBe(409);
+        const body = (await res.json()) as ErrResponse;
+        expect(body.ok).toBe(false);
+        expect(Array.isArray(body.help)).toBe(true);
+        expect((body.help as unknown[]).length).toBeGreaterThan(0);
+        // POSITIVE — the help[] tells the caller HOW to fix it: register
+        // with the client's --cycle flag (§S4's fleet surface).
+        expect(errorSurface(body)).toContain("--cycle");
+        // NEGATIVE — a refused TDD-phase registration must not create a row.
+        expect(store.hasAgent(key, agentId)).toBe(false);
+      });
+    }
+  });
+
+  describe("§S2 refusal help[] NAMES the project's actual active cycle when one exists (CR-024 help convention)", () => {
+    for (const phase of TDD_PHASES) {
+      test(`register with phase:"${phase}", no cycleId, project HAS an active cycle → 409 whose help[] names that ACTUAL active cycle id (not a generic platitude)`, async () => {
+        handle = startServer({ port: 0, dbPath: ":memory:" });
+        const store = handle.store;
+        const key = seedProject(store);
+        const { cycleId: activeCycleId } = await fileAndActivate(
+          key,
+          `CR-CRU-056-C2-active-${phase}`,
+        );
+        const agentId = `cycle-unbound-active-${phase}`;
+
+        const res = await postJson("/api/v2/agents/register", {
+          projectKey: key,
+          agentId,
+          phase,
+        });
+
+        expect(res.status).toBe(409);
+        const body = (await res.json()) as ErrResponse;
+        expect(body.ok).toBe(false);
+        // POSITIVE — state-derived: names THIS project's real active cycle id.
+        expect(errorSurface(body)).toContain(String(activeCycleId));
+        expect(store.hasAgent(key, agentId)).toBe(false);
+      });
+    }
+  });
+
+  describe("§S2 regression — register with NO cycleId still succeeds for ORCHESTRATOR/report (unchanged)", () => {
+    for (const phase of UNBOUND_OK_PHASES) {
+      test(`register with phase:"${phase}" and no cycleId field at all still succeeds (200, ok:true) and no boundCycleId is fabricated`, async () => {
         handle = startServer({ port: 0, dbPath: ":memory:" });
         const store = handle.store;
         const key = seedProject(store);
