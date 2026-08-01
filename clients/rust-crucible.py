@@ -916,7 +916,7 @@ def cmd_test(args):
         cmd += ["-E", args.filter]
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", "12")
-    print(f"[crucible] running: {' '.join(cmd)}")
+    print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
     result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
     print(f"[crucible] cargo nextest exit={result.returncode}", file=sys.stderr)
     if args.agent:
