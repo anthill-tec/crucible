@@ -213,4 +213,28 @@ export const cycleHints = {
     `context.cycleId ${cycleId} references a CLOSED cycle — the run was stored, but your WORKFLOW_CYCLE_ID is likely stale`,
     "confirm the active cycle (GET …/plans?cr=<cr>) and export its id before the next ingest",
   ],
+  /**
+   * CR-CRU-056 §S1 — a register binding targeted a cycle that was never
+   * activated; name the concrete transition that would make it bindable.
+   */
+  bindPendingCycle: (cycleId: number, planId: number): string[] => [
+    `cycle ${cycleId} is pending — activate it first: PATCH …/plans/${planId}/cycles/${cycleId} {status: "active"}`,
+    "then retry the registration with the same cycleId",
+  ],
+  /**
+   * CR-CRU-056 §S1 — a register binding targeted a TERMINAL cycle; name its
+   * actual status and point at the plan's live cycle instead.
+   */
+  bindTerminalCycle: (cycleId: number, status: string): string[] => [
+    `cycle ${cycleId} is ${status} — a terminal cycle takes no new agents`,
+    "bind to the plan's ACTIVE cycle instead (GET …/plans?cr=<cr> to find it), or activate the next cycle first",
+  ],
+  /**
+   * CR-CRU-056 §S1 — a register binding targeted a cycle whose plan is no
+   * longer open; name the plan and its status.
+   */
+  bindClosedPlan: (cr: string, planId: number, planStatus: string): string[] => [
+    `plan ${cr} (id ${planId}) is ${planStatus} — its cycles take no new agents`,
+    "bind to an ACTIVE cycle of an OPEN plan (GET …/plans to find one), or file a new plan first",
+  ],
 };

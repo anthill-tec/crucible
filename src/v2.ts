@@ -41,6 +41,8 @@ interface V2Body {
   agentId?: unknown;
   /** CR-CRU-044 §S1 — declared phase (required on register). */
   phase?: unknown;
+  /** CR-CRU-056 §S1 — optional explicit cycle binding on register. */
+  cycleId?: unknown;
   status?: unknown;
   message?: unknown;
   identity?: unknown;
@@ -335,6 +337,58 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
  * the idle-time liveness ping hints.ts documents — never a re-declaration of
  * something the agent already declared when it registered.
  */
+/**
+ * CR-CRU-056 §S1 — validate an explicit register-time cycle binding against
+ * stored plan state BEFORE any agent write. The binding is legal only when
+ * the cycle exists in THIS project's plans, its plan is OPEN, and the cycle
+ * is ACTIVE. Every refusal is a 409 definitive error naming the ACTUAL state
+ * found (unknown / closed-plan / pending / done…), with state-derived help[]
+ * (CR-CRU-024 help-quality convention). Returns `{}` on the happy path.
+ */
+function validateCycleBinding(
+  store: Store,
+  projectKey: string,
+  cycleId: number,
+): { fail?: Response } {
+  const found = store.findCycle(projectKey, cycleId);
+  if (found === null) {
+    const summary = store.openPlanCycleSummary(projectKey);
+    const help =
+      summary !== null
+        ? cycleHints.unknownCycle(summary.cr, summary.cycleIds)
+        : hints.unknownCycleNoPlan;
+    return {
+      fail: fail(409, `unknown cycleId: ${cycleId} — no such cycle in this project's plans`, {
+        help,
+      }),
+    };
+  }
+  const plan = store.listPlans(projectKey).find((p) => p.planId === found.planId);
+  if (plan !== undefined && plan.status !== "open") {
+    return {
+      fail: fail(
+        409,
+        `cycle ${cycleId} belongs to plan ${plan.cr} (id ${plan.planId}), which is ${plan.status} — bindings require an OPEN plan`,
+        { help: cycleHints.bindClosedPlan(plan.cr, plan.planId, plan.status) },
+      ),
+    };
+  }
+  if (found.status !== "active") {
+    const help =
+      found.status === "pending"
+        ? cycleHints.bindPendingCycle(cycleId, found.planId)
+        : cycleHints.bindTerminalCycle(cycleId, found.status);
+    return {
+      fail: fail(
+        409,
+        `cycle ${cycleId} is ${found.status} — bindings require an ACTIVE cycle`,
+        { help },
+      ),
+    };
+  }
+  return {};
+}
+
 async function handleAgentTouch(
   store: Store,
   req: Request,
@@ -377,6 +431,19 @@ async function handleAgentTouch(
   // option is what makes the store PRESERVE the stored value.
   if (phaseValid) {
     opts.phase = phase as AgentPhase;
+  }
+  // CR-CRU-056 §S1 — an explicit cycle binding is VALIDATED before any write:
+  // a refused binding returns 409 with no agent row created and no stored
+  // binding mutated. Omitting the field entirely leaves a stored binding
+  // untouched (the touch-never-blanks contract) — the heartbeat path flows
+  // through here unchanged.
+  if (body.cycleId !== undefined) {
+    if (typeof body.cycleId !== "number" || !Number.isInteger(body.cycleId)) {
+      return fail(400, `cycleId must be an integer cycle id (got ${JSON.stringify(body.cycleId)})`);
+    }
+    const binding = validateCycleBinding(store, pk.key, body.cycleId);
+    if (binding.fail !== undefined) return binding.fail;
+    opts.boundCycleId = body.cycleId;
   }
   store.touchAgent(pk.key, agentId, opts);
   // CR-CRU-011 §S1 — a REAL registration (row created) appends a lifecycle

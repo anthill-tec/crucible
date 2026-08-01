@@ -62,6 +62,8 @@ interface AgentRow {
   last_seen: number;
   // CR-CRU-044 §S1 — NULL for pre-CR-044 rows (retrofitted column).
   phase: string | null;
+  // CR-CRU-056 §S1 — NULL for unbound / pre-CR-056 rows (retrofitted column).
+  bound_cycle_id: number | null;
 }
 
 export interface TouchAgentOpts {
@@ -74,6 +76,14 @@ export interface TouchAgentOpts {
    * phase lives at the register route boundary, never in the store.
    */
   phase?: AgentPhase;
+  /**
+   * CR-CRU-056 §S1 — OPTIONAL for the same reason as `phase`: validation
+   * (cycle exists / plan open / cycle active) lives at the register route
+   * boundary; the store only persists an already-validated binding. Omitting
+   * it PRESERVES a stored binding (the CR-CRU-044 "touch never blanks"
+   * contract, applied to bindings).
+   */
+  boundCycleId?: number;
 }
 
 interface EventRow {
@@ -452,6 +462,12 @@ export class Store {
     if (!agentCols.has("phase")) {
       this.db.exec(`ALTER TABLE agents ADD COLUMN phase TEXT`);
     }
+    // CR-CRU-056 §S1 — additive cycle-binding column; pre-056 db files lack
+    // it (same PRAGMA-checked retrofit pattern as above). No back-fill:
+    // historical rows keep a NULL binding and read back as absent.
+    if (!agentCols.has("bound_cycle_id")) {
+      this.db.exec(`ALTER TABLE agents ADD COLUMN bound_cycle_id INTEGER`);
+    }
   }
 
   /**
@@ -647,11 +663,14 @@ export class Store {
         // CR-CRU-044 §S1 — key ABSENT when never declared (a phase-less
         // ingest that creates the row must not fabricate one).
         ...(opts?.phase !== undefined ? { phase: opts.phase } : {}),
+        // CR-CRU-056 §S1 — same contract for the cycle binding: ABSENT when
+        // the creating touch declared none.
+        ...(opts?.boundCycleId !== undefined ? { boundCycleId: opts.boundCycleId } : {}),
       };
       this.db
         .query(
-          `INSERT INTO agents (project_key, agent_id, status, message, identity, first_seen, last_seen, phase)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO agents (project_key, agent_id, status, message, identity, first_seen, last_seen, phase, bound_cycle_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           agent.projectKey,
@@ -662,6 +681,7 @@ export class Store {
           agent.firstSeen,
           agent.lastSeen,
           agent.phase ?? null,
+          agent.boundCycleId ?? null,
         );
       this.emit("agents", projectKey);
       return agent;
@@ -684,10 +704,18 @@ export class Store {
         : existing.phase !== null && existing.phase !== undefined
           ? { phase: existing.phase as AgentPhase }
           : {}),
+      // CR-CRU-056 §S1 — PRESERVE on update (same contract as phase above):
+      // a binding-less touch (every ingest, every heartbeat) must never blank
+      // the cycle the agent bound at registration.
+      ...(opts?.boundCycleId !== undefined
+        ? { boundCycleId: opts.boundCycleId }
+        : existing.bound_cycle_id !== null && existing.bound_cycle_id !== undefined
+          ? { boundCycleId: existing.bound_cycle_id }
+          : {}),
     };
     this.db
       .query(
-        `UPDATE agents SET status = ?, message = ?, identity = ?, last_seen = ?, phase = ?
+        `UPDATE agents SET status = ?, message = ?, identity = ?, last_seen = ?, phase = ?, bound_cycle_id = ?
          WHERE project_key = ? AND agent_id = ?`,
       )
       .run(
@@ -696,6 +724,7 @@ export class Store {
         JSON.stringify(agent.identity),
         agent.lastSeen,
         agent.phase ?? null,
+        agent.boundCycleId ?? null,
         projectKey,
         agentId,
       );
@@ -1999,6 +2028,10 @@ export class Store {
       // back-filled or fabricated.
       ...(row.phase !== null && row.phase !== undefined
         ? { phase: row.phase as AgentPhase }
+        : {}),
+      // CR-CRU-056 §S1 — absent for unbound / historical rows (NULL column).
+      ...(row.bound_cycle_id !== null && row.bound_cycle_id !== undefined
+        ? { boundCycleId: row.bound_cycle_id }
         : {}),
     };
   }

@@ -54,6 +54,12 @@ export interface Agent {
    * (pre-CR-044) rows: no back-fill, never fabricated.
    */
   phase?: AgentPhase;
+  /**
+   * CR-CRU-056 §S1 — the cycle this agent registered bound to, validated at
+   * the register route (exists, open plan, active). ABSENT when the agent
+   * registered unbound: no back-fill, never fabricated.
+   */
+  boundCycleId?: number;
 }
 
 export interface RunSummary {
