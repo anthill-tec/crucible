@@ -223,40 +223,49 @@ class SharedAxiContextTest(unittest.TestCase):
         self.assertNotIn("track", ctx)
 
 
-class SharedAxiResolveActiveCycleTest(unittest.TestCase):
-    """`resolve_active_cycle_id(plans)` -- the §S9 auto-attach resolver,
-    factored as a PURE function (no HTTP of its own): the single ACTIVE
-    cycle id among OPEN plans, or None when none/all-terminal."""
+class SharedAxiCycleResolverRetiredTest(unittest.TestCase):
+    """CR-CRU-056 §S3/§S3c — the §S9-era client-side attach resolver
+    (`resolve_attach_cycle`/`resolve_active_cycle_id`, PURE functions the
+    shared module used to export) is DELETED wholesale: the server has never
+    resolved a cycle for a caller and the client stops guessing too.
+    Attachment is now the AGENT ROW's job (§S1 register --cycle binding,
+    server-stamped at ingest). This class supersedes
+    SharedAxiResolveActiveCycleTest -- the pins there exercised a function
+    that no longer exists, so they are retired (not adapted) in favour of a
+    grep-sweep proving the retirement is total across the fleet, per the CR
+    AC: "resolve_attach_cycle and resolve_active_cycle_id are gone from
+    clients/ (grep-sweep-asserted)"."""
 
-    def test_resolve_active_cycle_id_returns_the_single_active_cycle_among_open_plans(self):
-        axi_mod = _load_axi_module()
-        plans = [
-            {"planId": "plan-1", "status": "open",
-             "cycles": [{"id": 10, "status": "pending"}, {"id": 11, "status": "active"}]},
-            {"planId": "plan-2", "status": "closed",
-             "cycles": [{"id": 20, "status": "active"}]},
-        ]
-        self.assertEqual(axi_mod.resolve_active_cycle_id(plans), 11)
+    BANNED_NAMES = ("resolve_attach_cycle", "resolve_active_cycle_id")
 
-    def test_resolve_active_cycle_id_ignores_closed_plans_active_cycles(self):
+    def test_shared_axi_module_no_longer_exports_the_active_cycle_resolver(self):
         axi_mod = _load_axi_module()
-        plans = [
-            {"planId": "plan-2", "status": "closed",
-             "cycles": [{"id": 20, "status": "active"}]},
-        ]
-        self.assertIsNone(axi_mod.resolve_active_cycle_id(plans))
+        for banned in self.BANNED_NAMES:
+            self.assertFalse(
+                hasattr(axi_mod, banned),
+                f"clients/_crucible_axi.py must no longer export {banned} -- "
+                f"CR-CRU-056 §S3 deletes the client-side attach resolver")
 
-    def test_resolve_active_cycle_id_returns_none_when_all_cycles_terminal(self):
-        axi_mod = _load_axi_module()
-        plans = [
-            {"planId": "plan-1", "status": "open",
-             "cycles": [{"id": 10, "status": "done"}, {"id": 11, "status": "pending"}]},
-        ]
-        self.assertIsNone(axi_mod.resolve_active_cycle_id(plans))
-
-    def test_resolve_active_cycle_id_returns_none_when_no_plans(self):
-        axi_mod = _load_axi_module()
-        self.assertIsNone(axi_mod.resolve_active_cycle_id([]))
+    def test_no_python_client_file_calls_the_retired_resolver_names(self):
+        """Grep-sweep across every `clients/*.py` file (not just the shared
+        module) -- the AC requires the retirement to be total across the
+        fleet, since each of the five clients used to call these functions
+        at two sites apiece (§S3c). Scoped to actual CODE references (a
+        call, or dotted access) on non-comment lines -- a `# CR-CRU-056 ...`
+        explanatory comment naming the retired functions for historical
+        context is documentation, not a live reference, and stays legal."""
+        clients_dir = REPO_ROOT / "clients"
+        offenders = []
+        for py_file in sorted(clients_dir.glob("*.py")):
+            for lineno, line in enumerate(py_file.read_text().splitlines(), start=1):
+                code_part = line.split("#", 1)[0]
+                for banned in self.BANNED_NAMES:
+                    if banned + "(" in code_part or "." + banned in code_part:
+                        offenders.append(f"{py_file.name}:{lineno}: {banned}")
+        self.assertEqual(
+            offenders, [],
+            f"no file under clients/ may CALL the retired client-side attach "
+            f"resolver any more; found {offenders!r}")
 
 
 class BunCrucibleImportsSharedAxiModuleTest(unittest.TestCase):
