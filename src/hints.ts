@@ -199,19 +199,22 @@ export const cycleHints = {
   /**
    * §S7 — a run ingest's context.cycleId matched no cycle in any of the
    * project's plans; name the open plan (cr) and its known cycle ids so a
-   * mis-set WORKFLOW_CYCLE_ID can be corrected to a real one.
+   * mis-set explicit cycleId can be corrected to a real one — or the caller
+   * re-registered bound to it (CR-CRU-056: the server stamps the binding).
    */
   unknownCycle: (cr: string, cycleIds: number[]): string[] => [
     `context.cycleId matched no cycle in this project's plans — the open plan ${cr} has cycle ids: ${cycleIds.join(", ")}`,
-    "export a WORKFLOW_CYCLE_ID that resolves to one of those cycles, or omit context.cycleId",
+    "register bound to the intended cycle (--cycle <id> from that list) and the server stamps the attachment for you, or send one of those ids as context.cycleId",
   ],
   /**
    * §S7 — an accepted ingest referenced a TERMINAL (done/skipped/failed) cycle:
-   * late ingests are legal, but the WORKFLOW_CYCLE_ID is almost certainly stale.
+   * late ingests are legal, but the explicit cycleId is almost certainly stale.
+   * CR-CRU-056: the current mechanism is a registration BOUND to the ACTIVE
+   * cycle, so the remedy is a re-registration, not an exported env var.
    */
   staleCycle: (cycleId: number): string[] => [
-    `context.cycleId ${cycleId} references a CLOSED cycle — the run was stored, but your WORKFLOW_CYCLE_ID is likely stale`,
-    "confirm the active cycle (GET …/plans?cr=<cr>) and export its id before the next ingest",
+    `context.cycleId ${cycleId} references a CLOSED cycle — the run was stored, but the explicit cycleId you sent is likely stale`,
+    "find the ACTIVE cycle (GET …/plans?cr=<cr>) and re-register bound to it (--cycle <id>) — the server then stamps the attachment on every ingest",
   ],
   /**
    * CR-CRU-056 §S1 — a register binding targeted a cycle that was never

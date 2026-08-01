@@ -1759,8 +1759,9 @@ export class Store {
 
   /**
    * CR-CRU-024 §S7 — summarize the project's open plan for the unknown-cycle
-   * help[]: the cr and its known cycle ids so a mis-set WORKFLOW_CYCLE_ID can be
-   * corrected to a real one. Returns null when the project has no open plan.
+   * help[]: the cr and its known cycle ids so a mis-set explicit context.cycleId
+   * can be corrected to a real one — or the caller re-registered bound to that
+   * cycle (CR-CRU-056). Returns null when the project has no open plan.
    */
   openPlanCycleSummary(projectKey: string): { cr: string; planId: number; cycleIds: number[] } | null {
     const row = this.db

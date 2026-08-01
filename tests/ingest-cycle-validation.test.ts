@@ -42,7 +42,10 @@
 // and the parsedRunBody shape from tests/axi-negotiation.test.ts.
 
 import { describe, test, expect, afterEach } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { startServer } from "../src/server.ts";
+import { hints, cycleHints, authHints } from "../src/hints.ts";
 import type { RunSummary, SuiteNode } from "../src/types.ts";
 
 type ServerHandle = ReturnType<typeof startServer>;
@@ -407,5 +410,83 @@ describe("§S7.3 — context.cycle (the free-form label) is NEVER validated; cyc
     const events = await eventsForProject(handle, key);
     expect(events.length).toBe(1);
     expect(events[0]!.context?.cycle).toBe("totally-made-up-label");
+  });
+});
+
+// ── CR-CRU-056 C5 — no shipped help[] string may name a DEAD mechanism ─────
+//
+// CR-CRU-036 deleted the `WORKFLOW_CYCLE_ID` env var in July 2026 and
+// CR-CRU-056 deleted its last client-side resolver; attachment now comes
+// from the REGISTRATION BINDING the server stamps (`register --cycle <id>`).
+// The §S7 hints above still told agents to "export a WORKFLOW_CYCLE_ID" —
+// AXI help[] must name a CONCRETE, CURRENTLY-VALID next action, so this
+// sweep pins the purge and stops the drift returning silently.
+//
+// Every exported hint is invoked with a representative argument vector; the
+// arg table is asserted COMPLETE against the modules' keys, so a newly added
+// hint fails this suite until it is swept too.
+describe("CR-CRU-056 — shipped help[] strings name no dead mechanism", () => {
+  const cycleHintArgs: Record<keyof typeof cycleHints, unknown[][]> = {
+    outOfOrder: [[7]],
+    alreadyActive: [[7]],
+    insertBeforeActive: [[7]],
+    unknownCycle: [["CR-CRU-999", [7, 8]]],
+    staleCycle: [[7]],
+    bindPendingCycle: [[7, 3]],
+    bindTerminalCycle: [[7, "done"]],
+    bindClosedPlan: [["CR-CRU-999", 3, "closed"]],
+    // Both branches: with active cycles, and with none.
+    unboundTddPhase: [["RED", [7, 8]], ["RED", []]],
+    bindingConflict: [[7, 8]],
+    staleBinding: [[7, "done"]],
+  };
+  const authHintArgs: Record<keyof typeof authHints, unknown[][]> = {
+    // Both branches: an agentId was sent, and none was.
+    unregisteredCaller: [["CR-CRU-999-C1-RED"], [undefined]],
+  };
+
+  /** Every string this module can ship to an agent, statics + invoked. */
+  function allShippedHelpStrings(): string[] {
+    const out: string[] = [];
+    for (const lines of Object.values(hints)) out.push(...lines);
+    for (const [name, argVectors] of Object.entries(cycleHintArgs)) {
+      const fn = cycleHints[name as keyof typeof cycleHints] as (...a: unknown[]) => string[];
+      for (const args of argVectors) out.push(...fn(...args));
+    }
+    for (const [name, argVectors] of Object.entries(authHintArgs)) {
+      const fn = authHints[name as keyof typeof authHints] as (...a: unknown[]) => string[];
+      for (const args of argVectors) out.push(...fn(...args));
+    }
+    return out;
+  }
+
+  test("the sweep's arg table covers EVERY exported hint (a new hint cannot slip past it)", () => {
+    expect(Object.keys(cycleHintArgs).sort()).toEqual(Object.keys(cycleHints).sort());
+    expect(Object.keys(authHintArgs).sort()).toEqual(Object.keys(authHints).sort());
+    // Guard the sweep itself: it must actually produce strings to inspect.
+    const shipped = allShippedHelpStrings();
+    expect(shipped.length).toBeGreaterThan(40);
+    expect(shipped.every((s) => typeof s === "string" && s.length > 0)).toBe(true);
+  });
+
+  test("NO shipped help string mentions WORKFLOW_CYCLE_ID — the env var is gone from the system", () => {
+    const offenders = allShippedHelpStrings().filter((s) => s.includes("WORKFLOW_CYCLE_ID"));
+    expect(offenders).toEqual([]);
+  });
+
+  test("src/hints.ts carries no WORKFLOW_CYCLE_ID reference at all (doc comments included)", () => {
+    const source = readFileSync(join(import.meta.dir, "../src/hints.ts"), "utf-8");
+    expect(source).not.toMatch(/WORKFLOW_CYCLE_ID/);
+  });
+
+  test("the §S7 hints name the CURRENT mechanism — a cycle-bound registration", () => {
+    const unknown = cycleHints.unknownCycle("CR-CRU-999", [7, 8]);
+    expect(unknown.some((h) => h.includes("--cycle"))).toBe(true);
+    // State-derived: the real ids still ride in the text.
+    expect(unknown.some((h) => h.includes("7") && h.includes("8"))).toBe(true);
+
+    const stale = cycleHints.staleCycle(7);
+    expect(stale.some((h) => h.includes("--cycle"))).toBe(true);
+    expect(stale.some((h) => h.includes("7"))).toBe(true);
   });
 });
