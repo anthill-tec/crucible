@@ -64,6 +64,14 @@ since.
 
 ## Scope
 
+**Executed early (user order 2026-08-01):** `tests/client/test_bun_crucible_context.py` was
+DELETED from develop ahead of this CR — its `SCRIPT_PATH` targeted the retired mirror directly,
+so its whole class had been silently skipping on every run (surfaced as the python envelope's
+`pending=2` once CR-050 stopped counting skips as passes), and the behaviour it pinned
+(`WORKFLOW_CYCLE_ID` context) was itself removed by CR-036. Two stale docstring mentions of the
+deleted file remain for this CR's sweep: `tests/client/test_toon.py:37` and
+`tests/client/test_bun_crucible_lifecycle.py:54` + `:60`.
+
 ### §S1 — Correct the four misleading references
 Rewrite the four marked `fix` entries to state the current reality: the in-repo `clients/*.py` are
 the source of truth and what the tests drive; the `~/.claude/scripts` mirror is retired and must
