@@ -1,56 +1,62 @@
-"""CR-CRU-046 C2 -- official `toon-format` (PyPI) client-side round-trip
-conformance, pinning the CLIENT half (§S2 + §S4) of the flip from the
-hand-written `clients/toon.py` subset codec to the official library, at both
-seams `clients/_crucible_axi.py` drives:
-  - the `_emit` ENCODE seam (`_toon().encode({"axi": ...})`,
-    `clients/_crucible_axi.py:~84`) -- client -> agent direction.
-  - the snapshot DECODE path (each client's two `_toon().decode(snap)`
-    sites, e.g. `gate_from_axi`) -- server -> client direction.
+"""CR-CRU-046 C2 (second pass) -- `clients/toon.py`'s own conformance to the
+FULL official TOON spec, loaded BY PATH (mirrors `tests/client/test_toon.py`'s
+`_load_toon_module()` convention -- see its module docstring and the loader
+at line ~36) rather than importing the PyPI stub.
 
-RED phase, TWO independent layers, both deliberately left unguarded:
+REVISED after the §S2 stub finding (docs/changes/CR-CRU-046-toon-conformance.md
+§S2/§S3/§S3b/§S4, user decision 2026-08-01, Option A): PyPI `toon-format`
+0.1.0 -- the only release ever published -- is a name-reservation stub whose
+`encode`/`decode` both `raise NotImplementedError` (confirmed by unpacking the
+wheel, independently twice). There is nothing to import or adopt. Instead
+`clients/toon.py` itself is REWRITTEN into a full official-spec-conformant
+codec, permanently cross-validated against the first-party TS reference
+(`@toon-format/toon`) by the §S4 oracle in the BUN suite (a real client is
+spawned and its stdout is decoded with the official library, and vice versa).
+This Python suite carries the codec's OWN spec-conformance + self-round-trip
+cases only -- it does NOT, and must NOT, import any third-party
+`toon`/`toon-format` package (that would defeat the point: the point is that
+OUR codec, not a vendored one, speaks the full grammar).
 
-1. `import toon_format` at module top is a BARE import -- NOT wrapped in
-   try/except, NOT skip-guarded. `toon-format` is declared as a runtime
-   dependency in `pyproject.toml` (`dependencies = ["toon-format>=0.1,<0.2"]`)
-   but is NOT installed in the ambient `.venv` test interpreter today
-   (confirmed: `.venv/bin/python -c "import toon_format"` raises
-   `ModuleNotFoundError: No module named 'toon_format'`). That collection-time
-   failure IS the expected RED for this suite right now -- a missing,
-   not-yet-resolvable dependency, same convention as a missing SUT symbol
-   (see `tests/client/test_toon.py`'s module docstring). GREEN's §S3 harness
-   work (making the pinned dependency resolvable to the interpreter these
-   tests run under) is what turns this import into a real collection.
+RED phase, against TODAY's `clients/toon.py` (still the narrow 4-construct
+Crucible SUBSET ported from `src/toon.ts`, pinned to
+`docs/research/DN-crucible-toon-subset.md`, NOT the official grammar):
 
-2. ESCALATION -- CRITICAL FINDING (verified 2026-08-01 against the live PyPI
-   index): `pip index versions toon-format` reports **0.1.0 is the only
-   version ever published**, and downloading + inspecting that wheel
-   (`toon_format-0.1.0-py3-none-any.whl`) shows BOTH public entry points are
-   literal stubs:
+1. Self round-trip through the REAL emit seam (`_crucible_axi.emit_axi` ->
+   `_toon().encode` -> `_toon().decode`) using a representative AXI envelope.
+   Genuinely fails today: `context["wave"]` is the numeral-looking STRING
+   "4" (the real shape a `WORKFLOW_WAVE` env value takes), and the subset's
+   scalar-line decoder treats any bare token matching a JSON number literal
+   as numeric -- "4" comes back as the INT 4, not the string "4".
 
-       # toon_format/encoder.py:34
-       def encode(value, options=None):
-           raise NotImplementedError("TOON encoder is not yet implemented")
+2. Type preservation (§S2's "silent corruption"): encode -> decode of
+   STRINGS that look like other TOON scalar types must survive as exact
+   strings. Fails today: the subset emits `"42"`/`"true"`/`"null"` bare
+   (unquoted) and its decoder re-types them as int/bool/None; it also
+   mishandles a blank string (decodes as a nested empty object, not `""`,
+   because an empty scalar tail is indistinguishable from a `key:` nested-
+   object header) and loses meaningful leading/trailing whitespace (a blind
+   `.strip()` on every decoded line).
 
-       # toon_format/decoder.py:29
-       def decode(input, options=None):
-           raise NotImplementedError("TOON decoder is not yet implemented")
+3. MUST-quote encode shape: the encoded TEXT itself must contain the
+   JSON-quoted form of `"42"`, `" padded "` and `"-leading"` -- values the
+   official grammar requires quoting to stay unambiguous (digits-only,
+   meaningful whitespace, and leading `-` respectively). Fails today: the
+   subset encoder's scalar-quoting trigger set (`\n : , { } [ ]`) does not
+   include any of those, so none of these three are quoted in the raw
+   output.
 
-   Every test below that reaches a real `toon_format.encode`/`.decode` call
-   will therefore raise `NotImplementedError`, not merely fail an assertion,
-   for as long as the installed release is 0.1.0 -- independent of, and in
-   addition to, the ModuleNotFoundError RED in (1). The §S4 round-trip AC as
-   written cannot be satisfied against today's only published release; it
-   needs either a future patch inside the pinned `>=0.1,<0.2` window that
-   actually implements encode/decode, or the CR's version pin revisited.
-   Flagging for the orchestrator/GREEN agent rather than working around it
-   (no skip, no mock of the third-party library -- that would defeat the
-   point of this conformance gate).
+4. Official-dialect decode: two small hand-written sample documents in the
+   OFFICIAL spec's wire form (list arrays as `- `-prefixed lines, quoted
+   scalars, and a uniform tabular block) are decoded and compared to the
+   expected Python structure. Fails today: the subset's list-array reader
+   does not strip the `- ` marker, so every list item decodes with the
+   literal `- ` (and, for quoted items, the surrounding quotes) still
+   embedded in the string.
 
-These tests assert DEEP-EQUALITY on decoded Python structures, never exact
-encoded TEXT, precisely so they stay valid regardless of which concrete
-layout (inline-compact vs multi-line dash-prefixed list-array) the official
-implementation eventually picks -- the contract §S4 pins is round-trip
-fidelity between two independent implementations, not byte-for-byte layout.
+Encoder wire-LAYOUT beyond the quoting assertions in (3) is deliberately NOT
+pinned here -- cross-stack conformance is proven by the §S4 bun-side oracle
+(a real TS decoder reading our output, and vice versa), not by asserting one
+specific official list/table rendering choice in this file.
 
 Invocation:
     python3 -m pytest tests/client/test_cr046_official_toon_roundtrip.py -q
@@ -61,13 +67,13 @@ Fallback:
 import contextlib
 import importlib.util
 import io
+import json
 import unittest
 from pathlib import Path
 
-import toon_format
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AXI_MODULE_PATH = REPO_ROOT / "clients" / "_crucible_axi.py"
+TOON_PATH = REPO_ROOT / "clients" / "toon.py"
 
 
 def _load_axi_module():
@@ -83,37 +89,40 @@ def _load_axi_module():
     return module
 
 
-class ClientEmitOfficialToonConformanceTest(unittest.TestCase):
-    """§S4 client -> agent direction: the `emit_axi` encode seam
-    (clients/_crucible_axi.py:~84, `_toon().encode({"axi": ...})`) must
-    produce text that an OFFICIAL TOON decoder reads back as an object
-    deep-equal to the source envelope -- proving the client's encoder and
-    the official library's decoder (two independent implementations) agree.
-    Fails today: the hand-written subset encoder's list-array form omits the
-    spec's `- `-prefixed elements (see CR context, `help[]`), so a
-    standard-conformant decoder either mis-reads or rejects it."""
+def _load_toon_module():
+    """Load clients/toon.py by file path -- the SAME by-path convention as
+    `tests/client/test_toon.py`'s `_load_toon_module()` (line ~36), so this
+    suite never depends on a package-importable `toon`/`toon_format` name."""
+    spec = importlib.util.spec_from_file_location("toon_under_test_cr046", TOON_PATH)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-    def _representative_envelope_result_fields(self):
-        return {
+
+class ClientEmitSelfRoundTripThroughRealSeamTest(unittest.TestCase):
+    """Item 1 -- drive the REAL `_crucible_axi.emit_axi` encode seam with a
+    representative AXI envelope (verb/ok/help[]/context/warnings), capture
+    stdout, decode it back with `clients/toon.py`'s OWN decode (via the same
+    `_toon()` accessor `_crucible_axi` itself uses), and deep-equal the
+    result against `{"axi": ...}` -- INCLUDING exact types, not just values."""
+
+    def _representative_envelope(self):
+        result_fields = {
             "help": ["cycle-activate <id>", "status", "test --agent <id>"],
         }
-
-    def _representative_context(self):
-        return {
+        context = {
             "projectKey": "proj-k",
             "agentId": "CR-CRU-046-C2-py-RED",
             "cycleId": 142,
             "wave": "4",
         }
+        warnings = [{"code": "no-wave", "detail": "plan filed with no wave"}]
+        return result_fields, context, warnings
 
-    def _representative_warnings(self):
-        return [{"code": "no-wave", "detail": "plan filed with no wave"}]
-
-    def test_emit_axi_stdout_decodes_via_official_toon_format_to_the_source_envelope(self):
+    def test_emit_axi_stdout_self_round_trips_to_the_source_envelope(self):
         axi_mod = _load_axi_module()
-        result_fields = self._representative_envelope_result_fields()
-        context = self._representative_context()
-        warnings = self._representative_warnings()
+        result_fields, context, warnings = self._representative_envelope()
 
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
@@ -121,42 +130,63 @@ class ClientEmitOfficialToonConformanceTest(unittest.TestCase):
 
         expected_axi = {"verb": "status", "ok": True, **result_fields,
                          "context": context, "warnings": warnings}
-        decoded = toon_format.decode(stdout.getvalue())
+        decoded = axi_mod._toon().decode(stdout.getvalue())
 
         self.assertEqual(
             decoded, {"axi": expected_axi},
-            f"official toon_format.decode() of the client's emit_axi stdout "
-            f"must deep-equal the source envelope {expected_axi!r}; got "
+            f"toon.py's own decode() of the client's emit_axi stdout must "
+            f"deep-equal the source envelope {expected_axi!r}; got "
             f"{decoded!r} from stdout={stdout.getvalue()!r}")
 
-    def test_emit_axi_help_list_round_trips_as_the_exact_ordered_list_of_strings(self):
-        """Bound check on the hottest-path construct named by the CR: `help[]`
-        must survive as the SAME list, same order, same element count -- not
-        merged into one string, not truncated, not reordered."""
+    def test_emit_axi_context_wave_survives_as_the_exact_string_not_an_int(self):
+        """Bound/type check, both directions: the envelope's genuinely
+        NON-string fields (`ok`: bool, `context.cycleId`: int, exactly 1
+        warning) must keep their own exact types/shape -- proving this is a
+        targeted STRING-typing bug, not a blanket decode failure -- before
+        asserting the actual RED: `context["wave"]` is the numeral-looking
+        STRING "4" (the real WORKFLOW_WAVE env shape), which must not be
+        silently retyped as the int 4."""
         axi_mod = _load_axi_module()
-        result_fields = self._representative_envelope_result_fields()
+        result_fields, context, warnings = self._representative_envelope()
+
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            axi_mod.emit_axi("status", True, result_fields,
-                              self._representative_context(), [])
+            axi_mod.emit_axi("status", True, result_fields, context, warnings)
 
-        decoded = toon_format.decode(stdout.getvalue())
-        help_list = decoded.get("axi", {}).get("help")
+        decoded = axi_mod._toon().decode(stdout.getvalue())
+        axi = decoded.get("axi", {})
 
+        self.assertIsInstance(
+            axi.get("ok"), bool,
+            f"axi.ok must decode back as a bool, got "
+            f"{type(axi.get('ok')).__name__} ({axi.get('ok')!r})")
+        self.assertEqual(axi.get("ok"), True)
+        self.assertIsInstance(
+            axi.get("context", {}).get("cycleId"), int,
+            f"context.cycleId must decode back as an int, got "
+            f"{type(axi.get('context', {}).get('cycleId')).__name__}")
+        self.assertEqual(axi.get("context", {}).get("cycleId"), 142)
         self.assertEqual(
-            help_list, result_fields["help"],
-            f"help[] must round-trip as the exact 3-element ordered list "
-            f"{result_fields['help']!r}; got {help_list!r}")
-        self.assertEqual(len(help_list), 3,
-                          f"expected exactly 3 help[] entries, got {help_list!r}")
+            len(axi.get("warnings", [])), 1,
+            f"expected exactly 1 warning entry, got {axi.get('warnings')!r}")
+
+        wave = axi.get("context", {}).get("wave")
+        self.assertIsInstance(
+            wave, str,
+            f"context.wave (source value {context['wave']!r}) must decode "
+            f"back as a STRING, not {type(wave).__name__} ({wave!r})")
+        self.assertEqual(
+            wave, "4",
+            f"context.wave must round-trip to the exact string '4'; got {wave!r}")
 
 
-class ClientEmitTypePreservationTest(unittest.TestCase):
-    """§S4 + AC bullet: STRING values that look like other TOON scalar types
-    must decode back as the exact same STRING, not a coerced bool/int/None,
-    after passing through the client's emit seam then the official decoder.
-    Fails today: the subset encoder emits these values unquoted, and a
-    standard decoder reads their literal-looking form as the typed value."""
+class ClientEncodeDecodeTypePreservationTest(unittest.TestCase):
+    """Item 2 -- STRINGS that look like other TOON scalar types must survive
+    encode -> decode as exact strings, per the CR's AC bullet: `"42"`,
+    `"true"`, `"null"`, `""`, `" padded "`, `"-leading"` all round-trip as
+    STRINGS ("`"42"` must not become a number."). Fails today: the subset's
+    scalar-quoting trigger set omits digits-only/whitespace/leading-dash
+    content, so these are emitted bare and re-typed on decode."""
 
     TRICKY_STRINGS = {
         "numeric": "42",
@@ -167,88 +197,133 @@ class ClientEmitTypePreservationTest(unittest.TestCase):
         "dashed": "-leading",
     }
 
-    def test_string_values_resembling_other_scalar_types_survive_as_exact_strings(self):
-        axi_mod = _load_axi_module()
-        stdout = io.StringIO()
-        with contextlib.redirect_stdout(stdout):
-            axi_mod.emit_axi(
-                "check", True, {"tricky": dict(self.TRICKY_STRINGS)},
-                {"projectKey": "proj-k"}, [])
-
-        decoded = toon_format.decode(stdout.getvalue())
-        tricky = decoded.get("axi", {}).get("tricky", {})
+    def test_tricky_string_values_survive_encode_decode_as_exact_strings(self):
+        toon = _load_toon_module()
+        encoded = toon.encode(dict(self.TRICKY_STRINGS))
+        decoded = toon.decode(encoded)
 
         for key, original in self.TRICKY_STRINGS.items():
             with self.subTest(field=key, original=original):
-                self.assertIn(key, tricky,
-                              f"decoded envelope missing tricky field {key!r}; "
-                              f"got tricky={tricky!r}")
-                actual = tricky[key]
+                self.assertIn(
+                    key, decoded,
+                    f"decoded object missing field {key!r}; got {decoded!r} "
+                    f"from encoded={encoded!r}")
+                actual = decoded[key]
                 self.assertIsInstance(
                     actual, str,
                     f"{key!r} (source value {original!r}) must decode back "
-                    f"as a STRING, not {type(actual).__name__} ({actual!r}) "
-                    f"-- e.g. \"42\" must NOT become the number 42")
+                    f"as a STRING, not {type(actual).__name__} ({actual!r})")
                 self.assertEqual(
                     actual, original,
                     f"{key!r} must round-trip to the EXACT original string "
                     f"{original!r}; got {actual!r}")
 
+    def test_numeric_looking_string_specifically_must_not_become_a_number(self):
+        """AC-named case, pinned on its own: `"42"` must not become the
+        number 42."""
+        toon = _load_toon_module()
+        decoded = toon.decode(toon.encode({"n": "42"}))
 
-class ClientDecodeOfficialToonDialectTest(unittest.TestCase):
-    """§S4 server -> client direction: a server SNAPSHOT encoded with the
-    OFFICIAL `toon_format.encode` must decode, through the SAME seam the
-    clients use for gate/status snapshots (`_toon().decode`, bound via
-    `_crucible_axi`'s own private `_toon()` loader so this assertion survives
-    the swap from `clients/toon.py` to `toon_format`), to an object deep-equal
-    to the source snapshot. Fails today: the hand-written subset decoder
-    mis-reads the official library's list-array and quoting forms."""
+        self.assertNotIsInstance(
+            decoded["n"], (int, float),
+            f'"42" must not decode as a number; got {decoded["n"]!r} '
+            f"({type(decoded['n']).__name__})")
+        self.assertEqual(decoded["n"], "42")
 
-    def test_official_encoded_server_snapshot_decodes_via_the_clients_decode_seam(self):
-        axi_mod = _load_axi_module()
-        snapshot = {
-            "run": {
-                "steps": [
-                    {"step": "build", "status": "passed"},
-                    {"step": "test", "status": "failed"},
-                ],
-                "outcome": "checks-passed",
-                "head": "abc123",
-            },
-            "notes": ["42", "true", "-leading"],
+
+class MustQuoteEncodeShapeTest(unittest.TestCase):
+    """Item 3 -- the encoded TEXT itself must carry the JSON-quoted form of
+    values the official grammar requires quoting to stay unambiguous: a
+    digits-only string, a string with meaningful surrounding whitespace, and
+    a string starting with `-` (ambiguous with the list-item marker / a
+    negative number). Fails today: none of these trigger the subset
+    encoder's quoting rule."""
+
+    def test_encoded_text_quotes_numeric_padded_and_leading_dash_strings(self):
+        toon = _load_toon_module()
+        encoded = toon.encode({
+            "numeric": "42",
+            "padded": " padded ",
+            "dashed": "-leading",
+        })
+
+        self.assertIn(
+            json.dumps("42"), encoded,
+            f'expected the JSON-quoted form {json.dumps("42")!r} of "42" in '
+            f"the encoded output; got {encoded!r}")
+        self.assertIn(
+            json.dumps(" padded "), encoded,
+            f'expected the JSON-quoted form {json.dumps(" padded ")!r} of '
+            f'" padded " in the encoded output; got {encoded!r}')
+        self.assertIn(
+            json.dumps("-leading"), encoded,
+            f'expected the JSON-quoted form {json.dumps("-leading")!r} of '
+            f'"-leading" in the encoded output; got {encoded!r}')
+
+        # Negative/bound: the BARE (unquoted) numeric line must not appear --
+        # guards against a false pass where the quoted substring happens to
+        # appear elsewhere by coincidence while the actual value line stays bare.
+        self.assertNotIn(
+            "numeric: 42\n", encoded + "\n",
+            f'expected "42" to be quoted, found it emitted bare in {encoded!r}')
+
+
+class OfficialDialectDecodeTest(unittest.TestCase):
+    """Item 4 -- two hand-written sample documents in the OFFICIAL TOON wire
+    form (list arrays as `- `-prefixed lines, quoted scalars, a uniform
+    tabular block) must decode to the expected Python structure. Fails
+    today: the subset's list-array reader does not strip the `- ` marker,
+    so list items decode with it (and any quoting) still embedded."""
+
+    def test_decodes_dash_prefixed_list_with_quoted_scalar_and_tabular_block(self):
+        toon = _load_toon_module()
+        raw = (
+            'title: "42"\n'
+            "tags[3]:\n"
+            '  - "-leading"\n'
+            "  - plain\n"
+            '  - "true"\n'
+            "rows[2]{id,name}:\n"
+            "  1,Ada\n"
+            '  2,"Bo,b"\n'
+        )
+        expected = {
+            "title": "42",
+            "tags": ["-leading", "plain", "true"],
+            "rows": [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bo,b"}],
         }
 
-        encoded = toon_format.encode(snapshot)
-        decoded = axi_mod._toon().decode(encoded)
+        decoded = toon.decode(raw)
 
         self.assertEqual(
-            decoded, snapshot,
-            f"the client's current decode seam (_crucible_axi._toon().decode) "
-            f"must deep-equal the source snapshot {snapshot!r} when fed text "
-            f"produced by the OFFICIAL toon_format.encode(); got {decoded!r} "
-            f"from encoded={encoded!r}")
+            decoded, expected,
+            f"expected the official-dialect sample to decode to {expected!r}; "
+            f"got {decoded!r} from raw={raw!r}")
+        self.assertEqual(
+            len(decoded.get("tags", [])), 3,
+            f"expected exactly 3 tags[] entries, got {decoded.get('tags')!r}")
 
-    def test_official_encoded_notes_list_survives_as_exact_ordered_strings(self):
-        """Bound check mirroring the type-preservation AC on the DECODE
-        direction: the tricky-looking strings inside a list array must not be
-        coerced by the client's decoder when the text came from the official
-        encoder's own (possibly differently-formatted) list-array form."""
-        axi_mod = _load_axi_module()
-        snapshot = {"notes": ["42", "true", "-leading"]}
+    def test_decodes_dash_prefixed_list_nested_under_an_object_with_quoted_scalar(self):
+        toon = _load_toon_module()
+        raw = (
+            "meta:\n"
+            '  code: "-leading"\n'
+            "notes[2]:\n"
+            "  - alpha\n"
+            "  - beta\n"
+        )
+        expected = {
+            "meta": {"code": "-leading"},
+            "notes": ["alpha", "beta"],
+        }
 
-        encoded = toon_format.encode(snapshot)
-        decoded = axi_mod._toon().decode(encoded)
-        notes = decoded.get("notes")
+        decoded = toon.decode(raw)
 
         self.assertEqual(
-            notes, ["42", "true", "-leading"],
-            f"notes[] must decode to the exact 3-element ordered string list; "
-            f"got {notes!r} from encoded={encoded!r}")
-        for value in notes or []:
-            self.assertIsInstance(
-                value, str,
-                f"every element of notes[] must remain a STRING after "
-                f"decode; got {type(value).__name__} ({value!r}) in {notes!r}")
+            decoded, expected,
+            f"expected the official-dialect sample to decode to {expected!r}; "
+            f"got {decoded!r} from raw={raw!r}")
+        self.assertEqual(decoded.get("meta", {}).get("code"), "-leading")
 
 
 if __name__ == "__main__":

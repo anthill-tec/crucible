@@ -1,29 +1,40 @@
-"""CR-CRU-046 C1 -- PEP 723 inline script metadata on the client fleet
-(pre-flip mechanism step, §S3 + §S3b).
+"""CR-CRU-046 C2 (second pass) -- PEP 723 inline script metadata on the
+client fleet, RE-POINTED after the §S2 stub finding (docs/changes/
+CR-CRU-046-toon-conformance.md §S2/§S3, user decision 2026-08-01, Option A).
 
-Contract pinned from docs/changes/CR-CRU-046-toon-conformance.md §S3:
+Original C1 contract (now SUPERSEDED): each block pinned
+`dependencies = ["toon-format>=0.1,<0.2"]`. That pin has been proven to
+point at a stub -- PyPI `toon-format` 0.1.0 (the only release ever
+published) has `encode`/`decode` that both `raise NotImplementedError`.
+Pinning it would install a landmine that silently shadows any future real
+module a client script might resolve by name.
+
+REVISED contract pinned from §S3's revision note:
 
     Each of the five clients (`clients/bun-crucible.py`,
     `clients/python-crucible.py`, `clients/mvn-crucible.py`,
-    `clients/rust-crucible.py`, `clients/arduino-crucible.py`) carries a
-    `# /// script` PEP 723 inline metadata block declaring
-    `requires-python = ">=3.10"` and
-    `dependencies = ["toon-format>=0.1,<0.2"]`, so `uv run <client>.py`
-    resolves the upcoming `toon-format` dependency without relying on
-    whatever bare `python3` happens to be on hand. The block must sit in
-    the leading comment region per PEP 723 (before the first non-comment,
-    non-shebang, non-docstring statement).
+    `clients/rust-crucible.py`, `clients/arduino-crucible.py`) still carries
+    a `# /// script` PEP 723 inline metadata block declaring
+    `requires-python = ">=3.10"`, but its `dependencies` list is now EMPTY
+    (`dependencies = []`) -- the mechanism (PEP 723 + `uv run`) stays wired
+    and proven, harmless while empty, and the eventual real-library re-add
+    becomes a one-line change per file (the §S2 revisit pin). The block
+    must still sit in the leading comment region per PEP 723 (before the
+    first non-comment, non-shebang, non-docstring statement).
 
-    Separately, `pyproject.toml`'s `[project]` table must declare a
-    runtime `dependencies` list containing `toon-format>=0.1,<0.2` (the
-    server-side half of the §S2 dependency pin, on the Python side).
+    Separately, `pyproject.toml`'s `[project]` table must carry NO
+    `toon-format` runtime dependency at all -- the stub-landmine guard
+    applies there too; the C1 pin is REVERTED, not merely left as one
+    dependency among others.
 
-RED phase: none of the five clients carry a `# /// script` block yet (each
-starts with a bare `#!/usr/bin/env python3` shebang and nothing else in the
-leading comment region), and `pyproject.toml`'s `[project]` table has NO
-`dependencies` key at all. Every test below fails a plain assertion against
-that absence -- no collection/import errors expected, since this test file
-only reads source text and TOML, it does not import any client module.
+RED phase: today (C1's GREEN state) all five clients still carry
+`dependencies = ["toon-format>=0.1,<0.2"]` and `pyproject.toml`'s
+`[project]` table still declares that same pin. The presence tests (block
+exists / requires-python / leading-comment position) still pass unchanged
+-- only the dependency-shape assertions below are the RED surface for C2:
+they fail because the pin is still THERE, where the revised contract now
+requires it ABSENT. No collection/import errors expected -- this file only
+reads source text and TOML, it does not import any client module.
 
 Invocation:
     python3 -m pytest tests/client/test_cr046_pep723_metadata.py -q
@@ -47,9 +58,19 @@ CLIENT_NAMES = [
     "arduino-crucible.py",
 ]
 
-EXPECTED_DEPENDENCY = "toon-format>=0.1,<0.2"
 EXPECTED_REQUIRES_PYTHON = ">=3.10"
 MAX_BLOCK_START_LINE = 60
+TOON_STUB_PIN = "toon-format>=0.1,<0.2"
+
+
+def _toon_like_entries(entries):
+    """Return the subset of `entries` whose package name (the part before
+    any version specifier) is `toon-format` or the near-miss bare `toon` --
+    the stub-landmine guard: neither may sneak back in under any pin."""
+    return [
+        d for d in entries
+        if d.split(">")[0].split("=")[0].split("<")[0].strip() in ("toon-format", "toon")
+    ]
 
 # PEP 723: a fenced comment block, opening tag `# /// TYPE`, closing tag
 # `# ///`, each body line either bare `#` or `# ` + content.
@@ -155,46 +176,73 @@ class ClientPep723BlockDeclaresRequiresPythonTest(unittest.TestCase):
             f"{EXPECTED_REQUIRES_PYTHON!r}, got {parsed.get('requires-python')!r}")
 
 
-class ClientPep723BlockDeclaresToonFormatDependencyTest(unittest.TestCase):
-    """§S3 -- the block's `dependencies` list contains EXACTLY one entry
-    matching `toon-format>=0.1,<0.2` -- not zero, not more than one, and
-    not some other unrelated pin (guards against the near-miss PyPI
-    package `toon`, per the CR's warning)."""
+class ClientPep723BlockDeclaresEmptyDependenciesTest(unittest.TestCase):
+    """§S3 REVISED -- with no adoptable Python TOON library (the §S2 stub
+    finding), each block's `dependencies` list must be EMPTY (`[]`). The C1
+    `toon-format` pin is REVERTED everywhere it landed -- pinning a stub
+    would install a landmine that shadows any future real module. Fails
+    today: all five clients still carry `dependencies = ["toon-format>=0.1,<0.2"]`."""
 
-    def test_bun_crucible_dependency_pin(self):
-        self._assert_dependency_pin("bun-crucible.py")
+    def test_bun_crucible_dependencies_are_empty(self):
+        self._assert_dependencies_empty("bun-crucible.py")
 
-    def test_python_crucible_dependency_pin(self):
-        self._assert_dependency_pin("python-crucible.py")
+    def test_python_crucible_dependencies_are_empty(self):
+        self._assert_dependencies_empty("python-crucible.py")
 
-    def test_mvn_crucible_dependency_pin(self):
-        self._assert_dependency_pin("mvn-crucible.py")
+    def test_mvn_crucible_dependencies_are_empty(self):
+        self._assert_dependencies_empty("mvn-crucible.py")
 
-    def test_rust_crucible_dependency_pin(self):
-        self._assert_dependency_pin("rust-crucible.py")
+    def test_rust_crucible_dependencies_are_empty(self):
+        self._assert_dependencies_empty("rust-crucible.py")
 
-    def test_arduino_crucible_dependency_pin(self):
-        self._assert_dependency_pin("arduino-crucible.py")
+    def test_arduino_crucible_dependencies_are_empty(self):
+        self._assert_dependencies_empty("arduino-crucible.py")
 
-    def _assert_dependency_pin(self, name):
+    def _assert_dependencies_empty(self, name):
+        text = _read_client_text(name)
+        match, _ = _find_pep723_block(text)
+        self.assertIsNotNone(
+            match, f"{name}: expected a PEP 723 block to parse, found none")
+        parsed = _parse_pep723_block(match)
+        deps = parsed.get("dependencies", None)
+        self.assertEqual(
+            deps, [],
+            f"{name}: expected an EMPTY dependencies list ([]) -- the "
+            f"stub-landmine guard -- got dependencies={deps!r}")
+
+
+class ClientPep723BlockHasNoToonNearMissDependencyTest(unittest.TestCase):
+    """Negative/bound guard, kept from C1 -- even under the empty-list
+    contract, no stray `toon-format` or bare `toon` entry may sneak back in
+    under a differently-formatted specifier."""
+
+    def test_bun_crucible_no_toon_dependency(self):
+        self._assert_no_toon_dependency("bun-crucible.py")
+
+    def test_python_crucible_no_toon_dependency(self):
+        self._assert_no_toon_dependency("python-crucible.py")
+
+    def test_mvn_crucible_no_toon_dependency(self):
+        self._assert_no_toon_dependency("mvn-crucible.py")
+
+    def test_rust_crucible_no_toon_dependency(self):
+        self._assert_no_toon_dependency("rust-crucible.py")
+
+    def test_arduino_crucible_no_toon_dependency(self):
+        self._assert_no_toon_dependency("arduino-crucible.py")
+
+    def _assert_no_toon_dependency(self, name):
         text = _read_client_text(name)
         match, _ = _find_pep723_block(text)
         self.assertIsNotNone(
             match, f"{name}: expected a PEP 723 block to parse, found none")
         parsed = _parse_pep723_block(match)
         deps = parsed.get("dependencies", [])
-        matching = [d for d in deps if d == EXPECTED_DEPENDENCY]
+        found = _toon_like_entries(deps)
         self.assertEqual(
-            len(matching), 1,
-            f"{name}: expected exactly one dependency entry == "
-            f"{EXPECTED_DEPENDENCY!r}, got dependencies={deps!r}")
-        # Negative/bound: no unrelated near-miss package name (bare "toon")
-        # smuggled in alongside the correct pin.
-        self.assertNotIn(
-            "toon", [d.split(">")[0].split("=")[0].split("<")[0].strip()
-                     for d in deps if d != EXPECTED_DEPENDENCY],
-            f"{name}: found an unrelated 'toon'-named dependency pin "
-            f"alongside the correct one: {deps!r}")
+            found, [],
+            f"{name}: found a toon-related dependency entry where none is "
+            f"allowed: {found!r} (full dependencies={deps!r})")
 
 
 class ClientPep723BlockSitsInLeadingCommentRegionTest(unittest.TestCase):
@@ -229,31 +277,34 @@ class ClientPep723BlockSitsInLeadingCommentRegionTest(unittest.TestCase):
             f"{MAX_BLOCK_START_LINE} lines, but it starts at line {start_line}")
 
 
-class PyprojectDeclaresToonFormatRuntimeDependencyTest(unittest.TestCase):
-    """§S3 -- pyproject.toml's [project] table declares a runtime
-    `dependencies` list containing `toon-format>=0.1,<0.2`. Currently
-    there is NO [project] dependencies key at all, so this must fail
-    cleanly on that absence (KeyError-shaped, not an ambiguous parse
-    error)."""
+class PyprojectHasNoToonFormatRuntimeDependencyTest(unittest.TestCase):
+    """§S3 REVISED -- pyproject.toml's [project] table must NOT list any
+    `toon-format` (or near-miss bare `toon`) runtime dependency -- the
+    stub-landmine guard applies server-side (Python packaging) too, not
+    just to the five PEP 723 blocks. Fails today: the C1 pin
+    `dependencies = ["toon-format>=0.1,<0.2"]` is still present."""
 
-    def test_project_dependencies_key_exists(self):
-        with open(PYPROJECT_PATH, "rb") as f:
-            parsed = tomllib.load(f)
-        project = parsed.get("project", {})
-        self.assertIn(
-            "dependencies", project,
-            "expected pyproject.toml's [project] table to declare a "
-            "'dependencies' key, found none")
-
-    def test_project_dependencies_contains_toon_format_pin(self):
+    def test_project_dependencies_do_not_contain_toon_format_pin(self):
         with open(PYPROJECT_PATH, "rb") as f:
             parsed = tomllib.load(f)
         project = parsed.get("project", {})
         deps = project.get("dependencies", [])
-        self.assertIn(
-            EXPECTED_DEPENDENCY, deps,
-            f"expected pyproject.toml's [project.dependencies] to contain "
-            f"{EXPECTED_DEPENDENCY!r}, got {deps!r}")
+        self.assertNotIn(
+            TOON_STUB_PIN, deps,
+            f"expected pyproject.toml's [project.dependencies] to NOT "
+            f"contain the stub pin {TOON_STUB_PIN!r} (reverted per §S3), "
+            f"got {deps!r}")
+
+    def test_project_dependencies_contain_no_toon_named_entry_at_all(self):
+        with open(PYPROJECT_PATH, "rb") as f:
+            parsed = tomllib.load(f)
+        project = parsed.get("project", {})
+        deps = project.get("dependencies", [])
+        found = _toon_like_entries(deps)
+        self.assertEqual(
+            found, [],
+            f"expected NO toon-format/toon-named entry in pyproject.toml's "
+            f"[project.dependencies], found {found!r} (full deps={deps!r})")
 
 
 if __name__ == "__main__":
