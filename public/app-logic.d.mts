@@ -301,10 +301,8 @@ export declare function digestFailures<T extends DigestLeafLike>(
 // CR-CRU-007 §S1 — phase-role icon tinting (pure).
 export type PhaseRole = "red" | "green" | "verify" | "fix" | null;
 
-export declare function phaseRole(agentId: string): PhaseRole;
-
-// CR-CRU-044 §S2 — classification by the agent's STORED phase; `phaseRole`
-// is the fallback only when `phase` is absent (undefined) or null.
+// CR-CRU-044 §S2 / CR-CRU-057 §S3 — classification by the STORED phase only;
+// an absent (undefined/null) phase is unclassified, never id-derived.
 export declare function agentRole(agent: {
   agentId: string;
   phase?: string | null;
