@@ -1,70 +1,85 @@
-# CR-CRU-056 — Patch: ambiguous active-cycle auto-attach must throw, never guess
+# CR-CRU-056 — Agent registration binds its cycle EXPLICITLY; server-side auto-attach guessing is DELETED
 
 **Status:** PENDING
-**Type:** patch (server correctness / board integrity)
-**Priority:** P1 — a silent wrong-cycle attach corrupts the live Workflow board and is invisible until a human notices
-**Depends on:** CR-CRU-036 (§S9 auto-attach), CR-CRU-024 (plan/cycle state machine + AXI invalid-action responses)
-**Labels:** patch, server, plans, ingest, auto-attach, board-integrity
+**Type:** patch (workflow-model correction: server + client fleet)
+**Priority:** P0 — user escalation 2026-08-01; the board's integrity currently depends on orchestrator hygiene the system does not enforce
+**Depends on:** CR-CRU-036 (§S9 auto-attach — deleted here), CR-CRU-024 (state machine + §S7 cycle-reference validation), CR-CRU-044 (phase as registration data)
+**Labels:** patch, server, client-fleet, plans, registration, board-integrity
 **Phase:** Wave 4
-**Design reference:** user ruling 2026-08-01 — *"the server auto-attaching an agent to whatever
-cycle is active itself is wrong — it should throw an exception."*
+**Design reference:** user rulings 2026-08-01 (two, same day). First: ambiguity must throw, never
+guess. Second, superseding in scope: *"fix the damn agent registration"* — throwing on ambiguity
+still leaves the server guessing in the "unambiguous" case, and registration itself remains a
+free-floating act. Registration is the binding act.
 
 ## Context
-CR-CRU-036 §S9 replaced hand-passed `WORKFLOW_CYCLE_ID` with server-side auto-attach: a run
-ingest with no explicit cycle context is attached to the project's active cycle. The
-implementation silently PICKS one when **multiple open plans each have an active cycle**.
+The attach model has swung between two failure modes. CR-CRU-036 removed hand-passed
+`WORKFLOW_CYCLE_ID` (per-run env — forgotten var → orphaned runs) in favour of server-side
+auto-attach ("the project's active cycle"). Observed live 2026-08-01: with two open plans each
+holding an active cycle (141 + 146, an orchestrator sequencing error), the server silently picked
+141 and another CR's runs polluted CR-CRU-046's workflow card. The silent pick trusts exactly the
+orchestrator state hygiene that failed; and even single-active auto-attach is still a GUESS — the
+server inferring intent the dispatch never declared.
 
-Observed live (2026-08-01): plans 54 (CR-CRU-046, cycle 141 active) and 55 (CR-CRU-055,
-cycle 146 active) were simultaneously open with actives after an orchestrator sequencing
-error; CR-055's agents' ingests silently attached to CR-046's cycle 141, polluting that
-CR's workflow card with another CR's runs. The silent choice trusts exactly the
-orchestrator state hygiene that had just failed. Ambiguity must be LOUD.
+The synthesis that kills both failure modes: **the ORCHESTRATOR declares the cycle ONCE, at agent
+registration; the server validates it; every subsequent ingest rides the validated binding.** A
+forgotten binding fails loudly AT REGISTRATION (not as a silently orphaned or mis-attached run
+later), and a wrong-but-active binding is at least explicit, visible, and attributable.
 
 ## Scope
 
-### §S1 — Attach resolution: >1 active is a definitive error
-Run-ingest auto-attach resolves against the project's OPEN plans:
-- exactly **one** active cycle → attach (unchanged);
-- **zero** active → warn + withhold (unchanged, CR-CRU-036 §S9);
-- **more than one** active → **409 definitive AXI error**: the ingest is REFUSED and not
-  stored; the error enumerates every active cycle as `{planId, cr, cycleId, label}`; the
-  envelope's `help[]` names the concrete next actions (close/complete the stray cycle, or
-  send explicit validated cycle context per CR-CRU-024 §S7).
+### §S1 — `register` takes a cycle binding, validated
+`POST /api/v2/agents/register` accepts `cycleId`. The server validates: the cycle exists, belongs
+to an OPEN plan of this project, and is ACTIVE — otherwise 409 definitive AXI error naming the
+actual state (unknown / pending / done / closed-plan), with concrete `help[]` (CR-CRU-024
+help-quality convention). The binding is stored on the agent row.
 
-### §S2 — Every auto-attach consumer, same rule
-The same three-way resolution applies to every other path that auto-attaches to "the
-active cycle" (gate snapshot ingest, milestones, any others — enumerate the full consumer
-set at gap-analysis; none may silently pick).
+### §S2 — TDD phases MUST register bound
+`RED | GREEN | FIX | VERIFY` registrations REQUIRE `cycleId` — an implementation agent with no
+workflow home is refused (409 + help). `ORCHESTRATOR` and `report` may register unbound.
 
-### §S3 — Fleet surfaces the 409 as a definitive error
-The clients must surface the refusal as a structured AXI error with a non-zero exit
-(manifesto principle 8) — expected to be envelope pass-through with no client code change;
-verify and pin with one test per surface actually exercised.
+### §S3 — Ingest attaches by binding; auto-attach is DELETED
+A bound agent's run ingest attaches to ITS registered cycle, re-validated live: if that cycle is
+no longer active (done/plan closed), the ingest gets a 409 definitive error — it never spills
+into another cycle. CR-CRU-036 §S9's resolve-the-active-cycle attachment is deleted; no code path
+answers "which cycle is active" for attachment purposes (sweep-asserted). Unbound agents' runs
+attach ONLY via explicit per-ingest `context.cycleId` (validated per CR-CRU-024 §S7); otherwise
+they are stored cycle-less with the existing warning in the envelope.
+
+### §S4 — Fleet: `--cycle` on register
+The shared register path (`_crucible_axi.py`) and all five clients gain `--cycle`; dispatch
+briefs supply it. Client-surface change → standing Model-B intimation. The orchestrator's own
+gate runs register bound to the VERIFY/regression cycle (no special casing).
+
+### §S5 — Multi-track becomes safe by construction (forward note, no extra work)
+With attachment always explicit and validated, parallel active cycles in one project stop being
+an ambiguity hazard — each track's agents bind their own cycle. This CR is the enabler the 0.2.0
+multi-track wave was missing; no additional disambiguator design is needed there.
 
 ## Acceptance criteria
-- [ ] With two open plans each holding an active cycle, a context-less run ingest returns
-      409 `ok:false`, stores NO run, and the error enumerates both cycles with
-      `{planId, cr, cycleId, label}` — asserted.
-- [ ] `help[]` on that error is non-empty and names a concrete next action (CR-CRU-024
-      help-quality convention) — asserted.
-- [ ] Exactly one active cycle → attach still works; zero active → warn + withhold still
-      works — regression-asserted.
-- [ ] The §S2 consumer sweep is enumerated in the tests (each auto-attach path refuses on
-      ambiguity) — asserted per consumer.
-- [ ] Full bun regression green; Python gate green if any client file is touched
-      (CR-CRU-045 §S3).
+- [ ] RED/GREEN/FIX/VERIFY registration without `cycleId` → 409 `ok:false`, non-empty `help[]` —
+      asserted per phase.
+- [ ] Registration bound to a pending / done / unknown cycle or a closed plan → 409 naming the
+      actual state — asserted per state.
+- [ ] A bound agent's ingest attaches to its registered cycle even when ANOTHER plan's cycle is
+      also active — asserted (the 2026-08-01 failure scenario, inverted).
+- [ ] A bound agent's ingest AFTER its cycle is done → 409, run not stored, no spill — asserted.
+- [ ] No attachment code path resolves "the active cycle": the §S9 attach helpers are gone —
+      grep/sweep-asserted.
+- [ ] All five clients + `_crucible_axi.py` send `--cycle` through to the wire; `register --help`
+      documents it — asserted.
+- [ ] ORCHESTRATOR/report unbound registration still works; explicit per-ingest `context.cycleId`
+      still validates per CR-CRU-024 §S7 — regression-asserted.
+- [ ] Full bun regression green AND full Python regression green (client change → both gates,
+      CR-CRU-045 §S3).
 
 ## Non-goals
-- Designing the multi-track disambiguator: the 0.2.0 multi-track model legitimately runs
-  parallel active cycles in one project, and will need track-scoped attach (explicit,
-  validated context per lane). That is Wave-5 design work; this CR only makes today's
-  ambiguity throw instead of guess.
-- Any change to cycle activation rules or the CR-CRU-024 state machine.
+- Phase persistence on events (CR-CRU-057).
+- Authenticating/authorizing agent identity (who may register at all) — out of scope; this CR
+  makes every binding explicit and validated, not authenticated.
 
 ## Risk
-- A refused ingest drops run data if the caller ignores the error — mitigated by the
-  definitive AXI error + non-zero exit (the run can be re-ingested once the state is
-  fixed; that is the point).
-- The §S2 consumer enumeration is the completeness risk — a missed auto-attach path keeps
-  the silent-guess behaviour alive. Gap-analysis must grep every `_active_cycle` /
-  attach-resolution call site, unfiltered.
+- **Coordinated fleet + server + test-harness change** — every existing test that registers a
+  TDD-phase agent must supply a binding; the RED sweep must enumerate registration sites the way
+  CR-CRU-044 did (six callers) plus every test fixture that registers.
+- The orchestrator dispatch flow changes (briefs must carry the cycle id) — process memo rides
+  the CR close-out.
