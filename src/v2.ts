@@ -5,7 +5,7 @@
 import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
-import { hints, cycleHints } from "./hints.ts";
+import { authHints, hints, cycleHints } from "./hints.ts";
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
 import { AGENT_PHASES } from "./types.ts";
@@ -189,6 +189,32 @@ function requireProject(store: Store, key: unknown): { key: string } | { fail: R
     return { fail: fail(404, `project is archived: ${key}`, { help: hints.archivedProject }) };
   }
   return { key };
+}
+
+/**
+ * CR-CRU-056 §S2b/§S3b — the single caller-auth seam. Every mutating
+ * workflow verb and every ingest surface routes its posted `agentId` through
+ * here: the caller must be a LIVE registered agent (lazy-prune semantics —
+ * a row past its prune window, or one removed by unregister, is absent).
+ * Returns the authenticated agentId, or the shared 409 refusal (ok:false,
+ * state-derived help[] naming registration as the next step) — the caller
+ * returns it BEFORE mutating or storing anything.
+ */
+function requireRegisteredCaller(
+  store: Store,
+  projectKey: string,
+  body: V2Body,
+): { agentId: string } | { fail: Response } {
+  const agentId =
+    typeof body.agentId === "string" && body.agentId.length > 0 ? body.agentId : undefined;
+  if (agentId !== undefined && store.hasAgent(projectKey, agentId)) {
+    return { agentId };
+  }
+  const error =
+    agentId === undefined
+      ? "a registered caller is required — this request carried no agentId"
+      : `agent ${agentId} is not registered with this project — refused`;
+  return { fail: fail(409, error, { help: authHints.unregisteredCaller(agentId) }) };
 }
 
 function handleOrientation(store: Store, deps: V2Deps, req: Request, url: URL): Response {
@@ -683,10 +709,14 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   if ("error" in parsed) return fail(400, parsed.error);
   const { run } = parsed;
 
-  // CR-CRU-056 §S3 — the single attach/validation seam: a BOUND agent's run
+  // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
+  // BEFORE any touchAgent/record — no agent row is created or resurrected);
+  // §S3 — then the single attach/validation seam: a BOUND agent's run
   // is server-stamped from its row (or refused, 409, nothing stored); an
   // UNBOUND agent keeps CR-CRU-024 §S7's explicit-context validation.
-  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const { agentId } = caller;
   const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
   if (attach.fail !== undefined) return attach.fail;
 
@@ -727,10 +757,14 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     ...(typeof body.raw === "string" ? { raw: body.raw } : {}),
   };
 
-  // CR-CRU-056 §S3 — the single attach/validation seam: a BOUND agent's run
+  // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
+  // BEFORE any touchAgent/record — no agent row is created or resurrected);
+  // §S3 — then the single attach/validation seam: a BOUND agent's run
   // is server-stamped from its row (or refused, 409, nothing stored); an
   // UNBOUND agent keeps CR-CRU-024 §S7's explicit-context validation.
-  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const { agentId } = caller;
   const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
   if (attach.fail !== undefined) return attach.fail;
 
@@ -763,7 +797,11 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
 
   const format = typeof body.format === "string" ? body.format : undefined;
   const report = parseCompile(body.errors, format);
-  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
+  // BEFORE recordCompileEvent's touchAgent — no row created or resurrected).
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const { agentId } = caller;
   const event = store.recordCompileEvent(pk.key, agentId, report, {
     codec: report.format,
     ...runMeta(body),
@@ -836,7 +874,12 @@ async function handleGates(store: Store, req: Request): Promise<Response> {
       help: hints.gateOutcomes,
     });
   }
-  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  // CR-CRU-056 §S2b/§S3b — gates are BOTH a workflow verb and an ingest
+  // surface: a live registered caller is required (refused BEFORE any
+  // touchAgent/record — no row created or resurrected).
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const { agentId } = caller;
   // CR-CRU-056 §S3 — gate snapshots are the second stamped surface: a BOUND
   // agent's gate is server-stamped from its row (or refused, 409, nothing
   // stored); an UNBOUND poster keeps today's verbatim context pass-through
@@ -867,7 +910,11 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
       help: hints.milestoneTypes,
     });
   }
-  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  // CR-CRU-056 §S2b — milestones are a workflow verb: a live registered
+  // caller is required (refused BEFORE the event is recorded).
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const { agentId } = caller;
   const event = store.recordMilestoneEvent(pk.key, agentId, body.type, {
     ...(typeof body.label === "string" ? { label: body.label } : {}),
     ...(typeof body.commit === "string" ? { commit: body.commit } : {}),
@@ -924,6 +971,9 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
   if ("fail" in pk) return pk.fail;
   const body = await readBody(req);
   if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
+  // CR-CRU-056 §S2b — workflow verbs require a live registered caller.
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
   if (typeof body.cr !== "string" || body.cr.length === 0) {
     return fail(400, "cr is required", { help: hints.planFileInput });
   }
@@ -1003,6 +1053,9 @@ async function handleCycleAppend(
   }
   const body = await readBody(req);
   if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
+  // CR-CRU-056 §S2b — workflow verbs require a live registered caller.
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
   const parsed = parseCycleInput(body);
   if ("error" in parsed) return fail(400, parsed.error, { help: hints.cycleInput });
   // CR-CRU-024 §S3.1 — optional `before: <cycleId>` inserts the new cycle
@@ -1050,6 +1103,9 @@ async function handleCycleTransition(
   }
   const body = await readBody(req);
   if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
+  // CR-CRU-056 §S2b — workflow verbs require a live registered caller.
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
   // CR-CRU-024 §S3.2 — the PATCH carries EITHER {status} (transition) or {label}
   // (rename), never both: one mutation per call.
   const hasStatus = body.status !== undefined;
@@ -1113,6 +1169,9 @@ async function handlePlanClose(
   }
   const body = await readBody(req);
   if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
+  // CR-CRU-056 §S2b — close AND backfill require a live registered caller.
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
   // §S6 re-baseline (cycle 19) — one-field orchestrator backfill: a PATCH
   // body carrying `orchestrator` with NO `status` stamps an OPEN plan (the
   // executing plan); closed plans → 400, mirroring the close validation.
@@ -1186,9 +1245,20 @@ async function handlePlanClose(
  * re-anchor. 200 {ok:true, changed:true} with an active cycle, {changed:false}
  * with none; an unknown plan → 404 + help[].
  */
-function handlePlanCheckpoint(store: Store, key: string, planIdRaw: string): Response {
+async function handlePlanCheckpoint(
+  store: Store,
+  key: string,
+  planIdRaw: string,
+  req: Request,
+): Promise<Response> {
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
+  // CR-CRU-056 §S2b — checkpoint requires a live registered caller (any
+  // phase — a bound TDD agent checkpoints its own plan too, not just the
+  // orchestrator). An absent/unparseable body carries no agentId → refused.
+  const body = (await readBody(req)) ?? {};
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
   const planId = numericId(planIdRaw);
   if (planId === null) {
     return fail(404, `plan not found: ${planIdRaw}`, { help: hints.planCycleNotFound });
@@ -1217,8 +1287,14 @@ async function handlePlanAbort(
 ): Promise<Response> {
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
-  // Approval gate FIRST — mirrors the guarded-run-deletion 409 convention.
   const body = (await readBody(req)) ?? {};
+  // CR-CRU-056 §S2b — caller auth precedes even the approval gate: an
+  // unregistered caller is refused with the registration help[] regardless
+  // of userApproved (no anonymous verbs, approved or not).
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  // Approval gate next — mirrors the guarded-run-deletion 409 convention
+  // (still checked BEFORE plan existence).
   if (body.userApproved !== true) {
     return fail(
       409,
@@ -1243,9 +1319,13 @@ async function handlePlanAbort(
  * CR-CRU-024 §S5.3 — POST …/projects/<key>/stop — checkpoint every active
  * cycle's timer across the project's open plans. Returns {ok, checkpointed}.
  */
-function handleProjectStop(store: Store, key: string): Response {
+async function handleProjectStop(store: Store, key: string, req: Request): Promise<Response> {
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
+  // CR-CRU-056 §S2b — project stop requires a live registered caller.
+  const body = (await readBody(req)) ?? {};
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
   const checkpointed = store.stopProject(pk.key);
   return json({ ok: true, checkpointed });
 }
@@ -1426,7 +1506,7 @@ function handlePlansRoute(
     return handlePlanClose(store, key, segments[2]!, req);
   }
   if (segments.length === 4 && segments[3] === "checkpoint" && req.method === "POST") {
-    return handlePlanCheckpoint(store, key, segments[2]!);
+    return handlePlanCheckpoint(store, key, segments[2]!, req);
   }
   if (segments.length === 4 && segments[3] === "abort" && req.method === "POST") {
     return handlePlanAbort(store, key, segments[2]!, req);
@@ -1664,7 +1744,7 @@ export function handleV2(
     }
     // CR-CRU-024 §S5.3 — project stop: checkpoint every active cycle's timer.
     if (req.method === "POST" && segments.length === 2 && segments[1] === "stop") {
-      return handleProjectStop(store, segments[0]!);
+      return handleProjectStop(store, segments[0]!, req);
     }
     // CR-CRU-012 §S1 — PATCH project parameters (v2-only; the v1 shim has
     // no equivalent route).

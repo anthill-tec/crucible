@@ -74,9 +74,15 @@ function expectUnregisteredRefusal(res: Response, body: ErrResponse): void {
 
 let handle: ServerHandle | undefined;
 
+/** Project keys that already have the fixture orchestrator (below) live-registered
+ * for the CURRENT server boot — reset every afterEach so it never leaks across
+ * boots (each boot is a fresh :memory: store with no live agents). */
+let fixtureOrchestratorKeys: Set<string> = new Set();
+
 afterEach(() => {
   handle?.stop();
   handle = undefined;
+  fixtureOrchestratorKeys = new Set();
 });
 
 function boot(): ServerHandle {
@@ -122,8 +128,29 @@ function projectPath(key: string, suffix = ""): string {
   return `/api/v2/projects/${key}${suffix}`;
 }
 
+/** §S2b fixture-repair (C3): plan-file/cycle-activate/cycle-transition are
+ * MUTATING v2 workflow verbs — §S2b requires them to refuse an unregistered
+ * caller (409) exactly like every other route below. The shared setup
+ * helpers below are fixtures, not assertions under test, so they must model
+ * a CORRECTLY-registered caller: once per server boot (memoized per project
+ * key — a fresh :memory: store per boot has no live agents), register a
+ * dedicated `fixture-orch` ORCHESTRATOR via the real HTTP register route,
+ * then pass its agentId on every fixture request. This does NOT touch the
+ * §S2b anonymous/ghost/pruned assertions themselves — those construct their
+ * own requests below and must keep failing-then-refused exactly as written. */
+async function ensureFixtureOrchestrator(key: string): Promise<void> {
+  if (fixtureOrchestratorKeys.has(key)) return;
+  await registerOrchestrator(key, "fixture-orch");
+  fixtureOrchestratorKeys.add(key);
+}
+
 async function fileOnly(key: string, cr: string): Promise<{ planId: number; cycleId: number }> {
-  const res = await postJson(plansPath(key), { cr, cycles: [{ label: "solo" }] });
+  await ensureFixtureOrchestrator(key);
+  const res = await postJson(plansPath(key), {
+    cr,
+    cycles: [{ label: "solo" }],
+    agentId: "fixture-orch",
+  });
   expect(res.status).toBe(201);
   const body = (await res.json()) as PlanFileResponse;
   return { planId: body.planId, cycleId: body.cycles[0]!.id };
@@ -131,13 +158,21 @@ async function fileOnly(key: string, cr: string): Promise<{ planId: number; cycl
 
 async function fileAndActivate(key: string, cr: string): Promise<{ planId: number; cycleId: number }> {
   const { planId, cycleId } = await fileOnly(key, cr);
-  const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), { status: "active" });
+  await ensureFixtureOrchestrator(key);
+  const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+    status: "active",
+    agentId: "fixture-orch",
+  });
   expect(res.status).toBe(200);
   return { planId, cycleId };
 }
 
 async function transitionCycle(key: string, planId: number, cycleId: number, status: string): Promise<void> {
-  const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), { status });
+  await ensureFixtureOrchestrator(key);
+  const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+    status,
+    agentId: "fixture-orch",
+  });
   expect(res.status).toBe(200);
 }
 

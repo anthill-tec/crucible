@@ -269,3 +269,20 @@ export const cycleHints = {
     "re-register bound to the cycle this run belongs to (an ACTIVE cycle of an OPEN plan), then re-ingest",
   ],
 };
+
+/**
+ * CR-CRU-056 §S2b/§S3b — registered-caller refusals. Every mutating workflow
+ * verb and every ingest surface requires a LIVE registered caller; the help
+ * is state-derived (names the offending agentId when the request carried one)
+ * and always names registration as the next step.
+ */
+export const authHints = {
+  /** §S2b/§S3b — the request carried no agentId, or one with no live row. */
+  unregisteredCaller: (agentId: string | undefined): string[] => [
+    agentId === undefined
+      ? "this verb requires a registered caller — send your agentId in the request body"
+      : `agentId ${agentId} has no live registration in this project (never registered, unregistered, or pruned) — nothing was stored or changed`,
+    "register first: POST /api/v2/agents/register {projectKey, agentId, phase} (phase: RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report; TDD phases register bound with cycleId)",
+    "then retry this call with that same agentId in the body",
+  ],
+};
