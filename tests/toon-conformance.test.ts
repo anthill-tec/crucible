@@ -20,7 +20,8 @@
 // wire is the seam this file pins.
 import { decode } from "@toon-format/toon";
 import { describe, test, expect, afterEach } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
 import type { RunSummary, SuiteNode } from "../src/types.ts";
@@ -308,6 +309,175 @@ describe("TOON conformance — official library decode of the real server wire (
 
       expect(decoded.help).toEqual(jsonBody.help);
       expect(Array.isArray(decoded.help)).toBe(true);
+    });
+  });
+
+  // ── §S4 AC — client-emit direction: a REAL client's own stdout envelope ──
+  // decodes via the official library. The describe block above proves
+  // server-emit → official-decode; this proves the MISSING direction named
+  // by §S4 ("client `_emit` output ... → `@toon-format/toon` decode ...
+  // across the client envelope shapes"). `clients/bun-crucible.py` writes
+  // its own AXI envelope to stdout via `_crucible_axi.py:84`
+  // (`sys.stdout.write(_toon().encode({"axi": axi}) + "\n")`) — a REAL
+  // client-side TOON encode, produced by `clients/toon.py`, not the
+  // server's `src/toon.ts`. Self-contained: its own spawn helper, its own
+  // scratch-dir lifecycle, reusing only `createProject`/`handle` from the
+  // outer describe.
+
+  describe("client-emit oracle — a real client envelope decodes via the official library (§S4, client→agent direction)", () => {
+    const CLIENT_SCRIPT_PATH = join(import.meta.dir, "..", "clients", "bun-crucible.py");
+    const scratchDirs: string[] = [];
+
+    afterEach(() => {
+      while (scratchDirs.length > 0) {
+        rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+      }
+    });
+
+    interface ClientRunResult {
+      code: number;
+      stdout: string;
+      stderr: string;
+    }
+
+    /**
+     * Spawns `uv run clients/bun-crucible.py <args>` against a REAL server —
+     * the same PEP 723 `uv run` invocation pattern
+     * `tests/clients-bun-crucible.test.ts`'s `runScript` helper uses (§S3),
+     * copied locally (that helper is not exported) rather than imported.
+     * Strips ambient `WORKFLOW_*` env so each call controls it explicitly,
+     * and always injects `CRUCIBLE_URL` at the fixture server under test.
+     */
+    async function runClient(
+      args: string[],
+      cwd: string,
+      crucibleUrl: string,
+    ): Promise<ClientRunResult> {
+      const baseEnv: Record<string, string | undefined> = { ...process.env };
+      for (const k of Object.keys(baseEnv)) {
+        if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
+      }
+      const proc = Bun.spawn({
+        cmd: ["uv", "run", CLIENT_SCRIPT_PATH, ...args],
+        cwd,
+        env: { ...baseEnv, CRUCIBLE_URL: crucibleUrl },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      return { code, stdout, stderr };
+    }
+
+    /** A fresh scratch project dir carrying only the `.env` project-key pin
+     * the client's `_project_key()` resolution needs — the ephemeral FIXTURE
+     * server's project, never the live :3849 board. */
+    function scratchProjectDir(key: string): string {
+      const dir = mkdtempSync(join(tmpdir(), "toon-oracle-client-"));
+      scratchDirs.push(dir);
+      writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
+      return dir;
+    }
+
+    test("a real client `register` envelope's stdout decodes via the official library into a well-formed AXI envelope (§S4 AC — 'every client-emitted envelope round-trips')", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject("client-emit-register-rt");
+      const projectDir = scratchProjectDir(key);
+
+      const res = await runClient(
+        ["register", "--agent", "toon-oracle-probe", "--phase", "report", "--project-dir", projectDir],
+        projectDir,
+        `http://localhost:${handle.server.port}`,
+      );
+
+      expect(res.code).toBe(0);
+      const decoded = decode(res.stdout) as {
+        axi: {
+          verb: string;
+          ok: boolean;
+          agent: string;
+          help: unknown;
+          context: { projectKey: string };
+          warnings: unknown;
+        };
+      };
+
+      // POSITIVE — the exact deterministic shape a real register call must emit.
+      expect(decoded.axi.verb).toBe("register");
+      expect(decoded.axi.ok).toBe(true);
+      expect(decoded.axi.agent).toBe("toon-oracle-probe");
+      expect(Array.isArray(decoded.axi.help)).toBe(true);
+      expect((decoded.axi.help as unknown[]).length).toBeGreaterThan(0);
+      expect((decoded.axi.help as unknown[]).every((h) => typeof h === "string")).toBe(true);
+      // NEGATIVE/bound — the fixture project's own key, not some other value.
+      expect(decoded.axi.context.projectKey).toBe(key);
+    });
+
+    // ESCALATION: the dispatch brief asked for this case to be driven via
+    // `--message "42"`, but reading `clients/bun-crucible.py:339-421`
+    // (`_register_agent`/`cmd_register`) shows `message` is POSTed to the
+    // server ONLY — the `_emit_axi("register", ok, {"agent": args.agent,
+    // "help": _HELP_STEPS["register"]}, ...)` call at bun-crucible.py:419-420
+    // never includes it, and `_crucible_axi.py`'s documented envelope shape
+    // (`axi: {verb, ok, <verb-specific result fields>, context, warnings}`)
+    // confirms `register`'s result fields are exactly `{agent, help}` — no
+    // field carries `message` in the CLIENT's own stdout to decode. The
+    // AGENT ID (`args.agent`) IS echoed verbatim into both `axi.agent` and
+    // `axi.context.agentId`, giving the identical client-emit
+    // type-preservation property the §S4 AC requires ("42" must not become
+    // a number), so this test drives it through `--agent "42"` instead of
+    // `--message "42"` — flagged here rather than silently substituted.
+    test("a numeric-looking agent id ('42') survives the client's own encode→official-decode as a STRING, never coerced to a number (§S4 AC type preservation, client-emit direction)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject("client-emit-type-preserve-rt");
+      const projectDir = scratchProjectDir(key);
+
+      const res = await runClient(
+        ["register", "--agent", "42", "--phase", "report", "--project-dir", projectDir],
+        projectDir,
+        `http://localhost:${handle.server.port}`,
+      );
+
+      expect(res.code).toBe(0);
+      const decoded = decode(res.stdout) as {
+        axi: { agent: unknown; context: { agentId: unknown } };
+      };
+
+      // POSITIVE — the exact string, unchanged.
+      expect(decoded.axi.agent).toBe("42");
+      expect(decoded.axi.context.agentId).toBe("42");
+      // NEGATIVE — never silently coerced to the JS number 42 by the
+      // official decoder reading the client's OWN TOON output.
+      expect(typeof decoded.axi.agent).toBe("string");
+      expect(typeof decoded.axi.context.agentId).toBe("string");
+    });
+
+    test("`unregister` through the same spawn path also decodes via the official library to a well-formed ok:true envelope (lighter, decode-asserted)", async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const key = await createProject("client-emit-unregister-rt");
+      const projectDir = scratchProjectDir(key);
+
+      await runClient(
+        ["register", "--agent", "toon-oracle-probe", "--phase", "report", "--project-dir", projectDir],
+        projectDir,
+        `http://localhost:${handle.server.port}`,
+      );
+
+      const res = await runClient(
+        ["unregister", "--agent", "toon-oracle-probe", "--project-dir", projectDir],
+        projectDir,
+        `http://localhost:${handle.server.port}`,
+      );
+
+      expect(res.code).toBe(0);
+      const decoded = decode(res.stdout) as { axi: { verb: string; ok: boolean; agent: string } };
+      // POSITIVE — the exact deterministic unregister shape.
+      expect(decoded.axi.verb).toBe("unregister");
+      expect(decoded.axi.ok).toBe(true);
+      expect(decoded.axi.agent).toBe("toon-oracle-probe");
     });
   });
 
