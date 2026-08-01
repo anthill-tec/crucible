@@ -93,11 +93,23 @@ briefs supply it. Client-surface change → standing Model-B intimation. The orc
 gate runs register bound to the VERIFY/regression cycle (no special casing).
 
 ### §S4b — PRD sync (design surface — user-approved 2026-08-01)
-The PRD still documents the superseded model and carries CR-CRU-036 drift: `:278` ("attach
-`context.cycleId`"), `:285` ("clients auto-attach it"), and STALE `WORKFLOW_CYCLE_ID` references
-at `:292` and `:358` that CR-CRU-036 removed from the system but never from the PRD. Rewrite
-those clauses to the registration-binding model (agents register bound; the server stamps
-attachment; no client resolution; no `WORKFLOW_CYCLE_ID`), preserving surrounding content.
+The PRD still documents the superseded model and carries CR-CRU-036 drift: `:278` ("agents
+attach `context.cycleId`") and STALE `WORKFLOW_CYCLE_ID` references at `:292` and `:358` that
+CR-CRU-036 removed from the system but never from the PRD. Rewrite those clauses to the
+registration-binding model (agents register bound; the server stamps attachment; no client
+resolution; no `WORKFLOW_CYCLE_ID`), preserving surrounding content.
+
+**Correction (C4 RED, 2026-08-01):** an earlier draft of this section also cited `:285`
+("clients auto-attach it") as superseded. That is WRONG — `:285` is the *track*
+auto-attach-from-`$WORKFLOW_ROLE` sentence, an unrelated mechanism this CR does not touch. It
+is a PRESERVED NEIGHBOUR, guarded by a byte-identical anchor assertion. Read the line before
+citing it; the one-hit grep for "auto-attach" is what caught this.
+
+Additionally in scope (found at C4 RED): `clients/STATUS-CONTRACT.md` documents the CR-044
+`--agent`/`--phase` identity contract in detail but has ZERO mention of `--cycle` or binding —
+a genuine gap in the versioned ambient-read contract. Document the binding there (TDD-bound vs
+ORCHESTRATOR/report-unbound, and the 409 on an invalid binding). `docs/RUNBOOK.md` is
+server-only (confirmed twice — CR-046 C4 and here); nothing to change there.
 
 ### §S5 — Multi-track becomes safe by construction (forward note, no extra work)
 With attachment always explicit and validated, parallel active cycles in one project stop being
