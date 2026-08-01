@@ -879,6 +879,42 @@ describe("§S3 (CR-CRU-047) — bun narration survives bun's real ANSI tick line
   );
 
   test(
+    "narration still posts 'running N/M' when AI_AGENT=1 is explicitly SET in the runner's environment (CR-CRU-055 — the quieting list must strip it)",
+    async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const baseUrl = `http://localhost:${handle.server.port}`;
+      const key = await createProject(baseUrl, "clients-narration-bun-ai-agent-set");
+      const dir = scratch.dir("narration-bun-ai-agent-set-");
+      writeNarrationBunProject(dir, key, 24, 120);
+      const agentId = "narration-bun-ai-agent-set-agent";
+
+      let done = false;
+      const pollPromise = pollAgentUntil(baseUrl, key, agentId, () => done);
+      const proc = spawnScript(
+        BUN_SCRIPT_PATH,
+        ["test", "--agent", agentId, "--tests", "narration.test.ts", "--project-dir", dir, "--package-dir", dir],
+        { cwd: dir, crucibleUrl: baseUrl, env: { AI_AGENT: "1" } },
+      );
+      const [, , code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      done = true;
+      const log = await pollPromise;
+
+      expect(code).toBe(0); // all 24 fixture tests pass
+
+      const matches = extractNarration(log, NARRATION_RE);
+      // Non-vacuous precondition, same discipline as the §S2b tests above:
+      // narration must actually be OBSERVED, not merely asserted away.
+      expect(matches.length).toBeGreaterThan(0);
+      for (const m of matches) expect(m.m).toBe(24);
+    },
+    20000,
+  );
+
+  test(
     "narration still posts 'running N/M' when CLAUDECODE is explicitly UNSET in the runner's environment",
     async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });

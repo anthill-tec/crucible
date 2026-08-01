@@ -186,9 +186,15 @@ def _patch(path, payload):
 # `\x1b[0m\x1b[32m✓\x1b[0m\x1b[0m\x1b[1m <name>…`. An anchored bare `^✓`
 # therefore matches ZERO real output; the SGR runs around the glyph must be
 # tolerated on both sides. Pass (✓) and fail (✗) both count as completions.
+# §S1b (CR-CRU-055): the tick family has a SECOND legal wire form — an
+# uncoloured pipe (bun ≥1.3.14 canary) emits PLAIN result lines,
+# `(pass) suite > name [0.04ms]` / `(fail) suite > name [0.15ms]`, with no
+# SGR runs at all. Both forms must count. Plain `(skip)`/`(todo)` lines are
+# NOT completions — mirroring the ANSI family, where skip (») and todo (✎)
+# never matched here either.
 _ANSI_SGR_RUN = r"(?:\x1b\[[0-9;]*m)*"
 _COMPLETION_LINE = re.compile(
-    r"^" + _ANSI_SGR_RUN + r"[✓✗]" + _ANSI_SGR_RUN + r"\s"
+    r"^" + _ANSI_SGR_RUN + r"(?:[✓✗]" + _ANSI_SGR_RUN + r"|\((?:pass|fail)\))\s"
 )
 # bun's per-file section header, e.g. `narration.test.ts:`.
 _FILE_HEADER_LINE = re.compile(r"^(\S+\.[cm]?[jt]sx?):$")
@@ -541,18 +547,29 @@ def _parse_junit_file(junit_path):
 # Matching therefore happens on the WIRE form, while everything STORED (name,
 # message, trace) is stripped clean — junit leaf names carry no escapes, so a
 # married key must not either.
+# §S1b (CR-CRU-055): an uncoloured pipe (bun ≥1.3.14 canary) emits the SECOND
+# legal wire form — PLAIN result lines with no SGR runs:
+#   (fail) scratch > fails one [0.15ms]
+#   (pass) scratch > passes one [0.04ms]
+#   (skip) scratch > skipped one        (no duration tail)
+#   (todo) scratch > todo one           (no duration tail)
+# The `error:` detail block still arrives IMMEDIATELY BEFORE its `(fail)`
+# line, so both matcher families accept both forms and the marrying logic
+# downstream is unchanged. (`_ANSI_SGR_RUN` is zero-or-more, so the existing
+# duration-tail pattern already matches the plain `[0.15ms]` tail.)
 _ANSI_SGR_RE = re.compile(_ANSI_SGR_RUN)
 _DURATION_TAIL = (r"(?:\s+" + _ANSI_SGR_RUN + r"\[" + _ANSI_SGR_RUN
                   + r"[0-9.]+\s*m?s" + _ANSI_SGR_RUN + r"\])?")
 _FAIL_LINE = re.compile(
-    r"^" + _ANSI_SGR_RUN + r"✗" + _ANSI_SGR_RUN + r"\s+(?P<name>.*?)"
+    r"^" + _ANSI_SGR_RUN + r"(?:✗|\(fail\))" + _ANSI_SGR_RUN + r"\s+(?P<name>.*?)"
     + _ANSI_SGR_RUN + _DURATION_TAIL + _ANSI_SGR_RUN + r"\s*$"
 )
-# The non-failing result glyphs — pass (✓), skip (»), todo (✎). Each ends the
-# preceding detail block, so an `error:` block can never cross a finished test
-# and marry onto the wrong leaf. (Skip/todo lines carry no duration tail.)
+# The non-failing result markers — ANSI pass (✓), skip (»), todo (✎) and their
+# plain twins `(pass)`/`(skip)`/`(todo)`. Each ends the preceding detail
+# block, so an `error:` block can never cross a finished test and marry onto
+# the wrong leaf. (Skip/todo lines carry no duration tail.)
 _RESULT_BOUNDARY_LINE = re.compile(
-    r"^" + _ANSI_SGR_RUN + r"[✓»✎]" + _ANSI_SGR_RUN + r"\s"
+    r"^" + _ANSI_SGR_RUN + r"(?:[✓»✎]" + _ANSI_SGR_RUN + r"|\((?:pass|skip|todo)\))\s"
 )
 
 
@@ -782,10 +799,10 @@ def cmd_test(args):
         narrator = None
         if args.agent:
             # bun ≥1.3 hides per-test completion lines when it detects an agent
-            # session (CLAUDECODE / AGENT / REPL_ID env). Drop them all for the
+            # session (CLAUDECODE / AGENT / REPL_ID / AI_AGENT env). Drop them all for the
             # wrapped runner so the full ✓/✗ line family streams: §S2b counts it
             # live and the §S2c run.log keeps its result-line block boundaries.
-            for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID"):
+            for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
             narrator = _Narrator(
                 lambda message: _register_agent(project_dir, args.agent, message),
@@ -859,7 +876,7 @@ def cmd_regression(args):
         if args.agent:
             # Same §S2b setup as cmd_test (whole-suite M via package walk),
             # including the agent-quieting env strip.
-            for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID"):
+            for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
             narrator = _Narrator(
                 lambda message: _register_agent(project_dir, args.agent, message),

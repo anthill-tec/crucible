@@ -36,6 +36,20 @@ Consequences today, in any agent session:
 `("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT")`. Only the bun client carries the pattern
 — bun is the fleet's only env-quieting runner.
 
+### §S1b — Widen the tick matchers: plain `(pass)`/`(fail)` is a legal wire form (found at C1 GREEN, 2026-08-01)
+The strip alone proved necessary but not sufficient. The PATH-resolved runner on this
+machine is `bun test v1.3.14-canary.1`, which through an uncoloured pipe emits PLAIN
+result lines — `(pass) name [ms]` / `(fail) name` — where the stable binary emitted the
+ANSI ✓/✗ family. `_COMPLETION_LINE` (`clients/bun-crucible.py:190`) and the §S2c
+result-line family (≈`:533`) match ONLY the ANSI form, so narration and marrying stay
+blind even with §S1 in place.
+
+**Fix (decision: widen, not force):** both matcher families accept BOTH wire forms —
+ANSI ✓/✗ AND plain `(pass)`/`(fail)`. Rejected alternatives: `FORCE_COLOR=1` in the
+wrapped env (re-introduces env coupling, the exact fragility class this CR exists to
+fix) and pinning the stable binary (not controllable on consumer machines; the canary
+form is the coming stable).
+
 ### §S2 — Name `AI_AGENT` in the regression guards
 Extend the CR-047 §S3 guard family in `tests/clients-narration.test.ts` with an
 `AI_AGENT`-explicitly-SET variant (mirroring the existing CLAUDECODE=1 guard), so the next
@@ -46,6 +60,8 @@ new quieting variable is one test + one tuple entry away from being pinned.
       `running N/M` heartbeats — asserted by the new §S2 guard.
 - [ ] The 5 currently-failing tests (4 narration + §S2c marrying) pass with `AI_AGENT` set
       in the ambient environment (as it is in agent sessions).
+- [ ] Narration and §S2c marrying work against BOTH tick forms — asserted with the real
+      runner (plain form) while the existing ANSI-fixture tests stay green (§S1b).
 - [ ] Full bun regression green AND full Python regression green (client change → both
       gates, CR-CRU-045 §S3).
 
