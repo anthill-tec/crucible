@@ -60,7 +60,7 @@ interface RunResult {
 }
 
 /**
- * Spawns `python3 clients/bun-crucible.py <args>`. Strips any ambient
+ * Spawns `uv run clients/bun-crucible.py <args>`. Strips any ambient
  * WORKFLOW_* env so each test controls it explicitly, and always injects
  * CRUCIBLE_URL — the contract under test (the v1 script hardcodes
  * `http://localhost:3849`; the C2 upgrade must honor this env var so tests
@@ -75,7 +75,7 @@ async function runScript(
     if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
   }
   const proc = Bun.spawn({
-    cmd: ["python3", SCRIPT_PATH, ...args],
+    cmd: ["uv", "run", SCRIPT_PATH, ...args],
     cwd: opts.cwd,
     env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl, ...(opts.env ?? {}) },
     stdout: "pipe",

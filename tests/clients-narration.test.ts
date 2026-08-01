@@ -125,7 +125,7 @@ function startCapturingProxy(targetBaseUrl: string): {
 }
 
 /**
- * Spawns `python3 <scriptPath> <args>` WITHOUT awaiting completion — hands
+ * Spawns `uv run <scriptPath> <args>` WITHOUT awaiting completion — hands
  * back the raw `Bun.Subprocess` so callers can poll live agent state
  * concurrently with the run. Strips ambient WORKFLOW_* env; always injects
  * CRUCIBLE_URL.
@@ -140,7 +140,7 @@ function spawnScript(
     if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
   }
   return Bun.spawn({
-    cmd: ["python3", scriptPath, ...args],
+    cmd: ["uv", "run", scriptPath, ...args],
     cwd: opts.cwd,
     env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl, ...(opts.env ?? {}) },
     stdout: "pipe",
@@ -167,7 +167,7 @@ function spawnScriptWithClaudecodeUnset(
   }
   delete baseEnv.CLAUDECODE;
   return Bun.spawn({
-    cmd: ["python3", scriptPath, ...args],
+    cmd: ["uv", "run", scriptPath, ...args],
     cwd: opts.cwd,
     env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl },
     stdout: "pipe",

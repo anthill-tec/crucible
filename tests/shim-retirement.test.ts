@@ -731,7 +731,7 @@ async function runScript(
     if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
   }
   const proc = Bun.spawn({
-    cmd: ["python3", opts.scriptPath ?? SCRIPT_PATH, ...args],
+    cmd: ["uv", "run", opts.scriptPath ?? SCRIPT_PATH, ...args],
     cwd: opts.cwd,
     env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl, ...(opts.env ?? {}) },
     stdout: "pipe",
