@@ -68,6 +68,25 @@ describe("TOON conformance — official library decode of the real server wire (
     return { res, text };
   }
 
+  /**
+   * CR-CRU-046 C2 test-fix pass — the JSON and TOON bodies for a given
+   * envelope are fetched SEQUENTIALLY (two real HTTP round-trips), so any
+   * field derived from the live wall clock (`Date.now()`) can tick between
+   * the two fetches and make an otherwise-identical deep-equal flake
+   * (~40-60% observed on `GET /api/v2/agents`'s `runtime_ms` and
+   * `GET /api/v2/health`'s `uptime_s`). Strip exactly the named volatile
+   * key(s) from BOTH decoded representations before the comparison — every
+   * other field, including every other agent field, stays fully compared.
+   * `JSON.stringify`'s replacer walks every key at every depth, so this
+   * reaches `runtime_ms` nested inside `agents[]` as well as a top-level
+   * `uptime_s`.
+   */
+  function stripVolatile<T>(value: T, volatileKeys: string[]): T {
+    return JSON.parse(
+      JSON.stringify(value, (key, val) => (volatileKeys.includes(key) ? undefined : val)),
+    ) as T;
+  }
+
   async function createProject(name: string): Promise<string> {
     const res = await postJson("/api/v2/projects", { name });
     const body = (await res.json()) as OkResponse & { project: { key: string } };
@@ -123,7 +142,13 @@ describe("TOON conformance — official library decode of the real server wire (
       const { res: toonRes, text: toonText } = await getToonText("/api/v2");
       expect(toonRes.status).toBe(200);
       expect(toonRes.headers.get("content-type")).toBe("text/toon; charset=utf-8");
-      const decoded = decode(toonText);
+      // TS2769 fix (CR-CRU-046 C2 test-fix pass): `decode()` returns the
+      // library's `JsonValue` union, which pins `.toEqual`'s overload and
+      // rejects the JSON twin's `OkResponse` shape. Cast through `unknown`
+      // (not a narrower type) so every field still round-trips through the
+      // real deep-equal below — this is a type-level unblock only, no
+      // runtime behavior changes.
+      const decoded = decode(toonText) as unknown;
 
       expect(decoded).toEqual(jsonBody);
     });
@@ -139,9 +164,19 @@ describe("TOON conformance — official library decode of the real server wire (
 
       const { res: toonRes, text: toonText } = await getToonText("/api/v2/agents");
       expect(toonRes.status).toBe(200);
-      const decoded = decode(toonText);
+      // TS2769 fix (CR-CRU-046 C2 test-fix pass): `decode()` returns the
+      // library's `JsonValue` union, which pins `.toEqual`'s overload and
+      // rejects the JSON twin's `OkResponse` shape. Cast through `unknown`
+      // (not a narrower type) so every field still round-trips through the
+      // real deep-equal below — this is a type-level unblock only, no
+      // runtime behavior changes.
+      const decoded = decode(toonText) as unknown;
 
-      expect(decoded).toEqual(jsonBody);
+      // Flake fix (CR-CRU-046 C2): `runtime_ms` (nested in each agent) ticks
+      // between the JSON and TOON fetches above — strip it from BOTH sides
+      // before the deep-equal so the live clock can't flip this test red.
+      // Every other agent field (including `message`) stays compared as-is.
+      expect(stripVolatile(decoded, ["runtime_ms"])).toEqual(stripVolatile(jsonBody, ["runtime_ms"]));
     });
 
     test("GET /api/v2/projects — official decode deep-equals the JSON twin", async () => {
@@ -154,7 +189,13 @@ describe("TOON conformance — official library decode of the real server wire (
 
       const { res: toonRes, text: toonText } = await getToonText("/api/v2/projects");
       expect(toonRes.status).toBe(200);
-      const decoded = decode(toonText);
+      // TS2769 fix (CR-CRU-046 C2 test-fix pass): `decode()` returns the
+      // library's `JsonValue` union, which pins `.toEqual`'s overload and
+      // rejects the JSON twin's `OkResponse` shape. Cast through `unknown`
+      // (not a narrower type) so every field still round-trips through the
+      // real deep-equal below — this is a type-level unblock only, no
+      // runtime behavior changes.
+      const decoded = decode(toonText) as unknown;
 
       expect(decoded).toEqual(jsonBody);
     });
@@ -169,7 +210,13 @@ describe("TOON conformance — official library decode of the real server wire (
 
       const { res: toonRes, text: toonText } = await getToonText("/api/v2/events");
       expect(toonRes.status).toBe(200);
-      const decoded = decode(toonText);
+      // TS2769 fix (CR-CRU-046 C2 test-fix pass): `decode()` returns the
+      // library's `JsonValue` union, which pins `.toEqual`'s overload and
+      // rejects the JSON twin's `OkResponse` shape. Cast through `unknown`
+      // (not a narrower type) so every field still round-trips through the
+      // real deep-equal below — this is a type-level unblock only, no
+      // runtime behavior changes.
+      const decoded = decode(toonText) as unknown;
 
       expect(decoded).toEqual(jsonBody);
     });
@@ -186,7 +233,13 @@ describe("TOON conformance — official library decode of the real server wire (
 
       const { res: toonRes, text: toonText } = await getToonText(`/api/v2/events/${eventId}`);
       expect(toonRes.status).toBe(200);
-      const decoded = decode(toonText);
+      // TS2769 fix (CR-CRU-046 C2 test-fix pass): `decode()` returns the
+      // library's `JsonValue` union, which pins `.toEqual`'s overload and
+      // rejects the JSON twin's `OkResponse` shape. Cast through `unknown`
+      // (not a narrower type) so every field still round-trips through the
+      // real deep-equal below — this is a type-level unblock only, no
+      // runtime behavior changes.
+      const decoded = decode(toonText) as unknown;
 
       expect(decoded).toEqual(jsonBody);
     });
@@ -201,7 +254,13 @@ describe("TOON conformance — official library decode of the real server wire (
 
       const { res: toonRes, text: toonText } = await getToonText(`/api/v2/status?project=${key}`);
       expect(toonRes.status).toBe(200);
-      const decoded = decode(toonText);
+      // TS2769 fix (CR-CRU-046 C2 test-fix pass): `decode()` returns the
+      // library's `JsonValue` union, which pins `.toEqual`'s overload and
+      // rejects the JSON twin's `OkResponse` shape. Cast through `unknown`
+      // (not a narrower type) so every field still round-trips through the
+      // real deep-equal below — this is a type-level unblock only, no
+      // runtime behavior changes.
+      const decoded = decode(toonText) as unknown;
 
       expect(decoded).toEqual(jsonBody);
     });
@@ -214,9 +273,19 @@ describe("TOON conformance — official library decode of the real server wire (
 
       const { res: toonRes, text: toonText } = await getToonText("/api/v2/health");
       expect(toonRes.status).toBe(200);
-      const decoded = decode(toonText);
+      // TS2769 fix (CR-CRU-046 C2 test-fix pass): `decode()` returns the
+      // library's `JsonValue` union, which pins `.toEqual`'s overload and
+      // rejects the JSON twin's `OkResponse` shape. Cast through `unknown`
+      // (not a narrower type) so every field still round-trips through the
+      // real deep-equal below — this is a type-level unblock only, no
+      // runtime behavior changes.
+      const decoded = decode(toonText) as unknown;
 
-      expect(decoded).toEqual(jsonBody);
+      // Flake fix (CR-CRU-046 C2): `uptime_s` ticks between the JSON and
+      // TOON fetches above — strip it from BOTH sides before the deep-equal
+      // so the live clock can't flip this test red. Every other health
+      // field (status/version/counts) stays compared as-is.
+      expect(stripVolatile(decoded, ["uptime_s"])).toEqual(stripVolatile(jsonBody, ["uptime_s"]));
     });
   });
 
