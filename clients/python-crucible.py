@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["toon-format>=0.1,<0.2"]
+# dependencies = []
 # ///
 """Python + unittest Crucible CLI — single entry point for orchestrator + RED/GREEN/
 FIX/VERIFY agent lifecycle ops AND for running Python test targets (unittest via

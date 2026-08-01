@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["toon-format>=0.1,<0.2"]
+# dependencies = []
 # ///
 """Rust + Cargo Crucible CLI — single entry point for orchestrator + rust-{red,
 green,fix,verify} agent lifecycle ops AND for running Cargo targets (nextest,
