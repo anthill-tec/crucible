@@ -45,6 +45,31 @@ answers "which cycle is active" for attachment purposes (sweep-asserted). Unboun
 attach ONLY via explicit per-ingest `context.cycleId` (validated per CR-CRU-024 §S7); otherwise
 they are stored cycle-less with the existing warning in the envelope.
 
+### §S2b — ONLY a registered agent communicates with the server — orchestrators included (user ruling 2026-08-01)
+Every MUTATING v2 surface — plan-file, cycle-activate, cycle-done, cycle-add, cr-close,
+checkpoint, stop, abort, milestone, gate ingest, run/compile ingest — carries the calling
+`agentId` and is REFUSED (409, definitive AXI error) unless that id is a LIVE REGISTERED agent.
+There are no anonymous verbs and no orchestrator exemption: plan verbs require a registered
+`ORCHESTRATOR`-phase agent (the fleet's plan verbs stop taking a free-text `--orchestrator`
+label and instead require the registered `--agent` id). Observed live 2026-08-01:
+`cycle-activate`/`cycle-done` succeeded while the orchestrator's own registration had been
+pruned — the server took workflow-mutating commands from an agent it did not know.
+
+Read surfaces (dashboard GETs, the CR-CRU-035 hook-safe `status` contract) remain open —
+requiring registration there would break the ambient-read contract. Flagged for explicit user
+confirmation at gap-analysis in case "all communication" is meant to include reads.
+
+### §S3b — Ingest ONLY from registered agents; implicit agent-creation retired (user ruling 2026-08-01, second)
+Run/compile/gate ingest carrying an `agentId` with **no live registered row** is REFUSED — 409
+definitive AXI error, run not stored, `help[]` = register first (with phase, and cycle binding
+where §S2 requires it). The v1 "ingest-as-implicit-heartbeat" behaviour survives ONLY as a
+heartbeat: an ingest from a REGISTERED agent still refreshes `lastSeen`; it never CREATES or
+resurrects an agent row. Observed live 2026-08-01: a pruned `vidushi` row was silently
+re-materialised by a bare ingest at 09:45 with no registration, no phase validation, no
+declaration of intent — the server accepted a run from an agent it did not know. The server is
+the discipline boundary: unregistered posters are thrown out with the appropriate exception, not
+welcomed in.
+
 ### §S4 — Fleet: `--cycle` on register
 The shared register path (`_crucible_axi.py`) and all five clients gain `--cycle`; dispatch
 briefs supply it. Client-surface change → standing Model-B intimation. The orchestrator's own
@@ -65,6 +90,19 @@ multi-track wave was missing; no additional disambiguator design is needed there
 - [ ] A bound agent's ingest AFTER its cycle is done → 409, run not stored, no spill — asserted.
 - [ ] No attachment code path resolves "the active cycle": the §S9 attach helpers are gone —
       grep/sweep-asserted.
+- [ ] Ingest with an agentId that has NO live registered row → 409 `ok:false`, run NOT stored,
+      `help[]` names registration as the next action — asserted (run, compile and gate-snapshot
+      surfaces each).
+- [ ] Ingest from an agent AFTER its unregister or prune → same 409; the agent row is NOT
+      re-created — asserted (the 2026-08-01 `vidushi` resurrection scenario).
+- [ ] A registered agent's ingest still refreshes `lastSeen` (implicit heartbeat preserved for
+      known agents) — regression-asserted.
+- [ ] Every mutating verb (plan-file, cycle-activate, cycle-done, cycle-add, cr-close,
+      checkpoint, stop, abort, milestone, gate ingest) from an unregistered caller → 409, state
+      unchanged — asserted per verb (§S2b).
+- [ ] The fleet's plan verbs send the registered `--agent` id (free-text `--orchestrator` label
+      retired); an orchestrator must register (phase `ORCHESTRATOR`) before filing/activating —
+      asserted.
 - [ ] All five clients + `_crucible_axi.py` send `--cycle` through to the wire; `register --help`
       documents it — asserted.
 - [ ] ORCHESTRATOR/report unbound registration still works; explicit per-ingest `context.cycleId`
