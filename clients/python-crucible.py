@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
 """Python + unittest Crucible CLI — single entry point for orchestrator + RED/GREEN/
 FIX/VERIFY agent lifecycle ops AND for running Python test targets (unittest via
 xmlrunner → JUnit XML, optional coverage.py). Replaces inline python / loose curl so

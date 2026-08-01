@@ -8,6 +8,7 @@ dynamic = ["version"]
 description = "Crucible install orchestrator — ships the *-crucible.py client fleet and stages server/manifest sub-installers behind one TOON-AXI envelope"
 requires-python = ">=3.10"
 license = "GPL-3.0-only"
+dependencies = []
 authors = [{ name = "Antony John" }]
 keywords = ["crucible", "axi", "orchestration", "model-b", "testing"]
 classifiers = [

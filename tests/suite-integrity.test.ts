@@ -146,7 +146,8 @@ async function runRegression(
   }
   const proc = Bun.spawn({
     cmd: [
-      "python3",
+      "uv",
+      "run",
       SCRIPT_PATH,
       "regression",
       "--agent",

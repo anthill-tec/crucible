@@ -1,90 +1,34 @@
-# DN — Crucible TOON Subset (Normative Wire Spec)
+# DN — Crucible TOON Subset (RETIRED — pointer document)
 
 **Author:** Antony John
 **Co-author:** crucible orchestrator
-**Status:** PINNED (CR-CRU-005 §S1)
-**Producer/consumers:** the crucible fleet only
+**Status:** RETIRED by CR-CRU-046 (2026-08-01) — kept in place because CR-005, CR-030 and the storyboard reference it
 
-This document IS the wire spec for the TOON responses emitted by `src/toon.ts`
-(`toToon(obj, indent = 0)`). The subset has exactly FOUR constructs. It is pinned:
-producer and consumers are both our fleet — revisit only if third-party TOON
-tooling arrives.
+## Current contract
 
-## Construct 1 — Scalar line
+Crucible speaks TOON per the OFFICIAL spec — toonformat.dev / the toon-format
+GitHub org (github.com/toon-format). The spec, not this document, is the wire
+contract. Two pinned implementations:
 
-`key: value`. Numbers, booleans, and `null` render bare. Strings render bare
-unless they contain a special character (see quoting table).
+- **Server (TypeScript):** `@toon-format/toon` `^4.1.0` (the first-party
+  reference implementation), pinned in `package.json`.
+- **Clients (Python):** `clients/toon.py` — our spec-conformant port, validated
+  against the official library by the CR-CRU-046 §S4 round-trip oracle
+  (`tests/toon-conformance.test.ts` + `tests/client/test_cr046_official_toon_roundtrip.py`).
 
-```
-ok: true
-n: 3
-note: null
-```
+## Historical note
 
-## Construct 2 — Nested object
+This document originally (2026-07-15) defined a private 4-construct TOON subset
+as the fleet's wire format: at the time both producer and consumers were our own
+fleet, no third-party TOON tooling existed, and a hand-pinned subset was the
+cheapest way to bank the token-economy win (measured 47.1% of JSON bytes on the
+flattened `events[]` brief after CR-CRU-006 §S0). The DN carried an explicit
+revisit trigger for the arrival of third-party TOON tooling; that trigger fired
+(official implementations now exist in 8 languages), and CR-CRU-046 retired the
+subset on 2026-08-01 in favour of the official spec on both stacks.
 
-`key:` followed by the child's own lines, indented 2 spaces per level.
+## Revisit pin (§S2)
 
-```
-store:
-  path: crucible.db
-  open: true
-```
-
-## Construct 3 — Uniform object array (table form)
-
-Applies only when every item is a plain object with the SAME key-set in the SAME
-order and scalar-only values. Header `name[N]{col1,col2}:`, then one 2-space-
-indented, comma-joined row per item.
-
-```
-events[2]{id,n}:
-  a,1
-  b,2
-```
-
-## Construct 4 — List array
-
-Everything else: `name[N]:` + one 2-space-indented line per item (scalars bare or
-quoted; object items as nested indented blocks WITHOUT a `{cols}` header). Empty
-arrays are just the header `items[0]:` with no body lines.
-
-```
-help[2]:
-  do x
-  see y
-```
-
-## Quoting rules
-
-| Context | JSON-quote when the string contains | Otherwise |
-|---|---|---|
-| Scalar line / list item | any of `\n : , { } [ ]` | bare |
-| Table cell | any of `" , \n` | bare |
-| Numbers / booleans / null | never quoted | bare |
-
-Quoting is `JSON.stringify` of the single string value — consumers un-quote with
-`JSON.parse` when a value or cell starts with `"`.
-
-## Measured token-ratio (Risk — CR-CRU-005)
-
-Measured 2026-07-15: 50-event `GET /api/v2/events` listing (live-server probe,
-`ratio-agent` fixture, each event carrying an `id/agentId/kind/tier/timestamp`
-scalar set plus a nested `summary` object) — JSON 9067 bytes, TOON 9516 bytes,
-**TOON = 105.0% of JSON bytes** (TOON was LARGER, not smaller, for this shape).
-Root cause: a per-event `summary` sub-object disqualifies the array from
-Construct 3's uniform-table form (table cells must be scalar), so it falls
-back to Construct 4's per-item nested block, which repeats each key on its
-own indented line — verbose compared to compact single-line JSON objects.
-Flat/uniform payloads (e.g. `agents[]`, `projects[]` with no nested objects)
-are expected to compress well under Construct 3; nested-object listings like
-`events[]` do not, until callers request `?depth=suites`-style flattening or
-the events payload is reshaped to hoist `summary` fields to top-level scalars.
-
-Re-measured 2026-07-15 (post CR-CRU-006 §S0 event-brief reshape): 50-event
-`GET /api/v2/events` listing (`:memory:` server probe, flattened all-scalar
-briefs `{id, projectKey, agentId, kind, tier, codec, timestamp, total, passed,
-failed, pending, duration_ms, hasCoverage}`, no nested `summary`) — JSON 12862
-bytes, TOON 6062 bytes, **TOON = 47.1% of JSON bytes** (uniform-table
-Construct 3 form confirmed: body matches `/^events\[\d+\]\{/`). AC gate ≤ 70%
-met.
+Adopt PyPI `toon-format` the day upstream ships a working release — as of
+2026-08-01 the published 0.1.0 is a NotImplementedError stub. The §S4
+round-trip gate above is the ready-made acceptance test for that swap.

@@ -283,7 +283,7 @@ describe("AXI negotiation, hints, truncation (CR-CRU-005 §S2+§S3+§S4)", () =>
   // ── §S4 — truncation with pointer ────────────────────────────────────────
 
   describe("TOON truncation with pointer (§S4)", () => {
-    test("~500 events: TOON GET truncates its largest array with 'truncated: true' + a 'fmt=json' pointer; JSON GET stays complete", async () => {
+    test("~850 events: TOON GET truncates its largest array with 'truncated: true' + a 'fmt=json' pointer; JSON GET stays complete", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       // CR-CRU-001 §S4 pins a default per-project retention of 100 raw
       // events — a plain POST /api/v2/projects create would prune this
@@ -291,9 +291,23 @@ describe("AXI negotiation, hints, truncation (CR-CRU-005 §S2+§S3+§S4)", () =>
       // threshold. Override retention via the store directly (same pattern
       // as tests/events.test.ts's "per-project retention override" test) so
       // the fixture actually exercises §S4 truncation.
+      //
+      // CR-CRU-046 C2 test-fix pass — the official library's compact
+      // tabular form (every `eventBrief` is an all-scalar row of identical
+      // shape, per src/v2.ts's `eventBrief` comment) encodes 500 of these
+      // events to ~59 KB, UNDER the 64 KB truncation threshold, so
+      // `truncated: true` legitimately never fired: the fixture pinned the
+      // subset serializer's size profile, not the official encoder's.
+      // Measured empirically against the real production `toToon` encode of
+      // this exact event shape (scripts/probe, not committed): 500 → ~59 KB
+      // (0.90×), 700 → ~83 KB (1.26×), 850 → ~100 KB (1.53×), scaling
+      // linearly at ~118 bytes/event. 850 events puts the PRE-truncation
+      // encoded body at ~1.53× the 64 KB threshold — comfortable margin
+      // above 1.0× so the mechanism is proven at the real threshold, not
+      // pinned to a bar lowered to just clear it.
       const key = crypto.randomUUID();
-      handle.store.addProject({ key, name: "trunc-project", type: "backend", sutRoot: "/tmp", retention: 600 });
-      const EVENT_COUNT = 500;
+      const EVENT_COUNT = 850;
+      handle.store.addProject({ key, name: "trunc-project", type: "backend", sutRoot: "/tmp", retention: EVENT_COUNT + 100 });
       for (let i = 0; i < EVENT_COUNT; i++) {
         handle.store.recordTestEvent(key, "trunc-agent", {
           summary: { total: 1, passed: 1, failed: 0, pending: 0, duration_ms: 1 },

@@ -86,7 +86,7 @@ interface RunResult {
 }
 
 /**
- * Spawns `python3 <scriptPath> <args>`. Strips any ambient WORKFLOW_* env so
+ * Spawns `uv run <scriptPath> <args>`. Strips any ambient WORKFLOW_* env so
  * each test controls it explicitly, and always injects CRUCIBLE_URL — the
  * contract under test (both v1 scripts hardcode `http://localhost:3849`;
  * the C3 upgrade must honor this env var so tests can point it at an
@@ -102,7 +102,7 @@ async function runScript(
     if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
   }
   const proc = Bun.spawn({
-    cmd: ["python3", scriptPath, ...args],
+    cmd: ["uv", "run", scriptPath, ...args],
     cwd: opts.cwd,
     env: { ...baseEnv, CRUCIBLE_URL: opts.crucibleUrl, ...(opts.env ?? {}) },
     stdout: "pipe",
@@ -685,7 +685,7 @@ describe("clients/rust-crucible.py — byte-compatible CLI surface (existing fla
     ];
     for (const [subcommand, flags] of cases) {
       const proc = Bun.spawn({
-        cmd: ["python3", RUST_SCRIPT_PATH, subcommand, "--help"],
+        cmd: ["uv", "run", RUST_SCRIPT_PATH, subcommand, "--help"],
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -1395,7 +1395,7 @@ describe("clients/mvn-crucible.py — byte-compatible CLI surface (existing flag
     ];
     for (const [subcommand, flags] of cases) {
       const proc = Bun.spawn({
-        cmd: ["python3", MVN_SCRIPT_PATH, subcommand, "--help"],
+        cmd: ["uv", "run", MVN_SCRIPT_PATH, subcommand, "--help"],
         stdout: "pipe",
         stderr: "pipe",
       });

@@ -53,16 +53,23 @@ first-party reference implementation): `@toon-format/toon` (latest 4.1.0; ESM-on
 `package.json` declares none today — so CR-CRU-041's `files` whitelist and the `npx` install path
 must be re-checked (dependencies are resolved on install, not vendored in the tarball).
 
-### §S2 — Client fleet: adopt `toon-format` (PyPI) and DELETE `clients/toon.py`
-Declare the official Python implementation as a runtime dependency of `crucible-axi` and use it
-from `_crucible_axi.py` — BOTH the `_emit` encode seam and the snapshot decode path — removing
-the by-path loader shim. `clients/toon.py` (8.6 KB of hand-written codec) is deleted, not
-maintained.
+### §S2 — Client fleet: `clients/toon.py` becomes OUR spec-conformant codec (REVISED — user decision 2026-08-01, Option A)
+The official Python story collapsed on inspection: PyPI **`toon-format` 0.1.0** (the only
+release ever published) is a name-reservation STUB — `encode` and `decode` each
+`raise NotImplementedError` (verified by unpacking the wheel, independently twice) — and the
+org's `toon-python` repo is dormant with no implementation module. There is nothing to adopt.
+(PyPI `toon` remains an unrelated research/hardware package — the near-miss trap stands.)
 
-🚨 **The package is `toon-format`** (import `toon_format`; `from toon_format import encode,
-decode`; requires-python `>=3.10`, matching ours) — **NOT PyPI `toon`**, which is an unrelated
-research/hardware package the near-miss name would silently pull in. The explicit pin below is
-what guards against that.
+**Decision:** the server still adopts the first-party TS library (§S1). The Python side
+REWRITES `clients/toon.py` into a full official-spec-conformant codec — a faithful port of the
+TS reference — permanently validated by the §S4 oracle: every client envelope must decode via
+`@toon-format/toon`, and official-encoded output must decode via ours. The by-path `_toon()`
+loader, the `_emit` seam call-shape, and the wheel packaging of `toon.py` are UNCHANGED;
+deletion is RESCINDED. The eight decode-instrument test files need NO migration — they load
+`toon.py` by path and inherit conformance.
+
+**Revisit pin:** adopt PyPI `toon-format` the day upstream ships a working release; the §S4
+round-trip gate is the ready-made acceptance test for that swap.
 
 ### §S3 — 🚨 Dependency resolution for path-invoked clients
 **This is the item that makes §S2 actually work.** `crucible_axi/manifest.py:43` records each
@@ -73,13 +80,17 @@ break every path-invoked client with `ModuleNotFoundError: toon`.
 
 Resolve it so a client always runs under an interpreter that can import its dependencies.
 **Mechanism (user-decided 2026-08-01): PEP 723 inline script metadata + `uv run`.** Each of the
-five clients carries a `# /// script` block declaring `requires-python = ">=3.10"` and
-`dependencies = ["toon-format>=0.1,<0.2"]`; the documented invocation becomes
+five clients carries a `# /// script` block; the documented invocation becomes
 `uv run <client>.py` (uv is already a hard prerequisite of the install chain). ONE mechanism
-everywhere: installed machines, loose copies, AND the in-repo harness — the bun client tests
-(`tests/clients-*.test.ts`) spawn bare `python3` today and migrate to the same `uv run`
-invocation. The ACCEPTED OUTCOME is unchanged: invoking a client the documented way must work on
-a machine where `crucible-axi` (+ uv) is installed and nothing else is.
+everywhere: installed machines, loose copies, AND the in-repo harness (`tests/clients-*.test.ts`
+spawn via `uv run` — landed in C1).
+
+**REVISED after the §S2 stub finding:** with no adoptable Python library, the blocks declare
+`requires-python = ">=3.10"` and an EMPTY `dependencies = []` — the C1 `toon-format` pin is
+REVERTED everywhere it landed (the five headers AND `pyproject.toml`'s runtime dependency),
+because pinning the stub would install a landmine that shadows any future real module. The
+mechanism itself stays: it is proven, harmless while the list is empty, and makes the §S2
+revisit-pin swap a one-line re-add per file.
 
 Note this is a **client-surface change**, so it triggers the standing Model-B intimation
 (they consume `crucible-clients.json` at pre-flight, and every documented client invocation
@@ -90,21 +101,26 @@ changes to `uv run`).
 suite, loaded by path in at least eight test files, and a pinned member of the wheel. The
 deletion surface:
 
-| Surface | Files | Action |
+| Surface | Files | Action (REVISED per §S2 Option A) |
 |---|---|---|
-| Subset-contract tests | `tests/toon.test.ts` (108L, server), `tests/client/test_toon.py` (305L, port parity) | retire; replaced by official-library conformance + §S4 round-trip |
-| Decode-instrument tests | `test_crucible_axi_shared.py:71`, `test_cr039_regression_discovery.py:60`, `test_crucible_axi_install.py:101`, `test_arduino_crucible_axi.py:77`, `test_bun_crucible_gates.py`, `test_bun_crucible_workflow_verbs.py`, `test_help_state_derived_cycle_transitions.py:134`, `test_bun_crucible_toon_envelope.py` (727L — the CR-030 §S5 round-trip surface) | migrate the instrument from by-path `toon.py` loading to `import toon_format` |
-| Wheel packaging | `pyproject.toml` force-include + `test_crucible_axi_wheel_packaging.py:69` (asserts `crucible_axi/clients/toon.py` ships) | drop `toon.py` from the wheel; assert the PEP 723 headers ship intact in the packaged clients |
+| Subset-contract tests | `tests/toon.test.ts` (108L, server) | retire; replaced by `tests/toon-conformance.test.ts` (official-library wire gate) |
+| Port-parity tests | `tests/client/test_toon.py` (305L — pinned construct-for-construct to the SUBSET) | retire; replaced by the new codec's spec-conformance suite + §S4 |
+| Decode-instrument tests | `test_crucible_axi_shared.py:71`, `test_cr039_regression_discovery.py:60`, `test_crucible_axi_install.py:101`, `test_arduino_crucible_axi.py:77`, `test_bun_crucible_gates.py`, `test_bun_crucible_workflow_verbs.py`, `test_help_state_derived_cycle_transitions.py:134`, `test_bun_crucible_toon_envelope.py` (727L) | **NO migration** — they load `toon.py` by path and inherit conformance when it is rewritten |
+| C1 contract tests | `tests/client/test_cr046_pep723_metadata.py` (22 tests pinning the `toon-format` dependency) | re-point: blocks carry `requires-python` + EMPTY `dependencies`; the stub pin is asserted ABSENT |
+| Wheel packaging | `pyproject.toml` force-include + `test_crucible_axi_wheel_packaging.py:69` | UNCHANGED — `toon.py` stays in the wheel; runtime dep on `toon-format` reverted |
 | Wire fixture | `tests/fixtures/no-mistakes-axi-status.toon` (hand-written subset dialect) | regenerate in official dialect |
-| Harness spawns | `tests/clients-*.test.ts` spawn helpers (`python3` → `uv run`, §S3) | migrate |
+| Harness spawns | `tests/clients-*.test.ts` spawn helpers (`python3` → `uv run`, §S3) | DONE in C1 |
 
 ### §S4 — Round-trip conformance gate
-With both ends on the official libraries this simplifies to a genuine interop test rather than a
-subset guard, in BOTH directions: server output → client decode → deep-equals the source object,
-across every AXI envelope shape the server emits; AND client `_emit` output → decode →
-deep-equals, across the client envelope shapes (the clients encode too — §S2). Keep it — it is
-what proves the two independent implementations agree, and it is the regression test for any
-future library bump.
+The first-party TS implementation is the SOLE conformance oracle, in BOTH directions:
+server output (official encode) → OUR codec's decode → deep-equals the source object, across
+every AXI envelope shape the server emits; AND client `_emit` output (our codec's encode) →
+`@toon-format/toon` decode → deep-equals, across the client envelope shapes. The cross-stack
+direction lives in the BUN suite (it spawns a real client and decodes its stdout with the
+official library); the Python suite carries the codec's own spec-conformance and
+self-round-trip cases. This gate is what proves our port and the reference agree — and it is
+the ready-made acceptance test for the §S2 revisit-pin swap on any future library arrival or
+bump.
 
 ### §S5 — Retire the subset DN
 `docs/research/DN-crucible-toon-subset.md` describes a pinned fleet-only subset that will no
@@ -121,8 +137,8 @@ reversal (official TOON libraries on both stacks; the spec is the contract), pre
 surrounding resolved-note entries untouched.
 
 ## Acceptance criteria
-- [ ] `clients/toon.py` is deleted; no client imports it, and `grep -rn "toon.py" clients/` finds
-      no loader shim.
+- [ ] `clients/toon.py` implements the FULL official spec (no subset dialect remains in its
+      output) — proven by the §S4 oracle, not by self-asserted unit cases alone.
 - [ ] `src/toon.ts`'s hand-written serializer is gone; the server encodes via the official library.
 - [ ] A list array emits `- `-prefixed elements — asserted on `help[]`, the most-emitted case.
 - [ ] `"42"`, `"true"`, `"null"`, `""`, `" padded "`, `"-leading"` all round-trip as STRINGS
@@ -130,14 +146,15 @@ surrounding resolved-note entries untouched.
 - [ ] **Round-trip:** every AXI envelope shape the server emits decodes client-side to an object
       deep-equal to the source, and every client-emitted envelope round-trips likewise — asserted
       (§S4, both directions).
-- [ ] **§S3 gate:** on an environment where `crucible-axi` (+ uv) is installed and `toon-format`
-      is NOT separately installed into the ambient interpreter, `uv run <client>.py` (the
-      documented way) succeeds — asserted, since this is the failure mode §S2 would otherwise
-      introduce.
-- [ ] Both library versions are pinned with an explicit lower bound: `@toon-format/toon` in
-      `package.json`, `toon-format` in `pyproject.toml`.
-- [ ] The wheel no longer ships `clients/toon.py`; the packaged clients carry their PEP 723
-      metadata intact (`test_crucible_axi_wheel_packaging.py` updated, not weakened).
+- [ ] **§S3 gate:** on an environment where only `crucible-axi` + uv are installed,
+      `uv run <client>.py` (the documented way) succeeds — asserted.
+- [ ] `@toon-format/toon` is pinned with an explicit lower bound in `package.json`;
+      `pyproject.toml` carries NO `toon-format` runtime dependency and all five PEP 723 blocks
+      declare EMPTY `dependencies` (the stub-landmine guard) — asserted by the re-pointed C1
+      contract tests.
+- [ ] The wheel STILL ships `clients/toon.py`, and the packaged clients carry their PEP 723
+      metadata intact (`test_crucible_axi_wheel_packaging.py` unchanged in intent, not
+      weakened).
 - [ ] The bun client-test harness spawns clients via the documented `uv run` invocation and
       stays green (§S3b).
 - [ ] CR-CRU-030 §S5 golden envelope fixtures regenerated and matching; no fixture deleted to
@@ -157,8 +174,11 @@ surrounding resolved-note entries untouched.
   environment test rather than a unit test.
 - **First runtime dependency on BOTH stacks.** Re-check the npm tarball/`npx` path (CR-041 §S1) and
   the `uv tool install` path.
-- **`toon-format` (PyPI) is 0.1.0** — same author as the TS reference but pre-1.0; pin
-  `>=0.1,<0.2` and let §S4's round-trip be the guard on any bump.
+- **There is no working Python TOON implementation upstream** (PyPI 0.1.0 = NotImplementedError
+  stubs; `toon-python` repo dormant). Our port carries fidelity risk — mitigated by the §S4
+  oracle, which fails the gate the moment our codec and the TS reference disagree on any real
+  envelope. The §S2 revisit pin governs eventual adoption; never re-add the dependency without
+  opening the wheel first — registry metadata proved nothing.
 - **Fixture churn is wide but mechanical.** The temptation is to "fix" a failing golden fixture by
   trimming an assertion; the AC forbids deleting fixtures.
 - Deleting `clients/toon.py` removes ~8.6 KB of code the fleet currently depends on — the round-trip

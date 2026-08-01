@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
 """Bun + TypeScript Crucible CLI — single entry point for orchestrator + RED/GREEN/
 FIX/VERIFY agent lifecycle ops AND for running TypeScript test targets (`bun test` →
 JUnit XML, optional lcov coverage). Replaces inline bun -e / loose curl so each
