@@ -82,11 +82,22 @@ describe("POST …/cycles insert-before-a-position (CR-CRU-024 §S3.1)", () => {
     handle = undefined;
   });
 
+  // CR-CRU-056 §S2b fixture-repair (C3): mutating v2 workflow verbs
+  // (plan-file, cycle-add/insert, cycle transitions) now refuse an
+  // unregistered caller (409) — merge a live-registered agentId into any
+  // JSON body lacking one.
+  function withFixtureAgent(body: unknown): unknown {
+    if (body !== null && typeof body === "object" && !Array.isArray(body) && !("agentId" in (body as Record<string, unknown>))) {
+      return { ...(body as Record<string, unknown>), agentId: "fixture-orch" };
+    }
+    return body;
+  }
+
   async function postJson(path: string, body: unknown): Promise<Response> {
     return fetch(`http://localhost:${handle!.server.port}${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(withFixtureAgent(body)),
     });
   }
 
@@ -94,7 +105,7 @@ describe("POST …/cycles insert-before-a-position (CR-CRU-024 §S3.1)", () => {
     return fetch(`http://localhost:${handle!.server.port}${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(withFixtureAgent(body)),
     });
   }
 
@@ -102,9 +113,19 @@ describe("POST …/cycles insert-before-a-position (CR-CRU-024 §S3.1)", () => {
     return fetch(`http://localhost:${handle!.server.port}${path}`);
   }
 
+  async function registerOrchestrator(key: string, agentId: string): Promise<void> {
+    const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectKey: key, agentId, phase: "ORCHESTRATOR" }),
+    });
+    expect(res.status).toBe(200);
+  }
+
   async function createProject(): Promise<string> {
     const res = await postJson("/api/v2/projects", { name: `cycle-insert-${crypto.randomUUID()}` });
     const body = (await res.json()) as { ok: true; project: { key: string } };
+    await registerOrchestrator(body.project.key, "fixture-orch");
     return body.project.key;
   }
 

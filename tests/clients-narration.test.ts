@@ -208,6 +208,24 @@ async function createProject(baseUrl: string, name: string): Promise<string> {
   return body.project.key;
 }
 
+/**
+ * CR-CRU-056 §S2b fixture-repair (C3): every ingesting verb now refuses an
+ * unregistered agentId (409). The narration fixtures above (24-test/20-test)
+ * work around this implicitly — their longer runs fire enough throttled
+ * heartbeats (`/api/v2/agents/heartbeat`, which creates the agent row on
+ * first touch) BEFORE the final ingest. The deliberately near-instant 5-test
+ * fixture below fires ZERO heartbeats (that's its whole point — proving no
+ * premature narration), so its agent is never created before the final
+ * ingest and the ingest gets refused. Register it directly up front instead.
+ */
+async function ensureRegistered(baseUrl: string, key: string, agentId: string): Promise<void> {
+  await fetch(`${baseUrl}/api/v2/agents/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectKey: key, agentId, phase: "report" }),
+  });
+}
+
 interface AgentWire {
   agentId: string;
   message?: string;
@@ -507,6 +525,7 @@ describe("§S2b in-run progress narration — clients/bun-crucible.py (fine-grai
       const dir = scratch.dir("narration-bun-silent-");
       writeNarrationBunProject(dir, key, 5, 0);
       const agentId = "narration-bun-silent-agent";
+      await ensureRegistered(baseUrl, key, agentId);
 
       let done = false;
       const pollPromise = pollAgentUntil(baseUrl, key, agentId, () => done, 100);

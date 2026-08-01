@@ -65,6 +65,16 @@ async function patchProject(
   });
 }
 
+// CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs/parsed now refuses an
+// unregistered agentId (409) — register the ingest-under agentId first.
+async function registerAgent(baseUrl: string, key: string, agentId: string): Promise<void> {
+  await fetch(`${baseUrl}/api/v2/agents/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectKey: key, agentId, phase: "ORCHESTRATOR" }),
+  });
+}
+
 async function ingestParsed(
   baseUrl: string,
   opts: {
@@ -77,6 +87,7 @@ async function ingestParsed(
 ): Promise<string> {
   const passed = opts.passed ?? 1;
   const failed = opts.failed ?? 0;
+  await registerAgent(baseUrl, opts.projectKey, opts.agentId ?? "agent-1");
   const res = await fetch(`${baseUrl}/api/v2/runs/parsed`, {
     method: "POST",
     headers: { "content-type": "application/json" },

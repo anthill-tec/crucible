@@ -168,7 +168,9 @@ class CheckpointClientVerbTest(_BaseWorkflowVerbTest):
              mock.patch.object(self.module, "_post",
                                side_effect=self._post_recorder(calls, ok=True,
                                                                 extra={"changed": True})):
-            code, out, err = _run_main(self.module, ["checkpoint", "--project-dir", self.tmpdir])
+            code, out, err = _run_main(self.module, [
+                "checkpoint", "--agent", "test-agent", "--project-dir", self.tmpdir,
+            ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
         self.assertEqual(len(calls), 1)
@@ -193,7 +195,7 @@ class CheckpointClientVerbTest(_BaseWorkflowVerbTest):
                                side_effect=self._post_recorder(calls, ok=True,
                                                                 extra={"changed": True})):
             code, out, err = _run_main(self.module, [
-                "checkpoint", "--cr", "CR-R", "--project-dir", self.tmpdir,
+                "checkpoint", "--cr", "CR-R", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -207,7 +209,9 @@ class CheckpointClientVerbTest(_BaseWorkflowVerbTest):
         calls = []
         with mock.patch.object(self.module, "_get", return_value=_open_plans_response([])), \
              mock.patch.object(self.module, "_post", side_effect=self._post_recorder(calls)):
-            code, out, err = _run_main(self.module, ["checkpoint", "--project-dir", self.tmpdir])
+            code, out, err = _run_main(self.module, [
+                "checkpoint", "--agent", "test-agent", "--project-dir", self.tmpdir,
+            ])
 
         self.assertNotEqual(code, 0, "no open plan to checkpoint must be non-zero")
         self.assertEqual(calls, [])
@@ -223,7 +227,9 @@ class CheckpointClientVerbTest(_BaseWorkflowVerbTest):
         calls = []
         with mock.patch.object(self.module, "_get", return_value=plans), \
              mock.patch.object(self.module, "_post", side_effect=self._post_recorder(calls)):
-            code, out, err = _run_main(self.module, ["checkpoint", "--project-dir", self.tmpdir])
+            code, out, err = _run_main(self.module, [
+                "checkpoint", "--agent", "test-agent", "--project-dir", self.tmpdir,
+            ])
 
         self.assertNotEqual(code, 0, "ambiguous (2 open plans, no --cr) must be non-zero")
         self.assertEqual(calls, [])
@@ -239,7 +245,9 @@ class CheckpointClientVerbTest(_BaseWorkflowVerbTest):
              mock.patch.object(self.module, "_post",
                                side_effect=self._post_recorder(calls, ok=False,
                                                                 error="plan not found")):
-            code, out, err = _run_main(self.module, ["checkpoint", "--project-dir", self.tmpdir])
+            code, out, err = _run_main(self.module, [
+                "checkpoint", "--agent", "test-agent", "--project-dir", self.tmpdir,
+            ])
 
         self.assertNotEqual(code, 0)
         axi = self._decode_axi(out)
@@ -258,7 +266,9 @@ class StopClientVerbTest(_BaseWorkflowVerbTest):
         with mock.patch.object(self.module, "_post",
                                side_effect=self._post_recorder(calls, ok=True,
                                                                 extra={"checkpointed": 3})):
-            code, out, err = _run_main(self.module, ["stop", "--project-dir", self.tmpdir])
+            code, out, err = _run_main(self.module, [
+                "stop", "--agent", "test-agent", "--project-dir", self.tmpdir,
+            ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
         self.assertEqual(len(calls), 1)
@@ -274,7 +284,9 @@ class StopClientVerbTest(_BaseWorkflowVerbTest):
         calls = []
         with mock.patch.object(self.module, "_post",
                                side_effect=self._post_recorder(calls, ok=False, error="boom")):
-            code, out, err = _run_main(self.module, ["stop", "--project-dir", self.tmpdir])
+            code, out, err = _run_main(self.module, [
+                "stop", "--agent", "test-agent", "--project-dir", self.tmpdir,
+            ])
 
         self.assertNotEqual(code, 0)
         axi = self._decode_axi(out)
@@ -301,12 +313,14 @@ class AbortClientVerbTest(_BaseWorkflowVerbTest):
                                    calls, ok=False,
                                    error="HTTP 409: aborting discards a declared workflow — "
                                          "explicit user approval is required; refused")):
-            code, out, err = _run_main(self.module, ["abort", "--project-dir", self.tmpdir])
+            code, out, err = _run_main(self.module, [
+                "abort", "--agent", "test-agent", "--project-dir", self.tmpdir,
+            ])
 
         self.assertEqual(len(calls), 1, "abort must still POST (the 409 is a SERVER refusal)")
         path, payload = calls[0]
         self.assertTrue(path.endswith("/plans/plan-7/abort"))
-        self.assertEqual(payload, {"userApproved": False},
+        self.assertEqual(payload, {"userApproved": False, "agentId": "test-agent"},
                           "without --user-approved the body must NOT claim approval")
 
         self.assertNotEqual(code, 0, "the discouraging 409 must surface as non-zero")
@@ -323,13 +337,13 @@ class AbortClientVerbTest(_BaseWorkflowVerbTest):
                                    extra={"changed": True,
                                           "plan": {"planId": "plan-7", "status": "aborted"}})):
             code, out, err = _run_main(self.module, [
-                "abort", "--user-approved", "--project-dir", self.tmpdir,
+                "abort", "--user-approved", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(len(calls), 1)
         path, payload = calls[0]
         self.assertTrue(path.endswith("/plans/plan-7/abort"))
-        self.assertEqual(payload, {"userApproved": True},
+        self.assertEqual(payload, {"userApproved": True, "agentId": "test-agent"},
                           "--user-approved must map to body userApproved:true")
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -343,7 +357,7 @@ class AbortClientVerbTest(_BaseWorkflowVerbTest):
         with mock.patch.object(self.module, "_get", return_value=_open_plans_response([])), \
              mock.patch.object(self.module, "_post", side_effect=self._post_recorder(calls)):
             code, out, err = _run_main(self.module, [
-                "abort", "--user-approved", "--project-dir", self.tmpdir,
+                "abort", "--user-approved", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertNotEqual(code, 0, "no open plan to abort must be non-zero")
@@ -362,7 +376,8 @@ class AbortClientVerbTest(_BaseWorkflowVerbTest):
                                side_effect=self._post_recorder(calls, ok=True,
                                                                 extra={"changed": True})):
             code, out, err = _run_main(self.module, [
-                "abort", "--user-approved", "--cr", "CR-R", "--project-dir", self.tmpdir,
+                "abort", "--user-approved", "--cr", "CR-R", "--agent", "test-agent",
+                "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")

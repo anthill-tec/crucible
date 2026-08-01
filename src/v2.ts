@@ -5,7 +5,7 @@
 import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
-import { hints, cycleHints } from "./hints.ts";
+import { authHints, hints, cycleHints } from "./hints.ts";
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
 import { AGENT_PHASES } from "./types.ts";
@@ -41,6 +41,8 @@ interface V2Body {
   agentId?: unknown;
   /** CR-CRU-044 §S1 — declared phase (required on register). */
   phase?: unknown;
+  /** CR-CRU-056 §S1 — optional explicit cycle binding on register. */
+  cycleId?: unknown;
   status?: unknown;
   message?: unknown;
   identity?: unknown;
@@ -189,6 +191,32 @@ function requireProject(store: Store, key: unknown): { key: string } | { fail: R
   return { key };
 }
 
+/**
+ * CR-CRU-056 §S2b/§S3b — the single caller-auth seam. Every mutating
+ * workflow verb and every ingest surface routes its posted `agentId` through
+ * here: the caller must be a LIVE registered agent (lazy-prune semantics —
+ * a row past its prune window, or one removed by unregister, is absent).
+ * Returns the authenticated agentId, or the shared 409 refusal (ok:false,
+ * state-derived help[] naming registration as the next step) — the caller
+ * returns it BEFORE mutating or storing anything.
+ */
+function requireRegisteredCaller(
+  store: Store,
+  projectKey: string,
+  body: V2Body,
+): { agentId: string } | { fail: Response } {
+  const agentId =
+    typeof body.agentId === "string" && body.agentId.length > 0 ? body.agentId : undefined;
+  if (agentId !== undefined && store.hasAgent(projectKey, agentId)) {
+    return { agentId };
+  }
+  const error =
+    agentId === undefined
+      ? "a registered caller is required — this request carried no agentId"
+      : `agent ${agentId} is not registered with this project — refused`;
+  return { fail: fail(409, error, { help: authHints.unregisteredCaller(agentId) }) };
+}
+
 function handleOrientation(store: Store, deps: V2Deps, req: Request, url: URL): Response {
   return reply(req, url, {
     ok: true,
@@ -335,6 +363,72 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
  * the idle-time liveness ping hints.ts documents — never a re-declaration of
  * something the agent already declared when it registered.
  */
+/**
+ * CR-CRU-056 §S1 — validate an explicit register-time cycle binding against
+ * stored plan state BEFORE any agent write. The binding is legal only when
+ * the cycle exists in THIS project's plans, its plan is OPEN, and the cycle
+ * is ACTIVE. Every refusal is a 409 definitive error naming the ACTUAL state
+ * found (unknown / closed-plan / pending / done…), with state-derived help[]
+ * (CR-CRU-024 help-quality convention). Returns `{}` on the happy path.
+ */
+function validateCycleBinding(
+  store: Store,
+  projectKey: string,
+  cycleId: number,
+): { fail?: Response } {
+  const found = store.findCycle(projectKey, cycleId);
+  if (found === null) {
+    const summary = store.openPlanCycleSummary(projectKey);
+    const help =
+      summary !== null
+        ? cycleHints.unknownCycle(summary.cr, summary.cycleIds)
+        : hints.unknownCycleNoPlan;
+    return {
+      fail: fail(409, `unknown cycleId: ${cycleId} — no such cycle in this project's plans`, {
+        help,
+      }),
+    };
+  }
+  const plan = store.listPlans(projectKey).find((p) => p.planId === found.planId);
+  if (plan !== undefined && plan.status !== "open") {
+    return {
+      fail: fail(
+        409,
+        `cycle ${cycleId} belongs to plan ${plan.cr} (id ${plan.planId}), which is ${plan.status} — bindings require an OPEN plan`,
+        { help: cycleHints.bindClosedPlan(plan.cr, plan.planId, plan.status) },
+      ),
+    };
+  }
+  if (found.status !== "active") {
+    const help =
+      found.status === "pending"
+        ? cycleHints.bindPendingCycle(cycleId, found.planId)
+        : cycleHints.bindTerminalCycle(cycleId, found.status);
+    return {
+      fail: fail(
+        409,
+        `cycle ${cycleId} is ${found.status} — bindings require an ACTIVE cycle`,
+        { help },
+      ),
+    };
+  }
+  return {};
+}
+
+/** CR-CRU-056 §S2 — the phases that MUST register bound (ORCHESTRATOR/report are exempt). */
+const TDD_PHASES: ReadonlySet<string> = new Set(["RED", "GREEN", "FIX", "VERIFY"]);
+
+/**
+ * CR-CRU-056 §S2 — every ACTIVE cycle across the project's OPEN plans, so an
+ * unbound-registration refusal can name the concrete binding(s) available.
+ */
+function activeCycleIds(store: Store, projectKey: string): number[] {
+  return store
+    .listPlans(projectKey)
+    .filter((plan) => plan.status === "open")
+    .flatMap((plan) => plan.cycles.filter((c) => c.status === "active").map((c) => c.id));
+}
+
 async function handleAgentTouch(
   store: Store,
   req: Request,
@@ -361,6 +455,24 @@ async function handleAgentTouch(
       { help: hints.phaseRequired },
     );
   }
+  // CR-CRU-056 §S2 — TDD phases MUST register bound: a RED/GREEN/FIX/VERIFY
+  // registration with no `cycleId` is refused at the ROUTE boundary, before
+  // any write (an implementation agent with no workflow home). The refusal
+  // help is STATE-derived: it names this project's actual ACTIVE cycle id(s)
+  // when any exist. ORCHESTRATOR/report stay exempt; the heartbeat path
+  // (`requirePhase === false`) is untouched.
+  if (
+    requirePhase &&
+    typeof phase === "string" &&
+    TDD_PHASES.has(phase) &&
+    body.cycleId === undefined
+  ) {
+    return fail(
+      409,
+      `phase ${phase} requires a cycle binding — register with --cycle <cycleId>`,
+      { help: cycleHints.unboundTddPhase(phase, activeCycleIds(store, pk.key)) },
+    );
+  }
 
   const existed = store.hasAgent(pk.key, agentId);
   const opts: TouchAgentOpts = {};
@@ -377,6 +489,19 @@ async function handleAgentTouch(
   // option is what makes the store PRESERVE the stored value.
   if (phaseValid) {
     opts.phase = phase as AgentPhase;
+  }
+  // CR-CRU-056 §S1 — an explicit cycle binding is VALIDATED before any write:
+  // a refused binding returns 409 with no agent row created and no stored
+  // binding mutated. Omitting the field entirely leaves a stored binding
+  // untouched (the touch-never-blanks contract) — the heartbeat path flows
+  // through here unchanged.
+  if (body.cycleId !== undefined) {
+    if (typeof body.cycleId !== "number" || !Number.isInteger(body.cycleId)) {
+      return fail(400, `cycleId must be an integer cycle id (got ${JSON.stringify(body.cycleId)})`);
+    }
+    const binding = validateCycleBinding(store, pk.key, body.cycleId);
+    if (binding.fail !== undefined) return binding.fail;
+    opts.boundCycleId = body.cycleId;
   }
   store.touchAgent(pk.key, agentId, opts);
   // CR-CRU-011 §S1 — a REAL registration (row created) appends a lifecycle
@@ -492,6 +617,66 @@ function validateCycleRef(
   return {};
 }
 
+/**
+ * CR-CRU-056 §S3 — the ONE attach/validation seam every stamped ingest
+ * surface routes through, sitting exactly where CR-CRU-024 §S7 validation
+ * ran. Resolves the POSTING agent's stored binding:
+ *  - BOUND, no explicit context.cycleId → re-validate the binding LIVE and
+ *    STAMP it into the stored context (the client sends no resolved cycle);
+ *  - BOUND, explicit id equal to the binding → belt-and-braces, accepted;
+ *  - BOUND, explicit id differing → 409 naming BOTH ids, nothing stored;
+ *  - BOUND but the cycle is no longer active (done / plan closed) → 409,
+ *    nothing stored — a stale binding never spills into a sibling cycle;
+ *  - UNBOUND (or unknown poster) → behavior unchanged: §S7 explicit-context
+ *    validation where the surface already ran it (`validateUnbound: true` —
+ *    the run routes), verbatim pass-through otherwise (gates).
+ */
+function resolveIngestAttach(
+  store: Store,
+  projectKey: string,
+  agentId: string,
+  body: V2Body,
+  validateUnbound: boolean,
+): { fail?: Response; staleHelp?: string[]; context?: RunContext } {
+  const agent = store.getAgent(projectKey, agentId);
+  const bound = agent?.boundCycleId;
+  if (bound === undefined) {
+    return validateUnbound ? validateCycleRef(store, projectKey, body) : {};
+  }
+  const context =
+    typeof body.context === "object" && body.context !== null ? (body.context as RunContext) : {};
+  const explicit = (context as { cycleId?: unknown }).cycleId;
+  if (typeof explicit === "number" && explicit !== bound) {
+    return {
+      fail: fail(
+        409,
+        `context.cycleId ${explicit} conflicts with agent ${agentId}'s registered binding to cycle ${bound} — run NOT stored`,
+        { help: cycleHints.bindingConflict(bound, explicit) },
+      ),
+    };
+  }
+  // Re-validated LIVE: the binding was active at registration, but the cycle
+  // may since have transitioned or its plan closed.
+  const found = store.findCycle(projectKey, bound);
+  const plan =
+    found === null ? undefined : store.listPlans(projectKey).find((p) => p.planId === found.planId);
+  const planClosed = plan !== undefined && plan.status !== "open";
+  if (found === null || found.status !== "active" || planClosed) {
+    const state =
+      found === null
+        ? "unknown"
+        : planClosed
+          ? `in ${plan.status} plan ${plan.cr}`
+          : found.status;
+    return {
+      fail: fail(409, `bound cycle ${bound} is ${state} — ingest refused, run NOT stored`, {
+        help: cycleHints.staleBinding(bound, state),
+      }),
+    };
+  }
+  return { context: { ...context, cycleId: bound } };
+}
+
 /** §S1 — one-line run verdict: RED when failed>0, GREEN otherwise. */
 function runVerdict(summary: RunSummary): string {
   return summary.failed > 0
@@ -499,13 +684,36 @@ function runVerdict(summary: RunSummary): string {
     : `GREEN — ${summary.passed}/${summary.total} passed`;
 }
 
-function runResponse(eventId: string, summary: RunSummary, help?: string[]): Response {
+/**
+ * CR-CRU-056 §S3 (C5) — ECHO the attachment the server actually applied, read
+ * straight back off the STORED event so the response can never disagree with
+ * what landed in the feed. Since C2 moved cycle attachment server-side, the
+ * poster no longer knows which cycle absorbed its evidence; without this echo
+ * an agent has to issue a second `GET /api/v2/events` to find out (an
+ * observability regression against the pre-CR client-resolved echo).
+ *
+ * Shape: `context: { cycleId }` — the SAME path the read side already serves
+ * (`eventBrief.context.cycleId` on GET /api/v2/events), so the echo is a
+ * drop-in for the follow-up GET rather than a second vocabulary, and it maps
+ * 1:1 onto the clients' envelope `context` block. Additive: existing consumers
+ * read `ok`/`event`/`run`/`verdict`/`help` unchanged.
+ *
+ * A cycle-less event yields NO `context` key at all — absence is never
+ * fabricated into a null or a guess (the `runMeta`/`axi_context` convention).
+ */
+function attachEcho(event: RunEvent): { context?: { cycleId: number } } {
+  const cycleId = event.context?.cycleId;
+  return typeof cycleId === "number" ? { context: { cycleId } } : {};
+}
+
+function runResponse(event: RunEvent, summary: RunSummary, help?: string[]): Response {
   return json({
     ok: true,
     changed: true,
-    event: eventId,
+    event: event.id,
     run: summary,
     verdict: runVerdict(summary),
+    ...attachEcho(event),
     ...(help !== undefined ? { help } : {}),
   });
 }
@@ -524,22 +732,28 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   if ("error" in parsed) return fail(400, parsed.error);
   const { run } = parsed;
 
-  // CR-CRU-024 §S7 — reject an unlinkable context.cycleId BEFORE the event is
-  // stored; a stale (terminal) cycle only adds a help note.
-  const cycleCheck = validateCycleRef(store, pk.key, body);
-  if (cycleCheck.fail !== undefined) return cycleCheck.fail;
+  // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
+  // BEFORE any touchAgent/record — no agent row is created or resurrected);
+  // §S3 — then the single attach/validation seam: a BOUND agent's run
+  // is server-stamped from its row (or refused, 409, nothing stored); an
+  // UNBOUND agent keeps CR-CRU-024 §S7's explicit-context validation.
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const { agentId } = caller;
+  const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
+  if (attach.fail !== undefined) return attach.fail;
 
-  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: codecName,
     ...runMeta(body),
+    ...(attach.context !== undefined ? { context: attach.context } : {}),
   });
   // §S3 — a RED ingest carries the transition hint; §S7 adds the stale note.
   const help = [
     ...(run.summary.failed > 0 ? hints.afterRed : []),
-    ...(cycleCheck.staleHelp ?? []),
+    ...(attach.staleHelp ?? []),
   ];
-  return runResponse(event.id, run.summary, help.length > 0 ? help : undefined);
+  return runResponse(event, run.summary, help.length > 0 ? help : undefined);
 }
 
 async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
@@ -566,16 +780,22 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     ...(typeof body.raw === "string" ? { raw: body.raw } : {}),
   };
 
-  // CR-CRU-024 §S7 — reject an unlinkable context.cycleId BEFORE the event is
-  // stored; a stale (terminal) cycle only adds a help note.
-  const cycleCheck = validateCycleRef(store, pk.key, body);
-  if (cycleCheck.fail !== undefined) return cycleCheck.fail;
+  // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
+  // BEFORE any touchAgent/record — no agent row is created or resurrected);
+  // §S3 — then the single attach/validation seam: a BOUND agent's run
+  // is server-stamped from its row (or refused, 409, nothing stored); an
+  // UNBOUND agent keeps CR-CRU-024 §S7's explicit-context validation.
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const { agentId } = caller;
+  const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
+  if (attach.fail !== undefined) return attach.fail;
 
-  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: "parsed",
     ...(typeof body.name === "string" ? { name: body.name } : {}),
     ...runMeta(body),
+    ...(attach.context !== undefined ? { context: attach.context } : {}),
   });
   // §S3 — RED transition hint; coverage arrived but the store dropped it
   // (failing run) — say so in help too. §S7 adds the stale-cycle note.
@@ -583,9 +803,9 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   const help = [
     ...(summary.failed > 0 ? hints.afterRed : []),
     ...(dropped ? hints.coverageDropped : []),
-    ...(cycleCheck.staleHelp ?? []),
+    ...(attach.staleHelp ?? []),
   ];
-  return runResponse(event.id, summary, help.length > 0 ? help : undefined);
+  return runResponse(event, summary, help.length > 0 ? help : undefined);
 }
 
 async function handleRunsCompile(store: Store, req: Request): Promise<Response> {
@@ -600,7 +820,11 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
 
   const format = typeof body.format === "string" ? body.format : undefined;
   const report = parseCompile(body.errors, format);
-  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  // CR-CRU-056 §S3b — ingest ONLY from a live registered caller (refused
+  // BEFORE recordCompileEvent's touchAgent — no row created or resurrected).
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const { agentId } = caller;
   const event = store.recordCompileEvent(pk.key, agentId, report, {
     codec: report.format,
     ...runMeta(body),
@@ -673,9 +897,27 @@ async function handleGates(store: Store, req: Request): Promise<Response> {
       help: hints.gateOutcomes,
     });
   }
-  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
-  const event = store.recordGateEvent(pk.key, agentId, gate, eventContext(body));
-  return json({ ok: true, changed: true, event: event.id }, 201);
+  // CR-CRU-056 §S2b/§S3b — gates are BOTH a workflow verb and an ingest
+  // surface: a live registered caller is required (refused BEFORE any
+  // touchAgent/record — no row created or resurrected).
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const { agentId } = caller;
+  // CR-CRU-056 §S3 — gate snapshots are the second stamped surface: a BOUND
+  // agent's gate is server-stamped from its row (or refused, 409, nothing
+  // stored); an UNBOUND poster keeps today's verbatim context pass-through
+  // (this route never ran §S7 validation — validateUnbound stays false).
+  const attach = resolveIngestAttach(store, pk.key, agentId, body, false);
+  if (attach.fail !== undefined) return attach.fail;
+  const event = store.recordGateEvent(
+    pk.key,
+    agentId,
+    gate,
+    attach.context !== undefined ? { context: attach.context } : eventContext(body),
+  );
+  // CR-CRU-056 §S3 (C5) — the second stamped surface echoes its attachment on
+  // exactly the same `context.cycleId` path as the run-ingest response.
+  return json({ ok: true, changed: true, event: event.id, ...attachEcho(event) }, 201);
 }
 
 /** §S4b/§S4c — POST /api/v2/milestones: a workflow marker → a milestone event. */
@@ -693,7 +935,11 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
       help: hints.milestoneTypes,
     });
   }
-  const agentId = typeof body.agentId === "string" ? body.agentId : "unknown";
+  // CR-CRU-056 §S2b — milestones are a workflow verb: a live registered
+  // caller is required (refused BEFORE the event is recorded).
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const { agentId } = caller;
   const event = store.recordMilestoneEvent(pk.key, agentId, body.type, {
     ...(typeof body.label === "string" ? { label: body.label } : {}),
     ...(typeof body.commit === "string" ? { commit: body.commit } : {}),
@@ -750,6 +996,9 @@ async function handlePlanFile(store: Store, key: string, req: Request): Promise<
   if ("fail" in pk) return pk.fail;
   const body = await readBody(req);
   if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
+  // CR-CRU-056 §S2b — workflow verbs require a live registered caller.
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
   if (typeof body.cr !== "string" || body.cr.length === 0) {
     return fail(400, "cr is required", { help: hints.planFileInput });
   }
@@ -829,6 +1078,9 @@ async function handleCycleAppend(
   }
   const body = await readBody(req);
   if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
+  // CR-CRU-056 §S2b — workflow verbs require a live registered caller.
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
   const parsed = parseCycleInput(body);
   if ("error" in parsed) return fail(400, parsed.error, { help: hints.cycleInput });
   // CR-CRU-024 §S3.1 — optional `before: <cycleId>` inserts the new cycle
@@ -876,6 +1128,9 @@ async function handleCycleTransition(
   }
   const body = await readBody(req);
   if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
+  // CR-CRU-056 §S2b — workflow verbs require a live registered caller.
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
   // CR-CRU-024 §S3.2 — the PATCH carries EITHER {status} (transition) or {label}
   // (rename), never both: one mutation per call.
   const hasStatus = body.status !== undefined;
@@ -939,6 +1194,9 @@ async function handlePlanClose(
   }
   const body = await readBody(req);
   if (body === null) return fail(400, "malformed JSON body", { help: hints.malformedBody });
+  // CR-CRU-056 §S2b — close AND backfill require a live registered caller.
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
   // §S6 re-baseline (cycle 19) — one-field orchestrator backfill: a PATCH
   // body carrying `orchestrator` with NO `status` stamps an OPEN plan (the
   // executing plan); closed plans → 400, mirroring the close validation.
@@ -1012,9 +1270,20 @@ async function handlePlanClose(
  * re-anchor. 200 {ok:true, changed:true} with an active cycle, {changed:false}
  * with none; an unknown plan → 404 + help[].
  */
-function handlePlanCheckpoint(store: Store, key: string, planIdRaw: string): Response {
+async function handlePlanCheckpoint(
+  store: Store,
+  key: string,
+  planIdRaw: string,
+  req: Request,
+): Promise<Response> {
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
+  // CR-CRU-056 §S2b — checkpoint requires a live registered caller (any
+  // phase — a bound TDD agent checkpoints its own plan too, not just the
+  // orchestrator). An absent/unparseable body carries no agentId → refused.
+  const body = (await readBody(req)) ?? {};
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
   const planId = numericId(planIdRaw);
   if (planId === null) {
     return fail(404, `plan not found: ${planIdRaw}`, { help: hints.planCycleNotFound });
@@ -1043,8 +1312,14 @@ async function handlePlanAbort(
 ): Promise<Response> {
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
-  // Approval gate FIRST — mirrors the guarded-run-deletion 409 convention.
   const body = (await readBody(req)) ?? {};
+  // CR-CRU-056 §S2b — caller auth precedes even the approval gate: an
+  // unregistered caller is refused with the registration help[] regardless
+  // of userApproved (no anonymous verbs, approved or not).
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  // Approval gate next — mirrors the guarded-run-deletion 409 convention
+  // (still checked BEFORE plan existence).
   if (body.userApproved !== true) {
     return fail(
       409,
@@ -1069,9 +1344,13 @@ async function handlePlanAbort(
  * CR-CRU-024 §S5.3 — POST …/projects/<key>/stop — checkpoint every active
  * cycle's timer across the project's open plans. Returns {ok, checkpointed}.
  */
-function handleProjectStop(store: Store, key: string): Response {
+async function handleProjectStop(store: Store, key: string, req: Request): Promise<Response> {
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
+  // CR-CRU-056 §S2b — project stop requires a live registered caller.
+  const body = (await readBody(req)) ?? {};
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
   const checkpointed = store.stopProject(pk.key);
   return json({ ok: true, checkpointed });
 }
@@ -1252,7 +1531,7 @@ function handlePlansRoute(
     return handlePlanClose(store, key, segments[2]!, req);
   }
   if (segments.length === 4 && segments[3] === "checkpoint" && req.method === "POST") {
-    return handlePlanCheckpoint(store, key, segments[2]!);
+    return handlePlanCheckpoint(store, key, segments[2]!, req);
   }
   if (segments.length === 4 && segments[3] === "abort" && req.method === "POST") {
     return handlePlanAbort(store, key, segments[2]!, req);
@@ -1490,7 +1769,7 @@ export function handleV2(
     }
     // CR-CRU-024 §S5.3 — project stop: checkpoint every active cycle's timer.
     if (req.method === "POST" && segments.length === 2 && segments[1] === "stop") {
-      return handleProjectStop(store, segments[0]!);
+      return handleProjectStop(store, segments[0]!, req);
     }
     // CR-CRU-012 §S1 — PATCH project parameters (v2-only; the v1 shim has
     // no equivalent route).

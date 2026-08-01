@@ -133,10 +133,29 @@ async function createProject(baseUrl: string, name: string): Promise<string> {
   return body.project.key;
 }
 
+// CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs, /api/v2/runs/parsed,
+// and /api/v2/runs/compile now refuse an unregistered agentId (409) — each
+// distinct --agent value these CLI invocations ingest under must be live
+// registered first (register/unregister/heartbeat aren't gated by
+// requireRegisteredCaller, so those tests are unaffected).
+async function registerAgent(baseUrl: string, key: string, agentId: string): Promise<void> {
+  const res = await fetch(`${baseUrl}/api/v2/agents/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectKey: key, agentId, phase: "ORCHESTRATOR" }),
+  });
+  if (res.status !== 200) {
+    throw new Error(`registerAgent fixture failed: ${res.status} ${await res.text()}`);
+  }
+}
+
 async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: string }>> {
   const res = await fetch(`${baseUrl}/api/v2/events?project=${key}`);
-  const body = (await res.json()) as { events: Array<{ id: string }> };
-  return body.events;
+  const body = (await res.json()) as { events: Array<{ id: string; kind?: string }> };
+  // CR-CRU-056 §S2b fixture-repair: registerAgent() journals its own
+  // "lifecycle" event (CR-CRU-011 §S1) — not one of the ingest events these
+  // tests actually assert on. Filter it out.
+  return body.events.filter((e) => e.kind !== "lifecycle");
 }
 
 async function getFullEvent(
@@ -352,6 +371,7 @@ describe("crucible-axi CLI (CR-CRU-008 §S1)", () => {
     writeFileSync(fixturePath, JUNIT_FIXTURE);
     const { runCli } = await loadCli();
     const { calls, fetchImpl } = capturingFetch();
+    await registerAgent(baseUrl, key, "cli-ingest-agent");
 
     const code = await runCli({
       argv: ["ingest", fixturePath, "--project-key", key, "--agent", "cli-ingest-agent", "--tier", "e2e"],
@@ -385,6 +405,7 @@ describe("crucible-axi CLI (CR-CRU-008 §S1)", () => {
     const fixturePath = join(repoDir, "sample.junit.xml");
     writeFileSync(fixturePath, JUNIT_FIXTURE);
     const { runCli } = await loadCli();
+    await registerAgent(baseUrl, key, "cli-git-agent");
 
     const code = await runCli({
       argv: ["ingest", fixturePath, "--project-key", key, "--agent", "cli-git-agent"],
@@ -413,6 +434,7 @@ describe("crucible-axi CLI (CR-CRU-008 §S1)", () => {
     const { runCli } = await loadCli();
     const { GIT_DIR: _unused, ...envWithoutGitDir } = process.env;
     void _unused;
+    await registerAgent(baseUrl, key, "cli-norepo-agent");
 
     const code = await runCli({
       argv: ["ingest", fixturePath, "--project-key", key, "--agent", "cli-norepo-agent"],
@@ -442,6 +464,7 @@ describe("crucible-axi CLI (CR-CRU-008 §S1)", () => {
     const fixturePath = join(dir, "sample.junit.xml");
     writeFileSync(fixturePath, JUNIT_FIXTURE);
     const { runCli } = await loadCli();
+    await registerAgent(baseUrl, key, "cli-explicit-agent");
 
     const code = await runCli({
       argv: [
@@ -483,6 +506,7 @@ describe("crucible-axi CLI (CR-CRU-008 §S1)", () => {
     const key = await createProject(baseUrl, "cli-ingest-parsed");
     const { runCli } = await loadCli();
     const { calls, fetchImpl } = capturingFetch();
+    await registerAgent(baseUrl, key, "cli-parsed-agent");
     const parsedPayload = {
       summary: { total: 2, passed: 2, failed: 0, pending: 0, duration_ms: 12 },
       tree: [
@@ -525,6 +549,7 @@ describe("crucible-axi CLI (CR-CRU-008 §S1)", () => {
     writeFileSync(filePath, TSC_COMPILE_FIXTURE);
     const { runCli } = await loadCli();
     const { calls, fetchImpl } = capturingFetch();
+    await registerAgent(baseUrl, key, "cli-compile-agent");
 
     const code = await runCli({
       argv: ["ingest-compile", filePath, "--project-key", key, "--agent", "cli-compile-agent"],
@@ -586,6 +611,7 @@ describe("crucible-axi CLI (CR-CRU-008 §S1)", () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "cli-events-status");
+    await registerAgent(baseUrl, key, "seed-agent");
     await fetch(`${baseUrl}/api/v2/runs`, {
       method: "POST",
       headers: { "content-type": "application/json" },

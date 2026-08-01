@@ -148,6 +148,20 @@ def _open_plans_response(plans):
     return {"ok": True, "plans": plans}
 
 
+def _post_call_for_path(post_mock, path):
+    """The first recorded `_post(path, payload)` call matching `path`
+    exactly, as a `unittest.mock.call` object, or None. Needed because
+    --agent ingest verbs also POST an agent-unregister cleanup call through
+    the SAME mocked `_post` seam -- the ingest POST is not necessarily the
+    only (or last) call recorded."""
+    for call in post_mock.call_args_list:
+        args, kwargs = call
+        call_path = args[0] if args else kwargs.get("path")
+        if call_path == path:
+            return call
+    return None
+
+
 class _BaseEnvelopeTest(unittest.TestCase):
     """Shared tmp-project-dir + WORKFLOW_* env isolation."""
 
@@ -270,7 +284,7 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
         with mock.patch.object(self.module, "_post", return_value=server_resp):
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-X", "--cycles", "a,b",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0)
@@ -300,7 +314,7 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
         with mock.patch.object(self.module, "_post", return_value=server_resp):
             code, out, _err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-Y", "--cycles", "a",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0)
@@ -313,7 +327,7 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
                                 return_value={"ok": False, "error": "bad cr"}):
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-BAD", "--cycles", "a",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 1)
@@ -340,7 +354,7 @@ class CycleTransitionEnvelopeTest(_BaseEnvelopeTest):
                                 return_value=self._open_plan_with_cycle(55)), \
              mock.patch.object(self.module, "_patch", return_value={"ok": True}):
             code, out, err = _run_main(self.module, [
-                "cycle-activate", "55", "--project-dir", self.tmpdir,
+                "cycle-activate", "55", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0)
@@ -359,7 +373,7 @@ class CycleTransitionEnvelopeTest(_BaseEnvelopeTest):
                                 return_value=self._open_plan_with_cycle(56)), \
              mock.patch.object(self.module, "_patch", return_value={"ok": True}):
             code, out, err = _run_main(self.module, [
-                "cycle-done", "56", "--project-dir", self.tmpdir,
+                "cycle-done", "56", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0)
@@ -373,7 +387,7 @@ class CycleTransitionEnvelopeTest(_BaseEnvelopeTest):
         with mock.patch.object(self.module, "_get",
                                 return_value=_open_plans_response([])):
             code, out, err = _run_main(self.module, [
-                "cycle-activate", "999", "--project-dir", self.tmpdir,
+                "cycle-activate", "999", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 1)
@@ -465,14 +479,16 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
                         {"id": active_id - 1, "status": "done"}]},
         ])
 
-    def test_test_command_emits_toon_envelope_with_run_summary_and_cycleid_context(self):
-        """CR-CRU-036 §S1 retarget: WORKFLOW_CYCLE_ID no longer exists -- the
-        cycleId comes from the server's active cycle instead."""
+    def test_test_command_emits_toon_envelope_with_run_summary_and_no_client_resolved_cycle(self):
+        """CR-CRU-056 §S3 retarget: the client-side active-cycle resolver is
+        DELETED -- attachment is now server-stamped from the agent's
+        registered `--cycle` binding, so the client's own printed context
+        must carry no cycleId key at all (never a client-resolved guess)."""
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
         os.environ["FAKE_BUN_EXIT_CODE"] = "0"
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
-             mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans(51)):
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
+             mock.patch.object(self.module, "_get", create=True) as get_mock:
             code, out, err = _run_main(self.module, [
                 "test", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
                 "--package-dir", self.tmpdir, "--reports", "reports",
@@ -480,6 +496,7 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
             ])
 
         self.assertEqual(code, 0)
+        get_mock.assert_not_called()
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "test")
         self.assertIs(axi.get("ok"), True)
@@ -492,8 +509,11 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         context = axi.get("context")
         self.assertEqual(context.get("projectKey"), self.PROJECT_KEY)
         self.assertEqual(context.get("agentId"), "CR-CRU-013-C51-test")
-        self.assertEqual(context.get("cycleId"), 51)
-        self.assertIsInstance(context.get("cycleId"), int)
+        self.assertNotIn("cycleId", context)
+
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNotNone(ingest_call)
+        self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}))
 
         self.assertEqual(axi.get("warnings"), [])
 
@@ -502,6 +522,63 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         legacy_line = "ingest: ok=True passed=1 failed=0 pending=0 total=1"
         self.assertIn(legacy_line, err)
         self.assertNotIn(legacy_line, out)
+
+    def test_test_command_envelope_echoes_the_cycle_the_SERVER_reported(self):
+        """CR-CRU-056 C5 (VERIFY fix round): attachment is server-stamped, so
+        the ingest RESPONSE now echoes it back on `context.cycleId`. The
+        client SURFACES that echo in its envelope context -- an agent reading
+        stdout sees which cycle absorbed its evidence without a second
+        `GET /api/v2/events`.
+
+        Crucially this is an ECHO, not a revival of the deleted client-side
+        resolver: the POSTED body still carries NO cycleId, and no plans GET
+        is issued -- the id printed comes exclusively from the server's
+        answer."""
+        os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
+        os.environ["FAKE_BUN_EXIT_CODE"] = "0"
+        server_response = {"ok": True, "context": {"cycleId": 152}}
+        with mock.patch.object(self.module, "_post", return_value=server_response) as post_mock, \
+             mock.patch.object(self.module, "_get", create=True) as get_mock:
+            code, out, _err = _run_main(self.module, [
+                "test", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
+                "--package-dir", self.tmpdir, "--reports", "reports",
+                "--agent", "CR-CRU-056-C5-echo",
+            ])
+
+        self.assertEqual(code, 0)
+        axi = self._decode_axi(out)
+        context = axi.get("context")
+        self.assertEqual(context.get("agentId"), "CR-CRU-056-C5-echo")
+        self.assertEqual(
+            context.get("cycleId"), 152,
+            f"the envelope context must carry the cycle the SERVER reported "
+            f"attaching this run to; got context={context!r}")
+
+        # NEGATIVE -- no client-side RESOLUTION anywhere: the ingest POST body
+        # still sends no cycleId, and no plans/active-cycle GET was made.
+        get_mock.assert_not_called()
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNotNone(ingest_call)
+        self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}))
+
+    def test_test_command_envelope_omits_cycle_when_the_server_reports_no_attachment(self):
+        """The mirror case: a cycle-less ingest (server echoed no context)
+        prints NO cycleId key -- absence is stated by omission, never
+        fabricated into a null or a guessed active cycle."""
+        os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
+        os.environ["FAKE_BUN_EXIT_CODE"] = "0"
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
+             mock.patch.object(self.module, "_get", create=True) as get_mock:
+            code, out, _err = _run_main(self.module, [
+                "test", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
+                "--package-dir", self.tmpdir, "--reports", "reports",
+                "--agent", "CR-CRU-056-C5-no-echo",
+            ])
+
+        self.assertEqual(code, 0)
+        get_mock.assert_not_called()
+        context = self._decode_axi(out).get("context")
+        self.assertNotIn("cycleId", context)
 
     def test_test_command_without_agent_emits_no_toon_envelope(self):
         """Nothing was ingested (no --agent), so there is nothing to report --
@@ -528,8 +605,8 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
         os.environ["FAKE_BUN_EXIT_CODE"] = "0"
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
-             mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans(51)):
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
+             mock.patch.object(self.module, "_get", create=True) as get_mock:
             code, out, err = _run_main(self.module, [
                 "regression", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
                 "--package-dir", self.tmpdir, "--reports", "reports",
@@ -537,6 +614,7 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
             ])
 
         self.assertEqual(code, 0)
+        get_mock.assert_not_called()
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "regression")
         self.assertIs(axi.get("ok"), True)
@@ -545,7 +623,10 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         self.assertEqual(run.get("total"), 1)
         context = axi.get("context")
         self.assertEqual(context.get("agentId"), "CR-CRU-013-C51-regression")
-        self.assertEqual(context.get("cycleId"), 51)
+        self.assertNotIn("cycleId", context)
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNotNone(ingest_call)
+        self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}))
 
         # CR-CRU-050 §S2 — the plain stderr line now also carries `pending`, so
         # a line that omits a skip count can never be misread as summing.
@@ -554,19 +635,17 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         self.assertNotIn(legacy_line, out)
 
     def test_auto_ingest_emits_toon_envelope_with_run_summary(self):
-        """CR-CRU-036 §S1 retarget: an env-unset ingest with NO active cycle
-        WARNS+WITHHOLDS (see test_bun_crucible_auto_attach.py), so this
-        envelope/run-summary pin needs a resolvable cycle to reach the
-        ok:True envelope it was written to verify -- a SERVER active cycle
-        (never WORKFLOW_CYCLE_ID, which no longer exists) supplies it."""
+        """CR-CRU-056 §S3 retarget: attachment is server-stamped from the
+        agent's registered `--cycle` binding, not client-resolved -- the
+        client sends and echoes no cycleId at all any more."""
         reports_dir = os.path.join(self.tmpdir, "reports")
         os.makedirs(reports_dir, exist_ok=True)
         with open(os.path.join(reports_dir, "junit.xml"), "w") as f:
             f.write(PASS_JUNIT_XML)
         os.environ.pop("WORKFLOW_CYCLE_ID", None)
 
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
-             mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans(51)):
+        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
+             mock.patch.object(self.module, "_get", create=True) as get_mock:
             code, out, err = _run_main(self.module, [
                 "auto-ingest", "--agent", "CR-CRU-013-C51-auto",
                 "--project-dir", self.tmpdir, "--package-dir", self.tmpdir,
@@ -574,6 +653,7 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
             ])
 
         self.assertEqual(code, 0)
+        get_mock.assert_not_called()
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "auto-ingest")
         self.assertIs(axi.get("ok"), True)
@@ -582,7 +662,10 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         self.assertEqual(run.get("total"), 1)
         context = axi.get("context")
         self.assertEqual(context.get("agentId"), "CR-CRU-013-C51-auto")
-        self.assertEqual(context.get("cycleId"), 51)
+        self.assertNotIn("cycleId", context)
+        ingest_call = _post_call_for_path(post_mock, "/api/v2/runs/parsed")
+        self.assertIsNotNone(ingest_call)
+        self.assertNotIn("cycleId", ingest_call[0][1].get("context", {}))
 
         # CR-CRU-050 §S2 — the plain stderr line now also carries `pending`, so
         # a line that omits a skip count can never be misread as summing.
@@ -591,136 +674,17 @@ class IngestEnvelopeTest(_BaseEnvelopeTest):
         self.assertNotIn(legacy_line, out)
 
 
-class NoCycleIdWarningTest(_BaseEnvelopeTest):
-    """§S3 (no-cycle-id half) -- the cycle-id orphan incident (5 CR-013 runs
-    ingested with cycleId=null, with the plain-text output surfacing nothing)
-    is exactly what this guard prevents."""
-
-    PROJECT_KEY = "test-key-toon-nocycleid"
-    ACTIVE_CYCLE_ID = 909
-
-    def setUp(self):
-        super().setUp()
-        self.fake_bun = os.path.join(self.tmpdir, "fake_bun.py")
-        with open(self.fake_bun, "w") as f:
-            f.write(FAKE_BUN_SCRIPT_TEMPLATE.format(python=sys.executable))
-        os.chmod(self.fake_bun, 0o755)
-        os.environ["FAKE_BUN_JUNIT_CONTENT"] = PASS_JUNIT_XML
-        os.environ["FAKE_BUN_EXIT_CODE"] = "0"
-
-    def _active_cycle_plans(self):
-        return _open_plans_response([
-            {"planId": "plan-active", "cr": "CR-CRU-013", "status": "open",
-             "cycles": [{"id": self.ACTIVE_CYCLE_ID, "status": "active"}]},
-        ])
-
-    def _no_active_cycle_plans(self):
-        return _open_plans_response([
-            {"planId": "plan-quiet", "cr": "CR-CRU-013", "status": "open",
-             "cycles": [{"id": 10, "status": "pending"}, {"id": 11, "status": "done"}]},
-        ])
-
-    def _run_test_verb(self, agent="CR-CRU-013-C51-test"):
-        return _run_main(self.module, [
-            "test", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
-            "--package-dir", self.tmpdir, "--reports", "reports", "--agent", agent,
-        ])
-
-    def test_no_cycle_id_env_unset_with_active_cycle_auto_attaches_without_warning(self):
-        """CR-CRU-030 §S9 SUPERSEDES the old soft no-cycle-id warn-and-proceed
-        behavior pinned here originally: when WORKFLOW_CYCLE_ID is unset but
-        the open plan has exactly one ACTIVE cycle, the ingest now
-        AUTO-ATTACHES to it silently -- no cycleId=null orphan, no
-        `no-cycle-id` warning on either channel."""
-        os.environ.pop("WORKFLOW_CYCLE_ID", None)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
-             mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans()):
-            code, out, err = self._run_test_verb()
-
-        self.assertEqual(code, 0)
-        axi = self._decode_axi(out)
-
-        context = axi.get("context")
-        self.assertEqual(context.get("cycleId"), self.ACTIVE_CYCLE_ID,
-                          "the run must auto-attach to the plan's single "
-                          "ACTIVE cycle when WORKFLOW_CYCLE_ID is unset")
-
-        self.assertEqual(axi.get("warnings"), [],
-                          "auto-attach succeeded -- no no-cycle-id warning should be emitted")
-        self.assertNotIn("no-cycle-id", err)
-
-    def test_setting_workflow_cycle_id_env_has_no_effect_when_active_cycle_present(self):
-        """CR-CRU-036 §S1: WORKFLOW_CYCLE_ID no longer overrides anything --
-        the server's active cycle (self.ACTIVE_CYCLE_ID) is attached even
-        though the env var names a DIFFERENT id (51), proving it is ignored."""
-        os.environ["WORKFLOW_CYCLE_ID"] = "51"
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
-             mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans()):
-            code, out, err = self._run_test_verb()
-
-        self.assertEqual(code, 0)
-        axi = self._decode_axi(out)
-        context = axi.get("context")
-        self.assertEqual(
-            context.get("cycleId"), self.ACTIVE_CYCLE_ID,
-            "WORKFLOW_CYCLE_ID=51 must NOT override the server-resolved "
-            f"active cycle ({self.ACTIVE_CYCLE_ID})",
-        )
-        self.assertEqual(axi.get("warnings"), [])
-        self.assertNotIn("no-cycle-id", err)
-
-    def test_no_active_cycle_at_all_warns_and_withholds(self):
-        """CR-CRU-036 §S1 SUPERSEDES the old soft no-cycle-id warn-and-proceed
-        behavior for exactly this scenario (no ACTIVE cycle at all, env
-        unset): it is now a WARN + WITHHOLD (ok:false, non-zero exit, no
-        POST), never a silent orphan. Full coverage of the §S1 corrected
-        §S9 auto-attach/warn-withhold contract (test/regression/auto-ingest,
-        the tolerant paths, and the exact stdout message) lives in
-        tests/client/test_bun_crucible_auto_attach.py -- this method only
-        pins that the OLD assertion here (code==0, warnings==[]) no longer
-        holds."""
-        os.environ.pop("WORKFLOW_CYCLE_ID", None)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock, \
-             mock.patch.object(self.module, "_get", return_value=self._no_active_cycle_plans()):
-            code, out, err = self._run_test_verb()
-
-        self.assertNotEqual(code, 0,
-                             "no ACTIVE cycle exists -- §S1 requires a WARN + "
-                             "WITHHOLD, not a silent success")
-        axi = self._decode_axi(out)
-        self.assertIs(axi.get("ok"), False)
-        warnings_list = axi.get("warnings", [])
-        codes = [w.get("code") for w in warnings_list]
-        self.assertIn("no-active-cycle", codes)
-        for call in post_mock.call_args_list:
-            args, kwargs = call
-            path = args[0] if args else kwargs.get("path")
-            self.assertNotEqual(
-                path, "/api/v2/runs/parsed",
-                "the run must never be POSTed as a silent orphan when there "
-                "is no active cycle to attach it to")
-
-    def test_regression_also_auto_attaches_to_active_cycle_when_env_unset_no_warning(self):
-        """CR-CRU-030 §S9 retarget of the `regression` sibling to the same
-        auto-attach contract as the `test` verb above."""
-        os.environ.pop("WORKFLOW_CYCLE_ID", None)
-        with mock.patch.object(self.module, "_post", return_value={"ok": True}), \
-             mock.patch.object(self.module, "_get", return_value=self._active_cycle_plans()):
-            code, out, err = _run_main(self.module, [
-                "regression", "--bun", self.fake_bun, "--project-dir", self.tmpdir,
-                "--package-dir", self.tmpdir, "--reports", "reports",
-                "--agent", "CR-CRU-013-C51-regression",
-            ])
-
-        self.assertEqual(code, 0)
-        axi = self._decode_axi(out)
-        context = axi.get("context")
-        self.assertEqual(context.get("cycleId"), self.ACTIVE_CYCLE_ID,
-                          "the run must auto-attach to the plan's single "
-                          "ACTIVE cycle when WORKFLOW_CYCLE_ID is unset")
-        self.assertEqual(axi.get("warnings"), [],
-                          "auto-attach succeeded -- no no-cycle-id warning should be emitted")
-        self.assertNotIn("no-cycle-id", err)
+# CR-CRU-056 §S3/§S3c — `NoCycleIdWarningTest` (the CR-CRU-030/036-era
+# no-active-cycle warn+withhold guard) is RETIRED wholesale, not adapted: the
+# client-side plans lookup it exercised (`_get` the open plan, resolve its
+# single active cycle, warn+withhold when none exists) is gone entirely --
+# a bound TDD agent cannot hit "no active cycle" any more (registration
+# validates the binding up front, §S1/§S2), and an ORCHESTRATOR/report
+# agent's ingest attaches only via an explicit `context.cycleId` or is
+# stored cycle-less. None of the withhold-wording assertions this class
+# pinned have a surviving purpose. The residual "no client-resolved cycleId
+# ever appears" concern is covered above (IngestEnvelopeTest) and in
+# tests/client/test_bun_crucible_auto_attach.py's cycle-binding coverage.
 
 
 if __name__ == "__main__":

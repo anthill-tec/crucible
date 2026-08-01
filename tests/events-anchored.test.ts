@@ -100,11 +100,21 @@ afterEach(() => {
   servers = [];
 });
 
+// CR-CRU-056 §S2b fixture-repair (C3): mutating v2 workflow verbs
+// (plan-file, cycle transitions) now refuse an unregistered caller (409) —
+// merge a live-registered agentId into any JSON body lacking one.
+function withFixtureAgent(body: unknown): unknown {
+  if (body !== null && typeof body === "object" && !Array.isArray(body) && !("agentId" in (body as Record<string, unknown>))) {
+    return { ...(body as Record<string, unknown>), agentId: "fixture-orch" };
+  }
+  return body;
+}
+
 async function postJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
   return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
@@ -112,7 +122,7 @@ async function patchJson(handle: ServerHandle, urlPath: string, body: unknown): 
   return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
@@ -120,9 +130,15 @@ async function getRaw(handle: ServerHandle, urlPath: string): Promise<Response> 
   return fetch(`http://localhost:${handle.server.port}${urlPath}`);
 }
 
+async function registerAgent(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+  const res = await postJson(handle, "/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+  expect(res.status).toBe(200);
+}
+
 async function createProject(handle: ServerHandle): Promise<string> {
   const res = await postJson(handle, "/api/v2/projects", { name: `anchor-${crypto.randomUUID()}` });
   const body = (await res.json()) as { ok: true; project: { key: string } };
+  await registerAgent(handle, body.project.key, "fixture-orch");
   return body.project.key;
 }
 
@@ -220,6 +236,9 @@ describe("§S1 — GET /api/v2/events?project=<k>&cycleId=<id> (anchored fetch)"
     // Cycle B stays pending/active — its own run must NOT show up under A's anchor.
     await transition(handle, key, planId, b, "active");
 
+    await registerAgent(handle, key, "agent-a");
+    await registerAgent(handle, key, "agent-b");
+    await registerAgent(handle, key, "agent-unlinked");
     const linkedToA = await postParsedRun(handle, key, "agent-a", { cycleId: a });
     const linkedToB = await postParsedRun(handle, key, "agent-b", { cycleId: b });
     const unlinked = await postParsedRun(handle, key, "agent-unlinked");
@@ -256,6 +275,7 @@ describe("§S1 — GET /api/v2/events?project=<k>&cycleId=<id> (anchored fetch)"
     const { planId, a } = await filePlanAB(handle, key, "CR-ANCHOR-UNKNOWN");
     await transition(handle, key, planId, a, "active");
     await transition(handle, key, planId, a, "done");
+    await registerAgent(handle, key, "agent-a");
     await postParsedRun(handle, key, "agent-a", { cycleId: a });
 
     const { status, body } = await getAnchoredEvents(handle, key, 999999);
@@ -272,6 +292,7 @@ describe("§S1 — GET /api/v2/events?project=<k>&cycleId=<id> (anchored fetch)"
     const { planId, a } = await filePlanAB(handle, key, "CR-ANCHOR-TOON");
     await transition(handle, key, planId, a, "active");
     await transition(handle, key, planId, a, "done");
+    await registerAgent(handle, key, "agent-a");
     await postParsedRun(handle, key, "agent-a", { cycleId: a });
 
     const res = await getRaw(handle, `/api/v2/events?project=${key}&cycleId=${a}&fmt=toon`);
@@ -287,7 +308,13 @@ describe("§S1 — GET /api/v2/events?project=<k>&cycleId=<id> (anchored fetch)"
     const handle = boot();
     const key = await createProject(handle);
 
-    // Five unlinked runs, no plan/cycleId involved at all.
+    // Five unlinked runs, no plan/cycleId involved at all. Register all
+    // agents UP FRONT (each registration's own "lifecycle" event lands
+    // before any of the 5 test events) so the 5 real runs are the 5 NEWEST
+    // events — `limit=2` below fetches exactly the 2 newest of THOSE.
+    for (let i = 0; i < 5; i += 1) {
+      await registerAgent(handle, key, `agent-${i}`);
+    }
     for (let i = 0; i < 5; i += 1) {
       await postParsedRun(handle, key, `agent-${i}`);
     }

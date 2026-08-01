@@ -34,8 +34,8 @@ Subcommands:
   plan-file             File a cycle plan: --cr, --title, --cycles "a,b[,c…]" →
                         POST /api/v2/projects/<key>/plans. Prints the assigned NUMERIC
                         cycle ids on stdout (never guess ids — the plan-7 incident).
-                        track comes from $WORKFLOW_ROLE; orchestrator from
-                        --orchestrator / $WORKFLOW_ORCHESTRATOR when set.
+                        track comes from $WORKFLOW_ROLE; the registered --agent id
+                        is the caller AND the plan's orchestrator (§S2b).
   cycle-activate <id>   Transition a cycle to active. Cycle ids are unique per PROJECT:
                         resolved by scanning the OPEN plans for the id.
   cycle-done <id>       Transition an ACTIVE cycle to done (closes the span).
@@ -337,7 +337,7 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None):
 
 
 def _register_agent(project_dir, agent_id, message, display_name=None, source="claude-md",
-                    phase=None):
+                    phase=None, cycle_id=None):
     """POST the agent-online heartbeat. Single payload builder shared by
     cmd_register and the gate-run lifecycle brackets (CR-CRU-021 §S5).
 
@@ -345,6 +345,10 @@ def _register_agent(project_dir, agent_id, message, display_name=None, source="c
     phase-less callers here are the §S2b narration heartbeats, which route to
     /api/v2/agents/heartbeat: the phase-optional liveness ping, so a narration
     tick never re-declares — nor blanks — the phase the agent registered with.
+
+    CR-CRU-056 §S1/§S4 — `cycle_id` rides the register body as `cycleId`,
+    binding the agent to a cycle; the server validates it (ACTIVE cycle in an
+    OPEN plan) and REQUIRES it for TDD phases (RED/GREEN/FIX/VERIFY).
     """
     payload = {
         "agentId": agent_id,
@@ -360,6 +364,8 @@ def _register_agent(project_dir, agent_id, message, display_name=None, source="c
     if phase is None:
         return _post("/api/v2/agents/heartbeat", payload)
     payload["phase"] = phase
+    if cycle_id is not None:
+        payload["cycleId"] = cycle_id
     return _post("/api/v2/agents/register", payload)
 
 
@@ -375,14 +381,19 @@ def _unregister_agent(project_dir, agent_id):
 def _remove_agent_silent(project_dir, agent_id):
     """Gated-run cleanup (CR-CRU-021 §S5 anti-ghost, v2 model).
 
-    Under v2, a gated run needs NO explicit register: the run's ingest IS the
-    registration (implicit heartbeat — creates the agent row with NO lifecycle
-    event). The closing cleanup must be equally silent: a PLAIN v2 unregister
-    journals an 'unregistered' lifecycle event into /api/v2/events
-    (CR-CRU-011 §S1), which would bury and miscount the run event the gate
-    just ingested. CR-CRU-008 §S4 retired the shim's /api/agents/remove; the
-    ceremony-free removal is now the v2 unregister VERB with {silent: true} —
-    removes the agent row WITHOUT journaling a lifecycle event.
+    The cleanup must be SILENT: a PLAIN v2 unregister journals an
+    'unregistered' lifecycle event into /api/v2/events (CR-CRU-011 §S1), which
+    would bury and miscount the run event the gate just ingested. CR-CRU-008
+    §S4 retired the shim's /api/agents/remove; the ceremony-free removal is
+    now the v2 unregister VERB with {silent: true} — removes the agent row
+    WITHOUT journaling a lifecycle event.
+
+    CR-CRU-056 — call this ONLY for an identity the gated run itself created
+    (`_axi().GatedRunIdentity.should_remove`). The v2 model this cleanup was
+    written for — "the run's ingest IS the registration" — is gone: §S3b
+    retired implicit agent creation, and §S1 stores the cycle binding ON the
+    agent row, so removing a CALLER-owned registration destroys that caller's
+    binding and the next gated run under the same identity ingests unattached.
     """
     return _post(
         "/api/v2/agents/unregister",
@@ -390,33 +401,60 @@ def _remove_agent_silent(project_dir, agent_id):
     )
 
 
+def _open_gate_identity(project_dir, agent_id, cycle_id, message):
+    """CR-CRU-056 — open a gated run's identity and learn whether the run
+    CREATED it. One phase-optional heartbeat (never /register: the gated verbs
+    declare no phase, and the heartbeat route is the one touch that cannot
+    blank a pre-registered caller's phase); `cycle_id` is the verb's `--cycle`,
+    validated SERVER-side. The returned `GatedRunIdentity` answers
+    `should_remove` for the closing anti-ghost cleanup."""
+    identity = _axi().GatedRunIdentity(agent_id, cycle_id)
+    resp = _post(identity.PATH,
+                 identity.open_payload(_project_key(project_dir), message=message))
+    identity.observe(resp)
+    if resp.get("error") is not None or not resp.get("ok", False):
+        print(_axi().gate_identity_open_failed_line(agent_id, resp.get("error")),
+              file=sys.stderr)
+    return identity
+
+
+def _close_gate_identity(project_dir, identity):
+    """CR-CRU-056 — the closing half of the bracket: silently remove the agent
+    row ONLY when this run created it, and SAY SO either way on stderr so the
+    decision is never invisible."""
+    if identity is None:
+        return
+    if not identity.should_remove:
+        print(_axi().gate_identity_skipped_line(identity.agent_id, identity.confirmed),
+              file=sys.stderr)
+        return
+    cleanup_resp = _remove_agent_silent(project_dir, identity.agent_id)
+    print(f"cleanup: ok={cleanup_resp.get('ok', False)} agent={identity.agent_id}",
+          file=sys.stderr)
+
+
 def cmd_register(args):
+    """Register / heartbeat. CR-CRU-056 §S1/§S2 — `--cycle` binds the agent to
+    an ACTIVE cycle of an OPEN plan; the server validates the binding and
+    REQUIRES it for TDD phases (RED/GREEN/FIX/VERIFY) — a refused registration
+    surfaces the server's 409 envelope (error + help) and exits non-zero.
+    ORCHESTRATOR/report may register unbound."""
     project_dir = _resolve_project_dir(args.project_dir)
-    # CR-CRU-036 §S9 — resolve the active cycle the same way the ingest verbs do
-    # BEFORE the register POST: an OPEN plan with no active cycle WARNS + WITHHOLDS
-    # — the agent must never come online against an untracked plan. The POST is
-    # withheld; the ok:false envelope (with help[]) goes to stdout, the human
-    # detail to stderr, and the exit code is non-zero. A plans-fetch failure or no
-    # open plan at all is tolerant (register proceeds).
-    withhold, warnings = _register_cycle_guard(project_dir)
-    if withhold:
-        for w in warnings:
-            print(_axi().withhold_stderr_line(w), file=sys.stderr)
-        _emit_axi("register", False,
-                  {"agent": args.agent, "help": _HELP_STEPS["register"]},
-                  _axi_context(project_dir, agent_id=args.agent, cycle_id=None),
-                  warnings)
-        return 1
     resp = _register_agent(
         project_dir, args.agent,
         args.message or f"Starting {args.phase} phase",
         display_name=args.display_name, source=args.source,
-        phase=args.phase,
+        phase=args.phase, cycle_id=args.cycle,
     )
     ok = bool(resp.get("ok", False))
     legacy = (f"register: ok={resp.get('ok', False)} agent={args.agent} "
               f"phase={args.phase} source={args.source}")
-    _emit_axi("register", ok, {"agent": args.agent, "help": _HELP_STEPS["register"]},
+    result_fields = {"agent": args.agent, "help": _HELP_STEPS["register"]}
+    err = resp.get("error")
+    if err is not None:
+        # Faithful pass-through of the server's 409 envelope (error + help[]).
+        result_fields["error"] = err
+    _emit_axi("register", ok, result_fields,
               _axi_context(project_dir, agent_id=args.agent), [], legacy)
     return 0 if ok else 1
 
@@ -676,9 +714,9 @@ def _parse_lcov(lcov_path):
 def _run_context():
     """CR-CRU-019 §P1 — env + git → run context for declared cycle linkage.
 
-    Reads WORKFLOW_CYCLE (string) — CR-CRU-036 removed the cycle-id env read; the
-    cycle is resolved from the server's active cycle, never from the environment.
-    When at least one is set, attaches
+    Reads WORKFLOW_CYCLE (string) — no cycle-id env read; a bound agent's cycle
+    attachment is stamped SERVER-side from its registered binding (CR-CRU-056
+    §S3). When at least one is set, attaches
     git {branch, commit} from a cheap `git rev-parse` (tolerant of a
     non-repo cwd → omitted). Returns the context dict, or None when no
     workflow env is set.
@@ -710,18 +748,6 @@ def _run_context():
     except (OSError, subprocess.CalledProcessError):
         pass
     return context
-
-
-def _ingest_context(cycle_id):
-    """§S9 — the ingest payload's `context`: the env/git `_run_context()`
-    enriched with the RESOLVED cycleId, so the SERVER-recorded run carries the
-    attach cycle (not just the printed envelope). In the common auto-resolved
-    case `_run_context()` is None, so the cycleId is the sole classifying field.
-    Returns None only when there is nothing to attach."""
-    context = _run_context() or {}
-    if cycle_id is not None:
-        context["cycleId"] = cycle_id
-    return context or None
 
 
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
@@ -785,11 +811,14 @@ def cmd_test(args):
     _wipe(reports_dir)
     junit_path = _junit_path(reports_dir)
 
-    # Gate-run lifecycle bracket (CR-CRU-021 §S5, v2 model): the ingest itself
-    # registers the agent (implicit heartbeat); AFTER the final ingest the
-    # agent row is silently removed — even on a failing run or a mid-ingest
-    # exception — so gate/close-out agents never linger as online ghosts.
-    # Omitted --agent: no lifecycle calls at all.
+    # Gate-run lifecycle bracket (CR-CRU-021 §S5): an opening heartbeat DECLARES
+    # the run's identity (and binds it when --cycle is given), and AFTER the
+    # final ingest the agent row is silently removed — even on a failing run or
+    # a mid-ingest exception — so gate/close-out agents never linger as online
+    # ghosts. CR-CRU-056: the removal fires ONLY for an identity this run
+    # created; a caller who registered BEFORE the run keeps its registration
+    # and its cycle binding. Omitted --agent: no lifecycle calls at all.
+    identity = None
     try:
         cmd = _bun_test_cmd(bun, args.tests, junit_path, False, None)
         env = os.environ.copy()
@@ -802,6 +831,9 @@ def cmd_test(args):
             log_path = os.path.join(reports_dir, "run.log")
         narrator = None
         if args.agent:
+            identity = _open_gate_identity(project_dir, args.agent,
+                                           getattr(args, "cycle", None),
+                                           "gated test run starting")
             # bun ≥1.3 hides per-test completion lines when it detects an agent
             # session (CLAUDECODE / AGENT / REPL_ID / AI_AGENT env). Drop them all for the
             # wrapped runner so the full ✓/✗ line family streams: §S2b counts it
@@ -809,7 +841,10 @@ def cmd_test(args):
             for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
             narrator = _Narrator(
-                lambda message: _register_agent(project_dir, args.agent, message),
+                # Every narration tick is observed too: if the row is pruned
+                # mid-run and a tick re-creates it, this run owns that ghost.
+                lambda message: identity.observe(
+                    _register_agent(project_dir, args.agent, message)),
                 total_hint=_prescan_test_total(package_dir, args.tests),
             )
         result = _run_logged(cmd, package_dir, env, log_path, narrator)
@@ -822,18 +857,11 @@ def cmd_test(args):
             summary, tree, files = _parse_junit_file(junit_path)
             # §S2c — the captured run log IS the failure-detail source.
             _marry_failures(tree, getattr(result, "stdout", None))
-            # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run
-            # withholds WITHOUT ever ingesting a cycleId=null orphan.
-            cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
-            if withhold:
-                _emit_ingest_withhold("test", project_dir, args.agent, warnings)
-                return 1
             resp = _ingest_parsed(project_dir, args.agent, summary, tree,
                                   tier="unit",
-                                  context=_ingest_context(cycle_id),
+                                  context=_run_context(),
                                   raw=getattr(result, "stdout", None))
-            _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent,
-                             cycle_id, warnings)
+            _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent)
             # A failing run exits non-zero even when the ingest succeeded —
             # the exit code carries the RUNNER verdict, not the POST's.
             if summary["failed"] > 0:
@@ -848,10 +876,7 @@ def cmd_test(args):
         return _ingest_compile(project_dir, args.agent,
                                synthetic + ("\n\n" + tail if tail else ""))
     finally:
-        if args.agent:
-            cleanup_resp = _remove_agent_silent(project_dir, args.agent)
-            print(f"cleanup: ok={cleanup_resp.get('ok', False)} agent={args.agent}",
-                  file=sys.stderr)
+        _close_gate_identity(project_dir, identity)
 
 
 def cmd_regression(args):
@@ -866,9 +891,11 @@ def cmd_regression(args):
     coverage_dir = os.path.join(package_dir, "coverage")
     env = os.environ.copy()
 
-    # Gate-run lifecycle bracket (CR-CRU-021 §S5, v2 model): identical to
-    # cmd_test — implicit registration via the ingest, silent removal after
-    # the final ingest, try/finally.
+    # Gate-run lifecycle bracket (CR-CRU-021 §S5): identical to cmd_test —
+    # opening heartbeat (binding when --cycle is given), silent removal after
+    # the final ingest, try/finally, and (CR-CRU-056) removal ONLY of an
+    # identity this run created.
+    identity = None
     try:
         cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
         print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
@@ -878,12 +905,16 @@ def cmd_regression(args):
             log_path = os.path.join(reports_dir, "run.log")
         narrator = None
         if args.agent:
+            identity = _open_gate_identity(project_dir, args.agent,
+                                           getattr(args, "cycle", None),
+                                           "gated regression run starting")
             # Same §S2b setup as cmd_test (whole-suite M via package walk),
             # including the agent-quieting env strip.
             for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
             narrator = _Narrator(
-                lambda message: _register_agent(project_dir, args.agent, message),
+                lambda message: identity.observe(
+                    _register_agent(project_dir, args.agent, message)),
                 total_hint=_prescan_test_total(package_dir, None),
             )
         result = _run_logged(cmd, package_dir, env, log_path, narrator)
@@ -903,22 +934,12 @@ def cmd_regression(args):
             if coverage is None:
                 print(f"[crucible] WARN: lcov coverage unavailable at {lcov_path}",
                       file=sys.stderr)
-        # §S9 — resolve/attach the active cycle before the POST (withhold
-        # when none, never a cycleId=null orphan).
-        cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
-        if withhold:
-            _emit_ingest_withhold("regression", project_dir, args.agent, warnings)
-            return 1
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                              tier="regression", context=_ingest_context(cycle_id))
-        _emit_ingest_axi("regression", resp, summary, files, project_dir, args.agent,
-                         cycle_id, warnings)
+                              tier="regression", context=_run_context())
+        _emit_ingest_axi("regression", resp, summary, files, project_dir, args.agent)
         return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
     finally:
-        if args.agent:
-            cleanup_resp = _remove_agent_silent(project_dir, args.agent)
-            print(f"cleanup: ok={cleanup_resp.get('ok', False)} agent={args.agent}",
-                  file=sys.stderr)
+        _close_gate_identity(project_dir, identity)
 
 
 def cmd_auto_ingest(args):
@@ -930,17 +951,9 @@ def cmd_auto_ingest(args):
         print(f"[crucible] no {junit_path} — nothing to ingest", file=sys.stderr)
         return 1
     summary, tree, files = _parse_junit_file(junit_path)
-    # CR-CRU-030 §S9 — resolve/attach the active cycle BEFORE the POST so the
-    # ingested e2e run carries the resolved cycleId in the SERVER record (not
-    # just the envelope); no active cycle → withhold, never a cycleId=null orphan.
-    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
-    if withhold:
-        _emit_ingest_withhold("auto-ingest", project_dir, args.agent, warnings)
-        return 1
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="e2e",
-                          context=_ingest_context(cycle_id))
-    _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
-                     cycle_id, warnings)
+                          context=_run_context())
+    _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent)
     return 0 if resp.get("ok") else 1
 
 
@@ -989,7 +1002,7 @@ def cmd_pre_merge_gate(args):
     reg_args = argparse.Namespace(
         agent=args.agent, coverage=True, reports=args.reports, bun=args.bun,
         package_dir=args.package_dir, project_dir=args.project_dir,
-        log=getattr(args, "log", None),
+        log=getattr(args, "log", None), cycle=getattr(args, "cycle", None),
     )
     return cmd_regression(reg_args)
 
@@ -1009,11 +1022,18 @@ def _open_plans(project_dir):
 
 
 def cmd_plan_file(args):
+    # CR-CRU-056 §S2b — plan-file mutates workflow state, so the registered
+    # caller identity is REQUIRED and rides the wire as `agentId`. The same
+    # registered id IS the plan's stored orchestrator (the free-text
+    # --orchestrator label and its $WORKFLOW_ORCHESTRATOR fallback are
+    # retired). Resolve it FIRST: the hard stop must happen before any POST.
+    agent_id = _agent_id(args)
     project_dir = _resolve_project_dir(args.project_dir)
     labels = [label.strip() for label in args.cycles.split(",") if label.strip()]
     if not labels:
         sys.exit("[crucible] ERROR: --cycles must name at least one cycle")
-    payload = {"cr": args.cr, "cycles": [{"label": label} for label in labels]}
+    payload = {"cr": args.cr, "agentId": agent_id,
+               "cycles": [{"label": label} for label in labels]}
     if args.title:
         payload["title"] = args.title
     # §S3: wave resolution is `--wave` > $WORKFLOW_WAVE. Neither resolvable ->
@@ -1035,19 +1055,17 @@ def cmd_plan_file(args):
         wt = _axi().no_title_warning(args.cr)
         warnings.append(wt)
         print(f"warning: {wt['code']} — {wt['detail']}", file=sys.stderr)
-    # Track identity comes from the workflow env; the orchestrator NAME is a
-    # separate concept — explicit flag or $WORKFLOW_ORCHESTRATOR.
+    # Track identity comes from the workflow env.
     track = os.environ.get("WORKFLOW_ROLE")
     if track:
         payload["track"] = track
-    orchestrator = args.orchestrator or os.environ.get("WORKFLOW_ORCHESTRATOR")
-    if orchestrator:
-        payload["orchestrator"] = orchestrator
+    # §S2b — the registered caller is the plan's orchestrator; no free text.
+    payload["orchestrator"] = agent_id
     resp = _post(_plans_path(project_dir), payload)
     if not resp.get("ok"):
         legacy = f"plan-file: ok=False error={resp.get('error')}"
         _emit_axi("plan-file", False, {"cr": args.cr},
-                  _axi_context(project_dir), warnings, legacy)
+                  _axi_context(project_dir, agent_id=agent_id), warnings, legacy)
         return 1
     # Emit the ASSIGNED numeric cycle ids — never guess them (plan-7 incident);
     # they stay machine-readable in the envelope's `cycles` table (AC 124).
@@ -1061,7 +1079,7 @@ def cmd_plan_file(args):
     _emit_axi("plan-file", True,
               {"planId": resp.get("planId"), "cr": resp.get("cr"), "cycles": cycles,
                "help": ["cycle-activate <id>"]},
-              _axi_context(project_dir), warnings, legacy)
+              _axi_context(project_dir, agent_id=agent_id), warnings, legacy)
     return 0
 
 
@@ -1070,7 +1088,11 @@ def cmd_plan_backfill(args):
     PATCH its wave via S1. A wave-only PATCH body is closed-plan-safe, so the
     resolver considers ALL plans (open AND closed) — a merged plan's wave is
     exactly what a backfill corrects. Unknown/ambiguous/zero -> non-zero +
-    ok=False envelope. A server PATCH failure surfaces the same way."""
+    ok=False envelope. A server PATCH failure surfaces the same way.
+
+    CR-CRU-056 §S2b — the plan PATCH requires a live registered caller;
+    resolve the identity FIRST so the hard stop precedes any request."""
+    agent_id = _agent_id(args)
     project_dir = _resolve_project_dir(args.project_dir)
     resp = _get(_plans_path(project_dir))
     if not resp.get("ok"):
@@ -1097,7 +1119,7 @@ def cmd_plan_backfill(args):
     plan = plans[0]
     # Wave-only body: NEVER a `status` key (S1 closed-plan-safe backfill).
     patch_resp = _patch(f"{_plans_path(project_dir)}/{plan['planId']}",
-                        {"wave": args.wave})
+                        {"wave": args.wave, "agentId": agent_id})
     ok = patch_resp.get("ok", False)
     cr_label = plan.get("cr")
     legacy = (f"plan-backfill: ok={ok} plan={plan['planId']} cr={cr_label} "
@@ -1111,7 +1133,11 @@ def cmd_plan_backfill(args):
 
 def _cycle_transition(args, status):
     """Cycle ids are unique per PROJECT — resolve the owning OPEN plan by
-    scanning GET …/plans, then PATCH that plan's cycle."""
+    scanning GET …/plans, then PATCH that plan's cycle.
+
+    CR-CRU-056 §S2b — the cycle PATCH requires a live registered caller;
+    resolve the identity FIRST so the hard stop precedes any request."""
+    agent_id = _agent_id(args)
     project_dir = _resolve_project_dir(args.project_dir)
     cycle_id = args.cycle_id
     open_plans = _open_plans(project_dir)
@@ -1140,7 +1166,7 @@ def _cycle_transition(args, status):
                   _axi_context(project_dir), [], legacy)
         return 1
     resp = _patch(f"{_plans_path(project_dir)}/{target['planId']}/cycles/{cycle_id}",
-                  {"status": status})
+                  {"status": status, "agentId": agent_id})
     ok = resp.get("ok", False)
     legacy = (f"{verb}: ok={ok} cycle={cycle_id} plan={target['planId']}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
@@ -1159,10 +1185,11 @@ def cmd_cycle_done(args):
 
 
 def cmd_cr_close(args):
-    # CR-CRU-044 §S5 — cr-close ends by POSTing a `cr-merged` MILESTONE, so it
-    # needs a declared identity. Resolve it FIRST: a hard stop must happen
-    # before the plan GET/PATCH, never after the CR has already been closed.
-    _agent_id(args)
+    # CR-CRU-044 §S5 + CR-CRU-056 §S2b — cr-close PATCHes the plan closed and
+    # ends by POSTing a `cr-merged` MILESTONE; both require the registered
+    # caller identity. Resolve it FIRST: a hard stop must happen before the
+    # plan GET/PATCH, never after the CR has already been closed.
+    agent_id = _agent_id(args)
     project_dir = _resolve_project_dir(args.project_dir)
     open_plans = _open_plans(project_dir)
     if args.cr:
@@ -1184,7 +1211,8 @@ def cmd_cr_close(args):
         return 1
     plan = open_plans[0]
     resp = _patch(f"{_plans_path(project_dir)}/{plan['planId']}",
-                  {"status": "closed", "merge": {"commit": args.commit}})
+                  {"status": "closed", "merge": {"commit": args.commit},
+                   "agentId": agent_id})
     ok = resp.get("ok", False)
     cr_label = plan.get("cr")
     legacy = (f"cr-close: ok={ok} plan={plan['planId']} cr={cr_label} "
@@ -1200,7 +1228,7 @@ def cmd_cr_close(args):
     # (label=CR id, the merge commit, env auto-context). Withheld on a failed
     # close: the CR is not actually merged, so no marker fires.
     ms_resp = _post_milestone(
-        project_dir, _agent_id(args), "cr-merged",
+        project_dir, agent_id, "cr-merged",
         label=cr_label, commit=args.commit,
         context=_fleet_context(cr=cr_label) or None,
     )
@@ -1248,7 +1276,11 @@ def cmd_cycle_add(args):
     (ALL plans, optional --cr), POST …/plans/<planId>/cycles with ONLY the
     label, and let the SERVER reject a CLOSED/absent plan (400) — never a
     client-side pre-filter that would make the "closed plan" AC unreachable.
-    The assigned numeric id stays machine-readable in the envelope."""
+    The assigned numeric id stays machine-readable in the envelope.
+
+    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
+    FIRST so the hard stop precedes any request."""
+    agent_id = _agent_id(args)
     project_dir = _resolve_project_dir(args.project_dir)
     # §S15 — the next step after appending a cycle is to activate it; help[]
     # rides both the resolve-failure envelope and the success envelope.
@@ -1258,7 +1290,7 @@ def cmd_cycle_add(args):
     if plan is None:
         return rc
     resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/cycles",
-                 {"label": args.label})
+                 {"label": args.label, "agentId": agent_id})
     ok = resp.get("ok", False)
     cr_label = plan.get("cr")
     legacy = (f"cycle-add: ok={ok} plan={plan['planId']} cr={cr_label} "
@@ -1275,13 +1307,18 @@ def cmd_checkpoint(args):
     """§S7 — checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint).
     Resolves the single open plan, or --cr among several — the /shutdown
     emergency flow checkpoints the CURRENTLY open work, never a numeric id the
-    caller doesn't have."""
+    caller doesn't have.
+
+    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
+    FIRST so the hard stop precedes any request."""
+    agent_id = _agent_id(args)
     project_dir = _resolve_project_dir(args.project_dir)
     plan, rc = _resolve_plan_or_emit("checkpoint", project_dir, args.cr,
                                      {"help": _HELP_STEPS["checkpoint"]}, open_only=True)
     if plan is None:
         return rc
-    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/checkpoint", {})
+    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/checkpoint",
+                 {"agentId": agent_id})
     ok = resp.get("ok", False)
     legacy = (f"checkpoint: ok={ok} plan={plan['planId']}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
@@ -1294,9 +1331,14 @@ def cmd_checkpoint(args):
 
 def cmd_stop(args):
     """§S7 — project-level stop (POST …/projects/<key>/stop). No plan targeting;
-    checkpoints every open plan server-side and reports the count."""
+    checkpoints every open plan server-side and reports the count.
+
+    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
+    FIRST so the hard stop precedes any request."""
+    agent_id = _agent_id(args)
     project_dir = _resolve_project_dir(args.project_dir)
-    resp = _post(f"/api/v2/projects/{_project_key(project_dir)}/stop", {})
+    resp = _post(f"/api/v2/projects/{_project_key(project_dir)}/stop",
+                 {"agentId": agent_id})
     ok = resp.get("ok", False)
     legacy = (f"stop: ok={ok} checkpointed={resp.get('checkpointed')}"
               + (f" error={resp.get('error')}" if resp.get("error") else ""))
@@ -1310,14 +1352,18 @@ def cmd_abort(args):
     """§S7 — abort the resolved OPEN plan (POST …/plans/<id>/abort). The body's
     `userApproved` maps from --user-approved; WITHOUT the flag it is `false`,
     so the server's discouraging 409 refusal stays reachable by default (and
-    surfaces here as ok:false + non-zero, never a silent no-op)."""
+    surfaces here as ok:false + non-zero, never a silent no-op).
+
+    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
+    FIRST so the hard stop precedes any request."""
+    agent_id = _agent_id(args)
     project_dir = _resolve_project_dir(args.project_dir)
     plan, rc = _resolve_plan_or_emit("abort", project_dir, args.cr,
                                      {"help": _HELP_STEPS["abort"]}, open_only=True)
     if plan is None:
         return rc
     resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/abort",
-                 {"userApproved": bool(args.user_approved)})
+                 {"userApproved": bool(args.user_approved), "agentId": agent_id})
     ok = resp.get("ok", False)
     legacy = (f"abort: ok={ok} plan={plan['planId']} "
               f"userApproved={bool(args.user_approved)}"
@@ -1497,77 +1543,29 @@ _HELP_STEPS = {
 }
 
 
-def _plans_response(project_dir):
-    """Raw `GET .../plans` response, tolerant of any transport failure (a raised
-    exception / non-dict is normalised to a not-ok dict so `resolve_attach_cycle`
-    treats it as the tolerant fetch-failure case, never a definitive withhold)."""
-    try:
-        resp = _get(_plans_path(project_dir))
-    except Exception:
-        return {"ok": False, "error": "plans fetch raised"}
-    return resp if isinstance(resp, dict) else {"ok": False, "error": "non-dict plans response"}
-
-
-def _resolve_ingest_cycle(project_dir):
-    """CR-CRU-036 §S9 — resolve the cycle an --agent ingest attaches to FROM THE
-    SERVER (the open plan's single `status:"active"` cycle); no cycle-id env
-    override is read. Returns `(cycle_id, warnings, withhold)`:
-      - a valid cycle, or a tolerant `(None, [], False)` proceed (fetch failure /
-        no open plan at all — NOT proof of "no active cycle"),
-      - `(None, [warning], True)`  — an OPEN plan carries NO active cycle: WARN +
-        WITHHOLD. The caller MUST emit the ok:false envelope and SKIP the ingest
-        POST rather than orphan the run (cycleId=NONE).
-    """
-    return _axi().resolve_attach_cycle(_plans_response(project_dir))
-
-
-def _register_cycle_guard(project_dir):
-    """CR-CRU-036 §S9 — register mirrors the ingest withhold: an OPEN plan
-    carrying no `status:"active"` cycle withholds registration rather than bring
-    an agent online against untracked work. A plans fetch that itself FAILS
-    (server error / unreachable) or no open plan at all is NOT positive proof of
-    "no active cycle", so register PROCEEDS (tolerant). Returns
-    `(withhold, warnings)`."""
-    _cycle, warnings, withhold = _axi().resolve_attach_cycle(_plans_response(project_dir))
-    return withhold, warnings
-
-
-def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, cycle_id,
-                     warnings):
-    """Emit the §S1 envelope for a SUCCESSFUL ingest verb
-    (test/regression/auto-ingest): run{passed,failed,pending,total,files} +
-    cycle-aware
-    context. `files` (CR-CRU-047 §S2) is the distinct test-FILE count from
+def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent):
+    """Emit the §S1 envelope for an ingest verb
+    (test/regression/auto-ingest): run{passed,failed,pending,total,files}.
+    `files` (CR-CRU-047 §S2) is the distinct test-FILE count from
     `_parse_junit_file`, a sibling of the test counts, so a suite that silently
-    shrinks is visible in the gate output. Any warnings are also surfaced on
-    stderr."""
+    shrinks is visible in the gate output. CR-CRU-056 §S3 — the client RESOLVES
+    no cycle: a bound agent's run is server-stamped with its registered cycle
+    (a stale binding gets a 409, surfaced via `error`). C5 — the envelope
+    context ECHOES the attachment the SERVER reported (`context.cycleId` on the
+    ingest response), so the agent sees which cycle absorbed its evidence
+    without a second `GET /api/v2/events`; absent → the key is omitted."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
            "total": summary["total"], "files": files}
-    # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
-    # the cycleId key rather than emit an orphan-signalling explicit null.
-    if cycle_id is not None:
-        context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
-    else:
-        context = _axi_context(project_dir, agent_id=agent)
-    for w in warnings:
-        print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
+    context = _axi_context(project_dir, agent_id=agent,
+                           cycle_id=_axi().echoed_cycle_id(resp))
     # §S15 — the ingest envelope names the next step (mark the cycle done once
     # the run is green, else re-list the queue).
-    _emit_axi(verb, bool(resp.get("ok")),
-              {"run": run, "help": _HELP_STEPS.get(verb, ["status"])},
-              context, warnings)
-
-
-def _emit_ingest_withhold(verb, project_dir, agent, warnings):
-    """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when
-    an OPEN plan carries no active cycle to attach an ingest to. The run is NOT
-    POSTed, so it can never land as a silent cycleId=NONE orphan; the caller
-    returns non-zero."""
-    context = _axi_context(project_dir, agent_id=agent, cycle_id=None)
-    for w in warnings:
-        print(_axi().withhold_stderr_line(w), file=sys.stderr)
-    _emit_axi(verb, False, {}, context, warnings)
+    result_fields = {"run": run, "help": _HELP_STEPS.get(verb, ["status"])}
+    err = resp.get("error")
+    if err is not None:
+        result_fields["error"] = err
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
 
 
 def _agent_id(args):
@@ -1829,6 +1827,19 @@ def _add_project_dir_arg(p):
                         "git repo of CWD). The .env at the root must contain CRUCIBLE_PROJECT_KEY.")
 
 
+def _add_workflow_agent_arg(p, extra=""):
+    """CR-CRU-056 §S2b — the shared `--agent` flag for workflow verbs: every
+    mutating workflow verb posts as a LIVE registered caller (`agentId` on the
+    wire) and hard-stops client-side when the identity is undeclared."""
+    p.add_argument(
+        "--agent",
+        help="Registered agent id — REQUIRED (§S2b): every workflow verb posts as a "
+             "live registered caller; the identity is declared or the verb fails, "
+             "with no fallback. An unregistered id is refused by the server (409)."
+             + extra,
+    )
+
+
 def _add_package_dir_arg(p):
     p.add_argument("--package-dir",
                    help="Bun package dir / test cwd (default: $BUN_CRUCIBLE_PACKAGE_DIR, else "
@@ -1846,6 +1857,12 @@ def _add_reports_arg(p):
 def _add_log_arg(p):
     p.add_argument("--log", help="Write the FULL run output (combined stdout+stderr) to this path "
                                  "in addition to streaming it.")
+
+
+def _add_gate_cycle_arg(p):
+    """CR-CRU-056 — `--cycle` on a GATED verb (test/regression/pre-merge-gate):
+    the binding for the register-inside-the-run case."""
+    p.add_argument("--cycle", type=int, help=_axi().GATE_CYCLE_HELP)
 
 
 # §S14 — content-first: the one-line tool purpose printed by a bare invocation
@@ -1879,7 +1896,9 @@ def main():
     # no-arg live dashboard (below), never argparse's required-subcommand error.
     sub = p.add_subparsers(dest="cmd", required=False)
 
-    r = sub.add_parser("register", help="Register / heartbeat an agent.")
+    r = sub.add_parser("register",
+                       help="Register / heartbeat an agent. TDD phases must bind a "
+                            "cycle with --cycle.")
     r.add_argument("--agent", required=True,
                    help="Agent id — a free-form identifier. The phase is declared by "
                         "--phase and is never inferred from the agentId's shape; any "
@@ -1891,6 +1910,14 @@ def main():
                    choices=["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"],
                    help="Declared phase — the ONLY phase channel. Use `report` for a "
                         "registration that is not exercising a TDD phase.")
+    # CR-CRU-056 §S1/§S2 — cycle binding. Optional at the CLI; the SERVER
+    # enforces the per-phase requirement.
+    r.add_argument("--cycle", type=int,
+                   help="Cycle id to BIND this agent to (an ACTIVE cycle of an OPEN "
+                        "plan). TDD phases (RED/GREEN/FIX/VERIFY) MUST bind — the "
+                        "server refuses an unbound TDD registration (409). "
+                        "ORCHESTRATOR/report may register unbound. A bound agent's "
+                        "ingests are server-stamped with this cycle.")
     r.add_argument("--display-name", help="Human-readable name (default: the agentId)")
     r.add_argument("--source", default="claude-md",
                    choices=["claude-md", "package-json", "git-repo", "manual"])
@@ -1907,6 +1934,7 @@ def main():
     t.add_argument("--tests", nargs="+",
                    help="Test file/path target(s) (e.g. src/tools/send.test.ts). Omit for all.")
     t.add_argument("--agent", help="If set, ingest the junit result after the run")
+    _add_gate_cycle_arg(t)
     _add_reports_arg(t)
     _add_bun_arg(t)
     _add_package_dir_arg(t)
@@ -1918,6 +1946,7 @@ def main():
     g.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     g.add_argument("--coverage", action="store_true",
                    help="Run with bun lcov coverage and post /api/v2/runs/parsed with coverage")
+    _add_gate_cycle_arg(g)
     _add_reports_arg(g)
     _add_bun_arg(g)
     _add_package_dir_arg(g)
@@ -1944,6 +1973,7 @@ def main():
                               "coverage (the only coverage path).")
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     pmg.add_argument("--skip-check", action="store_true", help="Bypass the fail-fast tsc check")
+    _add_gate_cycle_arg(pmg)
     _add_reports_arg(pmg)
     _add_bun_arg(pmg)
     _add_package_dir_arg(pmg)
@@ -1952,13 +1982,15 @@ def main():
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     pf = sub.add_parser("plan-file",
-                        help="File a cycle plan; prints the ASSIGNED numeric cycle ids.")
+                        help="File a cycle plan; prints the ASSIGNED numeric cycle ids. "
+                             "Requires --agent <registered id> (§S2b).")
     pf.add_argument("--cr", required=True, help="CR id, e.g. CR-CRU-008.")
     pf.add_argument("--title", help="Optional plan title.")
     pf.add_argument("--cycles", required=True,
                     help='Comma-separated cycle labels, e.g. "a,b,c".')
-    pf.add_argument("--orchestrator",
-                    help="Orchestrator name (default: $WORKFLOW_ORCHESTRATOR when set).")
+    _add_workflow_agent_arg(
+        pf, extra=" The registered id is also stored as the plan's orchestrator "
+                  "(the free-text --orchestrator label is retired).")
     pf.add_argument("--wave",
                     help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE; "
                          "neither -> filed wave-less (no hard block).")
@@ -1966,62 +1998,75 @@ def main():
     pf.set_defaults(func=cmd_plan_file)
 
     pb = sub.add_parser("plan-backfill",
-                        help="Backfill a plan's wave (PATCH wave-only; open OR closed).")
+                        help="Backfill a plan's wave (PATCH wave-only; open OR closed). "
+                             "Requires --agent <registered id> (§S2b).")
     pb.add_argument("--wave", required=True, help="Wave number to assign.")
     pb.add_argument("--cr", help="Disambiguate when multiple plans exist.")
+    _add_workflow_agent_arg(pb)
     _add_project_dir_arg(pb)
     pb.set_defaults(func=cmd_plan_backfill)
 
-    ca = sub.add_parser("cycle-activate", help="Transition a plan cycle to active.")
+    ca = sub.add_parser("cycle-activate",
+                        help="Transition a plan cycle to active. "
+                             "Requires --agent <registered id> (§S2b).")
     ca.add_argument("cycle_id", type=int, help="Numeric cycle id (unique per project).")
+    _add_workflow_agent_arg(ca)
     _add_project_dir_arg(ca)
     ca.set_defaults(func=cmd_cycle_activate)
 
-    cdn = sub.add_parser("cycle-done", help="Transition an ACTIVE plan cycle to done.")
+    cdn = sub.add_parser("cycle-done",
+                         help="Transition an ACTIVE plan cycle to done. "
+                              "Requires --agent <registered id> (§S2b).")
     cdn.add_argument("cycle_id", type=int, help="Numeric cycle id (unique per project).")
+    _add_workflow_agent_arg(cdn)
     _add_project_dir_arg(cdn)
     cdn.set_defaults(func=cmd_cycle_done)
 
     cc = sub.add_parser("cr-close",
-                        help="Close the single OPEN plan (PATCH status=closed + merge.commit).")
+                        help="Close the single OPEN plan (PATCH status=closed + merge.commit). "
+                             "Requires --agent <registered id> (§S2b).")
     cc.add_argument("--commit", required=True, help="Merge commit sha.")
     cc.add_argument("--cr", help="Disambiguate when multiple plans are open.")
-    # CR-CRU-044 §S5 — cr-close POSTs a `cr-merged` milestone, so it carries the
-    # same declared-identity requirement (and the same flag) as the other four
-    # clients, which already exposed --agent here.
-    cc.add_argument("--agent",
-                    help="Agent id for the cr-merged milestone — REQUIRED (§S5): the "
-                         "identity is declared or the verb fails; there is no fallback.")
+    _add_workflow_agent_arg(
+        cc, extra=" The same id posts the closing cr-merged milestone (§S5).")
     _add_project_dir_arg(cc)
     cc.set_defaults(func=cmd_cr_close)
 
     # ── CR-CRU-030 §S4/§S7 — append-cycle + CR-024 workflow verbs ──
     cad = sub.add_parser("cycle-add",
                          help="Append a cycle to a plan (POST …/plans/<id>/cycles); "
-                              "prints the ASSIGNED numeric id.")
+                              "prints the ASSIGNED numeric id. "
+                              "Requires --agent <registered id> (§S2b).")
     cad.add_argument("label", help="Label for the new cycle.")
     cad.add_argument("--cr", help="Disambiguate when multiple plans exist.")
+    _add_workflow_agent_arg(cad)
     _add_project_dir_arg(cad)
     cad.set_defaults(func=cmd_cycle_add)
 
     cp = sub.add_parser("checkpoint",
-                        help="Checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint).")
+                        help="Checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint). "
+                             "Requires --agent <registered id> (§S2b).")
     cp.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _add_workflow_agent_arg(cp)
     _add_project_dir_arg(cp)
     cp.set_defaults(func=cmd_checkpoint)
 
     st = sub.add_parser("stop",
                         help="Stop the project — checkpoint every open plan "
-                             "(POST …/projects/<key>/stop).")
+                             "(POST …/projects/<key>/stop). "
+                             "Requires --agent <registered id> (§S2b).")
+    _add_workflow_agent_arg(st)
     _add_project_dir_arg(st)
     st.set_defaults(func=cmd_stop)
 
     ab = sub.add_parser("abort",
                         help="Abort the resolved OPEN plan (POST …/plans/<id>/abort). "
-                             "Requires --user-approved to pass the server's 409 gate.")
+                             "Requires --user-approved to pass the server's 409 gate "
+                             "and --agent <registered id> (§S2b).")
     ab.add_argument("--user-approved", action="store_true",
                     help="Map to body userApproved:true (the server refuses without it).")
     ab.add_argument("--cr", help="Disambiguate when multiple plans are open.")
+    _add_workflow_agent_arg(ab)
     _add_project_dir_arg(ab)
     ab.set_defaults(func=cmd_abort)
 

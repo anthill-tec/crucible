@@ -155,7 +155,7 @@ class PlanBackfillTest(_BaseWaveTest):
         with mock.patch.object(self.module, "_get", return_value=plans) as mock_get, \
              mock.patch.object(self.module, "_patch", return_value={"ok": True}) as mock_patch:
             code, out, err = _run_main(self.module, [
-                "plan-backfill", "--wave", "4", "--project-dir", self.tmpdir,
+                "plan-backfill", "--wave", "4", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"expected success exit 0; stdout={out!r} stderr={err!r}")
@@ -164,9 +164,10 @@ class PlanBackfillTest(_BaseWaveTest):
         (patch_path, patch_payload), _kwargs = mock_patch.call_args[0], mock_patch.call_args[1]
         self.assertTrue(patch_path.endswith("/plans/plan-4"),
                          f"PATCH must target the resolved plan's id; got path={patch_path!r}")
-        self.assertEqual(set(patch_payload.keys()), {"wave"},
-                          f"PATCH body must carry ONLY `wave`, never `status` "
-                          f"(closed-plan-safe backfill); got {patch_payload!r}")
+        self.assertEqual(set(patch_payload.keys()), {"wave", "agentId"},
+                          f"PATCH body must carry ONLY `wave` + the §S2b `agentId`, "
+                          f"never `status` (closed-plan-safe backfill); "
+                          f"got {patch_payload!r}")
         self.assertEqual(str(patch_payload["wave"]), "4")
 
         # "Prints the assigned wave" -- the established stdout channel in this
@@ -189,7 +190,7 @@ class PlanBackfillTest(_BaseWaveTest):
              mock.patch.object(self.module, "_patch", return_value={"ok": True}) as mock_patch:
             code, out, err = _run_main(self.module, [
                 "plan-backfill", "--wave", "4", "--cr", "CR-CRU-021",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"a CLOSED plan must be a valid backfill target; "
@@ -207,7 +208,7 @@ class PlanBackfillTest(_BaseWaveTest):
              mock.patch.object(self.module, "_patch", return_value={"ok": True}) as mock_patch:
             code, out, err = _run_main(self.module, [
                 "plan-backfill", "--wave", "4", "--cr", "CR-CRU-021",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -231,7 +232,7 @@ class PlanBackfillTest(_BaseWaveTest):
              mock.patch.object(self.module, "_patch", return_value={"ok": True}) as mock_patch:
             code, out, err = _run_main(self.module, [
                 "plan-backfill", "--wave", "4", "--cr", "CR-CRU-999-NOPE",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertNotEqual(code, 0, "an unresolvable --cr must be non-zero")
@@ -256,7 +257,7 @@ class PlanBackfillTest(_BaseWaveTest):
         with mock.patch.object(self.module, "_get", return_value=_plans_response([])), \
              mock.patch.object(self.module, "_patch", return_value={"ok": True}) as mock_patch:
             code, out, err = _run_main(self.module, [
-                "plan-backfill", "--wave", "4", "--project-dir", self.tmpdir,
+                "plan-backfill", "--wave", "4", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertNotEqual(code, 0, "no plan at all must be a non-resolvable-target error")
@@ -276,7 +277,7 @@ class PlanBackfillTest(_BaseWaveTest):
         with mock.patch.object(self.module, "_get", return_value=plans), \
              mock.patch.object(self.module, "_patch", return_value={"ok": True}) as mock_patch:
             code, out, err = _run_main(self.module, [
-                "plan-backfill", "--wave", "4", "--project-dir", self.tmpdir,
+                "plan-backfill", "--wave", "4", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertNotEqual(code, 0,
@@ -297,7 +298,7 @@ class PlanBackfillTest(_BaseWaveTest):
              mock.patch.object(self.module, "_patch",
                                return_value={"ok": False, "error": "plan not found"}):
             code, out, err = _run_main(self.module, [
-                "plan-backfill", "--wave", "4", "--project-dir", self.tmpdir,
+                "plan-backfill", "--wave", "4", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertNotEqual(code, 0)
@@ -322,7 +323,7 @@ class PlanFileWaveTest(_BaseWaveTest):
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-X", "--cycles", "a", "--wave", "5",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -337,7 +338,7 @@ class PlanFileWaveTest(_BaseWaveTest):
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-X", "--cycles", "a",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -353,7 +354,7 @@ class PlanFileWaveTest(_BaseWaveTest):
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-X", "--cycles", "a", "--wave", "5",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -372,7 +373,7 @@ class PlanFileWaveTest(_BaseWaveTest):
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-X", "--cycles", "a",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0,
@@ -393,7 +394,7 @@ class PlanFileWaveTest(_BaseWaveTest):
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-Z", "--cycles", "a,b",
                 "--title", "Some Title", "--wave", "7",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -429,7 +430,7 @@ class PlanFileNoWaveWarningTest(_BaseWaveTest):
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-CRU-090", "--cycles", "a",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0,
@@ -461,7 +462,7 @@ class PlanFileNoWaveWarningTest(_BaseWaveTest):
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-CRU-091", "--cycles", "a", "--wave", "5",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -481,7 +482,7 @@ class PlanFileNoWaveWarningTest(_BaseWaveTest):
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-CRU-092", "--cycles", "a",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -501,7 +502,7 @@ class PlanFileNoWaveWarningTest(_BaseWaveTest):
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-CRU-093", "--cycles", "a", "--wave", "5",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -538,7 +539,7 @@ class PlanFileNoTitleWarningTest(_BaseWaveTest):
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-CRU-094", "--cycles", "a",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0,
@@ -568,7 +569,7 @@ class PlanFileNoTitleWarningTest(_BaseWaveTest):
         with mock.patch.object(self.module, "_post", return_value=server_resp) as mock_post:
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-CRU-095", "--cycles", "a",
-                "--title", "Some Title", "--project-dir", self.tmpdir,
+                "--title", "Some Title", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")

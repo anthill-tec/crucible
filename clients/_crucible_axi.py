@@ -74,6 +74,31 @@ def axi_context(project_key, agent_id=None, cr=None, cycle_id=AXI_UNSET):
     return ctx
 
 
+def echoed_cycle_id(resp):
+    """CR-CRU-056 §S3 (C5) — read the cycle the SERVER reports it attached an
+    ingest to, out of the ingest response's `context.cycleId` echo.
+
+    This is a PURE READ of the server's own answer — emphatically NOT a
+    revival of the client-side cycle RESOLUTION deleted in C2: no plans fetch,
+    no active-cycle picking, no env var. The server owns the binding and
+    stamps the attachment; the client only repeats what came back, so an agent
+    reading stdout sees where its run landed without a second
+    `GET /api/v2/events`.
+
+    Returns the echoed integer id, or `AXI_UNSET` when the server reported no
+    attachment (a cycle-less ingest) so `axi_context` OMITS the key rather
+    than fabricating a null."""
+    context = resp.get("context") if isinstance(resp, dict) else None
+    if not isinstance(context, dict):
+        return AXI_UNSET
+    cycle_id = context.get("cycleId")
+    # `bool` is an int subclass — exclude it so a stray True can never pose
+    # as a cycle id.
+    if isinstance(cycle_id, int) and not isinstance(cycle_id, bool):
+        return cycle_id
+    return AXI_UNSET
+
+
 def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
     """Write the §S1 TOON-AXI envelope to stdout (the machine channel) and the
     optional human-readable line to stderr (interactive only)."""
@@ -185,63 +210,154 @@ def last_run_cr(plans):
     return max(closed, key=lambda p: p.get("closedAt")).get("cr")
 
 
-def resolve_active_cycle_id(plans):
-    """§S9 auto-attach resolver (PURE): the single `status:"active"` cycle id
-    among the OPEN plans of a `GET .../plans` payload, or None when there is
-    none (all terminal / none activated) — closed plans' active cycles are
-    ignored (only an OPEN plan is a live attach target)."""
-    for p in plans or []:
-        if p.get("status") != "open":
-            continue
-        for c in p.get("cycles", []):
-            if c.get("status") == "active":
-                return c.get("id")
-    return None
+# CR-CRU-056 §S3 — the CR-CRU-036-era client-side attach resolver
+# (`resolve_attach_cycle` / `resolve_active_cycle_id`) and its warn+withhold
+# flow are DELETED. Ingest attachment is the SERVER's job: a bound agent's run
+# is stamped from its registered cycle binding (`register --cycle`); an unbound
+# agent attaches only via an explicit `context.cycleId`. The client resolves
+# nothing.
 
 
-# CR-CRU-036 §S1 — the corrected §S9 no-active-cycle warning. The env override
-# WORKFLOW_CYCLE_ID is GONE; the server's active cycle is the single source of
-# truth. When an OPEN plan exists but carries no active cycle the run is
-# withheld with this warning (detail is pinned wording, asserted by the RED
-# suites — do NOT reword to "activate one first").
-NO_ACTIVE_CYCLE_WARNING = {"code": "no-active-cycle", "detail": "activate a cycle first"}
+# ── CR-CRU-056 §S1/§S3 — the gated-run identity bracket owns what it CREATED ─
+#
+# CR-CRU-021 §S5's anti-ghost cleanup exists so a gate/close-out agent never
+# lingers as an online ghost: after the final ingest the gated run SILENTLY
+# removes the agent row (no lifecycle event — a journaled 'unregistered' would
+# bury the run just ingested; see each client's `_remove_agent_silent`).
+#
+# Under the pre-CR model that row was ALWAYS the run's own — the ingest
+# implicitly created it — so "remove the row" and "remove what I created" were
+# the same statement. CR-CRU-056 broke that identity: §S1 stores the cycle
+# binding ON the agent row, and §S3b retired implicit creation. An unconditional
+# cleanup therefore DELETES a caller-owned registration together with its
+# binding, and the next gated run under the same identity ingests unattached.
+# Observed live 2026-08-01 on the :3849 board: `vidushi` registered bound to
+# cycle 152; `python-crucible.py regression --agent vidushi` ingested stamped
+# 152 and then ran its cleanup; the immediately following
+# `bun-crucible.py regression --agent vidushi` landed with NO cycle.
+#
+# The anti-ghost PURPOSE is preserved exactly; only its REACH is corrected —
+# the bracket removes an identity it created and never one that pre-existed.
+# Ownership is not guessed and needs no probe: the server already answers it.
+# `POST /api/v2/agents/register` and `/api/v2/agents/heartbeat` both return
+# `changed: true` iff that call CREATED the row (`src/v2.ts` handleAgentTouch:
+# `changed: !existed`), so the run's OWN opening lifecycle call reports whether
+# the identity is its to clean up.
 
 
-def resolve_attach_cycle(plans_resp):
-    """CR-CRU-036 §S9 (PURE) — from a raw `GET .../plans` RESPONSE dict decide the
-    cycle a run attaches to, distinguishing the definitive "no active cycle" from
-    the tolerant cases the interim guard wrongly conflated.
+class GatedRunIdentity:
+    """The identity half of a gated run's lifecycle bracket, shared by all five
+    clients so the fleet cannot drift apart again.
 
-    Returns `(cycle_id, warnings, withhold)`:
-      - plans-fetch FAILURE (response missing / not `ok`) → `(None, [], False)`:
-        an infra hiccup / non-UUID key is NOT proof of "no active cycle" — the
-        verb PROCEEDS (tolerant), no withhold, no warning.
-      - NO open plan at all (`ok`, empty/all-terminal plan set) → `(None, [], False)`:
-        a lightweight project with nothing to attach to — PROCEEDS (tolerant).
-      - an OPEN plan carrying a `status:"active"` cycle → `(id, [], False)`.
-      - an OPEN plan but NO active cycle → `(None, [no-active-cycle], True)`:
-        the definitive case — the caller MUST emit ok:false, print the withhold
-        line to stderr, SKIP the POST (no `cycleId=NONE` orphan) and exit non-zero.
+    Two jobs, both tiny:
+
+    1. OPEN the run's identity — `open_payload()` builds the body for a
+       phase-OPTIONAL heartbeat (`PATH`). The heartbeat route, never
+       `/register`, is deliberate: the gated verbs take no `--phase`, and
+       CR-CRU-044 §S1(a) makes the heartbeat the one touch that never
+       re-declares — nor blanks — the phase a pre-registered caller declared.
+       A `cycle_id` (the gated verbs' `--cycle`, same flag and semantics as
+       `register --cycle`) rides the body as `cycleId` for the
+       register-inside-the-run case: an agent that never registered separately
+       still binds, and the SERVER validates that binding. Nothing here
+       RESOLVES a cycle — no plans fetch, no active-cycle picking; the id is
+       whatever the caller typed, or the key is absent.
+
+    2. TRACK ownership — `observe()` reads the server's `changed` flag off
+       every register/heartbeat response the run makes (the opening call plus
+       any narration ticks). Ownership is STICKY: once a call of this run's
+       created the row, this run cleans it up, even if later ticks report
+       `changed: false`. A row that pre-existed (`changed: false` throughout)
+       is the CALLER's, and `should_remove` stays False — the caller's
+       registration, and with it their cycle binding, survives the run.
+
+    A refused opening call (409 on an invalid binding, a connection failure)
+    carries no `changed: true`, so it never claims ownership: the bracket
+    cleans up nothing it did not demonstrably create.
     """
-    if not isinstance(plans_resp, dict) or not plans_resp.get("ok"):
-        return None, [], False
-    plans = plans_resp.get("plans", []) or []
-    open_plans = [p for p in plans if p.get("status") == "open"]
-    if not open_plans:
-        return None, [], False
-    active = resolve_active_cycle_id(plans)
-    if active is not None:
-        return active, [], False
-    return None, [dict(NO_ACTIVE_CYCLE_WARNING)], True
+
+    PATH = "/api/v2/agents/heartbeat"
+
+    def __init__(self, agent_id, cycle_id=None):
+        self.agent_id = agent_id
+        self.cycle_id = cycle_id
+        self.created_here = False
+        self.confirmed = False
+
+    def open_payload(self, project_key, message="gated run starting",
+                     source="claude-md"):
+        """The opening heartbeat body. `cycleId` is present ONLY when the
+        caller supplied `--cycle` — an absent key leaves any stored binding
+        untouched (the server's touch-never-blanks contract, §S1)."""
+        payload = {
+            "agentId": self.agent_id,
+            "projectKey": project_key,
+            "status": "online",
+            "message": message,
+            "identity": {"displayName": self.agent_id, "source": source},
+        }
+        if self.cycle_id is not None:
+            payload["cycleId"] = self.cycle_id
+        return payload
+
+    def observe(self, resp):
+        """Record one register/heartbeat response and return it unchanged (so
+        it drops straight into a narration lambda). `changed: true` means THIS
+        call created the agent row; `ok: true` means the server ACCEPTED the
+        touch at all, which is what separates "the row is the caller's" from
+        "this run never established an identity"."""
+        if isinstance(resp, dict):
+            if resp.get("ok") is True:
+                self.confirmed = True
+            if resp.get("changed") is True:
+                self.created_here = True
+        return resp
+
+    @property
+    def should_remove(self):
+        """True only when this run created the identity — the single question
+        the anti-ghost cleanup is allowed to act on."""
+        return self.created_here
 
 
-def withhold_stderr_line(warning):
-    """Human stderr line for a §S9 withhold. Carries the SPACED phrase
-    'no active cycle' AND the machine code + detail, so a single emitted line
-    satisfies every grep (unit suites assert 'no active cycle'; the TS
-    integration suites assert both 'no-active-cycle' and 'activate a cycle
-    first')."""
-    return f"error: no active cycle [{warning['code']}] — {warning['detail']}"
+# CR-CRU-056 — the ONE `--cycle` help text for the GATED verbs, so all five
+# clients document the flag identically. Same flag name and semantics as
+# `register --cycle`; the difference is only WHEN it applies.
+GATE_CYCLE_HELP = (
+    "Cycle id to BIND this run's agent to, for a run whose agent did NOT "
+    "register separately (an ACTIVE cycle of an OPEN plan; the SERVER "
+    "validates it — nothing is resolved client-side). Same semantics as "
+    "`register --cycle`. An agent that ALREADY registered bound needs no "
+    "--cycle here: the gated run leaves its registration and binding intact.")
+
+
+def gate_identity_skipped_line(agent_id, confirmed=True):
+    """The stderr line a gated run prints INSTEAD of the cleanup, so an
+    operator can see WHY nothing was removed rather than being told nothing.
+
+    `confirmed` distinguishes the two no-removal cases, which must never be
+    reported as each other: the server ACCEPTED the opening touch and reported
+    the row already existed (it is the caller's, left standing), versus the
+    opening touch was REFUSED so this run never established an identity at
+    all."""
+    if not confirmed:
+        return (f"cleanup: nothing to remove for agent={agent_id} — this run "
+                f"never established an identity (its opening lifecycle call "
+                f"was refused); no agent row was created and none is removed")
+    return (f"cleanup: skipped agent={agent_id} — the identity pre-existed this "
+            f"run (registered by its caller); its registration and cycle "
+            f"binding are left intact")
+
+
+def gate_identity_open_failed_line(agent_id, error):
+    """The stderr line for a REFUSED opening call — a 409 on an invalid
+    `--cycle`, or an unreachable server. Without it the only symptom would be
+    the ingest's own downstream refusal, which names the registration but not
+    the binding that was actually rejected."""
+    return (f"[crucible] WARN: could not open the gated run's identity for "
+            f"agent={agent_id}: {error}. The run continues, but its ingest "
+            f"will be refused unless this id is already registered — and any "
+            f"--cycle binding was NOT applied.")
 
 
 # ── §S15 next-step templates + §S7/§S8 gate constants + gate helpers ────────
@@ -369,6 +485,15 @@ def cycle_transition_help(status, plan, cycle_id=None):
 # entity that is not an agent, with no phase, no lifecycle and no owner. The
 # fallback is GONE and the resolver lives here ONCE so the fleet cannot drift
 # apart again.
+#
+# CR-CRU-056 §S2b extends the hard stop to EVERY mutating workflow verb:
+# plan-file, plan-backfill, cycle-activate, cycle-done, cycle-add, cr-close,
+# checkpoint, stop, abort, milestone and the gate verbs all resolve the
+# identity through `require_agent_id` BEFORE any POST/PATCH and send it on the
+# wire as `agentId` — the server refuses an unregistered caller (409). The
+# plan verbs' free-text `--orchestrator` label (and its $WORKFLOW_ORCHESTRATOR
+# fallback) is retired: the registered `--agent` id is the caller AND the
+# plan's stored orchestrator.
 #
 # `$WORKFLOW_ROLE` is deliberately NOT part of the chain: it carries the TRACK
 # LANE (`mainline` | `track-n`; PRD-crucible-v2.md:291, DN-model-b-language.md:53)

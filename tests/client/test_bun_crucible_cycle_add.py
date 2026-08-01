@@ -166,7 +166,7 @@ class CycleAddClientVerbTest(_BaseCycleAddTest):
                                           "label": "extra-review", "kind": "red-green",
                                           "status": "pending"})):
             code, out, err = _run_main(self.module, [
-                "cycle-add", "extra-review", "--project-dir", self.tmpdir,
+                "cycle-add", "extra-review", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -174,8 +174,9 @@ class CycleAddClientVerbTest(_BaseCycleAddTest):
         path, payload = post_calls[0]
         self.assertTrue(path.endswith("/plans/plan-9/cycles"),
                          f"POST must target the resolved plan's cycles route; got path={path!r}")
-        self.assertEqual(payload, {"label": "extra-review"},
-                          f"POST body must carry ONLY the label; got {payload!r}")
+        self.assertEqual(payload, {"label": "extra-review", "agentId": "test-agent"},
+                          f"POST body must carry the label + the §S2b `agentId`; "
+                          f"got {payload!r}")
 
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "cycle-add")
@@ -197,7 +198,7 @@ class CycleAddClientVerbTest(_BaseCycleAddTest):
                                    post_calls, ok=True,
                                    extra={"changed": True, "id": 55, "label": "rework"})):
             code, out, err = _run_main(self.module, [
-                "cycle-add", "rework", "--cr", "CR-CRU-030", "--project-dir", self.tmpdir,
+                "cycle-add", "rework", "--cr", "CR-CRU-030", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -227,7 +228,7 @@ class CycleAddClientVerbTest(_BaseCycleAddTest):
                                    post_calls, ok=False,
                                    error="plan 4 is closed — cannot append cycles")):
             code, out, err = _run_main(self.module, [
-                "cycle-add", "rework", "--cr", "CR-CRU-021", "--project-dir", self.tmpdir,
+                "cycle-add", "rework", "--cr", "CR-CRU-021", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(len(post_calls), 1,
@@ -246,7 +247,7 @@ class CycleAddClientVerbTest(_BaseCycleAddTest):
         with mock.patch.object(self.module, "_get", return_value=plans), \
              mock.patch.object(self.module, "_post", side_effect=self._post_recorder(post_calls)):
             code, out, err = _run_main(self.module, [
-                "cycle-add", "rework", "--cr", "CR-CRU-999-NOPE", "--project-dir", self.tmpdir,
+                "cycle-add", "rework", "--cr", "CR-CRU-999-NOPE", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertNotEqual(code, 0, "an unresolvable --cr must be non-zero")
@@ -260,7 +261,7 @@ class CycleAddClientVerbTest(_BaseCycleAddTest):
         with mock.patch.object(self.module, "_get", return_value=_plans_response([])), \
              mock.patch.object(self.module, "_post", side_effect=self._post_recorder(post_calls)):
             code, out, err = _run_main(self.module, [
-                "cycle-add", "rework", "--project-dir", self.tmpdir,
+                "cycle-add", "rework", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertNotEqual(code, 0, "no plan at all ('absent') must be non-zero")
@@ -278,7 +279,7 @@ class CycleAddClientVerbTest(_BaseCycleAddTest):
         with mock.patch.object(self.module, "_get", return_value=plans), \
              mock.patch.object(self.module, "_post", side_effect=self._post_recorder(post_calls)):
             code, out, err = _run_main(self.module, [
-                "cycle-add", "rework", "--project-dir", self.tmpdir,
+                "cycle-add", "rework", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertNotEqual(code, 0, "ambiguous (2 plans, no --cr) must be non-zero, not a guess")

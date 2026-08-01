@@ -175,7 +175,7 @@ class _StateDerivedHelpBehaviorMixin:
              ]},
         ])
         code, out, err, _get_mock, patch_mock = self._run(
-            ["cycle-done", "210", "--project-dir", self.tmpdir],
+            ["cycle-done", "210", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans,
         )
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -183,7 +183,7 @@ class _StateDerivedHelpBehaviorMixin:
         patch_path, patch_payload = patch_mock.call_args[0]
         self.assertTrue(patch_path.endswith("/plans/plan-open-1/cycles/210"),
                          f"PATCH must target the resolved plan's cycle route; got {patch_path!r}")
-        self.assertEqual(patch_payload, {"status": "done"})
+        self.assertEqual(patch_payload, {"status": "done", "agentId": "test-agent"})
 
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "cycle-done")
@@ -212,7 +212,7 @@ class _StateDerivedHelpBehaviorMixin:
              ]},
         ])
         code, out, err, _get_mock, patch_mock = self._run(
-            ["cycle-done", "221", "--project-dir", self.tmpdir],
+            ["cycle-done", "221", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans,
         )
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -220,7 +220,7 @@ class _StateDerivedHelpBehaviorMixin:
         patch_path, patch_payload = patch_mock.call_args[0]
         self.assertTrue(patch_path.endswith("/plans/plan-open-2/cycles/221"),
                          f"PATCH must target the resolved plan's cycle route; got {patch_path!r}")
-        self.assertEqual(patch_payload, {"status": "done"})
+        self.assertEqual(patch_payload, {"status": "done", "agentId": "test-agent"})
 
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "cycle-done")
@@ -249,7 +249,7 @@ class _StateDerivedHelpBehaviorMixin:
              ]},
         ])
         code, out, err, _get_mock, _patch_mock = self._run(
-            ["cycle-activate", "230", "--project-dir", self.tmpdir],
+            ["cycle-activate", "230", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans,
         )
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")

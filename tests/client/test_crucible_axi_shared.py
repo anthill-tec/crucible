@@ -223,40 +223,325 @@ class SharedAxiContextTest(unittest.TestCase):
         self.assertNotIn("track", ctx)
 
 
-class SharedAxiResolveActiveCycleTest(unittest.TestCase):
-    """`resolve_active_cycle_id(plans)` -- the §S9 auto-attach resolver,
-    factored as a PURE function (no HTTP of its own): the single ACTIVE
-    cycle id among OPEN plans, or None when none/all-terminal."""
+class SharedAxiCycleResolverRetiredTest(unittest.TestCase):
+    """CR-CRU-056 §S3/§S3c — the §S9-era client-side attach resolver
+    (`resolve_attach_cycle`/`resolve_active_cycle_id`, PURE functions the
+    shared module used to export) is DELETED wholesale: the server has never
+    resolved a cycle for a caller and the client stops guessing too.
+    Attachment is now the AGENT ROW's job (§S1 register --cycle binding,
+    server-stamped at ingest). This class supersedes
+    SharedAxiResolveActiveCycleTest -- the pins there exercised a function
+    that no longer exists, so they are retired (not adapted) in favour of a
+    grep-sweep proving the retirement is total across the fleet, per the CR
+    AC: "resolve_attach_cycle and resolve_active_cycle_id are gone from
+    clients/ (grep-sweep-asserted)"."""
 
-    def test_resolve_active_cycle_id_returns_the_single_active_cycle_among_open_plans(self):
-        axi_mod = _load_axi_module()
-        plans = [
-            {"planId": "plan-1", "status": "open",
-             "cycles": [{"id": 10, "status": "pending"}, {"id": 11, "status": "active"}]},
-            {"planId": "plan-2", "status": "closed",
-             "cycles": [{"id": 20, "status": "active"}]},
-        ]
-        self.assertEqual(axi_mod.resolve_active_cycle_id(plans), 11)
+    BANNED_NAMES = ("resolve_attach_cycle", "resolve_active_cycle_id")
 
-    def test_resolve_active_cycle_id_ignores_closed_plans_active_cycles(self):
+    def test_shared_axi_module_no_longer_exports_the_active_cycle_resolver(self):
         axi_mod = _load_axi_module()
-        plans = [
-            {"planId": "plan-2", "status": "closed",
-             "cycles": [{"id": 20, "status": "active"}]},
-        ]
-        self.assertIsNone(axi_mod.resolve_active_cycle_id(plans))
+        for banned in self.BANNED_NAMES:
+            self.assertFalse(
+                hasattr(axi_mod, banned),
+                f"clients/_crucible_axi.py must no longer export {banned} -- "
+                f"CR-CRU-056 §S3 deletes the client-side attach resolver")
 
-    def test_resolve_active_cycle_id_returns_none_when_all_cycles_terminal(self):
-        axi_mod = _load_axi_module()
-        plans = [
-            {"planId": "plan-1", "status": "open",
-             "cycles": [{"id": 10, "status": "done"}, {"id": 11, "status": "pending"}]},
-        ]
-        self.assertIsNone(axi_mod.resolve_active_cycle_id(plans))
+    def test_no_python_client_file_calls_the_retired_resolver_names(self):
+        """Grep-sweep across every `clients/*.py` file (not just the shared
+        module) -- the AC requires the retirement to be total across the
+        fleet, since each of the five clients used to call these functions
+        at two sites apiece (§S3c). Scoped to actual CODE references (a
+        call, or dotted access) on non-comment lines -- a `# CR-CRU-056 ...`
+        explanatory comment naming the retired functions for historical
+        context is documentation, not a live reference, and stays legal."""
+        clients_dir = REPO_ROOT / "clients"
+        offenders = []
+        for py_file in sorted(clients_dir.glob("*.py")):
+            for lineno, line in enumerate(py_file.read_text().splitlines(), start=1):
+                code_part = line.split("#", 1)[0]
+                for banned in self.BANNED_NAMES:
+                    if banned + "(" in code_part or "." + banned in code_part:
+                        offenders.append(f"{py_file.name}:{lineno}: {banned}")
+        self.assertEqual(
+            offenders, [],
+            f"no file under clients/ may CALL the retired client-side attach "
+            f"resolver any more; found {offenders!r}")
 
-    def test_resolve_active_cycle_id_returns_none_when_no_plans(self):
+
+class SharedAxiEchoedCycleIdTest(unittest.TestCase):
+    """CR-CRU-056 C5 (VERIFY fix round) -- `echoed_cycle_id` reads the cycle
+    the SERVER reports it attached an ingest to, out of the ingest response's
+    `context.cycleId` echo, so the client envelope can surface where the run
+    landed without a second `GET /api/v2/events`.
+
+    It is a PURE READ of the server's answer -- NOT a revival of the
+    client-side attach resolver deleted in §S3 (no plans fetch, no
+    active-cycle picking, no env var). Absence maps to `AXI_UNSET` so
+    `axi_context` OMITS the key rather than fabricating a null or a guess."""
+
+    def test_returns_the_integer_cycle_id_the_server_echoed(self):
         axi_mod = _load_axi_module()
-        self.assertIsNone(axi_mod.resolve_active_cycle_id([]))
+        self.assertEqual(
+            axi_mod.echoed_cycle_id({"ok": True, "context": {"cycleId": 152}}), 152)
+
+    def test_returns_the_unset_sentinel_when_the_response_carries_no_context(self):
+        axi_mod = _load_axi_module()
+        self.assertIs(axi_mod.echoed_cycle_id({"ok": True}), axi_mod.AXI_UNSET)
+
+    def test_returns_the_unset_sentinel_when_the_context_carries_no_cycle_id(self):
+        axi_mod = _load_axi_module()
+        self.assertIs(
+            axi_mod.echoed_cycle_id({"ok": True, "context": {"projectKey": "k"}}),
+            axi_mod.AXI_UNSET)
+
+    def test_returns_the_unset_sentinel_for_a_non_integer_or_null_cycle_id(self):
+        axi_mod = _load_axi_module()
+        for bogus in (None, "152", 1.5, True, {"id": 152}):
+            self.assertIs(
+                axi_mod.echoed_cycle_id({"ok": True, "context": {"cycleId": bogus}}),
+                axi_mod.AXI_UNSET,
+                f"a non-integer cycleId echo ({bogus!r}) must never be surfaced "
+                f"as a cycle id")
+
+    def test_tolerates_a_malformed_or_missing_response_without_raising(self):
+        axi_mod = _load_axi_module()
+        for bogus in (None, "boom", [], {"context": "not-a-dict"}):
+            self.assertIs(axi_mod.echoed_cycle_id(bogus), axi_mod.AXI_UNSET)
+
+    def test_feeds_axi_context_so_the_envelope_carries_the_server_reported_cycle(self):
+        """End of the wire: the helper's output drops straight into
+        `axi_context(cycle_id=...)` -- present -> the key appears with the
+        server's id; absent -> the key is omitted entirely."""
+        axi_mod = _load_axi_module()
+        ctx = axi_mod.axi_context(
+            "proj-k", agent_id="A1",
+            cycle_id=axi_mod.echoed_cycle_id({"ok": True, "context": {"cycleId": 152}}))
+        self.assertEqual(ctx.get("cycleId"), 152)
+        bare = axi_mod.axi_context(
+            "proj-k", agent_id="A1", cycle_id=axi_mod.echoed_cycle_id({"ok": True}))
+        self.assertNotIn("cycleId", bare)
+
+
+class FleetIngestEnvelopeEchoesServerCycleTest(unittest.TestCase):
+    """CR-CRU-056 C5 -- the echo is a FLEET property, not a bun-only one: each
+    of the five clients' ingest-envelope emitter must feed
+    `echoed_cycle_id(resp)` into its `_axi_context(...)` call, so every stack
+    prints the cycle the server reported. Grep-sweep in the style of
+    `SharedAxiCycleResolverRetiredTest` (the AC pattern for fleet-wide
+    uniformity)."""
+
+    CLIENTS = ("bun-crucible.py", "python-crucible.py", "rust-crucible.py",
+               "mvn-crucible.py", "arduino-crucible.py")
+
+    def test_every_client_feeds_the_server_echo_into_its_ingest_envelope_context(self):
+        missing = []
+        for name in self.CLIENTS:
+            source = (REPO_ROOT / "clients" / name).read_text()
+            if "cycle_id=_axi().echoed_cycle_id(resp)" not in source:
+                missing.append(name)
+        self.assertEqual(
+            missing, [],
+            f"every client's ingest envelope must surface the SERVER-reported "
+            f"cycle (echoed_cycle_id(resp) -> _axi_context(cycle_id=...)); "
+            f"missing in {missing!r}")
+
+
+class SharedGatedRunIdentityTest(unittest.TestCase):
+    """CR-CRU-056 (C5, VERIFY fix round) -- `GatedRunIdentity`, the shared
+    ownership half of the gated-run lifecycle bracket.
+
+    CR-CRU-021 §S5's anti-ghost cleanup removes the agent row a GATED RUN
+    created. Once §S1 stored the cycle binding ON that row, an UNCONDITIONAL
+    cleanup started destroying CALLER-owned registrations: observed live on
+    :3849 (2026-08-01), `vidushi` registered bound to cycle 152, a
+    `python-crucible.py regression --agent vidushi` ingested stamped 152 and
+    then ran its cleanup, and the immediately following `bun-crucible.py
+    regression --agent vidushi` landed with NO cycle. These pin the purpose
+    preserved / reach corrected split, at the PURE level (no I/O)."""
+
+    def test_open_payload_omits_cycle_id_when_no_cycle_was_supplied(self):
+        axi_mod = _load_axi_module()
+        payload = axi_mod.GatedRunIdentity("A1").open_payload("proj-k")
+        self.assertEqual(payload["agentId"], "A1")
+        self.assertEqual(payload["projectKey"], "proj-k")
+        # An ABSENT key is what preserves a pre-registered caller's binding
+        # (the server's §S1 touch-never-blanks contract). A fabricated
+        # null/0 would be a client-side resolution -- deleted in C2.
+        self.assertNotIn("cycleId", payload)
+        # A gated verb declares no phase; re-declaring one would BLANK the
+        # phase a pre-registered caller registered with (CR-CRU-044 §S1(a)).
+        self.assertNotIn("phase", payload)
+
+    def test_open_payload_carries_an_explicit_cycle_binding_verbatim(self):
+        axi_mod = _load_axi_module()
+        payload = axi_mod.GatedRunIdentity("A1", 152).open_payload("proj-k")
+        self.assertEqual(payload["cycleId"], 152,
+                         "--cycle on a gated verb must ride the opening "
+                         "heartbeat verbatim for the SERVER to validate")
+
+    def test_route_is_the_phase_optional_heartbeat_never_register(self):
+        axi_mod = _load_axi_module()
+        self.assertEqual(axi_mod.GatedRunIdentity("A1").PATH,
+                         "/api/v2/agents/heartbeat")
+
+    def test_a_row_that_pre_existed_is_never_claimed_by_the_run(self):
+        axi_mod = _load_axi_module()
+        identity = axi_mod.GatedRunIdentity("A1")
+        identity.observe({"ok": True, "changed": False})
+        self.assertFalse(
+            identity.should_remove,
+            "the bracket must not remove an identity it did not create -- "
+            "that is the caller's registration, and its cycle binding")
+
+    def test_a_row_this_run_created_is_claimed_for_cleanup(self):
+        axi_mod = _load_axi_module()
+        identity = axi_mod.GatedRunIdentity("A1")
+        identity.observe({"ok": True, "changed": True})
+        self.assertTrue(identity.should_remove,
+                        "the CR-CRU-021 §S5 anti-ghost purpose is preserved: "
+                        "a run-created row is still torn down")
+
+    def test_ownership_is_sticky_across_later_narration_ticks(self):
+        """A run that CREATED the row keeps ownership even though every
+        following narration tick reports `changed: false` -- otherwise a
+        long run would abandon the ghost it planted."""
+        axi_mod = _load_axi_module()
+        identity = axi_mod.GatedRunIdentity("A1")
+        identity.observe({"ok": True, "changed": True})
+        identity.observe({"ok": True, "changed": False})
+        identity.observe({"ok": True, "changed": False})
+        self.assertTrue(identity.should_remove)
+
+    def test_a_tick_that_re_creates_a_pruned_row_transfers_ownership(self):
+        """The inverse: the caller's row existed at open but was PRUNED
+        mid-run and a narration tick re-created it -- that new row is this
+        run's ghost to remove."""
+        axi_mod = _load_axi_module()
+        identity = axi_mod.GatedRunIdentity("A1")
+        identity.observe({"ok": True, "changed": False})
+        self.assertFalse(identity.should_remove)
+        identity.observe({"ok": True, "changed": True})
+        self.assertTrue(identity.should_remove)
+
+    def test_a_refused_or_unreachable_open_claims_nothing(self):
+        """A 409 (invalid binding) or a connection failure carries no
+        `changed: true`, so the bracket cleans up nothing it cannot show it
+        created -- never a `.get("changed")`-truthy accident."""
+        axi_mod = _load_axi_module()
+        for resp in ({"ok": False, "error": "HTTP 409: bad binding"},
+                     {"ok": False, "error": "connection failed"},
+                     {"ok": True},
+                     {"ok": True, "changed": "yes"},
+                     None):
+            identity = axi_mod.GatedRunIdentity("A1")
+            identity.observe(resp)
+            self.assertFalse(identity.should_remove,
+                             f"a response of {resp!r} must not claim ownership")
+
+    def test_observe_returns_its_response_so_it_can_wrap_a_narration_call(self):
+        axi_mod = _load_axi_module()
+        identity = axi_mod.GatedRunIdentity("A1")
+        resp = {"ok": True, "changed": True}
+        self.assertIs(identity.observe(resp), resp)
+
+    def test_skipped_cleanup_line_names_the_agent_and_says_why(self):
+        """AXI self-explanation: an operator must be able to see the caller's
+        registration was deliberately LEFT STANDING, not silently forgotten."""
+        axi_mod = _load_axi_module()
+        line = axi_mod.gate_identity_skipped_line("vidushi")
+        self.assertIn("vidushi", line)
+        self.assertIn("cleanup", line.lower())
+        self.assertIn("pre-existed", line)
+
+    def test_a_refused_open_is_not_reported_as_a_pre_existing_registration(self):
+        """The two no-removal cases must never be reported as each other: a
+        REFUSED opening touch means no row was ever created, and claiming the
+        identity "pre-existed (registered by its caller)" would be a false
+        statement about the board's state."""
+        axi_mod = _load_axi_module()
+        line = axi_mod.gate_identity_skipped_line("vidushi", confirmed=False)
+        self.assertIn("vidushi", line)
+        self.assertNotIn("pre-existed", line)
+        self.assertIn("never established an identity", line)
+
+    def test_confirmed_tracks_whether_the_server_accepted_the_touch(self):
+        axi_mod = _load_axi_module()
+        accepted = axi_mod.GatedRunIdentity("A1")
+        accepted.observe({"ok": True, "changed": False})
+        self.assertTrue(accepted.confirmed)
+        refused = axi_mod.GatedRunIdentity("A1")
+        refused.observe({"ok": False, "error": "HTTP 409: unknown cycleId: 999"})
+        self.assertFalse(refused.confirmed)
+        self.assertFalse(refused.should_remove)
+
+    def test_refused_open_line_names_the_agent_and_the_server_error(self):
+        """A 409 on an invalid `--cycle` must not be swallowed: without this
+        the only symptom is the ingest's downstream refusal, which names the
+        registration but never the binding that was actually rejected."""
+        axi_mod = _load_axi_module()
+        line = axi_mod.gate_identity_open_failed_line(
+            "vidushi", "HTTP 409: bound cycle 152 is done")
+        self.assertIn("vidushi", line)
+        self.assertIn("HTTP 409: bound cycle 152 is done", line)
+        self.assertIn("--cycle", line)
+
+
+class FleetGatedRunOwnsOnlyWhatItCreatedTest(unittest.TestCase):
+    """CR-CRU-056 (C5) -- the corrected bracket is a FLEET property, not a
+    bun-only one: no client may call `_remove_agent_silent` unconditionally
+    any more. Grep-sweep in the style of `SharedAxiCycleResolverRetiredTest`
+    (the established AC pattern for fleet-wide uniformity)."""
+
+    CLIENTS = ("bun-crucible.py", "python-crucible.py", "rust-crucible.py",
+               "mvn-crucible.py", "arduino-crucible.py")
+
+    def test_every_client_routes_its_gated_cleanup_through_the_ownership_gate(self):
+        missing = []
+        for name in self.CLIENTS:
+            source = (REPO_ROOT / "clients" / name).read_text()
+            if ("_open_gate_identity" not in source
+                    or "_close_gate_identity" not in source):
+                missing.append(name)
+        self.assertEqual(
+            missing, [],
+            f"every client's gated run must OPEN its identity and close it "
+            f"through the ownership gate (_open_gate_identity / "
+            f"_close_gate_identity); missing in {missing!r}")
+
+    def test_no_client_calls_the_silent_removal_outside_the_ownership_gate(self):
+        """The silent removal may be reached ONLY from `_close_gate_identity`
+        (which asks `should_remove` first) or from its own definition -- a
+        stray direct call in a `finally` is the exact defect this fixes."""
+        offenders = []
+        for name in self.CLIENTS:
+            source = (REPO_ROOT / "clients" / name).read_text()
+            in_close_gate = False
+            for lineno, line in enumerate(source.splitlines(), start=1):
+                stripped = line.strip()
+                if stripped.startswith("def "):
+                    in_close_gate = stripped.startswith("def _close_gate_identity")
+                    if stripped.startswith("def _remove_agent_silent"):
+                        in_close_gate = True   # its own definition line
+                        continue
+                code_part = line.split("#", 1)[0]
+                if "_remove_agent_silent(" in code_part and not in_close_gate:
+                    offenders.append(f"{name}:{lineno}: {stripped}")
+        self.assertEqual(
+            offenders, [],
+            f"the gated-run silent removal must be reached only through the "
+            f"ownership gate -- an unconditional call destroys a caller's "
+            f"registration and its cycle binding; found {offenders!r}")
+
+    def test_every_client_exposes_cycle_on_its_gated_verbs(self):
+        missing = []
+        for name in self.CLIENTS:
+            source = (REPO_ROOT / "clients" / name).read_text()
+            if "_add_gate_cycle_arg" not in source:
+                missing.append(name)
+        self.assertEqual(
+            missing, [],
+            f"every client's gated verbs must accept --cycle for the "
+            f"register-inside-the-run case (§S4); missing in {missing!r}")
 
 
 class BunCrucibleImportsSharedAxiModuleTest(unittest.TestCase):

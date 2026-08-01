@@ -199,18 +199,93 @@ export const cycleHints = {
   /**
    * §S7 — a run ingest's context.cycleId matched no cycle in any of the
    * project's plans; name the open plan (cr) and its known cycle ids so a
-   * mis-set WORKFLOW_CYCLE_ID can be corrected to a real one.
+   * mis-set explicit cycleId can be corrected to a real one — or the caller
+   * re-registered bound to it (CR-CRU-056: the server stamps the binding).
    */
   unknownCycle: (cr: string, cycleIds: number[]): string[] => [
     `context.cycleId matched no cycle in this project's plans — the open plan ${cr} has cycle ids: ${cycleIds.join(", ")}`,
-    "export a WORKFLOW_CYCLE_ID that resolves to one of those cycles, or omit context.cycleId",
+    "register bound to the intended cycle (--cycle <id> from that list) and the server stamps the attachment for you, or send one of those ids as context.cycleId",
   ],
   /**
    * §S7 — an accepted ingest referenced a TERMINAL (done/skipped/failed) cycle:
-   * late ingests are legal, but the WORKFLOW_CYCLE_ID is almost certainly stale.
+   * late ingests are legal, but the explicit cycleId is almost certainly stale.
+   * CR-CRU-056: the current mechanism is a registration BOUND to the ACTIVE
+   * cycle, so the remedy is a re-registration, not an exported env var.
    */
   staleCycle: (cycleId: number): string[] => [
-    `context.cycleId ${cycleId} references a CLOSED cycle — the run was stored, but your WORKFLOW_CYCLE_ID is likely stale`,
-    "confirm the active cycle (GET …/plans?cr=<cr>) and export its id before the next ingest",
+    `context.cycleId ${cycleId} references a CLOSED cycle — the run was stored, but the explicit cycleId you sent is likely stale`,
+    "find the ACTIVE cycle (GET …/plans?cr=<cr>) and re-register bound to it (--cycle <id>) — the server then stamps the attachment on every ingest",
+  ],
+  /**
+   * CR-CRU-056 §S1 — a register binding targeted a cycle that was never
+   * activated; name the concrete transition that would make it bindable.
+   */
+  bindPendingCycle: (cycleId: number, planId: number): string[] => [
+    `cycle ${cycleId} is pending — activate it first: PATCH …/plans/${planId}/cycles/${cycleId} {status: "active"}`,
+    "then retry the registration with the same cycleId",
+  ],
+  /**
+   * CR-CRU-056 §S1 — a register binding targeted a TERMINAL cycle; name its
+   * actual status and point at the plan's live cycle instead.
+   */
+  bindTerminalCycle: (cycleId: number, status: string): string[] => [
+    `cycle ${cycleId} is ${status} — a terminal cycle takes no new agents`,
+    "bind to the plan's ACTIVE cycle instead (GET …/plans?cr=<cr> to find it), or activate the next cycle first",
+  ],
+  /**
+   * CR-CRU-056 §S1 — a register binding targeted a cycle whose plan is no
+   * longer open; name the plan and its status.
+   */
+  bindClosedPlan: (cr: string, planId: number, planStatus: string): string[] => [
+    `plan ${cr} (id ${planId}) is ${planStatus} — its cycles take no new agents`,
+    "bind to an ACTIVE cycle of an OPEN plan (GET …/plans to find one), or file a new plan first",
+  ],
+  /**
+   * CR-CRU-056 §S2 — a TDD-phase (RED/GREEN/FIX/VERIFY) registration arrived
+   * UNBOUND. State-derived: name the project's actual ACTIVE cycle id(s) when
+   * any exist; otherwise say to activate one first. Always names `--cycle`.
+   */
+  unboundTddPhase: (phase: string, activeCycleIds: number[]): string[] =>
+    activeCycleIds.length > 0
+      ? [
+          `phase ${phase} must register bound to a cycle — this project's ACTIVE cycle id(s): ${activeCycleIds.join(", ")}`,
+          `retry the registration with --cycle ${activeCycleIds[0]} (wire: register {cycleId})`,
+        ]
+      : [
+          `phase ${phase} must register bound to a cycle — but NO cycle is active in this project`,
+          'activate one first (PATCH …/plans/<planId>/cycles/<id> {status: "active"}), then register with --cycle <id>',
+        ],
+  /**
+   * CR-CRU-056 §S3 — a BOUND agent's ingest carried an explicit
+   * context.cycleId CONFLICTING with its registered binding; name BOTH ids.
+   */
+  bindingConflict: (boundCycleId: number, explicitCycleId: number): string[] => [
+    `your registration is bound to cycle ${boundCycleId} but this ingest carried context.cycleId ${explicitCycleId} — the server stamps the binding, so a conflicting explicit id is refused`,
+    `omit context.cycleId (the server attaches cycle ${boundCycleId} for you), or re-register bound to cycle ${explicitCycleId} if that is really where this run belongs`,
+  ],
+  /**
+   * CR-CRU-056 §S3 — a BOUND agent ingested after its cycle left the active
+   * state (done/skipped/failed, or its plan closed): refuse, never spill.
+   */
+  staleBinding: (cycleId: number, state: string): string[] => [
+    `your bound cycle ${cycleId} is ${state} — the run was NOT stored (a stale binding never spills into another cycle)`,
+    "re-register bound to the cycle this run belongs to (an ACTIVE cycle of an OPEN plan), then re-ingest",
+  ],
+};
+
+/**
+ * CR-CRU-056 §S2b/§S3b — registered-caller refusals. Every mutating workflow
+ * verb and every ingest surface requires a LIVE registered caller; the help
+ * is state-derived (names the offending agentId when the request carried one)
+ * and always names registration as the next step.
+ */
+export const authHints = {
+  /** §S2b/§S3b — the request carried no agentId, or one with no live row. */
+  unregisteredCaller: (agentId: string | undefined): string[] => [
+    agentId === undefined
+      ? "this verb requires a registered caller — send your agentId in the request body"
+      : `agentId ${agentId} has no live registration in this project (never registered, unregistered, or pruned) — nothing was stored or changed`,
+    "register first: POST /api/v2/agents/register {projectKey, agentId, phase} (phase: RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report; TDD phases register bound with cycleId)",
+    "then retry this call with that same agentId in the body",
   ],
 };

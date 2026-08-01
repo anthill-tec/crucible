@@ -136,7 +136,17 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
     return body.project.key;
   }
 
+  // CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs/parsed and
+  // /api/v2/runs/compile now refuse an unregistered agentId (409) — each
+  // distinct agentId these seeding helpers ingest under must be live
+  // registered first.
+  async function registerAgent(key: string, agentId: string): Promise<void> {
+    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+    expect(res.status).toBe(200);
+  }
+
   async function seedCoveredTestEvent(key: string): Promise<string> {
+    await registerAgent(key, "cov-agent");
     const coverage: Coverage = { lines: { total: 10, covered: 8, percent: 80 } };
     const res = await postJson("/api/v2/runs/parsed", {
       projectKey: key,
@@ -151,6 +161,7 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
   }
 
   async function seedFailingTestEvent(key: string): Promise<string> {
+    await registerAgent(key, "fail-agent");
     const res = await postJson("/api/v2/runs/parsed", {
       projectKey: key,
       agentId: "fail-agent",
@@ -163,6 +174,7 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
   }
 
   async function seedCompileEvent(key: string): Promise<string> {
+    await registerAgent(key, "compile-agent");
     const res = await postJson("/api/v2/runs/compile", {
       projectKey: key,
       agentId: "compile-agent",
@@ -189,8 +201,13 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
 
     const res = await getJson(`/api/v2/events?project=${key}`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as EventsListResponse;
-    expect(body.ok).toBe(true);
+    const rawBody = (await res.json()) as EventsListResponse;
+    expect(rawBody.ok).toBe(true);
+    // CR-CRU-056 §S2b fixture-repair: registering each seeded agent journals
+    // its own "lifecycle" event (CR-CRU-011 §S1) — not one of this test's 3
+    // subject events (a covered test, a failing test, a compile). Filter
+    // those out; the reshape contract under test is unaffected.
+    const body: EventsListResponse = { ...rawBody, events: rawBody.events.filter((e) => e.kind !== "lifecycle") };
     expect(body.events.length).toBe(3);
 
     const covItem = body.events.find((e) => e.agentId === "cov-agent");
@@ -330,6 +347,15 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const key = await createProject("brief-toon");
 
+    // CR-CRU-056 §S2b fixture-repair: register BOTH agents UP FRONT (each
+    // registration's own "lifecycle" event lands before either test event),
+    // then seed both test-event briefs back to back so they are the two
+    // NEWEST events — `limit=2` below fetches exactly those two, keeping
+    // the uniform-table precondition (identical, non-lifecycle shape
+    // across rows) intact without touching the reshape contract itself.
+    await registerAgent(key, "toon-1");
+    await registerAgent(key, "toon-2");
+
     // Two same-shaped test-kind briefs (both without coverage) so the
     // flattened field set is identical/order-identical across rows —
     // the precondition for TOON's uniform-table detection.
@@ -347,7 +373,7 @@ describe("v2 event-brief reshape (CR-CRU-006 §S0)", () => {
       tree: [{ name: "s", status: "fail", children: [{ name: "t1", status: "fail", duration_ms: 15 }] }],
     });
 
-    const { status, text } = await getText(`/api/v2/events?project=${key}&fmt=toon`);
+    const { status, text } = await getText(`/api/v2/events?project=${key}&limit=2&fmt=toon`);
     expect(status).toBe(200);
     expect(text).toMatch(/^events\[\d+\]\{/m);
   });

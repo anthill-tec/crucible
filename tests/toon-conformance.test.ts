@@ -203,10 +203,17 @@ describe("TOON conformance — official library decode of the real server wire (
     test("GET /api/v2/events (events listing) — official decode deep-equals the JSON twin", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("events-rt");
+      // CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs/parsed now refuses
+      // an unregistered agentId (409) — register first. Its own "lifecycle"
+      // event (CR-CRU-011 §S1) is NOT this test's subject (the round-trip
+      // fidelity of the single ingested TEST event); drop it from both sides
+      // before comparing.
+      await registerAgent(key, "conformance-agent", "");
       await postJson("/api/v2/runs/parsed", parsedRunBody({ projectKey: key }));
 
       const jsonRes = await getJson("/api/v2/events");
-      const jsonBody = (await jsonRes.json()) as OkResponse;
+      const jsonBody = (await jsonRes.json()) as OkResponse & { events: Array<{ kind?: string }> };
+      jsonBody.events = jsonBody.events.filter((e) => e.kind !== "lifecycle");
 
       const { res: toonRes, text: toonText } = await getToonText("/api/v2/events");
       expect(toonRes.status).toBe(200);
@@ -216,7 +223,8 @@ describe("TOON conformance — official library decode of the real server wire (
       // (not a narrower type) so every field still round-trips through the
       // real deep-equal below — this is a type-level unblock only, no
       // runtime behavior changes.
-      const decoded = decode(toonText) as unknown;
+      const decoded = decode(toonText) as OkResponse & { events: Array<{ kind?: string }> };
+      decoded.events = decoded.events.filter((e) => e.kind !== "lifecycle");
 
       expect(decoded).toEqual(jsonBody);
     });
@@ -224,6 +232,7 @@ describe("TOON conformance — official library decode of the real server wire (
     test("GET /api/v2/events/:id (single event) — official decode deep-equals the JSON twin", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("event-single-rt");
+      await registerAgent(key, "conformance-agent", "");
       const runRes = await postJson("/api/v2/runs/parsed", parsedRunBody({ projectKey: key }));
       const runBody = (await runRes.json()) as OkResponse & { event: string };
       const eventId = runBody.event;
@@ -247,6 +256,7 @@ describe("TOON conformance — official library decode of the real server wire (
     test("GET /api/v2/status?project= — official decode deep-equals the JSON twin", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("status-rt");
+      await registerAgent(key, "conformance-agent", "");
       await postJson("/api/v2/runs/parsed", parsedRunBody({ projectKey: key }));
 
       const jsonRes = await getJson(`/api/v2/status?project=${key}`);
@@ -355,6 +365,7 @@ describe("TOON conformance — official library decode of the real server wire (
     test("a RED-verdict POST /api/v2/runs response's help[] (fetched back via the events surface in TOON) decodes to the exact JSON array", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("help-list-rt");
+      await registerAgent(key, "red-agent", "");
 
       const runRes = await postJson("/api/v2/runs", {
         projectKey: key,

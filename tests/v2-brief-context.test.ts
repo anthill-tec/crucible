@@ -74,6 +74,16 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
     return body.project.key;
   }
 
+  // CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs/parsed and
+  // /api/v2/runs/compile now refuse an unregistered `agentId` (409) — each
+  // distinct agentId these fixtures ingest under must be a LIVE registered
+  // agent (the tests key their assertions off agentId, so a single shared
+  // id can't stand in for all of them).
+  async function registerAgent(key: string, agentId: string): Promise<void> {
+    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+    expect(res.status).toBe(200);
+  }
+
   async function listBriefs(key: string): Promise<EventBriefLike[]> {
     const res = await getJson(`/api/v2/events?project=${key}`);
     expect(res.status).toBe(200);
@@ -99,6 +109,7 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
       cycle: "checkpoint persistence",
     };
 
+    await registerAgent(key, "ctx-brief-agent");
     const withCtxRes = await postJson("/api/v2/runs/parsed", {
       projectKey: key,
       agentId: "ctx-brief-agent",
@@ -108,6 +119,7 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
     });
     expect(withCtxRes.status).toBe(200);
 
+    await registerAgent(key, "no-ctx-agent");
     const noCtxRes = await postJson("/api/v2/runs/parsed", {
       projectKey: key,
       agentId: "no-ctx-agent",
@@ -137,6 +149,7 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const key = await createProject("brief-compile-counts");
 
+    await registerAgent(key, "compile-brief-agent");
     const compileRes = await postJson("/api/v2/runs/compile", {
       projectKey: key,
       agentId: "compile-brief-agent",
@@ -145,6 +158,7 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
     });
     expect(compileRes.status).toBe(200);
 
+    await registerAgent(key, "test-brief-agent");
     const testRes = await postJson("/api/v2/runs/parsed", {
       projectKey: key,
       agentId: "test-brief-agent",
@@ -180,6 +194,7 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const key = await createProject("brief-coverage-lines");
 
+    await registerAgent(key, "coverage-lines-agent");
     const withCovRes = await postJson("/api/v2/runs/parsed", {
       projectKey: key,
       agentId: "coverage-lines-agent",
@@ -189,6 +204,7 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
     });
     expect(withCovRes.status).toBe(200);
 
+    await registerAgent(key, "no-coverage-lines-agent");
     const noCovRes = await postJson("/api/v2/runs/parsed", {
       projectKey: key,
       agentId: "no-coverage-lines-agent",
@@ -223,6 +239,7 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const key = await createProject("brief-summary-regression");
 
+    await registerAgent(key, "summary-regression-agent");
     const res = await postJson("/api/v2/runs/parsed", {
       projectKey: key,
       agentId: "summary-regression-agent",

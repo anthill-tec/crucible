@@ -274,8 +274,17 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   orchestrator **files the cycle plan** (`POST /api/v2/projects/<key>/plans`,
   server-assigned numeric cycle ids), activates cycles, and closes them —
   **a cycle's span completes when the orchestrator confirms the GREEN; the CR
-  closes on feature merge** (a GREEN run alone never closes anything). Agents
-  attach `context.cycleId`; the timeline renders the plan inline (active cycle =
+  closes on feature merge** (a GREEN run alone never closes anything).
+  **Attachment is a registration binding, not a client guess (locked
+  2026-08-01):** agents **register bound to a cycle** — the TDD phases
+  (`RED | GREEN | FIX | VERIFY`) MUST declare their cycle at registration,
+  while ORCHESTRATOR and report agents may register unbound — and the **server
+  validates that binding and stamps the attachment** onto every ingest from the
+  bound agent; no client ever resolves "the active cycle", and an invalid
+  binding (unknown / pending / done cycle, closed plan) is refused with a 409
+  naming the actual state. Unregistered callers are refused (409) on the
+  workflow verbs and on ingest alike — the server never materialises an agent
+  it was never told about. The timeline renders the plan inline (active cycle =
   open event span); the Wave → CR → Cycle **workflow lens** consumes the plan
   first with inferred pairing as fallback; planless projects degrade gracefully.
   Cycles are not only RED→GREEN: **VERIFY and FIX steps are cycles under
@@ -289,7 +298,7 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   ORCHESTRATOR are workflow ROLES; **Crucible is a front-end tool and tracking
   system** — never a workflow actor, never lending its name to workflow
   concepts. Workflow-state env vars are `WORKFLOW_ROLE` (mainline | track-n),
-  `WORKFLOW_WAVE`, `WORKFLOW_CYCLE`, `WORKFLOW_CYCLE_ID`; the `CRUCIBLE_*`
+  `WORKFLOW_WAVE`, `WORKFLOW_CYCLE`, and nothing else; the `CRUCIBLE_*`
   prefix is reserved for Crucible's own configuration.
   **Model B in one sentence (locked round 29):** a flow of ACTIONS triggered by
   ACTORS with specific ROLES. Multi-track (parallel) and single-track
@@ -355,7 +364,7 @@ red dot + `server unreachable · retrying…`; it never shows version or event c
   bands, schedule health; zero new agent reporting) — implemented by
   CR-CRU-022 on the Roadmap tab.
   All in v0.1.0: plan API + lens in CR-CRU-011, fleet plan verbs
-  (plan-file / cycle-activate / cycle-done / cr-close + `WORKFLOW_CYCLE_ID`) in
+  (plan-file / cycle-activate / cycle-done / cr-close) in
   CR-CRU-008.
 - **Coverage** — line/function/branch meters on green regression events; latest-green
   coverage shown at project level.

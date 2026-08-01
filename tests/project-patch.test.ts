@@ -252,6 +252,16 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
     return body.event;
   }
 
+  /** GET .../events, filtering out the "lifecycle" event a fresh agentId's
+   * registration journals (CR-CRU-011 §S1) — not one of the ingested
+   * test-event ids this retention test's exact pre-patch counts pin. */
+  async function nonLifecycleEvents(projectKey: string): Promise<Array<{ id: string; [k: string]: unknown }>> {
+    const body = (await (
+      await getJson(`/api/v2/events?project=${projectKey}`)
+    ).json()) as EventsListResponse & { events: Array<{ id: string; kind?: string }> };
+    return body.events.filter((e) => e.kind !== "lifecycle");
+  }
+
   describe("AC1 — name PATCH → 200; GET reflects it; SSE projects change event fires", () => {
     test(
       'PATCH {name:"NAI-2"} → 200; GET /api/v2/projects shows name:"NAI-2"; ' +
@@ -451,24 +461,27 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
       async () => {
         handle = startServer({ port: 0, dbPath: ":memory:" });
         const key = await createProject("retention-patch");
+        // CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs/parsed now
+        // refuses an unregistered agentId (409) — register "a1" ONCE,
+        // up front, so its own "lifecycle" registration event (CR-CRU-011
+        // §S1) precedes all 4 ingests below rather than interleaving with
+        // them (this test's exact event-count assertions pin the 4
+        // subject ingests only).
+        await postJson("/api/v2/agents/register", { projectKey: key, agentId: "a1", phase: "ORCHESTRATOR" });
 
         const e1 = await ingestEvent(key, "a1");
         const e2 = await ingestEvent(key, "a1");
         const e3 = await ingestEvent(key, "a1");
 
-        const beforePatch = (await (
-          await getJson(`/api/v2/events?project=${key}`)
-        ).json()) as EventsListResponse;
-        expect(beforePatch.events.length).toBe(3);
+        const beforePatch = await nonLifecycleEvents(key);
+        expect(beforePatch.length).toBe(3);
 
         const patchRes = await patchJson(patchPath(key), { retention: 2 });
         expect(patchRes.status).toBe(200);
 
         // No retroactive pruning from the PATCH itself.
-        const rightAfterPatch = (await (
-          await getJson(`/api/v2/events?project=${key}`)
-        ).json()) as EventsListResponse;
-        expect(rightAfterPatch.events.length).toBe(3);
+        const rightAfterPatch = await nonLifecycleEvents(key);
+        expect(rightAfterPatch.length).toBe(3);
 
         // The next ingest enforces the new cap of 2.
         const e4 = await ingestEvent(key, "a1");

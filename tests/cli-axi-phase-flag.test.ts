@@ -153,9 +153,14 @@ describe("crucible-axi CLI §S3 — --phase hardening on the sixth register call
 
     // A VALID --phase must still work end-to-end (the C1 wire behaviour must
     // not regress) and round-trip the EXACT declared phase via the agents API.
+    // CR-CRU-056 C2 final sweep: this test's subject is the --phase FLAG's
+    // presence/validation round-trip, not the GREEN TDD phase's cycle-binding
+    // requirement (§S2, out of scope for this file) — "report" registers
+    // unbound so the assertion stays exactly as strong without an incidental
+    // plan/cycle fixture.
     const { calls: validCalls, fetchImpl: validFetch } = capturingFetch();
     const validCode = await runCli({
-      argv: ["register", "--project-key", key, "--agent", "cli-phase-valid", "--phase", "GREEN"],
+      argv: ["register", "--project-key", key, "--agent", "cli-phase-valid", "--phase", "report"],
       baseUrl,
       cwd: scratchDir("cli-phase-valid-"),
       stdout: captureStream(),
@@ -171,7 +176,7 @@ describe("crucible-axi CLI §S3 — --phase hardening on the sixth register call
     const listBody = (await listRes.json()) as { agents: Array<{ agentId: string; phase?: string }> };
     const agent = listBody.agents.find((a) => a.agentId === "cli-phase-valid");
     expect(agent).toBeDefined();
-    expect(agent!.phase).toBe("GREEN");
+    expect(agent!.phase).toBe("report");
   });
 
   test("an out-of-enum --phase is rejected CLIENT-SIDE — no network round-trip at all", async () => {

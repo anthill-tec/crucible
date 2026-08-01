@@ -113,19 +113,49 @@ afterEach(() => {
   setSystemTime(); // reset the injected clock so it never leaks to other files
 });
 
+// CR-CRU-056 §S2b fixture-repair (C3): every mutating v2 WORKFLOW verb
+// (plan-file, cycle transitions, abort) now refuses an unregistered caller
+// (409) — merge a live-registered agentId into any body lacking one.
+function withFixtureAgent(body: unknown): unknown {
+  if (body !== null && typeof body === "object" && !Array.isArray(body) && !("agentId" in (body as Record<string, unknown>))) {
+    return { ...(body as Record<string, unknown>), agentId: "fixture-orch" };
+  }
+  return body;
+}
+
+// This file drives `setSystemTime()` (including a 2h forward jump to
+// simulate downtime) — the fixture orchestrator registered at REAL
+// wall-clock time would otherwise fall outside its lazy-prune liveness
+// window the instant the mocked clock jumps ahead, spuriously 409ing every
+// workflow verb that follows a time jump (same fix as
+// tests/cycle-epochs.test.ts / tests/checkpoint-stop.test.ts). Re-touch
+// (re-register) it against the CURRENT (possibly mocked) clock immediately
+// before every mutating call, keyed off the projectKey in the request path.
+async function touchFixtureAgent(handle: ServerHandle, urlPath: string): Promise<void> {
+  const match = /^\/api\/v2\/projects\/([^/]+)\//.exec(urlPath);
+  if (match === null) return;
+  await fetch(`http://localhost:${handle.server.port}/api/v2/agents/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectKey: match[1], agentId: "fixture-orch", phase: "ORCHESTRATOR" }),
+  });
+}
+
 async function postJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
+  await touchFixtureAgent(handle, urlPath);
   return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
 async function patchJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
+  await touchFixtureAgent(handle, urlPath);
   return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 

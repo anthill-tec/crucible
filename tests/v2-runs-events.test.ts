@@ -145,6 +145,18 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     return body.project.key;
   }
 
+  // CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs, /api/v2/runs/parsed,
+  // and /api/v2/runs/compile now refuse an unregistered agentId (409) — each
+  // distinct agentId these fixtures ingest under must be live registered
+  // first (the pre-existing 400/404 validation-error pins that fire before
+  // any registered-caller check — unknown codec, malformed data, unknown
+  // project, missing fields — are untouched; only the calls that expect a
+  // 2xx ingest to actually succeed need this).
+  async function registerAgent(key: string, agentId: string): Promise<void> {
+    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+    expect(res.status).toBe(200);
+  }
+
   function parsedRunBody(overrides: {
     projectKey: string;
     agentId?: string;
@@ -184,6 +196,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     test("junit data w/ 1 failing case → 200 {ok:true, changed:true, event:'evt-…', verdict starting 'RED'}", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("runs-red");
+      await registerAgent(key, "red-1");
 
       const res = await postJson("/api/v2/runs", {
         projectKey: key,
@@ -208,6 +221,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     test("junit data, all pass → verdict starting 'GREEN'", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("runs-green");
+      await registerAgent(key, "green-1");
 
       const res = await postJson("/api/v2/runs", {
         projectKey: key,
@@ -237,6 +251,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
         "</testsuite>",
       ].join("\n");
       writeFileSync(join(dir, "TEST-a.xml"), xmlA);
+      await registerAgent(key, "dp-1");
 
       const res = await postJson("/api/v2/runs", {
         projectKey: key,
@@ -333,6 +348,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
         wave: "w1",
         orchestrator: "track-2",
       };
+      await registerAgent(key, "ctx-agent");
 
       const res = await postJson(
         "/api/v2/runs/parsed",
@@ -357,6 +373,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     test("with NO context → 200 ok; the stored event has NO context key at all (graceful — no fabrication)", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("parsed-no-context");
+      await registerAgent(key, "no-ctx-agent");
 
       const res = await postJson(
         "/api/v2/runs/parsed",
@@ -380,6 +397,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("parsed-discard-coverage");
       const coverage: Coverage = { lines: { total: 10, covered: 8, percent: 80 } };
+      await registerAgent(key, "discard-agent");
 
       const res = await postJson(
         "/api/v2/runs/parsed",
@@ -413,6 +431,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     test("rustc fixture (1 error, 1 warning) → 200 {ok:true, changed:true, event, errors:1, warnings:1, verdict containing 'COMPILE'}", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("compile-run");
+      await registerAgent(key, "compile-agent");
 
       const res = await postJson("/api/v2/runs/compile", {
         projectKey: key,
@@ -455,6 +474,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
   // ---------------------------------------------------------------------
   describe("GET /api/v2/events + GET/DELETE /api/v2/events/:id", () => {
     async function seedThreeEvents(key: string): Promise<string[]> {
+      await registerAgent(key, "seed-agent");
       const ids: string[] = [];
       for (let i = 0; i < 3; i++) {
         const res = await postJson(
@@ -593,6 +613,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
     test("?project=<key> → {ok:true, status:{hasData, lastTest, lastCompile}}", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("status-p");
+      await registerAgent(key, "status-agent");
 
       const runRes = await postJson(
         "/api/v2/runs/parsed",

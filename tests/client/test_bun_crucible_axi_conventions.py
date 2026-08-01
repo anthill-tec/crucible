@@ -420,7 +420,8 @@ class StructuredErrorsExitCodesIdempotencyTest(_BaseAxiConventionsTest):
         ])
         with mock.patch.object(self.module, "_get", return_value=open_plans):
             code3, out3, err3 = _run_main(
-                self.module, ["cycle-activate", "999", "--project-dir", self.tmpdir]
+                self.module, ["cycle-activate", "999", "--agent", "test-agent",
+                              "--project-dir", self.tmpdir]
             )
         self.assertEqual(code3, 1, f"stdout={out3!r} stderr={err3!r}")
         axi3 = self._decode_axi(out3)
@@ -495,7 +496,8 @@ class HelpNextStepTemplatesTest(_BaseAxiConventionsTest):
         with mock.patch.object(self.module, "_post", return_value=resp):
             code, out, err = _run_main(
                 self.module,
-                ["plan-file", "--cr", "CR-HELP", "--cycles", "a,b", "--project-dir", self.tmpdir],
+                ["plan-file", "--cr", "CR-HELP", "--cycles", "a,b",
+                 "--agent", "test-agent", "--project-dir", self.tmpdir],
             )
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -515,7 +517,8 @@ class HelpNextStepTemplatesTest(_BaseAxiConventionsTest):
         with mock.patch.object(self.module, "_get", return_value=open_plans), \
              mock.patch.object(self.module, "_patch", return_value={"ok": True}):
             code, out, err = _run_main(
-                self.module, ["cycle-done", "55", "--project-dir", self.tmpdir]
+                self.module, ["cycle-done", "55", "--agent", "test-agent",
+                              "--project-dir", self.tmpdir]
             )
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -592,7 +595,7 @@ class HelpArrayCoverageTest(_BaseAxiConventionsTest):
         with mock.patch.object(self.module, "_get", return_value=plans), \
              mock.patch.object(self.module, "_post", return_value=resp):
             code, out, err = _run_main(self.module, [
-                "cycle-add", "newlabel", "--project-dir", self.tmpdir,
+                "cycle-add", "newlabel", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
@@ -608,7 +611,9 @@ class HelpArrayCoverageTest(_BaseAxiConventionsTest):
         with mock.patch.object(self.module, "_get", return_value=plans), \
              mock.patch.object(self.module, "_post",
                                return_value={"ok": True, "changed": True}):
-            code, out, err = _run_main(self.module, ["checkpoint", "--project-dir", self.tmpdir])
+            code, out, err = _run_main(self.module, [
+                "checkpoint", "--agent", "test-agent", "--project-dir", self.tmpdir,
+            ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
         axi, help_list = self._help_list(out)
@@ -620,7 +625,9 @@ class HelpArrayCoverageTest(_BaseAxiConventionsTest):
     def test_stop_help_is_present_and_nonempty(self):
         with mock.patch.object(self.module, "_post",
                                return_value={"ok": True, "checkpointed": 1}):
-            code, out, err = _run_main(self.module, ["stop", "--project-dir", self.tmpdir])
+            code, out, err = _run_main(self.module, [
+                "stop", "--agent", "test-agent", "--project-dir", self.tmpdir,
+            ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
         axi, help_list = self._help_list(out)
@@ -637,7 +644,7 @@ class HelpArrayCoverageTest(_BaseAxiConventionsTest):
                                              "plan": {"planId": "plan-help",
                                                        "status": "aborted"}}):
             code, out, err = _run_main(self.module, [
-                "abort", "--user-approved", "--project-dir", self.tmpdir,
+                "abort", "--user-approved", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")

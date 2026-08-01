@@ -341,6 +341,14 @@ describe("v2 ingest with codec:'playwright' stores the feature → scenario → 
     const created = (await createRes.json()) as { ok: true; project: { key: string } };
     const projectKey = created.project.key;
 
+    // CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs now refuses an
+    // unregistered agentId (409) — register the ingesting agent first.
+    await fetch(`http://localhost:${handle.server.port}/api/v2/agents/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectKey, agentId: "bdd-agent", phase: "report" }),
+    });
+
     const ingestRes = await fetch(`http://localhost:${handle.server.port}/api/v2/runs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
