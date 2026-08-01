@@ -19,11 +19,12 @@ project-specific — the project path and interpreter are parameterizable.
 
 Every AXI verb prints a clients/toon.py-encoded envelope
 `{"axi": {verb, ok, <result fields>, context, warnings}}` on STDOUT (the machine
-channel); the human-readable line moves to STDERR (interactive only). §S9: ingest
-verbs (and register) auto-attach to the open plan's ACTIVE cycle resolved FROM THE
-SERVER (CR-CRU-036 removed every env override). An OPEN plan with no active cycle
-WARNS + WITHHOLDS (ok:false, non-zero exit, no POST — never a silent orphan); a
-plans-fetch failure or no open plan at all is tolerant (the verb proceeds).
+channel); the human-readable line moves to STDERR (interactive only). Cycle
+attachment (CR-CRU-056 §S3): agents register BOUND to a cycle (`register --cycle`
+with an ACTIVE cycle id — REQUIRED by the server for TDD phases RED/GREEN/FIX/
+VERIFY; ORCHESTRATOR/report may register unbound). A bound agent's ingests are
+stamped with that cycle SERVER-side — the client resolves and sends no cycle;
+an unbound agent's runs attach only via an explicit `context.cycleId`.
 
 Subcommands:
   register, unregister  Agent lifecycle.
@@ -244,9 +245,9 @@ def _emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
 def _run_context():
     """CR-CRU-008 §S2 — env + git → run context for declared cycle linkage.
 
-    Reads WORKFLOW_CYCLE, WORKFLOW_WAVE and WORKFLOW_ROLE (CR-CRU-036 removed the
-    cycle-id env read — the cycle is resolved from the server's active cycle,
-    never from the environment). When at least one is set, attaches
+    Reads WORKFLOW_CYCLE, WORKFLOW_WAVE and WORKFLOW_ROLE (no cycle-id env read —
+    a bound agent's cycle attachment is stamped SERVER-side from its registered
+    binding, CR-CRU-056 §S3). When at least one is set, attaches
     git {branch, commit} from a cheap `git rev-parse` (tolerant of a
     non-repo cwd → omitted). Returns the context dict, or None when no
     workflow env is set.
@@ -279,16 +280,6 @@ def _run_context():
     return context
 
 
-def _ingest_context(cycle_id):
-    """§S9 — the ingest payload's `context`: the env/git `_run_context()` enriched
-    with the RESOLVED cycleId so the SERVER-recorded run carries the attach cycle
-    (not just the printed envelope). Returns None only when there is nothing to attach."""
-    context = _run_context() or {}
-    if cycle_id is not None:
-        context["cycleId"] = cycle_id
-    return context or None
-
-
 def _run_logged(cmd, cwd, env, log_path):
     """Run `cmd` with combined stdout+stderr ALWAYS captured (the no-XML compile
     fallback needs the real runner output), echoed to STDERR so the machine
@@ -315,11 +306,15 @@ def _run_logged(cmd, cwd, env, log_path):
 
 
 def _register_agent(project_dir, agent_id, message, display_name=None, source="claude-md",
-                    phase=None):
+                    phase=None, cycle_id=None):
     """POST the agent-online heartbeat. Shared by cmd_register.
 
     CR-CRU-044 §S1 — `phase` is part of the registration wire contract; the
     server rejects a registration that declares none.
+
+    CR-CRU-056 §S1/§S4 — `cycle_id` rides the body as `cycleId`, binding the
+    agent to a cycle; the server validates it (ACTIVE cycle in an OPEN plan)
+    and REQUIRES it for TDD phases (RED/GREEN/FIX/VERIFY).
     """
     payload = {
         "agentId": agent_id,
@@ -334,6 +329,8 @@ def _register_agent(project_dir, agent_id, message, display_name=None, source="c
     }
     if phase is not None:
         payload["phase"] = phase
+    if cycle_id is not None:
+        payload["cycleId"] = cycle_id
     return _post("/api/v2/agents/register", payload)
 
 
@@ -357,7 +354,7 @@ def _remove_agent_silent(project_dir, agent_id):
         pass
 
 
-# ── §S9 — active-cycle resolution + register guard + ingest envelopes ────────
+# ── plans path + ingest envelopes ────────────────────────────────────────────
 
 
 def _plans_path(project_dir):
@@ -371,91 +368,46 @@ def _open_plans(project_dir):
     return [p for p in resp.get("plans", []) if p.get("status") == "open"]
 
 
-def _plans_response(project_dir):
-    """Raw `GET .../plans` response, tolerant of any transport failure (a raised
-    exception / non-dict is normalised to a not-ok dict so `resolve_attach_cycle`
-    treats it as the tolerant fetch-failure case, never a definitive withhold)."""
-    try:
-        resp = _get(_plans_path(project_dir))
-    except Exception:
-        return {"ok": False, "error": "plans fetch raised"}
-    return resp if isinstance(resp, dict) else {"ok": False, "error": "non-dict plans response"}
-
-
-def _resolve_ingest_cycle(project_dir):
-    """CR-CRU-036 §S9 — resolve the cycle an --agent ingest attaches to FROM THE
-    SERVER (the open plan's single `status:"active"` cycle); no cycle-id env
-    override is read. Returns (cycle_id, warnings, withhold): a valid cycle or a
-    tolerant (None, [], False) proceed; (None, [warning], True) ONLY when an OPEN
-    plan carries no active cycle — the caller MUST emit ok:false and SKIP the POST."""
-    return _axi().resolve_attach_cycle(_plans_response(project_dir))
-
-
-def _register_cycle_guard(project_dir):
-    """CR-CRU-036 §S9 — register mirrors the ingest withhold: an OPEN plan with no
-    active cycle withholds registration rather than bring an agent online against
-    untracked work. A plans-fetch failure or no open plan at all is TOLERANT
-    (register proceeds). Returns (withhold, warnings)."""
-    _cycle, warnings, withhold = _axi().resolve_attach_cycle(_plans_response(project_dir))
-    return withhold, warnings
-
-
-def _emit_ingest_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
-    """Emit the §S1 envelope for a SUCCESSFUL ingest verb:
-    run{passed,failed,pending,total} + cycle-aware context. Any warnings are
-    also surfaced on stderr."""
+def _emit_ingest_axi(verb, resp, summary, project_dir, agent):
+    """Emit the §S1 envelope for an ingest verb:
+    run{passed,failed,pending,total}. CR-CRU-056 §S3 — the client sends and
+    echoes NO resolved cycle: a bound agent's run is stamped with its registered
+    cycle SERVER-side (a stale binding gets a 409, surfaced via `error`)."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
            "total": summary["total"]}
-    # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
-    # the cycleId key rather than emit an orphan-signalling explicit null.
-    if cycle_id is not None:
-        context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
-    else:
-        context = _axi_context(project_dir, agent_id=agent)
-    for w in warnings:
-        print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
-    _emit_axi(verb, bool(resp.get("ok")),
-              {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])},
-              context, warnings)
-
-
-def _emit_ingest_withhold(verb, project_dir, agent, warnings):
-    """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when
-    an OPEN plan carries no active cycle to attach an ingest to. The run is NOT
-    POSTed, so it can never land as a silent cycleId=NONE orphan."""
-    context = _axi_context(project_dir, agent_id=agent, cycle_id=None)
-    for w in warnings:
-        print(_axi().withhold_stderr_line(w), file=sys.stderr)
-    _emit_axi(verb, False, {}, context, warnings)
+    context = _axi_context(project_dir, agent_id=agent)
+    result_fields = {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])}
+    err = resp.get("error")
+    if err is not None:
+        # Faithful pass-through: a 409 (stale binding / unregistered poster)
+        # carries the server's structured envelope inside the HTTP error body.
+        result_fields["error"] = err
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
 
 
 def cmd_register(args):
-    """Register / heartbeat. CR-CRU-036 §S9: an OPEN plan with no active cycle
-    WARNS + WITHHOLDS — the agent must never come online against an untracked
-    plan; the POST is withheld and the exit code is non-zero. A plans-fetch
-    failure or no open plan at all is tolerant (register proceeds)."""
+    """Register / heartbeat. CR-CRU-056 §S1/§S2 — `--cycle` binds the agent to
+    an ACTIVE cycle of an OPEN plan; the server validates the binding and
+    REQUIRES it for TDD phases (RED/GREEN/FIX/VERIFY) — a refused registration
+    surfaces the server's 409 envelope (error + help) and exits non-zero.
+    ORCHESTRATOR/report may register unbound."""
     project_dir = _resolve_project_dir(args.project_dir)
-    withhold, warnings = _register_cycle_guard(project_dir)
-    if withhold:
-        for w in warnings:
-            print(_axi().withhold_stderr_line(w), file=sys.stderr)
-        _emit_axi("register", False,
-                  {"agent": args.agent, "help": _axi().HELP_STEPS["register"]},
-                  _axi_context(project_dir, agent_id=args.agent, cycle_id=None),
-                  warnings)
-        return 1
     resp = _register_agent(
         project_dir, args.agent,
         args.message or f"Starting {args.phase} phase",
         display_name=args.display_name, source=args.source,
-        phase=args.phase,
+        phase=args.phase, cycle_id=args.cycle,
     )
     ok = bool(resp.get("ok", False))
     legacy = (f"register: ok={resp.get('ok', False)} agent={args.agent} "
               f"phase={args.phase} source={args.source}")
-    _emit_axi("register", ok,
-              {"agent": args.agent, "help": _axi().HELP_STEPS["register"]},
+    result_fields = {"agent": args.agent, "help": _axi().HELP_STEPS["register"]}
+    err = resp.get("error")
+    if err is not None:
+        # Faithful pass-through of the server's 409 envelope (error + help[]).
+        result_fields["error"] = err
+    _emit_axi("register", ok, result_fields,
               _axi_context(project_dir, agent_id=args.agent), [], legacy)
     return 0 if ok else 1
 
@@ -675,8 +627,9 @@ def _collect_coverage(python, project_dir, env):
 
 def cmd_test(args):
     """Targeted/discover unittest via xmlrunner → JUnit XML → /api/v2/runs/parsed
-    (tier unit). With --agent the result is ingested (regardless of pass/fail) and
-    §S9 auto-attaches it to the active cycle. Exit code reflects the runner."""
+    (tier unit). With --agent the result is ingested (regardless of pass/fail); a
+    bound agent's run is server-stamped with its registered cycle. Exit code
+    reflects the runner."""
     project_dir = _resolve_project_dir(args.project_dir)
     python = _resolve_python(args.python, project_dir)
     reports_dir = _reports_dir(project_dir, args.reports)
@@ -694,17 +647,10 @@ def cmd_test(args):
 
     if _produced_xml(reports_dir):
         summary, tree = _parse_junit_dir(reports_dir)
-        # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run
-        # withholds WITHOUT ever ingesting a cycleId=null orphan.
-        cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
-        if withhold:
-            _emit_ingest_withhold("test", project_dir, args.agent, warnings)
-            return 1
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
-                              context=_ingest_context(cycle_id),
+                              context=_run_context(),
                               raw=result.stdout)
-        _emit_ingest_axi("test", resp, summary, project_dir, args.agent,
-                         cycle_id, warnings)
+        _emit_ingest_axi("test", resp, summary, project_dir, args.agent)
         if summary["failed"] > 0:
             return 1
         return 0 if resp.get("ok") else 1
@@ -727,7 +673,8 @@ def cmd_regression(args):
 
 def _regression_run(args):
     """Full-suite discover via xmlrunner (tier regression). With --coverage: run under
-    coverage.py and post /api/v2/runs/parsed with coverage. §S9 auto-attaches."""
+    coverage.py and post /api/v2/runs/parsed with coverage. A bound agent's run is
+    server-stamped with its registered cycle."""
     project_dir = _resolve_project_dir(args.project_dir)
     python = _resolve_python(args.python, project_dir)
     reports_dir = _reports_dir(project_dir, args.reports)
@@ -782,21 +729,15 @@ def _regression_run(args):
 
     summary, tree = _parse_junit_dir(reports_dir)
     coverage = _collect_coverage(python, project_dir, env) if coverage_on else None
-    # §S9 — resolve/attach the active cycle before the POST (withhold when none).
-    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
-    if withhold:
-        _emit_ingest_withhold("regression", project_dir, args.agent, warnings)
-        return 1
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                          tier="regression", context=_ingest_context(cycle_id))
-    _emit_ingest_axi("regression", resp, summary, project_dir, args.agent,
-                     cycle_id, warnings)
+                          tier="regression", context=_run_context())
+    _emit_ingest_axi("regression", resp, summary, project_dir, args.agent)
     return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
 
 
 def cmd_auto_ingest(args):
     """Ingest an already-produced reports dir (client-parsed → per-method names).
-    §S9 auto-attaches the run to the active cycle."""
+    A bound agent's run is server-stamped with its registered cycle."""
     project_dir = _resolve_project_dir(args.project_dir)
     reports_dir = _reports_dir(project_dir, args.reports)
     if not _produced_xml(reports_dir):
@@ -804,14 +745,9 @@ def cmd_auto_ingest(args):
               file=sys.stderr)
         return 1
     summary, tree = _parse_junit_dir(reports_dir)
-    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
-    if withhold:
-        _emit_ingest_withhold("auto-ingest", project_dir, args.agent, warnings)
-        return 1
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
-                          context=_ingest_context(cycle_id))
-    _emit_ingest_axi("auto-ingest", resp, summary, project_dir, args.agent,
-                     cycle_id, warnings)
+                          context=_run_context())
+    _emit_ingest_axi("auto-ingest", resp, summary, project_dir, args.agent)
     return 0 if resp.get("ok") else 1
 
 
@@ -1421,8 +1357,9 @@ def main():
 
     r = sub.add_parser(
         "register",
-        help="Register / heartbeat an agent. The phase is declared by --phase; the "
-             "agentId is a free-form identifier.",
+        help="Register / heartbeat an agent. The phase is declared by --phase; TDD "
+             "phases must bind a cycle with --cycle; the agentId is a free-form "
+             "identifier.",
     )
     r.add_argument("--agent", required=True,
                    help="Agent id — a free-form identifier. The phase is declared by "
@@ -1435,6 +1372,14 @@ def main():
                    choices=["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"],
                    help="Declared phase — the ONLY phase channel. Use `report` for a "
                         "registration that is not exercising a TDD phase.")
+    # CR-CRU-056 §S1/§S2 — cycle binding. Optional at the CLI; the SERVER
+    # enforces the per-phase requirement.
+    r.add_argument("--cycle", type=int,
+                   help="Cycle id to BIND this agent to (an ACTIVE cycle of an OPEN "
+                        "plan). TDD phases (RED/GREEN/FIX/VERIFY) MUST bind — the "
+                        "server refuses an unbound TDD registration (409). "
+                        "ORCHESTRATOR/report may register unbound. A bound agent's "
+                        "ingests are server-stamped with this cycle.")
     r.add_argument("--display-name", help="Human-readable name (default: the agentId)")
     r.add_argument("--source", default="claude-md",
                    choices=["claude-md", "package-json", "git-repo", "manual"],

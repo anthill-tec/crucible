@@ -275,9 +275,9 @@ def _emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
 def _run_context():
     """CR-CRU-008 §S2 — env + git → run context for declared cycle linkage.
 
-    Reads WORKFLOW_CYCLE, WORKFLOW_WAVE and WORKFLOW_ROLE (CR-CRU-036 removed the
-    cycle-id env read — the cycle is resolved from the server's active cycle,
-    never from the environment). When at least one is set, attaches
+    Reads WORKFLOW_CYCLE, WORKFLOW_WAVE and WORKFLOW_ROLE (no cycle-id env read —
+    a bound agent's cycle attachment is stamped SERVER-side from its registered
+    binding, CR-CRU-056 §S3). When at least one is set, attaches
     git {branch, commit} from a cheap `git rev-parse` (tolerant of a
     non-repo cwd → omitted). Returns the context dict, or None when no
     workflow env is set. Same pattern as clients/bun-crucible.py.
@@ -310,16 +310,7 @@ def _run_context():
     return context
 
 
-# ── §S9 — active-cycle resolution + register guard + ingest envelopes ────────
-
-
-def _ingest_context(cycle_id):
-    """§S9 — the ingest payload's `context`: env/git `_run_context()` enriched with
-    the RESOLVED cycleId so the SERVER-recorded run carries the attach cycle."""
-    context = _run_context() or {}
-    if cycle_id is not None:
-        context["cycleId"] = cycle_id
-    return context or None
+# ── plans path + ingest envelopes ────────────────────────────────────────────
 
 
 def _plans_path(project_dir):
@@ -333,81 +324,37 @@ def _open_plans(project_dir):
     return [p for p in resp.get("plans", []) if p.get("status") == "open"]
 
 
-def _plans_response(project_dir):
-    """Raw `GET .../plans` response, tolerant of any transport failure (a raised
-    exception / non-dict is normalised to a not-ok dict so `resolve_attach_cycle`
-    treats it as the tolerant fetch-failure case, never a definitive withhold)."""
-    try:
-        resp = _get(_plans_path(project_dir))
-    except Exception:
-        return {"ok": False, "error": "plans fetch raised"}
-    return resp if isinstance(resp, dict) else {"ok": False, "error": "non-dict plans response"}
-
-
-def _resolve_ingest_cycle(project_dir):
-    """CR-CRU-036 §S9 — resolve the cycle an --agent ingest attaches to FROM THE
-    SERVER (the open plan's single `status:"active"` cycle); no cycle-id env
-    override is read. Returns (cycle_id, warnings, withhold): a valid cycle or a
-    tolerant (None,[],False) proceed; (None,[warning],True) ONLY when an OPEN plan
-    carries no active cycle — the caller MUST emit ok:false and SKIP the POST."""
-    return _axi().resolve_attach_cycle(_plans_response(project_dir))
-
-
-def _register_cycle_guard(project_dir):
-    """CR-CRU-036 §S9 — register mirrors the ingest withhold: an OPEN plan with no
-    active cycle withholds registration rather than bring an agent online against
-    untracked work. A plans-fetch failure or no open plan at all is TOLERANT
-    (register proceeds). Returns (withhold, warnings)."""
-    _cycle, warnings, withhold = _axi().resolve_attach_cycle(_plans_response(project_dir))
-    return withhold, warnings
-
-
-def _emit_ingest_axi_resp(verb, resp, project_dir, agent, cycle_id, warnings):
+def _emit_ingest_axi_resp(verb, resp, project_dir, agent):
     """Emit the §S1 envelope for a SERVER-parsed ingest (junit-dir path): run fields
     come from the server response `run`. CR-CRU-050 §S2 — `pending` is printed
-    alongside, so the line always sums."""
+    alongside, so the line always sums. CR-CRU-056 §S3 — the client sends and
+    echoes NO resolved cycle: a bound agent's run is server-stamped with its
+    registered cycle (a stale binding gets a 409, surfaced via `error`)."""
     s = resp.get("run", {}) or {}
     run = {"passed": s.get("passed"), "failed": s.get("failed"),
            "pending": s.get("pending", 0), "total": s.get("total")}
-    if cycle_id is not None:
-        context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
-    else:
-        context = _axi_context(project_dir, agent_id=agent)
-    for w in warnings:
-        print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
-    _emit_axi(verb, bool(resp.get("ok")),
-              {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])},
-              context, warnings)
+    context = _axi_context(project_dir, agent_id=agent)
+    result_fields = {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])}
+    err = resp.get("error")
+    if err is not None:
+        result_fields["error"] = err
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
 
 
-def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
+def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent):
     """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path): run fields
     come from the client-computed summary. CR-CRU-050 §S2 — `pending` is
-    printed alongside, so the line always sums."""
+    printed alongside, so the line always sums. CR-CRU-056 §S3 — no client-
+    resolved cycle; a bound agent's run is server-stamped."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
            "total": summary["total"]}
-    # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
-    # the cycleId key rather than emit an orphan-signalling explicit null.
-    if cycle_id is not None:
-        context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
-    else:
-        context = _axi_context(project_dir, agent_id=agent)
-    for w in warnings:
-        print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
-    _emit_axi(verb, bool(resp.get("ok")),
-              {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])},
-              context, warnings)
-
-
-def _emit_ingest_withhold(verb, project_dir, agent, warnings):
-    """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when an
-    OPEN plan carries no active cycle to attach an ingest to. The run is NOT POSTed
-    (no cycleId=NONE orphan)."""
-    context = _axi_context(project_dir, agent_id=agent, cycle_id=None)
-    for w in warnings:
-        print(_axi().withhold_stderr_line(w), file=sys.stderr)
-    _emit_axi(verb, False, {}, context, warnings)
+    context = _axi_context(project_dir, agent_id=agent)
+    result_fields = {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])}
+    err = resp.get("error")
+    if err is not None:
+        result_fields["error"] = err
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
 
 
 # ── §S2b (CR-CRU-008) — in-run progress narration (class granularity) ──────
@@ -535,20 +482,12 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None):
 # Agent lifecycle
 # --------------------------------------------------------------------------- #
 def cmd_register(args):
-    """Register / heartbeat. CR-CRU-036 §S9: an OPEN plan with no active cycle
-    WARNS + WITHHOLDS — the agent must never come online against an untracked
-    plan; the POST is withheld and the exit code is non-zero. A plans-fetch
-    failure or no open plan at all is tolerant (register proceeds)."""
+    """Register / heartbeat. CR-CRU-056 §S1/§S2 — `--cycle` binds the agent to
+    an ACTIVE cycle of an OPEN plan; the server validates the binding and
+    REQUIRES it for TDD phases (RED/GREEN/FIX/VERIFY) — a refused registration
+    surfaces the server's 409 envelope (error + help) and exits non-zero.
+    ORCHESTRATOR/report may register unbound."""
     project_dir = _resolve_project_dir(args.project_dir)
-    withhold, warnings = _register_cycle_guard(project_dir)
-    if withhold:
-        for w in warnings:
-            print(_axi().withhold_stderr_line(w), file=sys.stderr)
-        _emit_axi("register", False,
-                  {"agent": args.agent, "help": _axi().HELP_STEPS["register"]},
-                  _axi_context(project_dir, agent_id=args.agent, cycle_id=None),
-                  warnings)
-        return 1
     payload = {
         "agentId": args.agent,
         "projectKey": _project_key(project_dir),
@@ -560,11 +499,17 @@ def cmd_register(args):
         # displayName MUST go inside `identity` — top-level is silently ignored.
         "identity": {"displayName": args.agent, "source": "openclaw"},
     }
+    if args.cycle is not None:
+        payload["cycleId"] = args.cycle
     resp = _post("/api/v2/agents/register", payload)
     ok = bool(resp.get("ok", False))
     legacy = f"register: ok={resp.get('ok', False)} agent={args.agent} phase={args.phase}"
-    _emit_axi("register", ok,
-              {"agent": args.agent, "help": _axi().HELP_STEPS["register"]},
+    result_fields = {"agent": args.agent, "help": _axi().HELP_STEPS["register"]}
+    err = resp.get("error")
+    if err is not None:
+        # Faithful pass-through of the server's 409 envelope (error + help[]).
+        result_fields["error"] = err
+    _emit_axi("register", ok, result_fields,
               _axi_context(project_dir, agent_id=args.agent), [], legacy)
     return 0 if ok else 1
 
@@ -847,16 +792,9 @@ def _run_surefire_tier(args, goal_extra, label):
     if not args.agent:
         return result.returncode
     dirs = _report_dirs(maven_dir, getattr(args, "module", None), "surefire")
-    # CR-CRU-036 §S9 — resolve the attach cycle BEFORE ingesting so a
-    # no-active-cycle run withholds WITHOUT posting a cycleId=null orphan, and a
-    # tracked run carries the SERVER-resolved cycleId in its context.
-    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
-    if withhold:
-        _emit_ingest_withhold(label, project_dir, args.agent, warnings)
-        if narrator is not None:
-            narrator.finish()
-        return 1
-    ctx = _ingest_context(cycle_id)
+    # CR-CRU-056 §S3 — no client-side cycle resolution: a bound agent's run is
+    # server-stamped with its registered cycle.
+    ctx = _run_context()
     # CR-CRU-008 §S2 tier map: the subcommand name IS the tier (unit/module).
     if _smart_ingest(project_dir, args.agent, dirs, tier=label, context=ctx):
         rc = 0
@@ -1031,23 +969,17 @@ def _regression_run(args):
         print(f"[regression] {summary['failed']} failure(s) — NOT publishing coverage "
               "(JaCoCo from a failing run is incomplete).", file=sys.stderr)
 
-    # §S9 — resolve/attach the active cycle before the POST (withhold when none).
-    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
-    if withhold:
-        _emit_ingest_withhold("regression", project_dir, args.agent, warnings)
-        return 1
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                          tier="regression", context=_ingest_context(cycle_id),
+                          tier="regression", context=_run_context(),
                           raw=getattr(result, "stdout", None))
-    _emit_ingest_summary_axi("regression", resp, summary, project_dir, args.agent,
-                             cycle_id, warnings)
+    _emit_ingest_summary_axi("regression", resp, summary, project_dir, args.agent)
     return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
 
 
 def cmd_test(args):
     """§S2 fleet-uniform test verb — `mvn clean test [-Dtest=…]` → surefire
-    junit-dir ingest (/api/v2/runs). With --agent §S9 auto-attaches to the active
-    cycle; a no-active-cycle run withholds WITHOUT ingesting a cycleId=null orphan."""
+    junit-dir ingest (/api/v2/runs). With --agent the result is ingested; a bound
+    agent's run is server-stamped with its registered cycle."""
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
@@ -1064,20 +996,15 @@ def cmd_test(args):
         # No reports → tests didn't compile. Ingest the build output as compile.
         return _compile_fallback(maven_dir, project_dir, args.agent, common)
     _warn_if_stale(dirs)
-    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
-    if withhold:
-        _emit_ingest_withhold("test", project_dir, args.agent, warnings)
-        return 1
-    ctx = _ingest_context(cycle_id)
+    ctx = _run_context()
     if len(dirs) == 1:
         resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier="unit", context=ctx)
-        _emit_ingest_axi_resp("test", resp, project_dir, args.agent, cycle_id, warnings)
+        _emit_ingest_axi_resp("test", resp, project_dir, args.agent)
         failed = (resp.get("run") or {}).get("failed") or 0
     else:
         summary, tree = _parse_junit(dirs)
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit", context=ctx)
-        _emit_ingest_summary_axi("test", resp, summary, project_dir, args.agent,
-                                 cycle_id, warnings)
+        _emit_ingest_summary_axi("test", resp, summary, project_dir, args.agent)
         failed = summary["failed"]
     if failed and failed > 0:
         return 1
@@ -1107,8 +1034,9 @@ def cmd_check(args):
 
 
 def cmd_auto_ingest(args):
-    """Ingest EXISTING surefire/failsafe reports without running maven. §S9
-    auto-attaches to the active cycle. Compile fallback if no reports exist."""
+    """Ingest EXISTING surefire/failsafe reports without running maven. A bound
+    agent's run is server-stamped with its registered cycle. Compile fallback if
+    no reports exist."""
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     su = _dirs_with_xml(_report_dirs(maven_dir, getattr(args, "module", None), "surefire"))
@@ -1118,21 +1046,16 @@ def cmd_auto_ingest(args):
         print("[auto-ingest] no reports found", file=sys.stderr)
         return _compile_fallback(maven_dir, project_dir, args.agent, _common_mvn_flags(args))
     _warn_if_stale(dirs)
-    cycle_id, warnings, withhold = _resolve_ingest_cycle(project_dir)
-    if withhold:
-        _emit_ingest_withhold("auto-ingest", project_dir, args.agent, warnings)
-        return 1
-    ctx = _ingest_context(cycle_id)
+    ctx = _run_context()
     if len(dirs) == 1 and not args.coverage:
         resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier="unit", context=ctx)
-        _emit_ingest_axi_resp("auto-ingest", resp, project_dir, args.agent, cycle_id, warnings)
+        _emit_ingest_axi_resp("auto-ingest", resp, project_dir, args.agent)
     else:
         summary, tree = _parse_junit(dirs)
         coverage = _collect_jacoco(maven_dir) if (args.coverage and summary["failed"] == 0) else None
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                               tier="regression", context=ctx)
-        _emit_ingest_summary_axi("auto-ingest", resp, summary, project_dir, args.agent,
-                                 cycle_id, warnings)
+        _emit_ingest_summary_axi("auto-ingest", resp, summary, project_dir, args.agent)
     return 0 if resp.get("ok") else 1
 
 
@@ -1751,7 +1674,9 @@ def main():
     # no-arg live dashboard, never argparse's required-subcommand error.
     sub = p.add_subparsers(dest="cmd", required=False)
 
-    r = sub.add_parser("register", help="Register / heartbeat an agent")
+    r = sub.add_parser("register",
+                       help="Register / heartbeat an agent. TDD phases must bind a "
+                            "cycle with --cycle.")
     r.add_argument("--agent", required=True,
                    help="Agent id — a free-form identifier. The phase is declared by "
                         "--phase and is never inferred from the agentId's shape; any "
@@ -1764,6 +1689,14 @@ def main():
                    required=True,
                    help="Declared phase — the ONLY phase channel. Use `report` for a "
                         "registration that is not exercising a TDD phase.")
+    # CR-CRU-056 §S1/§S2 — cycle binding. Optional at the CLI; the SERVER
+    # enforces the per-phase requirement.
+    r.add_argument("--cycle", type=int,
+                   help="Cycle id to BIND this agent to (an ACTIVE cycle of an OPEN "
+                        "plan). TDD phases (RED/GREEN/FIX/VERIFY) MUST bind — the "
+                        "server refuses an unbound TDD registration (409). "
+                        "ORCHESTRATOR/report may register unbound. A bound agent's "
+                        "ingests are server-stamped with this cycle.")
     r.add_argument("--message", help="Optional status message")
     _add_project_args(r)
     r.set_defaults(func=cmd_register)
@@ -1846,9 +1779,10 @@ def main():
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     # ── CR-CRU-030 fleet-uniform verbs ──────────────────────────────────────
-    te = sub.add_parser("test", help="TEST tier: mvn clean test [-Dtest=<pattern>] → surefire ingest (§S2/§S9).")
+    te = sub.add_parser("test", help="TEST tier: mvn clean test [-Dtest=<pattern>] → surefire ingest (§S2).")
     te.add_argument("--test", help="Surefire -Dtest pattern, e.g. FooTest or FooTest#method")
-    te.add_argument("--agent", help="If set, ingest surefire and §S9 auto-attach")
+    te.add_argument("--agent", help="If set, ingest surefire (bound agents are "
+                                    "server-stamped with their registered cycle)")
     _add_mvn_flags(te)
     _add_project_args(te)
     _add_log_arg(te)

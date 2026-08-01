@@ -185,63 +185,12 @@ def last_run_cr(plans):
     return max(closed, key=lambda p: p.get("closedAt")).get("cr")
 
 
-def resolve_active_cycle_id(plans):
-    """§S9 auto-attach resolver (PURE): the single `status:"active"` cycle id
-    among the OPEN plans of a `GET .../plans` payload, or None when there is
-    none (all terminal / none activated) — closed plans' active cycles are
-    ignored (only an OPEN plan is a live attach target)."""
-    for p in plans or []:
-        if p.get("status") != "open":
-            continue
-        for c in p.get("cycles", []):
-            if c.get("status") == "active":
-                return c.get("id")
-    return None
-
-
-# CR-CRU-036 §S1 — the corrected §S9 no-active-cycle warning. The env override
-# WORKFLOW_CYCLE_ID is GONE; the server's active cycle is the single source of
-# truth. When an OPEN plan exists but carries no active cycle the run is
-# withheld with this warning (detail is pinned wording, asserted by the RED
-# suites — do NOT reword to "activate one first").
-NO_ACTIVE_CYCLE_WARNING = {"code": "no-active-cycle", "detail": "activate a cycle first"}
-
-
-def resolve_attach_cycle(plans_resp):
-    """CR-CRU-036 §S9 (PURE) — from a raw `GET .../plans` RESPONSE dict decide the
-    cycle a run attaches to, distinguishing the definitive "no active cycle" from
-    the tolerant cases the interim guard wrongly conflated.
-
-    Returns `(cycle_id, warnings, withhold)`:
-      - plans-fetch FAILURE (response missing / not `ok`) → `(None, [], False)`:
-        an infra hiccup / non-UUID key is NOT proof of "no active cycle" — the
-        verb PROCEEDS (tolerant), no withhold, no warning.
-      - NO open plan at all (`ok`, empty/all-terminal plan set) → `(None, [], False)`:
-        a lightweight project with nothing to attach to — PROCEEDS (tolerant).
-      - an OPEN plan carrying a `status:"active"` cycle → `(id, [], False)`.
-      - an OPEN plan but NO active cycle → `(None, [no-active-cycle], True)`:
-        the definitive case — the caller MUST emit ok:false, print the withhold
-        line to stderr, SKIP the POST (no `cycleId=NONE` orphan) and exit non-zero.
-    """
-    if not isinstance(plans_resp, dict) or not plans_resp.get("ok"):
-        return None, [], False
-    plans = plans_resp.get("plans", []) or []
-    open_plans = [p for p in plans if p.get("status") == "open"]
-    if not open_plans:
-        return None, [], False
-    active = resolve_active_cycle_id(plans)
-    if active is not None:
-        return active, [], False
-    return None, [dict(NO_ACTIVE_CYCLE_WARNING)], True
-
-
-def withhold_stderr_line(warning):
-    """Human stderr line for a §S9 withhold. Carries the SPACED phrase
-    'no active cycle' AND the machine code + detail, so a single emitted line
-    satisfies every grep (unit suites assert 'no active cycle'; the TS
-    integration suites assert both 'no-active-cycle' and 'activate a cycle
-    first')."""
-    return f"error: no active cycle [{warning['code']}] — {warning['detail']}"
+# CR-CRU-056 §S3 — the CR-CRU-036-era client-side attach resolver
+# (`resolve_attach_cycle` / `resolve_active_cycle_id`) and its warn+withhold
+# flow are DELETED. Ingest attachment is the SERVER's job: a bound agent's run
+# is stamped from its registered cycle binding (`register --cycle`); an unbound
+# agent attaches only via an explicit `context.cycleId`. The client resolves
+# nothing.
 
 
 # ── §S15 next-step templates + §S7/§S8 gate constants + gate helpers ────────

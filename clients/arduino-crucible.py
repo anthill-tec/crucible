@@ -15,13 +15,12 @@ CR-CRU-030 §S1/§S2: every AXI verb prints a clients/toon.py-encoded envelope
 `{"axi": {verb, ok, <result fields>, context, warnings}}` on STDOUT (the machine
 channel); human-readable lines move to STDERR (interactive only). The envelope
 machinery is factored into the shared clients/_crucible_axi.py module so every
-client emits a byte-identical §S1 envelope. §S9: the ingest verb (`test`) and
-`register` auto-attach to the open plan's ACTIVE cycle resolved FROM THE SERVER
-(CR-CRU-036 removed every env override). An OPEN plan with no active cycle WARNS +
-WITHHOLDS (ok:false, non-zero exit, no POST — never a silent orphan); a
-plans-fetch failure or no open plan at all is tolerant (proceeds). Arduino has NO
-separate `auto-ingest` verb, so §S9 rides its `test`
-verb (the CR forbids adding new verbs beyond cycle-add/status/checkpoint/stop/abort).
+client emits a byte-identical §S1 envelope. Cycle attachment (CR-CRU-056 §S3):
+agents register BOUND to a cycle (`register --cycle` with an ACTIVE cycle id —
+REQUIRED by the server for TDD phases RED/GREEN/FIX/VERIFY; ORCHESTRATOR/report
+may register unbound). A bound agent's ingests are stamped with that cycle
+SERVER-side — the client resolves and sends no cycle; an unbound agent's runs
+attach only via an explicit `context.cycleId`.
 
 The subproject dir (holding `.env` + `tests/native/`) is resolved:
   --project-dir  >  $ARDUINO_CRUCIBLE_PROJECT_DIR  >  CWD
@@ -30,9 +29,9 @@ It must contain a `.env`. Examples:
   (cd sheetal-firmware && arduino-crucible.py check --agent <id>)
 
 Run context (CR-CRU-008 §S2): when any WORKFLOW_* env var is set
-(WORKFLOW_CYCLE / WORKFLOW_WAVE / WORKFLOW_ROLE — CR-CRU-036 removed the cycle-id
-env read), ingests carry a `context` object {cycle, wave, orchestrator,
-git:{branch,commit}} plus the SERVER-resolved cycleId.
+(WORKFLOW_CYCLE / WORKFLOW_WAVE / WORKFLOW_ROLE — no cycle-id env read), ingests
+carry a `context` object {cycle, wave, orchestrator, git:{branch,commit}}; the
+attach cycle is stamped SERVER-side from the agent's registered binding.
 
 Env overrides: CRUCIBLE_URL (legacy alias CRUCIBLE_BASE), ARDUINO_CLI, ARDUINO_FQBN.
 
@@ -43,9 +42,9 @@ $AGENT_ID is set FROM `--agent` for child processes; it is not an identity sourc
 and neither is $WORKFLOW_ROLE (that is the track lane, reported as context.track).
 
 Subcommands:
-  register, unregister  Agent lifecycle (§S9 register guard).
-  test                  Run native host tests (`make junit`) → /api/v2/runs/parsed
-                        (§S9 auto-attach). The RED/GREEN workhorse for this stack.
+  register, unregister  Agent lifecycle (TDD phases bind a cycle with --cycle).
+  test                  Run native host tests (`make junit`) → /api/v2/runs/parsed.
+                        The RED/GREEN workhorse for this stack.
   check                 arduino-cli compile → /api/v2/runs/compile on failure. Gate.
   plan-file             File a cycle plan → the assigned NUMERIC cycle ids.
   cycle-activate <id>   Transition a cycle to active.
@@ -220,9 +219,9 @@ def _emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
 def _run_context():
     """CR-CRU-008 §S2 — env + git → run context for declared cycle linkage.
 
-    Reads WORKFLOW_CYCLE, WORKFLOW_WAVE and WORKFLOW_ROLE (CR-CRU-036 removed the
-    cycle-id env read — the cycle is resolved from the server's active cycle,
-    never from the environment). When at least one is set, attaches
+    Reads WORKFLOW_CYCLE, WORKFLOW_WAVE and WORKFLOW_ROLE (no cycle-id env read —
+    a bound agent's cycle attachment is stamped SERVER-side from its registered
+    binding, CR-CRU-056 §S3). When at least one is set, attaches
     git {branch, commit} from a cheap `git rev-parse` (tolerant of a
     non-repo cwd → omitted). Returns the context dict, or None when no
     workflow env is set.
@@ -255,16 +254,7 @@ def _run_context():
     return context
 
 
-def _ingest_context(cycle_id):
-    """§S9 — the ingest payload's `context`: env/git `_run_context()` enriched with
-    the RESOLVED cycleId so the SERVER-recorded run carries the attach cycle."""
-    context = _run_context() or {}
-    if cycle_id is not None:
-        context["cycleId"] = cycle_id
-    return context or None
-
-
-# ── §S9 — active-cycle resolution + register guard + ingest envelopes ────────
+# ── plans path + ingest envelopes ────────────────────────────────────────────
 
 
 def _plans_path(project_dir):
@@ -278,60 +268,20 @@ def _open_plans(project_dir):
     return [p for p in resp.get("plans", []) if p.get("status") == "open"]
 
 
-def _plans_response(project_dir):
-    """Raw `GET .../plans` response, tolerant of any transport failure (a raised
-    exception / non-dict is normalised to a not-ok dict so `resolve_attach_cycle`
-    treats it as the tolerant fetch-failure case, never a definitive withhold)."""
-    try:
-        resp = _get(_plans_path(project_dir))
-    except Exception:
-        return {"ok": False, "error": "plans fetch raised"}
-    return resp if isinstance(resp, dict) else {"ok": False, "error": "non-dict plans response"}
-
-
-def _resolve_ingest_cycle(project_dir):
-    """CR-CRU-036 §S9 — resolve the cycle an --agent ingest attaches to FROM THE
-    SERVER (the open plan's single `status:"active"` cycle); no cycle-id env
-    override is read. Returns (cycle_id, warnings, withhold): a valid cycle or a
-    tolerant (None,[],False) proceed; (None,[warning],True) ONLY when an OPEN plan
-    carries no active cycle — the caller MUST emit ok:false and SKIP the POST."""
-    return _axi().resolve_attach_cycle(_plans_response(project_dir))
-
-
-def _register_cycle_guard(project_dir):
-    """CR-CRU-036 §S9 — register mirrors the ingest withhold: an OPEN plan with no
-    active cycle withholds registration. A plans-fetch failure or no open plan at
-    all is TOLERANT (register proceeds). Returns (withhold, warnings)."""
-    _cycle, warnings, withhold = _axi().resolve_attach_cycle(_plans_response(project_dir))
-    return withhold, warnings
-
-
-def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent, cycle_id, warnings):
-    """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path)."""
+def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent):
+    """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path).
+    CR-CRU-056 §S3 — the client sends and echoes NO resolved cycle: a bound
+    agent's run is server-stamped with its registered cycle (a stale binding
+    gets a 409, surfaced via `error`)."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
            "total": summary["total"]}
-    # Tolerant path (no open plan / fetch failure) resolves cycle_id=None → OMIT
-    # the cycleId key rather than emit an orphan-signalling explicit null.
-    if cycle_id is not None:
-        context = _axi_context(project_dir, agent_id=agent, cycle_id=cycle_id)
-    else:
-        context = _axi_context(project_dir, agent_id=agent)
-    for w in warnings:
-        print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
-    _emit_axi(verb, bool(resp.get("ok")),
-              {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])},
-              context, warnings)
-
-
-def _emit_ingest_withhold(verb, project_dir, agent, warnings):
-    """§S9 — emit the ok:false envelope (cycleId=null) on stdout AND stderr when an
-    OPEN plan carries no active cycle to attach an ingest to. The run is NOT POSTed
-    (no cycleId=NONE orphan)."""
-    context = _axi_context(project_dir, agent_id=agent, cycle_id=None)
-    for w in warnings:
-        print(_axi().withhold_stderr_line(w), file=sys.stderr)
-    _emit_axi(verb, False, {}, context, warnings)
+    context = _axi_context(project_dir, agent_id=agent)
+    result_fields = {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])}
+    err = resp.get("error")
+    if err is not None:
+        result_fields["error"] = err
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
 
 
 # ── project self-registration + JUnit parsing ────────────────────────────────
@@ -416,25 +366,18 @@ def _ingest_compile(project_dir, key, agent_id, errors, context=None):
 
 
 def cmd_register(args):
-    """Register / heartbeat. CR-CRU-036 §S9: an OPEN plan with no active cycle
-    WARNS + WITHHOLDS — the agent must never come online against an untracked
-    plan; the heartbeat is withheld and the exit code is non-zero. A plans-fetch
-    failure or no open plan at all is tolerant (register proceeds)."""
+    """Register / heartbeat. CR-CRU-056 §S1/§S2 — `--cycle` binds the agent to
+    an ACTIVE cycle of an OPEN plan; the server validates the binding and
+    REQUIRES it for TDD phases (RED/GREEN/FIX/VERIFY) — a refused registration
+    surfaces the server's 409 envelope (error + help) and exits non-zero.
+    ORCHESTRATOR/report may register unbound."""
     pd = _project_dir(args)
     key, name = _load_env(pd)
     agent_id = _agent_id(args)
-    withhold, warnings = _register_cycle_guard(pd)
-    if withhold:
-        for w in warnings:
-            print(_axi().withhold_stderr_line(w), file=sys.stderr)
-        _emit_axi("register", False,
-                  {"agent": agent_id, "help": _axi().HELP_STEPS["register"]},
-                  _axi_context(pd, agent_id=agent_id, cycle_id=None), warnings)
-        return 1
     _ensure_project(key, name, pd)
     phase = getattr(args, "phase", None)
     msg = f"{phase} phase" if phase else "online"
-    resp = _post("/api/v2/agents/register", {
+    payload = {
         "agentId": agent_id, "projectKey": key, "status": "online", "message": msg,
         # CR-CRU-044 §S1 — the declared phase is part of the registration wire
         # contract, and §S3 makes --phase REQUIRED + enum-constrained on the
@@ -442,11 +385,19 @@ def cmd_register(args):
         # always declared by the time we build the payload. The `or "report"`
         # is a defensive floor for a hand-built Namespace, not a usable default.
         "phase": phase or "report",
-        "identity": {"displayName": agent_id, "source": "openclaw"}})
+        "identity": {"displayName": agent_id, "source": "openclaw"}}
+    cycle = getattr(args, "cycle", None)
+    if cycle is not None:
+        payload["cycleId"] = cycle
+    resp = _post("/api/v2/agents/register", payload)
     ok = bool(resp.get("ok", False))
     legacy = f"[crucible] register: {agent_id} online — {msg}"
-    _emit_axi("register", ok,
-              {"agent": agent_id, "help": _axi().HELP_STEPS["register"]},
+    result_fields = {"agent": agent_id, "help": _axi().HELP_STEPS["register"]}
+    err = resp.get("error")
+    if err is not None:
+        # Faithful pass-through of the server's 409 envelope (error + help[]).
+        result_fields["error"] = err
+    _emit_axi("register", ok, result_fields,
               _axi_context(pd, agent_id=agent_id), [], legacy)
     return 0 if ok else 1
 
@@ -485,14 +436,14 @@ def _remove_agent_silent(project_dir, agent_id):
 
 def _run_native_tests(args, verb, tier, want_coverage):
     """§S2/§S3 fleet-uniform native-test workhorse — run native host tests
-    (`make junit`) → parse → /api/v2/runs/parsed under the given `tier`, §S9
-    auto-attaching to the server's active cycle. `unit`/`test` ride tier `unit`;
-    `regression` rides tier `regression` and, with `want_coverage`, attaches
-    lcov coverage from `<native_dir>/coverage/lcov.info`. A no-active-cycle run
-    withholds WITHOUT ingesting a cycleId=null orphan. A gated run (agent set)
-    wraps the body in an anti-ghost silent cleanup (CR-CRU-008 §S4): even a
-    failed/raising/withheld run removes the implicitly registered agent via the
-    v2 silent unregister, and never touches the retired /api/agents/remove shim."""
+    (`make junit`) → parse → /api/v2/runs/parsed under the given `tier`; a
+    bound agent's run is server-stamped with its registered cycle (CR-CRU-056
+    §S3). `unit`/`test` ride tier `unit`; `regression` rides tier `regression`
+    and, with `want_coverage`, attaches lcov coverage from
+    `<native_dir>/coverage/lcov.info`. A gated run (agent set) wraps the body
+    in an anti-ghost silent cleanup (CR-CRU-008 §S4): even a failed/raising run
+    removes the implicitly registered agent via the v2 silent unregister, and
+    never touches the retired /api/agents/remove shim."""
     pd = _project_dir(args)
     try:
         return _run_native_tests_body(args, verb, tier, want_coverage, pd)
@@ -551,17 +502,11 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     # §S5 — past this point the run IS ingested under an agentId, so the
     # identity must be DECLARED (hard stop when it is not).
     agent_id = _agent_id(args)
-    # §S9 — resolve the cycle BEFORE the POST so a no-active-cycle run withholds
-    # WITHOUT ever ingesting a cycleId=null orphan.
-    cycle_id, warnings, withhold = _resolve_ingest_cycle(pd)
-    if withhold:
-        _emit_ingest_withhold(verb, pd, agent_id, warnings)
-        return 1
     payload = {"projectKey": key, "name": name, "agentId": agent_id,
                "summary": summary, "tree": tree, "tier": tier}
     if coverage:
         payload["coverage"] = coverage
-    context = _ingest_context(cycle_id)
+    context = _run_context()
     if context:
         payload["context"] = context
     # CR-CRU-038 §S2b — the captured make-junit output rides along as `raw` so
@@ -573,7 +518,7 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed, {summary.get('pending', 0)} pending "
           f"(ingest ok={resp.get('ok')})", file=sys.stderr)
-    _emit_ingest_summary_axi(verb, resp, summary, pd, agent_id, cycle_id, warnings)
+    _emit_ingest_summary_axi(verb, resp, summary, pd, agent_id)
     if summary["failed"]:
         return 1
     return 0 if resp.get("ok") else 1
@@ -645,8 +590,9 @@ def cmd_compile(args):
 
 def cmd_auto_ingest(args):
     """§S3 fleet-uniform `auto-ingest` verb — ingest a PRE-EXISTING native reports
-    dir (default `<native_dir>/reports`) with NO toolchain invocation, §S9
-    auto-attaching to the server's active cycle. Uniform with bun/python/mvn/rust."""
+    dir (default `<native_dir>/reports`) with NO toolchain invocation; a bound
+    agent's run is server-stamped with its registered cycle. Uniform with
+    bun/python/mvn/rust."""
     pd = _project_dir(args)
     key, name = _load_env(pd)
     agent_id = _agent_id(args)
@@ -667,20 +613,16 @@ def cmd_auto_ingest(args):
         for k in ("total", "passed", "failed", "pending"):
             summary[k] += s[k]
         tree.extend(t)
-    cycle_id, warnings, withhold = _resolve_ingest_cycle(pd)
-    if withhold:
-        _emit_ingest_withhold("auto-ingest", pd, agent_id, warnings)
-        return 1
     payload = {"projectKey": key, "name": name, "agentId": agent_id,
                "summary": summary, "tree": tree, "tier": "unit"}
-    context = _ingest_context(cycle_id)
+    context = _run_context()
     if context:
         payload["context"] = context
     resp = _post("/api/v2/runs/parsed", payload)
     print(f"[crucible] auto-ingest -> '{name}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed, {summary.get('pending', 0)} pending "
           f"(ingest ok={resp.get('ok')})", file=sys.stderr)
-    _emit_ingest_summary_axi("auto-ingest", resp, summary, pd, agent_id, cycle_id, warnings)
+    _emit_ingest_summary_axi("auto-ingest", resp, summary, pd, agent_id)
     if summary["failed"]:
         return 1
     return 0 if resp.get("ok") else 1
@@ -1193,12 +1135,12 @@ def main():
                  "e.g. tests/native-mock for the ArduinoFake L2 tier)")
 
     t = sub.add_parser("test", parents=[common],
-                       help="run native host tests (make junit) -> /api/v2/runs/parsed (§S9)")
+                       help="run native host tests (make junit) -> /api/v2/runs/parsed (§S2)")
     t.add_argument("--dir", default="tests/native", help=_dir_help)
     t.set_defaults(func=cmd_test)
 
     un = sub.add_parser("unit", parents=[common],
-                        help="run native host tests (make junit) -> /api/v2/runs/parsed, tier unit (§S9)")
+                        help="run native host tests (make junit) -> /api/v2/runs/parsed, tier unit (§S3)")
     un.add_argument("--dir", default="tests/native", help=_dir_help)
     un.set_defaults(func=cmd_unit)
 
@@ -1231,13 +1173,23 @@ def main():
                      help="skip the fail-fast arduino-cli compile step")
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
-    r = sub.add_parser("register", parents=[common], help="register/heartbeat the agent")
+    r = sub.add_parser("register", parents=[common],
+                       help="register/heartbeat the agent (TDD phases must bind a "
+                            "cycle with --cycle)")
     # CR-CRU-044 §S3 — phase is first-class DATA: --phase is REQUIRED and
     # enum-constrained (it was unconstrained free text before).
     r.add_argument("--phase", required=True,
                    choices=["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"],
                    help="Declared phase — the ONLY phase channel. Use `report` for a "
                         "registration that is not exercising a TDD phase.")
+    # CR-CRU-056 §S1/§S2 — cycle binding. Optional at the CLI; the SERVER
+    # enforces the per-phase requirement.
+    r.add_argument("--cycle", type=int,
+                   help="Cycle id to BIND this agent to (an ACTIVE cycle of an OPEN "
+                        "plan). TDD phases (RED/GREEN/FIX/VERIFY) MUST bind — the "
+                        "server refuses an unbound TDD registration (409). "
+                        "ORCHESTRATOR/report may register unbound. A bound agent's "
+                        "ingests are server-stamped with this cycle.")
     r.set_defaults(func=cmd_register)
 
     u = sub.add_parser("unregister", parents=[common], help="remove the agent")
