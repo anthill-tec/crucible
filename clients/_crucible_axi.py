@@ -218,6 +218,148 @@ def last_run_cr(plans):
 # nothing.
 
 
+# ── CR-CRU-056 §S1/§S3 — the gated-run identity bracket owns what it CREATED ─
+#
+# CR-CRU-021 §S5's anti-ghost cleanup exists so a gate/close-out agent never
+# lingers as an online ghost: after the final ingest the gated run SILENTLY
+# removes the agent row (no lifecycle event — a journaled 'unregistered' would
+# bury the run just ingested; see each client's `_remove_agent_silent`).
+#
+# Under the pre-CR model that row was ALWAYS the run's own — the ingest
+# implicitly created it — so "remove the row" and "remove what I created" were
+# the same statement. CR-CRU-056 broke that identity: §S1 stores the cycle
+# binding ON the agent row, and §S3b retired implicit creation. An unconditional
+# cleanup therefore DELETES a caller-owned registration together with its
+# binding, and the next gated run under the same identity ingests unattached.
+# Observed live 2026-08-01 on the :3849 board: `vidushi` registered bound to
+# cycle 152; `python-crucible.py regression --agent vidushi` ingested stamped
+# 152 and then ran its cleanup; the immediately following
+# `bun-crucible.py regression --agent vidushi` landed with NO cycle.
+#
+# The anti-ghost PURPOSE is preserved exactly; only its REACH is corrected —
+# the bracket removes an identity it created and never one that pre-existed.
+# Ownership is not guessed and needs no probe: the server already answers it.
+# `POST /api/v2/agents/register` and `/api/v2/agents/heartbeat` both return
+# `changed: true` iff that call CREATED the row (`src/v2.ts` handleAgentTouch:
+# `changed: !existed`), so the run's OWN opening lifecycle call reports whether
+# the identity is its to clean up.
+
+
+class GatedRunIdentity:
+    """The identity half of a gated run's lifecycle bracket, shared by all five
+    clients so the fleet cannot drift apart again.
+
+    Two jobs, both tiny:
+
+    1. OPEN the run's identity — `open_payload()` builds the body for a
+       phase-OPTIONAL heartbeat (`PATH`). The heartbeat route, never
+       `/register`, is deliberate: the gated verbs take no `--phase`, and
+       CR-CRU-044 §S1(a) makes the heartbeat the one touch that never
+       re-declares — nor blanks — the phase a pre-registered caller declared.
+       A `cycle_id` (the gated verbs' `--cycle`, same flag and semantics as
+       `register --cycle`) rides the body as `cycleId` for the
+       register-inside-the-run case: an agent that never registered separately
+       still binds, and the SERVER validates that binding. Nothing here
+       RESOLVES a cycle — no plans fetch, no active-cycle picking; the id is
+       whatever the caller typed, or the key is absent.
+
+    2. TRACK ownership — `observe()` reads the server's `changed` flag off
+       every register/heartbeat response the run makes (the opening call plus
+       any narration ticks). Ownership is STICKY: once a call of this run's
+       created the row, this run cleans it up, even if later ticks report
+       `changed: false`. A row that pre-existed (`changed: false` throughout)
+       is the CALLER's, and `should_remove` stays False — the caller's
+       registration, and with it their cycle binding, survives the run.
+
+    A refused opening call (409 on an invalid binding, a connection failure)
+    carries no `changed: true`, so it never claims ownership: the bracket
+    cleans up nothing it did not demonstrably create.
+    """
+
+    PATH = "/api/v2/agents/heartbeat"
+
+    def __init__(self, agent_id, cycle_id=None):
+        self.agent_id = agent_id
+        self.cycle_id = cycle_id
+        self.created_here = False
+        self.confirmed = False
+
+    def open_payload(self, project_key, message="gated run starting",
+                     source="claude-md"):
+        """The opening heartbeat body. `cycleId` is present ONLY when the
+        caller supplied `--cycle` — an absent key leaves any stored binding
+        untouched (the server's touch-never-blanks contract, §S1)."""
+        payload = {
+            "agentId": self.agent_id,
+            "projectKey": project_key,
+            "status": "online",
+            "message": message,
+            "identity": {"displayName": self.agent_id, "source": source},
+        }
+        if self.cycle_id is not None:
+            payload["cycleId"] = self.cycle_id
+        return payload
+
+    def observe(self, resp):
+        """Record one register/heartbeat response and return it unchanged (so
+        it drops straight into a narration lambda). `changed: true` means THIS
+        call created the agent row; `ok: true` means the server ACCEPTED the
+        touch at all, which is what separates "the row is the caller's" from
+        "this run never established an identity"."""
+        if isinstance(resp, dict):
+            if resp.get("ok") is True:
+                self.confirmed = True
+            if resp.get("changed") is True:
+                self.created_here = True
+        return resp
+
+    @property
+    def should_remove(self):
+        """True only when this run created the identity — the single question
+        the anti-ghost cleanup is allowed to act on."""
+        return self.created_here
+
+
+# CR-CRU-056 — the ONE `--cycle` help text for the GATED verbs, so all five
+# clients document the flag identically. Same flag name and semantics as
+# `register --cycle`; the difference is only WHEN it applies.
+GATE_CYCLE_HELP = (
+    "Cycle id to BIND this run's agent to, for a run whose agent did NOT "
+    "register separately (an ACTIVE cycle of an OPEN plan; the SERVER "
+    "validates it — nothing is resolved client-side). Same semantics as "
+    "`register --cycle`. An agent that ALREADY registered bound needs no "
+    "--cycle here: the gated run leaves its registration and binding intact.")
+
+
+def gate_identity_skipped_line(agent_id, confirmed=True):
+    """The stderr line a gated run prints INSTEAD of the cleanup, so an
+    operator can see WHY nothing was removed rather than being told nothing.
+
+    `confirmed` distinguishes the two no-removal cases, which must never be
+    reported as each other: the server ACCEPTED the opening touch and reported
+    the row already existed (it is the caller's, left standing), versus the
+    opening touch was REFUSED so this run never established an identity at
+    all."""
+    if not confirmed:
+        return (f"cleanup: nothing to remove for agent={agent_id} — this run "
+                f"never established an identity (its opening lifecycle call "
+                f"was refused); no agent row was created and none is removed")
+    return (f"cleanup: skipped agent={agent_id} — the identity pre-existed this "
+            f"run (registered by its caller); its registration and cycle "
+            f"binding are left intact")
+
+
+def gate_identity_open_failed_line(agent_id, error):
+    """The stderr line for a REFUSED opening call — a 409 on an invalid
+    `--cycle`, or an unreachable server. Without it the only symptom would be
+    the ingest's own downstream refusal, which names the registration but not
+    the binding that was actually rejected."""
+    return (f"[crucible] WARN: could not open the gated run's identity for "
+            f"agent={agent_id}: {error}. The run continues, but its ingest "
+            f"will be refused unless this id is already registered — and any "
+            f"--cycle binding was NOT applied.")
+
+
 # ── §S15 next-step templates + §S7/§S8 gate constants + gate helpers ────────
 #
 # These are the TOOLCHAIN-AGNOSTIC verb helpers shared by every client (they

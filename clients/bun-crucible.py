@@ -381,19 +381,56 @@ def _unregister_agent(project_dir, agent_id):
 def _remove_agent_silent(project_dir, agent_id):
     """Gated-run cleanup (CR-CRU-021 §S5 anti-ghost, v2 model).
 
-    Under v2, a gated run needs NO explicit register: the run's ingest IS the
-    registration (implicit heartbeat — creates the agent row with NO lifecycle
-    event). The closing cleanup must be equally silent: a PLAIN v2 unregister
-    journals an 'unregistered' lifecycle event into /api/v2/events
-    (CR-CRU-011 §S1), which would bury and miscount the run event the gate
-    just ingested. CR-CRU-008 §S4 retired the shim's /api/agents/remove; the
-    ceremony-free removal is now the v2 unregister VERB with {silent: true} —
-    removes the agent row WITHOUT journaling a lifecycle event.
+    The cleanup must be SILENT: a PLAIN v2 unregister journals an
+    'unregistered' lifecycle event into /api/v2/events (CR-CRU-011 §S1), which
+    would bury and miscount the run event the gate just ingested. CR-CRU-008
+    §S4 retired the shim's /api/agents/remove; the ceremony-free removal is
+    now the v2 unregister VERB with {silent: true} — removes the agent row
+    WITHOUT journaling a lifecycle event.
+
+    CR-CRU-056 — call this ONLY for an identity the gated run itself created
+    (`_axi().GatedRunIdentity.should_remove`). The v2 model this cleanup was
+    written for — "the run's ingest IS the registration" — is gone: §S3b
+    retired implicit agent creation, and §S1 stores the cycle binding ON the
+    agent row, so removing a CALLER-owned registration destroys that caller's
+    binding and the next gated run under the same identity ingests unattached.
     """
     return _post(
         "/api/v2/agents/unregister",
         {"agentId": agent_id, "projectKey": _project_key(project_dir), "silent": True},
     )
+
+
+def _open_gate_identity(project_dir, agent_id, cycle_id, message):
+    """CR-CRU-056 — open a gated run's identity and learn whether the run
+    CREATED it. One phase-optional heartbeat (never /register: the gated verbs
+    declare no phase, and the heartbeat route is the one touch that cannot
+    blank a pre-registered caller's phase); `cycle_id` is the verb's `--cycle`,
+    validated SERVER-side. The returned `GatedRunIdentity` answers
+    `should_remove` for the closing anti-ghost cleanup."""
+    identity = _axi().GatedRunIdentity(agent_id, cycle_id)
+    resp = _post(identity.PATH,
+                 identity.open_payload(_project_key(project_dir), message=message))
+    identity.observe(resp)
+    if resp.get("error") is not None or not resp.get("ok", False):
+        print(_axi().gate_identity_open_failed_line(agent_id, resp.get("error")),
+              file=sys.stderr)
+    return identity
+
+
+def _close_gate_identity(project_dir, identity):
+    """CR-CRU-056 — the closing half of the bracket: silently remove the agent
+    row ONLY when this run created it, and SAY SO either way on stderr so the
+    decision is never invisible."""
+    if identity is None:
+        return
+    if not identity.should_remove:
+        print(_axi().gate_identity_skipped_line(identity.agent_id, identity.confirmed),
+              file=sys.stderr)
+        return
+    cleanup_resp = _remove_agent_silent(project_dir, identity.agent_id)
+    print(f"cleanup: ok={cleanup_resp.get('ok', False)} agent={identity.agent_id}",
+          file=sys.stderr)
 
 
 def cmd_register(args):
@@ -774,11 +811,14 @@ def cmd_test(args):
     _wipe(reports_dir)
     junit_path = _junit_path(reports_dir)
 
-    # Gate-run lifecycle bracket (CR-CRU-021 §S5, v2 model): the ingest itself
-    # registers the agent (implicit heartbeat); AFTER the final ingest the
-    # agent row is silently removed — even on a failing run or a mid-ingest
-    # exception — so gate/close-out agents never linger as online ghosts.
-    # Omitted --agent: no lifecycle calls at all.
+    # Gate-run lifecycle bracket (CR-CRU-021 §S5): an opening heartbeat DECLARES
+    # the run's identity (and binds it when --cycle is given), and AFTER the
+    # final ingest the agent row is silently removed — even on a failing run or
+    # a mid-ingest exception — so gate/close-out agents never linger as online
+    # ghosts. CR-CRU-056: the removal fires ONLY for an identity this run
+    # created; a caller who registered BEFORE the run keeps its registration
+    # and its cycle binding. Omitted --agent: no lifecycle calls at all.
+    identity = None
     try:
         cmd = _bun_test_cmd(bun, args.tests, junit_path, False, None)
         env = os.environ.copy()
@@ -791,6 +831,9 @@ def cmd_test(args):
             log_path = os.path.join(reports_dir, "run.log")
         narrator = None
         if args.agent:
+            identity = _open_gate_identity(project_dir, args.agent,
+                                           getattr(args, "cycle", None),
+                                           "gated test run starting")
             # bun ≥1.3 hides per-test completion lines when it detects an agent
             # session (CLAUDECODE / AGENT / REPL_ID / AI_AGENT env). Drop them all for the
             # wrapped runner so the full ✓/✗ line family streams: §S2b counts it
@@ -798,7 +841,10 @@ def cmd_test(args):
             for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
             narrator = _Narrator(
-                lambda message: _register_agent(project_dir, args.agent, message),
+                # Every narration tick is observed too: if the row is pruned
+                # mid-run and a tick re-creates it, this run owns that ghost.
+                lambda message: identity.observe(
+                    _register_agent(project_dir, args.agent, message)),
                 total_hint=_prescan_test_total(package_dir, args.tests),
             )
         result = _run_logged(cmd, package_dir, env, log_path, narrator)
@@ -830,10 +876,7 @@ def cmd_test(args):
         return _ingest_compile(project_dir, args.agent,
                                synthetic + ("\n\n" + tail if tail else ""))
     finally:
-        if args.agent:
-            cleanup_resp = _remove_agent_silent(project_dir, args.agent)
-            print(f"cleanup: ok={cleanup_resp.get('ok', False)} agent={args.agent}",
-                  file=sys.stderr)
+        _close_gate_identity(project_dir, identity)
 
 
 def cmd_regression(args):
@@ -848,9 +891,11 @@ def cmd_regression(args):
     coverage_dir = os.path.join(package_dir, "coverage")
     env = os.environ.copy()
 
-    # Gate-run lifecycle bracket (CR-CRU-021 §S5, v2 model): identical to
-    # cmd_test — implicit registration via the ingest, silent removal after
-    # the final ingest, try/finally.
+    # Gate-run lifecycle bracket (CR-CRU-021 §S5): identical to cmd_test —
+    # opening heartbeat (binding when --cycle is given), silent removal after
+    # the final ingest, try/finally, and (CR-CRU-056) removal ONLY of an
+    # identity this run created.
+    identity = None
     try:
         cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
         print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
@@ -860,12 +905,16 @@ def cmd_regression(args):
             log_path = os.path.join(reports_dir, "run.log")
         narrator = None
         if args.agent:
+            identity = _open_gate_identity(project_dir, args.agent,
+                                           getattr(args, "cycle", None),
+                                           "gated regression run starting")
             # Same §S2b setup as cmd_test (whole-suite M via package walk),
             # including the agent-quieting env strip.
             for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
             narrator = _Narrator(
-                lambda message: _register_agent(project_dir, args.agent, message),
+                lambda message: identity.observe(
+                    _register_agent(project_dir, args.agent, message)),
                 total_hint=_prescan_test_total(package_dir, None),
             )
         result = _run_logged(cmd, package_dir, env, log_path, narrator)
@@ -890,10 +939,7 @@ def cmd_regression(args):
         _emit_ingest_axi("regression", resp, summary, files, project_dir, args.agent)
         return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
     finally:
-        if args.agent:
-            cleanup_resp = _remove_agent_silent(project_dir, args.agent)
-            print(f"cleanup: ok={cleanup_resp.get('ok', False)} agent={args.agent}",
-                  file=sys.stderr)
+        _close_gate_identity(project_dir, identity)
 
 
 def cmd_auto_ingest(args):
@@ -956,7 +1002,7 @@ def cmd_pre_merge_gate(args):
     reg_args = argparse.Namespace(
         agent=args.agent, coverage=True, reports=args.reports, bun=args.bun,
         package_dir=args.package_dir, project_dir=args.project_dir,
-        log=getattr(args, "log", None),
+        log=getattr(args, "log", None), cycle=getattr(args, "cycle", None),
     )
     return cmd_regression(reg_args)
 
@@ -1813,6 +1859,12 @@ def _add_log_arg(p):
                                  "in addition to streaming it.")
 
 
+def _add_gate_cycle_arg(p):
+    """CR-CRU-056 — `--cycle` on a GATED verb (test/regression/pre-merge-gate):
+    the binding for the register-inside-the-run case."""
+    p.add_argument("--cycle", type=int, help=_axi().GATE_CYCLE_HELP)
+
+
 # §S14 — content-first: the one-line tool purpose printed by a bare invocation
 # (the no-arg live dashboard), alongside the ~-abbreviated executable path.
 _DASHBOARD_PURPOSE_LINE = (
@@ -1882,6 +1934,7 @@ def main():
     t.add_argument("--tests", nargs="+",
                    help="Test file/path target(s) (e.g. src/tools/send.test.ts). Omit for all.")
     t.add_argument("--agent", help="If set, ingest the junit result after the run")
+    _add_gate_cycle_arg(t)
     _add_reports_arg(t)
     _add_bun_arg(t)
     _add_package_dir_arg(t)
@@ -1893,6 +1946,7 @@ def main():
     g.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     g.add_argument("--coverage", action="store_true",
                    help="Run with bun lcov coverage and post /api/v2/runs/parsed with coverage")
+    _add_gate_cycle_arg(g)
     _add_reports_arg(g)
     _add_bun_arg(g)
     _add_package_dir_arg(g)
@@ -1919,6 +1973,7 @@ def main():
                               "coverage (the only coverage path).")
     pmg.add_argument("--agent", required=True, help="Agent id (typically the orchestrator)")
     pmg.add_argument("--skip-check", action="store_true", help="Bypass the fail-fast tsc check")
+    _add_gate_cycle_arg(pmg)
     _add_reports_arg(pmg)
     _add_bun_arg(pmg)
     _add_package_dir_arg(pmg)

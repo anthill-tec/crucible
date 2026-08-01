@@ -344,7 +344,13 @@ def _unregister_agent(project_dir, agent_id):
 def _remove_agent_silent(project_dir, agent_id):
     """CR-CRU-008 §S4 anti-ghost cleanup for a gated run: remove the agent row
     WITHOUT journaling a lifecycle event. Best-effort: never raises, never
-    pollutes the run verdict or stdout."""
+    pollutes the run verdict or stdout.
+
+    CR-CRU-056 — call this ONLY for an identity the gated run itself created
+    (`_axi().GatedRunIdentity.should_remove`). §S1 stores the cycle binding ON
+    the agent row, so removing a CALLER-owned registration destroys that
+    caller's binding and the next gated run under the same identity ingests
+    unattached."""
     try:
         _post(
             "/api/v2/agents/unregister",
@@ -352,6 +358,38 @@ def _remove_agent_silent(project_dir, agent_id):
         )
     except Exception:
         pass
+
+
+def _open_gate_identity(project_dir, agent_id, cycle_id, message):
+    """CR-CRU-056 — open a gated run's identity and learn whether the run
+    CREATED it. One phase-optional heartbeat (never /register: the gated verbs
+    declare no phase, and the heartbeat route is the one touch that cannot
+    blank a pre-registered caller's phase); `cycle_id` is the verb's `--cycle`,
+    validated SERVER-side. The returned `GatedRunIdentity` answers
+    `should_remove` for the closing anti-ghost cleanup."""
+    identity = _axi().GatedRunIdentity(agent_id, cycle_id)
+    resp = _post(identity.PATH,
+                 identity.open_payload(_project_key(project_dir), message=message))
+    identity.observe(resp)
+    if resp.get("error") is not None or not resp.get("ok", False):
+        print(_axi().gate_identity_open_failed_line(agent_id, resp.get("error")),
+              file=sys.stderr)
+    return identity
+
+
+def _close_gate_identity(project_dir, identity):
+    """CR-CRU-056 — the closing half of the bracket: silently remove the agent
+    row ONLY when this run created it, and SAY SO either way on stderr so the
+    decision is never invisible."""
+    if identity is None:
+        return
+    if not identity.should_remove:
+        print(_axi().gate_identity_skipped_line(identity.agent_id, identity.confirmed),
+              file=sys.stderr)
+        return
+    _remove_agent_silent(project_dir, identity.agent_id)
+    print(f"cleanup: agent={identity.agent_id} removed (created by this run)",
+          file=sys.stderr)
 
 
 # ── plans path + ingest envelopes ────────────────────────────────────────────
@@ -665,14 +703,21 @@ def cmd_test(args):
 
 
 def cmd_regression(args):
-    """Gated regression run — wraps the ingest body in an anti-ghost silent
-    cleanup (CR-CRU-008 §S4)."""
+    """Gated regression run — an opening heartbeat DECLARES the run's identity
+    (binding it when `--cycle` is given), and the ingest body is wrapped in the
+    anti-ghost silent cleanup (CR-CRU-008 §S4). CR-CRU-056 — the cleanup fires
+    ONLY for an identity this run created; a caller who registered BEFORE the
+    run keeps its registration and its cycle binding."""
     project_dir = _resolve_project_dir(args.project_dir)
+    identity = None
     try:
+        if getattr(args, "agent", None):
+            identity = _open_gate_identity(project_dir, args.agent,
+                                           getattr(args, "cycle", None),
+                                           "gated regression run starting")
         return _regression_run(args)
     finally:
-        if getattr(args, "agent", None):
-            _remove_agent_silent(project_dir, args.agent)
+        _close_gate_identity(project_dir, identity)
 
 
 def _regression_run(args):
@@ -802,6 +847,7 @@ def cmd_pre_merge_gate(args):
         agent=args.agent, coverage=True, cov_source=args.cov_source,
         start_dir=args.start_dir, pattern=args.pattern, reports=args.reports,
         python=args.python, project_dir=args.project_dir, log=getattr(args, "log", None),
+        cycle=getattr(args, "cycle", None),
     )
     return cmd_regression(reg_args)
 
@@ -1381,6 +1427,12 @@ def _add_log_arg(p):
     )
 
 
+def _add_gate_cycle_arg(p):
+    """CR-CRU-056 — `--cycle` on a GATED verb (regression/pre-merge-gate): the
+    binding for the register-inside-the-run case."""
+    p.add_argument("--cycle", type=int, help=_axi().GATE_CYCLE_HELP)
+
+
 _DASHBOARD_PURPOSE_LINE = (
     "python-crucible.py -- Python/unittest Crucible CLI "
     "(agent lifecycle, test/ingest, plan/cycle verbs)."
@@ -1468,6 +1520,7 @@ def main():
                    help="Run under coverage.py and post /api/v2/runs/parsed with coverage")
     g.add_argument("--cov-source", default="crucible_axi,clients",
                    help="coverage --source package/dir (default: crucible_axi,clients)")
+    _add_gate_cycle_arg(g)
     _add_discover_args(g)
     _add_python_arg(g)
     _add_project_dir_arg(g)
@@ -1500,6 +1553,7 @@ def main():
                      help="coverage --source package/dir (default: crucible_axi,clients)")
     pmg.add_argument("--skip-check", action="store_true",
                      help="Bypass the fail-fast py_compile check step")
+    _add_gate_cycle_arg(pmg)
     _add_discover_args(pmg)
     _add_python_arg(pmg)
     _add_project_dir_arg(pmg)

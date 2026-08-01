@@ -421,11 +421,17 @@ def cmd_unregister(args):
 
 def _remove_agent_silent(project_dir, agent_id):
     """CR-CRU-008 §S4 anti-ghost cleanup for a gated run: remove the agent row
-    WITHOUT journaling a lifecycle event (the run's ingest was the implicit
-    registration — a plain unregister would journal an 'unregistered' event and
-    bury the run just ingested). Best-effort: never raises, never pollutes the
-    run verdict or stdout. Mirrors clients/rust-crucible.py's _remove_agent_silent
-    (v2 silent unregister, never the retired /api/agents/remove shim)."""
+    WITHOUT journaling a lifecycle event (a plain unregister would journal an
+    'unregistered' event and bury the run just ingested). Best-effort: never
+    raises, never pollutes the run verdict or stdout. Mirrors
+    clients/rust-crucible.py's _remove_agent_silent (v2 silent unregister,
+    never the retired /api/agents/remove shim).
+
+    CR-CRU-056 — call this ONLY for an identity the gated run itself created
+    (`_axi().GatedRunIdentity.should_remove`). §S1 stores the cycle binding ON
+    the agent row, so removing a CALLER-owned registration destroys that
+    caller's binding and the next gated run under the same identity ingests
+    unattached."""
     try:
         _post(
             "/api/v2/agents/unregister",
@@ -433,6 +439,38 @@ def _remove_agent_silent(project_dir, agent_id):
         )
     except Exception:
         pass
+
+
+def _open_gate_identity(project_dir, agent_id, cycle_id, message):
+    """CR-CRU-056 — open a gated run's identity and learn whether the run
+    CREATED it. One phase-optional heartbeat (never /register: the gated verbs
+    declare no phase, and the heartbeat route is the one touch that cannot
+    blank a pre-registered caller's phase); `cycle_id` is the verb's `--cycle`,
+    validated SERVER-side. The returned `GatedRunIdentity` answers
+    `should_remove` for the closing anti-ghost cleanup."""
+    identity = _axi().GatedRunIdentity(agent_id, cycle_id)
+    resp = _post(identity.PATH,
+                 identity.open_payload(_project_key(project_dir), message=message))
+    identity.observe(resp)
+    if resp.get("error") is not None or not resp.get("ok", False):
+        print(_axi().gate_identity_open_failed_line(agent_id, resp.get("error")),
+              file=sys.stderr)
+    return identity
+
+
+def _close_gate_identity(project_dir, identity):
+    """CR-CRU-056 — the closing half of the bracket: silently remove the agent
+    row ONLY when this run created it, and SAY SO either way on stderr so the
+    decision is never invisible."""
+    if identity is None:
+        return
+    if not identity.should_remove:
+        print(_axi().gate_identity_skipped_line(identity.agent_id, identity.confirmed),
+              file=sys.stderr)
+        return
+    _remove_agent_silent(project_dir, identity.agent_id)
+    print(f"cleanup: agent={identity.agent_id} removed (created by this run)",
+          file=sys.stderr)
 
 
 # ── Toolchain: native host tests + arduino-cli compile ───────────────────────
@@ -444,23 +482,31 @@ def _run_native_tests(args, verb, tier, want_coverage):
     bound agent's run is server-stamped with its registered cycle (CR-CRU-056
     §S3). `unit`/`test` ride tier `unit`; `regression` rides tier `regression`
     and, with `want_coverage`, attaches lcov coverage from
-    `<native_dir>/coverage/lcov.info`. A gated run (agent set) wraps the body
-    in an anti-ghost silent cleanup (CR-CRU-008 §S4): even a failed/raising run
-    removes the implicitly registered agent via the v2 silent unregister, and
-    never touches the retired /api/agents/remove shim."""
+    `<native_dir>/coverage/lcov.info`. A gated run (agent set) opens with a
+    heartbeat that DECLARES the run's identity (binding it when `--cycle` is
+    given) and wraps the body in an anti-ghost silent cleanup (CR-CRU-008 §S4):
+    even a failed/raising run tears that identity down via the v2 silent
+    unregister, and never touches the retired /api/agents/remove shim.
+    CR-CRU-056 — the cleanup fires ONLY for an identity this run created; a
+    caller who registered BEFORE the run keeps its registration and binding."""
     pd = _project_dir(args)
+    identity = None
     try:
+        if getattr(args, "agent", None):
+            # Open under the SAME id the run will ingest under. The body
+            # resolves via `_agent_id(args)`, the CR-CRU-044 §S5
+            # declared-identity resolver: the explicit `--agent` value or a hard
+            # stop. There is no $WORKFLOW_ROLE branch and no
+            # `"arduino-crucible"` filename default — both were deleted, and
+            # neither may be reinstated. Resolve the bracket id through that
+            # identical call so a run can never drift from the registered row
+            # and orphan a ghost.
+            identity = _open_gate_identity(pd, _agent_id(args),
+                                           getattr(args, "cycle", None),
+                                           f"gated {verb} run starting")
         return _run_native_tests_body(args, verb, tier, want_coverage, pd)
     finally:
-        if getattr(args, "agent", None):
-            # Remove the SAME id the run ingested under. The body resolves via
-            # `_agent_id(args)`, the CR-CRU-044 §S5 declared-identity resolver:
-            # the explicit `--agent` value or a hard stop. There is no
-            # $WORKFLOW_ROLE branch and no `"arduino-crucible"` filename default
-            # — both were deleted, and neither may be reinstated. Resolve the
-            # cleanup id through that identical call so a run can never drift
-            # from the registered row and orphan a ghost.
-            _remove_agent_silent(pd, _agent_id(args))
+        _close_gate_identity(pd, identity)
 
 
 def _run_native_tests_body(args, verb, tier, want_coverage, pd):
@@ -647,7 +693,8 @@ def cmd_pre_merge_gate(args):
             return rc
     reg_args = argparse.Namespace(
         agent=args.agent, project_dir=args.project_dir,
-        dir=getattr(args, "dir", None), coverage=True)
+        dir=getattr(args, "dir", None), coverage=True,
+        cycle=getattr(args, "cycle", None))
     return cmd_regression(reg_args)
 
 
@@ -1151,6 +1198,12 @@ def cmd_dashboard():
     return cmd_status(argparse.Namespace(project_dir=None, fields=None))
 
 
+def _add_gate_cycle_arg(p):
+    """CR-CRU-056 — `--cycle` on a GATED verb (test/unit/regression/
+    pre-merge-gate): the binding for the register-inside-the-run case."""
+    p.add_argument("--cycle", type=int, help=_axi().GATE_CYCLE_HELP)
+
+
 def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--agent",
@@ -1173,11 +1226,13 @@ def main():
     t = sub.add_parser("test", parents=[common],
                        help="run native host tests (make junit) -> /api/v2/runs/parsed (§S2)")
     t.add_argument("--dir", default="tests/native", help=_dir_help)
+    _add_gate_cycle_arg(t)
     t.set_defaults(func=cmd_test)
 
     un = sub.add_parser("unit", parents=[common],
                         help="run native host tests (make junit) -> /api/v2/runs/parsed, tier unit (§S3)")
     un.add_argument("--dir", default="tests/native", help=_dir_help)
+    _add_gate_cycle_arg(un)
     un.set_defaults(func=cmd_unit)
 
     rg = sub.add_parser("regression", parents=[common],
@@ -1185,6 +1240,7 @@ def main():
     rg.add_argument("--dir", default="tests/native", help=_dir_help)
     rg.add_argument("--coverage", action="store_true",
                     help="attach lcov coverage from <native_dir>/coverage/lcov.info")
+    _add_gate_cycle_arg(rg)
     rg.set_defaults(func=cmd_regression)
 
     ai = sub.add_parser("auto-ingest", parents=[common],
@@ -1207,6 +1263,7 @@ def main():
     pmg.add_argument("--dir", default="tests/native", help=_dir_help)
     pmg.add_argument("--skip-check", action="store_true",
                      help="skip the fail-fast arduino-cli compile step")
+    _add_gate_cycle_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     r = sub.add_parser("register", parents=[common],

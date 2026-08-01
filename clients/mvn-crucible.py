@@ -375,12 +375,16 @@ def _narrate_heartbeat(project_dir, agent_id, message):
     new API; a heartbeat against an already-existing agent journals no
     lifecycle event server-side). Best-effort and silent: never raises, never
     prints — the stdout data pipe stays pure and the run can never fail on a
-    narration hiccup."""
+    narration hiccup.
+
+    Returns the server's response dict (or None when the ping was swallowed),
+    so a gated run's `GatedRunIdentity` can read its `changed` flag: a tick
+    that RE-CREATES a pruned row makes that row this run's to clean up."""
     try:
         # CR-CRU-044 §S1(a) — narration is a liveness ping, not a
         # re-registration: it goes to the phase-optional heartbeat verb so it
         # never has to re-declare (nor can it blank) the registered phase.
-        _post("/api/v2/agents/heartbeat", {
+        return _post("/api/v2/agents/heartbeat", {
             "agentId": agent_id,
             "projectKey": _project_key(project_dir),
             "status": "online",
@@ -388,7 +392,7 @@ def _narrate_heartbeat(project_dir, agent_id, message):
             "identity": {"displayName": agent_id, "source": "openclaw"},
         })
     except (Exception, SystemExit):
-        pass
+        return None
 
 
 class _Narrator:
@@ -537,9 +541,15 @@ def cmd_unregister(args):
 
 def _remove_agent_silent(project_dir, agent_id):
     """CR-CRU-008 §S4 anti-ghost cleanup for a gated run: remove the agent row
-    WITHOUT journaling a lifecycle event (the run's ingest was the implicit
-    registration). Best-effort: never raises, never pollutes the run verdict or
-    stdout. Mirrors clients/bun-crucible.py's _remove_agent_silent."""
+    WITHOUT journaling a lifecycle event. Best-effort: never raises, never
+    pollutes the run verdict or stdout. Mirrors clients/bun-crucible.py's
+    _remove_agent_silent.
+
+    CR-CRU-056 — call this ONLY for an identity the gated run itself created
+    (`_axi().GatedRunIdentity.should_remove`). §S1 stores the cycle binding ON
+    the agent row, so removing a CALLER-owned registration destroys that
+    caller's binding and the next gated run under the same identity ingests
+    unattached."""
     try:
         _post(
             "/api/v2/agents/unregister",
@@ -547,6 +557,39 @@ def _remove_agent_silent(project_dir, agent_id):
         )
     except Exception:
         pass
+
+
+def _open_gate_identity(project_dir, agent_id, cycle_id, message):
+    """CR-CRU-056 — open a gated run's identity and learn whether the run
+    CREATED it. One phase-optional heartbeat (never /register: the gated verbs
+    declare no phase, and the heartbeat route is the one touch that cannot
+    blank a pre-registered caller's phase); `cycle_id` is the verb's `--cycle`,
+    validated SERVER-side. The returned `GatedRunIdentity` answers
+    `should_remove` for the closing anti-ghost cleanup."""
+    identity = _axi().GatedRunIdentity(agent_id, cycle_id)
+    resp = _post(identity.PATH,
+                 identity.open_payload(_project_key(project_dir), message=message,
+                                       source="openclaw"))
+    identity.observe(resp)
+    if resp.get("error") is not None or not resp.get("ok", False):
+        print(_axi().gate_identity_open_failed_line(agent_id, resp.get("error")),
+              file=sys.stderr)
+    return identity
+
+
+def _close_gate_identity(project_dir, identity):
+    """CR-CRU-056 — the closing half of the bracket: silently remove the agent
+    row ONLY when this run created it, and SAY SO either way on stderr so the
+    decision is never invisible."""
+    if identity is None:
+        return
+    if not identity.should_remove:
+        print(_axi().gate_identity_skipped_line(identity.agent_id, identity.confirmed),
+              file=sys.stderr)
+        return
+    _remove_agent_silent(project_dir, identity.agent_id)
+    print(f"cleanup: agent={identity.agent_id} removed (created by this run)",
+          file=sys.stderr)
 
 
 # --------------------------------------------------------------------------- #
@@ -909,21 +952,32 @@ def cmd_e2e(args):
 
 
 def cmd_regression(args):
-    """Gated regression run — wraps the ingest body in an anti-ghost silent
-    cleanup (CR-CRU-008 §S4): even a failed/raising run removes the implicitly
-    registered agent, and never touches the retired /api/agents/remove shim."""
+    """Gated regression run — an opening heartbeat DECLARES the run's identity
+    (binding it when `--cycle` is given), and the ingest body is wrapped in an
+    anti-ghost silent cleanup (CR-CRU-008 §S4): even a failed/raising run tears
+    the identity down, and never touches the retired /api/agents/remove shim.
+    CR-CRU-056 — the cleanup fires ONLY for an identity this run created; a
+    caller who registered BEFORE the run keeps its registration and binding."""
     project_dir = _resolve_project_dir(args.project_dir)
+    identity = None
     try:
-        return _regression_run(args)
-    finally:
         if getattr(args, "agent", None):
-            _remove_agent_silent(project_dir, args.agent)
+            identity = _open_gate_identity(project_dir, args.agent,
+                                           getattr(args, "cycle", None),
+                                           "gated regression run starting")
+        return _regression_run(args, identity)
+    finally:
+        _close_gate_identity(project_dir, identity)
 
 
-def _regression_run(args):
+def _regression_run(args, identity=None):
     """REGRESSION tier — full reactor suite WITH JaCoCo coverage. Orchestrator
     pre-merge gate. Parses surefire + failsafe + jacoco.csv → /api/v2/runs/parsed.
     Coverage is published ONLY here, and ONLY when zero failures.
+
+    `identity` is the caller's `GatedRunIdentity` (CR-CRU-056): the narration
+    ticks report through it, so a tick that re-creates a pruned row hands this
+    run ownership of that row.
     """
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
@@ -949,10 +1003,14 @@ def _regression_run(args):
                           + _report_dirs(maven_dir, None, "failsafe"))
             )
 
-        narrator = _Narrator(
-            lambda message: _narrate_heartbeat(project_dir, args.agent, message),
-            _xml_total,
-        )
+        def _tick(message):
+            # CR-CRU-056 — a tick that RE-CREATES a pruned row makes that row
+            # this run's to clean up; `observe` reads the server's `changed`.
+            resp = _narrate_heartbeat(project_dir, args.agent, message)
+            if identity is not None:
+                identity.observe(resp)
+
+        narrator = _Narrator(_tick, _xml_total)
     result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None), narrator)
     print(f"[regression] mvn exit={result.returncode}")
 
@@ -1170,7 +1228,8 @@ def cmd_pre_merge_gate(args):
             project_dir=args.project_dir, maven_dir=args.maven_dir, agent=args.agent,
             module=None, also_make=False, update_snapshots=False, native=False,
             profile=None, system_prop=None, goal=args.goal,
-            coverage_profile=args.coverage_profile, log=None))
+            coverage_profile=args.coverage_profile, log=None,
+            cycle=getattr(args, "cycle", None)))
     finally:
         cmd_docker_down(argparse.Namespace(
             project_dir=args.project_dir, compose_file=args.compose_file,
@@ -1691,6 +1750,12 @@ def _add_project_args(p):
                         "Default: $MVN_CRUCIBLE_MAVEN_DIR, else CRUCIBLE_MAVEN_DIR in .env, else root.")
 
 
+def _add_gate_cycle_arg(p):
+    """CR-CRU-056 — `--cycle` on a GATED verb (regression/pre-merge-gate): the
+    binding for the register-inside-the-run case."""
+    p.add_argument("--cycle", type=int, help=_axi().GATE_CYCLE_HELP)
+
+
 def _add_workflow_agent_arg(p, extra=""):
     """CR-CRU-056 §S2b — the shared `--agent` flag for workflow verbs: every
     mutating workflow verb posts as a LIVE registered caller (`agentId` on the
@@ -1796,6 +1861,7 @@ def main():
     g.add_argument("--agent", required=True, help="Agent id (typically the orchestrator's)")
     g.add_argument("--goal", default="verify", help="Maven goal (default: verify; use test for libs without IT)")
     g.add_argument("--coverage-profile", help="Maven profile that activates JaCoCo (else CRUCIBLE_COVERAGE_PROFILE)")
+    _add_gate_cycle_arg(g)
     _add_mvn_flags(g)
     _add_project_args(g)
     _add_log_arg(g)
@@ -1827,6 +1893,7 @@ def main():
     pmg.add_argument("--compose-file", default=None)
     pmg.add_argument("--goal", default="verify")
     pmg.add_argument("--coverage-profile")
+    _add_gate_cycle_arg(pmg)
     _add_project_args(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 

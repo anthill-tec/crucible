@@ -999,7 +999,175 @@ describe("clients/bun-crucible.py — byte-compatible CLI surface (existing verb
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
     expect(event.tier).toBe("regression");
-    expect(await getAgentIds(baseUrl, key)).not.toContain("regression-agent"); // unregistered after the gated run
+    // CR-CRU-056 (C5) RETARGET — this line previously asserted the OPPOSITE
+    // (`.not.toContain`), pinning the anti-ghost cleanup's over-reach: the
+    // agent here is pre-registered by `ensureRegistered` ABOVE, so deleting it
+    // destroys a CALLER-owned registration (and, once §S1 put the cycle
+    // binding on that row, the binding with it). The gated run now removes
+    // only identities it created; a pre-registered caller survives.
+    expect(await getAgentIds(baseUrl, key)).toContain("regression-agent");
+  });
+});
+
+// ── CR-CRU-056 (C5) — the gated-run bracket must not destroy the CALLER's ──
+// registration, because §S1 stores the cycle binding ON the agent row.
+//
+// Live failure this block is the regression test for (:3849, 2026-08-01):
+//   register --agent vidushi --phase ORCHESTRATOR --cycle 152   → bound to 152
+//   python-crucible.py regression --agent vidushi               → stamped 152 ✓
+//   bun-crucible.py    regression --agent vidushi               → NO cycle    ✗
+// The first gated run's `finally` silently unregistered `vidushi`, taking the
+// binding with it; the second run's identity was re-created unbound and its
+// evidence landed off the cycle card — the exact failure this CR exists to
+// prevent, reintroduced by the CR's own new surface.
+
+describe("clients/bun-crucible.py — CR-CRU-056 (C5): a gated run removes only the identity it CREATED", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratchDirs: string[] = [];
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  function scratchDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    scratchDirs.push(dir);
+    return dir;
+  }
+
+  /** Seeds project → open plan → ACTIVE cycle, and a fixture bun package. */
+  async function seedBoundFixture(name: string): Promise<{
+    baseUrl: string;
+    key: string;
+    dir: string;
+    cycleId: number;
+  }> {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, name);
+    const plan = await filePlan(baseUrl, key, `CR-CRU-056-${name}`);
+    const cycleId = plan.cycles[0]!.id;
+    await activateCycle(baseUrl, key, plan.planId, cycleId);
+    const dir = scratchDir("bun-crucible-c5-");
+    writeFixtureBunProject(dir, key);
+    return { baseUrl, key, dir, cycleId };
+  }
+
+  /** Registers `agentId` BOUND to `cycleId` through the script's own verb. */
+  async function registerBound(
+    agentId: string,
+    cycleId: number,
+    opts: { cwd: string; crucibleUrl: string },
+  ): Promise<void> {
+    const res = await runScript(
+      ["register", "--agent", agentId, "--phase", "ORCHESTRATOR",
+       "--cycle", String(cycleId), "--project-dir", opts.cwd],
+      opts,
+    );
+    expect(res.code).toBe(0);
+  }
+
+  async function boundCycleOf(baseUrl: string, key: string, agentId: string): Promise<number | undefined> {
+    const res = await fetch(`${baseUrl}/api/v2/agents?project=${key}`);
+    const body = (await res.json()) as { agents: Array<{ agentId: string; boundCycleId?: number }> };
+    return body.agents.find((a) => a.agentId === agentId)?.boundCycleId;
+  }
+
+  // (a) THE regression test for the live defect.
+  test("a pre-registered BOUND agent survives a gated run with its binding intact, and a SECOND consecutive gated run still ingests stamped to that same cycle", async () => {
+    const { baseUrl, key, dir, cycleId } = await seedBoundFixture("clients-bc-c5-consecutive");
+    await registerBound("bc-c5-bound-agent", cycleId, { cwd: dir, crucibleUrl: baseUrl });
+    expect(await boundCycleOf(baseUrl, key, "bc-c5-bound-agent")).toBe(cycleId);
+
+    const first = await runScript(
+      ["test", "--agent", "bc-c5-bound-agent", "--project-dir", dir, "--package-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+    // The fixture package fails 3 of 4 tests — the RUNNER verdict, not the
+    // bracket's; what matters here is that the ingest landed and attached.
+    expect(first.code).toBe(1);
+
+    // The caller's registration AND its binding must still be standing.
+    expect(await getAgentIds(baseUrl, key)).toContain("bc-c5-bound-agent");
+    expect(await boundCycleOf(baseUrl, key, "bc-c5-bound-agent")).toBe(cycleId);
+
+    const second = await runScript(
+      ["test", "--agent", "bc-c5-bound-agent", "--project-dir", dir, "--package-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+    expect(second.code).toBe(1);
+
+    // BOTH stored events carry the cycle — the second is the one that landed
+    // cycle-less before this fix.
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(2);
+    const stamped = await Promise.all(events.map((e) => getFullEvent(baseUrl, e.id)));
+    expect(stamped.map((e) => e.context?.cycleId)).toEqual([cycleId, cycleId]);
+  });
+
+  // (b) The anti-ghost purpose (CR-CRU-021 §S5) is PRESERVED, not weakened.
+  test("an identity the gated run itself created is still silently removed afterward (anti-ghost preserved)", async () => {
+    const { baseUrl, key, dir, cycleId } = await seedBoundFixture("clients-bc-c5-antighost");
+
+    const res = await runScript(
+      ["test", "--agent", "bc-c5-run-created", "--cycle", String(cycleId),
+       "--project-dir", dir, "--package-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+    expect(res.code).toBe(1);
+
+    // The run brought this row into being, so the run takes it away — no
+    // lingering online ghost on the agent rail.
+    expect(await getAgentIds(baseUrl, key)).not.toContain("bc-c5-run-created");
+    // ...and the removal stays SILENT: no 'unregistered' lifecycle event that
+    // would bury the run just ingested (CR-CRU-011 §S1 / CR-CRU-008 §S4).
+    const all = await fetch(`${baseUrl}/api/v2/events?project=${key}`);
+    const allBody = (await all.json()) as { events: Array<{ kind?: string; agentId?: string }> };
+    expect(
+      allBody.events.filter((e) => e.kind === "lifecycle" && e.agentId === "bc-c5-run-created").length,
+    ).toBe(1); // the creation only — never a matching 'unregistered'
+  });
+
+  // (c) `--cycle` passthrough — the register-inside-the-run case.
+  test("--cycle on a gated verb BINDS a run-created registration, so its evidence attaches without a separate `register` call", async () => {
+    const { baseUrl, key, dir, cycleId } = await seedBoundFixture("clients-bc-c5-passthrough");
+
+    const res = await runScript(
+      ["test", "--agent", "bc-c5-cycle-passthrough", "--cycle", String(cycleId),
+       "--project-dir", dir, "--package-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+    expect(res.code).toBe(1);
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+    expect(event.context?.cycleId).toBe(cycleId);
+    // The envelope echoes the attachment the server applied (C5's echo).
+    expect(extractContextBlock(res.stdout)).toContain(`cycleId: ${cycleId}`);
+  });
+
+  test("a gated run WITHOUT --cycle never invents one for a run-created identity — no client-side cycle resolution survives (§S3)", async () => {
+    const { baseUrl, key, dir } = await seedBoundFixture("clients-bc-c5-no-invention");
+
+    // An ACTIVE cycle exists on this project — the deleted resolver would
+    // have silently picked it. An unbound run-created agent must attach to
+    // NOTHING instead.
+    const res = await runScript(
+      ["test", "--agent", "bc-c5-unbound", "--project-dir", dir, "--package-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+    expect(res.code).toBe(1);
+
+    const events = await getEvents(baseUrl, key);
+    expect(events.length).toBe(1);
+    const event = await getFullEvent(baseUrl, events[0]!.id);
+    expect(event.context?.cycleId).toBeUndefined();
+    expect(await getAgentIds(baseUrl, key)).not.toContain("bc-c5-unbound");
   });
 });
 
