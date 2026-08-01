@@ -511,7 +511,14 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
   // ── unregister leaves no binding to leak ───────────────────────────────
 
   describe("unregister removes the row as today — no binding leaks into a fresh registration of the same id", () => {
-    test("unregister deletes the bound agent row; re-registering the SAME agent id afterward with NO cycleId does not inherit the old boundCycleId", async () => {
+    // CR-CRU-056 C2 final sweep (orchestrator decision): §S2 now REQUIRES a
+    // TDD-phase (GREEN) registration to be bound, so the re-registration
+    // below must supply a FRESH cycle binding — but the test's actual
+    // purpose (a leak check, not the auth model) is unchanged: the OLD
+    // binding must never resurface on the fresh row. Asserted here as "the
+    // NEW binding is exposed exactly, and it is NOT the old one" instead of
+    // "no binding at all".
+    test("unregister deletes the bound agent row; re-registering the SAME agent id afterward with a NEW cycleId does not inherit the OLD boundCycleId", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const store = handle.store;
       const key = seedProject(store);
@@ -533,18 +540,21 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
       expect(unregBody.changed).toBe(true);
       expect(store.hasAgent(key, agentId)).toBe(false);
 
+      const { cycleId: freshCycleId } = await fileAndActivate(key, "CR-CRU-056-T6-rebind-after-unregister");
       const reregRes = await postJson("/api/v2/agents/register", {
         projectKey: key,
         agentId,
         phase: "GREEN",
+        cycleId: freshCycleId,
       });
       expect(reregRes.status).toBe(200);
 
       const agent = await agentByIdFrom(key, agentId);
       expect(agent).toBeDefined();
+      // POSITIVE — the NEW binding is exposed exactly.
+      expect(agent!.boundCycleId).toBe(freshCycleId);
       // NEGATIVE bound — the old binding from the deleted row must never
-      // resurface on the fresh row.
-      expect(agent!.boundCycleId === undefined || agent!.boundCycleId === null).toBe(true);
+      // resurface on/leak into the fresh row.
       expect(agent!.boundCycleId).not.toBe(cycleId);
     });
   });

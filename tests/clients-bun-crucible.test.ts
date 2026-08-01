@@ -399,10 +399,26 @@ describe("clients/bun-crucible.py — v2 endpoints + CRUCIBLE_URL honored (CR-CR
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-bc-register-v2");
     const projectDir = fixtureProjectDir(key);
+    // CR-CRU-056 §S2/§S3c — RED (a TDD phase) now REQUIRES an explicit
+    // cycle binding; this test's subject (which endpoint/verb gets hit) is
+    // unaffected, so a fixture plan+active-cycle is filed and reused (same
+    // primitive as filePlan/activateCycle used elsewhere in this file).
+    const plan = await filePlan(baseUrl, key, "CR-CRU-008-C2-register-v2");
+    await activateCycle(baseUrl, key, plan.planId, plan.cycles[0]!.id);
     proxy = startCapturingProxy(baseUrl);
 
     const res = await runScript(
-      ["register", "--agent", "a1", "--phase", "RED", "--project-dir", projectDir],
+      [
+        "register",
+        "--agent",
+        "a1",
+        "--phase",
+        "RED",
+        "--cycle",
+        String(plan.cycles[0]!.id),
+        "--project-dir",
+        projectDir,
+      ],
       { cwd: projectDir, crucibleUrl: proxy.url },
     );
 
@@ -420,10 +436,25 @@ describe("clients/bun-crucible.py — v2 endpoints + CRUCIBLE_URL honored (CR-CR
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-bc-unregister-v2");
     const projectDir = fixtureProjectDir(key);
+    // CR-CRU-056 §S2/§S3c — same reused fixture: RED needs a bound cycle
+    // before this test's actual subject (the unregister verb/path) is
+    // exercised.
+    const plan = await filePlan(baseUrl, key, "CR-CRU-008-C2-unregister-v2");
+    await activateCycle(baseUrl, key, plan.planId, plan.cycles[0]!.id);
     proxy = startCapturingProxy(baseUrl);
 
     await runScript(
-      ["register", "--agent", "a2", "--phase", "RED", "--project-dir", projectDir],
+      [
+        "register",
+        "--agent",
+        "a2",
+        "--phase",
+        "RED",
+        "--cycle",
+        String(plan.cycles[0]!.id),
+        "--project-dir",
+        projectDir,
+      ],
       { cwd: projectDir, crucibleUrl: proxy.url },
     );
     expect(await getAgentIds(baseUrl, key)).toContain("a2");
@@ -502,6 +533,29 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
     runGit(["symbolic-ref", "HEAD", `refs/heads/${branch}`], dir);
     runGit(["add", "."], dir);
     runGit(["commit", "-q", "-m", "initial"], dir);
+
+    // CR-CRU-056 §S3 — the `test` verb's own implicit agent-touch never
+    // declares a phase/cycle (it is a phase-optional heartbeat, CR-CRU-044
+    // §S1(a)); the server now stamps a run's context.cycleId ONLY from an
+    // ALREADY-BOUND agent row (§S1/§S3). So the fixture agent is explicitly
+    // pre-registered bound to the real active cycle before the wrapped `bun
+    // test` run below — the auto-attach GUESS this describe block used to
+    // rely on is gone; explicit binding is what makes context.cycleId
+    // resolve to activeCycleId now.
+    await runScript(
+      [
+        "register",
+        "--agent",
+        "cr-cru-008-c2-fixture-agent",
+        "--phase",
+        "RED",
+        "--cycle",
+        String(activeCycleId),
+        "--project-dir",
+        dir,
+      ],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
 
     proxy = startCapturingProxy(baseUrl);
     runResult = await runScript(
@@ -747,9 +801,19 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
   });
 });
 
-// ── CR-CRU-036 §S1 — server-active-cycle auto-attach: warn+withhold vs tolerant ──
+// ── CR-CRU-056 §S2/§S3/§S3c — the CR-036 client-side auto-attach resolver ──
+// is DELETED; re-pointed from "no-active-cycle warns+withholds, no plan at
+// all is tolerant" (the old client-side GUESS) into the new unconditional
+// contract: a TDD-phase (RED/GREEN/FIX/VERIFY) register with no explicit
+// `--cycle` is REFUSED (409-style non-zero exit + structured `ok:false`
+// envelope naming `--cycle`) regardless of whether a plan exists at all —
+// there is no more "ambiguous" vs "tolerant" distinction because there is no
+// more resolution attempt of any kind. `WORKFLOW_CYCLE_ID` is read by
+// nobody (confirmed live: even a REAL, in-project, but pending cycle id
+// sitting in that env var changes nothing) — the exact resolver mechanism
+// this CR deletes.
 
-describe("clients/bun-crucible.py — §S1 auto-attach: no-active-cycle warns+withholds, no plan at all is tolerant", () => {
+describe("clients/bun-crucible.py — §S2 TDD-phase register REQUIRES an explicit --cycle (supersedes the deleted CR-036 auto-attach resolver)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratchDirs: string[] = [];
 
@@ -773,7 +837,7 @@ describe("clients/bun-crucible.py — §S1 auto-attach: no-active-cycle warns+wi
     return dir;
   }
 
-  test("register: an OPEN plan with NO active cycle warns[] 'no-active-cycle'/'activate a cycle first' + stderr, posts NO agent, exits non-zero — WORKFLOW_CYCLE_ID set is ignored", async () => {
+  test("register --phase RED with an OPEN plan whose cycles are all PENDING (no active cycle) is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-bc-no-active-cycle");
@@ -783,33 +847,35 @@ describe("clients/bun-crucible.py — §S1 auto-attach: no-active-cycle warns+wi
 
     const res = await runScript(
       ["register", "--agent", "bc-no-active-cycle-agent", "--phase", "RED", "--project-dir", projectDir],
-      // A stale WORKFLOW_CYCLE_ID pointing at a REAL (but pending) cycle in
-      // this very plan must change NOTHING — §S1 removes the env var
-      // entirely, so it can't rescue the withheld run.
+      // The deleted resolver's exact mechanism: a stale WORKFLOW_CYCLE_ID
+      // pointing at a REAL (but pending) cycle in this very plan must not
+      // rescue the registration — nobody reads this env var any more.
       { cwd: projectDir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
     );
 
     expect(res.code).not.toBe(0);
-    expect(res.stderr).toContain("no-active-cycle");
-    expect(res.stderr).toContain("activate a cycle first");
-    expect(res.stdout).toContain("no-active-cycle");
+    // POSITIVE — the structured envelope reports failure and names --cycle
+    // as the fix (the server's 409 error passed through faithfully).
+    expect(res.stdout).toContain("ok: false");
+    expect(res.stdout).toContain("--cycle");
     expect(await getAgentIds(baseUrl, key)).not.toContain("bc-no-active-cycle-agent");
   });
 
-  test("register: NO open plan at all is tolerant — proceeds with no warning and no withhold (the lightweight-project default)", async () => {
+  test("register --phase RED with NO open plan AT ALL is STILL refused the same way — the §S2 binding requirement is unconditional, not contingent on plan/cycle ambiguity (the old 'no plan, tolerant' escape hatch no longer exists)", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-bc-tolerant-no-plan");
     const projectDir = fixtureProjectDir(key);
 
     const res = await runScript(
-      ["register", "--agent", "bc-tolerant-agent", "--phase", "RED", "--project-dir", projectDir],
+      ["register", "--agent", "bc-no-plan-agent", "--phase", "RED", "--project-dir", projectDir],
       { cwd: projectDir, crucibleUrl: baseUrl },
     );
 
-    expect(res.code).toBe(0);
-    expect(res.stdout).not.toContain("no-active-cycle");
-    expect(await getAgentIds(baseUrl, key)).toContain("bc-tolerant-agent");
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain("ok: false");
+    expect(res.stdout).toContain("--cycle");
+    expect(await getAgentIds(baseUrl, key)).not.toContain("bc-no-plan-agent");
   });
 });
 

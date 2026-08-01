@@ -153,10 +153,44 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
     return fetch(`${base()}${path_}`);
   }
 
+  async function patchJson(path_: string, body: unknown): Promise<Response> {
+    return fetch(`${base()}${path_}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
   function seedProject(store: Store): string {
     const key = crypto.randomUUID();
     store.addProject({ key, name: "P", type: "backend", sutRoot: "/tmp/p" });
     return key;
+  }
+
+  // CR-CRU-056 §S2 — TDD-phase (RED/GREEN/FIX/VERIFY) registration now
+  // REQUIRES a cycle binding. Where a test's actual subject is the PHASE
+  // enumeration/declaration itself (not incidental to some other CR-044
+  // behaviour), it must supply one — same fixture primitive as
+  // tests/agent-cycle-binding.test.ts: files a real ONE-cycle plan through
+  // the plans API and activates that cycle through the real PATCH transition
+  // route (never store.filePlan/direct DB writes).
+  async function fileAndActivate(key: string, cr: string): Promise<{ planId: number; cycleId: number }> {
+    const fileRes = await postJson(`/api/v2/projects/${key}/plans`, {
+      cr,
+      cycles: [{ label: "solo" }],
+    });
+    expect(fileRes.status).toBe(201);
+    const fileBody = (await fileRes.json()) as {
+      planId: number;
+      cycles: Array<{ id: number }>;
+    };
+    const planId = fileBody.planId;
+    const cycleId = fileBody.cycles[0]!.id;
+    const activateRes = await patchJson(`/api/v2/projects/${key}/plans/${planId}/cycles/${cycleId}`, {
+      status: "active",
+    });
+    expect(activateRes.status).toBe(200);
+    return { planId, cycleId };
   }
 
   // ── §S1 required + enumerated (register) ──────────────────────────────
@@ -208,6 +242,12 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const store = handle.store;
       const key = seedProject(store);
+      // CR-CRU-056 §S2 — TDD phases (RED/GREEN/FIX/VERIFY) now REQUIRE a
+      // cycle binding; ORCHESTRATOR/report register unbound as before. The
+      // phase enumeration itself IS this test's subject, so every TDD value
+      // must still be exercised — bound, not swapped for an incidental one.
+      const { cycleId } = await fileAndActivate(key, "CR-CRU-044-phase-accept-all");
+      const TDD_PHASES: readonly string[] = ["RED", "GREEN", "FIX", "VERIFY"];
 
       for (const value of PHASE_ENUM) {
         const agentId = `phase-accept-${value}`;
@@ -215,6 +255,7 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
           projectKey: key,
           agentId,
           phase: value,
+          ...(TDD_PHASES.includes(value) ? { cycleId } : {}),
         });
         expect(res.status).toBe(200);
         const body = (await res.json()) as OkResponse;
@@ -237,7 +278,13 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
   // ── §S1 persisted + returned ────────────────────────────────────────────
 
   describe("§S1 persisted + returned — GET /api/v2/agents", () => {
-    test('register with phase:"GREEN" -> GET /api/v2/agents returns phase:"GREEN" for that agent', async () => {
+    // CR-CRU-056 C2 final sweep: the persisted VALUE round-tripping is this
+    // test's subject, not specifically the GREEN TDD phase (the enumeration
+    // loop above already exercises every TDD value bound) — "report" keeps
+    // the assertion exactly as strong (still an exact declared-value
+    // round-trip) without dragging in a cycle-binding fixture incidental to
+    // this test's actual purpose.
+    test('register with phase:"report" -> GET /api/v2/agents returns phase:"report" for that agent', async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = seedProject(handle.store);
       const agentId = "phase-roundtrip-1";
@@ -245,7 +292,7 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
       const regRes = await postJson("/api/v2/agents/register", {
         projectKey: key,
         agentId,
-        phase: "GREEN",
+        phase: "report",
       });
       expect(regRes.status).toBe(200);
 
@@ -254,7 +301,7 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
       const listBody = (await listRes.json()) as AgentsListResponse;
       const agent = listBody.agents.find((a) => a.agentId === agentId);
       expect(agent).toBeDefined();
-      expect(agent!.phase).toBe("GREEN");
+      expect(agent!.phase).toBe("report");
     });
   });
 
@@ -268,8 +315,17 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
         handle = startServer({ port: 0, dbPath: ":memory:" });
         const key = seedProject(handle.store);
         const agentId = "CR-CRU-041-C1-GREEN-bun";
+        // CR-CRU-056 §S2 — the SPECIFIC GREEN value is this test's genuine
+        // subject (proving the declaration, not the id shape, wins), so it
+        // is bound rather than swapped for an incidental phase.
+        const { cycleId } = await fileAndActivate(key, "CR-CRU-041-C1-GREEN-bun-cycle");
 
-        await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "GREEN" });
+        await postJson("/api/v2/agents/register", {
+          projectKey: key,
+          agentId,
+          phase: "GREEN",
+          cycleId,
+        });
 
         const listRes = await getJson(`/api/v2/agents?project=${key}`);
         const listBody = (await listRes.json()) as AgentsListResponse;
@@ -286,8 +342,17 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
         handle = startServer({ port: 0, dbPath: ":memory:" });
         const key = seedProject(handle.store);
         const agentId = "some-agent-suffix-GREEN";
+        // CR-CRU-056 §S2 — RED is this test's genuine subject too (proving
+        // the id's "-GREEN" suffix never overrides the declared RED), so it
+        // is bound rather than swapped for an incidental phase.
+        const { cycleId } = await fileAndActivate(key, "some-agent-suffix-GREEN-cycle");
 
-        await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "RED" });
+        await postJson("/api/v2/agents/register", {
+          projectKey: key,
+          agentId,
+          phase: "RED",
+          cycleId,
+        });
 
         const listRes = await getJson(`/api/v2/agents?project=${key}`);
         const listBody = (await listRes.json()) as AgentsListResponse;
@@ -311,10 +376,15 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
         const key = seedProject(handle.store);
         const agentId = "phase-heartbeat-1";
 
+        // CR-CRU-056 C2 final sweep: the heartbeat/blank-preservation
+        // contract is this test's actual subject, not the specific VERIFY
+        // TDD phase (already covered bound in the enumeration-loop test
+        // above) — "report" keeps the assertion exactly as strong without
+        // an incidental cycle-binding fixture.
         const regRes = await postJson("/api/v2/agents/register", {
           projectKey: key,
           agentId,
-          phase: "VERIFY",
+          phase: "report",
         });
         expect(regRes.status).toBe(200);
 
@@ -333,7 +403,7 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
         const listBody = (await listRes.json()) as AgentsListResponse;
         const agent = listBody.agents.find((a) => a.agentId === agentId);
         expect(agent).toBeDefined();
-        expect(agent!.phase).toBe("VERIFY");
+        expect(agent!.phase).toBe("report");
       },
     );
   });
@@ -341,15 +411,22 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
   // ── §S1(c) — an ingest must NEVER de-phase an agent ─────────────────────
 
   describe("§S1(c) an ingest never de-phases an agent (defect's second door)", () => {
+    // CR-CRU-056 C2 final sweep: this describe already exercises TWO phases
+    // ("report" here, "ORCHESTRATOR" in the next test) to prove the
+    // ingest-never-blanks contract holds regardless of the registered
+    // phase — the specific value is incidental to that purpose (the
+    // enumeration itself, including every TDD phase bound, is covered by
+    // the loop test above), so "report" avoids an incidental cycle-binding
+    // fixture without weakening this test's assertions at all.
     test(
-      "register with phase:\"GREEN\", then POST a run to /api/v2/runs/parsed for the SAME " +
-        "agent (runs carry no phase) -> GET /api/v2/agents still reads phase:\"GREEN\", not null",
+      "register with phase:\"report\", then POST a run to /api/v2/runs/parsed for the SAME " +
+        "agent (runs carry no phase) -> GET /api/v2/agents still reads phase:\"report\", not null",
       async () => {
         handle = startServer({ port: 0, dbPath: ":memory:" });
         const key = seedProject(handle.store);
         const agentId = "phase-ingest-1";
 
-        await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "GREEN" });
+        await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "report" });
 
         const runRes = await postJson("/api/v2/runs/parsed", {
           projectKey: key,
@@ -365,8 +442,8 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
         const listBody = (await listRes.json()) as AgentsListResponse;
         const agent = listBody.agents.find((a) => a.agentId === agentId);
         expect(agent).toBeDefined();
-        // POSITIVE — still exactly GREEN.
-        expect(agent!.phase).toBe("GREEN");
+        // POSITIVE — still exactly report.
+        expect(agent!.phase).toBe("report");
         // NEGATIVE bound — the ingest touch must never have written null/undefined over it.
         expect(agent!.phase).not.toBeNull();
         expect(agent!.phase).not.toBeUndefined();
@@ -455,11 +532,17 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
 
         handle = startServer({ port: 0, dbPath });
 
+        // CR-CRU-056 C2 final sweep: this test's subject is legacy/fresh
+        // coexistence + exact-value round-trip, not the RED TDD phase
+        // specifically (already covered bound in the enumeration-loop test
+        // above) — "report" registers unbound, avoiding an incidental
+        // plan/cycle fixture on a project seeded via a raw pre-migration
+        // schema.
         const freshAgentId = "fresh-agent-1";
         const regRes = await postJson("/api/v2/agents/register", {
           projectKey,
           agentId: freshAgentId,
-          phase: "RED",
+          phase: "report",
         });
         expect(regRes.status).toBe(200);
 
@@ -476,7 +559,7 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
         // must not be silently assigned one.
         expect(legacy!.phase === undefined || legacy!.phase === null).toBe(true);
         // The fresh registration's declared value round-trips exactly.
-        expect(fresh!.phase).toBe("RED");
+        expect(fresh!.phase).toBe("report");
       },
     );
   });

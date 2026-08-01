@@ -371,11 +371,17 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
     const key = await createProject(baseUrl, "clients-rc-register-v2");
     const dir = scratch.dir("rust-crucible-proj-");
     writeEnvFile(dir, key);
+    // CR-CRU-056 §S2/§S3c — RED (a TDD phase) now REQUIRES an explicit
+    // cycle binding; this test's subject (which endpoint/verb gets hit) is
+    // unaffected, so a fixture plan+active-cycle is filed and reused (same
+    // primitive as filePlan/activateCycle used elsewhere in this file).
+    const plan = await filePlan(baseUrl, key, "CR-RC-register-v2");
+    await activateCycle(baseUrl, key, plan.planId, plan.cycles[0]!.id);
     proxy = startCapturingProxy(baseUrl);
 
     const res = await runScript(
       RUST_SCRIPT_PATH,
-      ["register", "--agent", "r1", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "r1", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
 
@@ -393,11 +399,15 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
     const key = await createProject(baseUrl, "clients-rc-unregister-v2");
     const dir = scratch.dir("rust-crucible-proj-");
     writeEnvFile(dir, key);
+    // CR-CRU-056 §S2/§S3c — same reused fixture: RED needs a bound cycle
+    // before this test's actual subject (the unregister verb/path) runs.
+    const plan = await filePlan(baseUrl, key, "CR-RC-unregister-v2");
+    await activateCycle(baseUrl, key, plan.planId, plan.cycles[0]!.id);
     proxy = startCapturingProxy(baseUrl);
 
     await runScript(
       RUST_SCRIPT_PATH,
-      ["register", "--agent", "r2", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "r2", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
     expect(await getAgentIds(baseUrl, key)).toContain("r2");
@@ -434,7 +444,14 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
     expect(agent!.message.toLowerCase()).toContain("report");
   });
 
-  test("CR-CRU-036 §S1: register with an OPEN plan but NO active cycle warns[] 'no-active-cycle'/'activate a cycle first' + stderr, posts NO agent, exits non-zero — WORKFLOW_CYCLE_ID set is ignored", async () => {
+  // CR-CRU-056 §S2/§S3/§S3c — the CR-036 client-side auto-attach resolver
+  // is DELETED; re-pointed from "warns+withholds" into the new unconditional
+  // contract: a TDD-phase register with no explicit --cycle is REFUSED
+  // (non-zero exit, structured ok:false envelope naming --cycle) regardless
+  // of plan state — WORKFLOW_CYCLE_ID is read by nobody (confirmed live:
+  // even a REAL, in-project, pending cycle id sitting in that env var
+  // changes nothing).
+  test("CR-CRU-056 §S2: register --phase RED with an OPEN plan but NO active cycle is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-no-active-cycle");
@@ -446,15 +463,14 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
     const res = await runScript(
       RUST_SCRIPT_PATH,
       ["register", "--agent", "r-no-cycle", "--phase", "RED", "--project-dir", dir],
-      // A stale WORKFLOW_CYCLE_ID pointing at a REAL (but pending) cycle in
-      // this very plan must change NOTHING — §S1 removes the env var.
+      // The deleted resolver's exact mechanism: nobody reads this env var
+      // any more, so it must not rescue the registration.
       { cwd: dir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
     );
 
     expect(res.code).not.toBe(0);
-    expect(res.stderr).toContain("no-active-cycle");
-    expect(res.stderr).toContain("activate a cycle first");
-    expect(res.stdout).toContain("no-active-cycle");
+    expect(res.stdout).toContain("ok: false");
+    expect(res.stdout).toContain("--cycle");
     expect(await getAgentIds(baseUrl, key)).not.toContain("r-no-cycle");
   });
 
@@ -536,17 +552,31 @@ describe("clients/rust-crucible.py — auto-ingest: /api/v2/runs, tier:'unit', f
     expect(proxy.calls.some((c) => c.path === "/api/ingest")).toBe(false);
   });
 
-  test("with an ACTIVE cycle seeded server-side + WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set, records full context: cycleId AUTO-ATTACHED from the server (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing), cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
+  test("with an ACTIVE cycle seeded server-side + WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set, records full context: cycleId comes from the agent's REGISTERED BINDING (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing), cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-auto-ingest-context");
-    // CR-CRU-036 §S1: seed an ACTIVE cycle server-side; feed the OTHER
-    // (real, but pending) cycle to WORKFLOW_CYCLE_ID to prove it's ignored.
+    // CR-CRU-056 §S1/§S3: seed an ACTIVE cycle server-side; feed the OTHER
+    // (real, but pending) cycle to WORKFLOW_CYCLE_ID to prove it's ignored
+    // (nobody reads it any more — the client-side auto-attach resolver this
+    // env var used to feed is deleted).
     const plan = await filePlan(baseUrl, key, "CR-RC-CONTEXT");
     const activeCycleId = plan.cycles[0]!.id;
     const otherCycleId = plan.cycles[1]!.id;
     await activateCycle(baseUrl, key, plan.planId, activeCycleId);
     const dir = fixtureDir(key);
+
+    // CR-CRU-056 §S3 — auto-ingest itself never registers/binds an agent;
+    // the server now stamps a run's context.cycleId ONLY from an
+    // ALREADY-BOUND agent row. Explicitly pre-register the same agent id
+    // bound to the real active cycle so the ingest below has a binding to
+    // stamp from — this is what replaces the deleted server-side "active
+    // cycle" GUESS this test used to exercise.
+    await runScript(
+      RUST_SCRIPT_PATH,
+      ["register", "--agent", "rust-context-agent", "--phase", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
 
     await runScript(
       RUST_SCRIPT_PATH,
@@ -563,8 +593,11 @@ describe("clients/rust-crucible.py — auto-ingest: /api/v2/runs, tier:'unit', f
       },
     );
 
+    // Two events now: the explicit pre-registration's lifecycle event, plus
+    // the auto-ingest's test event — events are returned newest-first
+    // (ORDER BY timestamp DESC), so events[0] is still the ingest event.
     const events = await getEvents(baseUrl, key);
-    expect(events.length).toBe(1);
+    expect(events.length).toBe(2);
     const event = await getFullEvent(baseUrl, events[0]!.id);
     expect(event.context?.cycleId).toBe(activeCycleId);
     expect(event.context?.cycle).toBe("rust-crucible + mvn-crucible v2 upgrade");
@@ -992,11 +1025,17 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
     const key = await createProject(baseUrl, "clients-mc-register-v2");
     const dir = scratch.dir("mvn-crucible-proj-");
     writeEnvFile(dir, key);
+    // CR-CRU-056 §S2/§S3c — RED (a TDD phase) now REQUIRES an explicit
+    // cycle binding; this test's subject (which endpoint/verb gets hit) is
+    // unaffected, so a fixture plan+active-cycle is filed and reused (same
+    // primitive as filePlan/activateCycle used elsewhere in this file).
+    const plan = await filePlan(baseUrl, key, "CR-MC-register-v2");
+    await activateCycle(baseUrl, key, plan.planId, plan.cycles[0]!.id);
     proxy = startCapturingProxy(baseUrl);
 
     const res = await runScript(
       MVN_SCRIPT_PATH,
-      ["register", "--agent", "m1", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "m1", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
 
@@ -1014,11 +1053,15 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
     const key = await createProject(baseUrl, "clients-mc-unregister-v2");
     const dir = scratch.dir("mvn-crucible-proj-");
     writeEnvFile(dir, key);
+    // CR-CRU-056 §S2/§S3c — same reused fixture: RED needs a bound cycle
+    // before this test's actual subject (the unregister verb/path) runs.
+    const plan = await filePlan(baseUrl, key, "CR-MC-unregister-v2");
+    await activateCycle(baseUrl, key, plan.planId, plan.cycles[0]!.id);
     proxy = startCapturingProxy(baseUrl);
 
     await runScript(
       MVN_SCRIPT_PATH,
-      ["register", "--agent", "m2", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "m2", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
     expect(await getAgentIds(baseUrl, key)).toContain("m2");
@@ -1055,7 +1098,13 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
     expect(agent!.message.toLowerCase()).toContain("report");
   });
 
-  test("CR-CRU-036 §S1: register with an OPEN plan but NO active cycle warns[] 'no-active-cycle'/'activate a cycle first' + stderr, posts NO agent, exits non-zero — WORKFLOW_CYCLE_ID set is ignored", async () => {
+  // CR-CRU-056 §S2/§S3/§S3c — the CR-036 client-side auto-attach resolver
+  // is DELETED; re-pointed into the new unconditional contract: a TDD-phase
+  // register with no explicit --cycle is REFUSED (non-zero exit, structured
+  // ok:false envelope naming --cycle) regardless of plan state —
+  // WORKFLOW_CYCLE_ID is read by nobody (confirmed live: even a REAL,
+  // in-project, pending cycle id sitting in that env var changes nothing).
+  test("CR-CRU-056 §S2: register --phase RED with an OPEN plan but NO active cycle is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-mc-no-active-cycle");
@@ -1067,15 +1116,14 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
     const res = await runScript(
       MVN_SCRIPT_PATH,
       ["register", "--agent", "m-no-cycle", "--phase", "RED", "--project-dir", dir],
-      // A stale WORKFLOW_CYCLE_ID pointing at a REAL (but pending) cycle in
-      // this very plan must change NOTHING — §S1 removes the env var.
+      // The deleted resolver's exact mechanism: nobody reads this env var
+      // any more, so it must not rescue the registration.
       { cwd: dir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
     );
 
     expect(res.code).not.toBe(0);
-    expect(res.stderr).toContain("no-active-cycle");
-    expect(res.stderr).toContain("activate a cycle first");
-    expect(res.stdout).toContain("no-active-cycle");
+    expect(res.stdout).toContain("ok: false");
+    expect(res.stdout).toContain("--cycle");
     expect(await getAgentIds(baseUrl, key)).not.toContain("m-no-cycle");
   });
 
@@ -1257,12 +1305,14 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
-  test("with an ACTIVE cycle seeded server-side + WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set, the 'unit' tier ingest records full context: cycleId AUTO-ATTACHED from the server (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing)", async () => {
+  test("with an ACTIVE cycle seeded server-side + WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set, the 'unit' tier ingest records full context: cycleId comes from the agent's REGISTERED BINDING (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing)", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-mc-unit-context");
-    // CR-CRU-036 §S1: seed an ACTIVE cycle server-side; feed the OTHER
-    // (real, but pending) cycle to WORKFLOW_CYCLE_ID to prove it's ignored.
+    // CR-CRU-056 §S1/§S3: seed an ACTIVE cycle server-side; feed the OTHER
+    // (real, but pending) cycle to WORKFLOW_CYCLE_ID to prove it's ignored
+    // (nobody reads it any more — the client-side auto-attach resolver this
+    // env var used to feed is deleted).
     const plan = await filePlan(baseUrl, key, "CR-MC-CONTEXT");
     const activeCycleId = plan.cycles[0]!.id;
     const otherCycleId = plan.cycles[1]!.id;
@@ -1276,6 +1326,18 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
     writeFileSync(join(dir, ".gitkeep"), "");
     runGit(["add", "."], dir);
     runGit(["commit", "-q", "-m", "initial"], dir);
+
+    // CR-CRU-056 §S3 — the 'unit' tier verb itself never registers/binds an
+    // agent; the server now stamps a run's context.cycleId ONLY from an
+    // ALREADY-BOUND agent row. Explicitly pre-register the same agent id
+    // bound to the real active cycle so the ingest below has a binding to
+    // stamp from — this replaces the deleted server-side "active cycle"
+    // GUESS this test used to exercise.
+    await runScript(
+      MVN_SCRIPT_PATH,
+      ["register", "--agent", "mvn-context-agent", "--phase", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
 
     await runScript(
       MVN_SCRIPT_PATH,
@@ -1292,8 +1354,11 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
       },
     );
 
+    // Two events now: the explicit pre-registration's lifecycle event, plus
+    // the 'unit' tier's test event — events are returned newest-first
+    // (ORDER BY timestamp DESC), so events[0] is still the ingest event.
     const eventsWithContext = await getEvents(baseUrl, key);
-    expect(eventsWithContext.length).toBe(1);
+    expect(eventsWithContext.length).toBe(2);
     const eventWithContext = await getFullEvent(baseUrl, eventsWithContext[0]!.id);
     expect(eventWithContext.context?.cycleId).toBe(activeCycleId);
     expect(eventWithContext.context?.cycle).toBe("rust-crucible + mvn-crucible v2 upgrade");

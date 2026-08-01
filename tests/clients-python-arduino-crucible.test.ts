@@ -471,11 +471,17 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
     const key = await createProject(baseUrl, "clients-pc-register-v2");
     const dir = scratch.dir("python-crucible-proj-");
     writeEnvFile(dir, key);
+    // CR-CRU-056 §S2/§S3c — RED (a TDD phase) now REQUIRES an explicit
+    // cycle binding; this test's subject (which endpoint/verb gets hit) is
+    // unaffected, so a fixture plan+active-cycle is filed and reused (same
+    // primitive as filePlan/activateCycle used elsewhere in this file).
+    const plan = await filePlan(baseUrl, key, "CR-PC-register-v2");
+    await activateCycle(baseUrl, key, plan.planId, plan.cycles[0]!.id);
     proxy = startCapturingProxy(baseUrl);
 
     const res = await runScript(
       PYTHON_SCRIPT_PATH,
-      ["register", "--agent", "p1", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "p1", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
 
@@ -493,11 +499,15 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
     const key = await createProject(baseUrl, "clients-pc-unregister-v2");
     const dir = scratch.dir("python-crucible-proj-");
     writeEnvFile(dir, key);
+    // CR-CRU-056 §S2/§S3c — same reused fixture: RED needs a bound cycle
+    // before this test's actual subject (the unregister verb/path) runs.
+    const plan = await filePlan(baseUrl, key, "CR-PC-unregister-v2");
+    await activateCycle(baseUrl, key, plan.planId, plan.cycles[0]!.id);
     proxy = startCapturingProxy(baseUrl);
 
     await runScript(
       PYTHON_SCRIPT_PATH,
-      ["register", "--agent", "p2", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "p2", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
     expect(await getAgentIds(baseUrl, key)).toContain("p2");
@@ -535,7 +545,13 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
     expect(agent!.message.toLowerCase()).toContain("report");
   });
 
-  test("CR-CRU-036 §S1: register with an OPEN plan but NO active cycle warns[] 'no-active-cycle'/'activate a cycle first' + stderr, posts NO agent, exits non-zero — WORKFLOW_CYCLE_ID set is ignored", async () => {
+  // CR-CRU-056 §S2/§S3/§S3c — the CR-036 client-side auto-attach resolver
+  // is DELETED; re-pointed into the new unconditional contract: a TDD-phase
+  // register with no explicit --cycle is REFUSED (non-zero exit, structured
+  // ok:false envelope naming --cycle) regardless of plan state —
+  // WORKFLOW_CYCLE_ID is read by nobody (confirmed live: even a REAL,
+  // in-project, pending cycle id sitting in that env var changes nothing).
+  test("CR-CRU-056 §S2: register --phase RED with an OPEN plan but NO active cycle is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-no-active-cycle");
@@ -547,19 +563,18 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
     const res = await runScript(
       PYTHON_SCRIPT_PATH,
       ["register", "--agent", "p-no-cycle", "--phase", "RED", "--project-dir", dir],
-      // A stale WORKFLOW_CYCLE_ID pointing at a REAL (but pending) cycle in
-      // this very plan must change NOTHING — §S1 removes the env var.
+      // The deleted resolver's exact mechanism: nobody reads this env var
+      // any more, so it must not rescue the registration.
       { cwd: dir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
     );
 
     expect(res.code).not.toBe(0);
-    expect(res.stderr).toContain("no-active-cycle");
-    expect(res.stderr).toContain("activate a cycle first");
-    expect(res.stdout).toContain("no-active-cycle");
+    expect(res.stdout).toContain("ok: false");
+    expect(res.stdout).toContain("--cycle");
     expect(await getAgentIds(baseUrl, key)).not.toContain("p-no-cycle");
   });
 
-  test("CR-CRU-036 §S1: register with NO open plan at all is tolerant — proceeds with no warning and no withhold", async () => {
+  test("CR-CRU-056 §S2: register --phase RED with NO open plan AT ALL is STILL refused the same way — the binding requirement is unconditional, not contingent on plan/cycle ambiguity (the old 'no plan, tolerant' escape hatch no longer exists)", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-tolerant-no-plan");
@@ -568,13 +583,14 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
 
     const res = await runScript(
       PYTHON_SCRIPT_PATH,
-      ["register", "--agent", "p-tolerant", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "p-no-plan", "--phase", "RED", "--project-dir", dir],
       { cwd: dir, crucibleUrl: baseUrl },
     );
 
-    expect(res.code).toBe(0);
-    expect(res.stdout).not.toContain("no-active-cycle");
-    expect(await getAgentIds(baseUrl, key)).toContain("p-tolerant");
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain("ok: false");
+    expect(res.stdout).toContain("--cycle");
+    expect(await getAgentIds(baseUrl, key)).not.toContain("p-no-plan");
   });
 });
 
@@ -637,14 +653,15 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
-  test("with an ACTIVE cycle seeded server-side + WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set + a git repo, records full context: cycleId AUTO-ATTACHED from the server (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing), cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
+  test("with an ACTIVE cycle seeded server-side + WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set + a git repo, records full context: cycleId comes from the agent's REGISTERED BINDING (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing), cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-test-context");
-    // CR-CRU-036 §S1: seed an ACTIVE cycle server-side (plan-file + activate
-    // cycles[0]). cycles[1] stays pending and is fed to WORKFLOW_CYCLE_ID —
-    // a REAL, linkable, but NOT-active cycle — proving the env var is read
-    // by nobody: if it still won, context.cycleId would be cycles[1]'s id.
+    // CR-CRU-056 §S1/§S3: seed an ACTIVE cycle server-side (plan-file +
+    // activate cycles[0]). cycles[1] stays pending and is fed to
+    // WORKFLOW_CYCLE_ID — a REAL, linkable, but NOT-active cycle — proving
+    // the env var is read by nobody (the client-side auto-attach resolver
+    // it used to feed is deleted).
     const plan = await filePlan(baseUrl, key, "CR-PC-CONTEXT");
     const activeCycleId = plan.cycles[0]!.id;
     const otherCycleId = plan.cycles[1]!.id;
@@ -655,6 +672,17 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     writeFileSync(join(dir, ".gitkeep"), "");
     runGit(["add", "."], dir);
     runGit(["commit", "-q", "-m", "initial"], dir);
+
+    // CR-CRU-056 §S3 — the 'test' subcommand's own implicit agent-touch
+    // never declares a phase/cycle; the server now stamps a run's
+    // context.cycleId ONLY from an ALREADY-BOUND agent row. Explicitly
+    // pre-register the same agent id bound to the real active cycle so the
+    // ingest below has a binding to stamp from.
+    await runScript(
+      PYTHON_SCRIPT_PATH,
+      ["register", "--agent", "python-context-agent", "--phase", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
 
     await runScript(
       PYTHON_SCRIPT_PATH,
@@ -674,8 +702,11 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
       },
     );
 
+    // Two events now: the explicit pre-registration's lifecycle event, plus
+    // the 'test' subcommand's test event — events are returned newest-first
+    // (ORDER BY timestamp DESC), so events[0] is still the ingest event.
     const events = await getEvents(baseUrl, key);
-    expect(events.length).toBe(1);
+    expect(events.length).toBe(2);
     const event = await getFullEvent(baseUrl, events[0]!.id);
     expect(event.context?.cycleId).toBe(activeCycleId);
     expect(event.context?.cycle).toBe("python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix");
@@ -1083,11 +1114,18 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
     const key = await createProject(baseUrl, "clients-ac-register-v2");
     const dir = scratch.dir("arduino-crucible-proj-");
     writeArduinoEnvFile(dir, key, "clients-ac-register-v2");
+    // CR-CRU-056 §S2/§S3c — RED (a TDD phase) now REQUIRES an explicit
+    // cycle binding; this test's subject (self-registration + which
+    // endpoint/verb gets hit) is unaffected, so a fixture plan+active-cycle
+    // is filed and reused (same primitive as filePlan/activateCycle used
+    // elsewhere in this file).
+    const plan = await filePlan(baseUrl, key, "CR-AC-register-v2");
+    await activateCycle(baseUrl, key, plan.planId, plan.cycles[0]!.id);
     proxy = startCapturingProxy(baseUrl);
 
     const res = await runScript(
       ARDUINO_SCRIPT_PATH,
-      ["register", "--agent", "a1", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "a1", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
 
@@ -1109,11 +1147,15 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
     const key = await createProject(baseUrl, "clients-ac-unregister-v2");
     const dir = scratch.dir("arduino-crucible-proj-");
     writeArduinoEnvFile(dir, key, "clients-ac-unregister-v2");
+    // CR-CRU-056 §S2/§S3c — same reused fixture: RED needs a bound cycle
+    // before this test's actual subject (the unregister verb/path) runs.
+    const plan = await filePlan(baseUrl, key, "CR-AC-unregister-v2");
+    await activateCycle(baseUrl, key, plan.planId, plan.cycles[0]!.id);
     proxy = startCapturingProxy(baseUrl);
 
     await runScript(
       ARDUINO_SCRIPT_PATH,
-      ["register", "--agent", "a2", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "a2", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
     expect(await getAgentIds(baseUrl, key)).toContain("a2");
@@ -1131,7 +1173,13 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
     expect(proxy.calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
   });
 
-  test("CR-CRU-036 §S1: register with an OPEN plan but NO active cycle warns[] 'no-active-cycle'/'activate a cycle first' + stderr, posts NO agent, exits non-zero — WORKFLOW_CYCLE_ID set is ignored", async () => {
+  // CR-CRU-056 §S2/§S3/§S3c — the CR-036 client-side auto-attach resolver
+  // is DELETED; re-pointed into the new unconditional contract: a TDD-phase
+  // register with no explicit --cycle is REFUSED (non-zero exit, structured
+  // ok:false envelope naming --cycle) regardless of plan state —
+  // WORKFLOW_CYCLE_ID is read by nobody (confirmed live: even a REAL,
+  // in-project, pending cycle id sitting in that env var changes nothing).
+  test("CR-CRU-056 §S2: register --phase RED with an OPEN plan but NO active cycle is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-no-active-cycle");
@@ -1143,19 +1191,18 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
     const res = await runScript(
       ARDUINO_SCRIPT_PATH,
       ["register", "--agent", "a-no-cycle", "--phase", "RED", "--project-dir", dir],
-      // A stale WORKFLOW_CYCLE_ID pointing at a REAL (but pending) cycle in
-      // this very plan must change NOTHING — §S1 removes the env var.
+      // The deleted resolver's exact mechanism: nobody reads this env var
+      // any more, so it must not rescue the registration.
       { cwd: dir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
     );
 
     expect(res.code).not.toBe(0);
-    expect(res.stderr).toContain("no-active-cycle");
-    expect(res.stderr).toContain("activate a cycle first");
-    expect(res.stdout).toContain("no-active-cycle");
+    expect(res.stdout).toContain("ok: false");
+    expect(res.stdout).toContain("--cycle");
     expect(await getAgentIds(baseUrl, key)).not.toContain("a-no-cycle");
   });
 
-  test("CR-CRU-036 §S1: register with NO open plan at all is tolerant — proceeds with no warning and no withhold", async () => {
+  test("CR-CRU-056 §S2: register --phase RED with NO open plan AT ALL is STILL refused the same way — the binding requirement is unconditional, not contingent on plan/cycle ambiguity (the old 'no plan, tolerant' escape hatch no longer exists)", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-tolerant-no-plan");
@@ -1164,13 +1211,14 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
 
     const res = await runScript(
       ARDUINO_SCRIPT_PATH,
-      ["register", "--agent", "a-tolerant", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "a-no-plan", "--phase", "RED", "--project-dir", dir],
       { cwd: dir, crucibleUrl: baseUrl },
     );
 
-    expect(res.code).toBe(0);
-    expect(res.stdout).not.toContain("no-active-cycle");
-    expect(await getAgentIds(baseUrl, key)).toContain("a-tolerant");
+    expect(res.code).not.toBe(0);
+    expect(res.stdout).toContain("ok: false");
+    expect(res.stdout).toContain("--cycle");
+    expect(await getAgentIds(baseUrl, key)).not.toContain("a-no-plan");
   });
 });
 
@@ -1238,12 +1286,14 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
     expect(proxy.calls.some((c) => c.path === "/api/ingest/parsed")).toBe(false);
   });
 
-  test("with an ACTIVE cycle seeded server-side + WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set + a git repo, records full context: cycleId AUTO-ATTACHED from the server (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing), cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
+  test("with an ACTIVE cycle seeded server-side + WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE set + a git repo, records full context: cycleId comes from the agent's REGISTERED BINDING (WORKFLOW_CYCLE_ID set to a DIFFERENT real cycle changes nothing), cycle, wave, orchestrator, auto-detected git branch/commit", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-unit-context");
-    // CR-CRU-036 §S1: seed an ACTIVE cycle server-side; feed the OTHER
-    // (real, but pending) cycle to WORKFLOW_CYCLE_ID to prove it's ignored.
+    // CR-CRU-056 §S1/§S3: seed an ACTIVE cycle server-side; feed the OTHER
+    // (real, but pending) cycle to WORKFLOW_CYCLE_ID to prove it's ignored
+    // (nobody reads it any more — the client-side auto-attach resolver this
+    // env var used to feed is deleted).
     const plan = await filePlan(baseUrl, key, "CR-AC-CONTEXT");
     const activeCycleId = plan.cycles[0]!.id;
     const otherCycleId = plan.cycles[1]!.id;
@@ -1257,6 +1307,17 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
     runGit(["add", ".gitkeep"], dir);
     runGit(["commit", "-q", "-m", "initial"], dir);
 
+    // CR-CRU-056 §S3 — the 'unit' subcommand's own implicit agent-touch
+    // never declares a phase/cycle; the server now stamps a run's
+    // context.cycleId ONLY from an ALREADY-BOUND agent row. Explicitly
+    // pre-register the same agent id bound to the real active cycle so the
+    // ingest below has a binding to stamp from.
+    await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["register", "--agent", "arduino-context-agent", "--phase", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } },
+    );
+
     await runScript(ARDUINO_SCRIPT_PATH, ["unit", "--agent", "arduino-context-agent", "--project-dir", dir], {
       cwd: dir,
       crucibleUrl: baseUrl,
@@ -1269,8 +1330,11 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
       },
     });
 
+    // Two events now: the explicit pre-registration's lifecycle event, plus
+    // the 'unit' subcommand's test event — events are returned newest-first
+    // (ORDER BY timestamp DESC), so events[0] is still the ingest event.
     const events = await getEvents(baseUrl, key);
-    expect(events.length).toBe(1);
+    expect(events.length).toBe(2);
     const event = await getFullEvent(baseUrl, events[0]!.id);
     expect(event.context?.cycleId).toBe(activeCycleId);
     expect(event.context?.cycle).toBe("python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix");
@@ -1589,6 +1653,21 @@ describe("clients/arduino-crucible.py — auto-ingest subcommand: behavioral, no
       { name: "led_on" },
       { name: "led_off" },
     ]);
+
+    // CR-CRU-056 §S3 — the 'auto-ingest' subcommand's own implicit
+    // agent-touch never declares a phase/cycle; the server now stamps a
+    // run's context.cycleId ONLY from an ALREADY-BOUND agent row.
+    // Explicitly pre-register the same agent id bound to the real active
+    // cycle so the ingest below has a binding to stamp from — this replaces
+    // the deleted server-side "active cycle" GUESS this test used to
+    // exercise (title retained: cycle attach still happens, now via
+    // explicit binding instead of auto-attach).
+    await runScript(
+      ARDUINO_SCRIPT_PATH,
+      ["register", "--agent", "arduino-auto-ingest-agent", "--phase", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+
     proxy = startCapturingProxy(baseUrl);
 
     const res = await runScript(
@@ -1600,8 +1679,11 @@ describe("clients/arduino-crucible.py — auto-ingest subcommand: behavioral, no
       { cwd: dir, crucibleUrl: proxy.url },
     );
 
+    // Two events now: the explicit pre-registration's lifecycle event, plus
+    // the auto-ingest's test event — events are returned newest-first
+    // (ORDER BY timestamp DESC), so events[0] is still the ingest event.
     const events = await getEvents(baseUrl, key);
-    expect(events.length).toBe(1);
+    expect(events.length).toBe(2);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
     expect(res.code).toBe(0);
