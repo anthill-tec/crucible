@@ -58,6 +58,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-052](CR-CRU-052-project-teardown.md) | Projects can be created but never deleted — guarded `DELETE /api/v2/projects/<key>` with cascade + harness teardown/ephemeral-target guard; purge the 6 residue projects | feature | PENDING | 012, 032 | 4 |
 | [CR-CRU-053](CR-CRU-053-retired-mirror-references.md) | Test headers still present the retired `~/.claude/scripts` mirror as the client source (one hands out a `grep` command against it) — running it orphans runs | patch | PENDING | 008, 009, 042 | 4 |
 | [CR-CRU-054](CR-CRU-054-client-fleet-dry.md) | The client fleet is 44 functions copy-pasted 5× (shared module holds 19, overlap of 1) — lift into `_crucible_axi.py` + a drift guard; the multiplier behind every 5× client fix | maintenance | PENDING | 030 | 4 |
+| [CR-CRU-055](CR-CRU-055-ai-agent-quieting-strip.md) | Patch: bun env-quieting strip misses `AI_AGENT` — narration + `failure.message` marrying die in agent sessions (CR-047 defect class, new harness var) | patch | IN PROGRESS | 047, 038 | 4 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 · track-1) | 011, 013 | 5 (0.2.0) |
 | [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Playwright runner + codec + tab | feature | PENDING (0.2.0 · track-2) | 004, 007 | 5 (0.2.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end + Aborted state | feature | PENDING (0.2.0 · track-3 cand.) | 008, 011 | 5 (0.2.0) |
