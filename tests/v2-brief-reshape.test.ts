@@ -70,6 +70,16 @@ interface ProjectsRollupResponse extends OkResponse {
 }
 
 // The exact §S0 flattened-brief field set for a "test"-kind event.
+//
+// CR-CRU-057 §S1 (additive) — EVERY seeding helper in this file
+// (`seedCoveredTestEvent`/`seedFailingTestEvent`/`seedCompileEvent`) posts
+// through `registerAgent`, which always declares phase:"ORCHESTRATOR"
+// (unbound — no cycleId). The stamping seam in src/v2.ts attaches `phase`
+// (+ `phaseInferred`) onto ANY event whose posting agent has a declared
+// phase, bound or not — only a phase-LESS event omits both keys. So both
+// the coverage-bearing (cov-agent) and plain (fail-agent) test briefs gain
+// these two keys. Recording the intended addition here, not loosening
+// either guard to a subset check.
 const FLATTENED_TEST_BRIEF_KEYS = [
   "id",
   "projectKey",
@@ -84,6 +94,8 @@ const FLATTENED_TEST_BRIEF_KEYS = [
   "pending",
   "duration_ms",
   "hasCoverage",
+  "phase",
+  "phaseInferred",
 ].sort();
 
 // CR-CRU-007 §S5.2 F8 vitals anatomy (additive) — a COVERAGE-BEARING brief
