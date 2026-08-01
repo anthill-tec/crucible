@@ -28,14 +28,39 @@ row. Schema migration adds `events.phase` (nullable TEXT, enum-checked at write)
 `events.phase_inferred` (INTEGER 0/1) via the CR-CRU-044 `PRAGMA table_info` + `ALTER TABLE`
 pattern.
 
+🚨 **RIDE THE EXISTING SEAM (gap-analysis 2026-08-02 — this spec predates CR-CRU-056).**
+CR-CRU-056 built exactly the stamping machinery this CR needs: `resolveIngestAttach`
+(`src/v2.ts`) already fetches the posting agent's row (`store.getAgent(projectKey, agentId)`)
+on EVERY ingest and stamps server-derived data onto the stored event, and CR-056 §S3b
+guarantees that row EXISTS (an unregistered ingest is refused, so `agent.phase` is always
+available at stamp time — the "what if the agent is gone" case is now impossible by
+construction). Extend that ONE seam to carry the phase alongside the cycle; do NOT build a
+parallel lookup. Likewise the response echo: CR-056's `attachEcho` is the established
+read-back-the-stored-event pattern — extend it rather than adding a second echo path.
+
 ### §S2 — Classification reads stored phase only
 Workflow card, history lens, timeline — every agent classification for historical/unregistered
 agents reads `events.phase`. Live agents keep reading `agents.phase` (CR-044). No render path
 receives the agent id as a classification input.
 
 ### §S3 — DELETE `phaseRole(agentId)`
-The function and every caller are removed — server and `public/` UI. A sweep test grep-asserts
-its absence so it cannot return as a "fallback".
+The function and every caller are removed. A sweep test grep-asserts its absence so it cannot
+return as a "fallback".
+
+**Enumerated surface (gap-analysis 2026-08-02 — unfiltered sweep of `src/ public/ cli/ tests/`):**
+
+| File | What is there | Action |
+|---|---|---|
+| `public/app-logic.mjs` | the `phaseRole` definition | delete |
+| `public/app-logic.d.mts:304` | its type declaration (+ the CR-044 §S2 comment at `:306`) | delete |
+| `public/app.js:692-695` | **no direct call** — CR-CRU-044 already re-pointed every call site to `L.agentRole({...})`; only the fallback comment remains | correct the comment; `agentRole` loses its fallback BRANCH |
+| `tests/phase-role.test.ts` (~124 lines) | the whole file pins the CR-CRU-007 §S1 naming contract — suffix matching, case-insensitivity, the `verify`-substring rules, negative cases | **retire the file** (its subject ceases to exist) |
+| `tests/agent-role.test.ts` | ~15 references: the precedence contract (stored phase beats id), and several tests whose SUBJECT is the fallback (`:109`, `:117`, `:122`, `:303`, `:319`) | re-point: precedence tests survive (stored phase is now the ONLY source); fallback tests retire or become "absent phase → unclassified" |
+
+**Correction to this spec's own framing:** "the function and every caller are removed — server
+and `public/` UI" overstated it. `phaseRole` is a CLIENT-side (`public/`) helper only — it never
+existed server-side, and CR-044 already removed its direct callers. The real work is the two
+`public/` files plus the test retirement/re-pointing above.
 
 ### §S4 — One-time LABELED backfill (user-decided)
 A migration backfills `events.phase` for pre-existing rows WHERE the agent-id suffix parses to a
@@ -51,7 +76,13 @@ data.
 - [ ] An agent registered RED, then unregistered, still classifies RED in workflow history from
       stored data — asserted (and the `-baseline` failure mode: a stored GREEN phase on an id
       ending `-baseline` classifies GREEN, id ignored).
-- [ ] `grep -rn "phaseRole" src/ public/ cli/` finds nothing — sweep-asserted.
+- [ ] `grep -rn "phaseRole" src/ public/ cli/` finds nothing — sweep-asserted (tests may keep
+      retirement-assertion references only, in the CR-CRU-056 `BANNED_NAMES` style).
+- [ ] The phase is stamped through CR-CRU-056's EXISTING `resolveIngestAttach` seam, not a
+      parallel agent lookup — asserted by the absence of a second `getAgent` call on the ingest
+      path (§S1).
+- [ ] The ingest response echoes the stamped phase alongside the stamped cycle, via the
+      established `attachEcho` read-back (so an agent sees how its own run was classified).
 - [ ] Backfill on a fixture DB: parseable-suffix rows gain `phase` + `phase_inferred = 1`;
       unparseable rows stay NULL and render unclassified; running the migration twice is a no-op
       — asserted.

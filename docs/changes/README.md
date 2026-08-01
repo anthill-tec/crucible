@@ -250,6 +250,13 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `tests="1061" skipped="1"` ingested as `passed=1061`, and a python report `tests="2" skipped="2"`
   (an entire class where nothing ran) ingested as `passed=2` — so this project's own published
   gate figures are inflated, the failure mode CR-039/CR-047 exist to prevent.
+- 2026-08-02 (user scheduling decision) — the THREE pre-existing e2e failures
+  (`workspace-plan-scoping.feature`, CR-CRU-026 §S0 family, `toBeVisible`; baseline-proven on
+  develop, independent of CR-046/055/056) are **deferred until the current Wave-4 CR queue is
+  complete, and fixed BEFORE the 0.1.0 release**. They are a release-gate item, not a
+  merge-gate item for the CRs in flight. Model-B intimation for the CR-044/046/056 client-surface
+  changes is likewise **held until their Sandesh address is active** (it has been inactive all
+  session); the owed set is queued in project memory.
 - 2026-08-01 (CR-CRU-046 close) — deferred register: **(a)** rust stdout-purity siblings —
   `cmd_clippy` (`clients/rust-crucible.py:994`) and the coverage/regression verb (`:1288`) still
   print `[crucible] running:` to stdout (the `cmd_test` instance was fixed in-CR after the strict
