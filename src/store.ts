@@ -230,6 +230,43 @@ const DEFAULT_RETENTION = 100;
 export const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// ===========================================================================
+// 🚨 THE ONLY AGENT-ID PARSE IN THE CODEBASE — MIGRATION ONLY, NEVER RUNTIME
+// ===========================================================================
+// CR-CRU-057 §S4 — this is a ONE-TIME MIGRATION parse, and the ONLY place in
+// Crucible that may ever derive meaning from the SHAPE of an agent id.
+//
+// §S3 DELETED render-time parsing outright (the retired CR-CRU-007 name-role
+// helper and every caller are gone from src/, public/ and cli/ — an AC greps
+// for its name, which is why it is not spelled out here). Phase is
+// DECLARED data: agents declare it at registration and every new event stamps
+// the declared value with `phase_inferred = 0`. Nothing downstream is allowed
+// to guess a phase from a name, ever.
+//
+// This function exists solely to give pre-057 history — rows the §S1 ALTER
+// created with a NULL phase, written before the declaration existed — a
+// best-effort, VISIBLY LABELED (`phase_inferred = 1`) classification. It runs
+// inside `migrate()` against `phase IS NULL` rows and nowhere else.
+//
+// DO NOT: export it, call it from a request/ingest/render path, reuse it to
+// "fix up" a row whose declaration is missing, or lift it into public/. If a
+// new caller seems to need it, the answer is a DECLARED phase, not a parse.
+//
+// The rules mirror the retired CR-CRU-007 name-role helper's suffix contract
+// exactly: a trailing `-RED`/`-GREEN`/`-FIX`/`-VERIFY`, case-insensitive.
+// Its documented negative cases stay negative — `redteam-agent`,
+// `greenhouse-bot`, `fixture-agent`, `unverified-agent`, `verifying-agent`,
+// `plain-agent-1` and `claude-sandesh` all parse to null (the token must be a
+// trailing suffix, never a mid-word substring), so they keep a NULL phase and
+// render unclassified rather than carrying a fabricated guess.
+const MIGRATION_ONLY_PHASE_SUFFIX_RE = /-(red|green|fix|verify)$/i;
+
+function migrationOnlyPhaseFromAgentIdSuffix(agentId: string): AgentPhase | null {
+  const match = MIGRATION_ONLY_PHASE_SUFFIX_RE.exec(agentId);
+  if (match === null) return null;
+  return match[1]!.toUpperCase() as AgentPhase;
+}
+
 export class Store {
   private readonly db: Database;
   /** Monotonic per-store sequence for event ids. */
@@ -407,14 +444,16 @@ export class Store {
     }
     // CR-CRU-057 §S1 — additive declared-phase columns; pre-057 db files lack
     // them (same PRAGMA-checked retrofit pattern as CR-CRU-044's agents.phase
-    // and CR-CRU-056's agents.bound_cycle_id). No back-fill here: historical
-    // rows keep a NULL phase and read back as absent.
+    // and CR-CRU-056's agents.bound_cycle_id). The ALTER itself back-fills
+    // nothing — every historical row starts NULL; §S4's labeled backfill below
+    // then classifies the subset whose id suffix parses.
     if (!eventCols.has("phase")) {
       this.db.exec(`ALTER TABLE events ADD COLUMN phase TEXT`);
     }
     if (!eventCols.has("phase_inferred")) {
       this.db.exec(`ALTER TABLE events ADD COLUMN phase_inferred INTEGER`);
     }
+    this.backfillInferredEventPhases();
     // CR-CRU-011 §S0b — additive cycle-timestamp columns; pre-C4 db files
     // lack them (same PRAGMA-checked retrofit pattern as events above).
     const cycleCols = new Set(
@@ -492,6 +531,49 @@ export class Store {
     if (!agentCols.has("bound_cycle_id")) {
       this.db.exec(`ALTER TABLE agents ADD COLUMN bound_cycle_id INTEGER`);
     }
+  }
+
+  /**
+   * CR-CRU-057 §S4 — the ONE-TIME LABELED backfill of `events.phase` for
+   * pre-057 history (user-decided 2026-08-01). Runs at store open, at the tail
+   * of `migrate()`, right after the §S1 columns are guaranteed to exist.
+   *
+   * ADDITIVE: the `phase IS NULL` predicate is the whole safety story. A row
+   * whose agent DECLARED a phase was written with a non-NULL `phase` and
+   * `phase_inferred = 0` (the single event write path, `insertEvent`, always
+   * writes the two columns together), so a declared row is invisible to this
+   * UPDATE and can never be re-derived or flipped from its id's shape.
+   *
+   * IDEMPOTENT BY CONSTRUCTION: every row it touches leaves with a non-NULL
+   * `phase`, so the next open's `phase IS NULL` scan no longer sees it — no
+   * "has it run" flag needed, and `phase_inferred` is SET to 1, never
+   * incremented. Rows whose id does not parse are left NULL in BOTH columns
+   * (never 0 — that would read as "declared nothing" rather than "never
+   * classified") and render unclassified, which is also why re-running is
+   * harmless: they are simply re-examined and re-skipped.
+   *
+   * 🚨 The id parse it uses is migration-only — see the banner on
+   * `migrationOnlyPhaseFromAgentIdSuffix`. It must never reach a runtime path.
+   */
+  private backfillInferredEventPhases(): void {
+    const pending = this.db
+      .query<{ id: string; agent_id: string }, []>(
+        `SELECT id, agent_id FROM events WHERE phase IS NULL`,
+      )
+      .all();
+    if (pending.length === 0) return;
+    const update = this.db.query<never, [string, string]>(
+      `UPDATE events SET phase = ?, phase_inferred = 1 WHERE id = ? AND phase IS NULL`,
+    );
+    const apply = this.db.transaction((rows: { id: string; agent_id: string }[]) => {
+      for (const row of rows) {
+        const phase = migrationOnlyPhaseFromAgentIdSuffix(row.agent_id);
+        // Unparseable ids stay NULL — no guessing, ever (§S4).
+        if (phase === null) continue;
+        update.run(phase, row.id);
+      }
+    });
+    apply(pending);
   }
 
   /**
