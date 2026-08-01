@@ -782,10 +782,10 @@ def cmd_test(args):
         narrator = None
         if args.agent:
             # bun ≥1.3 hides per-test completion lines when it detects an agent
-            # session (CLAUDECODE / AGENT / REPL_ID env). Drop them all for the
+            # session (CLAUDECODE / AGENT / REPL_ID / AI_AGENT env). Drop them all for the
             # wrapped runner so the full ✓/✗ line family streams: §S2b counts it
             # live and the §S2c run.log keeps its result-line block boundaries.
-            for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID"):
+            for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
             narrator = _Narrator(
                 lambda message: _register_agent(project_dir, args.agent, message),
@@ -859,7 +859,7 @@ def cmd_regression(args):
         if args.agent:
             # Same §S2b setup as cmd_test (whole-suite M via package walk),
             # including the agent-quieting env strip.
-            for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID"):
+            for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
                 env.pop(_quieting_var, None)
             narrator = _Narrator(
                 lambda message: _register_agent(project_dir, args.agent, message),
