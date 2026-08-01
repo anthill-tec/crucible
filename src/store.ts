@@ -111,6 +111,11 @@ interface EventRow {
   // CR-CRU-013 §S1+§S4b — generic JSON blob for gate/milestone kind-specific
   // fields (the gate object; milestone type/label/commit). NULL otherwise.
   payload: string | null;
+  // CR-CRU-057 §S1 — the posting agent's declared phase, stamped at write time
+  // (retrofitted column; NULL on pre-057 rows and on undeclared writes).
+  phase: string | null;
+  // CR-CRU-057 §S1 — 0 = declared, 1 = §S4 backfill-inferred. NULL when phase is.
+  phase_inferred: number | null;
 }
 
 interface RollupRow {
@@ -206,6 +211,13 @@ export interface RecordEventMeta {
   codec?: string;
   name?: string;
   context?: RunContext;
+  /**
+   * CR-CRU-057 §S1 — the posting agent's DECLARED phase, resolved at the route
+   * boundary from the agent row CR-CRU-056's ingest seam already fetched. The
+   * store never looks a phase up and never derives one: passing it stamps
+   * `phase` + `phase_inferred = 0`; omitting it leaves both NULL.
+   */
+  phase?: AgentPhase;
 }
 
 export type ChangeKind = "projects" | "agents" | "events";
@@ -324,7 +336,9 @@ export class Store {
         context TEXT,
         action TEXT,
         first_seen INTEGER,
-        payload TEXT
+        payload TEXT,
+        phase TEXT,
+        phase_inferred INTEGER
       );
 
       CREATE INDEX IF NOT EXISTS idx_events_project_timestamp
@@ -390,6 +404,16 @@ export class Store {
     // retrofit pattern as action/first_seen above).
     if (!eventCols.has("payload")) {
       this.db.exec(`ALTER TABLE events ADD COLUMN payload TEXT`);
+    }
+    // CR-CRU-057 §S1 — additive declared-phase columns; pre-057 db files lack
+    // them (same PRAGMA-checked retrofit pattern as CR-CRU-044's agents.phase
+    // and CR-CRU-056's agents.bound_cycle_id). No back-fill here: historical
+    // rows keep a NULL phase and read back as absent.
+    if (!eventCols.has("phase")) {
+      this.db.exec(`ALTER TABLE events ADD COLUMN phase TEXT`);
+    }
+    if (!eventCols.has("phase_inferred")) {
+      this.db.exec(`ALTER TABLE events ADD COLUMN phase_inferred INTEGER`);
     }
     // CR-CRU-011 §S0b — additive cycle-timestamp columns; pre-C4 db files
     // lack them (same PRAGMA-checked retrofit pattern as events above).
@@ -835,6 +859,8 @@ export class Store {
       ...(meta?.codec !== undefined ? { codec: meta.codec } : {}),
       ...(meta?.name !== undefined ? { name: meta.name } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
+      // CR-CRU-057 §S1 — a stamped phase is DECLARED data by construction.
+      ...(meta?.phase !== undefined ? { phase: meta.phase, phaseInferred: false } : {}),
     };
     this.insertEvent(event);
     return event;
@@ -844,7 +870,7 @@ export class Store {
     projectKey: string,
     agentId: string,
     compile: unknown,
-    meta?: Pick<RecordEventMeta, "tier" | "stack" | "context" | "codec">,
+    meta?: Pick<RecordEventMeta, "tier" | "stack" | "context" | "codec" | "phase">,
   ): RunEvent {
     // §S3 implicit heartbeat — creates the agent row if new, bumps lastSeen.
     this.touchAgent(projectKey, agentId);
@@ -859,6 +885,8 @@ export class Store {
       ...(meta?.codec !== undefined ? { codec: meta.codec } : {}),
       ...(meta?.stack !== undefined ? { stack: meta.stack } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
+      // CR-CRU-057 §S1 — a stamped phase is DECLARED data by construction.
+      ...(meta?.phase !== undefined ? { phase: meta.phase, phaseInferred: false } : {}),
     };
     this.insertEvent(event);
     return event;
@@ -874,6 +902,7 @@ export class Store {
     agentId: string,
     action: "registered" | "unregistered",
     firstSeen?: number,
+    phase?: AgentPhase,
   ): RunEvent {
     const event: RunEvent = {
       id: this.nextEventId(),
@@ -884,6 +913,10 @@ export class Store {
       timestamp: Date.now(),
       action,
       ...(firstSeen !== undefined ? { firstSeen } : {}),
+      // CR-CRU-057 §S1 — the declared phase, captured by the route BEFORE the
+      // agents row is deleted (the same survives-deletion contract firstSeen
+      // has carried since CR-CRU-011 §S1). Declared, so never inferred.
+      ...(phase !== undefined ? { phase, phaseInferred: false } : {}),
     };
     this.insertEvent(event);
     return event;
@@ -899,7 +932,7 @@ export class Store {
     projectKey: string,
     agentId: string,
     gate: unknown,
-    meta?: { context?: RunContext },
+    meta?: { context?: RunContext; phase?: AgentPhase },
   ): RunEvent {
     this.touchAgent(projectKey, agentId);
     const event: RunEvent = {
@@ -912,6 +945,8 @@ export class Store {
       timestamp: Date.now(),
       gate,
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
+      // CR-CRU-057 §S1 — a stamped phase is DECLARED data by construction.
+      ...(meta?.phase !== undefined ? { phase: meta.phase, phaseInferred: false } : {}),
     };
     this.insertEvent(event);
     return event;
@@ -1066,8 +1101,9 @@ export class Store {
       .query(
         `INSERT INTO events (id, project_key, agent_id, kind, tier, stack, codec,
            timestamp, name, total, passed, failed, pending, duration_ms,
-           tree, coverage, compile, context, action, first_seen, payload)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           tree, coverage, compile, context, action, first_seen, payload,
+           phase, phase_inferred)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         event.id,
@@ -1091,6 +1127,11 @@ export class Store {
         event.action ?? null,
         event.firstSeen ?? null,
         payload,
+        // CR-CRU-057 §S1 — phase and its provenance move together: an event
+        // with no declared phase stores NULL in BOTH columns (never a 0 that
+        // would read as "declared nothing").
+        event.phase ?? null,
+        event.phase !== undefined ? (event.phaseInferred === true ? 1 : 0) : null,
       );
     this.enforceRetention(event.projectKey);
     this.emit("events", event.projectKey);
@@ -1142,6 +1183,11 @@ export class Store {
       ...(row.coverage !== null ? { coverage: JSON.parse(row.coverage) as Coverage } : {}),
       ...(row.compile !== null ? { compile: JSON.parse(row.compile) as unknown } : {}),
       ...(row.context !== null ? { context: JSON.parse(row.context) as RunContext } : {}),
+      // CR-CRU-057 §S1 — the stamped phase and its provenance; BOTH keys are
+      // absent on a phase-less row (never fabricated into a null or a guess).
+      ...(row.phase !== null
+        ? { phase: row.phase as AgentPhase, phaseInferred: row.phase_inferred === 1 }
+        : {}),
     };
   }
 

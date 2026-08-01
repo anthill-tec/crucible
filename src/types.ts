@@ -157,6 +157,20 @@ export interface RunEvent {
   // CR-CRU-013 §S1 (gate) — the full no-mistakes gate object, stored verbatim
   // (forward-tolerant: fields outside the ladder round-trip untouched).
   gate?: unknown;
+  /**
+   * CR-CRU-057 §S1 — the posting agent's DECLARED phase (CR-CRU-044), stamped
+   * server-side at write time through CR-CRU-056's `resolveIngestAttach` seam
+   * so classification survives the agent row's deletion at unregister. ABSENT
+   * when no phase was declared: no back-fill, never fabricated, and NEVER
+   * derived from the agentId's shape.
+   */
+  phase?: AgentPhase;
+  /**
+   * CR-CRU-057 §S1 — provenance of `phase`: `false` = declared by the agent at
+   * registration (every write-time stamp); `true` is reserved for the §S4
+   * one-time labeled backfill. Present exactly when `phase` is.
+   */
+  phaseInferred?: boolean;
   // CR-CRU-013 §S4b/§S4c (milestone) — flat carrying fields.
   type?: string;
   label?: string;
