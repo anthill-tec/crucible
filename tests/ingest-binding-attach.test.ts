@@ -101,11 +101,21 @@ function boot(): ServerHandle {
   return handle;
 }
 
+// CR-CRU-056 §S2b fixture-repair (C3): plan-file/cycle-transition are
+// mutating v2 workflow verbs and now refuse an unregistered caller (409) —
+// merge a live-registered agentId into any JSON body lacking one.
+function withFixtureAgent(body: unknown): unknown {
+  if (body !== null && typeof body === "object" && !Array.isArray(body) && !("agentId" in (body as Record<string, unknown>))) {
+    return { ...(body as Record<string, unknown>), agentId: "fixture-orch" };
+  }
+  return body;
+}
+
 async function postJson(path_: string, body: unknown): Promise<Response> {
   return fetch(`http://localhost:${handle!.server.port}${path_}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
@@ -113,7 +123,7 @@ async function patchJson(path_: string, body: unknown): Promise<Response> {
   return fetch(`http://localhost:${handle!.server.port}${path_}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
@@ -131,8 +141,27 @@ function plansPath(key: string, suffix = ""): string {
   return `/api/v2/projects/${key}/plans${suffix}`;
 }
 
+// `seedProject` creates the project directly via the store (bypassing the
+// HTTP layer entirely), so "fixture-orch" is never live-registered for it —
+// unlike every other file in this sweep, there's no createProject() HTTP
+// round trip to piggyback the registration onto. Register it once per
+// project key, memoized, right before the first workflow-verb HTTP call.
+const fixtureOrchestratorProjects = new Set<string>();
+
+async function ensureFixtureOrchestrator(key: string): Promise<void> {
+  if (fixtureOrchestratorProjects.has(key)) return;
+  const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectKey: key, agentId: "fixture-orch", phase: "ORCHESTRATOR" }),
+  });
+  expect(res.status).toBe(200);
+  fixtureOrchestratorProjects.add(key);
+}
+
 /** Files a one-cycle plan and activates it via the real PATCH transition route. */
 async function fileAndActivate(key: string, cr: string): Promise<{ planId: number; cycleId: number }> {
+  await ensureFixtureOrchestrator(key);
   const res = await postJson(plansPath(key), { cr, cycles: [{ label: "solo" }] });
   expect(res.status).toBe(201);
   const body = (await res.json()) as PlanFileResponse;
@@ -151,6 +180,7 @@ async function transitionCycle(
   cycleId: number,
   status: string,
 ): Promise<void> {
+  await ensureFixtureOrchestrator(key);
   const res = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), { status });
   expect(res.status).toBe(200);
 }

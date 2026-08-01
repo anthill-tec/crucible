@@ -209,10 +209,32 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
     };
   }
 
+  // CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs/parsed and
+  // /api/v2/agents/register now refuse an unregistered agentId (409) —
+  // each agentId these fixtures ingest/register under must be live
+  // registered first (the archived-project-rejection tests fire their 404
+  // BEFORE the registered-caller check is ever reached, so they're
+  // unaffected and untouched).
+  async function registerAgent(projectKey: string, agentId: string): Promise<void> {
+    const res = await postJson("/api/v2/agents/register", { projectKey, agentId, phase: "ORCHESTRATOR" });
+    expect(res.status).toBe(200);
+  }
+
   async function ingestEvent(projectKey: string, agentId = "seed-agent"): Promise<string> {
+    await registerAgent(projectKey, agentId);
     const res = await postJson("/api/v2/runs/parsed", { projectKey, ...parsedRunBody(agentId) });
     const body = (await res.json()) as RunsPostResponse;
     return body.event;
+  }
+
+  /** GET .../events, filtering out the "lifecycle" events registerAgent()'s
+   * own registration journals (CR-CRU-011 §S1) — not one of the seeded
+   * test-event ids this file's count/id-equality assertions pin. */
+  async function nonLifecycleEvents(projectKey: string): Promise<EventBrief[]> {
+    const body = (await (
+      await getJson(`/api/v2/events?project=${projectKey}`)
+    ).json()) as EventsListResponse & { events: Array<EventBrief & { kind?: string }> };
+    return body.events.filter((e) => e.kind !== "lifecycle");
   }
 
   async function bodyText(res: Response): Promise<string> {
@@ -243,10 +265,8 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
         expect(regRes.status).toBe(200);
 
         // Baseline BEFORE archiving.
-        const eventsBefore = (await (
-          await getJson(`/api/v2/events?project=${key}`)
-        ).json()) as EventsListResponse;
-        expect(eventsBefore.events.map((e) => e.id).sort()).toEqual(seededIds);
+        const eventsBefore = await nonLifecycleEvents(key);
+        expect(eventsBefore.map((e) => e.id).sort()).toEqual(seededIds);
 
         const agentsBefore = (await (
           await getJson(`/api/v2/agents?project=${key}`)
@@ -297,11 +317,9 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
         expect(defaultAfter.projects.some((p) => p.key === key)).toBe(true);
 
         // Events restored — count equality + identical ids (never deleted).
-        const eventsAfter = (await (
-          await getJson(`/api/v2/events?project=${key}`)
-        ).json()) as EventsListResponse;
-        expect(eventsAfter.events.length).toBe(seededIds.length);
-        expect(eventsAfter.events.map((e) => e.id).sort()).toEqual(seededIds);
+        const eventsAfter = await nonLifecycleEvents(key);
+        expect(eventsAfter.length).toBe(seededIds.length);
+        expect(eventsAfter.map((e) => e.id).sort()).toEqual(seededIds);
 
         // Agents restored.
         const agentsAfter = (await (

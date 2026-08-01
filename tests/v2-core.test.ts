@@ -95,6 +95,16 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     return fetch(`http://localhost:${handle!.server.port}${path}`);
   }
 
+  // CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs and /api/v2/runs/parsed
+  // now refuse an unregistered agentId (409) — each ingest-under fixture
+  // agentId must be registered live in the SPECIFIC tests that ingest under
+  // it (NOT blanket-registered in createProject — several tests in this
+  // file assert exact zero-agent baselines, e.g. "agentsTotal=0").
+  async function registerAgent(key: string, agentId: string): Promise<void> {
+    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+    expect(res.status).toBe(200);
+  }
+
   async function createProject(name: string, type?: string): Promise<string> {
     const res = await postJson("/api/v2/projects", type !== undefined ? { name, type } : { name });
     const body = (await res.json()) as OkResponse & { project: ProjectPayload };
@@ -312,6 +322,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     test("POST .../runs/parsed with body.raw set → the stored event, fetched via GET /api/v2/events/:id, carries raw with that EXACT text", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("raw-parsed-present");
+      await registerAgent(key, "ingest-agent");
       const raw = "captured stdout line\ncaptured stderr line";
 
       const ingestRes = await postJson("/api/v2/runs/parsed", parsedBody({ projectKey: key, raw }));
@@ -325,6 +336,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     test("POST .../runs/parsed WITHOUT a raw field → the stored event carries NO raw key at all (not fabricated as an empty string)", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("raw-parsed-absent");
+      await registerAgent(key, "ingest-agent");
 
       const ingestRes = await postJson("/api/v2/runs/parsed", parsedBody({ projectKey: key }));
       expect(ingestRes.status).toBe(200);
@@ -337,6 +349,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     test("raw persists on a FAILING parsed ingest — unlike coverage, raw is never discarded on fail", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("raw-parsed-failing");
+      await registerAgent(key, "ingest-agent");
       const raw = "failure diagnostics blob";
 
       const ingestRes = await postJson(
@@ -360,6 +373,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
         "<system-err>junit stderr capture</system-err>",
         "</testsuite>",
       ].join("\n");
+      await registerAgent(key, "junit-raw-agent");
 
       const ingestRes = await postJson("/api/v2/runs", {
         projectKey: key,

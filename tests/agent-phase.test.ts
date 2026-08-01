@@ -174,10 +174,24 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
   // tests/agent-cycle-binding.test.ts: files a real ONE-cycle plan through
   // the plans API and activates that cycle through the real PATCH transition
   // route (never store.filePlan/direct DB writes).
+  // CR-CRU-056 §S2b fixture-repair (C3): plan-file/cycle-transition are
+  // mutating v2 workflow verbs and now refuse an unregistered caller (409) —
+  // register a fixture orchestrator for this project before either call.
+  async function ensureFixtureOrchestrator(key: string): Promise<void> {
+    const res = await postJson("/api/v2/agents/register", {
+      projectKey: key,
+      agentId: "fixture-orch",
+      phase: "ORCHESTRATOR",
+    });
+    expect(res.status).toBe(200);
+  }
+
   async function fileAndActivate(key: string, cr: string): Promise<{ planId: number; cycleId: number }> {
+    await ensureFixtureOrchestrator(key);
     const fileRes = await postJson(`/api/v2/projects/${key}/plans`, {
       cr,
       cycles: [{ label: "solo" }],
+      agentId: "fixture-orch",
     });
     expect(fileRes.status).toBe(201);
     const fileBody = (await fileRes.json()) as {
@@ -188,6 +202,7 @@ describe("CR-CRU-044 C1 — phase as first-class data (server)", () => {
     const cycleId = fileBody.cycles[0]!.id;
     const activateRes = await patchJson(`/api/v2/projects/${key}/plans/${planId}/cycles/${cycleId}`, {
       status: "active",
+      agentId: "fixture-orch",
     });
     expect(activateRes.status).toBe(200);
     return { planId, cycleId };

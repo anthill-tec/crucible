@@ -218,15 +218,63 @@ async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: stri
 }
 
 /**
+ * CR-CRU-056 §S2b fixture-repair (C3): GET .../events, filtering out the
+ * "lifecycle" events an `ensureRegistered()` call journals (CR-CRU-011 §S1)
+ * — the fixtures below that pre-register an agent so a spawned client's
+ * ingest is no longer refused (409) must not fold that registration's own
+ * event into the ingest count assertions they pin. Distinct from the plain
+ * `getEvents` above, which some already-passing tests in this file rely on
+ * to literally count lifecycle events too (e.g. the context-enrichment
+ * tests pinning events.length===3) — never change those, add calls to this
+ * filtered helper instead.
+ */
+async function nonLifecycleEvents(baseUrl: string, key: string): Promise<Array<{ id: string }>> {
+  const res = await fetch(`${baseUrl}/api/v2/events?project=${key}`);
+  const body = (await res.json()) as { events: Array<{ id: string; kind?: string }> };
+  return body.events.filter((e) => e.kind !== "lifecycle");
+}
+
+/**
+ * CR-CRU-056 §S2b fixture-repair (C3): every ingesting verb now refuses an
+ * unregistered agentId (409) — spawn the given client's own
+ * `register --phase report` verb (needs no cycle binding) for the SAME
+ * agentId a following runScript call will ingest under, against the same
+ * fixture server.
+ */
+async function ensureRegistered(
+  scriptPath: string,
+  agentId: string,
+  opts: { cwd: string; crucibleUrl: string; projectDir?: string; env?: Record<string, string | undefined> },
+): Promise<void> {
+  await runScript(
+    scriptPath,
+    ["register", "--agent", agentId, "--phase", "report", "--project-dir", opts.projectDir ?? opts.cwd],
+    { cwd: opts.cwd, crucibleUrl: opts.crucibleUrl, env: opts.env },
+  );
+}
+
+// CR-CRU-056 §S2b fixture-repair: plan-file/cycle-transition are mutating v2
+// workflow verbs and now refuse an unregistered caller (409) — register a
+// fixture orchestrator for the project before either call.
+async function ensureFixtureOrchestrator(baseUrl: string, key: string): Promise<void> {
+  await fetch(`${baseUrl}/api/v2/agents/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectKey: key, agentId: "fixture-orch", phase: "ORCHESTRATOR" }),
+  });
+}
+
+/**
  * Files a real OPEN plan with two `pending` cycles (neither active) — the
  * CR-CRU-036 §S1 fixture primitive: "open plan, no active cycle" until
  * `activateCycle` below promotes one of them.
  */
 async function filePlan(baseUrl: string, key: string, cr: string): Promise<{ planId: number; cycles: Array<{ id: number }> }> {
+  await ensureFixtureOrchestrator(baseUrl, key);
   const res = await fetch(`${baseUrl}/api/v2/projects/${key}/plans`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ cr, cycles: [{ label: "A" }, { label: "B" }] }),
+    body: JSON.stringify({ cr, cycles: [{ label: "A" }, { label: "B" }], agentId: "fixture-orch" }),
   });
   return (await res.json()) as { planId: number; cycles: Array<{ id: number }> };
 }
@@ -238,10 +286,11 @@ async function filePlan(baseUrl: string, key: string, cr: string): Promise<{ pla
  * auto-attach resolver has a real target.
  */
 async function activateCycle(baseUrl: string, key: string, planId: number, cycleId: number): Promise<void> {
+  await ensureFixtureOrchestrator(baseUrl, key);
   await fetch(`${baseUrl}/api/v2/projects/${key}/plans/${planId}/cycles/${cycleId}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ status: "active" }),
+    body: JSON.stringify({ status: "active", agentId: "fixture-orch" }),
   });
 }
 
@@ -620,6 +669,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-test-unit-tier");
     const { dir, pythonPath } = fixtureDir(key);
+    await ensureRegistered(PYTHON_SCRIPT_PATH, "python-test-agent", { cwd: dir, crucibleUrl: baseUrl });
     proxy = startCapturingProxy(baseUrl);
 
     const res = await runScript(
@@ -640,7 +690,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
       },
     );
 
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
@@ -702,11 +752,13 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
       },
     );
 
-    // Two events now: the explicit pre-registration's lifecycle event, plus
-    // the 'test' subcommand's test event — events are returned newest-first
-    // (ORDER BY timestamp DESC), so events[0] is still the ingest event.
+    // Three events now: the fixture-orch registration filePlan()/activateCycle()
+    // now require (CR-CRU-056 §S2b fixture-repair), the explicit
+    // pre-registration's own lifecycle event, plus the 'test' subcommand's
+    // test event — events are returned newest-first (ORDER BY timestamp
+    // DESC), so events[0] is still the ingest event.
     const events = await getEvents(baseUrl, key);
-    expect(events.length).toBe(2);
+    expect(events.length).toBe(3);
     const event = await getFullEvent(baseUrl, events[0]!.id);
     expect(event.context?.cycleId).toBe(activeCycleId);
     expect(event.context?.cycle).toBe("python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix");
@@ -722,6 +774,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-test-no-context");
     const { dir, pythonPath } = fixtureDir(key);
+    await ensureRegistered(PYTHON_SCRIPT_PATH, "python-no-context-agent", { cwd: dir, crucibleUrl: baseUrl });
 
     await runScript(
       PYTHON_SCRIPT_PATH,
@@ -737,7 +790,7 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
       },
     );
 
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
     expect(event.context).toBeUndefined();
@@ -769,6 +822,7 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-regression-tier");
     const { dir, pythonPath } = fixtureDir(key);
+    await ensureRegistered(PYTHON_SCRIPT_PATH, "python-regression-agent", { cwd: dir, crucibleUrl: baseUrl });
     proxy = startCapturingProxy(baseUrl);
 
     const res = await runScript(
@@ -788,7 +842,7 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
       },
     );
 
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
@@ -805,6 +859,7 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-regression-coverage");
     const { dir, pythonPath } = fixtureDir(key);
+    await ensureRegistered(PYTHON_SCRIPT_PATH, "python-coverage-agent", { cwd: dir, crucibleUrl: baseUrl });
 
     const res = await runScript(
       PYTHON_SCRIPT_PATH,
@@ -821,7 +876,7 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
       },
     );
 
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
@@ -872,6 +927,7 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
     const shadowDir = join(dir, "coverage");
     mkdirSync(shadowDir, { recursive: true });
     writeFileSync(join(shadowDir, "lcov.info"), "SF:app/other.ts\nLF:3\nLH:2\nend_of_record\n");
+    await ensureRegistered(PYTHON_SCRIPT_PATH, "python-coverage-shadow-agent", { cwd: dir, crucibleUrl: baseUrl });
 
     const res = await runScript(
       PYTHON_SCRIPT_PATH,
@@ -888,7 +944,7 @@ describe("clients/python-crucible.py — regression subcommand: tier:'regression
       },
     );
 
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
@@ -920,6 +976,7 @@ describe("clients/python-crucible.py — the no-XML fallback fix (headline bug, 
     const key = await createProject(baseUrl, "clients-pc-test-no-xml-fallback");
     const dir = scratch.dir("python-crucible-no-xml-");
     writeEnvFile(dir, key);
+    await ensureRegistered(PYTHON_SCRIPT_PATH, "python-no-xml-agent", { cwd: dir, crucibleUrl: baseUrl });
     proxy = startCapturingProxy(baseUrl);
 
     const res = await runScript(PYTHON_SCRIPT_PATH, ["test", "--agent", "python-no-xml-agent", "--project-dir", dir], {
@@ -929,7 +986,7 @@ describe("clients/python-crucible.py — the no-XML fallback fix (headline bug, 
     });
 
     expect(res.code).not.toBe(0);
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     // An event exists at all → the server accepted the ingest (never a 400
     // from an empty `errors` string, which would leave zero events stored).
     expect(events.length).toBe(1);
@@ -949,6 +1006,7 @@ describe("clients/python-crucible.py — the no-XML fallback fix (headline bug, 
     const key = await createProject(baseUrl, "clients-pc-regression-no-xml-fallback");
     const dir = scratch.dir("python-crucible-no-xml-regression-");
     writeEnvFile(dir, key);
+    await ensureRegistered(PYTHON_SCRIPT_PATH, "python-no-xml-regression-agent", { cwd: dir, crucibleUrl: baseUrl });
     proxy = startCapturingProxy(baseUrl);
 
     const res = await runScript(
@@ -958,7 +1016,7 @@ describe("clients/python-crucible.py — the no-XML fallback fix (headline bug, 
     );
 
     expect(res.code).not.toBe(0);
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
     expect(event.compile?.raw).toBeDefined();
@@ -1035,6 +1093,7 @@ describe("clients/python-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> 
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-cr050-pending");
     const { dir, pythonPath } = fixtureDir(key);
+    await ensureRegistered(PYTHON_SCRIPT_PATH, "python-cr050-agent", { cwd: dir, crucibleUrl: baseUrl });
 
     runResult = await runScript(
       PYTHON_SCRIPT_PATH,
@@ -1054,7 +1113,7 @@ describe("clients/python-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/> 
       },
     );
 
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     event = await getFullEvent(baseUrl, events[0]!.id);
 
@@ -1265,6 +1324,7 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
       { name: "led_on" },
       { name: "led_off", fail: true },
     ]);
+    await ensureRegistered(ARDUINO_SCRIPT_PATH, "arduino-unit-agent", { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } });
     proxy = startCapturingProxy(baseUrl);
 
     const res = await runScript(ARDUINO_SCRIPT_PATH, ["unit", "--agent", "arduino-unit-agent", "--project-dir", dir], {
@@ -1273,7 +1333,7 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
       env: { PATH: path },
     });
 
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
@@ -1330,11 +1390,13 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
       },
     });
 
-    // Two events now: the explicit pre-registration's lifecycle event, plus
-    // the 'unit' subcommand's test event — events are returned newest-first
-    // (ORDER BY timestamp DESC), so events[0] is still the ingest event.
+    // Three events now: the fixture-orch registration filePlan()/activateCycle()
+    // now require (CR-CRU-056 §S2b fixture-repair), the explicit
+    // pre-registration's own lifecycle event, plus the 'unit' subcommand's
+    // test event — events are returned newest-first (ORDER BY timestamp
+    // DESC), so events[0] is still the ingest event.
     const events = await getEvents(baseUrl, key);
-    expect(events.length).toBe(2);
+    expect(events.length).toBe(3);
     const event = await getFullEvent(baseUrl, events[0]!.id);
     expect(event.context?.cycleId).toBe(activeCycleId);
     expect(event.context?.cycle).toBe("python-crucible + arduino-crucible v2 upgrade + no-XML 400 fix");
@@ -1350,6 +1412,7 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-unit-no-context");
     const { dir, path } = fixtureDirWithFakeMake(key, "clients-ac-unit-no-context", [{ name: "led_on" }]);
+    await ensureRegistered(ARDUINO_SCRIPT_PATH, "arduino-no-context-agent", { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } });
 
     await runScript(ARDUINO_SCRIPT_PATH, ["unit", "--agent", "arduino-no-context-agent", "--project-dir", dir], {
       cwd: dir,
@@ -1357,7 +1420,7 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
       env: { PATH: path },
     });
 
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
     expect(event.context).toBeUndefined();
@@ -1389,6 +1452,7 @@ describe("clients/arduino-crucible.py — compile subcommand: v2-only ingest on 
       fakeCliPath,
       '#!/bin/sh\necho "FakeCompileError: undefined reference to foo" 1>&2\nexit 1\n',
     );
+    await ensureRegistered(ARDUINO_SCRIPT_PATH, "arduino-compile-agent", { cwd: dir, crucibleUrl: baseUrl });
     proxy = startCapturingProxy(baseUrl);
 
     const res = await runScript(ARDUINO_SCRIPT_PATH, ["compile", "--agent", "arduino-compile-agent", "--project-dir", dir], {
@@ -1398,7 +1462,7 @@ describe("clients/arduino-crucible.py — compile subcommand: v2-only ingest on 
     });
 
     expect(res.code).not.toBe(0);
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
     expect(event.compile?.raw).toBeDefined();
@@ -1472,6 +1536,7 @@ describe("clients/arduino-crucible.py — regression subcommand: tier:'regressio
       { name: "alpha" },
       { name: "beta" },
     ]);
+    await ensureRegistered(ARDUINO_SCRIPT_PATH, "arduino-regression-agent", { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } });
     proxy = startCapturingProxy(baseUrl);
 
     const res = await runScript(
@@ -1480,7 +1545,7 @@ describe("clients/arduino-crucible.py — regression subcommand: tier:'regressio
       { cwd: dir, crucibleUrl: proxy.url, env: { PATH: path } },
     );
 
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
@@ -1506,6 +1571,7 @@ describe("clients/arduino-crucible.py — regression subcommand: tier:'regressio
       [{ name: "alpha" }],
       { lf: 20, lh: 17, ff: 6, fh: 5 },
     );
+    await ensureRegistered(ARDUINO_SCRIPT_PATH, "arduino-coverage-agent", { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } });
 
     const res = await runScript(
       ARDUINO_SCRIPT_PATH,
@@ -1513,7 +1579,7 @@ describe("clients/arduino-crucible.py — regression subcommand: tier:'regressio
       { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } },
     );
 
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
@@ -1556,6 +1622,11 @@ describe("clients/arduino-crucible.py — pre-merge-gate: check (arduino-cli com
     writeExecutable(join(binDir, "make"), NOOP_SCRIPT);
     const fakeCliPath = join(binDir, "fake-arduino-cli-ok");
     writeExecutable(fakeCliPath, NOOP_SCRIPT);
+    await ensureRegistered(ARDUINO_SCRIPT_PATH, "arduino-pmg-agent", {
+      cwd: dir,
+      crucibleUrl: baseUrl,
+      env: { PATH: `${binDir}:${process.env.PATH ?? ""}` },
+    });
 
     const res = await runScript(
       ARDUINO_SCRIPT_PATH,
@@ -1569,7 +1640,7 @@ describe("clients/arduino-crucible.py — pre-merge-gate: check (arduino-cli com
 
     expect(res.code).toBe(0);
     expect(res.stdout).toContain("ok: true");
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
     expect(event.tier).toBe("regression");
@@ -1592,6 +1663,7 @@ describe("clients/arduino-crucible.py — pre-merge-gate: check (arduino-cli com
       fakeCliPath,
       '#!/bin/sh\necho "FakeCompileError: undefined reference to foo" 1>&2\nexit 1\n',
     );
+    await ensureRegistered(ARDUINO_SCRIPT_PATH, "arduino-pmg-fail-agent", { cwd: dir, crucibleUrl: baseUrl });
 
     const res = await runScript(
       ARDUINO_SCRIPT_PATH,
@@ -1600,7 +1672,7 @@ describe("clients/arduino-crucible.py — pre-merge-gate: check (arduino-cli com
     );
 
     expect(res.code).not.toBe(0);
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     // Positive: the check step DID run and ingest its failure (proves the
     // gate actually executed the compile step, not a no-op stub that just
     // exits non-zero without touching either sub-step). Bound: exactly one
@@ -1679,11 +1751,13 @@ describe("clients/arduino-crucible.py — auto-ingest subcommand: behavioral, no
       { cwd: dir, crucibleUrl: proxy.url },
     );
 
-    // Two events now: the explicit pre-registration's lifecycle event, plus
-    // the auto-ingest's test event — events are returned newest-first
-    // (ORDER BY timestamp DESC), so events[0] is still the ingest event.
+    // Three events now: the fixture-orch registration filePlan()/activateCycle()
+    // now require (CR-CRU-056 §S2b fixture-repair), the explicit
+    // pre-registration's own lifecycle event, plus the auto-ingest's test
+    // event — events are returned newest-first (ORDER BY timestamp DESC), so
+    // events[0] is still the ingest event.
     const events = await getEvents(baseUrl, key);
-    expect(events.length).toBe(2);
+    expect(events.length).toBe(3);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
     expect(res.code).toBe(0);
@@ -1771,6 +1845,7 @@ describe("clients/arduino-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/>
       { name: "led_off", fail: true },
       { name: "led_blink", skip: true },
     ]);
+    await ensureRegistered(ARDUINO_SCRIPT_PATH, "arduino-cr050-agent", { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } });
 
     const res = await runScript(ARDUINO_SCRIPT_PATH, ["unit", "--agent", "arduino-cr050-agent", "--project-dir", dir], {
       cwd: dir,
@@ -1778,7 +1853,7 @@ describe("clients/arduino-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/>
       env: { PATH: path },
     });
 
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
 
@@ -1848,6 +1923,7 @@ describe("clients/arduino-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/>
       { name: "led_on" },
       { name: "led_blink", skip: true },
     ]);
+    await ensureRegistered(ARDUINO_SCRIPT_PATH, "arduino-cr050-auto-agent", { cwd: dir, crucibleUrl: baseUrl });
 
     const res = await runScript(
       ARDUINO_SCRIPT_PATH,
@@ -1855,7 +1931,7 @@ describe("clients/arduino-crucible.py — CR-CRU-050 §S1/§S1b/§S2: <skipped/>
       { cwd: dir, crucibleUrl: baseUrl },
     );
 
-    const events = await getEvents(baseUrl, key);
+    const events = await nonLifecycleEvents(baseUrl, key);
     expect(events.length).toBe(1);
     const event = await getFullEvent(baseUrl, events[0]!.id);
     expect(event.summary?.total).toBe(2);

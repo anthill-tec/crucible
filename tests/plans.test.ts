@@ -76,11 +76,26 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     handle = undefined;
   });
 
+  // CR-CRU-056 §S2b fixture-repair (C3): every mutating v2 WORKFLOW verb this
+  // file exercises (plan-file, cycle-add, cycle transitions, plan close/
+  // backfill, and run ingest) now refuses an unregistered caller (409) —
+  // these are functional coverage tests, not the §S2b auth suite itself, so
+  // they must model a CORRECTLY-registered caller rather than assert on the
+  // refusal. `withFixtureAgent` merges a live-registered `agentId` into any
+  // JSON body that doesn't already declare one (a body that already sets its
+  // own agentId — e.g. parsedRunBody — passes through untouched).
+  function withFixtureAgent(body: unknown): unknown {
+    if (body !== null && typeof body === "object" && !Array.isArray(body) && !("agentId" in (body as Record<string, unknown>))) {
+      return { ...(body as Record<string, unknown>), agentId: "fixture-orch" };
+    }
+    return body;
+  }
+
   async function postJson(path: string, body: unknown): Promise<Response> {
     return fetch(`http://localhost:${handle!.server.port}${path}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(withFixtureAgent(body)),
     });
   }
 
@@ -88,7 +103,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     return fetch(`http://localhost:${handle!.server.port}${path}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(withFixtureAgent(body)),
     });
   }
 
@@ -96,9 +111,19 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     return fetch(`http://localhost:${handle!.server.port}${path}`);
   }
 
+  async function registerOrchestrator(key: string, agentId: string): Promise<void> {
+    const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectKey: key, agentId, phase: "ORCHESTRATOR" }),
+    });
+    expect(res.status).toBe(200);
+  }
+
   async function createProject(): Promise<string> {
     const res = await postJson("/api/v2/projects", { name: `plans-${crypto.randomUUID()}` });
     const body = (await res.json()) as { ok: true; project: { key: string } };
+    await registerOrchestrator(body.project.key, "fixture-orch");
     return body.project.key;
   }
 
@@ -115,7 +140,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     summary?: Record<string, unknown>;
   }) {
     return {
-      agentId: "ingest-agent",
+      agentId: "fixture-orch",
       summary: {
         total: 5,
         passed: 5,
@@ -1052,7 +1077,12 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
 
       const before = await getJson(`/api/v2/events?project=${key}`);
       const beforeBody = (await before.json()) as EventsListResponse;
-      expect(beforeBody.events.length).toBe(0);
+      // CR-CRU-056 §S2b fixture-repair: createProject() now registers the
+      // fixture orchestrator, which itself journals ONE lifecycle event
+      // (CR-CRU-011 §S1) — the baseline is that registration event, not
+      // zero; the point of this test (rollups/events untouched by wave
+      // backfill) is the UNCHANGED count across the backfill, asserted below.
+      const baselineCount = beforeBody.events.length;
 
       const listedBefore = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-ROLLUP-1"));
       const listedBeforeBody = (await listedBefore.json()) as PlansListResponse;
@@ -1065,7 +1095,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
 
       const after = await getJson(`/api/v2/events?project=${key}`);
       const afterBody = (await after.json()) as EventsListResponse;
-      expect(afterBody.events.length).toBe(0);
+      expect(afterBody.events.length).toBe(baselineCount);
 
       const listedAfter = await getJson(plansPath(key, "?cr=CR-WAVE-PATCH-ROLLUP-1"));
       const listedAfterBody = (await listedAfter.json()) as PlansListResponse;
@@ -1083,7 +1113,12 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
 
       const before = await getJson(`/api/v2/events?project=${key}`);
       const beforeBody = (await before.json()) as EventsListResponse;
-      expect(beforeBody.events.length).toBe(0);
+      // CR-CRU-056 §S2b fixture-repair: createProject() now registers the
+      // fixture orchestrator, which itself journals ONE lifecycle event
+      // (CR-CRU-011 §S1) — the baseline is that registration event, not
+      // zero; the point of this test (plans add no run-events) is the
+      // UNCHANGED count across plan filing/transition/close, asserted below.
+      const baselineCount = beforeBody.events.length;
 
       const filed = await postJson(plansPath(key), { cr: "CR-N-1", cycles: [{ label: "a" }] });
       const plan = (await filed.json()) as PlanFileResponse;
@@ -1097,7 +1132,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
 
       const after = await getJson(`/api/v2/events?project=${key}`);
       const afterBody = (await after.json()) as EventsListResponse;
-      expect(afterBody.events.length).toBe(0);
+      expect(afterBody.events.length).toBe(baselineCount);
     });
   });
 });

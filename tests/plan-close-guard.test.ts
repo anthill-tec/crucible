@@ -79,11 +79,22 @@ afterEach(() => {
   servers = [];
 });
 
+// CR-CRU-056 §S2b fixture-repair (C3): mutating v2 workflow verbs
+// (plan-file, cycle transitions, plan close) now refuse an unregistered
+// caller (409) — merge a live-registered agentId into any JSON body lacking
+// one.
+function withFixtureAgent(body: unknown): unknown {
+  if (body !== null && typeof body === "object" && !Array.isArray(body) && !("agentId" in (body as Record<string, unknown>))) {
+    return { ...(body as Record<string, unknown>), agentId: "fixture-orch" };
+  }
+  return body;
+}
+
 async function postJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
   return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
@@ -91,7 +102,7 @@ async function patchJson(handle: ServerHandle, urlPath: string, body: unknown): 
   return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
@@ -99,9 +110,15 @@ async function getJson(handle: ServerHandle, urlPath: string): Promise<Response>
   return fetch(`http://localhost:${handle.server.port}${urlPath}`);
 }
 
+async function registerOrchestrator(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+  const res = await postJson(handle, "/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+  expect(res.status).toBe(200);
+}
+
 async function createProject(handle: ServerHandle): Promise<string> {
   const res = await postJson(handle, "/api/v2/projects", { name: `close-guard-${crypto.randomUUID()}` });
   const body = (await res.json()) as { ok: true; project: { key: string } };
+  await registerOrchestrator(handle, body.project.key, "fixture-orch");
   return body.project.key;
 }
 

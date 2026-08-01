@@ -175,10 +175,31 @@ async function getPlans(baseUrl: string, key: string): Promise<PlanWire[]> {
   return body.plans;
 }
 
-async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: string }>> {
+// CR-CRU-056 §S2b fixture-repair (C3): filters out "lifecycle" events
+// (CR-CRU-011 §S1) — registerAgent()/ensureRegistered() calls now journal a
+// registration lifecycle event of their own, which this file's count/id
+// assertions must not fold into the real run/ingest events they pin.
+async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: string; kind?: string }>> {
   const res = await fetch(`${baseUrl}/api/v2/events?project=${key}`);
-  const body = (await res.json()) as { events: Array<{ id: string }> };
-  return body.events;
+  const body = (await res.json()) as { events: Array<{ id: string; kind?: string }> };
+  return body.events.filter((e) => e.kind !== "lifecycle");
+}
+
+/**
+ * CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs/parsed (and every
+ * ingesting verb) now refuses an unregistered agentId (409) — spawn the
+ * script's own `register --phase report` verb (needs no cycle binding) for
+ * the SAME agentId a following `test`/`regression` runScript call will
+ * ingest under, against the same fixture server.
+ */
+async function ensureRegistered(
+  agentId: string,
+  opts: { cwd: string; crucibleUrl: string; projectDir?: string },
+): Promise<void> {
+  await runScript(
+    ["register", "--agent", agentId, "--phase", "report", "--project-dir", opts.projectDir ?? opts.cwd],
+    { cwd: opts.cwd, crucibleUrl: opts.crucibleUrl },
+  );
 }
 
 /**
@@ -190,11 +211,23 @@ async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: stri
  * and `activateCycle` below is what actually makes one of its cycles the
  * auto-attach target.
  */
+// CR-CRU-056 §S2b fixture-repair (C3): plan-file/cycle-transition are
+// mutating v2 workflow verbs and now refuse an unregistered caller (409) —
+// register a fixture orchestrator for the project before either call.
+async function ensureFixtureOrchestrator(baseUrl: string, key: string): Promise<void> {
+  await fetch(`${baseUrl}/api/v2/agents/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectKey: key, agentId: "fixture-orch", phase: "ORCHESTRATOR" }),
+  });
+}
+
 async function filePlan(baseUrl: string, key: string, cr: string): Promise<PlanWire> {
+  await ensureFixtureOrchestrator(baseUrl, key);
   const res = await fetch(`${baseUrl}/api/v2/projects/${key}/plans`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ cr, cycles: [{ label: "A" }, { label: "B" }] }),
+    body: JSON.stringify({ cr, cycles: [{ label: "A" }, { label: "B" }], agentId: "fixture-orch" }),
   });
   return (await res.json()) as PlanWire;
 }
@@ -208,10 +241,11 @@ async function filePlan(baseUrl: string, key: string, cr: string): Promise<PlanW
  * cycle-activate) the CR calls for.
  */
 async function activateCycle(baseUrl: string, key: string, planId: number, cycleId: number): Promise<void> {
+  await ensureFixtureOrchestrator(baseUrl, key);
   await fetch(`${baseUrl}/api/v2/projects/${key}/plans/${planId}/cycles/${cycleId}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ status: "active" }),
+    body: JSON.stringify({ status: "active", agentId: "fixture-orch" }),
   });
 }
 
@@ -664,11 +698,26 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
     return dir;
   }
 
+  // CR-CRU-056 §S2b fixture-repair (C3): plan-file/cycle-activate/cycle-done/
+  // cr-close each hard-stop client-side without a declared --agent, and the
+  // server refuses an unregistered caller (409) — register a fixture
+  // orchestrator identity first, then thread --agent <id> through every
+  // verb invocation below.
+  async function registerFixtureAgent(baseUrl: string, key: string, agentId: string): Promise<void> {
+    const res = await fetch(`${baseUrl}/api/v2/agents/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ projectKey: key, agentId, phase: "ORCHESTRATOR" }),
+    });
+    expect(res.status).toBe(200);
+  }
+
   test("plan-file creates an OPEN plan with the title, two cycles, and prints both numeric cycle ids on stdout", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-bc-plan-file");
     const projectDir = fixtureProjectDir(key);
+    await registerFixtureAgent(baseUrl, key, "plan-verb-agent");
 
     const res = await runScript(
       [
@@ -679,6 +728,8 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
         "Plan verbs C2",
         "--cycles",
         "cycle-a,cycle-b",
+        "--agent",
+        "plan-verb-agent",
         "--project-dir",
         projectDir,
       ],
@@ -704,9 +755,10 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-bc-plan-track");
     const projectDir = fixtureProjectDir(key);
+    await registerFixtureAgent(baseUrl, key, "plan-verb-agent");
 
     const res = await runScript(
-      ["plan-file", "--cr", "CR-X-2", "--cycles", "cycle-a,cycle-b", "--project-dir", projectDir],
+      ["plan-file", "--cr", "CR-X-2", "--cycles", "cycle-a,cycle-b", "--agent", "plan-verb-agent", "--project-dir", projectDir],
       { cwd: projectDir, crucibleUrl: baseUrl, env: { WORKFLOW_ROLE: "track-2" } },
     );
 
@@ -720,15 +772,16 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-bc-cycle-activate");
     const projectDir = fixtureProjectDir(key);
+    await registerFixtureAgent(baseUrl, key, "plan-verb-agent");
 
     await runScript(
-      ["plan-file", "--cr", "CR-X-3", "--cycles", "cycle-a,cycle-b", "--project-dir", projectDir],
+      ["plan-file", "--cr", "CR-X-3", "--cycles", "cycle-a,cycle-b", "--agent", "plan-verb-agent", "--project-dir", projectDir],
       { cwd: projectDir, crucibleUrl: baseUrl },
     );
     const cycleId = (await getPlans(baseUrl, key))[0]!.cycles[0]!.id;
 
     const res = await runScript(
-      ["cycle-activate", String(cycleId), "--project-dir", projectDir],
+      ["cycle-activate", String(cycleId), "--agent", "plan-verb-agent", "--project-dir", projectDir],
       { cwd: projectDir, crucibleUrl: baseUrl },
     );
 
@@ -743,18 +796,19 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-bc-cycle-done");
     const projectDir = fixtureProjectDir(key);
+    await registerFixtureAgent(baseUrl, key, "plan-verb-agent");
 
     await runScript(
-      ["plan-file", "--cr", "CR-X-4", "--cycles", "cycle-a,cycle-b", "--project-dir", projectDir],
+      ["plan-file", "--cr", "CR-X-4", "--cycles", "cycle-a,cycle-b", "--agent", "plan-verb-agent", "--project-dir", projectDir],
       { cwd: projectDir, crucibleUrl: baseUrl },
     );
     const cycleId = (await getPlans(baseUrl, key))[0]!.cycles[0]!.id;
-    await runScript(["cycle-activate", String(cycleId), "--project-dir", projectDir], {
+    await runScript(["cycle-activate", String(cycleId), "--agent", "plan-verb-agent", "--project-dir", projectDir], {
       cwd: projectDir,
       crucibleUrl: baseUrl,
     });
 
-    const res = await runScript(["cycle-done", String(cycleId), "--project-dir", projectDir], {
+    const res = await runScript(["cycle-done", String(cycleId), "--agent", "plan-verb-agent", "--project-dir", projectDir], {
       cwd: projectDir,
       crucibleUrl: baseUrl,
     });
@@ -770,18 +824,20 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-bc-cr-close");
     const projectDir = fixtureProjectDir(key);
+    await registerFixtureAgent(baseUrl, key, "plan-verb-agent");
+    await registerFixtureAgent(baseUrl, key, "test-agent");
 
     await runScript(
-      ["plan-file", "--cr", "CR-X-5", "--cycles", "cycle-a,cycle-b", "--project-dir", projectDir],
+      ["plan-file", "--cr", "CR-X-5", "--cycles", "cycle-a,cycle-b", "--agent", "plan-verb-agent", "--project-dir", projectDir],
       { cwd: projectDir, crucibleUrl: baseUrl },
     );
     const cycles = (await getPlans(baseUrl, key))[0]!.cycles;
     for (const cycle of cycles) {
-      await runScript(["cycle-activate", String(cycle.id), "--project-dir", projectDir], {
+      await runScript(["cycle-activate", String(cycle.id), "--agent", "plan-verb-agent", "--project-dir", projectDir], {
         cwd: projectDir,
         crucibleUrl: baseUrl,
       });
-      await runScript(["cycle-done", String(cycle.id), "--project-dir", projectDir], {
+      await runScript(["cycle-done", String(cycle.id), "--agent", "plan-verb-agent", "--project-dir", projectDir], {
         cwd: projectDir,
         crucibleUrl: baseUrl,
       });
@@ -905,6 +961,7 @@ describe("clients/bun-crucible.py — byte-compatible CLI surface (existing verb
     const key = await createProject(baseUrl, "clients-bc-regression-compat");
     const dir = scratchDir("bun-crucible-regression-");
     writeFixtureBunProject(dir, key);
+    await ensureRegistered("regression-agent", { cwd: dir, crucibleUrl: baseUrl, projectDir: dir });
 
     const res = await runScript(
       ["regression", "--agent", "regression-agent", "--coverage", "--project-dir", dir, "--package-dir", dir],
@@ -951,6 +1008,7 @@ describe("clients/bun-crucible.py — CR-CRU-050 §S1/§S1b: <skipped/> (test.sk
     const key = await createProject(baseUrl, "clients-bc-cr050-mixed");
     const dir = scratchDir("bun-crucible-cr050-mixed-");
     writeBunProjectWithSource(dir, key, FIXTURE_PENDING_MIXED_SOURCE);
+    await ensureRegistered("cr050-mixed-agent", { cwd: dir, crucibleUrl: baseUrl, projectDir: dir });
 
     runResult = await runScript(
       ["test", "--agent", "cr050-mixed-agent", "--tests", "sample.test.ts", "--project-dir", dir, "--package-dir", dir],
@@ -1038,6 +1096,7 @@ describe("clients/bun-crucible.py — CR-CRU-050 E2E repro: 'N pass / 1 skip / 0
     const key = await createProject(baseUrl, "clients-bc-cr050-repro");
     const dir = scratchDir("bun-crucible-cr050-repro-");
     writeBunProjectWithSource(dir, key, FIXTURE_PENDING_REPRO_SOURCE);
+    await ensureRegistered("cr050-repro-agent", { cwd: dir, crucibleUrl: baseUrl, projectDir: dir });
 
     runResult = await runScript(
       ["test", "--agent", "cr050-repro-agent", "--tests", "sample.test.ts", "--project-dir", dir, "--package-dir", dir],

@@ -81,6 +81,14 @@ describe("AXI negotiation, hints, truncation (CR-CRU-005 §S2+§S3+§S4)", () =>
     return body.project.key;
   }
 
+  // CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs and /api/v2/runs/parsed
+  // now refuse an unregistered agentId (409) — each ingest-under fixture
+  // agentId must be live registered first.
+  async function registerAgent(key: string, agentId: string): Promise<void> {
+    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+    expect(res.status).toBe(200);
+  }
+
   function parsedRunBody(overrides: { projectKey: string; agentId?: string; summary?: Partial<RunSummary> }) {
     return {
       projectKey: overrides.projectKey,
@@ -159,6 +167,7 @@ describe("AXI negotiation, hints, truncation (CR-CRU-005 §S2+§S3+§S4)", () =>
     test("?fmt=toon on every v2 GET route → text/toon + parses as TOON; without fmt → JSON", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("negotiate-all");
+      await registerAgent(key, "negotiate-agent");
       const runRes = await postJson("/api/v2/runs/parsed", parsedRunBody({ projectKey: key }));
       const runBody = (await runRes.json()) as RunsPostResponse;
       const eventId = runBody.event;
@@ -248,6 +257,7 @@ describe("AXI negotiation, hints, truncation (CR-CRU-005 §S2+§S3+§S4)", () =>
     test("a RED-verdict POST /api/v2/runs response help includes 'transition'", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("hint-red-verdict");
+      await registerAgent(key, "red-agent");
 
       const res = await postJson("/api/v2/runs", {
         projectKey: key,

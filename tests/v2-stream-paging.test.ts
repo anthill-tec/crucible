@@ -204,7 +204,18 @@ describe("SSE + progressive event paging (CR-CRU-004 §S3+§S4)", () => {
     return body.project.key;
   }
 
+  // CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs and /api/v2/runs/parsed
+  // now refuse an unregistered agentId (409) — each distinct agentId these
+  // fixtures ingest under must be live registered first (the SSE
+  // hello/keep-alive frames and the heartbeat-driven "agents" frame need no
+  // registration — heartbeat isn't gated by requireRegisteredCaller).
+  async function registerAgent(projectKey: string, agentId: string): Promise<void> {
+    const res = await postJson("/api/v2/agents/register", { projectKey, agentId, phase: "ORCHESTRATOR" });
+    expect(res.status).toBe(200);
+  }
+
   async function seedThreeSuiteEvent(projectKey: string): Promise<string> {
+    await registerAgent(projectKey, "paging-agent");
     const res = await postJson("/api/v2/runs/parsed", {
       projectKey,
       agentId: "paging-agent",
@@ -247,6 +258,7 @@ describe("SSE + progressive event paging (CR-CRU-004 §S3+§S4)", () => {
       const sse = new SseReader(reader);
       // Consume the hello frame first so we don't accidentally match on it.
       await nextFrameMatching(sse, (f) => !f.isComment && f.data?.type === "hello", 1000);
+      await registerAgent(key, "v2-ingest-agent");
 
       const ingestRes = await postJson("/api/v2/runs", {
         projectKey: key,
@@ -348,6 +360,7 @@ describe("SSE + progressive event paging (CR-CRU-004 §S3+§S4)", () => {
       // A subsequent ingest must not throw server-side (no dangling/broken
       // listener). Modernized off the retired v1 shim (CR-CRU-008 §S4) to
       // /api/v2/runs — the seeding mechanism only, not the subject under test.
+      await registerAgent(key, "post-disconnect-agent");
       const ingestRes = await postJson("/api/v2/runs", {
         projectKey: key,
         agentId: "post-disconnect-agent",

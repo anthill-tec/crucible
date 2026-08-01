@@ -127,6 +127,15 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
     return fetch(`http://localhost:${handle!.server.port}${reqPath}`);
   }
 
+  // CR-CRU-056 §S2b fixture-repair (C3): plan-file/cycle-activate/run-ingest
+  // now refuse an unregistered caller (409) — register each agentId this
+  // dog-food scenario uses (the orchestrator that files/activates the plan,
+  // and each of the three run-producing agents) before it's used.
+  async function registerAgent(key: string, agentId: string): Promise<void> {
+    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+    expect(res.status).toBe(200);
+  }
+
   test("RED(2/5) + targeted-GREEN(24/24) + full-suite gate(559/559), each ingested via /api/v2/runs/parsed (modernized off the retired v1 shim, CR-CRU-008 §S4) with context.cycleId, render as ONE declared open-span containing all three real runs and ZERO inferred transition markers", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const pk = crypto.randomUUID();
@@ -138,9 +147,11 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
     });
 
     // 1. File a plan with one cycle, then activate it — real v2 plan routes.
+    await registerAgent(pk, "fixture-orch");
     const planRes = await postJson(`/api/v2/projects/${pk}/plans`, {
       cr: "CR-DOGFOOD-1",
       cycles: [{ label: "c1 checkpoint", kind: "red-green" }],
+      agentId: "fixture-orch",
     });
     expect(planRes.status).toBe(201);
     const planBody = (await planRes.json()) as {
@@ -152,7 +163,7 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
 
     const activateRes = await patchJson(
       `/api/v2/projects/${pk}/plans/${planBody.planId}/cycles/${cycleId}`,
-      { status: "active" },
+      { status: "active", agentId: "fixture-orch" },
     );
     expect(activateRes.status).toBe(200);
 
@@ -160,6 +171,7 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
     // context.cycleId linking it to the active cycle above — this is the
     // exact dog-food scenario: RED, a targeted GREEN, and a later full-suite
     // gate run, all declared members of the same cycle.
+    await registerAgent(pk, "dogfood-RED");
     const redRes = await postJson("/api/v2/runs/parsed", {
       projectKey: pk,
       agentId: "dogfood-RED",
@@ -169,6 +181,7 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
     });
     expect(redRes.status).toBe(200);
 
+    await registerAgent(pk, "dogfood-GREEN");
     const greenRes = await postJson("/api/v2/runs/parsed", {
       projectKey: pk,
       agentId: "dogfood-GREEN",
@@ -178,6 +191,7 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
     });
     expect(greenRes.status).toBe(200);
 
+    await registerAgent(pk, "dogfood-GATE");
     const gateRes = await postJson("/api/v2/runs/parsed", {
       projectKey: pk,
       agentId: "dogfood-GATE",
@@ -192,10 +206,17 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
     // src/v2.ts handleEventsList).
     const eventsRes = await getJson(`/api/v2/events?project=${pk}`);
     expect(eventsRes.status).toBe(200);
-    const eventsBody = (await eventsRes.json()) as {
+    const rawEventsBody = (await eventsRes.json()) as {
       ok: true;
-      events: Array<{ id: string; context?: { cycleId?: number } }>;
+      events: Array<{ id: string; kind?: string; context?: { cycleId?: number } }>;
     };
+    // CR-CRU-056 §S2b fixture-repair: the fixture must register each agent
+    // it acts as (fixture-orch + the three run-producing agents) before it
+    // can call a workflow verb — each registration journals its own
+    // "lifecycle" event (CR-CRU-011 §S1), which is NOT one of the dog-food
+    // scenario's three real runs. Filter those out; the test's subject
+    // (declared-span rendering of the three real runs) is unaffected.
+    const eventsBody = { ...rawEventsBody, events: rawEventsBody.events.filter((e) => e.kind !== "lifecycle") };
     expect(eventsBody.events.length).toBe(3);
 
     const plansRes = await getJson(`/api/v2/projects/${pk}/plans`);

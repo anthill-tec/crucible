@@ -97,11 +97,22 @@ afterEach(() => {
   servers = [];
 });
 
+// CR-CRU-056 §S2b fixture-repair (C3): mutating v2 workflow verbs
+// (plan-file, cycle transitions) and run ingest now refuse an unregistered
+// caller (409) — merge a live-registered agentId into any JSON body lacking
+// one.
+function withFixtureAgent(body: unknown): unknown {
+  if (body !== null && typeof body === "object" && !Array.isArray(body) && !("agentId" in (body as Record<string, unknown>))) {
+    return { ...(body as Record<string, unknown>), agentId: "fixture-orch" };
+  }
+  return body;
+}
+
 async function postJson(handle: ServerHandle, urlPath: string, body: unknown): Promise<Response> {
   return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
@@ -109,7 +120,7 @@ async function patchJson(handle: ServerHandle, urlPath: string, body: unknown): 
   return fetch(`http://localhost:${handle.server.port}${urlPath}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withFixtureAgent(body)),
   });
 }
 
@@ -117,9 +128,17 @@ async function getJson(handle: ServerHandle, urlPath: string): Promise<Response>
   return fetch(`http://localhost:${handle.server.port}${urlPath}`);
 }
 
+async function registerOrchestrator(handle: ServerHandle, key: string, agentId: string): Promise<void> {
+  const res = await postJson(handle, "/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+  expect(res.status).toBe(200);
+}
+
 async function createProject(handle: ServerHandle): Promise<string> {
   const res = await postJson(handle, "/api/v2/projects", { name: `ingest-cycle-${crypto.randomUUID()}` });
   const body = (await res.json()) as { ok: true; project: { key: string } };
+  await registerOrchestrator(handle, body.project.key, "fixture-orch");
+  // parsedRunBody defaults to this agentId for ingest calls in this file.
+  await registerOrchestrator(handle, body.project.key, "ingest-cycle-agent");
   return body.project.key;
 }
 
@@ -192,7 +211,11 @@ async function postParsedRun(
 async function eventsForProject(handle: ServerHandle, key: string): Promise<EventsListResponse["events"]> {
   const res = await getJson(handle, `/api/v2/events?project=${key}`);
   const body = (await res.json()) as EventsListResponse;
-  return body.events;
+  // CR-CRU-056 §S2b fixture-repair: createProject() now registers two
+  // fixture agents, each journaling its own "lifecycle" event (CR-CRU-011
+  // §S1) — not one of this file's ingest-under-test events. Filter those
+  // out; every assertion here is about the RUN ingest, not registration.
+  return body.events.filter((e) => (e as { kind?: string }).kind !== "lifecycle");
 }
 
 describe("§S7.1 — run ingest with an unknown context.cycleId is REFUSED (400), never stored on trust", () => {

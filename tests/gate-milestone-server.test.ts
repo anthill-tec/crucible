@@ -156,7 +156,20 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
   async function createProject(name: string): Promise<string> {
     const res = await postJson("/api/v2/projects", { name });
     const body = (await res.json()) as OkResponse & { project: { key: string } };
+    // CR-CRU-056 §S2b fixture-repair (C3): /api/v2/gates and
+    // /api/v2/milestones now refuse an unregistered agentId (409) —
+    // "orchestrator-1" is the default agentId gateBody/milestoneBody use
+    // across this file, so register it live for every project up front
+    // (harmless for the field-validation tests, which use their own
+    // distinct "a1"/unregistered ids and 400 on their own bad fields
+    // before any registered-caller check is reached).
+    await registerAgent(body.project.key, "orchestrator-1");
     return body.project.key;
+  }
+
+  async function registerAgent(key: string, agentId: string): Promise<void> {
+    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+    expect(res.status).toBe(200);
   }
 
   async function listEvents(key: string): Promise<EventBrief[]> {
@@ -226,6 +239,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
   }
 
   async function seedTestEvent(key: string, agentId: string): Promise<string> {
+    await registerAgent(key, agentId);
     const res = await postJson("/api/v2/runs/parsed", {
       projectKey: key,
       agentId,
@@ -520,6 +534,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
           commit: "abc1234",
           context: { cr: "CR-NAI-042", wave: 1 },
         };
+        await registerAgent(key, "cr-close-verb");
 
         const res = await postJson("/api/v2/milestones", body);
         expect(res.status).toBe(201);
