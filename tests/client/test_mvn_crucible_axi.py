@@ -439,7 +439,7 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
                 "cycles": [{"label": "a", "id": 901}]}
         code, out, _err, _p, _g, _pa = self._run(
             ["plan-file", "--cr", "CR-CRU-030", "--cycles", "a",
-             "--project-dir", self.tmpdir], post_return=resp)
+             "--agent", "test-agent", "--project-dir", self.tmpdir], post_return=resp)
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
         self.assertEqual(axi.get("verb"), "plan-file")
@@ -457,7 +457,7 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
              "cycles": [{"id": 901, "status": "pending"}]},
         ])
         code, out, _err, _p, _g, _pa = self._run(
-            ["cycle-activate", "901", "--project-dir", self.tmpdir],
+            ["cycle-activate", "901", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans, patch_return={"ok": True})
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
@@ -470,7 +470,7 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
              "cycles": [{"id": 901, "status": "active"}]},
         ])
         code, out, _err, _p, _g, _pa = self._run(
-            ["cycle-done", "901", "--project-dir", self.tmpdir],
+            ["cycle-done", "901", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans, patch_return={"ok": True})
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
@@ -495,7 +495,7 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
             {"planId": "plan-9", "cr": "CR-CRU-030", "status": "open", "cycles": []},
         ])
         code, out, _err, _p, _g, _pa = self._run(
-            ["cycle-add", "new-cycle", "--project-dir", self.tmpdir],
+            ["cycle-add", "new-cycle", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans, post_return={"ok": True, "id": 991})
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
@@ -525,7 +525,7 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
             {"planId": "plan-9", "cr": "CR-CRU-030", "status": "open", "cycles": []},
         ])
         code, out, _err, _p, _g, _pa = self._run(
-            ["checkpoint", "--project-dir", self.tmpdir],
+            ["checkpoint", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans, post_return={"ok": True})
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
@@ -534,7 +534,7 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
 
     def test_stop_prints_toon_envelope(self):
         code, out, _err, _p, _g, _pa = self._run(
-            ["stop", "--project-dir", self.tmpdir],
+            ["stop", "--agent", "test-agent", "--project-dir", self.tmpdir],
             post_return={"ok": True, "checkpointed": 2})
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
@@ -546,7 +546,7 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
             {"planId": "plan-9", "cr": "CR-CRU-030", "status": "open", "cycles": []},
         ])
         code, out, _err, _p, _g, _pa = self._run(
-            ["abort", "--project-dir", self.tmpdir],
+            ["abort", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans, post_return={"ok": False, "error": "409 userApproved required"})
         self.assertNotEqual(code, 0)
         axi = self._decode_axi(out)
@@ -554,7 +554,7 @@ class MvnCrucibleVerbEnvelopeTest(_BaseMvnAxiTest):
         self.assertIs(axi.get("ok"), False)
 
         code2, out2, _err2, _p2, _g2, _pa2 = self._run(
-            ["abort", "--user-approved", "--project-dir", self.tmpdir],
+            ["abort", "--user-approved", "--agent", "test-agent", "--project-dir", self.tmpdir],
             get_return=plans, post_return={"ok": True})
         self.assertEqual(code2, 0, f"stdout={out2!r}")
         axi2 = self._decode_axi(out2)
@@ -868,7 +868,7 @@ class MvnCrucibleNoWaveWarningTest(_BaseMvnAxiTest):
 
     def _run_plan_file(self, post_return, wave_flag=None):
         argv = ["plan-file", "--cr", post_return["cr"], "--cycles", "a",
-                "--project-dir", self.tmpdir]
+                "--agent", "test-agent", "--project-dir", self.tmpdir]
         if wave_flag is not None:
             argv += ["--wave", wave_flag]
         with mock.patch.object(self.module, "_post", return_value=post_return,
@@ -936,7 +936,7 @@ class MvnCrucibleNoTitleWarningTest(_BaseMvnAxiTest):
 
     def _run_plan_file(self, post_return, title=None):
         argv = ["plan-file", "--cr", post_return["cr"], "--cycles", "a",
-                "--project-dir", self.tmpdir]
+                "--agent", "test-agent", "--project-dir", self.tmpdir]
         if title is not None:
             argv += ["--title", title]
         with mock.patch.object(self.module, "_post", return_value=post_return,

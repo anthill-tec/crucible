@@ -447,7 +447,7 @@ class BoundRegistrationServerStampedAttachTest(_BaseAutoAttachTest):
              mock.patch.object(self.module, "_patch", side_effect=fake_patch), \
              mock.patch.object(self.module, "_post", side_effect=fake_post):
             code, out, _err = _run_main(self.module, [
-                "cycle-activate", "501", "--project-dir", self.tmpdir,
+                "cycle-activate", "501", "--agent", "fixture-orch", "--project-dir", self.tmpdir,
             ])
             self.assertEqual(code, 0, f"cycle-activate stdout={out!r}")
 

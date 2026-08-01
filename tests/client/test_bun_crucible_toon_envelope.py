@@ -284,7 +284,7 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
         with mock.patch.object(self.module, "_post", return_value=server_resp):
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-X", "--cycles", "a,b",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0)
@@ -314,7 +314,7 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
         with mock.patch.object(self.module, "_post", return_value=server_resp):
             code, out, _err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-Y", "--cycles", "a",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0)
@@ -327,7 +327,7 @@ class PlanFileEnvelopeTest(_BaseEnvelopeTest):
                                 return_value={"ok": False, "error": "bad cr"}):
             code, out, err = _run_main(self.module, [
                 "plan-file", "--cr", "CR-BAD", "--cycles", "a",
-                "--project-dir", self.tmpdir,
+                "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 1)
@@ -354,7 +354,7 @@ class CycleTransitionEnvelopeTest(_BaseEnvelopeTest):
                                 return_value=self._open_plan_with_cycle(55)), \
              mock.patch.object(self.module, "_patch", return_value={"ok": True}):
             code, out, err = _run_main(self.module, [
-                "cycle-activate", "55", "--project-dir", self.tmpdir,
+                "cycle-activate", "55", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0)
@@ -373,7 +373,7 @@ class CycleTransitionEnvelopeTest(_BaseEnvelopeTest):
                                 return_value=self._open_plan_with_cycle(56)), \
              mock.patch.object(self.module, "_patch", return_value={"ok": True}):
             code, out, err = _run_main(self.module, [
-                "cycle-done", "56", "--project-dir", self.tmpdir,
+                "cycle-done", "56", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 0)
@@ -387,7 +387,7 @@ class CycleTransitionEnvelopeTest(_BaseEnvelopeTest):
         with mock.patch.object(self.module, "_get",
                                 return_value=_open_plans_response([])):
             code, out, err = _run_main(self.module, [
-                "cycle-activate", "999", "--project-dir", self.tmpdir,
+                "cycle-activate", "999", "--agent", "test-agent", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 1)
