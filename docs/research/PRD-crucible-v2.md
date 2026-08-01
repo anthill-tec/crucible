@@ -443,6 +443,6 @@ client-fleet upgrade, then the BDD harness (§4.12). Crucible ingests its own ru
 (Resolved 2026-07-14: upgraded clients send `tier` explicitly — §3.3; BDD uses the
 dedicated `playwright` codec with trace links, and Crucible can harness the run —
 §4.12; run `context` {git, wave, orchestrator} decided as all-optional — §3.3;
-retention: 100 full-fidelity runs + wave-aware rollups — §4.7; TOON: pin the
-documented Crucible subset rather than vendoring the reference serializer — both
-producer and consumers are our own fleet.)
+retention: 100 full-fidelity runs + wave-aware rollups — §4.7; TOON: reversed
+2026-07-28 — official TOON libraries on both stacks and the spec is the contract;
+the Crucible subset was retired by CR-CRU-046.)
