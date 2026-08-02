@@ -246,7 +246,8 @@ def _open_plans(project_dir):
     return _axi().open_plans(_get, _plans_path(project_dir))
 
 
-def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent):
+def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
+                             help_steps=None):
     """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path).
     CR-CRU-051 §S2 — `files` (the distinct-source count from `_parse_junit`,
     per-FILE when the native harness stamps `file=`, else per-class/per-suite)
@@ -257,13 +258,18 @@ def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent):
     surfaced via `error`). C5 — the envelope context ECHOES the attachment the
     SERVER reported (`context.cycleId` on the ingest response), so the agent
     sees which cycle absorbed its evidence without a second
-    `GET /api/v2/events`; absent → the key is omitted."""
+    `GET /api/v2/events`; absent → the key is omitted.
+
+    CR-CRU-058 §S2 — `help_steps` lets a GATE caller supply the STATE-DERIVED
+    next step for the run it just made (`_axi().run_help`), instead of the
+    canned per-verb `HELP_STEPS` entry; unset keeps today's behaviour exactly."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
            "total": summary["total"], "files": files}
     context = _axi_context(project_dir, agent_id=agent,
                            cycle_id=_axi().echoed_cycle_id(resp))
-    result_fields = {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])}
+    result_fields = {"run": run,
+                     "help": help_steps or _axi().HELP_STEPS.get(verb, ["status"])}
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err
@@ -552,7 +558,14 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
           f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
           f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)
-    _emit_ingest_summary_axi(verb, resp, summary, files, pd, agent_id)
+    # CR-CRU-058 §S2 — a GATE run's next step is derived from the run state it
+    # reached (unrecorded / red / green); the plain test verbs keep their canned
+    # HELP_STEPS entry, unchanged.
+    ok = bool(resp.get("ok")) and summary["failed"] == 0
+    help_steps = (_axi().run_help(verb, ok, summary["failed"], CRUCIBLE)
+                  if verb == "pre-merge-gate" else None)
+    _emit_ingest_summary_axi(verb, resp, summary, files, pd, agent_id,
+                             help_steps=help_steps)
     if summary["failed"]:
         return 1
     return 0 if resp.get("ok") else 1
@@ -582,6 +595,19 @@ def _compile_gate(args, verb):
     build output to /api/v2/runs/compile. Returns the §S1 envelope under `verb`
     (`check` and `compile` expose the SAME gate under fleet-uniform names)."""
     pd = _project_dir(args)
+    state = _compile_run(args, pd)
+    legacy = f"{verb}: ok={state['ok']} exit={state['exit']}"
+    _emit_axi(verb, state["ok"],
+              {"exit": state["exit"], "help": _axi().HELP_STEPS.get(verb, ["status"])},
+              _axi_context(pd, agent_id=state["agent_id"]), [], legacy)
+    return 0 if state["ok"] else (state["exit"] or 1)
+
+
+def _compile_run(args, pd):
+    """The arduino-cli compile itself — CR-CRU-058 §S1: this helper NEVER emits,
+    so the envelope-owning verbs that run it (`check`/`compile` via
+    `_compile_gate`, and `pre-merge-gate`'s fail-fast step 0) each put exactly
+    ONE document on stdout. Returns `{exit, ok, agent_id}`; its caller emits."""
     key, name = _load_env(pd)
     # CR-CRU-044 §S5 — the gate only INGESTS when an identity was declared, so
     # the id is optional here (omitted from the envelope context when absent)
@@ -602,11 +628,7 @@ def _compile_gate(args, verb):
             sys.stderr.write(errors + "\n")
     else:
         print("[crucible] compile OK", file=sys.stderr)
-    legacy = f"{verb}: ok={ok} exit={run.returncode}"
-    _emit_axi(verb, ok,
-              {"exit": run.returncode, "help": _axi().HELP_STEPS.get(verb, ["status"])},
-              _axi_context(pd, agent_id=agent_id), [], legacy)
-    return 0 if ok else (run.returncode or 1)
+    return {"exit": run.returncode, "ok": ok, "agent_id": agent_id}
 
 
 def cmd_check(args):
@@ -670,19 +692,39 @@ def cmd_pre_merge_gate(args):
     `regression --coverage`. On compile failure the compile-failure event is
     posted and regression is SKIPPED (non-zero exit); on compile success the
     regression run posts the tier:'regression' event with coverage attached."""
+    pd = _project_dir(args)
     if not getattr(args, "skip_check", False):
         check_args = argparse.Namespace(agent=args.agent, project_dir=args.project_dir)
-        rc = _compile_gate(check_args, "compile")
-        if rc != 0:
+        # The STEP form (no envelope of its own) — this gate owns stdout.
+        state = _compile_run(check_args, pd)
+        if not state["ok"]:
             print("[crucible] pre-merge gate FAILED at the arduino-cli compile step — "
                   "skipped the regression. Fix the compile first (or --skip-check to bypass).",
                   file=sys.stderr)
-            return rc
+            # §S2 — the state reached is "aborted at step 0, the regression
+            # never ran": the next action is the compile error, never the
+            # gate's own successor. A passing gate falls through to the
+            # regression envelope, whose help[] is derived from the RUN state.
+            _emit_axi("pre-merge-gate", False,
+                      {"stage": "compile", "exit": state["exit"],
+                       "help": _axi().gate_step_abort_help(
+                           "pre-merge-gate",
+                           "fix the arduino-cli compile error(s) reported on "
+                           "stderr (or --skip-check to bypass)")},
+                      _axi_context(pd, agent_id=state["agent_id"]),
+                      [_axi().gate_step_abort_warning(
+                          "pre-merge-gate", "arduino-cli compile",
+                          "the firmware does not compile")],
+                      f"pre-merge-gate: ok=False exit={state['exit']} — "
+                      f"aborted at the arduino-cli compile step")
+            return state["exit"] or 1
     reg_args = argparse.Namespace(
         agent=args.agent, project_dir=args.project_dir,
         dir=getattr(args, "dir", None), coverage=True,
         cycle=getattr(args, "cycle", None))
-    return cmd_regression(reg_args)
+    # §S1 — the native-test body emits under THIS gate's verb, so the gate puts
+    # exactly one envelope on stdout under the name the caller invoked.
+    return _run_native_tests(reg_args, "pre-merge-gate", "regression", True)
 
 
 # ── CR-CRU-030 §S4/§S6/§S7/§S8 — plan / cycle / status / gate verbs ──────────

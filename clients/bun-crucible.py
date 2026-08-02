@@ -719,8 +719,12 @@ def _ingest_compile(project_dir, agent_id, errors_text):
         "agentId": agent_id,
     }
     resp = _post("/api/v2/runs/compile", payload)
+    # CR-CRU-058 §S3 — the human ingest line is interactive-only (stderr); it
+    # used to land on stdout AHEAD of the caller's envelope (`check`'s failure
+    # path, and with it `pre-merge-gate`'s), leaving stdout un-decodable.
     print(f"ingest compile (typescript): ok={resp.get('ok')}"
-          + (f" error={resp['error']}" if resp.get("error") else ""))
+          + (f" error={resp['error']}" if resp.get("error") else ""),
+          file=sys.stderr)
     return 0 if resp.get("ok") else 1
 
 
@@ -801,7 +805,10 @@ def cmd_test(args):
         _close_gate_identity(project_dir, identity)
 
 
-def cmd_regression(args):
+def cmd_regression(args, verb="regression"):
+    """CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
+    `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
+    carries ONE document under the GATE's own verb, not the inner one's."""
     project_dir = _resolve_project_dir(args.project_dir)
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     bun = _resolve_bun(args.bun)
@@ -858,7 +865,14 @@ def cmd_regression(args):
                       file=sys.stderr)
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                               tier="regression", context=_run_context())
-        _emit_ingest_axi("regression", resp, summary, files, project_dir, args.agent)
+        ok = bool(resp.get("ok")) and summary["failed"] == 0
+        # §S2 — a GATE run's next step is derived from the run state it reached
+        # (unrecorded / red / green); the plain `regression` verb keeps its
+        # canned _HELP_STEPS entry, unchanged.
+        help_steps = (_axi().run_help(verb, ok, summary["failed"], CRUCIBLE_URL)
+                      if verb != "regression" else None)
+        _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
+                         help_steps=help_steps)
         return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
     finally:
         _close_gate_identity(project_dir, identity)
@@ -882,6 +896,21 @@ def cmd_auto_ingest(args):
 def cmd_check(args):
     """`tsc --noEmit` typecheck gate over the package. With --agent, ingest errors."""
     project_dir = _resolve_project_dir(args.project_dir)
+    state = _check_gate(args, project_dir)
+    # §S2/§S13/§S15 — the typecheck gate returns the §S1 envelope (verb=check,
+    # ok, exit code, help[]) on BOTH clean and error compile, not ad-hoc prints.
+    legacy = f"check: ok={state['ok']} exit={state['exit']}"
+    _emit_axi("check", state["ok"],
+              {"exit": state["exit"], "help": _HELP_STEPS["check"]},
+              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+    return 0 if state["ok"] else 1
+
+
+def _check_gate(args, project_dir):
+    """The tsc typecheck itself — CR-CRU-058 §S1: this helper NEVER emits, so
+    the two envelope-owning verbs that run it (`check` standalone, and
+    `pre-merge-gate`'s fail-fast step 0) each put exactly ONE document on
+    stdout. Returns the measured state — `{exit, ok}` — and its caller emits."""
     package_dir = _resolve_package_dir(args.package_dir, project_dir)
     bun = _resolve_bun(args.bun)
     # Prefer the package's local tsc via `bun x tsc`; falls back to a tsc on PATH.
@@ -899,34 +928,49 @@ def cmd_check(args):
         sys.stderr.write(out)
         if args.agent:
             _ingest_compile(project_dir, args.agent, out)
-    # §S2/§S13/§S15 — the typecheck gate returns the §S1 envelope (verb=check,
-    # ok, exit code, help[]) on BOTH clean and error compile, not ad-hoc prints.
-    legacy = f"check: ok={ok} exit={result.returncode}"
-    _emit_axi("check", ok, {"exit": result.returncode, "help": _HELP_STEPS["check"]},
-              _axi_context(project_dir, agent_id=args.agent), [], legacy)
-    return 0 if ok else 1
+    return {"exit": result.returncode, "ok": ok}
 
 
 def cmd_pre_merge_gate(args):
     """ORCHESTRATOR pre-merge gate — the ONLY path that measures coverage (project policy:
     coverage reserved for the pre-merge gate). fail-fast `check` (tsc) → `regression
     --coverage`. A check failure aborts before the suite."""
+    project_dir = _resolve_project_dir(args.project_dir)
     if not getattr(args, "skip_check", False):
         check_args = argparse.Namespace(
             agent=args.agent, bun=args.bun, package_dir=args.package_dir,
             project_dir=args.project_dir,
         )
-        rc = cmd_check(check_args)
-        if rc != 0:
+        # The STEP form (no envelope of its own) — this gate owns stdout.
+        state = _check_gate(check_args, project_dir)
+        if not state["ok"]:
+            # §S3 — the abort narration is interactive-only; §S2 — the state
+            # reached is "aborted at step 0, the regression never ran", so the
+            # next action is the type errors, never the gate's own successor.
             print("[crucible] pre-merge gate FAILED at the tsc check step — skipped the "
-                  "regression. Fix type errors first (or --skip-check to bypass).")
-            return rc
+                  "regression. Fix type errors first (or --skip-check to bypass).",
+                  file=sys.stderr)
+            _emit_axi("pre-merge-gate", False,
+                      {"stage": "check", "exit": state["exit"],
+                       "help": _axi().gate_step_abort_help(
+                           "pre-merge-gate",
+                           "fix the tsc type error(s) reported on stderr "
+                           "(or --skip-check to bypass)")},
+                      _axi_context(project_dir, agent_id=args.agent),
+                      [_axi().gate_step_abort_warning(
+                          "pre-merge-gate", "tsc typecheck",
+                          "the package does not typecheck")],
+                      f"pre-merge-gate: ok=False exit={state['exit']} — "
+                      f"aborted at the tsc check step")
+            return 1
     reg_args = argparse.Namespace(
         agent=args.agent, coverage=True, reports=args.reports, bun=args.bun,
         package_dir=args.package_dir, project_dir=args.project_dir,
         log=getattr(args, "log", None), cycle=getattr(args, "cycle", None),
     )
-    return cmd_regression(reg_args)
+    # §S1 — the regression body emits under THIS gate's verb, so the gate puts
+    # exactly one envelope on stdout under the name the caller invoked.
+    return cmd_regression(reg_args, verb="pre-merge-gate")
 
 
 # ── CR-CRU-008 — plan verbs (plan-file / cycle-activate / cycle-done / cr-close) ──
@@ -1198,7 +1242,7 @@ _HELP_STEPS = {
 }
 
 
-def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent):
+def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=None):
     """Emit the §S1 envelope for an ingest verb
     (test/regression/auto-ingest): run{passed,failed,pending,total,files}.
     `files` (CR-CRU-047 §S2) is the distinct test-FILE count from
@@ -1215,8 +1259,10 @@ def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent):
     context = _axi_context(project_dir, agent_id=agent,
                            cycle_id=_axi().echoed_cycle_id(resp))
     # §S15 — the ingest envelope names the next step (mark the cycle done once
-    # the run is green, else re-list the queue).
-    result_fields = {"run": run, "help": _HELP_STEPS.get(verb, ["status"])}
+    # the run is green, else re-list the queue). CR-CRU-058 §S2 — `help_steps`
+    # lets a GATE caller supply the STATE-DERIVED next step for the run it just
+    # made (`_axi().run_help`); unset keeps today's behaviour exactly.
+    result_fields = {"run": run, "help": help_steps or _HELP_STEPS.get(verb, ["status"])}
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err

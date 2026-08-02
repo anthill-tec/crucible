@@ -674,6 +674,72 @@ def no_title_warning(cr):
     }
 
 
+# ── CR-CRU-058 §S1/§S2 — the toolchain-gate help/warning vocabulary ────────
+#
+# The verbs C3 gives envelopes to (`unit`/`module`/`compile`/`e2e`/`docker-*`/
+# `pre-merge-gate`) exist in four clients with the SAME two states to describe:
+# a run that happened but could not be recorded, and a fail-fast step that
+# aborted the gate before the suite ran. Both live HERE rather than as four
+# per-client copies — the CR-CRU-054 consolidation dividend. They are PURE
+# (no I/O, no globals): the caller passes its own resolved `base_url`.
+
+
+def server_unreachable_help(verb, base_url):
+    """CR-CRU-058 §S2 — the state-derived `help[]` for a run that produced real
+    results but could not record them: pointing at the verb's normal successor
+    would walk the orchestrator past a run that was never ingested."""
+    return [f"check the Crucible server is running / reachable at {base_url}, "
+            f"then re-run {verb} --agent <agentId>",
+            "status"]
+
+
+def ingest_failed_warning(verb, base_url):
+    """CR-CRU-058 §S1 — the structured warning naming the condition behind a
+    completed run whose evidence never reached the board, so a machine caller
+    reading the envelope alone (the human line is stderr-only) learns that the
+    run happened but is NOT recorded. Mirrors `plans_unavailable_warning`."""
+    return {
+        "code": "ingest-failed",
+        "detail": (f"the {verb} run completed but its ingest to {base_url} "
+                   f"did not succeed — the evidence is NOT on the board"),
+    }
+
+
+def run_help(verb, ok, failed, base_url):
+    """CR-CRU-058 §S2 (CR-CRU-048's rule, PURE) — the next step for a
+    test-running verb, derived from the run state ACTUALLY reached: an
+    unrecorded run points at the server, a red run at its failures, a green one
+    at the next workflow move. Never a canned per-verb string."""
+    if not ok and not failed:
+        return server_unreachable_help(verb, base_url)
+    if failed:
+        return [f"fix the {failed} failing test(s), then re-run "
+                f"{verb} --agent <agentId>",
+                "status"]
+    return ["cycle-done <id>", "status"]
+
+
+def gate_step_abort_help(verb, remedy):
+    """CR-CRU-058 §S2 — the `help[]` for a gate that stopped at its fail-fast
+    step: the concrete next action is the step's OWN remedy, then re-running
+    the gate — never the gate's successor, which would skip a suite that never
+    ran."""
+    return [remedy, f"re-run {verb} --agent <agentId>", "status"]
+
+
+def gate_step_abort_warning(verb, step, detail):
+    """CR-CRU-058 §S1 — the structured warning for a gate aborted at `step`,
+    naming what consequently did NOT happen: an ok:false envelope alone would
+    not tell a machine caller that the regression never ran, so the gate says
+    NOTHING about the test suite."""
+    return {
+        "code": "gate-step-abort",
+        "detail": (f"{verb} stopped at its fail-fast {step} step — {detail}; "
+                   f"the regression never ran, so this gate says NOTHING "
+                   f"about the test suite"),
+    }
+
+
 def next_pending_cycle_id(plan, exclude_cycle_id=None):
     """CR-CRU-048 §S1 (PURE) — the id of the NEXT cycle still awaiting work in
     `plan` (a plan dict from a `GET .../plans` payload), or None when none
