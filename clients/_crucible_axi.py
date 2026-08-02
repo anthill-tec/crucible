@@ -1152,6 +1152,268 @@ def cycle_transition(args, project_dir, ops, status):
     return 0 if ok else 1
 
 
+# ── CR-CRU-054 §S2b — the DRIFTED lifecycle/plan verbs, lifted to ONE locus ──
+#
+# These six (plus `_request`, lifted in C2) are the §S2b DRIFTED set: bodies
+# that should have been identical but had diverged, several of them into latent
+# DEFECTS. C4 corrected the behaviour in place across all five clients; this is
+# the lift that makes the corrected version the ONLY version. Every §S2b
+# correction is preserved verbatim here — the correction table lives in
+# docs/changes/CR-CRU-054-client-fleet-dry.md §S2b.
+#
+# What stays a per-client PARAMETER (never flattened into a shared constant —
+# doing so is precisely the silent fleet-wide regression §S1's classification
+# exists to prevent):
+#   * project-dir resolution (each client owns its own .env/layout convention),
+#     passed in ALREADY-RESOLVED per this module's scope boundary;
+#   * the legacy interactive line's wording, where a client has its own
+#     (`legacy_format`);
+#   * a client's own register/unregister payload helper (`register_fn` /
+#     `unregister_fn`) — bun/python send an `identity.repoPath` and expose
+#     `--display-name`, and bun's helper also serves its gate-run brackets;
+#   * arduino's unique self-registration bootstrap (`pre_register`), its
+#     `report` phase floor (`phase_default`) and its message convention
+#     (`message_fn`).
+
+AGENT_REGISTER_PATH = "/api/v2/agents/register"
+AGENT_UNREGISTER_PATH = "/api/v2/agents/unregister"
+
+# CR-CRU-054 §S2b — the fleet's identity `source` default. It MUST be a member
+# of the clients' own documented enum {claude-md, package-json, git-repo,
+# manual}; the historical "openclaw" was outside it and only survived because
+# the server never validated the field.
+DEFAULT_IDENTITY_SOURCE = "claude-md"
+
+
+def cmd_register(args, project_dir, ops, *, register_fn=None, pre_register=None,
+                 phase_default=None, message_fn=None, legacy_format=None):
+    """Register / heartbeat. CR-CRU-056 §S1/§S2 — `--cycle` binds the agent to
+    an ACTIVE cycle of an OPEN plan; the server validates the binding and
+    REQUIRES it for TDD phases (RED/GREEN/FIX/VERIFY) — a refused registration
+    surfaces the server's 409 envelope (error + help) and exits non-zero.
+    ORCHESTRATOR/report may register unbound.
+
+    CR-CRU-054 §S2b (DN §4 finding #3) — the identity is resolved through the
+    fleet's §S5 runtime hard stop, so a missing --agent produces the SAME
+    ok:false AXI envelope every other mutating verb emits, not argparse's bare
+    usage error. Resolved FIRST: nothing is posted (and no per-client
+    `pre_register` bootstrap runs) without it.
+
+    CR-CRU-054 §S2b (DN §4 finding #5) — ONE `source` strategy for the fleet:
+    the configurable `--source` with a fleet-wide `claude-md` default, never a
+    hardcoded value."""
+    agent_id = ops.agent_id(args)
+    if pre_register is not None:
+        pre_register(project_dir)
+    declared_phase = getattr(args, "phase", None)
+    phase = declared_phase or phase_default
+    message = (message_fn(args, declared_phase) if message_fn is not None
+               else (getattr(args, "message", None) or f"Starting {phase} phase"))
+    source = getattr(args, "source", None) or DEFAULT_IDENTITY_SOURCE
+    cycle_id = getattr(args, "cycle", None)
+    if register_fn is not None:
+        resp = register_fn(project_dir, agent_id, message,
+                           display_name=getattr(args, "display_name", None),
+                           source=source, phase=phase, cycle_id=cycle_id)
+    else:
+        payload = {
+            "agentId": agent_id,
+            "projectKey": ops.project_key(project_dir),
+            "status": "online",
+            "message": message,
+            # CR-CRU-044 §S1 — the declared phase is part of the registration
+            # wire contract (the server rejects a registration carrying none).
+            "phase": phase,
+            # displayName MUST go inside `identity` — top-level is ignored by v2.
+            "identity": {"displayName": agent_id, "source": source},
+        }
+        if cycle_id is not None:
+            payload["cycleId"] = cycle_id
+        resp = ops.post(AGENT_REGISTER_PATH, payload)
+    ok = bool(resp.get("ok", False))
+    legacy = (legacy_format.format(agent_id=agent_id, ok=ok, phase=phase,
+                                   source=source, message=message,
+                                   resp_ok=resp.get("ok", False))
+              if legacy_format else
+              f"register: ok={resp.get('ok', False)} agent={agent_id} "
+              f"phase={phase} source={source}")
+    result_fields = {"agent": agent_id, "help": HELP_STEPS["register"]}
+    err = resp.get("error")
+    if err is not None:
+        # Faithful pass-through of the server's 409 envelope (error + help[]).
+        result_fields["error"] = err
+    ops.emit("register", ok, result_fields,
+             ops.context(project_dir, agent_id=agent_id), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_unregister(args, project_dir, ops, *, unregister_fn=None,
+                   legacy_format=None):
+    """Remove the agent row (the v2 unregister VERB — journals an
+    'unregistered' lifecycle event, CR-CRU-011 §S1).
+
+    CR-CRU-054 §S2b (DN §4 finding #3) — identity through the §S5 runtime hard
+    stop, resolved FIRST so nothing is posted without it."""
+    agent_id = ops.agent_id(args)
+    if unregister_fn is not None:
+        resp = unregister_fn(project_dir, agent_id)
+    else:
+        resp = ops.post(AGENT_UNREGISTER_PATH,
+                        {"agentId": agent_id,
+                         "projectKey": ops.project_key(project_dir)})
+    ok = bool(resp.get("ok", False))
+    legacy = (legacy_format.format(agent_id=agent_id, ok=ok,
+                                   resp_ok=resp.get("ok", False))
+              if legacy_format else
+              f"unregister: ok={resp.get('ok', False)} agent={agent_id}")
+    ops.emit("unregister", ok,
+             {"agent": agent_id, "help": HELP_STEPS["unregister"]},
+             ops.context(project_dir, agent_id=agent_id), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_plan_file(args, project_dir, ops):
+    """§S4 — file a workflow plan (CR + its cycles) for this project.
+
+    CR-CRU-056 §S2b — plan-file mutates workflow state, so the registered
+    caller identity is REQUIRED and rides the wire as `agentId`. The same
+    registered id IS the plan's stored orchestrator (the free-text
+    --orchestrator label and its $WORKFLOW_ORCHESTRATOR fallback are retired).
+    Resolve it FIRST: the hard stop must happen before any POST."""
+    agent_id = ops.agent_id(args)
+    labels = [label.strip() for label in args.cycles.split(",") if label.strip()]
+    if not labels:
+        sys.exit("[crucible] ERROR: --cycles must name at least one cycle")
+    payload = {"cr": args.cr, "agentId": agent_id,
+               "cycles": [{"label": label} for label in labels]}
+    if args.title:
+        payload["title"] = args.title
+    wave = args.wave if getattr(args, "wave", None) is not None else os.environ.get("WORKFLOW_WAVE")
+    warnings = []
+    if wave:
+        payload["wave"] = wave
+    else:
+        w = no_wave_warning(args.cr)
+        warnings.append(w)
+        print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
+    if not args.title:
+        wt = no_title_warning(args.cr)
+        warnings.append(wt)
+        print(f"warning: {wt['code']} — {wt['detail']}", file=sys.stderr)
+    track = os.environ.get("WORKFLOW_ROLE")
+    if track:
+        payload["track"] = track
+    # §S2b — the registered caller is the plan's orchestrator; no free text.
+    payload["orchestrator"] = agent_id
+    resp = ops.post(ops.plans_path(project_dir), payload)
+    if not resp.get("ok"):
+        legacy = f"plan-file: ok=False error={resp.get('error')}"
+        # CR-CRU-054 §S2b (DN §4 finding #2) — context.cr rides the FAILURE
+        # envelope too: a plan-file that could not be filed is exactly when the
+        # caller needs to know which CR it was for.
+        ops.emit("plan-file", False, {"cr": args.cr},
+                 ops.context(project_dir, agent_id=agent_id, cr=args.cr),
+                 warnings, legacy)
+        return 1
+    cycles = resp.get("cycles", [])
+    ids = " ".join(f"{c.get('label')}={c.get('id')}" for c in cycles)
+    legacy = (f"plan-file: ok=True planId={resp.get('planId')} cr={resp.get('cr')} "
+              f"cycles: {ids}")
+    ops.emit("plan-file", True,
+             {"planId": resp.get("planId"), "cr": resp.get("cr"), "cycles": cycles,
+              "help": ["cycle-activate <id>"]},
+             ops.context(project_dir, agent_id=agent_id, cr=resp.get("cr") or args.cr),
+             warnings, legacy)
+    return 0
+
+
+def cmd_milestone(args, project_dir, ops):
+    """POST a workflow milestone. §S4b.
+
+    CR-CRU-054 §S2b (DN §4 finding #1) — the legacy line is the INTERACTIVE
+    channel and belongs on stderr; on stdout it corrupts the §S1 envelope
+    stream a machine caller parses."""
+    context = fleet_context(cr=args.cr)
+    resp = ops.post_milestone(project_dir, ops.agent_id(args), args.type,
+                              label=args.label, commit=getattr(args, "commit", None),
+                              context=context or None)
+    ok = resp.get("ok", False)
+    print(f"milestone: ok={ok} type={args.type}"
+          + (f" label={args.label}" if args.label else "")
+          + (f" error={resp.get('error')}" if resp.get("error") else ""),
+          file=sys.stderr)
+    return 0 if ok else 1
+
+
+def remove_agent_silent(project_dir, agent_id, ops):
+    """CR-CRU-008 §S4 anti-ghost cleanup for a gated run: remove the agent row
+    WITHOUT journaling a lifecycle event (a plain unregister would journal an
+    'unregistered' event and bury the run just ingested).
+
+    CR-CRU-056 — call this ONLY for an identity the gated run itself created
+    (`GatedRunIdentity.should_remove`). §S1 stores the cycle binding ON the
+    agent row, so removing a CALLER-owned registration destroys that caller's
+    binding and the next gated run under the same identity ingests unattached.
+
+    CR-CRU-054 §S2b (DN §4 finding #6) — the removal must never crash the
+    closing bracket AND must never be reported as a success it cannot vouch
+    for: the real response is returned when the server answered, and None when
+    the call did not reach it, so `close_gate_identity` can say which
+    happened."""
+    try:
+        return ops.post(AGENT_UNREGISTER_PATH,
+                        {"agentId": agent_id,
+                         "projectKey": ops.project_key(project_dir),
+                         "silent": True})
+    except (OSError, ValueError):
+        # A transport/decode failure here is best-effort cleanup, not a run
+        # verdict — but it is NOT swallowed: None is the caller's signal to
+        # report the outcome as unknown rather than claim a removal.
+        return None
+
+
+def open_gate_identity(project_dir, agent_id, cycle_id, message, ops):
+    """CR-CRU-056 — open a gated run's identity and learn whether the run
+    CREATED it. One phase-optional heartbeat (never /register: the gated verbs
+    declare no phase, and the heartbeat route is the one touch that cannot
+    blank a pre-registered caller's phase); `cycle_id` is the verb's `--cycle`,
+    validated SERVER-side. The returned `GatedRunIdentity` answers
+    `should_remove` for the closing anti-ghost cleanup."""
+    identity = GatedRunIdentity(agent_id, cycle_id)
+    resp = ops.post(identity.PATH,
+                    identity.open_payload(ops.project_key(project_dir),
+                                          message=message))
+    identity.observe(resp)
+    if resp.get("error") is not None or not resp.get("ok", False):
+        print(gate_identity_open_failed_line(agent_id, resp.get("error")),
+              file=sys.stderr)
+    return identity
+
+
+def close_gate_identity(project_dir, identity, ops, remove_fn=None):
+    """CR-CRU-056 — the closing half of the bracket: silently remove the agent
+    row ONLY when this run created it, and SAY SO either way on stderr so the
+    decision is never invisible.
+
+    CR-CRU-054 §S2b (DN §4 finding #6) — the line reports the REAL outcome of
+    the removal (or that it is unknown), never a blanket "removed".
+
+    `remove_fn` is the CLIENT's own silent-removal entry point (its delegator to
+    `remove_agent_silent`), kept a parameter for the same reason `ClientOps` is
+    built fresh per call: the removal stays a patchable seam in the client
+    module the fleet's harness already targets."""
+    if identity is None:
+        return
+    if not identity.should_remove:
+        print(gate_identity_skipped_line(identity.agent_id, identity.confirmed),
+              file=sys.stderr)
+        return
+    cleanup_resp = (remove_fn(project_dir, identity.agent_id) if remove_fn is not None
+                    else remove_agent_silent(project_dir, identity.agent_id, ops))
+    print(gate_identity_cleanup_line(identity.agent_id, cleanup_resp),
+          file=sys.stderr)
+
+
 def post_gate(project_key, agent_id, gate, post_fn, context=None):
     """POST a gate event. `context` is OMITTED entirely when falsy — never a
     fabricated empty dict."""

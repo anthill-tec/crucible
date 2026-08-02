@@ -508,124 +508,45 @@ def cmd_register(args):
     an ACTIVE cycle of an OPEN plan; the server validates the binding and
     REQUIRES it for TDD phases (RED/GREEN/FIX/VERIFY) — a refused registration
     surfaces the server's 409 envelope (error + help) and exits non-zero.
-    ORCHESTRATOR/report may register unbound."""
-    # CR-CRU-054 §S2b (DN §4 finding #3) — the identity is resolved through the
-    # fleet's §S5 runtime hard stop, so a missing --agent produces the SAME
-    # ok:false AXI envelope every other mutating verb emits, not argparse's
-    # bare usage error. Resolved FIRST: nothing is posted without it.
-    agent_id = _agent_id(args)
-    project_dir = _resolve_project_dir(args.project_dir)
-    payload = {
-        "agentId": agent_id,
-        "projectKey": _project_key(project_dir),
-        "status": "online",
-        "message": args.message or f"Starting {args.phase} phase",
-        # CR-CRU-044 §S1 — the declared phase is part of the registration wire
-        # contract (the server rejects a registration that carries none).
-        "phase": args.phase,
-        # displayName MUST go inside `identity` — top-level is ignored by v2.
-        # CR-CRU-054 §S2b — `source` must be a member of the documented
-        # enum {claude-md, package-json, git-repo, manual}; the historical
-        # "openclaw" was outside it and only survived because the server
-        # never validated the field.
-        "identity": {"displayName": agent_id,
-                     "source": getattr(args, "source", None) or "claude-md"},
-    }
-    if args.cycle is not None:
-        payload["cycleId"] = args.cycle
-    resp = _post("/api/v2/agents/register", payload)
-    ok = bool(resp.get("ok", False))
-    legacy = (f"register: ok={resp.get('ok', False)} agent={agent_id} "
-              f"phase={args.phase} source={getattr(args, 'source', None) or 'claude-md'}")
-    result_fields = {"agent": agent_id, "help": _axi().HELP_STEPS["register"]}
-    err = resp.get("error")
-    if err is not None:
-        # Faithful pass-through of the server's 409 envelope (error + help[]).
-        result_fields["error"] = err
-    _emit_axi("register", ok, result_fields,
-              _axi_context(project_dir, agent_id=agent_id), [], legacy)
-    return 0 if ok else 1
+    ORCHESTRATOR/report may register unbound.
+
+    CR-CRU-054 §S2b — delegates to the shared implementation, which owns the
+    §S5 runtime identity hard stop (DN §4 finding #3) and the documented-enum
+    `--source` strategy (finding #5)."""
+    return _axi().cmd_register(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 def cmd_unregister(args):
-    # CR-CRU-054 §S2b (DN §4 finding #3) — identity through the §S5 runtime
-    # hard stop, resolved FIRST so nothing is posted without it.
-    agent_id = _agent_id(args)
-    project_dir = _resolve_project_dir(args.project_dir)
-    resp = _post(
-        "/api/v2/agents/unregister",
-        {"agentId": agent_id, "projectKey": _project_key(project_dir)},
-    )
-    ok = bool(resp.get("ok", False))
-    legacy = f"unregister: ok={resp.get('ok', False)} agent={agent_id}"
-    _emit_axi("unregister", ok,
-              {"agent": agent_id, "help": _axi().HELP_STEPS["unregister"]},
-              _axi_context(project_dir, agent_id=agent_id), [], legacy)
-    return 0 if ok else 1
+    """Remove this agent's row (journals an 'unregistered' lifecycle event).
+
+    CR-CRU-054 §S2b — delegates to the shared implementation, whose §S5 runtime
+    identity hard stop replaced argparse `required=True` (DN §4 finding #3)."""
+    return _axi().cmd_unregister(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 def _remove_agent_silent(project_dir, agent_id):
-    """CR-CRU-008 §S4 anti-ghost cleanup for a gated run: remove the agent row
-    WITHOUT journaling a lifecycle event (a plain unregister would journal an
-    'unregistered' event and bury the run just ingested).
-
-    CR-CRU-056 — call this ONLY for an identity the gated run itself created
-    (`_axi().GatedRunIdentity.should_remove`). §S1 stores the cycle binding ON
-    the agent row, so removing a CALLER-owned registration destroys that
-    caller's binding and the next gated run under the same identity ingests
-    unattached.
-
-    CR-CRU-054 §S2b (DN §4 finding #6) — the removal must never crash the
-    closing bracket AND must never be reported as a success it cannot vouch
-    for: the real response is returned when the server answered, and None when
-    the call did not reach it, so `_close_gate_identity` can say which
-    happened."""
-    try:
-        return _post(
-            "/api/v2/agents/unregister",
-            {"agentId": agent_id, "projectKey": _project_key(project_dir),
-             "silent": True},
-        )
-    except (OSError, ValueError):
-        # A transport/decode failure here is best-effort cleanup, not a run
-        # verdict — but it is NOT swallowed: None is the caller's signal to
-        # report the outcome as unknown rather than claim a removal.
-        return None
+    """CR-CRU-008 §S4 anti-ghost cleanup for a gated run — CR-CRU-054 §S2b thin
+    delegator to `_crucible_axi.remove_agent_silent`, which owns the guarded
+    POST and the honest outcome signal (the real response when the server
+    answered, None when the call never reached it; DN §4 finding #6)."""
+    return _axi().remove_agent_silent(project_dir, agent_id, _ops())
 
 
 def _open_gate_identity(project_dir, agent_id, cycle_id, message):
     """CR-CRU-056 — open a gated run's identity and learn whether the run
-    CREATED it. One phase-optional heartbeat (never /register: the gated verbs
-    declare no phase, and the heartbeat route is the one touch that cannot
-    blank a pre-registered caller's phase); `cycle_id` is the verb's `--cycle`,
-    validated SERVER-side. The returned `GatedRunIdentity` answers
-    `should_remove` for the closing anti-ghost cleanup."""
-    identity = _axi().GatedRunIdentity(agent_id, cycle_id)
-    resp = _post(identity.PATH,
-                 identity.open_payload(_project_key(project_dir), message=message))
-    identity.observe(resp)
-    if resp.get("error") is not None or not resp.get("ok", False):
-        print(_axi().gate_identity_open_failed_line(agent_id, resp.get("error")),
-              file=sys.stderr)
-    return identity
+    CREATED it. CR-CRU-054 §S2b — a thin delegator to
+    `_crucible_axi.open_gate_identity`, which owns the phase-optional heartbeat
+    touch and the documented-enum identity `source`."""
+    return _axi().open_gate_identity(project_dir, agent_id, cycle_id, message, _ops())
 
 
 def _close_gate_identity(project_dir, identity):
-    """CR-CRU-056 — the closing half of the bracket: silently remove the agent
-    row ONLY when this run created it, and SAY SO either way on stderr so the
-    decision is never invisible.
-
-    CR-CRU-054 §S2b (DN §4 finding #6) — the line reports the REAL outcome of
-    the removal (or that it is unknown), never a blanket "removed"."""
-    if identity is None:
-        return
-    if not identity.should_remove:
-        print(_axi().gate_identity_skipped_line(identity.agent_id, identity.confirmed),
-              file=sys.stderr)
-        return
-    cleanup_resp = _remove_agent_silent(project_dir, identity.agent_id)
-    print(_axi().gate_identity_cleanup_line(identity.agent_id, cleanup_resp),
-          file=sys.stderr)
+    """CR-CRU-056 — the closing half of the gated-run bracket. CR-CRU-054 §S2b —
+    a thin delegator to `_crucible_axi.close_gate_identity`, which owns the
+    ownership gate and the honest cleanup reporting (DN §4 finding #6); this
+    module's own silent removal rides along as the client-side seam."""
+    return _axi().close_gate_identity(project_dir, identity, _ops(),
+                                      remove_fn=_remove_agent_silent)
 
 
 def _clean_stale_junit(project_dir, profile=None):
@@ -1532,57 +1453,11 @@ def cmd_docker_e2e_gate(args):
 
 
 def cmd_plan_file(args):
-    # CR-CRU-056 §S2b — plan-file mutates workflow state, so the registered
-    # caller identity is REQUIRED and rides the wire as `agentId`. The same
-    # registered id IS the plan's stored orchestrator (the free-text
-    # --orchestrator label and its $WORKFLOW_ORCHESTRATOR fallback are
-    # retired). Resolve it FIRST: the hard stop must happen before any POST.
-    agent_id = _agent_id(args)
-    project_dir = _resolve_project_dir(args.project_dir)
-    labels = [label.strip() for label in args.cycles.split(",") if label.strip()]
-    if not labels:
-        sys.exit("[crucible] ERROR: --cycles must name at least one cycle")
-    payload = {"cr": args.cr, "agentId": agent_id,
-               "cycles": [{"label": label} for label in labels]}
-    if args.title:
-        payload["title"] = args.title
-    wave = args.wave if getattr(args, "wave", None) is not None else os.environ.get("WORKFLOW_WAVE")
-    warnings = []
-    if wave:
-        payload["wave"] = wave
-    else:
-        w = _axi().no_wave_warning(args.cr)
-        warnings.append(w)
-        print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
-    if not args.title:
-        wt = _axi().no_title_warning(args.cr)
-        warnings.append(wt)
-        print(f"warning: {wt['code']} — {wt['detail']}", file=sys.stderr)
-    track = os.environ.get("WORKFLOW_ROLE")
-    if track:
-        payload["track"] = track
-    # §S2b — the registered caller is the plan's orchestrator; no free text.
-    payload["orchestrator"] = agent_id
-    resp = _post(_plans_path(project_dir), payload)
-    if not resp.get("ok"):
-        legacy = f"plan-file: ok=False error={resp.get('error')}"
-        # CR-CRU-054 §S2b (DN §4 finding #2) — context.cr rides the FAILURE
-        # envelope too: a plan-file that could not be filed is exactly when the
-        # caller needs to know which CR it was for.
-        _emit_axi("plan-file", False, {"cr": args.cr},
-                  _axi_context(project_dir, agent_id=agent_id, cr=args.cr),
-                  warnings, legacy)
-        return 1
-    cycles = resp.get("cycles", [])
-    ids = " ".join(f"{c.get('label')}={c.get('id')}" for c in cycles)
-    legacy = (f"plan-file: ok=True planId={resp.get('planId')} cr={resp.get('cr')} "
-              f"cycles: {ids}")
-    _emit_axi("plan-file", True,
-              {"planId": resp.get("planId"), "cr": resp.get("cr"), "cycles": cycles,
-               "help": ["cycle-activate <id>"]},
-              _axi_context(project_dir, agent_id=agent_id, cr=resp.get("cr") or args.cr),
-              warnings, legacy)
-    return 0
+    """§S4 — file a workflow plan (CR + its cycles). CR-CRU-054 §S2b — delegates
+    to the shared implementation, which owns the §S5 identity hard stop, the
+    wave/title warnings and `context.cr` on BOTH the success and failure
+    envelopes (DN §4 finding #2)."""
+    return _axi().cmd_plan_file(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 def cmd_plan_backfill(args):
@@ -1742,18 +1617,10 @@ def cmd_gate_run(args):
 
 
 def cmd_milestone(args):
-    """POST a workflow milestone. §S4b."""
-    project_dir = _resolve_project_dir(args.project_dir)
-    context = _axi().fleet_context(cr=args.cr)
-    resp = _post_milestone(project_dir, _agent_id(args), args.type,
-                           label=args.label, commit=getattr(args, "commit", None),
-                           context=context or None)
-    ok = resp.get("ok", False)
-    print(f"milestone: ok={ok} type={args.type}"
-          + (f" label={args.label}" if args.label else "")
-          + (f" error={resp.get('error')}" if resp.get("error") else ""),
-          file=sys.stderr)
-    return 0 if ok else 1
+    """POST a workflow milestone. §S4b — CR-CRU-054 §S2b delegator to the shared
+    implementation, which writes the legacy line to STDERR so it can never
+    corrupt the §S1 envelope stream (DN §4 finding #1)."""
+    return _axi().cmd_milestone(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 _DASHBOARD_PURPOSE_LINE = (
