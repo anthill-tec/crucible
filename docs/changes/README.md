@@ -54,7 +54,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-048](CR-CRU-048-state-derived-help-and-close-guard.md) | AXI `help[]` must be state-derived (`cycle-done` said `cr-close` with VERIFY pending) + `cr-close` must refuse an incomplete plan | patch | COMPLETED | 011, 024, 030, 036 | 4 |
 | [CR-CRU-049](CR-CRU-049-mvn-narration-hardening.md) | Audit + harden `mvn-crucible.py` narration against environment-dependent output (the CR-047 defect class, unaudited in the mvn client) | patch | PENDING | 008, 047 | 4 |
 | [CR-CRU-050](CR-CRU-050-skip-folds-into-passed.md) | Skipped/todo tests counted as PASSED in the ingest envelope — `_parse_junit_file` never checks `<skipped/>`; reproduced live (bun 29 pass/1 skip → envelope passed=30) | patch | COMPLETED | 039, 047 | 4 |
-| [CR-CRU-051](CR-CRU-051-files-count-fleet-parity.md) | Propagate the run-envelope `files` count (CR-047 §S2) to python/rust×2/mvn/arduino — fleet parity on the shrinking-suite signal | patch | PENDING | 047, 050 | 4 |
+| [CR-CRU-051](CR-CRU-051-files-count-fleet-parity.md) | Propagate the run-envelope `files` count (CR-047 §S2) to python/rust×2/mvn/arduino — fleet parity on the shrinking-suite signal | patch | COMPLETED | 047, 050 | 4 |
 | [CR-CRU-052](CR-CRU-052-project-teardown.md) | Projects can be created but never deleted — guarded `DELETE /api/v2/projects/<key>` with cascade + harness teardown/ephemeral-target guard; purge the 6 residue projects | feature | PENDING | 012, 032 | 4 |
 | [CR-CRU-053](CR-CRU-053-retired-mirror-references.md) | Test headers still present the retired `~/.claude/scripts` mirror as the client source (one hands out a `grep` command against it) — running it orphans runs | patch | PENDING | 008, 009, 042 | 4 |
 | [CR-CRU-054](CR-CRU-054-client-fleet-dry.md) | The client fleet is 44 functions copy-pasted 5× (shared module holds 19, overlap of 1) — lift into `_crucible_axi.py` + a drift guard; the multiplier behind every 5× client fix | maintenance | COMPLETED | 030 | 4 |
@@ -251,7 +251,8 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `tests="1061" skipped="1"` ingested as `passed=1061`, and a python report `tests="2" skipped="2"`
   (an entire class where nothing ran) ingested as `passed=2` — so this project's own published
   gate figures are inflated, the failure mode CR-039/CR-047 exist to prevent.
-- 2026-08-02 (CR-CRU-051 C2 finding — deferred, needs scheduling) — **two rust verbs emit no
+- 2026-08-02 (CR-CRU-051 C2 finding — **FILED as CR-CRU-058** on user direction; the follow-up
+  audit widened it from two verbs to NINE, including `pre-merge-gate`) — two rust verbs emit no
   TOON-AXI envelope at all.** `regression-ingest` and `workspace-regression` print a bare
   `print(f"regression: ok=…")` and never call `_emit_axi`/`_emit_ingest_axi`, so an agent consuming
   their stdout gets no structured envelope, no `help[]`, no `context` — the AXI contract CR-CRU-030
