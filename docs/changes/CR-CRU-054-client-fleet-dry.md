@@ -144,6 +144,17 @@ against the enum. That is a server-side input-validation gap, a different stack 
 this client-refactor CR; folding it in would turn a DRY refactor into a server CR. Recorded in the
 queue Notes with evidence for scheduling.
 
+### §S3b — Backlog the guard revealed but does NOT assert on (C5, 2026-08-02)
+The §S3 guard's blocking assertion covers **THE_42 only**. A full-fleet sweep found roughly **25
+further duplicated names outside the inventory** — docker-compose helpers shared by rust/mvn,
+`_parse_junit`/`cmd_compile` shared by mvn/arduino, `_read_env`, `_run_logged` and others. The DN
+never classified these, so guarding them would mean inventing per-client verdicts nobody has
+reviewed — the scope absorption this CR's own Risk section warns against.
+
+Recorded as backlog, deliberately un-asserted. A future CR inventories and lifts them; the guard's
+analyser already handles arbitrary sources, so widening its scope later is a one-line change once
+the classification exists.
+
 ### §S4 — Behaviour is unchanged, with ONE bounded carve-out
 This is a refactor. For the **27 SHARED + 1 PARAMETERISED** functions, every existing client test
 must pass **unmodified** — a test needing a change is evidence the move changed behaviour; stop
