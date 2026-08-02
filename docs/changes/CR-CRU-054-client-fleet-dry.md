@@ -95,6 +95,23 @@ explicit, justified per-client allow-list (the §S1 GENUINELY-PER-CLIENT set). W
 fleet re-diverges the first time someone copies a helper, and the whole exercise is undone by
 attrition.
 
+### §S1b — SHARED splits in two: ALREADY-DELEGATED vs NEEDS-LIFT (refinement, C3 RED 2026-08-02)
+The "42 functions defined in all five clients" headline counts NAMES, not duplicated LOGIC. C3's
+RED pass read all five bodies of its nine candidates and found `_axi_context`, `_emit_axi` and
+`_agent_id` are **already thin delegators** — the logic has lived in `_crucible_axi.py` since
+CR-030/CR-044 §S5, and the local `def` survives only because tests patch it and internal call
+sites use the unqualified name. That is the TARGET state, not the problem state.
+
+So SHARED must be read as two sub-categories:
+- **ALREADY-DELEGATED** — name present five times, logic shared once. Nothing to do; a
+  "single locus" test for these is born green and is not a valid RED.
+- **NEEDS-LIFT** — logic genuinely duplicated five times. The real work.
+
+This does not invalidate C1's classification (SHARED is correct for all three); it means the
+inventory measures consistency, not remaining work. Each lift cycle establishes its own slice's
+sub-category by reading the bodies, and the §S3 drift guard reconciles the DN at the end. The
+CR's line-count AC is the honest measure of remaining work — the name count is not.
+
 ### §S2b — The DRIFTED eight lift to their CORRECT version (ruling 2026-08-02, after C1's inventory)
 C1's classification found a category the original spec did not anticipate: **8 of the 42 have
 bodies that should be identical but are not**, and several are latent DEFECTS rather than style
