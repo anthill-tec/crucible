@@ -580,51 +580,74 @@ class EnvelopeCensusTest(unittest.TestCase):
             f"empty entry means enumeration broke for that client, not "
             f"that it legitimately has zero verbs): {empty!r}")
 
-    def test_rust_nine_verbs_confirmed_envelope_less(self):
-        """The CR's Context table (hand-traced) named nine rust verbs as
-        bare. Independently confirmed here by READING each function body:
+    def test_rust_nine_verbs_confirmed_enveloped(self):
+        """CR-CRU-058 §S3 re-point (this is the RED-cycle predecessor
+        test's inversion, not a new finding -- C1/C2's
+        `test_rust_nine_verbs_confirmed_envelope_less` pinned the nine
+        rust verbs the CR's Context table (hand-traced) named as bare:
         `cmd_regression_ingest`/`_regression_ingest_run`,
         `_workspace_regression_run` (via `cmd_workspace_regression`),
         `cmd_pre_merge_gate`, `cmd_clippy`, `cmd_workspace_clippy` (via
         `_clippy_workspace_gate`), `cmd_smoke_test`, `cmd_docker_up`,
-        `cmd_docker_down` and `cmd_docker_e2e_gate` (a thin wrapper over
-        `cmd_smoke_test`) each end in a plain `print(...)`, never an
-        `_emit_axi`/`_axi().emit` call -- this asserts the DYNAMIC census
-        agrees with that static reading."""
-        expected_bare = {
+        `cmd_docker_down` and `cmd_docker_e2e_gate`. C3 GREEN-a gave every
+        one of them a shared-emitter `_emit_axi` call (confirmed by
+        reading each body: none end in a bare `print(...)` any more).
+        Never silently -- this re-point asserts the fix, and additionally
+        that rust's fleet-wide bare count is now exactly zero, so a future
+        regression that re-bares even ONE of these nine is caught even if
+        it happens to leave the other eight enveloped."""
+        expected_now_enveloped = {
             "regression-ingest", "workspace-regression", "pre-merge-gate",
             "clippy", "workspace-clippy", "smoke-test", "docker-up",
             "docker-down", "docker-e2e-gate",
         }
         rust = self.census["rust"]
-        missing_from_enumeration = expected_bare - set(rust)
+        missing_from_enumeration = expected_now_enveloped - set(rust)
         self.assertEqual(
             missing_from_enumeration, set(),
             f"the CR's nine named rust verbs must all still exist in "
             f"rust's argparse: missing {missing_from_enumeration!r}")
-        still_enveloped = {v for v in expected_bare if rust.get(v)}
+        still_bare = {v for v in expected_now_enveloped if not rust.get(v)}
         self.assertEqual(
-            still_enveloped, set(),
-            f"the CR's nine rust verbs must all still be measured as "
-            f"envelope-less today (this cycle only measures, it does not "
-            f"fix) -- any verb here would mean it already got an envelope "
-            f"since the CR was filed: {still_enveloped!r}")
+            still_bare, set(),
+            f"the CR's nine rust verbs must all show ENVELOPED (a "
+            f"decodable 'axi:' with the right verb) after C3 GREEN-a's "
+            f"shared-emitter fix -- any verb here means it regressed back "
+            f"to bare: {still_bare!r}")
+        for verb in expected_now_enveloped:
+            axi = rust.get(verb)
+            self.assertEqual(
+                axi.get("verb"), verb,
+                f"rust's {verb!r} envelope must carry verb={verb!r}, got "
+                f"{axi.get('verb')!r}")
+        fleet_bare = {v for v, ok in rust.items() if not ok}
+        self.assertEqual(
+            fleet_bare, set(),
+            f"rust's fleet-wide envelope census must now be zero bare "
+            f"(CR-CRU-058 C3 GREEN-a: rust census 9 -> 0): {fleet_bare!r}")
 
-    def test_rust_check_confirmed_enveloped_unlike_its_clippy_sibling(self):
-        """The CR's own Context section named only `clippy`, not `check`,
-        as bare -- confirmed by reading `cmd_check`'s body (ends in a real
-        `_emit_axi("check", ok, ...)` call) versus `cmd_clippy`'s (plain
-        `print(...)` only, no emitter at all). The census must agree with
-        that asymmetry, or the detector's positive/negative discrimination
-        itself is broken."""
+    def test_rust_check_and_clippy_both_confirmed_enveloped(self):
+        """CR-CRU-058 §S3 re-point (inversion of C1/C2's
+        `test_rust_check_confirmed_enveloped_unlike_its_clippy_sibling`,
+        which pinned an asymmetry: `cmd_check` already called
+        `_emit_axi` while `cmd_clippy` was a plain `print(...)` with no
+        emitter at all). C3 GREEN-a closed that gap -- `cmd_clippy` now
+        also ends in a real `_emit_axi("clippy", ok, ...)` call (confirmed
+        by reading its body). The asymmetry this test used to document is
+        gone; re-pointed to assert BOTH verbs emit, never silently
+        loosened back to only checking one side."""
+        check_axi = self.census["rust"].get("check")
+        clippy_axi = self.census["rust"].get("clippy")
         self.assertTrue(
-            self.census["rust"].get("check"),
+            check_axi,
             "rust's 'check' verb calls _emit_axi directly and must show "
             "enveloped")
-        self.assertFalse(
-            self.census["rust"].get("clippy"),
-            "rust's 'clippy' verb has no _emit_axi call anywhere in its "
-            "body and must show envelope-less")
+        self.assertEqual(check_axi.get("verb"), "check")
+        self.assertTrue(
+            clippy_axi,
+            "rust's 'clippy' verb now also calls _emit_axi (C3 GREEN-a) "
+            "and must show enveloped, not envelope-less")
+        self.assertEqual(clippy_axi.get("verb"), "clippy")
 
     def test_mvn_unit_module_compile_e2e_confirmed_envelope_less(self):
         """Gap-analysis finding (CR's own retracted non-goal: "mvn cmd_unit/

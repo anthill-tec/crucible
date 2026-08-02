@@ -819,7 +819,7 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 1 (regres
     return { dir, path };
   }
 
-  test("§S1/§S1b: counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), pass/fail leaves unaffected; §S2 (extended): the plain 'regression: ...' stdout line (rust-crucible.py:818) also carries pending=1", async () => {
+  test("§S1/§S1b: counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), pass/fail leaves unaffected; §S2 (extended), CR-CRU-058 §S3 re-point: the §S1 TOON envelope's run: block on stdout (the 'regression: ...' prose moved to stderr when regression-ingest got a shared-emitter call) also carries pending=1", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-cr050-regression-ingest");
@@ -859,10 +859,15 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 1 (regres
     expect(passLeaf?.status).toBe("pass");
     expect(failLeaf?.status).toBe("fail");
 
-    // §S2 (extended) — the plain "regression: ..." stdout line (no TOON
-    // envelope exists for this verb — it prints its own summary directly).
-    expect(res.stdout).toContain("regression:");
-    expect(res.stdout).toContain("pending=1");
+    // §S2 (extended), CR-CRU-058 §S3 re-point: regression-ingest now emits a
+    // real §S1 TOON envelope on stdout (C3 GREEN-a gave it a shared-emitter
+    // call; the "regression: ..." prose narration moved to stderr, §S3
+    // purity) — the CR-CRU-050 substance this test guards (pending=1) rides
+    // the STRUCTURED run: block now, never silently dropped.
+    expect(res.stdout).toContain("verb: regression-ingest");
+    const runBlock = extractRunBlock(res.stdout);
+    expect(runBlock).toBeDefined();
+    expect(runBlock).toContain("pending: 1");
   });
 });
 
@@ -876,7 +881,7 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 2 (worksp
     scratch.cleanup();
   });
 
-  test("§S1/§S1b: counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), pass/fail leaves unaffected; §S2 (extended): the plain 'workspace regression: ...' stdout line (rust-crucible.py:1352) also carries pending=1", async () => {
+  test("§S1/§S1b: counts the skipped testcase as pending=1 (never folded into passed), the skipped leaf carries tree status 'pending' (not 'pass'), pass/fail leaves unaffected; §S2 (extended), CR-CRU-058 §S3 re-point: the §S1 TOON envelope's run: block on stdout (the 'workspace regression: ...' prose moved to stderr when workspace-regression got a shared-emitter call) also carries pending=1", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-cr050-workspace-regression");
@@ -935,9 +940,16 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S1/§S1b/§S2 site 2 (worksp
     expect(passLeaf?.status).toBe("pass");
     expect(failLeaf?.status).toBe("fail");
 
-    // §S2 (extended) — the plain "workspace regression: ..." stdout line.
-    expect(res.stdout).toContain("workspace regression:");
-    expect(res.stdout).toContain("pending=1");
+    // §S2 (extended), CR-CRU-058 §S3 re-point: workspace-regression now
+    // emits a real §S1 TOON envelope on stdout (C3 GREEN-a gave it a
+    // shared-emitter call; the "workspace regression: ..." prose narration
+    // moved to stderr, §S3 purity) — the CR-CRU-050 substance this test
+    // guards (pending=1) rides the STRUCTURED run: block now, never
+    // silently dropped.
+    expect(res.stdout).toContain("verb: workspace-regression");
+    const runBlock = extractRunBlock(res.stdout);
+    expect(runBlock).toBeDefined();
+    expect(runBlock).toContain("pending: 1");
   });
 });
 
@@ -1010,7 +1022,7 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S2: auto-ingest's junit-dir 
   });
 });
 
-describe("clients/rust-crucible.py — CR-CRU-050 §S2 (extended): smoke-test's inline 'smoke-test: ...' stdout print line (rust-crucible.py:1199-1202) also carries pending", () => {
+describe("clients/rust-crucible.py — CR-CRU-050 §S2 (extended), CR-CRU-058 §S3 re-point: smoke-test's §S1 TOON envelope run: block on stdout (the inline 'smoke-test: ...' prose moved to stderr when smoke-test got a shared-emitter call) also carries pending", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratch = makeScratchTracker();
 
@@ -1020,7 +1032,7 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S2 (extended): smoke-test's 
     scratch.cleanup();
   });
 
-  test("with a real skipped testcase pre-placed at target/nextest/ci/junit.xml and a fake no-op cargo, 'smoke-test' (--clean/--all-features/--with-docker all default-off) ingests via the server's junit codec (event.summary.pending=1 confirmed) and its own print line carries pending=1", async () => {
+  test("with a real skipped testcase pre-placed at target/nextest/ci/junit.xml and a fake no-op cargo, 'smoke-test' (--clean/--all-features/--with-docker all default-off) ingests via the server's junit codec (event.summary.pending=1 confirmed) and its stdout §S1 TOON envelope's run: block carries pending=1", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-cr050-smoke-test");
@@ -1055,8 +1067,15 @@ describe("clients/rust-crucible.py — CR-CRU-050 §S2 (extended): smoke-test's 
     expect(event.summary?.pending).toBe(1);
     expect(res.code).toBe(0);
 
-    expect(res.stdout).toContain("smoke-test:");
-    expect(res.stdout).toContain("pending=1");
+    // CR-CRU-058 §S3 re-point: smoke-test now emits a real §S1 TOON
+    // envelope on stdout (C3 GREEN-a gave it a shared-emitter call; the
+    // "smoke-test: ..." prose narration moved to stderr, §S3 purity) — the
+    // CR-CRU-050 substance this test guards (pending=1) rides the
+    // STRUCTURED run: block now, never silently dropped.
+    expect(res.stdout).toContain("verb: smoke-test");
+    const runBlock = extractRunBlock(res.stdout);
+    expect(runBlock).toBeDefined();
+    expect(runBlock).toContain("pending: 1");
   });
 });
 
