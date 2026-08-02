@@ -925,5 +925,280 @@ class UnmeasurableVerbClassificationTest(unittest.TestCase):
             f"own auto-exit is not a registered subcommand): {offenders!r}")
 
 
+# ── CR-CRU-058 §S4 -- the guard's own proof-of-capability ──────────────────
+#
+# AC (verbatim): "The §S4 guard fails when a verb is added without an
+# envelope -- proven by adding one temporarily." A guard nobody has watched
+# fail is a guard nobody knows works -- the entire lesson of this CR: three
+# separate grep sweeps gave three wrong answers, and only DRIVING the code
+# found the truth. The two classes below apply that same skepticism to the
+# detector itself, rather than trusting "the fleet census currently reads
+# zero" as proof the machinery works.
+#
+# `SyntheticSourceEnvelopeDetectorProofTest` builds a client-shaped module
+# the detector has never seen. `RealClientCopyEnvelopeDetectorProofTest`
+# mirrors CR-CRU-054 §S3's own on-scratch-disk proof
+# (`DriftGuardCatchesReintroducedDuplicateOnScratchFilesTest`, in the sibling
+# `test_cr054_drift_guard.py`): copy a REAL client into a tmpdir and append a
+# genuinely bare verb, never touching `clients/` itself. Both drive the EXACT
+# SAME `enumerate_verbs`/`build_argv`/`drive_verb`/`classify_envelope`
+# machinery `_get_census()` uses above -- proving the machinery detects a
+# bare verb, not merely that today's fleet happens to be clean. These tests
+# are expected to PASS on arrival: the capability they assert already
+# exists; that is correct for a proof-of-capability cycle.
+#
+# These two classes are kept in THIS file, not a sibling, because -- unlike
+# CR-054 §S3's split (a classification-DATA fixture vs. its own enforcement
+# mechanism) -- the thing under proof here IS this file's own machinery
+# (`enumerate_verbs`, `build_argv`, `drive_verb`, `classify_envelope`,
+# `CLIENT_FILES`, `_build_fake_bin_dir`, `_make_project_dir`). Reusing those
+# functions directly, rather than re-loading them by path into a second
+# module, keeps the proof and the thing it proves from ever silently
+# drifting apart.
+
+_SYNTHETIC_CLIENT_SOURCE = r'''#!/usr/bin/env python3
+"""A client-shaped module the detector has never seen -- built ONLY for
+CR-CRU-058 SS4's proof-of-capability, never imported by anything else."""
+
+import argparse
+import importlib.util
+import sys
+from pathlib import Path
+
+
+def _toon():
+    """Loads the REAL toon.py copied alongside this script (never a
+    hand-rolled TOON string) so the emitted envelope is genuinely
+    round-trippable, exactly like a real client's own bootstrap loader."""
+    toon_path = Path(__file__).resolve().parent / "toon.py"
+    spec = importlib.util.spec_from_file_location("synthetic_toon_under_proof", toon_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="synthetic-crucible")
+    sub = parser.add_subparsers(dest="verb")
+
+    bare = sub.add_parser("bare-verb")
+    bare.add_argument("--agent")
+
+    enveloped = sub.add_parser("enveloped-verb")
+    enveloped.add_argument("--agent")
+
+    args = parser.parse_args()
+
+    if args.verb == "bare-verb":
+        # Exactly the shape a careless toolchain-verb addition takes: a
+        # human-readable line, no axi: block, no emitter call anywhere.
+        print("synthetic: bare-verb ran fine, nothing structured here")
+        sys.exit(0)
+    elif args.verb == "enveloped-verb":
+        axi = {"verb": "enveloped-verb", "ok": True, "context": {}, "warnings": []}
+        sys.stdout.write(_toon().encode({"axi": axi}) + "\n")
+        sys.exit(0)
+    else:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+_SCRATCH_BARE_VERB_FUNCTION_SOURCE = '''
+def cmd_cr058_scratch_bare_verb(args):
+    """A genuinely bare verb, appended ONLY to a scratch tmpdir copy of a
+    real client for CR-CRU-058 S4's proof-of-capability -- prints prose, no
+    axi: block, no _emit_axi call anywhere in its body. Exactly the shape a
+    careless toolchain-verb addition would take."""
+    print("cr058-scratch: bare verb ran fine, nothing structured here")
+    return 0
+
+'''
+
+
+class SyntheticSourceEnvelopeDetectorProofTest(unittest.TestCase):
+    """§S4 AC, first half: the SAME machinery `_get_census()` drives above,
+    pointed at a client-shaped module the detector has never seen -- proves
+    the DETECTOR's capability, not merely today's fleet snapshot."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp_dir = Path(tempfile.mkdtemp(prefix="cr058-s4-synthetic-"))
+        cls.script_path = cls.tmp_dir / "synthetic-crucible.py"
+        cls.script_path.write_text(_SYNTHETIC_CLIENT_SOURCE)
+        shutil.copy(TOON_PATH, cls.tmp_dir / "toon.py")
+        cls.toon_module = _load_toon_module()
+        cls.fake_bin_dir = _build_fake_bin_dir()
+        cls.project_dir = Path(tempfile.mkdtemp(prefix="cr058-s4-synthetic-project-"))
+        cls.verbs = enumerate_verbs("synthetic", cls.script_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp_dir, ignore_errors=True)
+        shutil.rmtree(cls.fake_bin_dir, ignore_errors=True)
+        shutil.rmtree(cls.project_dir, ignore_errors=True)
+
+    def test_enumeration_finds_both_synthetic_verbs_from_its_own_real_argparse(self):
+        self.assertEqual(
+            set(self.verbs), {"bare-verb", "enveloped-verb"},
+            f"enumerate_verbs must read the synthetic module's OWN argparse "
+            f"choices, not a hardcoded list: got {sorted(self.verbs)!r}")
+
+    def test_synthetic_bare_verb_is_flagged_envelope_less_by_the_real_detector(self):
+        argv = build_argv("bare-verb", self.verbs["bare-verb"], self.project_dir)
+        result = drive_verb(self.script_path, argv, self.project_dir, self.fake_bin_dir)
+        emits, axi = classify_envelope(result.stdout, self.toon_module)
+        self.assertFalse(
+            emits,
+            f"the synthetic bare-verb prints prose only, no axi: block -- "
+            f"the detector must classify it envelope-less, proving the "
+            f"machinery detects a bare verb rather than merely reporting "
+            f"today's fleet as clean; raw stdout was {result.stdout!r}, "
+            f"exit code {result.returncode}, stderr {result.stderr!r}")
+        self.assertIsNone(axi)
+
+    def test_synthetic_enveloped_verb_is_not_flagged_positive_control(self):
+        """Requirement 3's positive control, in this same file: a verb that
+        genuinely emits (through the REAL toon encoder, not a hand-rolled
+        string) must NOT be flagged -- otherwise a detector that flagged
+        everything would also have passed the test above."""
+        argv = build_argv("enveloped-verb", self.verbs["enveloped-verb"], self.project_dir)
+        result = drive_verb(self.script_path, argv, self.project_dir, self.fake_bin_dir)
+        emits, axi = classify_envelope(result.stdout, self.toon_module)
+        self.assertTrue(
+            emits,
+            f"the synthetic enveloped-verb emits a real axi: block through "
+            f"the real toon encoder -- it must NOT be flagged envelope-less; "
+            f"raw stdout was {result.stdout!r}")
+        self.assertEqual(axi.get("verb"), "enveloped-verb")
+        self.assertIs(axi.get("ok"), True)
+
+
+class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
+    """§S4 AC, second half: mirrors CR-CRU-054 §S3's own on-disk proof
+    (`DriftGuardCatchesReintroducedDuplicateOnScratchFilesTest`) -- copy a
+    REAL client (python) plus its two sibling shared modules into a scratch
+    tmpdir, append a genuinely bare verb to its argparse + dispatch, and
+    drive it through the SAME detector machinery. `clients/` itself is never
+    touched -- confirmed below."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.original_python_source = CLIENT_FILES["python"].read_text()
+        assert cls.original_python_source.count("def main():") == 1, (
+            "python-crucible.py's main() shape changed -- update this "
+            "proof's insertion point")
+        assert "    args = p.parse_args()" in cls.original_python_source, (
+            "python-crucible.py's dispatch shape changed -- update this "
+            "proof's insertion point")
+
+        cls.tmp_dir = Path(tempfile.mkdtemp(prefix="cr058-s4-real-copy-"))
+        shutil.copy(CLIENTS_DIR / "_crucible_axi.py", cls.tmp_dir / "_crucible_axi.py")
+        shutil.copy(TOON_PATH, cls.tmp_dir / "toon.py")
+
+        # The bare verb's function definition must sit BEFORE `def main():`
+        # in the file: the real client's trailing `if __name__ == "__main__":
+        # main()` guard fires during a genuine subprocess drive (unlike
+        # enumeration's in-process module load, which calls module.main()
+        # explicitly AFTER exec_module already ran top-to-bottom), so the
+        # function must already be bound by the time main() references it
+        # in set_defaults(func=...).
+        patched = cls.original_python_source.replace(
+            "def main():",
+            _SCRATCH_BARE_VERB_FUNCTION_SOURCE + "\ndef main():",
+            1,
+        )
+        wiring = (
+            '    scratch = sub.add_parser("cr058-scratch-bare-verb",\n'
+            '                             help="CR-CRU-058 S4 proof-only bare verb")\n'
+            '    scratch.add_argument("--agent")\n'
+            '    scratch.set_defaults(func=cmd_cr058_scratch_bare_verb)\n\n'
+        )
+        patched = patched.replace(
+            "    args = p.parse_args()", wiring + "    args = p.parse_args()", 1)
+
+        cls.scratch_script = cls.tmp_dir / "scratch-python-crucible.py"
+        cls.scratch_script.write_text(patched)
+
+        cls.fake_bin_dir = _build_fake_bin_dir()
+        cls.project_dir = _make_project_dir("python")
+        cls.toon_module = _load_toon_module()
+        cls.pristine_verbs = enumerate_verbs("python", CLIENT_FILES["python"])
+        cls.scratch_verbs = enumerate_verbs("scratch-python", cls.scratch_script)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp_dir, ignore_errors=True)
+        shutil.rmtree(cls.fake_bin_dir, ignore_errors=True)
+        shutil.rmtree(cls.project_dir, ignore_errors=True)
+
+    def test_real_clients_directory_was_never_modified(self):
+        self.assertNotIn(
+            "cr058-scratch-bare-verb", CLIENT_FILES["python"].read_text(),
+            "this proof must never mutate clients/python-crucible.py itself")
+        self.assertEqual(
+            CLIENT_FILES["python"].read_text(), self.original_python_source,
+            "clients/python-crucible.py must be byte-identical before and "
+            "after this proof -- only the scratch tmpdir copy is patched")
+
+    def test_enumeration_grows_by_exactly_the_one_appended_verb_with_no_hand_list_to_update(self):
+        """Requirement 4: guard the ENUMERATION step too. If `enumerate_verbs`
+        read from a hand-maintained list of known verb names instead of the
+        real argparse `_SubParsersAction.choices`, `cr058-scratch-bare-verb`
+        would have silently gone unmeasured here -- exactly the failure mode
+        this whole detector exists to prevent (the CR's own history: three
+        grep sweeps gave three wrong answers by reasoning about verbs from
+        memory/text, never argparse's own ground truth). A future engineer
+        who adds a real verb and never touches this test file still gets it
+        measured, because enumeration re-reads the parser fresh every run --
+        there is no list here to have forgotten to update."""
+        added = set(self.scratch_verbs) - set(self.pristine_verbs)
+        removed = set(self.pristine_verbs) - set(self.scratch_verbs)
+        self.assertEqual(
+            added, {"cr058-scratch-bare-verb"},
+            f"the scratch copy's enumerated verbs must be exactly the "
+            f"pristine client's verbs plus the one appended verb: "
+            f"pristine={sorted(self.pristine_verbs)!r} "
+            f"scratch={sorted(self.scratch_verbs)!r}")
+        self.assertEqual(
+            removed, set(),
+            "appending a verb must never make an existing verb vanish from "
+            "enumeration")
+
+    def test_appended_bare_verb_is_flagged_envelope_less_on_a_real_client_copy(self):
+        argv = build_argv(
+            "cr058-scratch-bare-verb", self.scratch_verbs["cr058-scratch-bare-verb"],
+            self.project_dir)
+        result = drive_verb(self.scratch_script, argv, self.project_dir, self.fake_bin_dir)
+        emits, axi = classify_envelope(result.stdout, self.toon_module)
+        self.assertFalse(
+            emits,
+            f"a genuinely bare verb appended to a REAL client copy must be "
+            f"flagged envelope-less by the same detector machinery the "
+            f"fleet-wide census uses above -- the AC's exact proof ('the "
+            f"guard fails when a verb is added without an envelope'); raw "
+            f"stdout was {result.stdout!r}, stderr {result.stderr!r}, exit "
+            f"code {result.returncode}")
+        self.assertIsNone(axi)
+
+    def test_preexisting_status_verb_on_the_same_scratch_copy_is_still_correctly_enveloped(self):
+        """Requirement 3's positive control, on REAL (not synthetic) source
+        this time: the scratch copy's own pre-existing `status` verb --
+        untouched by the append -- must still show enveloped, proving
+        detection discriminates on a real client body in both directions,
+        not merely alarmist."""
+        argv = build_argv("status", self.scratch_verbs["status"], self.project_dir)
+        result = drive_verb(self.scratch_script, argv, self.project_dir, self.fake_bin_dir)
+        emits, axi = classify_envelope(result.stdout, self.toon_module)
+        self.assertTrue(
+            emits,
+            f"the scratch copy's pre-existing 'status' verb must still show "
+            f"enveloped after appending an unrelated bare verb elsewhere in "
+            f"the file; raw stdout was {result.stdout!r}")
+        self.assertEqual(axi.get("verb"), "status")
+
+
 if __name__ == "__main__":
     unittest.main()
