@@ -686,16 +686,37 @@
         }),
       );
 
-    // CR-CRU-044 §S2 — an event is tinted by its OWNING agent's stored phase.
-    // The agent is resolved off the `state.agents` slice by agentId (same
-    // lookup CrAgentRuntime uses); an event with no matching record yields
-    // `undefined`, which `L.agentRole` treats as absent and falls back to the
-    // historical `phaseRole(agentId)` classification.
-    const eventRole = (e) =>
-      L.agentRole({
-        agentId: e.agentId,
-        phase: state.agents.find((a) => a.agentId === e.agentId)?.phase,
-      });
+    // CR-CRU-044 §S2 / CR-CRU-057 §S2 — an event is tinted by a STORED phase,
+    // never by the shape of its agentId. A LIVE agent's declaration wins (it is
+    // resolved off the `state.agents` slice by agentId, the same lookup
+    // CrAgentRuntime uses); once that agent unregisters its record is gone, so
+    // classification falls through to the phase stamped onto the EVENT itself
+    // at ingest time (§S1), which outlives the agent. Neither present -> the
+    // event is simply unclassified.
+    const eventPhase = (e) => {
+      const live = state.agents.find((a) => a.agentId === e.agentId)?.phase;
+      if (live !== undefined && live !== null) return { phase: live, inferred: false };
+      const stored = e.phase;
+      if (stored === undefined || stored === null) return { phase: null, inferred: false };
+      // §S4 — a phase recovered by the one-time backfill is DOM-distinguishable
+      // from a declared one, so backfilled history is never read as declared.
+      return { phase: stored, inferred: e.phaseInferred === true };
+    };
+
+    const eventRole = (e) => L.agentRole({ agentId: e.agentId, phase: eventPhase(e).phase });
+
+    // The tintable card-icon wrapper, shared by every run-entry render site.
+    const eventIconProps = (e) => {
+      const { inferred } = eventPhase(e);
+      const role = eventRole(e);
+      const props = {
+        "data-testid": "card-icon",
+        "data-icon-tintable": "true",
+        class: `app-card-icon${role !== null ? ` app-role-${role}` : ""}`,
+      };
+      if (inferred) props["data-phase-inferred"] = "true";
+      return props;
+    };
 
     const EventCard = (e) =>
       div(
@@ -709,20 +730,13 @@
         },
         // §S1 — the kind icon is tinted by the agent's phase role (RED red /
         // GREEN green / VERIFY purple / FIX yellow); roleless stays neutral.
-        // CR-CRU-044 §S2 — the role comes from the OWNING agent's stored
-        // phase; the agentId shape is only the fallback for history.
+        // CR-CRU-044 §S2 / CR-CRU-057 §S2 — the role comes from a stored
+        // phase only: the live agent's, else the event's own stamped one.
         // Tintable-icon contract: the wrapper carries the role color; the
         // glyph is a monochrome CSS-mask child painted `currentColor` —
         // never color-emoji text, which CSS `color` cannot tint.
         span(
-          {
-            "data-testid": "card-icon",
-            "data-icon-tintable": "true",
-            class: (() => {
-              const role = eventRole(e);
-              return `app-card-icon${role !== null ? ` app-role-${role}` : ""}`;
-            })(),
-          },
+          eventIconProps(e),
           span({
             "data-testid": "icon-glyph",
             class: "app-icon-mask",
@@ -2171,14 +2185,7 @@
           onclick: () => openDrillin(e.id),
         },
         span(
-          {
-            "data-testid": "card-icon",
-            "data-icon-tintable": "true",
-            class: (() => {
-              const role = eventRole(e);
-              return `app-card-icon${role !== null ? ` app-role-${role}` : ""}`;
-            })(),
-          },
+          eventIconProps(e),
           span({
             "data-testid": "icon-glyph",
             class: "app-icon-mask",
@@ -2207,14 +2214,7 @@
           onclick: () => openDrillin(e.id),
         },
         span(
-          {
-            "data-testid": "card-icon",
-            "data-icon-tintable": "true",
-            class: (() => {
-              const role = eventRole(e);
-              return `app-card-icon${role !== null ? ` app-role-${role}` : ""}`;
-            })(),
-          },
+          eventIconProps(e),
           span({
             "data-testid": "icon-glyph",
             class: "app-icon-mask",

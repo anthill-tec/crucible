@@ -506,8 +506,11 @@ async function handleAgentTouch(
   store.touchAgent(pk.key, agentId, opts);
   // CR-CRU-011 §S1 — a REAL registration (row created) appends a lifecycle
   // event; a heartbeat on an existing agent never does.
+  // CR-CRU-057 §S1 — the journal entry carries the DECLARED phase (the very
+  // value just validated at this boundary), so a finished agent's registration
+  // stays classifiable after its row is deleted.
   if (!existed) {
-    store.recordLifecycleEvent(pk.key, agentId, "registered");
+    store.recordLifecycleEvent(pk.key, agentId, "registered", undefined, opts.phase);
   }
   return json({ ok: true, changed: !existed, help: hints.registered });
 }
@@ -528,8 +531,11 @@ async function handleAgentUnregister(store: Store, req: Request): Promise<Respon
   // CR-CRU-008 §S4 precondition 4 — {silent:true} removes the agent WITHOUT
   // journaling the lifecycle event (the clients' anti-ghost cleanup path);
   // any other value keeps the non-silent journaling byte-unchanged.
+  // CR-CRU-057 §S1 — phase joins firstSeen in the pre-deletion snapshot above:
+  // the final journal entry names the phase the agent actually declared, read
+  // from the row while it still existed.
   if (agent !== null && body.silent !== true) {
-    store.recordLifecycleEvent(pk.key, agentId, "unregistered", agent.firstSeen);
+    store.recordLifecycleEvent(pk.key, agentId, "unregistered", agent.firstSeen, agent.phase);
   }
   return json({ ok: true, changed: agent !== null });
 }
@@ -630,6 +636,13 @@ function validateCycleRef(
  *  - UNBOUND (or unknown poster) → behavior unchanged: §S7 explicit-context
  *    validation where the surface already ran it (`validateUnbound: true` —
  *    the run routes), verbatim pass-through otherwise (gates).
+ *
+ * CR-CRU-057 §S1 — the SAME seam (and the SAME single `getAgent` read) also
+ * carries the poster's DECLARED phase out to the caller, so every stamped
+ * surface persists it onto the event row and classification survives the
+ * agents-row deletion at unregister. It is read straight off the registration
+ * row — never derived from the agentId's shape — and CR-CRU-056 §S3b makes
+ * that row's existence structural (an unregistered ingest never reaches here).
  */
 function resolveIngestAttach(
   store: Store,
@@ -637,11 +650,16 @@ function resolveIngestAttach(
   agentId: string,
   body: V2Body,
   validateUnbound: boolean,
-): { fail?: Response; staleHelp?: string[]; context?: RunContext } {
+): { fail?: Response; staleHelp?: string[]; context?: RunContext; phase?: AgentPhase } {
   const agent = store.getAgent(projectKey, agentId);
+  const phaseAttach: { phase?: AgentPhase } =
+    agent?.phase !== undefined ? { phase: agent.phase } : {};
   const bound = agent?.boundCycleId;
   if (bound === undefined) {
-    return validateUnbound ? validateCycleRef(store, projectKey, body) : {};
+    return {
+      ...phaseAttach,
+      ...(validateUnbound ? validateCycleRef(store, projectKey, body) : {}),
+    };
   }
   const context =
     typeof body.context === "object" && body.context !== null ? (body.context as RunContext) : {};
@@ -674,7 +692,7 @@ function resolveIngestAttach(
       }),
     };
   }
-  return { context: { ...context, cycleId: bound } };
+  return { ...phaseAttach, context: { ...context, cycleId: bound } };
 }
 
 /** §S1 — one-line run verdict: RED when failed>0, GREEN otherwise. */
@@ -700,10 +718,19 @@ function runVerdict(summary: RunSummary): string {
  *
  * A cycle-less event yields NO `context` key at all — absence is never
  * fabricated into a null or a guess (the `runMeta`/`axi_context` convention).
+ *
+ * CR-CRU-057 §S1 — the same read-back also reports the PHASE the server
+ * stamped, so an agent sees how its own evidence was classified without a
+ * follow-up GET. `phase` sits top-level alongside `context`, mirroring the
+ * Agent shape (where phase is a sibling of the run context, not part of it);
+ * a phase-less event yields no `phase` key, same absence rule as above.
  */
-function attachEcho(event: RunEvent): { context?: { cycleId: number } } {
+function attachEcho(event: RunEvent): { context?: { cycleId: number }; phase?: AgentPhase } {
   const cycleId = event.context?.cycleId;
-  return typeof cycleId === "number" ? { context: { cycleId } } : {};
+  return {
+    ...(typeof cycleId === "number" ? { context: { cycleId } } : {}),
+    ...(event.phase !== undefined ? { phase: event.phase } : {}),
+  };
 }
 
 function runResponse(event: RunEvent, summary: RunSummary, help?: string[]): Response {
@@ -747,6 +774,8 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
     codec: codecName,
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
+    // CR-CRU-057 §S1 — the declared phase off the same seam read.
+    ...(attach.phase !== undefined ? { phase: attach.phase } : {}),
   });
   // §S3 — a RED ingest carries the transition hint; §S7 adds the stale note.
   const help = [
@@ -796,6 +825,8 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     ...(typeof body.name === "string" ? { name: body.name } : {}),
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
+    // CR-CRU-057 §S1 — the declared phase off the same seam read.
+    ...(attach.phase !== undefined ? { phase: attach.phase } : {}),
   });
   // §S3 — RED transition hint; coverage arrived but the store dropped it
   // (failing run) — say so in help too. §S7 adds the stale-cycle note.
@@ -825,9 +856,18 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
+  // CR-CRU-057 §S1 — compile evidence is stamped on the SAME footing as run and
+  // gate evidence: the one CR-CRU-056 attach seam resolves the poster's row
+  // once and yields both its declared phase and its bound cycle (gates parity —
+  // this route never ran §S7 explicit-context validation either, so
+  // validateUnbound stays false).
+  const attach = resolveIngestAttach(store, pk.key, agentId, body, false);
+  if (attach.fail !== undefined) return attach.fail;
   const event = store.recordCompileEvent(pk.key, agentId, report, {
     codec: report.format,
     ...runMeta(body),
+    ...(attach.context !== undefined ? { context: attach.context } : {}),
+    ...(attach.phase !== undefined ? { phase: attach.phase } : {}),
   });
   const verdict =
     report.errorCount > 0
@@ -909,12 +949,11 @@ async function handleGates(store: Store, req: Request): Promise<Response> {
   // (this route never ran §S7 validation — validateUnbound stays false).
   const attach = resolveIngestAttach(store, pk.key, agentId, body, false);
   if (attach.fail !== undefined) return attach.fail;
-  const event = store.recordGateEvent(
-    pk.key,
-    agentId,
-    gate,
-    attach.context !== undefined ? { context: attach.context } : eventContext(body),
-  );
+  const event = store.recordGateEvent(pk.key, agentId, gate, {
+    ...(attach.context !== undefined ? { context: attach.context } : eventContext(body)),
+    // CR-CRU-057 §S1 — the declared phase off the same seam read.
+    ...(attach.phase !== undefined ? { phase: attach.phase } : {}),
+  });
   // CR-CRU-056 §S3 (C5) — the second stamped surface echoes its attachment on
   // exactly the same `context.cycleId` path as the run-ingest response.
   return json({ ok: true, changed: true, event: event.id, ...attachEcho(event) }, 201);
@@ -1584,6 +1623,12 @@ function eventBrief(event: RunEvent) {
     ...(event.action !== undefined ? { action: event.action } : {}),
     ...(event.firstSeen !== undefined ? { firstSeen: event.firstSeen } : {}),
     ...(event.context !== undefined ? { context: event.context } : {}),
+    // CR-CRU-057 §S1 (additive) — the stamped declared phase and its
+    // provenance; both keys ABSENT on events that carry no stored phase, so
+    // history renders unclassified rather than guessed.
+    ...(event.phase !== undefined
+      ? { phase: event.phase, phaseInferred: event.phaseInferred === true }
+      : {}),
     // CR-CRU-013 §S1+§S4b (additive) — gate/milestone carrying fields, keys
     // ABSENT on every other kind.
     ...(event.gate !== undefined ? { gate: event.gate } : {}),
