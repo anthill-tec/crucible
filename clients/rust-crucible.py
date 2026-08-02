@@ -656,6 +656,21 @@ def _regression_ingest_run(args):
     tree_nodes = []
     total = passed = failed = pending = 0
     duration_ms = 0
+    # CR-CRU-051 §S3 — the distinct-source count, via bun's fallback chain
+    # (`file` → `classname` → suite name), so it can never collapse to 0: a
+    # constant zero would make a shrinking suite look identical to a healthy
+    # one. RESOLVED GRANULARITY FOR THIS CLIENT: **per test BINARY, which is
+    # per-FILE only for the common `tests/*.rs` layout.** Measured against the
+    # real cargo-nextest 0.9.130, not assumed: nextest stamps `classname`
+    # (`crate::test-file-stem`, the test-binary id) on every `<testcase>` and
+    # NEVER a `file` attribute, so rung 1 of the chain never fires today.
+    # Because each `tests/*.rs` integration file compiles to its own binary,
+    # classname coincides with the source file there; but several `src/`-
+    # embedded unit-test modules SHARE one lib test binary and therefore one
+    # classname, so the count is coarser than per-file for those. Named
+    # honestly rather than claiming blanket per-file precision. Print-only —
+    # it never enters `summary`/`payload` (CR-CRU-047 §S2).
+    files = set()
     # A JUnit root can be <testsuites> (nextest's wrapper) OR a bare
     # <testsuite> — handle both, like the server's junit codec.
     suites = ([root] if root.tag == "testsuite" else []) + root.findall(".//testsuite")
@@ -663,6 +678,9 @@ def _regression_ingest_run(args):
         children = []
         suite_fail = False
         for tc in suite.findall("testcase"):
+            source = tc.get("file") or tc.get("classname") or suite.get("name")
+            if source:
+                files.add(source.replace("\\", "/"))
             tc_time = int(float(tc.get("time", 0)) * 1000)
             fail = tc.find("failure") is not None or tc.find("error") is not None
             # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase (nextest emits it
@@ -750,7 +768,8 @@ def _regression_ingest_run(args):
         )
     print(
         f"regression: ok={resp.get('ok')} "
-        f"passed={passed} failed={failed} pending={pending} total={total}{cov_line}"
+        f"passed={passed} failed={failed} pending={pending} total={total} "
+        f"files={len(files)}{cov_line}"
     )
     return 0 if resp.get("ok") else 1
 
@@ -1208,6 +1227,19 @@ def _workspace_regression_run(args, project_dir):
     tree_nodes = []
     total = passed = failed = pending = 0
     duration_ms = 0
+    # CR-CRU-051 §S3 — the pre-merge-gate site's own distinct-source count
+    # (rust has no shared `_parse_junit` helper, so this is a second
+    # implementation of the same chain, not a call site). Same fallback chain
+    # as `_regression_ingest_run` (`file` → `classname` → suite name), so it
+    # can never collapse to 0. RESOLVED GRANULARITY FOR THIS CLIENT: **per
+    # test BINARY, per-FILE only for the common `tests/*.rs` layout** —
+    # measured against the real cargo-nextest 0.9.130, which stamps
+    # `classname` (the test-binary id) on every `<testcase>` and never a
+    # `file` attribute. One binary per `tests/*.rs` file makes the two
+    # coincide there; `src/`-embedded unit-test modules share one lib binary
+    # and so collapse to a single classname, coarsening the count. Print-only
+    # — never enters `summary`/`payload` (CR-CRU-047 §S2).
+    files = set()
     # A JUnit root can be <testsuites> (nextest's wrapper) OR a bare
     # <testsuite> — handle both, like the server's junit codec.
     suites = ([root] if root.tag == "testsuite" else []) + root.findall(".//testsuite")
@@ -1215,6 +1247,9 @@ def _workspace_regression_run(args, project_dir):
         children = []
         suite_fail = False
         for tc in suite.findall("testcase"):
+            source = tc.get("file") or tc.get("classname") or suite.get("name")
+            if source:
+                files.add(source.replace("\\", "/"))
             tc_time = int(float(tc.get("time", 0)) * 1000)
             fail = tc.find("failure") is not None or tc.find("error") is not None
             # CR-CRU-050 §S1/§S1b — the pre-merge-gate parse site. A
@@ -1288,7 +1323,8 @@ def _workspace_regression_run(args, project_dir):
         cov_line = f" lines={coverage['lines']['percent']}% funcs={coverage['functions']['percent']}%"
     print(
         f"workspace regression: ok={resp.get('ok')} "
-        f"passed={passed} failed={failed} pending={pending} total={total}{cov_line}"
+        f"passed={passed} failed={failed} pending={pending} total={total} "
+        f"files={len(files)}{cov_line}"
     )
     return 0 if resp.get("ok") else 1
 
