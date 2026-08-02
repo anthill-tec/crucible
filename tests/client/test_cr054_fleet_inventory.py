@@ -275,38 +275,67 @@ class DriftedFindingsAreStillPresentTest(unittest.TestCase):
     def test_cmd_milestone_now_writes_to_stderr_fleet_wide(self):
         """RESOLVED (CR-CRU-054 §S2b, DN §4 finding #1): bun's cmd_milestone
         used to write its legacy line to stdout while the other four already
-        redirected to stderr. All FIVE now redirect. Falsifiable both ways:
-        fails if any client's legacy print goes back to stdout, and fails if
-        the redirect migrates off the actual 'milestone: ok=...' print (a
-        different regression papering over the same symptom)."""
+        redirected to stderr. C5 lifted cmd_milestone into
+        `_crucible_axi.cmd_milestone` -- the ONE locus that now owns the
+        stderr-redirected legacy print -- and every client is a thin
+        delegator. Falsifiable both ways: fails if the shared implementation
+        regresses off stderr (or off the actual 'milestone: ok=...' print),
+        and fails if any client stops delegating and reintroduces a private
+        copy of the print itself."""
+        axi_body = self._body_after_signature(AXI_MODULE_PATH, "cmd_milestone")
+        self.assertIn(
+            'print(f"milestone: ok={ok}', axi_body,
+            "_crucible_axi.cmd_milestone must still print the legacy "
+            "'milestone: ok=...' line -- the fleet's single locus for it "
+            "after the C5 lift")
+        self.assertIn(
+            "file=sys.stderr", axi_body,
+            "_crucible_axi.cmd_milestone must write its legacy line to "
+            "stderr (DN §4 finding #1, resolved in CR-CRU-054 §S2b)")
         for client in CLIENT_FILES:
-            body = self._body_after_signature(CLIENT_FILES[client], "cmd_milestone")
+            client_body = self._body_after_signature(CLIENT_FILES[client], "cmd_milestone")
+            self.assertNotIn(
+                'print(f"milestone: ok=', client_body,
+                f"{client}'s cmd_milestone must be a thin delegator to "
+                f"_crucible_axi.cmd_milestone -- no client (bun included) "
+                f"may carry its own private copy of the legacy print; that "
+                f"private copy is exactly the drift CR-CRU-054 §S2b resolved")
             self.assertIn(
-                'print(f"milestone: ok={ok}', body,
-                f"{client}'s cmd_milestone must still print the legacy "
-                f"'milestone: ok=...' line")
-            self.assertIn(
-                "file=sys.stderr", body,
-                f"{client}'s cmd_milestone must write its legacy line to "
-                f"stderr (DN §4 finding #1, resolved in CR-CRU-054 §S2b) -- "
-                f"bun was the lone offender before this lift")
+                ".cmd_milestone(", client_body,
+                f"{client}'s cmd_milestone must delegate to the shared "
+                f"cmd_milestone(...) rather than reimplementing it")
 
     def test_cmd_plan_file_now_carries_cr_in_context_on_both_paths_fleet_wide(self):
         """RESOLVED (DN §4 finding #2): bun never passed cr= to _axi_context
         on either path; rust/python omitted it on the failure path only;
-        mvn/arduino were already correct on both. All FIVE now carry
-        context.cr on BOTH paths. Falsifiable both ways: fails if any client
-        drops cr= from either the failure or the success envelope."""
+        mvn/arduino were already correct on both. C5 lifted cmd_plan_file
+        into `_crucible_axi.cmd_plan_file`, which now carries context.cr on
+        BOTH paths via `ops.context(...)`, and every client is a thin
+        delegator. Falsifiable both ways: fails if the shared implementation
+        drops cr= from either envelope, and fails if any client stops
+        delegating and reintroduces a private `_axi_context(...)` call of
+        its own."""
+        axi_body = self._body_after_signature(AXI_MODULE_PATH, "cmd_plan_file")
+        self.assertIn(
+            "ops.context(project_dir, agent_id=agent_id, cr=args.cr)", axi_body,
+            "_crucible_axi.cmd_plan_file must carry context.cr on the "
+            "FAILURE path (DN §4 finding #2, resolved)")
+        self.assertIn(
+            'cr=resp.get("cr") or args.cr)', axi_body,
+            "_crucible_axi.cmd_plan_file must carry context.cr on the "
+            "SUCCESS path too (DN §4 finding #2, resolved)")
         for client in CLIENT_FILES:
-            body = self._body_after_signature(CLIENT_FILES[client], "cmd_plan_file")
+            client_body = self._body_after_signature(CLIENT_FILES[client], "cmd_plan_file")
+            self.assertNotIn(
+                "_axi_context(", client_body,
+                f"{client}'s cmd_plan_file must be a thin delegator to "
+                f"_crucible_axi.cmd_plan_file -- no client may carry its "
+                f"own private `_axi_context(...)` call; that private copy "
+                f"is exactly the drift CR-CRU-054 §S2b resolved")
             self.assertIn(
-                "_axi_context(project_dir, agent_id=agent_id, cr=args.cr)", body,
-                f"{client}'s cmd_plan_file must carry context.cr on the "
-                f"FAILURE path (DN §4 finding #2, resolved)")
-            self.assertIn(
-                'cr=resp.get("cr") or args.cr)', body,
-                f"{client}'s cmd_plan_file must carry context.cr on the "
-                f"SUCCESS path too (DN §4 finding #2, resolved)")
+                ".cmd_plan_file(", client_body,
+                f"{client}'s cmd_plan_file must delegate to the shared "
+                f"cmd_plan_file(...) rather than reimplementing it")
 
     def test_cmd_register_and_unregister_agent_flag_now_resolved_optional_fleet_wide(self):
         """RESOLVED (DN §4 finding #3): bun/rust/mvn/python used to
@@ -370,47 +399,76 @@ class DriftedFindingsAreStillPresentTest(unittest.TestCase):
     def test_remove_agent_silent_try_except_now_present_fleet_wide(self):
         """RESOLVED (DN §4 finding #6): bun's _remove_agent_silent used to
         have no exception guard (rust/mvn/python/arduino already did, but
-        discarded the response). All FIVE now share the same
+        discarded the response). C5 lifted it into
+        `_crucible_axi.remove_agent_silent`, which now owns the shared
         try/except(OSError, ValueError), returning None on a caught failure
-        so _close_gate_identity can report "outcome unknown" rather than
-        crash or fabricate a fixed "removed". Falsifiable both ways: fails
-        if any client drops the guard, and fails if a client's guard stops
-        returning None on failure (silently reverting to the
-        swallow-and-claim-success shape)."""
+        so close_gate_identity can report "outcome unknown" rather than
+        crash or fabricate a fixed "removed"; every client is a thin
+        delegator. Falsifiable both ways: fails if the shared guard is
+        dropped or stops returning None on failure, and fails if any client
+        stops delegating and reintroduces a private guard of its own."""
+        axi_body = self._body_after_signature(AXI_MODULE_PATH, "remove_agent_silent")
+        self.assertIn(
+            "except (OSError, ValueError):", axi_body,
+            "_crucible_axi.remove_agent_silent must guard the removal POST "
+            "with the shared try/except (DN §4 finding #6, resolved)")
+        self.assertIn(
+            "return None", axi_body,
+            "_crucible_axi.remove_agent_silent must return None on a "
+            "caught failure -- the caller's signal to report the outcome "
+            "as unknown rather than a blanket success")
         for client in CLIENT_FILES:
-            body = self._body_after_signature(CLIENT_FILES[client], "_remove_agent_silent")
+            client_body = self._body_after_signature(CLIENT_FILES[client], "_remove_agent_silent")
+            self.assertNotIn(
+                "except (OSError, ValueError):", client_body,
+                f"{client}'s _remove_agent_silent must be a thin delegator "
+                f"to _crucible_axi.remove_agent_silent -- no client (bun "
+                f"included) may carry its own private try/except guard; "
+                f"that private copy is exactly the drift CR-CRU-054 §S2b "
+                f"resolved")
             self.assertIn(
-                "except (OSError, ValueError):", body,
-                f"{client}'s _remove_agent_silent must guard the removal "
-                f"POST with the shared try/except (DN §4 finding #6, "
-                f"resolved) -- bun was the lone offender before this lift")
-            self.assertIn(
-                "return None", body,
-                f"{client}'s _remove_agent_silent must return None on a "
-                f"caught failure -- the caller's signal to report the "
-                f"outcome as unknown rather than a blanket success")
+                ".remove_agent_silent(", client_body,
+                f"{client}'s _remove_agent_silent must delegate to the "
+                f"shared remove_agent_silent(...) rather than "
+                f"reimplementing it")
 
     def test_close_gate_identity_now_reports_the_real_post_outcome_fleet_wide(self):
         """RESOLVED (DN §4 finding #6): rust/mvn/python/arduino used to
         discard _remove_agent_silent's return value and print a FIXED
         "removed" message unconditionally (bun was the only one capturing
-        and reporting the real outcome). All FIVE now capture `cleanup_resp`
-        and report ITS actual ok=/outcome-unknown state. Falsifiable both
-        ways: fails if any client goes back to discarding the response, and
-        fails if the cleanup line stops being built FROM that captured
-        value."""
+        and reporting the real outcome). C5 lifted it into
+        `_crucible_axi.close_gate_identity`, which now captures
+        `cleanup_resp` and reports ITS actual ok=/outcome-unknown state;
+        every client is a thin delegator. Falsifiable both ways: fails if
+        the shared implementation goes back to discarding the response (or
+        stops building the cleanup line FROM that captured value), and
+        fails if any client stops delegating and reintroduces a private
+        capture of its own."""
+        axi_body = self._body_after_signature(AXI_MODULE_PATH, "close_gate_identity")
+        self.assertIn(
+            "cleanup_resp = (remove_fn(project_dir, identity.agent_id)", axi_body,
+            "_crucible_axi.close_gate_identity must capture the removal's "
+            "return value into cleanup_resp (DN §4 finding #6, resolved) "
+            "-- a discarded response is the original defect")
+        self.assertIn(
+            "gate_identity_cleanup_line(identity.agent_id, cleanup_resp)", axi_body,
+            "_crucible_axi.close_gate_identity must build its report line "
+            "FROM the captured cleanup_resp, never a fixed 'removed' "
+            "string")
         for client in CLIENT_FILES:
-            body = self._body_after_signature(CLIENT_FILES[client], "_close_gate_identity")
+            client_body = self._body_after_signature(CLIENT_FILES[client], "_close_gate_identity")
+            self.assertNotIn(
+                "cleanup_resp", client_body,
+                f"{client}'s _close_gate_identity must be a thin delegator "
+                f"to _crucible_axi.close_gate_identity -- no client may "
+                f"carry its own private capture of the removal outcome; "
+                f"that private copy is exactly the drift CR-CRU-054 §S2b "
+                f"resolved")
             self.assertIn(
-                "cleanup_resp = _remove_agent_silent", body,
-                f"{client}'s _close_gate_identity must capture "
-                f"_remove_agent_silent's return value (DN §4 finding #6, "
-                f"resolved) -- a discarded response is the original defect")
-            self.assertIn(
-                "gate_identity_cleanup_line(identity.agent_id, cleanup_resp)", body,
-                f"{client}'s _close_gate_identity must build its report "
-                f"line FROM the captured cleanup_resp, never a fixed "
-                f"'removed' string")
+                ".close_gate_identity(", client_body,
+                f"{client}'s _close_gate_identity must delegate to the "
+                f"shared close_gate_identity(...) rather than "
+                f"reimplementing it")
 
     def test_request_empty_body_guard_now_resolved_uniformly_via_crucible_axi(self):
         """RESOLVED in C2 (§S2b): the empty-body guard that only arduino used

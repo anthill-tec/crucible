@@ -919,15 +919,29 @@ class MilestoneStderrDriftCorrectionTest(unittest.TestCase, _ProjectDirFixture):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_milestone_legacy_line_goes_to_stderr_not_stdout(self):
+        """CR-CRU-054 §S2b (C5) lifted cmd_milestone into
+        `_crucible_axi.cmd_milestone` -- the ONE locus that now owns the
+        `file=sys.stderr` legacy print -- and every client is a thin
+        delegator, so the marker no longer lives in any client's OWN
+        top-level `cmd_milestone` body. Re-pointed to the fleet's established
+        "moved out of every client and still works" shape (matches
+        `VerbSurfaceWriteVerbsSingleLocusTest` above): falsifiable both ways
+        -- fails if any client reintroduces a private copy of the print, and
+        fails if `_crucible_axi.py` itself stops owning the marker."""
         marker = "file=sys.stderr"
-        offenders = [c for c in CLIENTS
-                     if marker not in (_function_source_segment(
-                         CLIENT_FILES[c], "cmd_milestone") or "")]
+        offenders = _clients_with_marker_in_function("cmd_milestone", marker)
         self.assertEqual(
             offenders, [],
-            f"the following clients' cmd_milestone omits `file=sys.stderr` "
-            f"on its legacy print -- DN §4 finding #1 (bun is the known "
-            f"drift; the fix must land here): {offenders!r}")
+            f"the following clients still carry cmd_milestone's own "
+            f"`file=sys.stderr` print in their own source instead of "
+            f"delegating to clients/_crucible_axi.py (CR-CRU-054 §S2b "
+            f"lift): {offenders!r}")
+        axi_source = AXI_MODULE_PATH.read_text()
+        self.assertIn(
+            marker, axi_source,
+            "clients/_crucible_axi.py must own cmd_milestone's "
+            "stderr-redirected legacy print after the §S2b lift -- DN §4 "
+            "finding #1's correction must live in the fleet's single locus")
 
         for client in CLIENTS:
             with self.subTest(client=client):
