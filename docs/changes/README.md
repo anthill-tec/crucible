@@ -62,7 +62,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-056](CR-CRU-056-ambiguous-auto-attach-throws.md) | Registered-agents-only server: every workflow verb authenticates a live registration (orchestrators included), registration binds its cycle (validated), ingest never creates agents, the CLIENT-side attach resolver DELETED | patch | COMPLETED | 036, 024, 044 | 4 |
 | [CR-CRU-057](CR-CRU-057-phase-survives-the-agent.md) | Patch: phase rides every run/lifecycle event at write time; history classifies on stored phase; `phaseRole(agentId)` DELETED; one-time labeled backfill | patch | COMPLETED | 044, 011 | 4 |
 | [CR-CRU-058](CR-CRU-058-rust-axi-envelope-parity.md) | **40 of 118 client verbs emit no TOON-AXI envelope** (measured by a detector, not grep) — incl. `pre-merge-gate` in ALL FIVE clients, the orchestrator's merge-decision path; join them to the shared emitters + state-derived `help[]`, stdout purity, fleet-wide guard | patch | COMPLETED | 030, 054 | 4 |
-| [CR-CRU-059](CR-CRU-059-identity-source-validation.md) | Registration identity contract — rename `phase` → **`role`** fleet-wide (the DN's own ontology says Role; `phase` is only the scope word), + validate `identity.source` against its documented enum. CLEAN BREAK (no alias) — **merge HELD until Model-B confirms + refreshes their bundle** | patch | IN PROGRESS | 044, 054, 056, 057 | 4 |
+| [CR-CRU-059](CR-CRU-059-identity-source-validation.md) | Registration identity contract — rename `phase` → **`role`** fleet-wide (the DN's own ontology says Role; `phase` is only the scope word), + validate `identity.source` against its documented enum. CLEAN BREAK (no alias); the capability change rides the single per-release Model-B intimation | patch | IN PROGRESS | 044, 054, 056, 057 | 4 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 · track-1) | 011, 013 | 5 (0.2.0) |
 | [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Playwright runner + codec + tab | feature | PENDING (0.2.0 · track-2) | 004, 007 | 5 (0.2.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end + Aborted state | feature | PENDING (0.2.0 · track-3 cand.) | 008, 011 | 5 (0.2.0) |
@@ -252,6 +252,17 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `tests="1061" skipped="1"` ingested as `passed=1061`, and a python report `tests="2" skipped="2"`
   (an entire class where nothing ran) ingested as `passed=2` — so this project's own published
   gate figures are inflated, the failure mode CR-039/CR-047 exist to prevent.
+- 2026-08-02 (**STRATEGY CHANGE — user decision**) — **Crucible bundles the SERVER AND THE CLIENT
+  SCRIPTS together** as one matched, locally-deployable artifact; the CR-CRU-041 composite-lockstep
+  machinery (one tag, `crucible-axi` pinning `@anthill-tec/crucible-server@<version>`) becomes the
+  PRIMARY delivery model rather than a packaging detail. Rationale: the client↔server contract is
+  ONE contract — "they're closely matched" — so shipping the halves separately invites the version
+  skew this project keeps paying for. **Model-B owns the SKILLS only** (the skills that reference
+  Crucible's capabilities); they no longer bundle our client scripts. **Intimation cadence: ONCE
+  PER RELEASE, after that release's CRs are complete** — never per client change, and no CR merge
+  is gated on Model-B reachability. Supersedes the per-change intimation timing recorded on
+  2026-07-28; the accumulated owed-items list becomes the CONTENT of that single release
+  intimation.
 - 2026-08-02 (CR-CRU-051 C2 finding — **FILED as CR-CRU-058** on user direction; the follow-up
   audit widened it from two verbs to NINE, including `pre-merge-gate`) — two rust verbs emit no
   TOON-AXI envelope at all.** `regression-ingest` and `workspace-regression` print a bare

@@ -87,14 +87,19 @@ Measured surface (2026-08-02): `--phase` in all five clients (1 site each) + the
 **Compatibility ruling — USER-DECIDED 2026-08-02: CLEAN BREAK, and the MERGE IS HELD.** The server
 accepts `role` only; no `phase` alias, no dual-key handling, no deprecation path. Consequently:
 
-> 🚧 **MERGE GATE — this CR may NOT merge until Model-B has been intimated, has confirmed, and has
-> refreshed their vendored bundle.** Their Sandesh address (`Mainline - ModelB`) has been
-> `active:false` all session, so the intimation cannot even be sent yet. CR-059 will sit
-> COMPLETE-BUT-UNMERGED on its feature branch for however long that takes. That is the accepted
-> cost of the clean break — do not merge it to unblock the queue, and do not quietly add an alias
-> to make merging safe.
+🚧 **MERGE GATE — LIFTED 2026-08-02 by the bundling strategy change.** The gate assumed Model-B
+VENDORS our client scripts, so a wire rename would break their copy. Under the user's new model
+that premise is gone: **Crucible bundles the server AND the clients together** as one matched,
+locally-deployable artifact (the CR-CRU-041 composite-lockstep machinery becomes the primary
+delivery model), and **Model-B owns only the SKILLS** that reference Crucible's capabilities.
+A rename that moves both halves of our own bundle in lockstep is internally consistent and breaks
+nothing they hold.
 
-The work proceeds regardless: the branch is built, gated and VERIFY-approved, then it waits.
+What Model-B still needs is the CAPABILITY change — `--phase` becomes `--role` in the verb surface
+their skills document — and that rides the **single per-release intimation**, sent once all of this
+release's CRs are complete. It is a release-gate item, NOT a merge-gate item.
+
+The clean-break ruling itself stands: server accepts `role` only, no alias, no dual-key handling.
 
 ### §S1 — Validate `identity.source` at the route boundary
 Introduce `IDENTITY_SOURCES = ["claude-md", "package-json", "git-repo", "manual"] as const` in
@@ -126,8 +131,8 @@ operation — a validation that breaks the fleet is a defect, not a fix.
 - [ ] Storage migrated: `agents.role`, `events.role`, `events.role_inferred` — and **CR-057's
       backfilled classification survives the migration** (assert the live-shaped fixture's counts
       before and after are identical; on the dog-food DB, 299 of 338 classified events).
-- [ ] **MERGE GATE**: Model-B intimated, confirmed, and bundle-refreshed before `feature finish`.
-      This AC is satisfied by evidence of their reply, not by our own readiness.
+- [ ] **RELEASE-gate (not merge-gate)**: the `--phase` → `--role` capability change is on the
+      single per-release Model-B intimation list, sent once this release's CRs are complete.
 - [ ] The UI classifies from the renamed field; `agentRole()` unchanged.
 - [ ] `POST /api/v2/agents/register` with `identity.source` outside the enum → 409, `ok:false`,
       non-empty `help[]` naming the received value and the valid set; nothing stored — asserted
