@@ -33,13 +33,13 @@ export interface AgentIdentity {
 }
 
 /**
- * CR-CRU-044 §S1 — the enumeration an agent registration must declare. Phase
+ * CR-CRU-044 §S1 — the enumeration an agent registration must declare. Role
  * is WHAT the agent is doing (identity stays WHO it is), so it is its own
  * first-class field rather than a guess from the agentId's shape.
  */
-export const AGENT_PHASES = ["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"] as const;
+export const AGENT_ROLES = ["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"] as const;
 
-export type AgentPhase = (typeof AGENT_PHASES)[number];
+export type AgentRole = (typeof AGENT_ROLES)[number];
 
 export interface Agent {
   agentId: string;
@@ -53,7 +53,7 @@ export interface Agent {
    * CR-CRU-044 §S1 — declared at registration. ABSENT for historical
    * (pre-CR-044) rows: no back-fill, never fabricated.
    */
-  phase?: AgentPhase;
+  role?: AgentRole;
   /**
    * CR-CRU-056 §S1 — the cycle this agent registered bound to, validated at
    * the register route (exists, open plan, active). ABSENT when the agent
@@ -158,19 +158,19 @@ export interface RunEvent {
   // (forward-tolerant: fields outside the ladder round-trip untouched).
   gate?: unknown;
   /**
-   * CR-CRU-057 §S1 — the posting agent's DECLARED phase (CR-CRU-044), stamped
+   * CR-CRU-057 §S1 — the posting agent's DECLARED role (CR-CRU-044), stamped
    * server-side at write time through CR-CRU-056's `resolveIngestAttach` seam
    * so classification survives the agent row's deletion at unregister. ABSENT
-   * when no phase was declared: no back-fill, never fabricated, and NEVER
+   * when no role was declared: no back-fill, never fabricated, and NEVER
    * derived from the agentId's shape.
    */
-  phase?: AgentPhase;
+  role?: AgentRole;
   /**
-   * CR-CRU-057 §S1 — provenance of `phase`: `false` = declared by the agent at
+   * CR-CRU-057 §S1 — provenance of `role`: `false` = declared by the agent at
    * registration (every write-time stamp); `true` is reserved for the §S4
-   * one-time labeled backfill. Present exactly when `phase` is.
+   * one-time labeled backfill. Present exactly when `role` is.
    */
-  phaseInferred?: boolean;
+  roleInferred?: boolean;
   // CR-CRU-013 §S4b/§S4c (milestone) — flat carrying fields.
   type?: string;
   label?: string;

@@ -8,11 +8,11 @@ import type { CompileReport } from "./codecs/compile.ts";
 import { authHints, hints, cycleHints } from "./hints.ts";
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
-import { AGENT_PHASES } from "./types.ts";
+import { AGENT_ROLES } from "./types.ts";
 import type { ProjectPatch, RecordEventMeta, TouchAgentOpts } from "./store.ts";
 import type {
   AgentIdentity,
-  AgentPhase,
+  AgentRole,
   Coverage,
   CycleKind,
   CycleStatus,
@@ -39,8 +39,8 @@ interface V2Body {
   sutRoot?: unknown;
   projectKey?: unknown;
   agentId?: unknown;
-  /** CR-CRU-044 §S1 — declared phase (required on register). */
-  phase?: unknown;
+  /** CR-CRU-044 §S1 — declared role (required on register). */
+  role?: unknown;
   /** CR-CRU-056 §S1 — optional explicit cycle binding on register. */
   cycleId?: unknown;
   status?: unknown;
@@ -358,8 +358,8 @@ function handleProjectsList(store: Store, req: Request, url: URL): Response {
 
 /**
  * §S1 — register and heartbeat share these semantics (upsert via touchAgent),
- * differing in ONE respect: CR-CRU-044 §S1(a) makes `phase` REQUIRED on
- * register (`requirePhase`) but leaves it optional on heartbeat, which stays
+ * differing in ONE respect: CR-CRU-044 §S1(a) makes `role` REQUIRED on
+ * register (`requireRole`) but leaves it optional on heartbeat, which stays
  * the idle-time liveness ping hints.ts documents — never a re-declaration of
  * something the agent already declared when it registered.
  */
@@ -415,8 +415,8 @@ function validateCycleBinding(
   return {};
 }
 
-/** CR-CRU-056 §S2 — the phases that MUST register bound (ORCHESTRATOR/report are exempt). */
-const TDD_PHASES: ReadonlySet<string> = new Set(["RED", "GREEN", "FIX", "VERIFY"]);
+/** CR-CRU-056 §S2 — the roles that MUST register bound (ORCHESTRATOR/report are exempt). */
+const TDD_ROLES: ReadonlySet<string> = new Set(["RED", "GREEN", "FIX", "VERIFY"]);
 
 /**
  * CR-CRU-056 §S2 — every ACTIVE cycle across the project's OPEN plans, so an
@@ -432,7 +432,7 @@ function activeCycleIds(store: Store, projectKey: string): number[] {
 async function handleAgentTouch(
   store: Store,
   req: Request,
-  requirePhase: boolean,
+  requireRole: boolean,
 ): Promise<Response> {
   const body = await readBody(req);
   if (body === null) return fail(400, "malformed JSON body");
@@ -444,33 +444,33 @@ async function handleAgentTouch(
   }
   // CR-CRU-044 §S1(b) — validated at the ROUTE boundary, before any write, so
   // a rejected registration never leaves a partial agent row behind.
-  const phase = body.phase;
-  const phaseValid = typeof phase === "string" && (AGENT_PHASES as readonly string[]).includes(phase);
-  if (requirePhase && !phaseValid) {
+  const role = body.role;
+  const roleValid = typeof role === "string" && (AGENT_ROLES as readonly string[]).includes(role);
+  if (requireRole && !roleValid) {
     return fail(
       400,
-      `phase is required and must be one of ${AGENT_PHASES.join(" | ")} (got ${
-        phase === undefined ? "no phase field" : JSON.stringify(phase)
+      `role is required and must be one of ${AGENT_ROLES.join(" | ")} (got ${
+        role === undefined ? "no role field" : JSON.stringify(role)
       })`,
-      { help: hints.phaseRequired },
+      { help: hints.roleRequired },
     );
   }
-  // CR-CRU-056 §S2 — TDD phases MUST register bound: a RED/GREEN/FIX/VERIFY
+  // CR-CRU-056 §S2 — TDD roles MUST register bound: a RED/GREEN/FIX/VERIFY
   // registration with no `cycleId` is refused at the ROUTE boundary, before
   // any write (an implementation agent with no workflow home). The refusal
   // help is STATE-derived: it names this project's actual ACTIVE cycle id(s)
   // when any exist. ORCHESTRATOR/report stay exempt; the heartbeat path
-  // (`requirePhase === false`) is untouched.
+  // (`requireRole === false`) is untouched.
   if (
-    requirePhase &&
-    typeof phase === "string" &&
-    TDD_PHASES.has(phase) &&
+    requireRole &&
+    typeof role === "string" &&
+    TDD_ROLES.has(role) &&
     body.cycleId === undefined
   ) {
     return fail(
       409,
-      `phase ${phase} requires a cycle binding — register with --cycle <cycleId>`,
-      { help: cycleHints.unboundTddPhase(phase, activeCycleIds(store, pk.key)) },
+      `role ${role} requires a cycle binding — register with --cycle <cycleId>`,
+      { help: cycleHints.unboundTddRole(role, activeCycleIds(store, pk.key)) },
     );
   }
 
@@ -485,10 +485,10 @@ async function handleAgentTouch(
   if (typeof body.identity === "object" && body.identity !== null) {
     opts.identity = body.identity as AgentIdentity;
   }
-  // CR-CRU-044 §S1(c) — only a declared phase is passed through; omitting the
+  // CR-CRU-044 §S1(c) — only a declared role is passed through; omitting the
   // option is what makes the store PRESERVE the stored value.
-  if (phaseValid) {
-    opts.phase = phase as AgentPhase;
+  if (roleValid) {
+    opts.role = role as AgentRole;
   }
   // CR-CRU-056 §S1 — an explicit cycle binding is VALIDATED before any write:
   // a refused binding returns 409 with no agent row created and no stored
@@ -506,11 +506,11 @@ async function handleAgentTouch(
   store.touchAgent(pk.key, agentId, opts);
   // CR-CRU-011 §S1 — a REAL registration (row created) appends a lifecycle
   // event; a heartbeat on an existing agent never does.
-  // CR-CRU-057 §S1 — the journal entry carries the DECLARED phase (the very
+  // CR-CRU-057 §S1 — the journal entry carries the DECLARED role (the very
   // value just validated at this boundary), so a finished agent's registration
   // stays classifiable after its row is deleted.
   if (!existed) {
-    store.recordLifecycleEvent(pk.key, agentId, "registered", undefined, opts.phase);
+    store.recordLifecycleEvent(pk.key, agentId, "registered", undefined, opts.role);
   }
   return json({ ok: true, changed: !existed, help: hints.registered });
 }
@@ -531,11 +531,11 @@ async function handleAgentUnregister(store: Store, req: Request): Promise<Respon
   // CR-CRU-008 §S4 precondition 4 — {silent:true} removes the agent WITHOUT
   // journaling the lifecycle event (the clients' anti-ghost cleanup path);
   // any other value keeps the non-silent journaling byte-unchanged.
-  // CR-CRU-057 §S1 — phase joins firstSeen in the pre-deletion snapshot above:
-  // the final journal entry names the phase the agent actually declared, read
+  // CR-CRU-057 §S1 — role joins firstSeen in the pre-deletion snapshot above:
+  // the final journal entry names the role the agent actually declared, read
   // from the row while it still existed.
   if (agent !== null && body.silent !== true) {
-    store.recordLifecycleEvent(pk.key, agentId, "unregistered", agent.firstSeen, agent.phase);
+    store.recordLifecycleEvent(pk.key, agentId, "unregistered", agent.firstSeen, agent.role);
   }
   return json({ ok: true, changed: agent !== null });
 }
@@ -638,7 +638,7 @@ function validateCycleRef(
  *    the run routes), verbatim pass-through otherwise (gates).
  *
  * CR-CRU-057 §S1 — the SAME seam (and the SAME single `getAgent` read) also
- * carries the poster's DECLARED phase out to the caller, so every stamped
+ * carries the poster's DECLARED role out to the caller, so every stamped
  * surface persists it onto the event row and classification survives the
  * agents-row deletion at unregister. It is read straight off the registration
  * row — never derived from the agentId's shape — and CR-CRU-056 §S3b makes
@@ -650,14 +650,14 @@ function resolveIngestAttach(
   agentId: string,
   body: V2Body,
   validateUnbound: boolean,
-): { fail?: Response; staleHelp?: string[]; context?: RunContext; phase?: AgentPhase } {
+): { fail?: Response; staleHelp?: string[]; context?: RunContext; role?: AgentRole } {
   const agent = store.getAgent(projectKey, agentId);
-  const phaseAttach: { phase?: AgentPhase } =
-    agent?.phase !== undefined ? { phase: agent.phase } : {};
+  const roleAttach: { role?: AgentRole } =
+    agent?.role !== undefined ? { role: agent.role } : {};
   const bound = agent?.boundCycleId;
   if (bound === undefined) {
     return {
-      ...phaseAttach,
+      ...roleAttach,
       ...(validateUnbound ? validateCycleRef(store, projectKey, body) : {}),
     };
   }
@@ -692,7 +692,7 @@ function resolveIngestAttach(
       }),
     };
   }
-  return { ...phaseAttach, context: { ...context, cycleId: bound } };
+  return { ...roleAttach, context: { ...context, cycleId: bound } };
 }
 
 /** §S1 — one-line run verdict: RED when failed>0, GREEN otherwise. */
@@ -719,17 +719,17 @@ function runVerdict(summary: RunSummary): string {
  * A cycle-less event yields NO `context` key at all — absence is never
  * fabricated into a null or a guess (the `runMeta`/`axi_context` convention).
  *
- * CR-CRU-057 §S1 — the same read-back also reports the PHASE the server
+ * CR-CRU-057 §S1 — the same read-back also reports the ROLE the server
  * stamped, so an agent sees how its own evidence was classified without a
- * follow-up GET. `phase` sits top-level alongside `context`, mirroring the
- * Agent shape (where phase is a sibling of the run context, not part of it);
- * a phase-less event yields no `phase` key, same absence rule as above.
+ * follow-up GET. `role` sits top-level alongside `context`, mirroring the
+ * Agent shape (where role is a sibling of the run context, not part of it);
+ * a role-less event yields no `role` key, same absence rule as above.
  */
-function attachEcho(event: RunEvent): { context?: { cycleId: number }; phase?: AgentPhase } {
+function attachEcho(event: RunEvent): { context?: { cycleId: number }; role?: AgentRole } {
   const cycleId = event.context?.cycleId;
   return {
     ...(typeof cycleId === "number" ? { context: { cycleId } } : {}),
-    ...(event.phase !== undefined ? { phase: event.phase } : {}),
+    ...(event.role !== undefined ? { role: event.role } : {}),
   };
 }
 
@@ -774,8 +774,8 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
     codec: codecName,
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
-    // CR-CRU-057 §S1 — the declared phase off the same seam read.
-    ...(attach.phase !== undefined ? { phase: attach.phase } : {}),
+    // CR-CRU-057 §S1 — the declared role off the same seam read.
+    ...(attach.role !== undefined ? { role: attach.role } : {}),
   });
   // §S3 — a RED ingest carries the transition hint; §S7 adds the stale note.
   const help = [
@@ -825,8 +825,8 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     ...(typeof body.name === "string" ? { name: body.name } : {}),
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
-    // CR-CRU-057 §S1 — the declared phase off the same seam read.
-    ...(attach.phase !== undefined ? { phase: attach.phase } : {}),
+    // CR-CRU-057 §S1 — the declared role off the same seam read.
+    ...(attach.role !== undefined ? { role: attach.role } : {}),
   });
   // §S3 — RED transition hint; coverage arrived but the store dropped it
   // (failing run) — say so in help too. §S7 adds the stale-cycle note.
@@ -858,7 +858,7 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
   const { agentId } = caller;
   // CR-CRU-057 §S1 — compile evidence is stamped on the SAME footing as run and
   // gate evidence: the one CR-CRU-056 attach seam resolves the poster's row
-  // once and yields both its declared phase and its bound cycle (gates parity —
+  // once and yields both its declared role and its bound cycle (gates parity —
   // this route never ran §S7 explicit-context validation either, so
   // validateUnbound stays false).
   const attach = resolveIngestAttach(store, pk.key, agentId, body, false);
@@ -867,7 +867,7 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
     codec: report.format,
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
-    ...(attach.phase !== undefined ? { phase: attach.phase } : {}),
+    ...(attach.role !== undefined ? { role: attach.role } : {}),
   });
   const verdict =
     report.errorCount > 0
@@ -951,8 +951,8 @@ async function handleGates(store: Store, req: Request): Promise<Response> {
   if (attach.fail !== undefined) return attach.fail;
   const event = store.recordGateEvent(pk.key, agentId, gate, {
     ...(attach.context !== undefined ? { context: attach.context } : eventContext(body)),
-    // CR-CRU-057 §S1 — the declared phase off the same seam read.
-    ...(attach.phase !== undefined ? { phase: attach.phase } : {}),
+    // CR-CRU-057 §S1 — the declared role off the same seam read.
+    ...(attach.role !== undefined ? { role: attach.role } : {}),
   });
   // CR-CRU-056 §S3 (C5) — the second stamped surface echoes its attachment on
   // exactly the same `context.cycleId` path as the run-ingest response.
@@ -1318,7 +1318,7 @@ async function handlePlanCheckpoint(
   const pk = requireProject(store, key);
   if ("fail" in pk) return pk.fail;
   // CR-CRU-056 §S2b — checkpoint requires a live registered caller (any
-  // phase — a bound TDD agent checkpoints its own plan too, not just the
+  // role — a bound TDD agent checkpoints its own plan too, not just the
   // orchestrator). An absent/unparseable body carries no agentId → refused.
   const body = (await readBody(req)) ?? {};
   const caller = requireRegisteredCaller(store, pk.key, body);
@@ -1623,11 +1623,11 @@ function eventBrief(event: RunEvent) {
     ...(event.action !== undefined ? { action: event.action } : {}),
     ...(event.firstSeen !== undefined ? { firstSeen: event.firstSeen } : {}),
     ...(event.context !== undefined ? { context: event.context } : {}),
-    // CR-CRU-057 §S1 (additive) — the stamped declared phase and its
-    // provenance; both keys ABSENT on events that carry no stored phase, so
+    // CR-CRU-057 §S1 (additive) — the stamped declared role and its
+    // provenance; both keys ABSENT on events that carry no stored role, so
     // history renders unclassified rather than guessed.
-    ...(event.phase !== undefined
-      ? { phase: event.phase, phaseInferred: event.phaseInferred === true }
+    ...(event.role !== undefined
+      ? { role: event.role, roleInferred: event.roleInferred === true }
       : {}),
     // CR-CRU-013 §S1+§S4b (additive) — gate/milestone carrying fields, keys
     // ABSENT on every other kind.
@@ -1823,7 +1823,7 @@ export function handleV2(
     }
   }
   // CR-CRU-044 §S1(a) — the two routes SPLIT on one flag: register must
-  // declare a phase, heartbeat must not be forced to re-declare it.
+  // declare a role, heartbeat must not be forced to re-declare it.
   if (req.method === "POST" && pathname === "/api/v2/agents/register") {
     return handleAgentTouch(store, req, true);
   }
