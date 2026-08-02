@@ -244,10 +244,12 @@ class _ProjectDirFixture:
     resolve without crashing -- matches the sibling agent-identity tests'
     setUp exactly."""
 
+    _PROJECT_KEY = "cr054-c4-key"
+
     def _make_project_dir(self):
         tmpdir = tempfile.mkdtemp(prefix="cr054-c4-verb-surface-")
         with open(os.path.join(tmpdir, ".env"), "w") as f:
-            f.write("CRUCIBLE_PROJECT_KEY=cr054-c4-key\n")
+            f.write(f"CRUCIBLE_PROJECT_KEY={self._PROJECT_KEY}\n")
             f.write("CRUCIBLE_PROJECT_NAME=cr054-c4-project\n")
         return tmpdir
 
@@ -266,6 +268,12 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
     below, are byte-identical). Each combined test asserts the structural
     "no private copy" condition (what fails TODAY) then proves the client's
     own name still delegates correctly end-to-end."""
+
+    def setUp(self):
+        self.tmpdir = self._make_project_dir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_status_moves_out_of_every_client_and_still_works(self):
         marker = "status-unavailable"
@@ -289,7 +297,7 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                      "activeCycleId": 7, "closedAt": None}]}
                 with mock.patch.object(module, "_get", return_value=plans_resp) as get_mock, \
                         mock.patch.object(module, "_emit_axi") as emit_mock:
-                    rc = module.cmd_status(_make_args(project_dir="/fake/dir"))
+                    rc = module.cmd_status(_make_args(project_dir=self.tmpdir))
                 self.assertEqual(rc, 0)
                 get_mock.assert_called_once()
                 emit_mock.assert_called_once()
@@ -306,7 +314,7 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                         module, "_get",
                         return_value={"ok": False, "error": "ECONNREFUSED"}), \
                         mock.patch.object(module, "_emit_axi") as emit_mock:
-                    rc = module.cmd_status(_make_args(project_dir="/fake/dir"))
+                    rc = module.cmd_status(_make_args(project_dir=self.tmpdir))
                 self.assertEqual(
                     rc, 0,
                     f"{client}-crucible.py's cmd_status must still degrade "
@@ -341,14 +349,19 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                     return {"ok": True, "checkpointed": 3}
 
                 with mock.patch.object(module, "_agent_id", return_value="A1"), \
-                        mock.patch.object(module, "_project_key", return_value="pk"), \
                         mock.patch.object(module, "_post", side_effect=fake_post), \
                         mock.patch.object(module, "_emit_axi") as emit_mock:
-                    rc = module.cmd_stop(_make_args(project_dir="/fake/dir"))
+                    rc = module.cmd_stop(_make_args(project_dir=self.tmpdir))
                 self.assertEqual(rc, 0)
                 self.assertEqual(len(calls), 1)
                 path, payload = calls[0]
-                self.assertEqual(path, "/api/v2/projects/pk/stop")
+                self.assertEqual(
+                    path, f"/api/v2/projects/{self._PROJECT_KEY}/stop",
+                    f"{client}-crucible.py's cmd_stop must still resolve the "
+                    f"REAL project key from the project dir's .env (no "
+                    f"`_project_key` stub here -- this is the exact "
+                    f".env->key->URL integration the fixture landmine used "
+                    f"to hide)")
                 self.assertEqual(
                     payload, {"agentId": "A1"},
                     f"{client}-crucible.py's cmd_stop must still send the "
@@ -387,10 +400,10 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                         mock.patch.object(module, "_plans_path", return_value="/api/v2/projects/pk/plans"), \
                         mock.patch.object(module, "_post", side_effect=fake_post), \
                         mock.patch.object(module, "_emit_axi") as emit_mock:
-                    rc = module.cmd_checkpoint(_make_args(project_dir="/fake/dir", cr=None))
+                    rc = module.cmd_checkpoint(_make_args(project_dir=self.tmpdir, cr=None))
                 self.assertEqual(rc, 0)
                 resolve_mock.assert_called_once_with(
-                    "checkpoint", "/fake/dir", None, mock.ANY, open_only=True)
+                    "checkpoint", self.tmpdir, None, mock.ANY, open_only=True)
                 self.assertEqual(len(calls), 1)
                 path, payload = calls[0]
                 self.assertEqual(path, "/api/v2/projects/pk/plans/9/checkpoint")
@@ -430,7 +443,7 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                         mock.patch.object(module, "_post", side_effect=fake_post), \
                         mock.patch.object(module, "_emit_axi") as emit_mock:
                     rc = module.cmd_abort(_make_args(
-                        project_dir="/fake/dir", cr=None, user_approved=False))
+                        project_dir=self.tmpdir, cr=None, user_approved=False))
                 self.assertEqual(
                     rc, 1,
                     f"{client}-crucible.py's cmd_abort must still surface a "
@@ -476,7 +489,7 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                         mock.patch.object(module, "_post", side_effect=fake_post), \
                         mock.patch.object(module, "_emit_axi") as emit_mock:
                     rc = module.cmd_cycle_add(_make_args(
-                        project_dir="/fake/dir", cr=None, label="C5"))
+                        project_dir=self.tmpdir, cr=None, label="C5"))
                 self.assertEqual(rc, 0)
                 path, payload = calls[0]
                 self.assertEqual(path, "/api/v2/projects/pk/plans/2/cycles")
@@ -508,7 +521,7 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                         mock.patch.object(module, "_emit_axi") as emit_mock, \
                         mock.patch.object(module, "_post_milestone") as ms_mock:
                     rc = module.cmd_cr_close(_make_args(
-                        project_dir="/fake/dir", cr=None, commit="abc123"))
+                        project_dir=self.tmpdir, cr=None, commit="abc123"))
                 self.assertEqual(rc, 1)
                 self.assertFalse(emit_mock.call_args.args[1])
                 ms_mock.assert_not_called()
@@ -529,7 +542,7 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                             module, "_post_milestone",
                             return_value={"ok": True}) as ms_mock:
                     rc = module.cmd_cr_close(_make_args(
-                        project_dir="/fake/dir", cr=None, commit="abc123"))
+                        project_dir=self.tmpdir, cr=None, commit="abc123"))
                 self.assertEqual(rc, 0)
                 patch_path, patch_payload = patch_mock.call_args.args
                 self.assertEqual(patch_path, "/api/v2/projects/pk/plans/3")
@@ -539,7 +552,7 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
                      "agentId": "A1"})
                 self.assertTrue(emit_mock.call_args.args[1])
                 ms_mock.assert_called_once_with(
-                    "/fake/dir", "A1", "cr-merged", label="CR-CRU-054",
+                    self.tmpdir, "A1", "cr-merged", label="CR-CRU-054",
                     commit="abc123", context=mock.ANY)
 
 
@@ -549,12 +562,18 @@ class VerbSurfaceWriteVerbsSingleLocusTest(unittest.TestCase, _ProjectDirFixture
 # ---------------------------------------------------------------------------
 
 
-class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase):
+class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase, _ProjectDirFixture):
     """`_post_gate`, `_post_milestone`, `_add_gate_cycle_arg`, `cmd_gate_report`
     and `cmd_gate_run` are byte-identical across all five clients today
     (confirmed by reading every body -- only bun's private
     `_PREFER_GATE_RUN_WARNING`/`_HELP_STEPS` dict access and arduino's
     `_project_dir(args)` differ, matching DN §1's own note)."""
+
+    def setUp(self):
+        self.tmpdir = self._make_project_dir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_post_gate_moves_out_of_every_client_and_still_works(self):
         marker = '"/api/v2/gates"'
@@ -695,7 +714,7 @@ class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase):
                             return_value={"ok": True}) as gate_mock, \
                         mock.patch.object(module, "_emit_axi") as emit_mock:
                     rc = module.cmd_gate_report(_make_args(
-                        project_dir="/fake/dir", outcome="passed",
+                        project_dir=self.tmpdir, outcome="passed",
                         commit="abc123", steps="review:passed", intent=None,
                         full=False))
                 self.assertEqual(rc, 0)
@@ -717,7 +736,7 @@ class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase):
                         mock.patch.object(module, "_post_gate") as gate_mock, \
                         mock.patch.object(module, "_emit_axi") as emit_mock:
                     rc = module.cmd_gate_report(_make_args(
-                        project_dir="/fake/dir", outcome="passed",
+                        project_dir=self.tmpdir, outcome="passed",
                         commit=None, steps="not-a-valid-step", intent=None,
                         full=False))
                 self.assertEqual(
@@ -747,7 +766,7 @@ class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase):
                 with mock.patch.object(module, "shutil") as shutil_mock:
                     shutil_mock.which.return_value = None
                     rc = module.cmd_gate_run(_make_args(
-                        project_dir="/fake/dir", intent="verify"))
+                        project_dir=self.tmpdir, intent="verify"))
                 self.assertEqual(
                     rc, 1,
                     f"{client}-crucible.py's cmd_gate_run must still refuse "
@@ -761,12 +780,18 @@ class GateAndMilestoneHelpersSingleLocusTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-class CycleTransitionSingleLocusTest(unittest.TestCase):
+class CycleTransitionSingleLocusTest(unittest.TestCase, _ProjectDirFixture):
     """`_cycle_transition`'s real plan-scan + PATCH orchestration is
     byte-identical across all five clients today. `cmd_cycle_activate`/
     `cmd_cycle_done` are already-trivial 1-line dispatchers to this name (no
     test for either -- see module docstring) whose bodies will not change
     even after this lift."""
+
+    def setUp(self):
+        self.tmpdir = self._make_project_dir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_cycle_transition_moves_out_of_every_client_and_still_works(self):
         marker = "is not in any OPEN plan"
@@ -791,7 +816,7 @@ class CycleTransitionSingleLocusTest(unittest.TestCase):
                         mock.patch.object(module, "_patch") as patch_mock, \
                         mock.patch.object(module, "_emit_axi") as emit_mock:
                     rc = module._cycle_transition(
-                        _make_args(project_dir="/fake/dir", cycle_id=999), "active")
+                        _make_args(project_dir=self.tmpdir, cycle_id=999), "active")
                 self.assertEqual(rc, 1)
                 patch_mock.assert_not_called()
                 self.assertEqual(emit_mock.call_args.args[0], "cycle-activate")
@@ -811,7 +836,7 @@ class CycleTransitionSingleLocusTest(unittest.TestCase):
                             return_value={"ok": True}) as patch_mock, \
                         mock.patch.object(module, "_emit_axi") as emit_mock:
                     rc = module._cycle_transition(
-                        _make_args(project_dir="/fake/dir", cycle_id=160), "done")
+                        _make_args(project_dir=self.tmpdir, cycle_id=160), "done")
                 self.assertEqual(rc, 0)
                 path, payload = patch_mock.call_args.args
                 self.assertEqual(path, "/api/v2/projects/pk/plans/6/cycles/160")

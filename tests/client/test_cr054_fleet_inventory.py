@@ -34,6 +34,8 @@ CLIENT_FILES = {
     "arduino": CLIENTS_DIR / "arduino-crucible.py",
 }
 
+AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
+
 
 def _defined_function_names(path):
     """Every FunctionDef/AsyncFunctionDef name defined anywhere in `path`
@@ -270,78 +272,145 @@ class DriftedFindingsAreStillPresentTest(unittest.TestCase):
                 return "\n".join(body_lines[sig_end + 1:])
         return None
 
-    def test_cmd_milestone_bun_still_omits_stderr_redirect_unlike_the_other_four(self):
-        bun_body = self._body_after_signature(CLIENT_FILES["bun"], "cmd_milestone")
-        rust_body = self._body_after_signature(CLIENT_FILES["rust"], "cmd_milestone")
-        self.assertNotIn(
-            "file=sys.stderr", bun_body,
-            "this drift is documented as bun's cmd_milestone NOT redirecting "
-            "its legacy print to stderr -- if this now fails, bun has been "
-            "fixed and the DN + this fixture need updating, not silencing")
-        self.assertIn(
-            "file=sys.stderr", rust_body,
-            "rust's cmd_milestone is documented as correctly redirecting to stderr")
+    def test_cmd_milestone_now_writes_to_stderr_fleet_wide(self):
+        """RESOLVED (CR-CRU-054 §S2b, DN §4 finding #1): bun's cmd_milestone
+        used to write its legacy line to stdout while the other four already
+        redirected to stderr. All FIVE now redirect. Falsifiable both ways:
+        fails if any client's legacy print goes back to stdout, and fails if
+        the redirect migrates off the actual 'milestone: ok=...' print (a
+        different regression papering over the same symptom)."""
+        for client in CLIENT_FILES:
+            body = self._body_after_signature(CLIENT_FILES[client], "cmd_milestone")
+            self.assertIn(
+                'print(f"milestone: ok={ok}', body,
+                f"{client}'s cmd_milestone must still print the legacy "
+                f"'milestone: ok=...' line")
+            self.assertIn(
+                "file=sys.stderr", body,
+                f"{client}'s cmd_milestone must write its legacy line to "
+                f"stderr (DN §4 finding #1, resolved in CR-CRU-054 §S2b) -- "
+                f"bun was the lone offender before this lift")
 
-    def test_cmd_plan_file_bun_still_never_carries_cr_in_its_context(self):
-        bun_body = self._body_after_signature(CLIENT_FILES["bun"], "cmd_plan_file")
-        mvn_body = self._body_after_signature(CLIENT_FILES["mvn"], "cmd_plan_file")
-        self.assertNotIn(
-            "_axi_context(project_dir, agent_id=agent_id, cr=", bun_body,
-            "documented drift: bun's cmd_plan_file never passes cr= to "
-            "_axi_context on either the failure or success path")
-        self.assertIn(
-            "_axi_context(project_dir, agent_id=agent_id, cr=args.cr)", mvn_body,
-            "mvn is documented as carrying cr= on its FAILURE-path envelope too")
+    def test_cmd_plan_file_now_carries_cr_in_context_on_both_paths_fleet_wide(self):
+        """RESOLVED (DN §4 finding #2): bun never passed cr= to _axi_context
+        on either path; rust/python omitted it on the failure path only;
+        mvn/arduino were already correct on both. All FIVE now carry
+        context.cr on BOTH paths. Falsifiable both ways: fails if any client
+        drops cr= from either the failure or the success envelope."""
+        for client in CLIENT_FILES:
+            body = self._body_after_signature(CLIENT_FILES[client], "cmd_plan_file")
+            self.assertIn(
+                "_axi_context(project_dir, agent_id=agent_id, cr=args.cr)", body,
+                f"{client}'s cmd_plan_file must carry context.cr on the "
+                f"FAILURE path (DN §4 finding #2, resolved)")
+            self.assertIn(
+                'cr=resp.get("cr") or args.cr)', body,
+                f"{client}'s cmd_plan_file must carry context.cr on the "
+                f"SUCCESS path too (DN §4 finding #2, resolved)")
 
-    def test_cmd_unregister_and_register_still_split_on_argparse_required_true(self):
-        bun_source = CLIENT_FILES["bun"].read_text()
+    def test_cmd_register_and_unregister_agent_flag_now_resolved_optional_fleet_wide(self):
+        """RESOLVED (DN §4 finding #3): bun/rust/mvn/python used to
+        argparse-`required=True` --agent on register/unregister (a bare
+        argparse usage error, bypassing the fleet's §S5 AXI hard-stop
+        envelope); arduino's shared `common` parser already left it optional,
+        enforced at runtime via `_agent_id`/`require_agent_id`. All FIVE now
+        match arduino's shape. Falsifiable both ways: fails if any of the
+        four re-pins required=True, and fails if --agent stops being
+        declared at all on any client (register/unregister or arduino's
+        shared common parser)."""
+        for client in ("bun", "rust", "mvn", "python"):
+            source = CLIENT_FILES[client].read_text()
+            self.assertNotIn(
+                'r.add_argument("--agent", required=True', source,
+                f"{client}'s register subparser must NOT argparse-require "
+                f"--agent any more (DN §4 finding #3, resolved) -- the hard "
+                f"stop belongs to the runtime _agent_id() path")
+            self.assertNotIn(
+                'u.add_argument("--agent", required=True)', source,
+                f"{client}'s unregister subparser must NOT argparse-require "
+                f"--agent any more (DN §4 finding #3, resolved)")
+            self.assertIn(
+                'r.add_argument("--agent",', source,
+                f"{client}'s register subparser must still declare --agent "
+                f"(just no longer required=True)")
+            self.assertIn(
+                'u.add_argument("--agent",', source,
+                f"{client}'s unregister subparser must still declare --agent "
+                f"(just no longer required=True)")
         arduino_source = CLIENT_FILES["arduino"].read_text()
-        # bun's unregister/register subparsers still hard-require --agent at
-        # the argparse level (bypassing the shared runtime hard-stop).
-        self.assertIn('r.add_argument("--agent", required=True', bun_source)
-        self.assertIn('u.add_argument("--agent", required=True)', bun_source)
-        # arduino's common parser leaves --agent optional; enforcement is
-        # the runtime require_agent_id() path (via _agent_id()).
         self.assertIn(
             'common.add_argument("--agent",', arduino_source,
-            "arduino's --agent must still be declared on the shared 'common' "
-            "parser (no required=True) -- enforcement happens at runtime")
+            "arduino's --agent must still be declared on the shared "
+            "'common' parser (no required=True) -- the shape the other "
+            "four now match")
 
-    def test_open_gate_identity_mvn_still_the_lone_explicit_source_override(self):
-        mvn_body = self._body_after_signature(CLIENT_FILES["mvn"], "_open_gate_identity")
-        bun_body = self._body_after_signature(CLIENT_FILES["bun"], "_open_gate_identity")
+    def test_open_gate_identity_source_override_now_removed_fleet_wide(self):
+        """RESOLVED: mvn's lone explicit source="openclaw" override in
+        _open_gate_identity is gone -- all FIVE clients now take
+        GatedRunIdentity.open_payload()'s own default ("claude-md"), so no
+        client passes an explicit `source=` kwarg at all any more.
+        Falsifiable both ways: fails if ANY client reintroduces an explicit
+        source override (mvn's original defect resurfacing, on mvn or
+        elsewhere), and fails if the shared default itself regresses away
+        from claude-md."""
+        for client in CLIENT_FILES:
+            body = self._body_after_signature(CLIENT_FILES[client], "_open_gate_identity")
+            self.assertNotIn(
+                "source=", body,
+                f"{client}'s _open_gate_identity must not pass an explicit "
+                f"source= override any more (DN §4 finding #4, resolved) -- "
+                f"mvn was the lone offender before this lift")
+        axi_source = AXI_MODULE_PATH.read_text()
         self.assertIn(
-            'source="openclaw"', mvn_body,
-            "documented drift: mvn is the only client passing an explicit "
-            "source override to identity.open_payload() in _open_gate_identity")
-        self.assertNotIn(
-            'source="openclaw"', bun_body,
-            "bun is documented as taking GatedRunIdentity's default source "
-            "(claude-md) rather than overriding it")
+            'source="claude-md"', axi_source,
+            "the shared GatedRunIdentity.open_payload() default source must "
+            "still be claude-md -- the value every client now implicitly "
+            "relies on by omitting an override")
 
-    def test_remove_agent_silent_bun_still_lacks_the_try_except_the_others_added(self):
-        bun_body = self._body_after_signature(CLIENT_FILES["bun"], "_remove_agent_silent")
-        python_body = self._body_after_signature(CLIENT_FILES["python"], "_remove_agent_silent")
-        self.assertNotIn(
-            "except Exception:", bun_body,
-            "documented drift: bun's _remove_agent_silent has no try/except "
-            "safety net (a raised exception here can crash a gated run's cleanup)")
-        self.assertIn(
-            "except Exception:", python_body,
-            "python (and rust/mvn/arduino) are documented as swallowing the "
-            "exception -- best-effort cleanup")
+    def test_remove_agent_silent_try_except_now_present_fleet_wide(self):
+        """RESOLVED (DN §4 finding #6): bun's _remove_agent_silent used to
+        have no exception guard (rust/mvn/python/arduino already did, but
+        discarded the response). All FIVE now share the same
+        try/except(OSError, ValueError), returning None on a caught failure
+        so _close_gate_identity can report "outcome unknown" rather than
+        crash or fabricate a fixed "removed". Falsifiable both ways: fails
+        if any client drops the guard, and fails if a client's guard stops
+        returning None on failure (silently reverting to the
+        swallow-and-claim-success shape)."""
+        for client in CLIENT_FILES:
+            body = self._body_after_signature(CLIENT_FILES[client], "_remove_agent_silent")
+            self.assertIn(
+                "except (OSError, ValueError):", body,
+                f"{client}'s _remove_agent_silent must guard the removal "
+                f"POST with the shared try/except (DN §4 finding #6, "
+                f"resolved) -- bun was the lone offender before this lift")
+            self.assertIn(
+                "return None", body,
+                f"{client}'s _remove_agent_silent must return None on a "
+                f"caught failure -- the caller's signal to report the "
+                f"outcome as unknown rather than a blanket success")
 
-    def test_close_gate_identity_bun_still_reports_the_actual_post_outcome(self):
-        bun_body = self._body_after_signature(CLIENT_FILES["bun"], "_close_gate_identity")
-        rust_body = self._body_after_signature(CLIENT_FILES["rust"], "_close_gate_identity")
-        self.assertIn(
-            "cleanup_resp = _remove_agent_silent", bun_body,
-            "documented: bun captures _remove_agent_silent's return value and "
-            "reports its real ok= outcome")
-        self.assertNotIn(
-            "cleanup_resp = _remove_agent_silent", rust_body,
-            "documented drift: rust (and mvn/python/arduino) discard the "
-            "return value and print a FIXED 'removed' message unconditionally")
+    def test_close_gate_identity_now_reports_the_real_post_outcome_fleet_wide(self):
+        """RESOLVED (DN §4 finding #6): rust/mvn/python/arduino used to
+        discard _remove_agent_silent's return value and print a FIXED
+        "removed" message unconditionally (bun was the only one capturing
+        and reporting the real outcome). All FIVE now capture `cleanup_resp`
+        and report ITS actual ok=/outcome-unknown state. Falsifiable both
+        ways: fails if any client goes back to discarding the response, and
+        fails if the cleanup line stops being built FROM that captured
+        value."""
+        for client in CLIENT_FILES:
+            body = self._body_after_signature(CLIENT_FILES[client], "_close_gate_identity")
+            self.assertIn(
+                "cleanup_resp = _remove_agent_silent", body,
+                f"{client}'s _close_gate_identity must capture "
+                f"_remove_agent_silent's return value (DN §4 finding #6, "
+                f"resolved) -- a discarded response is the original defect")
+            self.assertIn(
+                "gate_identity_cleanup_line(identity.agent_id, cleanup_resp)", body,
+                f"{client}'s _close_gate_identity must build its report "
+                f"line FROM the captured cleanup_resp, never a fixed "
+                f"'removed' string")
 
     def test_request_empty_body_guard_now_resolved_uniformly_via_crucible_axi(self):
         """RESOLVED in C2 (§S2b): the empty-body guard that only arduino used
@@ -369,6 +438,107 @@ class DriftedFindingsAreStillPresentTest(unittest.TestCase):
                 ".http_request(", client_body,
                 f"{client}'s _request must delegate to the shared "
                 f"http_request(...) rather than reimplementing the transport")
+
+
+# ---------------------------------------------------------------------------
+# CR-CRU-054 C4 FIX -- guard the untested `identity.source` correction.
+#
+# GREEN flagged that mvn:359's `_narrate_heartbeat` carried a hardcoded
+# "openclaw" literal -- outside the documented enum {claude-md, package-json,
+# git-repo, manual} -- that NO RED assertion in this cycle covered; the
+# `test_open_gate_identity_source_override_now_removed_fleet_wide` fixture
+# flip above is only incidental evidence for a DIFFERENT site
+# (`_open_gate_identity`). This is the direct guard: every hardcoded
+# `identity.source` literal, at every site across the fleet (and the shared
+# `_crucible_axi.py`) that builds one, must be an enum member -- the check
+# that would have caught the original "openclaw" defect outright.
+# ---------------------------------------------------------------------------
+
+IDENTITY_SOURCE_ENUM = frozenset(
+    {"claude-md", "package-json", "git-repo", "manual"})
+
+
+def _boolop_or_constant_strings(node):
+    """String constants directly reachable from `node`, following `or`-chain
+    BoolOps ONLY (e.g. `getattr(args, "source", None) or "claude-md"`) --
+    deliberately does NOT descend into unrelated Call arguments (which would
+    also surface an unrelated literal, like the "source" attribute-name
+    string `getattr` itself takes)."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, ast.BoolOp):
+        found = []
+        for value in node.values:
+            found.extend(_boolop_or_constant_strings(value))
+        return found
+    return []
+
+
+def _identity_source_literals(path):
+    """Every hardcoded STRING literal `path` ever assigns as an identity
+    `source` -- a `{"source": <value>}` dict entry, a `source=` keyword
+    argument, or a `source=` parameter default -- AST-walked (never grep) so
+    a literal can never hide behind formatting or a helper wrapper."""
+    tree = ast.parse(path.read_text(), filename=str(path))
+    literals = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if isinstance(key, ast.Constant) and key.value == "source":
+                    literals.extend(_boolop_or_constant_strings(value))
+        elif isinstance(node, ast.Call):
+            for kw in node.keywords:
+                if kw.arg == "source":
+                    literals.extend(_boolop_or_constant_strings(kw.value))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            params = node.args.args[len(node.args.args) - len(node.args.defaults):]
+            for param, default in zip(params, node.args.defaults):
+                if param.arg == "source":
+                    literals.extend(_boolop_or_constant_strings(default))
+    return literals
+
+
+class IdentitySourceEnumGuardTest(unittest.TestCase):
+    """No client (nor the shared `_crucible_axi.py`) may hardcode
+    `identity.source` outside the documented enum {claude-md, package-json,
+    git-repo, manual} -- the guard the historical mvn `_narrate_heartbeat`
+    "openclaw" literal (DN §4, now fixed) had no RED assertion covering."""
+
+    def test_the_sweep_actually_finds_hardcoded_source_literals(self):
+        """A guard that finds nothing is not a guard -- confirm the sweep
+        picks up at least the known hardcoded sites (mvn's now-corrected
+        `_narrate_heartbeat` literal and the shared `GatedRunIdentity.
+        open_payload` default) BEFORE trusting the offenders check below;
+        this would fail against a no-op/stubbed sweep, so the guard test
+        itself can never pass vacuously."""
+        mvn_literals = _identity_source_literals(CLIENT_FILES["mvn"])
+        self.assertIn(
+            "claude-md", mvn_literals,
+            "the sweep must find mvn's _narrate_heartbeat hardcoded "
+            "identity.source literal")
+        axi_literals = _identity_source_literals(AXI_MODULE_PATH)
+        self.assertIn(
+            "claude-md", axi_literals,
+            "the sweep must find _crucible_axi.GatedRunIdentity."
+            "open_payload's default source= literal")
+
+    def test_every_hardcoded_identity_source_literal_is_in_the_documented_enum(self):
+        offenders = {}
+        for client, path in CLIENT_FILES.items():
+            bad = [v for v in _identity_source_literals(path)
+                   if v not in IDENTITY_SOURCE_ENUM]
+            if bad:
+                offenders[client] = bad
+        axi_bad = [v for v in _identity_source_literals(AXI_MODULE_PATH)
+                   if v not in IDENTITY_SOURCE_ENUM]
+        if axi_bad:
+            offenders["_crucible_axi"] = axi_bad
+        self.assertEqual(
+            offenders, {},
+            f"the following files hardcode an identity.source literal "
+            f"outside {sorted(IDENTITY_SOURCE_ENUM)!r} -- the exact "
+            f"historical defect (mvn's _narrate_heartbeat 'openclaw') this "
+            f"guard exists to catch: {offenders!r}")
 
 
 if __name__ == "__main__":
