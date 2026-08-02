@@ -1,4 +1,9 @@
-# CR-CRU-058 — Nine rust verbs emit no TOON-AXI envelope, including the pre-merge gate
+# CR-CRU-058 — 40 of 118 client verbs emit no TOON-AXI envelope, including the pre-merge gate in all five clients
+
+> **Title corrected 2026-08-02.** Filed as "nine rust verbs" from hand-tracing. §S0's detector
+> measured **40 across all five clients**, and `pre-merge-gate` — the CR's headline concern — was
+> bare in every one of them, not just rust. The original framing is preserved below in Context for
+> the record; §S0b is the measured scope.
 
 **Status:** PENDING
 **Type:** patch (AXI-compliance — fleet parity)
@@ -125,15 +130,15 @@ drift guard: enumerate verbs from each client's argparse, assert each produces a
 explicit justified allow-list if any verb legitimately cannot (state the reason in-file).
 
 ## Acceptance criteria
-- [ ] All nine rust verbs emit an `axi:` envelope with `ok`, verb-specific fields, non-empty
+- [x] **(re-scoped by §S0b: all 40, not nine)** every envelope-less verb fleet-wide emits an `axi:` envelope with `ok`, verb-specific fields, non-empty
       `help[]`, `context`, and `warnings[]` — asserted per verb by driving the real CLI.
-- [ ] The envelopes come from the SHARED emitters, not a rust-local copy — asserted (the CR-054
+- [x] The envelopes come from the SHARED emitters, not a rust-local copy — asserted (the CR-054
       drift guard must stay green).
-- [ ] `help[]` is state-derived: a failing and a passing run of the same verb produce DIFFERENT
+- [x] `help[]` is state-derived: a failing and a passing run of the same verb produce DIFFERENT
       next-step text — asserted for at least the two gate verbs.
-- [ ] No `[crucible] …` human line reaches stdout from any of the nine; stdout parses as a TOON
+- [x] No `[crucible] …` human line reaches stdout from ANY verb in ANY client; stdout parses as a TOON
       envelope alone — asserted (§S3).
-- [ ] The §S4 guard fails when a verb is added without an envelope — proven by adding one
+- [x] The §S4 guard fails when a verb is added without an envelope — proven by adding one
       temporarily.
 - [ ] Full bun regression green AND full Python regression green (client change → both gates, per
       CR-CRU-045 §S3).
