@@ -61,15 +61,12 @@ Subcommands:
 import argparse
 import glob
 import importlib.util
-import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 import xml.etree.ElementTree as ET
 
 CRUCIBLE = (os.environ.get("CRUCIBLE_URL") or os.environ.get("CRUCIBLE_BASE")
@@ -132,23 +129,14 @@ def _request(method, path, payload=None, timeout=None):
     CR-CRU-035 §S1 — `timeout=None` (the default) is UNBOUNDED: ingest POSTs
     (`/api/v2/runs/parsed`) for a large regression/coverage run can legitimately
     take the server >10s, and a short bound there is a false-negative. The short
-    hook-safe bound is applied ONLY on the status/plans read path via `_get`."""
-    req = urllib.request.Request(
-        CRUCIBLE + path,
-        data=json.dumps(payload).encode() if payload is not None else None,
-        headers={"Content-Type": "application/json"},
-        method=method,
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            body = r.read().decode()
-        return json.loads(body) if body else {"ok": True}
-    except urllib.error.HTTPError as e:
-        body = e.read().decode(errors="replace")
-        return {"ok": False, "error": f"HTTP {e.code}: {body}"}
-    except urllib.error.URLError as e:
-        return {"ok": False, "error": f"connection failed: {e.reason} "
-                                      f"(is Crucible running at {CRUCIBLE}?)"}
+    hook-safe bound is applied ONLY on the status/plans read path via `_get`.
+
+    CR-CRU-054 §S2 — a thin delegator to the fleet's ONE transport,
+    `_crucible_axi.http_request`, which documents the full contract (including
+    the §S2b empty-body correction). The local name is kept deliberately: the
+    CR-CRU-030 delegation pattern, addressed unqualified by every call site
+    here and by the client test harnesses."""
+    return _axi().http_request(CRUCIBLE, method, path, payload, timeout)
 
 
 def _post(path, payload):
@@ -1186,8 +1174,9 @@ _DASHBOARD_PURPOSE_LINE = (
 
 
 def _abbrev_home(path):
-    home = os.path.expanduser("~")
-    return "~" + path[len(home):] if path.startswith(home) else path
+    """Render an absolute path with `~` for the home dir (§S14) — CR-CRU-054 §S2
+    delegator to `_crucible_axi.abbrev_home`."""
+    return _axi().abbrev_home(path)
 
 
 def cmd_dashboard():

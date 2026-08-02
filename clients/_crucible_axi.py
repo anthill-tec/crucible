@@ -25,8 +25,11 @@ same way the clients do.
 """
 
 import importlib.util
+import json
 import os
 import sys
+import urllib.error
+import urllib.request
 
 # Sentinel distinguishing "cycle_id not supplied" (omit the key) from an
 # explicit `cycle_id=None` (emit an EXPLICIT null — the §S3 orphan signal).
@@ -50,6 +53,74 @@ def _toon():
         _TOON_MOD = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(_TOON_MOD)
     return _TOON_MOD
+
+
+# ── CR-CRU-054 §S2 — the fleet's HTTP core, lifted to ONE locus of truth ────
+#
+# Every client used to carry its OWN byte-identical `_request` (plus the
+# `_post`/`_get`/`_patch` wrappers over it) and its OWN `_abbrev_home`. Five
+# copies of a transport is five places for a fix to land in four of them —
+# exactly the failure `docs/research/DN-client-fleet-inventory.md` §4 found.
+# The clients keep the local names (their internal call sites and every client
+# test harness address `_post`/`_get`/`_patch`/`_request` unqualified) but the
+# LOGIC lives here only, reached through the same thin-delegator pattern
+# CR-CRU-030 established for `_axi_context`/`_emit_axi`.
+
+
+def http_request(base_url, method, path, payload=None, timeout=None):
+    """The fleet's ONE JSON-over-HTTP call to Crucible. Returns the parsed JSON
+    response, or a structured `{ok: False, error}` on an HTTP/connection error.
+
+    `base_url` is passed in rather than read from the environment here: each
+    client owns its own base-URL constant (four spell it `CRUCIBLE_URL`,
+    arduino `CRUCIBLE`), and resolving it stays client-side under this module's
+    scope boundary — the shared module reads no config of its own.
+
+    CR-CRU-035 §S1 — `timeout=None` (the default) is UNBOUNDED: ingest POSTs
+    (`/api/v2/runs/parsed`) for a large regression/coverage run can legitimately
+    take the server >10s, and a short bound there is a false-negative. The short
+    hook-safe bound is applied ONLY on the status/plans read path via `_get`.
+    The bound is passed as a `timeout=` KEYWORD, which the fleet's hook-safety
+    tests assert on directly.
+
+    CR-CRU-054 §S2b (DRIFTED, DN §4 finding #7) — an EMPTY 200 response body
+    yields `{"ok": True}` rather than the uncaught `json.JSONDecodeError` that
+    `json.loads(b"")` raised in bun/rust/mvn/python. arduino was the lone client
+    with the body-presence guard and its version is the one that survives the
+    lift; the other four inherit the fix. A NON-empty body that is not valid
+    JSON still raises, unchanged — only the empty case was ever a defect.
+    """
+    req = urllib.request.Request(
+        f"{base_url}{path}",
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={"Content-Type": "application/json"},
+        method=method,
+    )
+    try:
+        # Deliberately NOT a `with` block: the client test harnesses stub
+        # `urllib.request.urlopen` with a plain response double, and a
+        # context-managed read would consume that double's `__enter__` result
+        # instead of the double itself. The explicit close keeps the
+        # connection from leaking all the same.
+        response = urllib.request.urlopen(req, timeout=timeout)
+        try:
+            body = response.read()
+        finally:
+            response.close()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")
+        return {"ok": False, "error": f"HTTP {e.code}: {detail}"}
+    except urllib.error.URLError as e:
+        return {"ok": False, "error": f"connection failed: {e.reason} "
+                                      f"(is Crucible running at {base_url}?)"}
+    return json.loads(body) if body else {"ok": True}
+
+
+def abbrev_home(path):
+    """Render an absolute path with `~` for the home dir (§S14). A path outside
+    the home directory is returned unchanged."""
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home) else path
 
 
 def axi_context(project_key, agent_id=None, cr=None, cycle_id=AXI_UNSET):
