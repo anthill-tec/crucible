@@ -360,9 +360,14 @@ def _open_plans(project_dir):
     return _axi().open_plans(_get, _plans_path(project_dir))
 
 
-def _emit_ingest_axi(verb, resp, summary, project_dir, agent):
+def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent):
     """Emit the §S1 envelope for an ingest verb:
-    run{passed,failed,pending,total}. CR-CRU-056 §S3 — the client RESOLVES no
+    run{passed,failed,pending,total,files}. `files` (CR-CRU-051 §S2, propagating
+    CR-CRU-047 §S2 from the bun reference) is the distinct-source count from
+    `_parse_junit_dir` — per-FILE on xmlrunner 4.x (it stamps `file=`),
+    degrading to per-CLASS on a report without it — carried as a
+    sibling of the test counts so a suite that silently shrinks is visible in
+    the gate output itself. CR-CRU-056 §S3 — the client RESOLVES no
     cycle: a bound agent's run is stamped with its registered cycle SERVER-side
     (a stale binding gets a 409, surfaced via `error`). C5 — the envelope
     context ECHOES the attachment the SERVER reported (`context.cycleId` on the
@@ -370,7 +375,7 @@ def _emit_ingest_axi(verb, resp, summary, project_dir, agent):
     without a second `GET /api/v2/events`; absent → the key is omitted."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
-           "total": summary["total"]}
+           "total": summary["total"], "files": files}
     context = _axi_context(project_dir, agent_id=agent,
                            cycle_id=_axi().echoed_cycle_id(resp))
     result_fields = {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])}
@@ -436,11 +441,29 @@ def _xmlrunner_cmd(python, targets, start_dir, pattern, reports_dir):
 
 
 def _parse_junit_dir(reports_dir):
-    """Parse every TEST-*.xml in reports_dir into (summary, tree) with per-method leaf
-    names for the /api/v2/runs/parsed path so the Crucible tree shows real names."""
+    """Parse every TEST-*.xml in reports_dir into (summary, tree, files) with
+    per-method leaf names for the /api/v2/runs/parsed path so the Crucible tree
+    shows real names.
+
+    CR-CRU-051 §S1 — `files` is the DISTINCT-SOURCE count, mirroring
+    `bun-crucible.py::_parse_junit_file` (the reference).
+
+    RESOLVED GRANULARITY FOR THIS CLIENT: **VERSION-DEPENDENT — per-FILE on the
+    xmlrunner we run, per-CLASS on one that predates it.** Measured, not
+    assumed: unittest-xml-reporting 4.0.0 stamps each `<testcase>` with BOTH
+    `classname` AND a real `file="tests/client/foo.py"`, so the first rung of
+    the chain hits and the count is genuinely per test FILE (a whole-module run
+    of one file reports files=1, not one-per-TestCase-class). Where `file` is
+    absent the count degrades to `classname` — i.e. distinct test CLASSES, NOT
+    files, which is the format's contract and is named honestly here rather
+    than implying a precision that report cannot give — and then to the suite
+    name. The chain never collapses to zero: a constant zero would make a
+    shrinking suite look identical to a healthy one. It rides the printed run
+    envelope only, never the ingest payload (CR-CRU-047 §S2)."""
     tree_nodes = []
     total = passed = failed = pending = 0
     duration_ms = 0
+    files = set()
     for xml_file in sorted(glob.glob(os.path.join(reports_dir, "TEST-*.xml"))):
         root = ET.parse(xml_file).getroot()
         suites = root.findall(".//testsuite") or [root]
@@ -448,6 +471,9 @@ def _parse_junit_dir(reports_dir):
             children = []
             suite_fail = False
             for tc in suite.findall("testcase"):
+                source = tc.get("file") or tc.get("classname") or suite.get("name")
+                if source:
+                    files.add(source.replace("\\", "/"))
                 tc_time = int(float(tc.get("time", 0)) * 1000)
                 fail = tc.find("failure") is not None or tc.find("error") is not None
                 # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase (unittest's
@@ -480,7 +506,10 @@ def _parse_junit_dir(reports_dir):
                 })
     summary = {"total": total, "passed": passed, "failed": failed,
                "pending": pending, "duration_ms": duration_ms}
-    return summary, tree_nodes
+    # `files` is returned as a SIBLING of `summary`, deliberately not a key
+    # inside it: `summary` IS the /api/v2/runs/parsed payload's summary field
+    # verbatim, and CR-CRU-047 §S2 keeps this count out of the wire.
+    return summary, tree_nodes, len(files)
 
 
 def _produced_xml(reports_dir):
@@ -516,9 +545,13 @@ def _is_zero_discovery(result):
 
 
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
-                   context=None, raw=None):
+                   context=None, raw=None, files=None):
     """POST the client-parsed run (per-method leaf names) to /api/v2/runs/parsed.
-    Returns the parsed response dict (the caller emits the §S1 envelope)."""
+    Returns the parsed response dict (the caller emits the §S1 envelope).
+
+    CR-CRU-051 §S2 — `files` (the distinct-source count) is a PRINT-ONLY
+    argument: it is appended to the human-readable count line and is never
+    added to `payload`/`summary`, which go on the wire (CR-CRU-047 §S2)."""
     payload = {
         "projectKey": _project_key(project_dir),
         "agentId": agent_id,
@@ -541,7 +574,9 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     print(
         f"ingest parsed: ok={resp.get('ok')} passed={summary['passed']} "
         f"failed={summary['failed']} pending={summary.get('pending', 0)} "
-        f"total={summary['total']}{cov_line}"
+        f"total={summary['total']}"
+        + (f" files={files}" if files is not None else "")
+        + cov_line
         + (f" error={resp['error']}" if resp.get("error") else ""),
         file=sys.stderr,
     )
@@ -631,11 +666,11 @@ def cmd_test(args):
         return result.returncode
 
     if _produced_xml(reports_dir):
-        summary, tree = _parse_junit_dir(reports_dir)
+        summary, tree, files = _parse_junit_dir(reports_dir)
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
                               context=_run_context(),
-                              raw=result.stdout)
-        _emit_ingest_axi("test", resp, summary, project_dir, args.agent)
+                              raw=result.stdout, files=files)
+        _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent)
         if summary["failed"] > 0:
             return 1
         return 0 if resp.get("ok") else 1
@@ -719,11 +754,11 @@ def _regression_run(args):
                         tier="regression")
         return result.returncode or 1
 
-    summary, tree = _parse_junit_dir(reports_dir)
+    summary, tree, files = _parse_junit_dir(reports_dir)
     coverage = _collect_coverage(python, project_dir, env) if coverage_on else None
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                          tier="regression", context=_run_context())
-    _emit_ingest_axi("regression", resp, summary, project_dir, args.agent)
+                          tier="regression", context=_run_context(), files=files)
+    _emit_ingest_axi("regression", resp, summary, files, project_dir, args.agent)
     return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
 
 
@@ -736,10 +771,10 @@ def cmd_auto_ingest(args):
         print(f"[crucible] no TEST-*.xml in {reports_dir} — nothing to ingest",
               file=sys.stderr)
         return 1
-    summary, tree = _parse_junit_dir(reports_dir)
+    summary, tree, files = _parse_junit_dir(reports_dir)
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",
-                          context=_run_context())
-    _emit_ingest_axi("auto-ingest", resp, summary, project_dir, args.agent)
+                          context=_run_context(), files=files)
+    _emit_ingest_axi("auto-ingest", resp, summary, files, project_dir, args.agent)
     return 0 if resp.get("ok") else 1
 
 

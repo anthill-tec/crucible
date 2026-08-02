@@ -65,11 +65,25 @@ if source:
     files.add(source.replace("\\", "/"))
 ```
 
-Per format: surefire and xmlrunner stamp `classname` (per-CLASS granularity — that is the format's
-contract, not a defect, exactly as CR-CRU-049 §"Non-goals" records for narration); nextest and the
-arduino native harness should be checked for a `file` attribute first. **State the resolved
-granularity per client** — "files" that is really "classes" must be labelled honestly rather than
-implying per-file precision the format cannot give.
+Per format: **surefire** stamps `classname` only (per-CLASS granularity — the format's contract,
+not a defect, exactly as CR-CRU-049 §"Non-goals" records for narration); nextest and the arduino
+native harness should be checked for a `file` attribute first. **State the resolved granularity
+per client** — "files" that is really "classes" must be labelled honestly rather than implying
+per-file precision the format cannot give.
+
+🚨 **CORRECTION (measured at C1 GREEN, 2026-08-02): this section's xmlrunner claim was WRONG.**
+The spec asserted xmlrunner stamps `classname` and therefore yields per-CLASS granularity. Run
+against the version this repo actually uses — `unittest-xml-reporting 4.0.0` — each `<testcase>`
+carries **both** `classname` AND a real `file="tests/client/….py"` (plus `line=`). Rung 1 of the
+fallback chain therefore hits, and the python client's count is genuinely **per-FILE**. Caught by
+the GREEN agent measuring a live run (`files=1` across 4 TestCase classes) instead of trusting
+this document, then verifying against the raw XML. Resolved granularity, per client:
+- **python** — per-FILE on xmlrunner 4.0.0; degrades to per-CLASS on a runner that omits `file`.
+- **mvn** — per-CLASS, genuinely; surefire/failsafe emit no `file`. Java's one-public-class-per-file
+  convention usually makes the two coincide, but nested/inner test classes push the count above the
+  file count, so "classes" is the accurate word.
+- **arduino** — per-FILE when the native g++ harness stamps `file=`, degrading to per-class then
+  per-suite; only as precise as the harness that produced the XML.
 
 ### §S2 — Surface it in the envelope and the plain count lines
 Add `files` to each client's `run:` block alongside `passed`/`failed`/`pending`/`total`, and to the
