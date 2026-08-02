@@ -649,28 +649,53 @@ class EnvelopeCensusTest(unittest.TestCase):
             "and must show enveloped, not envelope-less")
         self.assertEqual(clippy_axi.get("verb"), "clippy")
 
-    def test_mvn_unit_module_compile_e2e_confirmed_envelope_less(self):
-        """Gap-analysis finding (CR's own retracted non-goal: "mvn cmd_unit/
-        cmd_module reaching a print-only _ingest_parsed with no emitter in
-        the chain"). Confirmed by reading the full delegation chain:
-        `cmd_unit`/`cmd_module` -> `_run_surefire_tier` -> `_smart_ingest` ->
-        `_ingest_junit_dir`/`_ingest_parsed`, NONE of which ever call
-        `_emit_axi`, and `_run_surefire_tier` itself never calls it either.
-        `cmd_compile` and `cmd_e2e` are two MORE, undocumented instances of
-        the identical gap (neither has an `_emit_axi` call anywhere in its
-        body -- `cmd_compile` ends in a bare `_ingest_compile(...)` print,
-        `cmd_e2e` in a bare `_ingest_parsed(...)`/`_compile_fallback(...)`)
-        -- new to this detector's run, in scope per the CR's own retracted
-        non-goal ("Whatever it finds in the other four is IN SCOPE for this
-        CR")."""
+    def test_mvn_unit_module_compile_e2e_confirmed_enveloped(self):
+        """CR-CRU-058 §S1 re-point (this is the RED-cycle predecessor test's
+        inversion, not a new finding -- C1/C2's
+        `test_mvn_unit_module_compile_e2e_confirmed_envelope_less` pinned the
+        defect the gap-analysis found, and which the CR's own retracted
+        non-goal had put in scope: "mvn cmd_unit/cmd_module reaching a
+        print-only _ingest_parsed with no emitter in the chain". The full
+        delegation chain `cmd_unit`/`cmd_module` -> `_run_surefire_tier` ->
+        `_smart_ingest` -> `_ingest_junit_dir`/`_ingest_parsed` reached no
+        `_emit_axi` at any hop, and `cmd_compile`/`cmd_e2e` were two MORE,
+        undocumented instances of the identical gap (bare
+        `_ingest_compile(...)` / `_ingest_parsed(...)`+`_compile_fallback(...)`
+        prints).
+
+        C3 GREEN-b closed all four: each now reaches a real shared-emitter
+        `_emit_axi` call. This is a PERMANENT GUARD, never a skip -- it
+        asserts the specific envelope content (a decoded `axi` carrying the
+        right `verb`) so a future regression that re-bares even ONE of the
+        four is caught even if the other three stay enveloped, plus mvn's
+        fleet-wide bare count being exactly zero."""
         mvn = self.census["mvn"]
-        still_enveloped = {v for v in ("unit", "module", "compile", "e2e")
-                           if mvn.get(v)}
+        expected_now_enveloped = ("unit", "module", "compile", "e2e")
+        missing_from_enumeration = {v for v in expected_now_enveloped
+                                    if v not in mvn}
         self.assertEqual(
-            still_enveloped, set(),
-            f"mvn's unit/module/compile/e2e verbs must show envelope-less "
-            f"-- each reaches only a plain-print ingest helper, never "
-            f"_emit_axi: {still_enveloped!r}")
+            missing_from_enumeration, set(),
+            f"the four named mvn verbs must all still exist in mvn's "
+            f"argparse: missing {missing_from_enumeration!r}")
+        still_bare = {v for v in expected_now_enveloped if not mvn.get(v)}
+        self.assertEqual(
+            still_bare, set(),
+            f"mvn's unit/module/compile/e2e must all show ENVELOPED (a "
+            f"decodable 'axi:' with the right verb) after C3 GREEN-b's "
+            f"shared-emitter fix -- any verb here means it regressed back "
+            f"to a plain-print ingest helper with no _emit_axi: "
+            f"{still_bare!r}")
+        for verb in expected_now_enveloped:
+            axi = mvn[verb]
+            self.assertEqual(
+                axi.get("verb"), verb,
+                f"mvn's {verb!r} envelope must carry verb={verb!r}, got "
+                f"{axi.get('verb')!r}")
+        fleet_bare = {v for v, ok in mvn.items() if not ok}
+        self.assertEqual(
+            fleet_bare, set(),
+            f"mvn's fleet-wide envelope census must now be zero bare "
+            f"(CR-CRU-058 C3 GREEN-b): {fleet_bare!r}")
 
     def test_mvn_test_and_auto_ingest_confirmed_cleanly_enveloped(self):
         """The asymmetry that makes the finding above interesting: mvn's
@@ -688,36 +713,51 @@ class EnvelopeCensusTest(unittest.TestCase):
             missing, set(),
             f"mvn's test/auto-ingest must show cleanly enveloped: {missing!r}")
 
-    def test_mvn_regression_reaches_the_emitter_but_stdout_purity_is_violated(self):
-        """A THIRD, more subtle category the census's strict single-document
-        decode surfaces: mvn's `_regression_run` DOES call
-        `_emit_ingest_summary_axi` (confirmed by reading its body) -- but
-        `print(f"[regression] running: {{...}}")` and
-        `print(f"[regression] mvn exit={{...}}")` (mvn-crucible.py, both with
-        no `file=sys.stderr`, unlike `cmd_test`'s/`cmd_check`'s equivalent
-        prints two lines below each) write to STDOUT first, so the overall
-        stream is prose-then-envelope, not "a TOON envelope alone" (§S3's
-        exact AC wording). The strict `classify_envelope` above correctly
-        reads this as `False` (a caller trying to decode the WHOLE stdout as
-        one document gets a parse failure) -- this test confirms that
-        reading precisely: an `axi:` block genuinely IS present in the raw
-        stream (so this is §S3 stdout-pollution, not an S1 missing-emitter
-        gap like unit/module/compile/e2e above), it just cannot be decoded
-        as the clean single document the AC requires."""
+    def test_mvn_regression_stdout_is_now_one_clean_envelope_with_no_prose(self):
+        """CR-CRU-058 §S3 re-point (this is the RED-cycle predecessor test's
+        inversion, not a new finding -- C1/C2's
+        `test_mvn_regression_reaches_the_emitter_but_stdout_purity_is_violated`
+        pinned a THIRD, subtler category the census's strict single-document
+        decode surfaced: mvn's `_regression_run` DID reach
+        `_emit_ingest_summary_axi`, but `print(f"[regression] running: ...")`
+        and `print(f"[regression] mvn exit=...")` had no `file=sys.stderr`
+        (unlike `cmd_test`'s/`cmd_check`'s equivalent prints two lines below
+        each), so the stream was prose-then-envelope -- not "stdout parses as
+        a TOON envelope alone", §S3's exact AC wording.
+
+        C3 GREEN-b's fleet-wide stdout-purity sweep moved that prose to
+        stderr. This is a PERMANENT GUARD, never a skip: it asserts BOTH
+        surfaces, so the fix cannot regress AND cannot be "achieved" by
+        deleting the operator-facing prose outright -- stdout must decode as
+        exactly one `verb: regression` envelope with no `[regression] ...`
+        line anywhere in it, and the human lines must still be present, on
+        stderr."""
         result = self._drive_mvn_regression_raw()
-        self.assertIn(
-            "axi:\n  verb: regression", result.stdout,
-            "mvn's regression verb must still contain a real axi: block "
-            "in its raw stdout -- confirming the emitter WAS reached")
-        self.assertFalse(
-            self.census["mvn"].get("regression"),
-            "the strict single-document census must still read regression "
-            "as non-compliant: prose precedes the envelope on stdout")
+        toon_module = _load_toon_module()
+        emits, axi = classify_envelope(result.stdout, toon_module)
         self.assertTrue(
-            result.stdout.split("axi:", 1)[0].strip().startswith("[regression] running:"),
-            "the polluting line must be mvn's own unguarded "
-            "'[regression] running: ...' print (no file=sys.stderr), "
-            "landing on stdout BEFORE the envelope")
+            emits,
+            f"mvn's regression stdout must now decode as ONE clean TOON "
+            f"envelope (§S3's AC: 'stdout parses as a TOON envelope alone'); "
+            f"raw stdout was: {result.stdout!r}")
+        self.assertEqual(
+            axi.get("verb"), "regression",
+            f"that single document must be regression's own envelope, got "
+            f"verb={axi.get('verb')!r}")
+        self.assertNotIn(
+            "[regression]", result.stdout,
+            f"no '[regression] ...' human line may reach stdout any more "
+            f"(the exact pollution §S3 forbids); raw stdout was: "
+            f"{result.stdout!r}")
+        self.assertTrue(
+            self.census["mvn"].get("regression"),
+            "the strict single-document census must now read regression as "
+            "compliant -- nothing precedes the envelope on stdout")
+        self.assertIn(
+            "[regression] running:", result.stderr,
+            "the prose must have MOVED to stderr, not been deleted -- the "
+            "operator-facing 'running: mvn ...' line is still required, on "
+            "the human channel")
 
     def _drive_mvn_regression_raw(self):
         fake_bin_dir = _build_fake_bin_dir()

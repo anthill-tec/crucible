@@ -329,28 +329,6 @@ def _emit_ingest_axi(verb, resp, project_dir, agent):
     _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
 
 
-def _ingest_failed_warning(verb):
-    """CR-CRU-058 §S1 — the structured warning naming the condition behind a
-    completed run whose evidence never reached the board, so a machine caller
-    reading the envelope alone (the human line is stderr-only) learns that the
-    run happened but is NOT recorded. Mirrors the shared
-    `plans_unavailable_warning` shape."""
-    return {
-        "code": "ingest-failed",
-        "detail": (f"the {verb} run completed but its ingest to {CRUCIBLE_URL} "
-                   f"did not succeed — the evidence is NOT on the board"),
-    }
-
-
-def _server_unreachable_help(verb):
-    """CR-CRU-058 §S2 — the state-derived `help[]` for a run that produced real
-    results but could not record them: pointing at the verb's normal successor
-    would walk the orchestrator past a run that was never ingested."""
-    return [f"check the Crucible server is running / reachable at {CRUCIBLE_URL}, "
-            f"then re-run {verb} --agent <agentId>",
-            "status"]
-
-
 def _clippy_help(ok, errors, lints, scope):
     """CR-CRU-058 §S2 (CR-CRU-048's rule) — the next step for the clippy state
     ACTUALLY reached, never a canned per-verb string: a clean lint run points at
@@ -377,19 +355,6 @@ def _docker_help(action, ok):
     return ["the stack did not tear down cleanly — remove it by hand with "
             "`docker compose down -v`, then re-check",
             "status"]
-
-
-def _run_help(verb, ok, failed):
-    """CR-CRU-058 §S2 — the next step for a test-running verb, derived from the
-    run state actually reached: an unrecorded run points at the server, a red
-    run at the failures, a green one at the next workflow move."""
-    if not ok and failed == 0:
-        return _server_unreachable_help(verb)
-    if failed:
-        return [f"fix the {failed} failing test(s), then re-run "
-                f"{verb} --agent <agentId>",
-                "status"]
-    return ["cycle-done <id>", "status"]
 
 
 def _no_junit_help(verb):
@@ -719,12 +684,18 @@ def _acquire_gate_lock(project_dir, agent):
 
 def _run_logged(cmd, cwd, env, log_path):
     """Run `cmd`. If `log_path` is set, capture the COMBINED stdout+stderr (merged
-    in order), write it to `log_path`, and echo it to this process's stdout so the
+    in order), write it to `log_path`, and echo it to this process's STDERR so the
     caller still sees the run. Returns the `subprocess.CompletedProcess`.
 
     Used for the streaming run commands (test / smoke-test / workspace-regression)
     so an agent can read the full run output back from a file for debugging — the
     streamed-to-terminal output is otherwise lost.
+
+    CR-CRU-058 §S3 — the echo and both log-status lines go to STDERR, matching
+    the rest of the fleet (`python-crucible._run_logged` is the reference): a
+    cargo/nextest run's own output on stdout would put megabytes of prose in
+    front of the verb's envelope, so stdout would no longer parse as a TOON
+    envelope alone. Nothing is lost — the human channel still shows every byte.
     """
     if not log_path:
         # No log requested — stream live (interactive), current behaviour.
@@ -737,10 +708,11 @@ def _run_logged(cmd, cwd, env, log_path):
     try:
         with open(log_path, "w") as f:
             f.write(out)
-        print(f"[crucible] run log → {log_path} ({len(out)} bytes)")
+        print(f"[crucible] run log → {log_path} ({len(out)} bytes)", file=sys.stderr)
     except OSError as e:
-        print(f"[crucible] WARN: could not write run log to {log_path}: {e}")
-    sys.stdout.write(out)  # echo so the run is still visible on the terminal
+        print(f"[crucible] WARN: could not write run log to {log_path}: {e}",
+              file=sys.stderr)
+    sys.stderr.write(out)  # echo so the run is still visible on the terminal
     return result
 
 
@@ -826,7 +798,7 @@ def cmd_auto_ingest(args):
     cmd = ["cargo", "check", "-p", args.crate]
     if args.features:
         cmd += ["--features", args.features]
-    print(f"[crucible] no junit — running: {' '.join(cmd)}")
+    print(f"[crucible] no junit — running: {' '.join(cmd)}", file=sys.stderr)
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=project_dir)
     err_count = result.stderr.count("error[E")
     warn_count = result.stderr.count("warning:")
@@ -840,11 +812,43 @@ def cmd_auto_ingest(args):
     if context:
         payload["context"] = context
     resp = _post("/api/v2/runs/compile", payload)
-    print(
-        f"ingest compile: ok={resp.get('ok')} "
-        f"errors={err_count} warnings={warn_count} cargo_exit={result.returncode}"
-    )
-    return 0 if resp.get("ok") else 1
+    # CR-CRU-058 §S1/§S3 — this branch used to end in TWO unguarded stdout
+    # prints and no emitter at all: the last path in the fleet putting a
+    # `[crucible] …` human line on the machine channel, and the only outcome of
+    # `auto-ingest` with no envelope behind it. Both human lines are stderr now
+    # (the second rides `_emit_axi`'s own legacy_line, so it is printed ONCE),
+    # and the branch carries the envelope its junit sibling already emitted.
+    #
+    # `ok` means the same thing on BOTH branches of this one verb — did the
+    # evidence reach the board — matching `_emit_ingest_axi` above and this
+    # function's own return code; the BUILD outcome rides `exit`, the shape
+    # `cmd_check` and `mvn cmd_compile` already use for a compile envelope.
+    # `help[]` is derived from the state ACTUALLY reached (CR-CRU-048's rule),
+    # mirroring the shared `run_help`: an unrecorded run points at the server
+    # first, a broken build at the errors just ingested, and a clean build with
+    # no report at the verb that would produce one.
+    ok = bool(resp.get("ok"))
+    if not ok:
+        help_steps = _axi().server_unreachable_help("auto-ingest", CRUCIBLE_URL)
+    elif result.returncode != 0:
+        help_steps = [f"fix the {err_count} compile error(s) just ingested to "
+                      f"Crucible, then re-run auto-ingest --agent <agentId>",
+                      "status"]
+    else:
+        help_steps = ["no junit report was present and `cargo check` is clean "
+                      "— run test --agent <agentId> to produce one", "status"]
+    result_fields = {"exit": result.returncode, "help": help_steps}
+    err = resp.get("error")
+    if err is not None:
+        result_fields["error"] = err
+    _emit_axi("auto-ingest", ok, result_fields,
+              _axi_context(project_dir, agent_id=args.agent,
+                           cycle_id=_axi().echoed_cycle_id(resp)),
+              [] if ok
+              else [_axi().ingest_failed_warning("auto-ingest", CRUCIBLE_URL)],
+              f"ingest compile: ok={resp.get('ok')} errors={err_count} "
+              f"warnings={warn_count} cargo_exit={result.returncode}")
+    return 0 if ok else 1
 
 
 def cmd_regression_ingest(args):
@@ -941,7 +945,7 @@ def _regression_ingest_run(args):
         )
     result_fields = {
         "run": _run_block(summary, files),
-        "help": _run_help("regression-ingest", ok, failed),
+        "help": _axi().run_help("regression-ingest", ok, failed, CRUCIBLE_URL),
     }
     if coverage:
         result_fields["coverage"] = {
@@ -954,7 +958,8 @@ def _regression_ingest_run(args):
     _emit_axi("regression-ingest", ok, result_fields,
               _axi_context(project_dir, agent_id=args.agent,
                            cycle_id=_axi().echoed_cycle_id(resp)),
-              [] if ok else [_ingest_failed_warning("regression-ingest")],
+              [] if ok else [_axi().ingest_failed_warning(
+                  "regression-ingest", CRUCIBLE_URL)],
               f"regression: ok={resp.get('ok')} "
               f"passed={passed} failed={failed} pending={pending} total={total} "
               f"files={len(files)}{cov_line}")
@@ -1121,7 +1126,7 @@ def cmd_clippy(args):
     if args.agent:
         ingest_rc = _ingest_rustc_stderr(project_dir, args.agent, result.stderr, kind="clippy")
         if ingest_rc != 0:
-            warnings.append(_ingest_failed_warning("clippy"))
+            warnings.append(_axi().ingest_failed_warning("clippy", CRUCIBLE_URL))
         rc = ingest_rc
     # §S1 — the lint WARNING count is `lints`, never `warnings`: `emit_axi`
     # unconditionally overwrites `axi["warnings"]` with the STRUCTURED warnings
@@ -1180,7 +1185,7 @@ def _clippy_workspace_gate(project_dir, agent):
     warnings = []
     if agent:
         if _ingest_rustc_stderr(project_dir, agent, result.stderr, kind="clippy") != 0:
-            warnings.append(_ingest_failed_warning("workspace clippy"))
+            warnings.append(_axi().ingest_failed_warning("workspace clippy", CRUCIBLE_URL))
     if result.returncode != 0:
         tail = "\n".join(result.stderr.strip().splitlines()[-25:])
         print(f"[crucible:clippy-gate] ⛔ ABORT — clippy -D warnings failed:\n{tail}",
@@ -1413,7 +1418,7 @@ def _smoke_test(args, verb):
         ok = bool(resp.get("ok")) and summary["failed"] == 0
         result_fields = {
             "run": _run_block(summary),
-            "help": _run_help(verb, ok, summary["failed"]),
+            "help": _axi().run_help(verb, ok, summary["failed"], CRUCIBLE_URL),
         }
         err = resp.get("error")
         if err is not None:
@@ -1421,7 +1426,8 @@ def _smoke_test(args, verb):
         _emit_axi(verb, ok, result_fields,
                   _axi_context(project_dir, agent_id=args.agent,
                                cycle_id=_axi().echoed_cycle_id(resp)),
-                  [] if resp.get("ok") else [_ingest_failed_warning(verb)],
+                  [] if resp.get("ok")
+                  else [_axi().ingest_failed_warning(verb, CRUCIBLE_URL)],
                   f"smoke-test: ok={resp.get('ok')} "
                   f"passed={s.get('passed')} failed={s.get('failed')} "
                   f"pending={s.get('pending', 0)} total={s.get('total')}")
@@ -1552,7 +1558,7 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
         cov_line = f" lines={coverage['lines']['percent']}% funcs={coverage['functions']['percent']}%"
     result_fields = {
         "run": _run_block(summary, files),
-        "help": _run_help(verb, ok, failed),
+        "help": _axi().run_help(verb, ok, failed, CRUCIBLE_URL),
     }
     if coverage:
         result_fields["coverage"] = {
@@ -1565,7 +1571,7 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
     _emit_axi(verb, ok, result_fields,
               _axi_context(project_dir, agent_id=args.agent,
                            cycle_id=_axi().echoed_cycle_id(resp)),
-              [] if ok else [_ingest_failed_warning(verb)],
+              [] if ok else [_axi().ingest_failed_warning(verb, CRUCIBLE_URL)],
               f"workspace regression: ok={resp.get('ok')} "
               f"passed={passed} failed={failed} pending={pending} total={total} "
               f"files={len(files)}{cov_line}")
