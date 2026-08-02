@@ -132,7 +132,7 @@ async function touchFixtureAgent(handle: ServerHandle, urlPath: string): Promise
   await fetch(`http://localhost:${handle.server.port}/api/v2/agents/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ projectKey: match[1], agentId: "fixture-orch", phase: "ORCHESTRATOR" }),
+    body: JSON.stringify({ projectKey: match[1], agentId: "fixture-orch", role: "ORCHESTRATOR" }),
   });
 }
 

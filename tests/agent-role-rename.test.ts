@@ -30,11 +30,11 @@
 // assertion below fails today for that reason.
 //
 // Harness: drives the REAL production server (startServer) + real HTTP, same
-// pattern as tests/agent-phase.test.ts / tests/event-phase-stamping.test.ts.
+// pattern as tests/agent-role-required.test.ts / tests/event-role-stamping.test.ts.
 // The §6 migration fixture builds a genuinely INDEPENDENT live-shaped schema
 // with a raw bun:sqlite Database (never through the Store class, which would
 // just re-apply whatever migration already exists in THIS checkout), mirror-
-// ing tests/agent-phase.test.ts's `seedLegacyDb` convention.
+// ing tests/agent-role-required.test.ts's `seedLegacyDb` convention.
 //
 // Does NOT touch src/, clients/, or any existing test file — tests only.
 
@@ -147,7 +147,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
   }
 
   /** Same "orchestrator registers unbound" fixture primitive as
-   * agent-phase.test.ts's ensureFixtureOrchestrator, on the RENAMED field. */
+   * agent-role-required.test.ts's ensureFixtureOrchestrator, on the RENAMED field. */
   async function ensureFixtureOrchestrator(key: string): Promise<void> {
     const res = await postJson("/api/v2/agents/register", {
       projectKey: key,
@@ -476,7 +476,7 @@ describe("CR-CRU-059 C1 — phase -> role rename (server + storage)", () => {
   // `phase`/`phase_inferred` — exactly the schema this checkout's Store
   // writes today, so the migration assertions are meaningful regardless of
   // RED/GREEN state (same independent-fixture principle as
-  // tests/agent-phase.test.ts's seedLegacyDb).
+  // tests/agent-role-required.test.ts's seedLegacyDb).
 
   describe("§6 migration idempotently RENAMES phase->role/phase_inferred->role_inferred, preserving CR-057's classification counts exactly", () => {
     let tmpDir: string | undefined;

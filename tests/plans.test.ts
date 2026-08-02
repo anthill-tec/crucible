@@ -115,7 +115,7 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
     const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectKey: key, agentId, phase: "ORCHESTRATOR" }),
+      body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
     });
     expect(res.status).toBe(200);
   }
@@ -551,12 +551,12 @@ describe("cycle-plan API (CR-CRU-011 §S0)", () => {
       });
       expect(res.status).toBe(200);
       const body = (await res.json()) as RunIngestResponse;
-      // CR-CRU-057 §S1 — `phase` is a deliberate ADDITIVE key: `fixture-orch`
-      // (createProject's registered caller) declares phase:"ORCHESTRATOR",
+      // CR-CRU-057 §S1 — `role` is a deliberate ADDITIVE key: `fixture-orch`
+      // (createProject's registered caller) declares role:"ORCHESTRATOR",
       // so the ingest-response echo now carries it alongside the pre-CR-011
-      // set. Any agent with a declared phase gets the key, bound or not —
+      // set. Any agent with a declared role gets the key, bound or not —
       // this is not a subset loosening, it's recording the intended shape.
-      expect(Object.keys(body).sort()).toEqual(["changed", "event", "ok", "phase", "run", "verdict"].sort());
+      expect(Object.keys(body).sort()).toEqual(["changed", "event", "ok", "role", "run", "verdict"].sort());
       expect(body.ok).toBe(true);
       expect(body.changed).toBe(true);
     });

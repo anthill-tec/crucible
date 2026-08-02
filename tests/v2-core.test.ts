@@ -101,7 +101,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
   // it (NOT blanket-registered in createProject — several tests in this
   // file assert exact zero-agent baselines, e.g. "agentsTotal=0").
   async function registerAgent(key: string, agentId: string): Promise<void> {
-    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, role: "ORCHESTRATOR" });
     expect(res.status).toBe(200);
   }
 
@@ -280,8 +280,8 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
         projectKey: key,
         agentId: "roll-agent",
         message: "m",
-        // CR-CRU-044 §S1 — register now declares a phase.
-        phase: "report",
+        // CR-CRU-044 §S1 — register now declares a role.
+        role: "report",
         identity: { displayName: "R" },
       });
       expect(registerRes.status).toBe(200);
@@ -413,7 +413,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
           projectKey: key,
           agentId: "tomb-agent",
           message: "m",
-          phase: "report",
+          role: "report",
         });
 
         // 240s later: register the two agents that must stay highlighted.
@@ -422,13 +422,13 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
           projectKey: key,
           agentId: "stale-agent",
           message: "m",
-          phase: "report",
+          role: "report",
         });
         await postJson("/api/v2/agents/register", {
           projectKey: key,
           agentId: "online-agent",
           message: "m",
-          phase: "report",
+          role: "report",
         });
 
         // 60s later still (T0+300_000 total): tomb-agent's silence is
@@ -482,7 +482,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
         projectKey: key,
         agentId: "a1",
         message: "m",
-        phase: "report",
+        role: "report",
         identity: { displayName: "A" },
       });
 
@@ -496,7 +496,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
     test("second register of the same agent → changed:false", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const key = await createProject("reg-p2");
-      const registerBody = { projectKey: key, agentId: "a1", message: "m", phase: "report", identity: { displayName: "A" } };
+      const registerBody = { projectKey: key, agentId: "a1", message: "m", role: "report", identity: { displayName: "A" } };
 
       const first = await postJson("/api/v2/agents/register", registerBody);
       expect(first.status).toBe(200);
@@ -515,7 +515,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
         projectKey: crypto.randomUUID(),
         agentId: "a1",
         message: "m",
-        phase: "report",
+        role: "report",
       });
 
       expect(res.status).toBe(404);
@@ -545,7 +545,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
         projectKey: key,
         agentId: "a1",
         message: "initial",
-        phase: "report",
+        role: "report",
         identity: { displayName: "A" },
       });
 
@@ -576,7 +576,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
         projectKey: key,
         agentId: "a1",
         message: "m",
-        phase: "report",
+        role: "report",
       });
       await postJson("/api/v2/agents/heartbeat", { projectKey: key, agentId: "a1", message: "m2" });
 
@@ -598,7 +598,7 @@ describe("v2 API — orientation, health parity, project rollups, agent verbs (C
         projectKey: key,
         agentId: "a1",
         message: "m",
-        phase: "report",
+        role: "report",
       });
 
       const first = await postJson("/api/v2/agents/unregister", { projectKey: key, agentId: "a1" });

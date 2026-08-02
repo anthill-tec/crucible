@@ -168,7 +168,7 @@ describe("POST /api/v2/gates + /api/v2/milestones — server foundation (CR-CRU-
   }
 
   async function registerAgent(key: string, agentId: string): Promise<void> {
-    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, role: "ORCHESTRATOR" });
     expect(res.status).toBe(200);
   }
 

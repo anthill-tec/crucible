@@ -153,7 +153,7 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
   // project, missing fields — are untouched; only the calls that expect a
   // 2xx ingest to actually succeed need this).
   async function registerAgent(key: string, agentId: string): Promise<void> {
-    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, role: "ORCHESTRATOR" });
     expect(res.status).toBe(200);
   }
 

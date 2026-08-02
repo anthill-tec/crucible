@@ -184,7 +184,7 @@ async function registerOrchestrator(key: string, agentId: string): Promise<void>
   const res = await postJson("/api/v2/agents/register", {
     projectKey: key,
     agentId,
-    phase: "ORCHESTRATOR",
+    role: "ORCHESTRATOR",
   });
   expect(res.status).toBe(200);
 }
@@ -192,10 +192,10 @@ async function registerOrchestrator(key: string, agentId: string): Promise<void>
 async function registerBound(
   key: string,
   agentId: string,
-  phase: string,
+  role: string,
   cycleId: number,
 ): Promise<void> {
-  const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase, cycleId });
+  const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, role, cycleId });
   expect(res.status).toBe(200);
 }
 
@@ -428,7 +428,7 @@ describe("§S2b — POST .../plans/<planId>/checkpoint refuses an unregistered c
     expect(body).toEqual({ ok: true, changed: true });
   });
 
-  test("a bound TDD-phase (GREEN) registered caller is ALSO a valid checkpoint caller (not ORCHESTRATOR-exclusive) — 200, {ok:true, changed:true}; but once that same id is unregistered, the identical call is refused (409) — the yesterday-registered-today-gone case", async () => {
+  test("a bound TDD-role (GREEN) registered caller is ALSO a valid checkpoint caller (not ORCHESTRATOR-exclusive) — 200, {ok:true, changed:true}; but once that same id is unregistered, the identical call is refused (409) — the yesterday-registered-today-gone case", async () => {
     const h = boot();
     const key = seedProject(h.store);
     const { planId, cycleId } = await fileAndActivate(key, "CR-CKPT-TDD-THEN-PRUNED");

@@ -1,34 +1,34 @@
-// CR-CRU-057 §S2/§S3 — Classification reads the STORED EVENT phase only;
+// CR-CRU-057 §S2/§S3 — Classification reads the STORED EVENT role only;
 // the phaseRole(agentId) name-parsing fallback is swept from src/ public/
 // cli/ entirely.
 //
-// Context: CR-CRU-044 made `phase` a required, enum-constrained
+// Context: CR-CRU-044 made `role` a required, enum-constrained
 // REGISTRATION field, but stored it ONLY on the live `agents` row —
 // `unregister` deletes that row, so the moment an agent finishes (the
 // state most of the board is in, most of the time) classification fell
 // back to `phaseRole(agentId)` NAME parsing. CR-CRU-057 §S1 (already
-// landed — tests/event-phase-stamping.test.ts) closed that at the SERVER:
-// every run/lifecycle event now carries the agent's declared `phase` (+
-// `phaseInferred`) stamped at ingest time, through CR-CRU-056's existing
+// landed — tests/event-role-stamping.test.ts) closed that at the SERVER:
+// every run/lifecycle event now carries the agent's declared `role` (+
+// `roleInferred`) stamped at ingest time, through CR-CRU-056's existing
 // `resolveIngestAttach` seam, surviving the posting agent's
 // unregistration.
 //
 // This file is §S2 at the CLIENT: the UI's classification entry point —
 // `eventRole(e)`, a local function in public/app.js (defined once at
 // app.js:694, called from all three EventCard render sites) via
-// `L.agentRole({ agentId, phase })` — must read the EVENT's own stored
-// `phase` for the historical/unregistered-agent case (no matching
+// `L.agentRole({ agentId, role })` — must read the EVENT's own stored
+// `role` for the historical/unregistered-agent case (no matching
 // `state.agents` record), never fall back to phaseRole(agentId) id-shape
 // parsing. §S3 deletes phaseRole outright; test (2) below is the
 // assertion that proves that deletion is safe (an id-shape that WOULD
-// have parsed classifies null when nothing declares a phase for it).
+// have parsed classifies null when nothing declares a role for it).
 //
-// RED phase: `eventRole` (public/app.js:694-698) currently derives `phase`
-// SOLELY from `state.agents.find((a) => a.agentId === e.agentId)?.phase` —
-// a LIVE agent-record lookup. It never reads `e.phase` at all, and
-// `agentRole`'s absent-phase branch still falls back to
+// RED phase: `eventRole` (public/app.js:694-698) currently derives `role`
+// SOLELY from `state.agents.find((a) => a.agentId === e.agentId)?.role` —
+// a LIVE agent-record lookup. It never reads `e.role` at all, and
+// `agentRole`'s absent-role branch still falls back to
 // `phaseRole(agentId)` (CR-CRU-007 era). So every assertion below that
-// depends on the EVENT's own stored phase winning, or on the fallback
+// depends on the EVENT's own stored role winning, or on the fallback
 // being GONE, fails today.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
@@ -58,8 +58,8 @@ interface EventFixture {
   hasCoverage?: boolean;
   // CR-CRU-057 §S1 — stamped server-side at ingest; §S2 is the ONLY
   // classification input for the historical/no-live-agent-record case.
-  phase?: string | null;
-  phaseInferred?: boolean;
+  role?: string | null;
+  roleInferred?: boolean;
 }
 
 interface AgentFixture {
@@ -69,7 +69,7 @@ interface AgentFixture {
   liveness?: "online" | "stale" | "tombstoned";
   lastSeen?: number;
   identity?: { displayName?: string };
-  phase?: string | null;
+  role?: string | null;
 }
 
 interface ProjectFixture {
@@ -105,7 +105,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
     else if (url.includes("/api/v2/events")) body = { ok: true, events: opts.events };
     else if (url.includes("/api/v2/health")) {
       body = { ok: true, version: "2.0.0-test", counts: { events: 0 } };
-    } else throw new Error(`event-phase-classification.test.ts mountApp: unexpected fetch url ${url}`);
+    } else throw new Error(`event-role-classification.test.ts mountApp: unexpected fetch url ${url}`);
     return { ok: true, status: 200, json: async () => body } as Response;
   }) as typeof fetch;
 
@@ -113,7 +113,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
   (0, eval)(VAN_X_SRC);
 
   cacheBust += 1;
-  await import(`${APP_LOGIC_PATH}?eventPhaseClassification=${cacheBust}`);
+  await import(`${APP_LOGIC_PATH}?eventRoleClassification=${cacheBust}`);
 
   (0, eval)(APP_JS_SRC);
 
@@ -171,19 +171,19 @@ function assertOnlyRole(agentId: string, expectedClass: string | null): void {
   }
 }
 
-describe("CR-CRU-057 §S2 — event classification reads the STORED event.phase, no agent record required", () => {
-  test("an event carrying a stored phase classifies by THAT phase with NO agent record at all (the historical/unregistered case) — id says '-GREEN', event.phase says 'RED' -> renders red, never green", async () => {
+describe("CR-CRU-057 §S2 — event classification reads the STORED event.role, no agent record required", () => {
+  test("an event carrying a stored role classifies by THAT role with NO agent record at all (the historical/unregistered case) — id says '-GREEN', event.role says 'RED' -> renders red, never green", async () => {
     const now = Date.now();
-    const projectKey = "proj-event-phase-1";
+    const projectKey = "proj-event-role-1";
     // Id shape WOULD parse to "green" via the (dying) name-based fallback.
     const agentId = "some-agent-suffix-GREEN";
     await mountApp({
       pathname: "/",
       projects: [
-        { key: projectKey, name: "Event Phase 1", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
+        { key: projectKey, name: "Event Role 1", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
       ],
       agents: [], // no agent record whatsoever — the agent is long gone
-      events: [{ ...baseEvent("evt-ephase-1", agentId, projectKey, now), phase: "RED" }],
+      events: [{ ...baseEvent("evt-ephase-1", agentId, projectKey, now), role: "RED" }],
     });
 
     assertOnlyRole(agentId, "app-role-red");
@@ -191,78 +191,78 @@ describe("CR-CRU-057 §S2 — event classification reads the STORED event.phase,
 
   // The assertion that kills the fallback: an id-shape that WOULD have
   // parsed under the old phaseRole contract must NOT leak through once
-  // there is simply no declared phase to classify by.
-  test("an event with NO stored phase and NO agent record classifies UNCLASSIFIED (null) — it must NOT fall back to parsing the id, even when the id WOULD have parsed: 'CR-X-1-RED'", async () => {
+  // there is simply no declared role to classify by.
+  test("an event with NO stored role and NO agent record classifies UNCLASSIFIED (null) — it must NOT fall back to parsing the id, even when the id WOULD have parsed: 'CR-X-1-RED'", async () => {
     const now = Date.now();
-    const projectKey = "proj-event-phase-2";
+    const projectKey = "proj-event-role-2";
     const agentId = "CR-X-1-RED";
     await mountApp({
       pathname: "/",
       projects: [
-        { key: projectKey, name: "Event Phase 2", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
+        { key: projectKey, name: "Event Role 2", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
       ],
       agents: [],
-      events: [baseEvent("evt-ephase-2", agentId, projectKey, now)], // no `phase` key at all
+      events: [baseEvent("evt-ephase-2", agentId, projectKey, now)], // no `role` key at all
     });
 
     assertOnlyRole(agentId, null);
   });
 
-  test("a stored phase that DISAGREES with the id wins: id ends '-RED', stored phase is 'report' -> neutral (no role tint, matching the existing report->null mapping), never app-role-red", async () => {
+  test("a stored role that DISAGREES with the id wins: id ends '-RED', stored role is 'report' -> neutral (no role tint, matching the existing report->null mapping), never app-role-red", async () => {
     const now = Date.now();
-    const projectKey = "proj-event-phase-3";
+    const projectKey = "proj-event-role-3";
     // Shaped exactly like the CR-CRU-046 stray-id failure mode this CR closes.
     const agentId = "widget-99-bun-RED";
     await mountApp({
       pathname: "/",
       projects: [
-        { key: projectKey, name: "Event Phase 3", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
+        { key: projectKey, name: "Event Role 3", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
       ],
       agents: [],
-      events: [{ ...baseEvent("evt-ephase-3", agentId, projectKey, now), phase: "report" }],
+      events: [{ ...baseEvent("evt-ephase-3", agentId, projectKey, now), role: "report" }],
     });
 
     assertOnlyRole(agentId, null);
   });
 
-  test('phaseInferred:true events classify by their stored phase but are DOM-distinguishable as inferred (§S4 backfill marker) — data-phase-inferred="true" on the tinted icon, alongside the normal role class', async () => {
+  test('roleInferred:true events classify by their stored role but are DOM-distinguishable as inferred (§S4 backfill marker) — data-role-inferred="true" on the tinted icon, alongside the normal role class', async () => {
     const now = Date.now();
-    const projectKey = "proj-event-phase-4";
+    const projectKey = "proj-event-role-4";
     // Does not parse via id shape at all — proves the classification came
-    // from the stored (inferred) phase, not a name-derived guess.
+    // from the stored (inferred) role, not a name-derived guess.
     const agentId = "backfilled-history-1";
     await mountApp({
       pathname: "/",
       projects: [
-        { key: projectKey, name: "Event Phase 4", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
+        { key: projectKey, name: "Event Role 4", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
       ],
       agents: [],
-      events: [{ ...baseEvent("evt-ephase-4", agentId, projectKey, now), phase: "GREEN", phaseInferred: true }],
+      events: [{ ...baseEvent("evt-ephase-4", agentId, projectKey, now), role: "GREEN", roleInferred: true }],
     });
 
     assertOnlyRole(agentId, "app-role-green");
     const icon = iconFor(agentId);
     // POSITIVE — the inferred marker is present and reads exactly "true".
-    expect(icon.getAttribute("data-phase-inferred")).toBe("true");
+    expect(icon.getAttribute("data-role-inferred")).toBe("true");
   });
 
-  test('bound: a DECLARED (non-inferred) event does NOT carry data-phase-inferred="true" — the marker is exclusive to backfilled rows, never leaking onto declared data', async () => {
+  test('bound: a DECLARED (non-inferred) event does NOT carry data-role-inferred="true" — the marker is exclusive to backfilled rows, never leaking onto declared data', async () => {
     const now = Date.now();
-    const projectKey = "proj-event-phase-5";
+    const projectKey = "proj-event-role-5";
     const agentId = "declared-history-1";
     await mountApp({
       pathname: "/",
       projects: [
-        { key: projectKey, name: "Event Phase 5", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
+        { key: projectKey, name: "Event Role 5", type: "backend", agentsOnline: 0, agentsTotal: 0, active: true, lastActivity: now },
       ],
       agents: [],
-      events: [{ ...baseEvent("evt-ephase-5", agentId, projectKey, now), phase: "VERIFY", phaseInferred: false }],
+      events: [{ ...baseEvent("evt-ephase-5", agentId, projectKey, now), role: "VERIFY", roleInferred: false }],
     });
 
     assertOnlyRole(agentId, "app-role-verify");
     const icon = iconFor(agentId);
     // NEGATIVE bound — explicit false must not render as the marker string.
-    expect(icon.getAttribute("data-phase-inferred")).not.toBe("true");
+    expect(icon.getAttribute("data-role-inferred")).not.toBe("true");
   });
 });
 

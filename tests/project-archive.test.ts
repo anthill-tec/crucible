@@ -216,7 +216,7 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
   // BEFORE the registered-caller check is ever reached, so they're
   // unaffected and untouched).
   async function registerAgent(projectKey: string, agentId: string): Promise<void> {
-    const res = await postJson("/api/v2/agents/register", { projectKey, agentId, phase: "ORCHESTRATOR" });
+    const res = await postJson("/api/v2/agents/register", { projectKey, agentId, role: "ORCHESTRATOR" });
     expect(res.status).toBe(200);
   }
 
@@ -259,8 +259,8 @@ describe("archive / unarchive (CR-CRU-012 §S1b, cycle 26)", () => {
         const regRes = await postJson("/api/v2/agents/register", {
           projectKey: key,
           agentId: "agent-a",
-          // CR-CRU-044 §S1 — register now declares a phase.
-          phase: "report",
+          // CR-CRU-044 §S1 — register now declares a role.
+          role: "report",
         });
         expect(regRes.status).toBe(200);
 

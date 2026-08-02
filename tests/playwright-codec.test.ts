@@ -346,7 +346,7 @@ describe("v2 ingest with codec:'playwright' stores the feature → scenario → 
     await fetch(`http://localhost:${handle.server.port}/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectKey, agentId: "bdd-agent", phase: "report" }),
+      body: JSON.stringify({ projectKey, agentId: "bdd-agent", role: "report" }),
     });
 
     const ingestRes = await fetch(`http://localhost:${handle.server.port}/api/v2/runs`, {

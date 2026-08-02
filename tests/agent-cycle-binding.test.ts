@@ -4,7 +4,7 @@
 // stored binding as `boundCycleId`.
 //
 // C2 (server) RE-POINT (per dispatch — sanctioned): C1's own baseline pins
-// ("register with no cycleId still succeeds for every phase, today") are
+// ("register with no cycleId still succeeds for every role, today") are
 // flipped HERE into §S2's real contract: RED/GREEN/FIX/VERIFY registration
 // with no `cycleId` is now REFUSED (409); ORCHESTRATOR/report unbound
 // registration is UNCHANGED (still 200) — a real regression pin, not a RED
@@ -12,13 +12,13 @@
 // tests/ingest-binding-attach.test.ts, not here. No caller-auth on other
 // mutating verbs (§S2b/§S3b) — still out of scope for this cycle.
 //
-// RED phase: handleAgentTouch (src/v2.ts) has NO per-phase cycleId
+// RED phase: handleAgentTouch (src/v2.ts) has NO per-role cycleId
 // requirement yet — every RED/GREEN/FIX/VERIFY unbound-register case below
 // reads back 200 today (the C1 baseline this CR is deliberately flipping);
 // the ORCHESTRATOR/report block is expected to PASS today AND after GREEN.
 //
 // Harness: drives the REAL production server (startServer) + real HTTP, the
-// same pattern as tests/agent-phase.test.ts (register/heartbeat/GET agents)
+// same pattern as tests/agent-role-required.test.ts (register/heartbeat/GET agents)
 // and tests/checkpoint-stop.test.ts (the plans/cycles HTTP surface: POST
 // .../plans to file, PATCH .../plans/<planId>/cycles/<id> to transition,
 // PATCH .../plans/<planId> to close) — no new mechanism invented here.
@@ -44,7 +44,7 @@ interface AgentBrief {
   agentId: string;
   projectKey: string;
   liveness: string;
-  phase?: string | null;
+  role?: string | null;
   // CR-CRU-056 §S1 — the exact field name is this CR's to name; the dispatch
   // suggests `boundCycleId`, so that is what the assertions below pin.
   boundCycleId?: number | null;
@@ -73,7 +73,7 @@ interface PlanFileResponse {
   [key: string]: unknown;
 }
 
-/** Same helper as tests/agent-phase.test.ts's errorSurface — concatenate
+/** Same helper as tests/agent-role-required.test.ts's errorSurface — concatenate
  * every string-ish field an AXI error could carry the named state in, so
  * the assertion survives whatever exact wording GREEN picks while still
  * requiring the actual state (unknown / pending / done / closed-plan) to be
@@ -83,7 +83,7 @@ function errorSurface(body: ErrResponse): string {
   return `${String(body.error ?? "")} ${help}`.toLowerCase();
 }
 
-const PHASE_ENUM = ["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"] as const;
+const ROLE_ENUM = ["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"] as const;
 
 describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, additive)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
@@ -149,7 +149,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
     const res = await postJson("/api/v2/agents/register", {
       projectKey: key,
       agentId: "fixture-orch",
-      phase: "ORCHESTRATOR",
+      role: "ORCHESTRATOR",
     });
     expect(res.status).toBe(200);
     fixtureOrchestratorProjects.add(key);
@@ -215,7 +215,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
       const res = await postJson("/api/v2/agents/register", {
         projectKey: key,
         agentId,
-        phase: "RED",
+        role: "RED",
         cycleId,
       });
 
@@ -245,7 +245,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
       const res = await postJson("/api/v2/agents/register", {
         projectKey: key,
         agentId,
-        phase: "RED",
+        role: "RED",
         cycleId: unknownCycleId,
       });
 
@@ -270,7 +270,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
       const res = await postJson("/api/v2/agents/register", {
         projectKey: key,
         agentId,
-        phase: "RED",
+        role: "RED",
         cycleId,
       });
 
@@ -294,7 +294,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
       const res = await postJson("/api/v2/agents/register", {
         projectKey: key,
         agentId,
-        phase: "RED",
+        role: "RED",
         cycleId,
       });
 
@@ -319,7 +319,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
       const res = await postJson("/api/v2/agents/register", {
         projectKey: key,
         agentId,
-        phase: "RED",
+        role: "RED",
         cycleId,
       });
 
@@ -335,7 +335,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
 
   // ── heartbeat must never blank a stored binding ────────────────────────
 
-  describe("heartbeat never blanks a stored cycle binding (mirrors CR-CRU-044's phase contract)", () => {
+  describe("heartbeat never blanks a stored cycle binding (mirrors CR-CRU-044's role contract)", () => {
     test("POST /api/v2/agents/heartbeat with no cycleId field on an already-bound agent still succeeds AND does NOT blank the stored boundCycleId", async () => {
       handle = startServer({ port: 0, dbPath: ":memory:" });
       const store = handle.store;
@@ -346,7 +346,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
       const regRes = await postJson("/api/v2/agents/register", {
         projectKey: key,
         agentId,
-        phase: "GREEN",
+        role: "GREEN",
         cycleId,
       });
       expect(regRes.status).toBe(200);
@@ -364,41 +364,41 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
       expect(agent).toBeDefined();
       // POSITIVE — still exactly the bound cycle.
       expect(agent!.boundCycleId).toBe(cycleId);
-      // NEGATIVE bound — the phase-less/cycle-less touch must never have
+      // NEGATIVE bound — the role-less/cycle-less touch must never have
       // written null/undefined over the stored binding.
       expect(agent!.boundCycleId).not.toBeNull();
       expect(agent!.boundCycleId).not.toBeUndefined();
     });
   });
 
-  // ── §S2 — TDD phases MUST register bound; ORCHESTRATOR/report unaffected ──
+  // ── §S2 — TDD roles MUST register bound; ORCHESTRATOR/report unaffected ──
   //
   // CR-CRU-056 C2 — SANCTIONED RE-POINT of this CR's own C1 baseline pins
   // (per dispatch: these six tests were written as "today's baseline" to be
   // consciously flipped by exactly this step). RED phase: handleAgentTouch
-  // has NO per-phase cycleId requirement yet — every RED/GREEN/FIX/VERIFY
+  // has NO per-role cycleId requirement yet — every RED/GREEN/FIX/VERIFY
   // case below reads back 200 (unbound accepted) today; the flip to 409 is
   // what C2 GREEN must build. The ORCHESTRATOR/report block is unchanged
   // (still expected to PASS today AND after GREEN — a real regression pin).
-  const TDD_PHASES = PHASE_ENUM.filter(
+  const TDD_ROLES = ROLE_ENUM.filter(
     (p): p is "RED" | "GREEN" | "FIX" | "VERIFY" => p !== "ORCHESTRATOR" && p !== "report",
   );
-  const UNBOUND_OK_PHASES = PHASE_ENUM.filter(
+  const UNBOUND_OK_ROLES = ROLE_ENUM.filter(
     (p): p is "ORCHESTRATOR" | "report" => p === "ORCHESTRATOR" || p === "report",
   );
 
-  describe("§S2 register with NO cycleId — TDD phases (RED/GREEN/FIX/VERIFY) are REFUSED (409)", () => {
-    for (const phase of TDD_PHASES) {
-      test(`register with phase:"${phase}" and no cycleId field at all is REFUSED — 409, ok:false, non-empty help[] telling the caller to register with --cycle; agent row NOT created`, async () => {
+  describe("§S2 register with NO cycleId — TDD roles (RED/GREEN/FIX/VERIFY) are REFUSED (409)", () => {
+    for (const role of TDD_ROLES) {
+      test(`register with role:"${role}" and no cycleId field at all is REFUSED — 409, ok:false, non-empty help[] telling the caller to register with --cycle; agent row NOT created`, async () => {
         handle = startServer({ port: 0, dbPath: ":memory:" });
         const store = handle.store;
         const key = seedProject(store);
-        const agentId = `cycle-unbound-${phase}`;
+        const agentId = `cycle-unbound-${role}`;
 
         const res = await postJson("/api/v2/agents/register", {
           projectKey: key,
           agentId,
-          phase,
+          role,
         });
 
         expect(res.status).toBe(409);
@@ -409,28 +409,28 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
         // POSITIVE — the help[] tells the caller HOW to fix it: register
         // with the client's --cycle flag (§S4's fleet surface).
         expect(errorSurface(body)).toContain("--cycle");
-        // NEGATIVE — a refused TDD-phase registration must not create a row.
+        // NEGATIVE — a refused TDD-role registration must not create a row.
         expect(store.hasAgent(key, agentId)).toBe(false);
       });
     }
   });
 
   describe("§S2 refusal help[] NAMES the project's actual active cycle when one exists (CR-024 help convention)", () => {
-    for (const phase of TDD_PHASES) {
-      test(`register with phase:"${phase}", no cycleId, project HAS an active cycle → 409 whose help[] names that ACTUAL active cycle id (not a generic platitude)`, async () => {
+    for (const role of TDD_ROLES) {
+      test(`register with role:"${role}", no cycleId, project HAS an active cycle → 409 whose help[] names that ACTUAL active cycle id (not a generic platitude)`, async () => {
         handle = startServer({ port: 0, dbPath: ":memory:" });
         const store = handle.store;
         const key = seedProject(store);
         const { cycleId: activeCycleId } = await fileAndActivate(
           key,
-          `CR-CRU-056-C2-active-${phase}`,
+          `CR-CRU-056-C2-active-${role}`,
         );
-        const agentId = `cycle-unbound-active-${phase}`;
+        const agentId = `cycle-unbound-active-${role}`;
 
         const res = await postJson("/api/v2/agents/register", {
           projectKey: key,
           agentId,
-          phase,
+          role,
         });
 
         expect(res.status).toBe(409);
@@ -444,17 +444,17 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
   });
 
   describe("§S2 regression — register with NO cycleId still succeeds for ORCHESTRATOR/report (unchanged)", () => {
-    for (const phase of UNBOUND_OK_PHASES) {
-      test(`register with phase:"${phase}" and no cycleId field at all still succeeds (200, ok:true) and no boundCycleId is fabricated`, async () => {
+    for (const role of UNBOUND_OK_ROLES) {
+      test(`register with role:"${role}" and no cycleId field at all still succeeds (200, ok:true) and no boundCycleId is fabricated`, async () => {
         handle = startServer({ port: 0, dbPath: ":memory:" });
         const store = handle.store;
         const key = seedProject(store);
-        const agentId = `cycle-unbound-${phase}`;
+        const agentId = `cycle-unbound-${role}`;
 
         const res = await postJson("/api/v2/agents/register", {
           projectKey: key,
           agentId,
-          phase,
+          role,
         });
 
         expect(res.status).toBe(200);
@@ -484,7 +484,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
       const first = await postJson("/api/v2/agents/register", {
         projectKey: key,
         agentId,
-        phase: "RED",
+        role: "RED",
         cycleId: cycleA,
       });
       expect(first.status).toBe(200);
@@ -492,7 +492,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
       const second = await postJson("/api/v2/agents/register", {
         projectKey: key,
         agentId,
-        phase: "RED",
+        role: "RED",
         cycleId: cycleB,
       });
       expect(second.status).toBe(200);
@@ -514,7 +514,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
       const first = await postJson("/api/v2/agents/register", {
         projectKey: key,
         agentId,
-        phase: "RED",
+        role: "RED",
         cycleId: validCycle,
       });
       expect(first.status).toBe(200);
@@ -523,7 +523,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
       const second = await postJson("/api/v2/agents/register", {
         projectKey: key,
         agentId,
-        phase: "RED",
+        role: "RED",
         cycleId: bogusCycleId,
       });
       expect(second.status).toBe(409);
@@ -543,7 +543,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
 
   describe("unregister removes the row as today — no binding leaks into a fresh registration of the same id", () => {
     // CR-CRU-056 C2 final sweep (orchestrator decision): §S2 now REQUIRES a
-    // TDD-phase (GREEN) registration to be bound, so the re-registration
+    // TDD-role (GREEN) registration to be bound, so the re-registration
     // below must supply a FRESH cycle binding — but the test's actual
     // purpose (a leak check, not the auth model) is unchanged: the OLD
     // binding must never resurface on the fresh row. Asserted here as "the
@@ -559,7 +559,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
       const regRes = await postJson("/api/v2/agents/register", {
         projectKey: key,
         agentId,
-        phase: "RED",
+        role: "RED",
         cycleId,
       });
       expect(regRes.status).toBe(200);
@@ -575,7 +575,7 @@ describe("CR-CRU-056 C1 — agent registration binds an explicit cycle (server, 
       const reregRes = await postJson("/api/v2/agents/register", {
         projectKey: key,
         agentId,
-        phase: "GREEN",
+        role: "GREEN",
         cycleId: freshCycleId,
       });
       expect(reregRes.status).toBe(200);

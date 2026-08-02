@@ -86,7 +86,7 @@ async function registerOrchestrator(key: string, agentId: string): Promise<void>
   const res = await postJson("/api/v2/agents/register", {
     projectKey: key,
     agentId,
-    phase: "ORCHESTRATOR",
+    role: "ORCHESTRATOR",
   });
   expect(res.status).toBe(200);
 }

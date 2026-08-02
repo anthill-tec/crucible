@@ -71,7 +71,7 @@ async function registerAgent(baseUrl: string, key: string, agentId: string): Pro
   await fetch(`${baseUrl}/api/v2/agents/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ projectKey: key, agentId, phase: "ORCHESTRATOR" }),
+    body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
   });
 }
 
@@ -379,7 +379,7 @@ describe("v2 silent unregister — §S4 precondition 4 (C2 GREEN finding)", () =
     await fetch(`${baseUrl}/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectKey: key, agentId, phase: "report" }),
+      body: JSON.stringify({ projectKey: key, agentId, role: "report" }),
     });
   }
 

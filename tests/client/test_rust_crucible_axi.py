@@ -387,7 +387,7 @@ class RustCrucibleVerbEnvelopeTest(_BaseRustAxiTest):
 
     def test_register_prints_toon_envelope(self):
         code, out, _err, _p, _g, _pa = self._run(
-            ["register", "--phase", "report", "--agent", "CR-Y-1", "--project-dir", self.tmpdir],
+            ["register", "--role", "report", "--agent", "CR-Y-1", "--project-dir", self.tmpdir],
             get_return=self._active_cycle_plans())
         self.assertEqual(code, 0, f"stdout={out!r}")
         axi = self._decode_axi(out)
@@ -963,7 +963,7 @@ class RustCrucibleCycleBindingTest(_BaseRustAxiTest):
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock:
             code, out, _err = _run_main(self.module, [
-                "register", "--phase", "RED", "--agent", "CR-Y-bound",
+                "register", "--role", "RED", "--agent", "CR-Y-bound",
                 "--cycle", "149", "--project-dir", self.tmpdir,
             ])
         self.assertEqual(code, 0, f"stdout={out!r}")
@@ -977,7 +977,7 @@ class RustCrucibleCycleBindingTest(_BaseRustAxiTest):
         with mock.patch.object(self.module, "_post", return_value={"ok": True},
                                 create=True) as post_mock:
             code, out, _err = _run_main(self.module, [
-                "register", "--phase", "report", "--agent", "CR-Y-unbound",
+                "register", "--role", "report", "--agent", "CR-Y-unbound",
                 "--project-dir", self.tmpdir,
             ])
         self.assertEqual(code, 0, f"stdout={out!r}")
@@ -988,12 +988,12 @@ class RustCrucibleCycleBindingTest(_BaseRustAxiTest):
             "no --cycle supplied -- the client must not fabricate a cycleId key")
 
     def test_register_409_refusal_envelope_surfaced_faithfully(self):
-        server_message = "phase RED requires a cycle binding — register with --cycle <cycleId>"
+        server_message = "role RED requires a cycle binding — register with --cycle <cycleId>"
         with mock.patch.object(self.module, "_post",
                                 return_value={"ok": False, "error": server_message},
                                 create=True) as post_mock:
             code, out, _err = _run_main(self.module, [
-                "register", "--phase", "RED", "--agent", "CR-Y-refused",
+                "register", "--role", "RED", "--agent", "CR-Y-refused",
                 "--project-dir", self.tmpdir,
             ])
         self.assertNotEqual(code, 0, "a 409 refusal must exit non-zero")

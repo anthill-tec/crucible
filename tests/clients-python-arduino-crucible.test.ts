@@ -3,7 +3,7 @@
 //
 // Spec: docs/changes/CR-CRU-008-cli-fleet-upgrade.md — §S2 script fleet
 // upgrade (v2 endpoints, tier per subcommand, git/wave/orchestrator/cycle
-// context, --phase optional) + Implementation Notes: "python-crucible.py
+// context, --role optional) + Implementation Notes: "python-crucible.py
 // no-XML fallback 400 bug: carried from the 2026-07-16 python-side cycle —
 // fix during §S2." This cycle (C4) upgrades python-crucible.py and
 // arduino-crucible.py.
@@ -89,22 +89,22 @@
 //
 // register/context conventions mirrored verbatim from the ALREADY-upgraded
 // clients/rust-crucible.py and clients/bun-crucible.py (read directly, not
-// assumed): `--phase` defaults to `"report"` and the register message is
-// `f"Starting {phase} phase"`; `_run_context()` reads WORKFLOW_CYCLE_ID
+// assumed): `--role` defaults to `"report"` and the register message is
+// `f"Starting {role} phase"`; `_run_context()` reads WORKFLOW_CYCLE_ID
 // (int-coerced)/WORKFLOW_CYCLE/WORKFLOW_WAVE/WORKFLOW_ROLE, attaches
 // `git: {branch, commit}` via a plain `git rev-parse` from CWD (tolerant of
 // a non-repo cwd), and returns None (→ no `context` key at all) when NO
 // WORKFLOW_* var is set.
 //
-// Scope note on arduino's `register --phase` (deliberate, NOT an oversight):
-// arduino-crucible.py's `--phase` is ALREADY optional today (message
+// Scope note on arduino's `register --role` (deliberate, NOT an oversight):
+// arduino-crucible.py's `--role` is ALREADY optional today (message
 // defaults to "online", not a hard failure) — unlike python's, which
 // currently `required=True`s it with an explicit choices list (the real
-// ergonomics bug). We do not assert arduino's no-`--phase` message contains
+// ergonomics bug). We do not assert arduino's no-`--role` message contains
 // "report": the CR's ergonomics note is specifically about hard-requiring
-// `--phase` (bun/python), and inventing a wording change for a script that
+// `--role` (bun/python), and inventing a wording change for a script that
 // was never broken here would be speculative scope-creep. We DO assert
-// arduino's register (with `--phase` given, matching today's real call
+// arduino's register (with `--role` given, matching today's real call
 // sites) hits the v2 endpoint.
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -237,7 +237,7 @@ async function nonLifecycleEvents(baseUrl: string, key: string): Promise<Array<{
 /**
  * CR-CRU-056 §S2b fixture-repair (C3): every ingesting verb now refuses an
  * unregistered agentId (409) — spawn the given client's own
- * `register --phase report` verb (needs no cycle binding) for the SAME
+ * `register --role report` verb (needs no cycle binding) for the SAME
  * agentId a following runScript call will ingest under, against the same
  * fixture server.
  */
@@ -248,7 +248,7 @@ async function ensureRegistered(
 ): Promise<void> {
   await runScript(
     scriptPath,
-    ["register", "--agent", agentId, "--phase", "report", "--project-dir", opts.projectDir ?? opts.cwd],
+    ["register", "--agent", agentId, "--role", "report", "--project-dir", opts.projectDir ?? opts.cwd],
     { cwd: opts.cwd, crucibleUrl: opts.crucibleUrl, env: opts.env },
   );
 }
@@ -260,7 +260,7 @@ async function ensureFixtureOrchestrator(baseUrl: string, key: string): Promise<
   await fetch(`${baseUrl}/api/v2/agents/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ projectKey: key, agentId: "fixture-orch", phase: "ORCHESTRATOR" }),
+    body: JSON.stringify({ projectKey: key, agentId: "fixture-orch", role: "ORCHESTRATOR" }),
   });
 }
 
@@ -520,7 +520,7 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
     const key = await createProject(baseUrl, "clients-pc-register-v2");
     const dir = scratch.dir("python-crucible-proj-");
     writeEnvFile(dir, key);
-    // CR-CRU-056 §S2/§S3c — RED (a TDD phase) now REQUIRES an explicit
+    // CR-CRU-056 §S2/§S3c — RED (a TDD role) now REQUIRES an explicit
     // cycle binding; this test's subject (which endpoint/verb gets hit) is
     // unaffected, so a fixture plan+active-cycle is filed and reused (same
     // primitive as filePlan/activateCycle used elsewhere in this file).
@@ -530,7 +530,7 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
 
     const res = await runScript(
       PYTHON_SCRIPT_PATH,
-      ["register", "--agent", "p1", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
+      ["register", "--agent", "p1", "--role", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
 
@@ -556,7 +556,7 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
 
     await runScript(
       PYTHON_SCRIPT_PATH,
-      ["register", "--agent", "p2", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
+      ["register", "--agent", "p2", "--role", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
     expect(await getAgentIds(baseUrl, key)).toContain("p2");
@@ -574,16 +574,16 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
     expect(proxy.calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
   });
 
-  test("register --agent X --phase report succeeds and records the declared report phase", async () => {
+  test("register --agent X --role report succeeds and records the declared report role", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
-    const key = await createProject(baseUrl, "clients-pc-phase-optional");
+    const key = await createProject(baseUrl, "clients-pc-role-optional");
     const dir = scratch.dir("python-crucible-proj-");
     writeEnvFile(dir, key);
 
     const res = await runScript(
       PYTHON_SCRIPT_PATH,
-      ["register", "--agent", "p3", "--phase", "report", "--project-dir", dir],
+      ["register", "--agent", "p3", "--role", "report", "--project-dir", dir],
       { cwd: dir, crucibleUrl: baseUrl },
     );
 
@@ -595,12 +595,12 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
   });
 
   // CR-CRU-056 §S2/§S3/§S3c — the CR-036 client-side auto-attach resolver
-  // is DELETED; re-pointed into the new unconditional contract: a TDD-phase
+  // is DELETED; re-pointed into the new unconditional contract: a TDD-role
   // register with no explicit --cycle is REFUSED (non-zero exit, structured
   // ok:false envelope naming --cycle) regardless of plan state —
   // WORKFLOW_CYCLE_ID is read by nobody (confirmed live: even a REAL,
   // in-project, pending cycle id sitting in that env var changes nothing).
-  test("CR-CRU-056 §S2: register --phase RED with an OPEN plan but NO active cycle is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
+  test("CR-CRU-056 §S2: register --role RED with an OPEN plan but NO active cycle is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-no-active-cycle");
@@ -611,7 +611,7 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
 
     const res = await runScript(
       PYTHON_SCRIPT_PATH,
-      ["register", "--agent", "p-no-cycle", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "p-no-cycle", "--role", "RED", "--project-dir", dir],
       // The deleted resolver's exact mechanism: nobody reads this env var
       // any more, so it must not rescue the registration.
       { cwd: dir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
@@ -623,7 +623,7 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
     expect(await getAgentIds(baseUrl, key)).not.toContain("p-no-cycle");
   });
 
-  test("CR-CRU-056 §S2: register --phase RED with NO open plan AT ALL is STILL refused the same way — the binding requirement is unconditional, not contingent on plan/cycle ambiguity (the old 'no plan, tolerant' escape hatch no longer exists)", async () => {
+  test("CR-CRU-056 §S2: register --role RED with NO open plan AT ALL is STILL refused the same way — the binding requirement is unconditional, not contingent on plan/cycle ambiguity (the old 'no plan, tolerant' escape hatch no longer exists)", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-pc-tolerant-no-plan");
@@ -632,7 +632,7 @@ describe("clients/python-crucible.py — v2 endpoints + CRUCIBLE_URL + register 
 
     const res = await runScript(
       PYTHON_SCRIPT_PATH,
-      ["register", "--agent", "p-no-plan", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "p-no-plan", "--role", "RED", "--project-dir", dir],
       { cwd: dir, crucibleUrl: baseUrl },
     );
 
@@ -724,13 +724,13 @@ describe("clients/python-crucible.py — test subcommand: v2-only ingest, tier:'
     runGit(["commit", "-q", "-m", "initial"], dir);
 
     // CR-CRU-056 §S3 — the 'test' subcommand's own implicit agent-touch
-    // never declares a phase/cycle; the server now stamps a run's
+    // never declares a role/cycle; the server now stamps a run's
     // context.cycleId ONLY from an ALREADY-BOUND agent row. Explicitly
     // pre-register the same agent id bound to the real active cycle so the
     // ingest below has a binding to stamp from.
     await runScript(
       PYTHON_SCRIPT_PATH,
-      ["register", "--agent", "python-context-agent", "--phase", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
+      ["register", "--agent", "python-context-agent", "--role", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
       { cwd: dir, crucibleUrl: baseUrl },
     );
 
@@ -1032,7 +1032,7 @@ describe("clients/python-crucible.py — the no-XML fallback fix (headline bug, 
 describe("clients/python-crucible.py — byte-compatible CLI surface (existing flags unchanged post-upgrade)", () => {
   test("register/unregister/test/regression/auto-ingest/check/pre-merge-gate --help still expose today's exact flag names", async () => {
     const cases: Array<[string, string[]]> = [
-      ["register", ["--agent", "--phase", "--display-name", "--source", "--message", "--project-dir"]],
+      ["register", ["--agent", "--role", "--display-name", "--source", "--message", "--project-dir"]],
       ["unregister", ["--agent", "--project-dir"]],
       ["test", ["--tests", "--agent", "--start-dir", "--pattern", "--reports", "--python", "--project-dir", "--log"]],
       [
@@ -1173,7 +1173,7 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
     const key = await createProject(baseUrl, "clients-ac-register-v2");
     const dir = scratch.dir("arduino-crucible-proj-");
     writeArduinoEnvFile(dir, key, "clients-ac-register-v2");
-    // CR-CRU-056 §S2/§S3c — RED (a TDD phase) now REQUIRES an explicit
+    // CR-CRU-056 §S2/§S3c — RED (a TDD role) now REQUIRES an explicit
     // cycle binding; this test's subject (self-registration + which
     // endpoint/verb gets hit) is unaffected, so a fixture plan+active-cycle
     // is filed and reused (same primitive as filePlan/activateCycle used
@@ -1184,7 +1184,7 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
 
     const res = await runScript(
       ARDUINO_SCRIPT_PATH,
-      ["register", "--agent", "a1", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
+      ["register", "--agent", "a1", "--role", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
 
@@ -1214,7 +1214,7 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
 
     await runScript(
       ARDUINO_SCRIPT_PATH,
-      ["register", "--agent", "a2", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
+      ["register", "--agent", "a2", "--role", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
     expect(await getAgentIds(baseUrl, key)).toContain("a2");
@@ -1233,12 +1233,12 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
   });
 
   // CR-CRU-056 §S2/§S3/§S3c — the CR-036 client-side auto-attach resolver
-  // is DELETED; re-pointed into the new unconditional contract: a TDD-phase
+  // is DELETED; re-pointed into the new unconditional contract: a TDD-role
   // register with no explicit --cycle is REFUSED (non-zero exit, structured
   // ok:false envelope naming --cycle) regardless of plan state —
   // WORKFLOW_CYCLE_ID is read by nobody (confirmed live: even a REAL,
   // in-project, pending cycle id sitting in that env var changes nothing).
-  test("CR-CRU-056 §S2: register --phase RED with an OPEN plan but NO active cycle is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
+  test("CR-CRU-056 §S2: register --role RED with an OPEN plan but NO active cycle is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-no-active-cycle");
@@ -1249,7 +1249,7 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
 
     const res = await runScript(
       ARDUINO_SCRIPT_PATH,
-      ["register", "--agent", "a-no-cycle", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "a-no-cycle", "--role", "RED", "--project-dir", dir],
       // The deleted resolver's exact mechanism: nobody reads this env var
       // any more, so it must not rescue the registration.
       { cwd: dir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
@@ -1261,7 +1261,7 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
     expect(await getAgentIds(baseUrl, key)).not.toContain("a-no-cycle");
   });
 
-  test("CR-CRU-056 §S2: register --phase RED with NO open plan AT ALL is STILL refused the same way — the binding requirement is unconditional, not contingent on plan/cycle ambiguity (the old 'no plan, tolerant' escape hatch no longer exists)", async () => {
+  test("CR-CRU-056 §S2: register --role RED with NO open plan AT ALL is STILL refused the same way — the binding requirement is unconditional, not contingent on plan/cycle ambiguity (the old 'no plan, tolerant' escape hatch no longer exists)", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-ac-tolerant-no-plan");
@@ -1270,7 +1270,7 @@ describe("clients/arduino-crucible.py — v2 endpoints + CRUCIBLE_URL (project s
 
     const res = await runScript(
       ARDUINO_SCRIPT_PATH,
-      ["register", "--agent", "a-no-plan", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "a-no-plan", "--role", "RED", "--project-dir", dir],
       { cwd: dir, crucibleUrl: baseUrl },
     );
 
@@ -1368,13 +1368,13 @@ describe("clients/arduino-crucible.py — unit subcommand: v2-only ingest, tier:
     runGit(["commit", "-q", "-m", "initial"], dir);
 
     // CR-CRU-056 §S3 — the 'unit' subcommand's own implicit agent-touch
-    // never declares a phase/cycle; the server now stamps a run's
+    // never declares a role/cycle; the server now stamps a run's
     // context.cycleId ONLY from an ALREADY-BOUND agent row. Explicitly
     // pre-register the same agent id bound to the real active cycle so the
     // ingest below has a binding to stamp from.
     await runScript(
       ARDUINO_SCRIPT_PATH,
-      ["register", "--agent", "arduino-context-agent", "--phase", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
+      ["register", "--agent", "arduino-context-agent", "--role", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
       { cwd: dir, crucibleUrl: baseUrl, env: { PATH: path } },
     );
 
@@ -1727,7 +1727,7 @@ describe("clients/arduino-crucible.py — auto-ingest subcommand: behavioral, no
     ]);
 
     // CR-CRU-056 §S3 — the 'auto-ingest' subcommand's own implicit
-    // agent-touch never declares a phase/cycle; the server now stamps a
+    // agent-touch never declares a role/cycle; the server now stamps a
     // run's context.cycleId ONLY from an ALREADY-BOUND agent row.
     // Explicitly pre-register the same agent id bound to the real active
     // cycle so the ingest below has a binding to stamp from — this replaces
@@ -1736,7 +1736,7 @@ describe("clients/arduino-crucible.py — auto-ingest subcommand: behavioral, no
     // explicit binding instead of auto-attach).
     await runScript(
       ARDUINO_SCRIPT_PATH,
-      ["register", "--agent", "arduino-auto-ingest-agent", "--phase", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
+      ["register", "--agent", "arduino-auto-ingest-agent", "--role", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
       { cwd: dir, crucibleUrl: baseUrl },
     );
 
@@ -1774,7 +1774,7 @@ describe("clients/arduino-crucible.py — auto-ingest subcommand: behavioral, no
 describe("clients/arduino-crucible.py — byte-compatible CLI surface (existing flags unchanged post-upgrade)", () => {
   test("register/unregister/unit/compile/regression/auto-ingest/check/pre-merge-gate --help still expose today's exact flag names", async () => {
     const cases: Array<[string, string[]]> = [
-      ["register", ["--agent", "--project-dir", "--phase"]],
+      ["register", ["--agent", "--project-dir", "--role"]],
       ["unregister", ["--agent", "--project-dir"]],
       ["unit", ["--agent", "--project-dir", "--dir"]],
       ["compile", ["--agent", "--project-dir"]],

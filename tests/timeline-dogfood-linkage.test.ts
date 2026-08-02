@@ -132,7 +132,7 @@ describe("dog-food proof — v1 shim ingest linked to a declared cycle (CR-CRU-0
   // dog-food scenario uses (the orchestrator that files/activates the plan,
   // and each of the three run-producing agents) before it's used.
   async function registerAgent(key: string, agentId: string): Promise<void> {
-    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, role: "ORCHESTRATOR" });
     expect(res.status).toBe(200);
   }
 

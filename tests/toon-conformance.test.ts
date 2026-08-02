@@ -102,7 +102,7 @@ describe("TOON conformance — official library decode of the real server wire (
       projectKey,
       agentId,
       message,
-      phase: "report",
+      role: "report",
     });
     expect(res.status).toBe(200);
   }
@@ -468,7 +468,7 @@ describe("TOON conformance — official library decode of the real server wire (
       const projectDir = scratchProjectDir(key);
 
       const res = await runClient(
-        ["register", "--agent", "toon-oracle-probe", "--phase", "report", "--project-dir", projectDir],
+        ["register", "--agent", "toon-oracle-probe", "--role", "report", "--project-dir", projectDir],
         projectDir,
         `http://localhost:${handle.server.port}`,
       );
@@ -516,7 +516,7 @@ describe("TOON conformance — official library decode of the real server wire (
       const projectDir = scratchProjectDir(key);
 
       const res = await runClient(
-        ["register", "--agent", "42", "--phase", "report", "--project-dir", projectDir],
+        ["register", "--agent", "42", "--role", "report", "--project-dir", projectDir],
         projectDir,
         `http://localhost:${handle.server.port}`,
       );
@@ -541,7 +541,7 @@ describe("TOON conformance — official library decode of the real server wire (
       const projectDir = scratchProjectDir(key);
 
       await runClient(
-        ["register", "--agent", "toon-oracle-probe", "--phase", "report", "--project-dir", projectDir],
+        ["register", "--agent", "toon-oracle-probe", "--role", "report", "--project-dir", projectDir],
         projectDir,
         `http://localhost:${handle.server.port}`,
       );
