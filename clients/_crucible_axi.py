@@ -27,6 +27,7 @@ same way the clients do.
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -123,6 +124,49 @@ def abbrev_home(path):
     return "~" + path[len(home):] if path.startswith(home) else path
 
 
+def run_context():
+    """CR-CRU-008 §S2 — env + git → the run context for declared cycle linkage.
+
+    Reads WORKFLOW_CYCLE, WORKFLOW_WAVE and WORKFLOW_ROLE (no cycle-id env
+    read — a bound agent's cycle attachment is stamped SERVER-side from its
+    registered binding, CR-CRU-056 §S3). When at least one is set, attaches
+    git {branch, commit} from a cheap `git rev-parse` (tolerant of a non-repo
+    cwd → the key is OMITTED, never an error). Returns the context dict, or
+    None when no workflow env is set at all (never a bare `{}`).
+
+    CR-CRU-054 §S2 — lifted here from all five clients, which each carried a
+    byte-identical copy; they now keep only the thin `_run_context` delegator.
+    """
+    context = {}
+    cycle = os.environ.get("WORKFLOW_CYCLE")
+    if cycle:
+        context["cycle"] = cycle
+    wave = os.environ.get("WORKFLOW_WAVE")
+    if wave:
+        context["wave"] = wave
+    role = os.environ.get("WORKFLOW_ROLE")
+    if role:
+        context["orchestrator"] = role
+    if not context:
+        return None
+    try:
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if branch and commit:
+            context["git"] = {"branch": branch, "commit": commit}
+    except (OSError, subprocess.CalledProcessError):
+        # A non-repo cwd / absent git is not an ingest failure — the run
+        # context simply carries no git provenance.
+        pass
+    return context
+
+
 def axi_context(project_key, agent_id=None, cr=None, cycle_id=AXI_UNSET):
     """Build the §S1 envelope `context` from an already-resolved project_key
     plus optional agent_id/cr/cycle_id and env (WORKFLOW_WAVE, WORKFLOW_ROLE).
@@ -207,6 +251,72 @@ def resolve_single_plan(plans, cr=None, open_only=False):
     if len(candidates) > 1:
         return None, "ambiguous"
     return candidates[0], None
+
+
+# ── CR-CRU-054 §S2 — the fleet's plan-access layer, lifted to ONE locus ─────
+#
+# `_plans_path`, `_open_plans` and `_resolve_plan_or_emit`'s prelude were
+# byte-identical in all five clients. The plan SELECTION itself
+# (`resolve_single_plan`, above) was already shared; what follows is the
+# surrounding URL/GET/emit orchestration that was not. The clients keep their
+# local names as thin delegators — their internal call sites and every client
+# test harness address them unqualified — and inject the two genuinely
+# per-client pieces: the resolved plans path (built from the client-owned
+# `.env` project key) and the client's own `_get`/`_emit_axi`.
+
+
+def plans_path(project_key):
+    """The plans-collection URL for an ALREADY-RESOLVED project key. Key
+    resolution stays client-side (each client owns its `.env`/project-dir
+    layout — the same scope boundary `axi_context` observes)."""
+    return f"/api/v2/projects/{project_key}/plans"
+
+
+def open_plans(get_fn, path):
+    """GET the plans collection at `path` via the client's own `get_fn` and
+    return ONLY the `status:"open"` plans, in server order.
+
+    A failed GET is a hard stop (`SystemExit` naming the server error), not an
+    empty list: silently reporting "no open plans" when the server is
+    unreachable is the false-negative this shared copy exists to prevent."""
+    resp = get_fn(path)
+    if not resp.get("ok"):
+        sys.exit(f"[crucible] ERROR: could not list plans: {resp.get('error')}")
+    return [p for p in resp.get("plans", []) if p.get("status") == "open"]
+
+
+def resolve_plan_or_emit(verb, cr, result_fields, open_only,
+                         get_fn, path, emit_fn, context_fn):
+    """The shared prelude for the plan-targeting write verbs (`cycle-add` /
+    `checkpoint` / `abort`): GET the plans at `path`, resolve exactly ONE
+    target via `resolve_single_plan`, and on ANY failure (GET error, zero
+    candidates, or ambiguity) emit the ok:false envelope through `emit_fn` and
+    return `(None, 1)`. On success returns `(plan, None)` and emits nothing.
+
+    `context_fn` is a zero-arg callable so the envelope context (which costs a
+    client-side `.env` read) is built ONLY on the failure paths, exactly as the
+    per-client copies did."""
+    resp = get_fn(path)
+    if not resp.get("ok"):
+        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
+        emit_fn(verb, False, result_fields, context_fn(), [], legacy)
+        return None, 1
+    plans = resp.get("plans", [])
+    plan, reason = resolve_single_plan(plans, cr=cr, open_only=open_only)
+    if reason is not None:
+        scope = "open plan" if open_only else "plan"
+        if reason == "none":
+            legacy = (f"[crucible] ERROR: no {scope} to {verb}"
+                      + (f" for cr={cr}" if cr else ""))
+        else:
+            candidates = [p for p in plans
+                          if (not open_only or p.get("status") == "open")]
+            names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in candidates)
+            legacy = (f"[crucible] ERROR: {len(candidates)} {scope}s — ambiguous {verb}. "
+                      f"Pass --cr to pick one of: {names}")
+        emit_fn(verb, False, result_fields, context_fn(), [], legacy)
+        return None, 1
+    return plan, None
 
 
 def build_status_rows(plans):

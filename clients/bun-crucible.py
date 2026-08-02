@@ -702,42 +702,15 @@ def _parse_lcov(lcov_path):
 
 
 def _run_context():
-    """CR-CRU-019 §P1 — env + git → run context for declared cycle linkage.
+    """CR-CRU-008 §S2 — env + git → run context for declared cycle linkage.
 
-    Reads WORKFLOW_CYCLE (string) — no cycle-id env read; a bound agent's cycle
-    attachment is stamped SERVER-side from its registered binding (CR-CRU-056
-    §S3). When at least one is set, attaches
-    git {branch, commit} from a cheap `git rev-parse` (tolerant of a
-    non-repo cwd → omitted). Returns the context dict, or None when no
-    workflow env is set.
-    """
-    context = {}
-    cycle = os.environ.get("WORKFLOW_CYCLE")
-    if cycle:
-        context["cycle"] = cycle
-    # CR-CRU-008 §S2 — wave + orchestrator enrichment (alongside cycleId/cycle/git).
-    wave = os.environ.get("WORKFLOW_WAVE")
-    if wave:
-        context["wave"] = wave
-    role = os.environ.get("WORKFLOW_ROLE")
-    if role:
-        context["orchestrator"] = role
-    if not context:
-        return None
-    try:
-        branch = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        if branch and commit:
-            context["git"] = {"branch": branch, "commit": commit}
-    except (OSError, subprocess.CalledProcessError):
-        pass
-    return context
+    CR-CRU-054 §S2 — a thin delegator to `_crucible_axi.run_context`, which
+    documents the full contract (WORKFLOW_CYCLE/WAVE/ROLE, tolerant git
+    provenance, and None — never a bare `{}` — when no workflow env is set).
+    The local name is kept deliberately: the CR-CRU-030 delegation pattern,
+    addressed unqualified by every call site here and by the client test
+    harnesses."""
+    return _axi().run_context()
 
 
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
@@ -1001,14 +974,17 @@ def cmd_pre_merge_gate(args):
 
 
 def _plans_path(project_dir):
-    return f"/api/v2/projects/{_project_key(project_dir)}/plans"
+    """This project's plans-collection URL — CR-CRU-054 §S2 delegator to
+    `_crucible_axi.plans_path`. Only the URL TEMPLATE is shared: `_project_key`
+    stays client-owned (each client owns its own `.env`/project-dir layout)."""
+    return _axi().plans_path(_project_key(project_dir))
 
 
 def _open_plans(project_dir):
-    resp = _get(_plans_path(project_dir))
-    if not resp.get("ok"):
-        sys.exit(f"[crucible] ERROR: could not list plans: {resp.get('error')}")
-    return [p for p in resp.get("plans", []) if p.get("status") == "open"]
+    """This project's open plans — CR-CRU-054 §S2 delegator to
+    `_crucible_axi.open_plans`, which owns the status filter and the hard stop
+    on a failed plans GET."""
+    return _axi().open_plans(_get, _plans_path(project_dir))
 
 
 def cmd_plan_file(args):
@@ -1232,32 +1208,16 @@ def cmd_cr_close(args):
 
 
 def _resolve_plan_or_emit(verb, project_dir, cr, result_fields, open_only):
-    """Shared prelude for the plan-targeting write verbs (cycle-add /
-    checkpoint / abort): GET the plans, resolve exactly ONE target via the
-    shared `resolve_single_plan`, and on any failure (GET error, zero, or
-    ambiguous) emit the ok:false envelope + return `(None, 1)`. On success
-    returns `(plan, None)`."""
-    resp = _get(_plans_path(project_dir))
-    if not resp.get("ok"):
-        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
-        _emit_axi(verb, False, result_fields, _axi_context(project_dir, cr=cr), [], legacy)
-        return None, 1
-    plans = resp.get("plans", [])
-    plan, reason = _axi().resolve_single_plan(plans, cr=cr, open_only=open_only)
-    if reason is not None:
-        scope = "open plan" if open_only else "plan"
-        if reason == "none":
-            legacy = (f"[crucible] ERROR: no {scope} to {verb}"
-                      + (f" for cr={cr}" if cr else ""))
-        else:
-            candidates = [p for p in plans
-                          if (not open_only or p.get("status") == "open")]
-            names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in candidates)
-            legacy = (f"[crucible] ERROR: {len(candidates)} {scope}s — ambiguous {verb}. "
-                      f"Pass --cr to pick one of: {names}")
-        _emit_axi(verb, False, result_fields, _axi_context(project_dir, cr=cr), [], legacy)
-        return None, 1
-    return plan, None
+    """Resolve exactly ONE target plan for a write verb (cycle-add /
+    checkpoint / abort), or emit the ok:false envelope and return `(None, 1)`.
+
+    CR-CRU-054 §S2 — a thin delegator to `_crucible_axi.resolve_plan_or_emit`,
+    which owns the whole prelude; this client injects only its own transport,
+    emitter and resolved plans path."""
+    return _axi().resolve_plan_or_emit(
+        verb, cr, result_fields, open_only,
+        _get, _plans_path(project_dir), _emit_axi,
+        lambda: _axi_context(project_dir, cr=cr))
 
 
 def cmd_cycle_add(args):
@@ -1457,7 +1417,7 @@ def _toon():
     if _TOON_MOD is None:
         import importlib.util
         toon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "toon.py")
-        spec = importlib.util.spec_from_file_location("bun_crucible_toon", toon_path)
+        spec = importlib.util.spec_from_file_location(f"{__name__}_toon", toon_path)
         if spec is None or spec.loader is None:
             raise RuntimeError(f"could not load TOON codec at {toon_path}")
         _TOON_MOD = importlib.util.module_from_spec(spec)
@@ -1484,7 +1444,7 @@ def _axi():
     if _AXI_MOD is None:
         import importlib.util
         axi_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_crucible_axi.py")
-        spec = importlib.util.spec_from_file_location("bun_crucible_axi_shared", axi_path)
+        spec = importlib.util.spec_from_file_location(f"{__name__}_axi_shared", axi_path)
         if spec is None or spec.loader is None:
             raise RuntimeError(f"could not load shared AXI module at {axi_path}")
         _AXI_MOD = importlib.util.module_from_spec(spec)
