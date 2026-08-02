@@ -81,8 +81,20 @@ label alone -- exactly C3's method):
       'attempted, outcome unknown' only on a genuine transport failure, never
       a blanket 'removed.'" Pinned here exactly to that combination.
 
+  DRIFTED -- deferred by C4, RESOLVED in C5, given its BEHAVIOURAL proof in C6
+  (the §S2b corrections #4/#5 below; see `IdentitySourceOnTheWireDriftCorrectionTest`
+  at the foot of this file). C4 left the identity `source` split
+  (`openclaw` -> `claude-md`) unpinned, per the dispatch brief; C5 corrected it
+  fleet-wide but pinned it only with source-text/AST scans in
+  `test_cr054_fleet_inventory.py` (`test_open_gate_identity_source_override_now_removed_fleet_wide`,
+  `IdentitySourceEnumGuardTest`), which describe the SOURCE rather than the
+  behaviour. The whole point of the correction is what reaches the SERVER, so
+  C6 adds the missing half: every identity-payload-building site is invoked
+  with the client's own `_post` mocked and the ACTUAL outgoing body asserted.
+  The static scans stay -- a useful second net.
+
   EXPLICITLY NOT PINNED, flagged for the orchestrator (matches the dispatch
-  brief's own instruction not to choose):
+  brief's own instruction not to choose -- superseded by C5/C6, see above):
     * `_open_gate_identity`'s `source` label split (`openclaw` vs
       `claude-md`, DN §4 finding #4) -- the dispatch brief's item 5 says "pick
       one... do NOT choose. Pin nothing for it." No test below touches
@@ -1277,6 +1289,272 @@ class RemoveAgentSilentCloseGateIdentityCombinedCorrectionTest(unittest.TestCase
                     f"{client}-crucible.py's _close_gate_identity must "
                     f"report the outcome as unknown when the removal "
                     f"attempt's result is unavailable, got {err.getvalue()!r}")
+
+
+# ---------------------------------------------------------------------------
+# DRIFTED §S2b corrections #4 + #5 -- the identity `source` ON THE WIRE.
+#
+# C5 corrected `openclaw` -> `claude-md` fleet-wide, but the only proofs were
+# source-text/AST scans (test_cr054_fleet_inventory.py). A scan cannot show
+# what the SERVER receives -- which is the entire point of the correction. The
+# class below invokes each payload-building path for real with that client's
+# own `_post` mocked and asserts the ACTUAL outgoing body, so reverting the
+# shared default (or reintroducing a per-client override) fails here even if
+# someone teaches the scans to look elsewhere.
+# ---------------------------------------------------------------------------
+
+
+# The documented enum a client's identity.source must belong to (the same set
+# test_cr054_fleet_inventory.py's IdentitySourceEnumGuardTest guards statically).
+IDENTITY_SOURCE_ENUM = {"claude-md", "package-json", "git-repo", "manual"}
+FLEET_IDENTITY_SOURCE = "claude-md"
+# The pre-correction value (DN §4 findings #4/#5): outside the enum, and only
+# ever survived because the server does not validate the field.
+RETIRED_IDENTITY_SOURCE = "openclaw"
+
+
+def _identity_payload_sites(path):
+    """Every function in `path` -- top-level or method -- that BUILDS a dict
+    literal carrying an `"identity"` key, i.e. every place an `identity.source`
+    can reach the wire from. Used to prove the behavioural coverage below is
+    EXHAUSTIVE: a new payload-building site anywhere in the fleet fails the
+    completeness test rather than slipping in unexercised."""
+    text = path.read_text()
+    tree = ast.parse(text, filename=str(path))
+    sites = set()
+
+    def visit(node, enclosing):
+        for child in ast.iter_child_nodes(node):
+            name = enclosing
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                name = child.name
+            elif isinstance(child, ast.Dict):
+                for key in child.keys:
+                    if isinstance(key, ast.Constant) and key.value == "identity":
+                        sites.add(enclosing)
+            visit(child, name)
+
+    visit(tree, None)
+    sites.discard(None)
+    return sites
+
+
+# Every identity-payload-building site in the fleet, mapped to the test method
+# below that drives it FOR REAL. Keep in step with the sweep above.
+#   * `_crucible_axi.GatedRunIdentity.open_payload` -- driven through each
+#     client's `_open_gate_identity` (test_gate_run_identity_open_...).
+#   * `_crucible_axi.cmd_register`'s own inline payload -- rust/mvn/arduino's
+#     register path (test_register_* below).
+#   * bun/python's `_register_agent` -- the same three tests, via the
+#     `register_fn` parameter their `cmd_register` passes.
+#   * mvn's `_narrate_heartbeat` -- test_narration_heartbeat_... below (the
+#     site VERIFY flagged: hardcoded, and never covered by a RED test).
+COVERED_IDENTITY_PAYLOAD_SITES = {
+    "_crucible_axi": {"open_payload", "cmd_register"},
+    "bun": {"_register_agent"},
+    "rust": set(),
+    "mvn": {"_narrate_heartbeat"},
+    "python": {"_register_agent"},
+    "arduino": set(),
+}
+
+
+class IdentitySourceOnTheWireDriftCorrectionTest(unittest.TestCase, _ProjectDirFixture):
+    """DN §4 findings #4 + #5 / CR-CRU-054 §S2b: `identity.source` must leave
+    every client as the documented-enum `claude-md`, never the retired
+    `openclaw`. Behavioural throughout -- each test invokes real code with the
+    client's own `_post` mocked and inspects the payload that WOULD have gone
+    to the server."""
+
+    def setUp(self):
+        self.tmpdir = self._make_project_dir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    @staticmethod
+    def _recording_post(calls, resp=None):
+        def fake_post(path, payload, _c=calls):
+            _c.append((path, payload))
+            return {"ok": True} if resp is None else resp
+        return fake_post
+
+    def _assert_wire_source(self, client, path, payload, expected, where):
+        self.assertIn(
+            "identity", payload,
+            f"{client}-crucible.py's {where} must send an `identity` block "
+            f"(POST {path}), got {payload!r}")
+        actual = payload["identity"].get("source")
+        self.assertEqual(
+            actual, expected,
+            f"{client}-crucible.py's {where} must put source={expected!r} on "
+            f"the wire (DN §4 findings #4/#5 -- the correction exists for what "
+            f"the SERVER receives, not for what the source text says), got "
+            f"{actual!r} in {payload!r}")
+        self.assertIn(
+            actual, IDENTITY_SOURCE_ENUM,
+            f"{client}-crucible.py's {where} sent an identity.source outside "
+            f"the documented enum {sorted(IDENTITY_SOURCE_ENUM)!r}: {actual!r}")
+        self.assertNotIn(
+            RETIRED_IDENTITY_SOURCE, repr(payload),
+            f"{client}-crucible.py's {where} must not carry the retired "
+            f"{RETIRED_IDENTITY_SOURCE!r} label anywhere in its outgoing body, "
+            f"got {payload!r}")
+
+    def _register_posts(self, calls):
+        """Only the agent-register/heartbeat POSTs -- arduino's `pre_register`
+        project bootstrap also goes through `_post`."""
+        return [c for c in calls
+                if "agents/register" in c[0] or "agents/heartbeat" in c[0]]
+
+    def test_gate_run_identity_open_sends_claude_md_on_the_wire(self):
+        """`_open_gate_identity` -> `GatedRunIdentity.open_payload`: the site
+        DN §4 finding #4 named (mvn used to override it to `openclaw`). Driven
+        through each client's own delegator, so a reintroduced per-client
+        override fails here too."""
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                module = _load_client_module(client)
+                calls = []
+                with mock.patch.object(module, "_post",
+                                       side_effect=self._recording_post(calls)):
+                    module._open_gate_identity(
+                        self.tmpdir, "A1", None, "gated run starting")
+                heartbeats = [c for c in calls if "agents/heartbeat" in c[0]]
+                self.assertEqual(
+                    len(heartbeats), 1,
+                    f"{client}-crucible.py's _open_gate_identity must post "
+                    f"exactly one phase-optional heartbeat, got {calls!r}")
+                path, payload = heartbeats[0]
+                self._assert_wire_source(client, path, payload,
+                                         FLEET_IDENTITY_SOURCE,
+                                         "_open_gate_identity")
+
+    def test_register_cli_sends_claude_md_identity_source_on_the_wire(self):
+        """The full-CLI proof: real argparse dispatch through `main()`, so the
+        subparser's own `--source` default is part of what is being asserted."""
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                module = _load_client_module(client)
+                calls = []
+                with mock.patch.object(module, "_post",
+                                       side_effect=self._recording_post(calls)):
+                    code, out, err = _run_main(
+                        module,
+                        ["register", "--agent", "A1", "--phase", "RED",
+                         "--project-dir", self.tmpdir])
+                self.assertEqual(
+                    code, 0,
+                    f"{client}-crucible.py's `register` must succeed against "
+                    f"an ok:true server, got code={code} out={out!r} err={err!r}")
+                posts = self._register_posts(calls)
+                self.assertEqual(
+                    len(posts), 1,
+                    f"{client}-crucible.py's `register` must post exactly one "
+                    f"agent registration, got {posts!r}")
+                path, payload = posts[0]
+                self._assert_wire_source(client, path, payload,
+                                         FLEET_IDENTITY_SOURCE,
+                                         "`register` CLI")
+
+    def test_register_without_a_source_arg_still_sends_the_fleet_default(self):
+        """The shared `DEFAULT_IDENTITY_SOURCE` fallback, reached by calling
+        `cmd_register` with a Namespace that carries NO `source` at all (the
+        `getattr(args, "source", None) or DEFAULT_IDENTITY_SOURCE` branch the
+        CLI default hides). This is the assertion that dies if the shared
+        default is reverted."""
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                module = _load_client_module(client)
+                calls = []
+                with mock.patch.object(module, "_post",
+                                       side_effect=self._recording_post(calls)), \
+                        contextlib.redirect_stdout(io.StringIO()), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    module.cmd_register(_make_args(
+                        agent="A1", project_dir=self.tmpdir, message=None,
+                        display_name=None, phase="RED", cycle=None))
+                posts = self._register_posts(calls)
+                self.assertEqual(
+                    len(posts), 1,
+                    f"{client}-crucible.py's cmd_register must post exactly "
+                    f"one agent registration, got {posts!r}")
+                path, payload = posts[0]
+                self._assert_wire_source(client, path, payload,
+                                         FLEET_IDENTITY_SOURCE,
+                                         "cmd_register with no --source")
+
+    def test_register_honours_an_explicit_source_override_on_the_wire(self):
+        """The other half of finding #5's "configurable `--source` with a
+        fleet-wide default, never a hardcoded value": a caller-supplied source
+        must actually REACH the wire. Without this, the claude-md assertions
+        above would pass equally well against a re-hardcoded literal."""
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                module = _load_client_module(client)
+                calls = []
+                with mock.patch.object(module, "_post",
+                                       side_effect=self._recording_post(calls)):
+                    code, out, err = _run_main(
+                        module,
+                        ["register", "--agent", "A1", "--phase", "RED",
+                         "--source", "git-repo",
+                         "--project-dir", self.tmpdir])
+                self.assertEqual(code, 0, f"out={out!r} err={err!r}")
+                posts = self._register_posts(calls)
+                self.assertEqual(len(posts), 1, f"got {posts!r}")
+                path, payload = posts[0]
+                self._assert_wire_source(client, path, payload, "git-repo",
+                                         "`register --source git-repo` CLI")
+
+    def test_narration_heartbeat_sends_claude_md_on_the_wire(self):
+        """mvn's `_narrate_heartbeat` -- the hardcoded payload site VERIFY
+        flagged as never covered by a RED test (it is the exact function whose
+        `openclaw` literal DN §4 recorded). Written fleet-wide so any client
+        that grows a narration heartbeat is covered on arrival; the
+        non-vacuity assertion below keeps the loop honest."""
+        exercised = []
+        for client in CLIENTS:
+            module = _load_client_module(client)
+            narrate = getattr(module, "_narrate_heartbeat", None)
+            if narrate is None:
+                continue
+            with self.subTest(client=client):
+                exercised.append(client)
+                calls = []
+                with mock.patch.object(module, "_post",
+                                       side_effect=self._recording_post(calls)):
+                    narrate(self.tmpdir, "A1", "running class 3/10")
+                heartbeats = [c for c in calls if "agents/heartbeat" in c[0]]
+                self.assertEqual(
+                    len(heartbeats), 1,
+                    f"{client}-crucible.py's _narrate_heartbeat must post one "
+                    f"phase-optional heartbeat, got {calls!r}")
+                path, payload = heartbeats[0]
+                self._assert_wire_source(client, path, payload,
+                                         FLEET_IDENTITY_SOURCE,
+                                         "_narrate_heartbeat")
+        self.assertIn(
+            "mvn", exercised,
+            "mvn-crucible.py must still define _narrate_heartbeat -- it is the "
+            "site DN §4 recorded the `openclaw` literal at; a loop that "
+            "exercises nothing would make this test vacuous")
+
+    def test_every_identity_payload_building_site_is_behaviourally_covered(self):
+        """Completeness: the sweep of dict literals carrying an `"identity"`
+        key must match exactly the set of sites the tests above drive. A NEW
+        payload-building site fails here instead of shipping with only the
+        static scans behind it -- the precise gap this class closes."""
+        found = {"_crucible_axi": _identity_payload_sites(AXI_MODULE_PATH)}
+        for client, path in CLIENT_FILES.items():
+            found[client] = _identity_payload_sites(path)
+        self.assertEqual(
+            found, COVERED_IDENTITY_PAYLOAD_SITES,
+            "the fleet's identity-payload-building sites no longer match the "
+            "set exercised behaviourally by this class -- add a behavioural "
+            "test for the new/moved site (and update "
+            "COVERED_IDENTITY_PAYLOAD_SITES) rather than relying on the "
+            "source-text scans in test_cr054_fleet_inventory.py")
 
 
 if __name__ == "__main__":
