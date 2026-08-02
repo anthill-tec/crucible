@@ -686,35 +686,35 @@
         }),
       );
 
-    // CR-CRU-044 §S2 / CR-CRU-057 §S2 — an event is tinted by a STORED phase,
+    // CR-CRU-044 §S2 / CR-CRU-057 §S2 — an event is tinted by a STORED role,
     // never by the shape of its agentId. A LIVE agent's declaration wins (it is
     // resolved off the `state.agents` slice by agentId, the same lookup
     // CrAgentRuntime uses); once that agent unregisters its record is gone, so
-    // classification falls through to the phase stamped onto the EVENT itself
+    // classification falls through to the role stamped onto the EVENT itself
     // at ingest time (§S1), which outlives the agent. Neither present -> the
     // event is simply unclassified.
-    const eventPhase = (e) => {
-      const live = state.agents.find((a) => a.agentId === e.agentId)?.phase;
-      if (live !== undefined && live !== null) return { phase: live, inferred: false };
-      const stored = e.phase;
-      if (stored === undefined || stored === null) return { phase: null, inferred: false };
-      // §S4 — a phase recovered by the one-time backfill is DOM-distinguishable
+    const eventRoleDecl = (e) => {
+      const live = state.agents.find((a) => a.agentId === e.agentId)?.role;
+      if (live !== undefined && live !== null) return { role: live, inferred: false };
+      const stored = e.role;
+      if (stored === undefined || stored === null) return { role: null, inferred: false };
+      // §S4 — a role recovered by the one-time backfill is DOM-distinguishable
       // from a declared one, so backfilled history is never read as declared.
-      return { phase: stored, inferred: e.phaseInferred === true };
+      return { role: stored, inferred: e.roleInferred === true };
     };
 
-    const eventRole = (e) => L.agentRole({ agentId: e.agentId, phase: eventPhase(e).phase });
+    const eventRole = (e) => L.agentRole({ agentId: e.agentId, role: eventRoleDecl(e).role });
 
     // The tintable card-icon wrapper, shared by every run-entry render site.
     const eventIconProps = (e) => {
-      const { inferred } = eventPhase(e);
+      const { inferred } = eventRoleDecl(e);
       const role = eventRole(e);
       const props = {
         "data-testid": "card-icon",
         "data-icon-tintable": "true",
         class: `app-card-icon${role !== null ? ` app-role-${role}` : ""}`,
       };
-      if (inferred) props["data-phase-inferred"] = "true";
+      if (inferred) props["data-role-inferred"] = "true";
       return props;
     };
 
@@ -728,10 +728,10 @@
           class: "app-evt",
           onclick: () => openDrillin(e.id),
         },
-        // §S1 — the kind icon is tinted by the agent's phase role (RED red /
+        // §S1 — the kind icon is tinted by the agent's declared role (RED red /
         // GREEN green / VERIFY purple / FIX yellow); roleless stays neutral.
-        // CR-CRU-044 §S2 / CR-CRU-057 §S2 — the role comes from a stored
-        // phase only: the live agent's, else the event's own stamped one.
+        // CR-CRU-044 §S2 / CR-CRU-057 §S2 — the tint comes from a stored
+        // role only: the live agent's, else the event's own stamped one.
         // Tintable-icon contract: the wrapper carries the role color; the
         // glyph is a monochrome CSS-mask child painted `currentColor` —
         // never color-emoji text, which CSS `color` cannot tint.

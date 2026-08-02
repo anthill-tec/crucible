@@ -69,8 +69,8 @@ Examples:
 Agent naming (CR-CRU-044 §S4/§S5): the agentId is a FREE-FORM identifier carrying no
 structure the system reads. It is DECLARED with `--agent` or the verb fails — there is no
 filename default and no env fallback ($WORKFLOW_ROLE is the track lane, not an identity).
-The phase comes from `--phase` alone and is never inferred from the agentId's shape, so
-`<agent-type>-<project>` (e.g. claude-sandesh) and `CR-<PROJ>-NNN-<cycle>-<PHASE>` (e.g.
+The role comes from `--role` alone and is never inferred from the agentId's shape, so
+`<agent-type>-<project>` (e.g. claude-sandesh) and `CR-<PROJ>-NNN-<cycle>-<ROLE>` (e.g.
 CR-SAN-013-C1-RED) are readability habits only. Identity carries displayName + source
 (default claude-md) + repoPath, inside the `identity` object.
 """
@@ -327,18 +327,18 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None):
 
 
 def _register_agent(project_dir, agent_id, message, display_name=None, source="claude-md",
-                    phase=None, cycle_id=None):
+                    role=None, cycle_id=None):
     """POST the agent-online heartbeat. Single payload builder shared by
     cmd_register and the gate-run lifecycle brackets (CR-CRU-021 §S5).
 
-    CR-CRU-044 §S1 — a real REGISTRATION must declare its phase. The
-    phase-less callers here are the §S2b narration heartbeats, which route to
-    /api/v2/agents/heartbeat: the phase-optional liveness ping, so a narration
-    tick never re-declares — nor blanks — the phase the agent registered with.
+    CR-CRU-044 §S1 — a real REGISTRATION must declare its role. The
+    role-less callers here are the §S2b narration heartbeats, which route to
+    /api/v2/agents/heartbeat: the role-optional liveness ping, so a narration
+    tick never re-declares — nor blanks — the role the agent registered with.
 
     CR-CRU-056 §S1/§S4 — `cycle_id` rides the register body as `cycleId`,
     binding the agent to a cycle; the server validates it (ACTIVE cycle in an
-    OPEN plan) and REQUIRES it for TDD phases (RED/GREEN/FIX/VERIFY).
+    OPEN plan) and REQUIRES it for TDD roles (RED/GREEN/FIX/VERIFY).
     """
     payload = {
         "agentId": agent_id,
@@ -351,9 +351,9 @@ def _register_agent(project_dir, agent_id, message, display_name=None, source="c
             "repoPath": project_dir,
         },
     }
-    if phase is None:
+    if role is None:
         return _post("/api/v2/agents/heartbeat", payload)
-    payload["phase"] = phase
+    payload["role"] = role
     if cycle_id is not None:
         payload["cycleId"] = cycle_id
     return _post("/api/v2/agents/register", payload)
@@ -379,7 +379,7 @@ def _remove_agent_silent(project_dir, agent_id):
 def _open_gate_identity(project_dir, agent_id, cycle_id, message):
     """CR-CRU-056 — open a gated run's identity and learn whether the run
     CREATED it. CR-CRU-054 §S2b — a thin delegator to
-    `_crucible_axi.open_gate_identity`, which owns the phase-optional heartbeat
+    `_crucible_axi.open_gate_identity`, which owns the role-optional heartbeat
     touch and the documented-enum identity `source`."""
     return _axi().open_gate_identity(project_dir, agent_id, cycle_id, message, _ops())
 
@@ -396,7 +396,7 @@ def _close_gate_identity(project_dir, identity):
 def cmd_register(args):
     """Register / heartbeat. CR-CRU-056 §S1/§S2 — `--cycle` binds the agent to
     an ACTIVE cycle of an OPEN plan; the server validates the binding and
-    REQUIRES it for TDD phases (RED/GREEN/FIX/VERIFY) — a refused registration
+    REQUIRES it for TDD roles (RED/GREEN/FIX/VERIFY) — a refused registration
     surfaces the server's 409 envelope (error + help) and exits non-zero.
     ORCHESTRATOR/report may register unbound.
 
@@ -1454,7 +1454,7 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=False)
 
     r = sub.add_parser("register",
-                       help="Register / heartbeat an agent. TDD phases must bind a "
+                       help="Register / heartbeat an agent. TDD roles must bind a "
                             "cycle with --cycle.")
     # CR-CRU-054 §S2b (DN §4 finding #3) — NOT argparse-required: the §S5
     # runtime hard stop owns the refusal so it arrives as a structured envelope.
@@ -1463,21 +1463,21 @@ def main():
                         "RUNTIME by the §S5 hard stop (CR-CRU-054 §S2b) so a missing "
                         "id yields the ok:false AXI envelope, not a bare argparse "
                         "usage error. "
-                                                "Agent id — a free-form identifier. The phase is declared by "
-                        "--phase and is never inferred from the agentId's shape; any "
-                        "`CR-<PROJ>-NNN-<cycle>-<PHASE>` convention is a naming habit only.")
-    # CR-CRU-044 §S3 — phase is first-class DATA: --phase is REQUIRED and
+                                                "Agent id — a free-form identifier. The role is declared by "
+                        "--role and is never inferred from the agentId's shape; any "
+                        "`CR-<PROJ>-NNN-<cycle>-<ROLE>` convention is a naming habit only.")
+    # CR-CRU-044 §S3 — role is first-class DATA: --role is REQUIRED and
     # enum-constrained (this supersedes CR-CRU-008 §S2's `default="report"`
-    # ergonomics; pass `--phase report` for a non-TDD registration).
-    r.add_argument("--phase", required=True,
+    # ergonomics; pass `--role report` for a non-TDD registration).
+    r.add_argument("--role", required=True,
                    choices=["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"],
-                   help="Declared phase — the ONLY phase channel. Use `report` for a "
-                        "registration that is not exercising a TDD phase.")
+                   help="Declared role — the ONLY role channel. Use `report` for a "
+                        "registration that is not exercising a TDD role.")
     # CR-CRU-056 §S1/§S2 — cycle binding. Optional at the CLI; the SERVER
-    # enforces the per-phase requirement.
+    # enforces the per-role requirement.
     r.add_argument("--cycle", type=int,
                    help="Cycle id to BIND this agent to (an ACTIVE cycle of an OPEN "
-                        "plan). TDD phases (RED/GREEN/FIX/VERIFY) MUST bind — the "
+                        "plan). TDD roles (RED/GREEN/FIX/VERIFY) MUST bind — the "
                         "server refuses an unbound TDD registration (409). "
                         "ORCHESTRATOR/report may register unbound. A bound agent's "
                         "ingests are server-stamped with this cycle.")

@@ -17,7 +17,7 @@ channel); human-readable lines move to STDERR (interactive only). The envelope
 machinery is factored into the shared clients/_crucible_axi.py module so every
 client emits a byte-identical §S1 envelope. Cycle attachment (CR-CRU-056 §S3):
 agents register BOUND to a cycle (`register --cycle` with an ACTIVE cycle id —
-REQUIRED by the server for TDD phases RED/GREEN/FIX/VERIFY; ORCHESTRATOR/report
+REQUIRED by the server for TDD roles RED/GREEN/FIX/VERIFY; ORCHESTRATOR/report
 may register unbound). A bound agent's ingests are stamped with that cycle
 SERVER-side — the client resolves and sends no cycle; an unbound agent's runs
 attach only via an explicit `context.cycleId`.
@@ -42,7 +42,7 @@ $AGENT_ID is set FROM `--agent` for child processes; it is not an identity sourc
 and neither is $WORKFLOW_ROLE (that is the track lane, reported as context.track).
 
 Subcommands:
-  register, unregister  Agent lifecycle (TDD phases bind a cycle with --cycle).
+  register, unregister  Agent lifecycle (TDD roles bind a cycle with --cycle).
   test                  Run native host tests (`make junit`) → /api/v2/runs/parsed.
                         The RED/GREEN workhorse for this stack.
   check                 arduino-cli compile → /api/v2/runs/compile on failure. Gate.
@@ -386,10 +386,10 @@ def _ensure_project_registered(project_dir):
     _ensure_project(key, name, project_dir)
 
 
-def _register_message(args, phase):
+def _register_message(args, role):
     """arduino's own register message convention, a per-client PARAMETER of the
-    shared `cmd_register` (the other four send `Starting <phase> phase`)."""
-    return f"{phase} phase" if phase else "online"
+    shared `cmd_register` (the other four send `Starting <role> phase`)."""
+    return f"{role} phase" if role else "online"
 
 
 # CR-CRU-054 §S2b — arduino's own interactive legacy lines. Kept per-client
@@ -402,20 +402,20 @@ UNREGISTER_LEGACY_FORMAT = "[crucible] unregister: {agent_id} removed (ok={ok})"
 def cmd_register(args):
     """Register / heartbeat. CR-CRU-056 §S1/§S2 — `--cycle` binds the agent to
     an ACTIVE cycle of an OPEN plan; the server validates the binding and
-    REQUIRES it for TDD phases (RED/GREEN/FIX/VERIFY) — a refused registration
+    REQUIRES it for TDD roles (RED/GREEN/FIX/VERIFY) — a refused registration
     surfaces the server's 409 envelope (error + help) and exits non-zero.
     ORCHESTRATOR/report may register unbound.
 
     CR-CRU-054 §S2b — delegates to the shared implementation, which owns the
     §S5 runtime identity hard stop (DN §4 finding #3) and the documented-enum
     `--source` strategy (finding #5).
-    arduino's project self-registration, its `report` phase floor (a defensive
-    floor for a hand-built Namespace — §S3 makes `--phase` REQUIRED on the
+    arduino's project self-registration, its `report` role floor (a defensive
+    floor for a hand-built Namespace — §S3 makes `--role` REQUIRED on the
     subparser), its message convention and its legacy line stay per-client
     PARAMETERS."""
     return _axi().cmd_register(args, _project_dir(args), _ops(),
                                pre_register=_ensure_project_registered,
-                               phase_default="report",
+                               role_default="report",
                                message_fn=_register_message,
                                legacy_format=REGISTER_LEGACY_FORMAT)
 
@@ -441,7 +441,7 @@ def _remove_agent_silent(project_dir, agent_id):
 def _open_gate_identity(project_dir, agent_id, cycle_id, message):
     """CR-CRU-056 — open a gated run's identity and learn whether the run
     CREATED it. CR-CRU-054 §S2b — a thin delegator to
-    `_crucible_axi.open_gate_identity`, which owns the phase-optional heartbeat
+    `_crucible_axi.open_gate_identity`, which owns the role-optional heartbeat
     touch and the documented-enum identity `source`."""
     return _axi().open_gate_identity(project_dir, agent_id, cycle_id, message, _ops())
 
@@ -892,7 +892,7 @@ def main():
                         help="Agent id — a free-form identifier. Nothing derives one: "
                              "there is no filename default and no env fallback, so any "
                              "verb that POSTs under an agentId hard-stops without it. "
-                             "The phase is declared by --phase and is never inferred "
+                             "The role is declared by --role and is never inferred "
                              "from the agentId's shape.")
     common.add_argument("--project-dir",
                         help="subproject dir with .env + tests/native "
@@ -949,19 +949,19 @@ def main():
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     r = sub.add_parser("register", parents=[common],
-                       help="register/heartbeat the agent (TDD phases must bind a "
+                       help="register/heartbeat the agent (TDD roles must bind a "
                             "cycle with --cycle)")
-    # CR-CRU-044 §S3 — phase is first-class DATA: --phase is REQUIRED and
+    # CR-CRU-044 §S3 — role is first-class DATA: --role is REQUIRED and
     # enum-constrained (it was unconstrained free text before).
-    r.add_argument("--phase", required=True,
+    r.add_argument("--role", required=True,
                    choices=["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"],
-                   help="Declared phase — the ONLY phase channel. Use `report` for a "
-                        "registration that is not exercising a TDD phase.")
+                   help="Declared role — the ONLY role channel. Use `report` for a "
+                        "registration that is not exercising a TDD role.")
     # CR-CRU-056 §S1/§S2 — cycle binding. Optional at the CLI; the SERVER
-    # enforces the per-phase requirement.
+    # enforces the per-role requirement.
     r.add_argument("--cycle", type=int,
                    help="Cycle id to BIND this agent to (an ACTIVE cycle of an OPEN "
-                        "plan). TDD phases (RED/GREEN/FIX/VERIFY) MUST bind — the "
+                        "plan). TDD roles (RED/GREEN/FIX/VERIFY) MUST bind — the "
                         "server refuses an unbound TDD registration (409). "
                         "ORCHESTRATOR/report may register unbound. A bound agent's "
                         "ingests are server-stamped with this cycle.")
