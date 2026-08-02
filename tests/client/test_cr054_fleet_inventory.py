@@ -239,7 +239,16 @@ class DriftedFindingsAreStillPresentTest(unittest.TestCase):
     still exists on today's tree -- this is the fixture's falsifiability for
     §4 specifically: if a later cycle fixes one of these without updating this
     module, the corresponding test below would need to flip, which is exactly
-    the signal CR-CRU-054 §S3's drift guard is meant to generalise."""
+    the signal CR-CRU-054 §S3's drift guard is meant to generalise.
+
+    CONVENTION (running score): each of the 8 DRIFTED entries below stays a
+    "still present" pin until the cycle that lifts it. At that point the
+    entry's test flips from asserting the divergence survives to asserting
+    the correction is RESOLVED -- one locus, no client carrying a private
+    reimplementation -- per §S4's carve-out (a re-pointed test, never a
+    silently deleted one). `_request` flipped in C2 (see
+    `test_request_empty_body_guard_now_resolved_uniformly_via_crucible_axi`
+    below); the other 7 remain "still present" until their own lift cycles."""
 
     def _body_after_signature(self, path, name):
         """Return the function body text (signature line stripped, first
@@ -334,16 +343,32 @@ class DriftedFindingsAreStillPresentTest(unittest.TestCase):
             "documented drift: rust (and mvn/python/arduino) discard the "
             "return value and print a FIXED 'removed' message unconditionally")
 
-    def test_request_arduino_still_the_lone_empty_body_tolerant_implementation(self):
-        arduino_body = self._body_after_signature(CLIENT_FILES["arduino"], "_request")
-        bun_body = self._body_after_signature(CLIENT_FILES["bun"], "_request")
+    def test_request_empty_body_guard_now_resolved_uniformly_via_crucible_axi(self):
+        """RESOLVED in C2 (§S2b): the empty-body guard that only arduino used
+        to carry now lives in EXACTLY ONE locus -- `_crucible_axi.
+        http_request` -- and no client keeps a private reimplementation of
+        it. This is the flip named in the class docstring's running-score
+        convention; it replaces the "still present" pin this test used to
+        make (that pin was only ever true while arduino held a private copy)."""
+        axi_path = CLIENTS_DIR / "_crucible_axi.py"
+        axi_body = self._body_after_signature(axi_path, "http_request")
         self.assertIn(
-            'json.loads(body) if body else {"ok": True}', arduino_body,
-            "documented: arduino's _request tolerates an empty response body")
-        self.assertNotIn(
-            'if body else', bun_body,
-            "documented drift: bun (and rust/mvn/python) call json.loads() "
-            "directly on the read body with no empty-body guard")
+            'json.loads(body) if body else {"ok": True}', axi_body,
+            "the empty-body guard must live in _crucible_axi.http_request, "
+            "the fleet's single transport locus (C1 DN §4 finding #7)")
+        for client in CLIENT_FILES:
+            client_body = self._body_after_signature(CLIENT_FILES[client], "_request")
+            self.assertNotIn(
+                "json.loads", client_body,
+                f"{client}'s _request must be a thin delegator to "
+                f"_crucible_axi.http_request -- no client (arduino included) "
+                f"may carry its own json.loads(...) reimplementation of the "
+                f"empty-body guard; that private copy is exactly the drift "
+                f"CR-CRU-054 §S2b resolved")
+            self.assertIn(
+                ".http_request(", client_body,
+                f"{client}'s _request must delegate to the shared "
+                f"http_request(...) rather than reimplementing the transport")
 
 
 if __name__ == "__main__":
