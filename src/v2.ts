@@ -5,10 +5,10 @@
 import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
-import { authHints, hints, cycleHints } from "./hints.ts";
+import { authHints, hints, cycleHints, identityHints } from "./hints.ts";
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
-import { AGENT_ROLES } from "./types.ts";
+import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
 import type { ProjectPatch, RecordEventMeta, TouchAgentOpts } from "./store.ts";
 import type {
   AgentIdentity,
@@ -474,6 +474,28 @@ async function handleAgentTouch(
     );
   }
 
+  // CR-CRU-059 §S1 — `identity.source` is validated at the SAME route boundary
+  // as `role`, before any write, on BOTH paths (register AND heartbeat — they
+  // share this seam): a DECLARED value outside IDENTITY_SOURCES is refused with
+  // a 409 and nothing is stored, so a rejected heartbeat never clobbers the
+  // previously stored value. An ABSENT source stays legal — this rejects wrong
+  // values, it does not make the field required. `displayName`/`repoPath` are
+  // untouched by the check.
+  const identity =
+    typeof body.identity === "object" && body.identity !== null
+      ? (body.identity as Record<string, unknown>)
+      : undefined;
+  if (identity !== undefined && identity.source !== undefined) {
+    const source = identity.source;
+    if (typeof source !== "string" || !(IDENTITY_SOURCES as readonly string[]).includes(source)) {
+      return fail(
+        409,
+        `identity.source must be one of ${IDENTITY_SOURCES.join(" | ")} (got ${JSON.stringify(source)})`,
+        { help: identityHints.invalidSource(source, IDENTITY_SOURCES) },
+      );
+    }
+  }
+
   const existed = store.hasAgent(pk.key, agentId);
   const opts: TouchAgentOpts = {};
   if (body.status === "busy" || body.status === "online") {
@@ -482,8 +504,8 @@ async function handleAgentTouch(
   if (typeof body.message === "string") {
     opts.message = body.message;
   }
-  if (typeof body.identity === "object" && body.identity !== null) {
-    opts.identity = body.identity as AgentIdentity;
+  if (identity !== undefined) {
+    opts.identity = identity as AgentIdentity;
   }
   // CR-CRU-044 §S1(c) — only a declared role is passed through; omitting the
   // option is what makes the store PRESERVE the stored value.

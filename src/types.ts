@@ -26,9 +26,22 @@ export interface Project {
   allowRunDeletion?: boolean;
 }
 
+/**
+ * CR-CRU-059 §S1 — the enumeration an agent registration may declare its
+ * identity SOURCE from (mirroring `AGENT_ROLES`, and the clients' own
+ * `--source {claude-md,package-json,git-repo,manual}` argparse choices).
+ * Typed as a union so the type stops lying: `source?: string` is what let
+ * CR-CRU-054's hardcoded out-of-enum `"openclaw"` ship undetected.
+ */
+export const IDENTITY_SOURCES = ["claude-md", "package-json", "git-repo", "manual"] as const;
+
+export type IdentitySource = (typeof IDENTITY_SOURCES)[number];
+
 export interface AgentIdentity {
   displayName?: string;
-  source?: string;
+  /** CR-CRU-059 §S1 — OPTIONAL (absent stays legal), but when present it must
+   * be an `IDENTITY_SOURCES` member; validated at the route boundary. */
+  source?: IdentitySource;
   repoPath?: string;
 }
 

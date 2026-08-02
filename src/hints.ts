@@ -274,6 +274,22 @@ export const cycleHints = {
 };
 
 /**
+ * CR-CRU-059 §S1 — identity refusals. `identity.source` is optional, but a
+ * DECLARED value outside `IDENTITY_SOURCES` is refused at the route boundary
+ * (nothing stored). The help is state-derived: it names the RECEIVED value
+ * verbatim alongside the whole accepted set, so the caller can see exactly
+ * which of its own strings drifted (CR-CRU-054's `"openclaw"` was the case
+ * that shipped for months).
+ */
+export const identityHints = {
+  invalidSource: (received: unknown, sources: readonly string[]): string[] => [
+    `identity.source ${JSON.stringify(received)} is not a known source — it must be exactly one of ${sources.join(" | ")}`,
+    `re-register with --source <one of ${sources.join(" | ")}> (wire: register {identity:{source}}); nothing was stored`,
+    "identity.source stays OPTIONAL — omit it entirely rather than inventing a value",
+  ],
+};
+
+/**
  * CR-CRU-056 §S2b/§S3b — registered-caller refusals. Every mutating workflow
  * verb and every ingest surface requires a LIVE registered caller; the help
  * is state-derived (names the offending agentId when the request carried one)
