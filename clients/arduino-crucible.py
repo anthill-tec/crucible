@@ -246,8 +246,12 @@ def _open_plans(project_dir):
     return _axi().open_plans(_get, _plans_path(project_dir))
 
 
-def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent):
+def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent):
     """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path).
+    CR-CRU-051 §S2 — `files` (the distinct-source count from `_parse_junit`,
+    per-FILE when the native harness stamps `file=`, else per-class/per-suite)
+    rides alongside the test counts so a suite that silently shrinks is visible
+    in the gate output itself.
     CR-CRU-056 §S3 — the client RESOLVES no cycle: a bound agent's run is
     server-stamped with its registered cycle (a stale binding gets a 409,
     surfaced via `error`). C5 — the envelope context ECHOES the attachment the
@@ -256,7 +260,7 @@ def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent):
     `GET /api/v2/events`; absent → the key is omitted."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
-           "total": summary["total"]}
+           "total": summary["total"], "files": files}
     context = _axi_context(project_dir, agent_id=agent,
                            cycle_id=_axi().echoed_cycle_id(resp))
     result_fields = {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])}
@@ -275,14 +279,30 @@ def _ensure_project(key, name, pd):
 
 
 def _parse_junit(path):
-    """JUnit (the native harness shape) -> (summary, tree) for /api/v2/runs/parsed."""
+    """JUnit (the native harness shape) -> (summary, tree, files) for
+    /api/v2/runs/parsed.
+
+    CR-CRU-051 §S1 — `files` is the DISTINCT-SOURCE count for THIS report,
+    mirroring `bun-crucible.py::_parse_junit_file` (the reference). RESOLVED
+    GRANULARITY FOR THIS CLIENT: per-FILE **when the native g++ harness stamps
+    `file=` on its testcases**, degrading to per-CLASS (`classname`) and then to
+    per-SUITE otherwise — arduino is the one client in the fleet whose emitter
+    MAY carry a real `file` attribute, so it is checked first, but the value is
+    only as precise as the harness that produced the XML. The chain never
+    collapses to zero: a constant zero would make a shrinking suite look
+    identical to a healthy one. It rides the printed run envelope only, never
+    the ingest payload (CR-CRU-047 §S2)."""
     root = ET.parse(path).getroot()
     suites = root.findall("testsuite") if root.tag == "testsuites" else [root]
     total = passed = failed = pending = 0
     tree = []
+    files = set()
     for suite in suites:
         children, sfail = [], 0
         for tc in suite.findall("testcase"):
+            source = tc.get("file") or tc.get("classname") or suite.get("name")
+            if source:
+                files.add(source.replace("\\", "/"))
             bad = tc.find("failure") is not None or tc.find("error") is not None
             total += 1
             # CR-CRU-050 §S1/§S1b — a `<skipped/>` testcase is PENDING, never
@@ -304,7 +324,10 @@ def _parse_junit(path):
                      "status": "fail" if sfail else "pass", "children": children})
     summary = {"total": total, "passed": passed, "failed": failed,
                "pending": pending, "duration_ms": 0}
-    return summary, tree
+    # `files` is a SIBLING of `summary`, deliberately not a key inside it:
+    # `summary` IS the /api/v2/runs/parsed payload's summary field verbatim, and
+    # CR-CRU-047 §S2 keeps this count out of the wire.
+    return summary, tree, len(files)
 
 
 def _collect_lcov(path):
@@ -478,13 +501,20 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
         sys.exit(f"[crucible] no JUnit (reports/TEST-*.xml) under {native_dir}")
     summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
     tree = []
+    files = 0
     for junit in reports:
-        s, t = _parse_junit(junit)
+        s, t, f = _parse_junit(junit)
         # CR-CRU-050 §S1 — `pending` MUST be carried forward here too; without
         # it the per-file parse fix is silently undone by the aggregation and
         # the envelope still reports pending=0.
         for k in ("total", "passed", "failed", "pending"):
             summary[k] += s[k]
+        # CR-CRU-051 §S1 — same trap for `files`: without this the count is
+        # whatever the LAST report happened to hold. Summed per report rather
+        # than de-duplicated across reports, because `make junit` emits one
+        # TEST-*.xml per native test binary and their sources are disjoint; a
+        # harness that repeated a source across reports would over-count.
+        files += f
         tree.extend(t)
 
     coverage = None
@@ -498,7 +528,8 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     if not args.agent and not os.environ.get("AGENT_ID"):
         # No ingest requested — just report the run outcome.
         print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
-              f"{summary['failed']} failed, {summary.get('pending', 0)} pending",
+              f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
+              f"{files} files",
               file=sys.stderr)
         return 1 if summary["failed"] else 0
 
@@ -519,9 +550,9 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
         payload["raw"] = raw
     resp = _post("/api/v2/runs/parsed", payload)
     print(f"[crucible] {verb} -> '{name}': {summary['passed']}/{summary['total']} passed, "
-          f"{summary['failed']} failed, {summary.get('pending', 0)} pending "
-          f"(ingest ok={resp.get('ok')})", file=sys.stderr)
-    _emit_ingest_summary_axi(verb, resp, summary, pd, agent_id)
+          f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
+          f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)
+    _emit_ingest_summary_axi(verb, resp, summary, files, pd, agent_id)
     if summary["failed"]:
         return 1
     return 0 if resp.get("ok") else 1
@@ -610,11 +641,14 @@ def cmd_auto_ingest(args):
     _ensure_project(key, name, pd)
     summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
     tree = []
+    files = 0
     for junit in reports:
-        s, t = _parse_junit(junit)
+        s, t, f = _parse_junit(junit)
         # CR-CRU-050 §S1 — carry `pending` through the aggregation too.
         for k in ("total", "passed", "failed", "pending"):
             summary[k] += s[k]
+        # CR-CRU-051 §S1 — and `files`, per the same aggregation trap.
+        files += f
         tree.extend(t)
     payload = {"projectKey": key, "name": name, "agentId": agent_id,
                "summary": summary, "tree": tree, "tier": "unit"}
@@ -623,9 +657,9 @@ def cmd_auto_ingest(args):
         payload["context"] = context
     resp = _post("/api/v2/runs/parsed", payload)
     print(f"[crucible] auto-ingest -> '{name}': {summary['passed']}/{summary['total']} passed, "
-          f"{summary['failed']} failed, {summary.get('pending', 0)} pending "
-          f"(ingest ok={resp.get('ok')})", file=sys.stderr)
-    _emit_ingest_summary_axi("auto-ingest", resp, summary, pd, agent_id)
+          f"{summary['failed']} failed, {summary.get('pending', 0)} pending, "
+          f"{files} files (ingest ok={resp.get('ok')})", file=sys.stderr)
+    _emit_ingest_summary_axi("auto-ingest", resp, summary, files, pd, agent_id)
     if summary["failed"]:
         return 1
     return 0 if resp.get("ok") else 1

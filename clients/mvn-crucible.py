@@ -326,16 +326,19 @@ def _emit_ingest_axi_resp(verb, resp, project_dir, agent):
     _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
 
 
-def _emit_ingest_summary_axi(verb, resp, summary, project_dir, agent):
+def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent):
     """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path): run fields
     come from the client-computed summary. CR-CRU-050 §S2 — `pending` is
-    printed alongside, so the line always sums. CR-CRU-056 §S3 — no client-
+    printed alongside, so the line always sums. CR-CRU-051 §S2 — so is `files`,
+    the distinct-source count from `_parse_junit` (per-CLASS granularity for
+    surefire), so a suite that silently shrinks is visible in the gate output
+    itself. CR-CRU-056 §S3 — no client-
     resolved cycle; a bound agent's run is server-stamped. C5 — the envelope
     context ECHOES the attachment the SERVER reported (`context.cycleId` on the
     ingest response); absent → the key is omitted."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
-           "total": summary["total"]}
+           "total": summary["total"], "files": files}
     context = _axi_context(project_dir, agent_id=agent,
                            cycle_id=_axi().echoed_cycle_id(resp))
     result_fields = {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])}
@@ -556,12 +559,31 @@ def _warn_if_stale(dirs):
 
 
 def _parse_junit(dirs):
-    """Parse all TEST-*.xml across `dirs` into (summary, tree). Each file's root
-    is a <testsuite>; testcases with <failure>/<error> → fail, <skipped> → pending.
-    """
+    """Parse all TEST-*.xml across `dirs` into (summary, tree, files). Each
+    file's root is a <testsuite>; testcases with <failure>/<error> → fail,
+    <skipped> → pending.
+
+    CR-CRU-051 §S1 — `files` is the DISTINCT-SOURCE count, mirroring
+    `bun-crucible.py::_parse_junit_file` (the reference). RESOLVED GRANULARITY
+    FOR THIS CLIENT: per-CLASS, not per-file. Surefire/failsafe stamp every
+    `<testcase>` with `classname` (e.g. `com.acme.FooTest`) and do NOT emit a
+    `file` attribute, so what this client reports as "files" is really
+    "distinct test CLASSES" — the format's contract, not a defect, labelled
+    honestly here rather than implying a per-file precision surefire does not
+    give. (In Java the two usually coincide, one public test class per .java,
+    but nested/inner test classes make the count exceed the file count — so
+    "classes" is the accurate word, not "files".) The `file` rung is still
+    checked first so the count upgrades for free if a future reporter stamps
+    it. The chain degrades (file → classname → suite name)
+    instead of collapsing to zero: a constant zero would make a shrinking suite
+    look identical to a healthy one. Counted across ALL `dirs` at once (the
+    surefire + failsafe split), so a class appearing in both is counted once.
+    It rides the printed run envelope only, never the ingest payload
+    (CR-CRU-047 §S2)."""
     tree_nodes = []
     total = passed = failed = pending = 0
     duration_ms = 0
+    files = set()
     for d in dirs:
         for xml_file in sorted(glob.glob(os.path.join(d, "TEST-*.xml"))):
             try:
@@ -573,6 +595,9 @@ def _parse_junit(dirs):
             children = []
             suite_fail = False
             for tc in root.findall("testcase"):
+                source = tc.get("file") or tc.get("classname") or suite_name
+                if source:
+                    files.add(source.replace("\\", "/"))
                 tc_time = int(float(tc.get("time", 0) or 0) * 1000)
                 if tc.find("failure") is not None or tc.find("error") is not None:
                     status = "fail"
@@ -600,7 +625,10 @@ def _parse_junit(dirs):
         "total": total, "passed": passed, "failed": failed,
         "pending": pending, "duration_ms": duration_ms,
     }
-    return summary, tree_nodes
+    # `files` is a SIBLING of `summary`, deliberately not a key inside it:
+    # `summary` IS the /api/v2/runs/parsed payload's summary field verbatim, and
+    # CR-CRU-047 §S2 keeps this count out of the wire.
+    return summary, tree_nodes, len(files)
 
 
 def _collect_jacoco(maven_dir):
@@ -665,8 +693,12 @@ def _ingest_junit_dir(project_dir, agent, report_dir, tier=None, context=None):
 
 
 def _ingest_parsed(project_dir, agent, summary, tree, coverage=None, tier=None,
-                   context=None, raw=None):
-    """POST a client-parsed run to /api/v2/runs/parsed. Returns the response dict."""
+                   context=None, raw=None, files=None):
+    """POST a client-parsed run to /api/v2/runs/parsed. Returns the response dict.
+
+    CR-CRU-051 §S2 — `files` (the distinct-source count) is a PRINT-ONLY
+    argument: it is appended to the human-readable count line and is never added
+    to `payload`/`summary`, which go on the wire (CR-CRU-047 §S2)."""
     payload = {
         "projectKey": _project_key(project_dir),
         "agentId": agent,
@@ -692,7 +724,9 @@ def _ingest_parsed(project_dir, agent, summary, tree, coverage=None, tier=None,
                f"branches={coverage['branches']['percent']}%")
     print(f"ingest parsed: ok={resp.get('ok')} passed={summary['passed']} "
           f"failed={summary['failed']} pending={summary['pending']} "
-          f"total={summary['total']}{cov}", file=sys.stderr)
+          f"total={summary['total']}"
+          + (f" files={files}" if files is not None else "")
+          + cov, file=sys.stderr)
     return resp
 
 
@@ -725,8 +759,9 @@ def _smart_ingest(project_dir, agent, dirs, tier=None, context=None):
     if len(existing) == 1:
         _ingest_junit_dir(project_dir, agent, existing[0], tier=tier, context=context)
     else:
-        summary, tree = _parse_junit(existing)
-        _ingest_parsed(project_dir, agent, summary, tree, tier=tier, context=context)
+        summary, tree, files = _parse_junit(existing)
+        _ingest_parsed(project_dir, agent, summary, tree, tier=tier, context=context,
+                       files=files)
     return True
 
 
@@ -869,8 +904,9 @@ def cmd_e2e(args):
             dirs = fs + su
             if dirs:
                 _warn_if_stale(dirs)
-                summary, tree = _parse_junit(dirs)
-                _ingest_parsed(project_dir, args.agent, summary, tree, tier="e2e")
+                summary, tree, files = _parse_junit(dirs)
+                _ingest_parsed(project_dir, args.agent, summary, tree, tier="e2e",
+                               files=files)
                 e2e_rc = 0 if summary["failed"] == 0 else 1
             else:
                 e2e_rc = _compile_fallback(maven_dir, project_dir, args.agent, common)
@@ -953,7 +989,7 @@ def _regression_run(args, identity=None):
         return _compile_fallback(maven_dir, project_dir, args.agent, common)
 
     _warn_if_stale(dirs)
-    summary, tree = _parse_junit(dirs)
+    summary, tree, files = _parse_junit(dirs)
 
     coverage = None
     if summary["failed"] == 0:
@@ -967,8 +1003,8 @@ def _regression_run(args, identity=None):
 
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                           tier="regression", context=_run_context(),
-                          raw=getattr(result, "stdout", None))
-    _emit_ingest_summary_axi("regression", resp, summary, project_dir, args.agent)
+                          raw=getattr(result, "stdout", None), files=files)
+    _emit_ingest_summary_axi("regression", resp, summary, files, project_dir, args.agent)
     return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
 
 
@@ -998,9 +1034,10 @@ def cmd_test(args):
         _emit_ingest_axi_resp("test", resp, project_dir, args.agent)
         failed = (resp.get("run") or {}).get("failed") or 0
     else:
-        summary, tree = _parse_junit(dirs)
-        resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit", context=ctx)
-        _emit_ingest_summary_axi("test", resp, summary, project_dir, args.agent)
+        summary, tree, files = _parse_junit(dirs)
+        resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit", context=ctx,
+                              files=files)
+        _emit_ingest_summary_axi("test", resp, summary, files, project_dir, args.agent)
         failed = summary["failed"]
     if failed and failed > 0:
         return 1
@@ -1047,11 +1084,11 @@ def cmd_auto_ingest(args):
         resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier="unit", context=ctx)
         _emit_ingest_axi_resp("auto-ingest", resp, project_dir, args.agent)
     else:
-        summary, tree = _parse_junit(dirs)
+        summary, tree, files = _parse_junit(dirs)
         coverage = _collect_jacoco(maven_dir) if (args.coverage and summary["failed"] == 0) else None
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                              tier="regression", context=ctx)
-        _emit_ingest_summary_axi("auto-ingest", resp, summary, project_dir, args.agent)
+                              tier="regression", context=ctx, files=files)
+        _emit_ingest_summary_axi("auto-ingest", resp, summary, files, project_dir, args.agent)
     return 0 if resp.get("ok") else 1
 
 
