@@ -124,11 +124,25 @@ divergence (full verdicts in `docs/research/DN-client-fleet-inventory.md`):
 | `cmd_milestone` | **the four** | bun writes its legacy line to stdout — the envelope-purity class CR-046 hit in rust |
 | `cmd_plan_file` | **mvn/arduino** | bun never carries `context.cr`; rust/python only on the success path |
 | `_remove_agent_silent` / `_close_gate_identity` | **neither** | bun lacks the exception guard; the other four have it but discard the result and report "removed" even on silent failure — the lift must take BOTH the guard and honest reporting |
-| `_open_gate_identity` | pick one | `source` label split `openclaw` vs `claude-md` across the fleet |
+| `_open_gate_identity` + `cmd_register` | **`claude-md`** — see ruling | `source` split `openclaw` vs `claude-md`; **`openclaw` is not a valid value** |
 
 **Ruling:** each lifts to its correct version — the defects are fixed BY the consolidation, not
 filed separately (a defect found by a CR's own analysis belongs to that CR). Where no version is
 correct, the lift takes the correct COMBINATION.
+
+**The `source` question, ruled 2026-08-02 (it was not a "pick one"):** the clients' own
+documented enum is `--source {claude-md, package-json, git-repo, manual}`. `openclaw` is
+**outside it** — rust/mvn/arduino hardcode `"openclaw"` at five sites
+(`arduino:357`, `mvn:359,478,539`, `rust:508`), sending an undocumented value that only survives
+because the server does not validate the field. So this is a defect, not a naming preference.
+**All five clients send `claude-md`** (the enum's member, bun/python's existing default, and the
+only value present in the live DB), and the `--source` flag is available uniformly — bun/python's
+pattern wins over the hardcode.
+
+**Deferred, NOT absorbed:** the server accepts any `identity.source` string without validating it
+against the enum. That is a server-side input-validation gap, a different stack and contract from
+this client-refactor CR; folding it in would turn a DRY refactor into a server CR. Recorded in the
+queue Notes with evidence for scheduling.
 
 ### §S4 — Behaviour is unchanged, with ONE bounded carve-out
 This is a refactor. For the **27 SHARED + 1 PARAMETERISED** functions, every existing client test

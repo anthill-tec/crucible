@@ -250,6 +250,13 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `tests="1061" skipped="1"` ingested as `passed=1061`, and a python report `tests="2" skipped="2"`
   (an entire class where nothing ran) ingested as `passed=2` — so this project's own published
   gate figures are inflated, the failure mode CR-039/CR-047 exist to prevent.
+- 2026-08-02 (CR-CRU-054 C4 finding — deferred, needs scheduling) — **the server does not validate
+  `identity.source` on agent registration.** The clients document `--source
+  {claude-md,package-json,git-repo,manual}`, yet rust/mvn/arduino hardcoded `"openclaw"` — a value
+  outside that enum — at five sites, and the server stored it without complaint. CR-054 fixes the
+  CLIENT half (all five now send `claude-md`); the server-side validation gap is a different stack
+  and contract, deliberately NOT absorbed into a client-refactor CR. Same class as the CR-044 phase
+  enum, which the server DOES validate — this field simply never got the same treatment.
 - 2026-08-02 (user scheduling decision) — the THREE pre-existing e2e failures
   (`workspace-plan-scoping.feature`, CR-CRU-026 §S0 family, `toBeVisible`; baseline-proven on
   develop, independent of CR-046/055/056) are **deferred until the current Wave-4 CR queue is
