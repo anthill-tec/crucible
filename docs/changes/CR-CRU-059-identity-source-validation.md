@@ -1,11 +1,16 @@
-# CR-CRU-059 — The server does not validate `identity.source`; the clients' documented enum is unenforced
+# CR-CRU-059 — The registration identity contract: rename `phase` → `role` fleet-wide, and validate `identity.source`
 
 **Status:** PENDING
-**Type:** patch (server input validation)
-**Priority:** P2 — no wrong data is on the board today, but the contract is unenforced and drifted undetected for months
-**Depends on:** CR-CRU-044 (established the validate-at-the-route-boundary pattern for `phase`), CR-CRU-054 (found the drift)
-**Labels:** patch, server, validation, identity, axi-compliance
+**Type:** patch (naming correction + server input validation)
+**Priority:** P1 — the API contradicts the project's own ontology, and a documented enum is unenforced
+**Depends on:** CR-CRU-044 (introduced the field), CR-CRU-054 (found the source drift), CR-CRU-056 (registration is now the binding act), CR-CRU-057 (put the field on events)
+**Labels:** patch, server, client-fleet, naming, validation, identity, ontology
 **Phase:** Wave 4
+
+> **Two changes, one surface.** Both land on `handleAgentTouch`, `src/types.ts`, the five clients'
+> `register` verb and the agents/events schema — doing them separately would mean two migrations,
+> two fleet edits and two Model-B intimations over the same code. Folded on user direction
+> 2026-08-02.
 **Design reference:** CR-CRU-044 §S1 — the identical field-shaped problem, solved. `phase` is validated
 against `AGENT_PHASES` at the route boundary and refused with a 409 + state-derived `help[]`.
 `identity.source` sits in the same object, on the same route, and never received the same treatment.
@@ -39,7 +44,48 @@ nothing downstream objects. CR-054 fixed the client half; the server half is thi
 `phase` against its enum and 409s on a miss, because CR-CRU-044 made it so. Two fields, same
 object, same route, same kind of contract — one enforced, one free text.
 
+## Context B — `phase` contradicts the project's own ontology (user-raised 2026-08-02)
+
+`docs/research/DN-model-b-language.md` §1 is the locked actor ontology (round 25/31,
+user-directed). Its table's column header is **Role**, and the row reads:
+
+| Role | Scope |
+|---|---|
+| **RED / GREEN / VERIFY / FIX** | one **phase** of one cycle |
+
+So in the ontology: **role** is what an agent IS; **phase** is merely the SCOPE it acts in — one
+phase of one cycle. RED/GREEN/VERIFY/FIX are **roles**.
+
+CR-CRU-044 then named the CLI flag `--phase`, the enum `AGENT_PHASES`, and the stored column
+`phase` — taking the **scope** word for the field that carries the **role**. CR-CRU-007 had
+already compounded both in `phaseRole(agentId)` (since deleted by CR-057). Meanwhile the UI got
+it right all along: `public/app-logic.mjs` exposes **`agentRole()`**, and `wave` remains cleanly
+separate (it groups CRs; it is the wave-boundary synchronisation concept, unrelated to either).
+
+**The ontology is the contract; the API must move to it, not the reverse.** The user raised this
+directly: *"I had used the term role for agents… I've never used [phase]."* They are right on the
+record — the DN says Role.
+
 ## Scope
+
+### §S0 — Rename `phase` → `role` across the whole surface
+Measured surface (2026-08-02): `--phase` in all five clients (1 site each) + the shared module;
+`AGENT_PHASES`/`AgentPhase` in `src/types.ts` (4), `src/v2.ts` (8), `src/store.ts` (10); the
+`agents.phase` column; and `events.phase` + `events.phase_inferred` (added by CR-057 today).
+
+- CLI: `--phase` → `--role`; enum values (`RED|GREEN|FIX|VERIFY|ORCHESTRATOR|report`) unchanged.
+- Wire: the register/heartbeat body field `phase` → `role`.
+- Server: `AGENT_PHASES` → `AGENT_ROLES`, `AgentPhase` → `AgentRole`, all validation/error text.
+- Storage: `agents.phase` → `agents.role`; `events.phase`/`events.phase_inferred` →
+  `events.role`/`events.role_inferred`, via the established `PRAGMA table_info` + `ALTER TABLE`
+  migration pattern. 🚨 **Migrate the live dog-food data** — CR-057's backfill classified 283 of
+  338 events; that data must survive the rename, not be dropped and re-derived.
+- UI: `PhaseRole` → `AgentRole`; `agentRole()` already correct, keep it.
+- Error/help text: every message naming "phase" says "role" (CR-048 state-derived help included).
+
+**Compatibility ruling (decide at gap-analysis, flag to the user):** whether the server accepts
+the legacy `phase` body key for one release as an alias, or breaks cleanly. Model-B vendors these
+clients, so a clean break demands their bundle refresh FIRST — see Risk.
 
 ### §S1 — Validate `identity.source` at the route boundary
 Introduce `IDENTITY_SOURCES = ["claude-md", "package-json", "git-repo", "manual"] as const` in
@@ -63,6 +109,15 @@ the enforcement cannot silently regress. Confirm no client path can now produce 
 operation — a validation that breaks the fleet is a defect, not a fix.
 
 ## Acceptance criteria
+- [ ] `grep -rn "phase" clients/ src/ public/ cli/` finds no agent-role usage — only genuine
+      TDD-cycle-scope prose where the ontology's own word applies — sweep-asserted.
+- [ ] `register --role RED` works on all five clients; `--phase` is gone from every `--help`.
+- [ ] The wire field is `role`; the server validates it against `AGENT_ROLES` with the CR-044
+      semantics intact (required for TDD roles, enum-constrained, never blanked by heartbeat).
+- [ ] Storage migrated: `agents.role`, `events.role`, `events.role_inferred` — and **CR-057's
+      backfilled classification survives the migration** (assert the live-shaped fixture's counts
+      before and after are identical; on the dog-food DB, 283 classified events).
+- [ ] The UI classifies from the renamed field; `agentRole()` unchanged.
 - [ ] `POST /api/v2/agents/register` with `identity.source` outside the enum → 409, `ok:false`,
       non-empty `help[]` naming the received value and the valid set; nothing stored — asserted
       per invalid case (unknown string, empty string, non-string type).
@@ -82,6 +137,13 @@ operation — a validation that breaks the fleet is a defect, not a fix.
   rather than absorbing them here.
 
 ## Risk
+- 🚨 **The rename is a BREAKING wire change on the fleet's most-used verb.** Model-B vendors these
+  clients; an un-refreshed copy sending `phase` would be refused by a strict server. **This CR
+  must be intimated to Model-B BEFORE it merges, not after** — they refresh, then we break. The
+  compatibility ruling (§S0) exists precisely so the user can choose alias-for-one-release instead.
+- **The migration carries CR-057's backfilled history.** 283 of 338 live events gained a
+  classification yesterday; a rename that recreates the column instead of migrating it silently
+  discards that. The AC asserts the counts survive.
 - **A validating server can refuse a client that a previous version accepted.** The fleet is
   already compliant (CR-054), but any consumer running an OLD vendored client copy — Model-B's
   bundle, for instance — could start getting 409s on registration. That makes this a
