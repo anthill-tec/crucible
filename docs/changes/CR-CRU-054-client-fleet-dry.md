@@ -11,6 +11,33 @@ module — *"the 5 clients don't currently share code; user decision"*. Filed 20
 user asked, during CR-CRU-044 C4, *"Havent you heard about DRY?"*
 
 ## Context
+
+### Re-measured on `develop` at 2026-08-02 (gap-analysis — the 07-28 figures below are superseded)
+
+| | 2026-07-28 | 2026-08-02 | |
+|---|---|---|---|
+| functions defined in **all five** clients | 44 | **42** | five deleted by CR-056, three NEW ones added |
+| total client lines | 9,355 | **9,831** | **+476 — the fleet GREW** |
+| shared `_crucible_axi.py` | 19 fns | 657 lines | grew, but the duplication grew faster |
+
+**The multiplier is not theoretical — it operated during this very session.** CR-CRU-056 deleted
+five of the duplicated functions (`_ingest_context`, `_emit_ingest_withhold`,
+`_resolve_ingest_cycle`, `_register_cycle_guard`, `_plans_response` — the retired resolver flow)
+and then its own C5 fix round introduced **three new five-way duplicates**
+(`_open_gate_identity`, `_close_gate_identity`, `_add_gate_cycle_arg`). Net: the client fleet is
+476 lines LARGER after a CR whose headline was a deletion. Every fleet-wide change, including the
+ones fixing the consequences of duplication, adds more of it.
+
+### The 42, as they stand today
+`_abbrev_home _add_gate_cycle_arg _agent_id _axi _axi_context _close_gate_identity cmd_abort
+cmd_auto_ingest cmd_check cmd_checkpoint cmd_cr_close cmd_cycle_activate cmd_cycle_add
+cmd_cycle_done cmd_dashboard cmd_gate_report cmd_gate_run cmd_milestone cmd_plan_file
+cmd_pre_merge_gate cmd_register cmd_status cmd_stop cmd_test cmd_unregister _cycle_transition
+_emit_axi _get main _open_gate_identity _open_plans _patch _plans_path _post _post_gate
+_post_milestone _project_key _remove_agent_silent _request _resolve_plan_or_emit _run_context
+_toon`
+
+### Original context (2026-07-28)
 Measured on `develop` at 2026-07-28:
 
 | | |
@@ -99,5 +126,22 @@ editing the test.
   classification exists to prevent it; do not skip to §S2.
 - Sequence AFTER the in-flight client CRs (CR-CRU-044, then 049/051) — landing this mid-flight would
   conflict with every one of them. Equally, the longer it waits the more 5× fixes accrue.
+  **RESOLVED 2026-08-02 (gap-analysis): taken BEFORE 049/051.** The stated reason for the ordering
+  was mid-flight conflict; neither 049 nor 051 has started (no branch, no plan, nothing in the
+  tree), so there is nothing to conflict with. CR-044 landed. The accrual argument now dominates —
+  056/057 alone added 476 lines and three new five-way duplicates.
+
+### Possible scope absorption of CR-049 and CR-051 (gap-analysis finding — DO NOT act on unilaterally)
+Measured today, both queued client CRs may be substantially absorbed by this one:
+- **CR-CRU-051** (propagate the `files` envelope count to the other four clients): `"files"`
+  currently appears in **bun only**. If the run-envelope builder lifts as SHARED/PARAMETERISED,
+  the other four inherit the key by construction rather than by four hand-edits.
+- **CR-CRU-049** (audit mvn narration for the CR-047 defect class): narration exists in **four**
+  clients (bun, mvn, python, arduino — not rust). If the narrator lifts, mvn inherits bun's
+  hardened, CR-047/055-corrected implementation instead of being audited separately.
+
+Neither CR is closed or narrowed by this finding. Re-run each one's own gap-analysis AFTER this
+CR merges and re-scope then, with the user deciding what (if anything) remains. Recording the
+observation here so the re-scope is deliberate rather than a surprise.
 - `clients/*-crucible.py` are COPIED into consumer repos. Confirm how vendored copies resolve
   `_crucible_axi.py` before changing what it exports, or consumers break on their next sync.
