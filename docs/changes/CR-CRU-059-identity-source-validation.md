@@ -153,14 +153,38 @@ operation — a validation that breaks the fleet is a defect, not a fix.
   rather than absorbing them here.
 
 ## Risk
-- 🚨 **The rename is a BREAKING wire change on the fleet's most-used verb.** Model-B vendors these
-  clients; an un-refreshed copy sending `phase` would be refused by a strict server. **This CR
-  must be intimated to Model-B BEFORE it merges, not after** — they refresh, then we break. The
-  compatibility ruling (§S0) exists precisely so the user can choose alias-for-one-release instead.
+- 🚨 **The rename is a BREAKING wire change on the fleet's most-used verb.** An un-refreshed
+  client copy sending `phase` is refused by a strict server. The compatibility ruling (§S0) exists
+  precisely so the user could have chosen alias-for-one-release instead; the clean break was
+  chosen.
 - **The migration carries CR-057's backfilled history.** 283 of 338 live events gained a
   classification yesterday; a rename that recreates the column instead of migrating it silently
   discards that. The AC asserts the counts survive.
 - **A validating server can refuse a client that a previous version accepted.** The fleet is
-  already compliant (CR-054), but any consumer running an OLD vendored client copy — Model-B's
-  bundle, for instance — could start getting 409s on registration. That makes this a
-  MODEL-B-INTIMATION item before it merges, not after: they must refresh their bundle first.
+  already compliant (CR-054); the exposure is a consumer running an OLD vendored copy. Under the
+  standing delivery model this is contained: server and client ship as one uv-installed,
+  version-locked pair, so no consumer holds a client older than the server it talks to. It is a
+  RELEASE-intimation item for Model-B (skills reference `--role`/`--source`), delivered once after
+  the release's CRs complete — **not a merge gate**.
+
+## Implementation Notes
+- **Delivered surface: 76 files, +2560/−1180** against the spec's "~60 files" estimate. The delta
+  is the two new test files (`agent-identity-source-validation.test.ts`, `agent-role-rename.test.ts`)
+  plus doc updates (queue README, this spec) that the measured-surface sweep never counted. Scope
+  discipline held — every file maps to §S0 or §S1.
+- **§S0 found a SIXTH register surface**: `cli/crucible-axi.ts` (`PHASE_ENUM`, wire key `phase`)
+  alongside the five `clients/*-crucible.py`. The measured surface was taken from the Python fleet
+  only; the TypeScript CLI was invisible to it.
+- **The migration preserves, it does not recreate** — `ALTER TABLE … RENAME COLUMN` (SQLite 3.25+)
+  under a `PRAGMA table_info` guard, so it is idempotent by construction. Verified independently by
+  VERIFY on two isolated copies of the live dog-food DB: 339 events / 301 classified before and
+  after, legacy `phase`/`phase_inferred` gone from both tables, second open a clean no-op.
+- **`STATUS-CONTRACT.md` took a MAJOR bump (1.1.0 → 2.0.0)**, not a minor. Rationale: a consumer
+  pinned to 1.x that shells the retired `--phase` flag now breaks, which is a breaking change to
+  the contract's consumers — unlike CR-056's purely additive binding section.
+- **§S2 measurement, user-decided:** `SELECT DISTINCT source FROM agents` on the live DB returned
+  only `claude-md`, so no backfill was needed and none was written.
+- **Nine `phase` survivors, all audited and correct**: four in `src/store.ts` (the RENAME migration
+  must name the legacy column literally), four in narration/comment prose using `phase` in the
+  DN's own cycle-SCOPE sense ("one phase of one cycle"), one explanatory contrast line in
+  `STATUS-CONTRACT.md`. Zero surviving uses of `phase` as the agent's role field.
