@@ -972,13 +972,48 @@ class MilestoneStderrDriftCorrectionTest(unittest.TestCase, _ProjectDirFixture):
                     "milestone: ok=True", err.getvalue(),
                     f"{client}-crucible.py's cmd_milestone must print its "
                     f"legacy line to STDERR (§S2b corrected behaviour)")
-                self.assertEqual(
-                    out.getvalue(), "",
+                # CR-CRU-058 §S1 re-point (§S4 re-point discipline: never
+                # silently -- named here). This test's original assertion
+                # was `out.getvalue() == ""`; that was a valid PROXY for DN
+                # §4 finding #1's actual intent ("the legacy prose line must
+                # never reach stdout") only while cmd_milestone emitted
+                # NOTHING there at all. CR-CRU-058 C2 gave the shared
+                # cmd_milestone a real §S1 envelope on stdout (it was
+                # previously envelope-less fleet-wide -- see
+                # test_client_fleet_envelope_census.py's
+                # test_milestone_confirmed_enveloped_fleet_wide), so a bare
+                # emptiness check would now fail for the RIGHT reason and
+                # hide the real, still-true finding behind an unrelated
+                # failure. Re-pointed to assert BOTH halves explicitly,
+                # keeping the guard strictly STRONGER than before rather
+                # than weaker: (a) the prose line specifically never reaches
+                # stdout -- the original finding, preserved; (b) stdout
+                # parses as a clean TOON envelope alone -- the new
+                # legitimate occupant of that channel.
+                self.assertNotIn(
+                    "milestone: ok=", out.getvalue(),
                     f"{client}-crucible.py's cmd_milestone must NOT write "
-                    f"its legacy line to STDOUT -- got {out.getvalue()!r} "
-                    f"(this is DN §4 finding #1's exact defect: a caller "
-                    f"parsing stdout as a machine channel gets a corrupted "
-                    f"stream mixed with a prose line)")
+                    f"its legacy 'milestone: ok=...' prose line to STDOUT "
+                    f"-- got {out.getvalue()!r} (this is DN §4 finding #1's "
+                    f"exact defect: a caller parsing stdout as a machine "
+                    f"channel gets a corrupted stream mixed with a prose "
+                    f"line)")
+                toon = module._toon()
+                decoded = toon.decode(out.getvalue())
+                self.assertIn(
+                    "axi", decoded,
+                    f"{client}-crucible.py's cmd_milestone stdout must "
+                    f"parse as a clean TOON envelope alone (CR-CRU-058 §S1) "
+                    f"-- got {out.getvalue()!r}")
+                self.assertEqual(
+                    decoded["axi"]["verb"], "milestone",
+                    f"{client}-crucible.py's cmd_milestone envelope must "
+                    f"carry verb='milestone', got {decoded['axi']!r}")
+                self.assertTrue(
+                    decoded["axi"]["ok"],
+                    f"{client}-crucible.py's cmd_milestone envelope must "
+                    f"show ok=True for this successful post, got "
+                    f"{decoded['axi']!r}")
 
 
 # ---------------------------------------------------------------------------

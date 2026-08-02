@@ -487,7 +487,16 @@ def _get_census():
     """Drive EVERY enumerated verb of ALL FIVE clients exactly once, cached
     at module scope for the process lifetime of this test run so the ~10
     test methods below share one census instead of each re-driving ~140
-    subprocesses."""
+    subprocesses.
+
+    `per_verb[verb_name]` is the decoded `axi` dict when the verb emits an
+    envelope, or `None` when it does not -- CR-CRU-058 C2 widened this from
+    a bare bool so cycle-2 tests can assert the SPECIFIC envelope content
+    (e.g. `ok is False`), not just "something got enveloped". This is
+    truthy-compatible with every existing bool-style check in this file
+    (`if per_verb[v]`, `not per_verb[v]`, `.get(v)`): a non-empty axi dict
+    (it always carries at least `verb`/`ok`) is truthy exactly where `True`
+    was, and `None` is falsy exactly where `False` was."""
     global _CENSUS_CACHE
     if _CENSUS_CACHE is not None:
         return _CENSUS_CACHE
@@ -503,8 +512,8 @@ def _get_census():
                 for verb_name, subparser in verbs.items():
                     argv = build_argv(verb_name, subparser, project_dir)
                     result = drive_verb(script_path, argv, project_dir, fake_bin_dir)
-                    emits, _axi = classify_envelope(result.stdout, toon_module)
-                    per_verb[verb_name] = emits
+                    emits, axi = classify_envelope(result.stdout, toon_module)
+                    per_verb[verb_name] = axi if emits else None
                 census[client_key] = per_verb
             finally:
                 shutil.rmtree(project_dir, ignore_errors=True)
@@ -705,19 +714,24 @@ class EnvelopeCensusTest(unittest.TestCase):
         """CR-CRU-054's THE_42 SHARED set delegates straight to
         `_crucible_axi` (verified by that CR's own drift guard, which
         confirms every one of these is a thin `_axi()....`/`.http_request(`
-        delegator in every client) -- each must show enveloped everywhere,
-        EXCEPT the four excluded below, which the two dedicated tests that
-        follow this one document precisely (a "SHARED" classification
-        covers byte-identical LOGIC, not "always emits an envelope under
-        every failure precondition" -- this census is what discovered the
-        difference between the two)."""
-        # milestone: see test_milestone_confirmed_envelope_less_fleet_wide.
-        # cycle-activate/cycle-done/cr-close: see
-        # test_cycle_transition_and_cr_close_confirmed_bare_on_plans_get_failure.
+        delegator in every client) -- each must show enveloped everywhere.
+
+        CR-CRU-058 C2 GREEN closed the two gaps this test used to carve
+        `milestone`/`cycle-activate`/`cycle-done`/`cr-close` out for: the
+        shared `cmd_milestone` now emits unconditionally (see
+        `test_milestone_confirmed_enveloped_fleet_wide`, below), and the
+        shared `open_plans` now emits an `ok=False` envelope on a
+        plans-GET failure instead of a bare `sys.exit` (see
+        `test_cycle_transition_and_cr_close_confirmed_ok_false_envelope_on_plans_get_failure`,
+        below). All four fold back into this positive guard's own list
+        rather than staying excluded from it; the two dedicated tests
+        additionally assert the SPECIFIC envelope content (verb/ok) those
+        fixes produce, on top of the bare "it's enveloped" check made
+        here."""
         shared_verbs = [
             "register", "unregister", "status", "plans", "gate-run",
             "gate-report", "plan-file", "cycle-add", "checkpoint", "stop",
-            "abort",
+            "abort", "milestone", "cycle-activate", "cycle-done", "cr-close",
         ]
         offenders = {}
         for client, per_verb in self.census.items():
@@ -729,52 +743,60 @@ class EnvelopeCensusTest(unittest.TestCase):
             f"every THE_42-SHARED verb must show enveloped in every client "
             f"that defines it: {offenders!r}")
 
-    def test_milestone_confirmed_envelope_less_fleet_wide(self):
-        """A NEW finding this cycle's dynamic drive surfaced (not in the
-        CR's Context table, which only hand-traced rust): `_crucible_axi.
-        cmd_milestone` -- THE_42's SHARED implementation ALL FIVE clients
-        delegate to -- never calls `_emit_axi`/`ops.emit` at all. Confirmed
-        by reading its full body: it POSTs the milestone, then
-        `print(f"milestone: ok={{ok}} type={{args.type}}...", file=sys.stderr)`
-        and returns a bare int -- no envelope on ANY outcome, success or
-        failure. A hand-list would need to KNOW to check this; the dynamic
-        census caught it because `milestone` is enumerated and driven like
-        every other verb."""
-        offenders = {c: v.get("milestone") for c, v in self.census.items()
-                     if v.get("milestone")}
+    def test_milestone_confirmed_enveloped_fleet_wide(self):
+        """CR-CRU-058 C2 GREEN fix (this is the RED-cycle predecessor test's
+        inversion, not a new finding -- C1's `test_milestone_confirmed_envelope_less_fleet_wide`
+        pinned the defect; this asserts the fix). `_crucible_axi.cmd_milestone`
+        -- THE_42's SHARED implementation ALL FIVE clients delegate to --
+        now calls `ops.emit(...)` unconditionally (confirmed by reading its
+        body: the interactive `print(..., file=sys.stderr)` line is kept as
+        an ADDITION, not a replacement, and an `axi:` envelope now follows
+        it on stdout on every outcome, success or failure). Every client
+        must show a real envelope for `milestone`: a decoded dict carrying
+        `verb == "milestone"` and an `ok` field -- never merely "some text
+        decoded", the same strict shape `classify_envelope` already
+        enforces for the rest of the fleet."""
+        offenders = {}
+        for client, per_verb in self.census.items():
+            axi = per_verb.get("milestone")
+            if not axi or axi.get("verb") != "milestone" or "ok" not in axi:
+                offenders[client] = axi
         self.assertEqual(
             offenders, {},
-            f"milestone must show envelope-less in EVERY client (no client "
-            f"may have somehow grown its own envelope call around the "
-            f"shared no-op): {offenders!r}")
+            f"milestone must show a real TOON-AXI envelope (verb='milestone', "
+            f"an 'ok' field present) in EVERY client after CR-CRU-058 C2's "
+            f"fix to the shared cmd_milestone: {offenders!r}")
 
-    def test_cycle_transition_and_cr_close_confirmed_bare_on_plans_get_failure(self):
-        """A SECOND new finding: `cycle-activate`/`cycle-done` (via the
-        shared `cycle_transition`) and `cr-close` (via `cmd_cr_close`) both
-        call `ops.open_plans(project_dir)` FIRST to resolve the target plan
-        -- and `_crucible_axi.open_plans` (confirmed by reading it) does
+    def test_cycle_transition_and_cr_close_confirmed_ok_false_envelope_on_plans_get_failure(self):
+        """CR-CRU-058 C2 GREEN fix (inversion of C1's
+        `test_cycle_transition_and_cr_close_confirmed_bare_on_plans_get_failure`,
+        which pinned the defect this asserts is now closed).
+        `_crucible_axi.open_plans` no longer does a bare
         `sys.exit(f"[crucible] ERROR: could not list plans: {{...}}")` on a
-        GET failure: a bare process exit with NO envelope, unlike the
-        sibling `resolve_plan_or_emit` helper (used by cycle-add/checkpoint/
-        abort, confirmed via the same read) which correctly calls
-        `emit_fn(verb, False, ...)` on the identical GET-failure precondition.
-        Every OTHER failure mode inside cycle_transition/cmd_cr_close (cycle
-        not found, ambiguous open plans, a failed PATCH) DOES emit correctly
-        -- this is specifically the "the plans GET itself failed" precondition,
-        which is exactly the one `drive_verb`'s unreachable CRUCIBLE_URL
-        exercises for every verb in this census. Static reading alone would
-        need to separately trace `open_plans` vs `resolve_plan_or_emit` and
-        notice they diverge; the dynamic drive surfaces it directly."""
+        plans-GET failure -- confirmed by reading it, it now emits through
+        the caller's `emit_fn` with `ok=False`, matching the sibling
+        `resolve_plan_or_emit` helper (used by cycle-add/checkpoint/abort)
+        that already did this correctly. `cycle-activate`/`cycle-done` (via
+        the shared `cycle_transition`) and `cr-close` (via `cmd_cr_close`)
+        all resolve their target plan through this SAME shared
+        `open_plans`, so this must hold fleet-wide: driven under the
+        census's unreachable CRUCIBLE_URL (a genuine plans-GET failure),
+        each of the three verbs must decode as a TOON envelope carrying
+        `ok is False` -- not merely "enveloped", the specific outcome value
+        the fix produces."""
         affected = ("cycle-activate", "cycle-done", "cr-close")
         offenders = {}
         for client, per_verb in self.census.items():
-            still_enveloped = [v for v in affected if per_verb.get(v)]
-            if still_enveloped:
-                offenders[client] = still_enveloped
+            for verb in affected:
+                axi = per_verb.get(verb)
+                if not axi or axi.get("ok") is not False:
+                    offenders.setdefault(client, []).append((verb, axi))
         self.assertEqual(
             offenders, {},
-            f"cycle-activate/cycle-done/cr-close must show envelope-less "
-            f"under a plans-GET failure in every client: {offenders!r}")
+            f"cycle-activate/cycle-done/cr-close must show an enveloped "
+            f"ok=False result under a plans-GET failure in every client "
+            f"(the gap CR-CRU-058 C2 closed in the shared open_plans): "
+            f"{offenders!r}")
 
     def test_fleet_wide_envelope_less_count_and_full_table(self):
         """The primary deliverable (§S0 requirement 4): PRINT the complete
