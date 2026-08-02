@@ -90,14 +90,37 @@ Add `files` to each client's `run:` block alongside `passed`/`failed`/`pending`/
 human-readable count lines CR-CRU-050 §S2 swept. Keep the key name `files` — fleet parity with bun
 is the whole point of this CR.
 
-### §S3 — Rust has TWO parse sites
-`rust-crucible.py:762` and `:1306` (the second is the `pre-merge-gate` path). Both need it. This is
-the same trap CR-CRU-050 flagged: fixing only the first looks complete and leaves the merge gate
-blind.
+### §S3 — Rust: THREE count sites, only TWO of them parseable (corrected at C2 RED, 2026-08-02)
+The original text ("TWO parse sites at `:762` and `:1306`") was directionally right about the two
+client-parsed sites but missed a third, and its line numbers are stale. Measured:
+
+| Site | Verb(s) | Classification | Gets `files`? |
+|---|---|---|---|
+| `_regression_ingest_run` (inline `ET.parse`) | `regression-ingest` | CLIENT-PARSED | ✅ |
+| `_workspace_regression_run` (its own separate parse loop — rust has no shared `_parse_junit`) | `workspace-regression` (the pre-merge-gate path) | CLIENT-PARSED | ✅ |
+| `_ingest_junit_axi` | `test`, `auto-ingest` | **SERVER-PARSED** (`codec=junit`, `dataPath` — the client never sees a `<testcase>`) | ❌ **never** — a count here would be fabricated, not measured. Pinned by test. |
+
+🚨 **§S2 does not apply to rust as written.** Measured against the current source, rust's two
+CLIENT-PARSED sites print a bare `print(f"regression: ok=…")` / `print(f"workspace regression:
+ok=…")` and **never go through `_emit_axi`/`_emit_ingest_axi` — they have no TOON `run:` envelope
+at all.** The only rust site WITH a `run:` envelope is `_emit_ingest_axi`, i.e. the SERVER-PARSED
+one that cannot honestly carry the key. So for rust, §S2 resolves to: **human-count-line only on
+the two parsed sites, and a permanent no-`files` pin on the envelope site.** The AC below is
+amended accordingly — the alternative would be inventing an envelope (scope growth) or inventing
+a number (dishonest).
+
+**Granularity, measured** (`cargo-nextest 0.9.130`, real crate, not assumed): nextest stamps
+`classname` on every `<testcase>` and **never** a `file` attribute. `classname` is the test-binary
+id (`crate::test-file-stem`), which coincides with per-FILE for the common `tests/*.rs` layout
+(one binary per file) but coarsens to **per-BINARY** when several `src/`-embedded unit-test
+modules share one lib binary.
 
 ## Acceptance criteria
-- [ ] Each of python, rust (×2 sites), mvn and arduino computes a distinct-source count and emits
-      `files` in its `run:` envelope — asserted per client.
+- [ ] python, mvn and arduino compute a distinct-source count and emit `files` in the `run:`
+      envelope AND the human count line — asserted per client.
+- [ ] rust computes it at BOTH client-parsed sites and emits it in the human count line (it has no
+      `run:` envelope on those verbs — §S3); its SERVER-PARSED site emits NO `files` key, pinned by
+      a test so a later change cannot fabricate one.
 - [ ] The resolved granularity per client (file vs class) is recorded in a comment beside each
       implementation and stated in the CR's Implementation Notes.
 - [ ] A report whose testcases carry no `file` attribute still yields a NON-ZERO `files` count via

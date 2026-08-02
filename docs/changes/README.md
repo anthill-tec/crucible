@@ -250,6 +250,14 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `tests="1061" skipped="1"` ingested as `passed=1061`, and a python report `tests="2" skipped="2"`
   (an entire class where nothing ran) ingested as `passed=2` — so this project's own published
   gate figures are inflated, the failure mode CR-039/CR-047 exist to prevent.
+- 2026-08-02 (CR-CRU-051 C2 finding — deferred, needs scheduling) — **two rust verbs emit no
+  TOON-AXI envelope at all.** `regression-ingest` and `workspace-regression` print a bare
+  `print(f"regression: ok=…")` and never call `_emit_axi`/`_emit_ingest_axi`, so an agent consuming
+  their stdout gets no structured envelope, no `help[]`, no `context` — the AXI contract CR-CRU-030
+  established fleet-wide. `workspace-regression` is the PRE-MERGE-GATE path, so this is the gate
+  output an orchestrator reads. Found while measuring where `files` could go (CR-051 §S3); NOT
+  absorbed there — adding envelopes to two verbs is AXI-compliance scope (CR-030 lineage), not
+  count-parity scope.
 - 2026-08-02 (CR-CRU-054 C4 finding — deferred, needs scheduling) — **the server does not validate
   `identity.source` on agent registration.** The clients document `--source
   {claude-md,package-json,git-repo,manual}`, yet rust/mvn/arduino hardcoded `"openclaw"` — a value
