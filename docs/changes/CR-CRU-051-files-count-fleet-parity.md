@@ -13,6 +13,24 @@ fleet-drift audit during CR-CRU-050 C2 (user-prompted: which bun changes apply t
 scripts?).
 
 ## Context
+
+### Gap-analysis re-measurement, 2026-08-02 (post CR-CRU-050/054 — the line numbers below are stale)
+Re-verified after the fleet DRY refactor: **CR-CRU-054 did NOT absorb this CR.** The orchestrator
+predicted it might (the envelope builders were expected to lift), but the JUnit parsers are
+GENUINELY PER-CLIENT in the CR-054 inventory — each runner emits a different XML shape — so they
+were correctly never lifted. `grep -c '"files"'` today: bun 1, python 0, rust 0, mvn 0,
+arduino 0. The parity gap stands exactly as originally specced.
+
+Current parse-site names (CR-054 renamed/moved nothing here, but the surrounding files shrank
+~21%, so every line number in the table below is obsolete — locate by symbol):
+`bun-crucible.py::_parse_junit_file`, `python-crucible.py::_parse_junit_dir`,
+`mvn-crucible.py::_parse_junit`, `arduino-crucible.py::_parse_junit`, and rust's inline
+`ET.parse(junit_path)` sites. §S3's "rust has TWO parse sites" claim must be re-verified against
+the current file rather than trusted — rust now also has `_ingest_junit_axi`, which delegates
+parsing to the SERVER (`codec=junit`), and a server-parsed path has no client-side count to emit.
+State that distinction explicitly rather than bolting a count onto a path that does not parse.
+
+### Original context
 CR-CRU-047 §S2 was scoped to the bun client because it was chasing a bun-specific gate break. The
 `files` count it introduced is not bun-specific — it is a generic gate-integrity signal — and it
 never crossed to the rest of the fleet:
