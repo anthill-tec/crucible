@@ -132,6 +132,30 @@ modules share one lib binary.
 - [ ] Full bun regression green AND full Python regression green (client change → both gates, per
       CR-CRU-045 §S3).
 
+## Implementation Notes
+
+**Resolved granularity per client — measured, not assumed.** Two of the four contradicted this
+spec's original §S1 text; both were corrected by running the real tooling rather than trusting
+the document.
+
+| client | granularity | why, and where it degrades |
+|---|---|---|
+| **python** | **per-FILE** | `unittest-xml-reporting 4.0.0` stamps BOTH `classname` and a real `file="…"`, so rung 1 of the fallback hits. ⚠️ Version-dependent — on a runner that omits `file` it degrades to per-CLASS. The original spec asserted per-CLASS; that was **wrong for the version this repo runs** and was caught by measuring a live run (`files=1` across 4 TestCase classes). |
+| **mvn** | **per-CLASS** | surefire/failsafe emit no `file` attribute at all. Java's one-public-class-per-file convention usually makes class-count and file-count coincide, but nested/inner test classes push the count ABOVE the file count — "classes" is the accurate word. |
+| **arduino** | **per-FILE when the harness cooperates** | the native g++ harness may stamp `file=`, which is checked first; otherwise per-class, then per-suite. Only as precise as the XML its harness produces. |
+| **rust** | **per-BINARY** | `cargo-nextest 0.9.130` stamps `classname` (the test-binary id) and **never** `file`. Coincides with per-FILE for the common `tests/*.rs` layout (one binary per file) but coarsens when several `src/`-embedded unit-test modules share one lib binary. |
+
+**The three-rung fallback is uniform across all five sites** (`file` → `classname` → suite name),
+copied from `bun-crucible.py::_parse_junit_file`. Its purpose is that the count degrades in
+precision rather than collapsing to zero: a constant `files: 0` would read as a signal while
+conveying nothing, and would make a vanishing suite indistinguishable from a healthy one — the
+inverse of this CR's purpose.
+
+**Rust is deliberately asymmetric** (§S3): `files` appears in the human count line at both
+client-parsed sites and in NO envelope, because those verbs emit no envelope at all — a gap now
+filed as CR-CRU-058. Its third site (`_ingest_junit_axi`) is server-parsed and carries no count by
+design; a test pins that absence so a later change cannot fabricate one.
+
 ## Non-goals
 - Sending `files` to the server or modelling it on `RunEvent`. CR-CRU-047 §S2 deliberately kept it
   in the printed gate output only; this CR propagates that design, it does not revisit it.
