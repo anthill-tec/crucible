@@ -42,6 +42,27 @@ contract promises.
 
 ## Scope
 
+### §S0 — BUILD THE DETECTOR FIRST (gap-analysis ruling, 2026-08-02)
+**The §S4 guard moves to cycle ONE.** Reason, learned the hard way during this CR's own
+gap-analysis: "which verbs emit an envelope" cannot be answered by grep. Three separate
+source-pattern sweeps gave three wrong answers — the first flagged all 21 bun verbs as bare
+(including `status`, which demonstrably emits); a corrected run mis-scored `arduino cmd_compile`
+as bare (it emits via `_compile_gate`); and delegation chains run 2–4 hops deep
+(`cmd_unit → _run_surefire_tier → _smart_ingest → _ingest_parsed`) with the emitter sometimes at
+the end and sometimes absent. Post-CR-054 the fleet delegates through `_ops()`/`_axi()` as well,
+which every naive pattern misses.
+
+So the guard is not the CR's closing safety net — it is the CR's **measuring instrument**, and it
+must exist before any fix is scoped. Build it to answer, mechanically and for all five clients:
+*does invoking this verb produce an `axi:` envelope?* Prefer DRIVING each verb (subprocess, real
+argparse) over static analysis; where a verb cannot be driven without external tooling
+(cargo/docker/mvn absent), stub the toolchain rather than fall back to pattern-matching its source.
+
+**Its first output re-scopes this CR.** The "nine rust verbs" figure in the Context below was
+derived by reading four verb bodies plus their delegate helpers — solid for those, but the honest
+position is that the fleet-wide count is UNKNOWN until the detector runs. The §S1 fix list is
+whatever the detector reports, not what this document currently guesses.
+
 ### §S1 — Every rust verb emits a TOON-AXI envelope
 All nine gain an `axi:` block matching the fleet's established shape (`verb`, `ok`, verb-specific
 result fields, `help[]`, `context`, `warnings[]`) via the shared emitters in `_crucible_axi.py` —
@@ -87,8 +108,13 @@ explicit justified allow-list if any verb legitimately cannot (state the reason 
 
 ## Non-goals
 - Changing what any verb DOES, its flags, or its exit codes — this is output structure only.
-- The other four clients' verbs (they already emit envelopes; the §S4 guard will prove it or
-  surface counter-examples, which get filed, not fixed here).
+- ~~The other four clients' verbs (they already emit envelopes)~~ — **RETRACTED at gap-analysis.**
+  That assumption was never verified and is at least partly false: hand-tracing found
+  `mvn cmd_unit`/`cmd_module` reaching a print-only `_ingest_parsed` with no emitter in the chain,
+  while `arduino cmd_compile` DOES emit via `_compile_gate`. The picture is mixed and only §S0's
+  detector can establish it. **Whatever it finds in the other four is IN SCOPE for this CR** —
+  splitting a fleet-wide structural gap across five CRs by client would repeat exactly the
+  five-times-the-work pattern CR-CRU-054 just spent six cycles undoing.
 - Re-litigating CR-CRU-051's `files` placement — that CR lands first; this one gives rust's two
   regression verbs an envelope for the count to sit in.
 
