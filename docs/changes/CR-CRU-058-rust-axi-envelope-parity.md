@@ -63,6 +63,38 @@ derived by reading four verb bodies plus their delegate helpers — solid for th
 position is that the fleet-wide count is UNKNOWN until the detector runs. The §S1 fix list is
 whatever the detector reports, not what this document currently guesses.
 
+### §S0b — THE CENSUS (detector output, 2026-08-02 — this is the CR's real scope)
+118 verbs driven as subprocesses with stubbed toolchains. **40 emit no envelope.** Not nine.
+
+| client | verbs | envelope-less |
+|---|---|---|
+| rust | 28 | **13** |
+| mvn | 26 | **12** |
+| arduino | 22 | 5 |
+| bun | 21 | 5 |
+| python | 21 | 5 |
+
+**`pre-merge-gate` is bare in ALL FIVE clients** — the CR's stated top concern turns out to be
+five times wider than filed. The orchestrator's merge-decision path emits no envelope in any
+client.
+
+Beyond rust's original nine (all confirmed still bare):
+- **mvn** `unit`, `module`, `compile`, `e2e` never reach an emitter
+  (`_run_surefire_tier → _smart_ingest → _ingest_parsed`, no emit anywhere in the chain).
+- **Fleet-wide, in the SHARED module** (so CR-054 lifted a bare implementation — one fix now
+  covers all five, the consolidation dividend): `milestone` never calls any emitter, only a
+  stderr print.
+- **A sibling asymmetry worth naming:** `cycle-activate` / `cycle-done` / `cr-close` go bare
+  *specifically when the `/plans` GET fails*, because they call `open_plans()`, which does a bare
+  `sys.exit()`. Their siblings `cycle-add` / `checkpoint` / `abort` use `resolve_plan_or_emit()`,
+  which correctly emits on the identical failure. Two helpers, same job, opposite behaviour on
+  the error path — the exact drift class CR-CRU-054 was built to end.
+- **mvn `regression`** DOES emit, but an unguarded `print(f"[regression] running: …")` pollutes
+  stdout before the envelope — a §S3 stdout-purity defect, not an §S1 gap. Classified separately.
+
+Zero verbs were unmeasurable. Non-vacuity proven: `status` and `register` detect as enveloped in
+all five clients even under a refused connection.
+
 ### §S1 — Every rust verb emits a TOON-AXI envelope
 All nine gain an `axi:` block matching the fleet's established shape (`verb`, `ok`, verb-specific
 result fields, `help[]`, `context`, `warnings[]`) via the shared emitters in `_crucible_axi.py` —
