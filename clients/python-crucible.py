@@ -77,22 +77,16 @@ CR-SAN-001-A-RED) are readability habits only. Identity carries displayName + so
 import argparse
 import glob
 import importlib.util
-import json
 import os
 import shutil
 import subprocess
 import sys
-import time
-import urllib.error
-import urllib.request
 import xml.etree.ElementTree as ET
 
 CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
 DEFAULT_REPORTS = "test-reports"
 
 # §S2b cadence (CR-CRU-008 _Narrator default) reused by gate-run's interim poll.
-_GATE_POLL_CADENCE_S = 2.0
-_GATE_POLL_TICK_S = 0.4
 
 
 def _resolve_project_dir(arg_value):
@@ -159,21 +153,14 @@ def _request(method, path, payload=None, timeout=None):
     CR-CRU-035 §S1 — `timeout=None` (the default) is UNBOUNDED: ingest POSTs
     (`/api/v2/runs/parsed`) for a large regression/coverage run can legitimately
     take the server >10s, and a short bound there is a false-negative. The short
-    hook-safe bound is applied ONLY on the status/plans read path via `_get`."""
-    req = urllib.request.Request(
-        f"{CRUCIBLE_URL}{path}",
-        data=json.dumps(payload).encode() if payload is not None else None,
-        headers={"Content-Type": "application/json"},
-        method=method,
-    )
-    try:
-        return json.loads(urllib.request.urlopen(req, timeout=timeout).read())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode(errors="replace")
-        return {"ok": False, "error": f"HTTP {e.code}: {body}"}
-    except urllib.error.URLError as e:
-        return {"ok": False, "error": f"connection failed: {e.reason} "
-                                      f"(is Crucible running at {CRUCIBLE_URL}?)"}
+    hook-safe bound is applied ONLY on the status/plans read path via `_get`.
+
+    CR-CRU-054 §S2 — a thin delegator to the fleet's ONE transport,
+    `_crucible_axi.http_request`, which documents the full contract (including
+    the §S2b empty-body correction). The local name is kept deliberately: the
+    CR-CRU-030 delegation pattern, addressed unqualified by every call site
+    here and by the client test harnesses."""
+    return _axi().http_request(CRUCIBLE_URL, method, path, payload, timeout)
 
 
 def _post(path, payload):
@@ -202,7 +189,7 @@ def _toon():
     global _TOON_MOD
     if _TOON_MOD is None:
         toon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "toon.py")
-        spec = importlib.util.spec_from_file_location("python_crucible_toon", toon_path)
+        spec = importlib.util.spec_from_file_location(f"{__name__}_toon", toon_path)
         if spec is None or spec.loader is None:
             raise RuntimeError(f"could not load TOON codec at {toon_path}")
         _TOON_MOD = importlib.util.module_from_spec(spec)
@@ -215,7 +202,7 @@ def _axi():
     global _AXI_MOD
     if _AXI_MOD is None:
         axi_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_crucible_axi.py")
-        spec = importlib.util.spec_from_file_location("python_crucible_axi_shared", axi_path)
+        spec = importlib.util.spec_from_file_location(f"{__name__}_axi_shared", axi_path)
         if spec is None or spec.loader is None:
             raise RuntimeError(f"could not load shared AXI module at {axi_path}")
         _AXI_MOD = importlib.util.module_from_spec(spec)
@@ -239,45 +226,35 @@ def _emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
     return _axi().emit_axi(verb, ok, result_fields, context, warnings, legacy_line)
 
 
+def _ops():
+    """CR-CRU-054 §S2 — this client's own callables, handed to the shared verb
+    implementations in `_crucible_axi.py`.
+
+    Built FRESH per call from the module globals so the lifted logic observes a
+    test that patches `_post`/`_emit_axi`/`_agent_id` (the fleet's established
+    harness idiom) rather than a reference captured at import time."""
+    return _axi().ClientOps(
+        get=_get, post=_post, patch=_patch,
+        emit=_emit_axi, context=_axi_context, agent_id=_agent_id,
+        project_key=_project_key, plans_path=_plans_path,
+        open_plans=_open_plans, resolve_plan=_resolve_plan_or_emit,
+        post_gate=_post_gate, post_milestone=_post_milestone,
+        base_url=CRUCIBLE_URL)
+
+
 # ── run context (declared cycle linkage) ────────────────────────────────────
 
 
 def _run_context():
     """CR-CRU-008 §S2 — env + git → run context for declared cycle linkage.
 
-    Reads WORKFLOW_CYCLE, WORKFLOW_WAVE and WORKFLOW_ROLE (no cycle-id env read —
-    a bound agent's cycle attachment is stamped SERVER-side from its registered
-    binding, CR-CRU-056 §S3). When at least one is set, attaches
-    git {branch, commit} from a cheap `git rev-parse` (tolerant of a
-    non-repo cwd → omitted). Returns the context dict, or None when no
-    workflow env is set.
-    """
-    context = {}
-    cycle = os.environ.get("WORKFLOW_CYCLE")
-    if cycle:
-        context["cycle"] = cycle
-    wave = os.environ.get("WORKFLOW_WAVE")
-    if wave:
-        context["wave"] = wave
-    role = os.environ.get("WORKFLOW_ROLE")
-    if role:
-        context["orchestrator"] = role
-    if not context:
-        return None
-    try:
-        branch = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        if branch and commit:
-            context["git"] = {"branch": branch, "commit": commit}
-    except (OSError, subprocess.CalledProcessError):
-        pass
-    return context
+    CR-CRU-054 §S2 — a thin delegator to `_crucible_axi.run_context`, which
+    documents the full contract (WORKFLOW_CYCLE/WAVE/ROLE, tolerant git
+    provenance, and None — never a bare `{}` — when no workflow env is set).
+    The local name is kept deliberately: the CR-CRU-030 delegation pattern,
+    addressed unqualified by every call site here and by the client test
+    harnesses."""
+    return _axi().run_context()
 
 
 def _run_logged(cmd, cwd, env, log_path):
@@ -342,68 +319,45 @@ def _unregister_agent(project_dir, agent_id):
 
 
 def _remove_agent_silent(project_dir, agent_id):
-    """CR-CRU-008 §S4 anti-ghost cleanup for a gated run: remove the agent row
-    WITHOUT journaling a lifecycle event. Best-effort: never raises, never
-    pollutes the run verdict or stdout.
-
-    CR-CRU-056 — call this ONLY for an identity the gated run itself created
-    (`_axi().GatedRunIdentity.should_remove`). §S1 stores the cycle binding ON
-    the agent row, so removing a CALLER-owned registration destroys that
-    caller's binding and the next gated run under the same identity ingests
-    unattached."""
-    try:
-        _post(
-            "/api/v2/agents/unregister",
-            {"agentId": agent_id, "projectKey": _project_key(project_dir), "silent": True},
-        )
-    except Exception:
-        pass
+    """CR-CRU-008 §S4 anti-ghost cleanup for a gated run — CR-CRU-054 §S2b thin
+    delegator to `_crucible_axi.remove_agent_silent`, which owns the guarded
+    POST and the honest outcome signal (the real response when the server
+    answered, None when the call never reached it; DN §4 finding #6)."""
+    return _axi().remove_agent_silent(project_dir, agent_id, _ops())
 
 
 def _open_gate_identity(project_dir, agent_id, cycle_id, message):
     """CR-CRU-056 — open a gated run's identity and learn whether the run
-    CREATED it. One phase-optional heartbeat (never /register: the gated verbs
-    declare no phase, and the heartbeat route is the one touch that cannot
-    blank a pre-registered caller's phase); `cycle_id` is the verb's `--cycle`,
-    validated SERVER-side. The returned `GatedRunIdentity` answers
-    `should_remove` for the closing anti-ghost cleanup."""
-    identity = _axi().GatedRunIdentity(agent_id, cycle_id)
-    resp = _post(identity.PATH,
-                 identity.open_payload(_project_key(project_dir), message=message))
-    identity.observe(resp)
-    if resp.get("error") is not None or not resp.get("ok", False):
-        print(_axi().gate_identity_open_failed_line(agent_id, resp.get("error")),
-              file=sys.stderr)
-    return identity
+    CREATED it. CR-CRU-054 §S2b — a thin delegator to
+    `_crucible_axi.open_gate_identity`, which owns the phase-optional heartbeat
+    touch and the documented-enum identity `source`."""
+    return _axi().open_gate_identity(project_dir, agent_id, cycle_id, message, _ops())
 
 
 def _close_gate_identity(project_dir, identity):
-    """CR-CRU-056 — the closing half of the bracket: silently remove the agent
-    row ONLY when this run created it, and SAY SO either way on stderr so the
-    decision is never invisible."""
-    if identity is None:
-        return
-    if not identity.should_remove:
-        print(_axi().gate_identity_skipped_line(identity.agent_id, identity.confirmed),
-              file=sys.stderr)
-        return
-    _remove_agent_silent(project_dir, identity.agent_id)
-    print(f"cleanup: agent={identity.agent_id} removed (created by this run)",
-          file=sys.stderr)
+    """CR-CRU-056 — the closing half of the gated-run bracket. CR-CRU-054 §S2b —
+    a thin delegator to `_crucible_axi.close_gate_identity`, which owns the
+    ownership gate and the honest cleanup reporting (DN §4 finding #6); this
+    module's own silent removal rides along as the client-side seam."""
+    return _axi().close_gate_identity(project_dir, identity, _ops(),
+                                      remove_fn=_remove_agent_silent)
 
 
 # ── plans path + ingest envelopes ────────────────────────────────────────────
 
 
 def _plans_path(project_dir):
-    return f"/api/v2/projects/{_project_key(project_dir)}/plans"
+    """This project's plans-collection URL — CR-CRU-054 §S2 delegator to
+    `_crucible_axi.plans_path`. Only the URL TEMPLATE is shared: `_project_key`
+    stays client-owned (each client owns its own `.env`/project-dir layout)."""
+    return _axi().plans_path(_project_key(project_dir))
 
 
 def _open_plans(project_dir):
-    resp = _get(_plans_path(project_dir))
-    if not resp.get("ok"):
-        sys.exit(f"[crucible] ERROR: could not list plans: {resp.get('error')}")
-    return [p for p in resp.get("plans", []) if p.get("status") == "open"]
+    """This project's open plans — CR-CRU-054 §S2 delegator to
+    `_crucible_axi.open_plans`, which owns the status filter and the hard stop
+    on a failed plans GET."""
+    return _axi().open_plans(_get, _plans_path(project_dir))
 
 
 def _emit_ingest_axi(verb, resp, summary, project_dir, agent):
@@ -433,36 +387,25 @@ def cmd_register(args):
     an ACTIVE cycle of an OPEN plan; the server validates the binding and
     REQUIRES it for TDD phases (RED/GREEN/FIX/VERIFY) — a refused registration
     surfaces the server's 409 envelope (error + help) and exits non-zero.
-    ORCHESTRATOR/report may register unbound."""
-    project_dir = _resolve_project_dir(args.project_dir)
-    resp = _register_agent(
-        project_dir, args.agent,
-        args.message or f"Starting {args.phase} phase",
-        display_name=args.display_name, source=args.source,
-        phase=args.phase, cycle_id=args.cycle,
-    )
-    ok = bool(resp.get("ok", False))
-    legacy = (f"register: ok={resp.get('ok', False)} agent={args.agent} "
-              f"phase={args.phase} source={args.source}")
-    result_fields = {"agent": args.agent, "help": _axi().HELP_STEPS["register"]}
-    err = resp.get("error")
-    if err is not None:
-        # Faithful pass-through of the server's 409 envelope (error + help[]).
-        result_fields["error"] = err
-    _emit_axi("register", ok, result_fields,
-              _axi_context(project_dir, agent_id=args.agent), [], legacy)
-    return 0 if ok else 1
+    ORCHESTRATOR/report may register unbound.
+
+    CR-CRU-054 §S2b — delegates to the shared implementation, which owns the
+    §S5 runtime identity hard stop (DN §4 finding #3) and the documented-enum
+    `--source` strategy (finding #5).
+    This client's own `_register_agent` payload builder stays a per-client
+    PARAMETER: it sends an `identity.repoPath` and honours `--display-name`."""
+    return _axi().cmd_register(args, _resolve_project_dir(args.project_dir), _ops(),
+                               register_fn=_register_agent)
 
 
 def cmd_unregister(args):
-    project_dir = _resolve_project_dir(args.project_dir)
-    resp = _unregister_agent(project_dir, args.agent)
-    ok = bool(resp.get("ok", False))
-    legacy = f"unregister: ok={resp.get('ok', False)} agent={args.agent}"
-    _emit_axi("unregister", ok,
-              {"agent": args.agent, "help": _axi().HELP_STEPS["unregister"]},
-              _axi_context(project_dir, agent_id=args.agent), [], legacy)
-    return 0 if ok else 1
+    """Remove this agent's row (journals an 'unregistered' lifecycle event).
+
+    CR-CRU-054 §S2b — delegates to the shared implementation, whose §S5 runtime
+    identity hard stop replaced argparse `required=True` (DN §4 finding #3).
+    This client's own `_unregister_agent` poster stays a per-client PARAMETER."""
+    return _axi().cmd_unregister(args, _resolve_project_dir(args.project_dir), _ops(),
+                                 unregister_fn=_unregister_agent)
 
 
 # ── Toolchain: unittest/xmlrunner test + regression + auto-ingest + check ────
@@ -856,53 +799,11 @@ def cmd_pre_merge_gate(args):
 
 
 def cmd_plan_file(args):
-    # CR-CRU-056 §S2b — plan-file mutates workflow state, so the registered
-    # caller identity is REQUIRED and rides the wire as `agentId`. The same
-    # registered id IS the plan's stored orchestrator (the free-text
-    # --orchestrator label and its $WORKFLOW_ORCHESTRATOR fallback are
-    # retired). Resolve it FIRST: the hard stop must happen before any POST.
-    agent_id = _agent_id(args)
-    project_dir = _resolve_project_dir(args.project_dir)
-    labels = [label.strip() for label in args.cycles.split(",") if label.strip()]
-    if not labels:
-        sys.exit("[crucible] ERROR: --cycles must name at least one cycle")
-    payload = {"cr": args.cr, "agentId": agent_id,
-               "cycles": [{"label": label} for label in labels]}
-    if args.title:
-        payload["title"] = args.title
-    wave = args.wave if getattr(args, "wave", None) is not None else os.environ.get("WORKFLOW_WAVE")
-    warnings = []
-    if wave:
-        payload["wave"] = wave
-    else:
-        w = _axi().no_wave_warning(args.cr)
-        warnings.append(w)
-        print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
-    if not args.title:
-        wt = _axi().no_title_warning(args.cr)
-        warnings.append(wt)
-        print(f"warning: {wt['code']} — {wt['detail']}", file=sys.stderr)
-    track = os.environ.get("WORKFLOW_ROLE")
-    if track:
-        payload["track"] = track
-    # §S2b — the registered caller is the plan's orchestrator; no free text.
-    payload["orchestrator"] = agent_id
-    resp = _post(_plans_path(project_dir), payload)
-    if not resp.get("ok"):
-        legacy = f"plan-file: ok=False error={resp.get('error')}"
-        _emit_axi("plan-file", False, {"cr": args.cr},
-                  _axi_context(project_dir, agent_id=agent_id), warnings, legacy)
-        return 1
-    cycles = resp.get("cycles", [])
-    ids = " ".join(f"{c.get('label')}={c.get('id')}" for c in cycles)
-    legacy = (f"plan-file: ok=True planId={resp.get('planId')} cr={resp.get('cr')} "
-              f"cycles: {ids}")
-    _emit_axi("plan-file", True,
-              {"planId": resp.get("planId"), "cr": resp.get("cr"), "cycles": cycles,
-               "help": ["cycle-activate <id>"]},
-              _axi_context(project_dir, agent_id=agent_id, cr=resp.get("cr") or args.cr),
-              warnings, legacy)
-    return 0
+    """§S4 — file a workflow plan (CR + its cycles). CR-CRU-054 §S2b — delegates
+    to the shared implementation, which owns the §S5 identity hard stop, the
+    wave/title warnings and `context.cr` on BOTH the success and failure
+    envelopes (DN §4 finding #2)."""
+    return _axi().cmd_plan_file(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 def cmd_plan_backfill(args):
@@ -950,46 +851,9 @@ def cmd_plan_backfill(args):
 
 
 def _cycle_transition(args, status):
-    """Cycle ids are unique per PROJECT — resolve the owning OPEN plan by scanning
-    GET …/plans, then PATCH that plan's cycle.
-
-    CR-CRU-056 §S2b — the cycle PATCH requires a live registered caller;
-    resolve the identity FIRST so the hard stop precedes any request."""
-    agent_id = _agent_id(args)
-    project_dir = _resolve_project_dir(args.project_dir)
-    cycle_id = args.cycle_id
-    open_plans = _open_plans(project_dir)
-    target = next(
-        (p for p in open_plans
-         if any(c.get("id") == cycle_id for c in p.get("cycles", []))),
-        None,
-    )
-    verb = "cycle-activate" if status == "active" else "cycle-done"
-    # CR-CRU-048 §S1/§S3 — the `help[]` next step is DERIVED from the resolved
-    # plan's own cycle state by the shared `_crucible_axi.cycle_transition_help`
-    # (ONE implementation for the whole fleet — the hardcoded per-client ternary
-    # is exactly how this defect reached five clients).
-    help_steps = _axi().cycle_transition_help(status, target, cycle_id)
-    if target is None:
-        known = "; ".join(
-            f"plan {p.get('planId')} ({p.get('cr')}): "
-            + ", ".join(str(c.get("id")) for c in p.get("cycles", []))
-            for p in open_plans
-        ) or "none"
-        legacy = (f"[crucible] ERROR: cycle {cycle_id} is not in any OPEN plan. "
-                  f"Open plans' cycle ids: {known}")
-        _emit_axi(verb, False, {"cycle": cycle_id, "help": help_steps},
-                  _axi_context(project_dir), [], legacy)
-        return 1
-    resp = _patch(f"{_plans_path(project_dir)}/{target['planId']}/cycles/{cycle_id}",
-                  {"status": status, "agentId": agent_id})
-    ok = resp.get("ok", False)
-    legacy = (f"{verb}: ok={ok} cycle={cycle_id} plan={target['planId']}"
-              + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    _emit_axi(verb, bool(ok),
-              {"cycle": cycle_id, "plan": target["planId"], "help": help_steps},
-              _axi_context(project_dir), [], legacy)
-    return 0 if ok else 1
+    """§S4 — transition a cycle to `status`, resolving its owning OPEN plan
+    first. CR-CRU-054 §S2 — delegates to the shared implementation."""
+    return _axi().cycle_transition(args, _resolve_project_dir(args.project_dir), _ops(), status)
 
 
 def cmd_cycle_activate(args):
@@ -1001,224 +865,58 @@ def cmd_cycle_done(args):
 
 
 def cmd_cr_close(args):
-    # CR-CRU-044 §S5 + CR-CRU-056 §S2b — cr-close PATCHes the plan closed and
-    # ends by POSTing a `cr-merged` MILESTONE; both require the registered
-    # caller identity. Resolve it FIRST: a hard stop must happen before the
-    # plan GET/PATCH, never after the CR has already been closed.
-    agent_id = _agent_id(args)
-    project_dir = _resolve_project_dir(args.project_dir)
-    open_plans = _open_plans(project_dir)
-    if args.cr:
-        open_plans = [p for p in open_plans if p.get("cr") == args.cr]
-    if len(open_plans) == 0:
-        legacy = ("[crucible] ERROR: no OPEN plan to close"
-                  + (f" for cr={args.cr}" if args.cr else ""))
-        _emit_axi("cr-close", False,
-                  {"commit": args.commit, "help": _axi().HELP_STEPS["cr-close"]},
-                  _axi_context(project_dir, cr=args.cr), [], legacy)
-        return 1
-    if len(open_plans) > 1:
-        names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in open_plans)
-        legacy = (f"[crucible] ERROR: {len(open_plans)} open plans — ambiguous cr-close. "
-                  f"Pass --cr to pick one of: {names}")
-        _emit_axi("cr-close", False,
-                  {"commit": args.commit, "help": _axi().HELP_STEPS["cr-close"]},
-                  _axi_context(project_dir), [], legacy)
-        return 1
-    plan = open_plans[0]
-    resp = _patch(f"{_plans_path(project_dir)}/{plan['planId']}",
-                  {"status": "closed", "merge": {"commit": args.commit},
-                   "agentId": agent_id})
-    ok = resp.get("ok", False)
-    cr_label = plan.get("cr")
-    legacy = (f"cr-close: ok={ok} plan={plan['planId']} cr={cr_label} "
-              f"commit={args.commit}"
-              + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    _emit_axi("cr-close", bool(ok),
-              {"plan": plan["planId"], "cr": cr_label, "commit": args.commit,
-               "help": _axi().HELP_STEPS["cr-close"]},
-              _axi_context(project_dir, cr=cr_label), [], legacy)
-    if not ok:
-        return 1
-    ms_resp = _post_milestone(
-        project_dir, agent_id, "cr-merged",
-        label=cr_label, commit=args.commit,
-        context=_axi().fleet_context(cr=cr_label) or None,
-    )
-    print(f"cr-merged: ok={ms_resp.get('ok', False)} cr={cr_label} commit={args.commit}"
-          + (f" error={ms_resp.get('error')}" if ms_resp.get("error") else ""),
-          file=sys.stderr)
-    return 0
+    """§S4c — close the resolved OPEN plan and post the cr-merged milestone,
+    requiring a live registered caller. CR-CRU-054 §S2 — delegates to the
+    shared implementation."""
+    return _axi().cmd_cr_close(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 # ── CR-CRU-030 §S4/§S7 — append-cycle + CR-024 workflow verbs ────────────────
 
 
 def _resolve_plan_or_emit(verb, project_dir, cr, result_fields, open_only):
-    """Shared prelude for the plan-targeting write verbs (cycle-add / checkpoint /
-    abort): GET the plans, resolve exactly ONE target via the shared
-    resolve_single_plan, and on any failure emit ok:false + return (None, 1)."""
-    resp = _get(_plans_path(project_dir))
-    if not resp.get("ok"):
-        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
-        _emit_axi(verb, False, result_fields, _axi_context(project_dir, cr=cr), [], legacy)
-        return None, 1
-    plans = resp.get("plans", [])
-    plan, reason = _axi().resolve_single_plan(plans, cr=cr, open_only=open_only)
-    if reason is not None:
-        scope = "open plan" if open_only else "plan"
-        if reason == "none":
-            legacy = (f"[crucible] ERROR: no {scope} to {verb}"
-                      + (f" for cr={cr}" if cr else ""))
-        else:
-            candidates = [p for p in plans
-                          if (not open_only or p.get("status") == "open")]
-            names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in candidates)
-            legacy = (f"[crucible] ERROR: {len(candidates)} {scope}s — ambiguous {verb}. "
-                      f"Pass --cr to pick one of: {names}")
-        _emit_axi(verb, False, result_fields, _axi_context(project_dir, cr=cr), [], legacy)
-        return None, 1
-    return plan, None
+    """Resolve exactly ONE target plan for a write verb (cycle-add /
+    checkpoint / abort), or emit the ok:false envelope and return `(None, 1)`.
+
+    CR-CRU-054 §S2 — a thin delegator to `_crucible_axi.resolve_plan_or_emit`,
+    which owns the whole prelude; this client injects only its own transport,
+    emitter and resolved plans path."""
+    return _axi().resolve_plan_or_emit(
+        verb, cr, result_fields, open_only,
+        _get, _plans_path(project_dir), _emit_axi,
+        lambda: _axi_context(project_dir, cr=cr))
 
 
 def cmd_cycle_add(args):
-    """§S4 — append a cycle to a plan. Resolve the target plan (ALL plans, optional
-    --cr), POST …/plans/<planId>/cycles with ONLY the label, and let the SERVER
-    reject a CLOSED/absent plan. The assigned numeric id stays machine-readable.
-
-    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
-    FIRST so the hard stop precedes any request."""
-    agent_id = _agent_id(args)
-    project_dir = _resolve_project_dir(args.project_dir)
-    result_fields = {"label": args.label, "help": _axi().HELP_STEPS["cycle-add"]}
-    plan, rc = _resolve_plan_or_emit("cycle-add", project_dir, args.cr,
-                                     result_fields, open_only=False)
-    if plan is None:
-        return rc
-    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/cycles",
-                 {"label": args.label, "agentId": agent_id})
-    ok = resp.get("ok", False)
-    cr_label = plan.get("cr")
-    legacy = (f"cycle-add: ok={ok} plan={plan['planId']} cr={cr_label} "
-              f"label={args.label} id={resp.get('id')}"
-              + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    _emit_axi("cycle-add", bool(ok),
-              {"plan": plan["planId"], "id": resp.get("id"), "label": args.label,
-               "help": _axi().HELP_STEPS["cycle-add"]},
-              _axi_context(project_dir, cr=cr_label), [], legacy)
-    return 0 if ok else 1
+    """§S4 — append a cycle to the resolved plan, requiring a live registered
+    caller. CR-CRU-054 §S2 — delegates to the shared implementation."""
+    return _axi().cmd_cycle_add(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 def cmd_checkpoint(args):
-    """§S7 — checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint).
-
-    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
-    FIRST so the hard stop precedes any request."""
-    agent_id = _agent_id(args)
-    project_dir = _resolve_project_dir(args.project_dir)
-    plan, rc = _resolve_plan_or_emit("checkpoint", project_dir, args.cr,
-                                     {"help": _axi().HELP_STEPS["checkpoint"]}, open_only=True)
-    if plan is None:
-        return rc
-    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/checkpoint",
-                 {"agentId": agent_id})
-    ok = resp.get("ok", False)
-    legacy = (f"checkpoint: ok={ok} plan={plan['planId']}"
-              + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    _emit_axi("checkpoint", bool(ok),
-              {"plan": plan["planId"], "changed": resp.get("changed"),
-               "help": _axi().HELP_STEPS["checkpoint"]},
-              _axi_context(project_dir, cr=plan.get("cr")), [], legacy)
-    return 0 if ok else 1
+    """§S7 — checkpoint the resolved OPEN plan, requiring a live registered
+    caller. CR-CRU-054 §S2 — delegates to the shared implementation."""
+    return _axi().cmd_checkpoint(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 def cmd_stop(args):
-    """§S7 — project-level stop (POST …/projects/<key>/stop). No plan targeting.
-
-    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
-    FIRST so the hard stop precedes any request."""
-    agent_id = _agent_id(args)
-    project_dir = _resolve_project_dir(args.project_dir)
-    resp = _post(f"/api/v2/projects/{_project_key(project_dir)}/stop",
-                 {"agentId": agent_id})
-    ok = resp.get("ok", False)
-    legacy = (f"stop: ok={ok} checkpointed={resp.get('checkpointed')}"
-              + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    _emit_axi("stop", bool(ok),
-              {"checkpointed": resp.get("checkpointed"), "help": _axi().HELP_STEPS["stop"]},
-              _axi_context(project_dir), [], legacy)
-    return 0 if ok else 1
+    """§S7 — project-level stop (POST …/projects/<key>/stop), requiring a live
+    registered caller. CR-CRU-054 §S2 — delegates to the shared
+    implementation."""
+    return _axi().cmd_stop(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 def cmd_abort(args):
-    """§S7 — abort the resolved OPEN plan (POST …/plans/<id>/abort). WITHOUT
-    --user-approved the body's userApproved is false, so the server's discouraging
-    409 refusal stays reachable (surfaced as ok:false + non-zero).
-
-    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
-    FIRST so the hard stop precedes any request."""
-    agent_id = _agent_id(args)
-    project_dir = _resolve_project_dir(args.project_dir)
-    plan, rc = _resolve_plan_or_emit("abort", project_dir, args.cr,
-                                     {"help": _axi().HELP_STEPS["abort"]}, open_only=True)
-    if plan is None:
-        return rc
-    resp = _post(f"{_plans_path(project_dir)}/{plan['planId']}/abort",
-                 {"userApproved": bool(args.user_approved), "agentId": agent_id})
-    ok = resp.get("ok", False)
-    legacy = (f"abort: ok={ok} plan={plan['planId']} "
-              f"userApproved={bool(args.user_approved)}"
-              + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    _emit_axi("abort", bool(ok),
-              {"plan": plan["planId"], "help": _axi().HELP_STEPS["abort"]},
-              _axi_context(project_dir, cr=plan.get("cr")), [], legacy)
-    return 0 if ok else 1
+    """§S7 — abort the resolved OPEN plan, requiring a live registered caller.
+    CR-CRU-054 §S2 — delegates to the shared implementation."""
+    return _axi().cmd_abort(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 def cmd_status(args):
-    """§S6 — the plan/status READ verb (alias `plans`, no --agent). GET …/plans and
-    return the queue as a uniform-table §S1 envelope plus a top-level lastRunCr."""
-    project_dir = _resolve_project_dir(args.project_dir)
-    resp = _get(_plans_path(project_dir))
-    if not resp.get("ok"):
-        # CR-CRU-035 §S1 — hook-safe tolerant degrade: a plans-fetch failure
-        # (server unreachable / non-ok) is a DEFINITIVE unavailable data-state
-        # (AXI principle 5), NOT a command error. Emit ok:true + a structured
-        # status-unavailable warning + an empty board + a concrete help[]
-        # next-step, and exit 0 so a session-start hook can never hang or fail.
-        # This state is DISTINCT from the no-plan empty state below (that one
-        # carries NO warning) — the status-unavailable warning is the signal.
-        detail = (f"could not reach the Crucible server to read the board: "
-                  f"{resp.get('error')}")
-        legacy = f"[crucible] status: board unavailable — {resp.get('error')}"
-        _emit_axi("status", True,
-                  {"plans": [], "lastRunCr": None, "count": 0,
-                   "help": [f"check the Crucible server is running / reachable "
-                            f"at {CRUCIBLE_URL}"]},
-                  _axi_context(project_dir),
-                  [{"code": "status-unavailable", "detail": detail}],
-                  legacy)
-        return 0
-    plans = resp.get("plans", [])
-    full_rows = _axi().build_status_rows(plans)
-    last = _axi().last_run_cr(plans)
-    fields = getattr(args, "fields", None)
-    requested = [f.strip() for f in fields.split(",") if f.strip()] if fields else []
-    rows = _axi().select_status_fields(full_rows, requested)
-    count = len(plans)
-    if not rows:
-        legacy = "status: ok=True — no plans filed for this project"
-        _emit_axi("status", True,
-                  {"plans": [], "lastRunCr": None, "count": 0,
-                   "help": _axi().HELP_STEPS["status"]},
-                  _axi_context(project_dir), [], legacy)
-        return 0
-    legacy = f"status: ok=True plans={len(rows)} lastRunCr={last}"
-    _emit_axi("status", True,
-              {"plans": rows, "lastRunCr": last, "count": count,
-               "help": _axi().HELP_STEPS["status"]},
-              _axi_context(project_dir), [], legacy)
-    return 0
+    """§S6 — the plan/status READ verb (alias `plans`, no --agent): GET …/plans
+    and return the queue as a uniform-table §S1 envelope plus a top-level
+    lastRunCr. CR-CRU-054 §S2 — delegates to the shared implementation."""
+    return _axi().cmd_status(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 # ── CR-CRU-013 §S5 — fleet gate / milestone verbs ───────────────────────────
@@ -1239,142 +937,40 @@ def _agent_id(args):
 
 
 def _post_gate(project_dir, agent_id, gate, context=None):
-    payload = {"projectKey": _project_key(project_dir), "agentId": agent_id, "gate": gate}
-    if context:
-        payload["context"] = context
-    return _post("/api/v2/gates", payload)
+    """POST a gate event (CR-CRU-054 §S2 — delegates to the shared builder)."""
+    return _axi().post_gate(_project_key(project_dir), agent_id, gate, _post,
+                            context)
 
 
-def _post_milestone(project_dir, agent_id, mtype, label=None, commit=None, context=None):
-    payload = {"projectKey": _project_key(project_dir), "agentId": agent_id, "type": mtype}
-    if label:
-        payload["label"] = label
-    if commit:
-        payload["commit"] = commit
-    if context:
-        payload["context"] = context
-    return _post("/api/v2/milestones", payload)
+def _post_milestone(project_dir, agent_id, mtype, label=None, commit=None,
+                    context=None):
+    """POST a workflow milestone (CR-CRU-054 §S2 — delegates to the shared
+    builder)."""
+    return _axi().post_milestone(_project_key(project_dir), agent_id, mtype,
+                                 _post, label=label, commit=commit,
+                                 context=context)
 
 
 def cmd_gate_report(args):
-    """§S8 — report a single already-run gate (flags path). Emits the §S1 envelope
-    plus the interactive line on stderr, and always raises the prefer-gate-run
-    discouragement warning (envelope + stderr)."""
-    project_dir = _resolve_project_dir(args.project_dir)
-    prefer = _axi().PREFER_GATE_RUN_WARNING
-    warnings = [dict(prefer)]
-    print(f"warning: {prefer['code']} — {prefer['detail']}", file=sys.stderr)
-    context = _axi_context(project_dir, agent_id=_agent_id(args))
-    try:
-        steps = _axi().parse_steps_flag(args.steps) if args.steps else []
-    except ValueError as e:
-        legacy = f"gate-report: ERROR: {e}"
-        _emit_axi("gate-report", False, {"outcome": args.outcome}, context, warnings, legacy)
-        return 1
-    intent = args.intent or f"{args.outcome} gate"
-    gate = {"intent": intent, "outcome": args.outcome, "steps": steps}
-    if args.commit:
-        gate["push"] = {"commit": args.commit}
-    resp = _post_gate(project_dir, _agent_id(args), gate, _axi().fleet_context() or None)
-    ok = resp.get("ok", False)
-    legacy = (f"gate-report: ok={ok} outcome={args.outcome}"
-              + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    result_fields = {"outcome": args.outcome}
-    err = resp.get("error")
-    if err is not None:
-        result_fields["error"] = _axi().truncate_field(err, full=getattr(args, "full", False))
-    _emit_axi("gate-report", bool(ok), result_fields, context, warnings, legacy)
-    return 0 if ok else 1
+    """§S8 — report a single already-run gate (flags path), always raising the
+    prefer-gate-run discouragement. CR-CRU-054 §S2 — delegates to the shared
+    implementation."""
+    return _axi().cmd_gate_report(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 def cmd_gate_run(args):
-    """§S8 — axi PROXY wrapper: launch `no-mistakes axi run`, poll `axi status` for
-    throttled interim gates, seal a final gate from the run's outcome, and relay the
-    axi detail to the caller. The caller issues NO POST itself; no prefer-gate-run
-    warning (it is itself the streaming standard)."""
-    project_dir = _resolve_project_dir(args.project_dir)
-    nm = shutil.which("no-mistakes")
-    if not nm:
-        print("gate-run: ERROR: `no-mistakes` not found on PATH — cannot proxy axi run",
-              file=sys.stderr)
-        return 1
-
-    intent = args.intent
-    agent_id = _agent_id(args)
-    context = _axi().fleet_context()
-
-    try:
-        proc = subprocess.Popen(
-            [nm, "axi", "run", "--intent", intent],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
-    except OSError as e:
-        print(f"gate-run: ERROR: could not launch `no-mistakes axi run`: {e}",
-              file=sys.stderr)
-        return 1
-
-    last_post = None
-    while proc.poll() is None:
-        now = time.monotonic()
-        if last_post is None or (now - last_post) >= _GATE_POLL_CADENCE_S:
-            status = subprocess.run([nm, "axi", "status"], capture_output=True, text=True)
-            snap = (status.stdout or "").strip()
-            if snap:
-                try:
-                    decoded = _toon().decode(snap)
-                except Exception:
-                    decoded = None
-                if isinstance(decoded, dict):
-                    run = decoded.get("run") or {}
-                    in_flight = (str(run.get("status")) != "completed"
-                                 and "outcome" not in decoded)
-                    gate, nsteps = _axi().gate_from_axi(decoded, intent, final=False)
-                    if in_flight and 0 < nsteps < 9:
-                        _post_gate(project_dir, agent_id, gate, context or None)
-                        last_post = now
-        time.sleep(_GATE_POLL_TICK_S)
-
-    out, _err = proc.communicate()
-    if out:
-        sys.stdout.write(out)
-
-    final_snap = (out or "").strip()
-    final_decoded = None
-    if final_snap:
-        try:
-            final_decoded = _toon().decode(final_snap)
-        except Exception:
-            final_decoded = None
-    if not isinstance(final_decoded, dict):
-        print("gate-run: ERROR: `axi run` produced no parseable final snapshot",
-              file=sys.stderr)
-        return 1
-
-    final_gate, _ = _axi().gate_from_axi(final_decoded, intent, final=True)
-    resp = _post_gate(project_dir, agent_id, final_gate, context or None)
-    ok = resp.get("ok", False)
-    overall = bool(ok and proc.returncode == 0)
-    legacy = (f"gate-run: ok={ok} outcome={final_gate.get('outcome')} "
-              f"exit={proc.returncode}"
-              + (f" error={resp.get('error')}" if resp.get("error") else ""))
-    _emit_axi("gate-run", overall, {"outcome": final_gate.get("outcome")},
-              _axi_context(project_dir, agent_id=agent_id), [], legacy)
-    return 0 if overall else 1
+    """§S8 — axi PROXY wrapper around `no-mistakes axi run`. CR-CRU-054 §S2 —
+    delegates to the shared implementation; tool discovery stays HERE (this
+    module's own `shutil`) so each client's harness keeps its patch seam."""
+    return _axi().cmd_gate_run(
+        args, _resolve_project_dir(args.project_dir), shutil.which("no-mistakes"), _ops())
 
 
 def cmd_milestone(args):
-    """POST a workflow milestone. §S4b."""
-    project_dir = _resolve_project_dir(args.project_dir)
-    context = _axi().fleet_context(cr=args.cr)
-    resp = _post_milestone(project_dir, _agent_id(args), args.type,
-                           label=args.label, commit=getattr(args, "commit", None),
-                           context=context or None)
-    ok = resp.get("ok", False)
-    print(f"milestone: ok={ok} type={args.type}"
-          + (f" label={args.label}" if args.label else "")
-          + (f" error={resp.get('error')}" if resp.get("error") else ""),
-          file=sys.stderr)
-    return 0 if ok else 1
+    """POST a workflow milestone. §S4b — CR-CRU-054 §S2b delegator to the shared
+    implementation, which writes the legacy line to STDERR so it can never
+    corrupt the §S1 envelope stream (DN §4 finding #1)."""
+    return _axi().cmd_milestone(args, _resolve_project_dir(args.project_dir), _ops())
 
 
 # ── argparse helpers + no-arg dashboard + main ──────────────────────────────
@@ -1428,9 +1024,9 @@ def _add_log_arg(p):
 
 
 def _add_gate_cycle_arg(p):
-    """CR-CRU-056 — `--cycle` on a GATED verb (regression/pre-merge-gate): the
-    binding for the register-inside-the-run case."""
-    p.add_argument("--cycle", type=int, help=_axi().GATE_CYCLE_HELP)
+    """CR-CRU-056 — bind `--cycle` on a GATED verb (CR-CRU-054 §S2 — delegates
+    to the shared binding so all five clients document it identically)."""
+    return _axi().add_gate_cycle_arg(p)
 
 
 _DASHBOARD_PURPOSE_LINE = (
@@ -1440,8 +1036,9 @@ _DASHBOARD_PURPOSE_LINE = (
 
 
 def _abbrev_home(path):
-    home = os.path.expanduser("~")
-    return "~" + path[len(home):] if path.startswith(home) else path
+    """Render an absolute path with `~` for the home dir (§S14) — CR-CRU-054 §S2
+    delegator to `_crucible_axi.abbrev_home`."""
+    return _axi().abbrev_home(path)
 
 
 def cmd_dashboard():
@@ -1449,7 +1046,7 @@ def cmd_dashboard():
     dashboard on stdout, plus a one-line tool purpose + the executable path on stderr."""
     print(_DASHBOARD_PURPOSE_LINE, file=sys.stderr)
     print(_abbrev_home(os.path.abspath(__file__)), file=sys.stderr)
-    return cmd_status(argparse.Namespace(project_dir=None, fields=None))
+    return cmd_status(_axi().status_namespace())
 
 
 def main():
@@ -1465,8 +1062,14 @@ def main():
              "phases must bind a cycle with --cycle; the agentId is a free-form "
              "identifier.",
     )
-    r.add_argument("--agent", required=True,
-                   help="Agent id — a free-form identifier. The phase is declared by "
+    # CR-CRU-054 §S2b (DN §4 finding #3) — NOT argparse-required: the §S5
+    # runtime hard stop owns the refusal so it arrives as a structured envelope.
+    r.add_argument("--agent",
+                   help="Agent id — a free-form identifier. REQUIRED, but enforced at "
+                        "RUNTIME by the §S5 hard stop (CR-CRU-054 §S2b) so a missing "
+                        "id yields the ok:false AXI envelope, not a bare argparse "
+                        "usage error. "
+                                                "Agent id — a free-form identifier. The phase is declared by "
                         "--phase and is never inferred from the agentId's shape; any "
                         "`<type>-<project>` / `CR-<PROJ>-NNN-<cycle>-<PHASE>` convention "
                         "is a naming habit only.")
@@ -1493,7 +1096,11 @@ def main():
     r.set_defaults(func=cmd_register)
 
     u = sub.add_parser("unregister", help="Unregister an agent")
-    u.add_argument("--agent", required=True)
+    u.add_argument("--agent",
+                   help="Agent id — REQUIRED, but enforced at RUNTIME by the §S5 "
+                        "hard stop (CR-CRU-054 §S2b) so a missing id yields "
+                        "the ok:false AXI envelope, not a bare argparse "
+                        "usage error.")
     _add_project_dir_arg(u)
     u.set_defaults(func=cmd_unregister)
 

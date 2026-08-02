@@ -95,10 +95,78 @@ explicit, justified per-client allow-list (the §S1 GENUINELY-PER-CLIENT set). W
 fleet re-diverges the first time someone copies a helper, and the whole exercise is undone by
 attrition.
 
-### §S4 — Behaviour is unchanged
-This is a refactor. Every existing client test must pass **unmodified**. Any test needing a change
-to accommodate the move is evidence the move changed behaviour — stop and reassess rather than
-editing the test.
+### §S1b — SHARED splits in two: ALREADY-DELEGATED vs NEEDS-LIFT (refinement, C3 RED 2026-08-02)
+The "42 functions defined in all five clients" headline counts NAMES, not duplicated LOGIC. C3's
+RED pass read all five bodies of its nine candidates and found `_axi_context`, `_emit_axi` and
+`_agent_id` are **already thin delegators** — the logic has lived in `_crucible_axi.py` since
+CR-030/CR-044 §S5, and the local `def` survives only because tests patch it and internal call
+sites use the unqualified name. That is the TARGET state, not the problem state.
+
+So SHARED must be read as two sub-categories:
+- **ALREADY-DELEGATED** — name present five times, logic shared once. Nothing to do; a
+  "single locus" test for these is born green and is not a valid RED.
+- **NEEDS-LIFT** — logic genuinely duplicated five times. The real work.
+
+This does not invalidate C1's classification (SHARED is correct for all three); it means the
+inventory measures consistency, not remaining work. Each lift cycle establishes its own slice's
+sub-category by reading the bodies, and the §S3 drift guard reconciles the DN at the end. The
+CR's line-count AC is the honest measure of remaining work — the name count is not.
+
+### §S2b — The DRIFTED eight lift to their CORRECT version (ruling 2026-08-02, after C1's inventory)
+C1's classification found a category the original spec did not anticipate: **8 of the 42 have
+bodies that should be identical but are not**, and several are latent DEFECTS rather than style
+divergence (full verdicts in `docs/research/DN-client-fleet-inventory.md`):
+
+| Function | Correct version | What the others get wrong |
+|---|---|---|
+| `_request` | **arduino** | the other four raise an uncaught `JSONDecodeError` on an empty response body |
+| `cmd_register` / `cmd_unregister` | **arduino** | argparse `required=True` bypasses the fleet's own AXI hard-stop envelope, emitting a bare usage error instead of a structured refusal |
+| `cmd_milestone` | **the four** | bun writes its legacy line to stdout — the envelope-purity class CR-046 hit in rust |
+| `cmd_plan_file` | **mvn/arduino** | bun never carries `context.cr`; rust/python only on the success path |
+| `_remove_agent_silent` / `_close_gate_identity` | **neither** | bun lacks the exception guard; the other four have it but discard the result and report "removed" even on silent failure — the lift must take BOTH the guard and honest reporting |
+| `_open_gate_identity` + `cmd_register` | **`claude-md`** — see ruling | `source` split `openclaw` vs `claude-md`; **`openclaw` is not a valid value** |
+
+**Ruling:** each lifts to its correct version — the defects are fixed BY the consolidation, not
+filed separately (a defect found by a CR's own analysis belongs to that CR). Where no version is
+correct, the lift takes the correct COMBINATION.
+
+**The `source` question, ruled 2026-08-02 (it was not a "pick one"):** the clients' own
+documented enum is `--source {claude-md, package-json, git-repo, manual}`. `openclaw` is
+**outside it** — rust/mvn/arduino hardcode `"openclaw"` at five sites
+(`arduino:357`, `mvn:359,478,539`, `rust:508`), sending an undocumented value that only survives
+because the server does not validate the field. So this is a defect, not a naming preference.
+**All five clients send `claude-md`** (the enum's member, bun/python's existing default, and the
+only value present in the live DB), and the `--source` flag is available uniformly — bun/python's
+pattern wins over the hardcode.
+
+**Deferred, NOT absorbed:** the server accepts any `identity.source` string without validating it
+against the enum. That is a server-side input-validation gap, a different stack and contract from
+this client-refactor CR; folding it in would turn a DRY refactor into a server CR. Recorded in the
+queue Notes with evidence for scheduling.
+
+### §S3b — Backlog the guard revealed but does NOT assert on (C5, 2026-08-02)
+The §S3 guard's blocking assertion covers **THE_42 only**. A full-fleet sweep found roughly **25
+further duplicated names outside the inventory** — docker-compose helpers shared by rust/mvn,
+`_parse_junit`/`cmd_compile` shared by mvn/arduino, `_read_env`, `_run_logged` and others. The DN
+never classified these, so guarding them would mean inventing per-client verdicts nobody has
+reviewed — the scope absorption this CR's own Risk section warns against.
+
+Recorded as backlog, deliberately un-asserted. A future CR inventories and lifts them; the guard's
+analyser already handles arbitrary sources, so widening its scope later is a one-line change once
+the classification exists.
+
+### §S4 — Behaviour is unchanged, with ONE bounded carve-out
+This is a refactor. For the **27 SHARED + 1 PARAMETERISED** functions, every existing client test
+must pass **unmodified** — a test needing a change is evidence the move changed behaviour; stop
+and reassess rather than editing the test.
+
+**Carve-out, §S2b only:** the 8 DRIFTED functions change behaviour for the clients that were
+wrong — that is the point. For those, and ONLY those:
+- each correction gets a NEW test pinning the corrected behaviour, per affected client;
+- an existing test that pinned the DEFECTIVE behaviour is re-pointed with an inline note naming
+  this section and the C1 verdict — never silently;
+- the correction is listed in the cycle's report, so the diff is auditable against this table.
+A behaviour change outside these 8 is a defect in the lift, not a carve-out.
 
 ## Acceptance criteria
 - [ ] The §S1 inventory exists, with all 44 classified and per-client differences named.
