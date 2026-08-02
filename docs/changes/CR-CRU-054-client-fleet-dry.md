@@ -95,10 +95,36 @@ explicit, justified per-client allow-list (the §S1 GENUINELY-PER-CLIENT set). W
 fleet re-diverges the first time someone copies a helper, and the whole exercise is undone by
 attrition.
 
-### §S4 — Behaviour is unchanged
-This is a refactor. Every existing client test must pass **unmodified**. Any test needing a change
-to accommodate the move is evidence the move changed behaviour — stop and reassess rather than
-editing the test.
+### §S2b — The DRIFTED eight lift to their CORRECT version (ruling 2026-08-02, after C1's inventory)
+C1's classification found a category the original spec did not anticipate: **8 of the 42 have
+bodies that should be identical but are not**, and several are latent DEFECTS rather than style
+divergence (full verdicts in `docs/research/DN-client-fleet-inventory.md`):
+
+| Function | Correct version | What the others get wrong |
+|---|---|---|
+| `_request` | **arduino** | the other four raise an uncaught `JSONDecodeError` on an empty response body |
+| `cmd_register` / `cmd_unregister` | **arduino** | argparse `required=True` bypasses the fleet's own AXI hard-stop envelope, emitting a bare usage error instead of a structured refusal |
+| `cmd_milestone` | **the four** | bun writes its legacy line to stdout — the envelope-purity class CR-046 hit in rust |
+| `cmd_plan_file` | **mvn/arduino** | bun never carries `context.cr`; rust/python only on the success path |
+| `_remove_agent_silent` / `_close_gate_identity` | **neither** | bun lacks the exception guard; the other four have it but discard the result and report "removed" even on silent failure — the lift must take BOTH the guard and honest reporting |
+| `_open_gate_identity` | pick one | `source` label split `openclaw` vs `claude-md` across the fleet |
+
+**Ruling:** each lifts to its correct version — the defects are fixed BY the consolidation, not
+filed separately (a defect found by a CR's own analysis belongs to that CR). Where no version is
+correct, the lift takes the correct COMBINATION.
+
+### §S4 — Behaviour is unchanged, with ONE bounded carve-out
+This is a refactor. For the **27 SHARED + 1 PARAMETERISED** functions, every existing client test
+must pass **unmodified** — a test needing a change is evidence the move changed behaviour; stop
+and reassess rather than editing the test.
+
+**Carve-out, §S2b only:** the 8 DRIFTED functions change behaviour for the clients that were
+wrong — that is the point. For those, and ONLY those:
+- each correction gets a NEW test pinning the corrected behaviour, per affected client;
+- an existing test that pinned the DEFECTIVE behaviour is re-pointed with an inline note naming
+  this section and the C1 verdict — never silently;
+- the correction is listed in the cycle's report, so the diff is auditable against this table.
+A behaviour change outside these 8 is a defect in the lift, not a carve-out.
 
 ## Acceptance criteria
 - [ ] The §S1 inventory exists, with all 44 classified and per-client differences named.
