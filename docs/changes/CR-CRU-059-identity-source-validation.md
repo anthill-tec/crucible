@@ -78,14 +78,23 @@ Measured surface (2026-08-02): `--phase` in all five clients (1 site each) + the
 - Server: `AGENT_PHASES` → `AGENT_ROLES`, `AgentPhase` → `AgentRole`, all validation/error text.
 - Storage: `agents.phase` → `agents.role`; `events.phase`/`events.phase_inferred` →
   `events.role`/`events.role_inferred`, via the established `PRAGMA table_info` + `ALTER TABLE`
-  migration pattern. 🚨 **Migrate the live dog-food data** — CR-057's backfill classified 283 of
-  338 events; that data must survive the rename, not be dropped and re-derived.
+  migration pattern. 🚨 **Migrate the live dog-food data** — re-measured 2026-08-02: **299 of 338
+  events carry a classification** (CR-057 backfilled 283; today's runs added declared ones). That
+  data must survive the rename, not be dropped and re-derived.
 - UI: `PhaseRole` → `AgentRole`; `agentRole()` already correct, keep it.
 - Error/help text: every message naming "phase" says "role" (CR-048 state-derived help included).
 
-**Compatibility ruling (decide at gap-analysis, flag to the user):** whether the server accepts
-the legacy `phase` body key for one release as an alias, or breaks cleanly. Model-B vendors these
-clients, so a clean break demands their bundle refresh FIRST — see Risk.
+**Compatibility ruling — USER-DECIDED 2026-08-02: CLEAN BREAK, and the MERGE IS HELD.** The server
+accepts `role` only; no `phase` alias, no dual-key handling, no deprecation path. Consequently:
+
+> 🚧 **MERGE GATE — this CR may NOT merge until Model-B has been intimated, has confirmed, and has
+> refreshed their vendored bundle.** Their Sandesh address (`Mainline - ModelB`) has been
+> `active:false` all session, so the intimation cannot even be sent yet. CR-059 will sit
+> COMPLETE-BUT-UNMERGED on its feature branch for however long that takes. That is the accepted
+> cost of the clean break — do not merge it to unblock the queue, and do not quietly add an alias
+> to make merging safe.
+
+The work proceeds regardless: the branch is built, gated and VERIFY-approved, then it waits.
 
 ### §S1 — Validate `identity.source` at the route boundary
 Introduce `IDENTITY_SOURCES = ["claude-md", "package-json", "git-repo", "manual"] as const` in
@@ -116,7 +125,9 @@ operation — a validation that breaks the fleet is a defect, not a fix.
       semantics intact (required for TDD roles, enum-constrained, never blanked by heartbeat).
 - [ ] Storage migrated: `agents.role`, `events.role`, `events.role_inferred` — and **CR-057's
       backfilled classification survives the migration** (assert the live-shaped fixture's counts
-      before and after are identical; on the dog-food DB, 283 classified events).
+      before and after are identical; on the dog-food DB, 299 of 338 classified events).
+- [ ] **MERGE GATE**: Model-B intimated, confirmed, and bundle-refreshed before `feature finish`.
+      This AC is satisfied by evidence of their reply, not by our own readiness.
 - [ ] The UI classifies from the renamed field; `agentRole()` unchanged.
 - [ ] `POST /api/v2/agents/register` with `identity.source` outside the enum → 409, `ok:false`,
       non-empty `help[]` naming the received value and the valid set; nothing stored — asserted
