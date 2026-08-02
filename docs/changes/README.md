@@ -252,11 +252,15 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `tests="1061" skipped="1"` ingested as `passed=1061`, and a python report `tests="2" skipped="2"`
   (an entire class where nothing ran) ingested as `passed=2` — so this project's own published
   gate figures are inflated, the failure mode CR-039/CR-047 exist to prevent.
-- 2026-08-02 (**STRATEGY CHANGE — user decision**) — **Crucible bundles the SERVER AND THE CLIENT
-  SCRIPTS together** as one matched, locally-deployable artifact; the CR-CRU-041 composite-lockstep
-  machinery (one tag, `crucible-axi` pinning `@anthill-tec/crucible-server@<version>`) becomes the
-  PRIMARY delivery model rather than a packaging detail. Rationale: the client↔server contract is
-  ONE contract — "they're closely matched" — so shipping the halves separately invites the version
+- 2026-08-02 (**STRATEGY CHANGE — user decision**) — **the SERVER and CLIENT packages are
+  INSTALLED TOGETHER by uv: one operation, one version.** Wording precision (user-corrected):
+  "bundled" does NOT mean a single merged artifact — the **server stays a bun/npm package**
+  (`@anthill-tec/crucible-server`), the **client stays a Python/PyPI package** (`crucible-axi`,
+  carrying the `*-crucible.py` fleet). Two registries, two natures, ONE version-locked install,
+  deployable at local scope. The CR-CRU-041 composite-lockstep machinery (one `vX.Y.Z` tag,
+  `crucible-axi` pinning `@anthill-tec/crucible-server@<version>`) is therefore promoted from a
+  packaging detail to the PRIMARY delivery model. Rationale: the client↔server contract is ONE
+  contract — "they're closely matched" — so installing the halves separately invites the version
   skew this project keeps paying for. **Model-B owns the SKILLS only** (the skills that reference
   Crucible's capabilities); they no longer bundle our client scripts. **Intimation cadence: ONCE
   PER RELEASE, after that release's CRs are complete** — never per client change, and no CR merge
