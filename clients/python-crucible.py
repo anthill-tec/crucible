@@ -360,7 +360,7 @@ def _open_plans(project_dir):
     return _axi().open_plans(_get, _plans_path(project_dir))
 
 
-def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent):
+def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=None):
     """Emit the §S1 envelope for an ingest verb:
     run{passed,failed,pending,total,files}. `files` (CR-CRU-051 §S2, propagating
     CR-CRU-047 §S2 from the bun reference) is the distinct-source count from
@@ -372,13 +372,18 @@ def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent):
     (a stale binding gets a 409, surfaced via `error`). C5 — the envelope
     context ECHOES the attachment the SERVER reported (`context.cycleId` on the
     ingest response), so the agent sees which cycle absorbed its evidence
-    without a second `GET /api/v2/events`; absent → the key is omitted."""
+    without a second `GET /api/v2/events`; absent → the key is omitted.
+
+    CR-CRU-058 §S2 — `help_steps` lets a GATE caller supply the STATE-DERIVED
+    next step for the run it just made (`_axi().run_help`), instead of the
+    canned per-verb `HELP_STEPS` entry; unset keeps today's behaviour exactly."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
            "total": summary["total"], "files": files}
     context = _axi_context(project_dir, agent_id=agent,
                            cycle_id=_axi().echoed_cycle_id(resp))
-    result_fields = {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])}
+    result_fields = {"run": run,
+                     "help": help_steps or _axi().HELP_STEPS.get(verb, ["status"])}
     err = resp.get("error")
     if err is not None:
         # Faithful pass-through: a 409 (stale binding / unregistered poster)
@@ -680,12 +685,16 @@ def cmd_test(args):
     return result.returncode or 1
 
 
-def cmd_regression(args):
+def cmd_regression(args, verb="regression"):
     """Gated regression run — an opening heartbeat DECLARES the run's identity
     (binding it when `--cycle` is given), and the ingest body is wrapped in the
     anti-ghost silent cleanup (CR-CRU-008 §S4). CR-CRU-056 — the cleanup fires
     ONLY for an identity this run created; a caller who registered BEFORE the
-    run keeps its registration and its cycle binding."""
+    run keeps its registration and its cycle binding.
+
+    CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
+    `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
+    must carry ONE document under the GATE's own verb, not the inner one's."""
     project_dir = _resolve_project_dir(args.project_dir)
     identity = None
     try:
@@ -693,15 +702,16 @@ def cmd_regression(args):
             identity = _open_gate_identity(project_dir, args.agent,
                                            getattr(args, "cycle", None),
                                            "gated regression run starting")
-        return _regression_run(args)
+        return _regression_run(args, verb)
     finally:
         _close_gate_identity(project_dir, identity)
 
 
-def _regression_run(args):
+def _regression_run(args, verb="regression"):
     """Full-suite discover via xmlrunner (tier regression). With --coverage: run under
     coverage.py and post /api/v2/runs/parsed with coverage. A bound agent's run is
-    server-stamped with its registered cycle."""
+    server-stamped with its registered cycle. `verb` (CR-CRU-058 §S1) names the
+    envelope — see `cmd_regression`."""
     project_dir = _resolve_project_dir(args.project_dir)
     python = _resolve_python(args.python, project_dir)
     reports_dir = _reports_dir(project_dir, args.reports)
@@ -743,7 +753,7 @@ def _regression_run(args):
                       f"pattern={args.pattern!r} matched nothing")
             warning = {"code": "no-tests-discovered", "detail": detail}
             print(f"[crucible] ERROR: no-tests-discovered — {detail}", file=sys.stderr)
-            _emit_axi("regression", False,
+            _emit_axi(verb, False,
                       {"help": ["check --start-dir / --pattern; ensure the test dir "
                                 "is a package (has __init__.py)"]},
                       _axi_context(project_dir, agent_id=args.agent), [warning])
@@ -758,7 +768,14 @@ def _regression_run(args):
     coverage = _collect_coverage(python, project_dir, env) if coverage_on else None
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                           tier="regression", context=_run_context(), files=files)
-    _emit_ingest_axi("regression", resp, summary, files, project_dir, args.agent)
+    ok = bool(resp.get("ok")) and summary["failed"] == 0
+    # §S2 — a GATE run's next step is derived from the run state it reached
+    # (unrecorded / red / green); the plain `regression` verb keeps its canned
+    # HELP_STEPS entry, unchanged.
+    help_steps = (_axi().run_help(verb, ok, summary["failed"], CRUCIBLE_URL)
+                  if verb != "regression" else None)
+    _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
+                     help_steps=help_steps)
     return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
 
 
@@ -782,6 +799,19 @@ def cmd_check(args):
     """python -m py_compile over the given paths (default app/ + tests/). With --agent,
     ingest any errors as a compile failure. §S2/§S15 — returns the §S1 envelope."""
     project_dir = _resolve_project_dir(args.project_dir)
+    state = _check_gate(args, project_dir)
+    legacy = f"check: ok={state['ok']} exit={state['exit']}"
+    _emit_axi("check", state["ok"],
+              {"exit": state["exit"], "help": _axi().HELP_STEPS["check"]},
+              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+    return 0 if state["ok"] else (state["exit"] or 1)
+
+
+def _check_gate(args, project_dir):
+    """The py_compile gate itself — CR-CRU-058 §S1: this helper NEVER emits, so
+    the two envelope-owning verbs that run it (`check` standalone, and
+    `pre-merge-gate`'s fail-fast step 0) each put exactly ONE document on
+    stdout. Returns the measured state — `{exit, ok}` — and its caller emits."""
     python = _resolve_python(args.python, project_dir)
     paths = args.paths or ["app", "tests"]
     files = []
@@ -801,33 +831,49 @@ def cmd_check(args):
         sys.stderr.write(result.stderr)
         if args.agent:
             _ingest_compile(project_dir, args.agent, result.stderr)
-    legacy = f"check: ok={ok} exit={result.returncode}"
-    _emit_axi("check", ok,
-              {"exit": result.returncode, "help": _axi().HELP_STEPS["check"]},
-              _axi_context(project_dir, agent_id=args.agent), [], legacy)
-    return 0 if ok else (result.returncode or 1)
+    return {"exit": result.returncode, "ok": ok}
 
 
 def cmd_pre_merge_gate(args):
     """ORCHESTRATOR pre-merge gate — the ONLY path that measures coverage. Steps:
     fail-fast `check` (py_compile) → full `regression --coverage`."""
+    project_dir = _resolve_project_dir(args.project_dir)
     if not getattr(args, "skip_check", False):
         check_args = argparse.Namespace(
             paths=None, agent=args.agent, python=args.python, project_dir=args.project_dir,
         )
-        rc = cmd_check(check_args)
-        if rc != 0:
+        # The STEP form (no envelope of its own) — this gate owns stdout.
+        state = _check_gate(check_args, project_dir)
+        if not state["ok"]:
             print("[crucible] pre-merge gate FAILED at the py_compile check step — "
                   "skipped the regression. Fix syntax first (or --skip-check to bypass).",
                   file=sys.stderr)
-            return rc
+            # §S2 — the state reached is "aborted at step 0, the regression
+            # never ran": the next action is the syntax error, never the gate's
+            # own successor. A passing gate falls through to the regression
+            # envelope below, whose help[] is derived from the RUN state.
+            _emit_axi("pre-merge-gate", False,
+                      {"stage": "check", "exit": state["exit"],
+                       "help": _axi().gate_step_abort_help(
+                           "pre-merge-gate",
+                           "fix the py_compile syntax error(s) reported on "
+                           "stderr (or --skip-check to bypass)")},
+                      _axi_context(project_dir, agent_id=args.agent),
+                      [_axi().gate_step_abort_warning(
+                          "pre-merge-gate", "py_compile check",
+                          "the sources do not compile")],
+                      f"pre-merge-gate: ok=False exit={state['exit']} — "
+                      f"aborted at the py_compile check step")
+            return state["exit"] or 1
     reg_args = argparse.Namespace(
         agent=args.agent, coverage=True, cov_source=args.cov_source,
         start_dir=args.start_dir, pattern=args.pattern, reports=args.reports,
         python=args.python, project_dir=args.project_dir, log=getattr(args, "log", None),
         cycle=getattr(args, "cycle", None),
     )
-    return cmd_regression(reg_args)
+    # §S1 — the regression body emits under THIS gate's verb, so the gate puts
+    # exactly one envelope on stdout under the name the caller invoked.
+    return cmd_regression(reg_args, verb="pre-merge-gate")
 
 
 # ── CR-CRU-008/030 — plan verbs ─────────────────────────────────────────────

@@ -240,6 +240,11 @@ class RustRegressionIngestFilesCountTest(unittest.TestCase):
 
     def setUp(self):
         self.module = _load_module_by_path(RUST_SCRIPT, "cr051_c2_rust_regr_under_test")
+        # CR-CRU-058 §S3 re-point -- GREEN-a moved the human `regression:
+        # ok=...` line to stderr and the verb now emits a §S1 TOON envelope
+        # on stdout; this test class asserts BOTH surfaces, so it needs the
+        # decoder too.
+        self.toon = _load_module_by_path(TOON_SCRIPT, "cr051_c2_toon_for_rust_regr")
         self.tmpdir = tempfile.mkdtemp(prefix="cr051-c2-rust-regr-")
         _write(os.path.join(self.tmpdir, ".env"),
                f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
@@ -267,12 +272,17 @@ class RustRegressionIngestFilesCountTest(unittest.TestCase):
         return fake
 
     def test_regression_ingest_prints_files_count_of_distinct_classnames(self):
-        """§S1/§S2 AC: the human-readable `regression: ok=...` line must carry
-        `files=2` -- 2 distinct nextest classnames (test binaries) across 3
-        testcases. nextest never stamps `file` (measured empirically against
-        the real cargo-nextest 0.9.130 installed on this machine), so the
-        count here is genuinely classname-derived. A no-op GREEN that leaves
-        the line unchanged fails this at the substring check, not a crash."""
+        """§S1/§S2 AC, STRENGTHENED by CR-CRU-058 §S3's re-point: the
+        distinct-source count's subject was always that it is computed and
+        surfaced -- the channel it rides was incidental. GREEN-a moved the
+        `regression: ok=...` narration to STDERR and gave the verb a §S1
+        TOON envelope on STDOUT carrying `run.files` -- so this now asserts
+        `files=2` (2 distinct nextest classnames: test binaries, across 3
+        testcases; nextest never stamps `file`, measured empirically
+        against the real cargo-nextest 0.9.130 installed on this machine)
+        on BOTH surfaces, never only one. A no-op GREEN, or a future change
+        that drops either surface silently, fails one of the two checks
+        below rather than a crash."""
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=self._fake_subprocess_run(NEXTEST_TWO_BINARIES)), \
              mock.patch.object(self.module, "_post", return_value={"ok": True}, create=True), \
@@ -283,19 +293,35 @@ class RustRegressionIngestFilesCountTest(unittest.TestCase):
                 "--crates", "some-crate", "--agent", "CR-CRU-051-C2-rust-regr-check",
             ])
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
-        self.assertIn("passed=3", out)
-        self.assertIn("total=3", out)
+        # Surface 1 -- the human line, now on stderr (§S3 stdout purity).
+        self.assertIn("passed=3", err)
+        self.assertIn("total=3", err)
         self.assertIn(
-            "files=2", out,
-            f"the 'regression: ok=...' line must carry files=2 (2 distinct "
-            f"classnames: probe_crate::second_probe_test, "
-            f"probe_crate::probe_test); got stdout={out!r}")
+            "files=2", err,
+            f"the 'regression: ok=...' line (now on stderr, §S3) must "
+            f"carry files=2 (2 distinct classnames: "
+            f"probe_crate::second_probe_test, probe_crate::probe_test); "
+            f"got stderr={err!r}")
+        # Surface 2 -- the §S1 TOON envelope's structured `run.files`, new
+        # since rust's regression-ingest got an emitter (C3 GREEN-a).
+        decoded = self.toon.decode(out)
+        run = decoded["axi"].get("run")
+        self.assertIsInstance(run, dict, f"stdout must decode a run: block; got out={out!r}")
+        self.assertEqual(
+            run.get("files"), 2,
+            f"the envelope's structured run.files must also carry 2 (the "
+            f"same distinct-classname count as the stderr line); got "
+            f"run={run!r}")
 
     def test_regression_ingest_files_count_never_zero_via_suite_name_fallback(self):
         """AC (verbatim): "A report whose testcases carry no `file` attribute
         still yields a NON-ZERO `files` count via the `classname` ->
         suite-name fallback." Here no testcase carries `classname` OR `file`
-        -- only the two distinct suite names are available."""
+        -- only the two distinct suite names are available. STRENGTHENED by
+        CR-CRU-058 §S3: the never-zero fallback semantics must hold
+        identically on BOTH the stderr human line and the stdout envelope's
+        `run.files` -- a future change cannot drop the guarantee on one
+        surface while leaving the other looking healthy."""
         with mock.patch.object(self.module.subprocess, "run",
                                 side_effect=self._fake_subprocess_run(NEXTEST_BARE)), \
              mock.patch.object(self.module, "_post", return_value={"ok": True}, create=True), \
@@ -306,19 +332,38 @@ class RustRegressionIngestFilesCountTest(unittest.TestCase):
                 "--crates", "some-crate", "--agent", "CR-CRU-051-C2-rust-regr-bare",
             ])
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
-        self.assertIn("total=2", out)
-        match = re.search(r"files=(\d+)", out)
+        # Surface 1 -- stderr human line (§S3 moved it there).
+        self.assertIn("total=2", err)
+        match = re.search(r"files=(\d+)", err)
         self.assertIsNotNone(
-            match, f"'files=' must appear in the printed line at all; got stdout={out!r}")
-        files = int(match.group(1))
+            match, f"'files=' must appear in the stderr line at all; got stderr={err!r}")
+        stderr_files = int(match.group(1))
         self.assertGreater(
-            files, 0,
-            "files must NEVER degrade to 0 -- a constant zero would make a "
-            "shrinking suite look identical to a healthy one")
+            stderr_files, 0,
+            "files must NEVER degrade to 0 on the stderr line -- a "
+            "constant zero would make a shrinking suite look identical "
+            "to a healthy one")
         self.assertEqual(
-            files, 2,
-            f"with no file/classname anywhere, files must fall back to the "
-            f"2 distinct SUITE names; got files={files!r}")
+            stderr_files, 2,
+            f"with no file/classname anywhere, the stderr line's files "
+            f"must fall back to the 2 distinct SUITE names; got "
+            f"files={stderr_files!r}")
+        # Surface 2 -- stdout envelope's structured run.files, same
+        # never-zero fallback semantics.
+        decoded = self.toon.decode(out)
+        run = decoded["axi"].get("run")
+        self.assertIsInstance(run, dict, f"stdout must decode a run: block; got out={out!r}")
+        envelope_files = run.get("files")
+        self.assertIsNotNone(
+            envelope_files, f"run.files must be present, not omitted; got run={run!r}")
+        self.assertGreater(
+            envelope_files, 0,
+            "run.files must NEVER degrade to 0 in the envelope either -- "
+            "same never-zero guarantee as the stderr line")
+        self.assertEqual(
+            envelope_files, 2,
+            f"the envelope's run.files must also fall back to the 2 "
+            f"distinct SUITE names; got run.files={envelope_files!r}")
 
     def test_granularity_is_documented_in_a_comment_beside_regression_ingest(self):
         """AC: "The resolved granularity per client (file vs class) is
@@ -366,8 +411,9 @@ class RustRegressionIngestFilesCountTest(unittest.TestCase):
 
 # ── SITE 2: `_workspace_regression_run` / verb `workspace-regression` ──────
 # CLIENT-PARSED, the pre-merge-gate path §S3 names. Structurally its own copy
-# of the same inline ET.parse loop (no shared helper) -- prints a PLAIN line
-# (`workspace regression: ok=...`), no TOON envelope either.
+# of the same inline ET.parse loop (no shared helper). CR-CRU-058 C3
+# GREEN-a: the `workspace regression: ok=...` line moved to stderr (§S3
+# purity) and the verb now ALSO carries a §S1 TOON envelope on stdout.
 
 
 class RustWorkspaceRegressionFilesCountTest(unittest.TestCase):
@@ -375,6 +421,10 @@ class RustWorkspaceRegressionFilesCountTest(unittest.TestCase):
 
     def setUp(self):
         self.module = _load_module_by_path(RUST_SCRIPT, "cr051_c2_rust_ws_under_test")
+        # CR-CRU-058 §S3 re-point -- same reasoning as the sibling regression
+        # class: the human line moved to stderr, the stdout envelope's
+        # structured run.files is the new surface, assert both.
+        self.toon = _load_module_by_path(TOON_SCRIPT, "cr051_c2_toon_for_rust_ws")
         self.tmpdir = tempfile.mkdtemp(prefix="cr051-c2-rust-ws-")
         _write(os.path.join(self.tmpdir, ".env"),
                f"CRUCIBLE_PROJECT_KEY={self.PROJECT_KEY}\n")
@@ -408,29 +458,62 @@ class RustWorkspaceRegressionFilesCountTest(unittest.TestCase):
     def test_workspace_regression_prints_files_count_of_distinct_classnames(self):
         """Same AC as site 1, mirrored at the pre-merge-gate path -- this is
         the trap CR-CRU-050 flagged: fixing only site 1 looks complete and
-        leaves the merge gate's own count blind."""
+        leaves the merge gate's own count blind. STRENGTHENED by
+        CR-CRU-058 §S3's re-point: the subject was always that the count is
+        computed and surfaced, not which channel carries it -- assert it on
+        BOTH the stderr human line (where GREEN-a moved it) and the stdout
+        envelope's structured run.files (newly present now that
+        workspace-regression also emits)."""
         code, out, err = self._run_workspace_regression(NEXTEST_TWO_BINARIES)
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
-        self.assertIn("passed=3", out)
-        self.assertIn("total=3", out)
+        # Surface 1 -- stderr human line (§S3 stdout purity moved it here).
+        self.assertIn("passed=3", err)
+        self.assertIn("total=3", err)
         self.assertIn(
-            "files=2", out,
-            f"the 'workspace regression: ok=...' line must carry files=2; "
-            f"got stdout={out!r}")
+            "files=2", err,
+            f"the 'workspace regression: ok=...' line (now stderr, §S3) "
+            f"must carry files=2; got stderr={err!r}")
+        # Surface 2 -- the §S1 TOON envelope's structured run.files.
+        decoded = self.toon.decode(out)
+        run = decoded["axi"].get("run")
+        self.assertIsInstance(run, dict, f"stdout must decode a run: block; got out={out!r}")
+        self.assertEqual(
+            run.get("files"), 2,
+            f"the envelope's structured run.files must also carry 2; got run={run!r}")
 
     def test_workspace_regression_files_count_never_zero_via_suite_name_fallback(self):
+        """STRENGTHENED by CR-CRU-058 §S3: the never-zero fallback
+        guarantee must hold on BOTH the stderr human line and the stdout
+        envelope's run.files -- never only one surface."""
         code, out, err = self._run_workspace_regression(NEXTEST_BARE)
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
-        self.assertIn("total=2", out)
-        match = re.search(r"files=(\d+)", out)
+        # Surface 1 -- stderr human line.
+        self.assertIn("total=2", err)
+        match = re.search(r"files=(\d+)", err)
         self.assertIsNotNone(
-            match, f"'files=' must appear in the printed line at all; got stdout={out!r}")
-        files = int(match.group(1))
-        self.assertGreater(files, 0, "files must never degrade to 0")
+            match, f"'files=' must appear in the stderr line at all; got stderr={err!r}")
+        stderr_files = int(match.group(1))
+        self.assertGreater(stderr_files, 0, "files must never degrade to 0 on the stderr line")
         self.assertEqual(
-            files, 2,
-            f"with no file/classname anywhere, files must fall back to the "
-            f"2 distinct SUITE names; got files={files!r}")
+            stderr_files, 2,
+            f"with no file/classname anywhere, the stderr line's files "
+            f"must fall back to the 2 distinct SUITE names; got "
+            f"files={stderr_files!r}")
+        # Surface 2 -- stdout envelope's run.files, same never-zero
+        # fallback semantics.
+        decoded = self.toon.decode(out)
+        run = decoded["axi"].get("run")
+        self.assertIsInstance(run, dict, f"stdout must decode a run: block; got out={out!r}")
+        envelope_files = run.get("files")
+        self.assertIsNotNone(
+            envelope_files, f"run.files must be present, not omitted; got run={run!r}")
+        self.assertGreater(
+            envelope_files, 0,
+            "run.files must never degrade to 0 in the envelope either")
+        self.assertEqual(
+            envelope_files, 2,
+            f"the envelope's run.files must also fall back to the 2 "
+            f"distinct SUITE names; got run.files={envelope_files!r}")
 
     def test_granularity_is_documented_in_a_comment_beside_workspace_regression(self):
         body = _function_source_segment(RUST_SCRIPT, "_workspace_regression_run")

@@ -1,4 +1,9 @@
-# CR-CRU-058 — Nine rust verbs emit no TOON-AXI envelope, including the pre-merge gate
+# CR-CRU-058 — 40 of 118 client verbs emit no TOON-AXI envelope, including the pre-merge gate in all five clients
+
+> **Title corrected 2026-08-02.** Filed as "nine rust verbs" from hand-tracing. §S0's detector
+> measured **40 across all five clients**, and `pre-merge-gate` — the CR's headline concern — was
+> bare in every one of them, not just rust. The original framing is preserved below in Context for
+> the record; §S0b is the measured scope.
 
 **Status:** PENDING
 **Type:** patch (AXI-compliance — fleet parity)
@@ -63,6 +68,38 @@ derived by reading four verb bodies plus their delegate helpers — solid for th
 position is that the fleet-wide count is UNKNOWN until the detector runs. The §S1 fix list is
 whatever the detector reports, not what this document currently guesses.
 
+### §S0b — THE CENSUS (detector output, 2026-08-02 — this is the CR's real scope)
+118 verbs driven as subprocesses with stubbed toolchains. **40 emit no envelope.** Not nine.
+
+| client | verbs | envelope-less |
+|---|---|---|
+| rust | 28 | **13** |
+| mvn | 26 | **12** |
+| arduino | 22 | 5 |
+| bun | 21 | 5 |
+| python | 21 | 5 |
+
+**`pre-merge-gate` is bare in ALL FIVE clients** — the CR's stated top concern turns out to be
+five times wider than filed. The orchestrator's merge-decision path emits no envelope in any
+client.
+
+Beyond rust's original nine (all confirmed still bare):
+- **mvn** `unit`, `module`, `compile`, `e2e` never reach an emitter
+  (`_run_surefire_tier → _smart_ingest → _ingest_parsed`, no emit anywhere in the chain).
+- **Fleet-wide, in the SHARED module** (so CR-054 lifted a bare implementation — one fix now
+  covers all five, the consolidation dividend): `milestone` never calls any emitter, only a
+  stderr print.
+- **A sibling asymmetry worth naming:** `cycle-activate` / `cycle-done` / `cr-close` go bare
+  *specifically when the `/plans` GET fails*, because they call `open_plans()`, which does a bare
+  `sys.exit()`. Their siblings `cycle-add` / `checkpoint` / `abort` use `resolve_plan_or_emit()`,
+  which correctly emits on the identical failure. Two helpers, same job, opposite behaviour on
+  the error path — the exact drift class CR-CRU-054 was built to end.
+- **mvn `regression`** DOES emit, but an unguarded `print(f"[regression] running: …")` pollutes
+  stdout before the envelope — a §S3 stdout-purity defect, not an §S1 gap. Classified separately.
+
+Zero verbs were unmeasurable. Non-vacuity proven: `status` and `register` detect as enveloped in
+all five clients even under a refused connection.
+
 ### §S1 — Every rust verb emits a TOON-AXI envelope
 All nine gain an `axi:` block matching the fleet's established shape (`verb`, `ok`, verb-specific
 result fields, `help[]`, `context`, `warnings[]`) via the shared emitters in `_crucible_axi.py` —
@@ -93,15 +130,15 @@ drift guard: enumerate verbs from each client's argparse, assert each produces a
 explicit justified allow-list if any verb legitimately cannot (state the reason in-file).
 
 ## Acceptance criteria
-- [ ] All nine rust verbs emit an `axi:` envelope with `ok`, verb-specific fields, non-empty
+- [x] **(re-scoped by §S0b: all 40, not nine)** every envelope-less verb fleet-wide emits an `axi:` envelope with `ok`, verb-specific fields, non-empty
       `help[]`, `context`, and `warnings[]` — asserted per verb by driving the real CLI.
-- [ ] The envelopes come from the SHARED emitters, not a rust-local copy — asserted (the CR-054
+- [x] The envelopes come from the SHARED emitters, not a rust-local copy — asserted (the CR-054
       drift guard must stay green).
-- [ ] `help[]` is state-derived: a failing and a passing run of the same verb produce DIFFERENT
+- [x] `help[]` is state-derived: a failing and a passing run of the same verb produce DIFFERENT
       next-step text — asserted for at least the two gate verbs.
-- [ ] No `[crucible] …` human line reaches stdout from any of the nine; stdout parses as a TOON
+- [x] No `[crucible] …` human line reaches stdout from ANY verb in ANY client; stdout parses as a TOON
       envelope alone — asserted (§S3).
-- [ ] The §S4 guard fails when a verb is added without an envelope — proven by adding one
+- [x] The §S4 guard fails when a verb is added without an envelope — proven by adding one
       temporarily.
 - [ ] Full bun regression green AND full Python regression green (client change → both gates, per
       CR-CRU-045 §S3).

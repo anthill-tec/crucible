@@ -274,17 +274,76 @@ def plans_path(project_key):
     return f"/api/v2/projects/{project_key}/plans"
 
 
+class PlansFetchFailed(SystemExit):
+    """CR-CRU-058 §S1 — the plans GET inside `open_plans` failed.
+
+    A `SystemExit` SUBCLASS deliberately: `open_plans`'s hard-stop contract
+    (a failed GET is NEVER an empty list) is preserved unchanged for every
+    caller, while the verbs that own an envelope catch THIS type narrowly and
+    report the failure the way `resolve_plan_or_emit` already does — an
+    ok:false envelope on stdout — before returning the same non-zero rc the
+    bare `sys.exit` produced. Carries the server `error` separately so the
+    envelope can name the real condition rather than re-parse the message."""
+
+    def __init__(self, message, error=None):
+        super().__init__(message)
+        self.error = error
+
+
+def plans_fetch_failed_help(base_url):
+    """CR-CRU-058 §S2 (PURE) — the state-derived `help[]` for a verb that could
+    not READ the plan board at all.
+
+    Distinct from the verb's canned `HELP_STEPS` entry by design (CR-CRU-048's
+    rule): the state actually reached is "the board is unreadable", so the
+    concrete next action is to restore the server, and only then re-read the
+    board — pointing at the verb's normal successor here would walk the
+    orchestrator straight back into the same failure."""
+    return [f"check the Crucible server is running / reachable at {base_url}",
+            "status"]
+
+
+def plans_unavailable_warning(verb, error):
+    """CR-CRU-058 §S1 — the structured warning naming the ACTUAL condition
+    behind a plans-fetch failure, so a machine caller reading the envelope
+    alone (the human line is stderr-only) learns why the verb could not run.
+    Mirrors `cmd_status`'s `status-unavailable` shape."""
+    return {
+        "code": "plans-unavailable",
+        "detail": (f"could not read the plan board to {verb}: {error} — "
+                   f"nothing was posted"),
+    }
+
+
 def open_plans(get_fn, path):
     """GET the plans collection at `path` via the client's own `get_fn` and
     return ONLY the `status:"open"` plans, in server order.
 
-    A failed GET is a hard stop (`SystemExit` naming the server error), not an
-    empty list: silently reporting "no open plans" when the server is
-    unreachable is the false-negative this shared copy exists to prevent."""
+    A failed GET is a hard stop (`PlansFetchFailed`, a `SystemExit` naming the
+    server error), not an empty list: silently reporting "no open plans" when
+    the server is unreachable is the false-negative this shared copy exists to
+    prevent. CR-CRU-058 §S1 only makes the stop TYPED — the envelope-owning
+    callers (`cmd_cr_close` / `cycle_transition`) catch it and emit the
+    ok:false envelope the bare exit never produced."""
     resp = get_fn(path)
     if not resp.get("ok"):
-        sys.exit(f"[crucible] ERROR: could not list plans: {resp.get('error')}")
+        error = resp.get("error")
+        raise PlansFetchFailed(
+            f"[crucible] ERROR: could not list plans: {error}", error=error)
     return [p for p in resp.get("plans", []) if p.get("status") == "open"]
+
+
+def emit_plans_fetch_failure(verb, exc, project_dir, ops, result_fields, cr=None):
+    """CR-CRU-058 §S1 — report a `PlansFetchFailed` as the fleet's standard
+    ok:false envelope (the shape `resolve_plan_or_emit` already produces for
+    the IDENTICAL failure on `cycle-add`/`checkpoint`/`abort`) and return the
+    non-zero rc the bare `sys.exit` used to produce. The human line stays the
+    exit's own message, on stderr, via the emitter's legacy channel."""
+    fields = dict(result_fields)
+    fields["help"] = plans_fetch_failed_help(ops.base_url)
+    ops.emit(verb, False, fields, ops.context(project_dir, cr=cr),
+             [plans_unavailable_warning(verb, exc.error)], str(exc))
+    return 1
 
 
 def resolve_plan_or_emit(verb, cr, result_fields, open_only,
@@ -612,6 +671,72 @@ def no_title_warning(cr):
         "code": "no-title",
         "detail": (f"plan filed for {cr} with no title — --title was unset; "
                    f"the plan is title-less until one is supplied"),
+    }
+
+
+# ── CR-CRU-058 §S1/§S2 — the toolchain-gate help/warning vocabulary ────────
+#
+# The verbs C3 gives envelopes to (`unit`/`module`/`compile`/`e2e`/`docker-*`/
+# `pre-merge-gate`) exist in four clients with the SAME two states to describe:
+# a run that happened but could not be recorded, and a fail-fast step that
+# aborted the gate before the suite ran. Both live HERE rather than as four
+# per-client copies — the CR-CRU-054 consolidation dividend. They are PURE
+# (no I/O, no globals): the caller passes its own resolved `base_url`.
+
+
+def server_unreachable_help(verb, base_url):
+    """CR-CRU-058 §S2 — the state-derived `help[]` for a run that produced real
+    results but could not record them: pointing at the verb's normal successor
+    would walk the orchestrator past a run that was never ingested."""
+    return [f"check the Crucible server is running / reachable at {base_url}, "
+            f"then re-run {verb} --agent <agentId>",
+            "status"]
+
+
+def ingest_failed_warning(verb, base_url):
+    """CR-CRU-058 §S1 — the structured warning naming the condition behind a
+    completed run whose evidence never reached the board, so a machine caller
+    reading the envelope alone (the human line is stderr-only) learns that the
+    run happened but is NOT recorded. Mirrors `plans_unavailable_warning`."""
+    return {
+        "code": "ingest-failed",
+        "detail": (f"the {verb} run completed but its ingest to {base_url} "
+                   f"did not succeed — the evidence is NOT on the board"),
+    }
+
+
+def run_help(verb, ok, failed, base_url):
+    """CR-CRU-058 §S2 (CR-CRU-048's rule, PURE) — the next step for a
+    test-running verb, derived from the run state ACTUALLY reached: an
+    unrecorded run points at the server, a red run at its failures, a green one
+    at the next workflow move. Never a canned per-verb string."""
+    if not ok and not failed:
+        return server_unreachable_help(verb, base_url)
+    if failed:
+        return [f"fix the {failed} failing test(s), then re-run "
+                f"{verb} --agent <agentId>",
+                "status"]
+    return ["cycle-done <id>", "status"]
+
+
+def gate_step_abort_help(verb, remedy):
+    """CR-CRU-058 §S2 — the `help[]` for a gate that stopped at its fail-fast
+    step: the concrete next action is the step's OWN remedy, then re-running
+    the gate — never the gate's successor, which would skip a suite that never
+    ran."""
+    return [remedy, f"re-run {verb} --agent <agentId>", "status"]
+
+
+def gate_step_abort_warning(verb, step, detail):
+    """CR-CRU-058 §S1 — the structured warning for a gate aborted at `step`,
+    naming what consequently did NOT happen: an ok:false envelope alone would
+    not tell a machine caller that the regression never ran, so the gate says
+    NOTHING about the test suite."""
+    return {
+        "code": "gate-step-abort",
+        "detail": (f"{verb} stopped at its fail-fast {step} step — {detail}; "
+                   f"the regression never ran, so this gate says NOTHING "
+                   f"about the test suite"),
     }
 
 
@@ -1063,7 +1188,14 @@ def cmd_cr_close(args, project_dir, ops):
     the registered caller identity, resolved FIRST: a hard stop must happen
     before the plan GET/PATCH, never after the CR has already been closed."""
     agent_id = ops.agent_id(args)
-    open_plans = ops.open_plans(project_dir)
+    try:
+        open_plans = ops.open_plans(project_dir)
+    except PlansFetchFailed as exc:
+        # CR-CRU-058 §S1 — an unreadable plan board used to leave cr-close with
+        # NOTHING on stdout; it now reports the failure in the same ok:false
+        # envelope its sibling verbs already emit.
+        return emit_plans_fetch_failure("cr-close", exc, project_dir, ops,
+                                        {"commit": args.commit}, cr=args.cr)
     if args.cr:
         open_plans = [p for p in open_plans if p.get("cr") == args.cr]
     if len(open_plans) == 0:
@@ -1118,13 +1250,19 @@ def cycle_transition(args, project_dir, ops, status):
     resolve the identity FIRST so the hard stop precedes any request."""
     agent_id = ops.agent_id(args)
     cycle_id = args.cycle_id
-    open_plans = ops.open_plans(project_dir)
+    verb = "cycle-activate" if status == "active" else "cycle-done"
+    try:
+        open_plans = ops.open_plans(project_dir)
+    except PlansFetchFailed as exc:
+        # CR-CRU-058 §S1 — same correction as cr-close: the transition reports
+        # an unreadable plan board as an envelope, not a bare process exit.
+        return emit_plans_fetch_failure(verb, exc, project_dir, ops,
+                                        {"cycle": cycle_id})
     target = next(
         (p for p in open_plans
          if any(c.get("id") == cycle_id for c in p.get("cycles", []))),
         None,
     )
-    verb = "cycle-activate" if status == "active" else "cycle-done"
     # §S13/§S15 + CR-CRU-048 §S1/§S3 — every cycle-transition envelope carries a
     # `help[]` of concrete next-step commands, DERIVED from the resolved plan's
     # own cycle state (the hardcoded per-client ternary is exactly how that
@@ -1327,21 +1465,47 @@ def cmd_plan_file(args, project_dir, ops):
     return 0
 
 
+def milestone_help(ok, mtype, base_url):
+    """CR-CRU-058 §S2 (PURE) — the state-derived `help[]` for `milestone`.
+
+    A posted marker's next move is to read the board it now shows on; a
+    REFUSED post has not recorded anything, so the next move is to restore the
+    server and re-post the SAME marker type (named, so the retry is concrete)
+    — per CR-CRU-048, the two states must not share one canned string."""
+    if ok:
+        return ["status"]
+    return [f"check the Crucible server is running / reachable at {base_url}",
+            f"milestone --type {mtype} --agent <agentId>"]
+
+
 def cmd_milestone(args, project_dir, ops):
     """POST a workflow milestone. §S4b.
 
     CR-CRU-054 §S2b (DN §4 finding #1) — the legacy line is the INTERACTIVE
     channel and belongs on stderr; on stdout it corrupts the §S1 envelope
-    stream a machine caller parses."""
+    stream a machine caller parses.
+
+    CR-CRU-058 §S1 — the verb reached NO emitter at all: the stderr line was
+    its only output, so a machine caller saw nothing on stdout. It now emits
+    the fleet's standard envelope like every other write verb, in the shared
+    module, for all five clients at once."""
     context = fleet_context(cr=args.cr)
     resp = ops.post_milestone(project_dir, ops.agent_id(args), args.type,
                               label=args.label, commit=getattr(args, "commit", None),
                               context=context or None)
     ok = resp.get("ok", False)
+    # The interactive line stays an EXPLICIT stderr print (CR-CRU-054 §S2b's
+    # single locus for it) rather than riding the emitter's legacy channel —
+    # the envelope below is an ADDITION to that line, not a replacement.
     print(f"milestone: ok={ok} type={args.type}"
           + (f" label={args.label}" if args.label else "")
           + (f" error={resp.get('error')}" if resp.get("error") else ""),
           file=sys.stderr)
+    ops.emit("milestone", bool(ok),
+             {"type": args.type, "label": args.label,
+              "commit": getattr(args, "commit", None),
+              "help": milestone_help(bool(ok), args.type, ops.base_url)},
+             ops.context(project_dir, cr=args.cr), [], None)
     return 0 if ok else 1
 
 

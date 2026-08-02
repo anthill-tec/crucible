@@ -326,7 +326,8 @@ def _emit_ingest_axi_resp(verb, resp, project_dir, agent):
     _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
 
 
-def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent):
+def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
+                             help_steps=None, warnings=None):
     """Emit the §S1 envelope for a CLIENT-parsed ingest (parsed path): run fields
     come from the client-computed summary. CR-CRU-050 §S2 — `pending` is
     printed alongside, so the line always sums. CR-CRU-051 §S2 — so is `files`,
@@ -335,17 +336,24 @@ def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent):
     itself. CR-CRU-056 §S3 — no client-
     resolved cycle; a bound agent's run is server-stamped. C5 — the envelope
     context ECHOES the attachment the SERVER reported (`context.cycleId` on the
-    ingest response); absent → the key is omitted."""
+    ingest response); absent → the key is omitted.
+
+    CR-CRU-058 §S1/§S2 — `help_steps` lets a caller supply the STATE-DERIVED
+    next step for the run it just made (`_axi().run_help`) instead of the canned
+    per-verb `HELP_STEPS` entry, and `warnings` the structured condition behind
+    a run whose evidence never reached the board; both unset keeps today's
+    behaviour exactly."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
            "total": summary["total"], "files": files}
     context = _axi_context(project_dir, agent_id=agent,
                            cycle_id=_axi().echoed_cycle_id(resp))
-    result_fields = {"run": run, "help": _axi().HELP_STEPS.get(verb, ["status"])}
+    result_fields = {"run": run,
+                     "help": help_steps or _axi().HELP_STEPS.get(verb, ["status"])}
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
 
 
 # ── §S2b (CR-CRU-008) — in-run progress narration (class granularity) ──────
@@ -554,7 +562,8 @@ def _warn_if_stale(dirs):
             age = now - os.path.getmtime(x)
             if age > STALE_THRESHOLD_S:
                 print(f"[crucible] WARN: report looks stale ({int(age)}s old): {x} "
-                      "— did the run actually re-write it? (use `clean` to be sure)")
+                      "— did the run actually re-write it? (use `clean` to be sure)",
+                      file=sys.stderr)
                 return
 
 
@@ -589,7 +598,8 @@ def _parse_junit(dirs):
             try:
                 root = ET.parse(xml_file).getroot()
             except ET.ParseError as e:
-                print(f"[crucible] WARN: unparseable report {xml_file}: {e}")
+                print(f"[crucible] WARN: unparseable report {xml_file}: {e}",
+                      file=sys.stderr)
                 continue
             suite_name = root.get("name", os.path.basename(xml_file))
             children = []
@@ -656,7 +666,8 @@ def _collect_jacoco(maven_dir):
                     mt += int(row.get("METHOD_MISSED", 0) or 0) + int(row.get("METHOD_COVERED", 0) or 0)
                     bc += int(row.get("BRANCH_COVERED", 0) or 0)
                     bt += int(row.get("BRANCH_MISSED", 0) or 0) + int(row.get("BRANCH_COVERED", 0) or 0)
-        print(f"[crucible] jacoco: {len(files)} csv file(s) from {rel}")
+        print(f"[crucible] jacoco: {len(files)} csv file(s) from {rel}",
+              file=sys.stderr)
         return {
             "lines": {"total": lt, "covered": lc, "percent": round(lc / lt * 100, 1) if lt else 0},
             "functions": {"total": mt, "covered": mc, "percent": round(mc / mt * 100, 1) if mt else 0},
@@ -750,19 +761,30 @@ def _ingest_compile(project_dir, agent, output, context=None):
 
 def _smart_ingest(project_dir, agent, dirs, tier=None, context=None):
     """One reports dir with XML → fast junit-dir path. Many → parse + parsed.
-    None → return False so the caller can run the compile fallback.
-    """
+    None → return None so the caller can run the compile fallback.
+
+    CR-CRU-058 §S1 — returns the INGEST STATE (`{resp, summary, files}`) rather
+    than a bare bool, so the caller can emit a `run:` block. Those counts are
+    parsed CLIENT-side on BOTH paths: the ingest response carries none when the
+    server could not be reached, and an envelope reporting a real run as empty
+    would be a false negative. Falsy exactly where the old `False` was (None),
+    so every existing truthiness call site reads unchanged."""
     existing = _dirs_with_xml(dirs)
     if not existing:
-        return False
+        return None
     _warn_if_stale(existing)
     if len(existing) == 1:
-        _ingest_junit_dir(project_dir, agent, existing[0], tier=tier, context=context)
+        resp = _ingest_junit_dir(project_dir, agent, existing[0], tier=tier,
+                                 context=context)
+        # The junit-dir path ingests the DIR (the server parses it), so the
+        # envelope's own counts come from a client-side parse of the same
+        # reports — for the envelope only, never on the wire (CR-CRU-051 §S2).
+        summary, _tree, files = _parse_junit(existing)
     else:
         summary, tree, files = _parse_junit(existing)
-        _ingest_parsed(project_dir, agent, summary, tree, tier=tier, context=context,
-                       files=files)
-    return True
+        resp = _ingest_parsed(project_dir, agent, summary, tree, tier=tier,
+                              context=context, files=files)
+    return {"resp": resp, "summary": summary, "files": files}
 
 
 def _compile_fallback(maven_dir, project_dir, agent, common_flags):
@@ -770,7 +792,8 @@ def _compile_fallback(maven_dir, project_dir, agent, common_flags):
     ingest the build output as a compile failure (the RED-as-compile path)."""
     base = _mvn_base(maven_dir)
     cmd = base + ["clean", "test-compile"] + common_flags
-    print(f"[crucible] no reports — capturing compile: {' '.join(cmd)}")
+    print(f"[crucible] no reports — capturing compile: {' '.join(cmd)}",
+          file=sys.stderr)
     result = subprocess.run(cmd, cwd=maven_dir, capture_output=True, text=True)
     output = (result.stdout or "") + (result.stderr or "")
     return _ingest_compile(project_dir, agent, output)
@@ -787,7 +810,8 @@ def _run_surefire_tier(args, goal_extra, label):
     common = _common_mvn_flags(args)
     cmd = _mvn_base(maven_dir) + ["clean", "test"] + goal_extra + common
     env = os.environ.copy()
-    print(f"[{label}] running: {' '.join(cmd)}  (cwd={maven_dir})")
+    # §S3 — human narration on stderr; stdout carries the §S1 envelope alone.
+    print(f"[{label}] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
     narrator = None
     if args.agent:
         # §S2b — tail the run and narrate class-level progress heartbeats.
@@ -804,7 +828,7 @@ def _run_surefire_tier(args, goal_extra, label):
             _xml_total,
         )
     result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None), narrator)
-    print(f"[{label}] mvn exit={result.returncode}")
+    print(f"[{label}] mvn exit={result.returncode}", file=sys.stderr)
     if not args.agent:
         return result.returncode
     dirs = _report_dirs(maven_dir, getattr(args, "module", None), "surefire")
@@ -812,14 +836,55 @@ def _run_surefire_tier(args, goal_extra, label):
     # server-stamped with its registered cycle.
     ctx = _run_context()
     # CR-CRU-008 §S2 tier map: the subcommand name IS the tier (unit/module).
-    if _smart_ingest(project_dir, args.agent, dirs, tier=label, context=ctx):
+    ingested = _smart_ingest(project_dir, args.agent, dirs, tier=label, context=ctx)
+    if ingested:
         rc = 0
+        # CR-CRU-058 §S1 — the tier verbs reached only a plain-print ingest
+        # helper before this: the run they measured now rides a real envelope,
+        # emitted HERE (the verb), never inside the shared ingest helpers.
+        _emit_tier_run_axi(label, ingested, project_dir, args.agent)
     else:
         rc = _compile_fallback(maven_dir, project_dir, args.agent, common)
+        _emit_compile_fallback_axi(label, rc, project_dir, args.agent)
     # §S2b — the final ingest replaces the narration (strictly after it).
     if narrator is not None:
         narrator.finish()
     return rc
+
+
+def _emit_tier_run_axi(verb, ingested, project_dir, agent):
+    """CR-CRU-058 §S1 — the `run:` envelope for a test-tier verb, from the
+    ingest state `_smart_ingest` measured. §S2 — `help[]` is derived from the
+    state actually reached (unrecorded run / red run / green run), never a
+    canned per-verb string."""
+    resp = ingested["resp"]
+    summary = ingested["summary"]
+    ok = bool(resp.get("ok")) and summary["failed"] == 0
+    _emit_ingest_summary_axi(verb, resp, summary, ingested["files"],
+                             project_dir, agent,
+                             help_steps=_axi().run_help(verb, ok, summary["failed"],
+                                                        CRUCIBLE_URL),
+                             warnings=([] if resp.get("ok")
+                                       else [_axi().ingest_failed_warning(
+                                           verb, CRUCIBLE_URL)]))
+
+
+def _emit_compile_fallback_axi(verb, rc, project_dir, agent):
+    """CR-CRU-058 §S1 — the envelope for the RED-as-compile path: the run
+    produced no reports at all, so there is no `run:` block to carry and the
+    §S2 next step is the build error, never the verb's successor."""
+    _emit_axi(verb, False,
+              {"stage": "compile",
+               "help": [f"the {verb} run produced no surefire reports — fix the "
+                        f"build/test-compile errors ingested to Crucible (and "
+                        f"echoed on stderr), then re-run {verb} --agent <agentId>",
+                        "status"]},
+              _axi_context(project_dir, agent_id=agent),
+              [{"code": "no-test-reports",
+                "detail": (f"{verb} produced no surefire reports — the tests did "
+                           f"not compile; the captured build output was ingested "
+                           f"as a compile failure instead of a test run")}],
+              f"{verb}: ok=False — no reports, ingested as compile (rc={rc})")
 
 
 def cmd_unit(args):
@@ -839,14 +904,32 @@ def cmd_compile(args):
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
     cmd = _mvn_base(maven_dir) + ["clean", "test-compile"] + common
-    print(f"[compile] running: {' '.join(cmd)}  (cwd={maven_dir})")
+    print(f"[compile] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
     result = subprocess.run(cmd, cwd=maven_dir, capture_output=True, text=True)
     output = (result.stdout or "") + (result.stderr or "")
-    sys.stdout.write(output)
-    print(f"[compile] mvn exit={result.returncode}")
-    if args.agent:
-        return _ingest_compile(project_dir, args.agent, output)
-    return result.returncode
+    # §S3 — the raw captured build log is interactive-only: it used to be
+    # dumped verbatim to STDOUT, the strongest purity violation in this client.
+    sys.stderr.write(output)
+    print(f"[compile] mvn exit={result.returncode}", file=sys.stderr)
+    if not args.agent:
+        return result.returncode
+    rc = _ingest_compile(project_dir, args.agent, output)
+    ok = result.returncode == 0
+    # CR-CRU-058 §S1/§S2 — the compile verb reached only a plain-print ingest
+    # helper before this; its envelope names the build outcome, and its help[]
+    # the state actually reached (a clean build points at the next verb, a
+    # broken one at the errors just ingested).
+    warnings = ([] if rc == 0
+                else [_axi().ingest_failed_warning("compile", CRUCIBLE_URL)])
+    _emit_axi("compile", ok,
+              {"exit": result.returncode,
+               "help": (_axi().HELP_STEPS["check"] if ok else
+                        [f"fix the compile error(s) ingested to Crucible (and "
+                         f"echoed on stderr), then re-run compile "
+                         f"--agent <agentId>", "status"])},
+              _axi_context(project_dir, agent_id=args.agent), warnings,
+              f"compile: ok={ok} exit={result.returncode}")
+    return rc
 
 
 def _docker_clean_check(maven_dir):
@@ -858,10 +941,12 @@ def _docker_clean_check(maven_dir):
                            capture_output=True, text=True)
         running = [l for l in r.stdout.splitlines() if l.strip()]
         if running:
-            print(f"[crucible] ⚠ {len(running)} docker container(s) already running before e2e:")
+            print(f"[crucible] ⚠ {len(running)} docker container(s) already running before e2e:",
+                  file=sys.stderr)
             for l in running[:15]:
-                print(f"    {l}")
-            print("    Confirm these are expected; stale e2e containers can poison the run.")
+                print(f"    {l}", file=sys.stderr)
+            print("    Confirm these are expected; stale e2e containers can poison the run.",
+                  file=sys.stderr)
     except Exception:
         pass
 
@@ -876,11 +961,24 @@ def cmd_e2e(args):
 
     docker_up = False
     if args.with_docker:
-        rc = cmd_docker_up(argparse.Namespace(
+        # The STEP form (no envelope of its own) — this verb owns stdout.
+        rc = _docker_up(argparse.Namespace(
             project_dir=args.project_dir, compose_file=args.compose_file,
-            no_wait=args.no_wait, services=None, all_services=False, maven_dir=args.maven_dir))
+            no_wait=args.no_wait, services=None, all_services=False,
+            maven_dir=args.maven_dir), project_dir)
         if rc != 0:
-            print("[e2e] docker-up failed — aborting.")
+            print("[e2e] docker-up failed — aborting.", file=sys.stderr)
+            _emit_axi("e2e", False,
+                      {"action": "up", "exit": rc,
+                       "help": _axi().gate_step_abort_help(
+                           "e2e",
+                           "inspect `docker compose logs` for the service that "
+                           "failed to start / become healthy, then re-run")},
+                      _axi_context(project_dir, agent_id=args.agent),
+                      [_axi().gate_step_abort_warning(
+                          "e2e", "docker-up",
+                          "the compose stack never came up")],
+                      f"e2e: ok=False exit={rc} — docker-up failed")
             return rc
         docker_up = True
 
@@ -892,9 +990,9 @@ def cmd_e2e(args):
         else:
             cmd = _mvn_base(maven_dir) + ["clean", "verify"] + common
         env = os.environ.copy()
-        print(f"[e2e] running: {' '.join(cmd)}  (cwd={maven_dir})")
+        print(f"[e2e] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
         result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None))
-        print(f"[e2e] mvn exit={result.returncode}")
+        print(f"[e2e] mvn exit={result.returncode}", file=sys.stderr)
         if not args.agent:
             e2e_rc = result.returncode
         else:
@@ -905,26 +1003,37 @@ def cmd_e2e(args):
             if dirs:
                 _warn_if_stale(dirs)
                 summary, tree, files = _parse_junit(dirs)
-                _ingest_parsed(project_dir, args.agent, summary, tree, tier="e2e",
-                               files=files)
+                resp = _ingest_parsed(project_dir, args.agent, summary, tree,
+                                      tier="e2e", files=files)
                 e2e_rc = 0 if summary["failed"] == 0 else 1
+                # CR-CRU-058 §S1 — `cmd_e2e` ended in a bare `_ingest_parsed`
+                # before this; the run it measured now rides a real envelope.
+                _emit_tier_run_axi("e2e", {"resp": resp, "summary": summary,
+                                           "files": files},
+                                   project_dir, args.agent)
             else:
                 e2e_rc = _compile_fallback(maven_dir, project_dir, args.agent, common)
+                _emit_compile_fallback_axi("e2e", e2e_rc, project_dir, args.agent)
     finally:
         if docker_up:
-            cmd_docker_down(argparse.Namespace(
+            # STEP form — the teardown must not put a second document on stdout.
+            _docker_down(argparse.Namespace(
                 project_dir=args.project_dir, compose_file=args.compose_file,
-                maven_dir=args.maven_dir))
+                maven_dir=args.maven_dir), project_dir)
     return e2e_rc
 
 
-def cmd_regression(args):
+def cmd_regression(args, verb="regression"):
     """Gated regression run — an opening heartbeat DECLARES the run's identity
     (binding it when `--cycle` is given), and the ingest body is wrapped in an
     anti-ghost silent cleanup (CR-CRU-008 §S4): even a failed/raising run tears
     the identity down, and never touches the retired /api/agents/remove shim.
     CR-CRU-056 — the cleanup fires ONLY for an identity this run created; a
-    caller who registered BEFORE the run keeps its registration and binding."""
+    caller who registered BEFORE the run keeps its registration and binding.
+
+    CR-CRU-058 §S1 — `verb` names the envelope this run belongs to:
+    `pre-merge-gate` runs this body AS its regression step, so the gate's stdout
+    must carry ONE document under the GATE's own verb, not the inner one's."""
     project_dir = _resolve_project_dir(args.project_dir)
     identity = None
     try:
@@ -932,19 +1041,20 @@ def cmd_regression(args):
             identity = _open_gate_identity(project_dir, args.agent,
                                            getattr(args, "cycle", None),
                                            "gated regression run starting")
-        return _regression_run(args, identity)
+        return _regression_run(args, identity, verb)
     finally:
         _close_gate_identity(project_dir, identity)
 
 
-def _regression_run(args, identity=None):
+def _regression_run(args, identity=None, verb="regression"):
     """REGRESSION tier — full reactor suite WITH JaCoCo coverage. Orchestrator
     pre-merge gate. Parses surefire + failsafe + jacoco.csv → /api/v2/runs/parsed.
     Coverage is published ONLY here, and ONLY when zero failures.
 
     `identity` is the caller's `GatedRunIdentity` (CR-CRU-056): the narration
     ticks report through it, so a tick that re-creates a pruned row hands this
-    run ownership of that row.
+    run ownership of that row. `verb` (CR-CRU-058 §S1) names the envelope — see
+    `cmd_regression`.
     """
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
@@ -956,7 +1066,10 @@ def _regression_run(args, identity=None):
 
     cmd = _mvn_base(maven_dir) + ["clean", args.goal] + common
     env = os.environ.copy()
-    print(f"[regression] running: {' '.join(cmd)}  (cwd={maven_dir})")
+    # §S3 (§S0b's named finding) — this unguarded print landed on stdout AHEAD
+    # of the envelope, leaving the stream prose-then-envelope, never a clean
+    # single document. Interactive-only now, like `test`/`check`'s equivalents.
+    print(f"[regression] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
     narrator = None
     if args.agent:
         # §S2b — tail the run and narrate class-level progress heartbeats. This
@@ -979,14 +1092,17 @@ def _regression_run(args, identity=None):
 
         narrator = _Narrator(_tick, _xml_total)
     result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None), narrator)
-    print(f"[regression] mvn exit={result.returncode}")
+    print(f"[regression] mvn exit={result.returncode}", file=sys.stderr)
 
     su = _dirs_with_xml(_report_dirs(maven_dir, None, "surefire"))
     fs = _dirs_with_xml(_report_dirs(maven_dir, None, "failsafe"))
     dirs = su + fs
     if not dirs:
-        print("[regression] no surefire/failsafe reports — capturing compile output")
-        return _compile_fallback(maven_dir, project_dir, args.agent, common)
+        print("[regression] no surefire/failsafe reports — capturing compile output",
+              file=sys.stderr)
+        rc = _compile_fallback(maven_dir, project_dir, args.agent, common)
+        _emit_compile_fallback_axi(verb, rc, project_dir, args.agent)
+        return rc
 
     _warn_if_stale(dirs)
     summary, tree, files = _parse_junit(dirs)
@@ -1004,7 +1120,14 @@ def _regression_run(args, identity=None):
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                           tier="regression", context=_run_context(),
                           raw=getattr(result, "stdout", None), files=files)
-    _emit_ingest_summary_axi("regression", resp, summary, files, project_dir, args.agent)
+    ok = bool(resp.get("ok")) and summary["failed"] == 0
+    # §S2 — a GATE run's next step is derived from the run state it reached
+    # (unrecorded / red / green); the plain `regression` verb keeps its canned
+    # HELP_STEPS entry, unchanged.
+    help_steps = (_axi().run_help(verb, ok, summary["failed"], CRUCIBLE_URL)
+                  if verb != "regression" else None)
+    _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, args.agent,
+                             help_steps=help_steps)
     return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
 
 
@@ -1141,15 +1264,45 @@ def _compose_args(arg_value, project_dir, missing_ok):
     compose_path = compose_file if os.path.isabs(compose_file) else os.path.join(project_dir, compose_file)
     if not os.path.exists(compose_path):
         if missing_ok:
-            print(f"[crucible] compose file absent, skipping: {compose_path}")
+            print(f"[crucible] compose file absent, skipping: {compose_path}",
+                  file=sys.stderr)
             return [], 0
-        print(f"[crucible] ERROR: compose file not found: {compose_path}")
+        print(f"[crucible] ERROR: compose file not found: {compose_path}", file=sys.stderr)
         return [], 1
     return ["-f", compose_path], None
 
 
+def _docker_help(action, ok):
+    """CR-CRU-058 §S2 — state-derived next step for a compose action."""
+    if action == "up":
+        if ok:
+            return ["e2e --with-docker --agent <agentId>", "docker-down"]
+        return ["inspect `docker compose logs` for the service that failed to "
+                "start / become healthy, then re-run docker-up",
+                "docker-down"]
+    if ok:
+        return ["status"]
+    return ["the stack did not tear down cleanly — remove it by hand with "
+            "`docker compose down -v`, then re-check",
+            "status"]
+
+
 def cmd_docker_up(args):
+    """`docker compose up -d [--wait]` + the §S1 envelope (action + outcome)."""
     project_dir = _resolve_project_dir(args.project_dir)
+    rc = _docker_up(args, project_dir)
+    ok = rc == 0
+    _emit_axi("docker-up", ok,
+              {"action": "up", "exit": rc, "help": _docker_help("up", ok)},
+              _axi_context(project_dir), [],
+              f"docker-up: ok={ok} exit={rc}")
+    return rc
+
+
+def _docker_up(args, project_dir):
+    """The compose bring-up itself — NO envelope, so the gate verbs that use it
+    as a STEP (`e2e --with-docker`, `pre-merge-gate`) keep exactly one document
+    on stdout (CR-CRU-058 §S1/§S3). `cmd_docker_up` emits."""
     compose_args, err = _compose_args(args.compose_file, project_dir, missing_ok=False)
     if err is not None:
         return err
@@ -1164,44 +1317,81 @@ def cmd_docker_up(args):
         services = _resolve_services(getattr(args, "services", None), project_dir)
         if services:
             cmd += services
-    print(f"[docker] {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=project_dir, env=env)
-    print(f"[docker] up exit={result.returncode}")
+    # §S3 — the compose narration AND the compose child's own stdout are
+    # interactive-only; stdout belongs to the envelope alone.
+    print(f"[docker] {' '.join(cmd)}", file=sys.stderr)
+    result = subprocess.run(cmd, cwd=project_dir, env=env, stdout=sys.stderr)
+    print(f"[docker] up exit={result.returncode}", file=sys.stderr)
     return result.returncode
 
 
 def cmd_docker_down(args):
+    """`docker compose down -v` + the §S1 envelope (action + outcome)."""
     project_dir = _resolve_project_dir(args.project_dir)
+    rc = _docker_down(args, project_dir)
+    ok = rc == 0
+    _emit_axi("docker-down", ok,
+              {"action": "down", "exit": rc, "help": _docker_help("down", ok)},
+              _axi_context(project_dir), [],
+              f"docker-down: ok={ok} exit={rc}")
+    return rc
+
+
+def _docker_down(args, project_dir):
+    """The compose teardown itself — NO envelope (same step-vs-verb split as
+    `_docker_up`); `cmd_docker_down` emits."""
     compose_args, err = _compose_args(args.compose_file, project_dir, missing_ok=True)
     if err is not None:
         return err
     cmd = ["docker", "compose", *compose_args, "down", "-v"]
-    print(f"[docker] {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=project_dir)
-    print(f"[docker] down exit={result.returncode}")
+    print(f"[docker] {' '.join(cmd)}", file=sys.stderr)
+    result = subprocess.run(cmd, cwd=project_dir, stdout=sys.stderr)
+    print(f"[docker] down exit={result.returncode}", file=sys.stderr)
     return result.returncode
 
 
 def cmd_pre_merge_gate(args):
     """ORCHESTRATOR one-shot: docker-up → regression → docker-down (always)."""
-    rc = cmd_docker_up(argparse.Namespace(
+    project_dir = _resolve_project_dir(args.project_dir)
+    up_args = argparse.Namespace(
         project_dir=args.project_dir, compose_file=args.compose_file,
-        no_wait=True, services=None, all_services=False, maven_dir=args.maven_dir))
+        no_wait=True, services=None, all_services=False, maven_dir=args.maven_dir)
+    # The STEP form (no envelope of its own) — this gate owns stdout.
+    rc = _docker_up(up_args, project_dir)
     if rc != 0:
-        print("[pre-merge-gate] docker-up failed — aborting.")
+        print("[pre-merge-gate] docker-up failed — aborting.", file=sys.stderr)
+        # §S2 — the state reached is "aborted at step 0, the regression never
+        # ran": the next action is the stack that would not come up, never the
+        # gate's own successor. A passing gate falls through to the regression
+        # envelope below, whose help[] is derived from the RUN state.
+        _emit_axi("pre-merge-gate", False,
+                  {"stage": "docker-up", "action": "up", "exit": rc,
+                   "help": _axi().gate_step_abort_help(
+                       "pre-merge-gate",
+                       "inspect `docker compose logs` for the service that "
+                       "failed to start / become healthy, then re-run")},
+                  _axi_context(project_dir, agent_id=args.agent),
+                  [_axi().gate_step_abort_warning(
+                      "pre-merge-gate", "docker-up",
+                      "the compose stack never came up")],
+                  f"pre-merge-gate: ok=False exit={rc} — aborted at the "
+                  f"docker-up step")
         return rc
     reg_rc = 1
     try:
+        # §S1 — the regression body emits under THIS gate's verb, so the gate
+        # puts exactly one envelope on stdout under the name the caller invoked.
         reg_rc = cmd_regression(argparse.Namespace(
             project_dir=args.project_dir, maven_dir=args.maven_dir, agent=args.agent,
             module=None, also_make=False, update_snapshots=False, native=False,
             profile=None, system_prop=None, goal=args.goal,
             coverage_profile=args.coverage_profile, log=None,
-            cycle=getattr(args, "cycle", None)))
+            cycle=getattr(args, "cycle", None)), verb="pre-merge-gate")
     finally:
-        cmd_docker_down(argparse.Namespace(
+        # STEP form — the teardown must not put a second document on stdout.
+        _docker_down(argparse.Namespace(
             project_dir=args.project_dir, compose_file=args.compose_file,
-            maven_dir=args.maven_dir))
+            maven_dir=args.maven_dir), project_dir)
     return reg_rc
 
 
