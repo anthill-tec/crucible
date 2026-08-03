@@ -284,10 +284,23 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   CLIENT half (all five now send `claude-md`); the server-side validation gap is a different stack
   and contract, deliberately NOT absorbed into a client-refactor CR. Same class as the CR-044 phase
   enum, which the server DOES validate — this field simply never got the same treatment.
-- 2026-08-02 (user scheduling decision) — the THREE pre-existing e2e failures
-  (`workspace-plan-scoping.feature`, CR-CRU-026 §S0 family, `toBeVisible`; baseline-proven on
-  develop, independent of CR-046/055/056) are **deferred until the current Wave-4 CR queue is
-  complete, and fixed BEFORE the 0.1.0 release**. They are a release-gate item, not a
+- 🚨 **2026-08-03 (CR-CRU-052) — THE "THREE E2E FAILURES" ITEM BELOW IS REFUTED. Read this first.**
+  That count was measured against a POLLUTED database. CR-CRU-052 found that every default e2e run
+  since CR-CRU-043 had been writing to `~/.local/share/crucible/crucible.db` (79 projects / 259
+  events of accumulated fixtures), because `resolveDbPath` falls through a `mkdtempSync` scratch cwd
+  to the user-level path. Different scenarios failed for different residue reasons on each run;
+  "three" was noise. **On a genuinely isolated DB it is 19 failed / 11 passed / 10 blocked**,
+  reproduced three times and confirmed independently by CR-052's VERIFY. All 19 share ONE cause —
+  the harness predates the registered-caller hard stop (`filePlan` sends no `agentId`; the ingest
+  helpers send unregistered ones), so `requireRegisteredCaller` correctly refuses them. **Zero UI or
+  layout assertions fail.** The `workspace-plan-scoping`/CR-026 attribution below was therefore also
+  wrong. Filed as **CR-CRU-060**; the release gate re-baselines when it lands, and the 10 blocked
+  scenarios have never been measured, so the inventory may grow.
+- ~~2026-08-02 (user scheduling decision)~~ — **SUPERSEDED, see above.** ~~the THREE pre-existing
+  e2e failures (`workspace-plan-scoping.feature`, CR-CRU-026 §S0 family, `toBeVisible`;
+  baseline-proven on develop, independent of CR-046/055/056) are deferred until the current Wave-4
+  CR queue is complete, and fixed BEFORE the 0.1.0 release.~~ The DEFERRAL decision stands (it is a
+  release-gate item, not a merge gate); only the COUNT and the ATTRIBUTION were wrong. They are a release-gate item, not a
   merge-gate item for the CRs in flight. Model-B intimation for the CR-044/046/056 client-surface
   changes is likewise **held until their Sandesh address is active** (it has been inactive all
   session); the owed set is queued in project memory.
@@ -296,9 +309,9 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   print `[crucible] running:` to stdout (the `cmd_test` instance was fixed in-CR after the strict
   conformant decoder exposed it; no failing test covers these two yet — candidates for CR-CRU-054's
   DRY sweep or a micro-patch). **(b)** compile-ingest events carry no `cycleId` (silent
-  non-attachment) — input for CR-CRU-056's §S2 auto-attach-consumer enumeration. **(c)** THREE
-  pre-existing e2e failures on develop (`workspace-plan-scoping.feature`, CR-CRU-026 §S0 family,
-  `toBeVisible`) — baseline-proven independent of CR-046; disposition pending user decision.
+  non-attachment) — input for CR-CRU-056's §S2 auto-attach-consumer enumeration. **(c)** ~~THREE pre-existing e2e failures on develop~~ — **SUPERSEDED 2026-08-03: the count and the
+  attribution were both artefacts of the polluted user-level DB; the real figure is 19, one cause,
+  now CR-CRU-060. See the top of these Notes.**
 - 2026-07-28 (CR-CRU-045 §S3 — **cross-stack gate rule for the client fleet**) — a change to
   `clients/*-crucible.py` requires **BOTH** the Python gate and the bun gate before close-out.
   Those clients are Python programs whose observable contract is asserted by **bun** tests
