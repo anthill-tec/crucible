@@ -353,18 +353,23 @@ function writeNarrationBunProject(dir: string, key: string, count: number, sleep
 
 // ── mvn fixture: a streaming fake `mvnw` over ≥3 classes + pre-placed XML ──
 
+// CR-CRU-049 §S1 — REAL surefire console format, measured against surefire
+// 3.2.5 and 3.5.4 (see the CR's Context section): the `[INFO] ` prefix Maven
+// always emits, and the two-dash `-- in <FQCN>` separator surefire 3.x uses on
+// the completion line. The streaming shape (sleeps, 3 classes, ~3.6s span) is
+// unchanged — the throttle/heartbeat assertions depend on it.
 const STREAMING_MVNW_SCRIPT = `#!/bin/sh
-echo "Running com.acme.AlphaTest"
+echo "[INFO] Running com.acme.AlphaTest"
 sleep 1.0
-echo "Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.0 sec - in com.acme.AlphaTest"
+echo "[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.0 sec -- in com.acme.AlphaTest"
 sleep 0.3
-echo "Running com.acme.BravoTest"
+echo "[INFO] Running com.acme.BravoTest"
 sleep 1.0
-echo "Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.0 sec - in com.acme.BravoTest"
+echo "[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.0 sec -- in com.acme.BravoTest"
 sleep 0.3
-echo "Running com.acme.CharlieTest"
+echo "[INFO] Running com.acme.CharlieTest"
 sleep 1.0
-echo "Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.0 sec - in com.acme.CharlieTest"
+echo "[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.0 sec -- in com.acme.CharlieTest"
 exit 0
 `;
 
