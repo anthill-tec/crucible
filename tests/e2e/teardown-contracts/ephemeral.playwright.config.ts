@@ -11,11 +11,17 @@
 // RED-FIXUP (cycle 180) — two defects fixed here:
 //  1. The source files were originally named `ephemeral.spec.ts` /
 //     `non-ephemeral.spec.ts`. Bun's default `bun test` file discovery
-//     matches any file with `.test.` OR `.spec.` (or `_test.`/`_spec.`)
-//     immediately before its extension — CONFIRMED empirically this cycle
-//     (a throwaway glob probe: `foo.spec.ts`/`foo.test.ts` were picked up by
-//     a bare `bun test`; `foo.contract.ts`/`foo.pw.ts` were not) — so both
-//     files were being swept into the plain `bun test` regression gate
+//     matches any file whose name carries one of the four markers `.test.`,
+//     `.spec.`, `_test.` or `_spec.` immediately before its extension —
+//     CONFIRMED empirically this cycle by a throwaway glob probe over
+//     scratch files outside the repo. The finding is recorded by MARKER
+//     rather than by example filename deliberately: those probe files were
+//     never committed, and naming a file that does not exist on disk is
+//     exactly what CR-CRU-053's dangling-citation guard forbids. What the
+//     probe showed: a bare `bun test` collected the probe files whose names
+//     carried a `.spec.` or `.test.` marker, and ignored the ones carrying
+//     a `.contract.` or `.pw.` marker instead — so both files here were
+//     being swept into the plain `bun test` regression gate
 //     despite this CR's own stated premise that they stay OUT of it (one of
 //     them contains a deliberately-failing scenario, and BOTH require a live
 //     server this config boots, which a bare `bun test` never does — hence
