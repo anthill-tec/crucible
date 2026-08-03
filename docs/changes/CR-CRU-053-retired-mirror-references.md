@@ -120,6 +120,21 @@ guard asserting that every surviving `~/.claude/scripts` reference in `tests/` a
 do-NOT-use warning, never a presentation of the mirror as the client source. This CR's enumeration
 has now decayed twice; a one-time grep in an AC does not hold a line.
 
+### §S4b — AMENDED mid-execution (2026-08-03): two more instances of the SAME defect
+GREEN found, two lines from a line §S2 was already fixing in
+`tests/client/test_bun_crucible_gates.py`:
+- `:48` — *"This matches **test_toon.py**'s own REPO_ROOT-relative loading convention exactly."*
+  `test_toon.py` does not exist; CR-046 renamed it to `test_cr046_official_toon_roundtrip.py`.
+  Identical defect class to §S2, just a different dead filename.
+- `:47` — *"(the home mirror is not yet re-synced past the C4 GREEN commit)"* — a present-tense
+  claim implying the mirror is synced at all.
+
+Both are fixed here rather than deferred: they are comment lines in a file this CR already edits,
+and they are the exact hazard it exists to remove. **The §S2 guard is generalised accordingly** —
+from "no docstring cites `test_bun_crucible_context.py`" to "no docstring cites a `tests/` file that
+does not exist". A guard hardcoded to one dead filename would have missed this one, which is the
+CR's own lesson applied to its own guard.
+
 ### §S5 — Leave the three correct references alone
 `test_bun_crucible_lifecycle.py:36`/`:126` and `test_bun_crucible_gates.py:42` name the mirror only
 to say *don't use it*. They reinforce the rule and must not be swept up in a blanket edit. Confirm
