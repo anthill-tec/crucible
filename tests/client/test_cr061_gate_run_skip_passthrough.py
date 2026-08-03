@@ -192,12 +192,13 @@ import os
 import sys
 
 argv = sys.argv[1:]
-argv_file = os.environ.get("GATE_RUN_FAKE_ARGV_FILE")
-if argv_file:
-    with open(argv_file, "w") as f:
-        json.dump(argv, f)
 
 if len(argv) >= 2 and argv[0] == "axi" and argv[1] in ("run", "status"):
+    if argv[1] == "run":
+        argv_file = os.environ.get("GATE_RUN_FAKE_ARGV_FILE")
+        if argv_file:
+            with open(argv_file, "w") as f:
+                json.dump(argv, f)
     sys.stdout.write({_FINAL_SNAPSHOT!r})
     sys.exit(0)
 else:
