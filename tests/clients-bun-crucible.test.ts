@@ -7,12 +7,17 @@
 // section: "clients/ in-repo is the SOURCE OF TRUTH ... VERIFY tests run
 // against clients/ copies." This cycle (C2) upgrades bun-crucible.py.
 //
-// RED phase: `clients/bun-crucible.py` does not exist AT ALL yet on this
-// branch (only `~/.claude/scripts/bun-crucible.py`, the LIVE v1 script,
-// exists — it is copied into `clients/` and upgraded there by GREEN).
-// Every test below spawns `python3 clients/bun-crucible.py ...` against a
-// REAL live test server and fails because the file is missing — `python3`
-// exits 2 with "can't open file" on stderr. That is expected RED.
+// Current state: `clients/bun-crucible.py` EXISTS in-repo and is exactly
+// what these tests drive — every test below spawns `python3
+// clients/bun-crucible.py ...` against a REAL test server. The in-repo
+// `clients/` copy is the SOURCE OF TRUTH. The old
+// `~/.claude/scripts/bun-crucible.py` mirror is RETIRED: do NOT run it,
+// point tests at it, or treat it as the client source — running the mirror
+// ORPHANS Crucible runs. (History, for context only: this file first landed
+// as C2's RED, when the client did not exist on the branch yet and every
+// spawn failed with `python3` exit 2 "can't open file"; the v1 script was
+// then copied into `clients/` and upgraded there by GREEN. That is how the
+// file began, not how it reads today.)
 //
 // Technique: reuses tests/cli-axi.test.ts's proven pattern — a real
 // `startServer({port:0, dbPath:":memory:"})` instance + `Bun.spawn`

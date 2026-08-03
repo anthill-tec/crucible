@@ -39,9 +39,9 @@ not the asserted 0) or on the cr-merged call-count assertion (0 calls found,
 not 1) -- real behavioral RED, not a missing-symbol accident.
 
 Module-loading convention: this file targets the REPO's `clients/` copy
-directly (REPO_ROOT-relative), NOT the `~/.claude/scripts` mirror the older
-sibling harnesses (test_bun_crucible_lifecycle.py / test_bun_crucible_context.py)
-load from. Reason: `gate-report`/`gate-run` are speced to consume
+directly (REPO_ROOT-relative), NOT the `~/.claude/scripts` mirror that an older
+generation of sibling harnesses once loaded from (history — that mirror is
+retired now, and every harness here is REPO_ROOT-relative). Reason: `gate-report`/`gate-run` are speced to consume
 `clients/toon.py` (§S5, C4) for TOON decoding, and only the in-repo `clients/`
 directory has `toon.py` sitting next to `bun-crucible.py` today (the home
 mirror is not yet re-synced past the C4 GREEN commit). This matches

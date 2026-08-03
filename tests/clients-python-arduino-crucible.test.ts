@@ -8,13 +8,18 @@
 // fix during §S2." This cycle (C4) upgrades python-crucible.py and
 // arduino-crucible.py.
 //
-// RED phase: neither `clients/python-crucible.py` nor
-// `clients/arduino-crucible.py` exists yet on this branch (only the LIVE v1
-// scripts at ~/.claude/scripts/*.py exist — copied into clients/ and
-// upgraded there by GREEN). Every test spawns `python3 clients/<script>.py
-// ...` against a REAL live test server and fails because the file is
-// missing — python3 exits 2 with "can't open file" on stderr. Same RED
-// shape as C2 (bun) / C3 (rust+mvn).
+// Current state: BOTH `clients/python-crucible.py` and
+// `clients/arduino-crucible.py` EXIST in-repo and are exactly what these
+// tests drive — every test spawns `python3 clients/<script>.py ...` against
+// a REAL test server. The in-repo `clients/` copies are the SOURCE OF
+// TRUTH. The old `~/.claude/scripts/*.py` mirror is RETIRED: do NOT run it,
+// point tests at it, or treat it as the client source — running the mirror
+// ORPHANS Crucible runs. (History, for context only: this file first landed
+// as C4's RED, when neither client existed on the branch yet and every
+// spawn failed with python3 exit 2 "can't open file" — the same RED shape
+// as C2 (bun) / C3 (rust+mvn); the v1 scripts were then copied into
+// `clients/` and upgraded there by GREEN. That is how the file began, not
+// how it reads today.)
 //
 // Technique reused verbatim from C2/C3: a real `startServer({port:0,
 // dbPath:":memory:"})` instance + `Bun.spawn`, plus the CAPTURING PROXY
