@@ -284,6 +284,20 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   CLIENT half (all five now send `claude-md`); the server-side validation gap is a different stack
   and contract, deliberately NOT absorbed into a client-refactor CR. Same class as the CR-044 phase
   enum, which the server DOES validate — this field simply never got the same treatment.
+- ✅ **2026-08-03 (CR-CRU-060 close) — THE E2E RELEASE-GATE ITEM IS CLOSED. Zero items remain.**
+  The re-baseline the entry below anticipated is done, and the outcome was better than forecast.
+  Fixing the identity drift took the suite from **19 failed / 11 passed / 10 blocked** to
+  **40 passed / 0 failed / 0 blocked** — independently re-run twice (orchestrator and VERIFY),
+  57.2s, with the 10 previously-blocked scenarios confirmed to genuinely EXECUTE (real varied
+  durations, not skip-stubs) rather than being reported green while skipped.
+  **ZERO genuine product defects were hiding behind the drift.** The forecast below said the
+  inventory might GROW once the 19 stopped cascading, because those 10 had never been measured in
+  the project's history. They ran for the first time and all passed. There is no defect list to
+  enumerate — §S5's deliverable is this sentence.
+  Nothing under `src/` was touched: `requireRegisteredCaller` is byte-identical to develop. The
+  server guard was correct the whole time; only the harness was stale.
+  **Remaining 0.1.0 gate items: the single per-release Model-B intimation, and the `@anthill-tec`
+  npm org (human prerequisite). No e2e item.**
 - 🚨 **2026-08-03 (CR-CRU-052) — THE "THREE E2E FAILURES" ITEM BELOW IS REFUTED. Read this first.**
   That count was measured against a POLLUTED database. CR-CRU-052 found that every default e2e run
   since CR-CRU-043 had been writing to `~/.local/share/crucible/crucible.db` (79 projects / 259
