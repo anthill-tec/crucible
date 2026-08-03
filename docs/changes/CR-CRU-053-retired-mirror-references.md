@@ -52,8 +52,8 @@ no surviving instance.
 
 **But the deletion left DANGLING references, and the original spec located them wrongly.** It said
 they were at `tests/client/test_toon.py:37` and `test_bun_crucible_lifecycle.py:54 + :60`. Neither
-is right: `test_toon.py` does not exist (CR-046 renamed it to
-`test_cr046_official_toon_roundtrip.py`), and `lifecycle.py:54` is a *mirror* reference, not a
+is right: `test_toon.py` does not exist (CR-046 RETIRED it — see the §S4b correction below; it was
+not a rename), and `lifecycle.py:54` is a *mirror* reference, not a
 deleted-file one. The actual dangling references to the deleted file are:
 
 | file:line | reads |
@@ -124,7 +124,14 @@ has now decayed twice; a one-time grep in an AC does not hold a line.
 GREEN found, two lines from a line §S2 was already fixing in
 `tests/client/test_bun_crucible_gates.py`:
 - `:48` — *"This matches **test_toon.py**'s own REPO_ROOT-relative loading convention exactly."*
-  `test_toon.py` does not exist; CR-046 renamed it to `test_cr046_official_toon_roundtrip.py`.
+  `test_toon.py` does not exist. ⚠ **This line originally said CR-046 "renamed" it — that is
+  WRONG, and the error was caught during execution.** Git shows the successor
+  `test_cr046_official_toon_roundtrip.py` was ADDED separately in `aa2702f` (the CR-046 RED commit)
+  and `test_toon.py` DELETED in `987b331` ("subset-parity test retired"). Two files, two commits,
+  different subjects — a narrow 4-construct subset pin versus a full official-spec conformance
+  suite. The correct narration is "retired by CR-046, successor X", never "renamed to X".
+  Recorded because a spec that says "renamed" would seed a fresh wrong fact into every docstring
+  copied from it — this CR's own defect class, committed by this CR's own text.
   Identical defect class to §S2, just a different dead filename.
 - `:47` — *"(the home mirror is not yet re-synced past the C4 GREEN commit)"* — a present-tense
   claim implying the mirror is synced at all.
