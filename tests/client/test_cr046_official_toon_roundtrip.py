@@ -1,7 +1,8 @@
 """CR-CRU-046 C2 (second pass) -- `clients/toon.py`'s own conformance to the
-FULL official TOON spec, loaded BY PATH (mirrors `tests/client/test_toon.py`'s
-`_load_toon_module()` convention -- see its module docstring and the loader
-at line ~36) rather than importing the PyPI stub.
+FULL official TOON spec, loaded BY PATH via this file's own
+`_load_toon_module()` (the convention inherited from `test_toon.py`, the
+subset-parity pin retired by this same CR-CRU-046 C2 pass in `987b331` -- this
+file is its successor) rather than importing the PyPI stub.
 
 REVISED after the §S2 stub finding (docs/changes/CR-CRU-046-toon-conformance.md
 §S2/§S3/§S3b/§S4, user decision 2026-08-01, Option A): PyPI `toon-format`
@@ -90,8 +91,8 @@ def _load_axi_module():
 
 
 def _load_toon_module():
-    """Load clients/toon.py by file path -- the SAME by-path convention as
-    `tests/client/test_toon.py`'s `_load_toon_module()` (line ~36), so this
+    """Load clients/toon.py by file path -- the SAME by-path convention the
+    retired `test_toon.py` used (retired by CR-CRU-046 C2, `987b331`), so this
     suite never depends on a package-importable `toon`/`toon_format` name."""
     spec = importlib.util.spec_from_file_location("toon_under_test_cr046", TOON_PATH)
     assert spec is not None and spec.loader is not None

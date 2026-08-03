@@ -213,7 +213,8 @@ export async function ingestCompile(
 }
 
 // 3-case junit: 2 pass + 1 fail w/ message="boom" (mirrors the fixture
-// already used in tests/v2-runs-events.test.ts / tests/ingest-routes.test.ts).
+// already used in tests/v2-runs-events.test.ts; the v1 `ingest-routes.test.ts`
+// that first carried it was deleted by CR-CRU-008's C7 v1-retirement sweep).
 export const JUNIT_3CASE_1FAIL = [
   '<testsuite name="Suite1" tests="3">',
   '<testcase name="t1" time="0.01"/>',
@@ -238,7 +239,9 @@ export function junit60(failCount = 3): string {
 }
 
 // rustc fixture per CR §S2 AC4: 1 error[E0308] block + 1 plain warning block
-// (same fixture shape as tests/v2-runs-events.test.ts / ingest-routes.test.ts).
+// (same fixture shape as tests/v2-runs-events.test.ts; the v1
+// `ingest-routes.test.ts` it also came from was deleted by CR-CRU-008's C7
+// v1-retirement sweep).
 export const RUSTC_ERRORS = [
   "error[E0308]: mismatched types",
   " --> src/lib.rs:12:5",

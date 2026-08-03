@@ -69,7 +69,9 @@ function freshDir(): string {
   return mkdtempSync(join(tmpdir(), "v2-runs-route-"));
 }
 
-// 3-case junit: 2 pass + 1 fail w/ message="boom" — matches ingest-routes.test.ts fixture.
+// 3-case junit: 2 pass + 1 fail w/ message="boom". Originally copied from the
+// v1 `ingest-routes.test.ts` fixture — that file was deleted by CR-CRU-008's
+// C7 v1-retirement sweep (`5193768`), so THIS is now the canonical copy.
 // summary => {total:3, passed:2, failed:1, pending:0, duration_ms:60}
 const JUNIT_3CASE_1FAIL = [
   '<testsuite name="Suite1" tests="3">',
@@ -89,7 +91,8 @@ const JUNIT_3CASE_ALLPASS = [
 ].join("\n");
 
 // rustc fixture per CR §S2 AC4: 1 error[E0308] block + 1 plain warning block
-// (same fixture as tests/ingest-routes.test.ts).
+// (originally the same fixture as the v1 `tests/ingest-routes.test.ts`, deleted
+// by CR-CRU-008's C7 v1-retirement sweep — history, not a live sibling).
 const RUSTC_ERRORS = [
   "error[E0308]: mismatched types",
   " --> src/lib.rs:12:5",

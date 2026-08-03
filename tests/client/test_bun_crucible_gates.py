@@ -43,9 +43,12 @@ directly (REPO_ROOT-relative), NOT the `~/.claude/scripts` mirror that an older
 generation of sibling harnesses once loaded from (history — that mirror is
 retired now, and every harness here is REPO_ROOT-relative). Reason: `gate-report`/`gate-run` are speced to consume
 `clients/toon.py` (§S5, C4) for TOON decoding, and only the in-repo `clients/`
-directory has `toon.py` sitting next to `bun-crucible.py` today (the home
-mirror is not yet re-synced past the C4 GREEN commit). This matches
-test_toon.py's own REPO_ROOT-relative loading convention exactly.
+directory has `toon.py` sitting next to `bun-crucible.py` (the home mirror is
+retired and nothing syncs it — there is no install step that ever will). This
+matched the REPO_ROOT-relative loading convention of `test_toon.py`, retired by
+CR-CRU-046 C2 (`987b331`) once `clients/toon.py` was rewritten as a full
+official-spec port; the live example of that convention is now
+`test_cr046_official_toon_roundtrip.py`.
 
 HTTP isolation: per the dispatch's cycle-specific constraint, every test here
 mocks the module's SAME single HTTP transport seams the sibling lifecycle

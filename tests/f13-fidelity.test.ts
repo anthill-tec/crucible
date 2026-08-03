@@ -43,7 +43,10 @@
 // Reused, unchanged testids: `cycle-row`, `cycle-glyph`, `cycle-toggle`,
 // `linked-run-row`, `wave-group`, `wave-header`, `cr-group`, `cr-group-
 // toggle`, `lens-cycle-row`, `card-icon`, `icon-glyph` (CR-007 mask-icon,
-// public/app.js ~535-548 / tests/phase-role.test.ts, tests/run-cards.test.ts).
+// public/app.js ~535-548 / tests/agent-role.test.ts, tests/run-cards.test.ts;
+// the older `tests/phase-role.test.ts` named here was retired by CR-CRU-057 C2
+// (`3b5877b`) when the `phaseRole` fallback it pinned ceased to exist — its
+// surviving precedence coverage moved to tests/agent-role.test.ts).
 //
 // SANCTIONED RE-TARGET (CR-CRU-021 §S6 RULED (a), this CR's authority): the
 // "§S2.3 active-cycle drill-down parity" describe block in tests/workflow-

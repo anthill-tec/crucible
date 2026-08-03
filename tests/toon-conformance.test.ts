@@ -3,8 +3,12 @@
 // EXPECTED RED MODE: `@toon-format/toon` is NOT yet a dependency of this
 // package (package.json declares zero runtime deps today) — this file is
 // RED via MODULE-RESOLUTION FAILURE on the import below, the same
-// documented RED convention `tests/toon.test.ts:4` used for CR-005's
-// `../src/toon.ts` (a not-yet-existing SUT module). Once GREEN adds
+// documented RED convention CR-005's own serializer test used for
+// `../src/toon.ts` (a not-yet-existing SUT module). That test file,
+// `tests/toon.test.ts`, was itself retired by CR-CRU-046 C2 GREEN part 1
+// (`a0360f1`) when the hand-written subset serializer was replaced by the
+// official `@toon-format/toon` library — history, cited here only for
+// provenance; THIS file is its successor. Once GREEN adds
 // `@toon-format/toon` as a runtime dependency and flips `src/toon.ts` (or
 // its replacement) to encode through the official library, these tests
 // become the §S4 server-side conformance gate — no edits needed here.
