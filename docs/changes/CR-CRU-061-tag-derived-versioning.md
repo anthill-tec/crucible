@@ -246,7 +246,28 @@ reader is told to do a step that no longer exists.
   asserts that every `vX.Y.Z`/`versiontag v` occurrence sits AFTER the `## Superseded` heading:
   history preserved, a `v`-shape can never reappear as live instruction.
 
-## Open item for the user (raised at the merge gate, NOT a defect in this CR)
+## §S7 outcome — the open item is CLOSED
+**User chose option (b) on 2026-08-04.** `cmd_finish` now calls `align_manifest_version` before its
+guards, so `release.sh finish X.Y.Z` is the whole release command. Verified independently:
+- **One write path, not two.** `cmd_set_version`'s inline writer was MOVED into
+  `align_manifest_version`; exactly two call sites (`release.sh:279`, `:311`) both delegate to it,
+  so `set-version` and `finish` cannot drift apart.
+- **Idempotent** — the commit is gated on `git diff --cached --quiet`, so a second `finish` produces
+  no empty commit and an identical HEAD sha.
+- **The guard is kept and still fatal**, retargeted at its genuine failure mode (a `package.json`
+  with no `version` key). Its old advice — "run `set-version`" — would now be wrong, so it no longer
+  says it.
+- **🚨 The safety split is exact.** The alignment write+commit are real even under `--dry-run`; ONLY
+  `git flow finish` and `git push` stay gated. VERIFY audited every `finish` invocation in the test
+  file: exactly one omits `--dry-run`, and it is the branch-gate test where `require_release_branch`
+  exits 2 BEFORE anything is written. The file header's absolute rule — no test ever runs a real
+  finish or push — holds.
+- The superseded "finish refuses on a stale manifest" test was removed WITH an inline supersession
+  marker, not silently — correct, since it pinned the behaviour §S7 deliberately reverses.
+
+**Final union regression: 1991 passing / 0 failing** (bun 1308 + python 683), coverage 87.6%/87.0%.
+
+## Historical: the open item as raised at the gate (now closed by §S7)
 `scripts/release.sh:277` still calls `guard_manifest_version`, so `finish` refuses unless
 `package.json` was hand-bumped via `set-version` first. §S2 made the tag authoritative for what is
 **published**; it did not make it authoritative for what is **released**. Against the user's stated
