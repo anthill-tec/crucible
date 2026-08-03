@@ -34,9 +34,19 @@ Everything below was verified against the repo, not recalled.
 | # | Premise | Measured reality |
 |---|---|---|
 | B1 | *"We already have set a tag at 0.1.0"* | **No tags exist.** `git tag -l` → 0 locally; `git ls-remote --tags origin` → empty. Nothing is tagged. |
-| B2 | package.json is at the release version | `package.json` = `2.0.0-alpha.1`. **NOT a conflict — a scaffold placeholder.** Traced to `eab2080`, the FIRST commit of the v2 rebuild ("CR-CRU-001 C1 red"), untouched since; it meant "v2 of Crucible, alpha", never a release version. `release.sh set-version 0.1.0` overwrites it and `finish` re-checks it against the tag. Nothing to decide. |
+| B2 | package.json is at the release version | `package.json` = `2.0.0-alpha.1`. **NOT a conflict — a scaffold placeholder** from `eab2080`, the FIRST commit of the v2 rebuild, untouched since. **Under CR-CRU-061 this stops mattering entirely**: `publish-npm` will SET the version from the tag, so a stale committed value can no longer affect a release. Nothing to decide. |
 | B3 | The repo reflects the work | **641 commits unpushed on `develop`.** Remote last saw `2026-07-16`; local HEAD is `2026-08-03`. The entire Wave-4 body of work exists only locally. **CI cannot fire on code GitHub has never seen.** |
-| B4 | git-flow is configured for tagging | **`gitflow.prefix.versiontag` is NOT set.** `release.sh finish` guards this as a documented footgun and will refuse to run. One-time `git config`. |
+| B4 | git-flow is configured for tagging | **`gitflow.prefix.versiontag` is NOT set** — and under the user's bare-SemVer ruling it must be set to the EMPTY string, not `v`. `release.sh:175` currently hard-asserts `"v"` and would refuse. **CR-CRU-061 owns this** — the config alone is not enough. |
+
+### 1.2b 🚨 User rulings 2026-08-03 that the machinery does NOT yet implement
+
+| Ruling | State today | Owner |
+|---|---|---|
+| **Tags are bare SemVer — `0.1.0`, not `v0.1.0`** | The `v` prefix is hardcoded in **6 live sites** across `release.sh` and `release.yml`; a bare tag would make `create-release` find nothing and BOTH publish jobs refuse. | **CR-CRU-061 §S1** |
+| **Packaging takes the version from the GitHub tag automatically** | ✅ Python already does (hatch-vcs, `pyproject.toml:7,32`). ❌ npm does NOT — `package.json` is hand-bumped and CI merely *verifies* it (`release.yml:156-165`). | **CR-CRU-061 §S2** |
+
+**CR-CRU-061 is a release blocker and must land before Step 2.** No tag exists yet, so the format is
+still free; once `0.1.0` is cut in either shape it is published history on two registries.
 
 ### 1.3 Open setup items (human-owned)
 
@@ -44,7 +54,7 @@ Everything below was verified against the repo, not recalled.
 |---|---|---|
 | S1 | **PyPI + TestPyPI pending Trusted Publishers** | Publishing is OIDC — there are no API tokens in this repo by design. A PyPI *account* is not the same as a *pending Trusted Publisher*, which is registered per project + workflow + environment. `RELEASING.md` §"PyPI and TestPyPI" has the exact field values. |
 | S2 | **npm org `@anthill-tec` does not exist** | User-confirmed. Blocks `publish-npm`. |
-| S3 | **`NPM_TOKEN` not set** | ⚠ `publish-npm` *detects the absent token and skips with a notice* — a release would report success having published **PyPI only**, violating the lockstep rule *"do not publish one artifact alone."* **Resolution (user): fix the setup, not the symptom** — the org + token land in Phase 0.4, so the skip is unreachable on a release. No CI guard is added. |
+| S3 | **`NPM_TOKEN` not set** | ⚠ `publish-npm` *detects the absent token and skips with a notice* — a release would report success having published **PyPI only**, violating the lockstep rule *"do not publish one artifact alone."* **Resolution (user): fix the setup, not the symptom** — the org + token land in Setup step 1.4, so the skip is unreachable on a release. No CI guard is added. |
 | S4 | GitHub Environments (`pypi`, `testpypi`) + `RELEASE_PAT` | Status unverified. `RELEASING.md` documents both. |
 | S5 | Repo is **PRIVATE** | **Resolved: goes PUBLIC at release** (user, 2026-08-03) — CI does not run otherwise. `npm publish --provenance` then works for free. |
 
@@ -71,34 +81,63 @@ Two properties this ordering buys:
 
 ## 3. The plan
 
-### Phase 0 — Pre-flight (do BEFORE cutting the release branch)
+**On the naming.** An earlier draft used "Phase 0/1/2…", which is invented jargon that says nothing
+about what happens. The steps below are named for what they DO. Step 1 is SETUP — one-time
+prerequisites that are not part of a release at all; steps 2-9 are the release itself, in order.
+
+```
+  SETUP (once)  ─┐
+                 │
+  2 cut branch ──┤  reversible — delete the branch, re-cut
+  3 NO-MISTAKES ─┤  ← integrity gate, FIRST, on the source
+  4 full test   ─┤
+  5 package     ─┤  ← build + install + run the artifacts
+  6 rehearse    ─┘  ← TestPyPI + npm dry-run, same CI path
+  ─────────────────────────────────────────────
+  7 finish      ── ⚠ tag push = POINT OF NO RETURN
+  8 CI publish  ──    PyPI ∥ npm, no human step
+  9 verify      ──    install from the registries
+```
+
+
+### Step 1 — SETUP (one-time; done before any release, not part of one)
+
+These are account/repo facts that must be true before a release can work at all. They are not
+release steps — they are prerequisites, done once and then true forever. A release never repeats
+them.
 
 Each item is a hard gate; none is optional.
 
 | Step | Action | Owner | Blocker |
 |---|---|---|---|
-| 0.1 | `git config gitflow.prefix.versiontag v` | orchestrator | B4 |
-| 0.2 | **Push develop to origin** — 641 commits. Nothing downstream works until GitHub has the code. | orchestrator | B3 |
-| 0.3 | Register **pending Trusted Publishers** on PyPI + TestPyPI (`RELEASING.md` has the field table) | **user** | S1 |
-| 0.4 | Create the **npm org `@anthill-tec`**, then generate an automation `NPM_TOKEN` and add it as a repo secret | **user** | S2, S3 |
-| 0.5 | Confirm GitHub Environments `pypi` / `testpypi` exist and `RELEASE_PAT` is set | **user** | S4 |
-| 0.6 | **Make the repo PUBLIC** — user-decided 2026-08-03: *"we will make it public during release, the CI wont run otherwise"*. Provenance follows for free. | **user** | S5 |
+| 1.1 | `git config gitflow.prefix.versiontag ''` — bare SemVer, no `v` (see CR-CRU-061) | orchestrator | B4 |
+| 1.2 | **Push develop to origin** — 641 commits. Nothing downstream works until GitHub has the code. | orchestrator | B3 |
+| 1.3 | Register **pending Trusted Publishers** on PyPI + TestPyPI (`RELEASING.md` has the field table) | **user** | S1 |
+| 1.4 | Create the **npm org `@anthill-tec`**, then generate an automation `NPM_TOKEN` and add it as a repo secret | **user** | S2, S3 |
+| 1.5 | Confirm GitHub Environments `pypi` / `testpypi` exist and `RELEASE_PAT` is set | **user** | S4 |
+| 1.6 | **Make the repo PUBLIC** — user-decided 2026-08-03: *"we will make it public during release, the CI wont run otherwise"*. Provenance follows for free. | **user** | S5 |
 
-⚠ **B2 (`package.json` = the `eab2080` scaffold placeholder) is NOT a Phase-0 item.** An earlier
+⚠ **B2 (`package.json` = the `eab2080` scaffold placeholder) is NOT a SETUP item.** An earlier
 draft listed `set-version 0.1.0` here; that is impossible — `release.sh` refuses to run outside a
-`release/*` or `hotfix/*` branch, and Phase 0 runs on `develop`. It is already correctly placed at
-**step 4.1**, after the release branch exists. The version itself is not in question: the storyboard
+`release/*` or `hotfix/*` branch, and Setup runs on `develop`. It is already correctly placed at
+**step 5.1**, after the release branch exists. The version itself is not in question: the storyboard
 fixes it at **0.1.0**, then 0.2.0.
 
-### Phase 1 — Cut the release branch
+### Step 2 — CUT THE RELEASE BRANCH
+
+The git-flow release start. Everything from here until Step 6 is reversible: delete the branch and re-cut.
 
 ```bash
 git flow release start 0.1.0        # from develop
 ```
-Reversible. `scripts/release.sh` refuses to run anywhere but a `release/*` or `hotfix/*` branch, so
+`scripts/release.sh` refuses to run anywhere but a `release/*` or `hotfix/*` branch, so
 this must come first.
 
-### Phase 2 — Integrity gate (no-mistakes, tracked in Crucible)
+### Step 3 — INTEGRITY GATE — **no-mistakes** (the first gate, as specified)
+
+🔷 **This is the no-mistakes run.** It is the FIRST thing that happens after the branch is cut,
+before any packaging, because it validates the SOURCE. Packaging validates the ARTIFACT; if
+packaging ran first, a failure would be ambiguous between the two.
 
 ```bash
 python3 clients/bun-crucible.py gate-run --intent "0.1.0 release integrity" --agent vidushi
@@ -112,7 +151,9 @@ not a claim in a chat log.
 **Gate:** the sealed gate's outcome must be `passed`. A `failed` outcome ends the release; fix on
 `develop`, re-merge, re-run. Do not proceed on a partial pass.
 
-### Phase 3 — Full-stack regression
+### Step 4 — FULL-STACK TEST
+
+Every test the project has, on the release branch.
 
 Union regression (all tests except e2e) **plus** e2e, which is now meaningful — CR-CRU-060 took the
 suite to 40/40 green for the first time.
@@ -123,23 +164,27 @@ suite to 40/40 green for the first time.
 
 **Gate:** all three green. Any failure ends the release.
 
-### Phase 4 — Packaging build + artifact test
+### Step 5 — PACKAGE, AND TEST THE PACKAGE
+
+Build both artifacts, then test them AS ARTIFACTS — installed, not run from the source tree.
 
 Build both artifacts and test them as artifacts, not as a source tree.
 
 | Step | Action | Proves |
 |---|---|---|
-| 4.1 | `scripts/release.sh set-version 0.1.0` | the manual manifest matches the intended tag |
-| 4.2 | Build the Python sdist/wheel | `crucible-axi` packages cleanly; hatch-vcs derives the version from the tag |
-| 4.3 | Build/pack the npm tarball (`npm pack`) | `@anthill-tec/crucible-server` packages cleanly; the file list is what we intend to ship |
-| 4.4 | **Install the built wheel into a throwaway venv** and run the client fleet's `--help` + one real verb against an ephemeral server | the packaged client works *as installed*, not just from the repo |
-| 4.5 | **Verify the composite pin resolves** — the installed `crucible_axi.__version__` must select `@anthill-tec/crucible-server@0.1.0`, never `latest` | the lockstep contract holds at runtime, not just in tests |
+| 5.1 | `scripts/release.sh set-version 0.1.0` | the manual manifest matches the intended tag |
+| 5.2 | Build the Python sdist/wheel | `crucible-axi` packages cleanly; hatch-vcs derives the version from the tag |
+| 5.3 | Build/pack the npm tarball (`npm pack`) | `@anthill-tec/crucible-server` packages cleanly; the file list is what we intend to ship |
+| 5.4 | **Install the built wheel into a throwaway venv** and run the client fleet's `--help` + one real verb against an ephemeral server | the packaged client works *as installed*, not just from the repo |
+| 5.5 | **Verify the composite pin resolves** — the installed `crucible_axi.__version__` must select `@anthill-tec/crucible-server@0.1.0`, never `latest` | the lockstep contract holds at runtime, not just in tests |
 
-**Gate:** 4.4 and 4.5 are the ones that matter. A wheel that builds but doesn't run is not a
-release. Note 4.5 can be proven *before* the npm package exists by asserting the resolved
-coordinate string, with the actual fetch deferred to Phase 5.
+**Gate:** 5.4 and 5.5 are the ones that matter. A wheel that builds but doesn't run is not a
+release. Note 5.5 can be proven *before* the npm package exists by asserting the resolved
+coordinate string, with the actual fetch deferred to Step 6.
 
-### Phase 5 — Rehearsal against throwaway targets
+### Step 6 — REHEARSE THE PUBLISH (throwaway targets)
+
+The same CI path, aimed at TestPyPI and an npm dry-run. Repeatable, costs nothing, proves the real publish before it happens.
 
 ```bash
 scripts/release.sh checkpoint        # dispatches release.yml → TestPyPI + npm dry-run
@@ -152,7 +197,9 @@ Exercises the **identical CI path** — same workflow, same jobs, same OIDC — 
 absent, `publish-npm` will *skip rather than fail* — treat a skip as a **failed gate**, not a pass
 (§4).
 
-### Phase 6 — Finish (the first irreversible act)
+### Step 7 — FINISH — ⚠ THE POINT OF NO RETURN
+
+The tag push. This is the first irreversible act in the whole sequence.
 
 ```bash
 scripts/release.sh finish 0.1.0
@@ -162,7 +209,7 @@ Preflight guards → `git flow release finish` → tag `v0.1.0` → push `master
 
 **This is the point of no return.** The tag push is what CI keys on.
 
-### Phase 7 — CI takes over
+### Step 8 — CI PUBLISHES (no human step)
 
 ```
 push master → create-release → GitHub Release (published)
@@ -172,7 +219,7 @@ push master → create-release → GitHub Release (published)
 
 No human step. **Watch both jobs to completion.**
 
-### Phase 8 — Post-publish verification
+### Step 9 — VERIFY FROM THE REGISTRIES
 
 Prove the delivered thing works from the registries, not from the repo:
 - `uv`-install `crucible-axi==0.1.0` into a clean environment
