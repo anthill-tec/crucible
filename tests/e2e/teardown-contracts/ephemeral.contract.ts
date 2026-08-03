@@ -49,9 +49,9 @@
 //     cycle and is pure config introspection, no response parsing — a
 //     strictly more robust source of truth regardless. It is also better
 //     for the CR's Risk section on its own merits: it can reject BEFORE any
-//     network attempt (proven in non-ephemeral.spec.ts, the sibling file
-//     for §S3 contract 4), so a mis-pointed call never even reaches a live
-//     server.
+//     network attempt (proven in non-ephemeral.contract.ts, the sibling
+//     file for §S3 contract 4), so a mis-pointed call never even reaches a
+//     live server.
 //
 // The server itself is booted by this file's config via a REAL BUN
 // SUBPROCESS (Playwright's `webServer` stanza) — see
@@ -60,15 +60,56 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { seedProject, teardownSeededProjects, E2E_PORT } from "../steps/harness.ts";
 
-/** GET /api/v2/projects?archived=true and check whether `key` is present —
- * `archived=true` so a project that was merely archived (not yet deleted)
- * still counts as "exists", making the assertion honest about DELETION
- * specifically, not just disappearance from the default non-archived view. */
+// RED-FIXUP (cycle 180) — `projectExists` originally queried ONLY
+// `GET /api/v2/projects?archived=true`. Verified by reading
+// `handleProjectsList` (`src/v2.ts:268-275`) → `store.listProjects(archived)`
+// (`src/store.ts:669-676`): the query is
+// `WHERE archived_at IS ${archived ? "NOT NULL" : "NULL"}` — `archived=true`
+// is an EXCLUSIVE view of ONLY archived projects, never a superset. A freshly
+// seeded (unarchived) project can therefore never appear in that response,
+// so every `expect(await projectExists(...)).toBe(true)` precondition below
+// was unwinnable no matter what GREEN did. Fixed to query BOTH listings and
+// union them, so "exists" genuinely means "exists, archived or not" — the
+// intent the original comment stated but the implementation didn't deliver.
+
+/** Fetch the union of the default (unarchived) and archived project
+ * listings — see the RED-FIXUP note above for why neither listing alone
+ * is a superset of "does this project exist at all". */
+async function fetchAllProjects(
+  request: APIRequestContext,
+): Promise<Array<{ key: string; name: string }>> {
+  const [unarchivedRes, archivedRes] = await Promise.all([
+    request.get("/api/v2/projects"),
+    request.get("/api/v2/projects?archived=true"),
+  ]);
+  expect(unarchivedRes.ok()).toBe(true);
+  expect(archivedRes.ok()).toBe(true);
+  const unarchived = (await unarchivedRes.json()) as {
+    ok: true;
+    projects: Array<{ key: string; name: string }>;
+  };
+  const archived = (await archivedRes.json()) as {
+    ok: true;
+    projects: Array<{ key: string; name: string }>;
+  };
+  return [...unarchived.projects, ...archived.projects];
+}
+
+/** Does a project with this KEY exist, archived or not — the union from
+ * `fetchAllProjects`, so the assertion is honest about DELETION specifically
+ * (a merely-archived project still counts as "exists"), not just
+ * disappearance from one particular view. */
 async function projectExists(request: APIRequestContext, key: string): Promise<boolean> {
-  const res = await request.get("/api/v2/projects?archived=true");
-  expect(res.ok()).toBe(true);
-  const body = (await res.json()) as { ok: true; projects: Array<{ key: string }> };
-  return body.projects.some((p) => p.key === key);
+  const all = await fetchAllProjects(request);
+  return all.some((p) => p.key === key);
+}
+
+/** Does a project with this NAME exist, archived or not? Used by contract 2
+ * below, which — unlike contract 1/3/5 — cannot identify its target project
+ * by a runtime-captured KEY (see contract 2's RED-FIXUP note). */
+async function projectExistsByName(request: APIRequestContext, name: string): Promise<boolean> {
+  const all = await fetchAllProjects(request);
+  return all.some((p) => p.name === name);
 }
 
 test.describe("§S2 contract 1 — every project seedProject creates is deleted by end of run", () => {
@@ -156,20 +197,29 @@ test.describe("§S3 contract 5 — seedProject against the ephemeral target stil
     const key = await seedProject(request, "ephemeral-guard-happy-path");
     expect(key).toMatch(/^[0-9a-f-]{36}$/i);
 
-    const res = await request.get("/api/v2/projects?archived=true");
-    expect(res.ok()).toBe(true);
-    const body = (await res.json()) as {
-      ok: true;
-      projects: Array<{ key: string; name: string }>;
-    };
-    const created = body.projects.find((p) => p.key === key);
+    // RED-FIXUP (cycle 180) — this originally queried ONLY
+    // `?archived=true`, which can never contain a freshly-seeded
+    // (unarchived) project (see `fetchAllProjects`'s doc comment). Fixed to
+    // use the union so the assertion can actually observe a real creation.
+    const all = await fetchAllProjects(request);
+    const created = all.find((p) => p.key === key);
     expect(created).toBeDefined();
     expect(created?.name).toBe("ephemeral-guard-happy-path");
   });
 });
 
 test.describe("§S2 contract 2 — teardown runs even when a scenario FAILS", () => {
-  let failedScenarioKey: string | undefined;
+  // RED-FIXUP (cycle 180) — this describe block previously captured the
+  // seeded key in a module-level `let failedScenarioKey`, read back by the
+  // follow-up test. That cannot work: Playwright RESTARTS THE WORKER PROCESS
+  // after a test failure (GREEN proved this with a throwaway probe this
+  // cycle), so the follow-up test runs in a fresh process where
+  // `failedScenarioKey` has been re-initialized to `undefined` — the
+  // `expect(failedScenarioKey, ...).toBeDefined()` guard could never pass.
+  // Fixed by asserting on the project's NAME instead: a compile-time string
+  // literal is not runtime state, so it trivially survives the process
+  // restart the same way the literal below already does.
+  const FAILING_SCENARIO_PROJECT_NAME = "teardown-contract2-failure-fixture";
 
   // The REAL mechanism under test: hooking teardownSeededProjects into a
   // Playwright afterEach. Playwright GUARANTEES afterEach hooks run
@@ -185,8 +235,8 @@ test.describe("§S2 contract 2 — teardown runs even when a scenario FAILS", ()
   });
 
   test("a scenario that seeds a project and then deliberately FAILS", async ({ request }) => {
-    failedScenarioKey = await seedProject(request, "teardown-contract2-failure-fixture");
-    expect(await projectExists(request, failedScenarioKey)).toBe(true);
+    const key = await seedProject(request, FAILING_SCENARIO_PROJECT_NAME);
+    expect(await projectExists(request, key)).toBe(true);
 
     // Deliberate failure — the "scenario FAILS" half of the AC. This test
     // is EXPECTED to be reported red; the next test proves teardown still
@@ -194,10 +244,9 @@ test.describe("§S2 contract 2 — teardown runs even when a scenario FAILS", ()
     expect(1, "CR-CRU-052 RED fixture — deliberately failing scenario").toBe(2);
   });
 
-  test("the FAILED scenario's seeded project is gone afterward — proves afterEach teardown survived the failure", async ({
+  test("no project named teardown-contract2-failure-fixture exists — proves afterEach teardown survived the previous scenario's failure", async ({
     request,
   }) => {
-    expect(failedScenarioKey, "previous test must have run and captured a key").toBeDefined();
-    expect(await projectExists(request, failedScenarioKey!)).toBe(false);
+    expect(await projectExistsByName(request, FAILING_SCENARIO_PROJECT_NAME)).toBe(false);
   });
 });

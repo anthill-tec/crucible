@@ -1,7 +1,7 @@
 // CR-CRU-052 §S3 RED — proves seedProject refuses a non-ephemeral target
 // (contract 4). Deliberately configured with a baseURL that is NEITHER
 // harness.ts's expected `E2E_PORT` (39_877) NOR anything ever bound in this
-// suite: the invented §S3 guard (see ephemeral.spec.ts's header) is
+// suite: the invented §S3 guard (see ephemeral.contract.ts's header) is
 // expected to reject BEFORE any network attempt — a config-introspection
 // check (`test.info().project.use.baseURL`), not a round trip — so this
 // config's baseURL having NO listener at all is itself part of the proof:
@@ -15,7 +15,13 @@
 // already-existing `seedProject` (no E2E_PORT import here) — this config
 // and its spec load and RUN cleanly today, producing a genuine assertion
 // failure (not a bare collection error) that turns green only once §S3
-// actually ships. See non-ephemeral.spec.ts.
+// actually ships. See non-ephemeral.contract.ts.
+//
+// RED-FIXUP (cycle 180) — renamed from non-ephemeral.spec.ts (and
+// testMatch updated to match) so plain `bun test` no longer sweeps this
+// file into the regression gate — see ephemeral.playwright.config.ts's
+// header for the full rationale (bun's `.spec.`/`.test.` discovery rule,
+// and why `bunfig.toml` exclusion isn't available).
 import { defineConfig } from "@playwright/test";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,7 +35,7 @@ const NON_EPHEMERAL_PORT = 48_231;
 
 export default defineConfig({
   testDir: HERE,
-  testMatch: /non-ephemeral\.spec\.ts$/,
+  testMatch: /(^|\/)non-ephemeral\.contract\.ts$/,
   fullyParallel: false,
   workers: 1,
   retries: 0,

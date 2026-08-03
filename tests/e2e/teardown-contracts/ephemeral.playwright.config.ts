@@ -2,11 +2,42 @@
 // harness.ts's teardown + ephemeral-guard contracts against a REAL server
 // bound to the real e2e port. Kept separate from the main
 // tests/e2e/features BDD suite (playwright.config.ts — GREEN-owned, not
-// touched here): one of the scenarios in ephemeral.spec.ts deliberately
+// touched here): one of the scenarios in ephemeral.contract.ts deliberately
 // FAILS (§S2 AC — "teardown also runs when a scenario fails"), and a
 // permanently-red scenario inside the real regression suite would be a
 // standing false alarm forever, not a genuine assertion. See
-// ephemeral.spec.ts's header for the full contract rationale.
+// ephemeral.contract.ts's header for the full contract rationale.
+//
+// RED-FIXUP (cycle 180) — two defects fixed here:
+//  1. The source files were originally named `ephemeral.spec.ts` /
+//     `non-ephemeral.spec.ts`. Bun's default `bun test` file discovery
+//     matches any file with `.test.` OR `.spec.` (or `_test.`/`_spec.`)
+//     immediately before its extension — CONFIRMED empirically this cycle
+//     (a throwaway glob probe: `foo.spec.ts`/`foo.test.ts` were picked up by
+//     a bare `bun test`; `foo.contract.ts`/`foo.pw.ts` were not) — so both
+//     files were being swept into the plain `bun test` regression gate
+//     despite this CR's own stated premise that they stay OUT of it (one of
+//     them contains a deliberately-failing scenario, and BOTH require a live
+//     server this config boots, which a bare `bun test` never does — hence
+//     the "Playwright Test did not expect test() to be called here." errors
+//     the plain regression gate was reporting). `bunfig.toml`'s
+//     `pathIgnorePatterns` is NOT an available fix: CR-CRU-047 §S1 forbids a
+//     permanently-excluded `tests/` directory, and
+//     `tests/suite-integrity.test.ts` (out of this agent's scope) asserts
+//     `bunfig.toml` carries no such key at all. Renamed instead — to
+//     `ephemeral.contract.ts` / `non-ephemeral.contract.ts` — since neither
+//     substring matches bun's discovery rule, so plain `bun test` no longer
+//     collects them, while THIS config's own `testMatch` below still finds
+//     them explicitly by name.
+//  2. `testMatch: /ephemeral\.spec\.ts$/` matched `non-ephemeral.spec.ts`
+//     too, as a trailing SUBSTRING — so this config ran BOTH files' tests,
+//     including non-ephemeral's (which requires no live server and expects
+//     a connection to FAIL), against a config that DOES boot a live server
+//     on the expected port, defeating that file's own "no listener at all"
+//     premise. Fixed by anchoring the match to require nothing (start of
+//     path, or a path separator) immediately before "ephemeral", so
+//     "non-ephemeral..." — where "ephemeral" is preceded by "non-", never
+//     "/" or the start of the string — can never match.
 //
 // Boots the server via a REAL BUN SUBPROCESS (Playwright's `webServer`
 // stanza, `bun run <SERVER_ENTRY>`) — mirroring the main playwright.config.ts
@@ -42,7 +73,10 @@ const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
 
 export default defineConfig({
   testDir: HERE,
-  testMatch: /ephemeral\.spec\.ts$/,
+  // Anchored so "non-ephemeral.contract.ts" (which ALSO ends with
+  // "ephemeral.contract.ts" as a trailing substring) can never match — see
+  // the RED-FIXUP header comment above.
+  testMatch: /(^|\/)ephemeral\.contract\.ts$/,
   fullyParallel: false,
   workers: 1,
   retries: 0,
