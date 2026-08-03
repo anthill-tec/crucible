@@ -44,6 +44,17 @@ Also: `git config gitflow.prefix.versiontag` was briefly set to `v` by the orche
 2026-08-03 while clearing release pre-flight, and has been **unset again** — the correct value under
 this CR is the empty string, and `release.sh` must assert THAT.
 
+**🚨 This SUPERSEDES CR-CRU-041 §S5, which was itself a user decision.** That section (revised
+2026-07-28) adopted `vX.Y.Z` explicitly to tally with Sandesh, which runs
+`gitflow.prefix.versiontag = v` and has published `v0.3.3`/`v0.3.4`/`v0.3.5`. It also superseded
+CR-CRU-009 §S6's original bare `0.1.0`. **The user reaffirmed bare SemVer categorically on
+2026-08-03**, so the lineage is: bare (009) → `v` (041 §S5, Sandesh alignment) → **bare (061, final)**.
+
+**Accepted consequence:** Crucible and Sandesh will use different git-tag shapes. Sandesh is
+unchanged and out of scope. Note this only affects the GIT TAG — hatch-vcs strips the `v` either
+way, so the published PyPI/npm versions were always bare `X.Y.Z`; no published artifact changes
+shape.
+
 **Why this must land before the release, not after.** No tag exists yet (`git tag -l` → 0, remote
 included). The tag format is therefore still free. Once `0.1.0` is cut in either format it is
 published history on two registries, and changing it later means a version that exists in one shape
@@ -95,9 +106,29 @@ step has no PR to watch and would block until its timeout.
 But **`bun-crucible.py gate-run` exposes only `--intent`, `--agent`, `--project-dir`** — there is no
 `--skip` passthrough, so the release gate cannot currently be run in the shape this project needs.
 
-Add a `--skip` passthrough to `gate-run` (and to the sibling clients that carry the verb). Keep it a
-pure passthrough — the client must not hardcode WHICH steps to skip, because that is a per-project
-workflow decision, not a client-fleet fact.
+**Gap analysis correction — this is ONE locus, not five.** `gate-run` appears in all five clients,
+but CR-CRU-054 lifted the body to `clients/_crucible_axi.py:1654`, where it builds
+`[nm, "axi", "run", "--intent", intent]`. Add `--skip` there, plus the argparse surface. **Do not
+patch five copies** — that would re-fragment exactly what CR-054 unified.
+
+Keep it a pure passthrough — the client must not hardcode WHICH steps to skip, because that is a
+per-project workflow decision, not a client-fleet fact.
+
+### §S6 — The two test files that ENCODE the `v` contract
+Gap analysis (Dimension 6) found two consumers the earlier draft did not name:
+
+- **`tests/cr009-release-bundle.test.ts:325,342-343`** asserts, verbatim, *"§S5 — Adopt Sandesh's
+  vX.Y.Z tag scheme: publish-pypi / publish-npm guards match **ONLY v-prefixed tags**"*. This file
+  **goes red the moment §S1 lands** — by design, because it pins the decision §S1 reverses. Update
+  it to pin the bare-SemVer contract, and preserve the CR-041 §S5 history as a labelled
+  supersession rather than deleting it.
+- **`tests/release-driver.test.ts`** — 14 tests, 11 referencing `versiontag`/`prefix`, including one
+  asserting `finish` refuses when the prefix is UNSET. Under §S1, **unset is the CORRECT state**, so
+  that test's meaning inverts and must be rewritten, not merely retargeted.
+
+⚠ Neither may be weakened to pass. If a test pins the old contract, it is rewritten to pin the new
+one with the same rigour — a guard that is loosened rather than re-aimed is how the `v` assumption
+would survive into the release.
 
 ### §S4 — Documentation matches the machinery
 `RELEASING.md` documents the `v` model and the manual-manifest model in several places (§"Version
@@ -119,12 +150,17 @@ reader is told to do a step that no longer exists.
       surviving instruction to hand-bump `package.json` — asserted.
 - [ ] `gate-run --skip <steps>` passes the value through to `no-mistakes axi run` unchanged, and
       `gate-run --help` documents it — asserted (§S5).
+- [ ] `tests/cr009-release-bundle.test.ts` pins the BARE-SemVer guard contract; the CR-041 §S5
+      history is preserved as a labelled supersession, not deleted (§S6).
+- [ ] `tests/release-driver.test.ts`'s prefix tests are rewritten for "unset is correct" — no test
+      still asserts `v` is required (§S6).
 - [ ] Full bun regression green AND full Python regression green.
 
 ## Non-goals
 - Changing the composite lockstep MODEL (CR-CRU-041) — only its version source.
 - Changing what gets published, or the OIDC/Trusted-Publishing setup.
 - The `CRUCIBLE_SERVER_VERSION` escape hatch — unchanged.
+- Changing Sandesh. It keeps `v`-prefixed tags; the divergence is accepted, not a defect to chase.
 - Retiring `release.sh` itself. Its branch gating and preflights stay valuable; only the version
   step is in question (§S2).
 
