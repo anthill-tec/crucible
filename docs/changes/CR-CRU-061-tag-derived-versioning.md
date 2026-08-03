@@ -180,3 +180,50 @@ reader is told to do a step that no longer exists.
   (*"do not publish one artifact alone"*) makes a partial failure expensive to unwind.
 - **`npm version` rewrites `package.json` in the CI workspace.** Confirm it does not get committed
   back, and that `--allow-same-version` prevents a spurious failure when the value already matches.
+
+## Implementation Notes
+- **Union regression at the gate: 1988 passing / 0 failing** (bun 1305 + python 683), coverage
+  87.6%/87.0% bun.
+- **This CR reverses a prior USER decision, and the lineage is recorded rather than erased.**
+  CR-CRU-041 §S5 (2026-07-28, user) adopted `vX.Y.Z` to tally with Sandesh, which has published
+  `v0.3.3`/`v0.3.4`/`v0.3.5`. The user reaffirmed bare SemVer categorically on 2026-08-03. Lineage:
+  bare (009 §S6) → `v` (041 §S5) → **bare (061, final)**. Crucible and Sandesh now diverge on tag
+  shape; accepted, and Sandesh is explicitly out of scope. Only the GIT TAG changes — hatch-vcs
+  stripped the `v` either way, so no published artifact ever changed shape.
+- **🚨 `git config --get`'s EXIT STATUS is the load-bearing detail.** git-flow treats UNSET and
+  SET-TO-EMPTY differently: unset → `Fatal: Version tag not set`; set-empty → works. The old code's
+  `|| true` capture destroyed exactly that signal, so even a `!= ""` check would have waved through
+  the state that breaks git-flow outright. VERIFY drove all three states in a scratch repo.
+- **The npm derivation was proven by EXECUTION, not by reading YAML.** RED extracts the step's shell
+  body and runs it under `bash -e -o pipefail` against a scratch `package.json`. Confirmed
+  independently twice (orchestrator + VERIFY): `2.0.0-alpha.1` + tag `0.1.0` → `0.1.0`.
+- **The `--skip` passthrough exists at ONE locus** (`_crucible_axi.py:1671-1678`), with the flag on
+  all five clients. RED's single-locus contract calls `cmd_gate_run` DIRECTLY with a duck-typed args
+  stand-in, so a future per-client re-implementation keeps that test red even if the fleet-wide test
+  passes. CR-054's unification is defended by construction.
+- **A FLAKY test shipped in this CR's own RED and was caught, not re-run away.** The fake
+  `no-mistakes` wrote its argv capture on EVERY invocation, so `cmd_gate_run`'s interim
+  `axi status` poll overwrote the `axi run` capture — passing 1 run in 4 (measured FAILED, FAILED,
+  OK, FAILED). GREEN diagnosed it, proved production correct in a scratch harness, and escalated
+  WITHOUT touching the file it did not own. The fix nests the write inside the `argv[1] == "run"`
+  branch, so a `status` invocation has NO code path to the capture file — eliminated by
+  construction, not made less likely. 10 consecutive green runs (VERIFY) + 8 (orchestrator).
+- **The docs cycle corrected the orchestrator's own brief.** It was told to stop presenting
+  `set-version` as required; `release.sh:277` still calls `guard_manifest_version`, so on the
+  `release.sh` path it genuinely IS required. The agent documented the split honestly instead of
+  writing the convenient falsehood. See the open item below.
+- **A supersession-boundary invariant now guards the docs.** Correcting `RELEASING.md` invalidated
+  THREE assertions, not the one flagged — and one would have "passed stale" off the new supersession
+  section, which legitimately quotes the old `versiontag v` command as history. The replacement
+  asserts that every `vX.Y.Z`/`versiontag v` occurrence sits AFTER the `## Superseded` heading:
+  history preserved, a `v`-shape can never reappear as live instruction.
+
+## Open item for the user (raised at the merge gate, NOT a defect in this CR)
+`scripts/release.sh:277` still calls `guard_manifest_version`, so `finish` refuses unless
+`package.json` was hand-bumped via `set-version` first. §S2 made the tag authoritative for what is
+**published**; it did not make it authoritative for what is **released**. Against the user's stated
+goal — *"once we set it for a release it is automatic"* — cutting a release is still two commands.
+VERIFY's assessment: a real unresolved contradiction with the CR's intent, with two remediations —
+(a) drop `guard_manifest_version` now the manifest is provably irrelevant to publishing, or
+(b) have `finish` invoke `set-version` itself so the operator issues one command. Deliberately NOT
+decided here.
