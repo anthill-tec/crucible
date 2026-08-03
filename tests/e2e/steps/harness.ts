@@ -143,6 +143,46 @@ export async function registerAgent(
   expect(res.ok()).toBe(true);
 }
 
+/**
+ * CR-CRU-060 §S2 — the identity `filePlan` (and any other harness helper that
+ * needs a caller but is handed none) registers for itself. A single fixed id,
+ * not a generated one, so a scenario's board shows ONE harness agent however
+ * many plans it files.
+ */
+export const HARNESS_AGENT_ID = "e2e-harness";
+
+/**
+ * CR-CRU-060 §S3/§S4 — the ensure-registered guarantee, at the HELPER
+ * boundary. Every helper that hits a `requireRegisteredCaller` route
+ * (CR-CRU-056) calls this with the id it is about to send, so the id is a live
+ * registered agent by the time the real request goes out — whether the caller
+ * registered it (`seeding.steps.ts:24`), generated it and registered nothing
+ * (`cycle-run-navigation.steps.ts`'s `crb-filler-*`), or supplied no id at all
+ * (`filePlan`).
+ *
+ * Safe to call UNCONDITIONALLY: registration is idempotent by construction —
+ * `handleAgentTouch` (`src/v2.ts:499`) branches on `hasAgent` and merely skips
+ * the lifecycle-event journal on a repeat, so a re-register of a live id is a
+ * no-op touch, never a duplicate row and never a 409.
+ *
+ * Deliberately delegates to `registerAgent` rather than posting its own
+ * registration: ONE registration idiom, and `registerAgent` already sends
+ * `role: "report"` — the non-TDD role that carries no cycle binding, so an e2e
+ * fixture can never attach itself to a real plan cycle.
+ */
+async function ensureRegistered(
+  request: APIRequestContext,
+  projectKey: string,
+  agentId: string,
+): Promise<void> {
+  await registerAgent(
+    request,
+    projectKey,
+    agentId,
+    "CR-CRU-060 — e2e harness ensure-registered caller",
+  );
+}
+
 /** Poll a standalone server's /api/health until it answers ok, or throw. */
 export async function waitForHealth(baseUrl: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -179,6 +219,8 @@ export async function ingestJunit(
   xml: string,
   tier?: string,
 ): Promise<RunIngestResponse> {
+  // CR-CRU-060 §S3/§S4 — the id arrives from the caller; guarantee it here.
+  await ensureRegistered(request, projectKey, agentId);
   const res = await request.post("/api/v2/runs", {
     data: {
       projectKey,
@@ -199,6 +241,8 @@ export async function ingestParsed(
   summary: RunSummaryInput,
   opts?: { coverage?: unknown; tier?: string; context?: unknown },
 ): Promise<RunIngestResponse> {
+  // CR-CRU-060 §S3/§S4 — the id arrives from the caller; guarantee it here.
+  await ensureRegistered(request, projectKey, agentId);
   const status = summary.failed > 0 ? "fail" : "pass";
   const res = await request.post("/api/v2/runs/parsed", {
     data: {
@@ -247,9 +291,14 @@ export async function filePlan(
   cycleLabels: string[],
   wave?: string,
 ): Promise<PlanFileResponse> {
+  // CR-CRU-060 §S2 — `filePlan` is handed no id by ANY of its call sites
+  // (gates.steps.ts:22, wave-backfill.steps.ts:21, workflow.steps.ts:19), so
+  // it registers one for itself rather than growing a new required argument.
+  await ensureRegistered(request, projectKey, HARNESS_AGENT_ID);
   const res = await request.post(`/api/v2/projects/${projectKey}/plans`, {
     data: {
       cr,
+      agentId: HARNESS_AGENT_ID,
       cycles: cycleLabels.map((label) => ({ label })),
       ...(wave !== undefined ? { wave } : {}),
     },
@@ -266,9 +315,12 @@ export async function transitionCycle(
   cycleId: number,
   status: string,
 ): Promise<void> {
+  // CR-CRU-060 §S2/§S4 — same shape as `filePlan`: a workflow verb behind
+  // `requireRegisteredCaller` that no call site hands an id to.
+  await ensureRegistered(request, projectKey, HARNESS_AGENT_ID);
   const res = await request.patch(
     `/api/v2/projects/${projectKey}/plans/${planId}/cycles/${cycleId}`,
-    { data: { status } },
+    { data: { status, agentId: HARNESS_AGENT_ID } },
   );
   expect(res.ok()).toBe(true);
 }
@@ -280,8 +332,10 @@ export async function closePlan(
   planId: number,
   mergeCommit: string,
 ): Promise<void> {
+  // CR-CRU-060 §S2/§S4 — as `filePlan`/`transitionCycle`.
+  await ensureRegistered(request, projectKey, HARNESS_AGENT_ID);
   const res = await request.patch(`/api/v2/projects/${projectKey}/plans/${planId}`, {
-    data: { status: "closed", merge: { commit: mergeCommit } },
+    data: { status: "closed", merge: { commit: mergeCommit }, agentId: HARNESS_AGENT_ID },
   });
   expect(res.ok()).toBe(true);
 }
@@ -298,8 +352,10 @@ export async function backfillPlanWave(
   planId: number,
   wave: string,
 ): Promise<{ ok: boolean; changed: boolean; plan: { wave?: string } }> {
+  // CR-CRU-060 §S2/§S4 — as `filePlan`/`transitionCycle`.
+  await ensureRegistered(request, projectKey, HARNESS_AGENT_ID);
   const res = await request.patch(`/api/v2/projects/${projectKey}/plans/${planId}`, {
-    data: { wave },
+    data: { wave, agentId: HARNESS_AGENT_ID },
   });
   expect(res.ok()).toBe(true);
   return (await res.json()) as { ok: boolean; changed: boolean; plan: { wave?: string } };
@@ -318,6 +374,8 @@ export async function ingestCompile(
   errors: string,
   format = "rustc",
 ): Promise<CompileIngestResponse> {
+  // CR-CRU-060 §S3/§S4 — the id arrives from the caller; guarantee it here.
+  await ensureRegistered(request, projectKey, agentId);
   const res = await request.post("/api/v2/runs/compile", {
     data: { projectKey, agentId, errors, format },
   });
@@ -396,6 +454,8 @@ export async function postGate(
   gate: GatePayload,
   context?: Record<string, unknown>,
 ): Promise<EventPostResponse> {
+  // CR-CRU-060 §S3/§S4 — the id arrives from the caller; guarantee it here.
+  await ensureRegistered(request, projectKey, agentId);
   const res = await request.post("/api/v2/gates", {
     data: {
       projectKey,
@@ -416,6 +476,8 @@ export async function postMilestone(
   type: string,
   opts?: { label?: string; context?: Record<string, unknown>; commit?: string },
 ): Promise<EventPostResponse> {
+  // CR-CRU-060 §S3/§S4 — the id arrives from the caller; guarantee it here.
+  await ensureRegistered(request, projectKey, agentId);
   const res = await request.post("/api/v2/milestones", {
     data: {
       projectKey,
