@@ -353,18 +353,23 @@ function writeNarrationBunProject(dir: string, key: string, count: number, sleep
 
 // ── mvn fixture: a streaming fake `mvnw` over ≥3 classes + pre-placed XML ──
 
+// CR-CRU-049 §S1 — REAL surefire console format, measured against surefire
+// 3.2.5 and 3.5.4 (see the CR's Context section): the `[INFO] ` prefix Maven
+// always emits, and the two-dash `-- in <FQCN>` separator surefire 3.x uses on
+// the completion line. The streaming shape (sleeps, 3 classes, ~3.6s span) is
+// unchanged — the throttle/heartbeat assertions depend on it.
 const STREAMING_MVNW_SCRIPT = `#!/bin/sh
-echo "Running com.acme.AlphaTest"
+echo "[INFO] Running com.acme.AlphaTest"
 sleep 1.0
-echo "Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.0 sec - in com.acme.AlphaTest"
+echo "[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.0 sec -- in com.acme.AlphaTest"
 sleep 0.3
-echo "Running com.acme.BravoTest"
+echo "[INFO] Running com.acme.BravoTest"
 sleep 1.0
-echo "Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.0 sec - in com.acme.BravoTest"
+echo "[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.0 sec -- in com.acme.BravoTest"
 sleep 0.3
-echo "Running com.acme.CharlieTest"
+echo "[INFO] Running com.acme.CharlieTest"
 sleep 1.0
-echo "Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.0 sec - in com.acme.CharlieTest"
+echo "[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.0 sec -- in com.acme.CharlieTest"
 exit 0
 `;
 
@@ -1018,4 +1023,140 @@ describe("§S2b in-run progress narration — clients/mvn-crucible.py (class-gra
     },
     20000,
   );
+});
+
+// ── CR-CRU-049 — mvn narration hardening ────────────────────────────────
+//
+// Spec: docs/changes/CR-CRU-049-mvn-narration-hardening.md. Context section
+// measured against REAL surefire 3.2.5 AND 3.5.4 (offline, real mvnw
+// wrappers + local ~/.m2 cache): both emit exactly
+//   `[INFO] Running <FQCN>`
+//   `[INFO] Tests run: N, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: T s -- in <FQCN>`
+// STREAMING_MVNW_SCRIPT above currently hand-fits `_MVN_RUNNING_LINE`
+// instead (`Running com.acme.AlphaTest` — no `[INFO] ` prefix — and the
+// completion lines use the older single-dash `- in` separator). That is the
+// CR's named defect: the fixture confirms the narrator against itself, not
+// against Maven. `_MVN_RUNNING_LINE` itself is verified CORRECT already
+// (`(?:^|\s)` accepts the space after `[INFO]`) — GREEN fixes the FIXTURE
+// BODY (STREAMING_MVNW_SCRIPT), never the regex. RED never touches the
+// fixture body; these tests assert on it as it exists today (real behavioral
+// RED — see "STREAMING_MVNW_SCRIPT emits real surefire..." below) and on
+// clients/mvn-crucible.py's current command construction / comments.
+describe("CR-CRU-049 — mvn narration hardening", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratch = makeScratchTracker();
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    scratch.cleanup();
+  });
+
+  test("STREAMING_MVNW_SCRIPT emits real surefire console format ([INFO] prefix + '-- in' separator), not the hand-fitted format lacking both", () => {
+    // POSITIVE — the exact real-surefire lines the CR's Context section
+    // measured, for every one of the fixture's 3 classes.
+    for (const cls of ["AlphaTest", "BravoTest", "CharlieTest"]) {
+      expect(STREAMING_MVNW_SCRIPT).toContain(`[INFO] Running com.acme.${cls}`);
+      expect(STREAMING_MVNW_SCRIPT).toContain(
+        `[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.0 sec -- in com.acme.${cls}`,
+      );
+    }
+    // BOUND — exactly 3 of each real-format marker (one per fixture class),
+    // never more, never fewer.
+    expect((STREAMING_MVNW_SCRIPT.match(/\[INFO\] Running /g) ?? []).length).toBe(3);
+    expect((STREAMING_MVNW_SCRIPT.match(/\[INFO\] Tests run: /g) ?? []).length).toBe(3);
+    expect((STREAMING_MVNW_SCRIPT.match(/ -- in /g) ?? []).length).toBe(3);
+    // NEGATIVE — the CR's named defect must be gone: no un-prefixed
+    // "Running <FQCN>" line, no single-dash " - in " separator anywhere.
+    // This is what pins the fixture so it "cannot silently drift back to a
+    // hand-fitted format" (spec AC bullet 2).
+    const bareRunning = STREAMING_MVNW_SCRIPT.match(/(?<!\[INFO\] )Running com\.acme\.\w+Test/g);
+    expect(bareRunning).toBeNull();
+    expect(STREAMING_MVNW_SCRIPT.includes(" - in ")).toBe(false);
+  });
+
+  test(
+    "module tier passes -B/--batch-mode on its narrated maven invocation and still ingests the fixture's unchanged 3-class/6-test surefire report set",
+    async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const baseUrl = `http://localhost:${handle.server.port}`;
+      const key = await createProject(baseUrl, "clients-narration-mvn-module-batchmode");
+      const dir = scratch.dir("narration-mvn-module-batchmode-");
+      writeMvnNarrationFixture(dir, key);
+      const agentId = "narration-mvn-module-batchmode-agent";
+
+      const proc = spawnScript(MVN_SCRIPT_PATH, ["module", "--agent", agentId, "--project-dir", dir], {
+        cwd: dir,
+        crucibleUrl: baseUrl,
+      });
+      const [, stderrText, code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+
+      expect(code).toBe(0); // all 3 fixture classes still pass
+
+      // AC3 — `-B` / `--batch-mode` is present as a whole argv token on the
+      // constructed command the client prints (`[module] running: ...`).
+      const runningLine = stderrText.split("\n").find((l) => l.startsWith("[module] running:"));
+      expect(runningLine).toBeDefined();
+      expect(/(?:^|\s)(-B|--batch-mode)(?=\s|$)/.test(runningLine!)).toBe(true);
+
+      // AC4 — the surefire report file SET the ingest path parses is
+      // unchanged by `-B`: the narrator's final replacement heartbeat names
+      // the exact same 3/3 classes the fixture pre-placed (measured
+      // identical in the CR's Context — `-B` is safe but inert on the
+      // report side).
+      const agents = await getAgents(baseUrl, key);
+      const finalAgent = agents.find((a) => a.agentId === agentId);
+      expect(finalAgent?.message).toBe("finished 3/3 test classes — results ingested");
+    },
+    20000,
+  );
+
+  test(
+    "regression tier passes -B/--batch-mode on its narrated maven invocation",
+    async () => {
+      handle = startServer({ port: 0, dbPath: ":memory:" });
+      const baseUrl = `http://localhost:${handle.server.port}`;
+      const key = await createProject(baseUrl, "clients-narration-mvn-regression-batchmode");
+      const dir = scratch.dir("narration-mvn-regression-batchmode-");
+      writeMvnNarrationFixture(dir, key);
+      const agentId = "narration-mvn-regression-batchmode-agent";
+
+      const proc = spawnScript(MVN_SCRIPT_PATH, ["regression", "--agent", agentId, "--project-dir", dir], {
+        cwd: dir,
+        crucibleUrl: baseUrl,
+      });
+      const [, stderrText, code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+
+      expect(code).toBe(0); // 6/6 fixture tests pass → regression ingests green
+
+      const runningLine = stderrText.split("\n").find((l) => l.startsWith("[regression] running:"));
+      expect(runningLine).toBeDefined();
+      expect(/(?:^|\s)(-B|--batch-mode)(?=\s|$)/.test(runningLine!)).toBe(true);
+    },
+    20000,
+  );
+
+  test("a version-pin comment beside _MVN_RUNNING_LINE names the verified surefire versions (3.2.5, 3.5.4) and the matched line form", () => {
+    const src = readFileSync(MVN_SCRIPT_PATH, "utf8");
+    const lines = src.split("\n");
+    const idx = lines.findIndex((l) => l.includes("_MVN_RUNNING_LINE = re.compile"));
+    expect(idx).toBeGreaterThan(-1);
+    // A window around the regex definition — the comment may sit directly
+    // above (matching the existing `# surefire/failsafe class-start line...`
+    // style) or immediately below it.
+    const windowStart = Math.max(0, idx - 8);
+    const windowEnd = Math.min(lines.length, idx + 4);
+    const commentBlock = lines.slice(windowStart, windowEnd).join("\n");
+    expect(commentBlock).toContain("3.2.5");
+    expect(commentBlock).toContain("3.5.4");
+    expect(commentBlock).toContain("[INFO] Running");
+  });
 });

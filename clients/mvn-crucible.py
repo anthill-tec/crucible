@@ -161,8 +161,20 @@ def _mvn_base(maven_dir):
 
 
 def _common_mvn_flags(args):
-    """Translate the shared CLI knobs into Maven args (order-independent for mvn)."""
-    flags = []
+    """Translate the shared CLI knobs into Maven args (order-independent for mvn).
+
+    CR-CRU-049 §S2 — `-B` (batch mode) leads every invocation. It pins Maven's
+    console output to the plain, non-ANSI, non-interactive layout the §S2b
+    narrator parses, instead of leaving that mode an implicit consequence of
+    Maven's own pipe detection in `_run_logged`. Placed on the SHARED flags
+    rather than at the two narrated call sites because the console-text readers
+    it also reaches are provably indifferent to it: the compile-output path
+    (`_compile_fallback`, `cmd_compile`, `cmd_check` → `_ingest_compile`) keys
+    on `[ERROR]` prefixes, which batch mode preserves verbatim, and the only
+    other `stdout.splitlines()` reader (`_docker_clean_check`) parses
+    `docker ps`, not Maven. Measured inert on the report-file side.
+    """
+    flags = ["-B"]
     module = getattr(args, "module", None)
     if module:
         flags += ["-pl", module]
@@ -359,6 +371,16 @@ def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
 # ── §S2b (CR-CRU-008) — in-run progress narration (class granularity) ──────
 
 # surefire/failsafe class-start line, e.g. `[INFO] Running com.acme.AlphaTest`.
+#
+# CR-CRU-049 §S3 — version pin. This regex was VERIFIED against real Maven
+# output on surefire 3.2.5 and 3.5.4 ONLY (2026-08-03, offline, real `mvnw`
+# wrappers + the local ~/.m2 cache). Both emit exactly:
+#     [INFO] Running <FQCN>
+# and the leading `(?:^|\s)` is what accepts the space after the `[INFO] `
+# prefix. Granularity is per CLASS — surefire's contract, not a defect.
+# NOT verified: 3.0.0-M7 (its surefire-junit-platform provider jar is absent
+# from the local repo and the probe was offline) and 2.22.1 (unexercised).
+# Treat those two as unknown, not as covered by a range.
 _MVN_RUNNING_LINE = re.compile(r"(?:^|\s)Running ([A-Za-z_][\w.$]*)\s*$")
 
 
