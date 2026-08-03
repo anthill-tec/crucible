@@ -35,10 +35,24 @@ POST …/plans              → 409  "a registered caller is required — this r
 POST /api/v2/runs/parsed  → 409  "agent a1 is not registered with this project — refused"
 ```
 
-Two distinct shapes of the same drift, in `tests/e2e/steps/harness.ts`:
-- **`filePlan` sends no `agentId` at all** — it predates the field being required.
-- **The ingest helpers send an `agentId` that was never registered** (`a1`, and similar fixture
-  ids) — the value is present but no registration backs it.
+Two distinct shapes of the same drift, in `tests/e2e/steps/harness.ts` — **both re-verified at gap
+analysis, and the second was stated wrongly on first filing:**
+- **`filePlan` (`harness.ts:243-259`) sends no `agentId` at all** — its POST body is
+  `{cr, cycles, wave?}`. Confirmed. `handlePlanFile` (`src/v2.ts:1061`) calls
+  `requireRegisteredCaller` BEFORE validating `cr` or `cycles`, so identity is the first gate hit.
+- **The ingest helpers take `agentId` as a PARAMETER; the unregistered ids come from their
+  CALLERS.** ⚠ The original wording ("the ingest helpers send an id that was never registered") was
+  wrong. It is caller-dependent: `seeding.steps.ts:24` DOES call `registerAgent` before ingesting at
+  `:47`, whereas `cycle-run-navigation.steps.ts:41` generates `crb-filler-${i}` ids that nothing
+  registers. So the defect is not "the helper sends a bad id" but "no layer guarantees the id is
+  registered before use."
+
+**The fix mechanism already exists — do not build a new one.** `registerAgent`
+(`harness.ts:134-144`) already posts `role: "report"`, which is exactly the role this CR's Risk
+section says to use. And registration is **idempotent by construction**: `handleAgentTouch`
+(`src/v2.ts:499`) branches on `hasAgent` and merely skips the lifecycle-event journal on a repeat
+call. So an ensure-registered wrapper over the existing helper is safe to call unconditionally,
+whether or not the caller already registered.
 
 The server is behaving **correctly** in both cases. `requireRegisteredCaller` (CR-CRU-056) is the
 guard the user demanded after unregistered callers silently corrupted the live board, and it is
@@ -58,16 +72,22 @@ own once the failing 19 stop cascading.
 Give `filePlan` a registered caller. Prefer reusing the harness's existing `registerAgent`
 (`harness.ts:137`) over inventing a second identity path — one registration idiom, not two.
 
-### §S3 — The ingest helpers use a REGISTERED id
-`ingestParsed`, `ingestJunit` and `ingestCompile` pass an `agentId` that no registration backs.
-Register it, or route them through a helper that guarantees registration first. The fixture ids
-(`a1` etc.) may stay; what must change is that something registers them.
+### §S3 — Every ingest call carries a REGISTERED id
+`ingestParsed`, `ingestJunit` and `ingestCompile` must not reach the server with an id nothing
+registered. Because the id arrives from the caller (see Context), fixing the helpers alone is not
+enough and fixing every call site is not durable. The fixture ids themselves may stay; what must
+change is that something guarantees registration.
 
-### §S4 — A scenario-level guarantee, not per-call patching
-Patching four call sites leaves the next helper free to reintroduce the drift. Prefer a harness-level
-guarantee that any call requiring a registered caller has one — mirroring how CR-CRU-052 §S2 wired
-teardown as an `auto` fixture in `tests/e2e/steps/world.ts` rather than per-scenario. Decide and
-record which shape you take.
+### §S4 — The guarantee belongs at the HELPER boundary, not the scenario boundary
+**Corrected at gap analysis.** This section originally pointed at CR-CRU-052 §S2's `auto`-fixture
+pattern in `world.ts`. That shape does not fit: `world.ts` tracks no agent id, and a scenario-level
+fixture cannot know which id a step will pass at call time. Following it literally would create a
+world-level agent that the ingest steps then ignore, because they pass their own ids.
+
+Put the guarantee where the id is known — an **idempotent ensure-registered** step inside the
+helpers that need a registered caller, delegating to the existing `registerAgent`. Safe to call
+unconditionally (registration is idempotent), covers callers that already registered and those that
+never did, and leaves no per-call-site patching for the next helper to forget.
 
 ### §S5 — Re-baseline the release gate
 The queue's release-gate item must be corrected from "3 pre-existing e2e failures" to whatever
@@ -77,7 +97,11 @@ those are the real gate items, and they have never been visible until now.
 ## Acceptance criteria
 - [ ] The true pre-fix failure inventory is recorded, each failure classified drift vs other (§S1).
 - [ ] `filePlan` sends a registered `agentId`; no route rejects it for identity — asserted.
-- [ ] `ingestParsed` / `ingestJunit` / `ingestCompile` send registered ids — asserted.
+- [ ] `ingestParsed` / `ingestJunit` / `ingestCompile` reach the server only with a registered id,
+      INCLUDING when the caller supplies its own unregistered id (e.g.
+      `cycle-run-navigation.steps.ts`'s generated `crb-filler-*`) — asserted with such an id.
+- [ ] The guarantee is idempotent: a caller that ALREADY registered (e.g. `seeding.steps.ts`) still
+      works, with no duplicate-registration failure — asserted.
 - [ ] The e2e suite's identity-drift failures are ZERO. Any remaining failure is documented as a
       genuine product defect with its cause, not left unexplained.
 - [ ] **No file under `src/` is modified.** The server guard is correct; this is harness drift.
@@ -103,4 +127,6 @@ those are the real gate items, and they have never been visible until now.
   CR-052 closed) for the same underlying reason — an ambient guarantee nobody owns.
 - **Tempting shortcut to refuse:** registering a fixture agent with a TDD role would bind it to a
   cycle and could attach e2e runs to real plan cycles. Use `report`, the role that exists precisely
-  for a registration not exercising a TDD phase.
+  for a registration not exercising a TDD phase. (Gap analysis: the existing `registerAgent` helper
+  ALREADY sends `role: "report"`, so reusing it satisfies this by construction — the risk is only
+  live if someone writes a second registration path.)
