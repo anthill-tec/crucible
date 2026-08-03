@@ -39,12 +39,31 @@ events, its agents and its plans all persist forever.
 
 Three are still ACTIVE and therefore visible on the user's board.
 
-**The e2e suite is NOT the cause — verified, and this matters for the fix.** `playwright.config.ts`
-isolates properly: it `mkdtempSync`s a scratch cwd and runs the server on port 39_877 so every run
-gets a fresh empty database. It never touches `data/crucible.db`. The `/tmp/e2e` sutRoot on the
-three residue projects is the harness's literal (`tests/e2e/steps/harness.ts:15`) **copied into
-ad-hoc API calls made against the live server** — one project is named `dbg`, and `Probe Project`
-and `Probe` were created 43 seconds apart. Fixing the e2e suite alone would therefore fix nothing.
+**🚨 CORRECTED 2026-08-03 — this paragraph was WRONG, and the error mattered.** It previously read
+*"The e2e suite is NOT the cause — verified … `playwright.config.ts` isolates properly … so every
+run gets a fresh empty database."* Only half of that is true. The config isolates by pointing the
+server's cwd at a `mkdtempSync` scratch dir, and it genuinely never touches `data/crucible.db`.
+But **CR-CRU-043 changed `resolveDbPath` underneath it** (`src/server.ts:47-66`): with no
+`CRUCIBLE_DB` set and no `<cwd>/data/crucible.db` present — which is precisely what a scratch cwd
+guarantees — resolution falls through to rule 4, `~/.local/share/crucible/crucible.db`.
+
+**So every default e2e run since CR-043 has been writing to a persistent USER-LEVEL database.**
+Measured 2026-08-03: `~/.local/share/crucible/crucible.db` holds **79 projects and 259 events**,
+every one with sutRoot `/tmp/e2e` — `F2 Project`, `F9 Project`, `Layout Project`, `Esc Project`
+and so on, the feature fixtures accumulated across every run. Its WAL had been written minutes
+before the measurement.
+
+Two consequences. First, the e2e suite **is** a residue generator, contrary to the original claim —
+the same defect class this CR exists to close, hiding one directory over. Second, this explains the
+"3 pre-existing e2e failures" carried as a release-gate item: on the default DB the suite fails far
+more widely (`F1 fresh forge — empty state` cannot pass against 79 accumulated projects), and the
+failures are residue artefacts rather than product defects.
+
+The original observation still stands for the LIVE board: the six residue projects on
+`data/crucible.db` came from the harness's `/tmp/e2e` literal (`tests/e2e/steps/harness.ts:15`)
+**copied into ad-hoc API calls against the live server** — one was named `dbg`, and `Probe Project`
+/ `Probe` were created 43 seconds apart. Fixing the e2e suite alone would not have fixed THOSE.
+But it was never true that the suite left nothing behind.
 
 **But the harness carries the latent trap that made copying it dangerous.** `seedProject`
 (`harness.ts:12`) creates a project and registers no cleanup — there is no `deleteProject` helper
@@ -140,7 +159,31 @@ This exists because CR-CRU-053 just spent an entire CR removing a false claim fr
 Shipping a new destructive capability without updating the design authority would recreate the
 defect one document over, in the same week.
 
-### §S5 — Correct the stale isolation comment
+### §S5 — Make the isolation REAL, then correct the comment
+**Expanded 2026-08-03 after the measurement above.** The original §S5 asked only to fix a false
+comment. The comment turns out to be false in a way that points straight at the bug: it claims
+*"no `CRUCIBLE_DB` env var exists to do this more directly"*, and the reason isolation is broken is
+that nothing sets `CRUCIBLE_DB`. CR-CRU-043 added exactly the knob the comment says is missing.
+
+So: set `CRUCIBLE_DB` explicitly in `playwright.config.ts`'s `webServer.env` to a per-run scratch
+path (or `:memory:`), so the e2e server can no longer resolve to the user-level database no matter
+what the cwd contains. Then correct the comment to describe what it now does. Asserting isolation
+positively is the same discipline §S3 applies to the harness: do not rely on an ambient property
+(cwd) when an explicit one (`CRUCIBLE_DB`) is available.
+
+### §S5c — RATIFIED scope addition: the SECOND leak site
+GREEN found that fixing `playwright.config.ts` alone leaves §S5's AC measurably false.
+`tests/e2e/steps/backend-liveness.steps.ts`'s `spawnServer` (feature F10) starts its OWN server
+with `cwd: scratchCwd` and no `CRUCIBLE_DB` — the identical defect, firing twice per run (boot +
+restart). A `/proc/<pid>/environ` watcher named it directly: `CRUCIBLE_DB=` empty, cwd scratch.
+
+**Ratified by the orchestrator 2026-08-03.** A CR that claims to close this leak while leaving it
+open in a second spawner would be the exact defect class the CR exists to close. The change is an
+env addition plus comments; no assertion moved. It also makes F10's kill/restart pair share one
+store BY CONSTRUCTION — previously that held only by accident, because the shared user-level DB
+happened to persist across both.
+
+### §S5b — Correct the stale isolation comment
 `playwright.config.ts`'s header states *"no CRUCIBLE_DB env var exists to do this more directly
 (verified by reading src/server.ts: only CRUCIBLE_PORT is read from env)"*. CR-CRU-043 added
 `CRUCIBLE_DB`, so that comment is now false. The cwd-based isolation still works and need not
@@ -165,6 +208,13 @@ worse, leave them believing isolation is impossible.
 - [ ] Deleting an archived project WITHOUT `userApproved: true` is refused with 409 and the project
       survives — asserted.
 - [ ] The DN records the new primitive and its double gate (§S6) — asserted by reading it.
+- [ ] `playwright.config.ts` sets `CRUCIBLE_DB` explicitly, so a default e2e run CANNOT resolve to
+      `~/.local/share/crucible/crucible.db` — asserted (§S5).
+- [ ] `backend-liveness.steps.ts`'s own spawned server likewise sets `CRUCIBLE_DB` (§S5c) —
+      otherwise the AC above is false in practice.
+- [ ] Leak closure proven BEHAVIOURALLY: the user-level DB's mtime/size are unchanged across a full
+      e2e run (`stat` only — the file is never opened), while the e2e server is confirmed running
+      on the scratch path.
 - [ ] Full bun regression green AND full Python regression green.
 - [ ] §S4 purge: performed only after separate explicit user approval; keys and deleted row counts
       recorded. The three real projects untouched — verified by name and key.
@@ -188,3 +238,43 @@ worse, leave them believing isolation is impossible.
   Confirm no real close-out history can be reached by the §S4 purge before running it.
 - §S3 could break a legitimate future harness that deliberately targets a non-default server.
   Prefer asserting "ephemeral" positively (scratch cwd / known e2e port) over blacklisting `:3849`.
+
+## Implementation Notes
+- **The Context section's central premise was FALSE, and correcting it became the CR's biggest
+  finding.** It asserted the e2e suite left nothing behind. In fact CR-CRU-043 changed
+  `resolveDbPath` underneath `playwright.config.ts`: with no `CRUCIBLE_DB` set and no
+  `<cwd>/data/crucible.db` — which a `mkdtempSync` scratch cwd *guarantees* — resolution falls
+  through to `~/.local/share/crucible/crucible.db`. Every default e2e run since had written there.
+  Measured 2026-08-03: **79 projects / 259 events**, all sutRoot `/tmp/e2e`. The suite was a residue
+  generator all along, one directory over from where anyone was looking.
+- **There were TWO leak sites, not one.** Fixing `playwright.config.ts` alone left §S5's AC
+  measurably false: `backend-liveness.steps.ts`'s `spawnServer` (F10) starts its own server with a
+  scratch cwd and no `CRUCIBLE_DB`, twice per run. Found by a `/proc/<pid>/environ` watcher, not by
+  reading. Ratified as §S5c.
+- **🚨 The "3 pre-existing e2e failures" release-gate item is REFUTED.** That number was measured
+  against the polluted user-level DB. On a genuinely isolated DB the figure is **19 failed / 11
+  passed / 10 blocked**, and all 19 share one systemic cause — not residue. The e2e harness predates
+  the registered-caller hard stop: `filePlan` sends no `agentId`, and the ingest helpers send one
+  that was never registered, so `requireRegisteredCaller` (CR-CRU-056) correctly refuses them.
+  Zero UI or layout assertions fail. VERIFY confirmed the attribution independently by tracing
+  `harness.ts:250` → `handlePlanFile` → `requireRegisteredCaller`. **This needs its own CR** — it is
+  a distinct pre-existing defect, out of this CR's scope, and the release gate must be re-baselined.
+- **`CRUCIBLE_DB` was set to a scratch FILE, not `:memory:`,** deliberately: `Store` skips
+  `PRAGMA journal_mode = WAL` for `:memory:`, so `:memory:` would exercise a configuration no
+  deployment runs. The scratch file also sits under the existing scratch cwd, so rules 2 and 3 of
+  `resolveDbPath` agree rather than tell two competing isolation stories.
+- **The double gate survived adversarial probing.** VERIFY drove ten bypass shapes: approval without
+  archiving (403), string `"true"` (409), numeric `1` (409), absent body (409), repeat delete (404).
+  The strict `!== true` check admits no truthy-value bypass. No bypass found.
+- **The route deliberately does NOT copy `handleProjectArchive`'s UUID pre-check.** A project may
+  carry a caller-supplied non-UUID key, so a UUID gate would render it permanently undeletable —
+  the exact defect this CR exists to remove. Gate order also matters: existence must be checked
+  BEFORE the archived gate, because `requireProject` 404s archived projects and archived is
+  precisely the state this route requires.
+- **CR-CRU-053's dangling-citation guard caught this CR within a day.** RED's
+  `ephemeral.playwright.config.ts` narrated a throwaway probe using `foo.test.ts`, a file that never
+  existed; the guard flagged it. Fixed by rewording so no name-plus-suffix token can be FORMED —
+  not by narrating a false retirement, which would have satisfied the guard while planting the very
+  kind of wrong fact CR-053 removed.
+- **Union regression at the gate: 1971 passing / 0 failing** (bun 1292 + python 679), coverage
+  86.2%/85.4% and 73.6%/84.3%.

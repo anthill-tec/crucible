@@ -274,6 +274,28 @@ export const cycleHints = {
 };
 
 /**
+ * CR-CRU-052 §S1 — the DOUBLE gate on `DELETE /api/v2/projects/<key>`, the
+ * most destructive route in the system. Both refusals are state-derived: they
+ * name the project the caller actually aimed at (key + name) and the ONE
+ * concrete call that moves it to the next state, so a refused agent never has
+ * to guess which of the two gates it tripped.
+ */
+export const projectDeleteHints = {
+  /** Gate 1 — the project is still live; archive is the deliberate first step. */
+  notArchived: (key: string, name: string): string[] => [
+    `project ${name} (${key}) is NOT archived — deleting a live project is refused, and deletion is irreversible (archive is the reversible one)`,
+    `archive it first: POST /api/v2/projects/${key}/archive — then live without it before deleting`,
+    "do NOT archive-then-delete in one breath to get past this gate; the two steps exist so the removal is deliberate",
+  ],
+  /** Gate 2 — archived, but the call carried no explicit user approval. */
+  needsApproval: (key: string, name: string): string[] => [
+    `deleting project ${name} (${key}) permanently destroys its events, agents, plans, plan cycles and rollups — never retry this call on your own initiative`,
+    `present the deletion to the user first; retry DELETE /api/v2/projects/${key} with {userApproved: true} ONLY after the user has explicitly approved this specific deletion`,
+    `if you only want it off the board, it is already archived — POST /api/v2/projects/${key}/unarchive restores it, deletion does not`,
+  ],
+};
+
+/**
  * CR-CRU-059 §S1 — identity refusals. `identity.source` is optional, but a
  * DECLARED value outside `IDENTITY_SOURCES` is refused at the route boundary
  * (nothing stored). The help is state-derived: it names the RECEIVED value

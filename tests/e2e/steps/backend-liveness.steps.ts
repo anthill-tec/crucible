@@ -2,6 +2,9 @@
 // `bun run src/server.ts` process (own port + scratch DB), kills it out
 // from under a live page, and restarts it on the SAME port/db — lifted
 // unchanged from the pre-conversion shell.e2e.ts "backend liveness" block.
+// CR-CRU-052 §S5 — the scratch DB is now named EXPLICITLY via CRUCIBLE_DB
+// rather than left to a cwd-relative default that stopped working in
+// CR-CRU-043; see `spawnServer` below.
 import { expect } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync } from "node:fs";
@@ -15,10 +18,34 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
 const STANDALONE_PORT = 39_878;
 
+// CR-CRU-052 §S5 — the SECOND leak site, found while proving the first one
+// closed. This step spawns its OWN server (not the config's `webServer`), and
+// it isolated the same way playwright.config.ts used to: scratch `cwd` only.
+// Since CR-CRU-043 that isolates nothing — a scratch cwd is exactly what makes
+// `resolveDbPath` miss its `<cwd>/data/crucible.db` probe and fall through to
+// the persistent `~/.local/share/crucible/crucible.db`. MEASURED: with
+// playwright.config.ts already fixed, a full e2e run still moved that file's
+// WAL mtime twice, and an `lsof` poll caught a transient `bun` process holding
+// it open — this spawner, once for the initial boot and once for the restart.
+//
+// `CRUCIBLE_DB` is therefore passed explicitly, and derived from `scratchCwd`
+// so the restart — which is handed back the SAME scratchCwd — necessarily gets
+// the SAME database. That is load-bearing for F10: the scenario asserts the
+// page RECOVERS after the process is killed and restarted, which is only
+// meaningful if the restarted server reopens the same store. Previously that
+// held by accident, because the shared user-level DB persisted across both.
+function dbFor(scratchCwd: string): string {
+  return path.join(scratchCwd, "data", "crucible.db");
+}
+
 function spawnServer(scratchCwd: string, port: number): ChildProcess {
   return spawn("bun", ["run", SERVER_ENTRY], {
     cwd: scratchCwd,
-    env: { ...process.env, CRUCIBLE_PORT: String(port) },
+    env: {
+      ...process.env,
+      CRUCIBLE_PORT: String(port),
+      CRUCIBLE_DB: dbFor(scratchCwd),
+    },
     stdio: "ignore",
   });
 }

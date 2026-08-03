@@ -5,7 +5,7 @@
 import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
-import { authHints, hints, cycleHints, identityHints } from "./hints.ts";
+import { authHints, hints, cycleHints, identityHints, projectDeleteHints } from "./hints.ts";
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
 import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
@@ -1461,6 +1461,49 @@ function handleProjectArchive(store: Store, key: string, archive: boolean): Resp
   return json({ ok: true, changed });
 }
 
+/**
+ * CR-CRU-052 §S1 — DELETE …/projects/<key>: the project row plus every row
+ * keyed to it, in one transaction. The most destructive route in the system,
+ * so it carries the SAME double gate as CR-CRU-032's lesser single-event
+ * delete (handleEventDelete), in this order:
+ * 1. existence — an unknown key is a definitive 404 (`unknown project: …`,
+ *    handleProjectArchive's wording), checked FIRST so a missing key can
+ *    never be reported as a gate refusal. It cannot route through
+ *    requireProject, which 404s ARCHIVED projects — and archived is exactly
+ *    the state this route requires;
+ * 2. state gate — the project must be ARCHIVED (CR-CRU-012 §S1b's existing
+ *    state, no new flag) → else 403;
+ * 3. approval gate — `userApproved: true` on the body → else 409, mirroring
+ *    CR-032's field name so the fleet learns ONE confirmation idiom.
+ * Both refusals leave the project and every cascaded row untouched. A throw
+ * from the cascade is rolled back whole by the store's transaction; it is
+ * reported as a 500 naming the failure rather than a partial success.
+ */
+async function handleProjectDelete(store: Store, key: string, req: Request): Promise<Response> {
+  const project = store.getProject(key);
+  if (project === null) {
+    return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
+  }
+  if (!store.isArchived(key)) {
+    return fail(403, `project is not archived — deletion refused: ${key}`, {
+      help: projectDeleteHints.notArchived(key, project.name),
+    });
+  }
+  const body = (await readBody(req)) ?? {};
+  if (body.userApproved !== true) {
+    return fail(409, `explicit user approval is required to delete a project — refused: ${key}`, {
+      help: projectDeleteHints.needsApproval(key, project.name),
+    });
+  }
+  let deleted;
+  try {
+    deleted = store.deleteProjectCascade(key);
+  } catch (error) {
+    return fail(500, `project deletion failed and was rolled back whole: ${String(error)}`);
+  }
+  return json({ ok: true, changed: true, deleted });
+}
+
 // CR-CRU-012 §S1 — the PATCHable field set; anything else 400s by name.
 const PATCHABLE_FIELDS = new Set([
   "name",
@@ -1842,6 +1885,10 @@ export function handleV2(
     // no equivalent route).
     if (req.method === "PATCH" && segments.length === 1) {
       return handleProjectPatch(store, segments[0]!, req);
+    }
+    // CR-CRU-052 §S1 — double-gated cascading project teardown.
+    if (req.method === "DELETE" && segments.length === 1) {
+      return handleProjectDelete(store, segments[0]!, req);
     }
   }
   // CR-CRU-044 §S1(a) — the two routes SPLIT on one flag: register must
