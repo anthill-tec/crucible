@@ -462,52 +462,45 @@ function scanDanglingFileCitations(): DanglingCitation[] {
 
 describe("§S2/§S4b guard — no docstring/comment in tests/ cites a test_*.py or *.test.ts filename that does not exist on disk", () => {
   test("zero LIVE dangling test-file citations survive anywhere under tests/ (history-narrated citations are carved out, live ones are not)", () => {
-    // BORN RED today. The two §S4b-anchor instances this guard MUST catch,
-    // both re-verified by hand as genuinely LIVE (present-tense "go look at
-    // this convention" claims, no retirement/rename narration anywhere in
-    // their own citing file):
-    //   tests/client/test_bun_crucible_gates.py:48 cites `test_toon.py`
-    //   (deleted; CR-046 rewrote clients/toon.py and retired the subset test).
-    //   tests/client/test_crucible_axi_shared.py:22 cites the SAME dead name
-    //   ("same convention as tests/client/test_toon.py, which deliberately
-    //   does NOT skip a missing module") — outside test_bun_crucible_gates.py,
-    //   so a guard scoped only to that one file would still have missed it.
+    // THIRD FIXUP (2026-08-03) — the PREVIOUS version of this guard asserted
+    // `expect(liveSorted).toEqual([ ...11 entries... ])`: an EQUALS-the-
+    // current-state snapshot, which is exactly the wrong shape for a
+    // guard — it passed today (pinning the defect) and would have gone RED
+    // the moment GREEN fixed even one site (backwards: a passing test
+    // breaking as bugs get fixed). The CONTRACT this guard exists to
+    // enforce is "zero live dangling citations survive", full stop — so the
+    // assertion is `toEqual([])`, never a literal snapshot of what's
+    // currently broken. Any future edit to this test must preserve that
+    // shape; re-introducing an equals-current-state list is the same bug a
+    // third time.
     //
-    // Re-deriving the FULL tree rather than trusting either report (this
-    // fixup's predecessor, or the mirror-fixup dispatch's "exactly 2")
-    // surfaced 7 MORE genuinely live citations sharing dead names that ARE
-    // correctly retired/renamed at other, unrelated sites — see the
-    // discrimination-rule comment block above for the full per-site
-    // evidence. Every one below was checked by hand: no retirement/rename
-    // keyword appears anywhere in the CITING file for that citation.
+    // BORN RED today: 11 live hits across 9 files (two files cite their dead
+    // name twice each) — re-derived by hand, per the discrimination-rule
+    // comment block above:
+    //   tests/agent-lifecycle.test.ts:13                     -> shim-projects-agents.test.ts
+    //   tests/client/test_bun_crucible_gates.py:48           -> test_toon.py
+    //   tests/client/test_cr046_official_toon_roundtrip.py:2 -> test_toon.py
+    //   tests/client/test_crucible_axi_shared.py:22          -> test_toon.py
+    //   tests/e2e/steps/harness.ts:216 (x2 occurrences)      -> ingest-routes.test.ts
+    //   tests/f13-fidelity.test.ts:46                        -> phase-role.test.ts
+    //   tests/plans.test.ts:6                                -> shim-ingest-events.test.ts
+    //   tests/toon-conformance.test.ts:6                     -> toon.test.ts
+    //   tests/v2-runs-events.test.ts:72 (x2 occurrences)     -> ingest-routes.test.ts
+    // This test goes GREEN only once GREEN has fixed every one of those 11
+    // sites (rewording, deleting, or narrating each as history) — not
+    // before, and not partially.
     const survivors = scanDanglingFileCitations();
     const live = survivors.filter((s) => s.verdict === "live");
 
-    const s4bInstance = live.find(
-      (s) => s.relPath === join("tests", "client", "test_bun_crucible_gates.py") && s.cited === "test_toon.py",
-    );
-    const axiSharedInstance = live.find(
-      (s) => s.relPath === join("tests", "client", "test_crucible_axi_shared.py") && s.cited === "test_toon.py",
-    );
-    expect(s4bInstance).toBeDefined();
-    expect(axiSharedInstance).toBeDefined();
+    // Formatted, not the raw object array: on failure a reader sees each
+    // surviving site as `relPath:line -> cited`, exactly the shape GREEN
+    // needs to work through the remaining list.
+    const liveFormatted = live
+      .map((s) => `${s.relPath}:${s.line} -> ${s.cited}`)
+      .sort();
 
-    const liveSorted = [...live].sort(
-      (a, b) => a.relPath.localeCompare(b.relPath) || a.cited.localeCompare(b.cited) || a.line - b.line,
-    );
-    expect(liveSorted).toEqual([
-      { relPath: join("tests", "agent-lifecycle.test.ts"), line: 13, cited: "shim-projects-agents.test.ts", verdict: "live" },
-      { relPath: join("tests", "client", "test_bun_crucible_gates.py"), line: 48, cited: "test_toon.py", verdict: "live" },
-      { relPath: join("tests", "client", "test_cr046_official_toon_roundtrip.py"), line: 2, cited: "test_toon.py", verdict: "live" },
-      { relPath: join("tests", "client", "test_crucible_axi_shared.py"), line: 22, cited: "test_toon.py", verdict: "live" },
-      { relPath: join("tests", "e2e", "steps", "harness.ts"), line: 216, cited: "ingest-routes.test.ts", verdict: "live" },
-      { relPath: join("tests", "e2e", "steps", "harness.ts"), line: 216, cited: "ingest-routes.test.ts", verdict: "live" },
-      { relPath: join("tests", "f13-fidelity.test.ts"), line: 46, cited: "phase-role.test.ts", verdict: "live" },
-      { relPath: join("tests", "plans.test.ts"), line: 6, cited: "shim-ingest-events.test.ts", verdict: "live" },
-      { relPath: join("tests", "toon-conformance.test.ts"), line: 6, cited: "toon.test.ts", verdict: "live" },
-      { relPath: join("tests", "v2-runs-events.test.ts"), line: 72, cited: "ingest-routes.test.ts", verdict: "live" },
-      { relPath: join("tests", "v2-runs-events.test.ts"), line: 72, cited: "ingest-routes.test.ts", verdict: "live" },
-    ]);
+    // THE CONTRACT: none survive.
+    expect(liveFormatted).toEqual([]);
   });
 
   test("history-narrated dangling citations are correctly carved out as legal, and the carve-out is not vacuously swallowing everything (sanity)", () => {
