@@ -139,14 +139,42 @@ this must come first.
 before any packaging, because it validates the SOURCE. Packaging validates the ARTIFACT; if
 packaging ran first, a failure would be ambiguous between the two.
 
-```bash
-python3 clients/bun-crucible.py gate-run --intent "0.1.0 release integrity" --agent vidushi
+**What no-mistakes actually is** (measured 2026-08-03, not assumed). A *local git proxy that
+validates code before pushing to the configured target*. It is initialized on this repo — gate
+`~/.no-mistakes/repos/3f4e6ab87dd8.git`, target `https://github.com/anthill-tec/crucible.git`,
+daemon running. Its pipeline:
+
+```
+rebase → review → test → document → lint → ci        (auto_fix keys, ~/.no-mistakes/config.yaml)
+                                          └── PR-based tail
 ```
 
-This is the step the user asked to lead with. It proxies the `no-mistakes` utility, streams
-throttled interim snapshots while the run is in flight, and posts a **final sealed gate event** into
-Crucible — so the release gate becomes evidence on the project timeline (CR-CRU-013's whole point),
-not a claim in a chat log.
+**🚨 The tail does not fit this project, and that is the marriage problem.** The `ci` step is
+explicitly PR-shaped: `ci_timeout: "168h"` bounds *"how long the CI monitor babysits an **open PR**
+with no base-branch movement"*, and test-evidence artifacts are committed so they *"render directly
+on **the PR**"*. **This project has no PRs** — git-flow, direct merges to `develop`. Left alone, the
+`ci` step would wait on a PR that never exists, for up to a week.
+
+**How they marry.** `no-mistakes axi run` blocks *"until the first approval gate, **CI-ready point**,
+or final outcome"*. That **CI-ready point is precisely the release gate this project wants**: every
+validating step has passed and the code is ready to ship, with the PR/CI tail — which belongs to a
+workflow we do not use — skipped via `--skip`.
+
+```bash
+python3 clients/bun-crucible.py gate-run \
+  --intent "0.1.0 release integrity" --agent vidushi --skip ci
+```
+
+⚠ **`--skip` does not exist on `gate-run` yet** — it exposes only `--intent`, `--agent`,
+`--project-dir`. **CR-CRU-061 §S5 adds the passthrough**, and until it lands this gate cannot be run
+in the shape described here. The skip list stays a *caller* decision: which steps a project skips is
+its workflow, not a client-fleet fact.
+
+**Why route it through `gate-run` at all**, rather than calling `no-mistakes` directly: `gate-run`
+proxies the run, streams throttled interim snapshots while it is in flight, and posts a **final
+sealed gate event** into Crucible (CR-CRU-013). The release gate becomes evidence on the project
+timeline — a `gate` event with its step ladder, findings and fix rounds — instead of a claim in a
+chat log. That is the whole point of having built gate events.
 
 **Gate:** the sealed gate's outcome must be `passed`. A `failed` outcome ends the release; fix on
 `develop`, re-merge, re-run. Do not proceed on a partial pass.
