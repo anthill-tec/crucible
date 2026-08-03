@@ -1040,6 +1040,13 @@ def main():
     gr = sub.add_parser("gate-run", parents=[common],
                         help="axi PROXY: run `no-mistakes axi run`, post throttled interim + final gates.")
     gr.add_argument("--intent", required=True, help="The intent/goal passed down to `axi run`.")
+    gr.add_argument("--skip", help="Pipeline steps to skip, forwarded VERBATIM to "
+                          "`no-mistakes axi run --skip` (pure passthrough — the "
+                          "client never validates or rewrites the value). Exists "
+                          "because no-mistakes' `ci` step is PR-based, and a "
+                          "git-flow project that merges directly has no PR for it "
+                          "to watch — without --skip the gate blocks until "
+                          "ci_timeout.")
     gr.set_defaults(func=cmd_gate_run)
 
     grp = sub.add_parser("gate-report", parents=[common],
