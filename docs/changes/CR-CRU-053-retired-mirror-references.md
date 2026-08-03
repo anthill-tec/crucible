@@ -135,6 +135,30 @@ from "no docstring cites `test_bun_crucible_context.py`" to "no docstring cites 
 does not exist". A guard hardcoded to one dead filename would have missed this one, which is the
 CR's own lesson applied to its own guard.
 
+### §S4c — USER-DECIDED 2026-08-03: the dangling-citation guard is WHOLE-TREE
+§S4b's generalised guard, run across the tree, found **9 live dangling citations** (11 hits) —
+comments that send a reader to a test file which no longer exists, with nothing marking it as gone.
+They are the same defect as §S2, just with different dead filenames, and they sit outside the
+mirror topic this CR started from.
+
+The user's call, taken explicitly rather than assumed: **fix all nine, and let the guard assert
+zero live dangling citations tree-wide.** This is a deliberate third expansion of a CR that began
+as a two-header comment patch; it is recorded here as a decision, not absorbed silently. It
+supersedes the Non-goal *"other stale CR-era narration not involving the mirror"* for the specific
+case of citations pointing at non-existent files — narration that merely reads oddly stays out of
+scope; narration that sends a reader to a file that is not there does not.
+
+Sites (RE-DERIVE every location at execution time):
+`tests/agent-lifecycle.test.ts` · `tests/client/test_bun_crucible_gates.py` ·
+`tests/client/test_cr046_official_toon_roundtrip.py` · `tests/client/test_crucible_axi_shared.py` ·
+`tests/e2e/steps/harness.ts` (×2) · `tests/f13-fidelity.test.ts` · `tests/plans.test.ts` ·
+`tests/toon-conformance.test.ts` · `tests/v2-runs-events.test.ts` (×2)
+
+**HISTORY carve-out stands:** a citation narrated as retired/renamed/archived within its OWN citing
+file is legal and must NOT be swept up — that is the same "preserve history, labelled as history"
+rule §S1 mandates. The rule is evaluated PER CITING FILE: one file correctly narrating a name's
+retirement does not legalise a different file's undisclosed live citation of it.
+
 ### §S5 — Leave the three correct references alone
 `test_bun_crucible_lifecycle.py:36`/`:126` and `test_bun_crucible_gates.py:42` name the mirror only
 to say *don't use it*. They reinforce the rule and must not be swept up in a blanket edit. Confirm
