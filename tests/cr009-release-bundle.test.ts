@@ -756,17 +756,37 @@ describe("§S4 docs — RELEASING.md", () => {
     expect(existsSync(join(REPO_ROOT, relPath))).toBe(true);
   });
 
-  test("documents the tag-driven version model: v-prefixed tag, hatch-vcs strips the v, Python version never hand-edited", () => {
+  // CR-CRU-061 §S1/§S4 — re-aimed from CR-CRU-041 §S5's v-prefixed contract.
+  // The doc contract is now BARE SemVer, and the old shape is permitted only
+  // inside the labelled supersession section, never as live instruction.
+  test("documents the tag-driven version model: BARE SemVer tag (no `v`), hatch-vcs derives it, Python version never hand-edited", () => {
     const doc = readText(relPath);
     const lower = doc.toLowerCase();
 
-    // The tag shape itself (vX.Y.Z) and hatch-vcs as the derivation mechanism.
-    expect(doc).toMatch(/v[Xx]\.[Yy]\.[Zz]|v<?major>?\.<?minor>?\.<?patch>?/);
+    // The tag shape itself (bare X.Y.Z) and hatch-vcs as the derivation
+    // mechanism. The absence of a prefix is stated, not merely implied.
+    expect(doc).toMatch(/\bX\.Y\.Z\b/);
+    expect(lower).toMatch(/bare[- ]semver/);
+    expect(lower).toMatch(/no `?v`? prefix|without a `?v`? prefix|no prefix of any kind/);
+    // The exact guard expression from release.yml — the doc must state the
+    // format the publish jobs actually enforce, not a paraphrase.
+    expect(doc).toContain("^refs/tags/[0-9]+\\.[0-9]+\\.[0-9]+$");
     expect(lower).toContain("hatch-vcs");
     // The Python version is DERIVED, never hand-edited — pyproject.toml is
     // dynamic (real identifier from the actual pyproject.toml).
     expect(lower).toContain("dynamic");
     expect(lower).toMatch(/never (?:be )?(?:hand|manually)[- ]edit/);
+
+    // CR-CRU-041 §S5's v-prefixed scheme is preserved as HISTORY, in a
+    // labelled supersession section — every surviving vX.Y.Z / v0.1.0 mention
+    // must sit after that heading, so none of them reads as a live
+    // instruction.
+    const supersededIdx = doc.indexOf("## Superseded");
+    expect(supersededIdx).toBeGreaterThan(-1);
+    expect(doc.slice(supersededIdx)).toContain("CR-CRU-041");
+    for (const m of doc.matchAll(/v\d+\.\d+\.\d+|v[Xx]\.[Yy]\.[Zz]/g)) {
+      expect(m.index).toBeGreaterThan(supersededIdx);
+    }
   });
 
   test("documents the one-time prerequisites: PyPI + TestPyPI pending Trusted Publishers, the pypi/testpypi/npm Environments, and a required reviewer on pypi", () => {
@@ -809,14 +829,26 @@ describe("§S4 docs — RELEASING.md", () => {
     expect(lower).toMatch(/no pending[- ]publisher|does not have.*pending[- ]publisher/);
   });
 
-  test("documents the one-time git config gitflow.prefix.versiontag v fix, and that it lives in .git/config (not version-controlled)", () => {
+  // CR-CRU-061 §S1/§S4 — re-aimed: the required state is SET-AND-EMPTY, and
+  // UNSET is a distinct, refused state (git-flow itself dies on it).
+  test('documents the one-time git config gitflow.prefix.versiontag "" fix (set-and-empty; unset refused), and that it lives in .git/config (not version-controlled)', () => {
     const doc = readText(relPath);
     const lower = doc.toLowerCase();
 
-    // Exact command, matching scripts/release.sh:176's error-message fix.
-    expect(doc).toContain("git config gitflow.prefix.versiontag v");
+    // Exact command, matching scripts/release.sh's guard error-message fix.
+    expect(doc).toContain('git config gitflow.prefix.versiontag ""');
     expect(doc).toContain(".git/config");
     expect(lower).toMatch(/not version-controlled|not (?:be )?committed|not tracked/);
+
+    // Unset must be documented as WRONG, with git-flow's own measured failure
+    // named — otherwise a reader "fixes" it by deleting the key.
+    expect(lower).toContain("unset");
+    expect(lower).toContain("fatal: version tag not set");
+
+    // The old `v` value may survive only as labelled history.
+    const supersededIdx = doc.indexOf("## Superseded");
+    const legacyIdx = doc.indexOf("git config gitflow.prefix.versiontag v");
+    expect(legacyIdx === -1 || legacyIdx > supersededIdx).toBe(true);
   });
 
   test("documents the TestPyPI rehearsal loop via scripts/release.sh checkpoint, and that an untagged checkpoint derives a clean X.Y.Z.devN via no-local-version", () => {
@@ -849,7 +881,10 @@ describe("§S4 docs — RELEASING.md", () => {
     expect(finishIdx).toBeLessThan(masterIdx);
   });
 
-  test("documents the composite/lockstep model: one tag publishes both crucible-axi (PyPI, derived) and @anthill-tec/crucible-server (npm, manual manifest) at the same version", () => {
+  // CR-CRU-061 §S2/§S4 — re-aimed: the npm side is no longer a manual
+  // manifest. BOTH artifacts derive from the one tag, so the doc must name the
+  // single authority and the mechanism that enforces it.
+  test("documents the composite/lockstep model: one tag publishes both crucible-axi (PyPI, hatch-vcs-derived) and @anthill-tec/crucible-server (npm, tag-derived at publish time) at the same version", () => {
     const doc = readText(relPath);
     const lower = doc.toLowerCase();
 
@@ -857,8 +892,11 @@ describe("§S4 docs — RELEASING.md", () => {
     // Exact scoped npm package name, matching package.json's real "name".
     expect(doc).toContain("@anthill-tec/crucible-server");
     expect(lower).toMatch(/lockstep|composite/);
-    // Distinguishes the two version-authority mechanisms by name.
     expect(lower).toMatch(/derived/);
-    expect(lower).toMatch(/manual manifest|manually[- ]versioned|hand[- ]versioned/);
+    // The npm version's real derivation mechanism, verbatim from release.yml's
+    // "Set package.json version from the release tag" step — not a paraphrase.
+    expect(lower).toContain("npm version --no-git-tag-version --allow-same-version");
+    // And the consequence stated plainly: one authority, nothing hand-versioned.
+    expect(lower).toMatch(/single version authority|neither is hand-versioned/);
   });
 });

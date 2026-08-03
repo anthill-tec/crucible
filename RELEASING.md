@@ -5,10 +5,15 @@ Crucible ships **two artifacts from one repository**, in lockstep:
 | Artifact | Registry | Package | Version authority |
 |----------|----------|---------|-------------------|
 | Python orchestrator + client fleet | PyPI | `crucible-axi` | **Derived** from the git tag by hatch-vcs |
-| Bun/TS server | npm | `@anthill-tec/crucible-server` | **Manual manifest** — the literal `version` in `package.json` |
+| Bun/TS server | npm | `@anthill-tec/crucible-server` | **Derived** from the git tag — `publish-npm` sets `package.json`'s `version` from the tag at publish time |
 
-One `vX.Y.Z` tag publishes both at `X.Y.Z`. There is no way to release one without the
-other, and that is deliberate — see [Composite / lockstep model](#composite--lockstep-model).
+One bare-SemVer `X.Y.Z` tag publishes both at `X.Y.Z`. **The tag is the single version
+authority for both artifacts**, and nothing is hand-versioned. There is no way to release
+one without the other, and that is deliberate — see
+[Composite / lockstep model](#composite--lockstep-model).
+
+Tags carry **no `v` prefix**. If you are looking for the older `v`-prefixed scheme, see
+[Superseded: the v-prefixed tag scheme](#superseded-the-v-prefixed-tag-scheme).
 
 Everything below assumes the [one-time setup](#one-time-setup) has already been done on
 your clone and in the GitHub repository settings.
@@ -22,10 +27,19 @@ run anywhere else:
 
 ```bash
 scripts/release.sh checkpoint            # optional: TestPyPI rehearsal, repeat as needed
-scripts/release.sh set-version X.Y.Z     # bump the manual manifest (package.json), commit
-scripts/release.sh finish     X.Y.Z      # preflight guards -> git flow finish -> tag vX.Y.Z
-                                         # -> push master + develop + tags
+scripts/release.sh set-version X.Y.Z     # housekeeping: align the committed package.json,
+                                         # commit. NOT the version authority (see below)
+scripts/release.sh finish     X.Y.Z      # preflight guards -> git flow finish -> tag X.Y.Z
+                                         # (bare, no `v`) -> push master + develop + tags
 ```
+
+**On `set-version`.** It no longer decides what npm publishes — `publish-npm` sets
+`package.json`'s version from the tag, so a stale committed value cannot affect or fail a
+release. It is **kept** for two narrower reasons: it keeps the committed manifest honest
+for local builds and `npm pack` rehearsals, and `finish`'s first preflight still asserts
+the committed manifest equals the finish version. So run it before `finish` (or that
+preflight refuses), but understand it as housekeeping, not as the step that sets the
+released version.
 
 The push to `master` is what starts CI:
 
@@ -41,8 +55,8 @@ The rest of this document explains each step and why it is shaped that way.
 
 ## Version model: the tag is the version
 
-The git tag is **`vX.Y.Z`** (e.g. `v0.1.0`). hatch-vcs strips the leading `v`, so the
-version published to PyPI is exactly `X.Y.Z`.
+The git tag is **bare SemVer — `X.Y.Z`** (e.g. `0.1.0`), with **no prefix of any kind**.
+hatch-vcs derives from it directly, so the version published to PyPI is exactly `X.Y.Z`.
 
 `pyproject.toml` declares:
 
@@ -58,15 +72,31 @@ raw-options = { local_scheme = "no-local-version" }
 There is **no `version = "..."` field** in `pyproject.toml`, and the Python version must
 **never be hand-edited** anywhere. You bump the Python version by tagging — nothing else.
 
-The npm side is the opposite: `package.json` carries a literal version string, which is
-why `scripts/release.sh set-version` exists and why `finish` refuses to proceed when the
-manifest and the requested version disagree.
+**The npm side now works the same way.** `package.json` still carries a literal `version`
+field (npm has no dynamic equivalent), but that committed value is **not consulted at
+publish time**. `publish-npm` runs
 
-The `v` prefix is not cosmetic. Every publish job in `.github/workflows/release.yml`
-guards on `^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$` (and additionally requires the tagged
-commit to be an ancestor of `origin/master`). A tag cut without the `v` is silently
-ignored by every publish job — after the merge has already happened. This is the same tag
-scheme Sandesh uses, so the two repositories tally.
+```bash
+npm version --no-git-tag-version --allow-same-version "$VERSION"   # $VERSION = the tag
+```
+
+which **sets** the manifest from the tag in the CI workspace (never committed back), and
+then publishes. A stale committed version can no longer fail a release, and there is no
+version that can disagree with the tag.
+
+That leaves `scripts/release.sh set-version` **redundant as a version authority**. It is
+deliberately kept, not retired, for exactly two jobs — keeping the committed manifest
+honest for local builds/`npm pack`, and satisfying `finish`'s manifest preflight — and it
+must not be presented as the step that decides the released version. See
+[Release at a glance](#release-at-a-glance).
+
+The tag format is not cosmetic. Every publish job in `.github/workflows/release.yml`
+guards on `^refs/tags/[0-9]+\.[0-9]+\.[0-9]+$` (and additionally requires the tagged
+commit to be an ancestor of `origin/master`), and `create-release` discovers the tag at
+`HEAD` with the matching `^[0-9]+\.[0-9]+\.[0-9]+$`. A prefixed tag is **rejected** by
+every publish job — after the merge has already happened. The guards accept exactly one
+format on purpose; loosening them to tolerate both would reintroduce the two-format drift
+they exist to prevent.
 
 ---
 
@@ -75,16 +105,23 @@ scheme Sandesh uses, so the two repositories tally.
 ### Per clone: the git-flow tag prefix
 
 ```bash
-git config gitflow.prefix.versiontag v
+git config gitflow.prefix.versiontag ""
 ```
 
 `gitflow.prefix.versiontag` lives in `.git/config`, which is **not version-controlled** —
 no committed file can guarantee it, so every fresh clone that will cut a release must set
-it. With the prefix unset (Crucible's default), `git flow release finish` would cut a bare
-`0.1.0` tag that every publish guard then rejects.
+it.
 
-`scripts/release.sh finish` preflight-asserts this config and refuses (non-zero) when it
-is not `v`, naming the fix above in its error message.
+🚨 **Set-to-empty is not the same as unset, and only set-to-empty works.** This was
+measured, not assumed: with the key *unset*, git-flow itself aborts with
+`Fatal: Version tag not set` and cuts nothing; with the key *present and empty*, it cuts
+the bare `X.Y.Z` tag the publish guards require. The quotes in the command above are
+therefore load-bearing.
+
+`scripts/release.sh finish` preflight-asserts exactly that state and refuses (non-zero)
+in **both** wrong states — unset, and set to any non-empty prefix — naming the fix above
+in its error message. It distinguishes the two via `git config --get`'s exit status (1 =
+key absent, 0 = key present even when the value is empty).
 
 ### PyPI and TestPyPI: pending Trusted Publishers
 
@@ -187,14 +224,16 @@ git flow release start X.Y.Z      # or: git flow hotfix start X.Y.Z
 
 Then, on that branch:
 
-**1. Bump the manual manifest.**
+**1. Align the committed manifest** (housekeeping, and `finish`'s first preflight).
 
 ```bash
 scripts/release.sh set-version X.Y.Z
 ```
 
-Format-preservingly rewrites `package.json`'s `version` and commits it. The Python version
-is untouched — it is tag-derived.
+Format-preservingly rewrites `package.json`'s `version` and commits it. Neither published
+version comes from here — the Python version is hatch-vcs tag-derived, and the npm version
+is set from the tag by `publish-npm`. This keeps the committed manifest consistent with the
+tag you are about to cut (and gets `finish`'s manifest preflight out of the way).
 
 **2. Rehearse** (see above) — `scripts/release.sh checkpoint` — until you are happy.
 
@@ -208,8 +247,11 @@ Two preflight guards run first, and either one aborts before any merge happens:
 
 | Guard | Failure | Remedy |
 |-------|---------|--------|
-| Manual manifest | `package.json` version != `X.Y.Z` | `scripts/release.sh set-version X.Y.Z` |
-| Tag prefix | `gitflow.prefix.versiontag` != `v` | `git config gitflow.prefix.versiontag v` |
+| Committed manifest | `package.json` version != `X.Y.Z` | `scripts/release.sh set-version X.Y.Z` |
+| Tag prefix | `gitflow.prefix.versiontag` is unset, or set to a non-empty prefix | `git config gitflow.prefix.versiontag ""` |
+
+The manifest guard is now a *consistency* check, not a correctness one: even if it were
+bypassed, `publish-npm` would still publish at the tag's version.
 
 Only then does it run `git flow <release\|hotfix> finish -m "Release X.Y.Z" X.Y.Z` (the
 `-m` keeps the annotated-tag editor from hanging a non-interactive run) and
@@ -220,23 +262,23 @@ underlying commands.
 
 **4. Approve the release in CI.** The push to `master` drives:
 
-1. `create-release` — gated on `github.event_name == 'push' && github.ref == 'refs/heads/master'`. It looks for a `v[0-9]+.[0-9]+.[0-9]+` tag at `HEAD` and creates the GitHub Release for it (idempotent — a re-run on an existing Release is a no-op). Using `RELEASE_PAT` here is what makes the next step happen at all.
+1. `create-release` — gated on `github.event_name == 'push' && github.ref == 'refs/heads/master'`. It looks for a `[0-9]+.[0-9]+.[0-9]+` tag at `HEAD` and creates the GitHub Release for it (idempotent — a re-run on an existing Release is a no-op). Using `RELEASE_PAT` here is what makes the next step happen at all.
 2. `release: published` fires, triggering the two publish jobs.
 3. `publish-pypi` — pauses on the `pypi` environment for its required reviewer, re-verifies the tag ref and the `origin/master` ancestry, then uploads to PyPI via OIDC.
-4. `publish-npm` — same guards, plus a check that the tag (with the `v` stripped) equals `package.json`'s version, then publishes the server package.
+4. `publish-npm` — same guards, then **sets** `package.json`'s version from the tag (`npm version --no-git-tag-version --allow-same-version "$VERSION"`, workspace-only, never committed back) and publishes the server package. There is no version to disagree about, so there is no version check.
 
-If a publish job is skipped, it is almost always a guard: a tag without the `v`, a tag on a
-commit that is not an ancestor of `origin/master`, or a missing `NPM_TOKEN`.
+If a publish job is skipped, it is almost always a guard: a prefixed or malformed tag, a
+tag on a commit that is not an ancestor of `origin/master`, or a missing `NPM_TOKEN`.
 
 ---
 
 ## Composite / lockstep model
 
 `crucible-axi` (PyPI) and `@anthill-tec/crucible-server` (npm) are released **in
-lockstep** from one tag at one version. Their version authorities differ — the Python
-version is **derived** by hatch-vcs from the tag; the npm version comes from the **manual
-manifest**, `package.json`, bumped by `set-version` and checked twice (by the `finish`
-preflight, and again at publish time against the tag).
+lockstep** from one tag at one version. Both version authorities are now the same one: the
+tag. The Python version is **derived** by hatch-vcs from the tag; the npm version is
+**derived** from the same tag by `publish-npm`, which sets `package.json` from it at
+publish time. Neither is hand-versioned, and there is no second source that could drift.
 
 Lockstep is enforced at runtime too, not just at publish time. `crucible-axi` installs the
 server by fetching it from npm, and it **pins that fetch to its own version**:
@@ -252,3 +294,36 @@ re-releasing the Python side. Unset means the pinned version; it never falls bac
 Practical consequence: **do not** publish one artifact alone. If a publish job fails after
 the other succeeded, fix forward with a new patch release rather than hand-publishing the
 straggler at a version no tag corresponds to.
+
+---
+
+## Superseded: the v-prefixed tag scheme
+
+⚠️ **This section is history, not instructions.** Everything in it was replaced by
+CR-CRU-061 and is recorded only so a reader who finds the old shape in a commit, a comment
+or an older doc can see that the scheme changed, and why. Do not follow it.
+
+**What CR-CRU-041 §S5 specified.** Tags were `vX.Y.Z` (e.g. `v0.1.0`). hatch-vcs stripped
+the leading `v`, so PyPI still saw `X.Y.Z`. Every publish guard matched
+`^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$`, `create-release` discovered a `v[0-9]+.[0-9]+.[0-9]+`
+tag at `HEAD`, `publish-npm` compared the tag *with the `v` stripped* (`${GITHUB_REF_NAME#v}`)
+against `package.json`, and every clone had to run `git config gitflow.prefix.versiontag v`.
+The rationale was tallying with Sandesh, which uses the same `v`-prefixed scheme.
+
+**Why it was replaced (CR-CRU-061, 2026-08-03).**
+
+- **The `v` prefix was dropped by user ruling** — tags are bare SemVer, `0.1.0`. §S1 moved
+  all six live prefix sites to `^[0-9]+\.[0-9]+\.[0-9]+$` and removed the now-dead `#v`
+  strips rather than leaving them as decoration, since a strip that can never match is a
+  lie about the format. The divergence from Sandesh (which keeps `v`) is accepted, not a
+  defect to chase.
+- **The manual-manifest model was dropped too** — §S2 made `publish-npm` *set*
+  `package.json` from the tag instead of verifying it, so the tag is the single version
+  authority for both artifacts and a stale committed version can no longer fail a release.
+  `release.sh set-version` survives as housekeeping only.
+- **The git-flow config flipped from `v` to set-and-empty** — and the *unset* state, which
+  the old scheme treated as merely "the default", turns out to be a hard failure of
+  git-flow itself. `release.sh` therefore refuses unset as well as any non-empty prefix.
+
+The current, authoritative model is
+[Version model: the tag is the version](#version-model-the-tag-is-the-version).
