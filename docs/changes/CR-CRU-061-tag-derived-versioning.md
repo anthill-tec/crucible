@@ -66,6 +66,12 @@ on npm and another in git.
 Retire the `v` prefix across the six sites above.
 - `release.sh`'s `guard_tag_prefix()` must assert `gitflow.prefix.versiontag` is **empty**, and its
   error text must give the exact fix command for that value.
+- 🚨 **MEASURED 2026-08-03 — "empty" and "unset" are NOT the same to git-flow.** With the key
+  UNSET, `git flow feature start` dies with `Fatal: Version tag not set. Please run 'git flow init'`.
+  With it SET to the empty string (`git config gitflow.prefix.versiontag ""`), git-flow works and
+  cuts bare tags. The guard must therefore accept **set-and-empty** and REJECT **unset**, with an
+  error naming the exact command including the empty quotes — a guard that merely checks
+  `!= "v"` would pass on the unset state that breaks git-flow outright.
 - Both CI publish guards and the `create-release` tag discovery must match `^[0-9]+\.[0-9]+\.[0-9]+$`.
 - Remove the now-dead `#v` strips rather than leaving them as decoration — a stripped prefix that
   can never be present is a lie about the format.
