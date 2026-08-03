@@ -38,6 +38,19 @@ export interface ProjectPatch {
   allowRunDeletion?: boolean;
 }
 
+/**
+ * CR-CRU-052 §S1 — per-table row counts removed by deleteProjectCascade.
+ * camelCase `planCycles` for the `plan_cycles` table, matching the wire
+ * convention (the response returns this object verbatim).
+ */
+export interface ProjectDeleteCounts {
+  events: number;
+  agents: number;
+  plans: number;
+  planCycles: number;
+  rollups: number;
+}
+
 interface ProjectRow {
   key: string;
   name: string;
@@ -756,6 +769,45 @@ export class Store {
       return true;
     }
     return false;
+  }
+
+  /**
+   * CR-CRU-052 §S1 — irreversible project teardown: remove the project row
+   * and EVERY row keyed to it (events, agents, plans, plan_cycles, rollups)
+   * in ONE transaction, so a mid-cascade failure leaves NOTHING partially
+   * removed (same fold+delete atomicity guarantee as enforceRetention). Both
+   * §S1 gates — archived-first and userApproved — live at the route boundary;
+   * reaching this method means the deletion is already authorized.
+   *
+   * One `DELETE FROM <table> WHERE project_key = ?` per dependent table, the
+   * established style (clearEvents / enforceRetention), dependents before the
+   * parent row. Returns the per-table deleted counts so a caller can ASSERT
+   * the cascade rather than assume it.
+   */
+  deleteProjectCascade(key: string): ProjectDeleteCounts {
+    const counts: ProjectDeleteCounts = {
+      events: 0,
+      agents: 0,
+      plans: 0,
+      planCycles: 0,
+      rollups: 0,
+    };
+    this.db.transaction(() => {
+      counts.events = this.db.query(`DELETE FROM events WHERE project_key = ?`).run(key).changes;
+      counts.agents = this.db.query(`DELETE FROM agents WHERE project_key = ?`).run(key).changes;
+      counts.plans = this.db.query(`DELETE FROM plans WHERE project_key = ?`).run(key).changes;
+      counts.planCycles = this.db
+        .query(`DELETE FROM plan_cycles WHERE project_key = ?`)
+        .run(key).changes;
+      counts.rollups = this.db.query(`DELETE FROM rollups WHERE project_key = ?`).run(key).changes;
+      this.db.query(`DELETE FROM projects WHERE key = ?`).run(key);
+    })();
+    // Emitted only after the transaction COMMITS — a rolled-back teardown
+    // must never tell the dashboard something changed.
+    this.emit("projects", key);
+    this.emit("agents", key);
+    this.emit("events", key);
+    return counts;
   }
 
   private static toProject(row: ProjectRow): Project {
