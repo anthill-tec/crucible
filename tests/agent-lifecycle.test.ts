@@ -10,7 +10,10 @@
 // timestamp - firstSeen (sealed).
 //
 // Drives the REAL production server (startServer) + real HTTP, same harness
-// pattern as tests/shim-projects-agents.test.ts / tests/plans.test.ts.
+// pattern as tests/plans.test.ts. (History: this line also cited
+// tests/shim-projects-agents.test.ts — archived by CR-CRU-008's shim-
+// retirement sweep, then deleted outright with tests/archive by CR-CRU-047.
+// tests/plans.test.ts is the surviving exemplar of that harness pattern.)
 // Timestamp fixtures use the SAME raw-db backdating technique as
 // tests/v2-projects-activity.test.ts (Store has no timestamp-override lever
 // in its public API — confirmed against src/store.ts) purely to seed

@@ -68,14 +68,15 @@ with `FAKE_BUN_EXIT_CODE`. This drives the REAL `cmd_test`/`cmd_regression`
 code paths (arg resolution, wipe, subprocess invocation, JUnit parse, ingest)
 end to end without requiring bun or a bun package on this machine.
 
-No live-server variant is included: the existing Python client harness in
-this repo has never made a live-server call (test_bun_crucible_context.py is
-pure-function only), so there is no established live-server pattern here to
+No live-server variant is included: the Python client harnesses in this repo
+have never made a live-server call — they are pure-function only (the harness
+that first established that convention has since been deleted; the convention
+itself still holds) — so there is no established live-server pattern here to
 extend, and the dispatch instructions say the request-sequence pins suffice
 in that case. The request-sequence + payload-shape pins below are the full
 RED coverage for §S5.
 
-Invocation (matches test_bun_crucible_context.py's documented convention):
+Invocation (the documented convention for every tests/client/ harness):
     python3 -m pytest tests/client/ -q          (run from the repo root)
 Fallback:
     python3 tests/client/test_bun_crucible_lifecycle.py

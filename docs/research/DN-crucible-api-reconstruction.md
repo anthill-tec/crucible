@@ -203,8 +203,13 @@ catalog** — it documented what the lost server did and gated the v2 rebuild's
 wire-compatibility; that guarantee has now been intentionally released. The
 v1-contract test suite is archived at `tests/archive/v1-contract.test.ts`
 (excluded from `bun test` via `bunfig.toml`). The five `clients/*-crucible.py`
-scripts are the v2-native source of truth; the live `~/.claude/scripts/`
-copies sync via CR-CRU-009's install step. Bulk event clearing
+scripts are the v2-native source of truth. The old `~/.claude/scripts/` mirror
+is RETIRED: nothing syncs it, and it must not be run or cited as the client
+source — running it orphans Crucible runs. (History: CR-CRU-009 originally
+specified an install step that would keep those copies in sync; that model is
+superseded. Under the standing delivery model the server (bun/npm) and the
+client (Python/PyPI) stay separate packages but ship as one uv-installed,
+version-locked pair.) Bulk event clearing
 (`/api/events/clear`) is deliberately NOT carried forward — v2's posture is an
 immutable audit log with per-project, double-gated single-event deletion
 (`DELETE /api/v2/events/<id>`, CR-CRU-008 §S4).

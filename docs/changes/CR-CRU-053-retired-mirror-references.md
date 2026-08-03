@@ -52,8 +52,8 @@ no surviving instance.
 
 **But the deletion left DANGLING references, and the original spec located them wrongly.** It said
 they were at `tests/client/test_toon.py:37` and `test_bun_crucible_lifecycle.py:54 + :60`. Neither
-is right: `test_toon.py` does not exist (CR-046 renamed it to
-`test_cr046_official_toon_roundtrip.py`), and `lifecycle.py:54` is a *mirror* reference, not a
+is right: `test_toon.py` does not exist (CR-046 RETIRED it — see the §S4b correction below; it was
+not a rename), and `lifecycle.py:54` is a *mirror* reference, not a
 deleted-file one. The actual dangling references to the deleted file are:
 
 | file:line | reads |
@@ -120,6 +120,52 @@ guard asserting that every surviving `~/.claude/scripts` reference in `tests/` a
 do-NOT-use warning, never a presentation of the mirror as the client source. This CR's enumeration
 has now decayed twice; a one-time grep in an AC does not hold a line.
 
+### §S4b — AMENDED mid-execution (2026-08-03): two more instances of the SAME defect
+GREEN found, two lines from a line §S2 was already fixing in
+`tests/client/test_bun_crucible_gates.py`:
+- `:48` — *"This matches **test_toon.py**'s own REPO_ROOT-relative loading convention exactly."*
+  `test_toon.py` does not exist. ⚠ **This line originally said CR-046 "renamed" it — that is
+  WRONG, and the error was caught during execution.** Git shows the successor
+  `test_cr046_official_toon_roundtrip.py` was ADDED separately in `aa2702f` (the CR-046 RED commit)
+  and `test_toon.py` DELETED in `987b331` ("subset-parity test retired"). Two files, two commits,
+  different subjects — a narrow 4-construct subset pin versus a full official-spec conformance
+  suite. The correct narration is "retired by CR-046, successor X", never "renamed to X".
+  Recorded because a spec that says "renamed" would seed a fresh wrong fact into every docstring
+  copied from it — this CR's own defect class, committed by this CR's own text.
+  Identical defect class to §S2, just a different dead filename.
+- `:47` — *"(the home mirror is not yet re-synced past the C4 GREEN commit)"* — a present-tense
+  claim implying the mirror is synced at all.
+
+Both are fixed here rather than deferred: they are comment lines in a file this CR already edits,
+and they are the exact hazard it exists to remove. **The §S2 guard is generalised accordingly** —
+from "no docstring cites `test_bun_crucible_context.py`" to "no docstring cites a `tests/` file that
+does not exist". A guard hardcoded to one dead filename would have missed this one, which is the
+CR's own lesson applied to its own guard.
+
+### §S4c — USER-DECIDED 2026-08-03: the dangling-citation guard is WHOLE-TREE
+§S4b's generalised guard, run across the tree, found **9 live dangling citations** (11 hits) —
+comments that send a reader to a test file which no longer exists, with nothing marking it as gone.
+They are the same defect as §S2, just with different dead filenames, and they sit outside the
+mirror topic this CR started from.
+
+The user's call, taken explicitly rather than assumed: **fix all nine, and let the guard assert
+zero live dangling citations tree-wide.** This is a deliberate third expansion of a CR that began
+as a two-header comment patch; it is recorded here as a decision, not absorbed silently. It
+supersedes the Non-goal *"other stale CR-era narration not involving the mirror"* for the specific
+case of citations pointing at non-existent files — narration that merely reads oddly stays out of
+scope; narration that sends a reader to a file that is not there does not.
+
+Sites (RE-DERIVE every location at execution time):
+`tests/agent-lifecycle.test.ts` · `tests/client/test_bun_crucible_gates.py` ·
+`tests/client/test_cr046_official_toon_roundtrip.py` · `tests/client/test_crucible_axi_shared.py` ·
+`tests/e2e/steps/harness.ts` (×2) · `tests/f13-fidelity.test.ts` · `tests/plans.test.ts` ·
+`tests/toon-conformance.test.ts` · `tests/v2-runs-events.test.ts` (×2)
+
+**HISTORY carve-out stands:** a citation narrated as retired/renamed/archived within its OWN citing
+file is legal and must NOT be swept up — that is the same "preserve history, labelled as history"
+rule §S1 mandates. The rule is evaluated PER CITING FILE: one file correctly narrating a name's
+retirement does not legalise a different file's undisclosed live citation of it.
+
 ### §S5 — Leave the three correct references alone
 `test_bun_crucible_lifecycle.py:36`/`:126` and `test_bun_crucible_gates.py:42` name the mirror only
 to say *don't use it*. They reinforce the rule and must not be swept up in a blanket edit. Confirm
@@ -132,9 +178,13 @@ in the report that they were checked and deliberately kept.
 - [ ] `docs/research/DN-crucible-api-reconstruction.md:206` no longer presents the mirror as a
       live, install-synced copy; DN:10's v1-history mention is untouched (§S3).
 - [ ] The three reinforcing references are unchanged — confirmed, not assumed.
-- [ ] `grep -rna '\.claude/scripts' tests/ docs/` returns only references that tell the reader NOT
-      to use the mirror. No reference presents it as the client source. (`-a`, and disregard
-      `__pycache__` — stale `.pyc` of deleted files carry old docstrings.)
+- [ ] `grep -rna '\.claude/scripts' tests/ docs/research/` returns only references that tell the
+      reader NOT to use the mirror. No reference presents it as the client source. (`-a`, and
+      disregard `__pycache__` — stale `.pyc` of deleted files carry old docstrings.)
+      **Scope note:** `docs/changes/` is deliberately EXCLUDED, matching the guard and the
+      `docs-registration-binding.test.ts` precedent — the CR archive is an immutable point-in-time
+      record and must keep saying what was true when written. AC originally read `docs/`, which was
+      looser than the guard it describes; tightened at VERIFY.
 - [ ] A guard test enforces the line above, on the `tests/docs-*.test.ts` precedent (§S4).
 - [ ] The diff is comments/docstrings ONLY, **plus the single new guard test of §S4** — zero
       change to any existing assertion, fixture, helper or import. AC amended from
@@ -156,3 +206,41 @@ in the report that they were checked and deliberately kept.
   per-instance and read in context.
 - Deleting the RED-phase history instead of relabelling it loses the explanation of why these
   files are shaped as they are. Preserve it as history, as CR-050 did.
+
+## Implementation Notes
+- **This CR grew three times, each recorded rather than absorbed.** It began as two header comments.
+  Gap analysis added the DN (§S3) and the guard (§S4) after finding the DN carried the same false
+  claim and that four `docs-*.test.ts` guards already existed to model. Execution added §S4b (two
+  more same-class instances two lines from one being fixed) and then §S4c, the user's explicit call
+  to make the dangling-citation guard whole-tree and fix all nine live sites. Final surface: 15
+  files.
+- **🚨 The guard snapshotted the defect TWICE before it became a contract.** First it pinned the real
+  trap prose so it classified as `trap`; then it asserted the live-citation list EQUALS the eleven
+  sites on disk. Both read green, both would have inverted the moment the fix landed, and both
+  carried comments claiming "BORN RED" while the run said otherwise. Caught only because an agent's
+  own numbers failed to reconcile — it reported the guard red on nine sites while reporting a single
+  failure. **A guard that asserts current state is worse than no guard: it passes CI and inverts on
+  repair.** The final form is `expect(liveFormatted).toEqual([])` with the residual-site list in the
+  failure message, and the file now documents this history so a fourth attempt does not repeat it.
+- **The spec seeded a wrong fact and execution caught it.** §S4b said CR-046 "renamed"
+  `test_toon.py`. Git disagrees: the successor was ADDED in `aa2702f` and the original DELETED
+  separately in `987b331` ("subset-parity test retired"), pinning different subjects. GREEN wrote
+  "retired … successor X" instead of copying the spec, which prevented a false fact from being
+  stamped into thirteen docstrings. Corrected in `6826b2a`.
+- **The `(×2)` hits were a reporting artefact.** The scanner resolves provenance with
+  `indexOf(cited)` — the FIRST occurrence — so a file citing a dead name twice prints one line
+  twice. `harness.ts` cites at :216 and :241; `v2-runs-events.test.ts` at :72 and :92. Fixing only
+  the printed line would have left the second live against a still-red guard.
+- **The `.py` blind spot was closed, not documented away.** Extraction originally saw only module
+  docstrings and `#` lines, so two citations hid in FUNCTION docstrings. FIX replaced the regex with
+  a ~35-line lexer over the string-literal layer, validated against `ast.get_docstring` ground truth
+  across all 48 test modules — 412/412 docstrings captured, zero extra blocks, and the
+  `(file, cited, verdict)` set unchanged (24→26 hits, both new ones history, live stayed 0).
+  Widening extraction is monotone here: extra occurrences can only flip live→history.
+- **Two limitations remain, stated rather than papered over.** (1) A Python docstring written with a
+  NON-triple-quoted literal is not scanned — at statement position a plain `"..."` is
+  indistinguishable from a wrapped argv element, so collecting them would drag fixture literals back
+  in. Zero such docstrings exist under `tests/` today. (2) `#`-comment extraction is still
+  line-oriented, so a line starting with `#` INSIDE a fixture string counts as a comment. The new
+  lexer makes this precisely fixable, but the fix is a REMOVAL from citable text and could
+  reclassify a site, so it was flagged rather than actioned.

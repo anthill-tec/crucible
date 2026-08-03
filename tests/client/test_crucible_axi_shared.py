@@ -19,8 +19,10 @@ And the envelope schema itself:
 RED phase: `clients/_crucible_axi.py` does not exist yet (confirmed by `ls
 clients/`). Every test below that loads it fails via FileNotFoundError raised
 by `exec_module()` -- a missing-SUT-module error, valid RED (same convention
-as `tests/client/test_toon.py`, which deliberately does NOT skip a missing
-module: the raise itself is the RED signal). `bun-crucible.py` also does not
+as the since-retired `test_toon.py` -- retired by CR-CRU-046 C2 (`987b331`),
+successor `test_cr046_official_toon_roundtrip.py` -- which deliberately did NOT
+skip a missing module: the raise itself is the RED signal). `bun-crucible.py`
+also does not
 yet reference `_crucible_axi` anywhere (confirmed by reading the source --
 `_emit_axi`/`_axi_context` are still standalone local functions at
 ~L1099/~L1079), so the wiring tests below fail too, and will keep failing
@@ -74,7 +76,8 @@ TOON_PATH = REPO_ROOT / "clients" / "toon.py"
 def _load_axi_module():
     """Load clients/_crucible_axi.py by file path. Deliberately does NOT skip
     when the file is missing -- a FileNotFoundError from exec_module() during
-    RED is the expected failure (same convention as test_toon.py)."""
+    RED is the expected failure (same convention as the retired test_toon.py,
+    successor `test_cr046_official_toon_roundtrip.py`)."""
     spec = importlib.util.spec_from_file_location(
         "crucible_axi_under_test", AXI_MODULE_PATH)
     assert spec is not None and spec.loader is not None
