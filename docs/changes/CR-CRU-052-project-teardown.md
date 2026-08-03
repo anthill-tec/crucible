@@ -238,3 +238,43 @@ worse, leave them believing isolation is impossible.
   Confirm no real close-out history can be reached by the §S4 purge before running it.
 - §S3 could break a legitimate future harness that deliberately targets a non-default server.
   Prefer asserting "ephemeral" positively (scratch cwd / known e2e port) over blacklisting `:3849`.
+
+## Implementation Notes
+- **The Context section's central premise was FALSE, and correcting it became the CR's biggest
+  finding.** It asserted the e2e suite left nothing behind. In fact CR-CRU-043 changed
+  `resolveDbPath` underneath `playwright.config.ts`: with no `CRUCIBLE_DB` set and no
+  `<cwd>/data/crucible.db` — which a `mkdtempSync` scratch cwd *guarantees* — resolution falls
+  through to `~/.local/share/crucible/crucible.db`. Every default e2e run since had written there.
+  Measured 2026-08-03: **79 projects / 259 events**, all sutRoot `/tmp/e2e`. The suite was a residue
+  generator all along, one directory over from where anyone was looking.
+- **There were TWO leak sites, not one.** Fixing `playwright.config.ts` alone left §S5's AC
+  measurably false: `backend-liveness.steps.ts`'s `spawnServer` (F10) starts its own server with a
+  scratch cwd and no `CRUCIBLE_DB`, twice per run. Found by a `/proc/<pid>/environ` watcher, not by
+  reading. Ratified as §S5c.
+- **🚨 The "3 pre-existing e2e failures" release-gate item is REFUTED.** That number was measured
+  against the polluted user-level DB. On a genuinely isolated DB the figure is **19 failed / 11
+  passed / 10 blocked**, and all 19 share one systemic cause — not residue. The e2e harness predates
+  the registered-caller hard stop: `filePlan` sends no `agentId`, and the ingest helpers send one
+  that was never registered, so `requireRegisteredCaller` (CR-CRU-056) correctly refuses them.
+  Zero UI or layout assertions fail. VERIFY confirmed the attribution independently by tracing
+  `harness.ts:250` → `handlePlanFile` → `requireRegisteredCaller`. **This needs its own CR** — it is
+  a distinct pre-existing defect, out of this CR's scope, and the release gate must be re-baselined.
+- **`CRUCIBLE_DB` was set to a scratch FILE, not `:memory:`,** deliberately: `Store` skips
+  `PRAGMA journal_mode = WAL` for `:memory:`, so `:memory:` would exercise a configuration no
+  deployment runs. The scratch file also sits under the existing scratch cwd, so rules 2 and 3 of
+  `resolveDbPath` agree rather than tell two competing isolation stories.
+- **The double gate survived adversarial probing.** VERIFY drove ten bypass shapes: approval without
+  archiving (403), string `"true"` (409), numeric `1` (409), absent body (409), repeat delete (404).
+  The strict `!== true` check admits no truthy-value bypass. No bypass found.
+- **The route deliberately does NOT copy `handleProjectArchive`'s UUID pre-check.** A project may
+  carry a caller-supplied non-UUID key, so a UUID gate would render it permanently undeletable —
+  the exact defect this CR exists to remove. Gate order also matters: existence must be checked
+  BEFORE the archived gate, because `requireProject` 404s archived projects and archived is
+  precisely the state this route requires.
+- **CR-CRU-053's dangling-citation guard caught this CR within a day.** RED's
+  `ephemeral.playwright.config.ts` narrated a throwaway probe using `foo.test.ts`, a file that never
+  existed; the guard flagged it. Fixed by rewording so no name-plus-suffix token can be FORMED —
+  not by narrating a false retirement, which would have satisfied the guard while planting the very
+  kind of wrong fact CR-053 removed.
+- **Union regression at the gate: 1971 passing / 0 failing** (bun 1292 + python 679), coverage
+  86.2%/85.4% and 73.6%/84.3%.
