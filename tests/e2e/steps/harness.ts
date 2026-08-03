@@ -4,18 +4,131 @@
 // directory — see docs/changes/CR-CRU-007-timeline-drill-in.md's
 // "E2E house style" AC). Every Given/When/Then step below delegates to
 // these functions instead of re-implementing seeding/ingest logic inline.
-import { type APIRequestContext, expect } from "@playwright/test";
+import { type APIRequestContext, expect, test } from "@playwright/test";
+
+/**
+ * CR-CRU-052 §S3 — the ONE definition of "the ephemeral e2e port". The root
+ * `playwright.config.ts` imports this constant instead of holding its own
+ * copy, so the port the suite actually binds and the port `seedProject`'s
+ * guard demands can never drift apart. The dependency runs config → harness
+ * (never the reverse): the harness is the thing that must be safe when it is
+ * copied somewhere else, so it cannot depend on a config it may not be
+ * running under.
+ */
+export const E2E_PORT = 39_877;
+
+/**
+ * CR-CRU-052 §S2 — every key `seedProject` created, tracked against the
+ * `APIRequestContext` INSTANCE that created it. Playwright hands each test its
+ * own `request` fixture instance, so per-instance tracking isolates tests from
+ * each other with no extra bookkeeping, and a `WeakMap` lets a finished test's
+ * bookkeeping be collected with its fixture.
+ */
+const seededProjectKeys = new WeakMap<APIRequestContext, string[]>();
+
+/**
+ * CR-CRU-052 §S3 — refuse to create anything unless the target is the
+ * ephemeral e2e server. Asserted POSITIVELY (the target's port must BE
+ * `E2E_PORT`) rather than by blacklisting any known-live address: a blacklist
+ * would still permit the same mistake against a server it had never heard of,
+ * which is precisely how the residue in this CR's Context table was created.
+ *
+ * This is pure config introspection — `test.info().project.use.baseURL`, no
+ * network round trip — so a mis-pointed call is rejected BEFORE any connection
+ * is attempted and a live server never even sees it.
+ */
+function assertEphemeralTarget(action: string): void {
+  const info = test.info();
+  const baseURL = info.project.use.baseURL;
+  let actualPort: string | undefined;
+  if (baseURL !== undefined) {
+    try {
+      actualPort = new URL(baseURL).port;
+    } catch {
+      actualPort = undefined;
+    }
+  }
+  if (actualPort === String(E2E_PORT)) return;
+  const found = baseURL === undefined ? "no baseURL at all" : `baseURL "${baseURL}"`;
+  throw new Error(
+    `CR-CRU-052 §S3 — refusing to ${action}: this target is NOT the ephemeral e2e server. ` +
+      `Expected a baseURL on the ephemeral e2e port ${E2E_PORT} ` +
+      `(as booted by playwright.config.ts, e.g. "http://localhost:${E2E_PORT}"), but Playwright ` +
+      `project "${info.project.name}" is configured with ${found}` +
+      (actualPort !== undefined && actualPort !== "" ? ` (port ${actualPort})` : "") +
+      `. This harness creates REAL projects that persist in whatever database it is pointed at, ` +
+      `so it may only run against the throwaway server the e2e config starts. ` +
+      `If you copied this helper into an ad-hoc script or repointed the suite at a shared or live ` +
+      `server: stop, and instead create the project yourself with POST /api/v2/projects and remove ` +
+      `it yourself with POST /api/v2/projects/<key>/archive then ` +
+      `DELETE /api/v2/projects/<key> {"userApproved": true}.`,
+  );
+}
 
 // CR-CRU-008 §S4 — modernized off the retired v1 shim's POST /api/projects/add
 // (snake_case sut_root) to the v2 route (camelCase sutRoot); the key is still
 // caller-generated so seeded fixtures keep a stable, known project key.
+//
+// CR-CRU-052 §S3/§S2 — guarded (ephemeral target only, checked before the POST)
+// and self-cleaning (every key created is registered for `teardownSeededProjects`).
 export async function seedProject(request: APIRequestContext, name: string): Promise<string> {
+  assertEphemeralTarget(`seed project "${name}"`);
   const key = crypto.randomUUID();
   const res = await request.post("/api/v2/projects", {
     data: { key, name, sutRoot: "/tmp/e2e" },
   });
   expect(res.ok()).toBe(true);
+  const tracked = seededProjectKeys.get(request);
+  if (tracked === undefined) {
+    seededProjectKeys.set(request, [key]);
+  } else {
+    tracked.push(key);
+  }
   return key;
+}
+
+/**
+ * CR-CRU-052 §S2 — delete every project `seedProject` created through THIS
+ * `request` instance, via CR-CRU-052 §S1's own guarded route: POST
+ * `…/archive` (the 403 state gate), then DELETE with `{userApproved: true}`
+ * (the 409 approval gate). Never a raw SQL/store call — the harness must
+ * exercise the same supported primitive an operator has, or it would be
+ * testing a path nobody else can take.
+ *
+ * Idempotent and safe to call when nothing was seeded: the registry is cleared
+ * before the deletes run, so a second call is a no-op rather than a
+ * double-delete, and a key someone already removed (404) counts as done.
+ * Every key is attempted even if an earlier one fails, so one bad key cannot
+ * leak the rest; failures are then reported together.
+ */
+export async function teardownSeededProjects(request: APIRequestContext): Promise<void> {
+  const keys = seededProjectKeys.get(request);
+  seededProjectKeys.delete(request);
+  if (keys === undefined || keys.length === 0) return;
+  const failures: string[] = [];
+  for (const key of keys) {
+    try {
+      const archived = await request.post(`/api/v2/projects/${key}/archive`);
+      if (!archived.ok() && archived.status() !== 404) {
+        failures.push(`archive ${key} → ${archived.status()} ${await archived.text()}`);
+        continue;
+      }
+      const deleted = await request.delete(`/api/v2/projects/${key}`, {
+        data: { userApproved: true },
+      });
+      if (!deleted.ok() && deleted.status() !== 404) {
+        failures.push(`delete ${key} → ${deleted.status()} ${await deleted.text()}`);
+      }
+    } catch (error) {
+      failures.push(`delete ${key} → ${String(error)}`);
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(
+      `CR-CRU-052 §S2 — teardown failed to remove ${failures.length} seeded project(s); ` +
+        `they are LEAKED in the target database: ${failures.join("; ")}`,
+    );
+  }
 }
 
 export async function registerAgent(

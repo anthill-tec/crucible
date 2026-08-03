@@ -14,10 +14,14 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+// CR-CRU-052 §S3 — the port is OWNED by the harness (E2E_PORT) and imported
+// here rather than declared locally, so the port this config binds and the port
+// `seedProject`'s ephemeral guard demands cannot drift apart. Direction is
+// deliberate: config depends on harness, never the reverse.
+import { E2E_PORT as PORT } from "./tests/e2e/steps/harness.ts";
 
 const REPO_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
-const PORT = 39_877;
 const SCRATCH_CWD = mkdtempSync(path.join(tmpdir(), "crucible-e2e-"));
 
 // CR-CRU-007 C5b — E2E house style: the E2E layer is proper BDD (Gherkin
