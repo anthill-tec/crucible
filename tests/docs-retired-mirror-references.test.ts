@@ -1,5 +1,5 @@
-// CR-CRU-053 §S2/§S4 — guard against retired-mirror source-claims + dangling
-// references to the deleted test_bun_crucible_context.py (RED).
+// CR-CRU-053 §S2/§S4/§S4b — guard against retired-mirror source-claims +
+// dangling references to test files that no longer exist on disk (RED).
 //
 // Spec: docs/changes/CR-CRU-053-retired-mirror-references.md
 //   §S4: add ONE guard, on the tests/docs-registration-binding.test.ts
@@ -8,6 +8,15 @@
 //   mirror as the client source.
 //   §S2: no docstring in tests/ may still cite the deleted
 //   test_bun_crucible_context.py as a live sibling harness.
+//   §S4b (AMENDED mid-execution 2026-08-03): GREEN found two more instances
+//   of the same defect class in tests/client/test_bun_crucible_gates.py — a
+//   dangling `test_toon.py` citation (renamed by CR-046) and a present-tense
+//   claim that the home `~/.claude/scripts` mirror is synced at all. The §S2
+//   guard is GENERALISED accordingly: from "no docstring cites
+//   test_bun_crucible_context.py" to "no docstring/comment under tests/
+//   cites a test_*.py/*.test.ts filename that does not exist on disk" — a
+//   guard hardcoded to one dead filename would have missed this one. A
+//   second, new guard pins the mirror-sync claim directly.
 //
 // RE-DERIVED at execution time (2026-08-03), per the CR's own lesson that a
 // location recorded in prose decays — do not trust the table below, it is
@@ -198,20 +207,47 @@ describe("§S4 guard — every surviving ~/.claude/scripts reference is a do-not
     expect(hits.length).toBeGreaterThanOrEqual(6);
   });
 
-  test("the classifier does not mistake an unrelated negation for a disclaimer (the exact near-miss on this branch)", () => {
-    // Pins the discrimination rule directly against the real, currently
-    // in-scope near-miss text, rather than a synthetic string, so a future
-    // change to the classifier constants is caught here even if the
-    // underlying prose in clients-bun-crucible.test.ts eventually moves.
-    // BORN RED today (this occurrence classifies as "trap", not "warning").
-    const text = readText(join("tests", "clients-bun-crucible.test.ts"));
-    const match = /\.claude\/scripts/.exec(text);
+  test("the classifier does not mistake an unrelated negation for a disclaimer (a synthetic near-miss reproducing the exact shape)", () => {
+    // SYNTHETIC fixture, deliberately NOT the real tests/clients-bun-
+    // crucible.test.ts prose the previous version of this test pinned.
+    // That was wrong, not merely stylistically: the real occurrence this
+    // test pinned is EXACTLY the one §S1 corrects (it's the first of the
+    // three traps test 1, above, asserts down to zero) — so the moment
+    // GREEN does its job, "the real occurrence classifies as trap" and
+    // "zero traps survive" (test 1) become mutually exclusive assertions
+    // about the SAME line. The test was unsatisfiable alongside test 1
+    // from the moment §S1 landed, which also means it was never "BORN RED
+    // today" as it claimed — pre-fix the occurrence WAS a trap, so this
+    // test was BORN GREEN, pinning the DEFECT (a live-source claim) rather
+    // than the discrimination REQUIREMENT (that an unrelated negation must
+    // not be mistaken for a disclaimer). Its stated reason for using real
+    // text — "so a future change to the classifier constants is caught
+    // here even if the underlying prose eventually moves" — is a
+    // legitimate goal, just achieved the wrong way: pinning mutable prose
+    // (prose this very CR deletes) inside a guard is what made it
+    // self-defeating. A synthetic fixture achieves the same goal (it still
+    // fails if the 30/45-char classifier constants in `classify()` above
+    // change) without depending on prose content this CR is actively
+    // correcting.
+    //
+    // The fixture reproduces the exact near-miss SHAPE measured on this
+    // branch: an unrelated "does not exist" sits ~55 chars upstream of a
+    // `~/.claude/scripts/...` mention (outside the 30-char pre-window, so
+    // it must NOT register as a disclaimer), and a "LIVE" liveness token
+    // sits a handful of words immediately before the match (inside the
+    // 30-char pre-window, so it MUST register as a live claim) — the same
+    // geometry as the real near-miss, built from a filename
+    // (`fixture-probe.py`) that will never collide with anything real.
+    const SYNTHETIC_NEAR_MISS =
+      "The fixture-probe.py helper does not exist on this branch (only the LIVE " +
+      "copy at ~/.claude/scripts/fixture-probe.py stands in for it).";
+    const match = /\.claude\/scripts/.exec(SYNTHETIC_NEAR_MISS);
     expect(match).not.toBeNull();
     const index = match!.index;
     // Confirms the exact near-miss shape this rule is designed against:
     // an unrelated "does not exist" sits upstream of the match.
-    expect(text.slice(Math.max(0, index - 60), index)).toMatch(/does not exist/);
-    expect(classify(text, index, match![0].length)).toBe("trap");
+    expect(SYNTHETIC_NEAR_MISS.slice(Math.max(0, index - 60), index)).toMatch(/does not exist/);
+    expect(classify(SYNTHETIC_NEAR_MISS, index, match![0].length)).toBe("trap");
   });
 
   test("the reinforcing do-not-use warnings are not swept up by the fix (§S5 — preserved, not deleted)", () => {
@@ -237,36 +273,140 @@ describe("§S4 guard — every surviving ~/.claude/scripts reference is a do-not
   });
 });
 
-describe("§S2 guard — no docstring in tests/ cites the deleted test_bun_crucible_context.py as a live sibling harness", () => {
-  test("zero references to test_bun_crucible_context.py survive anywhere under tests/", () => {
-    // BORN RED — today this finds exactly 3 dangling references:
-    //   tests/client/test_bun_crucible_gates.py:43
-    //     ("sibling harnesses (test_bun_crucible_lifecycle.py / test_bun_crucible_context.py)")
-    //   tests/client/test_bun_crucible_lifecycle.py:72
-    //     ("this repo has never made a live-server call (test_bun_crucible_context.py is...")
-    //   tests/client/test_bun_crucible_lifecycle.py:78
-    //     ("Invocation (matches test_bun_crucible_context.py's documented convention)")
-    // GREEN's §S2 fix (re-point or relabel each) is what turns this green.
-    const files = listFiles("tests", [".ts", ".py"]).filter(
-      (abs) => abs.slice(REPO_ROOT.length + 1) !== SELF_REL_PATH,
+// §S4b generalisation of the §S2 guard: a check hardcoded to one dead
+// filename (`test_bun_crucible_context.py`) missed the SECOND dangling
+// citation GREEN found in the very file it was fixing
+// (tests/client/test_bun_crucible_gates.py's `test_toon.py` mention, renamed
+// by CR-046). The generalised rule: no docstring/comment under `tests/` may
+// cite a `test_*.py` or `*.test.ts` filename that does not exist on disk.
+//
+// Scope note (RE-DERIVED 2026-08-03, reported alongside this RED run): a
+// literal, whole-tests/-tree application of this rule surfaces MORE than
+// the two §S4b instances — several other files carry citations to test
+// files retired/renamed by OTHER, already-closed CRs (CR-CRU-047's
+// tests/archive/ deletion, CR-CRU-057's phase-role.test.ts retirement,
+// CR-CRU-046's test_toon.py rename reaching a second file, etc.), each
+// narrated as history at its own site but never updated after the fact.
+// The CR's own §S4b text states the generalised rule in these unqualified
+// terms ("no docstring cites a tests/ file that does not exist"), so this
+// guard implements it literally rather than narrowing it unilaterally to
+// tests/client/test_bun_crucible_gates.py — see this run's final report for
+// the full RE-DERIVED enumeration and the scope question it raises for
+// GREEN.
+
+// Joins prose lines the way a reader would: a normal line break becomes a
+// space, but a line ending in a bare hyphen (a mid-word wrap, e.g.
+// "workflow-" / "tab.test.ts" split across two `//`/`#`/` * ` comment
+// lines) is joined with NO separator so the wrapped filename reassembles
+// correctly instead of shearing off its prefix.
+function joinWrapped(lines: string[]): string {
+  let out = "";
+  for (const line of lines) {
+    if (out.endsWith("-")) out += line;
+    else if (out.length > 0) out += ` ${line}`;
+    else out = line;
+  }
+  return out;
+}
+
+// Extracts ONLY docstring/comment prose from a file — never string literals
+// (fixture JUnit XML bodies, argv arrays, tmp-file names written by a test)
+// — so a fixture like `<testsuite name="toon.test.ts">` or a dynamically
+// written `test_probe.py` never counts as a "citation". For `.py` files:
+// the leading module docstring (the very first statement, so a LATER
+// triple-quoted fixture constant is never mistaken for it) plus every `#`
+// line comment. For `.ts` files: every `/* ... */` block (JSDoc marker
+// lines stripped) plus every `//` line comment.
+function extractCitableText(relPath: string, text: string): string {
+  if (relPath.endsWith(".py")) {
+    const docMatch = /^\s*("""|''')([\s\S]*?)\1/.exec(text);
+    const doc = docMatch ? joinWrapped(docMatch[2].split("\n").map((l) => l.trim())) : "";
+    const lineComments = joinWrapped(
+      text
+        .split("\n")
+        .filter((line) => line.trim().startsWith("#"))
+        .map((line) => line.trim().replace(/^#+\s?/, "")),
     );
-    const survivors: { relPath: string; line: number }[] = [];
-    for (const abs of files) {
-      const text = readFileSync(abs, "utf8");
-      const relPath = abs.slice(REPO_ROOT.length + 1);
-      for (const m of text.matchAll(/test_bun_crucible_context\.py/g)) {
-        const index = m.index ?? 0;
-        const line = text.slice(0, index).split("\n").length;
-        survivors.push({ relPath, line });
-      }
+    return `${doc}\n${lineComments}`;
+  }
+  const blockComments = (text.match(/\/\*[\s\S]*?\*\//g) ?? [])
+    .map((block) =>
+      joinWrapped(
+        block
+          .replace(/^\/\*\*?/, "")
+          .replace(/\*\/$/, "")
+          .split("\n")
+          .map((l) => l.trim().replace(/^\*\s?/, "")),
+      ),
+    )
+    .join("\n");
+  const lineComments = joinWrapped(
+    (text.match(/\/\/[^\n]*/g) ?? []).map((line) => line.replace(/^\/\/\s?/, "")),
+  );
+  return `${blockComments}\n${lineComments}`;
+}
+
+// Matches a bare `test_*.py` module name or a `*.test.ts` file name (basename
+// only — a leading `tests/...` path prefix, if any, is naturally excluded
+// because `/` is not in the allowed character class).
+const DEAD_FILE_PATTERN = /\b(test_[A-Za-z0-9_]+\.py|[A-Za-z0-9][A-Za-z0-9_.-]*\.test\.ts)\b/g;
+
+interface DanglingCitation {
+  relPath: string;
+  line: number;
+  cited: string;
+}
+
+function scanDanglingFileCitations(): DanglingCitation[] {
+  const existing = new Set(
+    listFiles("tests", [".py", ".ts"]).map((abs) => abs.split("/").pop() as string),
+  );
+  const files = listFiles("tests", [".ts", ".py"]).filter(
+    (abs) => abs.slice(REPO_ROOT.length + 1) !== SELF_REL_PATH,
+  );
+  const hits: DanglingCitation[] = [];
+  for (const abs of files) {
+    const text = readFileSync(abs, "utf8");
+    const relPath = abs.slice(REPO_ROOT.length + 1);
+    const citable = extractCitableText(relPath, text);
+    for (const m of citable.matchAll(DEAD_FILE_PATTERN)) {
+      const cited = m[0];
+      if (existing.has(cited)) continue;
+      // Best-effort line lookup on the RAW text for provenance only (this
+      // file's own convention: re-derived, do not trust it blindly) — a
+      // literal search first, falling back to the citation's tail (the
+      // wrapped case, where the full name never appears contiguous in the
+      // raw source because a real newline sits inside it).
+      let idx = text.indexOf(cited);
+      if (idx === -1) idx = text.indexOf(cited.slice(-Math.min(12, cited.length)));
+      const line = idx === -1 ? -1 : text.slice(0, idx).split("\n").length;
+      hits.push({ relPath, line, cited });
     }
+  }
+  return hits;
+}
+
+describe("§S2/§S4b guard — no docstring/comment in tests/ cites a test_*.py or *.test.ts filename that does not exist on disk", () => {
+  test("zero dangling test-file citations survive anywhere under tests/ (generalised from the single-filename check)", () => {
+    // BORN RED today. The §S4b-specific instance this guard MUST catch:
+    //   tests/client/test_bun_crucible_gates.py:48 cites `test_toon.py`
+    //   (deleted; CR-046 renamed it to test_cr046_official_toon_roundtrip.py).
+    // A second, independent citation of the SAME dead name also survives at
+    // tests/client/test_crucible_axi_shared.py:22 ("same convention as
+    // tests/client/test_toon.py") — outside test_bun_crucible_gates.py, so a
+    // guard scoped only to that one file would still have missed it.
+    const survivors = scanDanglingFileCitations();
+    const s4bInstance = survivors.find(
+      (s) => s.relPath === join("tests", "client", "test_bun_crucible_gates.py") && s.cited === "test_toon.py",
+    );
+    expect(s4bInstance).toBeDefined();
     expect(survivors).toEqual([]);
   });
 
   test("the file test_bun_crucible_context.py does not exist on disk (confirms the deletion the danglers point at)", () => {
     // BORN GREEN — sanity check that the premise of the guard above is
     // real: the file really was deleted (2026-08-01, per Scope), not
-    // merely renamed to something the grep above would miss.
+    // merely renamed to something the scan above would miss.
     let exists = true;
     try {
       statSync(join(REPO_ROOT, "tests", "client", "test_bun_crucible_context.py"));
@@ -274,5 +414,22 @@ describe("§S2 guard — no docstring in tests/ cites the deleted test_bun_cruci
       exists = false;
     }
     expect(exists).toBe(false);
+  });
+
+  test("no present-tense claim that the home ~/.claude/scripts mirror is synced survives in test_bun_crucible_gates.py (§S4b)", () => {
+    // Location RE-DERIVED at execution time (2026-08-03): lines 46-47 of
+    // tests/client/test_bun_crucible_gates.py's module docstring today
+    // (NOT the original spec's `:47` alone — do not trust it, re-grep).
+    // BORN RED today: the docstring reads "...only the in-repo `clients/`
+    // directory has `toon.py` sitting next to `bun-crucible.py` today (the
+    // home mirror is not yet re-synced past the C4 GREEN commit)" —
+    // present tense, implying the mirror IS synced, however lagging. That
+    // is false under the standing delivery model (§S3 of this CR): the
+    // mirror is retired, no install step syncs it, full stop. GREEN's
+    // §S4b fix (reword to state the mirror is retired, not "not yet
+    // re-synced") is what turns this green.
+    const gates = readText(join("tests", "client", "test_bun_crucible_gates.py"));
+    expect(gates).not.toMatch(/mirror\s+is\s+(?:not\s+yet\s+)?re-synced/i);
+    expect(gates).not.toMatch(/mirror\s+is\s+(?:currently\s+|already\s+)?synced/i);
   });
 });
