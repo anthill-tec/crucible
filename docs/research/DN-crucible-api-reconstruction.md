@@ -212,4 +212,35 @@ client (Python/PyPI) stay separate packages but ship as one uv-installed,
 version-locked pair.) Bulk event clearing
 (`/api/events/clear`) is deliberately NOT carried forward — v2's posture is an
 immutable audit log with per-project, double-gated single-event deletion
-(`DELETE /api/v2/events/<id>`, CR-CRU-008 §S4).
+(`DELETE /api/v2/events/<id>`, CR-CRU-008 §S4). That remains the posture for
+data *inside* a project, but it is no longer the whole story: as of CR-CRU-052 a
+project can also be disposed of wholesale, cascading over its entire recorded
+history behind a gate of its own — see §7.
+
+## 7 Project disposal (2026-08-03 — CR-CRU-052)
+
+The audit-log posture in §6 reasons about events; it never reasoned about the
+container. Projects were effectively immortal — an e2e fixture, a mistyped key or
+an abandoned experiment stayed on the board forever, and clearing six of them
+once took a hand-written SQL purge against the live database, which is not a
+capability, only a rescue. `DELETE /api/v2/projects/<key>` closes that gap as a
+first-class lifecycle primitive: it removes the project row and cascades to every
+row hanging off it — its `events`, `agents`, `plans`, `plan_cycles` and
+`rollups` — inside one transaction, so a project either departs whole or does not
+depart at all, and no partial failure can leave orphan rows behind pointing at a
+key that no longer resolves.
+
+Precisely because deletion is irreversible and reaches across a project's whole
+history rather than a single row, the route is double-gated. The project must be
+archived first: a live project is refused with **403**, which forces the operator
+through a reversible step and a deliberate pause before the destructive one. The
+request must then carry `userApproved: true` in its body; without it the delete is
+refused with **409**. That is the same confirmation idiom CR-CRU-032 established
+for run deletion, reused on purpose — the fleet should learn one confirmation
+shape, not a new one per resource.
+
+The division of labour CR-CRU-012 §S1b drew is therefore intact and is an explicit
+Non-goal of CR-CRU-052: archiving stays the reversible operation — it takes a
+project off the board and can be undone — while deleting is the irreversible one
+that ends it. Nothing about archive semantics changed to accommodate the new
+route; the new route was built to sit behind them.
