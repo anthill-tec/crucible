@@ -89,6 +89,19 @@ helpers that need a registered caller, delegating to the existing `registerAgent
 unconditionally (registration is idempotent), covers callers that already registered and those that
 never did, and leaves no per-call-site patching for the next helper to forget.
 
+### §S4b — RATIFIED scope extension: five more helpers on the same routes
+After the four named helpers were fixed, the remaining **10 failures were ALL `transitionCycle`** —
+precisely the "a fifth helper drifts" case §S4 was written to prevent. `closePlan` and
+`backfillPlanWave` sit behind it on the same `requireRegisteredCaller` routes and would have
+surfaced next; `postGate`/`postMilestone` are the same class.
+
+**Ratified by the orchestrator 2026-08-03.** The identical idiom was applied to all five —
+harness-identity for `transitionCycle`/`closePlan`/`backfillPlanWave`, caller-supplied id for
+`postGate`/`postMilestone`. This is what §S4's own wording requires ("inside the helpers that need a
+registered caller… leaves no per-call-site patching for the next helper to forget"), and the AC
+"identity-drift failures are ZERO" is unreachable without at least `transitionCycle`. Still one
+file, one idiom, no `src/` change.
+
 ### §S5 — Re-baseline the release gate
 The queue's release-gate item must be corrected from "3 pre-existing e2e failures" to whatever
 remains after §S2–§S4. If genuine product defects remain once the drift is gone, enumerate them —
@@ -119,9 +132,10 @@ those are the real gate items, and they have never been visible until now.
   scope, and bundling them here would repeat the pattern this queue keeps paying for.
 
 ## Risk
-- **The 10 "did not run" scenarios are an unknown.** They are blocked by earlier failures, so their
-  true state is unmeasured. The inventory may GROW once the 19 stop cascading — that is information,
-  not a regression, and it must be reported rather than presented as a surprise at the gate.
+- ~~**The 10 "did not run" scenarios are an unknown.**~~ **RESOLVED 2026-08-03 — they all PASS.**
+  Playwright's `dependencies: ["chromium"]` had refused to run them while `chromium` held 19
+  failures, so they had never executed. With the cascade cleared they ran for the first time and
+  every one passed. The inventory did not grow; it emptied.
 - **A per-call-site patch will look like a fix and rot.** §S4 exists because four fixed helpers do
   not stop a fifth from drifting; the harness has now drifted twice (this, and the teardown gap
   CR-052 closed) for the same underlying reason — an ambient guarantee nobody owns.
@@ -130,3 +144,28 @@ those are the real gate items, and they have never been visible until now.
   for a registration not exercising a TDD phase. (Gap analysis: the existing `registerAgent` helper
   ALREADY sends `role: "report"`, so reusing it satisfies this by construction — the risk is only
   live if someone writes a second registration path.)
+
+## Implementation Notes
+- **RESULT: the e2e suite is 40/40 green — 0 failed, 0 blocked.** Independently re-run by the
+  orchestrator (57.2s). This is the first time the full suite has passed.
+- **ZERO genuine product defects were hiding behind the drift.** The honest expectation was that
+  the 10 never-measured scenarios would reveal real bugs once unblocked. They did not — all 10
+  passed. §S5's re-baseline is therefore "no remaining e2e release-gate items", not a defect list.
+- **The whole 19-failure inventory was ONE cause.** RED classified every failure as identity drift
+  and corroborated it against the `.feature` sources rather than the error text alone: the scenarios
+  that call `registerAgent` before ingesting are EXACTLY the eleven that were passing. Failures and
+  passes both predicted by the same rule.
+- **The fix reused what existed.** `ensureRegistered` delegates to `registerAgent`, which already
+  posts `role: "report"` — so the cycle-binding trap the Risk section names is avoided by
+  construction rather than by discipline. Idempotence comes free from `handleAgentTouch` branching
+  on `hasAgent`. No new mechanism, no `src/` change, `requireRegisteredCaller` untouched.
+- **§S4's prediction came true within the same cycle.** Fixing the four named helpers left exactly
+  10 failures, all `transitionCycle` — the "next helper forgets" case. Ratified as §S4b and closed
+  across five more helpers.
+- **`filePlan` uses ONE fixed harness identity** (`HARNESS_AGENT_ID = "e2e-harness"`), not a
+  generated id, so a scenario's board shows one harness agent however many plans it files.
+- **Artefact-hygiene gotcha worth knowing:** running `bunx playwright test` before `bun test` in the
+  same tree leaves Playwright output in `test-reports/junit.xml`, which trips
+  `tests/suite-integrity.test.ts`'s corroboration check (it compares that artifact against on-disk
+  test files). Clearing the artifact restores its documented skip-when-absent path. Not a
+  regression — but it explains a failure that otherwise looks like one.
