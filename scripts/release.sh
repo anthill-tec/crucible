@@ -82,7 +82,8 @@ Subcommands:
                     develop + tags. Allowed only on release/* or hotfix/*.
 
   status            Print the current branch and the derived version
-                    (git describe --tags, leading 'v' stripped). Exit 0.
+                    (git describe --tags). Tags are bare SemVer (X.Y.Z).
+                    Exit 0.
 
 Options:
   --dry-run         Print the commands that would run without executing them.
@@ -166,14 +167,24 @@ guard_manifest_version() {
     fi
 }
 
-# Guard (b) (§S5): git-flow must be configured to cut vX.Y.Z tags. The setting
-# lives in .git/config, which is not version-controlled, so it can only be
-# asserted — an unset/wrong prefix would cut a tag every publish guard rejects.
+# Guard (b) (CR-CRU-061 §S1, superseding CR-CRU-041 §S5): git-flow must be
+# configured to cut BARE SemVer tags (X.Y.Z, no prefix). The setting lives in
+# .git/config, which is not version-controlled, so it can only be asserted — a
+# wrong prefix would cut a tag every publish guard rejects.
+#
+# 🚨 MEASURED: git-flow distinguishes UNSET from SET-TO-EMPTY. With the key
+# UNSET, git-flow dies with "Fatal: Version tag not set"; with it explicitly set
+# to the empty string it works and cuts bare tags. So the ONLY valid state is
+# set-and-empty, and `git config --get`'s exit status (1 = key absent, 0 = key
+# present, even with an empty value) is what tells the two apart — a plain
+# `|| true` capture cannot.
 guard_tag_prefix() {
     local prefix
-    prefix="$(git config --get gitflow.prefix.versiontag || true)"
-    if [ "$prefix" != "v" ]; then
-        error "gitflow.prefix.versiontag is '$prefix' (expected 'v') — run: git config gitflow.prefix.versiontag v" "$EXIT_ERROR"
+    if ! prefix="$(git config --get gitflow.prefix.versiontag)"; then
+        error 'gitflow.prefix.versiontag is UNSET (git-flow itself refuses to run in that state) — run: git config gitflow.prefix.versiontag ""' "$EXIT_ERROR"
+    fi
+    if [ -n "$prefix" ]; then
+        error "gitflow.prefix.versiontag is '$prefix' (expected the empty string, for bare X.Y.Z tags) — run: git config gitflow.prefix.versiontag \"\"" "$EXIT_ERROR"
     fi
 }
 
@@ -292,9 +303,7 @@ cmd_status() {
     branch="$(current_branch)"
 
     # Derive version from the latest tag; tolerate no-tag gracefully.
-    if version="$(git describe --tags 2>/dev/null)"; then
-        version="${version#v}"
-    else
+    if ! version="$(git describe --tags 2>/dev/null)"; then
         version="(no tag)"
     fi
 
