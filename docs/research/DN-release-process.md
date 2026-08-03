@@ -34,7 +34,7 @@ Everything below was verified against the repo, not recalled.
 | # | Premise | Measured reality |
 |---|---|---|
 | B1 | *"We already have set a tag at 0.1.0"* | **No tags exist.** `git tag -l` → 0 locally; `git ls-remote --tags origin` → empty. Nothing is tagged. |
-| B2 | package.json is at the release version | **`package.json` = `2.0.0-alpha.1`**, not `0.1.0`. `release.sh set-version` exists precisely to reconcile this, and `finish` re-checks it against the tag. |
+| B2 | package.json is at the release version | `package.json` = `2.0.0-alpha.1`. **NOT a conflict — a scaffold placeholder.** Traced to `eab2080`, the FIRST commit of the v2 rebuild ("CR-CRU-001 C1 red"), untouched since; it meant "v2 of Crucible, alpha", never a release version. `release.sh set-version 0.1.0` overwrites it and `finish` re-checks it against the tag. Nothing to decide. |
 | B3 | The repo reflects the work | **641 commits unpushed on `develop`.** Remote last saw `2026-07-16`; local HEAD is `2026-08-03`. The entire Wave-4 body of work exists only locally. **CI cannot fire on code GitHub has never seen.** |
 | B4 | git-flow is configured for tagging | **`gitflow.prefix.versiontag` is NOT set.** `release.sh finish` guards this as a documented footgun and will refuse to run. One-time `git config`. |
 
@@ -191,19 +191,29 @@ npm — and a **release-day trap**, because the run goes green having shipped ha
 `crucible-axi 0.1.0` on PyPI that pins `@anthill-tec/crucible-server@0.1.0` is **broken on install**
 if that npm version does not exist.
 
-**Decision required (§5).** Either:
-- **(a)** complete S2+S3 before releasing, so the skip cannot trigger; or
-- **(b)** make the skip a hard failure when the ref is a release tag — degrade on branch pushes,
-  refuse on a release. Recommended regardless of (a), as a standing guard.
+**RESOLVED 2026-08-03 (user).** *"GET THE tags right in the first case."* No CI guard is added.
+The npm org and `NPM_TOKEN` are completed in **Phase 0 (steps 0.4)** so the skip branch can never
+be reached on a release. Guarding a broken setup is the wrong fix; having the setup right is the
+fix. The skip stays as-is for ordinary branch pushes, which is what it was written for.
 
-## 5. Open decisions for the user
+## 5. Decisions — CLOSED
 
-| # | Decision | Why it cannot be defaulted |
+All four were settled on 2026-08-03. Recorded here because two of them **were never open**, and the
+DN asked anyway.
+
+| # | Question as posed | Resolution |
 |---|---|---|
-| D1 | **Release version: `0.1.0`, or reconcile with `2.0.0-alpha.1`?** | The queue targets 0.1.0; the npm manifest says 2.0.0-alpha.1. Publishing 0.1.0 *after* an alpha implies a version going backwards on npm. This is a product-identity call. |
-| D2 | **Repo visibility** — publish public (enables `--provenance`) or drop provenance? | Affects the workflow and is a disclosure decision. |
-| D3 | **npm skip → hard failure on release tags?** (§4 option b) | Changes CI behaviour; recommended but is a policy choice. |
-| D4 | **Does the 0.1.0 scope still hold** after Wave 4 grew well beyond the original queue? | Membership is the user's call, always. |
+| D1 | Release version — `0.1.0` or reconcile with `2.0.0-alpha.1`? | ❌ **The question was invalid.** `2.0.0-alpha.1` is a scaffold placeholder from the repo's first commit (`eab2080`), not a published version — nothing has ever been released, so no version can "go backwards". **The version is `0.1.0`, followed by `0.2.0`**, per the storyboard. `set-version` overwrites the placeholder. |
+| D2 | Repo visibility | **Public at release.** CI will not run otherwise; provenance follows for free. |
+| D3 | Make the npm skip a hard failure on release tags? | **No.** Complete the org + token in Phase 0 so the skip is unreachable. Get the setup right rather than guard the wrong state. |
+| D4 | Does the 0.1.0 scope still hold? | ❌ **The question was invalid.** `.lavish/crucible-v2-design.html` is the **authoritative source** for release scope and membership. It already answers this; alternatives should not have been invented against it. |
+
+### 5.1 Standing rule this DN got wrong twice
+
+**The storyboard (`.lavish/crucible-v2-design.html`) is authoritative for version model and release
+scope.** Two of the four "decisions" above were manufactured by reading a stale scaffold default and
+by offering alternatives to a question the storyboard had already settled. Check the storyboard
+first; escalate only what it genuinely does not answer.
 
 ## 6. What this DN does NOT cover
 
