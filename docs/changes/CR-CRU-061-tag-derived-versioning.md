@@ -136,6 +136,28 @@ Gap analysis (Dimension 6) found two consumers the earlier draft did not name:
 one with the same rigour — a guard that is loosened rather than re-aimed is how the `v` assumption
 would survive into the release.
 
+### §S7 — USER-DECIDED 2026-08-04: `finish` invokes `set-version` itself
+The open item below was put to the user at the merge gate. **Decision: option (b)** — keep
+`guard_manifest_version`, but have `cmd_finish` bring the manifest into line ITSELF rather than
+refusing and telling the operator to run a second command.
+
+Rationale (user-approved): the committed manifest still matters for local builds and `npm pack`, so
+dropping the guard entirely (option a) would let it rot. But the operator should issue **one**
+command. `finish X.Y.Z` therefore aligns the manifest to `X.Y.Z` before its preflight, so the guard
+becomes an invariant the script maintains rather than a wall the operator hits.
+
+This makes the CR's own intent real: **setting the tag is all a release needs.** §S2 achieved that
+for what is PUBLISHED; §S7 achieves it for what is RELEASED.
+
+Constraints:
+- `set-version` remains available standalone — it is still useful for local builds, and existing
+  tests pin its behaviour.
+- `finish` must remain **idempotent** on an already-aligned manifest (no spurious commit, no
+  failure) — the common case once someone has run `set-version` by habit.
+- Do not weaken `guard_manifest_version`. It stays; it should simply never fire on the happy path.
+- The manifest alignment must be committed BEFORE the git-flow finish, or it would not be on the
+  merge.
+
 ### §S4 — Documentation matches the machinery
 `RELEASING.md` documents the `v` model and the manual-manifest model in several places (§"Version
 model", §"Release at a glance", §"Composite / lockstep model"). Update it, and the release DN, so no
@@ -160,6 +182,12 @@ reader is told to do a step that no longer exists.
       history is preserved as a labelled supersession, not deleted (§S6).
 - [ ] `tests/release-driver.test.ts`'s prefix tests are rewritten for "unset is correct" — no test
       still asserts `v` is required (§S6).
+- [ ] `release.sh finish X.Y.Z` aligns `package.json` to `X.Y.Z` itself and proceeds, with NO
+      prior `set-version` run — asserted from a scratch repo whose manifest is stale (§S7).
+- [ ] `finish` on an ALREADY-aligned manifest is idempotent: succeeds, no spurious commit —
+      asserted (§S7).
+- [ ] `guard_manifest_version` still exists and still fails when the manifest cannot be aligned —
+      not deleted, not weakened (§S7).
 - [ ] Full bun regression green AND full Python regression green.
 
 ## Non-goals
