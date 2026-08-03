@@ -83,7 +83,12 @@ Each item is a hard gate; none is optional.
 | 0.4 | Create the **npm org `@anthill-tec`**, then generate an automation `NPM_TOKEN` and add it as a repo secret | **user** | S2, S3 |
 | 0.5 | Confirm GitHub Environments `pypi` / `testpypi` exist and `RELEASE_PAT` is set | **user** | S4 |
 | 0.6 | **Make the repo PUBLIC** — user-decided 2026-08-03: *"we will make it public during release, the CI wont run otherwise"*. Provenance follows for free. | **user** | S5 |
-| 0.7 | `scripts/release.sh set-version 0.1.0` — overwrites the `eab2080` scaffold placeholder. Not a decision; the storyboard fixes the version at **0.1.0**, then 0.2.0. | orchestrator | B2 |
+
+⚠ **B2 (`package.json` = the `eab2080` scaffold placeholder) is NOT a Phase-0 item.** An earlier
+draft listed `set-version 0.1.0` here; that is impossible — `release.sh` refuses to run outside a
+`release/*` or `hotfix/*` branch, and Phase 0 runs on `develop`. It is already correctly placed at
+**step 4.1**, after the release branch exists. The version itself is not in question: the storyboard
+fixes it at **0.1.0**, then 0.2.0.
 
 ### Phase 1 — Cut the release branch
 
