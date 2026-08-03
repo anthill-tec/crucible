@@ -111,9 +111,12 @@ the audit — without it the measurement is lost the moment this CR closes.
 
 ## Risk
 - **`-B` changes Maven's console output, which other parsing in the client may depend on.** Sweep
-  for other console-text readers in `mvn-crucible.py` before landing (`:890` reads
-  `r.stdout.splitlines()`) rather than assuming the narrator is the only one. Measured safe on the
-  report-file side; the console-reader sweep is the open half.
+  for other console-text readers in `mvn-crucible.py` before landing rather than assuming the
+  narrator is the only one. Measured safe on the report-file side; the console-reader sweep is the
+  open half. ⚠ **This item's original citation was wrong** — it named `:890` as an
+  `r.stdout.splitlines()` Maven reader. Line 890 is blank; the only `splitlines()` reader is
+  `_docker_clean_check`, which parses `docker ps`, not Maven. Corrected below in Implementation
+  Notes after both GREEN and VERIFY swept it independently.
 - **Making the fixture realistic could expose a regex that only ever matched the fake.** That is the
   point of the change, not a reason to avoid it — but if the narration test goes red on the real
   format, the regex is the thing to fix, never the fixture.
@@ -121,3 +124,29 @@ the audit — without it the measurement is lost the moment this CR closes.
   `surefire-junit-platform` provider jar is absent from the local repo and the probe was offline.
   One reachable project pins 2.22.1, which is likewise unverified. The comment must state the
   versions actually tested rather than implying a range that was not.
+
+## Implementation Notes
+- **The re-baseline was the substance of this CR.** The original spec asked for a four-section
+  audit and accepted NOT-EXERCISABLE as a pass. Running that audit for real falsified three of the
+  four sections and relocated the defect from the client to the test fixture. Recorded here because
+  the failed premises are more instructive than the fix: an audit that permits its own
+  non-execution will always pass.
+- **The `-B` sweep found the spec's own risk citation to be wrong.** The Risk section named
+  `mvn-crucible.py:890` as an `r.stdout.splitlines()` reader that `-B` might break. Line 890 is
+  blank; the sole `splitlines()` reader is `_docker_clean_check`, which parses `docker ps` output
+  and never sees Maven. The genuine Maven console consumers are the three compile-ingest sites
+  (`_compile_fallback`, `cmd_compile`, `cmd_check`), and all three key on the literal `[ERROR]`
+  substring, which batch mode does not alter. GREEN and VERIFY reached this independently.
+- **`-B` therefore went into the shared `_common_mvn_flags`**, covering all six Maven call sites,
+  rather than being duplicated narrowly at the two narrated ones — no reader is at risk, and a
+  single seed cannot drift out of sync the way two call-site copies would.
+- **`_MVN_RUNNING_LINE` was NOT modified.** It already matched real surefire output; `(?:^|\s)`
+  absorbs the space after `[INFO] `. The CR's stated inversion — if the test goes red on the real
+  format, fix the regex, never the fixture — never had to fire.
+- **Verified surefire coverage is two versions, not a range.** 3.2.5 and 3.5.4 were exercised
+  offline against a real multi-module project (139 tests). 3.0.0-M7 could not run — its
+  `surefire-junit-platform` provider jar is absent from the local repo and the probe had no
+  network. 2.22.1, pinned by one reachable project, is unexercised. The comment beside the regex
+  states this explicitly rather than implying a supported span.
+- **Union regression at the gate: 1945 passing / 0 failing** (bun 1266 + python 679), coverage
+  91.4%/89.7% and 73.6%/84.3% respectively.
