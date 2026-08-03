@@ -204,7 +204,7 @@ class RegisterUnregisterEnvelopeTest(_BaseEnvelopeTest):
     def test_register_emits_toon_envelope_and_moves_text_line_to_stderr(self):
         with mock.patch.object(self.module, "_post", return_value={"ok": True}):
             code, out, err = _run_main(self.module, [
-                "register", "--agent", "CR-X-1-RED", "--phase", "RED",
+                "register", "--agent", "CR-X-1-RED", "--role", "RED",
                 "--project-dir", self.tmpdir,
             ])
 
@@ -222,7 +222,7 @@ class RegisterUnregisterEnvelopeTest(_BaseEnvelopeTest):
         self.assertEqual(axi.get("warnings"), [])
 
         # The former stdout line is now interactive-only, on stderr.
-        legacy_line = "register: ok=True agent=CR-X-1-RED phase=RED source=claude-md"
+        legacy_line = "register: ok=True agent=CR-X-1-RED role=RED source=claude-md"
         self.assertIn(legacy_line, err)
         # And it must be GONE from stdout -- stdout is the TOON channel only.
         self.assertNotIn(legacy_line, out)
@@ -231,7 +231,7 @@ class RegisterUnregisterEnvelopeTest(_BaseEnvelopeTest):
         with mock.patch.object(self.module, "_post",
                                 return_value={"ok": False, "error": "boom"}):
             code, out, _err = _run_main(self.module, [
-                "register", "--phase", "report", "--agent", "CR-X-2-RED", "--project-dir", self.tmpdir,
+                "register", "--role", "report", "--agent", "CR-X-2-RED", "--project-dir", self.tmpdir,
             ])
 
         self.assertEqual(code, 1)

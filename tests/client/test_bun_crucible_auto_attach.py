@@ -225,7 +225,7 @@ class ClientSourceGrepSweepTest(_BaseAutoAttachTest):
 class RegisterCycleBindingWireTest(_BaseAutoAttachTest):
     """CR-CRU-056 §S1/§S2/§S4 — `register --cycle <id>` rides the wire as
     `cycleId` verbatim; omitting it omits the key (never a fabricated
-    default); a server refusal (409, unbound TDD phase / stale binding /
+    default); a server refusal (409, unbound TDD role / stale binding /
     unknown-pending-done cycle / closed plan) is surfaced faithfully
     (ok:false, the server's message, non-zero exit) -- this supersedes
     AutoAttachToActiveCycleTest's auto-attach pins, which exercised the now
@@ -234,7 +234,7 @@ class RegisterCycleBindingWireTest(_BaseAutoAttachTest):
     def test_register_cycle_flag_sends_cycleid_in_register_payload(self):
         with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock:
             code, out, _err = _run_main(self.module, [
-                "register", "--phase", "RED", "--agent", "CR-CRU-056-bound",
+                "register", "--role", "RED", "--agent", "CR-CRU-056-bound",
                 "--cycle", "149", "--project-dir", self.tmpdir,
             ])
         self.assertEqual(code, 0, f"stdout={out!r}")
@@ -247,7 +247,7 @@ class RegisterCycleBindingWireTest(_BaseAutoAttachTest):
     def test_register_without_cycle_flag_omits_cycleid_key(self):
         with mock.patch.object(self.module, "_post", return_value={"ok": True}) as post_mock:
             code, out, _err = _run_main(self.module, [
-                "register", "--phase", "report", "--agent", "CR-CRU-056-unbound",
+                "register", "--role", "report", "--agent", "CR-CRU-056-unbound",
                 "--project-dir", self.tmpdir,
             ])
         self.assertEqual(code, 0, f"stdout={out!r}")
@@ -258,11 +258,11 @@ class RegisterCycleBindingWireTest(_BaseAutoAttachTest):
             "no --cycle supplied -- the client must not fabricate a cycleId key")
 
     def test_register_409_refusal_envelope_surfaced_faithfully(self):
-        server_message = "phase RED requires a cycle binding — register with --cycle <cycleId>"
+        server_message = "role RED requires a cycle binding — register with --cycle <cycleId>"
         with mock.patch.object(self.module, "_post",
                                 return_value={"ok": False, "error": server_message}) as post_mock:
             code, out, _err = _run_main(self.module, [
-                "register", "--phase", "RED", "--agent", "CR-CRU-056-refused",
+                "register", "--role", "RED", "--agent", "CR-CRU-056-refused",
                 "--project-dir", self.tmpdir,
             ])
         self.assertNotEqual(code, 0, "a 409 refusal must exit non-zero")
@@ -452,7 +452,7 @@ class BoundRegistrationServerStampedAttachTest(_BaseAutoAttachTest):
             self.assertEqual(code, 0, f"cycle-activate stdout={out!r}")
 
             code, out, _err = _run_main(self.module, [
-                "register", "--phase", "RED", "--agent", "CR-CRU-056-smoke",
+                "register", "--role", "RED", "--agent", "CR-CRU-056-smoke",
                 "--cycle", "501", "--project-dir", self.tmpdir,
             ])
             self.assertEqual(code, 0, f"register stdout={out!r}")
@@ -500,7 +500,7 @@ class BoundRegistrationServerStampedAttachTest(_BaseAutoAttachTest):
 
         with mock.patch.object(self.module, "_post", side_effect=fake_post):
             code, out, _err = _run_main(self.module, [
-                "register", "--phase", "RED", "--agent", "CR-CRU-056-refused",
+                "register", "--role", "RED", "--agent", "CR-CRU-056-refused",
                 "--cycle", "777", "--project-dir", self.tmpdir,
             ])
 

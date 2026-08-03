@@ -142,7 +142,7 @@ async function registerAgent(baseUrl: string, key: string, agentId: string): Pro
   const res = await fetch(`${baseUrl}/api/v2/agents/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ projectKey: key, agentId, phase: "ORCHESTRATOR" }),
+    body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
   });
   if (res.status !== 200) {
     throw new Error(`registerAgent fixture failed: ${res.status} ${await res.text()}`);
@@ -287,7 +287,7 @@ describe("crucible-axi CLI (CR-CRU-008 §S1)", () => {
     const { calls, fetchImpl } = capturingFetch();
 
     const registerCode = await runCli({
-      argv: ["register", "--project-key", key, "--agent", "cli-a1", "--phase", "report"],
+      argv: ["register", "--project-key", key, "--agent", "cli-a1", "--role", "report"],
       baseUrl,
       cwd: process.cwd(),
       stdout: captureStream(),
@@ -335,7 +335,7 @@ describe("crucible-axi CLI (CR-CRU-008 §S1)", () => {
     const { calls, fetchImpl } = capturingFetch();
 
     await runCli({
-      argv: ["register", "--project-key", key, "--agent", "cli-hb-1", "--phase", "report"],
+      argv: ["register", "--project-key", key, "--agent", "cli-hb-1", "--role", "report"],
       baseUrl,
       cwd: process.cwd(),
       stdout: captureStream(),

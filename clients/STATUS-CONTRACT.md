@@ -1,6 +1,6 @@
 # Crucible `status` envelope contract
 
-**Version: 1.1.0**
+**Version: 2.0.0**
 
 This is the stable, versioned contract for the `status` (alias `plans`) read verb
 emitted by every `*-crucible.py` client in this directory. It is committed WITH the
@@ -95,26 +95,49 @@ unavailable" and continue, never fail (CR-CRU-035 §S1):
 A hook that receives `ok:true` together with a `status-unavailable` warning renders
 "board unavailable" and moves on — it never fails on it.
 
-## Agent identity and phase (CR-CRU-044 §S4)
+## Agent identity and role (CR-CRU-044 §S4, renamed by CR-CRU-059 §S0)
 
 The `context.agentId` this envelope reports — and the `--agent` value every client's
 `register` verb takes — is a **free-form identifier**. It carries no structure the
 system reads: it is a label for humans and for joining rows together, nothing more.
 
-The **`--phase` flag declares the agent's phase**, and that stored declaration is what
-classifies the agent everywhere (the dashboard's agent rail, the phase filters, the
-run attribution). Phase is never inferred from the agentId's shape.
+The **`--role` flag declares the agent's role**, and that stored declaration is what
+classifies the agent everywhere (the dashboard's agent rail, the role filters, the
+run attribution). The role is never inferred from the agentId's shape.
 
-- `--phase` is **required** on `register` across all five `*-crucible.py` clients and
+- `--role` is **required** on `register` across all five `*-crucible.py` clients and
   `cli/crucible-axi.ts`, and is constrained to the enumeration
   `RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report`. Omitting it, or passing a value
   outside the enumeration, fails argument parsing with a non-zero exit and the accepted
   values listed — no registration is sent.
-- Use `--phase report` for a registration that is not exercising a TDD phase.
+- Use `--role report` for a registration that is not exercising a TDD role.
+- RED/GREEN/VERIFY/FIX are **roles** (what the agent is doing), not phases (the scope
+  it acts in). CR-CRU-059 §S0 renamed the field fleet-wide as a CLEAN BREAK: there is
+  no legacy alias and no dual-key handling on the wire.
 - Naming conventions such as `<agent-type>-<project>` or
-  `CR-<PROJ>-NNN-<cycle>-<PHASE>` remain useful as **habits for readability only**. They
-  are not load-bearing: an agentId ending in `-GREEN` registered with `--phase RED`
+  `CR-<PROJ>-NNN-<cycle>-<ROLE>` remain useful as **habits for readability only**. They
+  are not load-bearing: an agentId ending in `-GREEN` registered with `--role RED`
   classifies as **RED**, because the declaration beats the label.
+
+## The identity source is an enumeration (CR-CRU-059 §S1)
+
+Alongside `--agent` and `--role`, a registration may declare WHERE the agent's identity
+came from, via the optional **`--source`** flag (sent on the wire as
+`identity.source`). It is constrained — client-side by argparse and server-side at the
+route boundary — to exactly four members:
+
+`claude-md | package-json | git-repo | manual`
+
+- A `source` **outside that enumeration is refused by the server** with HTTP `409`,
+  `ok:false`, and a `help[]` naming both the received value and the accepted set.
+  **Nothing is stored** — no agent row is created by a rejected registration, and a
+  rejected heartbeat never overwrites the previously stored value. The refusal covers
+  unknown strings, the empty string, and non-string types alike.
+- An **absent** `source` stays legal: the field is **optional** and this contract does
+  NOT require it. Clients omit it on some paths, and omitting it is always preferable
+  to inventing a value.
+- `--source` defaults to `claude-md` across the fleet. `displayName` and `repoPath`,
+  the sibling `identity` fields, are free-form and unaffected by this enumeration.
 
 ## The agent identity is declared, never fabricated (CR-CRU-044 §S5)
 
@@ -139,11 +162,11 @@ Attachment to a cycle is a **registration binding**, declared with `--cycle` on
 when the registration is made, and STAMPS that cycle onto every run the bound agent
 ingests.
 
-- A TDD-phase registration — `--phase` one of `RED | GREEN | FIX | VERIFY` — **requires
-  `--cycle <id>`, bound to an ACTIVE cycle of an open plan**. Registering such a phase
+- A TDD-role registration — `--role` one of `RED | GREEN | FIX | VERIFY` — **requires
+  `--cycle <id>`, bound to an ACTIVE cycle of an open plan**. Registering such a role
   with no binding is refused: `ok:false`, HTTP `409`, and a `help[]` naming `--cycle` as
   how to supply it. No agent row is created.
-- `--phase ORCHESTRATOR` and `--phase report` **may register unbound** — they do not
+- `--role ORCHESTRATOR` and `--role report` **may register unbound** — they do not
   execute a cycle, so they carry no cycle binding and their ingests are not stamped.
 - An INVALID binding is refused with a `409` whose message names the ACTUAL state —
   an unknown cycle id, a cycle still `pending`, a cycle already `done`, or a cycle whose
@@ -151,7 +174,7 @@ ingests.
 - A bound agent's ingests are **server-stamped to its registered cycle**, even when
   another plan's cycle is simultaneously active. The client sends no resolved cycle of
   its own; an explicit per-ingest `context.cycleId` remains available for the unbound
-  phases.
+  roles.
 
 ## Bounded fetch
 
@@ -165,3 +188,9 @@ This contract is versioned so Model-B's generated hook can pin what it renders. 
 the VERSION above on any change to the envelope shape, the row schema, the terminal
 states, or the tolerant-degrade shape. Additive `--fields` columns do not change the
 base contract and do not require a version bump.
+
+- **2.0.0 (CR-CRU-059)** — a MAJOR bump, because §S0's classification-flag rename to
+  `--role` is a CLEAN BREAK with no alias: a hook pinned to 1.x that shells the retired
+  1.x flag on `register` no longer parses. The additive §S1 `--source` enumeration
+  section rode along in the same release.
+- **1.1.0 (CR-CRU-056)** — additive: documented the registration cycle binding.

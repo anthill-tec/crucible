@@ -164,10 +164,10 @@ async function getToon(fetchImpl: typeof fetch, url: string, opts: RunCliOpts): 
 // ── commands ────────────────────────────────────────────────────────────────
 
 /**
- * CR-CRU-044 §S3 — the phase enumeration, identical to the five Python
+ * CR-CRU-044 §S3 — the role enumeration, identical to the five Python
  * clients' argparse `choices`. `register` requires one of these.
  */
-const PHASE_ENUM: string[] = ["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"];
+const ROLE_ENUM: string[] = ["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"];
 
 /** No-arg dashboard: health probe (stderr on failure), then GET /api/v2 TOON. */
 async function commandDashboard(fetchImpl: typeof fetch, opts: RunCliOpts): Promise<number> {
@@ -201,22 +201,22 @@ async function commandAgentVerb(
     opts.stderr.write(`error: ${verb} requires --agent <id>\n`);
     return 1;
   }
-  // CR-CRU-044 §S3 — a registration must DECLARE its phase, and the value is
+  // CR-CRU-044 §S3 — a registration must DECLARE its role, and the value is
   // validated CLIENT-SIDE (no network round-trip for a bad one), matching the
   // argparse-level enum the five Python clients enforce. The agentId itself is
-  // a free-form identifier — phase is never inferred from its shape.
-  // heartbeat/unregister never re-declare the phase.
+  // a free-form identifier — role is never inferred from its shape.
+  // heartbeat/unregister never re-declare the role.
   let body: Record<string, string>;
   if (verb === "register") {
-    const phase = parsed.flags["phase"];
-    if (phase === undefined || !PHASE_ENUM.includes(phase)) {
-      const what = phase === undefined ? "requires --phase <phase>" : `rejects --phase ${phase}`;
+    const role = parsed.flags["role"];
+    if (role === undefined || !ROLE_ENUM.includes(role)) {
+      const what = role === undefined ? "requires --role <role>" : `rejects --role ${role}`;
       opts.stderr.write(
-        `error: register ${what} — accepted values: ${PHASE_ENUM.join(", ")}\n`,
+        `error: register ${what} — accepted values: ${ROLE_ENUM.join(", ")}\n`,
       );
       return 2;
     }
-    body = { projectKey, agentId, phase };
+    body = { projectKey, agentId, role };
   } else {
     body = { projectKey, agentId };
   }

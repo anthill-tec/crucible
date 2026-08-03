@@ -5,7 +5,7 @@
 // its row — the client sends NO resolved cycle at all — re-validated LIVE:
 // if the bound cycle is no longer active (done/plan closed), the ingest
 // gets a 409 definitive error and never spills into another cycle. An
-// UNBOUND `report`-phase agent's runs attach ONLY via explicit
+// UNBOUND `report`-role agent's runs attach ONLY via explicit
 // `context.cycleId` (§S7, CR-CRU-024, unchanged) or are stored cycle-less
 // with the existing envelope warning. §S2's consumer sweep names the
 // gate-snapshot route (POST /api/v2/gates) as a second stamped surface.
@@ -155,7 +155,7 @@ async function ensureFixtureOrchestrator(key: string): Promise<void> {
   const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ projectKey: key, agentId: "fixture-orch", phase: "ORCHESTRATOR" }),
+    body: JSON.stringify({ projectKey: key, agentId: "fixture-orch", role: "ORCHESTRATOR" }),
   });
   expect(res.status).toBe(200);
   fixtureOrchestratorProjects.add(key);
@@ -190,15 +190,15 @@ async function transitionCycle(
 async function registerBound(
   key: string,
   agentId: string,
-  phase: string,
+  role: string,
   cycleId: number,
 ): Promise<void> {
-  const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase, cycleId });
+  const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, role, cycleId });
   expect(res.status).toBe(200);
 }
 
-async function registerUnbound(key: string, agentId: string, phase: string): Promise<void> {
-  const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase });
+async function registerUnbound(key: string, agentId: string, role: string): Promise<void> {
+  const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, role });
   expect(res.status).toBe(200);
 }
 
@@ -374,8 +374,8 @@ describe("§S3.4 — a BOUND agent's ingest AFTER its cycle is done is REFUSED (
   });
 });
 
-describe("§S3.5 regression guard — an UNBOUND report-phase agent's ingest is UNCHANGED (CR-CRU-024 §S7)", () => {
-  test("unbound report-phase agent, explicit VALID context.cycleId -> 200, attaches to that cycle exactly as before (§S7 unchanged)", async () => {
+describe("§S3.5 regression guard — an UNBOUND report-role agent's ingest is UNCHANGED (CR-CRU-024 §S7)", () => {
+  test("unbound report-role agent, explicit VALID context.cycleId -> 200, attaches to that cycle exactly as before (§S7 unchanged)", async () => {
     const handle_ = boot();
     const key = seedProject(handle_.store);
     const { cycleId } = await fileAndActivate(key, "CR-CRU-056-C2-unbound-report-explicit");
@@ -393,7 +393,7 @@ describe("§S3.5 regression guard — an UNBOUND report-phase agent's ingest is 
     expect(events[0]!.context?.cycleId).toBe(cycleId);
   });
 
-  test("unbound report-phase agent, NO context at all -> 200, event stored CYCLE-LESS (no context.cycleId fabricated) exactly as before (§S7 unchanged)", async () => {
+  test("unbound report-role agent, NO context at all -> 200, event stored CYCLE-LESS (no context.cycleId fabricated) exactly as before (§S7 unchanged)", async () => {
     const handle_ = boot();
     const key = seedProject(handle_.store);
     const agentId = "unbound-report-2";
@@ -478,7 +478,7 @@ describe("§S3.7 (C5) — the ingest RESPONSE echoes the cycle the server attach
     expect(typeof body.verdict).toBe("string");
   });
 
-  test("UNBOUND report-phase agent, cycle-less ingest -> 200 with NO cycle fabricated in the response echo (absence is stated by omission, never invented)", async () => {
+  test("UNBOUND report-role agent, cycle-less ingest -> 200 with NO cycle fabricated in the response echo (absence is stated by omission, never invented)", async () => {
     const handle_ = boot();
     const key = seedProject(handle_.store);
     const agentId = "echo-unbound-1";
@@ -499,7 +499,7 @@ describe("§S3.7 (C5) — the ingest RESPONSE echoes the cycle the server attach
     expect(events[0]!.context?.cycleId).toBeUndefined();
   });
 
-  test("UNBOUND report-phase agent with an explicit VALID context.cycleId -> the response echoes THAT id (the echo reports what was applied, however it was applied)", async () => {
+  test("UNBOUND report-role agent with an explicit VALID context.cycleId -> the response echoes THAT id (the echo reports what was applied, however it was applied)", async () => {
     const handle_ = boot();
     const key = seedProject(handle_.store);
     const { cycleId } = await fileAndActivate(key, "CR-CRU-056-C5-echo-explicit");

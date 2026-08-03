@@ -1,22 +1,26 @@
-// CR-CRU-044 C3 RED -- §S3 `--phase` hardening on the SIXTH register caller,
-// `cli/crucible-axi.ts` (found live during C1 GREEN; not in this CR's
-// original Context, called out explicitly in §S3's corrected 2026-07-28
-// table at docs/changes/CR-CRU-044-phase-as-first-class-data.md:119-120).
+// CR-CRU-044 C3 RED -- §S3 `--phase` (renamed `--role`, CR-CRU-059 C2)
+// hardening on the SIXTH register caller, `cli/crucible-axi.ts` (found live
+// during C1 GREEN; not in this CR's original Context, called out explicitly
+// in §S3's corrected 2026-07-28 table at
+// docs/changes/CR-CRU-044-phase-as-first-class-data.md:119-120).
+// CR-CRU-059 C2 — the fleet-wide phase->role rename reaches this sixth
+// surface too: the flag is `--role`, the wire field is `role`, the enum
+// VALUES are unchanged.
 //
-// Spec (§S3): "`--phase` becomes required and enum-constrained uniformly...
-// A missing `--phase` fails argument parsing with the accepted values
+// Spec (§S3): "`--role` becomes required and enum-constrained uniformly...
+// A missing `--role` fails argument parsing with the accepted values
 // listed," matching the five Python clients. This CLI is a thin manual
 // argv-flag parser (`parseArgs` in cli/crucible-axi.ts) with NO argparse —
 // today `commandAgentVerb`'s register branch (`cli/crucible-axi.ts:200-203`)
-// silently defaults phase to `"report"` when `--phase` is omitted and never
+// silently defaults role to `"report"` when `--role` is omitted and never
 // validates the value client-side; the ONLY validation today happens
 // server-side (§S1, already landed in C1) via a REAL network round-trip
-// (POST /api/v2/agents/register gets a 400 back for an invalid phase).
+// (POST /api/v2/agents/register gets a 400 back for an invalid role).
 //
 // RED phase, confirmed LIVE against a real ephemeral startServer():
-//   - missing --phase: exits 0 today (client fills in "report", server
-//     accepts it) -- code must become non-zero once --phase is required.
-//   - --phase banana: ALREADY exits non-zero today (the server's existing
+//   - missing --role: exits 0 today (client fills in "report", server
+//     accepts it) -- code must become non-zero once --role is required.
+//   - --role banana: ALREADY exits non-zero today (the server's existing
 //     §S1 validation 400s and postJson surfaces it) -- so a bare
 //     "non-zero exit + enum listed" assertion would be VACUOUSLY PASSING,
 //     not a new test. The genuinely new §S3 contract for THIS client is
@@ -93,9 +97,9 @@ async function createProject(baseUrl: string, name: string): Promise<string> {
   return body.project.key;
 }
 
-const PHASE_ENUM = ["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"];
+const ROLE_ENUM = ["RED", "GREEN", "FIX", "VERIFY", "ORCHESTRATOR", "report"];
 
-describe("crucible-axi CLI §S3 — --phase hardening on the sixth register caller (CR-CRU-044 C3)", () => {
+describe("crucible-axi CLI §S3 — --role hardening on the sixth register caller (CR-CRU-044 C3)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratchDirs: string[] = [];
 
@@ -114,20 +118,20 @@ describe("crucible-axi CLI §S3 — --phase hardening on the sixth register call
     return dir;
   }
 
-  test("omitting --phase now fails (non-zero, enum listed) but a valid --phase still round-trips", async () => {
+  test("omitting --role now fails (non-zero, enum listed) but a valid --role still round-trips", async () => {
     const { runCli } = await loadCli();
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
-    const key = await createProject(baseUrl, "cli-phase-required-project");
+    const key = await createProject(baseUrl, "cli-role-required-project");
     const { calls, fetchImpl } = capturingFetch();
 
-    // Missing --phase: today this exits 0 (client defaults to "report").
+    // Missing --role: today this exits 0 (client defaults to "report").
     // Would ALSO pass against a no-op stub that never validates anything --
     // fails today for the RIGHT reason (no requiredness enforced yet).
     const missingCode = await runCli({
-      argv: ["register", "--project-key", key, "--agent", "cli-phase-missing"],
+      argv: ["register", "--project-key", key, "--agent", "cli-role-missing"],
       baseUrl,
-      cwd: scratchDir("cli-phase-missing-"),
+      cwd: scratchDir("cli-role-missing-"),
       stdout: captureStream(),
       stderr: captureStream(),
       fetchImpl,
@@ -135,34 +139,34 @@ describe("crucible-axi CLI §S3 — --phase hardening on the sixth register call
     const stderrMissing = captureStream();
     const rerunOut = captureStream();
     const missingCode2 = await runCli({
-      argv: ["register", "--project-key", key, "--agent", "cli-phase-missing-2"],
+      argv: ["register", "--project-key", key, "--agent", "cli-role-missing-2"],
       baseUrl,
-      cwd: scratchDir("cli-phase-missing2-"),
+      cwd: scratchDir("cli-role-missing2-"),
       stdout: rerunOut,
       stderr: stderrMissing,
       fetchImpl,
     });
     expect(missingCode).not.toBe(0);
     expect(missingCode2).not.toBe(0);
-    for (const value of PHASE_ENUM) {
+    for (const value of ROLE_ENUM) {
       expect(stderrMissing.text).toContain(value);
     }
     expect(
       calls.some((c) => c.method === "POST" && c.url.includes("/api/v2/agents/register")),
     ).toBe(false);
 
-    // A VALID --phase must still work end-to-end (the C1 wire behaviour must
-    // not regress) and round-trip the EXACT declared phase via the agents API.
-    // CR-CRU-056 C2 final sweep: this test's subject is the --phase FLAG's
+    // A VALID --role must still work end-to-end (the C1 wire behaviour must
+    // not regress) and round-trip the EXACT declared role via the agents API.
+    // CR-CRU-056 C2 final sweep: this test's subject is the --role FLAG's
     // presence/validation round-trip, not the GREEN TDD phase's cycle-binding
     // requirement (§S2, out of scope for this file) — "report" registers
     // unbound so the assertion stays exactly as strong without an incidental
     // plan/cycle fixture.
     const { calls: validCalls, fetchImpl: validFetch } = capturingFetch();
     const validCode = await runCli({
-      argv: ["register", "--project-key", key, "--agent", "cli-phase-valid", "--phase", "report"],
+      argv: ["register", "--project-key", key, "--agent", "cli-role-valid", "--role", "report"],
       baseUrl,
-      cwd: scratchDir("cli-phase-valid-"),
+      cwd: scratchDir("cli-role-valid-"),
       stdout: captureStream(),
       stderr: captureStream(),
       fetchImpl: validFetch,
@@ -173,31 +177,31 @@ describe("crucible-axi CLI §S3 — --phase hardening on the sixth register call
     ).toBe(true);
 
     const listRes = await fetch(`${baseUrl}/api/v2/agents?project=${key}`);
-    const listBody = (await listRes.json()) as { agents: Array<{ agentId: string; phase?: string }> };
-    const agent = listBody.agents.find((a) => a.agentId === "cli-phase-valid");
+    const listBody = (await listRes.json()) as { agents: Array<{ agentId: string; role?: string }> };
+    const agent = listBody.agents.find((a) => a.agentId === "cli-role-valid");
     expect(agent).toBeDefined();
-    expect(agent!.phase).toBe("report");
+    expect(agent!.role).toBe("report");
   });
 
-  test("an out-of-enum --phase is rejected CLIENT-SIDE — no network round-trip at all", async () => {
+  test("an out-of-enum --role is rejected CLIENT-SIDE — no network round-trip at all", async () => {
     const { runCli } = await loadCli();
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
-    const key = await createProject(baseUrl, "cli-phase-enum-project");
+    const key = await createProject(baseUrl, "cli-role-enum-project");
     const { calls, fetchImpl } = capturingFetch();
     const stderr = captureStream();
 
     const code = await runCli({
-      argv: ["register", "--project-key", key, "--agent", "cli-phase-banana", "--phase", "banana"],
+      argv: ["register", "--project-key", key, "--agent", "cli-role-banana", "--role", "banana"],
       baseUrl,
-      cwd: scratchDir("cli-phase-banana-"),
+      cwd: scratchDir("cli-role-banana-"),
       stdout: captureStream(),
       stderr,
       fetchImpl,
     });
 
     expect(code).not.toBe(0);
-    for (const value of PHASE_ENUM) {
+    for (const value of ROLE_ENUM) {
       expect(stderr.text).toContain(value);
     }
     // The genuinely NEW §S3 contract for this client: reject BEFORE making

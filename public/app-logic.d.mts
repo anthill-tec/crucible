@@ -298,15 +298,16 @@ export declare function digestFailures<T extends DigestLeafLike>(
   leaves: T[],
 ): Array<DigestEntry<T>>;
 
-// CR-CRU-007 §S1 — phase-role icon tinting (pure).
-export type PhaseRole = "red" | "green" | "verify" | "fix" | null;
+// CR-CRU-007 §S1 — agent-role icon tinting (pure). CR-CRU-059 §S0 renamed the
+// type `PhaseRole` -> `AgentRole`; `agentRole()` was already correctly named.
+export type AgentRole = "red" | "green" | "verify" | "fix" | null;
 
-// CR-CRU-044 §S2 / CR-CRU-057 §S3 — classification by the STORED phase only;
-// an absent (undefined/null) phase is unclassified, never id-derived.
+// CR-CRU-044 §S2 / CR-CRU-057 §S3 — classification by the STORED role only;
+// an absent (undefined/null) role is unclassified, never id-derived.
 export declare function agentRole(agent: {
   agentId: string;
-  phase?: string | null;
-}): PhaseRole;
+  role?: string | null;
+}): AgentRole;
 
 // CR-CRU-028 §S1 — auto-coarsening level-colored coverage-trend buckets (pure).
 export declare const COVERAGE_LEVEL_ORANGE_MAX: number;

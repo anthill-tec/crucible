@@ -210,7 +210,7 @@ describe("SSE + progressive event paging (CR-CRU-004 §S3+§S4)", () => {
   // hello/keep-alive frames and the heartbeat-driven "agents" frame need no
   // registration — heartbeat isn't gated by requireRegisteredCaller).
   async function registerAgent(projectKey: string, agentId: string): Promise<void> {
-    const res = await postJson("/api/v2/agents/register", { projectKey, agentId, phase: "ORCHESTRATOR" });
+    const res = await postJson("/api/v2/agents/register", { projectKey, agentId, role: "ORCHESTRATOR" });
     expect(res.status).toBe(200);
   }
 

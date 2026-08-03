@@ -1138,7 +1138,7 @@ class RegisterUnregisterAgentHardStopDriftCorrectionTest(unittest.TestCase, _Pro
                         module.cmd_register(_make_args(
                             agent=None, project_dir=self.tmpdir, message=None,
                             display_name=None, source="claude-md",
-                            phase="RED", cycle=None))
+                            role="RED", cycle=None))
                 self.assertEqual(
                     calls, [],
                     f"{client}-crucible.py's cmd_register must hard-stop "
@@ -1178,7 +1178,7 @@ class RegisterUnregisterAgentHardStopDriftCorrectionTest(unittest.TestCase, _Pro
                         side_effect=lambda p, pl, _c=calls: (_c.append((p, pl)), {"ok": True})[1]):
                     code, out, err = _run_main(
                         module,
-                        ["register", "--phase", "RED",
+                        ["register", "--role", "RED",
                          "--project-dir", self.tmpdir])
                 self.assertNotEqual(
                     code, 0,
@@ -1459,7 +1459,7 @@ class IdentitySourceOnTheWireDriftCorrectionTest(unittest.TestCase, _ProjectDirF
                 self.assertEqual(
                     len(heartbeats), 1,
                     f"{client}-crucible.py's _open_gate_identity must post "
-                    f"exactly one phase-optional heartbeat, got {calls!r}")
+                    f"exactly one role-optional heartbeat, got {calls!r}")
                 path, payload = heartbeats[0]
                 self._assert_wire_source(client, path, payload,
                                          FLEET_IDENTITY_SOURCE,
@@ -1476,7 +1476,7 @@ class IdentitySourceOnTheWireDriftCorrectionTest(unittest.TestCase, _ProjectDirF
                                        side_effect=self._recording_post(calls)):
                     code, out, err = _run_main(
                         module,
-                        ["register", "--agent", "A1", "--phase", "RED",
+                        ["register", "--agent", "A1", "--role", "RED",
                          "--project-dir", self.tmpdir])
                 self.assertEqual(
                     code, 0,
@@ -1508,7 +1508,7 @@ class IdentitySourceOnTheWireDriftCorrectionTest(unittest.TestCase, _ProjectDirF
                         contextlib.redirect_stderr(io.StringIO()):
                     module.cmd_register(_make_args(
                         agent="A1", project_dir=self.tmpdir, message=None,
-                        display_name=None, phase="RED", cycle=None))
+                        display_name=None, role="RED", cycle=None))
                 posts = self._register_posts(calls)
                 self.assertEqual(
                     len(posts), 1,
@@ -1532,7 +1532,7 @@ class IdentitySourceOnTheWireDriftCorrectionTest(unittest.TestCase, _ProjectDirF
                                        side_effect=self._recording_post(calls)):
                     code, out, err = _run_main(
                         module,
-                        ["register", "--agent", "A1", "--phase", "RED",
+                        ["register", "--agent", "A1", "--role", "RED",
                          "--source", "git-repo",
                          "--project-dir", self.tmpdir])
                 self.assertEqual(code, 0, f"out={out!r} err={err!r}")
@@ -1564,7 +1564,7 @@ class IdentitySourceOnTheWireDriftCorrectionTest(unittest.TestCase, _ProjectDirF
                 self.assertEqual(
                     len(heartbeats), 1,
                     f"{client}-crucible.py's _narrate_heartbeat must post one "
-                    f"phase-optional heartbeat, got {calls!r}")
+                    f"role-optional heartbeat, got {calls!r}")
                 path, payload = heartbeats[0]
                 self._assert_wire_source(client, path, payload,
                                          FLEET_IDENTITY_SOURCE,

@@ -412,8 +412,8 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
         const patchBody = (await patchRes.json()) as OkResponse;
         expect(patchBody.changed).toBe(true);
 
-        await postJson("/api/v2/agents/register", { projectKey: overriddenKey, agentId: "a1", phase: "report" });
-        await postJson("/api/v2/agents/register", { projectKey: defaultKey, agentId: "b1", phase: "report" });
+        await postJson("/api/v2/agents/register", { projectKey: overriddenKey, agentId: "a1", role: "report" });
+        await postJson("/api/v2/agents/register", { projectKey: defaultKey, agentId: "b1", role: "report" });
 
         setSystemTime(T0 + 90_000); // 90s of silence
 
@@ -442,7 +442,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
         const key = await createProject("liveness-partial-merge");
         const patchRes = await patchJson(patchPath(key), { liveness: { t1_ms: 120_000 } });
         expect(patchRes.status).toBe(200);
-        await postJson("/api/v2/agents/register", { projectKey: key, agentId: "a1", phase: "report" });
+        await postJson("/api/v2/agents/register", { projectKey: key, agentId: "a1", role: "report" });
 
         setSystemTime(T0 + 200_000); // past overridden T1 (120s), under default T2 (300s)
 
@@ -467,7 +467,7 @@ describe("PATCH /api/v2/projects/<key> (CR-CRU-012 §S1, cycle 25)", () => {
         // §S1) precedes all 4 ingests below rather than interleaving with
         // them (this test's exact event-count assertions pin the 4
         // subject ingests only).
-        await postJson("/api/v2/agents/register", { projectKey: key, agentId: "a1", phase: "ORCHESTRATOR" });
+        await postJson("/api/v2/agents/register", { projectKey: key, agentId: "a1", role: "ORCHESTRATOR" });
 
         const e1 = await ingestEvent(key, "a1");
         const e2 = await ingestEvent(key, "a1");

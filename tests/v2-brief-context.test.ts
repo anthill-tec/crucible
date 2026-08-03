@@ -80,7 +80,7 @@ describe("v2 eventBrief context passthrough + compile counts (CR-CRU-007 §S1)",
   // agent (the tests key their assertions off agentId, so a single shared
   // id can't stand in for all of them).
   async function registerAgent(key: string, agentId: string): Promise<void> {
-    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+    const res = await postJson("/api/v2/agents/register", { projectKey: key, agentId, role: "ORCHESTRATOR" });
     expect(res.status).toBe(200);
   }
 

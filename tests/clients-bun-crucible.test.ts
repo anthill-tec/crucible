@@ -188,7 +188,7 @@ async function getEvents(baseUrl: string, key: string): Promise<Array<{ id: stri
 /**
  * CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs/parsed (and every
  * ingesting verb) now refuses an unregistered agentId (409) — spawn the
- * script's own `register --phase report` verb (needs no cycle binding) for
+ * script's own `register --role report` verb (needs no cycle binding) for
  * the SAME agentId a following `test`/`regression` runScript call will
  * ingest under, against the same fixture server.
  */
@@ -197,7 +197,7 @@ async function ensureRegistered(
   opts: { cwd: string; crucibleUrl: string; projectDir?: string },
 ): Promise<void> {
   await runScript(
-    ["register", "--agent", agentId, "--phase", "report", "--project-dir", opts.projectDir ?? opts.cwd],
+    ["register", "--agent", agentId, "--role", "report", "--project-dir", opts.projectDir ?? opts.cwd],
     { cwd: opts.cwd, crucibleUrl: opts.crucibleUrl },
   );
 }
@@ -218,7 +218,7 @@ async function ensureFixtureOrchestrator(baseUrl: string, key: string): Promise<
   await fetch(`${baseUrl}/api/v2/agents/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ projectKey: key, agentId: "fixture-orch", phase: "ORCHESTRATOR" }),
+    body: JSON.stringify({ projectKey: key, agentId: "fixture-orch", role: "ORCHESTRATOR" }),
   });
 }
 
@@ -443,7 +443,7 @@ describe("clients/bun-crucible.py — v2 endpoints + CRUCIBLE_URL honored (CR-CR
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-bc-register-v2");
     const projectDir = fixtureProjectDir(key);
-    // CR-CRU-056 §S2/§S3c — RED (a TDD phase) now REQUIRES an explicit
+    // CR-CRU-056 §S2/§S3c — RED (a TDD role) now REQUIRES an explicit
     // cycle binding; this test's subject (which endpoint/verb gets hit) is
     // unaffected, so a fixture plan+active-cycle is filed and reused (same
     // primitive as filePlan/activateCycle used elsewhere in this file).
@@ -456,7 +456,7 @@ describe("clients/bun-crucible.py — v2 endpoints + CRUCIBLE_URL honored (CR-CR
         "register",
         "--agent",
         "a1",
-        "--phase",
+        "--role",
         "RED",
         "--cycle",
         String(plan.cycles[0]!.id),
@@ -492,7 +492,7 @@ describe("clients/bun-crucible.py — v2 endpoints + CRUCIBLE_URL honored (CR-CR
         "register",
         "--agent",
         "a2",
-        "--phase",
+        "--role",
         "RED",
         "--cycle",
         String(plan.cycles[0]!.id),
@@ -516,14 +516,14 @@ describe("clients/bun-crucible.py — v2 endpoints + CRUCIBLE_URL honored (CR-CR
     expect(proxy.calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
   });
 
-  test("register --agent X --phase report succeeds and records the declared report phase", async () => {
+  test("register --agent X --role report succeeds and records the declared report role", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
-    const key = await createProject(baseUrl, "clients-bc-phase-optional");
+    const key = await createProject(baseUrl, "clients-bc-role-optional");
     const projectDir = fixtureProjectDir(key);
 
     const res = await runScript(
-      ["register", "--agent", "a3", "--phase", "report", "--project-dir", projectDir],
+      ["register", "--agent", "a3", "--role", "report", "--project-dir", projectDir],
       { cwd: projectDir, crucibleUrl: baseUrl },
     );
 
@@ -531,9 +531,9 @@ describe("clients/bun-crucible.py — v2 endpoints + CRUCIBLE_URL honored (CR-CR
     const agents = await getAgents(baseUrl, key);
     const agent = agents.find((a) => a.agentId === "a3");
     expect(agent).toBeDefined();
-    // CR-CRU-044 §S3: `report` is the DECLARED phase for a registration that
-    // is not exercising a TDD phase — it is no longer an implicit default
-    // (--phase is required), but it still round-trips the same way.
+    // CR-CRU-044 §S3: `report` is the DECLARED role for a registration that
+    // is not exercising a TDD role — it is no longer an implicit default
+    // (--role is required), but it still round-trips the same way.
     expect(agent!.message.toLowerCase()).toContain("report");
   });
 });
@@ -579,7 +579,7 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
     runGit(["commit", "-q", "-m", "initial"], dir);
 
     // CR-CRU-056 §S3 — the `test` verb's own implicit agent-touch never
-    // declares a phase/cycle (it is a phase-optional heartbeat, CR-CRU-044
+    // declares a role/cycle (it is a role-optional heartbeat, CR-CRU-044
     // §S1(a)); the server now stamps a run's context.cycleId ONLY from an
     // ALREADY-BOUND agent row (§S1/§S3). So the fixture agent is explicitly
     // pre-registered bound to the real active cycle before the wrapped `bun
@@ -591,7 +591,7 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
         "register",
         "--agent",
         "cr-cru-008-c2-fixture-agent",
-        "--phase",
+        "--role",
         "RED",
         "--cycle",
         String(activeCycleId),
@@ -731,7 +731,7 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
     const res = await fetch(`${baseUrl}/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectKey: key, agentId, phase: "ORCHESTRATOR" }),
+      body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
     });
     expect(res.status).toBe(200);
   }
@@ -884,7 +884,7 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
 // ── CR-CRU-056 §S2/§S3/§S3c — the CR-036 client-side auto-attach resolver ──
 // is DELETED; re-pointed from "no-active-cycle warns+withholds, no plan at
 // all is tolerant" (the old client-side GUESS) into the new unconditional
-// contract: a TDD-phase (RED/GREEN/FIX/VERIFY) register with no explicit
+// contract: a TDD-role (RED/GREEN/FIX/VERIFY) register with no explicit
 // `--cycle` is REFUSED (409-style non-zero exit + structured `ok:false`
 // envelope naming `--cycle`) regardless of whether a plan exists at all —
 // there is no more "ambiguous" vs "tolerant" distinction because there is no
@@ -893,7 +893,7 @@ describe("clients/bun-crucible.py — plan verbs (plan-file, cycle-activate, cyc
 // sitting in that env var changes nothing) — the exact resolver mechanism
 // this CR deletes.
 
-describe("clients/bun-crucible.py — §S2 TDD-phase register REQUIRES an explicit --cycle (supersedes the deleted CR-036 auto-attach resolver)", () => {
+describe("clients/bun-crucible.py — §S2 TDD-role register REQUIRES an explicit --cycle (supersedes the deleted CR-036 auto-attach resolver)", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratchDirs: string[] = [];
 
@@ -917,7 +917,7 @@ describe("clients/bun-crucible.py — §S2 TDD-phase register REQUIRES an explic
     return dir;
   }
 
-  test("register --phase RED with an OPEN plan whose cycles are all PENDING (no active cycle) is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
+  test("register --role RED with an OPEN plan whose cycles are all PENDING (no active cycle) is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-bc-no-active-cycle");
@@ -926,7 +926,7 @@ describe("clients/bun-crucible.py — §S2 TDD-phase register REQUIRES an explic
     const projectDir = fixtureProjectDir(key);
 
     const res = await runScript(
-      ["register", "--agent", "bc-no-active-cycle-agent", "--phase", "RED", "--project-dir", projectDir],
+      ["register", "--agent", "bc-no-active-cycle-agent", "--role", "RED", "--project-dir", projectDir],
       // The deleted resolver's exact mechanism: a stale WORKFLOW_CYCLE_ID
       // pointing at a REAL (but pending) cycle in this very plan must not
       // rescue the registration — nobody reads this env var any more.
@@ -941,14 +941,14 @@ describe("clients/bun-crucible.py — §S2 TDD-phase register REQUIRES an explic
     expect(await getAgentIds(baseUrl, key)).not.toContain("bc-no-active-cycle-agent");
   });
 
-  test("register --phase RED with NO open plan AT ALL is STILL refused the same way — the §S2 binding requirement is unconditional, not contingent on plan/cycle ambiguity (the old 'no plan, tolerant' escape hatch no longer exists)", async () => {
+  test("register --role RED with NO open plan AT ALL is STILL refused the same way — the §S2 binding requirement is unconditional, not contingent on plan/cycle ambiguity (the old 'no plan, tolerant' escape hatch no longer exists)", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-bc-tolerant-no-plan");
     const projectDir = fixtureProjectDir(key);
 
     const res = await runScript(
-      ["register", "--agent", "bc-no-plan-agent", "--phase", "RED", "--project-dir", projectDir],
+      ["register", "--agent", "bc-no-plan-agent", "--role", "RED", "--project-dir", projectDir],
       { cwd: projectDir, crucibleUrl: baseUrl },
     );
 
@@ -1013,7 +1013,7 @@ describe("clients/bun-crucible.py — byte-compatible CLI surface (existing verb
 // registration, because §S1 stores the cycle binding ON the agent row.
 //
 // Live failure this block is the regression test for (:3849, 2026-08-01):
-//   register --agent vidushi --phase ORCHESTRATOR --cycle 152   → bound to 152
+//   register --agent vidushi --role ORCHESTRATOR --cycle 152   → bound to 152
 //   python-crucible.py regression --agent vidushi               → stamped 152 ✓
 //   bun-crucible.py    regression --agent vidushi               → NO cycle    ✗
 // The first gated run's `finally` silently unregistered `vidushi`, taking the
@@ -1064,7 +1064,7 @@ describe("clients/bun-crucible.py — CR-CRU-056 (C5): a gated run removes only 
     opts: { cwd: string; crucibleUrl: string },
   ): Promise<void> {
     const res = await runScript(
-      ["register", "--agent", agentId, "--phase", "ORCHESTRATOR",
+      ["register", "--agent", agentId, "--role", "ORCHESTRATOR",
        "--cycle", String(cycleId), "--project-dir", opts.cwd],
       opts,
     );

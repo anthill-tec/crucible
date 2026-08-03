@@ -101,7 +101,7 @@ describe("GET /api/v2/plans — global read, additive (CR-CRU-026 §S3.2)", () =
     const res = await fetch(`http://localhost:${handle!.server.port}/api/v2/agents/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ projectKey: key, agentId, phase: "ORCHESTRATOR" }),
+      body: JSON.stringify({ projectKey: key, agentId, role: "ORCHESTRATOR" }),
     });
     expect(res.status).toBe(200);
   }

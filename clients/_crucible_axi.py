@@ -494,10 +494,10 @@ class GatedRunIdentity:
     Two jobs, both tiny:
 
     1. OPEN the run's identity — `open_payload()` builds the body for a
-       phase-OPTIONAL heartbeat (`PATH`). The heartbeat route, never
-       `/register`, is deliberate: the gated verbs take no `--phase`, and
+       role-OPTIONAL heartbeat (`PATH`). The heartbeat route, never
+       `/register`, is deliberate: the gated verbs take no `--role`, and
        CR-CRU-044 §S1(a) makes the heartbeat the one touch that never
-       re-declares — nor blanks — the phase a pre-registered caller declared.
+       re-declares — nor blanks — the role a pre-registered caller declared.
        A `cycle_id` (the gated verbs' `--cycle`, same flag and semantics as
        `register --cycle`) rides the body as `cycleId` for the
        register-inside-the-run case: an agent that never registered separately
@@ -790,7 +790,7 @@ def cycle_transition_help(status, plan, cycle_id=None):
 # fallback — the script's own filename (`"bun-crucible"`, `"rust-crucible"`,
 # `"python-crucible"` and friends). That fabricated an identity for any verb run
 # without `--agent` and planted a phantom row on the dashboard's agent rail — an
-# entity that is not an agent, with no phase, no lifecycle and no owner. The
+# entity that is not an agent, with no role, no lifecycle and no owner. The
 # fallback is GONE and the resolver lives here ONCE so the fleet cannot drift
 # apart again.
 #
@@ -1310,7 +1310,7 @@ def cycle_transition(args, project_dir, ops, status):
 #     `unregister_fn`) — bun/python send an `identity.repoPath` and expose
 #     `--display-name`, and bun's helper also serves its gate-run brackets;
 #   * arduino's unique self-registration bootstrap (`pre_register`), its
-#     `report` phase floor (`phase_default`) and its message convention
+#     `report` role floor (`role_default`) and its message convention
 #     (`message_fn`).
 
 AGENT_REGISTER_PATH = "/api/v2/agents/register"
@@ -1324,10 +1324,10 @@ DEFAULT_IDENTITY_SOURCE = "claude-md"
 
 
 def cmd_register(args, project_dir, ops, *, register_fn=None, pre_register=None,
-                 phase_default=None, message_fn=None, legacy_format=None):
+                 role_default=None, message_fn=None, legacy_format=None):
     """Register / heartbeat. CR-CRU-056 §S1/§S2 — `--cycle` binds the agent to
     an ACTIVE cycle of an OPEN plan; the server validates the binding and
-    REQUIRES it for TDD phases (RED/GREEN/FIX/VERIFY) — a refused registration
+    REQUIRES it for TDD roles (RED/GREEN/FIX/VERIFY) — a refused registration
     surfaces the server's 409 envelope (error + help) and exits non-zero.
     ORCHESTRATOR/report may register unbound.
 
@@ -1343,25 +1343,25 @@ def cmd_register(args, project_dir, ops, *, register_fn=None, pre_register=None,
     agent_id = ops.agent_id(args)
     if pre_register is not None:
         pre_register(project_dir)
-    declared_phase = getattr(args, "phase", None)
-    phase = declared_phase or phase_default
-    message = (message_fn(args, declared_phase) if message_fn is not None
-               else (getattr(args, "message", None) or f"Starting {phase} phase"))
+    declared_role = getattr(args, "role", None)
+    role = declared_role or role_default
+    message = (message_fn(args, declared_role) if message_fn is not None
+               else (getattr(args, "message", None) or f"Starting {role} phase"))
     source = getattr(args, "source", None) or DEFAULT_IDENTITY_SOURCE
     cycle_id = getattr(args, "cycle", None)
     if register_fn is not None:
         resp = register_fn(project_dir, agent_id, message,
                            display_name=getattr(args, "display_name", None),
-                           source=source, phase=phase, cycle_id=cycle_id)
+                           source=source, role=role, cycle_id=cycle_id)
     else:
         payload = {
             "agentId": agent_id,
             "projectKey": ops.project_key(project_dir),
             "status": "online",
             "message": message,
-            # CR-CRU-044 §S1 — the declared phase is part of the registration
+            # CR-CRU-044 §S1 — the declared role is part of the registration
             # wire contract (the server rejects a registration carrying none).
-            "phase": phase,
+            "role": role,
             # displayName MUST go inside `identity` — top-level is ignored by v2.
             "identity": {"displayName": agent_id, "source": source},
         }
@@ -1369,12 +1369,12 @@ def cmd_register(args, project_dir, ops, *, register_fn=None, pre_register=None,
             payload["cycleId"] = cycle_id
         resp = ops.post(AGENT_REGISTER_PATH, payload)
     ok = bool(resp.get("ok", False))
-    legacy = (legacy_format.format(agent_id=agent_id, ok=ok, phase=phase,
+    legacy = (legacy_format.format(agent_id=agent_id, ok=ok, role=role,
                                    source=source, message=message,
                                    resp_ok=resp.get("ok", False))
               if legacy_format else
               f"register: ok={resp.get('ok', False)} agent={agent_id} "
-              f"phase={phase} source={source}")
+              f"role={role} source={source}")
     result_fields = {"agent": agent_id, "help": HELP_STEPS["register"]}
     err = resp.get("error")
     if err is not None:
@@ -1538,9 +1538,9 @@ def remove_agent_silent(project_dir, agent_id, ops):
 
 def open_gate_identity(project_dir, agent_id, cycle_id, message, ops):
     """CR-CRU-056 — open a gated run's identity and learn whether the run
-    CREATED it. One phase-optional heartbeat (never /register: the gated verbs
-    declare no phase, and the heartbeat route is the one touch that cannot
-    blank a pre-registered caller's phase); `cycle_id` is the verb's `--cycle`,
+    CREATED it. One role-optional heartbeat (never /register: the gated verbs
+    declare no role, and the heartbeat route is the one touch that cannot
+    blank a pre-registered caller's role); `cycle_id` is the verb's `--cycle`,
     validated SERVER-side. The returned `GatedRunIdentity` answers
     `should_remove` for the closing anti-ghost cleanup."""
     identity = GatedRunIdentity(agent_id, cycle_id)

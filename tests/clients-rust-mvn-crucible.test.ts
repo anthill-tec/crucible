@@ -2,7 +2,7 @@
 //
 // Spec: docs/changes/CR-CRU-008-cli-fleet-upgrade.md — §S2 script fleet
 // upgrade (v2 endpoints, tier per subcommand, git/wave/orchestrator/cycle
-// context) + the register-ergonomics Implementation Note (--phase optional,
+// context) + the register-ergonomics Implementation Note (--role optional,
 // default "report") + Risk section: "clients/ in-repo is the SOURCE OF
 // TRUTH ... VERIFY tests run against clients/ copies." This cycle (C3)
 // upgrades rust-crucible.py and mvn-crucible.py.
@@ -202,7 +202,7 @@ async function nonLifecycleEvents(baseUrl: string, key: string): Promise<Array<{
 /**
  * CR-CRU-056 §S2b fixture-repair (C3): /api/v2/runs (and every ingesting
  * verb) now refuses an unregistered agentId (409) — spawn the given
- * client's own `register --phase report` verb (needs no cycle binding) for
+ * client's own `register --role report` verb (needs no cycle binding) for
  * the SAME agentId a following runScript call will ingest under, against
  * the same fixture server.
  */
@@ -213,7 +213,7 @@ async function ensureRegistered(
 ): Promise<void> {
   await runScript(
     scriptPath,
-    ["register", "--agent", agentId, "--phase", "report", "--project-dir", opts.projectDir ?? opts.cwd],
+    ["register", "--agent", agentId, "--role", "report", "--project-dir", opts.projectDir ?? opts.cwd],
     { cwd: opts.cwd, crucibleUrl: opts.crucibleUrl },
   );
 }
@@ -230,7 +230,7 @@ async function ensureFixtureOrchestrator(baseUrl: string, key: string): Promise<
   await fetch(`${baseUrl}/api/v2/agents/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ projectKey: key, agentId: "fixture-orch", phase: "ORCHESTRATOR" }),
+    body: JSON.stringify({ projectKey: key, agentId: "fixture-orch", role: "ORCHESTRATOR" }),
   });
 }
 
@@ -419,7 +419,7 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
     const key = await createProject(baseUrl, "clients-rc-register-v2");
     const dir = scratch.dir("rust-crucible-proj-");
     writeEnvFile(dir, key);
-    // CR-CRU-056 §S2/§S3c — RED (a TDD phase) now REQUIRES an explicit
+    // CR-CRU-056 §S2/§S3c — RED (a TDD role) now REQUIRES an explicit
     // cycle binding; this test's subject (which endpoint/verb gets hit) is
     // unaffected, so a fixture plan+active-cycle is filed and reused (same
     // primitive as filePlan/activateCycle used elsewhere in this file).
@@ -429,7 +429,7 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
 
     const res = await runScript(
       RUST_SCRIPT_PATH,
-      ["register", "--agent", "r1", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
+      ["register", "--agent", "r1", "--role", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
 
@@ -455,7 +455,7 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
 
     await runScript(
       RUST_SCRIPT_PATH,
-      ["register", "--agent", "r2", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
+      ["register", "--agent", "r2", "--role", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
     expect(await getAgentIds(baseUrl, key)).toContain("r2");
@@ -473,14 +473,14 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
     expect(proxy.calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
   });
 
-  test("register --agent X --phase report succeeds and records the declared report phase", async () => {
+  test("register --agent X --role report succeeds and records the declared report role", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
-    const key = await createProject(baseUrl, "clients-rc-phase-optional");
+    const key = await createProject(baseUrl, "clients-rc-role-optional");
     const dir = scratch.dir("rust-crucible-proj-");
     writeEnvFile(dir, key);
 
-    const res = await runScript(RUST_SCRIPT_PATH, ["register", "--agent", "r3", "--phase", "report", "--project-dir", dir], {
+    const res = await runScript(RUST_SCRIPT_PATH, ["register", "--agent", "r3", "--role", "report", "--project-dir", dir], {
       cwd: dir,
       crucibleUrl: baseUrl,
     });
@@ -494,12 +494,12 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
 
   // CR-CRU-056 §S2/§S3/§S3c — the CR-036 client-side auto-attach resolver
   // is DELETED; re-pointed from "warns+withholds" into the new unconditional
-  // contract: a TDD-phase register with no explicit --cycle is REFUSED
+  // contract: a TDD-role register with no explicit --cycle is REFUSED
   // (non-zero exit, structured ok:false envelope naming --cycle) regardless
   // of plan state — WORKFLOW_CYCLE_ID is read by nobody (confirmed live:
   // even a REAL, in-project, pending cycle id sitting in that env var
   // changes nothing).
-  test("CR-CRU-056 §S2: register --phase RED with an OPEN plan but NO active cycle is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
+  test("CR-CRU-056 §S2: register --role RED with an OPEN plan but NO active cycle is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-rc-no-active-cycle");
@@ -510,7 +510,7 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
 
     const res = await runScript(
       RUST_SCRIPT_PATH,
-      ["register", "--agent", "r-no-cycle", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "r-no-cycle", "--role", "RED", "--project-dir", dir],
       // The deleted resolver's exact mechanism: nobody reads this env var
       // any more, so it must not rescue the registration.
       { cwd: dir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
@@ -529,7 +529,7 @@ describe("clients/rust-crucible.py — v2 endpoints + CRUCIBLE_URL + register er
     const dir = scratch.dir("rust-crucible-proj-");
     writeEnvFile(dir, key);
 
-    const res = await runScript(RUST_SCRIPT_PATH, ["register", "--agent", "r-tolerant", "--phase", "report", "--project-dir", dir], {
+    const res = await runScript(RUST_SCRIPT_PATH, ["register", "--agent", "r-tolerant", "--role", "report", "--project-dir", dir], {
       cwd: dir,
       crucibleUrl: baseUrl,
     });
@@ -623,7 +623,7 @@ describe("clients/rust-crucible.py — auto-ingest: /api/v2/runs, tier:'unit', f
     // cycle" GUESS this test used to exercise.
     await runScript(
       RUST_SCRIPT_PATH,
-      ["register", "--agent", "rust-context-agent", "--phase", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
+      ["register", "--agent", "rust-context-agent", "--role", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
       { cwd: dir, crucibleUrl: baseUrl },
     );
 
@@ -762,7 +762,7 @@ describe("clients/rust-crucible.py — regression-ingest: /api/v2/runs/parsed, t
 describe("clients/rust-crucible.py — byte-compatible CLI surface (existing flags unchanged post-upgrade)", () => {
   test("register/unregister/test/check/clippy/auto-ingest/regression-ingest --help still expose today's exact flag names", async () => {
     const cases: Array<[string, string[]]> = [
-      ["register", ["--agent", "--phase", "--message", "--project-dir"]],
+      ["register", ["--agent", "--role", "--message", "--project-dir"]],
       ["unregister", ["--agent", "--project-dir"]],
       ["test", ["--crate", "--features", "--profile", "--test", "--filter", "--no-fail-fast", "--agent", "--project-dir", "--log"]],
       ["check", ["--crate", "--features", "--tests", "--agent", "--project-dir"]],
@@ -1102,7 +1102,7 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
     const key = await createProject(baseUrl, "clients-mc-register-v2");
     const dir = scratch.dir("mvn-crucible-proj-");
     writeEnvFile(dir, key);
-    // CR-CRU-056 §S2/§S3c — RED (a TDD phase) now REQUIRES an explicit
+    // CR-CRU-056 §S2/§S3c — RED (a TDD role) now REQUIRES an explicit
     // cycle binding; this test's subject (which endpoint/verb gets hit) is
     // unaffected, so a fixture plan+active-cycle is filed and reused (same
     // primitive as filePlan/activateCycle used elsewhere in this file).
@@ -1112,7 +1112,7 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
 
     const res = await runScript(
       MVN_SCRIPT_PATH,
-      ["register", "--agent", "m1", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
+      ["register", "--agent", "m1", "--role", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
 
@@ -1138,7 +1138,7 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
 
     await runScript(
       MVN_SCRIPT_PATH,
-      ["register", "--agent", "m2", "--phase", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
+      ["register", "--agent", "m2", "--role", "RED", "--cycle", String(plan.cycles[0]!.id), "--project-dir", dir],
       { cwd: dir, crucibleUrl: proxy.url },
     );
     expect(await getAgentIds(baseUrl, key)).toContain("m2");
@@ -1156,14 +1156,14 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
     expect(proxy.calls.some((c) => c.path === "/api/agents/remove")).toBe(false);
   });
 
-  test("register --agent X --phase report succeeds and records the declared report phase", async () => {
+  test("register --agent X --role report succeeds and records the declared report role", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
-    const key = await createProject(baseUrl, "clients-mc-phase-optional");
+    const key = await createProject(baseUrl, "clients-mc-role-optional");
     const dir = scratch.dir("mvn-crucible-proj-");
     writeEnvFile(dir, key);
 
-    const res = await runScript(MVN_SCRIPT_PATH, ["register", "--agent", "m3", "--phase", "report", "--project-dir", dir], {
+    const res = await runScript(MVN_SCRIPT_PATH, ["register", "--agent", "m3", "--role", "report", "--project-dir", dir], {
       cwd: dir,
       crucibleUrl: baseUrl,
     });
@@ -1176,12 +1176,12 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
   });
 
   // CR-CRU-056 §S2/§S3/§S3c — the CR-036 client-side auto-attach resolver
-  // is DELETED; re-pointed into the new unconditional contract: a TDD-phase
+  // is DELETED; re-pointed into the new unconditional contract: a TDD-role
   // register with no explicit --cycle is REFUSED (non-zero exit, structured
   // ok:false envelope naming --cycle) regardless of plan state —
   // WORKFLOW_CYCLE_ID is read by nobody (confirmed live: even a REAL,
   // in-project, pending cycle id sitting in that env var changes nothing).
-  test("CR-CRU-056 §S2: register --phase RED with an OPEN plan but NO active cycle is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
+  test("CR-CRU-056 §S2: register --role RED with an OPEN plan but NO active cycle is REFUSED (non-zero exit, structured ok:false envelope naming --cycle), posts NO agent — a STALE WORKFLOW_CYCLE_ID pointing at a REAL cycle in this very plan changes NOTHING", async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     const baseUrl = `http://localhost:${handle.server.port}`;
     const key = await createProject(baseUrl, "clients-mc-no-active-cycle");
@@ -1192,7 +1192,7 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
 
     const res = await runScript(
       MVN_SCRIPT_PATH,
-      ["register", "--agent", "m-no-cycle", "--phase", "RED", "--project-dir", dir],
+      ["register", "--agent", "m-no-cycle", "--role", "RED", "--project-dir", dir],
       // The deleted resolver's exact mechanism: nobody reads this env var
       // any more, so it must not rescue the registration.
       { cwd: dir, crucibleUrl: baseUrl, env: { WORKFLOW_CYCLE_ID: String(plan.cycles[0]!.id) } },
@@ -1211,7 +1211,7 @@ describe("clients/mvn-crucible.py — v2 endpoints + CRUCIBLE_URL + register erg
     const dir = scratch.dir("mvn-crucible-proj-");
     writeEnvFile(dir, key);
 
-    const res = await runScript(MVN_SCRIPT_PATH, ["register", "--agent", "m-tolerant", "--phase", "report", "--project-dir", dir], {
+    const res = await runScript(MVN_SCRIPT_PATH, ["register", "--agent", "m-tolerant", "--role", "report", "--project-dir", dir], {
       cwd: dir,
       crucibleUrl: baseUrl,
     });
@@ -1416,7 +1416,7 @@ describe("clients/mvn-crucible.py — tier map per subcommand: unit/module/e2e/r
     // GUESS this test used to exercise.
     await runScript(
       MVN_SCRIPT_PATH,
-      ["register", "--agent", "mvn-context-agent", "--phase", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
+      ["register", "--agent", "mvn-context-agent", "--role", "RED", "--cycle", String(activeCycleId), "--project-dir", dir],
       { cwd: dir, crucibleUrl: baseUrl },
     );
 
@@ -1535,7 +1535,7 @@ describe("clients/mvn-crucible.py — auto-ingest: JaCoCo coverage passthrough w
 describe("clients/mvn-crucible.py — byte-compatible CLI surface (existing flags unchanged post-upgrade)", () => {
   test("register/unregister/unit/module/e2e/regression/auto-ingest --help still expose today's exact flag names", async () => {
     const cases: Array<[string, string[]]> = [
-      ["register", ["--agent", "--phase", "--message", "--project-dir", "--maven-dir"]],
+      ["register", ["--agent", "--role", "--message", "--project-dir", "--maven-dir"]],
       ["unregister", ["--agent", "--project-dir", "--maven-dir"]],
       ["unit", ["--test", "--agent", "--module", "--also-make", "--native", "--profile", "--system-prop", "--project-dir", "--log"]],
       ["module", ["--agent", "--module", "--also-make", "--project-dir"]],

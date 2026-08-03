@@ -132,7 +132,7 @@ async function getJson(handle: ServerHandle, urlPath: string): Promise<Response>
 }
 
 async function registerOrchestrator(handle: ServerHandle, key: string, agentId: string): Promise<void> {
-  const res = await postJson(handle, "/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+  const res = await postJson(handle, "/api/v2/agents/register", { projectKey: key, agentId, role: "ORCHESTRATOR" });
   expect(res.status).toBe(200);
 }
 
@@ -436,7 +436,7 @@ describe("CR-CRU-056 — shipped help[] strings name no dead mechanism", () => {
     bindTerminalCycle: [[7, "done"]],
     bindClosedPlan: [["CR-CRU-999", 3, "closed"]],
     // Both branches: with active cycles, and with none.
-    unboundTddPhase: [["RED", [7, 8]], ["RED", []]],
+    unboundTddRole: [["RED", [7, 8]], ["RED", []]],
     bindingConflict: [[7, 8]],
     staleBinding: [[7, "done"]],
   };

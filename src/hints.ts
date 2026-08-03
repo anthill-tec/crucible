@@ -5,7 +5,7 @@
 export const hints: Record<
   | "orientation"
   | "registered"
-  | "phaseRequired"
+  | "roleRequired"
   | "afterRed"
   | "afterCompile"
   | "unknownProject"
@@ -36,14 +36,14 @@ export const hints: Record<
   orientation: [
     "POST /api/v2/projects {name, key?, type?, sutRoot?} — create a project (key auto-generated when omitted)",
     "GET /api/v2/projects — projects with rollups (agentsOnline, agentsTotal, lastEvent, latestGreenCoverage)",
-    "POST /api/v2/agents/register {projectKey, agentId, phase} — register an agent (phase: RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report)",
+    "POST /api/v2/agents/register {projectKey, agentId, role} — register an agent (role: RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report)",
     "GET /api/v2/health — service health",
   ],
-  /** CR-CRU-044 §S1 — a registration that declared no usable phase. */
-  phaseRequired: [
-    "POST /api/v2/agents/register {projectKey, agentId, phase} — phase must be exactly one of RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report",
-    "phase declares WHAT the agent is doing; it is never guessed from the agentId's shape",
-    "POST /api/v2/agents/heartbeat {projectKey, agentId} — heartbeat needs no phase; it never re-declares (or blanks) the registered one",
+  /** CR-CRU-044 §S1 — a registration that declared no usable role. */
+  roleRequired: [
+    "POST /api/v2/agents/register {projectKey, agentId, role} — role must be exactly one of RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report",
+    "role declares WHAT the agent is doing; it is never guessed from the agentId's shape",
+    "POST /api/v2/agents/heartbeat {projectKey, agentId} — heartbeat needs no role; it never re-declares (or blanks) the registered one",
   ],
   /** After register (and heartbeat): ingest hint + implicit-heartbeat note + unregister reminder. */
   registered: [
@@ -241,18 +241,18 @@ export const cycleHints = {
     "bind to an ACTIVE cycle of an OPEN plan (GET …/plans to find one), or file a new plan first",
   ],
   /**
-   * CR-CRU-056 §S2 — a TDD-phase (RED/GREEN/FIX/VERIFY) registration arrived
+   * CR-CRU-056 §S2 — a TDD-role (RED/GREEN/FIX/VERIFY) registration arrived
    * UNBOUND. State-derived: name the project's actual ACTIVE cycle id(s) when
    * any exist; otherwise say to activate one first. Always names `--cycle`.
    */
-  unboundTddPhase: (phase: string, activeCycleIds: number[]): string[] =>
+  unboundTddRole: (role: string, activeCycleIds: number[]): string[] =>
     activeCycleIds.length > 0
       ? [
-          `phase ${phase} must register bound to a cycle — this project's ACTIVE cycle id(s): ${activeCycleIds.join(", ")}`,
+          `role ${role} must register bound to a cycle — this project's ACTIVE cycle id(s): ${activeCycleIds.join(", ")}`,
           `retry the registration with --cycle ${activeCycleIds[0]} (wire: register {cycleId})`,
         ]
       : [
-          `phase ${phase} must register bound to a cycle — but NO cycle is active in this project`,
+          `role ${role} must register bound to a cycle — but NO cycle is active in this project`,
           'activate one first (PATCH …/plans/<planId>/cycles/<id> {status: "active"}), then register with --cycle <id>',
         ],
   /**
@@ -274,6 +274,22 @@ export const cycleHints = {
 };
 
 /**
+ * CR-CRU-059 §S1 — identity refusals. `identity.source` is optional, but a
+ * DECLARED value outside `IDENTITY_SOURCES` is refused at the route boundary
+ * (nothing stored). The help is state-derived: it names the RECEIVED value
+ * verbatim alongside the whole accepted set, so the caller can see exactly
+ * which of its own strings drifted (CR-CRU-054's `"openclaw"` was the case
+ * that shipped for months).
+ */
+export const identityHints = {
+  invalidSource: (received: unknown, sources: readonly string[]): string[] => [
+    `identity.source ${JSON.stringify(received)} is not a known source — it must be exactly one of ${sources.join(" | ")}`,
+    `re-register with --source <one of ${sources.join(" | ")}> (wire: register {identity:{source}}); nothing was stored`,
+    "identity.source stays OPTIONAL — omit it entirely rather than inventing a value",
+  ],
+};
+
+/**
  * CR-CRU-056 §S2b/§S3b — registered-caller refusals. Every mutating workflow
  * verb and every ingest surface requires a LIVE registered caller; the help
  * is state-derived (names the offending agentId when the request carried one)
@@ -285,7 +301,7 @@ export const authHints = {
     agentId === undefined
       ? "this verb requires a registered caller — send your agentId in the request body"
       : `agentId ${agentId} has no live registration in this project (never registered, unregistered, or pruned) — nothing was stored or changed`,
-    "register first: POST /api/v2/agents/register {projectKey, agentId, phase} (phase: RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report; TDD phases register bound with cycleId)",
+    "register first: POST /api/v2/agents/register {projectKey, agentId, role} (role: RED | GREEN | FIX | VERIFY | ORCHESTRATOR | report; TDD roles register bound with cycleId)",
     "then retry this call with that same agentId in the body",
   ],
 };

@@ -131,7 +131,7 @@ async function getRaw(handle: ServerHandle, urlPath: string): Promise<Response> 
 }
 
 async function registerAgent(handle: ServerHandle, key: string, agentId: string): Promise<void> {
-  const res = await postJson(handle, "/api/v2/agents/register", { projectKey: key, agentId, phase: "ORCHESTRATOR" });
+  const res = await postJson(handle, "/api/v2/agents/register", { projectKey: key, agentId, role: "ORCHESTRATOR" });
   expect(res.status).toBe(200);
 }
 

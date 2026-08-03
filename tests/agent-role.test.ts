@@ -1,29 +1,29 @@
-// CR-CRU-044 C2 — the dashboard classifies an agent by its STORED phase
+// CR-CRU-044 C2 — the dashboard classifies an agent by its STORED role
 // (declared at registration, C1 §S1) instead of string-matching the
 // agentId. `phaseRole(agentId)` (CR-CRU-007 §S1, tests/phase-role.test.ts)
 // is retained ONLY as a fallback for historical records that carry no
-// stored phase — that file stays green and UNMODIFIED (explicit AC).
+// stored role — that file stays green and UNMODIFIED (explicit AC).
 //
 // CR-CRU-057 §S3 SUPERSESSION — the paragraph above (and the "falls back
 // to phaseRole(agent.agentId) EXACTLY as today" contract described further
 // down) was the CR-CRU-044-era contract this file originally pinned.
 // CR-CRU-057 DELETES phaseRole and its fallback branch entirely: a stored
-// phase is now the ONLY classification source, full stop, and
+// role is now the ONLY classification source, full stop, and
 // tests/phase-role.test.ts is retired (its subject ceases to exist).
-// The precedence tests below (stored phase wins over a conflicting or
+// The precedence tests below (stored role wins over a conflicting or
 // matching id) are UNCHANGED by this — "stored beats id" simply becomes
 // "stored is the only source" once there is no id-based fallback left to
 // beat. The tests whose SUBJECT was that fallback are converted, at their
-// own site below, to pin "absent phase -> unclassified (null)", or
+// own site below, to pin "absent role -> unclassified (null)", or
 // retired where conversion would be redundant — each decision is marked
 // inline where it occurs.
 //
 // Contract this file defines for GREEN — a new pure helper on
 // public/app-logic.mjs:
 //
-//   export function agentRole(agent: { agentId: string; phase?: string | null }): PhaseRole
+//   export function agentRole(agent: { agentId: string; role?: string | null }): PhaseRole
 //
-//   - `agent.phase` present (a non-null, non-undefined string) -> the
+//   - `agent.role` present (a non-null, non-undefined string) -> the
 //     declaration decides, full stop; `phaseRole(agent.agentId)` is NEVER
 //     consulted in this branch, even if the mapped result is `null`.
 //     Enum -> role mapping (server enum is
@@ -38,17 +38,17 @@
 //       anything else (defensively, should never occur post-C1 validation)
 //                      -> null, and still WITHOUT falling back to phaseRole
 //                         (a present-but-unrecognized value is not "absent")
-//   - `agent.phase` absent (`undefined`) OR explicitly `null` (both are how
-//     a pre-CR-044 / historical row can read back, C1's `agent-phase.test.ts`
+//   - `agent.role` absent (`undefined`) OR explicitly `null` (both are how
+//     a pre-CR-044 / historical row can read back, C1's `agent-role.test.ts`
 //     §S1(d) pins `null`/`undefined` for legacy rows) -> falls back to
 //     `phaseRole(agent.agentId)` EXACTLY as today, unmodified contract.
 //
 // Callers to update in public/app.js (not tested directly here beyond the
 // EventCard integration below — same call shape at all three sites):
 //   public/app.js:709, :2165, :2201 currently call `L.phaseRole(e.agentId)`
-//   directly on an EVENT, ignoring the owning agent's stored phase. GREEN
+//   directly on an EVENT, ignoring the owning agent's stored role. GREEN
 //   must look the agent up from `state.agents` by `e.agentId` and call
-//   `L.agentRole({ agentId: e.agentId, phase: matchedAgent?.phase })`
+//   `L.agentRole({ agentId: e.agentId, role: matchedAgent?.role })`
 //   instead.
 //
 // RED phase: `agentRole` does not exist yet on public/app-logic.mjs (same
@@ -56,7 +56,7 @@
 // namespace import stays loadable, so `AppLogic.agentRole(...)` fails at
 // CALL time with a TypeError, which IS the RED signal) and public/app.js's
 // EventCard still classifies purely off `e.agentId` via `phaseRole`,
-// ignoring any stored phase on the matching agent record.
+// ignoring any stored role on the matching agent record.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -72,64 +72,64 @@ const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
 // ── Pure agentRole(agent) contract ──────────────────────────────────────
 
-describe("app-logic — agentRole(agent), pure (CR-CRU-044 §S2 stored-phase classification)", () => {
-  test("the defect's regression case: a stored phase wins over a conflicting id suffix — id ends '-GREEN', stored phase 'RED' -> 'red', NEVER 'green'", () => {
-    const result = AppLogic.agentRole({ agentId: "some-agent-suffix-GREEN", phase: "RED" });
+describe("app-logic — agentRole(agent), pure (CR-CRU-044 §S2 stored-role classification)", () => {
+  test("the defect's regression case: a stored role wins over a conflicting id suffix — id ends '-GREEN', stored role 'RED' -> 'red', NEVER 'green'", () => {
+    const result = AppLogic.agentRole({ agentId: "some-agent-suffix-GREEN", role: "RED" });
     expect(result).toBe("red");
     expect(result).not.toBe("green");
   });
 
-  test("a stored phase wins over the id even when the id does NOT match it: 'CR-CRU-041-C1-GREEN-bun' with stored phase 'GREEN' classifies GREEN (the id doesn't END in '-GREEN', so a name-parsing guess would not have produced 'green' here either)", () => {
+  test("a stored role wins over the id even when the id does NOT match it: 'CR-CRU-041-C1-GREEN-bun' with stored role 'GREEN' classifies GREEN (the id doesn't END in '-GREEN', so a name-parsing guess would not have produced 'green' here either)", () => {
     // CR-CRU-057 §S3 — this premise-sanity assertion used to call
     // `AppLogic.phaseRole(...)` directly (unmodified, it returned null for
     // this id shape: the suffix regex requires the match at the very end
     // and this id ends in "-bun", not "-GREEN"). phaseRole is DELETED by
     // this CR, so the direct call is removed — the point this test pins
-    // (a stored phase decides even when the id shape disagrees or would
+    // (a stored role decides even when the id shape disagrees or would
     // not itself have resolved a role) stands on its own without it.
-    expect(AppLogic.agentRole({ agentId: "CR-CRU-041-C1-GREEN-bun", phase: "GREEN" })).toBe("green");
+    expect(AppLogic.agentRole({ agentId: "CR-CRU-041-C1-GREEN-bun", role: "GREEN" })).toBe("green");
   });
 
-  test("stored phase 'FIX' wins over an id containing a 'verify' segment — never 'verify'", () => {
-    const result = AppLogic.agentRole({ agentId: "agent-verify-runner", phase: "FIX" });
+  test("stored role 'FIX' wins over an id containing a 'verify' segment — never 'verify'", () => {
+    const result = AppLogic.agentRole({ agentId: "agent-verify-runner", role: "FIX" });
     expect(result).toBe("fix");
     expect(result).not.toBe("verify");
   });
 
   test("enum -> role mapping is pinned exactly: RED/GREEN/FIX/VERIFY map to the existing lowercase role vocabulary", () => {
-    expect(AppLogic.agentRole({ agentId: "any-id", phase: "RED" })).toBe("red");
-    expect(AppLogic.agentRole({ agentId: "any-id", phase: "GREEN" })).toBe("green");
-    expect(AppLogic.agentRole({ agentId: "any-id", phase: "FIX" })).toBe("fix");
-    expect(AppLogic.agentRole({ agentId: "any-id", phase: "VERIFY" })).toBe("verify");
+    expect(AppLogic.agentRole({ agentId: "any-id", role: "RED" })).toBe("red");
+    expect(AppLogic.agentRole({ agentId: "any-id", role: "GREEN" })).toBe("green");
+    expect(AppLogic.agentRole({ agentId: "any-id", role: "FIX" })).toBe("fix");
+    expect(AppLogic.agentRole({ agentId: "any-id", role: "VERIFY" })).toBe("verify");
   });
 
   test("enum -> role mapping is pinned exactly: 'ORCHESTRATOR' and 'report' render with NO role tint (null) — the existing 4-role vocabulary has no color for them", () => {
-    expect(AppLogic.agentRole({ agentId: "any-id", phase: "ORCHESTRATOR" })).toBeNull();
-    expect(AppLogic.agentRole({ agentId: "any-id", phase: "report" })).toBeNull();
+    expect(AppLogic.agentRole({ agentId: "any-id", role: "ORCHESTRATOR" })).toBeNull();
+    expect(AppLogic.agentRole({ agentId: "any-id", role: "report" })).toBeNull();
     // NEGATIVE bound: an id-shape that WOULD resolve a role via the fallback
     // must NOT leak through — the stored (if unmapped) value still wins.
-    expect(AppLogic.agentRole({ agentId: "some-agent-suffix-RED", phase: "ORCHESTRATOR" })).toBeNull();
-    expect(AppLogic.agentRole({ agentId: "some-agent-suffix-RED", phase: "report" })).toBeNull();
+    expect(AppLogic.agentRole({ agentId: "some-agent-suffix-RED", role: "ORCHESTRATOR" })).toBeNull();
+    expect(AppLogic.agentRole({ agentId: "some-agent-suffix-RED", role: "report" })).toBeNull();
   });
 
-  test("precedence bound: a PRESENT but unrecognized stored phase value still does NOT fall back to phaseRole(agentId) — present beats absent, even when unmapped", () => {
-    // A stored phase is only ever one of the server's validated enum values
+  test("precedence bound: a PRESENT but unrecognized stored role value still does NOT fall back to phaseRole(agentId) — present beats absent, even when unmapped", () => {
+    // A stored role is only ever one of the server's validated enum values
     // in practice (C1 rejects anything else at registration), but the
     // precedence rule the spec pins ("phaseRole is consulted ONLY when the
-    // stored phase is absent") must hold even for this defensive case: the
+    // stored role is absent") must hold even for this defensive case: the
     // value is PRESENT, so the id-based fallback must never fire.
-    const result = AppLogic.agentRole({ agentId: "some-agent-suffix-RED", phase: "banana" as unknown as string });
+    const result = AppLogic.agentRole({ agentId: "some-agent-suffix-RED", role: "banana" as unknown as string });
     expect(result).not.toBe("red");
     expect(result).toBeNull();
   });
 
   // CR-CRU-057 §S3 CONVERSION — this test's SUBJECT was the id-based
-  // fallback ("phase absent -> phaseRole(agentId) exactly as today"). That
-  // fallback is deleted wholesale by this CR: a stored phase is now the
-  // ONLY classification source, so an absent phase must classify
+  // fallback ("role absent -> phaseRole(agentId) exactly as today"). That
+  // fallback is deleted wholesale by this CR: a stored role is now the
+  // ONLY classification source, so an absent role must classify
   // UNCLASSIFIED (null) even for id shapes that would previously have
   // parsed via the (now-gone) suffix/segment rules.
-  test("phase absent (key omitted, i.e. undefined) classifies UNCLASSIFIED (null) — CR-CRU-057 §S3 deletes the phaseRole(agentId) fallback entirely, so an id-shape that WOULD have parsed via the old suffix/segment rules must not resolve a role anymore", () => {
+  test("role absent (key omitted, i.e. undefined) classifies UNCLASSIFIED (null) — CR-CRU-057 §S3 deletes the phaseRole(agentId) fallback entirely, so an id-shape that WOULD have parsed via the old suffix/segment rules must not resolve a role anymore", () => {
     expect(AppLogic.agentRole({ agentId: "CR-X-1-RED" })).toBeNull();
     expect(AppLogic.agentRole({ agentId: "CR-X-1-GREEN" })).toBeNull();
     expect(AppLogic.agentRole({ agentId: "CR-X-1-FIX" })).toBeNull();
@@ -138,26 +138,26 @@ describe("app-logic — agentRole(agent), pure (CR-CRU-044 §S2 stored-phase cla
   });
 
   // CR-CRU-057 §S3 CONVERSION — same fallback subject, for the explicit-null
-  // shape (the legacy/pre-CR-044 round-trip per agent-phase.test.ts §S1(d)).
-  test("phase explicitly null (the shape a legacy/pre-CR-044 row round-trips as, per agent-phase.test.ts §S1(d)) classifies UNCLASSIFIED (null) — CR-CRU-057 §S3: no id-based fallback survives for this shape either", () => {
-    expect(AppLogic.agentRole({ agentId: "CR-X-1-GREEN", phase: null })).toBeNull();
-    expect(AppLogic.agentRole({ agentId: "plain-agent-1", phase: null })).toBeNull();
+  // shape (the legacy/pre-CR-044 round-trip per agent-role.test.ts §S1(d)).
+  test("role explicitly null (the shape a legacy/pre-CR-044 row round-trips as, per agent-role.test.ts §S1(d)) classifies UNCLASSIFIED (null) — CR-CRU-057 §S3: no id-based fallback survives for this shape either", () => {
+    expect(AppLogic.agentRole({ agentId: "CR-X-1-GREEN", role: null })).toBeNull();
+    expect(AppLogic.agentRole({ agentId: "plain-agent-1", role: null })).toBeNull();
   });
 
   // CR-CRU-057 §S3 RETIRED (not converted): "bound: fallback path is
   // byte-for-byte phaseRole's own precise contract — a 'verify' SEGMENT
-  // match (not substring) still applies through agentRole when phase is
+  // match (not substring) still applies through agentRole when role is
   // absent" pinned that the (now-deleted) phaseRole fallback correctly
   // special-cased non-matching id shapes ("unverified-agent",
-  // "redteam-agent") when phase was absent. With the fallback gone, EVERY
-  // id resolves null when phase is absent (see the converted test above) —
+  // "redteam-agent") when role was absent. With the fallback gone, EVERY
+  // id resolves null when role is absent (see the converted test above) —
   // there is no separate "byte-for-byte phaseRole contract" left to bind,
   // so this test is removed rather than converted (converting it would
   // just re-assert the same universal-null result the test above already
   // covers, adding no distinguishing value).
 });
 
-// ── DOM integration: EventCard classification reads the STORED agent phase ──
+// ── DOM integration: EventCard classification reads the STORED agent role ──
 
 interface EventFixture {
   id: string;
@@ -183,7 +183,7 @@ interface AgentFixture {
   lastSeen?: number;
   message?: string;
   identity?: { displayName?: string };
-  phase?: string | null;
+  role?: string | null;
 }
 
 interface ProjectFixture {
@@ -207,7 +207,7 @@ let cacheBust = 0;
 
 /** Same mountApp harness pattern as tests/agent-runtime-pane.test.ts, extended
  * with an `agents` fixture list (phase-role.test.ts's harness hardcodes
- * `agents: []`, which cannot exercise the stored-phase lookup this file needs). */
+ * `agents: []`, which cannot exercise the stored-role lookup this file needs). */
 async function mountApp(opts: MountOpts): Promise<void> {
   const pathname = opts.pathname ?? "/";
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
@@ -266,7 +266,7 @@ function baseEvent(id: string, agentId: string, projectKey: string, timestamp: n
   };
 }
 
-function baseAgent(agentId: string, projectKey: string, phase: string | null | undefined): AgentFixture {
+function baseAgent(agentId: string, projectKey: string, role: string | null | undefined): AgentFixture {
   return {
     agentId,
     projectKey,
@@ -274,7 +274,7 @@ function baseAgent(agentId: string, projectKey: string, phase: string | null | u
     liveness: "online",
     lastSeen: Date.now(),
     identity: { displayName: agentId },
-    phase,
+    role,
   };
 }
 
@@ -299,15 +299,15 @@ function assertOnlyRole(agentId: string, expectedClass: string | null): void {
   }
 }
 
-describe("CR-CRU-044 §S2 — the event feed classifies by the agent's STORED phase, not the agentId shape", () => {
-  test("the defect's regression test: an event whose owning agent is registered with '--phase GREEN' but an id NOT ending '-GREEN' renders app-role-green on the card icon", async () => {
+describe("CR-CRU-044 §S2 — the event feed classifies by the agent's STORED role, not the agentId shape", () => {
+  test("the defect's regression test: an event whose owning agent is registered with '--role GREEN' but an id NOT ending '-GREEN' renders app-role-green on the card icon", async () => {
     const now = Date.now();
-    const projectKey = "proj-stored-phase-1";
+    const projectKey = "proj-stored-role-1";
     const agentId = "CR-CRU-041-C1-GREEN-bun";
     await mountApp({
       pathname: "/",
       projects: [
-        { key: projectKey, name: "Stored Phase", type: "backend", agentsOnline: 1, agentsTotal: 1, active: true, lastActivity: now },
+        { key: projectKey, name: "Stored Role", type: "backend", agentsOnline: 1, agentsTotal: 1, active: true, lastActivity: now },
       ],
       agents: [baseAgent(agentId, projectKey, "GREEN")],
       events: [baseEvent("evt-stored-1", agentId, projectKey, now)],
@@ -316,14 +316,14 @@ describe("CR-CRU-044 §S2 — the event feed classifies by the agent's STORED ph
     assertOnlyRole(agentId, "app-role-green");
   });
 
-  test("the sharper regression case: an event whose owning agent's id ENDS in '-GREEN' but whose STORED phase is 'RED' renders app-role-red, NEVER app-role-green — the label must not override the declaration", async () => {
+  test("the sharper regression case: an event whose owning agent's id ENDS in '-GREEN' but whose STORED role is 'RED' renders app-role-red, NEVER app-role-green — the label must not override the declaration", async () => {
     const now = Date.now();
-    const projectKey = "proj-stored-phase-2";
+    const projectKey = "proj-stored-role-2";
     const agentId = "some-agent-suffix-GREEN";
     await mountApp({
       pathname: "/",
       projects: [
-        { key: projectKey, name: "Stored Phase Override", type: "backend", agentsOnline: 1, agentsTotal: 1, active: true, lastActivity: now },
+        { key: projectKey, name: "Stored Role Override", type: "backend", agentsOnline: 1, agentsTotal: 1, active: true, lastActivity: now },
       ],
       agents: [baseAgent(agentId, projectKey, "RED")],
       events: [baseEvent("evt-stored-2", agentId, projectKey, now)],
@@ -333,13 +333,13 @@ describe("CR-CRU-044 §S2 — the event feed classifies by the agent's STORED ph
   });
 
   // CR-CRU-057 §S3 CONVERSION — this test's SUBJECT was the id-based
-  // fallback ("no stored phase -> phaseRole(agentId) suffix exactly as
-  // today"). That fallback is deleted: an agent record with NO stored phase
+  // fallback ("no stored role -> phaseRole(agentId) suffix exactly as
+  // today"). That fallback is deleted: an agent record with NO stored role
   // now classifies UNCLASSIFIED (null), even though this id shape
   // ("CR-X-1-RED") would previously have parsed via the old suffix rule.
-  test("an agent record with NO stored phase (phase: null, the pre-CR-044 shape) classifies UNCLASSIFIED (null) on the card icon — CR-CRU-057 §S3: no id-suffix fallback anymore, even though the id 'CR-X-1-RED' would have parsed under the old contract", async () => {
+  test("an agent record with NO stored role (role: null, the pre-CR-044 shape) classifies UNCLASSIFIED (null) on the card icon — CR-CRU-057 §S3: no id-suffix fallback anymore, even though the id 'CR-X-1-RED' would have parsed under the old contract", async () => {
     const now = Date.now();
-    const projectKey = "proj-stored-phase-3";
+    const projectKey = "proj-stored-role-3";
     const agentId = "CR-X-1-RED";
     await mountApp({
       pathname: "/",
@@ -355,15 +355,15 @@ describe("CR-CRU-044 §S2 — the event feed classifies by the agent's STORED ph
 
   // CR-CRU-057 §S3 CONVERSION — this test's SUBJECT was the id-based
   // fallback for a missing agent record ("absent record is treated the same
-  // as an absent phase -> phaseRole(agentId)"). With the fallback deleted,
+  // as an absent role -> phaseRole(agentId)"). With the fallback deleted,
   // an event whose agentId matches no agent record AND carries no stored
-  // phase of its own (this fixture's `baseEvent` sets no `phase` field)
+  // role of its own (this fixture's `baseEvent` sets no `role` field)
   // classifies UNCLASSIFIED (null) — never a name-derived guess, even
   // though "CR-X-1-VERIFY" would previously have parsed via the old
   // "verify" segment rule.
-  test("an event whose agentId matches NO current agent record (e.g. a tombstoned/removed agent) and carries no stored phase itself classifies UNCLASSIFIED (null) on the card icon — CR-CRU-057 §S3: absent record + absent phase is simply absent, never a name-derived guess", async () => {
+  test("an event whose agentId matches NO current agent record (e.g. a tombstoned/removed agent) and carries no stored role itself classifies UNCLASSIFIED (null) on the card icon — CR-CRU-057 §S3: absent record + absent role is simply absent, never a name-derived guess", async () => {
     const now = Date.now();
-    const projectKey = "proj-stored-phase-4";
+    const projectKey = "proj-stored-role-4";
     const agentId = "CR-X-1-VERIFY";
     await mountApp({
       pathname: "/",
@@ -377,9 +377,9 @@ describe("CR-CRU-044 §S2 — the event feed classifies by the agent's STORED ph
     assertOnlyRole(agentId, null);
   });
 
-  test("an agent stored with phase 'ORCHESTRATOR' renders with NO role class on its card icon (neutral), even though its id contains a '-VERIFY'-shaped segment nowhere — pins the no-tint decision at the DOM level too", async () => {
+  test("an agent stored with role 'ORCHESTRATOR' renders with NO role class on its card icon (neutral), even though its id contains a '-VERIFY'-shaped segment nowhere — pins the no-tint decision at the DOM level too", async () => {
     const now = Date.now();
-    const projectKey = "proj-stored-phase-5";
+    const projectKey = "proj-stored-role-5";
     const agentId = "orchestrator-agent-1";
     await mountApp({
       pathname: "/",

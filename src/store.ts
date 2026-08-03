@@ -6,7 +6,7 @@ import { DEFAULT_LIVENESS } from "./types.ts";
 import type {
   Agent,
   AgentIdentity,
-  AgentPhase,
+  AgentRole,
   CommitBoundary,
   Coverage,
   CycleKind,
@@ -61,7 +61,7 @@ interface AgentRow {
   first_seen: number;
   last_seen: number;
   // CR-CRU-044 §S1 — NULL for pre-CR-044 rows (retrofitted column).
-  phase: string | null;
+  role: string | null;
   // CR-CRU-056 §S1 — NULL for unbound / pre-CR-056 rows (retrofitted column).
   bound_cycle_id: number | null;
 }
@@ -73,11 +73,11 @@ export interface TouchAgentOpts {
   /**
    * CR-CRU-044 §S1(b) — OPTIONAL here on purpose: touchAgent is the ingest
    * path (recordTestEvent et al call it with no options), so the *required*
-   * phase lives at the register route boundary, never in the store.
+   * role lives at the register route boundary, never in the store.
    */
-  phase?: AgentPhase;
+  role?: AgentRole;
   /**
-   * CR-CRU-056 §S1 — OPTIONAL for the same reason as `phase`: validation
+   * CR-CRU-056 §S1 — OPTIONAL for the same reason as `role`: validation
    * (cycle exists / plan open / cycle active) lives at the register route
    * boundary; the store only persists an already-validated binding. Omitting
    * it PRESERVES a stored binding (the CR-CRU-044 "touch never blanks"
@@ -111,11 +111,11 @@ interface EventRow {
   // CR-CRU-013 §S1+§S4b — generic JSON blob for gate/milestone kind-specific
   // fields (the gate object; milestone type/label/commit). NULL otherwise.
   payload: string | null;
-  // CR-CRU-057 §S1 — the posting agent's declared phase, stamped at write time
+  // CR-CRU-057 §S1 — the posting agent's declared role, stamped at write time
   // (retrofitted column; NULL on pre-057 rows and on undeclared writes).
-  phase: string | null;
-  // CR-CRU-057 §S1 — 0 = declared, 1 = §S4 backfill-inferred. NULL when phase is.
-  phase_inferred: number | null;
+  role: string | null;
+  // CR-CRU-057 §S1 — 0 = declared, 1 = §S4 backfill-inferred. NULL when role is.
+  role_inferred: number | null;
 }
 
 interface RollupRow {
@@ -212,12 +212,12 @@ export interface RecordEventMeta {
   name?: string;
   context?: RunContext;
   /**
-   * CR-CRU-057 §S1 — the posting agent's DECLARED phase, resolved at the route
+   * CR-CRU-057 §S1 — the posting agent's DECLARED role, resolved at the route
    * boundary from the agent row CR-CRU-056's ingest seam already fetched. The
-   * store never looks a phase up and never derives one: passing it stamps
-   * `phase` + `phase_inferred = 0`; omitting it leaves both NULL.
+   * store never looks a role up and never derives one: passing it stamps
+   * `role` + `role_inferred = 0`; omitting it leaves both NULL.
    */
-  phase?: AgentPhase;
+  role?: AgentRole;
 }
 
 export type ChangeKind = "projects" | "agents" | "events";
@@ -238,33 +238,33 @@ export const UUID_RE =
 //
 // §S3 DELETED render-time parsing outright (the retired CR-CRU-007 name-role
 // helper and every caller are gone from src/, public/ and cli/ — an AC greps
-// for its name, which is why it is not spelled out here). Phase is
+// for its name, which is why it is not spelled out here). Role is
 // DECLARED data: agents declare it at registration and every new event stamps
-// the declared value with `phase_inferred = 0`. Nothing downstream is allowed
-// to guess a phase from a name, ever.
+// the declared value with `role_inferred = 0`. Nothing downstream is allowed
+// to guess a role from a name, ever.
 //
 // This function exists solely to give pre-057 history — rows the §S1 ALTER
-// created with a NULL phase, written before the declaration existed — a
-// best-effort, VISIBLY LABELED (`phase_inferred = 1`) classification. It runs
-// inside `migrate()` against `phase IS NULL` rows and nowhere else.
+// created with a NULL role, written before the declaration existed — a
+// best-effort, VISIBLY LABELED (`role_inferred = 1`) classification. It runs
+// inside `migrate()` against `role IS NULL` rows and nowhere else.
 //
 // DO NOT: export it, call it from a request/ingest/render path, reuse it to
 // "fix up" a row whose declaration is missing, or lift it into public/. If a
-// new caller seems to need it, the answer is a DECLARED phase, not a parse.
+// new caller seems to need it, the answer is a DECLARED role, not a parse.
 //
 // The rules mirror the retired CR-CRU-007 name-role helper's suffix contract
 // exactly: a trailing `-RED`/`-GREEN`/`-FIX`/`-VERIFY`, case-insensitive.
 // Its documented negative cases stay negative — `redteam-agent`,
 // `greenhouse-bot`, `fixture-agent`, `unverified-agent`, `verifying-agent`,
 // `plain-agent-1` and `claude-sandesh` all parse to null (the token must be a
-// trailing suffix, never a mid-word substring), so they keep a NULL phase and
+// trailing suffix, never a mid-word substring), so they keep a NULL role and
 // render unclassified rather than carrying a fabricated guess.
-const MIGRATION_ONLY_PHASE_SUFFIX_RE = /-(red|green|fix|verify)$/i;
+const MIGRATION_ONLY_ROLE_SUFFIX_RE = /-(red|green|fix|verify)$/i;
 
-function migrationOnlyPhaseFromAgentIdSuffix(agentId: string): AgentPhase | null {
-  const match = MIGRATION_ONLY_PHASE_SUFFIX_RE.exec(agentId);
+function migrationOnlyRoleFromAgentIdSuffix(agentId: string): AgentRole | null {
+  const match = MIGRATION_ONLY_ROLE_SUFFIX_RE.exec(agentId);
   if (match === null) return null;
-  return match[1]!.toUpperCase() as AgentPhase;
+  return match[1]!.toUpperCase() as AgentRole;
 }
 
 export class Store {
@@ -348,7 +348,7 @@ export class Store {
         identity TEXT NOT NULL,
         first_seen INTEGER NOT NULL,
         last_seen INTEGER NOT NULL,
-        phase TEXT,
+        role TEXT,
         PRIMARY KEY (project_key, agent_id)
       );
 
@@ -374,8 +374,8 @@ export class Store {
         action TEXT,
         first_seen INTEGER,
         payload TEXT,
-        phase TEXT,
-        phase_inferred INTEGER
+        role TEXT,
+        role_inferred INTEGER
       );
 
       CREATE INDEX IF NOT EXISTS idx_events_project_timestamp
@@ -442,18 +442,37 @@ export class Store {
     if (!eventCols.has("payload")) {
       this.db.exec(`ALTER TABLE events ADD COLUMN payload TEXT`);
     }
-    // CR-CRU-057 §S1 — additive declared-phase columns; pre-057 db files lack
-    // them (same PRAGMA-checked retrofit pattern as CR-CRU-044's agents.phase
+    // CR-CRU-059 §S0 — RENAME, never re-create. Every db written before this
+    // CR carries the declared-role classification under the OLD column names
+    // `phase`/`phase_inferred` — including CR-CRU-057's one-time backfill
+    // (299 of 338 events on the live dog-food db). Adding fresh `role` columns
+    // and leaving the old ones behind would silently orphan all of it, so the
+    // columns are RENAMED IN PLACE with `ALTER TABLE ... RENAME COLUMN`
+    // (sqlite 3.25+), which moves every value untouched. Guarded on the same
+    // PRAGMA snapshot as the additive retrofits below, so a second open sees
+    // the old name already gone and does nothing.
+    if (eventCols.has("phase") && !eventCols.has("role")) {
+      this.db.exec(`ALTER TABLE events RENAME COLUMN phase TO role`);
+      eventCols.delete("phase");
+      eventCols.add("role");
+    }
+    if (eventCols.has("phase_inferred") && !eventCols.has("role_inferred")) {
+      this.db.exec(`ALTER TABLE events RENAME COLUMN phase_inferred TO role_inferred`);
+      eventCols.delete("phase_inferred");
+      eventCols.add("role_inferred");
+    }
+    // CR-CRU-057 §S1 — additive declared-role columns; pre-057 db files lack
+    // them (same PRAGMA-checked retrofit pattern as CR-CRU-044's agents.role
     // and CR-CRU-056's agents.bound_cycle_id). The ALTER itself back-fills
     // nothing — every historical row starts NULL; §S4's labeled backfill below
     // then classifies the subset whose id suffix parses.
-    if (!eventCols.has("phase")) {
-      this.db.exec(`ALTER TABLE events ADD COLUMN phase TEXT`);
+    if (!eventCols.has("role")) {
+      this.db.exec(`ALTER TABLE events ADD COLUMN role TEXT`);
     }
-    if (!eventCols.has("phase_inferred")) {
-      this.db.exec(`ALTER TABLE events ADD COLUMN phase_inferred INTEGER`);
+    if (!eventCols.has("role_inferred")) {
+      this.db.exec(`ALTER TABLE events ADD COLUMN role_inferred INTEGER`);
     }
-    this.backfillInferredEventPhases();
+    this.backfillInferredEventRoles();
     // CR-CRU-011 §S0b — additive cycle-timestamp columns; pre-C4 db files
     // lack them (same PRAGMA-checked retrofit pattern as events above).
     const cycleCols = new Set(
@@ -513,17 +532,26 @@ export class Store {
     if (!projectCols.has("allow_run_deletion")) {
       this.db.exec(`ALTER TABLE projects ADD COLUMN allow_run_deletion INTEGER`);
     }
-    // CR-CRU-044 §S1(d) — additive declared-phase column; pre-044 db files
+    // CR-CRU-044 §S1(d) — additive declared-role column; pre-044 db files
     // lack it (same PRAGMA-checked retrofit pattern as above). No back-fill:
-    // historical rows keep a NULL phase and read back as absent.
+    // historical rows keep a NULL role and read back as absent.
     const agentCols = new Set(
       this.db
         .query<{ name: string }, []>(`PRAGMA table_info(agents)`)
         .all()
         .map((col) => col.name),
     );
-    if (!agentCols.has("phase")) {
-      this.db.exec(`ALTER TABLE agents ADD COLUMN phase TEXT`);
+    // CR-CRU-059 §S0 — same RENAME-don't-re-create rule as events above: a
+    // pre-059 db stores the declared role under `agents.phase`, and that value
+    // is the agent's live classification. Rename it in place; a second open
+    // finds only `role` and falls through to the additive guard below.
+    if (agentCols.has("phase") && !agentCols.has("role")) {
+      this.db.exec(`ALTER TABLE agents RENAME COLUMN phase TO role`);
+      agentCols.delete("phase");
+      agentCols.add("role");
+    }
+    if (!agentCols.has("role")) {
+      this.db.exec(`ALTER TABLE agents ADD COLUMN role TEXT`);
     }
     // CR-CRU-056 §S1 — additive cycle-binding column; pre-056 db files lack
     // it (same PRAGMA-checked retrofit pattern as above). No back-fill:
@@ -534,43 +562,43 @@ export class Store {
   }
 
   /**
-   * CR-CRU-057 §S4 — the ONE-TIME LABELED backfill of `events.phase` for
+   * CR-CRU-057 §S4 — the ONE-TIME LABELED backfill of `events.role` for
    * pre-057 history (user-decided 2026-08-01). Runs at store open, at the tail
    * of `migrate()`, right after the §S1 columns are guaranteed to exist.
    *
-   * ADDITIVE: the `phase IS NULL` predicate is the whole safety story. A row
-   * whose agent DECLARED a phase was written with a non-NULL `phase` and
-   * `phase_inferred = 0` (the single event write path, `insertEvent`, always
+   * ADDITIVE: the `role IS NULL` predicate is the whole safety story. A row
+   * whose agent DECLARED a role was written with a non-NULL `role` and
+   * `role_inferred = 0` (the single event write path, `insertEvent`, always
    * writes the two columns together), so a declared row is invisible to this
    * UPDATE and can never be re-derived or flipped from its id's shape.
    *
    * IDEMPOTENT BY CONSTRUCTION: every row it touches leaves with a non-NULL
-   * `phase`, so the next open's `phase IS NULL` scan no longer sees it — no
-   * "has it run" flag needed, and `phase_inferred` is SET to 1, never
+   * `role`, so the next open's `role IS NULL` scan no longer sees it — no
+   * "has it run" flag needed, and `role_inferred` is SET to 1, never
    * incremented. Rows whose id does not parse are left NULL in BOTH columns
    * (never 0 — that would read as "declared nothing" rather than "never
    * classified") and render unclassified, which is also why re-running is
    * harmless: they are simply re-examined and re-skipped.
    *
    * 🚨 The id parse it uses is migration-only — see the banner on
-   * `migrationOnlyPhaseFromAgentIdSuffix`. It must never reach a runtime path.
+   * `migrationOnlyRoleFromAgentIdSuffix`. It must never reach a runtime path.
    */
-  private backfillInferredEventPhases(): void {
+  private backfillInferredEventRoles(): void {
     const pending = this.db
       .query<{ id: string; agent_id: string }, []>(
-        `SELECT id, agent_id FROM events WHERE phase IS NULL`,
+        `SELECT id, agent_id FROM events WHERE role IS NULL`,
       )
       .all();
     if (pending.length === 0) return;
     const update = this.db.query<never, [string, string]>(
-      `UPDATE events SET phase = ?, phase_inferred = 1 WHERE id = ? AND phase IS NULL`,
+      `UPDATE events SET role = ?, role_inferred = 1 WHERE id = ? AND role IS NULL`,
     );
     const apply = this.db.transaction((rows: { id: string; agent_id: string }[]) => {
       for (const row of rows) {
-        const phase = migrationOnlyPhaseFromAgentIdSuffix(row.agent_id);
+        const role = migrationOnlyRoleFromAgentIdSuffix(row.agent_id);
         // Unparseable ids stay NULL — no guessing, ever (§S4).
-        if (phase === null) continue;
-        update.run(phase, row.id);
+        if (role === null) continue;
+        update.run(role, row.id);
       }
     });
     apply(pending);
@@ -766,16 +794,16 @@ export class Store {
         identity: opts?.identity ?? {},
         firstSeen: now,
         lastSeen: now,
-        // CR-CRU-044 §S1 — key ABSENT when never declared (a phase-less
+        // CR-CRU-044 §S1 — key ABSENT when never declared (a role-less
         // ingest that creates the row must not fabricate one).
-        ...(opts?.phase !== undefined ? { phase: opts.phase } : {}),
+        ...(opts?.role !== undefined ? { role: opts.role } : {}),
         // CR-CRU-056 §S1 — same contract for the cycle binding: ABSENT when
         // the creating touch declared none.
         ...(opts?.boundCycleId !== undefined ? { boundCycleId: opts.boundCycleId } : {}),
       };
       this.db
         .query(
-          `INSERT INTO agents (project_key, agent_id, status, message, identity, first_seen, last_seen, phase, bound_cycle_id)
+          `INSERT INTO agents (project_key, agent_id, status, message, identity, first_seen, last_seen, role, bound_cycle_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
@@ -786,7 +814,7 @@ export class Store {
           JSON.stringify(agent.identity),
           agent.firstSeen,
           agent.lastSeen,
-          agent.phase ?? null,
+          agent.role ?? null,
           agent.boundCycleId ?? null,
         );
       this.emit("agents", projectKey);
@@ -803,14 +831,14 @@ export class Store {
       firstSeen: existing.first_seen,
       lastSeen: now,
       // CR-CRU-044 §S1(c) — PRESERVE on update (same precedent as identity
-      // above): a phase-less touch (every ingest, every heartbeat) must never
-      // blank the phase the agent declared at registration.
-      ...(opts?.phase !== undefined
-        ? { phase: opts.phase }
-        : existing.phase !== null && existing.phase !== undefined
-          ? { phase: existing.phase as AgentPhase }
+      // above): a role-less touch (every ingest, every heartbeat) must never
+      // blank the role the agent declared at registration.
+      ...(opts?.role !== undefined
+        ? { role: opts.role }
+        : existing.role !== null && existing.role !== undefined
+          ? { role: existing.role as AgentRole }
           : {}),
-      // CR-CRU-056 §S1 — PRESERVE on update (same contract as phase above):
+      // CR-CRU-056 §S1 — PRESERVE on update (same contract as role above):
       // a binding-less touch (every ingest, every heartbeat) must never blank
       // the cycle the agent bound at registration.
       ...(opts?.boundCycleId !== undefined
@@ -821,7 +849,7 @@ export class Store {
     };
     this.db
       .query(
-        `UPDATE agents SET status = ?, message = ?, identity = ?, last_seen = ?, phase = ?, bound_cycle_id = ?
+        `UPDATE agents SET status = ?, message = ?, identity = ?, last_seen = ?, role = ?, bound_cycle_id = ?
          WHERE project_key = ? AND agent_id = ?`,
       )
       .run(
@@ -829,7 +857,7 @@ export class Store {
         agent.message,
         JSON.stringify(agent.identity),
         agent.lastSeen,
-        agent.phase ?? null,
+        agent.role ?? null,
         agent.boundCycleId ?? null,
         projectKey,
         agentId,
@@ -941,8 +969,8 @@ export class Store {
       ...(meta?.codec !== undefined ? { codec: meta.codec } : {}),
       ...(meta?.name !== undefined ? { name: meta.name } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
-      // CR-CRU-057 §S1 — a stamped phase is DECLARED data by construction.
-      ...(meta?.phase !== undefined ? { phase: meta.phase, phaseInferred: false } : {}),
+      // CR-CRU-057 §S1 — a stamped role is DECLARED data by construction.
+      ...(meta?.role !== undefined ? { role: meta.role, roleInferred: false } : {}),
     };
     this.insertEvent(event);
     return event;
@@ -952,7 +980,7 @@ export class Store {
     projectKey: string,
     agentId: string,
     compile: unknown,
-    meta?: Pick<RecordEventMeta, "tier" | "stack" | "context" | "codec" | "phase">,
+    meta?: Pick<RecordEventMeta, "tier" | "stack" | "context" | "codec" | "role">,
   ): RunEvent {
     // §S3 implicit heartbeat — creates the agent row if new, bumps lastSeen.
     this.touchAgent(projectKey, agentId);
@@ -967,8 +995,8 @@ export class Store {
       ...(meta?.codec !== undefined ? { codec: meta.codec } : {}),
       ...(meta?.stack !== undefined ? { stack: meta.stack } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
-      // CR-CRU-057 §S1 — a stamped phase is DECLARED data by construction.
-      ...(meta?.phase !== undefined ? { phase: meta.phase, phaseInferred: false } : {}),
+      // CR-CRU-057 §S1 — a stamped role is DECLARED data by construction.
+      ...(meta?.role !== undefined ? { role: meta.role, roleInferred: false } : {}),
     };
     this.insertEvent(event);
     return event;
@@ -984,7 +1012,7 @@ export class Store {
     agentId: string,
     action: "registered" | "unregistered",
     firstSeen?: number,
-    phase?: AgentPhase,
+    role?: AgentRole,
   ): RunEvent {
     const event: RunEvent = {
       id: this.nextEventId(),
@@ -995,10 +1023,10 @@ export class Store {
       timestamp: Date.now(),
       action,
       ...(firstSeen !== undefined ? { firstSeen } : {}),
-      // CR-CRU-057 §S1 — the declared phase, captured by the route BEFORE the
+      // CR-CRU-057 §S1 — the declared role, captured by the route BEFORE the
       // agents row is deleted (the same survives-deletion contract firstSeen
       // has carried since CR-CRU-011 §S1). Declared, so never inferred.
-      ...(phase !== undefined ? { phase, phaseInferred: false } : {}),
+      ...(role !== undefined ? { role, roleInferred: false } : {}),
     };
     this.insertEvent(event);
     return event;
@@ -1014,7 +1042,7 @@ export class Store {
     projectKey: string,
     agentId: string,
     gate: unknown,
-    meta?: { context?: RunContext; phase?: AgentPhase },
+    meta?: { context?: RunContext; role?: AgentRole },
   ): RunEvent {
     this.touchAgent(projectKey, agentId);
     const event: RunEvent = {
@@ -1027,8 +1055,8 @@ export class Store {
       timestamp: Date.now(),
       gate,
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
-      // CR-CRU-057 §S1 — a stamped phase is DECLARED data by construction.
-      ...(meta?.phase !== undefined ? { phase: meta.phase, phaseInferred: false } : {}),
+      // CR-CRU-057 §S1 — a stamped role is DECLARED data by construction.
+      ...(meta?.role !== undefined ? { role: meta.role, roleInferred: false } : {}),
     };
     this.insertEvent(event);
     return event;
@@ -1184,7 +1212,7 @@ export class Store {
         `INSERT INTO events (id, project_key, agent_id, kind, tier, stack, codec,
            timestamp, name, total, passed, failed, pending, duration_ms,
            tree, coverage, compile, context, action, first_seen, payload,
-           phase, phase_inferred)
+           role, role_inferred)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
@@ -1209,11 +1237,11 @@ export class Store {
         event.action ?? null,
         event.firstSeen ?? null,
         payload,
-        // CR-CRU-057 §S1 — phase and its provenance move together: an event
-        // with no declared phase stores NULL in BOTH columns (never a 0 that
+        // CR-CRU-057 §S1 — role and its provenance move together: an event
+        // with no declared role stores NULL in BOTH columns (never a 0 that
         // would read as "declared nothing").
-        event.phase ?? null,
-        event.phase !== undefined ? (event.phaseInferred === true ? 1 : 0) : null,
+        event.role ?? null,
+        event.role !== undefined ? (event.roleInferred === true ? 1 : 0) : null,
       );
     this.enforceRetention(event.projectKey);
     this.emit("events", event.projectKey);
@@ -1265,10 +1293,10 @@ export class Store {
       ...(row.coverage !== null ? { coverage: JSON.parse(row.coverage) as Coverage } : {}),
       ...(row.compile !== null ? { compile: JSON.parse(row.compile) as unknown } : {}),
       ...(row.context !== null ? { context: JSON.parse(row.context) as RunContext } : {}),
-      // CR-CRU-057 §S1 — the stamped phase and its provenance; BOTH keys are
-      // absent on a phase-less row (never fabricated into a null or a guess).
-      ...(row.phase !== null
-        ? { phase: row.phase as AgentPhase, phaseInferred: row.phase_inferred === 1 }
+      // CR-CRU-057 §S1 — the stamped role and its provenance; BOTH keys are
+      // absent on a role-less row (never fabricated into a null or a guess).
+      ...(row.role !== null
+        ? { role: row.role as AgentRole, roleInferred: row.role_inferred === 1 }
         : {}),
     };
   }
@@ -2155,8 +2183,8 @@ export class Store {
       lastSeen: row.last_seen,
       // CR-CRU-044 §S1(d) — absent for historical rows (NULL column), never
       // back-filled or fabricated.
-      ...(row.phase !== null && row.phase !== undefined
-        ? { phase: row.phase as AgentPhase }
+      ...(row.role !== null && row.role !== undefined
+        ? { role: row.role as AgentRole }
         : {}),
       // CR-CRU-056 §S1 — absent for unbound / historical rows (NULL column).
       ...(row.bound_cycle_id !== null && row.bound_cycle_id !== undefined

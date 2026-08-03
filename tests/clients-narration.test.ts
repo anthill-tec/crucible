@@ -222,7 +222,7 @@ async function ensureRegistered(baseUrl: string, key: string, agentId: string): 
   await fetch(`${baseUrl}/api/v2/agents/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ projectKey: key, agentId, phase: "report" }),
+    body: JSON.stringify({ projectKey: key, agentId, role: "report" }),
   });
 }
 
