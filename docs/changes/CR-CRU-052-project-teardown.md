@@ -18,7 +18,8 @@ SHOULDN'T LEAVE DEAD STATE."*** That rule cannot currently be obeyed for project
 teardown primitive exists.
 
 `POST /api/v2/projects` creates a project. The only `DELETE` route on the server is
-`/api/v2/events/<id>` (`src/v2.ts:1507`). `Store` has no project-removal method. So **a project,
+`/api/v2/events/<id>` (`src/v2.ts:1887` — re-derived at gap analysis; the original `:1507` had
+drifted). `Store` has no project-removal method (confirmed by unfiltered grep, zero hits). So **a project,
 once created, is permanent** — archive (CR-CRU-012 §S1b) hides it from the board but the row, its
 events, its agents and its plans all persist forever.
 
@@ -59,12 +60,23 @@ Add the missing lifecycle primitive: remove the project row and everything keyed
 transaction retention fold+delete. Return the deleted counts so a caller can assert the cascade
 rather than assume it.
 
-Follow CR-CRU-032's precedent for a guarded destructive route rather than inventing a new guard
-style: that CR gated run deletion behind the per-project `allow_run_deletion` flag. Decide and
-record the equivalent gate here — candidates: require the project be archived first (making delete
-a deliberate two-step), or require an explicit confirmation field on the request body. **Do not
-ship an unguarded cascade delete**; the dog-food database is the highest-value artifact in the
-project and a mis-keyed call would take a real project with 200 events.
+**GUARD DECIDED at gap analysis (2026-08-03) — it is a DOUBLE gate, not a choice of one.**
+The spec previously offered "archived-first OR a confirmation field" as alternatives. Reading the
+precedent settled it: `handleEventDelete` (`src/v2.ts:1756-1766`, CR-CRU-032) already gates the
+*less* destructive single-event route with TWO checks — per-project `allowRunDeletion !== true`
+→ **403**, then `body.userApproved !== true` → **409**. Shipping one gate on the most destructive
+route in the system while a lesser one carries two would be indefensible.
+
+The gate for project deletion is therefore:
+1. **The project MUST be archived** (`archived_at IS NOT NULL`) → else **403**. This reuses
+   CR-CRU-012 §S1b's existing state rather than adding a flag, and makes deletion a deliberate
+   two-step: hide it, live without it, then remove it.
+2. **`userApproved: true` on the request body** → else **409**, mirroring CR-032's field name
+   exactly so the fleet learns one confirmation idiom, not two.
+
+Both rejections must leave the project and every cascaded row untouched. **Do not ship an
+unguarded cascade delete**; the dog-food database is the highest-value artifact in the project and
+a mis-keyed call would take a real project with 200 events.
 
 ### §S2 — The harness tears down what it creates
 `seedProject` must register cleanup so every seeded project is deleted at the end of the run, via
@@ -117,6 +129,17 @@ being the then-running VERIFY agent).
 still has no supported way to delete a project, so the next accidental project is equally
 permanent, and §S2's harness teardown still has nothing to call.
 
+### §S6 — Record the new primitive in the DN (added at gap analysis)
+`docs/research/DN-crucible-api-reconstruction.md:206-214` states v2's posture as *"an immutable
+audit log with per-project, double-gated single-event deletion (`DELETE /api/v2/events/<id>`)"*.
+A cascading project delete is a materially larger hole in that posture, and the DN — which is
+ACTIVE and normative — does not contemplate it. Record the primitive there: what it removes, that
+it is double-gated (archived + `userApproved`), and that archive remains the reversible operation.
+
+This exists because CR-CRU-053 just spent an entire CR removing a false claim from that same DN.
+Shipping a new destructive capability without updating the design authority would recreate the
+defect one document over, in the same week.
+
 ### §S5 — Correct the stale isolation comment
 `playwright.config.ts`'s header states *"no CRUCIBLE_DB env var exists to do this more directly
 (verified by reading src/server.ts: only CRUCIBLE_PORT is read from env)"*. CR-CRU-043 added
@@ -137,6 +160,11 @@ worse, leave them believing isolation is impossible.
 - [ ] Teardown also runs when a scenario FAILS — asserted with a deliberately failing scenario.
 - [ ] `seedProject` against a non-ephemeral target fails loudly — asserted (§S3).
 - [ ] `playwright.config.ts`'s comment no longer claims `CRUCIBLE_DB` does not exist (§S5).
+      (Verified at gap analysis: `CRUCIBLE_DB` IS read — `src/server.ts:52`, CR-CRU-043.)
+- [ ] Deleting a NON-ARCHIVED project is refused with 403 and the project survives — asserted.
+- [ ] Deleting an archived project WITHOUT `userApproved: true` is refused with 409 and the project
+      survives — asserted.
+- [ ] The DN records the new primitive and its double gate (§S6) — asserted by reading it.
 - [ ] Full bun regression green AND full Python regression green.
 - [ ] §S4 purge: performed only after separate explicit user approval; keys and deleted row counts
       recorded. The three real projects untouched — verified by name and key.
