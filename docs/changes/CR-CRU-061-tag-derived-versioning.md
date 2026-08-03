@@ -78,6 +78,27 @@ leave it in `RELEASING.md`'s "Release at a glance" as a required step it no long
 tag, which should make the pin *more* robust — but the pin's tests encode assumptions about version
 strings and must be re-run and, if they assume a `v`, corrected.
 
+### §S5 — `gate-run` must be able to skip PR-based pipeline steps
+**Found 2026-08-03 while marrying no-mistakes to the release process.**
+
+`no-mistakes` is a *local git proxy that validates code before pushing to the configured target*.
+Its pipeline is `rebase → review → test → document → lint → ci` (the `auto_fix` keys in
+`~/.no-mistakes/config.yaml`), and its tail is **explicitly PR-based**: `ci_timeout: "168h"` bounds
+*"how long the CI monitor babysits an open PR with no base-branch movement"*, and test-evidence
+artifacts are committed so they *"render directly on the PR"*.
+
+**This project does not use PRs.** It uses git-flow with direct merges to `develop`. So the `ci`
+step has no PR to watch and would block until its timeout.
+
+`no-mistakes axi run` already supports `--skip <steps>`, and blocks *"until the first approval gate,
+**CI-ready point**, or final outcome"* — the CI-ready point is exactly the gate this project wants.
+But **`bun-crucible.py gate-run` exposes only `--intent`, `--agent`, `--project-dir`** — there is no
+`--skip` passthrough, so the release gate cannot currently be run in the shape this project needs.
+
+Add a `--skip` passthrough to `gate-run` (and to the sibling clients that carry the verb). Keep it a
+pure passthrough — the client must not hardcode WHICH steps to skip, because that is a per-project
+workflow decision, not a client-fleet fact.
+
 ### §S4 — Documentation matches the machinery
 `RELEASING.md` documents the `v` model and the manual-manifest model in several places (§"Version
 model", §"Release at a glance", §"Composite / lockstep model"). Update it, and the release DN, so no
@@ -96,6 +117,8 @@ reader is told to do a step that no longer exists.
       all 10 pin tests green.
 - [ ] `RELEASING.md` and `DN-release-process.md` describe the bare-SemVer, tag-derived model, with no
       surviving instruction to hand-bump `package.json` — asserted.
+- [ ] `gate-run --skip <steps>` passes the value through to `no-mistakes axi run` unchanged, and
+      `gate-run --help` documents it — asserted (§S5).
 - [ ] Full bun regression green AND full Python regression green.
 
 ## Non-goals
