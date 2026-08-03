@@ -29,7 +29,8 @@
 // `docs/RUNBOOK.md`. Every test below is expected to FAIL for one of those
 // reasons — that is expected RED.
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -515,17 +516,37 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
     expect(raw).not.toContain("^v[0-9]+\\.[0-9]+\\.[0-9]+$");
   });
 
-  test("publish-npm still verifies the release tag against package.json version, with no dead #v strip", () => {
+  // 🚨 CR-CRU-061 §S2 SUPERSEDES the assertion below (2026-08-04). Cycle 185
+  // (§S1/§S6, this same describe block) pinned "publish-npm still VERIFIES
+  // package.json against the tag, only the dead #v strip is removed" —
+  // correct for that cycle, since §S2 (deriving the version) was explicitly
+  // deferred. §S2 now lands: the verify-and-fail comparison is REPLACED by a
+  // derive step (`npm version --no-git-tag-version --allow-same-version
+  // "$VERSION"`, per the CR's own §S2 text) — package.json is now SET from
+  // the tag, not compared against it. The original verify-only assertion
+  // remains visible in git history (this file's blame) rather than being
+  // restated as live test code — direction reversed, not deleted, per the
+  // CR's own §S6 discipline for this file. See also the data-driven
+  // execution tests below ("§S2 publish-npm derives...") for the behavioural
+  // half of this contract.
+  test("publish-npm SETS (derives) package.json's version from the tag; the verify-and-fail comparison is gone, with no dead #v strip", () => {
     const { raw } = readReleaseWorkflow();
     const npmJobMatch = raw.match(/publish-npm:[\s\S]*?(?=\n {2}\S|\n$)/);
     const npmJob = npmJobMatch?.[0] ?? "";
 
-    // POSITIVE — the verify-only comparison step itself is unchanged this
-    // cycle (§S2 — deriving npm's version FROM the tag — is a later cycle;
-    // §S1 only removes the now-dead v-strip from the comparison).
-    expect(npmJob.toLowerCase()).toContain("package.json");
-    // NEGATIVE — a bare GITHUB_REF_NAME has no leading 'v' to strip; the
-    // strip is dead code under this CR and must not survive.
+    const runBody = extractNpmVersionRunBody(npmJob);
+    // POSITIVE — the derive step exists and matches the CR's own §S2
+    // contract text verbatim (not merely "some npm version call").
+    expect(runBody.length).toBeGreaterThan(0);
+    expect(runBody).toContain("npm version");
+    expect(runBody).toContain("--no-git-tag-version");
+    expect(runBody).toContain("--allow-same-version");
+
+    // NEGATIVE — the old verify-and-fail comparison is gone, not merely
+    // renamed around; and the dead #v strip (already swept in §S1) has not
+    // resurfaced.
+    expect(npmJob).not.toMatch(/if\s*\[\s*"\$VERSION"\s*!=\s*"\$PKG_VERSION"\s*\]/);
+    expect(npmJob.toLowerCase()).not.toContain("!= release tag");
     expect(npmJob).not.toContain('VERSION="${GITHUB_REF_NAME#v}"');
     expect(npmJob).not.toMatch(/#v\}/);
   });
@@ -534,6 +555,177 @@ describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 
     const { raw } = readReleaseWorkflow();
     expect(raw).not.toMatch(/#v\}/);
     expect(raw).not.toContain("^v[0-9]");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CR-CRU-061 §S2 — Derive the npm version from the tag (publish-npm)
+//
+// Spec: docs/changes/CR-CRU-061-tag-derived-versioning.md §S2 + Acceptance
+// criteria: "publish-npm SETS package.json's version from the tag; a stale
+// committed value no longer fails the release — asserted, including that the
+// published version equals the tag" + "npm version rewrites package.json in
+// the CI workspace... confirm --allow-same-version prevents a spurious
+// failure when the value already matches" (Risk section).
+//
+// The rewritten test in the §S1 describe block above ("publish-npm SETS
+// (derives) package.json's version from the tag...") pins the STRUCTURAL
+// half of this contract (derive step present, verify-and-fail gone, exact
+// flags). The tests below drive the extracted step body as DATA — actually
+// EXECUTING the real shell fragment found in release.yml, under `bash -e`
+// (matching GitHub Actions' own run-step shell, `bash --noprofile --norc -eo
+// pipefail`), against a real scratch package.json — per the CR's own Risk
+// section: "prefer testing the guard expressions directly... over trusting a
+// read of the YAML". This proves the ACTUAL npm-version invocation found in
+// the file behaves correctly, not merely that some expected string appears.
+//
+// UNPROVABLE WITHOUT A REAL TAG PUSH (documented, not asserted): whether this
+// step actually runs on `on: release` in prod, whether `npm publish`
+// afterwards picks up the just-set version, and whether npm registry
+// enforcement (immutable published versions, provenance/OIDC) behaves as
+// expected. Those require the real `release` event + registry, which no
+// local test can exercise.
+//
+// RED phase: release.yml has no "npm version" step on this branch, so
+// extractNpmVersionRunBody() returns "" for every test below. Each test
+// therefore fails immediately on the `runBody` "npm version" containment
+// assertion — not on the later "finalVersion equals tag" assertions, which
+// would otherwise coincidentally pass for the same-version case. This is a
+// deliberate ordering: it stops the same-version test from vacuously passing
+// against an empty (no-op) script that happens to leave the version
+// unchanged.
+// ---------------------------------------------------------------------------
+
+/**
+ * Strips the minimum common leading whitespace from every non-blank line, so
+ * a YAML block-scalar body can be executed as a standalone shell script
+ * regardless of its indentation depth in release.yml.
+ */
+function dedent(text: string): string {
+  const lines = text.split("\n");
+  const indents = lines
+    .filter((l) => l.trim().length > 0)
+    .map((l) => l.match(/^ */)?.[0].length ?? 0);
+  const min = indents.length > 0 ? Math.min(...indents) : 0;
+  return lines
+    .map((l) => l.slice(min))
+    .join("\n")
+    .trimEnd();
+}
+
+/**
+ * Extracts the dedented shell body of publish-npm's version-derive step (the
+ * step whose run: block invokes `npm version`) from the job's raw YAML text.
+ * Returns "" if no such step exists yet (the pre-§S2 state on this branch).
+ */
+function extractNpmVersionRunBody(npmJob: string): string {
+  const stepChunks = npmJob.split(/\n(?=      - )/);
+  const stepChunk = stepChunks.find((c) => /npm version/.test(c));
+  if (!stepChunk) return "";
+  const runMatch = stepChunk.match(/run:\s*\|\n([\s\S]*)/);
+  if (!runMatch) return "";
+  return dedent(runMatch[1]);
+}
+
+/**
+ * Actually EXECUTES the extracted step body under `bash -e` against a real
+ * scratch package.json in a throwaway temp directory, injecting both
+ * GITHUB_REF_NAME and VERSION as the tag (covering either naming the derive
+ * step happens to use), then reports the resulting on-disk version — so the
+ * assertions exercise real `npm version` behaviour rather than re-deriving
+ * what it "should" do from reading text.
+ */
+function runNpmVersionStep(
+  runBody: string,
+  opts: { tag: string; initialPkgVersion: string },
+): { exitCode: number | null; stderr: string; finalVersion: string | null } {
+  const tmpDir = mkdtempSync(join(tmpdir(), "cr061-npm-version-"));
+  try {
+    writeFileSync(
+      join(tmpDir, "package.json"),
+      JSON.stringify({ name: "scratch-pkg", version: opts.initialPkgVersion }, null, 2),
+    );
+    const script = `set -euo pipefail\n${runBody}\n`;
+    const res = Bun.spawnSync({
+      cmd: ["bash", "-c", script],
+      cwd: tmpDir,
+      env: {
+        ...process.env,
+        GITHUB_REF_NAME: opts.tag,
+        VERSION: opts.tag,
+      },
+    });
+
+    let finalVersion: string | null = null;
+    try {
+      const pkg = JSON.parse(readFileSync(join(tmpDir, "package.json"), "utf8")) as {
+        version?: string;
+      };
+      finalVersion = pkg.version ?? null;
+    } catch {
+      finalVersion = null;
+    }
+
+    return { exitCode: res.exitCode, stderr: res.stderr.toString(), finalVersion };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+describe("§S2 publish-npm derives package.json's version from the tag (driven as data)", () => {
+  function getNpmVersionRunBody(): string {
+    const { raw } = readReleaseWorkflow();
+    const npmJobMatch = raw.match(/publish-npm:[\s\S]*?(?=\n {2}\S|\n$)/);
+    const npmJob = npmJobMatch?.[0] ?? "";
+    return extractNpmVersionRunBody(npmJob);
+  }
+
+  test("the published version equals the tag (fresh package.json version)", () => {
+    const runBody = getNpmVersionRunBody();
+    // Guard: the step must actually exist and invoke npm version — without
+    // this, a no-op script would leave finalVersion at initialPkgVersion,
+    // which could coincidentally satisfy a weaker assertion.
+    expect(runBody).toContain("npm version");
+
+    const result = runNpmVersionStep(runBody, { tag: "3.4.5", initialPkgVersion: "0.0.0" });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.finalVersion).toBe("3.4.5");
+  });
+
+  test("a stale committed package.json version (2.0.0-alpha.1, the real scaffold placeholder) no longer fails the job", () => {
+    const runBody = getNpmVersionRunBody();
+    expect(runBody).toContain("npm version");
+
+    // 2.0.0-alpha.1 is package.json's actual committed version today (the
+    // repo's first-commit scaffold placeholder, per the CR's own Context
+    // section) — under the old verify step this diverging from any real
+    // release tag would fail the job. §S2's whole point is that it no
+    // longer can: the job must succeed AND end up at the tag's version, not
+    // stuck at the stale one.
+    const result = runNpmVersionStep(runBody, {
+      tag: "5.0.0",
+      initialPkgVersion: "2.0.0-alpha.1",
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.finalVersion).toBe("5.0.0");
+  });
+
+  test("--allow-same-version: package.json already equal to the tag still succeeds (no no-op-bump failure)", () => {
+    const runBody = getNpmVersionRunBody();
+    expect(runBody).toContain("npm version");
+
+    // Without --allow-same-version, `npm version <same version>` exits
+    // non-zero ("Version not changed, might want --allow-same-version").
+    // package.json already matching the tag must NOT fail the job.
+    const result = runNpmVersionStep(runBody, {
+      tag: "6.6.6",
+      initialPkgVersion: "6.6.6",
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.finalVersion).toBe("6.6.6");
   });
 });
 
