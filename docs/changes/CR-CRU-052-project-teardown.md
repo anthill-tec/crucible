@@ -171,6 +171,18 @@ what the cwd contains. Then correct the comment to describe what it now does. As
 positively is the same discipline §S3 applies to the harness: do not rely on an ambient property
 (cwd) when an explicit one (`CRUCIBLE_DB`) is available.
 
+### §S5c — RATIFIED scope addition: the SECOND leak site
+GREEN found that fixing `playwright.config.ts` alone leaves §S5's AC measurably false.
+`tests/e2e/steps/backend-liveness.steps.ts`'s `spawnServer` (feature F10) starts its OWN server
+with `cwd: scratchCwd` and no `CRUCIBLE_DB` — the identical defect, firing twice per run (boot +
+restart). A `/proc/<pid>/environ` watcher named it directly: `CRUCIBLE_DB=` empty, cwd scratch.
+
+**Ratified by the orchestrator 2026-08-03.** A CR that claims to close this leak while leaving it
+open in a second spawner would be the exact defect class the CR exists to close. The change is an
+env addition plus comments; no assertion moved. It also makes F10's kill/restart pair share one
+store BY CONSTRUCTION — previously that held only by accident, because the shared user-level DB
+happened to persist across both.
+
 ### §S5b — Correct the stale isolation comment
 `playwright.config.ts`'s header states *"no CRUCIBLE_DB env var exists to do this more directly
 (verified by reading src/server.ts: only CRUCIBLE_PORT is read from env)"*. CR-CRU-043 added
@@ -198,6 +210,11 @@ worse, leave them believing isolation is impossible.
 - [ ] The DN records the new primitive and its double gate (§S6) — asserted by reading it.
 - [ ] `playwright.config.ts` sets `CRUCIBLE_DB` explicitly, so a default e2e run CANNOT resolve to
       `~/.local/share/crucible/crucible.db` — asserted (§S5).
+- [ ] `backend-liveness.steps.ts`'s own spawned server likewise sets `CRUCIBLE_DB` (§S5c) —
+      otherwise the AC above is false in practice.
+- [ ] Leak closure proven BEHAVIOURALLY: the user-level DB's mtime/size are unchanged across a full
+      e2e run (`stat` only — the file is never opened), while the e2e server is confirmed running
+      on the scratch path.
 - [ ] Full bun regression green AND full Python regression green.
 - [ ] §S4 purge: performed only after separate explicit user approval; keys and deleted row counts
       recorded. The three real projects untouched — verified by name and key.
