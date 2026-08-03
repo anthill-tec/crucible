@@ -339,7 +339,7 @@ describe("§S1 npm pack --dry-run tarball contents", () => {
 //     (create-release + publish-testpypi + dry-run-npm all firing off one
 //     dispatch).
 //
-// §S5 — Adopt Sandesh's vX.Y.Z tag scheme:
+// §S5 — Adopt Sandesh's vX.Y.Z tag scheme (SUPERSEDED — see below):
 //   - publish-pypi / publish-npm guards match ONLY v-prefixed tags
 //     (^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$); a bare 0.1.0 tag is REJECTED,
 //     v0.1.0 is accepted.
@@ -349,12 +349,24 @@ describe("§S1 npm pack --dry-run tarball contents", () => {
 //     comparison). The earlier "drop it" item was WITHDRAWN — do not assert
 //     its removal.
 //
-// RED phase: on the current branch release.yml's `on:` has ONLY
-// `release: types:[published]` + `workflow_dispatch` (no push/pull_request);
-// create-release is gated on workflow_dispatch; every guard uses the BARE
-// `^refs/tags/[0-9]+\.[0-9]+\.[0-9]+$` pattern; the tag-detection grep is
-// bare `^[0-9]+\.[0-9]+\.[0-9]+$`. Every assertion below is expected to FAIL
-// against that state.
+// 🚨 CR-CRU-061 §S1/§S6 SUPERSEDES §S5 above (2026-08-03). Lineage: bare
+// (CR-009 §S6) -> v-prefixed (CR-041 §S5, Sandesh alignment) -> bare, FINAL
+// (CR-061 §S1, user reaffirmed bare SemVer categorically). The describe
+// block below now pins the FINAL bare-SemVer contract, in the SAME two guard
+// sites §S5 named (publish-pypi/publish-npm refs guards + create-release's
+// tag-detection grep) — direction reversed, not deleted; the original
+// v-prefixed assertions this comment describes remain visible in git history
+// (this file's blame) rather than being restated as live test code. The
+// dead `VERSION="${GITHUB_REF_NAME#v}"` strip §S5 called load-bearing is now
+// itself dead code under bare tags (a bare GITHUB_REF_NAME has no leading
+// 'v' to strip) and must be swept.
+//
+// RED phase: on this branch release.yml's guards still match ONLY
+// `^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$` (the §S5 contract), the
+// create-release grep is still `^v[0-9]+\.[0-9]+\.[0-9]+$`, and the dead
+// `#v` strip is still present — every assertion below is expected to FAIL
+// against that state, by design (this is the CR's own §S6 callout: this
+// file "goes red the moment §S1 lands").
 // ---------------------------------------------------------------------------
 
 type ReleaseWorkflow = {
@@ -426,11 +438,10 @@ describe("§S2 release.yml trigger topology", () => {
   });
 });
 
-describe("§S5 release.yml v-prefixed tag scheme", () => {
-  const V_TAG_REGEX_SOURCE = "^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$";
-  const V_TAG_REGEX = /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+$/;
+describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 §S5's v-prefixed scheme)", () => {
+  const BARE_TAG_REGEX_SOURCE = "^refs/tags/[0-9]+\\.[0-9]+\\.[0-9]+$";
 
-  test("publish-pypi guard matches only v-prefixed tag refs (regex text)", () => {
+  test("publish-pypi guard matches only bare X.Y.Z tag refs (regex text), not v-prefixed", () => {
     const { raw } = readReleaseWorkflow();
 
     // Isolate the publish-pypi job body so we don't accidentally match
@@ -439,27 +450,29 @@ describe("§S5 release.yml v-prefixed tag scheme", () => {
     expect(pypiJobMatch).not.toBeNull();
     const pypiJob = pypiJobMatch?.[0] ?? "";
 
-    expect(pypiJob).toContain(V_TAG_REGEX_SOURCE);
-    // NEGATIVE — the old bare-tag pattern must be gone from this job.
-    expect(pypiJob).not.toContain("^refs/tags/[0-9]+\\.[0-9]+\\.[0-9]+$");
+    expect(pypiJob).toContain(BARE_TAG_REGEX_SOURCE);
+    // NEGATIVE — the superseded v-prefixed pattern must be gone from this job.
+    expect(pypiJob).not.toContain("^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$");
   });
 
-  test("publish-npm guard matches only v-prefixed tag refs (regex text)", () => {
+  test("publish-npm guard matches only bare X.Y.Z tag refs (regex text), not v-prefixed", () => {
     const { raw } = readReleaseWorkflow();
 
     const npmJobMatch = raw.match(/publish-npm:[\s\S]*?(?=\n {2}\S|\n$)/);
     expect(npmJobMatch).not.toBeNull();
     const npmJob = npmJobMatch?.[0] ?? "";
 
-    expect(npmJob).toContain(V_TAG_REGEX_SOURCE);
-    expect(npmJob).not.toContain("^refs/tags/[0-9]+\\.[0-9]+\\.[0-9]+$");
+    expect(npmJob).toContain(BARE_TAG_REGEX_SOURCE);
+    expect(npmJob).not.toContain("^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$");
   });
 
-  test("the guard regex extracted from publish-pypi rejects a bare X.Y.Z tag ref and accepts a v-prefixed one", () => {
+  test("the guard regex extracted from publish-pypi accepts a bare X.Y.Z tag ref and rejects a v-prefixed or malformed one", () => {
     // Exercises the ACTUAL regex found in the file (not a hand-maintained
     // duplicate) against the exact ref shapes GitHub Actions supplies via
     // GITHUB_REF — so a guard that merely LOOKS right (e.g. an unescaped
-    // 'v' that doesn't anchor correctly) is still caught behaviourally.
+    // 'v' left in the anchor) is still caught behaviourally. Driven as data,
+    // not read off the YAML: the CI guards have no coverage today and only
+    // run on a real tag push.
     const { raw } = readReleaseWorkflow();
     const pypiJobMatch = raw.match(/publish-pypi:[\s\S]*?(?=\n {2}\S|\n$)/);
     const pypiJob = pypiJobMatch?.[0] ?? "";
@@ -469,23 +482,58 @@ describe("§S5 release.yml v-prefixed tag scheme", () => {
     const extractedSource = guardMatch?.[1] ?? "";
 
     const extractedRegex = new RegExp(extractedSource);
-    expect(extractedRegex.test("refs/tags/0.1.0")).toBe(false);
-    expect(extractedRegex.test("refs/tags/v0.1.0")).toBe(true);
+    // POSITIVE — the shape the release must accept.
+    expect(extractedRegex.test("refs/tags/0.1.0")).toBe(true);
+    // NEGATIVE — every shape §S1 must reject: v-prefixed (the superseded
+    // contract), truncated, and outright junk.
+    expect(extractedRegex.test("refs/tags/v0.1.0")).toBe(false);
+    expect(extractedRegex.test("refs/tags/0.1")).toBe(false);
+    expect(extractedRegex.test("refs/tags/junk")).toBe(false);
   });
 
-  test("create-release's tag-detection grep matches v-prefixed semver tags", () => {
+  test("the guard regex extracted from publish-npm accepts a bare X.Y.Z tag ref and rejects a v-prefixed or malformed one", () => {
     const { raw } = readReleaseWorkflow();
-    expect(raw).toContain("^v[0-9]+\\.[0-9]+\\.[0-9]+$");
-    // NEGATIVE — the old bare grep pattern must be gone.
-    expect(raw).not.toContain("grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+$'");
+    const npmJobMatch = raw.match(/publish-npm:[\s\S]*?(?=\n {2}\S|\n$)/);
+    const npmJob = npmJobMatch?.[0] ?? "";
+
+    const guardMatch = npmJob.match(/GITHUB_REF"\s*=~\s*(\S+)\s*\]\]/);
+    expect(guardMatch).not.toBeNull();
+    const extractedSource = guardMatch?.[1] ?? "";
+
+    const extractedRegex = new RegExp(extractedSource);
+    expect(extractedRegex.test("refs/tags/0.1.0")).toBe(true);
+    expect(extractedRegex.test("refs/tags/v0.1.0")).toBe(false);
+    expect(extractedRegex.test("refs/tags/0.1")).toBe(false);
+    expect(extractedRegex.test("refs/tags/junk")).toBe(false);
   });
 
-  test("publish-npm keeps the GITHUB_REF_NAME v-strip for the package.json version comparison", () => {
+  test("create-release's tag-detection grep matches bare semver tags, not v-prefixed", () => {
     const { raw } = readReleaseWorkflow();
-    // This strip is still load-bearing under the v-scheme — the earlier
-    // "drop it" item from an earlier §S5 draft was WITHDRAWN. Do not assert
-    // its removal.
-    expect(raw).toContain('VERSION="${GITHUB_REF_NAME#v}"');
+    // POSITIVE — the bare grep pattern must be the one wired in.
+    expect(raw).toContain("grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+$'");
+    // NEGATIVE — the superseded v-prefixed grep pattern must be gone.
+    expect(raw).not.toContain("^v[0-9]+\\.[0-9]+\\.[0-9]+$");
+  });
+
+  test("publish-npm still verifies the release tag against package.json version, with no dead #v strip", () => {
+    const { raw } = readReleaseWorkflow();
+    const npmJobMatch = raw.match(/publish-npm:[\s\S]*?(?=\n {2}\S|\n$)/);
+    const npmJob = npmJobMatch?.[0] ?? "";
+
+    // POSITIVE — the verify-only comparison step itself is unchanged this
+    // cycle (§S2 — deriving npm's version FROM the tag — is a later cycle;
+    // §S1 only removes the now-dead v-strip from the comparison).
+    expect(npmJob.toLowerCase()).toContain("package.json");
+    // NEGATIVE — a bare GITHUB_REF_NAME has no leading 'v' to strip; the
+    // strip is dead code under this CR and must not survive.
+    expect(npmJob).not.toContain('VERSION="${GITHUB_REF_NAME#v}"');
+    expect(npmJob).not.toMatch(/#v\}/);
+  });
+
+  test("sweep: no #v strip or ^v tag-prefix pattern survives anywhere in release.yml", () => {
+    const { raw } = readReleaseWorkflow();
+    expect(raw).not.toMatch(/#v\}/);
+    expect(raw).not.toContain("^v[0-9]");
   });
 });
 

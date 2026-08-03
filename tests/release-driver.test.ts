@@ -253,7 +253,7 @@ describe("scripts/release.sh (CR-CRU-041 §S3 + §S5)", () => {
   test("finish 9.9.9 refuses (non-zero) when package.json version mismatches, naming set-version, even under --dry-run, and prints NO git-flow/push line", () => {
     const { dir } = initCommittedScratchRepo("release/9.9.9", "0.0.1"); // package.json still 0.0.1
     track(dir);
-    setVersionTagPrefix(dir, "v"); // tag-prefix guard satisfied so ONLY the manifest guard is under test
+    setVersionTagPrefix(dir, ""); // tag-prefix guard satisfied (CR-CRU-061 §S1: set-and-empty) so ONLY the manifest guard is under test
     const res = runRelease(dir, ["finish", "9.9.9", "--dry-run"]);
     expect(res.exitCode).not.toBe(0);
     expect(res.combined).toContain("set-version");
@@ -261,26 +261,44 @@ describe("scripts/release.sh (CR-CRU-041 §S3 + §S5)", () => {
     expect(res.combined).not.toContain("git push");
   });
 
-  test("finish 9.9.9 refuses (non-zero) when gitflow.prefix.versiontag is UNSET, naming the fix, even under --dry-run, and prints NO git-flow/push line", () => {
+  // CR-CRU-061 §S1/§S6 (SUPERSEDES the block below's prior 'v'-required
+  // contract) — the user reaffirmed bare SemVer categorically on 2026-08-03.
+  // guard_tag_prefix() now asserts gitflow.prefix.versiontag is EMPTY, not
+  // "v". MEASURED: git-flow treats UNSET and SET-TO-EMPTY differently — an
+  // unset key makes `git flow feature start` die outright ("Fatal: Version
+  // tag not set"), while a key explicitly set to "" works and cuts bare
+  // tags. So the guard must accept set-and-empty and REJECT unset — a naive
+  // `!= "v"` (or even `!= ""`-via-`git config --get \|\| true`, which cannot
+  // tell unset from set-empty) check would wrongly pass the unset state.
+  // These two guard tests together pin BOTH directions of that distinction;
+  // the two "BOTH guards satisfied" tests below pin the accept-when-empty
+  // side.
+  test("finish 9.9.9 refuses (non-zero) when gitflow.prefix.versiontag is UNSET, naming the fix (including the empty quotes), even under --dry-run, and prints NO git-flow/push line", () => {
     const { dir } = initCommittedScratchRepo("release/9.9.9", "9.9.9"); // manifest guard satisfied
     track(dir);
-    // gitflow.prefix.versiontag intentionally left unset.
+    // gitflow.prefix.versiontag intentionally left unset (the state that
+    // breaks git-flow itself, per CR-CRU-061's measured ground truth).
     const res = runRelease(dir, ["finish", "9.9.9", "--dry-run"]);
     expect(res.exitCode).not.toBe(0);
     expect(res.combined).toContain("gitflow.prefix.versiontag");
-    expect(res.combined).toContain("git config gitflow.prefix.versiontag v");
+    // POSITIVE — exact fix command, including the empty quotes (a bare
+    // `git config gitflow.prefix.versiontag` with no argument would UNSET
+    // it again, recreating the bug).
+    expect(res.combined).toContain('git config gitflow.prefix.versiontag ""');
+    // NEGATIVE — the superseded 'v'-prefixed fix command must not survive.
+    expect(res.combined).not.toContain("git config gitflow.prefix.versiontag v");
     expect(res.combined).not.toContain("git flow release");
     expect(res.combined).not.toContain("git push");
   });
 
-  test("finish 9.9.9 refuses (non-zero) when gitflow.prefix.versiontag is WRONG (not 'v'), naming the fix, even under --dry-run", () => {
+  test("finish 9.9.9 refuses (non-zero) when gitflow.prefix.versiontag is WRONG (set to the historical non-empty 'v'), naming the fix, even under --dry-run", () => {
     const { dir } = initCommittedScratchRepo("release/9.9.9", "9.9.9"); // manifest guard satisfied
     track(dir);
-    setVersionTagPrefix(dir, "release-"); // wrong prefix, e.g. Crucible's historical bare-tag setup
+    setVersionTagPrefix(dir, "v"); // the OLD (CR-041 §S5) contract's value — must now be REJECTED, not accepted
     const res = runRelease(dir, ["finish", "9.9.9", "--dry-run"]);
     expect(res.exitCode).not.toBe(0);
     expect(res.combined).toContain("gitflow.prefix.versiontag");
-    expect(res.combined).toContain("git config gitflow.prefix.versiontag v");
+    expect(res.combined).toContain('git config gitflow.prefix.versiontag ""');
     expect(res.combined).not.toContain("git flow release");
     expect(res.combined).not.toContain("git push");
   });
@@ -288,7 +306,7 @@ describe("scripts/release.sh (CR-CRU-041 §S3 + §S5)", () => {
   test("finish 9.9.9 with BOTH guards satisfied on release/* --dry-run exits 0 and prints the git-flow-release-finish + push plan without executing", () => {
     const { dir } = initCommittedScratchRepo("release/9.9.9", "9.9.9");
     track(dir);
-    setVersionTagPrefix(dir, "v");
+    setVersionTagPrefix(dir, ""); // CR-CRU-061 §S1: set-and-empty is the valid state
     const beforeSha = headSha(dir);
 
     const res = runRelease(dir, ["finish", "9.9.9", "--dry-run"]);
@@ -307,7 +325,7 @@ describe("scripts/release.sh (CR-CRU-041 §S3 + §S5)", () => {
   test("finish 9.9.9 with BOTH guards satisfied on hotfix/* --dry-run exits 0 and prints the git-flow-hotfix-finish plan without executing", () => {
     const { dir } = initCommittedScratchRepo("hotfix/9.9.9", "9.9.9");
     track(dir);
-    setVersionTagPrefix(dir, "v");
+    setVersionTagPrefix(dir, ""); // CR-CRU-061 §S1: set-and-empty is the valid state
     const beforeSha = headSha(dir);
 
     const res = runRelease(dir, ["finish", "9.9.9", "--dry-run"]);
@@ -316,5 +334,20 @@ describe("scripts/release.sh (CR-CRU-041 §S3 + §S5)", () => {
     expect(res.combined).toContain("git flow hotfix finish");
     expect(res.combined).toContain("git push origin master develop --tags");
     expect(headSha(dir)).toBe(beforeSha);
+  });
+
+  // CR-CRU-061 §S1 — sweep: no dead `#v` strip or `v`-prefix guard literal
+  // survives in scripts/release.sh (ground truth: cmd_status's
+  // `version="${version#v}"` and guard_tag_prefix's `!= "v"` / "expected 'v'"
+  // error text are both now stale under the bare-SemVer contract).
+  test("scripts/release.sh contains no dead #v strip and no v-prefix guard literal", () => {
+    const raw = readFileSync(RELEASE_SH, "utf8");
+    // POSITIVE — the guard now names the empty-string fix explicitly.
+    expect(raw).toContain('gitflow.prefix.versiontag ""');
+    // NEGATIVE — the dead `${...#v}` strip (cmd_status) must be gone.
+    expect(raw).not.toMatch(/\$\{[a-zA-Z_]+#v\}/);
+    // NEGATIVE — the old hardcoded 'v' guard/message text must be gone.
+    expect(raw).not.toContain('!= "v"');
+    expect(raw).not.toContain("expected 'v'");
   });
 });
