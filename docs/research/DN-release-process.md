@@ -1,6 +1,6 @@
 # DN — Release process: pre-release gates, packaging, and CI handover
 
-**Status:** DRAFT — awaiting user ratification
+**Status:** RATIFIED 2026-08-03 (all four decisions closed by the user)
 **Date:** 2026-08-03
 **Author:** Mainline orchestrator (`vidushi`)
 **Design inputs:** `RELEASING.md` (operational manual, CR-CRU-041), `scripts/release.sh`,
@@ -44,9 +44,9 @@ Everything below was verified against the repo, not recalled.
 |---|---|---|
 | S1 | **PyPI + TestPyPI pending Trusted Publishers** | Publishing is OIDC — there are no API tokens in this repo by design. A PyPI *account* is not the same as a *pending Trusted Publisher*, which is registered per project + workflow + environment. `RELEASING.md` §"PyPI and TestPyPI" has the exact field values. |
 | S2 | **npm org `@anthill-tec` does not exist** | User-confirmed. Blocks `publish-npm`. |
-| S3 | **`NPM_TOKEN` not set** | ⚠ **Footgun:** `publish-npm` *detects the absent token and skips with a notice* — the release would report success having published **PyPI only**. That directly violates the lockstep rule in `RELEASING.md`: *"do not publish one artifact alone."* See §4. |
+| S3 | **`NPM_TOKEN` not set** | ⚠ `publish-npm` *detects the absent token and skips with a notice* — a release would report success having published **PyPI only**, violating the lockstep rule *"do not publish one artifact alone."* **Resolution (user): fix the setup, not the symptom** — the org + token land in Phase 0.4, so the skip is unreachable on a release. No CI guard is added. |
 | S4 | GitHub Environments (`pypi`, `testpypi`) + `RELEASE_PAT` | Status unverified. `RELEASING.md` documents both. |
-| S5 | Repo is **PRIVATE** | `publish-npm` runs `npm publish --provenance`. Provenance attestation generally requires a public repository. **Verify before the real publish** — a `dry-run-npm` dispatch is the cheap probe. |
+| S5 | Repo is **PRIVATE** | **Resolved: goes PUBLIC at release** (user, 2026-08-03) — CI does not run otherwise. `npm publish --provenance` then works for free. |
 
 ---
 
@@ -82,8 +82,8 @@ Each item is a hard gate; none is optional.
 | 0.3 | Register **pending Trusted Publishers** on PyPI + TestPyPI (`RELEASING.md` has the field table) | **user** | S1 |
 | 0.4 | Create the **npm org `@anthill-tec`**, then generate an automation `NPM_TOKEN` and add it as a repo secret | **user** | S2, S3 |
 | 0.5 | Confirm GitHub Environments `pypi` / `testpypi` exist and `RELEASE_PAT` is set | **user** | S4 |
-| 0.6 | Decide the repo's visibility for provenance — publish public, or drop `--provenance` | **user** | S5 |
-| 0.7 | Confirm the target version. `0.1.0` is the queue's stated target; `package.json` currently says `2.0.0-alpha.1`. **These must be reconciled deliberately, not silently** — see §5. | **user** | B1, B2 |
+| 0.6 | **Make the repo PUBLIC** — user-decided 2026-08-03: *"we will make it public during release, the CI wont run otherwise"*. Provenance follows for free. | **user** | S5 |
+| 0.7 | `scripts/release.sh set-version 0.1.0` — overwrites the `eab2080` scaffold placeholder. Not a decision; the storyboard fixes the version at **0.1.0**, then 0.2.0. | orchestrator | B2 |
 
 ### Phase 1 — Cut the release branch
 
