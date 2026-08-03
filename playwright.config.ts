@@ -1,13 +1,31 @@
 // CR-CRU-006 §S6 — E2E harness seed. Playwright (headless chromium only)
 // driving the REAL served SPA against a REAL server instance.
 //
-// DB isolation without touching src/: `startServer()` (src/server.ts) resolves
-// its default dbPath ("data/crucible.db") relative to `process.cwd()`, so
-// pointing the webServer's `cwd` at a throwaway scratch directory gives every
-// E2E run a fresh, empty database — no CRUCIBLE_DB env var exists to do this
-// more directly (verified by reading src/server.ts: only CRUCIBLE_PORT is
-// read from env; dbPath only comes from StartServerOpts, which the CLI boot
-// path (`if (import.meta.main)`) never passes).
+// CR-CRU-052 §S5/§S5b — DB isolation, asserted POSITIVELY.
+//
+// This comment previously claimed "no CRUCIBLE_DB env var exists to do this
+// more directly". That was true when written, and CR-CRU-043 made it false:
+// `resolveDbPath()` (src/server.ts) now resolves, first match wins,
+//   1. an explicit `StartServerOpts.dbPath` (never passed on the CLI boot path),
+//   2. `CRUCIBLE_DB`,
+//   3. an ALREADY-EXISTING `<cwd>/data/crucible.db`,
+//   4. `<XDG_DATA_HOME or <HOME>/.local/share>/crucible/crucible.db`.
+//
+// Relying on the scratch `cwd` alone therefore stopped isolating anything: a
+// throwaway cwd is precisely what guarantees rule 3 misses, so every default
+// E2E run since CR-CRU-043 fell through to rule 4 and wrote to the PERSISTENT,
+// user-level `~/.local/share/crucible/crucible.db`. Measured 2026-08-03: that
+// file held 79 projects / 259 events, all `/tmp/e2e` fixtures accumulated
+// across runs — and F1 ("fresh forge — empty state") cannot pass against them.
+//
+// So isolation is now declared EXPLICITLY, via `webServer.env.CRUCIBLE_DB`
+// (see the `webServer` stanza below) — rule 2, which outranks both the cwd
+// probe and the user-level fallback, so no cwd, HOME or XDG_DATA_HOME value
+// can route this suite at a real database. The scratch `cwd` is KEPT and the
+// scratch DB lives inside it, so rules 2 and 3 name the same file and agree
+// rather than diverge. `tests/e2e/teardown-contracts/crucible-db-isolation.test.ts`
+// feeds this config's real `webServer.env` through the real `resolveDbPath`
+// and asserts the result is neither the user-level nor the XDG path.
 import { defineConfig, devices } from "@playwright/test";
 import { defineBddConfig } from "playwright-bdd";
 import { mkdtempSync } from "node:fs";
@@ -23,6 +41,17 @@ import { E2E_PORT as PORT } from "./tests/e2e/steps/harness.ts";
 const REPO_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = path.join(REPO_ROOT, "src", "server.ts");
 const SCRATCH_CWD = mkdtempSync(path.join(tmpdir(), "crucible-e2e-"));
+// CR-CRU-052 §S5 — the per-run database, named explicitly rather than left to
+// be resolved. A real FILE (not `:memory:`) deliberately: the webServer is a
+// separate long-lived process, so either would survive across requests within a
+// run, but a file additionally (a) exercises the same on-disk/WAL store path
+// production uses — `Store`'s constructor skips `PRAGMA journal_mode = WAL` for
+// `:memory:`, so an in-memory E2E DB would test a configuration no deployment
+// runs — and (b) leaves an inspectable post-mortem artifact next to Playwright's
+// retained traces when a scenario fails. It sits under SCRATCH_CWD, so it is
+// exactly the path rule 3 would have adopted, and `startServer()` creates the
+// `data/` parent itself (`mkdirSync(path.dirname(dbPath), {recursive: true})`).
+const SCRATCH_DB = path.join(SCRATCH_CWD, "data", "crucible.db");
 
 // CR-CRU-007 C5b — E2E house style: the E2E layer is proper BDD (Gherkin
 // `.feature` files bound to Playwright via playwright-bdd). `bddgen`
@@ -107,7 +136,12 @@ export default defineConfig({
   webServer: {
     command: `bun run ${SERVER_ENTRY}`,
     cwd: SCRATCH_CWD,
-    env: { CRUCIBLE_PORT: String(PORT) },
+    // CR-CRU-052 §S5 — Playwright spawns this command with
+    // `{...process.env, ...env}` (verified in playwright/lib/plugins/
+    // webServerPlugin.js), so CRUCIBLE_DB here OVERRIDES any ambient
+    // CRUCIBLE_DB the developer's shell happens to export: the suite cannot
+    // be pointed at a real database by accident, only by editing this line.
+    env: { CRUCIBLE_PORT: String(PORT), CRUCIBLE_DB: SCRATCH_DB },
     port: PORT,
     reuseExistingServer: false,
     timeout: 20_000,
