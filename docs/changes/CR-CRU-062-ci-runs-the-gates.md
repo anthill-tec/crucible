@@ -123,8 +123,10 @@ surfaces on push like the Python side already does, rather than at publish time.
 
 ## Risk
 - **CI minutes and wall-clock.** The bun suite is ~358s and e2e ~57s locally. Running all three on
-  every push is real cost; consider what runs on push versus what runs on the release path only.
-  Whatever is decided, the RELEASE path must run all of them.
+  every push is real cost. ⚠ **But §S0 forecloses the obvious saving**: scoping the test jobs to
+  push-only makes them absent from the release run, which either skips the publish outright or
+  forces an `if: always()` that defeats the gate. If cost must come down, reduce it INSIDE the jobs
+  (caching, sharding) — never by restricting which events they run on.
 - **e2e in CI needs browsers and a server.** Playwright installs browsers; the config spawns the
   server itself. The scratch-cwd + `CRUCIBLE_DB` isolation CR-052 built must hold on a runner too —
   verify rather than assume, since that isolation was silently broken for weeks on a developer
