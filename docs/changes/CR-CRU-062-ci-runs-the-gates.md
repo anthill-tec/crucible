@@ -40,13 +40,37 @@ CR-CRU-060 is that an ambient guarantee nobody owns is the one that rots.
 
 ## Scope
 
+### 🚨 §S0 — The event-boundary constraint that governs every other section
+**Found at gap analysis; get this wrong and the gate is decorative.**
+
+`publish-pypi` and `publish-npm` are `if: github.event_name == 'release'`. `create-release` is
+`if: push && master`. **These are DIFFERENT workflow runs**, and GitHub Actions' `needs:` only
+orders jobs *within a single run*. A test job scoped to `push`/`pull_request` therefore does not
+exist in the release run at all.
+
+Consequences, both bad:
+- A publish job that `needs:` a **skipped** job is itself skipped — so a release would publish
+  **nothing**, silently.
+- Working around that with `if: always()` on the publish would defeat the gate entirely.
+
+**Therefore the test jobs must carry NO event-restricting `if`**, so they run on push, PR **and**
+release. That is what makes `needs:` a real gate rather than a decoration. Do not "optimise" CI
+minutes by scoping them to push — that is precisely the change that would look correct in review
+and fail at the only moment it matters.
+
 ### §S1 — A CI job that runs the bun suite
-Run `bun test` on push and pull_request. This is the 1299-test suite that gates every CR locally.
+Run `bun test` — on every event (see §S0), not push-only. This is the ~1308-test suite that gates
+every CR locally.
 
 ### §S2 — A CI job that runs the Python suite
-Run the Python regression. Note the cross-stack rule (CR-CRU-045 §S3): a change to
-`clients/*-crucible.py` requires BOTH gates, so CI must carry both or it under-enforces a rule the
-project already holds itself to locally.
+**Measured at gap analysis:** `python3 -m unittest discover -s tests/client -t .` → **683/683 with
+NO server**, verified by re-running with `CRUCIBLE_URL` pointed at a dead port. Use that.
+
+⚠ Do **not** use the client's `regression` verb: it needs `CRUCIBLE_PROJECT_KEY` and a live Crucible
+server to ingest into, neither of which exists on a runner. It is the orchestrator's tool, not CI's.
+
+Note the cross-stack rule (CR-CRU-045 §S3): a change to `clients/*-crucible.py` requires BOTH gates,
+so CI must carry both or it under-enforces a rule the project already holds itself to locally.
 
 ### §S3 — A CI job that runs e2e
 `bun run test:e2e`. 🚨 **This is the one with a trap.** CR-CRU-052 found that a default e2e run
@@ -58,23 +82,28 @@ property of the environment.
 
 Expected: 40/40 (CR-CRU-060). Playwright needs its browsers installed in the runner.
 
-### §S4 — Decide what BLOCKS
-Running tests and ignoring them is theatre. Decide and record:
-- Do failures block a **publish**, or only report? (A publish job that runs after a failed test job
-  and does not depend on it is the same gap in a new shape.)
-- Does the release path require the test jobs to have passed on that commit?
+### §S4 — What BLOCKS: extend the existing `needs:` graph, add nothing new
+**Gap analysis correction:** this section originally asked to "decide" the mechanism. There is
+nothing to decide — all five jobs already `needs: build`, so the dependency graph IS the enforcement
+mechanism. Gating requires only more edges on it: `publish-pypi` and `publish-npm` gain
+`needs: [build, <the test jobs>]`.
 
-Prefer wiring `publish-*` to `needs:` the test jobs over adding a second, parallel guard — one
-dependency graph, not two enforcement mechanisms that can disagree.
+Do NOT add a second, parallel guard (a status check, an `if:` condition consulting a prior run).
+Two mechanisms can disagree; one graph cannot disagree with itself. Combined with §S0's no-`if`
+rule, this makes a failed suite block a publish by construction.
 
 ### §S5 — Build the server artifact in CI too
 Add a build/pack step for `@anthill-tec/crucible-server` so packaging breakage on the server side
 surfaces on push like the Python side already does, rather than at publish time.
 
 ## Acceptance criteria
+- [ ] 🚨 The test jobs carry NO event-restricting `if`, so they run on the `release` event too —
+      asserted (§S0). Without this the gate is inert.
+- [ ] `publish-pypi` and `publish-npm` `needs:` the test jobs — asserted on the parsed workflow, not
+      by eye.
 - [ ] A CI run on push executes the bun suite and its result is visible on the commit — asserted by
       a real run, not by reading YAML.
-- [ ] The Python suite likewise.
+- [ ] The Python suite likewise, via `unittest discover` with no server — asserted.
 - [ ] The e2e suite likewise, with `CRUCIBLE_DB` set explicitly in the job env.
 - [ ] A deliberately failing test **fails the workflow** — asserted by an actual red run, then
       reverted. A test job that cannot go red proves nothing.
