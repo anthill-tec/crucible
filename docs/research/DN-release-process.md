@@ -187,11 +187,34 @@ Every test the project has, on the release branch.
 Union regression (all tests except e2e) **plus** e2e, which is now meaningful — CR-CRU-060 took the
 suite to 40/40 green for the first time.
 
-- bun regression with coverage
-- python regression with coverage
-- `bun run test:e2e` — 40/40 expected
+**CI now owns these three gates** (CR-CRU-062). `.github/workflows/release.yml` carries a job per
+suite, and CI runs all three on every event — push, pull request **and** the `release` event itself:
 
-**Gate:** all three green. Any failure ends the release.
+| Suite | CI job | Command |
+|---|---|---|
+| bun | `test-bun` | `bun test` |
+| python | `test-python` | `python3 -m unittest discover -s tests/client -t .` (server-free) |
+| e2e | `test-e2e` | `bun run test:e2e` — 40/40 expected, with `CRUCIBLE_DB` declared explicitly |
+
+None of the three carries an event-restricting `if`, and that is load-bearing: `needs:` only orders
+jobs within a single workflow run, so a test job scoped to push would simply not exist in the
+release run. Because they always exist, `publish-pypi` and `publish-npm` can and do `needs:` all
+three — so a failed suite **blocks a publish by construction**, not by discipline. There is no
+second, parallel guard; the dependency graph is the whole mechanism. `pack-server` runs on the same
+unconditional cadence, so an npm packaging break surfaces on push rather than at publish time.
+
+**What stays local (the operator's, on the release branch):**
+
+- the coverage-carrying regression runs — CI runs the suites bare; bun/python **coverage** is still
+  produced locally through the Crucible clients, which need a live server CI does not have
+- the `no-mistakes` integrity gate of Step 3
+- the packaging install-and-smoke of Step 5
+
+Running them locally before the tag also remains the sane habit: local failure costs seconds, and CI
+is the backstop that makes the gate structural rather than a matter of remembering.
+
+**Gate:** all three green. Any failure ends the release — and, since CR-CRU-062, CI enforces that
+independently of whether anyone remembered to run them locally.
 
 ### Step 5 — PACKAGE, AND TEST THE PACKAGE
 
