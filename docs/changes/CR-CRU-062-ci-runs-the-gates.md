@@ -94,7 +94,30 @@ rule, this makes a failed suite block a publish by construction.
 
 ### §S5 — Build the server artifact in CI too
 Add a build/pack step for `@anthill-tec/crucible-server` so packaging breakage on the server side
-surfaces on push like the Python side already does, rather than at publish time.
+surfaces on push like the Python side already does, rather than at publish time. It must carry NO
+event-restricting `if` (§S0) — otherwise it surfaces nothing on push, which is the entire point.
+
+🚨 **Use `npm pack --dry-run`, NOT `npm publish --dry-run`. Measured 2026-08-04:**
+```
+$ npm publish --dry-run --access public
+npm error You must specify a tag using --tag when publishing a prerelease version.
+```
+`package.json` currently holds the `2.0.0-alpha.1` scaffold placeholder, and npm refuses to
+dry-run-publish a **prerelease** version without an explicit `--tag`. `npm pack --dry-run` has no
+such constraint, is network-free, and still resolves the `files` list — which is what this section
+actually needs.
+
+**Also worth asserting: the packed tarball CONTAINS the declared bin entrypoint.** `package.json`
+declares `files: ["bin/", "src/", "public/"]` and `bin: {"crucible-server": "bin/crucible-server.mjs"}`.
+A `files` list that silently stopped shipping the executable would today surface only when someone
+installed the published package and it failed to run. Verified provable in-runner: `npm pack
+--dry-run` lists `bin/crucible-server.mjs` in its output.
+
+**Note on the pre-existing `dry-run-npm` job:** it runs `npm publish --dry-run --access public` and
+therefore fails from any ref whose committed version is a prerelease. That is tolerable for its own
+purpose — it is the `workflow_dispatch` rehearsal, dispatched from a `release/*` branch where
+CR-CRU-061 §S7 has already aligned the manifest to a release version. It is NOT a model for §S5's
+unconditional job, which must work on ordinary pushes from `develop`.
 
 ## Acceptance criteria
 - [ ] 🚨 The test jobs carry NO event-restricting `if`, so they run on the `release` event too —
