@@ -1097,3 +1097,107 @@ describe("§S3 the e2e job sets CRUCIBLE_DB explicitly in its env", () => {
     expect((value as string).length).toBeGreaterThan(0);
   });
 });
+
+// CR-CRU-062 §S5 — build/pack the SERVER artifact in CI too (RED).
+//
+// Spec: docs/changes/CR-CRU-062-ci-runs-the-gates.md §S5.
+//
+// Measured: `build` (the only unconditional, always-runs packaging job)
+// packages `crucible-axi` (Python) only. The npm side publishes `bin/`,
+// `src/`, `public/` straight from source with no build/pack step at all —
+// the ONLY existing dry-run mechanism is the `dry-run-npm` job, and it is
+// `if: github.event_name == 'workflow_dispatch'` — REHEARSAL ONLY, not run
+// on every push, so a `package.json` `files`/`bin` regression would surface
+// only when someone manually dispatches the rehearsal, never on an ordinary
+// push — exactly the asymmetry §S5's own Context table names ("a packaging
+// break on the server side surfaces only at publish time").
+//
+// So the behavioural bar is NOT "some job runs npm pack somewhere" (that's
+// already vacuously true of dry-run-npm) — it's "an UNCONDITIONAL job does",
+// matching the cadence the Python `build` job and the §S0-gated test jobs
+// above already established (no event-restricting `if`).
+//
+// Dispatch's 🚨: consider whether asserting the packed TARBALL actually
+// CONTAINS the declared bin entrypoint (`bin/crucible-server.mjs`) is
+// provable in-runner. Decision: YES — `npm pack --dry-run` is a real,
+// local, network-free command (verified by hand: it tars per package.json's
+// `files` field, no registry contact) that runs identically here and on a
+// GitHub runner, so the second test below does not merely parse the YAML —
+// it EXTRACTS the real `run:` script GREEN wired up and EXECUTES it for
+// real, asserting the genuine observable outcome (the entrypoint survives
+// packaging) rather than "the step ran without error". This is deliberately
+// NOT hardcoded to the literal string `npm pack --dry-run`: the CR text
+// itself allows "or equivalent", and a hand-verified probe shows
+// `npm publish --dry-run --access public` (the mechanism the pre-existing
+// dry-run-npm job already uses) currently FAILS locally with "You must
+// specify a tag using --tag when publishing a prerelease version" (the repo
+// sits at `2.0.0-alpha.1`) — so hardcoding that exact command would either
+// force GREEN into a broken mechanism or require pinning a workaround this
+// RED phase has no authority to prescribe. Executing whatever GREEN
+// actually wires up is what makes this test tell the truth either way.
+type WorkflowStep062S5 = WorkflowStep062;
+
+// Matches `npm pack ... --dry-run` OR `npm publish ... --dry-run` on one
+// step's `run:` script — the "natural mechanism (or equivalent)" the CR
+// text names, not one literal command string.
+const NPM_PACK_DRYRUN_PATTERN = /\bnpm\s+(pack|publish)\b[^\n]*--dry-run/;
+
+function findJobsMatchingRun062(
+  jobs: Record<string, WorkflowJob062>,
+  pattern: RegExp,
+): Array<[string, WorkflowJob062]> {
+  return Object.entries(jobs).filter(([, job]) =>
+    (job.steps ?? []).some((s) => typeof s.run === "string" && pattern.test(s.run)),
+  );
+}
+
+describe("§S5 CI builds/packs the npm server artifact too, on the same unconditional cadence as the Python `build` job", () => {
+  test("at least one job dry-run-packs the npm server artifact with NO event-restricting `if` (runs on push, not just workflow_dispatch rehearsal)", () => {
+    // BORN RED — today exactly one job (`dry-run-npm`) matches the
+    // pack/dry-run pattern, and its `if` is
+    // `github.event_name == 'workflow_dispatch'` — defined, not absent — so
+    // the "unconditional" filter below currently yields zero matches.
+    const jobs = parseReleaseWorkflowJobs062();
+    const matches = findJobsMatchingRun062(jobs, NPM_PACK_DRYRUN_PATTERN);
+    const unconditional = matches.filter(([, job]) => job.if === undefined);
+
+    // POSITIVE — at least one such job exists AND runs unconditionally.
+    expect(unconditional.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("the unconditional packaging step, executed for real, resolves the declared bin entrypoint (bin/crucible-server.mjs) into the tarball", () => {
+    // Guard first (assertion, not a crash): the previous test's own
+    // condition must hold before this one can extract a real script to run.
+    const jobs = parseReleaseWorkflowJobs062();
+    const matches = findJobsMatchingRun062(jobs, NPM_PACK_DRYRUN_PATTERN);
+    const unconditional = matches.filter(([, job]) => job.if === undefined);
+    expect(unconditional.length).toBeGreaterThanOrEqual(1);
+
+    const [, job] = unconditional[0];
+    const step = (job.steps ?? []).find(
+      (s): s is WorkflowStep062S5 => typeof s.run === "string" && NPM_PACK_DRYRUN_PATTERN.test(s.run),
+    );
+    expect(step).toBeDefined();
+    const script = (step as WorkflowStep062S5).run as string;
+
+    // REAL execution — not a mock, not a re-parse of the YAML. This is the
+    // exact script GREEN wrote, run against the exact repo state, on the
+    // exact filesystem a GitHub runner would see (network-free: `npm pack
+    // --dry-run` never contacts a registry).
+    const proc = Bun.spawnSync(["bash", "-c", script], {
+      cwd: REPO_ROOT,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = `${proc.stdout.toString()}\n${proc.stderr.toString()}`;
+
+    // POSITIVE — the real, observable outcome: the packaging command
+    // succeeds AND the resolved file list names the declared bin
+    // entrypoint. Catches exactly the class of breakage §S5's 🚨 names — a
+    // `files`/`bin` regression in package.json that would silently stop
+    // shipping the executable, since a bare "the step didn't error" check
+    // would NOT catch a `files` list that quietly dropped `bin/`.
+    expect(proc.exitCode).toBe(0);
+    expect(output).toContain("bin/crucible-server.mjs");
+  });
+});
