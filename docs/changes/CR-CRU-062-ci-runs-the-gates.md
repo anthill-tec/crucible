@@ -156,3 +156,49 @@ unconditional job, which must work on ordinary pushes from `develop`.
   machine and nobody noticed.
 - **A green CI that never fails is worse than no CI**, because it manufactures confidence. The AC
   requiring a deliberately-red run exists for exactly that reason.
+
+## Implementation Notes
+- **Union regression at the gate: 2009 passing / 0 failing** (bun 1326 + python 683), coverage
+  87.6%/87.0% bun.
+- **🚨 §S0 was found at gap analysis and would have made the entire CR decorative.** `needs:` orders
+  jobs only WITHIN a workflow run. Publishes fire on the `release` event, `create-release` on
+  push-to-master — different runs. Test jobs scoped to push/PR simply do not exist in the release
+  run, so a publish that `needs:` them is itself SKIPPED and the release silently publishes nothing.
+  The original spec said "run on push and pull_request", which is precisely that mistake. All four
+  new jobs therefore carry NO event-restricting `if`, verified by YAML parse (orchestrator + VERIFY).
+  The Risk section records that this forecloses the obvious CI-minutes saving — cost must come down
+  inside the jobs, never by restricting events.
+- **`npm publish --dry-run` FAILS today** — measured: *"You must specify a tag using --tag when
+  publishing a prerelease version"*, because the manifest holds the `2.0.0-alpha.1` scaffold value.
+  §S5 uses `npm pack --dry-run` instead: network-free, no prerelease constraint, and it still
+  resolves the `files` list. The pre-existing `dry-run-npm` job gets away with the publish form only
+  because it is dispatched from a `release/*` branch where CR-061 §S7 has aligned the manifest.
+- **The pack job asserts the bin entrypoint SHIPS**, not merely that packing succeeds. `npm pack
+  --dry-run`'s listing is npm's own resolution of `files`/`.npmignore` precedence, so a typo'd glob
+  or dropped `bin/` entry fails the job rather than failing a user's first `npx`. RED proves this by
+  EXECUTING the extracted `run:` script, not by parsing YAML — a parse only shows the text says
+  `npm pack`; execution shows the command resolves the entrypoint against the real manifest state.
+- **The Python job is genuinely server-free** — 683/683 with `CRUCIBLE_URL` pointed at a dead port,
+  verified independently twice. The client's `regression` verb was explicitly rejected: it needs
+  `CRUCIBLE_PROJECT_KEY` and a live server to ingest into, so it is the orchestrator's tool, not
+  CI's.
+
+## 🚨 CARRY-FORWARD — five facets provable ONLY by a real push/release run
+This CR's subject is CI, which cannot be executed locally. VERIFY enumerated what remains open; it
+is recorded here rather than quietly ticked, because an incomplete list is worse than none.
+
+1. A real push executes `test-bun` and the result is visible on the commit.
+2. `test-e2e` genuinely runs in the runner container — Playwright's `--with-deps chromium` install
+   and the server spawn under `${{ github.workspace }}/e2e-scratch/…`. **CR-052's scratch-cwd +
+   `CRUCIBLE_DB` isolation has been reasoned about on a runner, never proven there** — and that same
+   isolation was silently broken for weeks on a dev machine before anyone noticed.
+3. **A deliberately RED commit fails the workflow, then is reverted.** This is the AC the whole CR
+   exists to guarantee and it remains unexercised. A CI that cannot fail manufactures confidence.
+4. `pack-server` succeeds on `ubuntu-latest` + `actions/setup-node@v4` (node 22) — proven only on
+   this machine's npm/node.
+5. On a real `release` event, the publishes genuinely WAIT on the three test jobs. The YAML topology
+   is sound by parse, but GitHub Actions' live scheduling and skip-propagation are unverified.
+
+**Item 3 is the one to do deliberately**, not opportunistically: push a trivial red commit to a
+throwaway branch, observe the workflow fail, revert. Until then the gate is designed but never
+demonstrated.
