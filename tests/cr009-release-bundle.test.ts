@@ -900,3 +900,304 @@ describe("§S4 docs — RELEASING.md", () => {
     expect(lower).toMatch(/single version authority|neither is hand-versioned/);
   });
 });
+
+// CR-CRU-062 §S0-§S4 — CI actually runs the gates (bun/python/e2e test jobs,
+// no event-restricting `if`, and the publish jobs `needs:` them)
+//
+// Spec: docs/changes/CR-CRU-062-ci-runs-the-gates.md.
+//
+// §S0 is the load-bearing constraint measured at gap analysis: publish-pypi
+// and publish-npm are `if: github.event_name == 'release'`; create-release is
+// a DIFFERENT workflow run, gated on push+master. `needs:` only orders jobs
+// WITHIN a single run, so a test job scoped to push/pull_request simply does
+// not exist in the release run — a publish job that `needs:` a SKIPPED job is
+// itself skipped, silently publishing nothing. Therefore the bun/python/e2e
+// test jobs below must carry NO event-restricting `if` at all, and the two
+// publish jobs must `needs:` them (extending the existing graph — §S4 — not a
+// second, parallel guard mechanism).
+//
+// Extends this file rather than starting a new one, following the pattern the
+// §S4 docs — RELEASING.md block above already set: this is the established
+// home for release.yml's assertions across every CR that touches it.
+//
+// Genuinely parses the workflow via Bun.YAML.parse (as the existing
+// readReleaseWorkflow()/ReleaseWorkflow helpers above already do) rather than
+// substring-matching, for the needs graph and if-absence checks specifically
+// — a substring test would pass on a commented-out line or a job name
+// appearing only in prose, and the CR spec calls this out explicitly.
+//
+// RED phase: release.yml on this branch has no bun/python/e2e test job at
+// all (this CR's own Context section measured, by sweep, that CI runs no
+// test today) — every assertion below is expected to FAIL: the `findJobsRunning`
+// lookups return zero matches, so the `.toBe(1)` / `toBeDefined()` guards fail
+// first, before the `if`/`needs`/env assertions further down would even be
+// reached against a real job.
+
+type WorkflowStep062 = { name?: string; run?: string; env?: Record<string, string> };
+type WorkflowJob062 = {
+  needs?: string | string[];
+  if?: string;
+  env?: Record<string, string>;
+  steps?: WorkflowStep062[];
+};
+type Workflow062 = { jobs?: Record<string, WorkflowJob062> };
+
+function parseReleaseWorkflowJobs062(): Record<string, WorkflowJob062> {
+  const raw = readText(join(".github", "workflows", "release.yml"));
+  const parsed = Bun.YAML.parse(raw) as Workflow062;
+  return parsed.jobs ?? {};
+}
+
+function findJobsRunning062(
+  jobs: Record<string, WorkflowJob062>,
+  substr: string,
+): Array<[string, WorkflowJob062]> {
+  return Object.entries(jobs).filter(([, job]) =>
+    (job.steps ?? []).some((s) => typeof s.run === "string" && s.run.includes(substr)),
+  );
+}
+
+function normalizeNeeds062(needs?: string | string[]): string[] {
+  if (!needs) return [];
+  return Array.isArray(needs) ? needs : [needs];
+}
+
+// Exact commands, verbatim from the CR's own §S1/§S2/§S3 text and measured
+// against the real repo (package.json's "test"/"test:e2e" scripts, and the
+// gap-analysis-measured `python3 -m unittest discover -s tests/client -t .`
+// invocation — 683/683 with no server).
+const BUN_SUITE_CMD = "bun test";
+const PY_SUITE_CMD = "python3 -m unittest discover -s tests/client -t .";
+const E2E_SUITE_CMD = "bun run test:e2e";
+
+describe("§S1/§S2/§S3 release.yml declares bun/python/e2e test jobs", () => {
+  test("exactly one job runs the bun suite (`bun test`)", () => {
+    const jobs = parseReleaseWorkflowJobs062();
+    const matches = findJobsRunning062(jobs, BUN_SUITE_CMD);
+    // POSITIVE — exactly one, not merely "at least one".
+    expect(matches.length).toBe(1);
+  });
+
+  test("exactly one job runs the Python suite (`python3 -m unittest discover -s tests/client -t .`)", () => {
+    const jobs = parseReleaseWorkflowJobs062();
+    const matches = findJobsRunning062(jobs, PY_SUITE_CMD);
+    expect(matches.length).toBe(1);
+  });
+
+  test("exactly one job runs e2e (`bun run test:e2e`)", () => {
+    const jobs = parseReleaseWorkflowJobs062();
+    const matches = findJobsRunning062(jobs, E2E_SUITE_CMD);
+    expect(matches.length).toBe(1);
+  });
+});
+
+describe("§S0 the three test jobs carry NO event-restricting `if`", () => {
+  test("the bun/python/e2e test jobs each have `if` undefined — they run on push, pull_request, AND release", () => {
+    const jobs = parseReleaseWorkflowJobs062();
+    const bunJob = findJobsRunning062(jobs, BUN_SUITE_CMD)[0];
+    const pyJob = findJobsRunning062(jobs, PY_SUITE_CMD)[0];
+    const e2eJob = findJobsRunning062(jobs, E2E_SUITE_CMD)[0];
+
+    // Guard: the jobs must actually exist before their `if` can be judged
+    // absent — otherwise `undefined` would vacuously "pass" against a job
+    // that was never found.
+    expect(bunJob).toBeDefined();
+    expect(pyJob).toBeDefined();
+    expect(e2eJob).toBeDefined();
+
+    // POSITIVE — the required property is the ABSENCE of `if`, so the run
+    // event alone (push/pull_request/release) governs whether the job runs.
+    expect(bunJob?.[1].if).toBeUndefined();
+    expect(pyJob?.[1].if).toBeUndefined();
+    expect(e2eJob?.[1].if).toBeUndefined();
+  });
+});
+
+describe("§S4 publish-pypi and publish-npm `needs:` all three test jobs", () => {
+  test("publish-pypi needs build + the bun/python/e2e test jobs", () => {
+    const jobs = parseReleaseWorkflowJobs062();
+    const bunJobName = findJobsRunning062(jobs, BUN_SUITE_CMD)[0]?.[0];
+    const pyJobName = findJobsRunning062(jobs, PY_SUITE_CMD)[0]?.[0];
+    const e2eJobName = findJobsRunning062(jobs, E2E_SUITE_CMD)[0]?.[0];
+
+    expect(bunJobName).toBeDefined();
+    expect(pyJobName).toBeDefined();
+    expect(e2eJobName).toBeDefined();
+
+    const publishPypi = jobs["publish-pypi"];
+    expect(publishPypi).toBeDefined();
+    const needs = normalizeNeeds062(publishPypi?.needs);
+
+    // POSITIVE — build must survive (§S4: extend the graph, not replace it),
+    // plus all three test jobs.
+    expect(needs).toContain("build");
+    expect(needs).toContain(bunJobName as string);
+    expect(needs).toContain(pyJobName as string);
+    expect(needs).toContain(e2eJobName as string);
+  });
+
+  test("publish-npm needs build + the bun/python/e2e test jobs", () => {
+    const jobs = parseReleaseWorkflowJobs062();
+    const bunJobName = findJobsRunning062(jobs, BUN_SUITE_CMD)[0]?.[0];
+    const pyJobName = findJobsRunning062(jobs, PY_SUITE_CMD)[0]?.[0];
+    const e2eJobName = findJobsRunning062(jobs, E2E_SUITE_CMD)[0]?.[0];
+
+    expect(bunJobName).toBeDefined();
+    expect(pyJobName).toBeDefined();
+    expect(e2eJobName).toBeDefined();
+
+    const publishNpm = jobs["publish-npm"];
+    expect(publishNpm).toBeDefined();
+    const needs = normalizeNeeds062(publishNpm?.needs);
+
+    expect(needs).toContain("build");
+    expect(needs).toContain(bunJobName as string);
+    expect(needs).toContain(pyJobName as string);
+    expect(needs).toContain(e2eJobName as string);
+  });
+});
+
+describe("§S2 the Python test job is server-free", () => {
+  test("uses `unittest discover` and does NOT use the client's `regression` verb or CRUCIBLE_PROJECT_KEY", () => {
+    const jobs = parseReleaseWorkflowJobs062();
+    const matches = findJobsRunning062(jobs, PY_SUITE_CMD);
+    expect(matches.length).toBe(1);
+    const [, job] = matches[0];
+
+    const runText = (job.steps ?? []).map((s) => s.run ?? "").join("\n");
+    // NEGATIVE — the server-needing verb and its required env var must be
+    // absent from the WHOLE job (every step), not merely from the one step
+    // that happens to match PY_SUITE_CMD.
+    expect(runText).not.toContain("regression");
+    expect(runText.toLowerCase()).not.toContain("crucible_project_key");
+    const jobEnvText = JSON.stringify(job.env ?? {}) + (job.steps ?? []).map((s) => JSON.stringify(s.env ?? {})).join("");
+    expect(jobEnvText.toLowerCase()).not.toContain("crucible_project_key");
+  });
+});
+
+describe("§S3 the e2e job sets CRUCIBLE_DB explicitly in its env", () => {
+  test("CRUCIBLE_DB is present with a non-empty value, declared on the job (not inherited from the ambient environment)", () => {
+    const jobs = parseReleaseWorkflowJobs062();
+    const matches = findJobsRunning062(jobs, E2E_SUITE_CMD);
+    expect(matches.length).toBe(1);
+    const [, job] = matches[0];
+
+    // CRUCIBLE_DB may be declared at job level or on the specific run step —
+    // either satisfies "the job sets it explicitly"; what must NOT happen is
+    // it being absent from both (silently inherited/ambient, CR-052's exact
+    // failure mode).
+    const jobEnvValue = job.env?.CRUCIBLE_DB;
+    const stepEnvValue = (job.steps ?? [])
+      .map((s) => s.env?.CRUCIBLE_DB)
+      .find((v) => typeof v === "string");
+    const value = jobEnvValue ?? stepEnvValue;
+
+    expect(value).toBeDefined();
+    expect(typeof value).toBe("string");
+    expect((value as string).length).toBeGreaterThan(0);
+  });
+});
+
+// CR-CRU-062 §S5 — build/pack the SERVER artifact in CI too (RED).
+//
+// Spec: docs/changes/CR-CRU-062-ci-runs-the-gates.md §S5.
+//
+// Measured: `build` (the only unconditional, always-runs packaging job)
+// packages `crucible-axi` (Python) only. The npm side publishes `bin/`,
+// `src/`, `public/` straight from source with no build/pack step at all —
+// the ONLY existing dry-run mechanism is the `dry-run-npm` job, and it is
+// `if: github.event_name == 'workflow_dispatch'` — REHEARSAL ONLY, not run
+// on every push, so a `package.json` `files`/`bin` regression would surface
+// only when someone manually dispatches the rehearsal, never on an ordinary
+// push — exactly the asymmetry §S5's own Context table names ("a packaging
+// break on the server side surfaces only at publish time").
+//
+// So the behavioural bar is NOT "some job runs npm pack somewhere" (that's
+// already vacuously true of dry-run-npm) — it's "an UNCONDITIONAL job does",
+// matching the cadence the Python `build` job and the §S0-gated test jobs
+// above already established (no event-restricting `if`).
+//
+// Dispatch's 🚨: consider whether asserting the packed TARBALL actually
+// CONTAINS the declared bin entrypoint (`bin/crucible-server.mjs`) is
+// provable in-runner. Decision: YES — `npm pack --dry-run` is a real,
+// local, network-free command (verified by hand: it tars per package.json's
+// `files` field, no registry contact) that runs identically here and on a
+// GitHub runner, so the second test below does not merely parse the YAML —
+// it EXTRACTS the real `run:` script GREEN wired up and EXECUTES it for
+// real, asserting the genuine observable outcome (the entrypoint survives
+// packaging) rather than "the step ran without error". This is deliberately
+// NOT hardcoded to the literal string `npm pack --dry-run`: the CR text
+// itself allows "or equivalent", and a hand-verified probe shows
+// `npm publish --dry-run --access public` (the mechanism the pre-existing
+// dry-run-npm job already uses) currently FAILS locally with "You must
+// specify a tag using --tag when publishing a prerelease version" (the repo
+// sits at `2.0.0-alpha.1`) — so hardcoding that exact command would either
+// force GREEN into a broken mechanism or require pinning a workaround this
+// RED phase has no authority to prescribe. Executing whatever GREEN
+// actually wires up is what makes this test tell the truth either way.
+type WorkflowStep062S5 = WorkflowStep062;
+
+// Matches `npm pack ... --dry-run` OR `npm publish ... --dry-run` on one
+// step's `run:` script — the "natural mechanism (or equivalent)" the CR
+// text names, not one literal command string.
+const NPM_PACK_DRYRUN_PATTERN = /\bnpm\s+(pack|publish)\b[^\n]*--dry-run/;
+
+function findJobsMatchingRun062(
+  jobs: Record<string, WorkflowJob062>,
+  pattern: RegExp,
+): Array<[string, WorkflowJob062]> {
+  return Object.entries(jobs).filter(([, job]) =>
+    (job.steps ?? []).some((s) => typeof s.run === "string" && pattern.test(s.run)),
+  );
+}
+
+describe("§S5 CI builds/packs the npm server artifact too, on the same unconditional cadence as the Python `build` job", () => {
+  test("at least one job dry-run-packs the npm server artifact with NO event-restricting `if` (runs on push, not just workflow_dispatch rehearsal)", () => {
+    // BORN RED — today exactly one job (`dry-run-npm`) matches the
+    // pack/dry-run pattern, and its `if` is
+    // `github.event_name == 'workflow_dispatch'` — defined, not absent — so
+    // the "unconditional" filter below currently yields zero matches.
+    const jobs = parseReleaseWorkflowJobs062();
+    const matches = findJobsMatchingRun062(jobs, NPM_PACK_DRYRUN_PATTERN);
+    const unconditional = matches.filter(([, job]) => job.if === undefined);
+
+    // POSITIVE — at least one such job exists AND runs unconditionally.
+    expect(unconditional.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("the unconditional packaging step, executed for real, resolves the declared bin entrypoint (bin/crucible-server.mjs) into the tarball", () => {
+    // Guard first (assertion, not a crash): the previous test's own
+    // condition must hold before this one can extract a real script to run.
+    const jobs = parseReleaseWorkflowJobs062();
+    const matches = findJobsMatchingRun062(jobs, NPM_PACK_DRYRUN_PATTERN);
+    const unconditional = matches.filter(([, job]) => job.if === undefined);
+    expect(unconditional.length).toBeGreaterThanOrEqual(1);
+
+    const [, job] = unconditional[0];
+    const step = (job.steps ?? []).find(
+      (s): s is WorkflowStep062S5 => typeof s.run === "string" && NPM_PACK_DRYRUN_PATTERN.test(s.run),
+    );
+    expect(step).toBeDefined();
+    const script = (step as WorkflowStep062S5).run as string;
+
+    // REAL execution — not a mock, not a re-parse of the YAML. This is the
+    // exact script GREEN wrote, run against the exact repo state, on the
+    // exact filesystem a GitHub runner would see (network-free: `npm pack
+    // --dry-run` never contacts a registry).
+    const proc = Bun.spawnSync(["bash", "-c", script], {
+      cwd: REPO_ROOT,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = `${proc.stdout.toString()}\n${proc.stderr.toString()}`;
+
+    // POSITIVE — the real, observable outcome: the packaging command
+    // succeeds AND the resolved file list names the declared bin
+    // entrypoint. Catches exactly the class of breakage §S5's 🚨 names — a
+    // `files`/`bin` regression in package.json that would silently stop
+    // shipping the executable, since a bare "the step didn't error" check
+    // would NOT catch a `files` list that quietly dropped `bin/`.
+    expect(proc.exitCode).toBe(0);
+    expect(output).toContain("bin/crucible-server.mjs");
+  });
+});
