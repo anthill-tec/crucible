@@ -22,11 +22,11 @@ Everything below was verified against the repo, not recalled.
 
 | Capability | Where | State |
 |---|---|---|
-| Release driver with preflight guards | `scripts/release.sh` (`set-version` · `checkpoint` · `finish` · `status`) | present |
+| Release driver with preflight guards | `scripts/release.sh` (`set-version` · `checkpoint` · `finish` · `status`) | present; `set-version` is housekeeping only since CR-CRU-061 §S2 (see 5.1) |
 | CI publish chain | `.github/workflows/release.yml` — `build` → `create-release` → `publish-pypi` ∥ `publish-npm`, plus `publish-testpypi` and `dry-run-npm` on dispatch | present |
 | Operational manual | `RELEASING.md` | present, comprehensive |
 | Composite lockstep | runtime pin: `crucible_axi.__version__` selects `@anthill-tec/crucible-server@<that version>`; `CRUCIBLE_SERVER_VERSION` is the only escape hatch | present, **10 tests** in `tests/client/test_crucible_axi_version_pin.py` |
-| no-mistakes → Crucible | `bun-crucible.py gate-run --intent … --agent …` proxies `axi run` and posts throttled interim snapshots then a final sealed gate event (CR-CRU-013) | present; `no-mistakes` is on PATH at `~/.local/bin/no-mistakes` |
+| no-mistakes → Crucible | `bun-crucible.py gate-run --intent … --agent … [--skip …]` (`--skip` shipped in CR-CRU-061 §S5, all five clients) proxies `axi run` and posts throttled interim snapshots then a final sealed gate event (CR-CRU-013) | present; `no-mistakes` is on PATH at `~/.local/bin/no-mistakes` |
 | GitHub repo | `anthill-tec/crucible`, default branch `develop`, **PRIVATE** | exists; `gh` authenticated as `antojk` |
 
 ### 1.2 🚨 Blockers and corrections — measured, not assumed
@@ -36,17 +36,18 @@ Everything below was verified against the repo, not recalled.
 | B1 | *"We already have set a tag at 0.1.0"* | **No tags exist.** `git tag -l` → 0 locally; `git ls-remote --tags origin` → empty. Nothing is tagged. |
 | B2 | package.json is at the release version | `package.json` = `2.0.0-alpha.1`. **NOT a conflict — a scaffold placeholder** from `eab2080`, the FIRST commit of the v2 rebuild, untouched since. **Under CR-CRU-061 this stops mattering entirely**: `publish-npm` will SET the version from the tag, so a stale committed value can no longer affect a release. Nothing to decide. |
 | B3 | The repo reflects the work | **641 commits unpushed on `develop`.** Remote last saw `2026-07-16`; local HEAD is `2026-08-03`. The entire Wave-4 body of work exists only locally. **CI cannot fire on code GitHub has never seen.** |
-| B4 | git-flow is configured for tagging | **`gitflow.prefix.versiontag` is NOT set** — and under the user's bare-SemVer ruling it must be set to the EMPTY string, not `v`. `release.sh:175` currently hard-asserts `"v"` and would refuse. **CR-CRU-061 owns this** — the config alone is not enough. |
+| B4 | git-flow is configured for tagging | **`gitflow.prefix.versiontag` is NOT set** — and under the user's bare-SemVer ruling it must be set to the EMPTY string, not `v`, and **not left unset** (git-flow aborts with `Fatal: Version tag not set`). `release.sh` used to hard-assert `"v"`; **CR-CRU-061 §S1 has shipped the corrected guard** (refuses unset AND any non-empty prefix). The repo-side work is done — **the per-clone `git config` at step 1.1 is still outstanding**, since `.git/config` is not version-controlled. |
 
 ### 1.2b 🚨 User rulings 2026-08-03 that the machinery does NOT yet implement
 
 | Ruling | State today | Owner |
 |---|---|---|
-| **Tags are bare SemVer — `0.1.0`, not `v0.1.0`** | The `v` prefix is hardcoded in **6 live sites** across `release.sh` and `release.yml`; a bare tag would make `create-release` find nothing and BOTH publish jobs refuse. | **CR-CRU-061 §S1** |
-| **Packaging takes the version from the GitHub tag automatically** | ✅ Python already does (hatch-vcs, `pyproject.toml:7,32`). ❌ npm does NOT — `package.json` is hand-bumped and CI merely *verifies* it (`release.yml:156-165`). | **CR-CRU-061 §S2** |
+| **Tags are bare SemVer — `0.1.0`, not `v0.1.0`** | *As measured 2026-08-03:* the `v` prefix was hardcoded in **6 live sites** across `release.sh` and `release.yml`; a bare tag would make `create-release` find nothing and BOTH publish jobs refuse. **✅ SHIPPED — CR-CRU-061 §S1**: all six sites now match `^[0-9]+\.[0-9]+\.[0-9]+$`, the `#v` strips are gone, and `release.sh` asserts a set-and-empty `gitflow.prefix.versiontag`. | **CR-CRU-061 §S1** |
+| **Packaging takes the version from the GitHub tag automatically** | ✅ Python already did (hatch-vcs, `pyproject.toml:7,32`). *As measured:* npm did NOT — `package.json` was hand-bumped and CI merely *verified* it. **✅ SHIPPED — CR-CRU-061 §S2**: `publish-npm` now runs `npm version --no-git-tag-version --allow-same-version "$VERSION"`, SETTING the manifest from the tag, so a stale committed value cannot fail a release. | **CR-CRU-061 §S2** |
 
-**CR-CRU-061 is a release blocker and must land before Step 2.** No tag exists yet, so the format is
-still free; once `0.1.0` is cut in either shape it is published history on two registries.
+**CR-CRU-061 was a release blocker and has landed** (§S1/§S6, §S2, §S5, §S4). No tag exists yet, so
+the format was still free; once `0.1.0` is cut it is published history on two registries — and the
+shape it will be cut in is now **bare `0.1.0`**.
 
 ### 1.3 Open setup items (human-owned)
 
@@ -110,7 +111,7 @@ Each item is a hard gate; none is optional.
 
 | Step | Action | Owner | Blocker |
 |---|---|---|---|
-| 1.1 | `git config gitflow.prefix.versiontag ''` — bare SemVer, no `v` (see CR-CRU-061) | orchestrator | B4 |
+| 1.1 | `git config gitflow.prefix.versiontag ""` — bare SemVer, no `v`. 🚨 **Set-and-empty, never unset**: measured under CR-CRU-061 §S1, git-flow aborts with `Fatal: Version tag not set` when the key is absent, so `release.sh finish`'s guard refuses BOTH unset and any non-empty prefix (shipped) | orchestrator | B4 |
 | 1.2 | **Push develop to origin** — 641 commits. Nothing downstream works until GitHub has the code. | orchestrator | B3 |
 | 1.3 | Register **pending Trusted Publishers** on PyPI + TestPyPI (`RELEASING.md` has the field table) | **user** | S1 |
 | 1.4 | Create the **npm org `@anthill-tec`**, then generate an automation `NPM_TOKEN` and add it as a repo secret | **user** | S2, S3 |
@@ -165,10 +166,10 @@ python3 clients/bun-crucible.py gate-run \
   --intent "0.1.0 release integrity" --agent vidushi --skip ci
 ```
 
-⚠ **`--skip` does not exist on `gate-run` yet** — it exposes only `--intent`, `--agent`,
-`--project-dir`. **CR-CRU-061 §S5 adds the passthrough**, and until it lands this gate cannot be run
-in the shape described here. The skip list stays a *caller* decision: which steps a project skips is
-its workflow, not a client-fleet fact.
+✅ **`--skip` is live.** CR-CRU-061 §S5 shipped it on all five clients — a pure passthrough,
+forwarded verbatim to `no-mistakes axi run` — so the invocation above is a real command, not an
+aspiration. The skip list stays a *caller* decision: which steps a project skips is its workflow,
+not a client-fleet fact, so the client never hardcodes them.
 
 **Why route it through `gate-run` at all**, rather than calling `no-mistakes` directly: `gate-run`
 proxies the run, streams throttled interim snapshots while it is in flight, and posts a **final
@@ -200,7 +201,7 @@ Build both artifacts and test them as artifacts, not as a source tree.
 
 | Step | Action | Proves |
 |---|---|---|
-| 5.1 | `scripts/release.sh set-version 0.1.0` | the manual manifest matches the intended tag |
+| 5.1 | `scripts/release.sh set-version 0.1.0` — **housekeeping, not the version authority** (CR-CRU-061 §S2: `publish-npm` SETS `package.json` from the tag, so a stale committed value can no longer fail a release). Kept, not retired: it keeps the committed manifest honest for the 5.3 `npm pack`, and `finish`'s first preflight still asserts it | the committed manifest agrees with the intended tag |
 | 5.2 | Build the Python sdist/wheel | `crucible-axi` packages cleanly; hatch-vcs derives the version from the tag |
 | 5.3 | Build/pack the npm tarball (`npm pack`) | `@anthill-tec/crucible-server` packages cleanly; the file list is what we intend to ship |
 | 5.4 | **Install the built wheel into a throwaway venv** and run the client fleet's `--help` + one real verb against an ephemeral server | the packaged client works *as installed*, not just from the repo |
@@ -233,7 +234,8 @@ The tag push. This is the first irreversible act in the whole sequence.
 scripts/release.sh finish 0.1.0
 ```
 
-Preflight guards → `git flow release finish` → tag `v0.1.0` → push `master` + `develop` + tags.
+Preflight guards → `git flow release finish` → tag `0.1.0` (**bare SemVer, no `v`** — CR-CRU-061
+§S1) → push `master` + `develop` + tags.
 
 **This is the point of no return.** The tag push is what CI keys on.
 

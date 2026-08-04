@@ -66,6 +66,12 @@ on npm and another in git.
 Retire the `v` prefix across the six sites above.
 - `release.sh`'s `guard_tag_prefix()` must assert `gitflow.prefix.versiontag` is **empty**, and its
   error text must give the exact fix command for that value.
+- 🚨 **MEASURED 2026-08-03 — "empty" and "unset" are NOT the same to git-flow.** With the key
+  UNSET, `git flow feature start` dies with `Fatal: Version tag not set. Please run 'git flow init'`.
+  With it SET to the empty string (`git config gitflow.prefix.versiontag ""`), git-flow works and
+  cuts bare tags. The guard must therefore accept **set-and-empty** and REJECT **unset**, with an
+  error naming the exact command including the empty quotes — a guard that merely checks
+  `!= "v"` would pass on the unset state that breaks git-flow outright.
 - Both CI publish guards and the `create-release` tag discovery must match `^[0-9]+\.[0-9]+\.[0-9]+$`.
 - Remove the now-dead `#v` strips rather than leaving them as decoration — a stripped prefix that
   can never be present is a lie about the format.
@@ -130,6 +136,28 @@ Gap analysis (Dimension 6) found two consumers the earlier draft did not name:
 one with the same rigour — a guard that is loosened rather than re-aimed is how the `v` assumption
 would survive into the release.
 
+### §S7 — USER-DECIDED 2026-08-04: `finish` invokes `set-version` itself
+The open item below was put to the user at the merge gate. **Decision: option (b)** — keep
+`guard_manifest_version`, but have `cmd_finish` bring the manifest into line ITSELF rather than
+refusing and telling the operator to run a second command.
+
+Rationale (user-approved): the committed manifest still matters for local builds and `npm pack`, so
+dropping the guard entirely (option a) would let it rot. But the operator should issue **one**
+command. `finish X.Y.Z` therefore aligns the manifest to `X.Y.Z` before its preflight, so the guard
+becomes an invariant the script maintains rather than a wall the operator hits.
+
+This makes the CR's own intent real: **setting the tag is all a release needs.** §S2 achieved that
+for what is PUBLISHED; §S7 achieves it for what is RELEASED.
+
+Constraints:
+- `set-version` remains available standalone — it is still useful for local builds, and existing
+  tests pin its behaviour.
+- `finish` must remain **idempotent** on an already-aligned manifest (no spurious commit, no
+  failure) — the common case once someone has run `set-version` by habit.
+- Do not weaken `guard_manifest_version`. It stays; it should simply never fire on the happy path.
+- The manifest alignment must be committed BEFORE the git-flow finish, or it would not be on the
+  merge.
+
 ### §S4 — Documentation matches the machinery
 `RELEASING.md` documents the `v` model and the manual-manifest model in several places (§"Version
 model", §"Release at a glance", §"Composite / lockstep model"). Update it, and the release DN, so no
@@ -154,6 +182,12 @@ reader is told to do a step that no longer exists.
       history is preserved as a labelled supersession, not deleted (§S6).
 - [ ] `tests/release-driver.test.ts`'s prefix tests are rewritten for "unset is correct" — no test
       still asserts `v` is required (§S6).
+- [ ] `release.sh finish X.Y.Z` aligns `package.json` to `X.Y.Z` itself and proceeds, with NO
+      prior `set-version` run — asserted from a scratch repo whose manifest is stale (§S7).
+- [ ] `finish` on an ALREADY-aligned manifest is idempotent: succeeds, no spurious commit —
+      asserted (§S7).
+- [ ] `guard_manifest_version` still exists and still fails when the manifest cannot be aligned —
+      not deleted, not weakened (§S7).
 - [ ] Full bun regression green AND full Python regression green.
 
 ## Non-goals
@@ -174,3 +208,71 @@ reader is told to do a step that no longer exists.
   (*"do not publish one artifact alone"*) makes a partial failure expensive to unwind.
 - **`npm version` rewrites `package.json` in the CI workspace.** Confirm it does not get committed
   back, and that `--allow-same-version` prevents a spurious failure when the value already matches.
+
+## Implementation Notes
+- **Union regression at the gate: 1988 passing / 0 failing** (bun 1305 + python 683), coverage
+  87.6%/87.0% bun.
+- **This CR reverses a prior USER decision, and the lineage is recorded rather than erased.**
+  CR-CRU-041 §S5 (2026-07-28, user) adopted `vX.Y.Z` to tally with Sandesh, which has published
+  `v0.3.3`/`v0.3.4`/`v0.3.5`. The user reaffirmed bare SemVer categorically on 2026-08-03. Lineage:
+  bare (009 §S6) → `v` (041 §S5) → **bare (061, final)**. Crucible and Sandesh now diverge on tag
+  shape; accepted, and Sandesh is explicitly out of scope. Only the GIT TAG changes — hatch-vcs
+  stripped the `v` either way, so no published artifact ever changed shape.
+- **🚨 `git config --get`'s EXIT STATUS is the load-bearing detail.** git-flow treats UNSET and
+  SET-TO-EMPTY differently: unset → `Fatal: Version tag not set`; set-empty → works. The old code's
+  `|| true` capture destroyed exactly that signal, so even a `!= ""` check would have waved through
+  the state that breaks git-flow outright. VERIFY drove all three states in a scratch repo.
+- **The npm derivation was proven by EXECUTION, not by reading YAML.** RED extracts the step's shell
+  body and runs it under `bash -e -o pipefail` against a scratch `package.json`. Confirmed
+  independently twice (orchestrator + VERIFY): `2.0.0-alpha.1` + tag `0.1.0` → `0.1.0`.
+- **The `--skip` passthrough exists at ONE locus** (`_crucible_axi.py:1671-1678`), with the flag on
+  all five clients. RED's single-locus contract calls `cmd_gate_run` DIRECTLY with a duck-typed args
+  stand-in, so a future per-client re-implementation keeps that test red even if the fleet-wide test
+  passes. CR-054's unification is defended by construction.
+- **A FLAKY test shipped in this CR's own RED and was caught, not re-run away.** The fake
+  `no-mistakes` wrote its argv capture on EVERY invocation, so `cmd_gate_run`'s interim
+  `axi status` poll overwrote the `axi run` capture — passing 1 run in 4 (measured FAILED, FAILED,
+  OK, FAILED). GREEN diagnosed it, proved production correct in a scratch harness, and escalated
+  WITHOUT touching the file it did not own. The fix nests the write inside the `argv[1] == "run"`
+  branch, so a `status` invocation has NO code path to the capture file — eliminated by
+  construction, not made less likely. 10 consecutive green runs (VERIFY) + 8 (orchestrator).
+- **The docs cycle corrected the orchestrator's own brief.** It was told to stop presenting
+  `set-version` as required; `release.sh:277` still calls `guard_manifest_version`, so on the
+  `release.sh` path it genuinely IS required. The agent documented the split honestly instead of
+  writing the convenient falsehood. See the open item below.
+- **A supersession-boundary invariant now guards the docs.** Correcting `RELEASING.md` invalidated
+  THREE assertions, not the one flagged — and one would have "passed stale" off the new supersession
+  section, which legitimately quotes the old `versiontag v` command as history. The replacement
+  asserts that every `vX.Y.Z`/`versiontag v` occurrence sits AFTER the `## Superseded` heading:
+  history preserved, a `v`-shape can never reappear as live instruction.
+
+## §S7 outcome — the open item is CLOSED
+**User chose option (b) on 2026-08-04.** `cmd_finish` now calls `align_manifest_version` before its
+guards, so `release.sh finish X.Y.Z` is the whole release command. Verified independently:
+- **One write path, not two.** `cmd_set_version`'s inline writer was MOVED into
+  `align_manifest_version`; exactly two call sites (`release.sh:279`, `:311`) both delegate to it,
+  so `set-version` and `finish` cannot drift apart.
+- **Idempotent** — the commit is gated on `git diff --cached --quiet`, so a second `finish` produces
+  no empty commit and an identical HEAD sha.
+- **The guard is kept and still fatal**, retargeted at its genuine failure mode (a `package.json`
+  with no `version` key). Its old advice — "run `set-version`" — would now be wrong, so it no longer
+  says it.
+- **🚨 The safety split is exact.** The alignment write+commit are real even under `--dry-run`; ONLY
+  `git flow finish` and `git push` stay gated. VERIFY audited every `finish` invocation in the test
+  file: exactly one omits `--dry-run`, and it is the branch-gate test where `require_release_branch`
+  exits 2 BEFORE anything is written. The file header's absolute rule — no test ever runs a real
+  finish or push — holds.
+- The superseded "finish refuses on a stale manifest" test was removed WITH an inline supersession
+  marker, not silently — correct, since it pinned the behaviour §S7 deliberately reverses.
+
+**Final union regression: 1991 passing / 0 failing** (bun 1308 + python 683), coverage 87.6%/87.0%.
+
+## Historical: the open item as raised at the gate (now closed by §S7)
+`scripts/release.sh:277` still calls `guard_manifest_version`, so `finish` refuses unless
+`package.json` was hand-bumped via `set-version` first. §S2 made the tag authoritative for what is
+**published**; it did not make it authoritative for what is **released**. Against the user's stated
+goal — *"once we set it for a release it is automatic"* — cutting a release is still two commands.
+VERIFY's assessment: a real unresolved contradiction with the CR's intent, with two remediations —
+(a) drop `guard_manifest_version` now the manifest is provably irrelevant to publishing, or
+(b) have `finish` invoke `set-version` itself so the operator issues one command. Deliberately NOT
+decided here.

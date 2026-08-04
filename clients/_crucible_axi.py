@@ -1668,9 +1668,18 @@ def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
     agent_id = ops.agent_id(args)
     context = fleet_context()
 
+    # CR-CRU-061 §S5 — PURE passthrough of `--skip`. WHICH pipeline steps a
+    # project skips is a per-project workflow decision, not a client-fleet
+    # fact, so the value is never validated, split, normalised or rewritten
+    # here; when unset, no `--skip` token reaches the argv at all.
+    run_argv = [nm, "axi", "run", "--intent", intent]
+    skip = getattr(args, "skip", None)
+    if skip is not None:
+        run_argv += ["--skip", skip]
+
     try:
         proc = subprocess.Popen(
-            [nm, "axi", "run", "--intent", intent],
+            run_argv,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
     except OSError as e:

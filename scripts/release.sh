@@ -14,7 +14,10 @@
 # Subcommands:
 #   set-version <X.Y.Z>  Format-preservingly rewrite + commit package.json.
 #   checkpoint           gh workflow run release.yml --ref <branch>.
-#   finish <X.Y.Z>       Preflight guards, then git flow finish + push.
+#   finish <X.Y.Z>       Align + commit the manifest, preflight guards, then git
+#                        flow finish + push. NOTE: the alignment write/commit is
+#                        real even under --dry-run (it must precede the merge);
+#                        only the git-flow finish and the push are gated.
 #   status               Print current branch + tag-derived version.
 #
 # Usage: ./scripts/release.sh <subcommand> [args] [--dry-run] [--verbose] [-h|--help]
@@ -77,12 +80,15 @@ Subcommands:
                     branch. Allowed only on release/* or hotfix/* branches.
                     Runs: gh workflow run release.yml --ref <branch>
 
-  finish <X.Y.Z>    Run both preflight guards (manifest version, tag prefix),
-                    then finish the git-flow release/hotfix and push master +
-                    develop + tags. Allowed only on release/* or hotfix/*.
+  finish <X.Y.Z>    Align package.json to X.Y.Z (committing it, so it lands on
+                    the merge — no separate set-version run is needed), run both
+                    preflight guards (manifest version, tag prefix), then finish
+                    the git-flow release/hotfix and push master + develop +
+                    tags. Allowed only on release/* or hotfix/*.
 
   status            Print the current branch and the derived version
-                    (git describe --tags, leading 'v' stripped). Exit 0.
+                    (git describe --tags). Tags are bare SemVer (X.Y.Z).
+                    Exit 0.
 
 Options:
   --dry-run         Print the commands that would run without executing them.
@@ -144,12 +150,61 @@ print(data.get("version", ""))
 PY
 }
 
+# Bring the manual manifest to $1, committing it if (and only if) that changed
+# anything. The SINGLE write path for the manifest version — used by both
+# `set-version` and `finish` (CR-CRU-061 §S7), so the two can never diverge.
+#
+# The rewrite is format-preserving: only the value of the "version" key is
+# replaced, leaving every other byte untouched (no JSON re-serialization). A
+# manifest with NO "version" key therefore matches nothing and is left alone —
+# it genuinely cannot be aligned, and guard_manifest_version stays fatal for it.
+#
+# Idempotent: an already-aligned manifest produces no diff and no commit.
+align_manifest_version() {
+    local want="$1"
+    local mf
+    mf="$(manifest_path)"
+
+    if [ ! -f "$mf" ]; then
+        debug "align: no manifest at $mf; nothing to do"
+        return "$EXIT_SUCCESS"
+    fi
+
+    python3 - "$mf" "$want" <<'PY'
+import re
+import sys
+
+path, new_version = sys.argv[1], sys.argv[2]
+with open(path, "r", encoding="utf-8") as fh:
+    text = fh.read()
+text = re.sub(
+    r'("version"\s*:\s*")[^"]*(")',
+    lambda m: m.group(1) + new_version + m.group(2),
+    text,
+    count=1,
+)
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(text)
+PY
+
+    git add "$mf"
+    if git diff --cached --quiet; then
+        info "package.json unchanged (no version value was rewritten to $want); nothing to commit"
+        return "$EXIT_SUCCESS"
+    fi
+    git commit -q -m "chore(release): set package.json to $want"
+}
+
 # ============================================================================
 # Preflight guards (both run BEFORE any git-flow/push command, and also under
 # --dry-run, which is a true preflight rather than an execution skip).
 # ============================================================================
 
-# Guard (a): the manual manifest must already carry the finish version.
+# Guard (a): the manual manifest must carry the finish version. Since
+# CR-CRU-061 §S7 `finish` aligns the manifest itself first, so this guard is an
+# invariant the script maintains rather than a wall the operator hits — it fires
+# only when the manifest genuinely CANNOT be aligned (e.g. no "version" key at
+# all for the format-preserving rewrite to substitute).
 guard_manifest_version() {
     local want="$1"
     local mf
@@ -162,18 +217,28 @@ guard_manifest_version() {
     local found
     found="$(read_manifest_version "$mf")"
     if [ "$found" != "$want" ]; then
-        error "package.json version '$found' does not match finish version '$want' — run: scripts/release.sh set-version $want" "$EXIT_ERROR"
+        error "package.json version '$found' could not be aligned to the finish version '$want' — the manifest has no \"version\" key to rewrite; add one and retry" "$EXIT_ERROR"
     fi
 }
 
-# Guard (b) (§S5): git-flow must be configured to cut vX.Y.Z tags. The setting
-# lives in .git/config, which is not version-controlled, so it can only be
-# asserted — an unset/wrong prefix would cut a tag every publish guard rejects.
+# Guard (b) (CR-CRU-061 §S1, superseding CR-CRU-041 §S5): git-flow must be
+# configured to cut BARE SemVer tags (X.Y.Z, no prefix). The setting lives in
+# .git/config, which is not version-controlled, so it can only be asserted — a
+# wrong prefix would cut a tag every publish guard rejects.
+#
+# 🚨 MEASURED: git-flow distinguishes UNSET from SET-TO-EMPTY. With the key
+# UNSET, git-flow dies with "Fatal: Version tag not set"; with it explicitly set
+# to the empty string it works and cuts bare tags. So the ONLY valid state is
+# set-and-empty, and `git config --get`'s exit status (1 = key absent, 0 = key
+# present, even with an empty value) is what tells the two apart — a plain
+# `|| true` capture cannot.
 guard_tag_prefix() {
     local prefix
-    prefix="$(git config --get gitflow.prefix.versiontag || true)"
-    if [ "$prefix" != "v" ]; then
-        error "gitflow.prefix.versiontag is '$prefix' (expected 'v') — run: git config gitflow.prefix.versiontag v" "$EXIT_ERROR"
+    if ! prefix="$(git config --get gitflow.prefix.versiontag)"; then
+        error 'gitflow.prefix.versiontag is UNSET (git-flow itself refuses to run in that state) — run: git config gitflow.prefix.versiontag ""' "$EXIT_ERROR"
+    fi
+    if [ -n "$prefix" ]; then
+        error "gitflow.prefix.versiontag is '$prefix' (expected the empty string, for bare X.Y.Z tags) — run: git config gitflow.prefix.versiontag \"\"" "$EXIT_ERROR"
     fi
 }
 
@@ -211,31 +276,7 @@ cmd_set_version() {
         return "$EXIT_SUCCESS"
     fi
 
-    # Format-preserving rewrite: replace only the value of the "version" key,
-    # leaving all other bytes/formatting untouched (no JSON re-serialization).
-    python3 - "$mf" "$VERSION" <<'PY'
-import re
-import sys
-
-path, new_version = sys.argv[1], sys.argv[2]
-with open(path, "r", encoding="utf-8") as fh:
-    text = fh.read()
-text = re.sub(
-    r'("version"\s*:\s*")[^"]*(")',
-    lambda m: m.group(1) + new_version + m.group(2),
-    text,
-    count=1,
-)
-with open(path, "w", encoding="utf-8") as fh:
-    fh.write(text)
-PY
-
-    git add "$mf"
-    if git diff --cached --quiet; then
-        info "set-version: package.json already at $VERSION; nothing to commit"
-        return "$EXIT_SUCCESS"
-    fi
-    git commit -q -m "chore(release): set package.json to $VERSION"
+    align_manifest_version "$VERSION"
 }
 
 cmd_checkpoint() {
@@ -261,8 +302,17 @@ cmd_finish() {
         error "finish requires a version: release.sh finish <X.Y.Z>" "$EXIT_USAGE"
     fi
 
-    # Preflight guards FIRST — before anything is printed or executed, and
-    # regardless of --dry-run.
+    # CR-CRU-061 §S7 — align the manifest to the finish version OURSELVES, so a
+    # release is ONE command. This write + commit is REAL even under --dry-run:
+    # it must land on the release branch BEFORE the git-flow finish or it would
+    # not be on the merge, and it is a purely local commit (only the terminal
+    # `git flow ... finish` / `git push` are --dry-run-gated). Idempotent — an
+    # already-aligned manifest yields no diff and no commit.
+    align_manifest_version "$VERSION"
+
+    # Preflight guards next — before anything is printed or executed, and
+    # regardless of --dry-run. The manifest guard now fires only when the
+    # manifest could not be aligned at all.
     guard_manifest_version "$VERSION"
     guard_tag_prefix
 
@@ -292,9 +342,7 @@ cmd_status() {
     branch="$(current_branch)"
 
     # Derive version from the latest tag; tolerate no-tag gracefully.
-    if version="$(git describe --tags 2>/dev/null)"; then
-        version="${version#v}"
-    else
+    if ! version="$(git describe --tags 2>/dev/null)"; then
         version="(no tag)"
     fi
 

@@ -29,7 +29,8 @@
 // `docs/RUNBOOK.md`. Every test below is expected to FAIL for one of those
 // reasons — that is expected RED.
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -339,7 +340,7 @@ describe("§S1 npm pack --dry-run tarball contents", () => {
 //     (create-release + publish-testpypi + dry-run-npm all firing off one
 //     dispatch).
 //
-// §S5 — Adopt Sandesh's vX.Y.Z tag scheme:
+// §S5 — Adopt Sandesh's vX.Y.Z tag scheme (SUPERSEDED — see below):
 //   - publish-pypi / publish-npm guards match ONLY v-prefixed tags
 //     (^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$); a bare 0.1.0 tag is REJECTED,
 //     v0.1.0 is accepted.
@@ -349,12 +350,24 @@ describe("§S1 npm pack --dry-run tarball contents", () => {
 //     comparison). The earlier "drop it" item was WITHDRAWN — do not assert
 //     its removal.
 //
-// RED phase: on the current branch release.yml's `on:` has ONLY
-// `release: types:[published]` + `workflow_dispatch` (no push/pull_request);
-// create-release is gated on workflow_dispatch; every guard uses the BARE
-// `^refs/tags/[0-9]+\.[0-9]+\.[0-9]+$` pattern; the tag-detection grep is
-// bare `^[0-9]+\.[0-9]+\.[0-9]+$`. Every assertion below is expected to FAIL
-// against that state.
+// 🚨 CR-CRU-061 §S1/§S6 SUPERSEDES §S5 above (2026-08-03). Lineage: bare
+// (CR-009 §S6) -> v-prefixed (CR-041 §S5, Sandesh alignment) -> bare, FINAL
+// (CR-061 §S1, user reaffirmed bare SemVer categorically). The describe
+// block below now pins the FINAL bare-SemVer contract, in the SAME two guard
+// sites §S5 named (publish-pypi/publish-npm refs guards + create-release's
+// tag-detection grep) — direction reversed, not deleted; the original
+// v-prefixed assertions this comment describes remain visible in git history
+// (this file's blame) rather than being restated as live test code. The
+// dead `VERSION="${GITHUB_REF_NAME#v}"` strip §S5 called load-bearing is now
+// itself dead code under bare tags (a bare GITHUB_REF_NAME has no leading
+// 'v' to strip) and must be swept.
+//
+// RED phase: on this branch release.yml's guards still match ONLY
+// `^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$` (the §S5 contract), the
+// create-release grep is still `^v[0-9]+\.[0-9]+\.[0-9]+$`, and the dead
+// `#v` strip is still present — every assertion below is expected to FAIL
+// against that state, by design (this is the CR's own §S6 callout: this
+// file "goes red the moment §S1 lands").
 // ---------------------------------------------------------------------------
 
 type ReleaseWorkflow = {
@@ -426,11 +439,10 @@ describe("§S2 release.yml trigger topology", () => {
   });
 });
 
-describe("§S5 release.yml v-prefixed tag scheme", () => {
-  const V_TAG_REGEX_SOURCE = "^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$";
-  const V_TAG_REGEX = /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+$/;
+describe("§S1 release.yml bare-SemVer tag scheme (CR-CRU-061 supersedes CR-041 §S5's v-prefixed scheme)", () => {
+  const BARE_TAG_REGEX_SOURCE = "^refs/tags/[0-9]+\\.[0-9]+\\.[0-9]+$";
 
-  test("publish-pypi guard matches only v-prefixed tag refs (regex text)", () => {
+  test("publish-pypi guard matches only bare X.Y.Z tag refs (regex text), not v-prefixed", () => {
     const { raw } = readReleaseWorkflow();
 
     // Isolate the publish-pypi job body so we don't accidentally match
@@ -439,27 +451,29 @@ describe("§S5 release.yml v-prefixed tag scheme", () => {
     expect(pypiJobMatch).not.toBeNull();
     const pypiJob = pypiJobMatch?.[0] ?? "";
 
-    expect(pypiJob).toContain(V_TAG_REGEX_SOURCE);
-    // NEGATIVE — the old bare-tag pattern must be gone from this job.
-    expect(pypiJob).not.toContain("^refs/tags/[0-9]+\\.[0-9]+\\.[0-9]+$");
+    expect(pypiJob).toContain(BARE_TAG_REGEX_SOURCE);
+    // NEGATIVE — the superseded v-prefixed pattern must be gone from this job.
+    expect(pypiJob).not.toContain("^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$");
   });
 
-  test("publish-npm guard matches only v-prefixed tag refs (regex text)", () => {
+  test("publish-npm guard matches only bare X.Y.Z tag refs (regex text), not v-prefixed", () => {
     const { raw } = readReleaseWorkflow();
 
     const npmJobMatch = raw.match(/publish-npm:[\s\S]*?(?=\n {2}\S|\n$)/);
     expect(npmJobMatch).not.toBeNull();
     const npmJob = npmJobMatch?.[0] ?? "";
 
-    expect(npmJob).toContain(V_TAG_REGEX_SOURCE);
-    expect(npmJob).not.toContain("^refs/tags/[0-9]+\\.[0-9]+\\.[0-9]+$");
+    expect(npmJob).toContain(BARE_TAG_REGEX_SOURCE);
+    expect(npmJob).not.toContain("^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$");
   });
 
-  test("the guard regex extracted from publish-pypi rejects a bare X.Y.Z tag ref and accepts a v-prefixed one", () => {
+  test("the guard regex extracted from publish-pypi accepts a bare X.Y.Z tag ref and rejects a v-prefixed or malformed one", () => {
     // Exercises the ACTUAL regex found in the file (not a hand-maintained
     // duplicate) against the exact ref shapes GitHub Actions supplies via
     // GITHUB_REF — so a guard that merely LOOKS right (e.g. an unescaped
-    // 'v' that doesn't anchor correctly) is still caught behaviourally.
+    // 'v' left in the anchor) is still caught behaviourally. Driven as data,
+    // not read off the YAML: the CI guards have no coverage today and only
+    // run on a real tag push.
     const { raw } = readReleaseWorkflow();
     const pypiJobMatch = raw.match(/publish-pypi:[\s\S]*?(?=\n {2}\S|\n$)/);
     const pypiJob = pypiJobMatch?.[0] ?? "";
@@ -469,23 +483,249 @@ describe("§S5 release.yml v-prefixed tag scheme", () => {
     const extractedSource = guardMatch?.[1] ?? "";
 
     const extractedRegex = new RegExp(extractedSource);
-    expect(extractedRegex.test("refs/tags/0.1.0")).toBe(false);
-    expect(extractedRegex.test("refs/tags/v0.1.0")).toBe(true);
+    // POSITIVE — the shape the release must accept.
+    expect(extractedRegex.test("refs/tags/0.1.0")).toBe(true);
+    // NEGATIVE — every shape §S1 must reject: v-prefixed (the superseded
+    // contract), truncated, and outright junk.
+    expect(extractedRegex.test("refs/tags/v0.1.0")).toBe(false);
+    expect(extractedRegex.test("refs/tags/0.1")).toBe(false);
+    expect(extractedRegex.test("refs/tags/junk")).toBe(false);
   });
 
-  test("create-release's tag-detection grep matches v-prefixed semver tags", () => {
+  test("the guard regex extracted from publish-npm accepts a bare X.Y.Z tag ref and rejects a v-prefixed or malformed one", () => {
     const { raw } = readReleaseWorkflow();
-    expect(raw).toContain("^v[0-9]+\\.[0-9]+\\.[0-9]+$");
-    // NEGATIVE — the old bare grep pattern must be gone.
-    expect(raw).not.toContain("grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+$'");
+    const npmJobMatch = raw.match(/publish-npm:[\s\S]*?(?=\n {2}\S|\n$)/);
+    const npmJob = npmJobMatch?.[0] ?? "";
+
+    const guardMatch = npmJob.match(/GITHUB_REF"\s*=~\s*(\S+)\s*\]\]/);
+    expect(guardMatch).not.toBeNull();
+    const extractedSource = guardMatch?.[1] ?? "";
+
+    const extractedRegex = new RegExp(extractedSource);
+    expect(extractedRegex.test("refs/tags/0.1.0")).toBe(true);
+    expect(extractedRegex.test("refs/tags/v0.1.0")).toBe(false);
+    expect(extractedRegex.test("refs/tags/0.1")).toBe(false);
+    expect(extractedRegex.test("refs/tags/junk")).toBe(false);
   });
 
-  test("publish-npm keeps the GITHUB_REF_NAME v-strip for the package.json version comparison", () => {
+  test("create-release's tag-detection grep matches bare semver tags, not v-prefixed", () => {
     const { raw } = readReleaseWorkflow();
-    // This strip is still load-bearing under the v-scheme — the earlier
-    // "drop it" item from an earlier §S5 draft was WITHDRAWN. Do not assert
-    // its removal.
-    expect(raw).toContain('VERSION="${GITHUB_REF_NAME#v}"');
+    // POSITIVE — the bare grep pattern must be the one wired in.
+    expect(raw).toContain("grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+$'");
+    // NEGATIVE — the superseded v-prefixed grep pattern must be gone.
+    expect(raw).not.toContain("^v[0-9]+\\.[0-9]+\\.[0-9]+$");
+  });
+
+  // 🚨 CR-CRU-061 §S2 SUPERSEDES the assertion below (2026-08-04). Cycle 185
+  // (§S1/§S6, this same describe block) pinned "publish-npm still VERIFIES
+  // package.json against the tag, only the dead #v strip is removed" —
+  // correct for that cycle, since §S2 (deriving the version) was explicitly
+  // deferred. §S2 now lands: the verify-and-fail comparison is REPLACED by a
+  // derive step (`npm version --no-git-tag-version --allow-same-version
+  // "$VERSION"`, per the CR's own §S2 text) — package.json is now SET from
+  // the tag, not compared against it. The original verify-only assertion
+  // remains visible in git history (this file's blame) rather than being
+  // restated as live test code — direction reversed, not deleted, per the
+  // CR's own §S6 discipline for this file. See also the data-driven
+  // execution tests below ("§S2 publish-npm derives...") for the behavioural
+  // half of this contract.
+  test("publish-npm SETS (derives) package.json's version from the tag; the verify-and-fail comparison is gone, with no dead #v strip", () => {
+    const { raw } = readReleaseWorkflow();
+    const npmJobMatch = raw.match(/publish-npm:[\s\S]*?(?=\n {2}\S|\n$)/);
+    const npmJob = npmJobMatch?.[0] ?? "";
+
+    const runBody = extractNpmVersionRunBody(npmJob);
+    // POSITIVE — the derive step exists and matches the CR's own §S2
+    // contract text verbatim (not merely "some npm version call").
+    expect(runBody.length).toBeGreaterThan(0);
+    expect(runBody).toContain("npm version");
+    expect(runBody).toContain("--no-git-tag-version");
+    expect(runBody).toContain("--allow-same-version");
+
+    // NEGATIVE — the old verify-and-fail comparison is gone, not merely
+    // renamed around; and the dead #v strip (already swept in §S1) has not
+    // resurfaced.
+    expect(npmJob).not.toMatch(/if\s*\[\s*"\$VERSION"\s*!=\s*"\$PKG_VERSION"\s*\]/);
+    expect(npmJob.toLowerCase()).not.toContain("!= release tag");
+    expect(npmJob).not.toContain('VERSION="${GITHUB_REF_NAME#v}"');
+    expect(npmJob).not.toMatch(/#v\}/);
+  });
+
+  test("sweep: no #v strip or ^v tag-prefix pattern survives anywhere in release.yml", () => {
+    const { raw } = readReleaseWorkflow();
+    expect(raw).not.toMatch(/#v\}/);
+    expect(raw).not.toContain("^v[0-9]");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CR-CRU-061 §S2 — Derive the npm version from the tag (publish-npm)
+//
+// Spec: docs/changes/CR-CRU-061-tag-derived-versioning.md §S2 + Acceptance
+// criteria: "publish-npm SETS package.json's version from the tag; a stale
+// committed value no longer fails the release — asserted, including that the
+// published version equals the tag" + "npm version rewrites package.json in
+// the CI workspace... confirm --allow-same-version prevents a spurious
+// failure when the value already matches" (Risk section).
+//
+// The rewritten test in the §S1 describe block above ("publish-npm SETS
+// (derives) package.json's version from the tag...") pins the STRUCTURAL
+// half of this contract (derive step present, verify-and-fail gone, exact
+// flags). The tests below drive the extracted step body as DATA — actually
+// EXECUTING the real shell fragment found in release.yml, under `bash -e`
+// (matching GitHub Actions' own run-step shell, `bash --noprofile --norc -eo
+// pipefail`), against a real scratch package.json — per the CR's own Risk
+// section: "prefer testing the guard expressions directly... over trusting a
+// read of the YAML". This proves the ACTUAL npm-version invocation found in
+// the file behaves correctly, not merely that some expected string appears.
+//
+// UNPROVABLE WITHOUT A REAL TAG PUSH (documented, not asserted): whether this
+// step actually runs on `on: release` in prod, whether `npm publish`
+// afterwards picks up the just-set version, and whether npm registry
+// enforcement (immutable published versions, provenance/OIDC) behaves as
+// expected. Those require the real `release` event + registry, which no
+// local test can exercise.
+//
+// RED phase: release.yml has no "npm version" step on this branch, so
+// extractNpmVersionRunBody() returns "" for every test below. Each test
+// therefore fails immediately on the `runBody` "npm version" containment
+// assertion — not on the later "finalVersion equals tag" assertions, which
+// would otherwise coincidentally pass for the same-version case. This is a
+// deliberate ordering: it stops the same-version test from vacuously passing
+// against an empty (no-op) script that happens to leave the version
+// unchanged.
+// ---------------------------------------------------------------------------
+
+/**
+ * Strips the minimum common leading whitespace from every non-blank line, so
+ * a YAML block-scalar body can be executed as a standalone shell script
+ * regardless of its indentation depth in release.yml.
+ */
+function dedent(text: string): string {
+  const lines = text.split("\n");
+  const indents = lines
+    .filter((l) => l.trim().length > 0)
+    .map((l) => l.match(/^ */)?.[0].length ?? 0);
+  const min = indents.length > 0 ? Math.min(...indents) : 0;
+  return lines
+    .map((l) => l.slice(min))
+    .join("\n")
+    .trimEnd();
+}
+
+/**
+ * Extracts the dedented shell body of publish-npm's version-derive step (the
+ * step whose run: block invokes `npm version`) from the job's raw YAML text.
+ * Returns "" if no such step exists yet (the pre-§S2 state on this branch).
+ */
+function extractNpmVersionRunBody(npmJob: string): string {
+  const stepChunks = npmJob.split(/\n(?=      - )/);
+  const stepChunk = stepChunks.find((c) => /npm version/.test(c));
+  if (!stepChunk) return "";
+  const runMatch = stepChunk.match(/run:\s*\|\n([\s\S]*)/);
+  if (!runMatch) return "";
+  return dedent(runMatch[1]);
+}
+
+/**
+ * Actually EXECUTES the extracted step body under `bash -e` against a real
+ * scratch package.json in a throwaway temp directory, injecting both
+ * GITHUB_REF_NAME and VERSION as the tag (covering either naming the derive
+ * step happens to use), then reports the resulting on-disk version — so the
+ * assertions exercise real `npm version` behaviour rather than re-deriving
+ * what it "should" do from reading text.
+ */
+function runNpmVersionStep(
+  runBody: string,
+  opts: { tag: string; initialPkgVersion: string },
+): { exitCode: number | null; stderr: string; finalVersion: string | null } {
+  const tmpDir = mkdtempSync(join(tmpdir(), "cr061-npm-version-"));
+  try {
+    writeFileSync(
+      join(tmpDir, "package.json"),
+      JSON.stringify({ name: "scratch-pkg", version: opts.initialPkgVersion }, null, 2),
+    );
+    const script = `set -euo pipefail\n${runBody}\n`;
+    const res = Bun.spawnSync({
+      cmd: ["bash", "-c", script],
+      cwd: tmpDir,
+      env: {
+        ...process.env,
+        GITHUB_REF_NAME: opts.tag,
+        VERSION: opts.tag,
+      },
+    });
+
+    let finalVersion: string | null = null;
+    try {
+      const pkg = JSON.parse(readFileSync(join(tmpDir, "package.json"), "utf8")) as {
+        version?: string;
+      };
+      finalVersion = pkg.version ?? null;
+    } catch {
+      finalVersion = null;
+    }
+
+    return { exitCode: res.exitCode, stderr: res.stderr.toString(), finalVersion };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+describe("§S2 publish-npm derives package.json's version from the tag (driven as data)", () => {
+  function getNpmVersionRunBody(): string {
+    const { raw } = readReleaseWorkflow();
+    const npmJobMatch = raw.match(/publish-npm:[\s\S]*?(?=\n {2}\S|\n$)/);
+    const npmJob = npmJobMatch?.[0] ?? "";
+    return extractNpmVersionRunBody(npmJob);
+  }
+
+  test("the published version equals the tag (fresh package.json version)", () => {
+    const runBody = getNpmVersionRunBody();
+    // Guard: the step must actually exist and invoke npm version — without
+    // this, a no-op script would leave finalVersion at initialPkgVersion,
+    // which could coincidentally satisfy a weaker assertion.
+    expect(runBody).toContain("npm version");
+
+    const result = runNpmVersionStep(runBody, { tag: "3.4.5", initialPkgVersion: "0.0.0" });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.finalVersion).toBe("3.4.5");
+  });
+
+  test("a stale committed package.json version (2.0.0-alpha.1, the real scaffold placeholder) no longer fails the job", () => {
+    const runBody = getNpmVersionRunBody();
+    expect(runBody).toContain("npm version");
+
+    // 2.0.0-alpha.1 is package.json's actual committed version today (the
+    // repo's first-commit scaffold placeholder, per the CR's own Context
+    // section) — under the old verify step this diverging from any real
+    // release tag would fail the job. §S2's whole point is that it no
+    // longer can: the job must succeed AND end up at the tag's version, not
+    // stuck at the stale one.
+    const result = runNpmVersionStep(runBody, {
+      tag: "5.0.0",
+      initialPkgVersion: "2.0.0-alpha.1",
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.finalVersion).toBe("5.0.0");
+  });
+
+  test("--allow-same-version: package.json already equal to the tag still succeeds (no no-op-bump failure)", () => {
+    const runBody = getNpmVersionRunBody();
+    expect(runBody).toContain("npm version");
+
+    // Without --allow-same-version, `npm version <same version>` exits
+    // non-zero ("Version not changed, might want --allow-same-version").
+    // package.json already matching the tag must NOT fail the job.
+    const result = runNpmVersionStep(runBody, {
+      tag: "6.6.6",
+      initialPkgVersion: "6.6.6",
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.finalVersion).toBe("6.6.6");
   });
 });
 
@@ -516,17 +756,37 @@ describe("§S4 docs — RELEASING.md", () => {
     expect(existsSync(join(REPO_ROOT, relPath))).toBe(true);
   });
 
-  test("documents the tag-driven version model: v-prefixed tag, hatch-vcs strips the v, Python version never hand-edited", () => {
+  // CR-CRU-061 §S1/§S4 — re-aimed from CR-CRU-041 §S5's v-prefixed contract.
+  // The doc contract is now BARE SemVer, and the old shape is permitted only
+  // inside the labelled supersession section, never as live instruction.
+  test("documents the tag-driven version model: BARE SemVer tag (no `v`), hatch-vcs derives it, Python version never hand-edited", () => {
     const doc = readText(relPath);
     const lower = doc.toLowerCase();
 
-    // The tag shape itself (vX.Y.Z) and hatch-vcs as the derivation mechanism.
-    expect(doc).toMatch(/v[Xx]\.[Yy]\.[Zz]|v<?major>?\.<?minor>?\.<?patch>?/);
+    // The tag shape itself (bare X.Y.Z) and hatch-vcs as the derivation
+    // mechanism. The absence of a prefix is stated, not merely implied.
+    expect(doc).toMatch(/\bX\.Y\.Z\b/);
+    expect(lower).toMatch(/bare[- ]semver/);
+    expect(lower).toMatch(/no `?v`? prefix|without a `?v`? prefix|no prefix of any kind/);
+    // The exact guard expression from release.yml — the doc must state the
+    // format the publish jobs actually enforce, not a paraphrase.
+    expect(doc).toContain("^refs/tags/[0-9]+\\.[0-9]+\\.[0-9]+$");
     expect(lower).toContain("hatch-vcs");
     // The Python version is DERIVED, never hand-edited — pyproject.toml is
     // dynamic (real identifier from the actual pyproject.toml).
     expect(lower).toContain("dynamic");
     expect(lower).toMatch(/never (?:be )?(?:hand|manually)[- ]edit/);
+
+    // CR-CRU-041 §S5's v-prefixed scheme is preserved as HISTORY, in a
+    // labelled supersession section — every surviving vX.Y.Z / v0.1.0 mention
+    // must sit after that heading, so none of them reads as a live
+    // instruction.
+    const supersededIdx = doc.indexOf("## Superseded");
+    expect(supersededIdx).toBeGreaterThan(-1);
+    expect(doc.slice(supersededIdx)).toContain("CR-CRU-041");
+    for (const m of doc.matchAll(/v\d+\.\d+\.\d+|v[Xx]\.[Yy]\.[Zz]/g)) {
+      expect(m.index).toBeGreaterThan(supersededIdx);
+    }
   });
 
   test("documents the one-time prerequisites: PyPI + TestPyPI pending Trusted Publishers, the pypi/testpypi/npm Environments, and a required reviewer on pypi", () => {
@@ -569,14 +829,26 @@ describe("§S4 docs — RELEASING.md", () => {
     expect(lower).toMatch(/no pending[- ]publisher|does not have.*pending[- ]publisher/);
   });
 
-  test("documents the one-time git config gitflow.prefix.versiontag v fix, and that it lives in .git/config (not version-controlled)", () => {
+  // CR-CRU-061 §S1/§S4 — re-aimed: the required state is SET-AND-EMPTY, and
+  // UNSET is a distinct, refused state (git-flow itself dies on it).
+  test('documents the one-time git config gitflow.prefix.versiontag "" fix (set-and-empty; unset refused), and that it lives in .git/config (not version-controlled)', () => {
     const doc = readText(relPath);
     const lower = doc.toLowerCase();
 
-    // Exact command, matching scripts/release.sh:176's error-message fix.
-    expect(doc).toContain("git config gitflow.prefix.versiontag v");
+    // Exact command, matching scripts/release.sh's guard error-message fix.
+    expect(doc).toContain('git config gitflow.prefix.versiontag ""');
     expect(doc).toContain(".git/config");
     expect(lower).toMatch(/not version-controlled|not (?:be )?committed|not tracked/);
+
+    // Unset must be documented as WRONG, with git-flow's own measured failure
+    // named — otherwise a reader "fixes" it by deleting the key.
+    expect(lower).toContain("unset");
+    expect(lower).toContain("fatal: version tag not set");
+
+    // The old `v` value may survive only as labelled history.
+    const supersededIdx = doc.indexOf("## Superseded");
+    const legacyIdx = doc.indexOf("git config gitflow.prefix.versiontag v");
+    expect(legacyIdx === -1 || legacyIdx > supersededIdx).toBe(true);
   });
 
   test("documents the TestPyPI rehearsal loop via scripts/release.sh checkpoint, and that an untagged checkpoint derives a clean X.Y.Z.devN via no-local-version", () => {
@@ -609,7 +881,10 @@ describe("§S4 docs — RELEASING.md", () => {
     expect(finishIdx).toBeLessThan(masterIdx);
   });
 
-  test("documents the composite/lockstep model: one tag publishes both crucible-axi (PyPI, derived) and @anthill-tec/crucible-server (npm, manual manifest) at the same version", () => {
+  // CR-CRU-061 §S2/§S4 — re-aimed: the npm side is no longer a manual
+  // manifest. BOTH artifacts derive from the one tag, so the doc must name the
+  // single authority and the mechanism that enforces it.
+  test("documents the composite/lockstep model: one tag publishes both crucible-axi (PyPI, hatch-vcs-derived) and @anthill-tec/crucible-server (npm, tag-derived at publish time) at the same version", () => {
     const doc = readText(relPath);
     const lower = doc.toLowerCase();
 
@@ -617,8 +892,11 @@ describe("§S4 docs — RELEASING.md", () => {
     // Exact scoped npm package name, matching package.json's real "name".
     expect(doc).toContain("@anthill-tec/crucible-server");
     expect(lower).toMatch(/lockstep|composite/);
-    // Distinguishes the two version-authority mechanisms by name.
     expect(lower).toMatch(/derived/);
-    expect(lower).toMatch(/manual manifest|manually[- ]versioned|hand[- ]versioned/);
+    // The npm version's real derivation mechanism, verbatim from release.yml's
+    // "Set package.json version from the release tag" step — not a paraphrase.
+    expect(lower).toContain("npm version --no-git-tag-version --allow-same-version");
+    // And the consequence stated plainly: one authority, nothing hand-versioned.
+    expect(lower).toMatch(/single version authority|neither is hand-versioned/);
   });
 });

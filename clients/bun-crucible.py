@@ -1657,6 +1657,13 @@ def main():
     gr.add_argument("--agent", help="Agent id for the gate events — REQUIRED (§S5): the "
                           "identity is declared or the verb fails; there is "
                           "no fallback.")
+    gr.add_argument("--skip", help="Pipeline steps to skip, forwarded VERBATIM to "
+                          "`no-mistakes axi run --skip` (pure passthrough — the "
+                          "client never validates or rewrites the value). Exists "
+                          "because no-mistakes' `ci` step is PR-based, and a "
+                          "git-flow project that merges directly has no PR for it "
+                          "to watch — without --skip the gate blocks until "
+                          "ci_timeout.")
     _add_project_dir_arg(gr)
     gr.set_defaults(func=cmd_gate_run)
 
