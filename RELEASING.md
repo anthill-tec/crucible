@@ -150,12 +150,24 @@ keys in `release.yml`:
 
 | Environment | Used by | Protection |
 |-------------|---------|------------|
-| `pypi` | `publish-pypi` | **Required reviewer** — this is the human gate on every production release |
-| `testpypi` | `publish-testpypi` | none (rehearsal only) |
+| `pypi` | `publish-pypi` | **Required reviewer** — the human gate on every production release |
+| `testpypi` | `publish-testpypi` | none needed (rehearsal only) |
 | `npm` | `publish-npm` | optional; add a required reviewer if you want npm gated too |
 
 The required reviewer on `pypi` is the one place a release pauses for a human. Nothing is
 published to PyPI until it is approved.
+
+🚨 **Protection rules need a public repo or a paid plan.** Deployment protection rules
+(required reviewers, wait timer) are available on **public** repositories, or on private
+ones under Pro/Team/Enterprise. On a **free-plan private** repo the section is not
+rendered at all — the environments still work and are still required (their NAMES are what
+`release.yml` and PyPI's trusted-publisher config verify), but the reviewer gate is simply
+unavailable and the human gate is then "you decide when to cut the tag". Measured
+2026-08-13 on this repo while it was private: the setting did not exist. It was made
+public, which also unblocked `npm publish --provenance` (see below).
+
+> Note: a required reviewer on `testpypi` makes every rehearsal dispatch pause for a click.
+> Leave it unprotected unless you want that.
 
 ### `RELEASE_PAT`
 
@@ -172,9 +184,29 @@ as the repository secret `RELEASE_PAT`.
 ### `NPM_TOKEN` (inaugural publish only)
 
 npm supports OIDC trusted publishing, but it has **no pending-publisher equivalent** to
-PyPI's: a trusted publisher can only be attached to a package that already exists. So the
-very first publish of the scoped package `@anthill-tec/crucible-server` needs a classic
-automation token, stored as the repository secret `NPM_TOKEN`.
+PyPI's: a trusted publisher is attached to a package's own settings, so it cannot be
+configured before the package exists. The very first publish of
+`@anthill-tec/crucible-server` therefore needs a token, stored as the repository secret
+`NPM_TOKEN`.
+
+🚨 **Use a GRANULAR token — classic/legacy tokens no longer exist.** Per npm's docs, "as of
+November 2025, only Granular access tokens are supported. Legacy access tokens have been
+removed." Create it on the website (the CLI cannot mint granular tokens yet) with:
+
+| Field | Value |
+|-------|-------|
+| Packages and scopes | **the `@anthill-tec` scope**, Read **and write** — the package does not exist yet, so it cannot be selected by name; the scope is what authorises creating it |
+| Organizations | **No access** — org access only manages settings/teams and grants no publish right |
+| Allowed IP ranges | **empty** — Actions runners get arbitrary IPs; any CIDR here fails the publish |
+| Expiration | short (e.g. 30 days) — it only has to survive the inaugural publish |
+| Bypass 2FA | see below |
+
+**Bypass 2FA, decided by your account's 2FA mode.** npm requires *either* 2FA enabled on the
+account *or* a bypass-2FA token in order to publish at all. With 2FA set to **authorization
+only**, `npm publish` is not a challenged action, so a token with Bypass **unchecked** works
+— that is this project's configuration. With 2FA set to *authorization and writes*, an
+unchecked token makes CI fail on an OTP prompt nobody can answer, so you must either switch
+the account to authorization-only or check Bypass.
 
 `publish-npm` detects the token and **skips the npm publish (with a notice) when it is
 absent** — PyPI is unaffected, so a release can legitimately ship Python-only until the
@@ -184,6 +216,14 @@ After the first successful npm publish, configure the trusted publisher on npmjs
 (repository + `release.yml` + the `npm` environment), then delete the `NPM_TOKEN` secret
 and switch the publish step to OIDC. The workflow already upgrades npm to >= 11.5.1, the
 minimum version with OIDC trusted-publishing support.
+
+### The repo must be PUBLIC for `--provenance`
+
+`publish-npm` runs `npm publish --provenance`. Provenance attestations are recorded in
+Sigstore's **public** transparency log, so the step requires a public repository — on a
+private one it fails at publish time, i.e. on release day. This is easy to miss because
+nothing else in the pipeline cares: the suites, the packaging and the PyPI publish are all
+indifferent to visibility.
 
 ---
 

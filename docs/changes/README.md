@@ -287,6 +287,32 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   CLIENT half (all five now send `claude-md`); the server-side validation gap is a different stack
   and contract, deliberately NOT absorbed into a client-refactor CR. Same class as the CR-044 phase
   enum, which the server DOES validate — this field simply never got the same treatment.
+- 🚨 **2026-08-13 (CR-CRU-063 — the first real CI push) — TWO FOLLOW-UPS FILED HERE, NOT DELIVERED.**
+  CR-CRU-062's carry-forward item 1 fired on the first push of `develop` and CI came back RED
+  (run 31677479804: `test-bun` 102 fail + 4 err, `test-python` 673 discovered / 7 fail / 2 err).
+  Root cause was provisioning — the jobs installed no project toolchain — and CR-CRU-063 fixed it
+  (`uv` on both client-driving jobs; `unittest-xml-reporting` added to the `dev` extra, which was
+  declared NOWHERE despite `python-crucible.py:442` shelling out to `python -m xmlrunner` for every
+  `test`/`regression`/`pre-merge-gate`; it only ever passed locally via user site-packages). Two
+  items were deliberately NOT absorbed:
+  **(a) the no-XML fallback emits no envelope — a real CR-CRU-030 §S1 breach.**
+  `python-crucible.py:682-685` and `_regression_run` `:761-765` (and the same shape at
+  `bun-crucible.py:796-803`) `_ingest_compile` and return, printing to stderr only: an agent with a
+  missing toolchain gets an exit code and nothing machine-readable. Fleet-wide across all five
+  clients ⇒ needs a RED-first CR (CR-030/058 lineage), with the census / stdout-purity suites
+  extended to drive a toolchain-starved interpreter. Measured during CR-063 C3: fixing it would have
+  greened 2 of the 5 residual tests (`test_toolchain_verb_envelopes.py:430`, `:514`) but for the
+  wrong reason, leaving three red — so it is a separate defect, not this CR's fix.
+  **(b) `test_docker_e2e_gate_emits_envelope_with_run_block` depends on AMBIENT FREE DISK.**
+  `test_toolchain_verb_envelopes.py:284` drives `docker-e2e-gate` with no `--min-free-g`, unlike its
+  rust siblings at `:480`/`:483`/`:490`/`:493`, so it inherits `rust-crucible.py:2180`'s **80 GB**
+  floor (guard `:1331`). It failed on the baseline run with `disk-guard-abort` and went green later
+  only because those runners had the space. It now sits inside a `needs:`-wired, publish-blocking
+  gate: a busier runner re-reds `test-python` and blocks a release for a reason unrelated to any CR.
+  **Release-setup learnings from the same day** (all now corrected in `RELEASING.md`): classic npm
+  tokens no longer exist (granular only, since Nov 2025); environment protection rules need a public
+  repo or a paid plan; and `npm publish --provenance` REQUIRES a public repo — a latent release-day
+  failure that nobody had listed, silently fixed when the repo was made public.
 - ✅ **2026-08-03 (CR-CRU-060 close) — THE E2E RELEASE-GATE ITEM IS CLOSED. Zero items remain.**
   The re-baseline the entry below anticipated is done, and the outcome was better than forecast.
   Fixing the identity drift took the suite from **19 failed / 11 passed / 10 blocked** to
