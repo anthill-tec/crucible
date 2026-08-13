@@ -141,3 +141,74 @@ that existing pattern (do not introduce a second CI-testing mechanism):
 - **§S3 is where this CR can quietly fail.** Nine unclassified failures is a small enough number to
   "fix" by weakening assertions. That would convert a real gate back into the decoration CR-CRU-062
   existed to remove.
+
+## Implementation notes
+
+### §S3 classification — C2, measured on run 31726344668 (5 remaining `test-python` failures)
+
+**One named cause covers all five: the `test-python` job's interpreter has no `xmlrunner`.**
+`unittest-xml-reporting` was declared NOWHERE — not in `pyproject.toml`, not in the clients' PEP 723
+blocks (which must stay `dependencies = []`, `test_cr046_uv_env_gate.py:340`), not in the workflow —
+yet `python-crucible.py:442` builds every `test` / `regression` / `pre-merge-gate` run as
+`<python> -m xmlrunner …`. On a dev box the module is present (here: user site-packages, 4.0.0); on
+a runner `pip install '.[dev]' build` yields `build`, `coverage`, `crucible-axi`, `packaging`,
+`pip`, `pyproject_hooks` — and no `xmlrunner`. Every one of the five tests drives that real
+xmlrunner path with `--python <this interpreter>`, so the child dies with
+`No module named 'xmlrunner'`, no `TEST-*.xml` is produced, and the client takes a no-XML fallback
+that writes to stderr only — hence the shared signature **exit 1 with completely empty stdout**.
+
+| # | Failure | Named cause | Fix |
+|---|---|---|---|
+| 1 | `test_cr039_regression_discovery.py:177` | `python -m xmlrunner discover` dies before running, so the capture carries no `Ran 0 tests`; `_is_zero_discovery` (correctly) refuses to call a silent crash a benign zero-discovery and routes to the compile fallback — which emits no envelope, so `_decode_axi` sees `{}` | provisioning |
+| 2 | `test_python_crucible_axi.py:1085` | same missing module ⇒ no XML ⇒ `cmd_test`'s compile fallback ⇒ exit 1, no `run` block | provisioning |
+| 3 | `test_python_crucible_axi.py:1129` | as #2; `raw` never reaches `/api/v2/runs/parsed` because the parsed ingest never happens | provisioning |
+| 4 | `test_toolchain_verb_envelopes.py:430` | `pre-merge-gate` python: py_compile passes (`exit=0` in the captured stderr), then its regression step runs `coverage run … -m xmlrunner` → `No module named 'xmlrunner'` → no gate envelope | provisioning |
+| 5 | `test_toolchain_verb_envelopes.py:514` | as #4, on the *passing* leg of the help-differs pair | provisioning |
+
+**Fix (one line, one place):** `pyproject.toml`'s `dev` extra now declares
+`unittest-xml-reporting>=4` alongside `coverage>=7`. **`release.yml` is not touched** — the
+`pip install '.[dev]'` step §S2 already added consumes the group, so AC8 (exactly one declaration)
+and the §S4 guard both hold unchanged (`tests/ci-toolchain-provisioning.test.ts`: 7 pass). `>=4`,
+not `>=3`: 4.x stamps `file=` on each `<testcase>`, which is what keeps `_parse_junit_dir`'s `files`
+count per-FILE instead of degrading to per-CLASS (`python-crucible.py:456`).
+
+**Local reproduction** (required before touching production code) — an exact mirror of the job's
+provisioning, not an approximation:
+
+```bash
+python3 -m venv /tmp/civenv-cr063
+/tmp/civenv-cr063/bin/python -m pip install --upgrade '.[dev]' build   # the job's two install steps
+/tmp/civenv-cr063/bin/python -m unittest \
+  tests.client.test_cr039_regression_discovery \
+  tests.client.test_python_crucible_axi \
+  tests.client.test_toolchain_verb_envelopes
+```
+
+`Ran 64 tests … FAILED (failures=5)` — the same five, by name, as run 31726344668. After the
+pyproject change and a re-`pip install '.[dev]'` in that same venv: `Ran 64 tests … OK`.
+
+**The sanitised-PATH hypothesis is refuted, with evidence.** `drive_verb`
+(`test_client_fleet_envelope_census.py:455`) *prepends* the fake bin dir —
+`env["PATH"] = fake_bin_dir + os.pathsep + env["PATH"]` — it never strips PATH, and the client
+resolves its interpreter by absolute path (`_resolve_python`), so PATH cannot starve it. Measured:
+the three modules are `OK` (64/64) under `env -i PATH=/usr/bin:/bin`, and a probe with a genuinely
+EMPTY PATH fails a *different* set of ten (rust/mvn/bun/arduino verbs needing real `git`/`sh`) while
+all five python failures stay green — the opposite of CI's fingerprint.
+
+### Deferred, with evidence: the no-XML fallback emits no envelope (a real AXI violation)
+
+Exit-1-with-empty-stdout is itself a CR-CRU-030 §S1 breach: `cmd_test`'s no-XML branch
+(`python-crucible.py:682-685`) and `_regression_run`'s non-zero-discovery branch (`:761-765`) both
+`_ingest_compile(...)` and return, printing to **stderr only**. An agent whose toolchain is missing
+therefore gets an exit code and nothing machine-readable. **Not fixed here, deliberately:**
+
+1. It is **fleet-wide, not python-local** — `bun-crucible.py:796-802` has the byte-equivalent
+   envelope-less fallback. Fixing one client would break the "modelled exactly on
+   bun-crucible.py" symmetry the fleet's design rests on; it needs a RED-first CR across all five
+   clients (CR-CRU-030/058 territory), not a patch smuggled into a CI-provisioning CR.
+2. It **fixes none of the five**: each asserts a *successful* xmlrunner run (exit 0 + a real `run`
+   block, or the `no-tests-discovered` warning that only a real `Ran 0 tests` capture produces).
+   Emitting `ok:false` on the crash path leaves all five red. Proven by the reproduction above.
+
+No test file was altered by C2 — §S3's "the suites are the contract" needed no exemption, because
+every one of the five assertions was true and the environment was wrong.
