@@ -102,6 +102,11 @@ Extend the EXISTING suites; introduce no new mechanism:
 - `tests/client/test_toolchain_verb_envelopes.py` — one case per §S2-§S4 site, driven so no report is
   produced (an interpreter/runner that cannot write JUnit), asserting `_assert_full_envelope` plus
   §S3 stdout purity (the TOON document is the ENTIRE stdout).
+- `tests/clients-python-arduino-crucible.test.ts` — the ONE existing starved-toolchain fixture
+  (`:69-71`) already drives a python client whose interpreter has no `xmlrunner` and asserts the
+  compile ingest carries the real captured `No module named …` text, never the placeholder
+  `xmlrunner produced no JUnit XML (import/syntax failure…)`. Extend THAT fixture with the stdout
+  envelope assertion rather than building a second starved harness.
 - `tests/client/test_client_fleet_envelope_census.py` — the census's `drive_verb` /
   `classify_envelope` pair covers the starved variant for the seven sites, so a future client cannot
   add a bare no-report branch.
@@ -157,9 +162,11 @@ fixtures) is the larger half. Three cycles: C1 shared helper + rust/mvn re-point
   genuinely cannot produce a report — the census's subprocess idiom, never an in-process call.
 - **Exit-code drift.** These branches carry RED signal; an envelope that changes an exit code from
   non-zero to zero would make a failing gate look green. AC5 is the guard.
-- **Wording churn in rust/mvn.** Re-pointing two working implementations at one shared helper will
-  move their `help[]` text. Any suite asserting that text verbatim must be updated deliberately, and
-  the change argued — not weakened.
+- **rust/mvn wording churn — measured LOW, not zero.** No test asserts `_no_junit_help`,
+  `_no_reports_envelope`, the `no-test-reports` code, or their help text (`grep` over `tests/`
+  returns nothing for any of them), so the re-point is unlikely to move a green suite. That also
+  means those two implementations are currently UNGUARDED: the shared helper must arrive with the
+  assertions they never had, or this CR trades duplication for silence.
 
 ## Non-goals
 
