@@ -721,5 +721,254 @@ class StatusContractDocTest(unittest.TestCase):
             "field/behavior satisfies, per §S2's explicit requirement")
 
 
+# ---------------------------------------------------------------------------
+# CR-CRU-064 §S1 (C1) — the ONE shared no-report envelope pair.
+#
+# Contract pinned from
+# docs/changes/CR-CRU-064-toolchain-starved-runs-emit-no-envelope.md §S1
+# (AC1/AC2) and the C1 dispatch note that resolved its signature collision
+# (a caller-composed `detail` cannot carry the AC2 invariant -- it would push
+# the exit-code/last-line/truncation rule into all seven call sites, which is
+# precisely the duplication C1 deletes, so the CAUSE reaches the helper):
+#
+#     no_report_help(verb, artifact, remedy=None)        -> list[str]
+#     no_report_warning(verb, artifact, exit_code, output) -> dict
+#
+# Shape follows `gate_step_abort_help` / `gate_step_abort_warning` (:722-740):
+# PURE, no I/O, `help[]` ends with "status", warning is {code, detail}.
+#
+# These are also the FIRST assertions rust's `_no_junit_help` (:360) and mvn's
+# inline `no-test-reports` warning (`_emit_compile_fallback_axi` :894-909) have
+# ever had -- CR-CRU-064's Risk note measured both as currently UNGUARDED --
+# so both artifact flavours ("junit.xml", "surefire reports") are asserted
+# here: the C1 re-point must not silently change what those two clients emit.
+#
+# RED: `clients/_crucible_axi.py` defines neither name (confirmed by reading
+# the module) -- every call below raises AttributeError, a valid
+# missing-SUT-symbol RED, the same convention as
+# `SharedAxiNoTitleWarningTest` above.
+# ---------------------------------------------------------------------------
+
+ARTIFACTS = ("junit.xml", "surefire reports")
+
+
+class SharedAxiNoReportHelpTest(unittest.TestCase):
+    """AC1 — `no_report_help(verb, artifact, remedy=None)` returns the
+    state-derived next step for a run that produced NO report at all: read the
+    runner's own output, then re-run. A `list[str]` whose final element is
+    `"status"`, as every `help[]` in the fleet is."""
+
+    def test_no_report_help_is_a_list_of_strings_whose_last_step_is_status(self):
+        axi_mod = _load_axi_module()
+        for artifact in ARTIFACTS:
+            steps = axi_mod.no_report_help("regression", artifact)
+            self.assertIsInstance(
+                steps, list,
+                f"no_report_help must return a list[str] help[] (the §S1 "
+                f"shape of gate_step_abort_help); got {steps!r}")
+            for step in steps:
+                self.assertIsInstance(
+                    step, str,
+                    f"every help[] element must be a string; got {steps!r}")
+                self.assertTrue(
+                    step.strip(),
+                    f"no help[] step may be blank -- a blank next action is "
+                    f"not an action; got {steps!r}")
+            self.assertEqual(
+                steps[-1], "status",
+                f"AC1: no_report_help's FINAL element must be exactly "
+                f"'status', as every help[] in the fleet ends; got {steps!r}")
+
+    def test_no_report_help_first_step_names_the_missing_artifact_and_the_verb(self):
+        """The first action must be self-explaining: WHICH verb produced no
+        report, and WHICH artifact was expected -- substrings, never a canned
+        per-verb sentence (CR-CRU-058 §S2)."""
+        axi_mod = _load_axi_module()
+        for verb, artifact in (("regression", "junit.xml"),
+                               ("pre-merge-gate", "junit.xml"),
+                               ("unit", "surefire reports"),
+                               ("module", "surefire reports")):
+            first = axi_mod.no_report_help(verb, artifact)[0]
+            self.assertIn(
+                artifact, first,
+                f"AC1: the first help step must NAME the artifact that was "
+                f"never produced ({artifact!r}); got {first!r}")
+            self.assertIn(
+                verb, first,
+                f"AC1: the first help step must NAME the verb whose run "
+                f"produced nothing ({verb!r}), never a canned string; "
+                f"got {first!r}")
+
+    def test_no_report_help_puts_an_explicit_remedy_ahead_of_the_rerun_step(self):
+        """§S1 — `remedy` is the step's OWN concrete fix (the shape
+        `gate_step_abort_help` established): it must come BEFORE re-running,
+        because re-running before applying it just reproduces the starvation."""
+        axi_mod = _load_axi_module()
+        remedy = "install unittest-xml-reporting into the interpreter under test"
+        steps = axi_mod.no_report_help("regression", "junit.xml", remedy)
+        remedy_indexes = [i for i, s in enumerate(steps) if remedy in s]
+        self.assertTrue(
+            remedy_indexes,
+            f"the supplied remedy must appear in help[]; got {steps!r}")
+        rerun_indexes = [i for i, s in enumerate(steps) if "re-run" in s]
+        self.assertTrue(
+            rerun_indexes,
+            f"help[] must still carry a re-run step alongside the remedy; "
+            f"got {steps!r}")
+        self.assertLess(
+            remedy_indexes[0], rerun_indexes[0],
+            f"AC1: the remedy must be ordered AHEAD of the re-run step -- "
+            f"re-running before applying it reproduces the same starved run; "
+            f"got {steps!r}")
+        self.assertEqual(
+            steps[-1], "status",
+            f"the remedy variant must still end with 'status'; got {steps!r}")
+
+
+class SharedAxiNoReportWarningTest(unittest.TestCase):
+    """AC1/AC2 — `no_report_warning(verb, artifact, exit_code, output)` is
+    exactly `{"code": "no-test-reports", "detail": ...}` (mvn's existing code
+    string, reused VERBATIM -- a lift, not a rename), whose `detail` carries
+    the machine-readable cause: the runner's exit code and the last non-empty
+    line of the captured output, so `No module named 'xmlrunner'` reaches the
+    consumer instead of an exit code and empty stdout."""
+
+    # The measured signature from CR-CRU-063 (run 31726344668): the child dies
+    # before writing any TEST-*.xml, and the ONLY evidence of why is the tail
+    # of the capture. Trailing blank lines are deliberate -- "last non-empty
+    # line", not "last line".
+    STARVED_CAPTURE = (
+        "Traceback (most recent call last):\n"
+        "  File \"/usr/lib/python3.13/runpy.py\", line 198, in _run_module_as_main\n"
+        "    return _run_code(code, main_globals, None,\n"
+        "  File \"/usr/lib/python3.13/runpy.py\", line 88, in _run_code\n"
+        "    exec(code, run_globals)\n"
+        "ModuleNotFoundError: No module named 'xmlrunner'\n"
+        "\n"
+        "   \n"
+    )
+
+    def test_no_report_warning_code_is_exactly_the_existing_no_test_reports(self):
+        axi_mod = _load_axi_module()
+        for artifact in ARTIFACTS:
+            warning = axi_mod.no_report_warning(
+                "regression", artifact, 1, self.STARVED_CAPTURE)
+            self.assertEqual(
+                warning.get("code"), "no-test-reports",
+                f"AC1: the code must be EXACTLY 'no-test-reports' -- mvn's "
+                f"existing string, reused verbatim, never renamed; "
+                f"got {warning!r}")
+            self.assertEqual(
+                set(warning), {"code", "detail"},
+                f"the warning is the fleet's {{code, detail}} pair and nothing "
+                f"else (the shape of gate_step_abort_warning); got {warning!r}")
+
+    def test_detail_names_the_runner_exit_code_and_the_last_non_empty_line(self):
+        axi_mod = _load_axi_module()
+        for artifact in ARTIFACTS:
+            detail = axi_mod.no_report_warning(
+                "regression", artifact, 9, self.STARVED_CAPTURE)["detail"]
+            self.assertTrue(
+                re.search(r"(?<!\d)9(?!\d)", detail),
+                f"AC2: the detail must name the RUNNER'S EXIT CODE (9) -- the "
+                f"first machine-readable fact about a starved run; "
+                f"got {detail!r}")
+            self.assertIn(
+                "ModuleNotFoundError: No module named 'xmlrunner'", detail,
+                f"AC2: the detail must carry the LAST NON-EMPTY line of the "
+                f"capture (trailing blank/whitespace lines skipped), which is "
+                f"the cause line; got {detail!r}")
+            self.assertNotIn(
+                "_run_module_as_main", detail,
+                f"AC2 says the LAST non-empty line, not the whole capture -- "
+                f"the traceback head must not be dumped into the warning; "
+                f"got {detail!r}")
+            self.assertIn(
+                artifact, detail,
+                f"the detail must name the artifact that was never produced "
+                f"({artifact!r}); got {detail!r}")
+            self.assertIn(
+                "regression", detail,
+                f"the detail must name the verb whose run produced nothing; "
+                f"got {detail!r}")
+
+    def test_the_xmlrunner_cause_substring_survives_into_the_detail(self):
+        """AC2's named example, asserted on its own: a run starved of
+        `xmlrunner` produces a detail containing `No module named
+        'xmlrunner'`. This is the whole point of the CR -- today the consumer
+        gets exit 1 and empty stdout."""
+        axi_mod = _load_axi_module()
+        detail = axi_mod.no_report_warning(
+            "pre-merge-gate", "junit.xml", 1, self.STARVED_CAPTURE)["detail"]
+        self.assertIn(
+            "No module named 'xmlrunner'", detail,
+            f"AC2: the starved-toolchain cause must reach the consumer "
+            f"verbatim; got {detail!r}")
+
+    def test_detail_is_bounded_at_500_characters_and_keeps_the_causing_tail(self):
+        """AC2 — a 5,000-character capture is truncated to a detail of at most
+        500 characters, and the truncation keeps the TAIL (the cause), not the
+        head: a bound that dropped the last line would bound away the only
+        machine-readable fact the warning exists to carry."""
+        axi_mod = _load_axi_module()
+        cause = "ModuleNotFoundError: No module named 'xmlrunner'"
+        long_capture = ("HEADOFCAPTUREMARKER " + "x" * 4940 + " " + cause)
+        self.assertGreaterEqual(
+            len(long_capture), 5000,
+            "fixture guard: the capture under test must really be ~5,000 "
+            "characters, otherwise the bound is never exercised")
+        for artifact in ARTIFACTS:
+            detail = axi_mod.no_report_warning(
+                "regression", artifact, 2, long_capture)["detail"]
+            self.assertLessEqual(
+                len(detail), 500,
+                f"AC2: the detail must be bounded at 500 characters; "
+                f"got len={len(detail)}")
+            self.assertIn(
+                cause, detail,
+                f"AC2: truncation must keep the TAIL of the capture -- the "
+                f"cause line is the payload; got {detail!r}")
+            self.assertNotIn(
+                "HEADOFCAPTUREMARKER", detail,
+                f"AC2: truncation must drop the HEAD, not the tail -- keeping "
+                f"the head would bound away the cause; got {detail!r}")
+            self.assertTrue(
+                re.search(r"(?<!\d)2(?!\d)", detail),
+                f"the helper-composed prefix (verb, artifact, exit code) is "
+                f"never truncated, so the exit code survives a 5,000-character "
+                f"capture; got {detail!r}")
+            self.assertIn(
+                artifact, detail,
+                f"the artifact named in the prefix must survive truncation; "
+                f"got {detail!r}")
+
+    def test_a_blank_capture_still_names_the_exit_code_and_is_never_empty(self):
+        """A runner can die with nothing on stdout/stderr at all. The detail
+        must still say what happened -- an empty detail is not merely useless,
+        the compile endpoint 400s on an empty string."""
+        axi_mod = _load_axi_module()
+        for blank in ("", "   ", "\n\n", "  \n\t\n   \n"):
+            for artifact in ARTIFACTS:
+                detail = axi_mod.no_report_warning(
+                    "regression", artifact, 127, blank)["detail"]
+                self.assertTrue(
+                    detail and detail.strip(),
+                    f"a blank capture ({blank!r}) must NOT yield an empty "
+                    f"detail -- the ingest endpoint rejects it; "
+                    f"got {detail!r}")
+                self.assertIn(
+                    "127", detail,
+                    f"AC2: with no captured output at all, the exit code is "
+                    f"the only fact left and MUST be named; got {detail!r}")
+                self.assertIn(
+                    artifact, detail,
+                    f"a blank capture must still name the missing artifact; "
+                    f"got {detail!r}")
+                self.assertNotIn(
+                    "None", detail,
+                    f"a blank capture must not leak a stringified None into "
+                    f"the detail; got {detail!r}")
+
+
 if __name__ == "__main__":
     unittest.main()
