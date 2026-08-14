@@ -67,6 +67,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-058](CR-CRU-058-rust-axi-envelope-parity.md) | **40 of 118 client verbs emit no TOON-AXI envelope** (measured by a detector, not grep) — incl. `pre-merge-gate` in ALL FIVE clients, the orchestrator's merge-decision path; join them to the shared emitters + state-derived `help[]`, stdout purity, fleet-wide guard | patch | COMPLETED | 030, 054 | 4 |
 | [CR-CRU-059](CR-CRU-059-identity-source-validation.md) | Registration identity contract — rename `phase` → **`role`** fleet-wide (the DN's own ontology says Role; `phase` is only the scope word), + validate `identity.source` against its documented enum. CLEAN BREAK (no alias); the capability change rides the single per-release Model-B intimation | patch | COMPLETED | 044, 054, 056, 057 | 4 |
 | [CR-CRU-063](CR-CRU-063-ci-provisions-the-toolchain.md) | CI runs the gates but provisions no toolchain — measured on the first real push (run 31677479804): **102 bun + 9 python failures**, 98 of them `Executable not found in $PATH: "uv"`; the Python job is server-free but not dependency-free (`uv`, the declared `dev` extra, `build`). Publishes `needs:` these suites, so a red gate publishes nothing. `unittest-xml-reporting` turned out to be declared NOWHERE despite every python client run shelling out to `python -m xmlrunner` | patch | COMPLETED | 062 | 4 |
+| [CR-CRU-064](CR-CRU-064-toolchain-starved-runs-emit-no-envelope.md) | A toolchain-starved run emits no envelope — seven no-report fallbacks (python ×3, bun ×2, arduino ×2, incl. BOTH `pre-merge-gate` regression bodies) return an exit code with empty stdout; one shared `no_report_*` helper replaces rust's + mvn's duplicated local ones, and `docker-e2e-gate`'s envelope test stops depending on ambient free disk | patch | PENDING | 030, 054, 058, 063 | 4 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 · track-1) | 011, 013 | 5 (0.2.0) |
 | [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Playwright runner + codec + tab | feature | PENDING (0.2.0 · track-2) | 004, 007 | 5 (0.2.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end + Aborted state | feature | PENDING (0.2.0 · track-3 cand.) | 008, 011 | 5 (0.2.0) |
@@ -313,6 +314,17 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   tokens no longer exist (granular only, since Nov 2025); environment protection rules need a public
   repo or a paid plan; and `npm publish --provenance` REQUIRES a public repo — a latent release-day
   failure that nobody had listed, silently fixed when the repo was made public.
+- 2026-08-14 (SCRUM filing) — **CR-CRU-063's two follow-ups are now CR-CRU-064**, filed together
+  because both land in `tests/client/test_toolchain_verb_envelopes.py` and both block the same
+  publish-wired gate. Re-measured on `develop` `f7f826d` before filing: the envelope-less no-report
+  branch is **seven sites, not the three CR-063 named** — `python-crucible.py:682-685` / `:761-765` /
+  `:787-790`, `bun-crucible.py:796-803` / `:852-855`, `arduino-crucible.py:505-507` / `:659-662`.
+  Two of them are the bodies `pre-merge-gate` runs as its regression step (bun `cmd_regression`,
+  python `_regression_run`), so the merge-decision verb is exactly what goes silent on a starved
+  toolchain. rust (`_no_junit_help:360`) and mvn (`_no_reports_envelope:895`) already emit and are
+  DUPLICATES of one concept — CR-064 lifts one `no_report_help`/`no_report_warning` pair into
+  `_crucible_axi.py` (CR-054 drift class) and deletes both local copies. Release membership is
+  unassigned (the user's call); filed PENDING at Wave 4, the lineage of the code it fixes.
 - ✅ **2026-08-03 (CR-CRU-060 close) — THE E2E RELEASE-GATE ITEM IS CLOSED. Zero items remain.**
   The re-baseline the entry below anticipated is done, and the outcome was better than forecast.
   Fixing the identity drift took the suite from **19 failed / 11 passed / 10 blocked** to
