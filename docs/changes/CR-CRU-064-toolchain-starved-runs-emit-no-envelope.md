@@ -38,9 +38,12 @@ is missing.
 
 **Two clients already do this correctly, and their implementations are duplicated:**
 rust has `_no_junit_help(verb)` (`clients/rust-crucible.py:360`) consumed by `_emit_axi` at `:899`,
-`:1396` and `:1523`; mvn has `_no_reports_envelope(...)` (`clients/mvn-crucible.py:895`) emitting the
-`no-test-reports` warning. Two local implementations of one fleet concept is the CR-CRU-054 drift
-class — the shared module carries no no-report helper at all.
+`:1396` and `:1523`; mvn inlines the same concept inside `_emit_compile_fallback_axi(verb, rc,
+project_dir, agent)` (`clients/mvn-crucible.py:894`) — its `help[]` prose and its
+`{"code": "no-test-reports"}` warning are literals at `:900-908`. `grep -rn '"no-test-reports"'
+clients/` returns exactly ONE hit, so the code that names this condition exists in one client only.
+Two local implementations of one fleet concept is the CR-CRU-054 drift class — the shared module
+carries no no-report helper at all.
 
 The second half of this CR is CR-CRU-063's other recorded follow-up:
 `test_docker_e2e_gate_emits_envelope_with_run_block`
@@ -60,15 +63,22 @@ this follows):
 - `no_report_help(verb, artifact, remedy=None) -> list[str]` — the state-derived next step: read the
   runner's own output on stderr, then re-run. Ends with `"status"`, as every `help[]` in the fleet
   does.
-- `no_report_warning(verb, artifact, detail) -> dict` — exactly `{"code": "no-test-reports",
-  "detail": …}`. The code is mvn's existing string, reused verbatim: this is a lift, not a rename.
-- `detail` MUST carry the machine-readable cause: the runner's exit code and the last non-empty line
-  of the captured output, so `No module named 'xmlrunner'` reaches the consumer. Bound the captured
-  fragment at 500 characters.
+- `no_report_warning(verb, artifact, exit_code, output) -> dict` — exactly `{"code":
+  "no-test-reports", "detail": …}`. The code is mvn's existing string, reused verbatim: a lift, not a
+  rename. **The helper COMPOSES the detail** — it does not receive a finished one. A `detail`
+  parameter would push the invariant below into all seven call sites, which is the duplication this
+  section exists to delete.
+- The composed `detail` names the verb, the artifact and the runner's `exit_code`, then the last
+  non-empty line of `output`, so `No module named 'xmlrunner'` reaches the consumer. The composed
+  PREFIX (verb + artifact + exit code) is never truncated; only the output fragment is bounded, it
+  keeps ITS tail (the cause), and the whole `detail` stays ≤ 500 characters. Blank/whitespace-only
+  `output` still yields a non-empty, exit-code-naming detail — `/api/v2/runs/compile` 400s on empty.
 
-rust's `_no_junit_help` and mvn's `_no_reports_envelope` are DELETED and re-pointed at the shared
-helpers — a clean cutover, no aliases. Their emitted `help[]`/`warnings[]` may change wording; their
-`ok`, verb and warning code must not.
+rust's `_no_junit_help` is DELETED and its three emit sites call the shared helpers — a clean
+cutover, no alias. mvn's `_emit_compile_fallback_axi` SURVIVES as a thin caller (it is an emitter,
+not a help/warning builder): its inlined `help[]` prose and warning literal are replaced by calls.
+The `artifact` parameter is what preserves each stack's wording (`junit.xml` · `surefire reports` ·
+`TEST-*.xml`); `ok`, the verb and the warning code must not change for either client.
 
 ### §S2 — python: three sites emit
 
@@ -110,8 +120,10 @@ Extend the EXISTING suites; introduce no new mechanism:
 - `tests/client/test_client_fleet_envelope_census.py` — the census's `drive_verb` /
   `classify_envelope` pair covers the starved variant for the seven sites, so a future client cannot
   add a bare no-report branch.
-- `tests/client/test_cr054_drift_guard.py` — a guard asserting no client defines its own no-report
-  help/envelope helper; the shared module is the only definition.
+- `tests/client/test_cr054_drift_guard.py` — the guard is TWO assertions, because a name-only check
+  misses mvn (which never had a named helper): (a) `_no_junit_help` is absent from every
+  `clients/*.py`, and (b) the `"no-test-reports"` literal and the no-report help prose appear ONLY in
+  `clients/_crucible_axi.py`. (b) is what catches an inlined re-introduction.
 
 ### §S6 — `docker-e2e-gate`'s envelope test must not depend on ambient free disk
 
@@ -125,13 +137,19 @@ already uses. No production code changes in this section, and no change to
 ## Acceptance criteria
 
 1. `clients/_crucible_axi.py` exports `no_report_help(verb, artifact, remedy=None)` returning a
-   `list[str]` whose final element is `"status"`, and `no_report_warning(verb, artifact, detail)`
-   returning a dict whose `code` is exactly `"no-test-reports"`.
-2. `no_report_warning`'s `detail` contains the runner exit code and the last non-empty line of the
-   captured output, truncated to at most 500 characters. A run starved of `xmlrunner` produces a
-   `detail` containing the substring `No module named 'xmlrunner'`.
-3. `grep -n "_no_junit_help\|_no_reports_envelope" clients/` returns **zero** matches; rust's `:899`,
-   `:1396`, `:1523` and mvn's compile/no-reports path all emit through the shared helpers.
+   `list[str]` whose final element is `"status"`, and `no_report_warning(verb, artifact, exit_code,
+   output)` returning a dict whose `code` is exactly `"no-test-reports"`. Both are PURE (no I/O), as
+   their `gate_step_abort_*` siblings are.
+2. `no_report_warning` COMPOSES the `detail`: it names the verb, the artifact and `exit_code`, then
+   the last non-empty line of `output`. For a 5,000-character `output` whose tail is
+   `ModuleNotFoundError: No module named 'xmlrunner'`: `len(detail) <= 500`, the prefix and exit code
+   are intact, and `No module named 'xmlrunner'` is present. For `output` that is empty or
+   whitespace-only, `detail` is non-empty and still names `exit_code`.
+3. `grep -rn "_no_junit_help" clients/` returns **zero** matches, and `grep -rn '"no-test-reports"'
+   clients/` matches **only** `clients/_crucible_axi.py`. rust's `:899`, `:1396`, `:1523` and mvn's
+   `_emit_compile_fallback_axi` (which survives as a thin caller) all source `help[]` and
+   `warnings[]` from the shared helpers; the "produced no junit.xml" / "produced no surefire reports"
+   prose exists only in the shared module, differentiated by the `artifact` argument.
 4. Each of the seven sites in the Context table emits exactly ONE document on stdout that decodes as
    TOON to `{axi: {verb, ok:false, help[], context, warnings[]}}` with a `no-test-reports` warning.
    `classify_envelope(stdout, toon)` is True for all seven.
@@ -145,7 +163,9 @@ already uses. No production code changes in this section, and no change to
 8. `test_docker_e2e_gate_emits_envelope_with_run_block` passes `--min-free-g 1`; running it on a
    filesystem with less than 80 GB free still passes, and the `disk-guard-abort` warning code does
    not appear in its captured envelope.
-9. `test_cr054_drift_guard.py` fails if any client re-introduces a local no-report helper.
+9. `test_cr054_drift_guard.py` fails on EITHER a re-introduced named helper or an inlined
+   `"no-test-reports"` / no-report help literal in any client — the name check alone would not have
+   caught mvn's inlined version.
 10. Both gates green before close-out (CR-CRU-045 §S3 cross-stack rule: these are Python clients
     whose observable contract is asserted by bun tests) — the Python suite AND the bun suite.
 
@@ -163,7 +183,7 @@ fixtures) is the larger half. Three cycles: C1 shared helper + rust/mvn re-point
 - **Exit-code drift.** These branches carry RED signal; an envelope that changes an exit code from
   non-zero to zero would make a failing gate look green. AC5 is the guard.
 - **rust/mvn wording churn — measured LOW, not zero.** No test asserts `_no_junit_help`,
-  `_no_reports_envelope`, the `no-test-reports` code, or their help text (`grep` over `tests/`
+  `_emit_compile_fallback_axi`, the `no-test-reports` code, or their help text (`grep` over `tests/`
   returns nothing for any of them), so the re-point is unlikely to move a green suite. That also
   means those two implementations are currently UNGUARDED: the shared helper must arrive with the
   assertions they never had, or this CR trades duplication for silence.

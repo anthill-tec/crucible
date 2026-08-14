@@ -321,9 +321,11 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `:787-790`, `bun-crucible.py:796-803` / `:852-855`, `arduino-crucible.py:505-507` / `:659-662`.
   Two of them are the bodies `pre-merge-gate` runs as its regression step (bun `cmd_regression`,
   python `_regression_run`), so the merge-decision verb is exactly what goes silent on a starved
-  toolchain. rust (`_no_junit_help:360`) and mvn (`_no_reports_envelope:895`) already emit and are
-  DUPLICATES of one concept — CR-064 lifts one `no_report_help`/`no_report_warning` pair into
-  `_crucible_axi.py` (CR-054 drift class) and deletes both local copies.
+  toolchain. rust (`_no_junit_help:360`) and mvn (inlined in `_emit_compile_fallback_axi:894` — no
+  named helper; the `"no-test-reports"` literal has exactly one occurrence fleet-wide) already emit
+  and are DUPLICATES of one concept — CR-064 lifts one `no_report_help`/`no_report_warning` pair into
+  `_crucible_axi.py` (CR-054 drift class); rust's local helper is deleted, mvn's emitter survives as a
+  thin caller.
   🚨 **User-decided 2026-08-14: CR-CRU-064 is a 0.1.0 PREREQUISITE, above the release boundary** —
   0.1.0 is what puts these clients in users' hands, where an incomplete toolchain is the NORMAL
   first-run state, so an envelope-less exit is a shipping defect, not a follow-up. The boundary's
