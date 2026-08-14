@@ -2,7 +2,7 @@
 
 **Status:** PENDING
 **Type:** patch (AXI-compliance — fleet parity)
-**Priority:** P1 — two of the seven sites are the `pre-merge-gate` regression body (bun) and the gate's python twin, so an orchestrator whose toolchain is incomplete gets an exit code with EMPTY stdout at a merge decision point
+**Priority:** P0 — **0.1.0 release prerequisite (user-decided 2026-08-14): this ships BEFORE the release, not after it.** Two of the seven sites are the `pre-merge-gate` regression body (bun) and the gate's python twin, so an orchestrator whose toolchain is incomplete gets an exit code with EMPTY stdout at a merge decision point — and 0.1.0 is the release that puts these clients in users' hands, where a missing toolchain is the NORMAL first-run state, not an edge case.
 **Depends on:** CR-CRU-030 (established the fleet-wide TOON-AXI contract), CR-CRU-054 (the shared module these sites must join), CR-CRU-058 (envelope parity + state-derived `help[]` — the same defect class, one branch deeper), CR-CRU-063 (measured the failure and recorded both follow-ups)
 **Labels:** patch, client-fleet, axi-compliance, gate-correctness, test-determinism
 **Design reference:** CR-CRU-030 §S1 — one TOON-AXI document per verb invocation on stdout; CR-CRU-058 §S1/§S2 — the run-produced-no-report envelope + state-derived `help[]`, whose rust/mvn implementations are the reference this CR generalises. The AXI manifesto's structured-output principle (https://axi.md) is the contract being violated.
