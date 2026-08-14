@@ -71,6 +71,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      # CR-CRU-063 §S1 — uv, not just bun. tests/clients-bun-crucible.test.ts:83
+      # spawns the client fleet as ["uv", "run", SCRIPT_PATH, …] (PEP 723,
+      # CR-CRU-046 §S3); oven-sh/setup-bun provides bun, not uv. Without this
+      # step 98 tests fail with `Executable not found in $PATH: "uv"`
+      # (measured on run 31677479804). The maintained, pinned action — a
+      # release gate must not depend on an unpinned `curl | sh` network script.
+      - uses: astral-sh/setup-uv@v6
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Bun suite
@@ -89,6 +96,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+      # CR-CRU-063 §S1 — tests/client/test_cr046_uv_env_gate.py's setUpClass
+      # raises ``RuntimeError: `uv` is not on PATH … Remedy: install uv.``,
+      # aborting the whole class (which is why CI discovered 673, not 683).
+      - uses: astral-sh/setup-uv@v6
+      # CR-CRU-063 §S2 — the project's `dev` extra, CONSUMED from
+      # pyproject.toml (which declares it) and never restated here (AC8):
+      # tests/client/test_cr040_coverage_tooling.py:172 needs the gate venv's
+      # python to run `-m coverage`.
+      - name: Install the project with its dev extra (pyproject.toml is the declaration)
+        run: python3 -m pip install --upgrade '.[dev]'
+      # CR-CRU-063 §S2 — tests/client/test_crucible_axi_wheel_packaging.py:121
+      # raises ``RuntimeError: no interpreter on this machine can `import
+      # build``` — the same package the `build` job already installs; that
+      # asymmetry is the bug.
+      - name: Install build (wheel-packaging suite imports it)
+        run: python3 -m pip install --upgrade build
       - name: Python client suite (no server required)
         run: python3 -m unittest discover -s tests/client -t .
 
