@@ -197,3 +197,21 @@ fixtures) is the larger half. Three cycles: C1 shared helper + rust/mvn re-point
 - No new CI provisioning. CR-CRU-063 delivered that; two of these tests would have gone green from
   this fix for the wrong reason (measured in its Implementation notes), which is why it is a separate
   CR.
+
+## Implementation notes
+
+### C1 — where a `detail` can actually carry a cause, measured per site
+
+`no_report_warning` composes the cause from a captured stream, so its value depends on whether the
+site HAS one. Measured while re-pointing rust and mvn:
+
+| Site | Capture | Resulting `detail` |
+|---|---|---|
+| rust `regression-ingest` | `capture_output=True` | full: prefix + real cause (`error: no such command: \`llvm-cov\``) |
+| rust `smoke-test`, `workspace-regression` | child streams INHERITED to stderr — nothing is captured | prefix + the blank-capture branch. Inherent, not a gap: the output the consumer needs already went to its terminal, and capturing it would change those verbs' streaming behaviour. |
+| mvn `_emit_compile_fallback_axi` | `_compile_fallback` returns only an `rc`; the build output stays inside it | prefix only. **This one IS a gap** — the capture exists one frame down. |
+
+**C3 threads mvn's capture out of `_compile_fallback` so the mvn detail carries its cause too.** It
+is recorded here rather than absorbed into C1 because it changes `_compile_fallback`'s return
+shape and its three call sites, which C1's target did not include. AC2 is not considered met at the
+mvn site until that lands.
