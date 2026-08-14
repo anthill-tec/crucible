@@ -357,14 +357,6 @@ def _docker_help(action, ok):
             "status"]
 
 
-def _no_junit_help(verb):
-    """CR-CRU-058 §S2 — the run never produced a report at all: the concrete
-    next action is to look at the runner's own output, not to ingest."""
-    return [f"the run produced no junit.xml — read the {verb} runner output on "
-            f"stderr (cargo/nextest failed before writing a report), then re-run",
-            "status"]
-
-
 def _gate_locked_help(verb):
     """CR-CRU-058 §S2 — the run never started because another gate holds the
     lock: the next action is to wait for the holder, not to re-run blindly."""
@@ -897,8 +889,12 @@ def _regression_ingest_run(args):
     junit_path = f"{project_dir}/target/nextest/ci/junit.xml"
     if not os.path.exists(junit_path):
         _emit_axi("regression-ingest", False,
-                  {"help": _no_junit_help("regression-ingest")},
-                  _axi_context(project_dir, agent_id=args.agent), [],
+                  {"help": _axi().no_report_help("regression-ingest",
+                                                 "junit.xml")},
+                  _axi_context(project_dir, agent_id=args.agent),
+                  [_axi().no_report_warning(
+                      "regression-ingest", "junit.xml", result.returncode,
+                      result.stderr or result.stdout or "")],
                   "[crucible] ERROR: no junit.xml after llvm-cov nextest")
         return 1
 
@@ -1393,8 +1389,11 @@ def _smoke_test(args, verb):
             default_junit if os.path.exists(default_junit) else None
         )
         if not junit_path:
-            _emit_axi(verb, False, {"help": _no_junit_help(verb)},
-                      _axi_context(project_dir, agent_id=args.agent), [],
+            _emit_axi(verb, False,
+                      {"help": _axi().no_report_help(verb, "junit.xml")},
+                      _axi_context(project_dir, agent_id=args.agent),
+                      [_axi().no_report_warning(verb, "junit.xml",
+                                                result.returncode, "")],
                       "[smoke-test] no junit.xml found — nothing to ingest")
             return 1
 
@@ -1520,8 +1519,11 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
 
     junit_path = f"{project_dir}/target/nextest/{args.profile}/junit.xml"
     if not os.path.exists(junit_path):
-        _emit_axi(verb, False, {"help": _no_junit_help(verb)},
-                  _axi_context(project_dir, agent_id=args.agent), [],
+        _emit_axi(verb, False,
+                  {"help": _axi().no_report_help(verb, "junit.xml")},
+                  _axi_context(project_dir, agent_id=args.agent),
+                  [_axi().no_report_warning(verb, "junit.xml",
+                                            result.returncode, "")],
                   f"[crucible] ERROR: no junit.xml at {junit_path}")
         return 1
 

@@ -894,18 +894,21 @@ def _emit_tier_run_axi(verb, ingested, project_dir, agent):
 def _emit_compile_fallback_axi(verb, rc, project_dir, agent):
     """CR-CRU-058 §S1 — the envelope for the RED-as-compile path: the run
     produced no reports at all, so there is no `run:` block to carry and the
-    §S2 next step is the build error, never the verb's successor."""
+    §S2 next step is the build error, never the verb's successor.
+
+    CR-CRU-064 §S1 — a thin caller: the `help[]` and the no-report warning are
+    BUILT by the shared pair (this client no longer spells either),
+    with the compile-fallback's own remedy ordered ahead of the re-run. The
+    build output itself was already ingested as a compile failure, so the
+    warning carries the fallback's exit code as the machine-readable cause."""
     _emit_axi(verb, False,
               {"stage": "compile",
-               "help": [f"the {verb} run produced no surefire reports — fix the "
-                        f"build/test-compile errors ingested to Crucible (and "
-                        f"echoed on stderr), then re-run {verb} --agent <agentId>",
-                        "status"]},
+               "help": _axi().no_report_help(
+                   verb, "surefire reports",
+                   "fix the build/test-compile errors ingested to Crucible "
+                   "(and echoed on stderr)")},
               _axi_context(project_dir, agent_id=agent),
-              [{"code": "no-test-reports",
-                "detail": (f"{verb} produced no surefire reports — the tests did "
-                           f"not compile; the captured build output was ingested "
-                           f"as a compile failure instead of a test run")}],
+              [_axi().no_report_warning(verb, "surefire reports", rc, "")],
               f"{verb}: ok=False — no reports, ingested as compile (rc={rc})")
 
 
