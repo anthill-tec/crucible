@@ -799,8 +799,18 @@ def cmd_test(args):
         tail = (getattr(result, "stdout", None) or "")[-4000:]
         synthetic = ("bun-test(1,1): error TS0000: "
                      "bun test produced no JUnit XML (collection/compile failure)")
-        return _ingest_compile(project_dir, args.agent,
-                               synthetic + ("\n\n" + tail if tail else ""))
+        rc = _ingest_compile(project_dir, args.agent,
+                             synthetic + ("\n\n" + tail if tail else ""))
+        # CR-CRU-064 §S3 — the synthetic TS0000 ingest above is UNCHANGED
+        # (errorCount=1, red card); the envelope is additive and the exit code
+        # is still the ingest's own (AC5).
+        _emit_axi("test", False,
+                  {"help": _axi().no_report_help("test", "junit.xml")},
+                  _axi_context(project_dir, agent_id=args.agent),
+                  [_axi().no_report_warning("test", "junit.xml",
+                                            result.returncode, tail)],
+                  "[crucible] ERROR: no JUnit XML produced — ingested as compile")
+        return rc
     finally:
         _close_gate_identity(project_dir, identity)
 
@@ -852,6 +862,17 @@ def cmd_regression(args, verb="regression"):
         if not os.path.exists(junit_path):
             print("[crucible] ERROR: no JUnit XML produced — nothing to ingest",
                   file=sys.stderr)
+            # CR-CRU-064 §S3/AC6 — under the `verb` PARAMETER, so a starved
+            # `pre-merge-gate` speaks as the gate, never as the inner
+            # `regression`. The capture exists here today and was simply
+            # discarded; it now carries the cause.
+            _emit_axi(verb, False,
+                      {"help": _axi().no_report_help(verb, "junit.xml")},
+                      _axi_context(project_dir, agent_id=args.agent),
+                      [_axi().no_report_warning(
+                          verb, "junit.xml", result.returncode,
+                          getattr(result, "stdout", None) or "")],
+                      f"{verb}: ok=False — no JUnit XML, nothing to ingest")
             return 1
 
         summary, tree, files = _parse_junit_file(junit_path)

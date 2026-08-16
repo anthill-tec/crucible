@@ -503,8 +503,20 @@ def _run_native_tests_body(args, verb, tier, want_coverage, pd):
     run = subprocess.run(["make", "junit"], cwd=native_dir, capture_output=True, text=True)
     reports = sorted(glob.glob(os.path.join(native_dir, "reports", "TEST-*.xml")))
     if not reports:
+        # CR-CRU-064 §S4 — was `sys.exit(<message>)`, which wrote the message to
+        # stderr and exited 1 with EMPTY stdout. The stderr text and the exit
+        # code are preserved verbatim (AC5); the envelope is what is added, and
+        # it carries the CALLER's `verb` (this body backs test AND regression).
         sys.stderr.write(run.stdout + run.stderr)
-        sys.exit(f"[crucible] no JUnit (reports/TEST-*.xml) under {native_dir}")
+        message = f"[crucible] no JUnit (reports/TEST-*.xml) under {native_dir}"
+        sys.stderr.write(message + "\n")
+        _emit_axi(verb, False,
+                  {"help": _axi().no_report_help(verb, "TEST-*.xml")},
+                  _axi_context(pd, agent_id=agent_id),
+                  [_axi().no_report_warning(verb, "TEST-*.xml", run.returncode,
+                                            (run.stdout or "") + (run.stderr or ""))],
+                  message)
+        return 1
     summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
     tree = []
     files = 0
@@ -659,7 +671,18 @@ def cmd_auto_ingest(args):
         reports_dir = os.path.join(pd, reports_dir)
     reports = sorted(glob.glob(os.path.join(reports_dir, "TEST-*.xml")))
     if not reports:
-        sys.exit(f"[crucible] no JUnit (TEST-*.xml) under {reports_dir} — nothing to ingest")
+        # CR-CRU-064 §S4 — same `sys.exit(<message>)` → emit + return 1 swap.
+        # This verb invokes NO toolchain, so there is no capture to carry and
+        # the helper's blank-capture detail is the honest one.
+        message = (f"[crucible] no JUnit (TEST-*.xml) under {reports_dir} "
+                   f"— nothing to ingest")
+        sys.stderr.write(message + "\n")
+        _emit_axi("auto-ingest", False,
+                  {"help": _axi().no_report_help("auto-ingest", "TEST-*.xml")},
+                  _axi_context(pd, agent_id=agent_id),
+                  [_axi().no_report_warning("auto-ingest", "TEST-*.xml", 1, "")],
+                  message)
+        return 1
     _ensure_project(key, name, pd)
     summary = {"total": 0, "passed": 0, "failed": 0, "pending": 0, "duration_ms": 0}
     tree = []
