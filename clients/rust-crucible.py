@@ -357,14 +357,6 @@ def _docker_help(action, ok):
             "status"]
 
 
-def _no_junit_help(verb):
-    """CR-CRU-058 §S2 — the run never produced a report at all: the concrete
-    next action is to look at the runner's own output, not to ingest."""
-    return [f"the run produced no junit.xml — read the {verb} runner output on "
-            f"stderr (cargo/nextest failed before writing a report), then re-run",
-            "status"]
-
-
 def _gate_locked_help(verb):
     """CR-CRU-058 §S2 — the run never started because another gate holds the
     lock: the next action is to wait for the holder, not to re-run blindly."""
@@ -897,8 +889,12 @@ def _regression_ingest_run(args):
     junit_path = f"{project_dir}/target/nextest/ci/junit.xml"
     if not os.path.exists(junit_path):
         _emit_axi("regression-ingest", False,
-                  {"help": _no_junit_help("regression-ingest")},
-                  _axi_context(project_dir, agent_id=args.agent), [],
+                  {"help": _axi().no_report_help("regression-ingest",
+                                                 "junit.xml")},
+                  _axi_context(project_dir, agent_id=args.agent),
+                  [_axi().no_report_warning(
+                      "regression-ingest", "junit.xml", result.returncode,
+                      result.stderr or result.stdout or "")],
                   "[crucible] ERROR: no junit.xml after llvm-cov nextest")
         return 1
 
@@ -1393,8 +1389,11 @@ def _smoke_test(args, verb):
             default_junit if os.path.exists(default_junit) else None
         )
         if not junit_path:
-            _emit_axi(verb, False, {"help": _no_junit_help(verb)},
-                      _axi_context(project_dir, agent_id=args.agent), [],
+            _emit_axi(verb, False,
+                      {"help": _axi().no_report_help(verb, "junit.xml")},
+                      _axi_context(project_dir, agent_id=args.agent),
+                      [_axi().no_report_warning(verb, "junit.xml",
+                                                result.returncode, "")],
                       "[smoke-test] no junit.xml found — nothing to ingest")
             return 1
 
@@ -1520,8 +1519,11 @@ def _workspace_regression_run(args, project_dir, verb="workspace-regression"):
 
     junit_path = f"{project_dir}/target/nextest/{args.profile}/junit.xml"
     if not os.path.exists(junit_path):
-        _emit_axi(verb, False, {"help": _no_junit_help(verb)},
-                  _axi_context(project_dir, agent_id=args.agent), [],
+        _emit_axi(verb, False,
+                  {"help": _axi().no_report_help(verb, "junit.xml")},
+                  _axi_context(project_dir, agent_id=args.agent),
+                  [_axi().no_report_warning(verb, "junit.xml",
+                                            result.returncode, "")],
                   f"[crucible] ERROR: no junit.xml at {junit_path}")
         return 1
 
@@ -1777,6 +1779,9 @@ def cmd_docker_e2e_gate(args):
         # let a non-kafka compose (qdrant/postgis) override the .env kafka service subset
         services=getattr(args, "services", None),
         all_services=getattr(args, "all_services", False),
+        # CR-CRU-064 §S6 — thread the caller's disk-guard floor through; without
+        # this `_smoke_test` fell back to an unconditional 80 for this verb.
+        min_free_g=getattr(args, "min_free_g", 80),
     )
     # §S1 — same one-document rule as pre-merge-gate: the shared smoke body
     # emits under `docker-e2e-gate`, the verb the caller actually invoked.
@@ -2330,6 +2335,10 @@ def main():
         help="Bring up ALL services in the given compose file, overriding the .env "
              "CRUCIBLE_DOCKER_SERVICES kafka subset. Use for single-sidecar composes "
              "(qdrant-e2e / postgis-e2e).",
+    )
+    e2e.add_argument(
+        "--min-free-g", type=int, default=80,
+        help="Disk-guard floor in GB before the gate (default: 80).",
     )
     _add_project_dir_arg(e2e)
     e2e.set_defaults(func=cmd_docker_e2e_gate)

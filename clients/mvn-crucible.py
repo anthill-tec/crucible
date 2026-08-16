@@ -811,14 +811,19 @@ def _smart_ingest(project_dir, agent, dirs, tier=None, context=None):
 
 def _compile_fallback(maven_dir, project_dir, agent, common_flags):
     """No test reports → tests didn't compile. Run `mvn clean test-compile` and
-    ingest the build output as a compile failure (the RED-as-compile path)."""
+    ingest the build output as a compile failure (the RED-as-compile path).
+
+    CR-CRU-064 §S1/AC2 — returns `(rc, output)`: the captured build output is
+    the ONLY cause this path has, and discarding it left the no-report
+    warning's `detail` prefix-only. Callers that need just the exit code
+    unpack and drop the second element."""
     base = _mvn_base(maven_dir)
     cmd = base + ["clean", "test-compile"] + common_flags
     print(f"[crucible] no reports — capturing compile: {' '.join(cmd)}",
           file=sys.stderr)
     result = subprocess.run(cmd, cwd=maven_dir, capture_output=True, text=True)
     output = (result.stdout or "") + (result.stderr or "")
-    return _ingest_compile(project_dir, agent, output)
+    return _ingest_compile(project_dir, agent, output), output
 
 
 # --------------------------------------------------------------------------- #
@@ -866,8 +871,10 @@ def _run_surefire_tier(args, goal_extra, label):
         # emitted HERE (the verb), never inside the shared ingest helpers.
         _emit_tier_run_axi(label, ingested, project_dir, args.agent)
     else:
-        rc = _compile_fallback(maven_dir, project_dir, args.agent, common)
-        _emit_compile_fallback_axi(label, rc, project_dir, args.agent)
+        rc, build_output = _compile_fallback(maven_dir, project_dir,
+                                             args.agent, common)
+        _emit_compile_fallback_axi(label, rc, build_output, project_dir,
+                                   args.agent)
     # §S2b — the final ingest replaces the narration (strictly after it).
     if narrator is not None:
         narrator.finish()
@@ -891,21 +898,30 @@ def _emit_tier_run_axi(verb, ingested, project_dir, agent):
                                            verb, CRUCIBLE_URL)]))
 
 
-def _emit_compile_fallback_axi(verb, rc, project_dir, agent):
+def _emit_compile_fallback_axi(verb, rc, build_output, project_dir, agent):
     """CR-CRU-058 §S1 — the envelope for the RED-as-compile path: the run
     produced no reports at all, so there is no `run:` block to carry and the
-    §S2 next step is the build error, never the verb's successor."""
+    §S2 next step is the build error, never the verb's successor.
+
+    CR-CRU-064 §S1 — a thin caller: the `help[]` and the no-report warning are
+    BUILT by the shared pair (this client no longer spells either),
+    with the compile-fallback's own remedy ordered ahead of the re-run. The
+    build output itself was already ingested as a compile failure, so the
+    warning carries the fallback's exit code as the machine-readable cause.
+
+    CR-CRU-064 AC2 — and its CAPTURED OUTPUT: `_compile_fallback` threads its
+    `mvn clean test-compile` capture out to here, so the shared helper can
+    compose the real cause into the detail rather than the prefix alone. The
+    helper owns the composition; this site never pre-composes a detail."""
     _emit_axi(verb, False,
               {"stage": "compile",
-               "help": [f"the {verb} run produced no surefire reports — fix the "
-                        f"build/test-compile errors ingested to Crucible (and "
-                        f"echoed on stderr), then re-run {verb} --agent <agentId>",
-                        "status"]},
+               "help": _axi().no_report_help(
+                   verb, "surefire reports",
+                   "fix the build/test-compile errors ingested to Crucible "
+                   "(and echoed on stderr)")},
               _axi_context(project_dir, agent_id=agent),
-              [{"code": "no-test-reports",
-                "detail": (f"{verb} produced no surefire reports — the tests did "
-                           f"not compile; the captured build output was ingested "
-                           f"as a compile failure instead of a test run")}],
+              [_axi().no_report_warning(verb, "surefire reports", rc,
+                                        build_output)],
               f"{verb}: ok=False — no reports, ingested as compile (rc={rc})")
 
 
@@ -1034,8 +1050,10 @@ def cmd_e2e(args):
                                            "files": files},
                                    project_dir, args.agent)
             else:
-                e2e_rc = _compile_fallback(maven_dir, project_dir, args.agent, common)
-                _emit_compile_fallback_axi("e2e", e2e_rc, project_dir, args.agent)
+                e2e_rc, build_output = _compile_fallback(
+                    maven_dir, project_dir, args.agent, common)
+                _emit_compile_fallback_axi("e2e", e2e_rc, build_output,
+                                           project_dir, args.agent)
     finally:
         if docker_up:
             # STEP form — the teardown must not put a second document on stdout.
@@ -1122,8 +1140,10 @@ def _regression_run(args, identity=None, verb="regression"):
     if not dirs:
         print("[regression] no surefire/failsafe reports — capturing compile output",
               file=sys.stderr)
-        rc = _compile_fallback(maven_dir, project_dir, args.agent, common)
-        _emit_compile_fallback_axi(verb, rc, project_dir, args.agent)
+        rc, build_output = _compile_fallback(maven_dir, project_dir,
+                                             args.agent, common)
+        _emit_compile_fallback_axi(verb, rc, build_output, project_dir,
+                                   args.agent)
         return rc
 
     _warn_if_stale(dirs)
@@ -1171,7 +1191,8 @@ def cmd_test(args):
     dirs = _dirs_with_xml(_report_dirs(maven_dir, getattr(args, "module", None), "surefire"))
     if not dirs:
         # No reports → tests didn't compile. Ingest the build output as compile.
-        return _compile_fallback(maven_dir, project_dir, args.agent, common)
+        rc, _ = _compile_fallback(maven_dir, project_dir, args.agent, common)
+        return rc
     _warn_if_stale(dirs)
     ctx = _run_context()
     if len(dirs) == 1:
@@ -1222,7 +1243,9 @@ def cmd_auto_ingest(args):
     dirs = su + fs
     if not dirs:
         print("[auto-ingest] no reports found", file=sys.stderr)
-        return _compile_fallback(maven_dir, project_dir, args.agent, _common_mvn_flags(args))
+        rc, _ = _compile_fallback(maven_dir, project_dir, args.agent,
+                                  _common_mvn_flags(args))
+        return rc
     _warn_if_stale(dirs)
     ctx = _run_context()
     if len(dirs) == 1 and not args.coverage:

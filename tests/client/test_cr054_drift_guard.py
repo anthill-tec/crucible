@@ -450,5 +450,104 @@ class DriftGuardCatchesReintroducedDuplicateOnScratchFilesTest(unittest.TestCase
                 f"{offenders!r}")
 
 
+# ---------------------------------------------------------------------------
+# CR-CRU-064 §S5 — the no-report helper is DEFINED ONCE.
+#
+# The CR's Context measured the drift this guard closes: rust owns
+# `_no_junit_help(verb)` (`rust-crucible.py:360`, consumed at :900/:1396/:1523)
+# and mvn inlines the `no-test-reports` warning dict inside
+# `_emit_compile_fallback_axi` (`mvn-crucible.py:894-909`) -- two local
+# implementations of ONE fleet concept, the CR-CRU-054 drift class, while the
+# shared module carries no no-report helper at all. AC3 requires the local
+# definition GONE and both clients emitting through
+# `no_report_help`/`no_report_warning`.
+#
+# `_emit_compile_fallback_axi` deliberately SURVIVES: it is an emitter, not a
+# help/warning builder, and becomes a thin caller sourcing its `help[]` and
+# `warnings[]` from the shared pair. What may not survive is a client-local
+# DEFINITION of the text or the warning code.
+# ---------------------------------------------------------------------------
+
+BANNED_LOCAL_NO_REPORT_HELPERS = ("_no_junit_help",)
+SHARED_NO_REPORT_HELPERS = ("no_report_help", "no_report_warning")
+NO_REPORT_WARNING_CODE = "no-test-reports"
+NO_REPORT_HELP_PROSE = ("produced no junit.xml", "produced no surefire reports")
+
+
+class NoClientDefinesItsOwnNoReportHelperTest(unittest.TestCase):
+    """CR-CRU-064 §S5/AC3 + AC9 — no client defines its own no-report
+    help/envelope helper; the shared module is the only definition.
+
+    RED today by construction: rust still defines `_no_junit_help` and mvn
+    still inlines the `no-test-reports` literal."""
+
+    def _non_shared_client_sources(self):
+        """Every `clients/*.py` EXCEPT the shared module itself -- the shared
+        module is where all of this is supposed to live."""
+        return {path.name: path.read_text()
+                for path in sorted(CLIENTS_DIR.glob("*.py"))
+                if path.name != AXI_MODULE_PATH.name}
+
+    def test_no_client_defines_a_local_no_report_help_builder(self):
+        offenders = {}
+        for client, funcs in sorted(_CLIENT_FUNCS.items()):
+            for banned in BANNED_LOCAL_NO_REPORT_HELPERS:
+                if banned in funcs:
+                    offenders.setdefault(client, []).append(banned)
+        self.assertEqual(
+            offenders, {},
+            f"CR-CRU-064 AC3: no client may define its own no-report help "
+            f"builder -- {BANNED_LOCAL_NO_REPORT_HELPERS} belong in "
+            f"clients/_crucible_axi.py as no_report_help/no_report_warning "
+            f"and nowhere else; local definitions found: {offenders!r}")
+
+    def test_the_no_test_reports_warning_code_literal_lives_only_in_the_shared_module(self):
+        """The warning CODE is the half that catches mvn: it is inlined at
+        `mvn-crucible.py:905` rather than sourced from the shared builder, so
+        the code string is a second, hand-copied definition."""
+        offenders = sorted(
+            name for name, src in self._non_shared_client_sources().items()
+            if NO_REPORT_WARNING_CODE in src)
+        self.assertEqual(
+            offenders, [],
+            f"CR-CRU-064 AC3: the {NO_REPORT_WARNING_CODE!r} literal must "
+            f"appear ONLY in clients/{AXI_MODULE_PATH.name} (built by "
+            f"no_report_warning); clients still spelling it themselves: "
+            f"{offenders!r}")
+
+    def test_no_client_spells_its_own_no_report_help_prose(self):
+        """The help TEXT is the other copied half -- rust's 'produced no
+        junit.xml' and mvn's 'produced no surefire reports' are two hand-written
+        renderings of one sentence, which `no_report_help(verb, artifact)`
+        parameterises."""
+        offenders = {}
+        for name, src in self._non_shared_client_sources().items():
+            found = [prose for prose in NO_REPORT_HELP_PROSE if prose in src]
+            if found:
+                offenders[name] = found
+        self.assertEqual(
+            offenders, {},
+            f"CR-CRU-064 AC3: the no-report help prose must be produced by "
+            f"the shared no_report_help(verb, artifact), never spelled out in "
+            f"a client; still hand-written in: {offenders!r}")
+
+    def test_rust_and_mvn_emit_through_the_shared_no_report_helpers(self):
+        """The positive half of the cutover (AC3): deleting the local copies
+        is only correct if those sites now SOURCE the shared pair -- otherwise
+        the guard could be satisfied by deleting the behaviour."""
+        missing = {}
+        for client in ("rust", "mvn"):
+            source = CLIENT_FILES[client].read_text()
+            absent = [h for h in SHARED_NO_REPORT_HELPERS if h not in source]
+            if absent:
+                missing[client] = absent
+        self.assertEqual(
+            missing, {},
+            f"CR-CRU-064 AC3: rust (:900/:1396/:1523) and mvn's compile/"
+            f"no-reports path must emit through the shared "
+            f"{SHARED_NO_REPORT_HELPERS} -- a clean cutover, no aliases; "
+            f"clients not referencing them: {missing!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

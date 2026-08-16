@@ -682,6 +682,15 @@ def cmd_test(args):
     # No XML at all → a hard collection/syntax failure. Ingest the CAPTURED runner
     # output as compile so the RED is still reported rather than silently lost.
     _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result), tier="unit")
+    # CR-CRU-064 §S2 — the compile ingest above is UNCHANGED; the envelope is
+    # additive, so a starved toolchain stops returning an exit code with empty
+    # stdout. The exit code is untouched (AC5).
+    _emit_axi("test", False,
+              {"help": _axi().no_report_help("test", "TEST-*.xml")},
+              _axi_context(project_dir, agent_id=args.agent),
+              [_axi().no_report_warning("test", "TEST-*.xml", result.returncode,
+                                        result.stdout or "")],
+              "[crucible] ERROR: no JUnit XML produced — ingested as compile")
     return result.returncode or 1
 
 
@@ -762,6 +771,17 @@ def _regression_run(args, verb="regression"):
               file=sys.stderr)
         _ingest_compile(project_dir, args.agent, _no_xml_errors_text(result),
                         tier="regression")
+        # CR-CRU-064 §S2/AC6 — emitted under the `verb` PARAMETER, never the
+        # literal "regression": `pre-merge-gate` runs this body as its
+        # regression step, so a starved GATE must speak as the gate. The
+        # `no-tests-discovered` branch above keeps its own code (AC7).
+        _emit_axi(verb, False,
+                  {"help": _axi().no_report_help(verb, "TEST-*.xml")},
+                  _axi_context(project_dir, agent_id=args.agent),
+                  [_axi().no_report_warning(verb, "TEST-*.xml",
+                                            result.returncode,
+                                            result.stdout or "")],
+                  f"{verb}: ok=False — no JUnit XML, ingested as compile")
         return result.returncode or 1
 
     summary, tree, files = _parse_junit_dir(reports_dir)
@@ -787,6 +807,14 @@ def cmd_auto_ingest(args):
     if not _produced_xml(reports_dir):
         print(f"[crucible] no TEST-*.xml in {reports_dir} — nothing to ingest",
               file=sys.stderr)
+        # CR-CRU-064 §S2 — this verb runs NO runner of its own (it ingests a
+        # pre-existing reports dir), so there is no capture to carry: the
+        # helper's blank-capture form is the honest detail here.
+        _emit_axi("auto-ingest", False,
+                  {"help": _axi().no_report_help("auto-ingest", "TEST-*.xml")},
+                  _axi_context(project_dir, agent_id=args.agent),
+                  [_axi().no_report_warning("auto-ingest", "TEST-*.xml", 1, "")],
+                  f"auto-ingest: ok=False — no TEST-*.xml in {reports_dir}")
         return 1
     summary, tree, files = _parse_junit_dir(reports_dir)
     resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit",

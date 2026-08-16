@@ -1003,6 +1003,23 @@ describe("clients/python-crucible.py — the no-XML fallback fix (headline bug, 
       proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/compile"),
     ).toBe(true);
     expect(proxy.calls.some((c) => c.path === "/api/ingest/compile")).toBe(false);
+
+    // CR-CRU-064 §S5 -- this fixture (xmlrunner genuinely absent on THIS
+    // interpreter) is the fleet's one real starved-toolchain drive, so it is
+    // extended here with the stdout envelope assertion rather than a second
+    // starved harness. §S3 purity: the TOON document is the ENTIRE stdout,
+    // nothing ahead of it -- exactly ONE `axi:` document, decoding to
+    // ok:false under verb:test, carrying the shared no-report helper's
+    // `no-test-reports` warning whose composed `detail` carries the REAL
+    // captured "No module named" cause (never the blank-capture form -- the
+    // capture here is genuinely non-empty, so that branch must not fire).
+    expect(res.stdout.trimStart().startsWith("axi:")).toBe(true);
+    expect((res.stdout.match(/^axi:/gm) ?? []).length).toBe(1);
+    expect(res.stdout).toContain("verb: test");
+    expect(res.stdout).toContain("ok: false");
+    expect(res.stdout).toContain("no-test-reports");
+    expect(res.stdout).toContain("No module named");
+    expect(res.stdout).not.toContain("no runner output reached this envelope");
   });
 
   test("'regression' with no XML produced NOW posts the same compile fallback (an event exists) instead of silently returning 1 with no ingest at all", async () => {
@@ -1031,6 +1048,21 @@ describe("clients/python-crucible.py — the no-XML fallback fix (headline bug, 
       proxy.calls.some((c) => c.method === "POST" && c.path === "/api/v2/runs/compile"),
     ).toBe(true);
     expect(proxy.calls.some((c) => c.path === "/api/ingest/compile")).toBe(false);
+
+    // CR-CRU-064 §S5/AC6 -- same envelope contract as the `test` sibling
+    // above, under the `regression` verb this invocation was actually run
+    // as (never a hardcoded literal -- `_regression_run` emits under its
+    // `verb` PARAMETER so a starved `pre-merge-gate` would speak as the
+    // gate; this drive is the plain `regression` subcommand, so `verb` is
+    // "regression" here). §S3 purity: exactly ONE `axi:` document, nothing
+    // ahead of it on stdout.
+    expect(res.stdout.trimStart().startsWith("axi:")).toBe(true);
+    expect((res.stdout.match(/^axi:/gm) ?? []).length).toBe(1);
+    expect(res.stdout).toContain("verb: regression");
+    expect(res.stdout).toContain("ok: false");
+    expect(res.stdout).toContain("no-test-reports");
+    expect(res.stdout).toContain("No module named");
+    expect(res.stdout).not.toContain("no runner output reached this envelope");
   });
 });
 

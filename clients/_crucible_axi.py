@@ -740,6 +740,72 @@ def gate_step_abort_warning(verb, step, detail):
     }
 
 
+NO_REPORT_DETAIL_MAX = 500
+
+
+def _last_non_empty_line(output):
+    """The last line of a captured runner stream that carries anything — the
+    CAUSE line of a starved run (`ModuleNotFoundError: No module named
+    'xmlrunner'`), which trailing blank/whitespace lines would otherwise hide.
+    Empty string when the capture holds nothing at all."""
+    for line in reversed((output or "").splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def no_report_help(verb, artifact, remedy=None):
+    """CR-CRU-064 §S1/AC1 (PURE) — the `help[]` for a run that produced NO
+    report at all: read the runner's OWN output (the report that would explain
+    the failure was never written), then re-run. `artifact` carries each
+    stack's wording (`junit.xml` · `surefire reports` · `TEST-*.xml`), so this
+    one sentence replaces the per-client hand-written renderings.
+
+    An explicit `remedy` — the step's own concrete fix, the shape
+    `gate_step_abort_help` established — is ordered AHEAD of the re-run:
+    re-running before applying it just reproduces the starved run."""
+    steps = [f"the {verb} run produced no {artifact} — read the {verb} runner "
+             f"output on stderr (it died before writing a report)"]
+    if remedy:
+        steps.append(remedy)
+    steps.append(f"re-run {verb} --agent <agentId>")
+    steps.append("status")
+    return steps
+
+
+def no_report_warning(verb, artifact, exit_code, output):
+    """CR-CRU-064 §S1/AC1+AC2 (PURE) — the structured warning for a run that
+    wrote no report: `{"code": "no-test-reports", ...}` (mvn's existing string,
+    lifted verbatim). The helper COMPOSES the detail — a caller-supplied one
+    would push this invariant into every call site, which is the duplication
+    §S1 deletes.
+
+    The detail names the verb, the artifact and the runner's `exit_code`, then
+    the last non-empty line of `output`, so the cause reaches the consumer
+    instead of an exit code and empty stdout. The composed PREFIX is never
+    truncated; only the output fragment is bounded, and it keeps ITS tail (the
+    cause is at the END of a capture, so a head-keeping bound would bound away
+    the only fact the warning exists to carry). A blank/whitespace-only
+    capture still yields a non-empty, exit-code-naming detail —
+    `/api/v2/runs/compile` 400s on an empty string."""
+    prefix = (f"{verb} produced no {artifact} — the runner exited "
+              f"{exit_code} before writing a report")
+    cause = _last_non_empty_line(output)
+    if not cause:
+        return {"code": "no-test-reports",
+                "detail": (f"{prefix}; no runner output reached this envelope, "
+                           f"so the runner's own stream is the only evidence "
+                           f"left")}
+    joiner = "; last output line: "
+    room = NO_REPORT_DETAIL_MAX - len(prefix) - len(joiner)
+    if room <= 0:
+        return {"code": "no-test-reports", "detail": prefix}
+    if len(cause) > room:
+        cause = "…" + cause[-(room - 1):]
+    return {"code": "no-test-reports", "detail": prefix + joiner + cause}
+
+
 def next_pending_cycle_id(plan, exclude_cycle_id=None):
     """CR-CRU-048 §S1 (PURE) — the id of the NEXT cycle still awaiting work in
     `plan` (a plan dict from a `GET .../plans` payload), or None when none
