@@ -131,8 +131,22 @@ Extend the EXISTING suites; introduce no new mechanism:
 matching its siblings (`test_rust_pre_merge_gate_help_differs_…`,
 `test_rust_workspace_regression_help_differs_…`). If the class's `_drive` helper cannot pass extra
 argv, it gains a passthrough parameter — the same mechanism `_drive_with_bin_dir(..., extra_argv=…)`
-already uses. No production code changes in this section, and no change to
-`rust-crucible.py:2180`'s 80 GB default (that default is correct for a real docker e2e run).
+already uses.
+
+**CORRECTED at C3 RED — this section DOES need a small production change; the original text
+asserted otherwise and measurement disproved it.** `--min-free-g` is registered on exactly two
+subparsers (`clients/rust-crucible.py:2182` and `:2287`) and `docker-e2e-gate`'s is not one of them,
+so the drive dies at argparse with `unrecognized arguments: --min-free-g 1` before any assertion is
+reachable. Nor would passing it help on its own: `cmd_pre_merge_gate` threads `min_free_g` into its
+`smoke_args` (`:1748`) while `cmd_docker_e2e_gate` (`:1770-1782`) does not, so `_smoke_test`'s
+`getattr(args, "min_free_g", 80)` (`:1327`) always falls back to 80 for this verb. Two lines are
+therefore in scope: register `--min-free-g` (`type=int, default=80`) on the `docker-e2e-gate`
+subparser exactly as its siblings declare it, and add `min_free_g=getattr(args, "min_free_g", 80)`
+to `cmd_docker_e2e_gate`'s `smoke_args`.
+
+The 80 GB DEFAULT is unchanged and stays correct for a real docker e2e run — this makes the
+existing flag reachable on a verb that was silently missing it, which is a latent gap in its own
+right: before this, no caller of `docker-e2e-gate` could lower the floor at all.
 
 ## Acceptance criteria
 
@@ -160,9 +174,11 @@ already uses. No production code changes in this section, and no change to
    `verb: pre-merge-gate` — in both python and bun — never `verb: regression`.
 7. The `no-tests-discovered` branch (`python-crucible.py:746-760`) still emits its own warning code;
    a zero-discovery run and a no-report run are distinguishable by `warnings[].code` alone.
-8. `test_docker_e2e_gate_emits_envelope_with_run_block` passes `--min-free-g 1`; running it on a
-   filesystem with less than 80 GB free still passes, and the `disk-guard-abort` warning code does
-   not appear in its captured envelope.
+8. `docker-e2e-gate` ACCEPTS `--min-free-g` (it did not before — see §S6) and threads it into the
+   shared smoke body, so `_smoke_test`'s floor for this verb is the caller's value rather than an
+   unconditional 80. `test_docker_e2e_gate_emits_envelope_with_run_block` passes `--min-free-g 1`;
+   running it on a filesystem with less than 80 GB free still passes, and the `disk-guard-abort`
+   warning code does not appear in its captured envelope. The DEFAULT stays 80.
 9. `test_cr054_drift_guard.py` fails on EITHER a re-introduced named helper or an inlined
    `"no-test-reports"` / no-report help literal in any client — the name check alone would not have
    caught mvn's inlined version.
