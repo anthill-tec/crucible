@@ -1200,5 +1200,192 @@ class RealClientCopyEnvelopeDetectorProofTest(unittest.TestCase):
         self.assertEqual(axi.get("verb"), "status")
 
 
+# ── CR-CRU-064 §S5 -- the STARVED variant of the seven no-report sites ─────
+#
+# Extends THIS file's own `drive_verb`/`classify_envelope` pair (never a new
+# harness) to cover the starved variant of the seven sites CR-CRU-064 §S2-§S4
+# fixed, so a future client cannot add a bare no-report branch without this
+# same argparse-driven census machinery catching it -- not only the sibling
+# `tests/client/test_toolchain_verb_envelopes.py` suite's own dedicated
+# fixtures (which this mirrors: the starved-tool bodies below are the exact
+# same starving technique -- a real interpreter/runner that genuinely cannot
+# produce a report, never a hand-built envelope, never an in-process call,
+# per the CR's own Risk section).
+
+_STARVED_PYTHON_NAME = "starved-python"
+
+_STARVED_PYTHON_BODY = r'''#!/usr/bin/env python3
+import os
+import sys
+
+# A REAL interpreter that genuinely cannot produce a JUnit report: `-S`
+# drops site-packages from sys.path entirely and `-E` drops PYTHONPATH, so
+# `-m xmlrunner` / `-m coverage` raise the interpreter's own "No module
+# named ..." and exit non-zero. No fake xmlrunner package, no stubbed
+# subprocess.
+os.execv(sys.executable, [sys.executable, "-S", "-E"] + sys.argv[1:])
+'''
+
+_FAIL_BUN_NO_JUNIT_BODY = r'''#!/usr/bin/env python3
+import sys
+argv = sys.argv[1:]
+if argv[:1] == ["test"]:
+    # Collection dies before the JUnit reporter writes anything -- the real
+    # shape of a starved bun run. Exit 3, so a `detail` naming the RUNNER's
+    # code cannot be satisfied by the process's own exit (1).
+    sys.stderr.write("error: Cannot find module 'node:nonexistent' from "
+                     "'/detector/pkg/index.test.ts'\n")
+    sys.exit(3)
+sys.exit(0)
+'''
+
+_FAIL_MAKE_NO_REPORTS_BODY = r'''#!/usr/bin/env python3
+import sys
+# `make junit` dies in the compiler: no reports/TEST-*.xml is written.
+sys.stderr.write(
+    "g++ -std=c++17 -o build/suite tests/native/suite.cpp\n"
+    "tests/native/suite.cpp:7:10: fatal error: unity.h: No such file or "
+    "directory\n")
+sys.exit(2)
+'''
+
+NO_REPORT_WARNING_CODE = "no-test-reports"
+
+
+def _build_bin_dir_with_override(tool_name, body):
+    """Same fake-tool-on-PATH idiom as `_build_fake_bin_dir` above, with
+    exactly one tool's body swapped for `body` -- the rest of the bin dir
+    (or, for a name absent from `_FAKE_TOOLS` such as the starved python
+    shim, every tool `_FAKE_TOOLS` already knows PLUS this one addition)
+    stays byte-identical to the census's own proven-working default."""
+    bin_dir = Path(tempfile.mkdtemp(prefix="cr064-census-starved-bin-"))
+    for name, default_body in _FAKE_TOOLS.items():
+        text = body if name == tool_name else default_body
+        path = bin_dir / name
+        path.write_text(text)
+        st = os.stat(path)
+        os.chmod(path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    if tool_name not in _FAKE_TOOLS:
+        path = bin_dir / tool_name
+        path.write_text(body)
+        st = os.stat(path)
+        os.chmod(path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return bin_dir
+
+
+# (client, verb) -> how to starve that specific site, so no report is ever
+# produced. Exactly the CR's Context table: python 3, bun 2, arduino 2.
+_SEVEN_SITE_STARVED_SPECS = {
+    ("python", "test"): dict(
+        bin_dir_factory=lambda: _build_bin_dir_with_override(
+            _STARVED_PYTHON_NAME, _STARVED_PYTHON_BODY),
+        extra_argv=["--python", _STARVED_PYTHON_NAME],
+    ),
+    ("python", "regression"): dict(
+        bin_dir_factory=lambda: _build_bin_dir_with_override(
+            _STARVED_PYTHON_NAME, _STARVED_PYTHON_BODY),
+        extra_argv=["--python", _STARVED_PYTHON_NAME],
+    ),
+    ("python", "auto-ingest"): dict(
+        bin_dir_factory=_build_fake_bin_dir,
+        extra_argv=[],
+    ),
+    ("bun", "test"): dict(
+        bin_dir_factory=lambda: _build_bin_dir_with_override(
+            "bun", _FAIL_BUN_NO_JUNIT_BODY),
+        extra_argv=[],
+    ),
+    ("bun", "regression"): dict(
+        bin_dir_factory=lambda: _build_bin_dir_with_override(
+            "bun", _FAIL_BUN_NO_JUNIT_BODY),
+        extra_argv=[],
+    ),
+    ("arduino", "test"): dict(
+        bin_dir_factory=lambda: _build_bin_dir_with_override(
+            "make", _FAIL_MAKE_NO_REPORTS_BODY),
+        extra_argv=[],
+    ),
+    ("arduino", "auto-ingest"): dict(
+        bin_dir_factory=_build_fake_bin_dir,
+        extra_argv=[],
+    ),
+}
+
+
+def _drive_starved_site(client_key, verb_name, bin_dir_factory, extra_argv):
+    """One real subprocess drive of the site, through the SAME `enumerate_
+    verbs`/`build_argv`/`drive_verb`/`classify_envelope` machinery
+    `_get_census()` uses -- never a second harness."""
+    fake_bin_dir = bin_dir_factory()
+    try:
+        toon_module = _load_toon_module()
+        project_dir = _make_project_dir(client_key)
+        try:
+            script_path = CLIENT_FILES[client_key]
+            verbs = enumerate_verbs(client_key, script_path)
+            argv = build_argv(verb_name, verbs[verb_name], project_dir) + list(extra_argv)
+            result = drive_verb(script_path, argv, project_dir, fake_bin_dir)
+            emits, axi = classify_envelope(result.stdout, toon_module)
+            return emits, axi, result
+        finally:
+            shutil.rmtree(project_dir, ignore_errors=True)
+    finally:
+        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+
+
+_STARVED_SEVEN_CACHE = {}
+
+
+def _get_starved_seven_site(client_key, verb_name):
+    """Cached at module scope for this process, mirroring `_get_census()`'s
+    own sharing idiom -- the several independent assertions below drive each
+    site once, not once per assertion."""
+    key = (client_key, verb_name)
+    if key not in _STARVED_SEVEN_CACHE:
+        spec = _SEVEN_SITE_STARVED_SPECS[key]
+        _STARVED_SEVEN_CACHE[key] = _drive_starved_site(
+            client_key, verb_name, spec["bin_dir_factory"], spec["extra_argv"])
+    return _STARVED_SEVEN_CACHE[key]
+
+
+class SevenNoReportSitesStarvedCensusTest(unittest.TestCase):
+    """CR-CRU-064 §S5 -- the seven no-report sites §S2-§S4 fixed must show
+    ENVELOPED (never bare) when genuinely starved, through THIS file's own
+    census machinery -- so a future client that reintroduces a bare
+    no-report branch (or a future regression in an existing one) is caught
+    here, by the same argparse-driven detector that already guards the
+    fleet's happy-path verbs, not only by the sibling fixture-heavy suite."""
+
+    def test_all_seven_no_report_sites_show_enveloped_when_starved(self):
+        offenders = {}
+        for client, verb in _SEVEN_SITE_STARVED_SPECS:
+            emits, axi, result = _get_starved_seven_site(client, verb)
+            if not emits:
+                offenders[(client, verb)] = result.stdout
+        self.assertEqual(
+            offenders, {},
+            f"every one of the CR's seven no-report sites must show a "
+            f"decodable axi: envelope when genuinely starved -- a future "
+            f"re-bare of any one of them must fail HERE: {offenders!r}")
+
+    def test_all_seven_no_report_sites_carry_the_no_test_reports_warning_code(self):
+        offenders = {}
+        for client, verb in _SEVEN_SITE_STARVED_SPECS:
+            emits, axi, result = _get_starved_seven_site(client, verb)
+            if not emits:
+                offenders[(client, verb)] = None
+                continue
+            codes = {w.get("code") for w in (axi.get("warnings") or [])
+                     if isinstance(w, dict)}
+            if NO_REPORT_WARNING_CODE not in codes:
+                offenders[(client, verb)] = sorted(codes)
+        self.assertEqual(
+            offenders, {},
+            f"every starved no-report site must carry the "
+            f"{NO_REPORT_WARNING_CODE!r} warning code specifically -- a "
+            f"future client that emits SOME envelope but drops the "
+            f"specific warning code must still fail HERE: {offenders!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -280,10 +280,41 @@ class RustEnvelopeLessVerbContractTest(_EnvelopeContractMixin, unittest.TestCase
 
     def test_docker_e2e_gate_emits_envelope_with_run_block(self):
         """`cmd_docker_e2e_gate` is a thin wrapper over `cmd_smoke_test`
-        (confirmed by reading it) -- same run: block shape."""
-        emits, axi, result = self._drive("docker-e2e-gate")
+        (confirmed by reading it) -- same run: block shape.
+
+        CR-CRU-064 §S6 -- driven with an explicit `--min-free-g 1`, matching
+        its `workspace-regression`/`pre-merge-gate` siblings, so this test's
+        pass no longer depends on how much free disk THIS box happens to
+        have. Undriven, it inherits `rust-crucible.py:2180`'s 80 GB default
+        floor (guard at `:1331`/`cmd_docker_e2e_gate`'s `cmd_smoke_test`
+        wrapper at `:1327`) and failed on CI run 31677479804 with
+        `disk-guard-abort`; it passed here only because this box measures
+        486 GB free (measured, not assumed) -- an ambient pass a naive 'it
+        passes' assertion could not tell apart from a real one, which is
+        why the argv and the absent warning code are pinned explicitly
+        below rather than trusted implicitly."""
+        emits, axi, result = self._drive("docker-e2e-gate",
+                                         extra_argv=["--min-free-g", "1"])
         self._assert_full_envelope("rust", "docker-e2e-gate", emits, axi, result,
                                    required_fields=("run",))
+        self.assertIn(
+            "--min-free-g", result.args,
+            f"rust/docker-e2e-gate: §S6 -- the drive must pin the disk-guard "
+            f"floor explicitly rather than inherit the 80 GB default; got "
+            f"argv={result.args!r}")
+        min_free_g_idx = result.args.index("--min-free-g")
+        self.assertEqual(
+            result.args[min_free_g_idx + 1], "1",
+            f"rust/docker-e2e-gate: §S6 -- --min-free-g must be pinned to "
+            f"1, matching workspace-regression/pre-merge-gate; got "
+            f"argv={result.args!r}")
+        warning_codes = {w.get("code") for w in (axi.get("warnings") or [])
+                         if isinstance(w, dict)}
+        self.assertNotIn(
+            "disk-guard-abort", warning_codes,
+            f"rust/docker-e2e-gate: AC8 -- an explicit low --min-free-g "
+            f"floor must not trip the disk guard; got "
+            f"warnings={axi.get('warnings')!r}")
 
     def test_regression_ingest_emits_envelope_with_exact_run_counts_and_files(self):
         """§S1: 'the two regression verbs carry their run: block (passed/
@@ -1075,6 +1106,81 @@ class ZeroDiscoveryVsNoReportWarningCodeTest(unittest.TestCase):
             f"AC7 -- the two conditions must share NO warning code, or a "
             f"consumer cannot tell a misconfigured discovery from a starved "
             f"toolchain: zero={zero_codes!r} no_report={no_report_codes!r}")
+
+
+# ── CR-CRU-064 C3 RED -- mvn's no-report detail must carry the captured ────
+# ── build-output cause, not just the verb/artifact/exit-code prefix ────────
+#
+# CR-CRU-064's Implementation notes (C1) measured this per site: rust's
+# `regression-ingest` already threads a real captured cause through (full
+# detail); rust's `smoke-test`/`workspace-regression` inherit their child's
+# stderr (nothing captured, by design); but mvn's `_emit_compile_fallback_
+# axi` (mvn-crucible.py:894) calls `no_report_warning(verb, "surefire
+# reports", rc, "")` -- read directly at mvn-crucible.py:911 -- with a
+# HARD-CODED empty `output` string, even though `_compile_fallback`
+# (mvn-crucible.py:812) captures the real `mvn clean test-compile` build log
+# via `subprocess.run(..., capture_output=True)` one frame down and returns
+# ONLY `rc` to its caller. AC2 is explicit this is a gap, not parity: "AC2
+# is not considered met at the mvn site until [the capture is threaded out
+# of `_compile_fallback`]". C3 threads that capture out; this pins the end
+# state.
+
+_FAIL_MVN_COMPILE_BODY = r'''#!/usr/bin/env python3
+import sys
+argv = sys.argv[1:]
+if "test-compile" in argv:
+    # The compile fallback's OWN invocation (`mvn clean test-compile`,
+    # captured by `_compile_fallback` via `capture_output=True`). This is
+    # the genuine cause CR-CRU-064's C1 measurement found trapped one frame
+    # down -- it must reach the emitted `detail`, not just get ingested and
+    # discarded.
+    sys.stdout.write(
+        "[ERROR] COMPILATION ERROR : \n"
+        "[ERROR] DetectorProbeTest.java:[7,10] cannot find symbol\n"
+        "[ERROR]   symbol:   class MissingHelper\n"
+    )
+    sys.exit(1)
+# `mvn clean test` -- writes NO surefire reports at all, the no-report
+# state that triggers the compile fallback.
+sys.exit(1)
+'''
+
+
+def _fail_mvn_compile_bin_dir():
+    return _build_bin_dir_with_override("mvn", _FAIL_MVN_COMPILE_BODY)
+
+
+class MvnCompileFallbackDetailCarriesCapturedCauseTest(unittest.TestCase):
+    """CR-CRU-064 C1/C3 -- the one no-report site among the CR's measured
+    sites where AC2 is NOT yet met. Driven as a genuine subprocess against a
+    real starved `mvn` on PATH (never a hand-built envelope, never an
+    in-process call -- the CR's own Risk section forbids both): the fake
+    `mvn` writes no surefire reports for `mvn clean test` (triggering the
+    compile fallback), then on the fallback's own `mvn clean test-compile`
+    invocation writes a recognisable compile-error message and exits 1."""
+
+    CAUSE_FRAGMENT = "cannot find symbol"
+
+    def test_detail_carries_the_captured_build_output_not_just_the_prefix(self):
+        emits, axi, result = _drive_with_bin_dir(
+            "mvn", "unit", _fail_mvn_compile_bin_dir)
+        self.assertTrue(
+            emits,
+            f"mvn/unit: must produce a decodable axi: envelope; got "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}")
+        warnings = axi.get("warnings") or []
+        matches = [w for w in warnings
+                   if isinstance(w, dict) and w.get("code") == NO_REPORT_WARNING_CODE]
+        self.assertEqual(
+            len(matches), 1,
+            f"mvn/unit: exactly ONE {NO_REPORT_WARNING_CODE!r} warning, "
+            f"got warnings={warnings!r}")
+        detail = matches[0].get("detail") or ""
+        self.assertIn(
+            self.CAUSE_FRAGMENT, detail,
+            f"mvn/unit: AC2 -- the compile fallback's own captured build "
+            f"output must reach the detail, not just the verb/artifact/"
+            f"exit-code prefix; got detail={detail!r}")
 
 
 if __name__ == "__main__":
