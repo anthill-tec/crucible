@@ -1779,6 +1779,9 @@ def cmd_docker_e2e_gate(args):
         # let a non-kafka compose (qdrant/postgis) override the .env kafka service subset
         services=getattr(args, "services", None),
         all_services=getattr(args, "all_services", False),
+        # CR-CRU-064 §S6 — thread the caller's disk-guard floor through; without
+        # this `_smoke_test` fell back to an unconditional 80 for this verb.
+        min_free_g=getattr(args, "min_free_g", 80),
     )
     # §S1 — same one-document rule as pre-merge-gate: the shared smoke body
     # emits under `docker-e2e-gate`, the verb the caller actually invoked.
@@ -2332,6 +2335,10 @@ def main():
         help="Bring up ALL services in the given compose file, overriding the .env "
              "CRUCIBLE_DOCKER_SERVICES kafka subset. Use for single-sidecar composes "
              "(qdrant-e2e / postgis-e2e).",
+    )
+    e2e.add_argument(
+        "--min-free-g", type=int, default=80,
+        help="Disk-guard floor in GB before the gate (default: 80).",
     )
     _add_project_dir_arg(e2e)
     e2e.set_defaults(func=cmd_docker_e2e_gate)

@@ -1159,7 +1159,25 @@ class MvnCompileFallbackDetailCarriesCapturedCauseTest(unittest.TestCase):
     compile fallback), then on the fallback's own `mvn clean test-compile`
     invocation writes a recognisable compile-error message and exits 1."""
 
-    CAUSE_FRAGMENT = "cannot find symbol"
+    # `_last_non_empty_line` (clients/_crucible_axi.py:746) takes the last
+    # NON-EMPTY line of the capture -- real maven puts the `symbol:` detail
+    # AFTER "cannot find symbol", so that fragment (asserted here previously)
+    # sits on the fixture's MIDDLE line, never the last one. Pointing this at
+    # a fragment genuinely on the last line is what AC2 actually specifies
+    # ("...then the last non-empty line of `output`"); reordering the fixture
+    # instead would make it a less faithful maven transcript for no reason.
+    CAUSE_FRAGMENT = "class MissingHelper"
+
+    # The exact detail `no_report_warning` composes when `output` carries NO
+    # cause (clients/_crucible_axi.py:801-804) -- i.e. the text this site's
+    # detail read BEFORE C3 threaded `build_output` through. A test that only
+    # greps for CAUSE_FRAGMENT would still pass if the helper were later
+    # changed to embed the whole raw capture (CAUSE_FRAGMENT would still be
+    # in there); asserting this blank-capture form is ABSENT is what proves
+    # the real captured build output -- not some other text -- reached the
+    # detail.
+    BLANK_CAPTURE_TAIL = ("no runner output reached this envelope, so the "
+                          "runner's own stream is the only evidence left")
 
     def test_detail_carries_the_captured_build_output_not_just_the_prefix(self):
         emits, axi, result = _drive_with_bin_dir(
@@ -1176,11 +1194,34 @@ class MvnCompileFallbackDetailCarriesCapturedCauseTest(unittest.TestCase):
             f"mvn/unit: exactly ONE {NO_REPORT_WARNING_CODE!r} warning, "
             f"got warnings={warnings!r}")
         detail = matches[0].get("detail") or ""
+        # POSITIVE -- the composed prefix (verb/artifact/exit-code) is still
+        # intact ahead of the cause; AC2 adds the cause, it doesn't replace
+        # the prefix.
+        self.assertRegex(
+            detail,
+            r"^unit produced no surefire reports — the runner exited \d+ "
+            r"before writing a report; last output line: ",
+            f"mvn/unit: the composed verb/artifact/exit-code prefix, plus "
+            f"the \"last output line: \" joiner, must stay intact ahead of "
+            f"the captured cause; got detail={detail!r}")
+        # POSITIVE -- the captured build output's own last non-empty line
+        # reached the detail.
         self.assertIn(
             self.CAUSE_FRAGMENT, detail,
             f"mvn/unit: AC2 -- the compile fallback's own captured build "
-            f"output must reach the detail, not just the verb/artifact/"
-            f"exit-code prefix; got detail={detail!r}")
+            f"output must reach the detail as the last non-empty line of "
+            f"`output`, not just the verb/artifact/exit-code prefix; got "
+            f"detail={detail!r}")
+        # NEGATIVE -- this is the exact text the site produced when `output`
+        # was hard-coded to "" (pre-C3): its absence is what proves real
+        # captured output reached the detail, rather than a coincidental
+        # substring match.
+        self.assertNotIn(
+            self.BLANK_CAPTURE_TAIL, detail,
+            f"mvn/unit: AC2 -- the detail must NOT be the blank-capture "
+            f"form (\"{self.BLANK_CAPTURE_TAIL}\"); its presence means the "
+            f"compile fallback's captured build output never reached "
+            f"`no_report_warning`; got detail={detail!r}")
 
 
 if __name__ == "__main__":
