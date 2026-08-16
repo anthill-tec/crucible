@@ -229,5 +229,25 @@ site HAS one. Measured while re-pointing rust and mvn:
 
 **C3 threads mvn's capture out of `_compile_fallback` so the mvn detail carries its cause too.** It
 is recorded here rather than absorbed into C1 because it changes `_compile_fallback`'s return
-shape and its three call sites, which C1's target did not include. AC2 is not considered met at the
+shape and its call sites, which C1's target did not include. AC2 is not considered met at the
 mvn site until that lands.
+
+### C3 — two corrections this CR's own prose got wrong, both found by measurement
+
+1. **`_compile_fallback` has FIVE call sites, not three** (the count above said three). `_run_surefire_tier`, `cmd_e2e` and `_regression_run` emit an envelope and pass the capture on; `cmd_test` and `cmd_auto_ingest` do not emit, but had to be updated anyway or they would have returned a `(rc, output)` tuple as a process exit code.
+2. **§S6 was not production-free** — see the correction inside that section.
+
+### C3 — measured follow-up, deliberately NOT taken in this CR
+
+`no_report_warning` composes its cause from the **last non-empty line** of the capture (AC2's literal
+wording, C1's drift-guarded contract). That serves python and node well — `ModuleNotFoundError: No
+module named 'xmlrunner'` and `Cannot find module …` genuinely terminate those streams. **It serves
+maven worse:** real maven emits the actionable `cannot find symbol` line ABOVE its `symbol:` detail
+lines, and a full build tail typically ends in boilerplate (`[ERROR] -> [Help 1]`), so mvn's detail
+can carry a true but uninformative last line. This surfaced when C3's own fixture asserted on
+`cannot find symbol` and could not reach it.
+
+Changing the selection rule is a CROSS-FLEET change to a shared, drift-guarded helper affecting all
+seven sites plus rust and mvn — out of scope here, and it would invalidate C1's committed tests.
+Recorded for a future CR: a per-artifact or first-error-line selection, or a bounded multi-line
+cause, would fit maven better without hurting the others.
