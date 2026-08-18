@@ -1,6 +1,6 @@
 # CR-CRU-064 — A toolchain-starved run emits no envelope: seven no-report fallbacks return an exit code and nothing machine-readable
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-08-16 on develop)
 **Type:** patch (AXI-compliance — fleet parity)
 **Priority:** P0 — **0.1.0 release prerequisite (user-decided 2026-08-14): this ships BEFORE the release, not after it.** Two of the seven sites are the `pre-merge-gate` regression body (bun) and the gate's python twin, so an orchestrator whose toolchain is incomplete gets an exit code with EMPTY stdout at a merge decision point — and 0.1.0 is the release that puts these clients in users' hands, where a missing toolchain is the NORMAL first-run state, not an edge case.
 **Depends on:** CR-CRU-030 (established the fleet-wide TOON-AXI contract), CR-CRU-054 (the shared module these sites must join), CR-CRU-058 (envelope parity + state-derived `help[]` — the same defect class, one branch deeper), CR-CRU-063 (measured the failure and recorded both follow-ups)
