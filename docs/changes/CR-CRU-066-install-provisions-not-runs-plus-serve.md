@@ -71,6 +71,10 @@ install): it execs the provisioned server by **absolute path** (`~/.bun/bin/cruc
   `crucible-axi serve`. The bare `crucible-server` line is replaced by `crucible-axi serve`.
 - **`docs/RUNBOOK.md`:** `crucible-server` → `crucible-axi serve` (with `CRUCIBLE_HOST`/`CRUCIBLE_PORT`
   examples); note Bun is the runtime and is guaranteed by `crucible-axi install`.
+- **Stale skills claims (CR-042 fallout):** README:33 still says install "installs the multi-harness
+  skill set" and README:58 describes `clients/skills/` — both false since CR-042 retired the `[skills]`
+  stage (`STAGE_ORDER = server, manifest` only; skills are Model-B's `modelb-axi`). Correct both so the
+  README states install provisions the server + writes the manifest, and does NOT touch skills.
 - **`install.sh`:** it already calls `crucible-axi install`, which now terminates — no logic change
   beyond confirming it no longer hangs end to end; update the `<crucible>` hosting comment.
 
@@ -85,8 +89,13 @@ install): it execs the provisioned server by **absolute path** (`~/.bun/bin/cruc
   out.
 - `crucible-axi serve` resolves the **absolute** Bun/bin path and version pin, and forwards
   `CRUCIBLE_HOST`/`CRUCIBLE_PORT` (drive it as data; do not actually bind a port in the unit test).
-- README/RUNBOOK data assertions updated: the install/run commands the docs advertise match the CLI
-  the package ships (the release-bundle suite already parses these).
+- **Rewrite the tests that pin the defect (RED-first):** `tests/client/test_crucible_axi_stages.py`
+  asserts the broken contract verbatim — `npx -y <SERVER_NPM_PACKAGE>` delegation, a RuntimeError
+  "mentioning npx", and `_server_already_installed` mocking. Re-point these to the `bun add -g`
+  provision-and-exit contract + the real bin-probe idempotency; they encode the bug today and must
+  change with the fix, not survive it. Add the `serve` verb to `tests/cli-axi.test.ts`.
+- README/RUNBOOK data assertions updated (`tests/cr009-release-bundle.test.ts`): the install/run
+  commands the docs advertise match the CLI the package ships.
 
 ## Acceptance criteria
 
