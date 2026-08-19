@@ -7,12 +7,14 @@ discovery manifest with the external tools mocked/injected; the real
 sub-installer delegation is C2.
 
 CR-CRU-041 §S6 — composite release: this package and the Bun/TS server release
-in lockstep off one ``vX.Y.Z`` tag, so ``__version__`` is DERIVED from the
-installed distribution metadata (hatch-vcs writes it at build time) rather than
-hand-maintained here. A source checkout has no installed ``crucible-axi``
-distribution, so the lookup falls back to :data:`_SOURCE_CHECKOUT_VERSION`;
-``CRUCIBLE_SERVER_VERSION`` is the documented escape hatch for pinning the
-server fetch in that (and any other) situation.
+in lockstep off one bare-SemVer ``X.Y.Z`` tag (CR-CRU-061 retired the ``v``
+prefix; ``RELEASING.md`` is the authority), so ``__version__`` is DERIVED
+from the installed distribution metadata (hatch-vcs writes it at build time)
+rather than hand-maintained here. A source checkout has no installed
+``crucible-axi`` distribution, so the lookup falls back to
+:data:`_SOURCE_CHECKOUT_VERSION`; ``CRUCIBLE_SERVER_VERSION`` is the
+documented escape hatch for pinning the server fetch in that (and any
+other) situation.
 """
 
 import importlib.metadata
