@@ -56,8 +56,14 @@ swallowed.
 
 ### §S2 — Bun is guaranteed or the install fails definitively
 
-Before §S1, ensure Bun. Detect `bun` on PATH; if absent, bootstrap via the Bun installer
-(`curl -fsSL https://bun.sh/install | bash`) **and re-resolve** PATH to include `~/.bun/bin` (the
+Before §S1, ensure Bun. **Detect it at BOTH locations before deciding anything: PATH
+(`shutil.which`) AND the explicit `$BUN_INSTALL/bin/bun` (default `~/.bun/bin/bun`).** A PATH-only
+probe is wrong and was caught at VERIFY: this CR's own install puts Bun under `~/.bun`, so an
+operator who has not re-sourced their shell has a perfectly usable Bun that PATH cannot see — and a
+PATH-only probe then re-pipes a remote installer into a shell on every `--force`/re-provision, which
+is both wasteful and exactly the pipe-to-shell behaviour the opt-out exists to avoid. Only when
+BOTH locations miss does it bootstrap via the Bun installer
+(`curl -fsSL https://bun.sh/install | bash`) **and re-resolve** including `~/.bun/bin` (the
 installer's target is not on the current shell PATH — the same re-resolve `install.sh` already does
 for `uv`). Then **verify** `bun --version` actually runs; if Bun still cannot be resolved, **raise and
 fail the whole install** with a named remedy (`install Bun: https://bun.sh, then re-run`) — never the
@@ -136,6 +142,15 @@ install): it execs the provisioned server by **absolute path** (`~/.bun/bin/cruc
    remedy and does NOT invoke the `curl … bun.sh` bootstrap.
 5. `crucible-axi serve` exists as a subcommand, launches the server by absolute path in the
    foreground, honours `CRUCIBLE_HOST`/`CRUCIBLE_PORT`, and returns the child's exit code.
+5a. **Ctrl-C stops it cleanly, with no traceback.** `RUNBOOK` documents Ctrl-C as the stop gesture, so
+   a foreground `SIGINT` — which the shell delivers to the whole process group — must NOT surface a
+   Python `KeyboardInterrupt` stack trace out of `subprocess.run`. It exits `130` (the SIGINT
+   convention). This is the same unpolished failure the 0.1.1 hang produced when the user Ctrl-C'd it,
+   and the reason the resolution-failure path already forbids tracebacks.
+5b. **A signal-terminated server reports `128+N`, not a masked negative.** `CompletedProcess.returncode`
+   is negative when the child is signalled (`-15` for SIGTERM), and `sys.exit(-15)` masks to OS status
+   `241`. `serve` translates it (`143` for SIGTERM, `137` for SIGKILL) so a supervisor — including the
+   systemd `--user` unit this CR delivers `serve` for — can tell the process was signalled.
 6. README "Quick start" contains no `crucible.dev` and no bare `crucible-server`; its one-liner is the
    `raw.githubusercontent.com/anthill-tec/crucible/<tag>/install.sh` form, and its run step is
    `crucible-axi serve`. `docs/RUNBOOK.md` matches.
