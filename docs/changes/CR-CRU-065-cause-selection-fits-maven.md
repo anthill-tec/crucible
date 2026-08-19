@@ -1,6 +1,6 @@
 # CR-CRU-065 — The no-report cause is selected by "last non-empty line", which fits python and node but not maven
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-08-18 on develop)
 **Type:** patch (AXI-compliance — envelope fidelity)
 **Priority:** P1 — **0.1.0 release prerequisite (user-decided 2026-08-18): delivered before the release.** It is a patch on CR-CRU-064, itself a 0.1.0 prerequisite; the envelope fidelity ships with the fleet that 0.1.0 puts in users' hands.
 **Depends on:** CR-CRU-064 (shipped the shared helper and its drift guard — this changes that contract additively)
