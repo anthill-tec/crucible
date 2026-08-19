@@ -2,7 +2,7 @@
 
 **Status:** PENDING
 **Type:** patch (AXI-compliance — envelope fidelity)
-**Priority:** P2 — proposed for **0.2.0**. The mvn envelope is CORRECT today (right code, right exit code, a true line); it is merely UNINFORMATIVE, so this is fidelity work, not a shipping defect. Release membership is the user's to confirm.
+**Priority:** P1 — **0.1.0 release prerequisite (user-decided 2026-08-18): delivered before the release.** It is a patch on CR-CRU-064, itself a 0.1.0 prerequisite; the envelope fidelity ships with the fleet that 0.1.0 puts in users' hands.
 **Depends on:** CR-CRU-064 (shipped the shared helper and its drift guard — this changes that contract additively)
 **Labels:** patch, client-fleet, axi-compliance, maven, envelope-fidelity
 **Design reference:** CR-CRU-030 §S1 (one TOON-AXI document per verb, `warnings[]` carries the machine-readable cause) and CR-CRU-064 §S1 (the `no_report_help` / `no_report_warning` pair this CR extends). The limit was measured and recorded in CR-CRU-064's Implementation notes, C3 section.
