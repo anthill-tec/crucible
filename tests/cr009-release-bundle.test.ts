@@ -1201,3 +1201,256 @@ describe("§S5 CI builds/packs the npm server artifact too, on the same uncondit
     expect(output).toContain("bin/crucible-server.mjs");
   });
 });
+
+// ---------------------------------------------------------------------------
+// CR-CRU-066 §S4 / AC6 — Docs reconciled to the shipped install/serve contract
+// (RED).
+//
+// Spec: docs/changes/CR-CRU-066-install-provisions-not-runs-plus-serve.md §S4
+// + AC6.
+//
+// Extends THIS file rather than starting a second doc-as-data mechanism: the
+// "§S5 docs — README quick start" / "§S5 docs — RUNBOOK" / "§S1 install.sh
+// bootstrap" describes above are the established home for README, RUNBOOK and
+// install.sh contracts, and every later CR that touched a doc (CR-041 §S4
+// RELEASING.md, CR-062 release.yml) extended here for the same reason. The
+// assertions below therefore ADD to those, and deliberately do not weaken
+// any of them (the pre-existing curl|sh regex, CRUCIBLE_PORT/CRUCIBLE_HOST,
+// corrupt-db, retention and uv-flow assertions must all stay green).
+//
+// What shipped in C1-C3 and what the docs still claim:
+//   * `crucible-axi install` PROVISIONS and EXITS — it guarantees Bun,
+//     provisions the server user-scoped, creates its target dir and writes
+//     the manifest. STAGE_ORDER = ("server", "manifest"); there is NO skills
+//     stage (CR-042 retired it — skills are Model-B's `modelb-axi`).
+//   * `crucible-axi serve` RUNS the server in the foreground.
+//   * `[project.scripts]` declares ONLY `crucible-axi`, so a bare
+//     `crucible-server` command is not installed by anything.
+//
+// The six measured doc defects each get an assertion below:
+//   1. README:21 `curl -fsSL https://crucible.dev/install.sh | sh` —
+//      `crucible.dev` is NOT REGISTERED (does not resolve). The repo is
+//      public, so GitHub raw serves the same install.sh.
+//   2. README:33 "installs the multi-harness skill set" — false since CR-042.
+//   3. README:40 documents a bare `crucible-server` command — not installed.
+//   4. README:58 describes `clients/skills/` as a shipped deliverable —
+//      the directory does not even exist any more (CR-042).
+//   5. docs/RUNBOOK.md:9/:126/:130 invoke a bare `crucible-server`.
+//   6. install.sh's header still calls its own hosting URL a human-gated
+//      unfinished step and still claims a skill-set install.
+//
+// 🚨 DELIBERATE DEVIATION FROM THE SPEC TEXT, recorded not silently taken:
+// §S4 writes the one-liner as
+// `raw.githubusercontent.com/anthill-tec/crucible/<tag>/install.sh`. This
+// suite pins the `master` REF instead of a version tag. Reason: this is a
+// git-flow repo where `master` only ever advances at a release, so the
+// `master` ref always serves the latest RELEASED installer and never needs a
+// per-release bump, whereas a `<tag>` pin goes stale the moment the next
+// release lands (and a stale quick-start one-liner is precisely the class of
+// defect this CR exists to kill). Pinned as an ANTI-assertion too: a
+// version-shaped ref is rejected outright, so nobody can "fix" this back into
+// a per-release maintenance burden without changing this test.
+// ---------------------------------------------------------------------------
+
+/** The canonical, always-latest-release quick-start installer URL. */
+const INSTALL_SH_RAW_URL =
+  "https://raw.githubusercontent.com/anthill-tec/crucible/master/install.sh";
+
+/**
+ * Returns the bodies of every fenced code block in `markdown`, optionally
+ * restricted to blocks whose info string matches `lang`.
+ */
+function fencedCodeBlocks(markdown: string, lang?: string): string[] {
+  const blocks: string[] = [];
+  const fence = /^```([^\n`]*)\n([\s\S]*?)^```/gm;
+  for (const match of markdown.matchAll(fence)) {
+    const info = match[1].trim();
+    if (lang === undefined || info === lang) blocks.push(match[2]);
+  }
+  return blocks;
+}
+
+/**
+ * Returns the body of the markdown section introduced by `heading` (up to the
+ * next heading of the same or a shallower level). Fence-aware: a shell comment
+ * inside a fenced code block (`# via the launcher`) is NOT a heading, so a
+ * section whose examples carry comments is not truncated at the first one.
+ */
+function markdownSection(markdown: string, heading: string): string {
+  const lines = markdown.split("\n");
+  const startIdx = lines.findIndex((line) => line.trim() === heading);
+  if (startIdx === -1) return "";
+  const depth = heading.match(/^#+/)?.[0].length ?? 1;
+  const body: string[] = [];
+  let inFence = false;
+  for (const line of lines.slice(startIdx + 1)) {
+    if (line.startsWith("```")) inFence = !inFence;
+    if (!inFence && !line.startsWith("```")) {
+      const hashes = line.match(/^(#+)\s/);
+      if (hashes !== null && hashes[1].length <= depth) break;
+    }
+    body.push(line);
+  }
+  return body.join("\n");
+}
+
+/**
+ * Every executable-looking line inside `markdown`'s fenced code blocks, with
+ * comment-only lines and blanks dropped. This is what makes the "no bare
+ * `crucible-server` COMMAND" assertions target command-line USAGE rather than
+ * any occurrence of the string: a path (`bin/crucible-server.mjs`) or an npm
+ * package name mentioned in prose is untouched by these.
+ */
+function shellCommandLines(markdown: string): string[] {
+  return fencedCodeBlocks(markdown)
+    .flatMap((block) => block.split("\n"))
+    .map((line) => line.replace(/\s+#.*$/, "").trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+}
+
+/**
+ * A command line whose invoked program is a bare `crucible-server` — i.e. the
+ * command that NOTHING installs (`[project.scripts]` declares only
+ * `crucible-axi`). Leading `VAR=value` environment prefixes are skipped so
+ * `CRUCIBLE_PORT=4000 crucible-server` is caught too; a path-qualified
+ * `~/.bun/bin/crucible-server` is NOT matched (that one really exists).
+ */
+const BARE_CRUCIBLE_SERVER_COMMAND = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*crucible-server\b/;
+
+function bareCrucibleServerCommands(markdown: string): string[] {
+  return shellCommandLines(markdown).filter((line) =>
+    BARE_CRUCIBLE_SERVER_COMMAND.test(line),
+  );
+}
+
+describe("CR-CRU-066 §S4/AC6 docs — README quick start reconciled", () => {
+  // Defect 1 — `crucible.dev` is not a registered domain.
+  test("README names no `crucible.dev` host anywhere (unregistered domain)", () => {
+    expect(readText("README.md")).not.toContain("crucible.dev");
+  });
+
+  // Defect 1 — the replacement one-liner, inside the quick-start block.
+  test("the quick-start one-liner curls install.sh from GitHub raw at the `master` ref", () => {
+    const quickStart = markdownSection(readText("README.md"), "## Quick start");
+    expect(quickStart).not.toBe("");
+
+    const blocks = fencedCodeBlocks(quickStart, "sh");
+    expect(blocks.length).toBeGreaterThan(0);
+
+    // The one-liner lives INSIDE a quick-start code block, not merely
+    // somewhere in the prose.
+    const oneLiners = blocks.filter((block) => /curl\s+-fsSL\s+\S*install\.sh\s*\|\s*sh/.test(block));
+    expect(oneLiners.length).toBeGreaterThan(0);
+
+    const oneLiner = oneLiners.join("\n");
+    expect(oneLiner).toContain(INSTALL_SH_RAW_URL);
+    // URL SHAPE, asserted independently of the literal above: raw host, the
+    // real owner/repo, the `master` ref, `install.sh`.
+    expect(oneLiner).toMatch(
+      /curl\s+-fsSL\s+https:\/\/raw\.githubusercontent\.com\/anthill-tec\/crucible\/master\/install\.sh\s*\|\s*sh/,
+    );
+    // ANTI-assertion (see the 🚨 note above): never a version-shaped ref, which
+    // would go stale every release.
+    expect(oneLiner).not.toMatch(
+      /raw\.githubusercontent\.com\/anthill-tec\/crucible\/v?\d+\.\d+\.\d+\//,
+    );
+  });
+
+  // Defect 3 — the bare `crucible-server` command is not installed by anything.
+  test("README documents NO bare `crucible-server` command line", () => {
+    expect(bareCrucibleServerCommands(readText("README.md"))).toEqual([]);
+  });
+
+  // Defect 3 — and documents the verb that actually runs the server.
+  test("README documents `crucible-axi serve` as the run command", () => {
+    const readme = readText("README.md");
+    expect(readme).toContain("crucible-axi serve");
+    // In a runnable code block, not only in prose.
+    expect(shellCommandLines(readme).some((line) => line.startsWith("crucible-axi serve"))).toBe(
+      true,
+    );
+  });
+
+  // Defects 2 + 4 — CR-042 retired the `[skills]` stage; the repo ships none
+  // (`clients/skills/` no longer even exists) and install installs none.
+  test("README makes no skills claim at all (CR-042 retired the skills stage)", () => {
+    const readme = readText("README.md");
+    expect(readme).not.toMatch(/skill/i);
+    expect(readme).not.toContain("clients/skills");
+  });
+
+  // Defect 2 — what install ACTUALLY does: the two real stages.
+  test("README describes `crucible-axi install` as provisioning the server + writing the manifest", () => {
+    const readme = readText("README.md");
+    expect(readme).toContain("manifest");
+
+    // The paragraph that introduces `crucible-axi install` must name BOTH
+    // real stages — a "manifest" mentioned only in some unrelated section
+    // would not reconcile the install description itself.
+    const paragraph = readme
+      .split(/\n\s*\n/)
+      .find((para) => /`?crucible-axi install`?/.test(para) && !para.trimStart().startsWith("```"));
+    expect(paragraph).toBeDefined();
+    expect(paragraph!).toMatch(/server/i);
+    expect(paragraph!).toMatch(/manifest/i);
+  });
+});
+
+describe("CR-CRU-066 §S4/AC6 docs — RUNBOOK reconciled", () => {
+  // Defect 5 — RUNBOOK:9/:126/:130.
+  test("docs/RUNBOOK.md documents NO bare `crucible-server` command line", () => {
+    expect(bareCrucibleServerCommands(readText(join("docs", "RUNBOOK.md")))).toEqual([]);
+  });
+
+  test("docs/RUNBOOK.md starts the server with `crucible-axi serve`", () => {
+    const runbook = readText(join("docs", "RUNBOOK.md"));
+    const start = markdownSection(runbook, "## Start");
+    expect(start).not.toBe("");
+    expect(shellCommandLines(start).some((line) => line.startsWith("crucible-axi serve"))).toBe(
+      true,
+    );
+  });
+
+  // §S4: keep the env-var examples — reconciled onto the real command, NOT
+  // deleted. Guards against a GREEN that fixes the command by dropping the
+  // documentation the pre-existing §S5 RUNBOOK test relies on.
+  test("docs/RUNBOOK.md keeps its CRUCIBLE_PORT / CRUCIBLE_HOST examples, on `crucible-axi serve`", () => {
+    const commands = shellCommandLines(readText(join("docs", "RUNBOOK.md")));
+    expect(commands.some((line) => /^CRUCIBLE_PORT=\S+\s+crucible-axi serve\b/.test(line))).toBe(
+      true,
+    );
+    expect(commands.some((line) => /^CRUCIBLE_HOST=\S+.*\bcrucible-axi serve\b/.test(line))).toBe(
+      true,
+    );
+  });
+
+  // §S4: "note Bun is the runtime and is guaranteed by `crucible-axi install`".
+  test("docs/RUNBOOK.md names Bun as the runtime, guaranteed by `crucible-axi install`", () => {
+    const runbook = readText(join("docs", "RUNBOOK.md"));
+    expect(runbook).toMatch(/\bBun\b/);
+    expect(runbook).toContain("crucible-axi install");
+    // Out-of-scope §: "No `npx`/node path — the server is a Bun program".
+    expect(runbook).not.toMatch(/npx/i);
+  });
+});
+
+describe("CR-CRU-066 §S4/AC6 docs — install.sh header prose reconciled", () => {
+  // Defect 6 — install.sh:4/:16/:18-20 still call the hosting URL an
+  // unfinished human-gated step and leave `<crucible>` as a placeholder.
+  test("install.sh no longer presents its hosting URL as an unfinished, human-gated step", () => {
+    const script = readText("install.sh");
+    expect(script).not.toMatch(/human-gated/i);
+    expect(script).not.toContain("<crucible>");
+    // It states the REAL hosting URL instead (the repo is public).
+    expect(script).toContain(INSTALL_SH_RAW_URL);
+  });
+
+  // Defect 6 — install.sh:10 still claims a skill-set install.
+  test("install.sh claims no skill-set install and names the two real stages", () => {
+    const script = readText("install.sh");
+    expect(script).not.toMatch(/skill/i);
+    expect(script).toMatch(/manifest/i);
+    // Bun-only: `npx` is not the server's launcher (Out-of-scope §).
+    expect(script).not.toMatch(/npx/i);
+  });
+});

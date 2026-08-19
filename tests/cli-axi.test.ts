@@ -45,7 +45,7 @@
 // assumption (no AC pins the override mechanism) exercised only by the one
 // true subprocess-spawn test below.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
@@ -711,5 +711,74 @@ describe("crucible-axi CLI (CR-CRU-008 §S1)", () => {
     expect(exitCode).toBe(0);
     expect(stdoutText.split("\n")[0]).toBe("ok: true");
     expect(stdoutText).toMatch(/help\[\d+\]:/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CR-CRU-066 §S4 / AC6 — the DOCUMENTED CLI surface covers every verb the
+// shipped `crucible-axi` actually dispatches (RED).
+//
+// Spec: docs/changes/CR-CRU-066-install-provisions-not-runs-plus-serve.md
+// §S4 + AC6; test-strategy line "Add the `serve` verb to
+// `tests/cli-axi.test.ts`."
+//
+// 🚨 SCOPE READING, recorded because it deviates from the literal wording:
+// this file's `describe` above exercises the BUN fleet CLI
+// (`cli/crucible-axi.ts` — register/heartbeat/ingest/project/events/status).
+// `install` and `serve` are verbs of the PYTHON console script
+// (`[project.scripts] crucible-axi = "crucible_axi.cli:main"`), NOT of the bun
+// fleet CLI, and C3 already shipped + unit-tested them Python-side. Making the
+// bun CLI grow an `install`/`serve` verb would be a wrong-package code change
+// that this CR's docs-only §S4 does not authorise. So what this block asserts
+// is the thing §S4/AC6 actually owns and that is genuinely broken today: the
+// DOCUMENTED command surface must cover every verb the shipped CLI dispatches
+// — derived from the real `_COMMANDS` table in `crucible_axi/cli.py` rather
+// than hardcoded, so the docs cannot drift from the code again (this CR's
+// whole failure mode).
+//
+// RED phase: `_COMMANDS` is {"install", "serve"}; README documents
+// `crucible-axi install` but NOT `crucible-axi serve` (it documents a bare
+// `crucible-server`, which nothing installs), so the coverage assertion FAILS
+// on the `serve` verb.
+// ---------------------------------------------------------------------------
+
+/**
+ * The verbs the shipped `crucible-axi` console script really dispatches,
+ * parsed out of `crucible_axi/cli.py`'s `_COMMANDS` table — the single source
+ * of truth for the CLI's verb surface.
+ */
+function shippedCrucibleAxiVerbs(): string[] {
+  const source = readFileSync(
+    join(import.meta.dir, "..", "crucible_axi", "cli.py"),
+    "utf8",
+  );
+  const table = source.match(/^_COMMANDS\s*=\s*\{([\s\S]*?)^\}/m);
+  if (table === null) return [];
+  return [...table[1].matchAll(/"([a-z][a-z0-9-]*)"\s*:/g)].map((m) => m[1]);
+}
+
+describe("CR-CRU-066 §S4/AC6 documented CLI surface vs the shipped verb table", () => {
+  test("`crucible_axi/cli.py` dispatches both `install` and `serve` (guards the parse)", () => {
+    const verbs = shippedCrucibleAxiVerbs();
+    expect(verbs).toContain("install");
+    expect(verbs).toContain("serve");
+  });
+
+  test("README documents `crucible-axi <verb>` for EVERY dispatched verb", () => {
+    const readme = readFileSync(join(import.meta.dir, "..", "README.md"), "utf8");
+    const verbs = shippedCrucibleAxiVerbs();
+    expect(verbs.length).toBeGreaterThan(0);
+
+    const undocumented = verbs.filter((verb) => !readme.includes(`crucible-axi ${verb}`));
+    expect(undocumented).toEqual([]);
+  });
+
+  test("docs/RUNBOOK.md documents the run verb (`serve`) it tells operators to use", () => {
+    const runbook = readFileSync(
+      join(import.meta.dir, "..", "docs", "RUNBOOK.md"),
+      "utf8",
+    );
+    expect(shippedCrucibleAxiVerbs()).toContain("serve");
+    expect(runbook).toContain("crucible-axi serve");
   });
 });
