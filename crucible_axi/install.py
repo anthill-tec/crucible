@@ -68,6 +68,13 @@ _DEFAULT_BUN_INSTALL_PREFIX = "~/.bun"
 # presence there is the server's REAL installed marker.
 SERVER_BIN_NAME = "crucible-server"
 
+# The server's own runtime configuration, forwarded to the child process by
+# `crucible-axi serve` (CR-CRU-066 §S3). `serve` composes the child env
+# EXPLICITLY: a systemd `--user` unit (the follow-up CR) inherits neither the
+# operator's PATH nor their exports.
+SERVER_HOST_ENV_VAR = "CRUCIBLE_HOST"
+SERVER_PORT_ENV_VAR = "CRUCIBLE_PORT"
+
 
 def _bun_global_bin_dir() -> str:
     """Bun's global bin directory -- `$BUN_INSTALL/bin` when set, else
@@ -272,6 +279,28 @@ def _server_stage(target_dir: str, force: bool,
     return {"path": server_path, "converged": False, "bun": bun}
 
 
+def server_launch_argv() -> list[str]:
+    """The ABSOLUTE argv that RUNS the provisioned server (CR-CRU-066 §S3).
+
+    `$BUN_INSTALL/bin/crucible-server` when the [server] install stage has
+    provisioned it, else the version-pinned package through the resolved
+    ABSOLUTE Bun (`<bun> x <pkg>@<pinned>` — what `bunx` is). Never a bare
+    `crucible-server`/`bun`/`bunx` token: the follow-up systemd `--user` unit
+    gets a minimal PATH that resolves none of them.
+
+    This RUNS the server, it never provisions one — `bun add -g` is the
+    [server] stage's job (§S1). So Bun is resolved and verified with the curl
+    bootstrap OPTED OUT: a missing Bun fails with the same named remedy rather
+    than piping a remote installer to a shell from a run command.
+    """
+    server_bin = _provisioned_server_bin_path()
+    if os.path.isfile(server_bin):
+        return [server_bin]
+    bun = _guarantee_bun(no_bun_bootstrap=True)
+    server_version = _resolved_server_version_or_fail()
+    return [bun, "x", f"{SERVER_NPM_PACKAGE}@{server_version}"]
+
+
 # Module-level, in-place-mutable stage table (patched by tests via
 # mock.patch.dict). `run_install` reads this name at call time.
 DEFAULT_STAGE_RUNNERS: dict = {
@@ -318,6 +347,11 @@ def run_install(target_dir, stage_runners=None, force=False,
     and surfaces as `ok=False` plus a warning — the failure is recorded
     visibly, never swallowed.
 
+    `target_dir` is CREATED first (`os.makedirs(..., exist_ok=True)` — §S1b):
+    the stages write into it, so a fresh machine without `~/.crucible` would
+    otherwise die on the [manifest] write. A target that cannot be created
+    fails definitively with the path named.
+
     `no_bun_bootstrap` is the `--no-bun-bootstrap` opt-out, threaded down to
     the stages that accept it.
     """
@@ -325,6 +359,19 @@ def run_install(target_dir, stage_runners=None, force=False,
     stages: list[dict] = []
     warnings: list[dict] = []
     ok = True
+
+    # §S1b — create what the install installs INTO, before any stage runs.
+    # Idempotent by `exist_ok`; an uncreatable target (permissions) fails
+    # definitively, naming the path, instead of surfacing later as a cryptic
+    # missing-manifest error.
+    try:
+        os.makedirs(target_dir, exist_ok=True)
+    except OSError as exc:
+        warnings.append({
+            "code": "target-dir-failed",
+            "detail": f"could not create target dir {target_dir}: {exc}",
+        })
+        return False, stages, warnings
 
     for name in STAGE_ORDER:
         runner = runners[name]

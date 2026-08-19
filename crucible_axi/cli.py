@@ -1,10 +1,12 @@
 """CR-CRU-009 §S2 — the `crucible-axi` console-script entry point.
 
-`main` parses the `install` subcommand, drives `install.run_install`, and emits
-EXACTLY ONE TOON-AXI envelope on stdout (`verb`, `ok`, `stages[]{name,path}`,
-`warnings[]`, `help[]`) via the fleet's shared envelope machinery
-(`clients/_crucible_axi.py` + `clients/toon.py`) so the format matches the
-`*-crucible.py` clients. Exit 0 on ok, 1 otherwise.
+`main` parses the `install` and `serve` subcommands. `install` drives
+`install.run_install` and emits EXACTLY ONE TOON-AXI envelope on stdout
+(`verb`, `ok`, `stages[]{name,path}`, `warnings[]`, `help[]`) via the fleet's
+shared envelope machinery (`clients/_crucible_axi.py` + `clients/toon.py`) so
+the format matches the `*-crucible.py` clients; exit 0 on ok, 1 otherwise.
+`serve` runs the provisioned server in the foreground and returns its exit code
+verbatim (CR-CRU-066 §S3), leaving stdout to the server itself.
 """
 
 from __future__ import annotations
@@ -12,6 +14,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import subprocess
+import sys
 
 from crucible_axi import install
 
@@ -67,6 +71,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="fail the install instead of bootstrapping Bun when it is absent "
              f"(same as {install.BUN_NO_BOOTSTRAP_ENV_VAR}=1)",
     )
+
+    p_serve = sub.add_parser(
+        "serve",
+        help="run the provisioned Crucible server in the foreground",
+    )
+    p_serve.add_argument(
+        "--host",
+        default=None,
+        help="host the server binds "
+             f"(overrides ${install.SERVER_HOST_ENV_VAR})",
+    )
+    p_serve.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="port the server binds "
+             f"(overrides ${install.SERVER_PORT_ENV_VAR})",
+    )
     return parser
 
 
@@ -98,10 +120,42 @@ def cmd_install(args) -> int:
     return 0 if ok else 1
 
 
+def cmd_serve(args) -> int:
+    """Run the server in the FOREGROUND and return its exit code (§S3 AC5).
+
+    Blocking is CORRECT here — that is the whole point of splitting the run out
+    of `install`. The child is launched by absolute path with an EXPLICITLY
+    composed environment (`$CRUCIBLE_HOST`/`$CRUCIBLE_PORT`, the `--host`/
+    `--port` flags overriding them), and its exit code is propagated verbatim
+    so a shell — and the follow-up systemd `--user` unit — sees the real
+    failure. No envelope is emitted: stdout belongs to the server. A launch that
+    cannot be RESOLVED (no provisioned bin and no usable Bun) is definitive —
+    the remedy on stderr, exit 1 — never a traceback.
+    """
+    try:
+        argv = install.server_launch_argv()
+    except RuntimeError as exc:
+        print(f"crucible-axi serve: {exc}", file=sys.stderr)
+        return 1
+    env = os.environ.copy()
+    if args.host is not None:
+        env[install.SERVER_HOST_ENV_VAR] = args.host
+    if args.port is not None:
+        env[install.SERVER_PORT_ENV_VAR] = str(args.port)
+    return subprocess.run(argv, env=env).returncode
+
+
+_COMMANDS = {
+    "install": cmd_install,
+    "serve": cmd_serve,
+}
+
+
 def main(argv=None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    if args.command == "install":
-        return cmd_install(args)
-    parser.print_help()
-    return 1
+    handler = _COMMANDS.get(args.command)
+    if handler is None:
+        parser.print_help()
+        return 1
+    return handler(args)
