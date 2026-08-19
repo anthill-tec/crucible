@@ -1,6 +1,10 @@
 {
   "name": "@anthill-tec/crucible-server",
   "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anthill-tec/crucible.git"
+  },
   "type": "module",
   "publishConfig": {
     "access": "public"
