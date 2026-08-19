@@ -221,6 +221,15 @@ After the first successful npm publish, configure the trusted publisher on npmjs
 and switch the publish step to OIDC. The workflow already upgrades npm to >= 11.5.1, the
 minimum version with OIDC trusted-publishing support.
 
+**DONE 2026-08-19 (after the 0.1.1 publish):** the trusted publisher is configured
+(`anthill-tec/crucible` → `release.yml`, perms `npm publish` + `npm stage publish`), and
+`publish-npm` now publishes token-free via OIDC (the `NODE_AUTH_TOKEN` / `NPM_TOKEN`-detect
+wiring is retired). Two remaining maintainer clicks on npmjs.com: set Publishing access to
+**"Require 2FA and disallow bypass-2fa tokens"** (trusted publishers keep working under it —
+npm's own note) and **delete the `NPM_TOKEN` repo secret** (no longer read by any workflow).
+The `NPM_TOKEN` section above is retained as the inaugural-publish record — OIDC cannot bootstrap
+a package that does not yet exist, so a first publish will always need this token path again.
+
 ### The repo must be PUBLIC for `--provenance`
 
 `publish-npm` runs `npm publish --provenance`. Provenance attestations are recorded in
