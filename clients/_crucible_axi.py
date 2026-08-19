@@ -1,0 +1,1846 @@
+"""CR-CRU-030 §S1 — the shared TOON-AXI envelope module for the client fleet.
+
+Historically the five `*-crucible.py` clients did NOT share code — each
+standalone client duplicated its own lifecycle/`.env`/context helpers, and the
+`_emit_axi`/`_axi_context` envelope builders existed only in `bun-crucible.py`.
+This module factors that envelope machinery out so every client imports it and
+emits a byte-identical §S1 envelope:
+
+    axi:
+      verb: <name>
+      ok: <bool>
+      <verb-specific result fields>
+      context: { projectKey, agentId?, cycleId?, wave, cr, track?, orchestrator? }
+      warnings[]{code,detail}
+
+Scope boundary (per the CR-CRU-030 RED escalation): `axi_context` takes an
+ALREADY-RESOLVED `project_key` string, not a project dir — `.env`/project-dir
+resolution stays client-specific (each client owns its filesystem layout), so
+the shared module never touches the filesystem for key resolution.
+
+The module is loaded by file path by the hyphen-named clients (which are not
+importable as normal module names), so it keeps zero hard dependencies on
+being on `sys.path`; it loads the sibling `clients/toon.py` codec by path the
+same way the clients do.
+"""
+
+import argparse
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+# Sentinel distinguishing "cycle_id not supplied" (omit the key) from an
+# explicit `cycle_id=None` (emit an EXPLICIT null — the §S3 orphan signal).
+AXI_UNSET = object()
+
+_TOON_MOD = None
+
+
+def _toon():
+    """Lazily load the sibling `clients/toon.py` (C4) TOON codec by file path.
+
+    `_crucible_axi.py` sits next to `toon.py` in `clients/`, but the clients
+    that load this module do so by path (hyphenated filenames), so `toon.py`
+    is not guaranteed to be on `sys.path` for a plain `import`."""
+    global _TOON_MOD
+    if _TOON_MOD is None:
+        toon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "toon.py")
+        spec = importlib.util.spec_from_file_location("crucible_axi_toon", toon_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"could not load TOON codec at {toon_path}")
+        _TOON_MOD = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_TOON_MOD)
+    return _TOON_MOD
+
+
+# ── CR-CRU-054 §S2 — the fleet's HTTP core, lifted to ONE locus of truth ────
+#
+# Every client used to carry its OWN byte-identical `_request` (plus the
+# `_post`/`_get`/`_patch` wrappers over it) and its OWN `_abbrev_home`. Five
+# copies of a transport is five places for a fix to land in four of them —
+# exactly the failure `docs/research/DN-client-fleet-inventory.md` §4 found.
+# The clients keep the local names (their internal call sites and every client
+# test harness address `_post`/`_get`/`_patch`/`_request` unqualified) but the
+# LOGIC lives here only, reached through the same thin-delegator pattern
+# CR-CRU-030 established for `_axi_context`/`_emit_axi`.
+
+
+def http_request(base_url, method, path, payload=None, timeout=None):
+    """The fleet's ONE JSON-over-HTTP call to Crucible. Returns the parsed JSON
+    response, or a structured `{ok: False, error}` on an HTTP/connection error.
+
+    `base_url` is passed in rather than read from the environment here: each
+    client owns its own base-URL constant (four spell it `CRUCIBLE_URL`,
+    arduino `CRUCIBLE`), and resolving it stays client-side under this module's
+    scope boundary — the shared module reads no config of its own.
+
+    CR-CRU-035 §S1 — `timeout=None` (the default) is UNBOUNDED: ingest POSTs
+    (`/api/v2/runs/parsed`) for a large regression/coverage run can legitimately
+    take the server >10s, and a short bound there is a false-negative. The short
+    hook-safe bound is applied ONLY on the status/plans read path via `_get`.
+    The bound is passed as a `timeout=` KEYWORD, which the fleet's hook-safety
+    tests assert on directly.
+
+    CR-CRU-054 §S2b (DRIFTED, DN §4 finding #7) — an EMPTY 200 response body
+    yields `{"ok": True}` rather than the uncaught `json.JSONDecodeError` that
+    `json.loads(b"")` raised in bun/rust/mvn/python. arduino was the lone client
+    with the body-presence guard and its version is the one that survives the
+    lift; the other four inherit the fix. A NON-empty body that is not valid
+    JSON still raises, unchanged — only the empty case was ever a defect.
+    """
+    req = urllib.request.Request(
+        f"{base_url}{path}",
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={"Content-Type": "application/json"},
+        method=method,
+    )
+    try:
+        # Deliberately NOT a `with` block: the client test harnesses stub
+        # `urllib.request.urlopen` with a plain response double, and a
+        # context-managed read would consume that double's `__enter__` result
+        # instead of the double itself. The explicit close keeps the
+        # connection from leaking all the same.
+        response = urllib.request.urlopen(req, timeout=timeout)
+        try:
+            body = response.read()
+        finally:
+            response.close()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")
+        return {"ok": False, "error": f"HTTP {e.code}: {detail}"}
+    except urllib.error.URLError as e:
+        return {"ok": False, "error": f"connection failed: {e.reason} "
+                                      f"(is Crucible running at {base_url}?)"}
+    return json.loads(body) if body else {"ok": True}
+
+
+def abbrev_home(path):
+    """Render an absolute path with `~` for the home dir (§S14). A path outside
+    the home directory is returned unchanged."""
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home) else path
+
+
+def run_context():
+    """CR-CRU-008 §S2 — env + git → the run context for declared cycle linkage.
+
+    Reads WORKFLOW_CYCLE, WORKFLOW_WAVE and WORKFLOW_ROLE (no cycle-id env
+    read — a bound agent's cycle attachment is stamped SERVER-side from its
+    registered binding, CR-CRU-056 §S3). When at least one is set, attaches
+    git {branch, commit} from a cheap `git rev-parse` (tolerant of a non-repo
+    cwd → the key is OMITTED, never an error). Returns the context dict, or
+    None when no workflow env is set at all (never a bare `{}`).
+
+    CR-CRU-054 §S2 — lifted here from all five clients, which each carried a
+    byte-identical copy; they now keep only the thin `_run_context` delegator.
+    """
+    context = {}
+    cycle = os.environ.get("WORKFLOW_CYCLE")
+    if cycle:
+        context["cycle"] = cycle
+    wave = os.environ.get("WORKFLOW_WAVE")
+    if wave:
+        context["wave"] = wave
+    role = os.environ.get("WORKFLOW_ROLE")
+    if role:
+        context["orchestrator"] = role
+    if not context:
+        return None
+    try:
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if branch and commit:
+            context["git"] = {"branch": branch, "commit": commit}
+    except (OSError, subprocess.CalledProcessError):
+        # A non-repo cwd / absent git is not an ingest failure — the run
+        # context simply carries no git provenance.
+        pass
+    return context
+
+
+def axi_context(project_key, agent_id=None, cr=None, cycle_id=AXI_UNSET):
+    """Build the §S1 envelope `context` from an already-resolved project_key
+    plus optional agent_id/cr/cycle_id and env (WORKFLOW_WAVE, WORKFLOW_ROLE).
+
+    Absent env keys are OMITTED; a supplied `cycle_id=None` is kept as an
+    EXPLICIT null (the §S3 orphan signal), never silently dropped."""
+    ctx = {"projectKey": project_key}
+    if agent_id:
+        ctx["agentId"] = agent_id
+    if cycle_id is not AXI_UNSET:
+        ctx["cycleId"] = cycle_id
+    wave = os.environ.get("WORKFLOW_WAVE")
+    if wave:
+        ctx["wave"] = wave
+    if cr:
+        ctx["cr"] = cr
+    role = os.environ.get("WORKFLOW_ROLE")
+    if role:
+        ctx["track"] = role
+    return ctx
+
+
+def echoed_cycle_id(resp):
+    """CR-CRU-056 §S3 (C5) — read the cycle the SERVER reports it attached an
+    ingest to, out of the ingest response's `context.cycleId` echo.
+
+    This is a PURE READ of the server's own answer — emphatically NOT a
+    revival of the client-side cycle RESOLUTION deleted in C2: no plans fetch,
+    no active-cycle picking, no env var. The server owns the binding and
+    stamps the attachment; the client only repeats what came back, so an agent
+    reading stdout sees where its run landed without a second
+    `GET /api/v2/events`.
+
+    Returns the echoed integer id, or `AXI_UNSET` when the server reported no
+    attachment (a cycle-less ingest) so `axi_context` OMITS the key rather
+    than fabricating a null."""
+    context = resp.get("context") if isinstance(resp, dict) else None
+    if not isinstance(context, dict):
+        return AXI_UNSET
+    cycle_id = context.get("cycleId")
+    # `bool` is an int subclass — exclude it so a stray True can never pose
+    # as a cycle id.
+    if isinstance(cycle_id, int) and not isinstance(cycle_id, bool):
+        return cycle_id
+    return AXI_UNSET
+
+
+def emit_axi(verb, ok, result_fields, context, warnings, legacy_line=None):
+    """Write the §S1 TOON-AXI envelope to stdout (the machine channel) and the
+    optional human-readable line to stderr (interactive only)."""
+    axi = {"verb": verb, "ok": ok}
+    axi.update(result_fields)
+    axi["context"] = context
+    axi["warnings"] = warnings
+    sys.stdout.write(_toon().encode({"axi": axi}) + "\n")
+    if legacy_line is not None:
+        print(legacy_line, file=sys.stderr)
+
+
+def resolve_single_plan(plans, cr=None, open_only=False):
+    """Resolve exactly ONE target plan from a `GET .../plans` payload's plans
+    list (PURE — no I/O), the shared resolution the client write-verbs
+    (`cycle-add`, `checkpoint`, `abort`) apply before POSTing.
+
+    - `open_only=True` restricts candidates to `status:"open"` plans first
+      (checkpoint/abort target live work); `False` considers open AND closed
+      (cycle-add, mirroring plan-backfill — the SERVER is the authority on a
+      closed plan's rejection, never a client-side pre-filter).
+    - `cr` filters the candidates to that CR (the disambiguator).
+
+    Returns `(plan, reason)`: exactly one is non-None. `reason` is None on a
+    unique match, else `"none"` (zero candidates) or `"ambiguous"` (>1, no
+    unique pick) — the caller maps each to a non-zero ok:false envelope and
+    issues NO POST."""
+    candidates = list(plans or [])
+    if open_only:
+        candidates = [p for p in candidates if p.get("status") == "open"]
+    if cr:
+        candidates = [p for p in candidates if p.get("cr") == cr]
+    if len(candidates) == 0:
+        return None, "none"
+    if len(candidates) > 1:
+        return None, "ambiguous"
+    return candidates[0], None
+
+
+# ── CR-CRU-054 §S2 — the fleet's plan-access layer, lifted to ONE locus ─────
+#
+# `_plans_path`, `_open_plans` and `_resolve_plan_or_emit`'s prelude were
+# byte-identical in all five clients. The plan SELECTION itself
+# (`resolve_single_plan`, above) was already shared; what follows is the
+# surrounding URL/GET/emit orchestration that was not. The clients keep their
+# local names as thin delegators — their internal call sites and every client
+# test harness address them unqualified — and inject the two genuinely
+# per-client pieces: the resolved plans path (built from the client-owned
+# `.env` project key) and the client's own `_get`/`_emit_axi`.
+
+
+def plans_path(project_key):
+    """The plans-collection URL for an ALREADY-RESOLVED project key. Key
+    resolution stays client-side (each client owns its `.env`/project-dir
+    layout — the same scope boundary `axi_context` observes)."""
+    return f"/api/v2/projects/{project_key}/plans"
+
+
+class PlansFetchFailed(SystemExit):
+    """CR-CRU-058 §S1 — the plans GET inside `open_plans` failed.
+
+    A `SystemExit` SUBCLASS deliberately: `open_plans`'s hard-stop contract
+    (a failed GET is NEVER an empty list) is preserved unchanged for every
+    caller, while the verbs that own an envelope catch THIS type narrowly and
+    report the failure the way `resolve_plan_or_emit` already does — an
+    ok:false envelope on stdout — before returning the same non-zero rc the
+    bare `sys.exit` produced. Carries the server `error` separately so the
+    envelope can name the real condition rather than re-parse the message."""
+
+    def __init__(self, message, error=None):
+        super().__init__(message)
+        self.error = error
+
+
+def plans_fetch_failed_help(base_url):
+    """CR-CRU-058 §S2 (PURE) — the state-derived `help[]` for a verb that could
+    not READ the plan board at all.
+
+    Distinct from the verb's canned `HELP_STEPS` entry by design (CR-CRU-048's
+    rule): the state actually reached is "the board is unreadable", so the
+    concrete next action is to restore the server, and only then re-read the
+    board — pointing at the verb's normal successor here would walk the
+    orchestrator straight back into the same failure."""
+    return [f"check the Crucible server is running / reachable at {base_url}",
+            "status"]
+
+
+def plans_unavailable_warning(verb, error):
+    """CR-CRU-058 §S1 — the structured warning naming the ACTUAL condition
+    behind a plans-fetch failure, so a machine caller reading the envelope
+    alone (the human line is stderr-only) learns why the verb could not run.
+    Mirrors `cmd_status`'s `status-unavailable` shape."""
+    return {
+        "code": "plans-unavailable",
+        "detail": (f"could not read the plan board to {verb}: {error} — "
+                   f"nothing was posted"),
+    }
+
+
+def open_plans(get_fn, path):
+    """GET the plans collection at `path` via the client's own `get_fn` and
+    return ONLY the `status:"open"` plans, in server order.
+
+    A failed GET is a hard stop (`PlansFetchFailed`, a `SystemExit` naming the
+    server error), not an empty list: silently reporting "no open plans" when
+    the server is unreachable is the false-negative this shared copy exists to
+    prevent. CR-CRU-058 §S1 only makes the stop TYPED — the envelope-owning
+    callers (`cmd_cr_close` / `cycle_transition`) catch it and emit the
+    ok:false envelope the bare exit never produced."""
+    resp = get_fn(path)
+    if not resp.get("ok"):
+        error = resp.get("error")
+        raise PlansFetchFailed(
+            f"[crucible] ERROR: could not list plans: {error}", error=error)
+    return [p for p in resp.get("plans", []) if p.get("status") == "open"]
+
+
+def emit_plans_fetch_failure(verb, exc, project_dir, ops, result_fields, cr=None):
+    """CR-CRU-058 §S1 — report a `PlansFetchFailed` as the fleet's standard
+    ok:false envelope (the shape `resolve_plan_or_emit` already produces for
+    the IDENTICAL failure on `cycle-add`/`checkpoint`/`abort`) and return the
+    non-zero rc the bare `sys.exit` used to produce. The human line stays the
+    exit's own message, on stderr, via the emitter's legacy channel."""
+    fields = dict(result_fields)
+    fields["help"] = plans_fetch_failed_help(ops.base_url)
+    ops.emit(verb, False, fields, ops.context(project_dir, cr=cr),
+             [plans_unavailable_warning(verb, exc.error)], str(exc))
+    return 1
+
+
+def resolve_plan_or_emit(verb, cr, result_fields, open_only,
+                         get_fn, path, emit_fn, context_fn):
+    """The shared prelude for the plan-targeting write verbs (`cycle-add` /
+    `checkpoint` / `abort`): GET the plans at `path`, resolve exactly ONE
+    target via `resolve_single_plan`, and on ANY failure (GET error, zero
+    candidates, or ambiguity) emit the ok:false envelope through `emit_fn` and
+    return `(None, 1)`. On success returns `(plan, None)` and emits nothing.
+
+    `context_fn` is a zero-arg callable so the envelope context (which costs a
+    client-side `.env` read) is built ONLY on the failure paths, exactly as the
+    per-client copies did."""
+    resp = get_fn(path)
+    if not resp.get("ok"):
+        legacy = f"[crucible] ERROR: could not list plans: {resp.get('error')}"
+        emit_fn(verb, False, result_fields, context_fn(), [], legacy)
+        return None, 1
+    plans = resp.get("plans", [])
+    plan, reason = resolve_single_plan(plans, cr=cr, open_only=open_only)
+    if reason is not None:
+        scope = "open plan" if open_only else "plan"
+        if reason == "none":
+            legacy = (f"[crucible] ERROR: no {scope} to {verb}"
+                      + (f" for cr={cr}" if cr else ""))
+        else:
+            candidates = [p for p in plans
+                          if (not open_only or p.get("status") == "open")]
+            names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in candidates)
+            legacy = (f"[crucible] ERROR: {len(candidates)} {scope}s — ambiguous {verb}. "
+                      f"Pass --cr to pick one of: {names}")
+        emit_fn(verb, False, result_fields, context_fn(), [], legacy)
+        return None, 1
+    return plan, None
+
+
+def build_status_rows(plans):
+    """§S6 — the plan queue as uniform-table-safe rows (PURE): one dict per
+    plan with the SAME scalar-only key-set, so the list round-trips as a TOON
+    Construct-3 table (the subset cannot round-trip a nested-dict cell, so the
+    active cycle is FLATTENED to `activeCycleId`/`activeCycleLabel` scalar
+    columns). `activeCycle*` come from the plan's single `status:"active"`
+    cycle (null when none — a closed/pending plan); `mergeCommit` from
+    `plan.merge.commit` (null when open/unmerged)."""
+    rows = []
+    for p in plans or []:
+        active = None
+        for c in p.get("cycles", []):
+            if c.get("status") == "active":
+                active = c
+                break
+        rows.append({
+            "cr": p.get("cr"),
+            "wave": p.get("wave"),
+            "status": p.get("status"),
+            "activeCycleId": active.get("id") if active else None,
+            "activeCycleLabel": active.get("label") if active else None,
+            "mergeCommit": (p.get("merge") or {}).get("commit"),
+        })
+    return rows
+
+
+# §S10 — the minimal default column set for the §S6 status/plans table: 3–4
+# fields per item (`--fields` adds the rest of the full set, never replaces the
+# base). Kept next to `build_status_rows` (which produces the FULL row) so the
+# projection and the source rows stay in one place.
+STATUS_BASE_FIELDS = ("cr", "wave", "status", "activeCycleId")
+
+
+def select_status_fields(rows, extra_fields):
+    """§S10 (PURE) — project the full status rows (`build_status_rows`) onto the
+    minimal base column set PLUS any requested extra columns, preserving a
+    uniform (TOON-table-safe) key set across every row. Requested fields ADD to
+    the base set (never replace it); an unknown requested field surfaces as a
+    null column (the source row simply has no such key)."""
+    keys = list(STATUS_BASE_FIELDS)
+    for f in extra_fields or []:
+        if f not in keys:
+            keys.append(f)
+    return [{k: r.get(k) for k in keys} for r in rows]
+
+
+# §S11 — the visible-content limit before a large text field is truncated in
+# the envelope. The CR gives no number; the CR-CRU-030 C1 slice-3 RED contract
+# pins 200 chars of visible content before the size-hint suffix.
+TRUNCATE_LIMIT = 200
+
+
+def truncate_field(value, full=False, limit=TRUNCATE_LIMIT):
+    """§S11 (PURE) — truncate a large text field to `limit` visible chars with a
+    `(truncated, <N> chars total — use --full)` size hint naming the TOTAL
+    original length. `full=True` (the `--full` flag) returns the value verbatim;
+    a value at or under the limit (or a non-str/None) is returned unchanged —
+    content that was never cut never carries a fabricated hint."""
+    if full or not isinstance(value, str) or len(value) <= limit:
+        return value
+    return value[:limit] + f" (truncated, {len(value)} chars total — use --full)"
+
+
+def last_run_cr(plans):
+    """§S6 — the `cr` of the plan with the LATEST `closedAt` (the last CR to
+    merge), or None when no plan has closed yet — never a fabricated guess."""
+    closed = [p for p in (plans or []) if p.get("closedAt") is not None]
+    if not closed:
+        return None
+    return max(closed, key=lambda p: p.get("closedAt")).get("cr")
+
+
+# CR-CRU-056 §S3 — the CR-CRU-036-era client-side attach resolver
+# (`resolve_attach_cycle` / `resolve_active_cycle_id`) and its warn+withhold
+# flow are DELETED. Ingest attachment is the SERVER's job: a bound agent's run
+# is stamped from its registered cycle binding (`register --cycle`); an unbound
+# agent attaches only via an explicit `context.cycleId`. The client resolves
+# nothing.
+
+
+# ── CR-CRU-056 §S1/§S3 — the gated-run identity bracket owns what it CREATED ─
+#
+# CR-CRU-021 §S5's anti-ghost cleanup exists so a gate/close-out agent never
+# lingers as an online ghost: after the final ingest the gated run SILENTLY
+# removes the agent row (no lifecycle event — a journaled 'unregistered' would
+# bury the run just ingested; see each client's `_remove_agent_silent`).
+#
+# Under the pre-CR model that row was ALWAYS the run's own — the ingest
+# implicitly created it — so "remove the row" and "remove what I created" were
+# the same statement. CR-CRU-056 broke that identity: §S1 stores the cycle
+# binding ON the agent row, and §S3b retired implicit creation. An unconditional
+# cleanup therefore DELETES a caller-owned registration together with its
+# binding, and the next gated run under the same identity ingests unattached.
+# Observed live 2026-08-01 on the :3849 board: `vidushi` registered bound to
+# cycle 152; `python-crucible.py regression --agent vidushi` ingested stamped
+# 152 and then ran its cleanup; the immediately following
+# `bun-crucible.py regression --agent vidushi` landed with NO cycle.
+#
+# The anti-ghost PURPOSE is preserved exactly; only its REACH is corrected —
+# the bracket removes an identity it created and never one that pre-existed.
+# Ownership is not guessed and needs no probe: the server already answers it.
+# `POST /api/v2/agents/register` and `/api/v2/agents/heartbeat` both return
+# `changed: true` iff that call CREATED the row (`src/v2.ts` handleAgentTouch:
+# `changed: !existed`), so the run's OWN opening lifecycle call reports whether
+# the identity is its to clean up.
+
+
+class GatedRunIdentity:
+    """The identity half of a gated run's lifecycle bracket, shared by all five
+    clients so the fleet cannot drift apart again.
+
+    Two jobs, both tiny:
+
+    1. OPEN the run's identity — `open_payload()` builds the body for a
+       role-OPTIONAL heartbeat (`PATH`). The heartbeat route, never
+       `/register`, is deliberate: the gated verbs take no `--role`, and
+       CR-CRU-044 §S1(a) makes the heartbeat the one touch that never
+       re-declares — nor blanks — the role a pre-registered caller declared.
+       A `cycle_id` (the gated verbs' `--cycle`, same flag and semantics as
+       `register --cycle`) rides the body as `cycleId` for the
+       register-inside-the-run case: an agent that never registered separately
+       still binds, and the SERVER validates that binding. Nothing here
+       RESOLVES a cycle — no plans fetch, no active-cycle picking; the id is
+       whatever the caller typed, or the key is absent.
+
+    2. TRACK ownership — `observe()` reads the server's `changed` flag off
+       every register/heartbeat response the run makes (the opening call plus
+       any narration ticks). Ownership is STICKY: once a call of this run's
+       created the row, this run cleans it up, even if later ticks report
+       `changed: false`. A row that pre-existed (`changed: false` throughout)
+       is the CALLER's, and `should_remove` stays False — the caller's
+       registration, and with it their cycle binding, survives the run.
+
+    A refused opening call (409 on an invalid binding, a connection failure)
+    carries no `changed: true`, so it never claims ownership: the bracket
+    cleans up nothing it did not demonstrably create.
+    """
+
+    PATH = "/api/v2/agents/heartbeat"
+
+    def __init__(self, agent_id, cycle_id=None):
+        self.agent_id = agent_id
+        self.cycle_id = cycle_id
+        self.created_here = False
+        self.confirmed = False
+
+    def open_payload(self, project_key, message="gated run starting",
+                     source="claude-md"):
+        """The opening heartbeat body. `cycleId` is present ONLY when the
+        caller supplied `--cycle` — an absent key leaves any stored binding
+        untouched (the server's touch-never-blanks contract, §S1)."""
+        payload = {
+            "agentId": self.agent_id,
+            "projectKey": project_key,
+            "status": "online",
+            "message": message,
+            "identity": {"displayName": self.agent_id, "source": source},
+        }
+        if self.cycle_id is not None:
+            payload["cycleId"] = self.cycle_id
+        return payload
+
+    def observe(self, resp):
+        """Record one register/heartbeat response and return it unchanged (so
+        it drops straight into a narration lambda). `changed: true` means THIS
+        call created the agent row; `ok: true` means the server ACCEPTED the
+        touch at all, which is what separates "the row is the caller's" from
+        "this run never established an identity"."""
+        if isinstance(resp, dict):
+            if resp.get("ok") is True:
+                self.confirmed = True
+            if resp.get("changed") is True:
+                self.created_here = True
+        return resp
+
+    @property
+    def should_remove(self):
+        """True only when this run created the identity — the single question
+        the anti-ghost cleanup is allowed to act on."""
+        return self.created_here
+
+
+# CR-CRU-056 — the ONE `--cycle` help text for the GATED verbs, so all five
+# clients document the flag identically. Same flag name and semantics as
+# `register --cycle`; the difference is only WHEN it applies.
+GATE_CYCLE_HELP = (
+    "Cycle id to BIND this run's agent to, for a run whose agent did NOT "
+    "register separately (an ACTIVE cycle of an OPEN plan; the SERVER "
+    "validates it — nothing is resolved client-side). Same semantics as "
+    "`register --cycle`. An agent that ALREADY registered bound needs no "
+    "--cycle here: the gated run leaves its registration and binding intact.")
+
+
+def gate_identity_skipped_line(agent_id, confirmed=True):
+    """The stderr line a gated run prints INSTEAD of the cleanup, so an
+    operator can see WHY nothing was removed rather than being told nothing.
+
+    `confirmed` distinguishes the two no-removal cases, which must never be
+    reported as each other: the server ACCEPTED the opening touch and reported
+    the row already existed (it is the caller's, left standing), versus the
+    opening touch was REFUSED so this run never established an identity at
+    all."""
+    if not confirmed:
+        return (f"cleanup: nothing to remove for agent={agent_id} — this run "
+                f"never established an identity (its opening lifecycle call "
+                f"was refused); no agent row was created and none is removed")
+    return (f"cleanup: skipped agent={agent_id} — the identity pre-existed this "
+            f"run (registered by its caller); its registration and cycle "
+            f"binding are left intact")
+
+
+def gate_identity_open_failed_line(agent_id, error):
+    """The stderr line for a REFUSED opening call — a 409 on an invalid
+    `--cycle`, or an unreachable server. Without it the only symptom would be
+    the ingest's own downstream refusal, which names the registration but not
+    the binding that was actually rejected."""
+    return (f"[crucible] WARN: could not open the gated run's identity for "
+            f"agent={agent_id}: {error}. The run continues, but its ingest "
+            f"will be refused unless this id is already registered — and any "
+            f"--cycle binding was NOT applied.")
+
+
+# ── §S15 next-step templates + §S7/§S8 gate constants + gate helpers ────────
+#
+# These are the TOOLCHAIN-AGNOSTIC verb helpers shared by every client (they
+# historically lived only in bun-crucible.py). Lifting them here (CR-CRU-030
+# §S2) lets python-crucible.py and rust-crucible.py drive the same plan/cycle/
+# gate verbs from ONE source of truth rather than re-implementing the logic.
+
+# §S15 — per-verb next-step command TEMPLATES: every envelope names the sane
+# next move (fixed disambiguating flags carried forward, runtime values as
+# `<placeholders>`), so the orchestrator never loses the process thread.
+HELP_STEPS = {
+    "register": ["test --agent <agentId>"],
+    "unregister": ["status"],
+    "test": ["cycle-done <id>", "status"],
+    "regression": ["cycle-done <id>", "status"],
+    "auto-ingest": ["cycle-done <id>", "status"],
+    "check": ["test --agent <agentId>"],
+    "cycle-add": ["cycle-activate <id>"],
+    "checkpoint": ["status"],
+    "stop": ["status"],
+    "abort": ["status"],
+    "status": ["cycle-activate <id>"],
+    "cr-close": ["status"],
+}
+
+# Valid server-side gate outcomes (CR-CRU-013 §S1). An interim (in-flight)
+# snapshot has no resolved outcome of its own, so gate-run synthesises one from
+# the current step set — it must still be a member of this set (server 400s
+# otherwise).
+GATE_OUTCOMES = ("checks-passed", "passed", "failed", "cancelled")
+
+# §S8 — gate-run is the AXI streaming standard; gate-report is discouraged.
+# EVERY gate-report invocation emits this warning (envelope warnings[] + stderr)
+# regardless of the POST outcome (the discouragement is a property of using
+# gate-report at all).
+PREFER_GATE_RUN_WARNING = {
+    "code": "prefer-gate-run",
+    "detail": ("gate-run is the AXI streaming standard (it posts throttled "
+               "interim snapshots while the run is in flight then a final sealed "
+               "gate); gate-report posts a single one-shot gate and is "
+               "discouraged wherever an axi proxy exists"),
+}
+
+# §S3 — wave resolution is `--wave` > $WORKFLOW_WAVE. A plan-file that resolves
+# NEITHER files un-waved (no hard block; the flag/env is the prevention lever),
+# but must carry this `no-wave` warning (envelope warnings[] + stderr) NAMING the
+# CR so an orchestrator can backfill the wave (plan-backfill --wave) rather than
+# silently losing the wave attribution. One source of truth for all five clients.
+
+
+def no_wave_warning(cr):
+    """Build the §S3 `no-wave` warning for a plan-file that resolved no wave.
+    The detail NAMES the CR being filed so the omission is actionable."""
+    return {
+        "code": "no-wave",
+        "detail": (f"plan filed for {cr} with no wave — neither --wave nor "
+                   f"$WORKFLOW_WAVE resolved; backfill it with "
+                   f"`plan-backfill --cr {cr} --wave <n>`"),
+    }
+
+
+def no_title_warning(cr):
+    """Build the §S2 `no-title` warning for a plan-file filed with no title.
+    The title is optional (the plan still files), but the detail NAMES the CR
+    being filed so the omission is actionable — mirroring `no_wave_warning`."""
+    return {
+        "code": "no-title",
+        "detail": (f"plan filed for {cr} with no title — --title was unset; "
+                   f"the plan is title-less until one is supplied"),
+    }
+
+
+# ── CR-CRU-058 §S1/§S2 — the toolchain-gate help/warning vocabulary ────────
+#
+# The verbs C3 gives envelopes to (`unit`/`module`/`compile`/`e2e`/`docker-*`/
+# `pre-merge-gate`) exist in four clients with the SAME two states to describe:
+# a run that happened but could not be recorded, and a fail-fast step that
+# aborted the gate before the suite ran. Both live HERE rather than as four
+# per-client copies — the CR-CRU-054 consolidation dividend. They are PURE
+# (no I/O, no globals): the caller passes its own resolved `base_url`.
+
+
+def server_unreachable_help(verb, base_url):
+    """CR-CRU-058 §S2 — the state-derived `help[]` for a run that produced real
+    results but could not record them: pointing at the verb's normal successor
+    would walk the orchestrator past a run that was never ingested."""
+    return [f"check the Crucible server is running / reachable at {base_url}, "
+            f"then re-run {verb} --agent <agentId>",
+            "status"]
+
+
+def ingest_failed_warning(verb, base_url):
+    """CR-CRU-058 §S1 — the structured warning naming the condition behind a
+    completed run whose evidence never reached the board, so a machine caller
+    reading the envelope alone (the human line is stderr-only) learns that the
+    run happened but is NOT recorded. Mirrors `plans_unavailable_warning`."""
+    return {
+        "code": "ingest-failed",
+        "detail": (f"the {verb} run completed but its ingest to {base_url} "
+                   f"did not succeed — the evidence is NOT on the board"),
+    }
+
+
+def run_help(verb, ok, failed, base_url):
+    """CR-CRU-058 §S2 (CR-CRU-048's rule, PURE) — the next step for a
+    test-running verb, derived from the run state ACTUALLY reached: an
+    unrecorded run points at the server, a red run at its failures, a green one
+    at the next workflow move. Never a canned per-verb string."""
+    if not ok and not failed:
+        return server_unreachable_help(verb, base_url)
+    if failed:
+        return [f"fix the {failed} failing test(s), then re-run "
+                f"{verb} --agent <agentId>",
+                "status"]
+    return ["cycle-done <id>", "status"]
+
+
+def gate_step_abort_help(verb, remedy):
+    """CR-CRU-058 §S2 — the `help[]` for a gate that stopped at its fail-fast
+    step: the concrete next action is the step's OWN remedy, then re-running
+    the gate — never the gate's successor, which would skip a suite that never
+    ran."""
+    return [remedy, f"re-run {verb} --agent <agentId>", "status"]
+
+
+def gate_step_abort_warning(verb, step, detail):
+    """CR-CRU-058 §S1 — the structured warning for a gate aborted at `step`,
+    naming what consequently did NOT happen: an ok:false envelope alone would
+    not tell a machine caller that the regression never ran, so the gate says
+    NOTHING about the test suite."""
+    return {
+        "code": "gate-step-abort",
+        "detail": (f"{verb} stopped at its fail-fast {step} step — {detail}; "
+                   f"the regression never ran, so this gate says NOTHING "
+                   f"about the test suite"),
+    }
+
+
+NO_REPORT_DETAIL_MAX = 500
+
+
+def _last_non_empty_line(output):
+    """The last line of a captured runner stream that carries anything — the
+    CAUSE line of a starved run (`ModuleNotFoundError: No module named
+    'xmlrunner'`), which trailing blank/whitespace lines would otherwise hide.
+    Empty string when the capture holds nothing at all."""
+    for line in reversed((output or "").splitlines()):
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def no_report_help(verb, artifact, remedy=None):
+    """CR-CRU-064 §S1/AC1 (PURE) — the `help[]` for a run that produced NO
+    report at all: read the runner's OWN output (the report that would explain
+    the failure was never written), then re-run. `artifact` carries each
+    stack's wording (`junit.xml` · `surefire reports` · `TEST-*.xml`), so this
+    one sentence replaces the per-client hand-written renderings.
+
+    An explicit `remedy` — the step's own concrete fix, the shape
+    `gate_step_abort_help` established — is ordered AHEAD of the re-run:
+    re-running before applying it just reproduces the starved run."""
+    steps = [f"the {verb} run produced no {artifact} — read the {verb} runner "
+             f"output on stderr (it died before writing a report)"]
+    if remedy:
+        steps.append(remedy)
+    steps.append(f"re-run {verb} --agent <agentId>")
+    steps.append("status")
+    return steps
+
+
+def no_report_warning(verb, artifact, exit_code, output, cause=None):
+    """CR-CRU-064 §S1/AC1+AC2 (PURE) — the structured warning for a run that
+    wrote no report: `{"code": "no-test-reports", ...}` (mvn's existing string,
+    lifted verbatim). The helper COMPOSES the detail — a caller-supplied one
+    would push this invariant into every call site, which is the duplication
+    §S1 deletes.
+
+    The detail names the verb, the artifact and the runner's `exit_code`, then
+    the last non-empty line of `output`, so the cause reaches the consumer
+    instead of an exit code and empty stdout. The composed PREFIX is never
+    truncated; only the output fragment is bounded, and it keeps ITS tail (the
+    cause is at the END of a capture, so a head-keeping bound would bound away
+    the only fact the warning exists to carry). A blank/whitespace-only
+    capture still yields a non-empty, exit-code-naming detail —
+    `/api/v2/runs/compile` 400s on an empty string.
+
+    CR-CRU-065 §S1 — an OPTIONAL `cause` keyword lets a caller REPLACE the
+    derived last line with a fragment it ordered by importance (maven's
+    actionable `cannot find symbol` sits ABOVE its epilogue, so the last line
+    is the wrong pick). A supplied cause is bounded keeping its HEAD, the
+    mirror of the derived path's tail-keeping bound. `cause=None` or a
+    blank/whitespace-only cause is NOT an override: it falls back to the
+    derived rule, so every existing caller is byte-identical to CR-CRU-064."""
+    prefix = (f"{verb} produced no {artifact} — the runner exited "
+              f"{exit_code} before writing a report")
+    joiner = "; last output line: "
+    if cause is not None and cause.strip():
+        room = NO_REPORT_DETAIL_MAX - len(prefix) - len(joiner)
+        if room <= 0:
+            return {"code": "no-test-reports", "detail": prefix}
+        fragment = cause
+        if len(fragment) > room:
+            fragment = fragment[:room - 1] + "…"
+        return {"code": "no-test-reports", "detail": prefix + joiner + fragment}
+    cause = _last_non_empty_line(output)
+    if not cause:
+        return {"code": "no-test-reports",
+                "detail": (f"{prefix}; no runner output reached this envelope, "
+                           f"so the runner's own stream is the only evidence "
+                           f"left")}
+    room = NO_REPORT_DETAIL_MAX - len(prefix) - len(joiner)
+    if room <= 0:
+        return {"code": "no-test-reports", "detail": prefix}
+    if len(cause) > room:
+        cause = "…" + cause[-(room - 1):]
+    return {"code": "no-test-reports", "detail": prefix + joiner + cause}
+
+
+def next_pending_cycle_id(plan, exclude_cycle_id=None):
+    """CR-CRU-048 §S1 (PURE) — the id of the NEXT cycle still awaiting work in
+    `plan` (a plan dict from a `GET .../plans` payload), or None when none
+    remains.
+
+    "Next" is the FIRST `status:"pending"` cycle in the plan's OWN
+    `cycles[]` order — the order the plan was filed in IS the execution order,
+    so no sorting or id-arithmetic is invented here. `exclude_cycle_id` drops
+    the cycle currently being transitioned (its server-side status in the
+    already-fetched payload is stale by the time the hint is built). When
+    several cycles are pending the FIRST in plan order wins — the one the
+    orchestrator should activate now; the rest surface on the next transition.
+    A missing/None plan yields None (no plan → nothing to derive)."""
+    if not plan:
+        return None
+    for cycle in plan.get("cycles", []) or []:
+        if exclude_cycle_id is not None and cycle.get("id") == exclude_cycle_id:
+            continue
+        if cycle.get("status") == "pending":
+            return cycle.get("id")
+    return None
+
+
+def cycle_transition_help(status, plan, cycle_id=None):
+    """CR-CRU-048 §S1/§S3 (PURE) — the `help[]` next-step hint for a
+    cycle-activate/cycle-done transition, DERIVED from the owning plan's state
+    instead of the hardcoded ternary each client used to carry.
+
+    - `status == "active"` (cycle-activate) → the literal `cycle-done <id>`
+      placeholder template (UNCHANGED — the cycle just activated is the work
+      to finish).
+    - `status == "done"` (cycle-done) with a cycle still PENDING in the plan →
+      `cycle-activate <that concrete id>`: the plan itself names the next move,
+      so the orchestrator is never walked toward closing a CR with cycles unrun.
+    - `status == "done"` with nothing pending left (or no resolved plan) →
+      `cr-close --commit <sha>`."""
+    if status == "active":
+        return ["cycle-done <id>", "status"]
+    next_id = next_pending_cycle_id(plan, exclude_cycle_id=cycle_id)
+    if next_id is not None:
+        return [f"cycle-activate {next_id}", "status"]
+    return ["cr-close --commit <sha>", "status"]
+
+
+# ── CR-CRU-044 §S5 — the agent identity is DECLARED or the verb FAILS ───────
+#
+# Historically each client carried its OWN `_agent_id()` with a filename-derived
+# fallback — the script's own filename (`"bun-crucible"`, `"rust-crucible"`,
+# `"python-crucible"` and friends). That fabricated an identity for any verb run
+# without `--agent` and planted a phantom row on the dashboard's agent rail — an
+# entity that is not an agent, with no role, no lifecycle and no owner. The
+# fallback is GONE and the resolver lives here ONCE so the fleet cannot drift
+# apart again.
+#
+# CR-CRU-056 §S2b extends the hard stop to EVERY mutating workflow verb:
+# plan-file, plan-backfill, cycle-activate, cycle-done, cycle-add, cr-close,
+# checkpoint, stop, abort, milestone and the gate verbs all resolve the
+# identity through `require_agent_id` BEFORE any POST/PATCH and send it on the
+# wire as `agentId` — the server refuses an unregistered caller (409). The
+# plan verbs' free-text `--orchestrator` label (and its $WORKFLOW_ORCHESTRATOR
+# fallback) is retired: the registered `--agent` id is the caller AND the
+# plan's stored orchestrator.
+#
+# `$WORKFLOW_ROLE` is deliberately NOT part of the chain: it carries the TRACK
+# LANE (`mainline` | `track-n`; PRD-crucible-v2.md:291, DN-model-b-language.md:53)
+# and is read into `ctx["track"]` by `axi_context`/`fleet_context` — registering
+# an agent named after a lane is the same category error as `bun-crucible`,
+# merely with a tidier-looking value.
+
+AGENT_IDENTITY_REQUIRED_CODE = "agent-identity-required"
+AGENT_IDENTITY_REQUIRED_DETAIL = (
+    "no agent identity was declared — supply it with `--agent <agentId>`. There "
+    "is no fallback and no default: $WORKFLOW_ROLE carries the track lane "
+    "(mainline | track-n), not an identity, and a filename-derived default "
+    "would plant a phantom row on the agent rail. Nothing was posted.")
+
+
+class AgentIdentityRequired(Exception):
+    """§S5 — raised by `require_agent_id` when no `--agent` was declared.
+
+    Carries no fallback value by design: the caller MUST convert it into an
+    `ok:false` envelope + non-zero exit (see `run_verb` /
+    `emit_agent_identity_hard_stop`) and issue NO POST."""
+
+    def __init__(self, detail=AGENT_IDENTITY_REQUIRED_DETAIL):
+        super().__init__(detail)
+        self.detail = detail
+
+
+def agent_identity_warning():
+    """The §S5 warning dict for a hard-stopped verb (fresh copy per call, so a
+    caller mutating its warnings[] can never corrupt the constant)."""
+    return {"code": AGENT_IDENTITY_REQUIRED_CODE,
+            "detail": AGENT_IDENTITY_REQUIRED_DETAIL}
+
+
+def require_agent_id(args):
+    """§S5 — the ONE fleet-wide agent-identity resolver. Returns the explicit
+    `--agent` value; raises `AgentIdentityRequired` when there is none.
+
+    No fallback, no default, no `$WORKFLOW_ROLE` — an agent that cannot say who
+    it is has no business appearing on the board."""
+    explicit = getattr(args, "agent", None)
+    if explicit:
+        return explicit
+    raise AgentIdentityRequired()
+
+
+def optional_agent_id(args):
+    """§S5 companion for the paths that DECORATE an envelope with an agentId but
+    POST nothing under it (e.g. a no-ingest local test run): the explicit
+    `--agent` value, else None so the key is simply OMITTED.
+
+    Still no fabrication — the difference from `require_agent_id` is only that
+    an absent identity is legal here, because nothing reaches the agent rail."""
+    return getattr(args, "agent", None) or None
+
+
+def emit_agent_identity_hard_stop(verb, context=None):
+    """§S5 — emit the `ok:false` hard-stop envelope (stdout) plus the human
+    error line (stderr) for an undeclared identity, and return the NON-ZERO exit
+    code the client's `main` must exit with. Nothing is posted from this path."""
+    warning = agent_identity_warning()
+    emit_axi(verb or "unknown", False, {}, context or {}, [warning],
+             legacy_line=(f"error: {AGENT_IDENTITY_REQUIRED_CODE} — "
+                          f"{AGENT_IDENTITY_REQUIRED_DETAIL}"))
+    return 2
+
+
+def run_verb(func, args, project_key_fn=None):
+    """Fleet-uniform subcommand dispatch: run the resolved verb and convert an
+    undeclared agent identity (§S5) into the `ok:false` hard-stop envelope and a
+    non-zero exit code instead of an unhandled traceback.
+
+    `project_key_fn(args)` is the client's own `.env` key resolver (project-dir
+    resolution stays client-specific per this module's scope boundary); it is
+    best-effort only — a project whose key cannot be resolved still hard-stops,
+    just with a bare context."""
+    try:
+        return func(args)
+    except AgentIdentityRequired:
+        context = {}
+        if project_key_fn is not None:
+            try:
+                context = axi_context(project_key_fn(args))
+            except Exception:
+                context = {}
+        return emit_agent_identity_hard_stop(getattr(args, "cmd", None), context)
+
+
+def fleet_context(cr=None):
+    """Env auto-context shared by gates + milestones: `cr` (when supplied),
+    `wave` from $WORKFLOW_WAVE, `track` from $WORKFLOW_ROLE. Absent env keys are
+    OMITTED (never fabricated) so an unset WORKFLOW_WAVE yields no `wave` key."""
+    ctx = {}
+    if cr:
+        ctx["cr"] = cr
+    wave = os.environ.get("WORKFLOW_WAVE")
+    if wave:
+        ctx["wave"] = wave
+    role = os.environ.get("WORKFLOW_ROLE")
+    if role:
+        ctx["track"] = role
+    return ctx
+
+
+def parse_steps_flag(steps_raw):
+    """Parse a `--steps "name:status,name:status"` flag into gate step dicts.
+    A malformed entry (no colon, or an empty name/status) raises ValueError —
+    the caller must surface it as a non-zero exit WITHOUT posting garbage."""
+    steps = []
+    for entry in steps_raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if ":" not in entry:
+            raise ValueError(
+                f"malformed --steps entry (expected name:status): {entry!r}")
+        name, status = entry.split(":", 1)
+        name, status = name.strip(), status.strip()
+        if not name or not status:
+            raise ValueError(
+                f"malformed --steps entry (empty name or status): {entry!r}")
+        steps.append({"name": name, "status": status})
+    return steps
+
+
+def map_axi_step_status(status):
+    """Map a no-mistakes axi step status onto a gate step status."""
+    return {
+        "completed": "passed",
+        "skipped": "skipped",
+        "failed": "failed",
+        "running": "running",
+    }.get(status, status or "passed")
+
+
+def gate_from_axi(decoded, intent, final):
+    """Build a `gate` object from a decoded `no-mistakes axi` TOON snapshot.
+
+    An in-flight snapshot (`final=False`) synthesises a valid interim outcome
+    from its steps; the sealing snapshot (`final=True`) takes the run's own
+    resolved top-level `outcome`. Returns (gate_dict, step_count)."""
+    run = decoded.get("run") if isinstance(decoded, dict) else None
+    run = run or {}
+    axi_steps = run.get("steps") or []
+    steps = []
+    any_failed = False
+    for s in axi_steps:
+        st = s.get("status")
+        if st == "failed":
+            any_failed = True
+        steps.append({"name": s.get("step"), "status": map_axi_step_status(st)})
+    if final:
+        raw = decoded.get("outcome")
+        outcome = raw if raw in GATE_OUTCOMES else ("failed" if any_failed else "passed")
+    else:
+        outcome = "failed" if any_failed else "checks-passed"
+    gate = {"intent": intent, "outcome": outcome, "steps": steps}
+    head = run.get("head")
+    if final and head:
+        gate["push"] = {"commit": head}
+    return gate, len(steps)
+
+
+# ── CR-CRU-054 §S2 — the VERB SURFACE, lifted to ONE locus of truth ─────────
+#
+# `cmd_status`, `cmd_stop`, `cmd_checkpoint`, `cmd_abort`, `cmd_cycle_add`,
+# `cmd_cr_close`, `cmd_gate_report`, `cmd_gate_run`, `_cycle_transition`,
+# `_post_gate`, `_post_milestone` and `_add_gate_cycle_arg` each carried their
+# FULL logic five times over (DN §1's NEEDS-LIFT set). The clients keep their
+# local `def cmd_*` names — internal call sites and every client test harness
+# address them unqualified — but each is now a thin wrapper over the
+# implementation below, exactly the pattern CR-CRU-030 established for
+# `_axi_context`/`_emit_axi` and C2/C3 extended to the HTTP and plan layers.
+#
+# Three things stay genuinely PER-CLIENT and are injected rather than flattened
+# (flattening a parameterised value into one shared constant is the silent
+# fleet-wide regression this CR exists to prevent):
+#   * the base URL (four clients spell it `CRUCIBLE_URL`, arduino `CRUCIBLE`);
+#   * the project-dir convention (arduino's `_project_dir(args)` vs the other
+#     four's `_resolve_project_dir(args.project_dir)`) — resolved by the wrapper
+#     and passed in ALREADY-RESOLVED, per this module's scope boundary;
+#   * mvn's extra `maven_dir` field on the dashboard's status Namespace.
+
+
+class ClientOps:
+    """The client-side callables a lifted verb needs, gathered in one object.
+
+    Every client builds a FRESH `ClientOps` per call from its own module
+    globals, so the shared implementation observes a test that patches
+    `module._post` / `module._emit_axi` / `module._agent_id` — the fleet's
+    established harness idiom — instead of holding a stale reference captured
+    at import time.
+    """
+
+    __slots__ = ("get", "post", "patch", "emit", "context", "agent_id",
+                 "project_key", "plans_path", "open_plans", "resolve_plan",
+                 "post_gate", "post_milestone", "base_url")
+
+    def __init__(self, *, get, post, patch, emit, context, agent_id,
+                 project_key, plans_path, open_plans, resolve_plan,
+                 post_gate, post_milestone, base_url):
+        self.get = get
+        self.post = post
+        self.patch = patch
+        self.emit = emit
+        self.context = context
+        self.agent_id = agent_id
+        self.project_key = project_key
+        self.plans_path = plans_path
+        self.open_plans = open_plans
+        self.resolve_plan = resolve_plan
+        self.post_gate = post_gate
+        self.post_milestone = post_milestone
+        self.base_url = base_url
+
+
+def cmd_status(args, project_dir, ops):
+    """§S6 — the plan/status READ verb (alias `plans`, no --agent). GET …/plans
+    and return the queue as a uniform-table §S1 envelope plus a top-level
+    `lastRunCr`."""
+    resp = ops.get(ops.plans_path(project_dir))
+    if not resp.get("ok"):
+        # CR-CRU-035 §S1 — hook-safe tolerant degrade: a plans-fetch failure
+        # (server unreachable / non-ok) is a DEFINITIVE unavailable data-state
+        # (AXI principle 5), NOT a command error. Emit ok:true + a structured
+        # status-unavailable warning + an empty board + a concrete help[]
+        # next-step, and exit 0 so a session-start hook can never hang or fail.
+        # This state is DISTINCT from the no-plan empty state below (that one
+        # carries NO warning) — the status-unavailable warning is the signal.
+        detail = (f"could not reach the Crucible server to read the board: "
+                  f"{resp.get('error')}")
+        legacy = f"[crucible] status: board unavailable — {resp.get('error')}"
+        ops.emit("status", True,
+                 {"plans": [], "lastRunCr": None, "count": 0,
+                  "help": [f"check the Crucible server is running / reachable "
+                           f"at {ops.base_url}"]},
+                 ops.context(project_dir),
+                 [{"code": "status-unavailable", "detail": detail}],
+                 legacy)
+        return 0
+    plans = resp.get("plans", [])
+    full_rows = build_status_rows(plans)
+    last = last_run_cr(plans)
+    # §S10 — the DEFAULT projection is the minimal base column set
+    # (cr,wave,status,activeCycleId); `--fields a,b,c` ADDS the requested extras
+    # to that base, never replaces it.
+    fields = getattr(args, "fields", None)
+    requested = [f.strip() for f in fields.split(",") if f.strip()] if fields else []
+    rows = select_status_fields(full_rows, requested)
+    # §S12 — the pre-computed `count` is the TOTAL plans available (unaffected
+    # by the --fields column projection), emitted even on an empty queue.
+    count = len(plans)
+    if not rows:
+        legacy = "status: ok=True — no plans filed for this project"
+        ops.emit("status", True,
+                 {"plans": [], "lastRunCr": None, "count": 0,
+                  "help": HELP_STEPS["status"]},
+                 ops.context(project_dir), [], legacy)
+        return 0
+    legacy = f"status: ok=True plans={len(rows)} lastRunCr={last}"
+    ops.emit("status", True,
+             {"plans": rows, "lastRunCr": last, "count": count,
+              "help": HELP_STEPS["status"]},
+             ops.context(project_dir), [], legacy)
+    return 0
+
+
+def status_namespace(**extra_fields):
+    """§S14 (PARAMETERISED, DN §2) — the `cmd_status` args Namespace the no-arg
+    dashboard forwards.
+
+    `project_dir`/`fields` are the fleet-wide base; `extra_fields` carries the
+    per-client additions (mvn's own `cmd_status` reads an extra `maven_dir`,
+    its module-dir convention). The extras stay a PARAMETER rather than being
+    flattened into the base set: adding mvn's field to the other four would be
+    precisely the silent fleet-wide regression §S1's classification exists to
+    prevent."""
+    return argparse.Namespace(project_dir=None, fields=None, **extra_fields)
+
+
+def cmd_stop(args, project_dir, ops):
+    """§S7 — project-level stop (POST …/projects/<key>/stop). No plan
+    targeting; checkpoints every open plan server-side and reports the count.
+
+    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
+    FIRST so the hard stop precedes any request."""
+    agent_id = ops.agent_id(args)
+    resp = ops.post(f"/api/v2/projects/{ops.project_key(project_dir)}/stop",
+                    {"agentId": agent_id})
+    ok = resp.get("ok", False)
+    legacy = (f"stop: ok={ok} checkpointed={resp.get('checkpointed')}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    ops.emit("stop", bool(ok),
+             {"checkpointed": resp.get("checkpointed"), "help": HELP_STEPS["stop"]},
+             ops.context(project_dir), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_checkpoint(args, project_dir, ops):
+    """§S7 — checkpoint the resolved OPEN plan (POST …/plans/<id>/checkpoint).
+    Resolves the single open plan, or --cr among several — the /shutdown
+    emergency flow checkpoints the CURRENTLY open work, never a numeric id the
+    caller doesn't have.
+
+    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
+    FIRST so the hard stop precedes any request."""
+    agent_id = ops.agent_id(args)
+    plan, rc = ops.resolve_plan("checkpoint", project_dir, args.cr,
+                                {"help": HELP_STEPS["checkpoint"]}, open_only=True)
+    if plan is None:
+        return rc
+    resp = ops.post(f"{ops.plans_path(project_dir)}/{plan['planId']}/checkpoint",
+                    {"agentId": agent_id})
+    ok = resp.get("ok", False)
+    legacy = (f"checkpoint: ok={ok} plan={plan['planId']}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    ops.emit("checkpoint", bool(ok),
+             {"plan": plan["planId"], "changed": resp.get("changed"),
+              "help": HELP_STEPS["checkpoint"]},
+             ops.context(project_dir, cr=plan.get("cr")), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_abort(args, project_dir, ops):
+    """§S7 — abort the resolved OPEN plan (POST …/plans/<id>/abort). WITHOUT
+    --user-approved the body's `userApproved` is false, so the server's
+    discouraging 409 refusal stays reachable (surfaced as ok:false +
+    non-zero, never a silent no-op).
+
+    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
+    FIRST so the hard stop precedes any request."""
+    agent_id = ops.agent_id(args)
+    plan, rc = ops.resolve_plan("abort", project_dir, args.cr,
+                                {"help": HELP_STEPS["abort"]}, open_only=True)
+    if plan is None:
+        return rc
+    resp = ops.post(f"{ops.plans_path(project_dir)}/{plan['planId']}/abort",
+                    {"userApproved": bool(args.user_approved), "agentId": agent_id})
+    ok = resp.get("ok", False)
+    legacy = (f"abort: ok={ok} plan={plan['planId']} "
+              f"userApproved={bool(args.user_approved)}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    ops.emit("abort", bool(ok),
+             {"plan": plan["planId"], "help": HELP_STEPS["abort"]},
+             ops.context(project_dir, cr=plan.get("cr")), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_cycle_add(args, project_dir, ops):
+    """§S4 — append a cycle to a plan. Resolve the target plan exactly like
+    plan-backfill (ALL plans, optional --cr), POST …/plans/<planId>/cycles with
+    ONLY the label, and let the SERVER reject a CLOSED/absent plan — never a
+    client-side pre-filter. The assigned numeric id stays machine-readable.
+
+    CR-CRU-056 §S2b — requires a live registered caller (`--agent`), resolved
+    FIRST so the hard stop precedes any request."""
+    agent_id = ops.agent_id(args)
+    # §S15 — the next step after appending a cycle is to activate it; help[]
+    # rides both the resolve-failure envelope and the success envelope.
+    result_fields = {"label": args.label, "help": HELP_STEPS["cycle-add"]}
+    plan, rc = ops.resolve_plan("cycle-add", project_dir, args.cr,
+                                result_fields, open_only=False)
+    if plan is None:
+        return rc
+    resp = ops.post(f"{ops.plans_path(project_dir)}/{plan['planId']}/cycles",
+                    {"label": args.label, "agentId": agent_id})
+    ok = resp.get("ok", False)
+    cr_label = plan.get("cr")
+    legacy = (f"cycle-add: ok={ok} plan={plan['planId']} cr={cr_label} "
+              f"label={args.label} id={resp.get('id')}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    ops.emit("cycle-add", bool(ok),
+             {"plan": plan["planId"], "id": resp.get("id"), "label": args.label,
+              "help": HELP_STEPS["cycle-add"]},
+             ops.context(project_dir, cr=cr_label), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_cr_close(args, project_dir, ops):
+    """§S4c — PATCH the resolved OPEN plan closed, then post the `cr-merged`
+    milestone.
+
+    CR-CRU-044 §S5 + CR-CRU-056 §S2b — both the PATCH and the milestone require
+    the registered caller identity, resolved FIRST: a hard stop must happen
+    before the plan GET/PATCH, never after the CR has already been closed."""
+    agent_id = ops.agent_id(args)
+    try:
+        open_plans = ops.open_plans(project_dir)
+    except PlansFetchFailed as exc:
+        # CR-CRU-058 §S1 — an unreadable plan board used to leave cr-close with
+        # NOTHING on stdout; it now reports the failure in the same ok:false
+        # envelope its sibling verbs already emit.
+        return emit_plans_fetch_failure("cr-close", exc, project_dir, ops,
+                                        {"commit": args.commit}, cr=args.cr)
+    if args.cr:
+        open_plans = [p for p in open_plans if p.get("cr") == args.cr]
+    if len(open_plans) == 0:
+        legacy = ("[crucible] ERROR: no OPEN plan to close"
+                  + (f" for cr={args.cr}" if args.cr else ""))
+        ops.emit("cr-close", False,
+                 {"commit": args.commit, "help": HELP_STEPS["cr-close"]},
+                 ops.context(project_dir, cr=args.cr), [], legacy)
+        return 1
+    if len(open_plans) > 1:
+        names = ", ".join(f"{p.get('cr')} (plan {p.get('planId')})" for p in open_plans)
+        legacy = (f"[crucible] ERROR: {len(open_plans)} open plans — ambiguous cr-close. "
+                  f"Pass --cr to pick one of: {names}")
+        ops.emit("cr-close", False,
+                 {"commit": args.commit, "help": HELP_STEPS["cr-close"]},
+                 ops.context(project_dir), [], legacy)
+        return 1
+    plan = open_plans[0]
+    resp = ops.patch(f"{ops.plans_path(project_dir)}/{plan['planId']}",
+                     {"status": "closed", "merge": {"commit": args.commit},
+                      "agentId": agent_id})
+    ok = resp.get("ok", False)
+    cr_label = plan.get("cr")
+    legacy = (f"cr-close: ok={ok} plan={plan['planId']} cr={cr_label} "
+              f"commit={args.commit}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    ops.emit("cr-close", bool(ok),
+             {"plan": plan["planId"], "cr": cr_label, "commit": args.commit,
+              "help": HELP_STEPS["cr-close"]},
+             ops.context(project_dir, cr=cr_label), [], legacy)
+    if not ok:
+        return 1
+    # §S4c / AC 141 — a SUCCESSFUL close emits a cr-merged milestone marker
+    # (label=CR id, the merge commit, env auto-context). Withheld on a failed
+    # close: the CR is not actually merged, so no marker fires.
+    ms_resp = ops.post_milestone(
+        project_dir, agent_id, "cr-merged",
+        label=cr_label, commit=args.commit,
+        context=fleet_context(cr=cr_label) or None,
+    )
+    print(f"cr-merged: ok={ms_resp.get('ok', False)} cr={cr_label} commit={args.commit}"
+          + (f" error={ms_resp.get('error')}" if ms_resp.get("error") else ""),
+          file=sys.stderr)
+    return 0
+
+
+def cycle_transition(args, project_dir, ops, status):
+    """§S4 — cycle ids are unique per PROJECT, so resolve the owning OPEN plan
+    by scanning GET …/plans, then PATCH that plan's cycle sub-resource.
+
+    CR-CRU-056 §S2b — the cycle PATCH requires a live registered caller;
+    resolve the identity FIRST so the hard stop precedes any request."""
+    agent_id = ops.agent_id(args)
+    cycle_id = args.cycle_id
+    verb = "cycle-activate" if status == "active" else "cycle-done"
+    try:
+        open_plans = ops.open_plans(project_dir)
+    except PlansFetchFailed as exc:
+        # CR-CRU-058 §S1 — same correction as cr-close: the transition reports
+        # an unreadable plan board as an envelope, not a bare process exit.
+        return emit_plans_fetch_failure(verb, exc, project_dir, ops,
+                                        {"cycle": cycle_id})
+    target = next(
+        (p for p in open_plans
+         if any(c.get("id") == cycle_id for c in p.get("cycles", []))),
+        None,
+    )
+    # §S13/§S15 + CR-CRU-048 §S1/§S3 — every cycle-transition envelope carries a
+    # `help[]` of concrete next-step commands, DERIVED from the resolved plan's
+    # own cycle state (the hardcoded per-client ternary is exactly how that
+    # defect reached five clients).
+    help_steps = cycle_transition_help(status, target, cycle_id)
+    if target is None:
+        known = "; ".join(
+            f"plan {p.get('planId')} ({p.get('cr')}): "
+            + ", ".join(str(c.get("id")) for c in p.get("cycles", []))
+            for p in open_plans
+        ) or "none"
+        legacy = (f"[crucible] ERROR: cycle {cycle_id} is not in any OPEN plan. "
+                  f"Open plans' cycle ids: {known}")
+        ops.emit(verb, False, {"cycle": cycle_id, "help": help_steps},
+                 ops.context(project_dir), [], legacy)
+        return 1
+    resp = ops.patch(f"{ops.plans_path(project_dir)}/{target['planId']}/cycles/{cycle_id}",
+                     {"status": status, "agentId": agent_id})
+    ok = resp.get("ok", False)
+    legacy = (f"{verb}: ok={ok} cycle={cycle_id} plan={target['planId']}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    ops.emit(verb, bool(ok),
+             {"cycle": cycle_id, "plan": target["planId"], "help": help_steps},
+             ops.context(project_dir), [], legacy)
+    return 0 if ok else 1
+
+
+# ── CR-CRU-054 §S2b — the DRIFTED lifecycle/plan verbs, lifted to ONE locus ──
+#
+# These six (plus `_request`, lifted in C2) are the §S2b DRIFTED set: bodies
+# that should have been identical but had diverged, several of them into latent
+# DEFECTS. C4 corrected the behaviour in place across all five clients; this is
+# the lift that makes the corrected version the ONLY version. Every §S2b
+# correction is preserved verbatim here — the correction table lives in
+# docs/changes/CR-CRU-054-client-fleet-dry.md §S2b.
+#
+# What stays a per-client PARAMETER (never flattened into a shared constant —
+# doing so is precisely the silent fleet-wide regression §S1's classification
+# exists to prevent):
+#   * project-dir resolution (each client owns its own .env/layout convention),
+#     passed in ALREADY-RESOLVED per this module's scope boundary;
+#   * the legacy interactive line's wording, where a client has its own
+#     (`legacy_format`);
+#   * a client's own register/unregister payload helper (`register_fn` /
+#     `unregister_fn`) — bun/python send an `identity.repoPath` and expose
+#     `--display-name`, and bun's helper also serves its gate-run brackets;
+#   * arduino's unique self-registration bootstrap (`pre_register`), its
+#     `report` role floor (`role_default`) and its message convention
+#     (`message_fn`).
+
+AGENT_REGISTER_PATH = "/api/v2/agents/register"
+AGENT_UNREGISTER_PATH = "/api/v2/agents/unregister"
+
+# CR-CRU-054 §S2b — the fleet's identity `source` default. It MUST be a member
+# of the clients' own documented enum {claude-md, package-json, git-repo,
+# manual}; the historical "openclaw" was outside it and only survived because
+# the server never validated the field.
+DEFAULT_IDENTITY_SOURCE = "claude-md"
+
+
+def cmd_register(args, project_dir, ops, *, register_fn=None, pre_register=None,
+                 role_default=None, message_fn=None, legacy_format=None):
+    """Register / heartbeat. CR-CRU-056 §S1/§S2 — `--cycle` binds the agent to
+    an ACTIVE cycle of an OPEN plan; the server validates the binding and
+    REQUIRES it for TDD roles (RED/GREEN/FIX/VERIFY) — a refused registration
+    surfaces the server's 409 envelope (error + help) and exits non-zero.
+    ORCHESTRATOR/report may register unbound.
+
+    CR-CRU-054 §S2b (DN §4 finding #3) — the identity is resolved through the
+    fleet's §S5 runtime hard stop, so a missing --agent produces the SAME
+    ok:false AXI envelope every other mutating verb emits, not argparse's bare
+    usage error. Resolved FIRST: nothing is posted (and no per-client
+    `pre_register` bootstrap runs) without it.
+
+    CR-CRU-054 §S2b (DN §4 finding #5) — ONE `source` strategy for the fleet:
+    the configurable `--source` with a fleet-wide `claude-md` default, never a
+    hardcoded value."""
+    agent_id = ops.agent_id(args)
+    if pre_register is not None:
+        pre_register(project_dir)
+    declared_role = getattr(args, "role", None)
+    role = declared_role or role_default
+    message = (message_fn(args, declared_role) if message_fn is not None
+               else (getattr(args, "message", None) or f"Starting {role} phase"))
+    source = getattr(args, "source", None) or DEFAULT_IDENTITY_SOURCE
+    cycle_id = getattr(args, "cycle", None)
+    if register_fn is not None:
+        resp = register_fn(project_dir, agent_id, message,
+                           display_name=getattr(args, "display_name", None),
+                           source=source, role=role, cycle_id=cycle_id)
+    else:
+        payload = {
+            "agentId": agent_id,
+            "projectKey": ops.project_key(project_dir),
+            "status": "online",
+            "message": message,
+            # CR-CRU-044 §S1 — the declared role is part of the registration
+            # wire contract (the server rejects a registration carrying none).
+            "role": role,
+            # displayName MUST go inside `identity` — top-level is ignored by v2.
+            "identity": {"displayName": agent_id, "source": source},
+        }
+        if cycle_id is not None:
+            payload["cycleId"] = cycle_id
+        resp = ops.post(AGENT_REGISTER_PATH, payload)
+    ok = bool(resp.get("ok", False))
+    legacy = (legacy_format.format(agent_id=agent_id, ok=ok, role=role,
+                                   source=source, message=message,
+                                   resp_ok=resp.get("ok", False))
+              if legacy_format else
+              f"register: ok={resp.get('ok', False)} agent={agent_id} "
+              f"role={role} source={source}")
+    result_fields = {"agent": agent_id, "help": HELP_STEPS["register"]}
+    err = resp.get("error")
+    if err is not None:
+        # Faithful pass-through of the server's 409 envelope (error + help[]).
+        result_fields["error"] = err
+    ops.emit("register", ok, result_fields,
+             ops.context(project_dir, agent_id=agent_id), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_unregister(args, project_dir, ops, *, unregister_fn=None,
+                   legacy_format=None):
+    """Remove the agent row (the v2 unregister VERB — journals an
+    'unregistered' lifecycle event, CR-CRU-011 §S1).
+
+    CR-CRU-054 §S2b (DN §4 finding #3) — identity through the §S5 runtime hard
+    stop, resolved FIRST so nothing is posted without it."""
+    agent_id = ops.agent_id(args)
+    if unregister_fn is not None:
+        resp = unregister_fn(project_dir, agent_id)
+    else:
+        resp = ops.post(AGENT_UNREGISTER_PATH,
+                        {"agentId": agent_id,
+                         "projectKey": ops.project_key(project_dir)})
+    ok = bool(resp.get("ok", False))
+    legacy = (legacy_format.format(agent_id=agent_id, ok=ok,
+                                   resp_ok=resp.get("ok", False))
+              if legacy_format else
+              f"unregister: ok={resp.get('ok', False)} agent={agent_id}")
+    ops.emit("unregister", ok,
+             {"agent": agent_id, "help": HELP_STEPS["unregister"]},
+             ops.context(project_dir, agent_id=agent_id), [], legacy)
+    return 0 if ok else 1
+
+
+def cmd_plan_file(args, project_dir, ops):
+    """§S4 — file a workflow plan (CR + its cycles) for this project.
+
+    CR-CRU-056 §S2b — plan-file mutates workflow state, so the registered
+    caller identity is REQUIRED and rides the wire as `agentId`. The same
+    registered id IS the plan's stored orchestrator (the free-text
+    --orchestrator label and its $WORKFLOW_ORCHESTRATOR fallback are retired).
+    Resolve it FIRST: the hard stop must happen before any POST."""
+    agent_id = ops.agent_id(args)
+    labels = [label.strip() for label in args.cycles.split(",") if label.strip()]
+    if not labels:
+        sys.exit("[crucible] ERROR: --cycles must name at least one cycle")
+    payload = {"cr": args.cr, "agentId": agent_id,
+               "cycles": [{"label": label} for label in labels]}
+    if args.title:
+        payload["title"] = args.title
+    wave = args.wave if getattr(args, "wave", None) is not None else os.environ.get("WORKFLOW_WAVE")
+    warnings = []
+    if wave:
+        payload["wave"] = wave
+    else:
+        w = no_wave_warning(args.cr)
+        warnings.append(w)
+        print(f"warning: {w['code']} — {w['detail']}", file=sys.stderr)
+    if not args.title:
+        wt = no_title_warning(args.cr)
+        warnings.append(wt)
+        print(f"warning: {wt['code']} — {wt['detail']}", file=sys.stderr)
+    track = os.environ.get("WORKFLOW_ROLE")
+    if track:
+        payload["track"] = track
+    # §S2b — the registered caller is the plan's orchestrator; no free text.
+    payload["orchestrator"] = agent_id
+    resp = ops.post(ops.plans_path(project_dir), payload)
+    if not resp.get("ok"):
+        legacy = f"plan-file: ok=False error={resp.get('error')}"
+        # CR-CRU-054 §S2b (DN §4 finding #2) — context.cr rides the FAILURE
+        # envelope too: a plan-file that could not be filed is exactly when the
+        # caller needs to know which CR it was for.
+        ops.emit("plan-file", False, {"cr": args.cr},
+                 ops.context(project_dir, agent_id=agent_id, cr=args.cr),
+                 warnings, legacy)
+        return 1
+    cycles = resp.get("cycles", [])
+    ids = " ".join(f"{c.get('label')}={c.get('id')}" for c in cycles)
+    legacy = (f"plan-file: ok=True planId={resp.get('planId')} cr={resp.get('cr')} "
+              f"cycles: {ids}")
+    ops.emit("plan-file", True,
+             {"planId": resp.get("planId"), "cr": resp.get("cr"), "cycles": cycles,
+              "help": ["cycle-activate <id>"]},
+             ops.context(project_dir, agent_id=agent_id, cr=resp.get("cr") or args.cr),
+             warnings, legacy)
+    return 0
+
+
+def milestone_help(ok, mtype, base_url):
+    """CR-CRU-058 §S2 (PURE) — the state-derived `help[]` for `milestone`.
+
+    A posted marker's next move is to read the board it now shows on; a
+    REFUSED post has not recorded anything, so the next move is to restore the
+    server and re-post the SAME marker type (named, so the retry is concrete)
+    — per CR-CRU-048, the two states must not share one canned string."""
+    if ok:
+        return ["status"]
+    return [f"check the Crucible server is running / reachable at {base_url}",
+            f"milestone --type {mtype} --agent <agentId>"]
+
+
+def cmd_milestone(args, project_dir, ops):
+    """POST a workflow milestone. §S4b.
+
+    CR-CRU-054 §S2b (DN §4 finding #1) — the legacy line is the INTERACTIVE
+    channel and belongs on stderr; on stdout it corrupts the §S1 envelope
+    stream a machine caller parses.
+
+    CR-CRU-058 §S1 — the verb reached NO emitter at all: the stderr line was
+    its only output, so a machine caller saw nothing on stdout. It now emits
+    the fleet's standard envelope like every other write verb, in the shared
+    module, for all five clients at once."""
+    context = fleet_context(cr=args.cr)
+    resp = ops.post_milestone(project_dir, ops.agent_id(args), args.type,
+                              label=args.label, commit=getattr(args, "commit", None),
+                              context=context or None)
+    ok = resp.get("ok", False)
+    # The interactive line stays an EXPLICIT stderr print (CR-CRU-054 §S2b's
+    # single locus for it) rather than riding the emitter's legacy channel —
+    # the envelope below is an ADDITION to that line, not a replacement.
+    print(f"milestone: ok={ok} type={args.type}"
+          + (f" label={args.label}" if args.label else "")
+          + (f" error={resp.get('error')}" if resp.get("error") else ""),
+          file=sys.stderr)
+    ops.emit("milestone", bool(ok),
+             {"type": args.type, "label": args.label,
+              "commit": getattr(args, "commit", None),
+              "help": milestone_help(bool(ok), args.type, ops.base_url)},
+             ops.context(project_dir, cr=args.cr), [], None)
+    return 0 if ok else 1
+
+
+def remove_agent_silent(project_dir, agent_id, ops):
+    """CR-CRU-008 §S4 anti-ghost cleanup for a gated run: remove the agent row
+    WITHOUT journaling a lifecycle event (a plain unregister would journal an
+    'unregistered' event and bury the run just ingested).
+
+    CR-CRU-056 — call this ONLY for an identity the gated run itself created
+    (`GatedRunIdentity.should_remove`). §S1 stores the cycle binding ON the
+    agent row, so removing a CALLER-owned registration destroys that caller's
+    binding and the next gated run under the same identity ingests unattached.
+
+    CR-CRU-054 §S2b (DN §4 finding #6) — the removal must never crash the
+    closing bracket AND must never be reported as a success it cannot vouch
+    for: the real response is returned when the server answered, and None when
+    the call did not reach it, so `close_gate_identity` can say which
+    happened."""
+    try:
+        return ops.post(AGENT_UNREGISTER_PATH,
+                        {"agentId": agent_id,
+                         "projectKey": ops.project_key(project_dir),
+                         "silent": True})
+    except (OSError, ValueError):
+        # A transport/decode failure here is best-effort cleanup, not a run
+        # verdict — but it is NOT swallowed: None is the caller's signal to
+        # report the outcome as unknown rather than claim a removal.
+        return None
+
+
+def open_gate_identity(project_dir, agent_id, cycle_id, message, ops):
+    """CR-CRU-056 — open a gated run's identity and learn whether the run
+    CREATED it. One role-optional heartbeat (never /register: the gated verbs
+    declare no role, and the heartbeat route is the one touch that cannot
+    blank a pre-registered caller's role); `cycle_id` is the verb's `--cycle`,
+    validated SERVER-side. The returned `GatedRunIdentity` answers
+    `should_remove` for the closing anti-ghost cleanup."""
+    identity = GatedRunIdentity(agent_id, cycle_id)
+    resp = ops.post(identity.PATH,
+                    identity.open_payload(ops.project_key(project_dir),
+                                          message=message))
+    identity.observe(resp)
+    if resp.get("error") is not None or not resp.get("ok", False):
+        print(gate_identity_open_failed_line(agent_id, resp.get("error")),
+              file=sys.stderr)
+    return identity
+
+
+def close_gate_identity(project_dir, identity, ops, remove_fn=None):
+    """CR-CRU-056 — the closing half of the bracket: silently remove the agent
+    row ONLY when this run created it, and SAY SO either way on stderr so the
+    decision is never invisible.
+
+    CR-CRU-054 §S2b (DN §4 finding #6) — the line reports the REAL outcome of
+    the removal (or that it is unknown), never a blanket "removed".
+
+    `remove_fn` is the CLIENT's own silent-removal entry point (its delegator to
+    `remove_agent_silent`), kept a parameter for the same reason `ClientOps` is
+    built fresh per call: the removal stays a patchable seam in the client
+    module the fleet's harness already targets."""
+    if identity is None:
+        return
+    if not identity.should_remove:
+        print(gate_identity_skipped_line(identity.agent_id, identity.confirmed),
+              file=sys.stderr)
+        return
+    cleanup_resp = (remove_fn(project_dir, identity.agent_id) if remove_fn is not None
+                    else remove_agent_silent(project_dir, identity.agent_id, ops))
+    print(gate_identity_cleanup_line(identity.agent_id, cleanup_resp),
+          file=sys.stderr)
+
+
+def post_gate(project_key, agent_id, gate, post_fn, context=None):
+    """POST a gate event. `context` is OMITTED entirely when falsy — never a
+    fabricated empty dict."""
+    payload = {"projectKey": project_key, "agentId": agent_id, "gate": gate}
+    if context:
+        payload["context"] = context
+    return post_fn("/api/v2/gates", payload)
+
+
+def post_milestone(project_key, agent_id, mtype, post_fn,
+                   label=None, commit=None, context=None):
+    """POST a workflow milestone (§S4b). Absent label/commit/context keys are
+    OMITTED rather than sent as nulls."""
+    payload = {"projectKey": project_key, "agentId": agent_id, "type": mtype}
+    if label:
+        payload["label"] = label
+    if commit:
+        payload["commit"] = commit
+    if context:
+        payload["context"] = context
+    return post_fn("/api/v2/milestones", payload)
+
+
+def add_gate_cycle_arg(p):
+    """CR-CRU-056 — bind `--cycle` on a GATED verb (test/regression/
+    pre-merge-gate): the binding for the register-inside-the-run case."""
+    p.add_argument("--cycle", type=int, help=GATE_CYCLE_HELP)
+
+
+def cmd_gate_report(args, project_dir, ops):
+    """§S8 — report a single already-run gate (flags path). Emits the §S1
+    envelope plus the interactive line on stderr, and ALWAYS raises the
+    prefer-gate-run discouragement warning (envelope + stderr) regardless of the
+    POST outcome — the discouragement is a property of using gate-report at
+    all."""
+    prefer = PREFER_GATE_RUN_WARNING
+    warnings = [dict(prefer)]
+    print(f"warning: {prefer['code']} — {prefer['detail']}", file=sys.stderr)
+    agent_id = ops.agent_id(args)
+    context = ops.context(project_dir, agent_id=agent_id)
+    try:
+        steps = parse_steps_flag(args.steps) if args.steps else []
+    except ValueError as e:
+        legacy = f"gate-report: ERROR: {e}"
+        ops.emit("gate-report", False, {"outcome": args.outcome}, context, warnings, legacy)
+        return 1
+    # gate.intent is REQUIRED server-side (400 if missing/empty); when no
+    # explicit intent is given, derive a non-empty one from the outcome.
+    intent = args.intent or f"{args.outcome} gate"
+    gate = {"intent": intent, "outcome": args.outcome, "steps": steps}
+    if args.commit:
+        gate["push"] = {"commit": args.commit}
+    resp = ops.post_gate(project_dir, agent_id, gate, fleet_context() or None)
+    ok = resp.get("ok", False)
+    legacy = (f"gate-report: ok={ok} outcome={args.outcome}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    # §S11 — a failed POST can carry a large server error/detail string; surface
+    # it as a truncated `error` field (size-hint suffix), verbatim under --full.
+    result_fields = {"outcome": args.outcome}
+    err = resp.get("error")
+    if err is not None:
+        result_fields["error"] = truncate_field(err, full=getattr(args, "full", False))
+    ops.emit("gate-report", bool(ok), result_fields, context, warnings, legacy)
+    return 0 if ok else 1
+
+
+# §S8 — how often `gate-run` posts an INTERIM snapshot while the proxied run is
+# in flight, and how often it wakes to check. One cadence for the whole fleet.
+_GATE_POLL_CADENCE_S = 2.0
+_GATE_POLL_TICK_S = 0.4
+
+
+def cmd_gate_run(args, project_dir, no_mistakes_path, ops):
+    """§S8 — axi PROXY wrapper: launch `no-mistakes axi run`, poll `axi status`
+    for throttled interim gates, seal a final gate from the run's outcome, and
+    relay the axi detail to the caller. The caller issues NO POST itself, and
+    there is no prefer-gate-run warning (gate-run IS the streaming standard).
+
+    `no_mistakes_path` is resolved by the client wrapper (its own `shutil`), so
+    the tool-discovery seam stays where each client's test harness patches it."""
+    nm = no_mistakes_path
+    if not nm:
+        print("gate-run: ERROR: `no-mistakes` not found on PATH — cannot proxy axi run",
+              file=sys.stderr)
+        return 1
+
+    intent = args.intent
+    agent_id = ops.agent_id(args)
+    context = fleet_context()
+
+    # CR-CRU-061 §S5 — PURE passthrough of `--skip`. WHICH pipeline steps a
+    # project skips is a per-project workflow decision, not a client-fleet
+    # fact, so the value is never validated, split, normalised or rewritten
+    # here; when unset, no `--skip` token reaches the argv at all.
+    run_argv = [nm, "axi", "run", "--intent", intent]
+    skip = getattr(args, "skip", None)
+    if skip is not None:
+        run_argv += ["--skip", skip]
+
+    try:
+        proc = subprocess.Popen(
+            run_argv,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except OSError as e:
+        print(f"gate-run: ERROR: could not launch `no-mistakes axi run`: {e}",
+              file=sys.stderr)
+        return 1
+
+    # Poll `axi status` while the run is in flight; post throttled INTERIM
+    # gates decoded from each (partial) snapshot.
+    last_post = None
+    while proc.poll() is None:
+        now = time.monotonic()
+        if last_post is None or (now - last_post) >= _GATE_POLL_CADENCE_S:
+            status = subprocess.run([nm, "axi", "status"], capture_output=True, text=True)
+            snap = (status.stdout or "").strip()
+            if snap:
+                decoded = _decode_axi_snapshot(snap)
+                if isinstance(decoded, dict):
+                    run = decoded.get("run") or {}
+                    in_flight = (str(run.get("status")) != "completed"
+                                 and "outcome" not in decoded)
+                    gate, nsteps = gate_from_axi(decoded, intent, final=False)
+                    # Post only a genuine PARTIAL ladder (never a resolved /
+                    # full 9-step snapshot masquerading as interim).
+                    if in_flight and 0 < nsteps < 9:
+                        ops.post_gate(project_dir, agent_id, gate, context or None)
+                        last_post = now
+        time.sleep(_GATE_POLL_TICK_S)
+
+    out, _err = proc.communicate()
+    # Proxy role: relay the axi detail to the caller's OWN stdout.
+    if out:
+        sys.stdout.write(out)
+
+    final_snap = (out or "").strip()
+    final_decoded = _decode_axi_snapshot(final_snap) if final_snap else None
+    if not isinstance(final_decoded, dict):
+        print("gate-run: ERROR: `axi run` produced no parseable final snapshot",
+              file=sys.stderr)
+        return 1
+
+    final_gate, _ = gate_from_axi(final_decoded, intent, final=True)
+    resp = ops.post_gate(project_dir, agent_id, final_gate, context or None)
+    ok = resp.get("ok", False)
+    overall = bool(ok and proc.returncode == 0)
+    legacy = (f"gate-run: ok={ok} outcome={final_gate.get('outcome')} "
+              f"exit={proc.returncode}"
+              + (f" error={resp.get('error')}" if resp.get("error") else ""))
+    ops.emit("gate-run", overall, {"outcome": final_gate.get("outcome")},
+             ops.context(project_dir, agent_id=agent_id), [], legacy)
+    return 0 if overall else 1
+
+
+def _decode_axi_snapshot(snapshot):
+    """Decode one `no-mistakes axi` TOON snapshot, or None when it is not
+    decodable.
+
+    An UNPARSEABLE snapshot is a normal, expected state of a run still being
+    written — not an error to propagate — so the decode failure is converted
+    into a None the caller acts on visibly (skip this tick / report "no
+    parseable final snapshot"), never silently swallowed."""
+    try:
+        return _toon().decode(snapshot)
+    except Exception:
+        return None
+
+
+def gate_identity_cleanup_line(agent_id, cleanup_resp):
+    """CR-CRU-054 §S2b (DN §4 finding #6) — the stderr line for a gated run's
+    anti-ghost cleanup, reporting what ACTUALLY happened.
+
+    No client had this right: bun let the removal POST raise (crashing the
+    closing bracket), while the other four guarded it but discarded the
+    response and printed a fixed "removed" line even when the removal had
+    silently failed. The corrected pair returns the real response (or None when
+    the call never reached the server) and reports the true outcome — `ok=` when
+    the server answered, "outcome unknown" on a transport failure, and never a
+    blanket claim of removal."""
+    if cleanup_resp is None:
+        return (f"cleanup: agent={agent_id} removal attempted, outcome unknown — "
+                f"the silent-unregister call did not reach the server")
+    return f"cleanup: ok={cleanup_resp.get('ok', False)} agent={agent_id}"

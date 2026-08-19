@@ -1,0 +1,332 @@
+# CR-CRU-009 §S4/§S6 — CI-automated publish on release.
+#
+# Single consolidated workflow (per the CR's §S4 text: "Publishing is a CI
+# workflow (.github/workflows/release.yml)") carrying BOTH publish stages as
+# gated jobs, modelled on Sandesh's publish-pypi.yml + publish-npm.yml:
+#   - build           : sdist/wheel for crucible-axi (hatchling/hatch-vcs) — always
+#   - create-release  : tag→GitHub-Release bridge on master (idempotent)
+#   - publish-pypi    : real PyPI via Trusted Publishing (OIDC), release-gated
+#   - publish-testpypi: Test-PyPI dry-run on workflow_dispatch (safe validation)
+#   - publish-npm     : the bun/node server to npm (--provenance), release-gated
+#
+# §S6: PyPI is validated against Test PyPI FIRST (workflow_dispatch), then the
+# real publish fires on the 0.1.0 GitHub Release.
+#
+# CR-CRU-062 §S0-§S4 — CI runs the gates. Three test jobs carry the suites that
+# gate every CR locally:
+#   - test-bun        : `bun test`
+#   - test-python     : the client suite, server-free (`unittest discover`)
+#   - test-e2e        : Playwright/BDD, with CRUCIBLE_DB declared explicitly
+# §S5 adds one more job on the same unconditional cadence:
+#   - pack-server     : `npm pack --dry-run` on the npm server artifact
+#
+# 🚨 §S0 — those three jobs carry NO event-restricting condition, deliberately.
+# The publishes fire on the `release` event while create-release fires on a push
+# to master: DIFFERENT workflow runs. `needs:` only orders jobs WITHIN one run,
+# so a test job scoped to push/pull_request would simply not exist in the
+# release run — and a publish that `needs:` a SKIPPED job is itself skipped,
+# silently publishing nothing. Do not "optimise" CI minutes by scoping them;
+# reduce cost INSIDE the jobs (caching, sharding) instead.
+#
+# §S4 — the gate IS the dependency graph: publish-pypi/publish-npm `needs:` all
+# three test jobs plus build. No second, parallel guard mechanism — two
+# mechanisms can disagree, one graph cannot disagree with itself.
+name: Release — publish crucible-axi (PyPI) + server (npm)
+
+on:
+  push:
+    branches: [develop, master]   # continuous build; master push drives create-release
+  pull_request:                   # packaging breakage surfaces on PRs, not on release day
+  release:
+    types: [published]
+  workflow_dispatch:        # REHEARSAL ONLY — Test-PyPI dry-run / npm dry-run
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # hatch-vcs needs tags for the dynamic version
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Build crucible-axi sdist + wheel
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # CR-CRU-062 §S1 — the ~1300-test bun suite that gates every CR locally.
+  # No event condition (§S0): it must exist in the release run too.
+  test-bun:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      # CR-CRU-063 §S1 — uv, not just bun. tests/clients-bun-crucible.test.ts:83
+      # spawns the client fleet as ["uv", "run", SCRIPT_PATH, …] (PEP 723,
+      # CR-CRU-046 §S3); oven-sh/setup-bun provides bun, not uv. Without this
+      # step 98 tests fail with `Executable not found in $PATH: "uv"`
+      # (measured on run 31677479804). The maintained, pinned action — a
+      # release gate must not depend on an unpinned `curl | sh` network script.
+      - uses: astral-sh/setup-uv@v6
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Bun suite
+        run: bun test
+
+  # CR-CRU-062 §S2 — the Python client suite. Measured server-free at gap
+  # analysis (683/683 with CRUCIBLE_URL pointed at a dead port), so it needs
+  # neither a running Crucible nor CRUCIBLE_PROJECT_KEY. The client's own
+  # `regression` verb is deliberately NOT used here: that verb is the
+  # orchestrator's tool and requires a live server to ingest into.
+  # No event condition (§S0).
+  test-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      # CR-CRU-063 §S1 — tests/client/test_cr046_uv_env_gate.py's setUpClass
+      # raises ``RuntimeError: `uv` is not on PATH … Remedy: install uv.``,
+      # aborting the whole class (which is why CI discovered 673, not 683).
+      - uses: astral-sh/setup-uv@v6
+      # CR-CRU-063 §S2 — the project's `dev` extra, CONSUMED from
+      # pyproject.toml (which declares it) and never restated here (AC8):
+      # tests/client/test_cr040_coverage_tooling.py:172 needs the gate venv's
+      # python to run `-m coverage`.
+      - name: Install the project with its dev extra (pyproject.toml is the declaration)
+        run: python3 -m pip install --upgrade '.[dev]'
+      # CR-CRU-063 §S2 — tests/client/test_crucible_axi_wheel_packaging.py:121
+      # raises ``RuntimeError: no interpreter on this machine can `import
+      # build``` — the same package the `build` job already installs; that
+      # asymmetry is the bug.
+      - name: Install build (wheel-packaging suite imports it)
+        run: python3 -m pip install --upgrade build
+      - name: Python client suite (no server required)
+        run: python3 -m unittest discover -s tests/client -t .
+
+  # CR-CRU-062 §S3 — the Playwright/BDD end-to-end suite.
+  # 🚨 CRUCIBLE_DB is declared HERE explicitly, per CR-CRU-052: isolation is
+  # DECLARED, never inherited from an ambient property of the environment. A
+  # runner is a fresh container, so the blast radius would be nil either way —
+  # but the guarantee must be written down, not depended on.
+  # No event condition (§S0).
+  test-e2e:
+    runs-on: ubuntu-latest
+    env:
+      CRUCIBLE_DB: ${{ github.workspace }}/e2e-scratch/data/crucible.db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Install Playwright browsers
+        run: bunx playwright install --with-deps chromium
+      - name: E2E suite
+        run: bun run test:e2e
+
+  # CR-CRU-062 §S5 — pack the SERVER artifact on every event, so a packaging
+  # break on the npm side surfaces on push exactly as the Python `build` job
+  # already makes it surface for crucible-axi.
+  # No event condition (§S0): the pre-existing `dry-run-npm` job is the
+  # workflow_dispatch REHEARSAL and is therefore silent on ordinary pushes —
+  # which is the very asymmetry this job exists to close. It is deliberately
+  # NOT modelled on that job:
+  #   🚨 `npm publish --dry-run` REFUSES a prerelease version without an
+  #   explicit --tag ("You must specify a tag using --tag when publishing a
+  #   prerelease version"), and the committed `package.json` version is
+  #   housekeeping only (RELEASING.md, "Version model: the tag is the
+  #   version") — outside a release branch it is simply whatever the last
+  #   release left behind, so no job may assume it is publishable. `npm pack
+  #   --dry-run` has no such constraint, contacts no registry, and still
+  #   resolves the `files` list — which is all this job needs. dry-run-npm
+  #   gets away with the publish form only because it is dispatched from a
+  #   release/* branch whose manifest CR-CRU-061 §S7 has already aligned to
+  #   the finish version.
+  # The grep is the actual assertion: `files: ["bin/","src/","public/"]` that
+  # silently stopped shipping bin/crucible-server.mjs would otherwise surface
+  # only when someone installed the published package and it failed to run.
+  pack-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Pack server package (dry-run) and assert the bin entrypoint ships
+        run: |
+          PACK_LIST="$(mktemp)"
+          npm pack --dry-run 2>&1 | tee "$PACK_LIST"
+          if ! grep -q 'bin/crucible-server\.mjs' "$PACK_LIST"; then
+            echo "::error::packed tarball is missing the declared bin entrypoint — package.json's files/bin no longer ship the executable"
+            exit 1
+          fi
+
+  create-release:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # need full tag history to detect the tag at HEAD
+      - name: Create GitHub Release for version tag at HEAD (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}   # PAT so 'release: published' re-fires
+        run: |
+          TAG=$(git tag --points-at HEAD | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          if [ -z "$TAG" ]; then
+            echo "::notice::no version tag at HEAD — nothing to release"
+            exit 0
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release exists for $TAG — nothing to do"
+            exit 0
+          fi
+          gh release create "$TAG" --generate-notes
+
+  publish-pypi:
+    # CR-CRU-062 §S4 — the gate: build PLUS all three suites. Extends the
+    # existing graph rather than adding a parallel guard.
+    needs: [build, test-bun, test-python, test-e2e]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write           # OIDC trusted publishing (no long-lived token)
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # guard needs origin/master history for the ancestry check
+      - name: Guard — tag ref + on-master ancestry
+        run: |
+          if ! [[ "$GITHUB_REF" =~ ^refs/tags/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::refusing to publish: $GITHUB_REF is not a clean bare SemVer version tag (^refs/tags/[0-9]+.[0-9]+.[0-9]+$)"
+            exit 1
+          fi
+          git fetch --no-tags origin master
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "::error::refusing to publish: $GITHUB_SHA is not an ancestor of origin/master"
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        # no password / no token — trusted publishing; attestations default-on
+
+  publish-testpypi:
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # hatch-vcs needs tags to derive the version
+      - name: Version sanity — reject PEP 440 local segment ('+')
+        run: |
+          python -m pip install --upgrade build
+          python -m build --sdist --no-isolation >/dev/null 2>&1 || true
+          VER=$(ls dist/*.tar.gz 2>/dev/null | sed -E 's#.*/[a-z_-]+-(.+)\.tar\.gz#\1#' | head -1)
+          echo "derived version: $VER"
+          if echo "$VER" | grep -q '+'; then
+            echo "::error::version '$VER' contains a '+' local segment — TestPyPI rejects PEP 440 local versions"
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-npm:
+    # CR-CRU-062 §S4 — same gate as publish-pypi.
+    needs: [build, test-bun, test-python, test-e2e]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write          # OIDC trusted publishing / provenance attestation
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # guard needs origin/master history for the ancestry check
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - name: Guard — tag ref + on-master ancestry
+        run: |
+          if ! [[ "$GITHUB_REF" =~ ^refs/tags/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::refusing to publish: $GITHUB_REF is not a clean bare SemVer version tag (^refs/tags/[0-9]+.[0-9]+.[0-9]+$)"
+            exit 1
+          fi
+          git fetch --no-tags origin master
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "::error::refusing to publish: $GITHUB_SHA is not an ancestor of origin/master"
+            exit 1
+          fi
+      # CR-CRU-061 §S2 — the tag is the single version authority. package.json's
+      # committed value is NOT consulted: it is SET from the tag here, so a
+      # stale committed version can no longer fail the release.
+      # --no-git-tag-version: npm must not cut its own git tag in CI.
+      # --allow-same-version: an already-correct package.json is a no-op success.
+      # The rewrite is workspace-only and is never committed back.
+      - name: Set package.json version from the release tag
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="$GITHUB_REF_NAME"
+          echo "release tag: $VERSION — setting package.json version from the tag"
+          npm version --no-git-tag-version --allow-same-version "$VERSION"
+      - name: Detect NPM_TOKEN (skip npm publish if absent)
+        id: npmtok
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::notice::NPM_TOKEN not set — skipping npm publish (deferred until token configured). PyPI is unaffected."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upgrade npm (>= 11.5.1 for OIDC trusted publishing)
+        if: steps.npmtok.outputs.publish == 'true'
+        run: npm install -g npm@latest
+      - name: Publish server to npm
+        if: steps.npmtok.outputs.publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
+
+  dry-run-npm:
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - name: npm pack dry-run (server package)
+        run: npm publish --dry-run --access public

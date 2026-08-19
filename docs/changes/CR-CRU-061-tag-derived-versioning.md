@@ -1,0 +1,278 @@
+# CR-CRU-061 — Bare-SemVer tags, and the npm version DERIVED from the tag instead of hand-bumped
+
+**Status:** PENDING
+**Type:** patch (release machinery)
+**Priority:** P0 — blocks the 0.1.0 release; the tag format must be settled before the first tag exists
+**Depends on:** CR-CRU-041 (release mechanism: `release.sh`, `release.yml`, composite lockstep)
+**Labels:** patch, release, ci, packaging, versioning
+**Phase:** Wave 4
+**Design reference:** `docs/research/DN-release-process.md`; `RELEASING.md` §"Version model: the tag is
+the version"
+
+## Context
+
+Two user decisions, 2026-08-03, that the current machinery does not implement:
+
+1. **Tags are bare SemVer — `0.1.0`, not `v0.1.0`.**
+2. **Packaging must take the version from the GitHub tag automatically**, so setting a tag is all a
+   release needs.
+
+**On (2), the two halves are not in the same state — measured:**
+
+| Artifact | Version source today | Automatic from tag? |
+|---|---|---|
+| `crucible-axi` (PyPI) | `dynamic = ["version"]` + **hatch-vcs** (`pyproject.toml:7,32`) | ✅ **already** derived from the tag |
+| `@anthill-tec/crucible-server` (npm) | **hand-bumped `package.json`**, then CI *verifies* it equals the tag (`release.yml:156-165`) | ❌ manual — CI checks agreement, never sets it |
+
+So the Python side already does exactly what the user asked. The npm side inverts it: a human runs
+`release.sh set-version X.Y.Z`, and CI's only job is to **refuse** if they got it wrong. That is a
+guard around a manual step that should not exist.
+
+**On (1), the `v` prefix is hardcoded in six live places** — this is why it is a CR and not a
+`git config`:
+
+| Site | What it does | Effect of a bare tag |
+|---|---|---|
+| `scripts/release.sh:172-176` | `guard_tag_prefix()` hard-asserts `gitflow.prefix.versiontag == "v"` | **hard ERROR**, release cannot start |
+| `.github/workflows/release.yml:59` | `git tag --points-at HEAD \| grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$'` | finds **no tag** → `create-release` produces nothing |
+| `.github/workflows/release.yml:83-84` | `publish-pypi` guard `^refs/tags/v[0-9]+…` | **refuses to publish** |
+| `.github/workflows/release.yml:147-148` | `publish-npm` guard `^refs/tags/v[0-9]+…` | **refuses to publish** |
+| `scripts/release.sh:296` | `version="${version#v}"` | harmless, but dead code |
+| `.github/workflows/release.yml:160` | `VERSION="${GITHUB_REF_NAME#v}"` | harmless, but dead code |
+
+Also: `git config gitflow.prefix.versiontag` was briefly set to `v` by the orchestrator on
+2026-08-03 while clearing release pre-flight, and has been **unset again** — the correct value under
+this CR is the empty string, and `release.sh` must assert THAT.
+
+**🚨 This SUPERSEDES CR-CRU-041 §S5, which was itself a user decision.** That section (revised
+2026-07-28) adopted `vX.Y.Z` explicitly to tally with Sandesh, which runs
+`gitflow.prefix.versiontag = v` and has published `v0.3.3`/`v0.3.4`/`v0.3.5`. It also superseded
+CR-CRU-009 §S6's original bare `0.1.0`. **The user reaffirmed bare SemVer categorically on
+2026-08-03**, so the lineage is: bare (009) → `v` (041 §S5, Sandesh alignment) → **bare (061, final)**.
+
+**Accepted consequence:** Crucible and Sandesh will use different git-tag shapes. Sandesh is
+unchanged and out of scope. Note this only affects the GIT TAG — hatch-vcs strips the `v` either
+way, so the published PyPI/npm versions were always bare `X.Y.Z`; no published artifact changes
+shape.
+
+**Why this must land before the release, not after.** No tag exists yet (`git tag -l` → 0, remote
+included). The tag format is therefore still free. Once `0.1.0` is cut in either format it is
+published history on two registries, and changing it later means a version that exists in one shape
+on npm and another in git.
+
+## Scope
+
+### §S1 — Bare-SemVer tags end to end
+Retire the `v` prefix across the six sites above.
+- `release.sh`'s `guard_tag_prefix()` must assert `gitflow.prefix.versiontag` is **empty**, and its
+  error text must give the exact fix command for that value.
+- 🚨 **MEASURED 2026-08-03 — "empty" and "unset" are NOT the same to git-flow.** With the key
+  UNSET, `git flow feature start` dies with `Fatal: Version tag not set. Please run 'git flow init'`.
+  With it SET to the empty string (`git config gitflow.prefix.versiontag ""`), git-flow works and
+  cuts bare tags. The guard must therefore accept **set-and-empty** and REJECT **unset**, with an
+  error naming the exact command including the empty quotes — a guard that merely checks
+  `!= "v"` would pass on the unset state that breaks git-flow outright.
+- Both CI publish guards and the `create-release` tag discovery must match `^[0-9]+\.[0-9]+\.[0-9]+$`.
+- Remove the now-dead `#v` strips rather than leaving them as decoration — a stripped prefix that
+  can never be present is a lie about the format.
+
+Keep the guards **strict**. They exist so a malformed or hand-cut tag cannot reach a publish job;
+loosening them to accept both forms would defeat the point and permit exactly the two-format drift
+this CR prevents.
+
+### §S2 — Derive the npm version from the tag
+`publish-npm` must **set** `package.json`'s version from the tag at publish time (e.g. `npm version
+--no-git-tag-version --allow-same-version "$VERSION"`), replacing the verify-only step. The tag
+becomes the single version authority for both artifacts, matching hatch-vcs on the Python side.
+
+Consequence to handle deliberately: `release.sh set-version` becomes **redundant** for the release
+path. Decide and record whether it is retired or kept as a convenience for local builds — do not
+leave it in `RELEASING.md`'s "Release at a glance" as a required step it no longer is.
+
+### §S3 — The lockstep pin must still resolve
+`crucible_axi.__version__` selects `@anthill-tec/crucible-server@<that version>`
+(`tests/client/test_crucible_axi_version_pin.py`, 10 tests). Both sides now derive from the same
+tag, which should make the pin *more* robust — but the pin's tests encode assumptions about version
+strings and must be re-run and, if they assume a `v`, corrected.
+
+### §S5 — `gate-run` must be able to skip PR-based pipeline steps
+**Found 2026-08-03 while marrying no-mistakes to the release process.**
+
+`no-mistakes` is a *local git proxy that validates code before pushing to the configured target*.
+Its pipeline is `rebase → review → test → document → lint → ci` (the `auto_fix` keys in
+`~/.no-mistakes/config.yaml`), and its tail is **explicitly PR-based**: `ci_timeout: "168h"` bounds
+*"how long the CI monitor babysits an open PR with no base-branch movement"*, and test-evidence
+artifacts are committed so they *"render directly on the PR"*.
+
+**This project does not use PRs.** It uses git-flow with direct merges to `develop`. So the `ci`
+step has no PR to watch and would block until its timeout.
+
+`no-mistakes axi run` already supports `--skip <steps>`, and blocks *"until the first approval gate,
+**CI-ready point**, or final outcome"* — the CI-ready point is exactly the gate this project wants.
+But **`bun-crucible.py gate-run` exposes only `--intent`, `--agent`, `--project-dir`** — there is no
+`--skip` passthrough, so the release gate cannot currently be run in the shape this project needs.
+
+**Gap analysis correction — this is ONE locus, not five.** `gate-run` appears in all five clients,
+but CR-CRU-054 lifted the body to `clients/_crucible_axi.py:1654`, where it builds
+`[nm, "axi", "run", "--intent", intent]`. Add `--skip` there, plus the argparse surface. **Do not
+patch five copies** — that would re-fragment exactly what CR-054 unified.
+
+Keep it a pure passthrough — the client must not hardcode WHICH steps to skip, because that is a
+per-project workflow decision, not a client-fleet fact.
+
+### §S6 — The two test files that ENCODE the `v` contract
+Gap analysis (Dimension 6) found two consumers the earlier draft did not name:
+
+- **`tests/cr009-release-bundle.test.ts:325,342-343`** asserts, verbatim, *"§S5 — Adopt Sandesh's
+  vX.Y.Z tag scheme: publish-pypi / publish-npm guards match **ONLY v-prefixed tags**"*. This file
+  **goes red the moment §S1 lands** — by design, because it pins the decision §S1 reverses. Update
+  it to pin the bare-SemVer contract, and preserve the CR-041 §S5 history as a labelled
+  supersession rather than deleting it.
+- **`tests/release-driver.test.ts`** — 14 tests, 11 referencing `versiontag`/`prefix`, including one
+  asserting `finish` refuses when the prefix is UNSET. Under §S1, **unset is the CORRECT state**, so
+  that test's meaning inverts and must be rewritten, not merely retargeted.
+
+⚠ Neither may be weakened to pass. If a test pins the old contract, it is rewritten to pin the new
+one with the same rigour — a guard that is loosened rather than re-aimed is how the `v` assumption
+would survive into the release.
+
+### §S7 — USER-DECIDED 2026-08-04: `finish` invokes `set-version` itself
+The open item below was put to the user at the merge gate. **Decision: option (b)** — keep
+`guard_manifest_version`, but have `cmd_finish` bring the manifest into line ITSELF rather than
+refusing and telling the operator to run a second command.
+
+Rationale (user-approved): the committed manifest still matters for local builds and `npm pack`, so
+dropping the guard entirely (option a) would let it rot. But the operator should issue **one**
+command. `finish X.Y.Z` therefore aligns the manifest to `X.Y.Z` before its preflight, so the guard
+becomes an invariant the script maintains rather than a wall the operator hits.
+
+This makes the CR's own intent real: **setting the tag is all a release needs.** §S2 achieved that
+for what is PUBLISHED; §S7 achieves it for what is RELEASED.
+
+Constraints:
+- `set-version` remains available standalone — it is still useful for local builds, and existing
+  tests pin its behaviour.
+- `finish` must remain **idempotent** on an already-aligned manifest (no spurious commit, no
+  failure) — the common case once someone has run `set-version` by habit.
+- Do not weaken `guard_manifest_version`. It stays; it should simply never fire on the happy path.
+- The manifest alignment must be committed BEFORE the git-flow finish, or it would not be on the
+  merge.
+
+### §S4 — Documentation matches the machinery
+`RELEASING.md` documents the `v` model and the manual-manifest model in several places (§"Version
+model", §"Release at a glance", §"Composite / lockstep model"). Update it, and the release DN, so no
+reader is told to do a step that no longer exists.
+
+## Acceptance criteria
+- [ ] `release.sh`'s tag-prefix guard asserts an EMPTY prefix and its error message names the exact
+      fix — asserted.
+- [ ] `create-release` discovers a bare `X.Y.Z` tag — asserted.
+- [ ] Both publish guards accept `refs/tags/X.Y.Z` and **reject** `refs/tags/vX.Y.Z` and any
+      malformed tag — asserted for both the accept and the reject case.
+- [ ] `publish-npm` SETS `package.json`'s version from the tag; a stale committed value no longer
+      fails the release — asserted, including that the published version equals the tag.
+- [ ] No `#v` strip or `^v` pattern survives in `release.sh` or `release.yml` — asserted by sweep.
+- [ ] The composite pin still resolves `crucible-axi X.Y.Z` → `@anthill-tec/crucible-server@X.Y.Z`;
+      all 10 pin tests green.
+- [ ] `RELEASING.md` and `DN-release-process.md` describe the bare-SemVer, tag-derived model, with no
+      surviving instruction to hand-bump `package.json` — asserted.
+- [ ] `gate-run --skip <steps>` passes the value through to `no-mistakes axi run` unchanged, and
+      `gate-run --help` documents it — asserted (§S5).
+- [ ] `tests/cr009-release-bundle.test.ts` pins the BARE-SemVer guard contract; the CR-041 §S5
+      history is preserved as a labelled supersession, not deleted (§S6).
+- [ ] `tests/release-driver.test.ts`'s prefix tests are rewritten for "unset is correct" — no test
+      still asserts `v` is required (§S6).
+- [ ] `release.sh finish X.Y.Z` aligns `package.json` to `X.Y.Z` itself and proceeds, with NO
+      prior `set-version` run — asserted from a scratch repo whose manifest is stale (§S7).
+- [ ] `finish` on an ALREADY-aligned manifest is idempotent: succeeds, no spurious commit —
+      asserted (§S7).
+- [ ] `guard_manifest_version` still exists and still fails when the manifest cannot be aligned —
+      not deleted, not weakened (§S7).
+- [ ] Full bun regression green AND full Python regression green.
+
+## Non-goals
+- Changing the composite lockstep MODEL (CR-CRU-041) — only its version source.
+- Changing what gets published, or the OIDC/Trusted-Publishing setup.
+- The `CRUCIBLE_SERVER_VERSION` escape hatch — unchanged.
+- Changing Sandesh. It keeps `v`-prefixed tags; the divergence is accepted, not a defect to chase.
+- Retiring `release.sh` itself. Its branch gating and preflights stay valuable; only the version
+  step is in question (§S2).
+
+## Risk
+- **The CI guards cannot be exercised locally.** They run only on a tag push, and a wrong guard is
+  discovered at the moment of publishing. Prefer testing the guard *expressions* directly (extract
+  and unit-test the regex/inputs) over trusting a read of the YAML — a workflow that "looks right"
+  is how the current `v` assumption survived unnoticed into a release plan.
+- **This CR changes the thing that publishes.** A mistake here is not caught by the test suite; it
+  surfaces as a failed or — worse — a *half-completed* publish. The npm/PyPI lockstep rule
+  (*"do not publish one artifact alone"*) makes a partial failure expensive to unwind.
+- **`npm version` rewrites `package.json` in the CI workspace.** Confirm it does not get committed
+  back, and that `--allow-same-version` prevents a spurious failure when the value already matches.
+
+## Implementation Notes
+- **Union regression at the gate: 1988 passing / 0 failing** (bun 1305 + python 683), coverage
+  87.6%/87.0% bun.
+- **This CR reverses a prior USER decision, and the lineage is recorded rather than erased.**
+  CR-CRU-041 §S5 (2026-07-28, user) adopted `vX.Y.Z` to tally with Sandesh, which has published
+  `v0.3.3`/`v0.3.4`/`v0.3.5`. The user reaffirmed bare SemVer categorically on 2026-08-03. Lineage:
+  bare (009 §S6) → `v` (041 §S5) → **bare (061, final)**. Crucible and Sandesh now diverge on tag
+  shape; accepted, and Sandesh is explicitly out of scope. Only the GIT TAG changes — hatch-vcs
+  stripped the `v` either way, so no published artifact ever changed shape.
+- **🚨 `git config --get`'s EXIT STATUS is the load-bearing detail.** git-flow treats UNSET and
+  SET-TO-EMPTY differently: unset → `Fatal: Version tag not set`; set-empty → works. The old code's
+  `|| true` capture destroyed exactly that signal, so even a `!= ""` check would have waved through
+  the state that breaks git-flow outright. VERIFY drove all three states in a scratch repo.
+- **The npm derivation was proven by EXECUTION, not by reading YAML.** RED extracts the step's shell
+  body and runs it under `bash -e -o pipefail` against a scratch `package.json`. Confirmed
+  independently twice (orchestrator + VERIFY): `2.0.0-alpha.1` + tag `0.1.0` → `0.1.0`.
+- **The `--skip` passthrough exists at ONE locus** (`_crucible_axi.py:1671-1678`), with the flag on
+  all five clients. RED's single-locus contract calls `cmd_gate_run` DIRECTLY with a duck-typed args
+  stand-in, so a future per-client re-implementation keeps that test red even if the fleet-wide test
+  passes. CR-054's unification is defended by construction.
+- **A FLAKY test shipped in this CR's own RED and was caught, not re-run away.** The fake
+  `no-mistakes` wrote its argv capture on EVERY invocation, so `cmd_gate_run`'s interim
+  `axi status` poll overwrote the `axi run` capture — passing 1 run in 4 (measured FAILED, FAILED,
+  OK, FAILED). GREEN diagnosed it, proved production correct in a scratch harness, and escalated
+  WITHOUT touching the file it did not own. The fix nests the write inside the `argv[1] == "run"`
+  branch, so a `status` invocation has NO code path to the capture file — eliminated by
+  construction, not made less likely. 10 consecutive green runs (VERIFY) + 8 (orchestrator).
+- **The docs cycle corrected the orchestrator's own brief.** It was told to stop presenting
+  `set-version` as required; `release.sh:277` still calls `guard_manifest_version`, so on the
+  `release.sh` path it genuinely IS required. The agent documented the split honestly instead of
+  writing the convenient falsehood. See the open item below.
+- **A supersession-boundary invariant now guards the docs.** Correcting `RELEASING.md` invalidated
+  THREE assertions, not the one flagged — and one would have "passed stale" off the new supersession
+  section, which legitimately quotes the old `versiontag v` command as history. The replacement
+  asserts that every `vX.Y.Z`/`versiontag v` occurrence sits AFTER the `## Superseded` heading:
+  history preserved, a `v`-shape can never reappear as live instruction.
+
+## §S7 outcome — the open item is CLOSED
+**User chose option (b) on 2026-08-04.** `cmd_finish` now calls `align_manifest_version` before its
+guards, so `release.sh finish X.Y.Z` is the whole release command. Verified independently:
+- **One write path, not two.** `cmd_set_version`'s inline writer was MOVED into
+  `align_manifest_version`; exactly two call sites (`release.sh:279`, `:311`) both delegate to it,
+  so `set-version` and `finish` cannot drift apart.
+- **Idempotent** — the commit is gated on `git diff --cached --quiet`, so a second `finish` produces
+  no empty commit and an identical HEAD sha.
+- **The guard is kept and still fatal**, retargeted at its genuine failure mode (a `package.json`
+  with no `version` key). Its old advice — "run `set-version`" — would now be wrong, so it no longer
+  says it.
+- **🚨 The safety split is exact.** The alignment write+commit are real even under `--dry-run`; ONLY
+  `git flow finish` and `git push` stay gated. VERIFY audited every `finish` invocation in the test
+  file: exactly one omits `--dry-run`, and it is the branch-gate test where `require_release_branch`
+  exits 2 BEFORE anything is written. The file header's absolute rule — no test ever runs a real
+  finish or push — holds.
+- The superseded "finish refuses on a stale manifest" test was removed WITH an inline supersession
+  marker, not silently — correct, since it pinned the behaviour §S7 deliberately reverses.
+
+**Final union regression: 1991 passing / 0 failing** (bun 1308 + python 683), coverage 87.6%/87.0%.
+
+## Historical: the open item as raised at the gate (now closed by §S7)
+`scripts/release.sh:277` still calls `guard_manifest_version`, so `finish` refuses unless
+`package.json` was hand-bumped via `set-version` first. §S2 made the tag authoritative for what is
+**published**; it did not make it authoritative for what is **released**. Against the user's stated
+goal — *"once we set it for a release it is automatic"* — cutting a release is still two commands.
+VERIFY's assessment: a real unresolved contradiction with the CR's intent, with two remediations —
+(a) drop `guard_manifest_version` now the manifest is provably irrelevant to publishing, or
+(b) have `finish` invoke `set-version` itself so the operator issues one command. Deliberately NOT
+decided here.

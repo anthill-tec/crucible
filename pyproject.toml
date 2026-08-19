@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling>=1.27", "hatch-vcs>=0.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "crucible-axi"
+dynamic = ["version"]
+description = "Crucible install orchestrator — ships the *-crucible.py client fleet and stages server/manifest sub-installers behind one TOON-AXI envelope"
+requires-python = ">=3.10"
+license = "GPL-3.0-only"
+dependencies = []
+authors = [{ name = "Antony John" }]
+keywords = ["crucible", "axi", "orchestration", "model-b", "testing"]
+classifiers = [
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: POSIX",
+]
+
+[project.optional-dependencies]
+# The toolchain `python-crucible.py` DRIVES, declared in exactly one place
+# (CR-CRU-063 §S2/AC8 — never restated in release.yml, which consumes the
+# group via `pip install '.[dev]'`).
+#
+#   coverage               — the pre-merge / regression coverage gate
+#                            (CR-CRU-040 §S1); coverage.py is the only
+#                            supported coverage path for this client.
+#   unittest-xml-reporting — the JUnit-XML producer EVERY `test` /
+#                            `regression` / `pre-merge-gate` run shells out to
+#                            (`python -m xmlrunner`, python-crucible.py:442).
+#                            Absent, no TEST-*.xml is produced and the run
+#                            dies with `No module named 'xmlrunner'`. Named
+#                            demanders (CR-CRU-063 §S3, run 31726344668):
+#                            test_cr039_regression_discovery.py:177,
+#                            test_python_crucible_axi.py:1085 and :1129,
+#                            test_toolchain_verb_envelopes.py:430 and :514.
+#                            4.x is required, not merely preferred: it stamps
+#                            each <testcase> with `file=`, which is what makes
+#                            `_parse_junit_dir`'s `files` count per-FILE rather
+#                            than degrading to per-CLASS (python-crucible.py:456).
+dev = ["coverage>=7", "unittest-xml-reporting>=4"]
+
+[project.scripts]
+crucible-axi = "crucible_axi.cli:main"
+
+[tool.hatch.version]
+source = "vcs"
+raw-options = { local_scheme = "no-local-version" }
+
+[tool.hatch.build.targets.wheel]
+packages = ["crucible_axi"]
+
+# The client fleet + its status contract ship as package data so the installed
+# `crucible-axi` orchestrator carries the clients it lays down (S1).
+[tool.hatch.build.targets.wheel.force-include]
+"clients" = "crucible_axi/clients"

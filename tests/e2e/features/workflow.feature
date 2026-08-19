@@ -1,0 +1,99 @@
+Feature: CR-CRU-011 workflow — cycle plans, the Workflow tab, and timeline plan integration
+  BDD layer expression of CR-CRU-011's AC "BDD E2E (house style):
+  tests/e2e/features/workflow.feature — scenarios: file a plan via API →
+  activate cycle 1 → register agent → ingest fail/pass with
+  context.cycleId → PATCH cycle done → close plan with merge commit → the
+  lens shows the plan tree with the closed span, cycle label, merge
+  commit, and the sealed agent runtime; plus a timeline scenario asserting
+  suppression + the declared marker" (docs/changes/CR-CRU-011-workflow-lens.md).
+  Storyboard frame F13 (Workflow tab). This feature sorts alphabetically
+  AFTER shell-storyboard.feature ("w" > "s"), so its F1 empty-DB
+  precondition already holds by the time these scenarios seed data into
+  the shared server/db instance. Every project/cr/agent name below is
+  namespaced "WF …" to stay clear of the other features sharing that
+  instance. Results are ingested with tier "e2e" by the orchestrator's
+  ingest step, not by this suite.
+
+  Scenario: F13 filing a plan, running its cycle to done, and closing the plan with a merge commit renders the closed plan tree in the Workflow tab's history lens
+    Given a project named "WF Lifecycle Project" is registered
+    And a cycle plan is filed for cr "CR-WF-1" with a cycle labelled "c1 red-green"
+    And cycle 1 of that plan is activated
+    And an online agent "agent-wf1" with message "filing the plan" is registered on that project
+    And a fail(2/5) run linked to that cycle is ingested for agent "agent-wf1"
+    And a pass(5/5) run linked to that cycle is ingested for agent "agent-wf1"
+    And cycle 1 of that plan is marked done
+    And the plan is closed with merge commit "abc1234"
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    # SANCTIONED RE-TARGET (CR-CRU-023 §S4 #2): the hidden `.app-hidden-data`
+    # `cr-rollup` compatibility span is retired — its done/total figures now
+    # live in the VISIBLE inline rollup form on the group header toggle
+    # itself ("<done>/<total> cycles" while not all done, "<total> cycles ✓"
+    # once all done — see app.js LensCrGroup). This fixture is 1 done of 1
+    # total (all done), so the visible form reads "1 cycles ✓" (was:
+    # asserted "1/1" against the retired `cr-rollup` testid).
+    Then the history lens shows a cr group for "CR-WF-1" with rollup "1 cycles ✓"
+    # SANCTIONED RE-TARGET (CR-CRU-021 §S6.9): the merge-commit pill dropped
+    # the `@` separator — it now reads `merged <sha>` (was: `merged @ <sha>`).
+    And the cr group for "CR-WF-1" shows a merge-commit pill reading "merged abc1234"
+    # SANCTIONED RE-TARGET (CR-CRU-021 §S4 — e2e sweep, newly uncovered while
+    # fixing the merge-commit pill above): the collapsed CR-group header now
+    # carries ZERO agentId-bearing elements — per-agent runtime rows render
+    # only once the group is expanded (an aggregate "N agents" pill stands
+    # in for them while collapsed). Moved this assertion to after the
+    # expand step below (was: asserted while still collapsed).
+    When I expand the cr group for "CR-WF-1"
+    And the cr group for "CR-WF-1" shows the runtime for agent "agent-wf1"
+    And I expand cycle "c1 red-green" in the cr group for "CR-WF-1"
+    Then the cr group for "CR-WF-1" shows cycle "c1 red-green" as a closed span containing the linked run for agent "agent-wf1"
+
+  Scenario: F13 the Runs timeline suppresses the heuristic marker for plan-linked runs and renders the active-cycle span, then the declared marker once the cycle is done
+    Given a project named "WF Timeline Project" is registered
+    And a cycle plan is filed for cr "CR-WF-2" with a cycle labelled "c1 red-green"
+    And cycle 1 of that plan is activated
+    And a fail(2/5) run linked to that cycle is ingested for agent "agent-wf2"
+    And a pass(5/5) run linked to that cycle is ingested for agent "agent-wf2"
+    When I open the workspace for that project
+    # SANCTIONED RE-TARGET (CR-CRU-021 §S1): the workspace's default active
+    # tab is now Workflow, not Runs — select Runs explicitly to view its
+    # pane (was: relied on Runs being the cold-load default).
+    And I click the "Runs" workspace tab
+    Then the workspace Runs pane shows no transition marker
+    And the workspace Runs pane shows the active cycle span for "c1 red-green" on "CR-WF-2"
+    When cycle 1 of that plan is marked done
+    Then the declared marker for "c1 red-green" on "CR-WF-2" becomes visible within 2 seconds
+    And the workspace Runs pane shows no cycle-span-open element
+
+  # SANCTIONED RE-TARGET (CR-CRU-026 §S3.4 — vestige cleanout): this control
+  # pair used to be ingested unlinked into "WF Timeline Project" ABOVE (the
+  # very project CR-WF-2 owns a plan for). §S3.4 makes the CR-007 heuristic
+  # marker structurally UNREACHABLE on any project that has a plan — a
+  # capability-conditional rule, not the old per-event cycleId-linkage
+  # carve-out — so an unlinked run there now renders a plain card, never a
+  # phantom pair (pinned at the unit level in
+  # tests/home-marker-parity.test.ts's "§S3.4 — vestige cleanout" suite).
+  # The classic heuristic-marker assertion stays meaningful only on a
+  # PLANLESS project (the CR-011 §S0b fallback) — moved here, onto its own
+  # dedicated second project, per this file's existing precedent of one
+  # concern per scenario (e.g. Scenario 1 vs Scenario 3 above).
+  Scenario: F13 an unlinked RED/GREEN control pair on a PLANLESS project still gets the classic heuristic marker (§S3.4 capability-conditional)
+    Given a project named "WF Timeline Control Project" is registered
+    When I open the workspace for that project
+    And I click the "Runs" workspace tab
+    And a fail(2/5) run is ingested for agent "CR-WF2-CTRL-RED"
+    And a pass(5/5) run is ingested for agent "CR-WF2-CTRL-GREEN"
+    Then exactly one transition marker becomes visible within 2 seconds in the workspace Runs pane
+
+  Scenario: F13 with an open plan and an active cycle, the Workflow tab's active section shows the per-CR todo, and the active cycle row renders its linked run inline with no toggle (CR-CRU-021 ruling (a) re-target)
+    Given a project named "WF Active Project" is registered
+    And a cycle plan is filed for cr "CR-WF-3" with a cycle labelled "c1 red-green"
+    And cycle 1 of that plan is activated
+    And a fail(2/5) run linked to that cycle is ingested for agent "agent-wf3"
+    When I open the workspace for that project
+    And I click the "Workflow" workspace tab
+    # SANCTIONED RE-TARGET (CR-CRU-021 §S6 ruling (a)): the active cycle's
+    # open span is ALWAYS inline now — no cycle-toggle exists on the active
+    # row (toggles narrowed to History-only rows), so the linked run is
+    # already visible with no click. Was: "I expand the active cycle row
+    # for …" clicked a toggle that no longer renders.
+    Then the workflow active section shows a cycle row for "c1 red-green" with the linked run for agent "agent-wf3" rendered inline with no cycle-toggle

@@ -1,0 +1,1012 @@
+/* CR-CRU-006 §S1 — forge theme + app-shell layout primitives.
+   Token palette from the storyboard (.lavish/crucible-v2-design.html §5). */
+
+/* ── DaisyUI custom theme: forge ────────────────────────────────────────── */
+[data-theme="forge"] {
+  color-scheme: dark;
+  --color-base-100: #0e1013;
+  --color-base-200: #15181d;
+  --color-base-300: #1c2027;
+  --color-base-content: #e6e2da;
+  --color-primary: #ff7a1a;
+  --color-primary-content: #0e1013;
+  --color-secondary: #ffb347;
+  --color-secondary-content: #0e1013;
+  --color-accent: #b35415;
+  --color-accent-content: #e6e2da;
+  --color-neutral: #1c2027;
+  --color-neutral-content: #9a958b;
+  --color-info: #9a958b;
+  --color-info-content: #0e1013;
+  --color-success: #4ade80;
+  --color-success-content: #0e1013;
+  --color-warning: #facc15;
+  --color-warning-content: #0e1013;
+  --color-error: #f87171;
+  --color-error-content: #0e1013;
+  --radius-selector: 999px;
+  --radius-field: 8px;
+  --radius-box: 12px;
+}
+
+/* ── App-shell custom properties (forge tokens) ─────────────────────────── */
+:root {
+  --bg: #0e1013;
+  --bg-1: #15181d;
+  --bg-2: #1c2027;
+  --line: #2a2f38;
+  --ink: #e6e2da;
+  --ink-dim: #9a958b;
+  --ink-faint: #635f57;
+  --ember: #ff7a1a;
+  --ember-dim: #b35415;
+  --heat: #ffb347;
+  --pass: #4ade80;
+  --fail: #f87171;
+  --pend: #facc15;
+  --stale: #facc15;
+  --offline: #635f57;
+  --mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+  --sans: "Inter", system-ui, sans-serif;
+}
+
+html { background: var(--bg); height: 100%; }
+body {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.55;
+  background:
+    radial-gradient(1200px 500px at 70% -10%, rgba(255, 122, 26, 0.07), transparent 60%),
+    var(--bg);
+  height: 100%;
+  /* CR-CRU-016 §S1 — the app frame owns scrolling: the window never
+     scrolls; each central pane is its own scroller (in-pane drill-in +
+     per-pane scrollTop capture/restore). */
+  overflow: hidden;
+}
+
+/* ── App frame (CR-CRU-016 §S1) — chrome rows stack over a flexible main
+   area; panes scroll independently inside it ─────────────────────────── */
+#app { height: 100%; }
+#app > div {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Top bar ────────────────────────────────────────────────────────────── */
+.app-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+  flex-wrap: wrap;
+}
+.app-logo {
+  font: 700 14px var(--mono);
+  color: var(--ink);
+  white-space: nowrap;
+}
+.app-logo span { color: var(--ember); }
+.app-slogan {
+  color: var(--ink-faint);
+  font: italic 11px var(--sans);
+  white-space: nowrap;
+}
+
+/* ── Projects row (§S5.1 CR-CRU-007 — second header row, flow layout) ───── */
+.app-projects-row {
+  border-top: none;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.app-badge-flow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.app-badge.active { color: var(--ink); }
+.app-badge.inactive { color: var(--ink-faint); opacity: 0.6; }
+.app-type-badge {
+  font: 600 8.5px/1.6 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-left: 6px;
+  color: var(--ink-dim);
+  background: var(--bg-2);
+}
+
+/* ── Pills / chips ──────────────────────────────────────────────────────── */
+.app-chip {
+  font: 600 10.5px/1.7 var(--mono);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 9px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  background: transparent;
+  cursor: pointer;
+}
+.app-chip.on {
+  color: var(--ember);
+  border-color: rgba(255, 122, 26, 0.5);
+  background: rgba(255, 122, 26, 0.09);
+}
+.app-health { margin-left: auto; cursor: default; }
+.app-health.down {
+  color: var(--fail);
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+/* ── Liveness dots ──────────────────────────────────────────────────────── */
+.app-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: 1px;
+}
+.app-dot.g { background: var(--pass); box-shadow: 0 0 6px rgba(74, 222, 128, 0.7); }
+.app-dot.y { background: var(--stale); }
+.app-dot.o { background: var(--offline); }
+.app-dot.r { background: var(--fail); box-shadow: 0 0 6px rgba(248, 113, 113, 0.7); }
+
+/* ── Shell grid (§S5 fidelity #1 — NO left rail anywhere: home is the
+   collective timeline alone; the workspace stacks a full-width tabs row
+   over a [content | Project pane] two-column body) ──────────────────────── */
+.app-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  /* CR-CRU-016 §S1 — the main area fills the frame below the chrome rows;
+     home is one pane row, the workspace stacks tabs over its body row. */
+  grid-template-rows: minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.app-main:not(.app-home) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+/* CR-CRU-016 §S1 tabs-hide — while a detail is open the tabs row is parked
+   (hidden, testid retired); the body row takes the whole main area and the
+   detail header renders inside the detail column (WorkspaceRunDetail). */
+.app-tabs-parked { display: none; }
+.app-main:not(.app-home):has(> .app-tabs-parked) {
+  grid-template-rows: minmax(0, 1fr);
+}
+/* CR-CRU-016 §S1 header-always-visible — home pins the detail header in a
+   band ABOVE the timeline pane's scroller. */
+.app-main.app-home:has(> .app-drillin-head) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.app-main > .app-drillin-head { margin-bottom: 0; }
+/* The workspace detail column: header band on top, the detail's own
+   scroller filling the rest. */
+.app-detail-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.app-detail-col > .app-drillin-head { margin-bottom: 8px; }
+.app-detail-col > .app-center { flex: 1 1 auto; }
+/* Hidden COMPAT copy of the detail head inside home's in-pane overlay (the
+   visible header is the band above the pane) — kept for the pre-C5
+   overlay-scoped chip/density contracts. */
+.app-drillin-inhead { display: none; }
+.app-workspace-body {
+  display: grid;
+  grid-template-columns: minmax(0, 2.6fr) minmax(260px, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  min-height: 0;
+}
+.app-rail-section + .app-rail-section {
+  margin-top: 16px;
+}
+.app-pane, .app-center {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  min-width: 0;
+  min-height: 0;
+}
+/* CR-CRU-029 §S1 — the right rail keeps being its own vertical scroller
+   (unchanged from CR-016). */
+.app-pane { overflow-y: auto; }
+/* CR-CRU-029 §S1 (mechanism a) — a central pane is a HEIGHT-BOUNDED,
+   NON-scrolling flex column: it delegates BOTH scroll axes to its
+   `.app-pane-content` child so that child stays viewport-sized and both
+   scrollbars pin to ITS edges, reachable at any scroll position. (Was a
+   vertical scroller whose overflowing height carried the horizontal bar
+   off-screen — CR-CRU-029 the bug.) */
+.app-center {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* CR-CRU-029 §S1 — the home in-pane run overlay is likewise a bounded flex
+   column so its own `.app-pane-content` scroller fills it. */
+.app-drillin.app-inpane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* CR-CRU-029 §S1 — the pane-scroll box: the dual-axis scroller, flex-filled
+   to the bounded pane height so it never grows past the viewport. */
+.app-center > .app-pane-content,
+.app-inpane > .app-pane-content {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* CR-CRU-016 AC2 — feed scroll runway RELOCATED (CR-CRU-029 §S1) off the
+   pane-scroll box (where `min-height: calc(100% + 260px)` un-bounded the
+   scroller, pushing its horizontal bar out of view) ONTO its content child:
+   the runway reserves extra scroll room INSIDE the now-bounded pane so a
+   restored reading position (closing an in-pane run detail) stays reachable,
+   however short the feed. */
+.app-pane-content > .app-pane-runway { min-height: calc(100% + 260px); }
+/* CR-CRU-023 §S1 — global pane scroll floor (min supported screen
+   1024×640): the shared content wrapper is each central pane's own
+   horizontal scroll boundary. Its children carry a min-width floor, so
+   below the floor the PANE scrolls inside itself instead of crushing its
+   content; the page body never scrolls horizontally. 660px: at a 1024px
+   viewport the workspace center pane's content box is ≈687px wide
+   (1024 − 2×12 frame padding − 260px right-rail minimum − 12px grid gap −
+   2×12 pane padding − 2px borders), so standard content stays scroll-free
+   at 1024×640 with headroom for a scrollbar gutter; home's full-width
+   timeline is far wider still. CR-CRU-029 §S1 — overflow-x stays on the
+   pane-scroll box (now paired with overflow-y so it owns BOTH axes). */
+/* CR-CRU-034 §S1 — position:relative makes the pane-scroll box the
+   offsetParent for the run-detail body, so a virtualized suite leaf-list's
+   offsetTop reads as its position WITHIN this one scroller (the re-sourced
+   §S4.4 window math offsets each expanded suite by it). No absolute-positioned
+   descendants live inside a pane-scroll, so this is layout-neutral. */
+.app-pane-content { overflow-x: auto; overflow-y: auto; position: relative; }
+.app-pane-content > * { min-width: 660px; }
+.app-rail-title {
+  font: 600 11px/1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  margin-bottom: 8px;
+}
+
+/* ── Project cards ──────────────────────────────────────────────────────── */
+.app-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.app-card-name { font: 600 12px var(--mono); color: var(--ink); }
+.app-card-meta { color: var(--ink-faint); font: 9.5px var(--mono); }
+
+/* ── Agent rows (card treatment — same border/radius/background/padding
+   family as the project cards, per user-directed polish) ────────────────── */
+.app-agent-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.app-agent-id { font: 600 11px var(--mono); color: var(--ink); }
+.app-agent-msg { color: var(--ink-dim); font: 10.5px var(--mono); }
+.app-agent-row.tombstoned { opacity: 0.45; }
+
+/* ── Project pane (§S5.2 CR-CRU-007 — agents nested as ⌁-marked sub-rows) ── */
+.app-pane-card { cursor: default; }
+.app-agent-subrows { margin-left: 12px; }
+.app-agent-glyph { color: var(--heat); font: 600 11px var(--mono); }
+.app-coverage { margin-top: 4px; }
+.app-coverage.clickable { cursor: pointer; }
+.app-vitals-card { cursor: default; }
+/* §S5.2 (a) — F8 pane section titles: uppercase mono, ember accent, wide
+   letter-spacing (the board's own section-header treatment). */
+.app-pane-section-title {
+  font: 600 10.5px/1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--ember);
+  margin: 2px 0 8px;
+}
+/* §S5.2 (d)/(e) — F8 vitals card anatomy: dim uppercase label ABOVE a
+   bright 600-weight value line. */
+.app-vitals-label {
+  font: 600 9px/1.5 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-faint);
+}
+.app-vitals-value {
+  font-weight: 600;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+}
+/* §S5.2 (d) / CR-CRU-027 §S1 — coverage-trend mini bar-chart: one bar per
+   green-coverage point (oldest→newest, last 16); earlier bars ember-dim,
+   latest bright ember. F8 mock geometry: fixed 9px bars in a 26px
+   left-aligned cluster — bars never grow/stretch to fill the card. */
+.app-trend-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 26px;
+  margin: 6px 0 4px;
+}
+.app-trend-bar {
+  border-radius: 2px 2px 0 0;
+}
+/* CR-CRU-028 §S1 — per-level fixed-slice widths (month < week < day), F8
+   mock lines 535-541; no level stretches. */
+.app-trend-bar-month { flex: 0 0 6px; }
+.app-trend-bar-week { flex: 0 0 9px; }
+.app-trend-bar-day { flex: 0 0 12px; }
+/* §S1 — level color ramp (DN §3.2). */
+.app-trend-bar-orange { background: var(--ember); }
+.app-trend-bar-yellow { background: #eab308; }
+.app-trend-bar-green { background: var(--pass); }
+/* §S1 — latest bucket composes emphasis WITH its level color (outline, not a
+   background override). */
+.app-trend-bar-latest { outline: 1px solid var(--ink-faint); }
+/* CR-CRU-028 §S2 — the drill-down accordion row (one branch open per card),
+   rendered beneath the top bars. */
+.app-trend-bar { cursor: pointer; }
+.app-trend-bar-retention-dim {
+  cursor: default;
+  opacity: 0.35;
+}
+.app-drill-row { margin: 0 0 4px; }
+.app-drill-bars { margin: 2px 0 4px; }
+/* §S2 — the per-run heat strip (F8 mock lines 538-541): a thin flex row of
+   level-colored, equal-flex slices. */
+.app-cov-heat-strip {
+  display: flex;
+  gap: 1px;
+  height: 8px;
+  margin: 2px 0 4px;
+}
+.app-cov-heat-slice {
+  flex: 1;
+  border-radius: 1px;
+  cursor: pointer;
+}
+.app-heat-slice-orange { background: var(--ember); }
+.app-heat-slice-yellow { background: #eab308; }
+.app-heat-slice-green { background: var(--pass); }
+/* §S5.2 (b) — the F8 mock `.meter`: 6px tall, fully rounded, BORDERLESS
+   track, ember-gradient fill sized to the lines percent. */
+.app-meter {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg);
+  overflow: hidden;
+  margin-top: 2px;
+}
+.app-meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--ember), var(--pass));
+}
+/* CR-CRU-016 §S4 F7 — inline card coverage meter (regression runs carrying
+   coverage): same .app-meter anatomy as the pane meter, sized to the card. */
+.app-card-meter {
+  max-width: 180px;
+  margin-top: 4px;
+}
+/* §S5.5 — Coverage tab panel rows. */
+.app-coverage-row {
+  font: 600 11px var(--mono);
+  color: var(--ink);
+  margin: 4px 0;
+}
+
+/* ── Timeline pane header + filter pulldown (§S5.1 CR-CRU-007) ──────────── */
+.app-timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.app-pane-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.app-filter {
+  font: 600 10.5px var(--mono);
+  color: var(--ink-dim);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px 6px;
+}
+
+/* ── Timeline / events ──────────────────────────────────────────────────── */
+.app-evt {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+  margin-bottom: 8px;
+  font: 11px var(--mono);
+}
+.app-evt-body { flex: 1; min-width: 0; }
+.app-evt-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.app-card-icon { display: inline-flex; line-height: 1; color: var(--ink-dim); }
+/* §S1 — the kind glyph is a monochrome CSS-mask silhouette painted with
+   currentColor, so the wrapper's app-role-* `color` ACTUALLY tints it
+   (CSS `color` is a no-op on color-emoji text glyphs). */
+.app-icon-mask {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+  -webkit-mask-image: var(--icon-mask);
+  mask-image: var(--icon-mask);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+/* Flask silhouette (test runs). */
+.app-icon-mask[data-kind="test"] {
+  --icon-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 2h6v2h-1v4.6l5.6 9.8A1.8 1.8 0 0 1 18 21H6a1.8 1.8 0 0 1-1.6-2.6L10 8.6V4H9V2zm3 4v3.1a2 2 0 0 1-.26.99L8.3 15h7.4l-3.44-4.91A2 2 0 0 1 12 9.1V6z'/%3E%3C/svg%3E");
+}
+/* Wrench silhouette (compile runs). */
+.app-icon-mask[data-kind="compile"] {
+  --icon-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z'/%3E%3C/svg%3E");
+}
+/* §S1 — agent-role icon tinting: RED red / GREEN green / VERIFY purple /
+   FIX yellow; roleless cards keep the neutral tint. */
+.app-role-red { color: var(--fail); text-shadow: 0 0 6px rgba(248, 113, 113, 0.5); }
+.app-role-green { color: var(--pass); text-shadow: 0 0 6px rgba(74, 222, 128, 0.5); }
+.app-role-verify { color: #c084fc; text-shadow: 0 0 6px rgba(192, 132, 252, 0.5); }
+.app-role-fix { color: var(--pend); text-shadow: 0 0 6px rgba(250, 204, 21, 0.5); }
+.app-card-badges { display: inline-flex; gap: 4px; }
+
+/* ── Run-card pills + badges (§S1 CR-CRU-007) ───────────────────────────── */
+.app-pill {
+  font: 600 9.5px var(--mono);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 6px;
+  color: var(--ink-dim);
+  background: var(--bg);
+  white-space: nowrap;
+}
+.app-ratio-pass { color: var(--pass); border-color: var(--pass); }
+.app-ratio-fail { color: var(--fail); border-color: var(--fail); }
+.app-ctx-badge { color: var(--ink-faint); }
+
+/* Compile-card diagnostics preview (first 2 lines, file:line — msg). */
+.app-diag-preview { margin-top: 4px; }
+.app-diag-line {
+  color: var(--fail);
+  font: 10px var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── RED→GREEN transition markers = Cycles (§S2 CR-CRU-007) ─────────────── */
+.app-transition-marker {
+  font: 600 10.5px var(--mono);
+  color: var(--heat);
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 4px 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  background: var(--bg);
+}
+
+/* CR-CRU-025 §S2b — Run Timeline accordion: a collapsed declared marker dims
+   its dashed frame and trails a `▸ N runs` cue for the hidden linked cards. */
+.app-accordion-collapsed { border-style: dotted; opacity: 0.85; }
+.app-accordion-collapsed-cue { margin-left: 8px; }
+
+.app-empty {
+  color: var(--ink-faint);
+  font: 12px var(--mono);
+  text-align: center;
+  padding: 24px 8px;
+}
+
+/* ── CR-CRU-012 §S2 — Projects manager slide-over (/manage, F12): its OWN
+   scrim + dark right sheet contract (the retired run-detail sheet below
+   stays retired — this is the separate contract that note reserved). ──── */
+.app-manager-layer { position: fixed; inset: 0; z-index: 40; }
+.app-manager-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.55); }
+.app-manager {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(560px, 92vw);
+  background: var(--bg-1);
+  border-left: 1px solid var(--line);
+  box-shadow: -18px 0 40px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  overflow-y: auto;
+}
+.app-manager-head { display: flex; align-items: center; gap: 8px; }
+.app-manager-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.app-manager-row-head { display: flex; align-items: center; gap: 6px; }
+.app-manager-row-head .app-manager-edit { margin-left: auto; }
+.app-manager-params { margin-top: 2px; }
+.app-manager-edit-form,
+.app-manager-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.app-manager-add {
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+/* CR-CRU-012 §S2 cycle 28 — archive/unarchive: confirm-gated row action +
+   the bottom "archived (N)" fold. Confirm reads as the destructive step
+   (ember-warm), the fold as a quiet dashed-off tail section. */
+.app-manager-archive-confirm {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+/* CR-CRU-008 §S4 — the guarded-deletion DANGER toggle in the edit form:
+   enabling it opens the run journal to (user-approved) deletion, so it wears
+   the forge error red rather than the ember accent. */
+.app-manager-danger-toggle {
+  accent-color: var(--color-error);
+  outline: 1px solid var(--color-error);
+  outline-offset: 1px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.app-manager-archived {
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+.app-manager-fold {
+  background: none;
+  border: none;
+  color: var(--color-neutral-content);
+  font: 11px var(--mono);
+  cursor: pointer;
+  padding: 2px 0;
+}
+.app-manager-fold:hover { color: var(--ink); }
+.app-manager-archived-row { opacity: 0.75; }
+.app-manager-archived-row .app-card-name { color: var(--color-neutral-content); }
+.app-manager input,
+.app-manager select {
+  background: var(--bg);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: 11px var(--mono);
+  padding: 3px 8px;
+}
+
+/* ── Live-region degradation (§S5) ──────────────────────────────────────── */
+/* ── CR-CRU-007 §S3/§S4 + CR-CRU-016 §S1 — run detail, IN-PANE: a pane
+   state of the active central pane. The right-hand slide-over sheet and
+   its scrim are RETIRED (the /manage and /roadmap overlays, when they
+   land, are a separate contract). ────────────────────────────────────── */
+.app-drillin.app-inpane { min-height: 0; }
+.app-drillin-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+/* CR-CRU-038 §S3 — header action chips (failure-jump + raw-toggle) sit beside
+   the density chip in the drill-in header; tighter padding keeps them compact
+   against it. */
+.app-drillin-headchip { padding: 1px 7px; }
+/* F4 anatomy — flat mono TREE LINES: status is text color alone; NO
+   border/outline on any tree row (the failure box below is the only boxed
+   element inside the tree). */
+.app-tree-line { font-family: var(--mono); }
+.app-suite-group { margin-bottom: 4px; }
+.app-suite-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 600 11px var(--mono);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.app-suite-row .app-suite-name { flex: 1; }
+.app-suite-row.fail { color: var(--fail); }
+.app-tree-toggle { color: var(--ink-dim); width: 12px; }
+.app-suite-counts { white-space: pre; }
+.app-count-fail { color: var(--fail); }
+.app-count-pass { color: var(--pass); }
+.app-count-pending { color: var(--pend); }
+.app-leaf-list { margin: 2px 0 4px 14px; }
+.app-leaf-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: 10.5px var(--mono);
+  color: var(--ink);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+/* Passing leaves render GREEN/bright — never a faint grey. */
+.app-leaf-pass { color: var(--pass); }
+.app-leaf-fail { color: var(--fail); }
+.app-leaf-pending { color: var(--pend); }
+
+/* Failed leaf expansion — failure.message + trace, mono red-accent box. */
+.app-failure-box {
+  font: 10.5px var(--mono);
+  color: var(--fail);
+  border: 1px solid var(--fail);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 6px 10px;
+  margin: 2px 0 6px 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.app-failure-trace { color: var(--ink-faint); margin-top: 4px; }
+/* §S3 failure-box degradation — dim reporter note when no message stored. */
+.app-failure-note { color: var(--ink-faint); font-style: italic; margin-top: 2px; }
+/* §S3 — compile drill-in status line (always first). */
+.app-compile-status {
+  display: inline-block;
+  font: 600 11px var(--mono);
+  margin-bottom: 8px;
+}
+
+/* Compile drill-in — diagnostics grouped by file + raw-output toggle. */
+.app-diag-group {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  padding: 6px 10px;
+  margin-bottom: 6px;
+}
+.app-diag-file { font: 600 11px var(--mono); color: var(--ink); margin-bottom: 2px; }
+.app-diag-error { color: var(--fail); }
+.app-diag-warning { color: var(--heat); }
+.app-raw-toggle { margin: 4px 0; }
+.app-raw-output {
+  font: 10px var(--mono);
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 4px 0 0;
+}
+
+.greyed { opacity: 0.45; filter: grayscale(0.6); }
+.app-synced { color: var(--ink-faint); font: 9.5px var(--mono); }
+
+/* ── CR-CRU-007 §S4 — density set ─────────────────────────────────────── */
+
+/* F4½ — Density status chips row, above the heat-strip. */
+.app-density-chips {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  font: 600 10.5px var(--mono);
+  padding: 4px 8px;
+  margin-bottom: 6px;
+}
+
+/* §S4.2 — heat-strip minimap: one cell per test, wrap at any run size. */
+.app-heat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  margin-bottom: 8px;
+}
+.app-heat-cell {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.app-heat-fail { background: var(--fail); }
+.app-heat-pending { background: var(--heat); }
+.app-heat-pass { background: var(--pass); opacity: 0.35; }
+
+/* §S4.3 — failure digest: shared-message group row + "+N identical". */
+.app-digest-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: 10.5px var(--mono);
+  color: var(--fail);
+  padding: 2px 8px;
+}
+.app-digest-expander { font: 9.5px var(--mono); }
+
+/* §S4.4 virtualization + CR-CRU-034 §S1 — the per-suite leaf list is NO
+   LONGER its own scroll container: the bounded `[data-testid="pane-scroll"]`
+   (`.app-pane-content`) owns the run-detail body's vertical AND horizontal
+   scroll (retiring the 60vh inner trap). The honest spacers still reserve the
+   full windowed height, now inside that one bounded scroller. */
+.app-virt-spacer { flex: none; }
+
+/* §S1/§nav — clickable drill-down spots (run cards, transition markers,
+   coverage meter) show the pointer with a subtle hover lift (forge
+   conventions) so the click affordance is discoverable. */
+.app-evt { cursor: pointer; transition: border-color 0.12s ease, background 0.12s ease; }
+.app-evt:hover {
+  border-color: var(--ember);
+  background: var(--bg-1);
+}
+.app-transition-marker { transition: border-color 0.12s ease, background 0.12s ease; }
+.app-transition-marker:hover {
+  border-color: var(--heat);
+  background: var(--bg-2);
+}
+.app-coverage.clickable { transition: opacity 0.12s ease; }
+.app-coverage.clickable:hover { opacity: 0.8; }
+
+/* §S4.6 — density root classes drive VISIBLE global spacing: comfortable is
+   the base; compact tightens padding/margins ≈ −35%; ultra ≈ −60% (and a
+   smaller mono size). Applies to timeline run cards + marker rows (home AND
+   workspace), drill-in tree rows, and Project pane rows. */
+:root.app-density-comfortable { --row-pad: 6px; }
+:root.app-density-compact { --row-pad: 3px; }
+:root.app-density-ultra { --row-pad: 1px; }
+.app-density-compact .app-leaf-row,
+.app-density-compact .app-suite-row,
+.app-density-compact .app-digest-row { padding-top: var(--row-pad); padding-bottom: var(--row-pad); }
+.app-density-ultra .app-leaf-row,
+.app-density-ultra .app-suite-row,
+.app-density-ultra .app-digest-row { padding-top: var(--row-pad); padding-bottom: var(--row-pad); font-size: 9.5px; }
+
+/* compact — ≈ −35% on cards, markers, agent/pane rows. */
+.app-density-compact .app-evt,
+.app-density-compact .app-card,
+.app-density-compact .app-agent-row { padding: 5px 7px; margin-bottom: 5px; gap: 6px; }
+.app-density-compact .app-transition-marker { padding: 3px 7px; margin-bottom: 5px; }
+.app-density-compact .app-evt-body { gap: 1px; }
+
+/* ultra — ≈ −60%, plus a tighter mono size. */
+.app-density-ultra .app-evt,
+.app-density-ultra .app-card,
+.app-density-ultra .app-agent-row { padding: 3px 4px; margin-bottom: 3px; gap: 4px; }
+.app-density-ultra .app-transition-marker { padding: 2px 4px; margin-bottom: 3px; font-size: 9.5px; }
+.app-density-ultra .app-evt { font-size: 10px; }
+.app-density-ultra .app-evt .app-pill { font-size: 8.5px; padding: 1px 5px; }
+.app-density-ultra .app-card-meta { font-size: 9px; }
+
+/* ── CR-CRU-011 §S3 — Workflow tab: ACTIVE todo view + gate pane ──────────
+   Design language: section titles ember (app-pane-section-title), panes
+   boxed like cards, cycle/linked-run ROWS text-color only (no boxes). */
+.app-workflow-cols {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.app-workflow-active { flex: 1 1 auto; min-width: 0; }
+.app-gate-pane {
+  flex: 0 0 220px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-1);
+  padding: 8px 10px;
+}
+.app-workflow-plan { margin-bottom: 12px; }
+.app-cycle-row {
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: var(--row-pad, 6px) 2px;
+}
+.app-cycle-line { display: flex; gap: 8px; align-items: baseline; }
+.app-cycle-glyph { width: 1.2em; text-align: center; }
+/* CR-CRU-025 §S1 — the row LABEL truncates (ellipsis) so the trailing
+   nav badge is never the thing that clips at the CR-023 660px pane floor. */
+.app-cycle-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* CR-CRU-021 §S6 #7 — GLYPH-ONLY status coloring: the status color paints
+   the glyph alone; row text stays default ink (the whole-row coloring the
+   live UI drifted into is the regression this fixes). */
+.cycle-status-pending .app-cycle-glyph { color: var(--ink-faint); }
+.cycle-status-active .app-cycle-glyph { color: var(--ember); }
+.cycle-status-done .app-cycle-glyph { color: var(--pass); }
+.cycle-status-skipped .app-cycle-glyph { color: var(--ink-faint); }
+.cycle-status-failed .app-cycle-glyph { color: var(--fail); }
+.cycle-status-active .app-cycle-text { color: var(--ink-strong, inherit); }
+/* CR-CRU-021 §S3 — active-cycle timer: ember badge ticking on the ACTIVE
+   row (F13 `.badge.ember`); sealed rows ride the dim card-meta ink via
+   app-cycle-timer-sealed (F13 `.agent-ts`). */
+.app-cycle-timer-ember {
+  display: inline-block;
+  font: 600 8.5px/1.8 var(--mono);
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--ember);
+  border: 1px solid rgba(255, 122, 26, 0.45);
+  background: rgba(255, 122, 26, 0.08);
+  white-space: nowrap;
+}
+.app-cycle-timer-sealed {
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+/* §S6 item 2 (re-baselined 2026-07-17) — ALIGNED TIMERS: both timer forms
+   share this slot class; the flex .app-cycle-line pushes the badge to a
+   right-hand column so rows read clean regardless of label length. */
+.app-cycle-timer-slot { margin-left: auto; }
+/* §S6 #11 — heat-highlighted CR-root id */
+.app-heat-ink { color: var(--heat); }
+.app-cr-root {
+  font: 600 11px var(--mono);
+  margin: 4px 0 2px;
+}
+.app-cr-root-cycles { margin-left: 14px; }
+.app-run-count-hint { margin-left: 8px; }
+.app-cycle-kind-badge { color: var(--ink-faint); }
+/* CR-CRU-025 §S1 — the "→ Runs" nav badge. Never wraps, never shrinks
+   (CR-023 660px pane floor): it holds its size while the row LABEL ellipsizes.
+   Dim + inert when the declared boundary has been pruned off the timeline. */
+.app-cycle-to-runs {
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+.app-cycle-to-runs:hover { color: var(--ink); }
+/* CR-CRU-032 §S3 (VERIFY 1B) — a `→ Runs` pill whose boundary was
+   server-confirmed pruned by its own anchor-fetch renders permanently dim:
+   faded ink + not-allowed cursor, so it never reads as a normal live jump. */
+.app-pill-dim {
+  color: var(--ink-faint);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.app-pill-dim:hover { color: var(--ink-faint); }
+/* CR-CRU-025 §S2 — the "⚑ Cycle" nav badge (inverse of "→ Runs"): never
+   wraps, never shrinks (CR-023 660px pane floor) so it holds its size while
+   the marker label ellipsizes. */
+.app-boundary-to-cycle {
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  color: var(--ink-dim);
+}
+.app-boundary-to-cycle:hover { color: var(--ink); }
+/* CR-CRU-032 §S3 — explicit "boundary truly pruned" feedback in the Runs pane
+   after a `→ Runs` anchor-fetch resolves empty. Replaces the old (removed,
+   inaccurate) dim `.app-cycle-to-runs.disabled` render + `title` channel. */
+.app-anchor-fetch-feedback {
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  border-left: 2px solid var(--ink-faint);
+  color: var(--ink-dim);
+}
+/* CR-CRU-025 §S1 — 10s locate blink applied to the scrolled-to declared
+   boundary; a JS timer removes the class after exactly 10s. */
+@keyframes app-locate-blink {
+  0%, 100% { background: transparent; }
+  50% { background: rgba(255, 122, 26, 0.28); }
+}
+.app-locate-blink {
+  animation: app-locate-blink 1s ease-in-out infinite;
+  border-radius: 4px;
+}
+.app-open-span-annotation { margin-left: 8px; }
+.app-lane-chip { color: var(--ink-dim); }
+.app-cr-track { color: var(--ink-dim); }
+.app-cycle-runs {
+  margin: 2px 0 4px 1.9em;
+  border-left: 1px solid var(--line);
+  padding-left: 10px;
+}
+.app-linked-run-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  cursor: pointer;
+  color: var(--ink);
+  padding: calc(var(--row-pad, 6px) / 2) 2px;
+}
+.app-linked-run-row:hover { color: var(--heat); }
+/* §S6 #3 (cycle 13) — the active cycle's open span: ONE inline flow */
+.app-open-span { margin: 2px 0 4px 1.9em; }
+.app-inline-run { cursor: pointer; color: var(--ink); }
+.app-inline-run:hover { color: var(--heat); }
+.app-workflow-history { color: var(--ink-faint); }
+/* CR-CRU-020 — ▸/▾ expand affordances (rows stay text-color only) */
+.app-lens-toggle { cursor: pointer; user-select: none; }
+.app-lens-toggle:hover .app-pane-section-title { color: var(--heat); }
+.app-cycle-toggle { cursor: pointer; user-select: none; }
+.app-toggle-glyph { color: var(--ink-faint); width: 1em; display: inline-block; }
+
+/* ── CR-CRU-013 — gate-body + milestone field separation ────────────────────
+   The shared gateBodyContent step ladder / fixes table (F8½ drill-in + F13
+   widget) and the §S4b milestone-entry row render ` · `-joined fields (the
+   same seal convention gate-card + merge-marker already use). These rules add
+   the per-field ink + row rhythm so no two fields visually abut. */
+.app-gate-step-row,
+.app-gate-fix-row {
+  font-size: 10.5px;
+  line-height: 1.9;
+  padding: 1px 0;
+}
+.app-gate-step-name { color: var(--pass); }
+.app-gate-step-status { color: var(--ink-faint); }
+.app-gate-step-findings { color: var(--heat); }
+.app-gate-fix-id { color: var(--heat); }
+.app-gate-fix-file { color: var(--ink-faint); }
+.app-gate-fix-desc { color: var(--ink); }
+.app-milestone-entry {
+  color: var(--ink-faint);
+  font-size: 10px;
+  line-height: 1.85;
+  padding: 3px 2px;
+}
+.app-milestone-glyph { color: var(--heat); }
+.app-milestone-type { color: var(--ink-dim); }

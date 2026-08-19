@@ -1,0 +1,15 @@
+data/
+node_modules/
+.lavish/*.excalidraw
+coverage/
+.coverage
+coverage.lcov
+test-reports/
+.env
+playwright-report/
+test-results/
+blob-report/
+.lavish/
+.features-gen/
+__pycache__/
+.venv/

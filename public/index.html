@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" data-theme="forge">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crucible v2</title>
+  <!-- Root-absolute asset URLs: the SPA fallback serves this page for deep
+       routes (/p/<key>/run/<id>); relative hrefs would resolve under the
+       route path and 404, leaving deep links a blank page. -->
+  <link rel="stylesheet" href="/vendor/daisyui-5.5.19.css">
+  <link rel="stylesheet" href="/vendor/daisyui-themes-5.5.19.css">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/vendor/tailwind-browser-4.2.4.js" defer></script>
+  <script src="/vendor/van-1.5.5.nomodule.min.js" defer></script>
+  <script src="/vendor/van-x-0.6.3.nomodule.min.js" defer></script>
+  <script type="module" src="/app-logic.mjs"></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div id="app"></div>
+</body>
+</html>
