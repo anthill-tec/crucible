@@ -82,4 +82,4 @@ pip install -e '.[dev]'
 
 ## Version
 
-`0.1.0` (set on the release branch per the git-flow release ceremony).
+`0.1.2` (set on the release branch per the git-flow release ceremony).
