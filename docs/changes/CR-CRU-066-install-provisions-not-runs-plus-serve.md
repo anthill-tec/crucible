@@ -162,6 +162,29 @@ release.
 - **Absolute-path resolution** must survive a minimal PATH (the systemd follow-up depends on it) —
   resolve `~/.bun/bin` explicitly rather than trusting inherited PATH.
 
+## Implementation notes
+
+### `serve` deliberately emits NO TOON-AXI envelope (C3)
+
+Every other verb emits one document on stdout (CR-CRU-030 §S1). `serve` does not, and that is a
+deliberate deviation rather than an omission: `serve` hands stdout to the **server process** for the
+life of the run, so emitting an envelope first would either violate §S3 stdout purity (a document
+followed by unrelated server output) or force us to swallow the server's own stdout. A run command
+that blocks by design has no terminal state to report at launch time.
+
+What it does instead: a pre-launch resolution failure (no provisioned bin AND no resolvable Bun)
+writes `crucible-axi serve: <remedy>` to **stderr** and exits 1 — no traceback — and the child's exit
+code otherwise passes through verbatim. If the fleet later wants a machine-readable `serve`
+(e.g. a pre-launch envelope on a separate fd, or a `--dry-run` that prints the composed argv and
+exits), that is a deliberate follow-up, not something half-done here.
+
+### Unwritable target dir returns an envelope, not a traceback (C3)
+
+`run_install`'s `makedirs` failure becomes `{"code": "target-dir-failed", detail: "could not create
+target dir <path>: <exc>"}` with `ok=False`, rather than a propagated `OSError`. The AC accepts
+either shape; this one keeps `crucible-axi install` emitting a well-formed envelope and exiting 1 on
+a permissions problem, which is what an agent consuming the install output needs.
+
 ## Non-goals
 
 - The **systemd `--user` daemon** (`crucible-axi service …` + unit template) — the Linux-native
