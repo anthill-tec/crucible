@@ -68,6 +68,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-059](CR-CRU-059-identity-source-validation.md) | Registration identity contract — rename `phase` → **`role`** fleet-wide (the DN's own ontology says Role; `phase` is only the scope word), + validate `identity.source` against its documented enum. CLEAN BREAK (no alias); the capability change rides the single per-release Model-B intimation | patch | COMPLETED | 044, 054, 056, 057 | 4 |
 | [CR-CRU-063](CR-CRU-063-ci-provisions-the-toolchain.md) | CI runs the gates but provisions no toolchain — measured on the first real push (run 31677479804): **102 bun + 9 python failures**, 98 of them `Executable not found in $PATH: "uv"`; the Python job is server-free but not dependency-free (`uv`, the declared `dev` extra, `build`). Publishes `needs:` these suites, so a red gate publishes nothing. `unittest-xml-reporting` turned out to be declared NOWHERE despite every python client run shelling out to `python -m xmlrunner` | patch | COMPLETED | 062 | 4 |
 | [CR-CRU-064](CR-CRU-064-toolchain-starved-runs-emit-no-envelope.md) | A toolchain-starved run emits no envelope — seven no-report fallbacks (python ×3, bun ×2, arduino ×2, incl. BOTH `pre-merge-gate` regression bodies) return an exit code with empty stdout; one shared `no_report_*` helper replaces rust's + mvn's duplicated local ones, and `docker-e2e-gate`'s envelope test stops depending on ambient free disk | patch | COMPLETED (0.1.0 · release prerequisite) | 030, 054, 058, 063 | 4 |
+| [CR-CRU-065](CR-CRU-065-cause-selection-fits-maven.md) | The no-report cause is picked as the LAST non-empty line — right for python/node (`ModuleNotFoundError` ends those streams), wrong for maven (`cannot find symbol` sits above its `symbol:` lines; the tail is `[ERROR] -> [Help 1]` boilerplate). Additive `cause=` override: selection becomes per-stack, composition/bounding stays shared; head-preserving bound for a supplied cause, tail-preserving for the derived one | patch | PENDING (0.2.0 proposed — membership unconfirmed) | 064 | 5 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 · track-1) | 011, 013 | 5 (0.2.0) |
 | [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Playwright runner + codec + tab | feature | PENDING (0.2.0 · track-2) | 004, 007 | 5 (0.2.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end + Aborted state | feature | PENDING (0.2.0 · track-3 cand.) | 008, 011 | 5 (0.2.0) |
@@ -75,6 +76,28 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: velocity + burndown + forecast | feature | PENDING (0.2.0) | 011, 014 | 5/6 (0.2.0) |
 
 ## Notes
+- 2026-08-18 (SCRUM filing) — **CR-CRU-065 filed** on user direction, carrying CR-CRU-064's C3
+  recorded follow-up: the shared `no_report_warning` picks the LAST non-empty line as the cause,
+  which is right for python/node and wrong for maven. Design call (mine, overrulable): an additive
+  `cause=` override so SELECTION becomes per-stack while COMPOSITION (prefix, 500-char bound,
+  never-empty) stays in the shared helper — a maven-shaped heuristic inside that helper would put
+  stack knowledge in the one place that must stay stack-agnostic. Proposed 0.2.0, membership
+  unconfirmed: mvn's envelope is CORRECT today (right code, right exit, a true line), just
+  uninformative, so it is fidelity work rather than a shipping defect.
+- 🚨 **2026-08-18 (CR-CRU-064 verification gap — CLOSED by measurement, recorded for the process
+  rule it broke).** Its C4 cycle was committed as `test(cr-cru-064): C4 RED …` and ingested under
+  `CR-CRU-064-C4-RED`, but it **never had a RED**: the commit is test-only (32 lines added to the
+  existing bun fixture `tests/clients-python-arduino-crucible.test.ts`) and the behaviour it asserts
+  had already shipped in **C2 (`ecf0fe5`)**, so the assertions passed on first execution. The board
+  shows it: TWO ingests of 32/32 passing under a `-RED` id (also a run-spam breach of
+  evidence-only-ingest — one final evidence run per contract file). **Mutation kill, run 2026-08-18
+  to supply the missing evidence:** baseline `bun test tests/clients-python-arduino-crucible.test.ts`
+  → 32 pass / 0 fail; with python `cmd_test`'s `_emit_axi` no-report call replaced by a bare stderr
+  print → **1 fail** (`:1016`, the starved-toolchain test) / 31 pass; reverted → 32 pass, tree clean.
+  So the C4 assertions are real guards and the delivery is sound — what was missing was PROOF, not
+  value. Rule this establishes: **a test written after its production code cannot go RED.** Write it
+  in the cycle that ships the behaviour, or label the cycle a BACKFILL and prove it with a mutation
+  kill — never name it `-RED`.
 - 2026-07-14 — Project kickoff: PRD + evidence DN landed. Kickoff design review (lavish)
   locked six decisions: A+B hybrid dashboard (Mission Control home + project workspace
   drill-in); TOON on agent-facing reads first; REST AXI + `crucible-axi` npx CLI; hybrid
