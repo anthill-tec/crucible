@@ -413,6 +413,134 @@ class ServeExitCodePassthroughTest(_ServeFixtureCase):
             f"`serve` must RETURN the child's exit code verbatim (3), not a "
             f"normalized 0/1 -- got {code}; stderr={err!r}")
 
+    def test_serve_returns_zero_when_the_child_exits_zero(self):
+        """The zero case is not the same code path as the signal translation
+        below -- pinned so the `128 - returncode` arithmetic can never leak into
+        a clean shutdown."""
+        install, cli = _import_fresh("crucible_axi.install", "crucible_axi.cli")
+        self._make_executable(self.server_bin)
+        with _patched_env(**self._serve_env()), \
+                mock.patch("subprocess.run",
+                           side_effect=_run_side_effect(0)) as mock_run, \
+                mock.patch("shutil.which",
+                           side_effect=_which_never_finds_bare_names()):
+            code, _out, err = _run_cli(cli, ["serve"])
+
+        self.assertTrue(_launch_calls(mock_run), f"stderr={err!r}")
+        self.assertEqual(
+            code, 0,
+            f"a child that exits 0 makes `serve` return 0, untranslated; "
+            f"got {code}; stderr={err!r}")
+
+
+class ServeCtrlCExitsCleanlyTest(_ServeFixtureCase):
+    """AC5a -- Ctrl-C stops `serve` cleanly: exit 130, NO traceback.
+
+    `docs/RUNBOOK.md` documents Ctrl-C as THE stop gesture, and a foreground
+    SIGINT is delivered by the shell to the whole PROCESS GROUP -- so the PARENT
+    raises `KeyboardInterrupt` out of `subprocess.run`, not just the child.
+    Unhandled, the console script prints a Python stack trace at an operator who
+    did exactly what the runbook told them to; that is the same unpolished
+    failure the 0.1.1 install hang produced, and the reason the
+    resolution-failure path already forbids tracebacks.
+
+    Driven at the seam -- the stubbed `subprocess.run` RAISES
+    `KeyboardInterrupt` -- so no port is bound and no server is spawned. The
+    real end-to-end SIGINT is covered by this CR's no-mock smoke.
+    """
+
+    def _serve_interrupted(self):
+        install, cli = _import_fresh("crucible_axi.install", "crucible_axi.cli")
+        self._make_executable(self.server_bin)
+        out, err = io.StringIO(), io.StringIO()
+        with _patched_env(**self._serve_env()), \
+                mock.patch("subprocess.run",
+                           side_effect=KeyboardInterrupt()) as mock_run, \
+                mock.patch("shutil.which",
+                           side_effect=_which_never_finds_bare_names()):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                try:
+                    code = cli.main(["serve"])
+                except KeyboardInterrupt:
+                    self.fail(
+                        "a Ctrl-C must NOT escape `crucible-axi serve` as a "
+                        "`KeyboardInterrupt` -- an escaped one is exactly the "
+                        "stack trace the console script prints at the operator "
+                        "(AC5a)")
+        return code, out.getvalue(), err.getvalue(), mock_run
+
+    def test_ctrl_c_returns_130_without_a_traceback(self):
+        code, out, err, mock_run = self._serve_interrupted()
+
+        self.assertTrue(
+            _launch_calls(mock_run),
+            f"the interrupt must be raised from the LAUNCH wait, so a launch "
+            f"call must have been composed; calls={mock_run.call_args_list}")
+        self.assertEqual(
+            code, 130,
+            f"a SIGINT'd foreground `serve` must exit 130 (the SIGINT "
+            f"convention, 128+2); got {code}; stderr={err!r}")
+        for stream_name, text in (("stdout", out), ("stderr", err)):
+            self.assertNotIn(
+                "Traceback", text,
+                f"Ctrl-C must print NO Python traceback on {stream_name}; "
+                f"{stream_name}={text!r}")
+            self.assertNotIn(
+                "KeyboardInterrupt", text,
+                f"Ctrl-C must not name the Python exception on {stream_name}; "
+                f"{stream_name}={text!r}")
+
+
+class ServeSignalledChildReportsOneTwentyEightPlusNTest(_ServeFixtureCase):
+    """AC5b -- a signal-terminated server reports `128+N`, never a masked
+    negative.
+
+    `CompletedProcess.returncode` is NEGATIVE when the child is signalled
+    (`-15` SIGTERM, `-9` SIGKILL), and the console script's `sys.exit(-15)`
+    masks to OS status 241 -- so a supervisor, including the systemd `--user`
+    unit this CR delivers `serve` for, cannot tell the process was signalled.
+    `serve` translates it to the conventional `128 - returncode`.
+    """
+
+    def _serve_with_returncode(self, returncode):
+        install, cli = _import_fresh("crucible_axi.install", "crucible_axi.cli")
+        self._make_executable(self.server_bin)
+        with _patched_env(**self._serve_env()), \
+                mock.patch("subprocess.run",
+                           side_effect=_run_side_effect(returncode)) as mock_run, \
+                mock.patch("shutil.which",
+                           side_effect=_which_never_finds_bare_names()):
+            code, _out, err = _run_cli(cli, ["serve"])
+        self.assertTrue(
+            _launch_calls(mock_run),
+            f"no launch call was composed, so no exit code could be "
+            f"translated; code={code} stderr={err!r}")
+        return code, err
+
+    def test_sigterm_reports_143_not_the_masked_241(self):
+        code, err = self._serve_with_returncode(-15)
+        self.assertEqual(
+            code, 143,
+            f"a SIGTERM'd child (returncode -15) must be reported as 143 "
+            f"(128+15); got {code} -- and `sys.exit(-15)` would reach the OS as "
+            f"241, which tells a supervisor nothing; stderr={err!r}")
+
+    def test_sigkill_reports_137(self):
+        code, err = self._serve_with_returncode(-9)
+        self.assertEqual(
+            code, 137,
+            f"a SIGKILL'd child (returncode -9) must be reported as 137 "
+            f"(128+9); got {code}; stderr={err!r}")
+
+    def test_a_positive_child_code_is_not_translated(self):
+        """The translation applies ONLY to the negative signalled codes -- a
+        real non-zero exit status still passes through verbatim (AC5)."""
+        code, err = self._serve_with_returncode(3)
+        self.assertEqual(
+            code, 3,
+            f"a positive exit status must pass through unchanged; got {code}; "
+            f"stderr={err!r}")
+
 
 def _fast_provision_server_stage(target_dir, force):
     """A [server] stage double that PROVISIONS instantly: no subprocess, no

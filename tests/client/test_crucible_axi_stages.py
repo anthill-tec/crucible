@@ -78,6 +78,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -199,27 +200,37 @@ class ServerStageTest(unittest.TestCase):
             "Bun is present on PATH -- the curl bootstrap must be skipped")
 
     def test_server_stage_bootstraps_bun_via_curl_installer_before_provision_when_bun_absent(self):
-        """When Bun is absent the curl bootstrap runs FIRST, then the
+        """When Bun is GENUINELY absent the curl bootstrap runs FIRST, then the
         `bun add -g` provision -- and still NEVER `npx`.
 
         Patches `crucible_axi.__version__` to a realistic installed-release
         value (see the sibling test's note on the source-checkout sentinel).
 
-        `$BUN_INSTALL` points at a tmp fixture tree holding an executable
-        `bin/bun` -- what the curl bootstrap leaves behind. Under CR-CRU-066
-        §S2 the stage RE-RESOLVES Bun there after bootstrapping (a freshly
-        installed Bun is not on the PATH this process inherited) and VERIFIES
-        it, so the fixture keeps this test machine-independent instead of
-        leaning on the developer's real `~/.bun`."""
+        `$BUN_INSTALL` points at a tmp fixture tree whose `bin/` starts EMPTY,
+        and the mocked bootstrap call LAYS THE BUN DOWN there as its side effect
+        -- what the real `curl … | bash` does. Retargeted in the CR-CRU-066 FIX
+        round: pre-creating that bun made "absent" false (§S2 detects PATH AND
+        `$BUN_INSTALL/bin`), so the old fixture could not distinguish a
+        legitimate bootstrap from a redundant one. Under §S2 the stage
+        RE-RESOLVES Bun there after bootstrapping (a freshly installed Bun is not
+        on the PATH this process inherited) and VERIFIES it, so the fixture keeps
+        this test machine-independent instead of leaning on the developer's real
+        `~/.bun`."""
         install = _import_fresh("crucible_axi.install")
         axi = _import_fresh("crucible_axi")
         bun_root = tempfile.mkdtemp(prefix="crucible-axi-bun-root-")
         self.addCleanup(shutil.rmtree, bun_root, ignore_errors=True)
         os.makedirs(os.path.join(bun_root, "bin"), exist_ok=True)
         fake_bun = os.path.join(bun_root, "bin", "bun")
-        with open(fake_bun, "w") as handle:
-            handle.write("#!/bin/sh\necho 1.1.34\n")
-        os.chmod(fake_bun, 0o755)
+
+        def _bootstrap_installs_bun(*args, **kwargs):
+            call = mock.call(*args, **kwargs)
+            if "bun.sh/install" in _call_command_text(call):
+                with open(fake_bun, "w") as handle:
+                    handle.write("#!/bin/sh\necho 1.1.34\n")
+                os.chmod(fake_bun, 0o755)
+            return SimpleNamespace(returncode=0, stdout="1.1.34\n", stderr="")
+
         with mock.patch.dict(os.environ, {"BUN_INSTALL": bun_root}), \
                 mock.patch.object(axi, "__version__", "0.1.0"), \
                 mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
@@ -227,7 +238,7 @@ class ServerStageTest(unittest.TestCase):
                            return_value=None), \
                 mock.patch("crucible_axi.install._server_already_installed",
                            return_value=False):
-            mock_run.return_value.returncode = 0
+            mock_run.side_effect = _bootstrap_installs_bun
             result = install._server_stage(self.tmp, False)
 
         self.assertFalse(result["converged"])

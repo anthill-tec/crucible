@@ -206,13 +206,22 @@ def _bun_remedy(problem: str) -> str:
 def _guarantee_bun(no_bun_bootstrap: bool = False) -> str:
     """GUARANTEE Bun, or fail definitively (CR-CRU-066 §S2 AC3/AC4).
 
-    Detect on PATH -> bootstrap when absent (unless opted out) -> RE-RESOLVE
-    including `$BUN_INSTALL/bin` -> VERIFY the resolved binary actually runs
-    (`<abs-bun> --version` exits 0) -> return its ABSOLUTE path. Anything else
-    raises `RuntimeError` carrying the remedy: an unguaranteed Bun must never
-    reach the provision, and the failure is never swallowed.
+    Detect at BOTH locations first (`_resolve_bun_path`: PATH **and** the
+    explicit `$BUN_INSTALL/bin/bun`) -> bootstrap only when BOTH miss (unless
+    opted out) -> RE-RESOLVE including `$BUN_INSTALL/bin` -> VERIFY the resolved
+    binary actually runs (`<abs-bun> --version` exits 0) -> return its ABSOLUTE
+    path. Anything else raises `RuntimeError` carrying the remedy: an
+    unguaranteed Bun must never reach the provision, and the failure is never
+    swallowed.
+
+    A PATH-ONLY first probe is wrong (caught at VERIFY): this CR's own install
+    puts Bun under `~/.bun`, so an operator who has not re-sourced their shell
+    has a perfectly usable Bun that PATH cannot see -- and the PATH-only probe
+    then re-pipes the remote installer into a shell on every `--force` /
+    re-provision, which is exactly the pipe-to-shell the opt-out exists to
+    avoid.
     """
-    bun = _bun_on_path()
+    bun = _resolve_bun_path()
     if bun is None:
         opted_out = _bun_bootstrap_disabled(no_bun_bootstrap)
         if not opted_out:

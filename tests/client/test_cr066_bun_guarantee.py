@@ -161,6 +161,26 @@ def _run_side_effect(failing_needles=()):
     return _run
 
 
+def _run_side_effect_bootstrap_installs_bun(install_bun, failing_needles=()):
+    """Like `_run_side_effect`, but the BOOTSTRAP call carries the side effect
+    the real `curl -fsSL https://bun.sh/install | bash` carries: it LAYS BUN
+    DOWN at `$BUN_INSTALL/bin/bun`.
+
+    Modelling that side effect is what lets a test distinguish "Bun was already
+    there" from "the bootstrap put it there" -- a fixture that pre-creates the
+    fake bun cannot tell those apart, and therefore cannot pin when a bootstrap
+    is legitimate.
+    """
+    base = _run_side_effect(failing_needles)
+
+    def _run(*args, **kwargs):
+        call = SimpleNamespace(args=args, kwargs=kwargs)
+        if BOOTSTRAP_NEEDLE in _command_text(call):
+            install_bun()
+        return base(*args, **kwargs)
+    return _run
+
+
 @contextlib.contextmanager
 def _patched_env(**overrides):
     """Set/remove environment keys for the block (a None value removes the
@@ -229,11 +249,27 @@ class _BunFixtureCase(unittest.TestCase):
 
 
 class BunBootstrapReResolveVerifyTest(_BunFixtureCase):
-    """AC3 -- Bun absent + auto-bootstrap (the default): bootstrap, RE-RESOLVE
-    `$BUN_INSTALL/bin`, VERIFY `bun --version`, and only then provision, using
-    the resolved ABSOLUTE bun path."""
+    """AC3 + §S2 -- Bun is detected at BOTH locations FIRST (PATH and the
+    explicit `$BUN_INSTALL/bin/bun`); the bootstrap runs ONLY when Bun is
+    genuinely absent from both, and is then followed by RE-RESOLVE, VERIFY
+    `bun --version`, and the provision, using the resolved ABSOLUTE bun path.
 
-    def test_bootstrap_then_reresolve_then_verify_then_provision_in_order(self):
+    RETARGETED at VERIFY (CR-CRU-066 FIX round): the ordering test here used to
+    pre-create the fake `$BUN_INSTALL/bin/bun` and still demand exactly one
+    bootstrap. That pinned the WRONG contract -- and the implementation was bent
+    to satisfy it by probing PATH only, so the state this CR's own install
+    creates (Bun under `~/.bun`, shell PATH not re-sourced) re-piped the remote
+    installer on every `--force`/re-provision. The fixture now models the
+    bootstrap's real side effect (it writes the bun) instead of pre-creating it,
+    so "bootstrap" and "Bun was already present" are distinguishable and the
+    tests can pin the detect-both-first contract the RED module always stated.
+    """
+
+    def test_bun_only_at_the_bun_install_prefix_is_used_without_any_bootstrap(self):
+        """Bun present at `$BUN_INSTALL/bin/bun` but NOT on PATH -- exactly the
+        state this CR's own install leaves behind before the operator re-sources
+        their shell. That Bun is perfectly usable, so ZERO bootstraps may run
+        and the provision must proceed with its absolute path."""
         install, = _import_fresh("crucible_axi.install")
         bun_path = self._make_fake_bun()
         with _patched_env(**self._bun_env()), \
@@ -243,7 +279,45 @@ class BunBootstrapReResolveVerifyTest(_BunFixtureCase):
                                                             bun_path)), \
                 mock.patch("crucible_axi.install._server_already_installed",
                            return_value=False):
-            mock_run.side_effect = _run_side_effect()
+            mock_run.side_effect = _run_side_effect_bootstrap_installs_bun(
+                self._make_fake_bun)
+            result = install._server_stage(self.tmp, False)
+
+        calls = mock_run.call_args_list
+        self.assertEqual(
+            _bootstrap_indices(mock_run), [],
+            f"a Bun already at $BUN_INSTALL/bin must be DETECTED, never "
+            f"re-fetched: piping the remote installer to a shell here is both "
+            f"wasteful and the very behaviour the opt-out exists to avoid "
+            f"(§S2); calls={calls}")
+        provisions = _provision_indices(mock_run)
+        self.assertTrue(
+            provisions,
+            f"the provision must still run with the prefix Bun; calls={calls}")
+        self.assertEqual(
+            _argv(calls[provisions[0]])[0], bun_path,
+            f"the provision must use the ABSOLUTE $BUN_INSTALL/bin/bun that was "
+            f"already there; calls={calls}")
+        self.assertEqual(result.get("bun"), bun_path)
+
+    def test_bootstrap_then_reresolve_then_verify_then_provision_in_order(self):
+        """Bun absent from BOTH locations -- the only state that justifies the
+        bootstrap. Exactly one runs, and the bun it lays down is then
+        re-resolved, verified and used."""
+        install, = _import_fresh("crucible_axi.install")
+        self.assertFalse(
+            os.path.exists(self.fake_bun),
+            "fixture sanity: Bun must be absent from BOTH locations here -- the "
+            "bootstrap is what creates it")
+        with _patched_env(**self._bun_env()), \
+                mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
+                mock.patch("crucible_axi.install.shutil.which",
+                           side_effect=_which_restricted_to(self.bun_bin_dir,
+                                                            self.fake_bun)), \
+                mock.patch("crucible_axi.install._server_already_installed",
+                           return_value=False):
+            mock_run.side_effect = _run_side_effect_bootstrap_installs_bun(
+                self._make_fake_bun)
             result = install._server_stage(self.tmp, False)
 
         bootstraps = _bootstrap_indices(mock_run)
@@ -253,8 +327,8 @@ class BunBootstrapReResolveVerifyTest(_BunFixtureCase):
 
         self.assertEqual(
             len(bootstraps), 1,
-            f"Bun absent from PATH => exactly one curl bootstrap, got "
-            f"calls={calls}")
+            f"Bun absent from PATH AND from $BUN_INSTALL/bin => exactly one "
+            f"curl bootstrap, got calls={calls}")
         self.assertTrue(
             verifies,
             f"the re-resolved Bun must be VERIFIED with a `<abs-bun> "
@@ -277,7 +351,7 @@ class BunBootstrapReResolveVerifyTest(_BunFixtureCase):
         # bun the installer just laid down under `$BUN_INSTALL/bin`, NOT the
         # bare token the inherited PATH cannot resolve.
         self.assertEqual(
-            _argv(calls[verifies[0]])[0], bun_path,
+            _argv(calls[verifies[0]])[0], self.fake_bun,
             "the verification must run the RE-RESOLVED absolute Bun path from "
             "`$BUN_INSTALL/bin` (a freshly bootstrapped Bun is not on the "
             "inherited PATH)")
@@ -511,19 +585,27 @@ class BunBootstrapOptOutTest(_BunFixtureCase):
 
     def test_cli_install_bootstraps_by_default_when_flag_absent(self):
         """Auto-bootstrap is the DEFAULT (README intent, AC4): without the flag
-        (and without the env opt-out) a missing Bun IS bootstrapped, and the
-        install then succeeds."""
+        (and without the env opt-out) a GENUINELY missing Bun IS bootstrapped,
+        and the install then succeeds.
+
+        Same VERIFY retarget as the ordering test above: Bun must be absent from
+        BOTH PATH and `$BUN_INSTALL/bin` for a bootstrap to be legitimate, so
+        the fixture lets the mocked bootstrap lay the bun down as its side
+        effect rather than pre-creating it."""
         cli, install = _import_fresh("crucible_axi.cli", "crucible_axi.install")
-        bun_path = self._make_fake_bun()
+        self.assertFalse(
+            os.path.exists(self.fake_bun),
+            "fixture sanity: Bun must be genuinely absent before the install")
         stdout = io.StringIO()
         with _patched_env(**self._bun_env()), \
                 mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
                 mock.patch("crucible_axi.install.shutil.which",
                            side_effect=_which_restricted_to(self.bun_bin_dir,
-                                                            bun_path)), \
+                                                            self.fake_bun)), \
                 mock.patch("crucible_axi.install._server_already_installed",
                            return_value=False):
-            mock_run.side_effect = _run_side_effect()
+            mock_run.side_effect = _run_side_effect_bootstrap_installs_bun(
+                self._make_fake_bun)
             with contextlib.redirect_stdout(stdout):
                 code = cli.main(["install", "--target-dir", self.tmp])
 

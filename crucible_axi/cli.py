@@ -131,6 +131,18 @@ def cmd_serve(args) -> int:
     failure. No envelope is emitted: stdout belongs to the server. A launch that
     cannot be RESOLVED (no provisioned bin and no usable Bun) is definitive —
     the remedy on stderr, exit 1 — never a traceback.
+
+    Two exit-status translations keep the foreground contract honest:
+
+    * `KeyboardInterrupt` -> 130 (AC5a). RUNBOOK documents Ctrl-C as THE stop
+      gesture, and a foreground SIGINT is delivered to the whole process group,
+      so the parent raises out of `subprocess.run` too. Catching it here is what
+      keeps a `Ctrl-C` from printing a Python stack trace at the operator.
+    * a NEGATIVE returncode -> `128 - returncode` (AC5b). `CompletedProcess`
+      reports a signalled child as `-N` (`-15` SIGTERM, `-9` SIGKILL), and the
+      console script's `sys.exit(-15)` would mask to OS status 241. Translating
+      to the conventional `128+N` (143 / 137) is what lets a supervisor tell
+      the server was signalled. A positive code passes through verbatim.
     """
     try:
         argv = install.server_launch_argv()
@@ -142,7 +154,11 @@ def cmd_serve(args) -> int:
         env[install.SERVER_HOST_ENV_VAR] = args.host
     if args.port is not None:
         env[install.SERVER_PORT_ENV_VAR] = str(args.port)
-    return subprocess.run(argv, env=env).returncode
+    try:
+        returncode = subprocess.run(argv, env=env).returncode
+    except KeyboardInterrupt:
+        return 130
+    return returncode if returncode >= 0 else 128 - returncode
 
 
 _COMMANDS = {
