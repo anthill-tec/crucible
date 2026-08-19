@@ -1,6 +1,6 @@
 # CR-CRU-066 — `crucible-axi install` hangs (runs the server) and exposes no run command; provision-and-exit + a `serve` verb + bun guarantee
 
-**Status:** PENDING
+**Status:** COMPLETED (shipped 2026-08-19 on develop)
 **Type:** bugfix (install-contract — release blocker)
 **Priority:** P0 — the published `0.1.1` install is unusable: `crucible-axi install` never returns, and nothing puts a runnable server command on PATH. Every `curl … | sh` / `uv tool install` user hits it.
 **Depends on:** CR-CRU-009 (the staged installer), CR-CRU-041 (the npm server package + version pin)
