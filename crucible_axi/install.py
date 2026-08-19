@@ -39,12 +39,42 @@ SERVER_VERSION_ENV_VAR = "CRUCIBLE_SERVER_VERSION"
 # The Bun curl-bootstrap the [server] stage runs when Bun is absent from PATH.
 _BUN_INSTALL_COMMAND = "curl -fsSL https://bun.sh/install | bash"
 
+# Bun's global install prefix -- where `bun add -g` lays packages down and
+# links their bins (CR-CRU-066 §S1). `$BUN_INSTALL` overrides it; the default
+# is the user-scoped `~/.bun`, which is why the provision needs no system
+# prefix (and no sudo) the way `npm -g` does.
+BUN_INSTALL_ENV_VAR = "BUN_INSTALL"
+_DEFAULT_BUN_INSTALL_PREFIX = "~/.bun"
+
+# The console-script `SERVER_NPM_PACKAGE` links into Bun's global bin; its
+# presence there is the server's REAL installed marker.
+SERVER_BIN_NAME = "crucible-server"
+
+
+def _bun_global_bin_dir() -> str:
+    """Bun's global bin directory -- `$BUN_INSTALL/bin` when set, else
+    `~/.bun/bin`. Read at call time so both an operator's `$BUN_INSTALL` and a
+    prefix that only exists after the curl bootstrap are observed."""
+    prefix = os.environ.get(BUN_INSTALL_ENV_VAR) or _DEFAULT_BUN_INSTALL_PREFIX
+    return os.path.join(os.path.expanduser(prefix), "bin")
+
+
+def _provisioned_server_bin_path() -> str:
+    """Absolute path of the `crucible-server` bin that `bun add -g` links."""
+    return os.path.join(_bun_global_bin_dir(), SERVER_BIN_NAME)
+
 
 def _server_already_installed(target_dir: str) -> bool:
-    """Idempotency detection seam for the [server] sub-installer -- True when the
-    server has already been laid down under `target_dir`. Tests patch this
-    directly; the on-disk probe is a simple marker-directory check."""
-    return os.path.isdir(os.path.join(target_dir, "server"))
+    """REAL idempotency probe for the [server] sub-installer (CR-CRU-066 §S1) --
+    True iff the `crucible-server` bin exists under Bun's global bin.
+
+    Bun owns where the server lands, so `target_dir` (the install/manifest
+    root) never holds a server payload: the retired `<target_dir>/server`
+    marker-directory probe could never converge because nothing ever created
+    it. `target_dir` is kept for the stage-runner signature.
+
+    Tests patch this seam directly."""
+    return os.path.isfile(_provisioned_server_bin_path())
 
 
 def _resolve_server_version() -> str:
@@ -74,8 +104,8 @@ def _resolved_server_version_or_fail() -> str:
     The one unusable case is the source-checkout fallback: when crucible-axi is
     not installed as a package, `crucible_axi.__version__` is the
     `_SOURCE_CHECKOUT_VERSION` sentinel, which is not a valid npm version — a
-    pin built from it makes `npx` fail with an opaque error deep inside the
-    install. With `CRUCIBLE_SERVER_VERSION` set the operator has named the
+    pin built from it makes the provision fail with an opaque error deep inside
+    the install. With `CRUCIBLE_SERVER_VERSION` set the operator has named the
     version explicitly, so there is nothing to guard.
     """
     override = os.environ.get(SERVER_VERSION_ENV_VAR)
@@ -99,14 +129,23 @@ def _resolved_server_version_or_fail() -> str:
 
 
 def _server_stage(target_dir: str, force: bool) -> dict:
-    """[server] sub-installer -- `npx -y <SERVER_NPM_PACKAGE>@<version>` fetches +
-    runs the bun/node server, bootstrapping Bun via the curl installer first if
-    absent. The fetch is VERSION-PINNED (see `_resolve_server_version`).
+    """[server] sub-installer -- PROVISIONS the server user-scoped via
+    `bun add -g <SERVER_NPM_PACKAGE>@<version>`, then RETURNS (CR-CRU-066 §S1).
 
-    Idempotent: an already-installed server (and not `force`) short-circuits to
-    converged=True without shelling out.
+    It never runs the server: that npm package's bin IS the server (it
+    `listen`s), so the retired run-the-published-bin delegation blocked forever
+    and the install never reached the [manifest] stage. `bun add -g` installs
+    the package and links its `crucible-server` bin into Bun's user-scoped
+    global prefix (`~/.bun`), so there is no system-prefix permission problem
+    either. Running the server is a separate step.
+
+    Bun is bootstrapped via the curl installer FIRST when absent from PATH. The
+    provision is VERSION-PINNED (see `_resolve_server_version`).
+
+    Idempotent: an already-provisioned server bin (and not `force`)
+    short-circuits to converged=True without shelling out.
     """
-    server_path = os.path.join(target_dir, "server")
+    server_path = _provisioned_server_bin_path()
 
     if not force and _server_already_installed(target_dir):
         return {"path": server_path, "converged": True}
@@ -118,12 +157,12 @@ def _server_stage(target_dir: str, force: bool) -> dict:
     if shutil.which("bun") is None:
         subprocess.run(_BUN_INSTALL_COMMAND, shell=True, check=False)
 
-    pinned_package = f"{SERVER_NPM_PACKAGE}@{server_version}"
-    completed = subprocess.run(
-        ["npx", "-y", pinned_package], check=False)
+    provision_argv = ["bun", "add", "-g",
+                      f"{SERVER_NPM_PACKAGE}@{server_version}"]
+    completed = subprocess.run(provision_argv, check=False)
     if completed.returncode != 0:
         raise RuntimeError(
-            f"server stage failed: `npx -y {pinned_package}` exited with "
+            f"server stage failed: `{' '.join(provision_argv)}` exited with "
             f"returncode {completed.returncode}")
 
     return {"path": server_path, "converged": False}
