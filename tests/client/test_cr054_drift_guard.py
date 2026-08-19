@@ -549,5 +549,108 @@ class NoClientDefinesItsOwnNoReportHelperTest(unittest.TestCase):
             f"clients not referencing them: {missing!r}")
 
 
+# ---------------------------------------------------------------------------
+# CR-CRU-065 §S3 — the guard EXTENDS, it does not fork.
+#
+# C1 gave `no_report_warning(..., cause=None)` an override so a stack can
+# SELECT the informative fragment; C2 makes mvn pass one via a pure
+# `_select_maven_no_report_cause`. The risk the CR names: an override is a
+# door to per-stack drift. §S3's rule draws the line — SELECTION may live in a
+# client, COMPOSITION may not. The composition is everything that made the
+# helper shared: the untruncated prefix, the `NO_REPORT_DETAIL_MAX` bound, and
+# the `; last output line: ` joiner. A client may compute a plain cause
+# STRING; it may never re-derive the envelope around it.
+# ---------------------------------------------------------------------------
+
+# The distinctive signatures of `no_report_warning`'s composition. A client
+# holding any of these is re-implementing the shared envelope, not selecting a
+# cause. (` · ` is deliberately NOT a marker: it is a plain string joiner a
+# selector legitimately uses, and mvn's progress narrator already spells it.)
+NO_REPORT_COMPOSITION_MARKERS = (
+    "; last output line: ",
+    "NO_REPORT_DETAIL_MAX",
+    "before writing a report",
+)
+
+MVN_CAUSE_SELECTOR = "_select_maven_no_report_cause"
+
+
+def _composition_markers_in(source_text):
+    """Generic (requirement-3 style): the composition markers present in ANY
+    source text, real client or synthetic fixture."""
+    return [m for m in NO_REPORT_COMPOSITION_MARKERS if m in source_text]
+
+
+class NoClientReimplementsNoReportCompositionTest(unittest.TestCase):
+    """CR-CRU-065 §S3 — no client re-implements the no-report envelope
+    composition; a client may hold a SELECTOR that produces a plain cause
+    string, but the prefix/bound/joiner stay only in the shared module.
+
+    RED today by construction: mvn does not yet expose the selector (§S2), so
+    the positive `selection is allowed AND has landed` clause cannot hold."""
+
+    def _non_shared_client_sources(self):
+        return {path.name: path.read_text()
+                for path in sorted(CLIENTS_DIR.glob("*.py"))
+                if path.name != AXI_MODULE_PATH.name}
+
+    def test_selection_may_be_local_but_composition_stays_shared(self):
+        # The analyser has teeth AND is discriminating: a scratch client that
+        # re-derives the composition is flagged; a scratch client that holds
+        # ONLY a selector returning a plain cause string is not.
+        reimplements_composition = (
+            "def no_report_warning(verb, artifact, exit_code, output):\n"
+            "    prefix = f'{verb} produced no {artifact} — the runner exited '\\\n"
+            "             f'{exit_code} before writing a report'\n"
+            "    joiner = '; last output line: '\n"
+            "    room = NO_REPORT_DETAIL_MAX - len(prefix) - len(joiner)\n"
+            "    return {'code': 'no-test-reports', 'detail': prefix + joiner + output[:room]}\n"
+        )
+        selector_only = (
+            "def _select_maven_no_report_cause(output):\n"
+            "    frag = []\n"
+            "    for line in output.splitlines():\n"
+            "        if line.startswith('[ERROR]') and ':[' in line:\n"
+            "            frag.append(line)\n"
+            "    return ' · '.join(frag[:3]) or None\n"
+        )
+        self.assertNotEqual(
+            _composition_markers_in(reimplements_composition), [],
+            "the §S3 guard must FLAG a client that re-implements the "
+            "prefix/bound/joiner composition")
+        self.assertEqual(
+            _composition_markers_in(selector_only), [],
+            "the §S3 guard must ALLOW a client that only SELECTS a plain "
+            "cause string (a selector is not composition)")
+
+        # The real fleet: the composition markers live ONLY in the shared
+        # module -- no non-shared client re-derives the envelope.
+        offenders = {name: found
+                     for name, found in
+                     ((n, _composition_markers_in(s))
+                      for n, s in self._non_shared_client_sources().items())
+                     if found}
+        self.assertEqual(
+            offenders, {},
+            f"CR-CRU-065 §S3: the no-report envelope composition "
+            f"({NO_REPORT_COMPOSITION_MARKERS}) must live ONLY in "
+            f"clients/{AXI_MODULE_PATH.name}; clients re-implementing it: "
+            f"{offenders!r}")
+
+        # And the positive half (RED driver): mvn's SELECTION has landed as a
+        # pure selector, and it does so WITHOUT dragging the composition into
+        # the client -- selection local, composition shared.
+        mvn_src = CLIENT_FILES["mvn"].read_text()
+        self.assertIn(
+            MVN_CAUSE_SELECTOR, mvn_src,
+            f"CR-CRU-065 §S2/§S3: mvn must hold its own pure "
+            f"{MVN_CAUSE_SELECTOR}(output) selector")
+        self.assertEqual(
+            _composition_markers_in(mvn_src), [],
+            f"CR-CRU-065 §S3: mvn may SELECT a cause but must NOT re-implement "
+            f"the composition; markers found in mvn: "
+            f"{_composition_markers_in(mvn_src)!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

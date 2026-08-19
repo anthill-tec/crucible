@@ -970,5 +970,172 @@ class SharedAxiNoReportWarningTest(unittest.TestCase):
                     f"the detail; got {detail!r}")
 
 
+class SharedAxiNoReportWarningCauseOverrideTest(unittest.TestCase):
+    """CR-CRU-065 §S1 — `no_report_warning` gains ONE additive keyword,
+    `cause=None`. `cause=None` (every existing caller) is byte-identical to
+    CR-CRU-064's behaviour: the last non-empty line of `output`, bounded
+    keeping its TAIL. A caller-supplied `cause` REPLACES that selection (the
+    caller knows its own stack's shape -- maven's actionable line sits ABOVE
+    its epilogue) and is bounded keeping its HEAD, because the caller ordered
+    the fragment by importance. The composed prefix (verb + artifact + exit
+    code) is still never truncated, the total is still <= 500, and the detail
+    is still never empty."""
+
+    # The measured 5,009-character single-line shape reused from
+    # `SharedAxiNoReportWarningTest`: one long line, so the last-non-empty-line
+    # rule returns the WHOLE line and the tail-keeping bound is exercised.
+    TAIL_CAUSE = "ModuleNotFoundError: No module named 'xmlrunner'"
+    LONG_SINGLE_LINE = ("HEADSENTINEL " + "x" * 4940 + " " + TAIL_CAUSE)
+
+    def _over_long_head_cause(self):
+        """A 600-character caller-supplied cause whose ACTIONABLE fragment is at
+        the FRONT (`cannot find symbol`, maven's shape) and whose final
+        characters are a unique `TAILSENTINEL` -- so a head-keeping bound proves
+        itself by dropping the sentinel."""
+        head = "cannot find symbol "
+        tail = " TAILSENTINEL"
+        fill = "z" * (600 - len(head) - len(tail))
+        cause = head + fill + tail
+        self.assertEqual(len(cause), 600, "fixture guard: cause must be 600 chars")
+        return cause
+
+    def test_ac2_supplied_cause_replaces_the_last_line_when_they_differ(self):
+        """AC2 -- with `cause="X"`, the detail carries X and NOT the last
+        non-empty line of `output` (the two are driven apart deliberately)."""
+        axi_mod = _load_axi_module()
+        supplied = "cannot find symbol · symbol: class Widget"
+        output = ("some noise\n"
+                  "ModuleNotFoundError: No module named 'xmlrunner'\n")
+        last_line = axi_mod._last_non_empty_line(output)
+        self.assertNotEqual(
+            supplied, last_line,
+            "fixture guard: the supplied cause and the last line must differ")
+        for artifact in ARTIFACTS:
+            detail = axi_mod.no_report_warning(
+                "regression", artifact, 1, output, cause=supplied)["detail"]
+            self.assertIn(
+                supplied, detail,
+                f"AC2: a supplied cause must reach the detail verbatim; "
+                f"got {detail!r}")
+            self.assertNotIn(
+                last_line, detail,
+                f"AC2: a supplied cause REPLACES the last-non-empty-line rule "
+                f"-- the output's last line must not appear when a cause is "
+                f"given; got {detail!r}")
+
+    def test_ac3_over_long_supplied_cause_is_bounded_keeping_its_head(self):
+        """AC3 -- a 600-character cause beginning `cannot find symbol` yields a
+        detail that CONTAINS `cannot find symbol`, is <= 500 chars, drops the
+        cause's FINAL characters (the `TAILSENTINEL`), and carries the
+        truncation marker."""
+        axi_mod = _load_axi_module()
+        cause = self._over_long_head_cause()
+        for artifact in ARTIFACTS:
+            detail = axi_mod.no_report_warning(
+                "regression", artifact, 3, "irrelevant output",
+                cause=cause)["detail"]
+            self.assertIn(
+                "cannot find symbol", detail,
+                f"AC3: a HEAD-keeping bound must preserve the front of the "
+                f"cause -- the actionable maven line; got {detail!r}")
+            self.assertLessEqual(
+                len(detail), 500,
+                f"AC3: the detail must be bounded at 500 characters; "
+                f"got len={len(detail)}")
+            self.assertNotIn(
+                "TAILSENTINEL", detail,
+                f"AC3: a HEAD-keeping bound must DROP the cause's final "
+                f"characters -- getting head-vs-tail backwards silently "
+                f"discards the payload; got {detail!r}")
+            self.assertIn(
+                "…", detail,
+                f"AC3: a truncated cause must carry the truncation marker; "
+                f"got {detail!r}")
+
+    def test_ac4_derived_cause_is_still_bounded_keeping_its_tail(self):
+        """AC4 -- with `cause=None` (or omitted), the CR-CRU-064 behaviour is
+        provably untouched: the 5,009-character single-line fixture keeps its
+        TAIL (the cause), drops its HEAD (`HEADSENTINEL`), and stays <= 500."""
+        axi_mod = _load_axi_module()
+        self.assertGreaterEqual(
+            len(self.LONG_SINGLE_LINE), 5000,
+            "fixture guard: the capture must really be ~5,009 characters")
+        for artifact in ARTIFACTS:
+            detail = axi_mod.no_report_warning(
+                "regression", artifact, 4, self.LONG_SINGLE_LINE,
+                cause=None)["detail"]
+            self.assertLessEqual(
+                len(detail), 500,
+                f"AC4: the derived-cause detail must be bounded at 500; "
+                f"got len={len(detail)}")
+            self.assertIn(
+                self.TAIL_CAUSE, detail,
+                f"AC4: a helper-DERIVED cause is bounded keeping its TAIL -- "
+                f"the cause sits at the end of the stream; got {detail!r}")
+            self.assertNotIn(
+                "HEADSENTINEL", detail,
+                f"AC4: the tail-keeping bound must drop the HEAD of the "
+                f"capture; got {detail!r}")
+
+    def test_four_positional_args_are_byte_identical_to_cause_none(self):
+        """AC1 -- the additive keyword is invisible to existing callers:
+        `no_report_warning(v,a,e,o)` returns the SAME dict as
+        `no_report_warning(v,a,e,o,cause=None)`."""
+        axi_mod = _load_axi_module()
+        for artifact in ARTIFACTS:
+            four = axi_mod.no_report_warning(
+                "regression", artifact, 7, self.LONG_SINGLE_LINE)
+            explicit_none = axi_mod.no_report_warning(
+                "regression", artifact, 7, self.LONG_SINGLE_LINE, cause=None)
+            self.assertEqual(
+                four, explicit_none,
+                f"AC1: passing cause=None explicitly must be byte-identical to "
+                f"the four-positional-arg call; got {four!r} vs "
+                f"{explicit_none!r}")
+
+    def test_empty_string_cause_falls_back_and_is_never_empty(self):
+        """An empty-string `cause` is not a valid override -- it must fall back
+        (to the derived cause or the blank-form) rather than emit an empty or
+        stringified-None detail (`/api/v2/runs/compile` 400s on an empty
+        string). The spec does not pin WHICH fallback; only that the detail is
+        non-empty, exit-code-naming, and never leaks 'None'."""
+        axi_mod = _load_axi_module()
+        for artifact in ARTIFACTS:
+            detail = axi_mod.no_report_warning(
+                "regression", artifact, 5,
+                "ModuleNotFoundError: No module named 'xmlrunner'\n",
+                cause="")["detail"]
+            self.assertTrue(
+                detail and detail.strip(),
+                f"an empty-string cause must NOT yield an empty detail; "
+                f"got {detail!r}")
+            self.assertIn(
+                "5", detail,
+                f"an empty-string cause must still name the exit code; "
+                f"got {detail!r}")
+            self.assertNotIn(
+                "None", detail,
+                f"an empty-string cause must not leak a stringified None; "
+                f"got {detail!r}")
+
+    def test_exit_code_survives_an_over_long_head_bound_override(self):
+        """The composed PREFIX is never truncated, even when the HEAD-bounded
+        cause consumes the whole 500-char budget: the exit code still appears."""
+        axi_mod = _load_axi_module()
+        cause = self._over_long_head_cause()
+        for artifact in ARTIFACTS:
+            detail = axi_mod.no_report_warning(
+                "regression", artifact, 42, "irrelevant output",
+                cause=cause)["detail"]
+            self.assertTrue(
+                re.search(r"(?<!\d)42(?!\d)", detail),
+                f"the never-truncated prefix must still name the exit code (42) "
+                f"under an over-long cause override; got {detail!r}")
+            self.assertIn(
+                artifact, detail,
+                f"the prefix's artifact must survive a HEAD-bound override; "
+                f"got {detail!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

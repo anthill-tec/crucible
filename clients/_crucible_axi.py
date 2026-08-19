@@ -774,7 +774,7 @@ def no_report_help(verb, artifact, remedy=None):
     return steps
 
 
-def no_report_warning(verb, artifact, exit_code, output):
+def no_report_warning(verb, artifact, exit_code, output, cause=None):
     """CR-CRU-064 §S1/AC1+AC2 (PURE) — the structured warning for a run that
     wrote no report: `{"code": "no-test-reports", ...}` (mvn's existing string,
     lifted verbatim). The helper COMPOSES the detail — a caller-supplied one
@@ -788,16 +788,32 @@ def no_report_warning(verb, artifact, exit_code, output):
     cause is at the END of a capture, so a head-keeping bound would bound away
     the only fact the warning exists to carry). A blank/whitespace-only
     capture still yields a non-empty, exit-code-naming detail —
-    `/api/v2/runs/compile` 400s on an empty string."""
+    `/api/v2/runs/compile` 400s on an empty string.
+
+    CR-CRU-065 §S1 — an OPTIONAL `cause` keyword lets a caller REPLACE the
+    derived last line with a fragment it ordered by importance (maven's
+    actionable `cannot find symbol` sits ABOVE its epilogue, so the last line
+    is the wrong pick). A supplied cause is bounded keeping its HEAD, the
+    mirror of the derived path's tail-keeping bound. `cause=None` or a
+    blank/whitespace-only cause is NOT an override: it falls back to the
+    derived rule, so every existing caller is byte-identical to CR-CRU-064."""
     prefix = (f"{verb} produced no {artifact} — the runner exited "
               f"{exit_code} before writing a report")
+    joiner = "; last output line: "
+    if cause is not None and cause.strip():
+        room = NO_REPORT_DETAIL_MAX - len(prefix) - len(joiner)
+        if room <= 0:
+            return {"code": "no-test-reports", "detail": prefix}
+        fragment = cause
+        if len(fragment) > room:
+            fragment = fragment[:room - 1] + "…"
+        return {"code": "no-test-reports", "detail": prefix + joiner + fragment}
     cause = _last_non_empty_line(output)
     if not cause:
         return {"code": "no-test-reports",
                 "detail": (f"{prefix}; no runner output reached this envelope, "
                            f"so the runner's own stream is the only evidence "
                            f"left")}
-    joiner = "; last output line: "
     room = NO_REPORT_DETAIL_MAX - len(prefix) - len(joiner)
     if room <= 0:
         return {"code": "no-test-reports", "detail": prefix}

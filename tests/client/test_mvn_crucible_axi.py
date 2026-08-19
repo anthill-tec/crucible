@@ -1200,5 +1200,183 @@ class MvnCrucibleToolchainTest(_BaseMvnAxiTest):
         self.assertIn("[ERROR]", compile_call[0][1].get("errors", ""))
 
 
+# ── CR-CRU-065 §S2 -- mvn selects its own no-report cause ──────────────────
+#
+# The shared `no_report_warning` (C1) now takes an optional `cause=`; C2 makes
+# mvn PASS one. `_select_maven_no_report_cause(output) -> str | None` is a
+# PURE selector (name+signature pinned with MAINLINE): first `[ERROR]` line
+# naming a source location + its continuation lines, <=3 joined by ` · `,
+# ignoring maven's `-> [Help N]` / `Re-run Maven` / `BUILD FAILURE` epilogue,
+# and None when no location-bearing `[ERROR]` is present.
+#
+# mvn-crucible.py IS loadable by path (`_load_client_module()` already execs
+# it), so the selector is unit-tested DIRECTLY where a byte-exact behaviour
+# (`None`, the ` · ` cap) can only be seen at the function boundary; the
+# end-to-end envelope contract (AC5) is ALSO driven through the real `unit`
+# fallback verb with a fake mvnw, because a passing direct test proves nothing
+# if the call site never wires the cause through.
+
+_MVN_CAUSE_JOINER = " · "
+_NO_REPORT_LAST_LINE_JOINER = "; last output line: "
+
+# A REAL maven compile-failure capture shape (AC5 / risk note): the actionable
+# `cannot find symbol` line sits ABOVE its `symbol:`/`location:` continuation
+# lines, and the stream ENDS in maven's epilogue -- so the last non-empty line
+# is `[ERROR] -> [Help 1]`, useless as a cause.
+_MVN_COMPILE_FAILURE_LINES = [
+    "[INFO] Scanning for projects...",
+    "[INFO] ------------------------------------------------------------------------",
+    "[INFO] BUILD FAILURE",
+    "[INFO] ------------------------------------------------------------------------",
+    "[ERROR] COMPILATION ERROR :",
+    "[ERROR] /src/main/java/com/acme/Foo.java:[12,5] cannot find symbol",
+    "[ERROR]   symbol:   variable bar",
+    "[ERROR]   location: class com.acme.Foo",
+    "[ERROR] BUILD FAILURE",
+    "[ERROR] Re-run Maven using the -X switch to enable full debug logging.",
+    "[ERROR] Re-run Maven using the -X switch to enable full debug logging.",
+    "[ERROR] For more information about the errors and possible solutions, please read the following articles:",
+    "[ERROR] -> [Help 1]",
+]
+
+# AC6a: the same compile failure but with FIVE continuation lines under the
+# location-bearing `[ERROR]` -- the cap must still hold the fragment to <=3
+# joined segments.
+_MVN_COMPILE_FAILURE_MANY_CONTINUATIONS_LINES = [
+    "[ERROR] COMPILATION ERROR :",
+    "[ERROR] /src/main/java/com/acme/Foo.java:[12,5] cannot find symbol",
+    "[ERROR]   symbol:   variable a",
+    "[ERROR]   location: class com.acme.Foo",
+    "[ERROR]   required: int",
+    "[ERROR]   found:    java.lang.String",
+    "[ERROR]   note:     five continuation lines in total",
+    "[ERROR] BUILD FAILURE",
+    "[ERROR] -> [Help 1]",
+]
+
+# AC6b: a plugin failure (NOT a compile failure) -- no `[ERROR] <path>:[l,c]`
+# location line anywhere, ending in maven epilogue. The selector must return
+# None so the shared last-line rule stands (never a fabricated cause).
+_MVN_PLUGIN_FAILURE_LINES = [
+    "[INFO] Scanning for projects...",
+    "[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.0.0:test (default-test) on project acme: There was an error in the forked process",
+    "[ERROR] Please refer to /work/acme/target/surefire-reports for the individual test results.",
+    "[ERROR] Please refer to dump files (if any exist) [date].dump, [date]-jvmRun[N].dump and [date].dumpstream.",
+    "[ERROR] BUILD FAILURE",
+    "[ERROR] Re-run Maven using the -X switch to enable full debug logging.",
+    "[ERROR] -> [Help 1]",
+]
+
+
+def _fake_mvnw_emitting(lines):
+    """A fake `mvnw` (any goal) that streams `lines` to stdout and exits 1 --
+    used to give the compile-fallback path a REAL maven-shaped capture."""
+    body = "#!/usr/bin/env python3\nimport sys\n"
+    for line in lines:
+        body += "sys.stdout.write(%r + chr(10))\n" % line
+    body += "sys.exit(1)\n"
+    return body
+
+
+class MvnCrucibleNoReportCauseSelectorTest(_BaseMvnAxiTest):
+    """CR-CRU-065 §S2 -- direct unit tests of the pure selector."""
+
+    def _selector(self):
+        sel = getattr(self.module, "_select_maven_no_report_cause", None)
+        self.assertTrue(
+            callable(sel),
+            "CR-CRU-065 §S2: mvn-crucible.py must expose a pure selector "
+            "`_select_maven_no_report_cause(output) -> str | None`",
+        )
+        return sel
+
+    def test_selector_picks_the_location_error_and_ignores_the_help_epilogue(self):
+        """AC5 (unit): the FIRST `[ERROR] <path>:[l,c]` line is the cause, not
+        the trailing `[ERROR] -> [Help 1]` epilogue."""
+        sel = self._selector()
+        cause = sel("\n".join(_MVN_COMPILE_FAILURE_LINES) + "\n")
+        self.assertIsInstance(cause, str)
+        self.assertIn("cannot find symbol", cause)
+        self.assertNotIn("[Help 1]", cause)
+        self.assertNotIn("BUILD FAILURE", cause)
+        self.assertNotIn("Re-run Maven", cause)
+
+    def test_selector_caps_fragment_at_three_lines_joined_by_middot(self):
+        """AC6a (unit): given 5 continuation lines, the fragment is <=3
+        segments joined by ` · `, headed by the location line."""
+        sel = self._selector()
+        cause = sel("\n".join(_MVN_COMPILE_FAILURE_MANY_CONTINUATIONS_LINES) + "\n")
+        self.assertIsInstance(cause, str)
+        self.assertIn(_MVN_CAUSE_JOINER, cause)
+        segments = cause.split(_MVN_CAUSE_JOINER)
+        self.assertLessEqual(
+            len(segments), 3,
+            f"the selector must join AT MOST 3 lines with {_MVN_CAUSE_JOINER!r}; "
+            f"got {len(segments)} segments: {segments!r}",
+        )
+        self.assertIn("cannot find symbol", segments[0])
+
+    def test_selector_returns_none_without_a_location_bearing_error(self):
+        """AC6b (unit): a plugin failure has no `[ERROR] <path>:[l,c]` line, so
+        the selector returns None (never a crash, never an empty string) and
+        the shared last-line rule stands."""
+        sel = self._selector()
+        cause = sel("\n".join(_MVN_PLUGIN_FAILURE_LINES) + "\n")
+        self.assertIsNone(
+            cause,
+            f"a capture with no location-bearing [ERROR] must select None so "
+            f"no cause is fabricated; got {cause!r}",
+        )
+
+
+class MvnCrucibleNoReportCauseEnvelopeTest(_BaseMvnAxiTest):
+    """CR-CRU-065 §S2 -- the cause is wired end-to-end through the real `unit`
+    compile-fallback verb (the ONLY call site, `_emit_compile_fallback_axi`)."""
+
+    def _drive_unit_no_report_detail(self, lines):
+        _write_fake_mvnw(self.tmpdir, _fake_mvnw_emitting(lines))
+        with mock.patch.object(self.module, "_post",
+                                return_value={"ok": True}, create=True):
+            _code, out, _err = _run_main(self.module, [
+                "unit", "--project-dir", self.tmpdir, "--agent", "CR-M-cause",
+            ])
+        axi = self._decode_axi(out)
+        self.assertIs(
+            axi.get("ok"), False,
+            f"a compile fallback (no reports) must emit ok=False; stdout={out!r}")
+        warnings = axi.get("warnings") or []
+        no_report = [w for w in warnings if w.get("code") == "no-test-reports"]
+        self.assertEqual(
+            len(no_report), 1,
+            f"the compile-fallback envelope must carry exactly one "
+            f"no-test-reports warning; got {warnings!r}",
+        )
+        return no_report[0].get("detail", "")
+
+    def test_fallback_detail_carries_cannot_find_symbol_not_help_epilogue(self):
+        """AC5 (end-to-end): the emitted `no-test-reports` detail CONTAINS
+        `cannot find symbol` and does NOT contain `[Help 1]`."""
+        detail = self._drive_unit_no_report_detail(_MVN_COMPILE_FAILURE_LINES)
+        self.assertIn("cannot find symbol", detail)
+        self.assertNotIn("[Help 1]", detail)
+
+    def test_fallback_detail_caps_the_cause_at_three_middot_joined_lines(self):
+        """AC6a (end-to-end): the cause fragment carried in the detail is <=3
+        segments joined by ` · `."""
+        detail = self._drive_unit_no_report_detail(
+            _MVN_COMPILE_FAILURE_MANY_CONTINUATIONS_LINES)
+        self.assertIn(_NO_REPORT_LAST_LINE_JOINER, detail,
+                      f"detail must retain the shared composition joiner; got {detail!r}")
+        cause = detail.split(_NO_REPORT_LAST_LINE_JOINER, 1)[1]
+        self.assertIn(_MVN_CAUSE_JOINER, cause)
+        segments = cause.split(_MVN_CAUSE_JOINER)
+        self.assertLessEqual(
+            len(segments), 3,
+            f"the caller-supplied cause must be <=3 ` · `-joined segments; "
+            f"got {len(segments)}: {segments!r}",
+        )
+        self.assertIn("cannot find symbol", segments[0])
+
+
 if __name__ == "__main__":
     unittest.main()
