@@ -5,7 +5,7 @@ Contract pinned from docs/changes/CR-CRU-041-release-mechanism.md:
 
     S6 -- `crucible_axi.__version__` resolves via
           `importlib.metadata.version("crucible-axi")` (never a hardcoded
-          literal). The `[server]` stage's npx argv is VERSION-PINNED:
+          literal). The `[server]` stage's server argv is VERSION-PINNED:
           `<SERVER_NPM_PACKAGE>@<crucible_axi.__version__>`, never a bare
           package name and never "latest". `CRUCIBLE_SERVER_VERSION`
           overrides the pin when set; unset means the pinned own-version,
@@ -17,12 +17,18 @@ Contract pinned from docs/changes/CR-CRU-041-release-mechanism.md:
 RED phase: `crucible_axi/__init__.py` has NO `__version__` attribute yet;
 `crucible_axi/install.py`'s `SERVER_NPM_PACKAGE = "crucible-server"` (a
 TODO(S4) placeholder) does not match `package.json`'s current `name` field
-("crucible"), and the `[server]` stage's npx argv carries the bare
+("crucible"), and the `[server]` stage's server argv carries the bare
 `SERVER_NPM_PACKAGE` with no version suffix at all -- always resolving to
 `latest`. Every test below either fails a plain assertion or raises
 AttributeError accessing the not-yet-existing `crucible_axi.__version__` --
 a missing-SUT-symbol error, valid RED per the sub-agent procedure (never
 skipped).
+
+CR-CRU-066 §S1 supersedes the SHAPE of that argv, not the pin: the `[server]`
+stage no longer RUNS the published bin via `npx` -- it PROVISIONS and returns
+via `bun add -g <SERVER_NPM_PACKAGE>@<version>`. Every version-pin contract
+asserted below is unchanged; only the argv the matcher looks for moved (the
+CR-CRU-041 wording above is kept as the historical record).
 
 Invocation:
     python3 -m pytest tests/client/test_crucible_axi_version_pin.py -q
@@ -73,16 +79,22 @@ def _call_command_text(call):
     return str(args)
 
 
-def _server_npx_argv(mock_run):
-    """Return the raw argv LIST of the npx server-stage subprocess.run call
-    (not flattened to text), or None if no npx call was recorded / it wasn't
-    a list-form call. Gives a stronger token-level assertion than a
-    substring check on flattened text (catches a bare package-name token
-    sitting ALONGSIDE a correctly pinned one, which a substring check on
-    joined text would miss)."""
+def _server_provision_argv(mock_run):
+    """Return the raw argv LIST of the [server] stage's PROVISION
+    subprocess.run call -- the `bun add -g <pkg>@<version>` invocation
+    (CR-CRU-066 §S1) -- or None if no such call was recorded / it wasn't a
+    list-form call. Matching on the leading `bun add -g` tokens deliberately
+    EXCLUDES the shell-form curl Bun-bootstrap call, so the bun-absent case
+    still isolates the provision argv. Returning the token list (not
+    flattened text) gives a stronger assertion than a substring check on
+    flattened text (catches a bare package-name token sitting ALONGSIDE a
+    correctly pinned one, which a substring check on joined text would
+    miss)."""
     for call in mock_run.call_args_list:
         args = call.args[0] if call.args else call.kwargs.get("args")
-        if isinstance(args, (list, tuple)) and any("npx" in str(a) for a in args):
+        if not isinstance(args, (list, tuple)):
+            continue
+        if [str(a) for a in args[:3]] == ["bun", "add", "-g"]:
             return list(args)
     return None
 
@@ -140,8 +152,8 @@ class ServerNpmPackageMatchesPackageJsonNameTest(unittest.TestCase):
         self.assertNotEqual(install.SERVER_NPM_PACKAGE, "crucible-server")
 
 
-class ServerStageNpxArgvVersionPinTest(unittest.TestCase):
-    """S6 -- the [server] stage's npx argv is VERSION-PINNED to
+class ServerStageProvisionArgvVersionPinTest(unittest.TestCase):
+    """S6 -- the [server] stage's provision argv is VERSION-PINNED to
     `<SERVER_NPM_PACKAGE>@<crucible_axi.__version__>` by default, and to
     `<SERVER_NPM_PACKAGE>@<CRUCIBLE_SERVER_VERSION>` when that env var is
     set -- never a bare package name, never "latest"."""
@@ -168,7 +180,7 @@ class ServerStageNpxArgvVersionPinTest(unittest.TestCase):
             install._server_stage(self.tmp, False)
         return mock_run
 
-    def test_server_stage_npx_argv_pins_to_own_version_when_override_unset(self):
+    def test_server_stage_provision_argv_pins_to_own_version_when_override_unset(self):
         """Uses a realistic INSTALLED-RELEASE version (patched), not the live
         `crucible_axi.__version__` -- in a source checkout the live value IS
         the `_SOURCE_CHECKOUT_VERSION` sentinel, which is a separate,
@@ -180,9 +192,11 @@ class ServerStageNpxArgvVersionPinTest(unittest.TestCase):
         with mock.patch.object(axi, "__version__", "0.1.0"):
             mock_run = self._run_server_stage(install)
 
-        argv = _server_npx_argv(mock_run)
+        argv = _server_provision_argv(mock_run)
         self.assertIsNotNone(
-            argv, f"expected an npx argv list, calls={mock_run.call_args_list}")
+            argv,
+            f"expected a `bun add -g` provision argv list, "
+            f"calls={mock_run.call_args_list}")
         expected_pin = f"{install.SERVER_NPM_PACKAGE}@0.1.0"
         self.assertIn(
             expected_pin, argv,
@@ -195,14 +209,16 @@ class ServerStageNpxArgvVersionPinTest(unittest.TestCase):
             any("latest" in str(token) for token in argv),
             f"argv must never resolve to 'latest': {argv}")
 
-    def test_server_stage_npx_argv_uses_crucible_server_version_env_override_when_set(self):
+    def test_server_stage_provision_argv_uses_crucible_server_version_env_override_when_set(self):
         install = _import_fresh("crucible_axi.install")
         os.environ["CRUCIBLE_SERVER_VERSION"] = "3.4.5-override-test"
         mock_run = self._run_server_stage(install)
 
-        argv = _server_npx_argv(mock_run)
+        argv = _server_provision_argv(mock_run)
         self.assertIsNotNone(
-            argv, f"expected an npx argv list, calls={mock_run.call_args_list}")
+            argv,
+            f"expected a `bun add -g` provision argv list, "
+            f"calls={mock_run.call_args_list}")
         expected_pin = f"{install.SERVER_NPM_PACKAGE}@3.4.5-override-test"
         self.assertIn(
             expected_pin, argv,
@@ -218,17 +234,17 @@ class ServerStageFailsFastOnUnresolvedVersionTest(unittest.TestCase):
     definitive, actionable error when the resolved version is the
     source-checkout fallback (`crucible_axi.__version__ ==
     _SOURCE_CHECKOUT_VERSION`, i.e. crucible-axi is not installed) AND
-    `CRUCIBLE_SERVER_VERSION` is unset -- instead of shelling out to npx
+    `CRUCIBLE_SERVER_VERSION` is unset -- instead of shelling out to Bun
     with an unusable pin like `@anthill-tec/crucible-server@0.0.0.dev0+source`
-    (not valid npm semver, so npx fails with an opaque error). Mirrors
-    CR-CRU-039's `no-tests-discovered` pattern: replace a silent/masked
-    failure with a definitive error naming its own remedy.
+    (not valid npm semver, so the provision fails with an opaque error).
+    Mirrors CR-CRU-039's `no-tests-discovered` pattern: replace a
+    silent/masked failure with a definitive error naming its own remedy.
 
-    RED phase: `crucible_axi/install.py`'s `_server_stage` has no such guard
-    yet, so it proceeds straight to `subprocess.run(["npx", ...])` regardless
-    of whether the resolved version is usable -- `assertRaises` fails with
+    RED phase: `crucible_axi/install.py`'s `_server_stage` had no such guard
+    yet, so it proceeded straight to the server subprocess regardless of
+    whether the resolved version is usable -- `assertRaises` fails with
     "did not raise" and/or `mock_run.assert_not_called()` fails because the
-    npx call already happened.
+    server call already happened.
     """
 
     def setUp(self):
@@ -292,9 +308,11 @@ class ServerStageFailsFastOnUnresolvedVersionTest(unittest.TestCase):
             mock_run.return_value.returncode = 0
             install._server_stage(self.tmp, False)
 
-        argv = _server_npx_argv(mock_run)
+        argv = _server_provision_argv(mock_run)
         self.assertIsNotNone(
-            argv, f"expected an npx argv list, calls={mock_run.call_args_list}")
+            argv,
+            f"expected a `bun add -g` provision argv list, "
+            f"calls={mock_run.call_args_list}")
         expected_pin = f"{install.SERVER_NPM_PACKAGE}@7.8.9-escape-hatch-test"
         self.assertIn(
             expected_pin, argv,
@@ -316,9 +334,11 @@ class ServerStageFailsFastOnUnresolvedVersionTest(unittest.TestCase):
             mock_run.return_value.returncode = 0
             install._server_stage(self.tmp, False)
 
-        argv = _server_npx_argv(mock_run)
+        argv = _server_provision_argv(mock_run)
         self.assertIsNotNone(
-            argv, f"expected an npx argv list, calls={mock_run.call_args_list}")
+            argv,
+            f"expected a `bun add -g` provision argv list, "
+            f"calls={mock_run.call_args_list}")
         expected_pin = f"{install.SERVER_NPM_PACKAGE}@0.1.0"
         self.assertIn(
             expected_pin, argv,
