@@ -40,8 +40,11 @@ under `$HOME`, so there is no system-permission problem — then creates its
 target directory (`--target-dir`, default `~/.crucible`) and writes the client
 discovery **manifest** into it. Those two stages, `server` and `manifest`, are
 the whole install. It reports a TOON-AXI envelope naming each stage's installed
-path plus the absolute Bun it resolved. A second run is a no-op once converged;
-`--force` re-runs every stage. `uvx crucible-axi …` is the on-demand form.
+path plus the absolute Bun it resolved. A second run at the same version is a
+no-op; re-running after an upgrade re-provisions the server, because the
+`server` stage counts as converged only when the installed server is exactly
+the pinned version. `--force` re-runs every stage regardless.
+`uvx crucible-axi …` is the on-demand form.
 
 Rather not pipe a remote script into a shell? Install Bun yourself first and
 pass `--no-bun-bootstrap` (or set `CRUCIBLE_NO_BUN_BOOTSTRAP=1`): an absent Bun
