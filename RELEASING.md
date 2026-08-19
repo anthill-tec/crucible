@@ -201,12 +201,16 @@ removed." Create it on the website (the CLI cannot mint granular tokens yet) wit
 | Expiration | short (e.g. 30 days) — it only has to survive the inaugural publish |
 | Bypass 2FA | see below |
 
-**Bypass 2FA, decided by your account's 2FA mode.** npm requires *either* 2FA enabled on the
-account *or* a bypass-2FA token in order to publish at all. With 2FA set to **authorization
-only**, `npm publish` is not a challenged action, so a token with Bypass **unchecked** works
-— that is this project's configuration. With 2FA set to *authorization and writes*, an
-unchecked token makes CI fail on an OTP prompt nobody can answer, so you must either switch
-the account to authorization-only or check Bypass.
+**Bypass 2FA must be CHECKED on the token — regardless of the account's 2FA mode.** This was
+wrong in an earlier draft and it cost a failed release-day publish (2026-08-19). Per npm's
+Sept–Nov 2025 security changes, **write-enabled granular tokens enforce 2FA by default**, and the
+**"Bypass two-factor authentication" option is UNCHECKED by default**. So an unchecked token is
+challenged for a one-time password on `npm publish` — CI fails `EOTP` — **even when the account is
+set to "authorization only"** (measured on this repo: account was authorization-only, publish still
+demanded an OTP). The account mode governs interactive account actions, not the token's publish
+enforcement. Fix: create the granular token with **Bypass 2FA CHECKED**. Note npm is deprecating
+bypass-2FA tokens for direct publishing (`gh.io/npm-gat-bypass2fa-deprecation`), which is why the
+OIDC cutover below is the real destination — a token is the inaugural-publish stopgap only.
 
 `publish-npm` detects the token and **skips the npm publish (with a notice) when it is
 absent** — PyPI is unaffected, so a release can legitimately ship Python-only until the
@@ -224,6 +228,13 @@ Sigstore's **public** transparency log, so the step requires a public repository
 private one it fails at publish time, i.e. on release day. This is easy to miss because
 nothing else in the pipeline cares: the suites, the packaging and the PyPI publish are all
 indifferent to visibility.
+
+**`package.json` MUST carry a `repository` field matching this repo, or `--provenance` is
+rejected.** npm verifies the signed provenance bundle against `package.json`'s `repository.url`;
+if it is missing or does not normalise to `https://github.com/anthill-tec/crucible`, the publish
+fails `E422 "Failed to validate repository information"` — *after* the tag is cut, on release day.
+This bit the 0.1.0 cut (package.json had no `repository` field); hotfix 0.1.1 added
+`{"type":"git","url":"git+https://github.com/anthill-tec/crucible.git"}`. Keep it present.
 
 ---
 

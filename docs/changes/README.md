@@ -76,6 +76,19 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: velocity + burndown + forecast | feature | PENDING (0.2.0) | 011, 014 | 5/6 (0.2.0) |
 
 ## Notes
+- 🚀 **2026-08-19 — Crucible v2 SHIPPED its first public release (0.1.0 + hotfix 0.1.1).**
+  `crucible-axi` on PyPI: **0.1.0** then **0.1.1** (OIDC trusted publishing, pending publisher
+  auto-converted on first upload). `@anthill-tec/crucible-server` on npm: **0.1.1**
+  (`--provenance`, signed to Sigstore). Lockstep from bare-SemVer tags via `release.sh finish`.
+  Two release-day failures, both fixed and recorded in `RELEASING.md`: (1) npm `EOTP` — a
+  write-enabled granular token enforces 2FA by DEFAULT (npm's late-2025 change), so it must be
+  created with **Bypass 2FA checked** even though the account is authorization-only (the doc's old
+  claim that auth-only + unchecked works was wrong). (2) npm `E422 "Failed to validate repository
+  information"` — `package.json` had no `repository` field, which `--provenance` requires; hotfix
+  0.1.1 added it. npm 0.1.0 never published (both failures preceded it), so npm starts at 0.1.1
+  while PyPI has 0.1.0+0.1.1 — lockstep holds from here. **Remaining follow-up (optional, maintainer):**
+  configure the npm OIDC trusted publisher now that the package exists, then delete `NPM_TOKEN` —
+  the bypass token is a stopgap npm is deprecating. Model-B intimated (Sandesh msg 1354).
 - ✅ **2026-08-18 (release-readiness — the "still pending setup" line is SUPERSEDED, verified against CI + repo).** The 2026-08-03 note below ("Remaining 0.1.0 gate items: … the `@anthill-tec` npm org (human prerequisite)") was stale and got re-quoted for weeks without anyone reading `release.yml`. Ground truth now: `release.yml` publishes PyPI + TestPyPI via **OIDC trusted publishing** (no token) and npm with `--provenance` (`NPM_TOKEN`-gated, skips only if absent); `gh` confirms the repo `anthill-tec/crucible` carries all three deploy environments (`pypi` · `testpypi` · `npm`) and both secrets (`NPM_TOKEN`, `RELEASE_PAT`, set 2026-08-13); the PyPI/TestPyPI trusted publishers are registered under Anthill (user-confirmed). **Nothing remains to SET UP.** The release is an execution step, not a setup gap: branch → no-mistakes → TestPyPI rehearsal (`workflow_dispatch`) → tag push → CI publishes → verify from the registries. The Model-B intimation is a post-release courtesy, never a publish prerequisite.
 - 2026-08-18 (SCRUM filing) — **CR-CRU-065 filed** on user direction, carrying CR-CRU-064's C3
   recorded follow-up: the shared `no_report_warning` picks the LAST non-empty line as the cause,
