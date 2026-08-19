@@ -1,10 +1,12 @@
 """CR-CRU-009 §S2 — the `crucible-axi` console-script entry point.
 
-`main` parses the `install` subcommand, drives `install.run_install`, and emits
-EXACTLY ONE TOON-AXI envelope on stdout (`verb`, `ok`, `stages[]{name,path}`,
-`warnings[]`, `help[]`) via the fleet's shared envelope machinery
-(`clients/_crucible_axi.py` + `clients/toon.py`) so the format matches the
-`*-crucible.py` clients. Exit 0 on ok, 1 otherwise.
+`main` parses the `install` and `serve` subcommands. `install` drives
+`install.run_install` and emits EXACTLY ONE TOON-AXI envelope on stdout
+(`verb`, `ok`, `stages[]{name,path}`, `warnings[]`, `help[]`) via the fleet's
+shared envelope machinery (`clients/_crucible_axi.py` + `clients/toon.py`) so
+the format matches the `*-crucible.py` clients; exit 0 on ok, 1 otherwise.
+`serve` runs the provisioned server in the foreground and returns its exit code
+verbatim (CR-CRU-066 §S3), leaving stdout to the server itself.
 """
 
 from __future__ import annotations
@@ -12,6 +14,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import subprocess
+import sys
 
 from crucible_axi import install
 
@@ -61,13 +65,47 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="re-run every stage even when already converged",
     )
+    p_install.add_argument(
+        "--no-bun-bootstrap",
+        action="store_true",
+        help="fail the install instead of bootstrapping Bun when it is absent "
+             f"(same as {install.BUN_NO_BOOTSTRAP_ENV_VAR}=1)",
+    )
+
+    p_serve = sub.add_parser(
+        "serve",
+        help="run the provisioned Crucible server in the foreground",
+    )
+    p_serve.add_argument(
+        "--host",
+        default=None,
+        help="host the server binds "
+             f"(overrides ${install.SERVER_HOST_ENV_VAR})",
+    )
+    p_serve.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="port the server binds "
+             f"(overrides ${install.SERVER_PORT_ENV_VAR})",
+    )
     return parser
 
 
 def cmd_install(args) -> int:
-    ok, stages, warnings = install.run_install(args.target_dir, force=args.force)
+    ok, stages, warnings = install.run_install(
+        args.target_dir, force=args.force,
+        no_bun_bootstrap=args.no_bun_bootstrap)
     axi = _load_client_module("_crucible_axi")
-    stage_fields = [{"name": s["name"], "path": s["path"]} for s in stages]
+    # The `[server]` stage reports the ABSOLUTE Bun it resolved (CR-CRU-066
+    # §S2); it rides along in that stage's envelope row so the operator can see
+    # exactly which Bun provisioned the server.
+    stage_fields = []
+    for stage in stages:
+        fields = {"name": stage["name"], "path": stage["path"]}
+        if stage.get("bun"):
+            fields["bun"] = stage["bun"]
+        stage_fields.append(fields)
     result_fields = {
         "stages": stage_fields,
         "help": ["status"],
@@ -82,10 +120,58 @@ def cmd_install(args) -> int:
     return 0 if ok else 1
 
 
+def cmd_serve(args) -> int:
+    """Run the server in the FOREGROUND and return its exit code (§S3 AC5).
+
+    Blocking is CORRECT here — that is the whole point of splitting the run out
+    of `install`. The child is launched by absolute path with an EXPLICITLY
+    composed environment (`$CRUCIBLE_HOST`/`$CRUCIBLE_PORT`, the `--host`/
+    `--port` flags overriding them), and its exit code is propagated verbatim
+    so a shell — and the follow-up systemd `--user` unit — sees the real
+    failure. No envelope is emitted: stdout belongs to the server. A launch that
+    cannot be RESOLVED (no provisioned bin and no usable Bun) is definitive —
+    the remedy on stderr, exit 1 — never a traceback.
+
+    Two exit-status translations keep the foreground contract honest:
+
+    * `KeyboardInterrupt` -> 130 (AC5a). RUNBOOK documents Ctrl-C as THE stop
+      gesture, and a foreground SIGINT is delivered to the whole process group,
+      so the parent raises out of `subprocess.run` too. Catching it here is what
+      keeps a `Ctrl-C` from printing a Python stack trace at the operator.
+    * a NEGATIVE returncode -> `128 - returncode` (AC5b). `CompletedProcess`
+      reports a signalled child as `-N` (`-15` SIGTERM, `-9` SIGKILL), and the
+      console script's `sys.exit(-15)` would mask to OS status 241. Translating
+      to the conventional `128+N` (143 / 137) is what lets a supervisor tell
+      the server was signalled. A positive code passes through verbatim.
+    """
+    try:
+        argv = install.server_launch_argv()
+    except RuntimeError as exc:
+        print(f"crucible-axi serve: {exc}", file=sys.stderr)
+        return 1
+    env = os.environ.copy()
+    if args.host is not None:
+        env[install.SERVER_HOST_ENV_VAR] = args.host
+    if args.port is not None:
+        env[install.SERVER_PORT_ENV_VAR] = str(args.port)
+    try:
+        returncode = subprocess.run(argv, env=env).returncode
+    except KeyboardInterrupt:
+        return 130
+    return returncode if returncode >= 0 else 128 - returncode
+
+
+_COMMANDS = {
+    "install": cmd_install,
+    "serve": cmd_serve,
+}
+
+
 def main(argv=None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    if args.command == "install":
-        return cmd_install(args)
-    parser.print_help()
-    return 1
+    handler = _COMMANDS.get(args.command)
+    if handler is None:
+        parser.print_help()
+        return 1
+    return handler(args)

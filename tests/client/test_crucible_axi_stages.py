@@ -9,13 +9,16 @@ Model-B's scope now (Sandesh 1337/1342) and is retired from this suite --
 Crucible no longer ships an `npx skills` invocation, and no envelope this
 suite exercises may carry a `skills` key.
 
-Contract pinned from docs/changes/CR-CRU-009-release-0.1.0.md §S2, as
-narrowed by CR-CRU-042:
+Contract pinned from docs/changes/CR-CRU-066-install-provisions-not-runs-plus-serve.md
+§S1/§S5 (CR-CRU-066 P0), superseding CR-CRU-009's npx-run contract:
 
-    - **[server]** `npx -y <crucible-server-npm-pkg>` fetches + runs the
-      bun/node server; bootstrap Bun via
-      `curl -fsSL https://bun.sh/install | bash` if absent.
-    - Idempotent + scope-parameterized.
+    - **[server]** PROVISIONS the server package user-scoped via
+      `bun add -g <crucible-server-npm-pkg>@<pin>` and RETURNS -- it NEVER
+      runs/serves (the 0.1.1 bug: `npx -y <server>` blocked forever because
+      that npm bin IS the server).
+    - Idempotent via a REAL probe: the resolved `crucible-server` bin exists
+      under Bun's global bin (`$BUN_INSTALL/bin`, default `~/.bun/bin`) -- not
+      a fictional `<target_dir>/server` dir npx never creates.
 
 This RED slice PINS the exact stage-runner contract GREEN must build:
 
@@ -29,18 +32,16 @@ This RED slice PINS the exact stage-runner contract GREEN must build:
                                                 # `...install.shutil.which`.
 
         STAGE_ORDER: tuple                      # == ("server", "manifest")
-                                                 # exactly -- two stages, in
-                                                 # this order (CR-CRU-042
-                                                 # §S1).
+                                                 # exactly (CR-CRU-042 §S1).
 
-        SERVER_NPM_PACKAGE: str                 # placeholder npm package
-                                                 # name for the bun/node
-                                                 # server (GREEN wires the
-                                                 # real published name).
+        SERVER_NPM_PACKAGE: str                 # published npm package name of
+                                                 # the bun/node server.
 
         _server_already_installed(target_dir) -> bool
-            Idempotency detection seam -- tests patch this directly rather
-            than pinning an on-disk marker layout.
+            REAL idempotency probe -- True when the resolved `crucible-server`
+            bin exists under Bun's global bin (`$BUN_INSTALL/bin`, default
+            `~/.bun/bin`). SEAM GREEN MUST SETTLE: Bun global-bin resolution
+            honours `$BUN_INSTALL`.
 
         _server_stage(target_dir, force) -> {"path": str, "converged": bool}
             1. If not force and `_server_already_installed(...)`: return
@@ -48,11 +49,13 @@ This RED slice PINS the exact stage-runner contract GREEN must build:
             2. If `shutil.which("bun")` is None: run the Bun curl-installer
                FIRST (`curl -fsSL https://bun.sh/install | bash`, via
                subprocess.run, shell or `bash -c` form).
-            3. Run `npx -y <SERVER_NPM_PACKAGE>` via subprocess.run.
-            4. If the npx subprocess's `.returncode != 0`: raise
-               RuntimeError with a message mentioning "server" and "npx"
-               (structured, not swallowed) -- run_install's fail-fast then
-               engages.
+            3. PROVISION via subprocess.run(["bun", "add", "-g",
+               f"{SERVER_NPM_PACKAGE}@{version}"]) -- and RETURN. NEVER `npx`,
+               never a server-RUN command.
+            4. If the provision subprocess's `.returncode != 0`: raise
+               RuntimeError with a message naming "server" and the "bun"
+               command (structured, not swallowed) -- run_install's fail-fast
+               then engages.
             5. Otherwise return {"path": ..., "converged": False}.
 
     DEFAULT_STAGE_RUNNERS carries EXACTLY `{"server": ..., "manifest": ...}`
@@ -60,7 +63,19 @@ This RED slice PINS the exact stage-runner contract GREEN must build:
     `stage_runners` must, with subprocess/shutil/already-installed all
     mocked to "fresh success", execute server -> manifest and return
     `ok=True` with exactly the two stage names present, and must never
-    invoke any command containing `npx skills`.
+    invoke `npx` at all.
+
+The 0.1.2 release round REFINES that idempotency probe rather than replacing
+it: presence of the bin alone made the [server] stage report converged on the
+UPGRADE path, silently skipping the version pin whose whole purpose is that a
+pinned `crucible-axi X.Y.Z` provisions the server it was released with. The
+probe now takes an optional expected version and is True only when the
+INSTALLED server (read from the provisioned package's own `package.json`, never
+by executing the server bin) IS that version; an undeterminable version counts
+as a mismatch, so the stage re-provisions instead of skipping silently.
+`ServerStageVersionSkewTest` / `InstalledServerVersionProbeTest` below pin that
+contract, including the unchanged `--force` and converged-is-side-effect-free
+behaviours.
 
 Invocation:
     python3 -m pytest tests/client/test_crucible_axi_stages.py -q
@@ -69,12 +84,14 @@ Fallback:
 """
 
 import importlib
+import json
 import os
 import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -108,9 +125,28 @@ def _call_command_text(call):
     return str(args)
 
 
+def _bun_provision_argvs(mock_run):
+    """Every `<bun> add -g ...` provision argv recorded on `mock_run`.
+
+    argv[0] is matched by BASENAME -- the provision runs the RESOLVED ABSOLUTE
+    bun path (CR-CRU-066 §S2), which also excludes the `<abs-bun> --version`
+    verification call and the shell-form curl bootstrap."""
+    found = []
+    for call in mock_run.call_args_list:
+        argv = call.args[0] if call.args else call.kwargs.get("args")
+        if not isinstance(argv, (list, tuple)):
+            continue
+        argv = list(argv)
+        if len(argv) >= 3 and os.path.basename(str(argv[0])) == "bun" \
+                and argv[1:3] == ["add", "-g"]:
+            found.append(argv)
+    return found
+
+
 class ServerStageTest(unittest.TestCase):
-    """§S2 [server] -- real `npx -y <SERVER_NPM_PACKAGE>` delegation, with a
-    Bun curl-bootstrap fallback when Bun is absent from PATH."""
+    """§S1 [server] -- PROVISIONS the server user-scoped via
+    `bun add -g <SERVER_NPM_PACKAGE>@<pin>` and RETURNS (never runs/serves),
+    with a Bun curl-bootstrap fallback when Bun is absent from PATH."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="crucible-axi-server-stage-")
@@ -118,13 +154,33 @@ class ServerStageTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_server_stage_invokes_npx_with_server_package_when_bun_present(self):
-        """Patches `crucible_axi.__version__` to a realistic installed-release
+    @staticmethod
+    def _provision_calls(mock_run):
+        """The `subprocess.run` calls whose argv is a `bun add -g ...` list.
+
+        argv[0] is matched by BASENAME: CR-CRU-066 §S2 provisions with the
+        RESOLVED ABSOLUTE bun path, never the bare `bun` token."""
+        found = []
+        for c in mock_run.call_args_list:
+            argv = c.args[0] if c.args else c.kwargs.get("args")
+            if not isinstance(argv, (list, tuple)):
+                continue
+            argv = list(argv)
+            if len(argv) >= 3 and os.path.basename(str(argv[0])) == "bun" \
+                    and argv[1:3] == ["add", "-g"]:
+                found.append(argv)
+        return found
+
+    def test_server_stage_provisions_via_bun_add_g_with_pinned_package_when_bun_present(self):
+        """The [server] stage PROVISIONS via `bun add -g
+        <SERVER_NPM_PACKAGE>@<version>` and returns -- it must NEVER shell out
+        to `npx` (that RUNS the server and hangs the install -- CR-CRU-066).
+
+        Patches `crucible_axi.__version__` to a realistic installed-release
         value -- the live value in a source checkout is the
-        `_SOURCE_CHECKOUT_VERSION` sentinel (CR-CRU-041 S6), which is a
-        separate, dedicated fail-fast contract covered by
-        ServerStageFailsFastOnUnresolvedVersionTest, not this stage-delegation
-        test."""
+        `_SOURCE_CHECKOUT_VERSION` sentinel (CR-CRU-041 S6), a separate
+        fail-fast contract covered by ServerStageFailsFastOnUnresolvedVersionTest,
+        not this stage-delegation test."""
         install = _import_fresh("crucible_axi.install")
         axi = _import_fresh("crucible_axi")
         with mock.patch.object(axi, "__version__", "0.1.0"), \
@@ -143,19 +199,29 @@ class ServerStageTest(unittest.TestCase):
             "a fresh (non-already-installed) server stage run must not "
             "report converged:True")
 
+        provisions = self._provision_calls(mock_run)
+        self.assertEqual(
+            len(provisions), 1,
+            f"expected exactly one `bun add -g` provision call, got "
+            f"calls={mock_run.call_args_list}")
+        self.assertEqual(
+            os.path.basename(provisions[0][0]), "bun",
+            f"argv[0] must be a bun executable -- CR-CRU-066 §S2 runs the "
+            f"RESOLVED ABSOLUTE bun path there; got {provisions[0]}")
+        self.assertEqual(
+            provisions[0][1:],
+            ["add", "-g", f"{install.SERVER_NPM_PACKAGE}@0.1.0"],
+            "the server stage must provision the version-pinned package "
+            "user-scoped via `bun add -g <SERVER_NPM_PACKAGE>@<version>`")
+
+        # NEVER `npx` -- that bin IS the server and blocks forever (the 0.1.1
+        # bug this CR fixes).
         npx_calls = [c for c in mock_run.call_args_list
                      if "npx" in _call_command_text(c)]
         self.assertEqual(
-            len(npx_calls), 1,
-            f"expected exactly one npx invocation, got "
-            f"calls={mock_run.call_args_list}")
-        command_text = _call_command_text(npx_calls[0])
-        self.assertIn("npx", command_text)
-        self.assertIn("-y", command_text)
-        self.assertIn(
-            install.SERVER_NPM_PACKAGE, command_text,
-            "expected the npx invocation to name the SERVER_NPM_PACKAGE "
-            "constant")
+            npx_calls, [],
+            f"the server stage must NEVER invoke `npx` (it RUNS the server and "
+            f"hangs the install -- CR-CRU-066); found calls={npx_calls}")
 
         # Bun already present -- the curl bootstrap must NOT run.
         bun_install_calls = [c for c in mock_run.call_args_list
@@ -164,54 +230,87 @@ class ServerStageTest(unittest.TestCase):
             bun_install_calls, [],
             "Bun is present on PATH -- the curl bootstrap must be skipped")
 
-    def test_server_stage_bootstraps_bun_via_curl_installer_before_npx_when_bun_absent(self):
-        """Patches `crucible_axi.__version__` to a realistic installed-release
-        value -- the live value in a source checkout is the
-        `_SOURCE_CHECKOUT_VERSION` sentinel (CR-CRU-041 S6), which is a
-        separate, dedicated fail-fast contract covered by
-        ServerStageFailsFastOnUnresolvedVersionTest, not this stage-delegation
-        test."""
+    def test_server_stage_bootstraps_bun_via_curl_installer_before_provision_when_bun_absent(self):
+        """When Bun is GENUINELY absent the curl bootstrap runs FIRST, then the
+        `bun add -g` provision -- and still NEVER `npx`.
+
+        Patches `crucible_axi.__version__` to a realistic installed-release
+        value (see the sibling test's note on the source-checkout sentinel).
+
+        `$BUN_INSTALL` points at a tmp fixture tree whose `bin/` starts EMPTY,
+        and the mocked bootstrap call LAYS THE BUN DOWN there as its side effect
+        -- what the real `curl … | bash` does. Retargeted in the CR-CRU-066 FIX
+        round: pre-creating that bun made "absent" false (§S2 detects PATH AND
+        `$BUN_INSTALL/bin`), so the old fixture could not distinguish a
+        legitimate bootstrap from a redundant one. Under §S2 the stage
+        RE-RESOLVES Bun there after bootstrapping (a freshly installed Bun is not
+        on the PATH this process inherited) and VERIFIES it, so the fixture keeps
+        this test machine-independent instead of leaning on the developer's real
+        `~/.bun`."""
         install = _import_fresh("crucible_axi.install")
         axi = _import_fresh("crucible_axi")
-        with mock.patch.object(axi, "__version__", "0.1.0"), \
+        bun_root = tempfile.mkdtemp(prefix="crucible-axi-bun-root-")
+        self.addCleanup(shutil.rmtree, bun_root, ignore_errors=True)
+        os.makedirs(os.path.join(bun_root, "bin"), exist_ok=True)
+        fake_bun = os.path.join(bun_root, "bin", "bun")
+
+        def _bootstrap_installs_bun(*args, **kwargs):
+            call = mock.call(*args, **kwargs)
+            if "bun.sh/install" in _call_command_text(call):
+                with open(fake_bun, "w") as handle:
+                    handle.write("#!/bin/sh\necho 1.1.34\n")
+                os.chmod(fake_bun, 0o755)
+            return SimpleNamespace(returncode=0, stdout="1.1.34\n", stderr="")
+
+        with mock.patch.dict(os.environ, {"BUN_INSTALL": bun_root}), \
+                mock.patch.object(axi, "__version__", "0.1.0"), \
                 mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
                 mock.patch("crucible_axi.install.shutil.which",
                            return_value=None), \
                 mock.patch("crucible_axi.install._server_already_installed",
                            return_value=False):
-            mock_run.return_value.returncode = 0
+            mock_run.side_effect = _bootstrap_installs_bun
             result = install._server_stage(self.tmp, False)
 
         self.assertFalse(result["converged"])
         self.assertGreaterEqual(
             len(mock_run.call_args_list), 2,
-            "expected both a bun-install call and an npx server call, got "
-            f"calls={mock_run.call_args_list}")
+            "expected both a bun-install call and a `bun add -g` provision "
+            f"call, got calls={mock_run.call_args_list}")
 
         first_call_text = _call_command_text(mock_run.call_args_list[0])
         self.assertIn("curl", first_call_text)
         self.assertIn("bun.sh/install", first_call_text)
         self.assertIn("bash", first_call_text)
 
-        npx_call_index = next(
+        provision_indices = [
             i for i, c in enumerate(mock_run.call_args_list)
-            if "npx" in _call_command_text(c) and "-y" in _call_command_text(c))
+            if (c.args and isinstance(c.args[0], (list, tuple))
+                and len(c.args[0]) >= 3
+                and os.path.basename(str(list(c.args[0])[0])) == "bun"
+                and list(c.args[0])[1:3] == ["add", "-g"])]
+        self.assertTrue(
+            provision_indices,
+            "expected a `bun add -g` provision call after the Bun bootstrap")
         self.assertGreater(
-            npx_call_index, 0,
-            "the Bun curl-install bootstrap must run BEFORE the npx server "
-            "step when Bun is absent")
+            provision_indices[0], 0,
+            "the Bun curl-install bootstrap must run BEFORE the `bun add -g` "
+            "provision step when Bun is absent")
 
-    def test_server_stage_raises_when_npx_exits_nonzero(self):
-        """Negative/error path -- a non-zero npx exit must surface as a
-        raised, structured exception (so run_install's fail-fast + ok:false
-        engages), never be swallowed.
+        npx_calls = [c for c in mock_run.call_args_list
+                     if "npx" in _call_command_text(c)]
+        self.assertEqual(
+            npx_calls, [],
+            f"the server stage must NEVER invoke `npx`; found calls={npx_calls}")
+
+    def test_server_stage_raises_naming_bun_command_when_provision_exits_nonzero(self):
+        """Negative/error path -- a non-zero `bun add -g` exit must surface as
+        a raised, structured exception (so run_install's fail-fast + ok:false
+        engages), never be swallowed. The message names "server" and the
+        "bun" command it ran -- NOT "npx" (the retired 0.1.1 wording).
 
         Patches `crucible_axi.__version__` to a realistic installed-release
-        value -- the live value in a source checkout is the
-        `_SOURCE_CHECKOUT_VERSION` sentinel (CR-CRU-041 S6), which is a
-        separate, dedicated fail-fast contract covered by
-        ServerStageFailsFastOnUnresolvedVersionTest, not this test (which
-        must reach the npx call to exercise ITS OWN error path)."""
+        value (see the first test's note on the source-checkout sentinel)."""
         install = _import_fresh("crucible_axi.install")
         axi = _import_fresh("crucible_axi")
         with mock.patch.object(axi, "__version__", "0.1.0"), \
@@ -226,7 +325,13 @@ class ServerStageTest(unittest.TestCase):
 
         message = str(ctx.exception).lower()
         self.assertIn("server", message)
-        self.assertIn("npx", message)
+        self.assertIn(
+            "bun", message,
+            "the failure message must name the `bun` provision command")
+        self.assertNotIn(
+            "npx", message,
+            "the server stage no longer shells out to npx -- the failure "
+            "message must not mention it (CR-CRU-066)")
 
     def test_server_stage_reports_converged_true_when_already_installed_without_invoking_subprocess(self):
         install = _import_fresh("crucible_axi.install")
@@ -241,7 +346,303 @@ class ServerStageTest(unittest.TestCase):
         self.assertFalse(
             mock_run.called,
             "an already-installed server stage must not re-invoke any "
-            "npx/bun subprocess call")
+            "provisioning subprocess call")
+
+
+class ServerAlreadyInstalledProbeTest(unittest.TestCase):
+    """§S1 REAL idempotency probe -- `_server_already_installed` is True iff the
+    resolved `crucible-server` bin exists under Bun's global bin
+    (`$BUN_INSTALL/bin`, default `~/.bun/bin`), NOT a fictional
+    `<target_dir>/server` dir `npx` never creates (the 0.1.1 bug).
+
+    SEAM GREEN MUST SETTLE: Bun global-bin resolution honours `$BUN_INSTALL`."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="crucible-axi-probe-target-")
+        self.bun_root = tempfile.mkdtemp(prefix="crucible-axi-bun-root-")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        shutil.rmtree(self.bun_root, ignore_errors=True)
+
+    def test_probe_true_when_crucible_server_bin_present_under_bun_global_bin(self):
+        install = _import_fresh("crucible_axi.install")
+        bin_dir = os.path.join(self.bun_root, "bin")
+        os.makedirs(bin_dir, exist_ok=True)
+        bin_path = os.path.join(bin_dir, "crucible-server")
+        with open(bin_path, "w") as f:
+            f.write("#!/usr/bin/env bun\n")
+        os.chmod(bin_path, 0o755)
+
+        # target_dir deliberately has NO `server/` subdir -- the retired probe
+        # would (wrongly) report not-installed here.
+        with mock.patch.dict(os.environ, {"BUN_INSTALL": self.bun_root}):
+            self.assertTrue(
+                install._server_already_installed(self.tmp),
+                "a `crucible-server` bin present under Bun's global bin means "
+                "the server is provisioned -- the probe must report installed")
+
+    def test_probe_false_when_bin_absent_even_if_target_dir_server_exists(self):
+        install = _import_fresh("crucible_axi.install")
+        os.makedirs(os.path.join(self.bun_root, "bin"), exist_ok=True)
+        # A `<target_dir>/server` dir must NOT fool the probe -- only the bin
+        # under Bun's global bin is the truth.
+        os.makedirs(os.path.join(self.tmp, "server"), exist_ok=True)
+
+        with mock.patch.dict(os.environ, {"BUN_INSTALL": self.bun_root}):
+            self.assertFalse(
+                install._server_already_installed(self.tmp),
+                "no `crucible-server` bin under Bun's global bin => the server "
+                "is not provisioned, regardless of any `<target_dir>/server`")
+
+
+class _ProvisionedServerFixtureCase(unittest.TestCase):
+    """Shared fixture: a tmp install target plus a tmp `$BUN_INSTALL` root laid
+    out the way `bun add -g <pkg>@<version>` really leaves it -- the package
+    unpacked under `$BUN_INSTALL/install/global/node_modules/<pkg>` (carrying
+    its own `package.json`) with its console script SYMLINKED into
+    `$BUN_INSTALL/bin`.
+
+    Nothing here runs a real Bun, a real server, or binds a port: the installed
+    version is read from METADATA, never by executing the server bin (executing
+    it is the CR-CRU-066 defect -- that bin IS the server and `listen`s)."""
+
+    PIN = "0.1.2"
+    OLDER = "0.1.0"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="crucible-axi-skew-target-")
+        self.bun_root = tempfile.mkdtemp(prefix="crucible-axi-skew-bun-root-")
+        self.bin_dir = os.path.join(self.bun_root, "bin")
+        os.makedirs(self.bin_dir, exist_ok=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        shutil.rmtree(self.bun_root, ignore_errors=True)
+
+    def _package_dir(self, install):
+        return os.path.join(self.bun_root, *install.BUN_GLOBAL_NODE_MODULES,
+                            *install.SERVER_NPM_PACKAGE.split("/"))
+
+    def _provision_server(self, install, version, package_json=None):
+        """Lay down a provisioned server at `version`. `package_json` overrides
+        the metadata text verbatim (for the malformed/foreign cases); passing
+        `version=None` with no override writes no metadata at all."""
+        package_dir = self._package_dir(install)
+        dist_dir = os.path.join(package_dir, "dist")
+        os.makedirs(dist_dir, exist_ok=True)
+
+        entrypoint = os.path.join(dist_dir, "cli.js")
+        with open(entrypoint, "w") as handle:
+            handle.write("#!/usr/bin/env bun\n")
+        os.chmod(entrypoint, 0o755)
+
+        bin_path = os.path.join(self.bin_dir, install.SERVER_BIN_NAME)
+        if os.path.lexists(bin_path):
+            os.remove(bin_path)
+        os.symlink(entrypoint, bin_path)
+
+        if package_json is None and version is not None:
+            package_json = json.dumps(
+                {"name": install.SERVER_NPM_PACKAGE, "version": version})
+        if package_json is not None:
+            with open(os.path.join(package_dir, "package.json"), "w") as handle:
+                handle.write(package_json)
+        return bin_path
+
+    def _run_server_stage(self, install, force=False):
+        """Run the REAL `_server_stage` against the fixture -- the convergence
+        probe is deliberately NOT patched here, since it is the behaviour under
+        test. `$CRUCIBLE_SERVER_VERSION` pins deterministically so the stage
+        never depends on the source-checkout `__version__` sentinel."""
+        with mock.patch.dict(os.environ,
+                             {"BUN_INSTALL": self.bun_root,
+                              "CRUCIBLE_SERVER_VERSION": self.PIN}), \
+                mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
+                mock.patch("crucible_axi.install.shutil.which",
+                           return_value="/usr/bin/bun"):
+            mock_run.return_value.returncode = 0
+            result = install._server_stage(self.tmp, force)
+        return result, mock_run
+
+    def _assert_reprovisioned_at_the_pin(self, install, result, mock_run):
+        """The stage re-provisioned through the existing absolute-Bun pinned
+        path, with the Bun guarantee ahead of it and both stage outputs intact."""
+        provisions = _bun_provision_argvs(mock_run)
+        self.assertEqual(
+            len(provisions), 1,
+            f"expected exactly one `bun add -g` re-provision, got "
+            f"calls={mock_run.call_args_list}")
+        self.assertEqual(
+            provisions[0],
+            ["/usr/bin/bun", "add", "-g",
+             f"{install.SERVER_NPM_PACKAGE}@{self.PIN}"],
+            "the re-provision must run the resolved ABSOLUTE Bun with the "
+            "pinned package")
+        self.assertFalse(
+            any("latest" in str(token) for token in provisions[0]),
+            f"the argv must never resolve to 'latest': {provisions[0]}")
+
+        verifies = [i for i, c in enumerate(mock_run.call_args_list)
+                    if "--version" in _call_command_text(c)]
+        provision_indices = [
+            i for i, c in enumerate(mock_run.call_args_list)
+            if _call_command_text(c).startswith("/usr/bin/bun add -g")]
+        self.assertTrue(
+            verifies and verifies[0] < provision_indices[0],
+            f"the Bun guarantee must still run BEFORE any provision; "
+            f"calls={mock_run.call_args_list}")
+
+        self.assertFalse(result["converged"])
+        self.assertEqual(
+            result.get("path"),
+            os.path.join(self.bin_dir, install.SERVER_BIN_NAME),
+            f"the stage must still record its `path` output; result={result}")
+        self.assertEqual(
+            result.get("bun"), "/usr/bin/bun",
+            f"the stage must still record its `bun` output; result={result}")
+
+        # Matched on argv[0] only: the pinned PACKAGE name legitimately embeds
+        # the bin name, so a flattened-text search would flag the provision.
+        server_runs = []
+        for call in mock_run.call_args_list:
+            argv = call.args[0] if call.args else call.kwargs.get("args")
+            if isinstance(argv, (list, tuple)) and argv:
+                if os.path.basename(str(argv[0])) == install.SERVER_BIN_NAME:
+                    server_runs.append(call)
+            elif isinstance(argv, str) and install.SERVER_BIN_NAME in argv:
+                server_runs.append(call)
+        self.assertEqual(
+            server_runs, [],
+            f"the installed version must be read from METADATA -- the server "
+            f"binary must NEVER be executed during the install (CR-CRU-066); "
+            f"found calls={server_runs}")
+
+
+class ServerStageVersionSkewTest(_ProvisionedServerFixtureCase):
+    """The [server] stage's convergence is VERSION-AWARE: a bin left behind by
+    an older `crucible-axi` (or by a hand-run `bun add -g`) is NOT the server
+    this release is pinned to, so the upgrade path must re-provision instead of
+    silently reporting converged and leaving the skew in place."""
+
+    def test_matching_installed_version_converges_without_shelling_out(self):
+        install = _import_fresh("crucible_axi.install")
+        self._provision_server(install, self.PIN)
+
+        result, mock_run = self._run_server_stage(install)
+
+        self.assertTrue(
+            result["converged"],
+            f"a server already provisioned AT THE PIN is converged; "
+            f"result={result}")
+        self.assertFalse(
+            mock_run.called,
+            f"the converged short-circuit must stay side-effect free -- no "
+            f"bootstrap, no verification, no provision; "
+            f"calls={mock_run.call_args_list}")
+
+    def test_older_installed_version_reprovisions_with_the_pinned_argv(self):
+        install = _import_fresh("crucible_axi.install")
+        self._provision_server(install, self.OLDER)
+
+        result, mock_run = self._run_server_stage(install)
+
+        self._assert_reprovisioned_at_the_pin(install, result, mock_run)
+
+    def test_absent_version_metadata_reprovisions(self):
+        """Fail-safe toward correctness: a bin whose package metadata is not
+        there at all cannot be claimed as the pinned server."""
+        install = _import_fresh("crucible_axi.install")
+        self._provision_server(install, None)
+
+        result, mock_run = self._run_server_stage(install)
+
+        self._assert_reprovisioned_at_the_pin(install, result, mock_run)
+
+    def test_unreadable_version_metadata_reprovisions(self):
+        install = _import_fresh("crucible_axi.install")
+        self._provision_server(install, None, package_json="{ not json at all")
+
+        result, mock_run = self._run_server_stage(install)
+
+        self._assert_reprovisioned_at_the_pin(install, result, mock_run)
+
+    def test_metadata_for_a_different_package_reprovisions(self):
+        """A `package.json` that is not the server's own says nothing about the
+        installed server version -- it must not be mistaken for it."""
+        install = _import_fresh("crucible_axi.install")
+        self._provision_server(
+            install, None,
+            package_json=json.dumps({"name": "some-other-package",
+                                      "version": self.PIN}))
+
+        result, mock_run = self._run_server_stage(install)
+
+        self._assert_reprovisioned_at_the_pin(install, result, mock_run)
+
+    def test_force_reprovisions_even_when_the_installed_version_matches(self):
+        """`--force` still re-runs unconditionally -- version-awareness narrows
+        what counts as converged, it never widens what `force` skips."""
+        install = _import_fresh("crucible_axi.install")
+        self._provision_server(install, self.PIN)
+
+        result, mock_run = self._run_server_stage(install, force=True)
+
+        self._assert_reprovisioned_at_the_pin(install, result, mock_run)
+
+
+class InstalledServerVersionProbeTest(_ProvisionedServerFixtureCase):
+    """Unit-level cover for the version seam itself: `_installed_server_version`
+    reads the provisioned package's own metadata, and
+    `_server_already_installed` answers the bare presence question when no
+    expected version is supplied (what `crucible-axi serve` needs) and the
+    version question when one is."""
+
+    def test_installed_version_is_read_from_the_provisioned_package_metadata(self):
+        install = _import_fresh("crucible_axi.install")
+        self._provision_server(install, self.OLDER)
+
+        with mock.patch.dict(os.environ, {"BUN_INSTALL": self.bun_root}):
+            self.assertEqual(install._installed_server_version(), self.OLDER)
+
+    def test_installed_version_is_none_when_no_server_is_provisioned(self):
+        install = _import_fresh("crucible_axi.install")
+
+        with mock.patch.dict(os.environ, {"BUN_INSTALL": self.bun_root}):
+            self.assertIsNone(install._installed_server_version())
+
+    def test_probe_without_expected_version_answers_bare_presence(self):
+        install = _import_fresh("crucible_axi.install")
+        self._provision_server(install, self.OLDER)
+
+        with mock.patch.dict(os.environ, {"BUN_INSTALL": self.bun_root}):
+            self.assertTrue(
+                install._server_already_installed(self.tmp),
+                "with no expected version the probe keeps its original "
+                "presence-only meaning")
+
+    def test_probe_is_true_only_for_the_expected_version(self):
+        install = _import_fresh("crucible_axi.install")
+        self._provision_server(install, self.OLDER)
+
+        with mock.patch.dict(os.environ, {"BUN_INSTALL": self.bun_root}):
+            self.assertTrue(
+                install._server_already_installed(self.tmp, self.OLDER))
+            self.assertFalse(
+                install._server_already_installed(self.tmp, self.PIN),
+                "an installed server at another version must not be reported "
+                "as the pinned one")
+
+    def test_probe_is_false_when_no_bin_is_linked_even_with_metadata_present(self):
+        """The bin link is still the installed marker -- package metadata alone
+        (a leftover tree with nothing linked) is not a provisioned server."""
+        install = _import_fresh("crucible_axi.install")
+        self._provision_server(install, self.PIN)
+        os.remove(os.path.join(self.bin_dir, install.SERVER_BIN_NAME))
+
+        with mock.patch.dict(os.environ, {"BUN_INSTALL": self.bun_root}):
+            self.assertFalse(
+                install._server_already_installed(self.tmp, self.PIN))
 
 
 class StageOrderContractTest(unittest.TestCase):

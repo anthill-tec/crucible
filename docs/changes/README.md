@@ -69,6 +69,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-063](CR-CRU-063-ci-provisions-the-toolchain.md) | CI runs the gates but provisions no toolchain — measured on the first real push (run 31677479804): **102 bun + 9 python failures**, 98 of them `Executable not found in $PATH: "uv"`; the Python job is server-free but not dependency-free (`uv`, the declared `dev` extra, `build`). Publishes `needs:` these suites, so a red gate publishes nothing. `unittest-xml-reporting` turned out to be declared NOWHERE despite every python client run shelling out to `python -m xmlrunner` | patch | COMPLETED | 062 | 4 |
 | [CR-CRU-064](CR-CRU-064-toolchain-starved-runs-emit-no-envelope.md) | A toolchain-starved run emits no envelope — seven no-report fallbacks (python ×3, bun ×2, arduino ×2, incl. BOTH `pre-merge-gate` regression bodies) return an exit code with empty stdout; one shared `no_report_*` helper replaces rust's + mvn's duplicated local ones, and `docker-e2e-gate`'s envelope test stops depending on ambient free disk | patch | COMPLETED (0.1.0 · release prerequisite) | 030, 054, 058, 063 | 4 |
 | [CR-CRU-065](CR-CRU-065-cause-selection-fits-maven.md) | The no-report cause is picked as the LAST non-empty line — right for python/node (`ModuleNotFoundError` ends those streams), wrong for maven (`cannot find symbol` sits above its `symbol:` lines; the tail is `[ERROR] -> [Help 1]` boilerplate). Additive `cause=` override: selection becomes per-stack, composition/bounding stays shared; head-preserving bound for a supplied cause, tail-preserving for the derived one | patch | COMPLETED (0.1.0 · release prerequisite) | 064 | 4 |
+| [CR-CRU-066](CR-CRU-066-install-provisions-not-runs-plus-serve.md) | `crucible-axi install` hangs (its server stage RUNS the server via `npx -y` instead of provisioning) + fictional idempotency marker + no run command on PATH + never creates its target dir — the published 0.1.1 install is unusable. Fix: server stage provisions-and-exits via `bun add -g` (user-scoped), guarantee-bun-or-fail (detect at PATH **and** `$BUN_INSTALL/bin`), new `crucible-axi serve` (absolute launch, 130 on Ctrl-C, 128+N when signalled), target dir created, README/RUNBOOK reconciled + raw-github one-liner. systemd `--user` daemon deferred to a follow-up CR | bugfix | COMPLETED (0.1.2 · release blocker) | 009, 041 | 4 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue + Wave/CR table | feature | PENDING (0.2.0 · track-1) | 011, 013 | 5 (0.2.0) |
 | [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Playwright runner + codec + tab | feature | PENDING (0.2.0 · track-2) | 004, 007 | 5 (0.2.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end + Aborted state | feature | PENDING (0.2.0 · track-3 cand.) | 008, 011 | 5 (0.2.0) |
@@ -76,6 +77,19 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: velocity + burndown + forecast | feature | PENDING (0.2.0) | 011, 014 | 5/6 (0.2.0) |
 
 ## Notes
+- 🚀 **2026-08-19 — Crucible v2 SHIPPED its first public release (0.1.0 + hotfix 0.1.1).**
+  `crucible-axi` on PyPI: **0.1.0** then **0.1.1** (OIDC trusted publishing, pending publisher
+  auto-converted on first upload). `@anthill-tec/crucible-server` on npm: **0.1.1**
+  (`--provenance`, signed to Sigstore). Lockstep from bare-SemVer tags via `release.sh finish`.
+  Two release-day failures, both fixed and recorded in `RELEASING.md`: (1) npm `EOTP` — a
+  write-enabled granular token enforces 2FA by DEFAULT (npm's late-2025 change), so it must be
+  created with **Bypass 2FA checked** even though the account is authorization-only (the doc's old
+  claim that auth-only + unchecked works was wrong). (2) npm `E422 "Failed to validate repository
+  information"` — `package.json` had no `repository` field, which `--provenance` requires; hotfix
+  0.1.1 added it. npm 0.1.0 never published (both failures preceded it), so npm starts at 0.1.1
+  while PyPI has 0.1.0+0.1.1 — lockstep holds from here. **Remaining follow-up (optional, maintainer):**
+  configure the npm OIDC trusted publisher now that the package exists, then delete `NPM_TOKEN` —
+  the bypass token is a stopgap npm is deprecating. Model-B intimated (Sandesh msg 1354).
 - ✅ **2026-08-18 (release-readiness — the "still pending setup" line is SUPERSEDED, verified against CI + repo).** The 2026-08-03 note below ("Remaining 0.1.0 gate items: … the `@anthill-tec` npm org (human prerequisite)") was stale and got re-quoted for weeks without anyone reading `release.yml`. Ground truth now: `release.yml` publishes PyPI + TestPyPI via **OIDC trusted publishing** (no token) and npm with `--provenance` (`NPM_TOKEN`-gated, skips only if absent); `gh` confirms the repo `anthill-tec/crucible` carries all three deploy environments (`pypi` · `testpypi` · `npm`) and both secrets (`NPM_TOKEN`, `RELEASE_PAT`, set 2026-08-13); the PyPI/TestPyPI trusted publishers are registered under Anthill (user-confirmed). **Nothing remains to SET UP.** The release is an execution step, not a setup gap: branch → no-mistakes → TestPyPI rehearsal (`workflow_dispatch`) → tag push → CI publishes → verify from the registries. The Model-B intimation is a post-release courtesy, never a publish prerequisite.
 - 2026-08-18 (SCRUM filing) — **CR-CRU-065 filed** on user direction, carrying CR-CRU-064's C3
   recorded follow-up: the shared `no_report_warning` picks the LAST non-empty line as the cause,

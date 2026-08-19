@@ -1,18 +1,30 @@
 # Crucible Server — Runbook
 
-Operating guide for the bun/node Crucible server (`src/server.ts`).
+Operating guide for the Crucible server (`src/server.ts`).
+
+The server is a **Bun** program — Bun is its runtime, and `crucible-axi install`
+guarantees it (detecting Bun, or bootstrapping it and verifying `bun --version`,
+failing the install outright if it cannot). There is no node launcher.
 
 ## Start
 
 ```sh
-# via the published npx-runnable launcher
-crucible-server
+# the provisioned server, in the foreground (Ctrl-C stops it)
+crucible-axi serve
 
 # or directly from a checkout
 bun run src/server.ts
 # or
 bun run start
 ```
+
+`crucible-axi serve` runs the server the `crucible-axi install` [server] stage
+provisioned, launched by ABSOLUTE path (`$BUN_INSTALL/bin/crucible-server`, or
+the version-pinned package through the resolved absolute Bun when that bin is
+missing) — never a bare token, so it also works under a minimal `PATH`. It
+blocks for the life of the run and exits with the server's own exit code. If
+neither the provisioned bin nor a usable Bun can be resolved it prints the
+remedy to stderr and exits 1 rather than half-starting.
 
 On boot the server logs its listen URL, e.g.:
 
@@ -123,11 +135,14 @@ the store:
 
 ```sh
 # custom port, still loopback
-CRUCIBLE_PORT=4000 crucible-server
+CRUCIBLE_PORT=4000 crucible-axi serve
 
 # expose beyond loopback (do this only behind a trusted network / proxy —
 # the API is unauthenticated)
-CRUCIBLE_HOST=0.0.0.0 CRUCIBLE_PORT=3849 crucible-server
+CRUCIBLE_HOST=0.0.0.0 CRUCIBLE_PORT=3849 crucible-axi serve
+
+# the same two knobs as per-run flags
+crucible-axi serve --host 127.0.0.1 --port 4000
 ```
 
 Keep the default `127.0.0.1` bind unless you have a specific, secured reason to

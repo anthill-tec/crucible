@@ -297,24 +297,15 @@ jobs:
           VERSION="$GITHUB_REF_NAME"
           echo "release tag: $VERSION — setting package.json version from the tag"
           npm version --no-git-tag-version --allow-same-version "$VERSION"
-      - name: Detect NPM_TOKEN (skip npm publish if absent)
-        id: npmtok
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "$NPM_TOKEN" ]; then
-            echo "::notice::NPM_TOKEN not set — skipping npm publish (deferred until token configured). PyPI is unaffected."
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          fi
+      # OIDC trusted publishing (configured on npmjs.com 2026-08-19): the
+      # trusted publisher (repo + release.yml + npm environment) authenticates
+      # via the job's id-token — NO NPM_TOKEN. The token path (and its skip
+      # gate) is retired; a trusted publisher works under npm's most
+      # restrictive "disallow bypass-2fa tokens" account setting, and
+      # --provenance draws its identity from the same OIDC token.
       - name: Upgrade npm (>= 11.5.1 for OIDC trusted publishing)
-        if: steps.npmtok.outputs.publish == 'true'
         run: npm install -g npm@latest
-      - name: Publish server to npm
-        if: steps.npmtok.outputs.publish == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish server to npm via OIDC trusted publisher
         run: npm publish --provenance --access public
 
   dry-run-npm:
