@@ -94,6 +94,16 @@ install): it execs the provisioned server by **absolute path** (`~/.bun/bin/cruc
   "mentioning npx", and `_server_already_installed` mocking. Re-point these to the `bun add -g`
   provision-and-exit contract + the real bin-probe idempotency; they encode the bug today and must
   change with the fix, not survive it. Add the `serve` verb to `tests/cli-axi.test.ts`.
+- **`tests/client/test_crucible_axi_version_pin.py` is in the impact set too** — its module helper
+  `_server_npx_argv` (`:76`) only recognises an argv containing `npx`, so under the new contract it
+  returns `None` and four tests fail: the two `ServerStageNpxArgvVersionPinTest.*` cases AND the two
+  `ServerStageFailsFastOnUnresolvedVersionTest.test_server_stage_proceeds_*` cases (all four consume
+  the same helper). The pin SEMANTICS are unaffected — the captured argv carries the correct pinned
+  version/override — so the fix is re-pointing the matcher to `["bun","add","-g"]` and renaming the
+  two `*_npx_argv_*` tests. Recorded because the first impact sweep used a truncated `grep … | head`
+  and missed this file; the unfiltered sweep is the authority (`cli-axi.test.ts` /
+  `cr009-release-bundle.test.ts` also mention `npx`, but only as prose about the npm bin being
+  npx-runnable, which stays true — both green, no action).
 - README/RUNBOOK data assertions updated (`tests/cr009-release-bundle.test.ts`): the install/run
   commands the docs advertise match the CLI the package ships.
 
