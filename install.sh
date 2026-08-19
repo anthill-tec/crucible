@@ -1,23 +1,26 @@
 #!/bin/sh
 # Crucible — one-line distro-agnostic bootstrap (CR-CRU-009 §S1).
 #
-#   curl -fsSL <crucible>/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/anthill-tec/crucible/master/install.sh | sh
+#
+# That URL is this script's canonical home: the repo is public, and `master`
+# only advances at a release, so the `master` ref always serves the installer
+# of the latest RELEASED version and never needs a per-release bump. Astral's
+# uv installer URL below is likewise its own canonical source.
 #
 # The ONLY prerequisites are `curl` and `sh`. No apt/dnf/pacman, no
 # pre-existing system Python or Node: `uv` is a single static distro-agnostic
 # binary that brings its own Python, and it installs the `crucible-axi`
-# primary orchestrator from PyPI. `crucible-axi install` then self-provisions
-# the rest (bun/node server via npx, the multi-harness skill set) — see §S2.
+# primary orchestrator from PyPI. `crucible-axi install` then provisions the
+# rest and EXITS — it guarantees Bun (the server's runtime), provisions the
+# Bun server user-scoped, and writes the client discovery manifest under its
+# target dir (the `server` and `manifest` stages) — see §S2.
 #
 # Re-running this script is safe (idempotent): uv and the tool install both
 # converge, and `crucible-axi install` is itself idempotent.
 #
 # Skip the staged install with `--no-install`, or `CRUCIBLE_NO_INSTALL=1`:
-#   curl -fsSL <crucible>/install.sh | sh -s -- --no-install
-#
-# NOTE: the canonical hosting URL for THIS script (the `<crucible>` above) is a
-# human-gated deploy step (open-source the repo + publish) — see §S4/§S6. Only
-# Astral's own uv installer URL is hardcoded below, as its canonical source.
+#   curl -fsSL https://raw.githubusercontent.com/anthill-tec/crucible/master/install.sh | sh -s -- --no-install
 
 set -eu
 
