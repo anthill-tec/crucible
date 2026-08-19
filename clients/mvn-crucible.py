@@ -898,6 +898,50 @@ def _emit_tier_run_axi(verb, ingested, project_dir, agent):
                                            verb, CRUCIBLE_URL)]))
 
 
+_MVN_CAUSE_JOINER = " · "
+_MVN_LOCATION_RE = re.compile(r":\[\d+,\d+\]")
+_MVN_CONTINUATION_PREFIXES = ("symbol:", "location:", "required:", "found:")
+_MVN_EPILOGUE_RE = re.compile(
+    r"-> \[Help \d+\]|Re-run Maven|For more information about the errors|"
+    r"BUILD FAILURE")
+
+
+def _select_maven_no_report_cause(output: str) -> str | None:
+    """CR-CRU-065 §S2 (PURE) — pick maven's actionable compile cause from a
+    build capture, or None when there is none. The FIRST `[ERROR] <path>:
+    [line,col] <message>` line is the head; its immediate continuation lines
+    (indented, or beginning `symbol:`/`location:`/`required:`/`found:`) follow.
+    The fragment is capped at 3 lines joined by ` · `. Maven's epilogue
+    (`-> [Help N]`, `Re-run Maven`, `For more information about the errors`,
+    `BUILD FAILURE`, a bare `[ERROR]` separator) is never a cause. This client
+    only SELECTS a plain string; the shared helper owns the envelope."""
+    lines = output.splitlines()
+    for i, line in enumerate(lines):
+        if not line.startswith("[ERROR]"):
+            continue
+        rest = line[len("[ERROR]"):]
+        stripped = rest.strip()
+        if not stripped or _MVN_EPILOGUE_RE.search(stripped):
+            continue
+        if not _MVN_LOCATION_RE.search(rest):
+            continue
+        fragment = [stripped]
+        for nxt in lines[i + 1:]:
+            if len(fragment) >= 3 or not nxt.startswith("[ERROR]"):
+                break
+            nrest = nxt[len("[ERROR]"):]
+            nstripped = nrest.strip()
+            if not nstripped or _MVN_EPILOGUE_RE.search(nstripped):
+                break
+            indented = nrest[1:2].isspace()
+            if indented or nstripped.startswith(_MVN_CONTINUATION_PREFIXES):
+                fragment.append(nstripped)
+            else:
+                break
+        return _MVN_CAUSE_JOINER.join(fragment)
+    return None
+
+
 def _emit_compile_fallback_axi(verb, rc, build_output, project_dir, agent):
     """CR-CRU-058 §S1 — the envelope for the RED-as-compile path: the run
     produced no reports at all, so there is no `run:` block to carry and the
@@ -920,8 +964,9 @@ def _emit_compile_fallback_axi(verb, rc, build_output, project_dir, agent):
                    "fix the build/test-compile errors ingested to Crucible "
                    "(and echoed on stderr)")},
               _axi_context(project_dir, agent_id=agent),
-              [_axi().no_report_warning(verb, "surefire reports", rc,
-                                        build_output)],
+              [_axi().no_report_warning(
+                  verb, "surefire reports", rc, build_output,
+                  cause=_select_maven_no_report_cause(build_output))],
               f"{verb}: ok=False — no reports, ingested as compile (rc={rc})")
 
 
