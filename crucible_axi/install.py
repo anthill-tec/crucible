@@ -24,6 +24,7 @@ then runs that resolved ABSOLUTE Bun path, reported as the stage's `bun` output.
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import shutil
 import subprocess
@@ -68,6 +69,15 @@ _DEFAULT_BUN_INSTALL_PREFIX = "~/.bun"
 # presence there is the server's REAL installed marker.
 SERVER_BIN_NAME = "crucible-server"
 
+# Where `bun add -g` lays a package's own tree down, relative to `$BUN_INSTALL`.
+# The `package.json` under it carries the INSTALLED server version, which is
+# what the pin is compared against so an UPGRADE never silently no-ops.
+BUN_GLOBAL_NODE_MODULES = ("install", "global", "node_modules")
+
+# The metadata key holding the installed version inside that `package.json`.
+_PACKAGE_JSON_VERSION_KEY = "version"
+_PACKAGE_JSON_NAME_KEY = "name"
+
 # The server's own runtime configuration, forwarded to the child process by
 # `crucible-axi serve` (CR-CRU-066 §S3). `serve` composes the child env
 # EXPLICITLY: a systemd `--user` unit (the follow-up CR) inherits neither the
@@ -76,12 +86,17 @@ SERVER_HOST_ENV_VAR = "CRUCIBLE_HOST"
 SERVER_PORT_ENV_VAR = "CRUCIBLE_PORT"
 
 
-def _bun_global_bin_dir() -> str:
-    """Bun's global bin directory -- `$BUN_INSTALL/bin` when set, else
-    `~/.bun/bin`. Read at call time so both an operator's `$BUN_INSTALL` and a
+def _bun_install_prefix() -> str:
+    """Bun's global install prefix -- `$BUN_INSTALL` when set, else `~/.bun`,
+    expanded. Read at call time so both an operator's `$BUN_INSTALL` and a
     prefix that only exists after the curl bootstrap are observed."""
     prefix = os.environ.get(BUN_INSTALL_ENV_VAR) or _DEFAULT_BUN_INSTALL_PREFIX
-    return os.path.join(os.path.expanduser(prefix), "bin")
+    return os.path.expanduser(prefix)
+
+
+def _bun_global_bin_dir() -> str:
+    """Bun's global bin directory -- `<prefix>/bin`."""
+    return os.path.join(_bun_install_prefix(), "bin")
 
 
 def _provisioned_server_bin_path() -> str:
@@ -89,17 +104,94 @@ def _provisioned_server_bin_path() -> str:
     return os.path.join(_bun_global_bin_dir(), SERVER_BIN_NAME)
 
 
-def _server_already_installed(target_dir: str) -> bool:
+def _installed_server_metadata_candidates() -> list[str]:
+    """Every `package.json` path the PROVISIONED server's own metadata may sit
+    at, most canonical first.
+
+    `bun add -g` unpacks the package under
+    `$BUN_INSTALL/install/global/node_modules/<pkg>` and links its bin into
+    `$BUN_INSTALL/bin`, so the canonical location is derived directly. The bin
+    link is then resolved and its directory walked upwards as a fallback, for a
+    Bun layout that differs -- the walk stays INSIDE the Bun prefix, so a bin
+    resolving elsewhere yields no candidate rather than reading arbitrary
+    `package.json` files off the operator's disk.
+    """
+    prefix = _bun_install_prefix()
+    candidates = [os.path.join(prefix, *BUN_GLOBAL_NODE_MODULES,
+                               *SERVER_NPM_PACKAGE.split("/"), "package.json")]
+
+    real_prefix = os.path.realpath(prefix)
+    directory = os.path.dirname(
+        os.path.realpath(_provisioned_server_bin_path()))
+    while directory == real_prefix or \
+            directory.startswith(real_prefix + os.sep):
+        candidate = os.path.join(directory, "package.json")
+        if candidate not in candidates:
+            candidates.append(candidate)
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            break
+        directory = parent
+    return candidates
+
+
+def _read_installed_server_version(package_json_path: str) -> str | None:
+    """The `version` from a provisioned-server `package.json`, or None when the
+    file is absent, unreadable, malformed, or belongs to another package.
+
+    Reading METADATA is deliberate: asking the server binary for its version
+    would RUN the server during the install, which is the exact defect
+    CR-CRU-066 exists to fix (that bin IS the server -- it `listen`s).
+    """
+    try:
+        with open(package_json_path, encoding="utf-8") as handle:
+            metadata = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    if metadata.get(_PACKAGE_JSON_NAME_KEY) != SERVER_NPM_PACKAGE:
+        return None
+    version = metadata.get(_PACKAGE_JSON_VERSION_KEY)
+    return version if isinstance(version, str) and version else None
+
+
+def _installed_server_version() -> str | None:
+    """The version of the server `bun add -g` actually laid down, or None when
+    it cannot be determined. None is the FAIL-SAFE answer: the caller treats it
+    as a mismatch and re-provisions rather than skipping silently."""
+    for candidate in _installed_server_metadata_candidates():
+        version = _read_installed_server_version(candidate)
+        if version is not None:
+            return version
+    return None
+
+
+def _server_already_installed(target_dir: str,
+                              expected_version: str | None = None) -> bool:
     """REAL idempotency probe for the [server] sub-installer (CR-CRU-066 §S1) --
-    True iff the `crucible-server` bin exists under Bun's global bin.
+    True iff the `crucible-server` bin exists under Bun's global bin AND, when
+    `expected_version` is given, the INSTALLED server is that exact version.
 
     Bun owns where the server lands, so `target_dir` (the install/manifest
     root) never holds a server payload: the retired `<target_dir>/server`
     marker-directory probe could never converge because nothing ever created
     it. `target_dir` is kept for the stage-runner signature.
 
+    The version comparison is what makes an UPGRADE converge honestly: a bin
+    left behind by an older `crucible-axi` (or by a hand-run `bun add -g`) is
+    NOT the server this release is pinned to, and reporting it converged would
+    silently skip the pin the lockstep release exists to enforce. An
+    undeterminable installed version counts as a mismatch, so the stage
+    re-provisions -- never a silent skip. `expected_version=None` asks the bare
+    presence question, which is what `crucible-axi serve` needs.
+
     Tests patch this seam directly."""
-    return os.path.isfile(_provisioned_server_bin_path())
+    if not os.path.isfile(_provisioned_server_bin_path()):
+        return False
+    if expected_version is None:
+        return True
+    return _installed_server_version() == expected_version
 
 
 def _resolve_server_version() -> str:
@@ -263,12 +355,20 @@ def _server_stage(target_dir: str, force: bool,
     bootstrap has not touched -- and reports it as the `bun` stage output. The
     provision is VERSION-PINNED (see `_resolve_server_version`).
 
-    Idempotent: an already-provisioned server bin (and not `force`)
-    short-circuits to converged=True without shelling out.
+    Idempotent AND version-aware: an already-provisioned server bin AT THE
+    RESOLVED PIN (and not `force`) short-circuits to converged=True without
+    shelling out. A bin at any other version -- or one whose version cannot be
+    read -- is NOT converged, so an upgrade re-provisions through the same
+    absolute-Bun `bun add -g <pkg>@<pin>` path instead of silently leaving the
+    older server in place.
     """
     server_path = _provisioned_server_bin_path()
 
-    if not force and _server_already_installed(target_dir):
+    # The non-failing resolver: an unusable pin must surface through
+    # `_resolved_server_version_or_fail` below (with its remedy), not as a
+    # convergence answer.
+    if not force and _server_already_installed(target_dir,
+                                               _resolve_server_version()):
         return {"path": server_path, "converged": True}
 
     # Resolve (and validate) the pin BEFORE any side effect -- an unusable
