@@ -39,6 +39,21 @@ and its `crucible-server` bin and **returns**. `_server_already_installed` is re
 probe — the resolved `crucible-server` bin exists under Bun's global bin — so a second `install` is a
 genuine no-op, not a re-hang. The version pin logic (`_resolved_server_version_or_fail`) is unchanged.
 
+### §S1b — The install creates its target directory (found by smoke, 2026-08-19)
+
+A fourth defect, found by driving the real `cli.main(['install'])` after C2 rather than by reading:
+the default `--target-dir` is `os.path.expanduser("~/.crucible")` (`cli.py:56`), **nothing in
+`crucible_axi/` ever creates it** (`grep -rn "makedirs\|mkdir" crucible_axi/*.py` → no match), and it
+does not exist on a fresh machine. So post-C1/C2 the server stage provisions successfully and the
+**manifest stage then dies** `FileNotFoundError: …/.crucible/crucible-clients.json`, and
+`crucible-axi install` still exits 1. The hang is fixed but the install is still not usable — same
+user-visible outcome, different cause.
+
+`run_install` creates the target directory (`os.makedirs(target_dir, exist_ok=True)`) before running
+any stage, so a first install on a clean machine writes its manifest. Idempotent by `exist_ok`; a
+genuinely unwritable target (permissions) must still fail definitively with the path named, never be
+swallowed.
+
 ### §S2 — Bun is guaranteed or the install fails definitively
 
 Before §S1, ensure Bun. Detect `bun` on PATH; if absent, bootstrap via the Bun installer
@@ -124,13 +139,18 @@ install): it execs the provisioned server by **absolute path** (`~/.bun/bin/cruc
 6. README "Quick start" contains no `crucible.dev` and no bare `crucible-server`; its one-liner is the
    `raw.githubusercontent.com/anthill-tec/crucible/<tag>/install.sh` form, and its run step is
    `crucible-axi serve`. `docs/RUNBOOK.md` matches.
-7. Both stacks green before close-out (CR-CRU-045 §S3 — Python + bun suites), including the release
+7. `run_install` creates `target_dir` (`exist_ok=True`) before any stage, so a first install on a
+   clean machine (no `~/.crucible`) completes: server provisions AND the manifest is written, exit 0.
+   Driven end to end against a non-existent target dir — the exact smoke that exposed the defect. An
+   unwritable target still fails definitively with the path named.
+8. Both stacks green before close-out (CR-CRU-045 §S3 — Python + bun suites), including the release
    `.github/workflows/release.yml`/README-as-data suite if its assertions are touched.
 
 ## Estimated size
 
 Medium. One install-stage rewrite + a bun-guarantee helper + one new CLI subcommand + doc
-reconciliation, with focused tests. Four cycles (C1–C4) then VERIFY, then the `0.1.2` patch release.
+reconciliation, with focused tests. Five cycles (C1, C1b, C2–C4) then VERIFY, then the `0.1.2` patch
+release.
 
 ## Risk
 
