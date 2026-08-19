@@ -309,6 +309,67 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
             "a path under $HOME must be ~-abbreviated in the stage result")
         self.assertFalse(server_stage["path"].startswith(home))
 
+    def test_run_install_terminates_because_server_stage_provisions_not_runs(self):
+        """CR-CRU-066 §S5 -- highest-value guard. With the REAL default
+        `_server_stage`, `run_install` must TERMINATE: it PROVISIONS the
+        server (`bun add -g`) and returns `(ok, stages, warnings)`, never
+        invoking the blocking `npx -y <server>` server-RUN that hung 0.1.1's
+        install.
+
+        Modelled as data (never a real port/subprocess): `subprocess.run` is
+        stubbed to RAISE if asked to run the server via `npx`, so the retired
+        behaviour surfaces here as ok:false (and would hang for real), while
+        the provision path returns ok:true with both stages present."""
+        install = _import_fresh("crucible_axi.install")
+        axi = _import_fresh("crucible_axi")
+
+        def _fail_if_npx_server_run(*args, **kwargs):
+            command = args[0] if args else kwargs.get("args", "")
+            text = " ".join(str(a) for a in command) if isinstance(
+                command, (list, tuple)) else str(command)
+            if "npx" in text:
+                raise AssertionError(
+                    "install invoked `npx` to RUN the server -- this blocks "
+                    "forever (CR-CRU-066); the [server] stage must PROVISION "
+                    "via `bun add -g` and exit")
+            completed = mock.Mock()
+            completed.returncode = 0
+            return completed
+
+        with mock.patch.object(axi, "__version__", "0.1.0"), \
+                mock.patch("crucible_axi.install.subprocess.run",
+                           side_effect=_fail_if_npx_server_run) as mock_run, \
+                mock.patch("crucible_axi.install.shutil.which",
+                           return_value="/usr/bin/bun"), \
+                mock.patch("crucible_axi.install._server_already_installed",
+                           return_value=False):
+            result = install.run_install(self.tmp)
+
+        self.assertEqual(
+            len(result), 3,
+            "run_install must return the (ok, stages, warnings) triple")
+        ok, stages, warnings = result
+        self.assertTrue(
+            ok,
+            f"run_install must TERMINATE with ok:true via a PROVISIONING "
+            f"server stage -- a `npx -y <server>` run would hang/fail here; "
+            f"warnings={warnings}")
+        self.assertEqual(
+            [s["name"] for s in stages], ["server", "manifest"],
+            "both stages must complete once the server stage provisions+exits")
+        # argv[0] is matched by BASENAME: CR-CRU-066 §S2 provisions with the
+        # RESOLVED ABSOLUTE bun path, never the bare `bun` token.
+        provisioned = [
+            c for c in mock_run.call_args_list
+            if (c.args and isinstance(c.args[0], (list, tuple))
+                and len(c.args[0]) >= 3
+                and os.path.basename(str(list(c.args[0])[0])) == "bun"
+                and list(c.args[0])[1:3] == ["add", "-g"])]
+        self.assertTrue(
+            provisioned,
+            "the [server] stage must PROVISION via `bun add -g`, never run the "
+            "server")
+
     def test_cli_install_emits_exactly_one_toon_axi_envelope_ok_true_exit_zero(self):
         """End-to-end (mocked externals): argv `install` drives the real
         cli.main -> cmd_install -> install.run_install wiring, using

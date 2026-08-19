@@ -39,10 +39,31 @@ and its `crucible-server` bin and **returns**. `_server_already_installed` is re
 probe — the resolved `crucible-server` bin exists under Bun's global bin — so a second `install` is a
 genuine no-op, not a re-hang. The version pin logic (`_resolved_server_version_or_fail`) is unchanged.
 
+### §S1b — The install creates its target directory (found by smoke, 2026-08-19)
+
+A fourth defect, found by driving the real `cli.main(['install'])` after C2 rather than by reading:
+the default `--target-dir` is `os.path.expanduser("~/.crucible")` (`cli.py:56`), **nothing in
+`crucible_axi/` ever creates it** (`grep -rn "makedirs\|mkdir" crucible_axi/*.py` → no match), and it
+does not exist on a fresh machine. So post-C1/C2 the server stage provisions successfully and the
+**manifest stage then dies** `FileNotFoundError: …/.crucible/crucible-clients.json`, and
+`crucible-axi install` still exits 1. The hang is fixed but the install is still not usable — same
+user-visible outcome, different cause.
+
+`run_install` creates the target directory (`os.makedirs(target_dir, exist_ok=True)`) before running
+any stage, so a first install on a clean machine writes its manifest. Idempotent by `exist_ok`; a
+genuinely unwritable target (permissions) must still fail definitively with the path named, never be
+swallowed.
+
 ### §S2 — Bun is guaranteed or the install fails definitively
 
-Before §S1, ensure Bun. Detect `bun` on PATH; if absent, bootstrap via the Bun installer
-(`curl -fsSL https://bun.sh/install | bash`) **and re-resolve** PATH to include `~/.bun/bin` (the
+Before §S1, ensure Bun. **Detect it at BOTH locations before deciding anything: PATH
+(`shutil.which`) AND the explicit `$BUN_INSTALL/bin/bun` (default `~/.bun/bin/bun`).** A PATH-only
+probe is wrong and was caught at VERIFY: this CR's own install puts Bun under `~/.bun`, so an
+operator who has not re-sourced their shell has a perfectly usable Bun that PATH cannot see — and a
+PATH-only probe then re-pipes a remote installer into a shell on every `--force`/re-provision, which
+is both wasteful and exactly the pipe-to-shell behaviour the opt-out exists to avoid. Only when
+BOTH locations miss does it bootstrap via the Bun installer
+(`curl -fsSL https://bun.sh/install | bash`) **and re-resolve** including `~/.bun/bin` (the
 installer's target is not on the current shell PATH — the same re-resolve `install.sh` already does
 for `uv`). Then **verify** `bun --version` actually runs; if Bun still cannot be resolved, **raise and
 fail the whole install** with a named remedy (`install Bun: https://bun.sh, then re-run`) — never the
@@ -94,6 +115,16 @@ install): it execs the provisioned server by **absolute path** (`~/.bun/bin/cruc
   "mentioning npx", and `_server_already_installed` mocking. Re-point these to the `bun add -g`
   provision-and-exit contract + the real bin-probe idempotency; they encode the bug today and must
   change with the fix, not survive it. Add the `serve` verb to `tests/cli-axi.test.ts`.
+- **`tests/client/test_crucible_axi_version_pin.py` is in the impact set too** — its module helper
+  `_server_npx_argv` (`:76`) only recognises an argv containing `npx`, so under the new contract it
+  returns `None` and four tests fail: the two `ServerStageNpxArgvVersionPinTest.*` cases AND the two
+  `ServerStageFailsFastOnUnresolvedVersionTest.test_server_stage_proceeds_*` cases (all four consume
+  the same helper). The pin SEMANTICS are unaffected — the captured argv carries the correct pinned
+  version/override — so the fix is re-pointing the matcher to `["bun","add","-g"]` and renaming the
+  two `*_npx_argv_*` tests. Recorded because the first impact sweep used a truncated `grep … | head`
+  and missed this file; the unfiltered sweep is the authority (`cli-axi.test.ts` /
+  `cr009-release-bundle.test.ts` also mention `npx`, but only as prose about the npm bin being
+  npx-runnable, which stays true — both green, no action).
 - README/RUNBOOK data assertions updated (`tests/cr009-release-bundle.test.ts`): the install/run
   commands the docs advertise match the CLI the package ships.
 
@@ -111,16 +142,30 @@ install): it execs the provisioned server by **absolute path** (`~/.bun/bin/cruc
    remedy and does NOT invoke the `curl … bun.sh` bootstrap.
 5. `crucible-axi serve` exists as a subcommand, launches the server by absolute path in the
    foreground, honours `CRUCIBLE_HOST`/`CRUCIBLE_PORT`, and returns the child's exit code.
+5a. **Ctrl-C stops it cleanly, with no traceback.** `RUNBOOK` documents Ctrl-C as the stop gesture, so
+   a foreground `SIGINT` — which the shell delivers to the whole process group — must NOT surface a
+   Python `KeyboardInterrupt` stack trace out of `subprocess.run`. It exits `130` (the SIGINT
+   convention). This is the same unpolished failure the 0.1.1 hang produced when the user Ctrl-C'd it,
+   and the reason the resolution-failure path already forbids tracebacks.
+5b. **A signal-terminated server reports `128+N`, not a masked negative.** `CompletedProcess.returncode`
+   is negative when the child is signalled (`-15` for SIGTERM), and `sys.exit(-15)` masks to OS status
+   `241`. `serve` translates it (`143` for SIGTERM, `137` for SIGKILL) so a supervisor — including the
+   systemd `--user` unit this CR delivers `serve` for — can tell the process was signalled.
 6. README "Quick start" contains no `crucible.dev` and no bare `crucible-server`; its one-liner is the
    `raw.githubusercontent.com/anthill-tec/crucible/<tag>/install.sh` form, and its run step is
    `crucible-axi serve`. `docs/RUNBOOK.md` matches.
-7. Both stacks green before close-out (CR-CRU-045 §S3 — Python + bun suites), including the release
+7. `run_install` creates `target_dir` (`exist_ok=True`) before any stage, so a first install on a
+   clean machine (no `~/.crucible`) completes: server provisions AND the manifest is written, exit 0.
+   Driven end to end against a non-existent target dir — the exact smoke that exposed the defect. An
+   unwritable target still fails definitively with the path named.
+8. Both stacks green before close-out (CR-CRU-045 §S3 — Python + bun suites), including the release
    `.github/workflows/release.yml`/README-as-data suite if its assertions are touched.
 
 ## Estimated size
 
 Medium. One install-stage rewrite + a bun-guarantee helper + one new CLI subcommand + doc
-reconciliation, with focused tests. Four cycles (C1–C4) then VERIFY, then the `0.1.2` patch release.
+reconciliation, with focused tests. Five cycles (C1, C1b, C2–C4) then VERIFY, then the `0.1.2` patch
+release.
 
 ## Risk
 
@@ -131,6 +176,29 @@ reconciliation, with focused tests. Four cycles (C1–C4) then VERIFY, then the 
   the composed launch (absolute path, pin, env) as data; never bind a port in a unit test.
 - **Absolute-path resolution** must survive a minimal PATH (the systemd follow-up depends on it) —
   resolve `~/.bun/bin` explicitly rather than trusting inherited PATH.
+
+## Implementation notes
+
+### `serve` deliberately emits NO TOON-AXI envelope (C3)
+
+Every other verb emits one document on stdout (CR-CRU-030 §S1). `serve` does not, and that is a
+deliberate deviation rather than an omission: `serve` hands stdout to the **server process** for the
+life of the run, so emitting an envelope first would either violate §S3 stdout purity (a document
+followed by unrelated server output) or force us to swallow the server's own stdout. A run command
+that blocks by design has no terminal state to report at launch time.
+
+What it does instead: a pre-launch resolution failure (no provisioned bin AND no resolvable Bun)
+writes `crucible-axi serve: <remedy>` to **stderr** and exits 1 — no traceback — and the child's exit
+code otherwise passes through verbatim. If the fleet later wants a machine-readable `serve`
+(e.g. a pre-launch envelope on a separate fd, or a `--dry-run` that prints the composed argv and
+exits), that is a deliberate follow-up, not something half-done here.
+
+### Unwritable target dir returns an envelope, not a traceback (C3)
+
+`run_install`'s `makedirs` failure becomes `{"code": "target-dir-failed", detail: "could not create
+target dir <path>: <exc>"}` with `ok=False`, rather than a propagated `OSError`. The AC accepts
+either shape; this one keeps `crucible-axi install` emitting a well-formed envelope and exiting 1 on
+a permissions problem, which is what an agent consuming the install output needs.
 
 ## Non-goals
 
