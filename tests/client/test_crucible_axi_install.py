@@ -357,10 +357,14 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         self.assertEqual(
             [s["name"] for s in stages], ["server", "manifest"],
             "both stages must complete once the server stage provisions+exits")
+        # argv[0] is matched by BASENAME: CR-CRU-066 §S2 provisions with the
+        # RESOLVED ABSOLUTE bun path, never the bare `bun` token.
         provisioned = [
             c for c in mock_run.call_args_list
             if (c.args and isinstance(c.args[0], (list, tuple))
-                and list(c.args[0])[:3] == ["bun", "add", "-g"])]
+                and len(c.args[0]) >= 3
+                and os.path.basename(str(list(c.args[0])[0])) == "bun"
+                and list(c.args[0])[1:3] == ["add", "-g"])]
         self.assertTrue(
             provisioned,
             "the [server] stage must PROVISION via `bun add -g`, never run the "

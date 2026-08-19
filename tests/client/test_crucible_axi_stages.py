@@ -124,12 +124,19 @@ class ServerStageTest(unittest.TestCase):
 
     @staticmethod
     def _provision_calls(mock_run):
-        """The `subprocess.run` calls whose argv is a `bun add -g ...` list."""
+        """The `subprocess.run` calls whose argv is a `bun add -g ...` list.
+
+        argv[0] is matched by BASENAME: CR-CRU-066 §S2 provisions with the
+        RESOLVED ABSOLUTE bun path, never the bare `bun` token."""
         found = []
         for c in mock_run.call_args_list:
             argv = c.args[0] if c.args else c.kwargs.get("args")
-            if isinstance(argv, (list, tuple)) and list(argv)[:3] == ["bun", "add", "-g"]:
-                found.append(list(argv))
+            if not isinstance(argv, (list, tuple)):
+                continue
+            argv = list(argv)
+            if len(argv) >= 3 and os.path.basename(str(argv[0])) == "bun" \
+                    and argv[1:3] == ["add", "-g"]:
+                found.append(argv)
         return found
 
     def test_server_stage_provisions_via_bun_add_g_with_pinned_package_when_bun_present(self):
@@ -166,8 +173,12 @@ class ServerStageTest(unittest.TestCase):
             f"expected exactly one `bun add -g` provision call, got "
             f"calls={mock_run.call_args_list}")
         self.assertEqual(
-            provisions[0],
-            ["bun", "add", "-g", f"{install.SERVER_NPM_PACKAGE}@0.1.0"],
+            os.path.basename(provisions[0][0]), "bun",
+            f"argv[0] must be a bun executable -- CR-CRU-066 §S2 runs the "
+            f"RESOLVED ABSOLUTE bun path there; got {provisions[0]}")
+        self.assertEqual(
+            provisions[0][1:],
+            ["add", "-g", f"{install.SERVER_NPM_PACKAGE}@0.1.0"],
             "the server stage must provision the version-pinned package "
             "user-scoped via `bun add -g <SERVER_NPM_PACKAGE>@<version>`")
 
@@ -192,10 +203,25 @@ class ServerStageTest(unittest.TestCase):
         `bun add -g` provision -- and still NEVER `npx`.
 
         Patches `crucible_axi.__version__` to a realistic installed-release
-        value (see the sibling test's note on the source-checkout sentinel)."""
+        value (see the sibling test's note on the source-checkout sentinel).
+
+        `$BUN_INSTALL` points at a tmp fixture tree holding an executable
+        `bin/bun` -- what the curl bootstrap leaves behind. Under CR-CRU-066
+        §S2 the stage RE-RESOLVES Bun there after bootstrapping (a freshly
+        installed Bun is not on the PATH this process inherited) and VERIFIES
+        it, so the fixture keeps this test machine-independent instead of
+        leaning on the developer's real `~/.bun`."""
         install = _import_fresh("crucible_axi.install")
         axi = _import_fresh("crucible_axi")
-        with mock.patch.object(axi, "__version__", "0.1.0"), \
+        bun_root = tempfile.mkdtemp(prefix="crucible-axi-bun-root-")
+        self.addCleanup(shutil.rmtree, bun_root, ignore_errors=True)
+        os.makedirs(os.path.join(bun_root, "bin"), exist_ok=True)
+        fake_bun = os.path.join(bun_root, "bin", "bun")
+        with open(fake_bun, "w") as handle:
+            handle.write("#!/bin/sh\necho 1.1.34\n")
+        os.chmod(fake_bun, 0o755)
+        with mock.patch.dict(os.environ, {"BUN_INSTALL": bun_root}), \
+                mock.patch.object(axi, "__version__", "0.1.0"), \
                 mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
                 mock.patch("crucible_axi.install.shutil.which",
                            return_value=None), \
@@ -218,7 +244,9 @@ class ServerStageTest(unittest.TestCase):
         provision_indices = [
             i for i, c in enumerate(mock_run.call_args_list)
             if (c.args and isinstance(c.args[0], (list, tuple))
-                and list(c.args[0])[:3] == ["bun", "add", "-g"])]
+                and len(c.args[0]) >= 3
+                and os.path.basename(str(list(c.args[0])[0])) == "bun"
+                and list(c.args[0])[1:3] == ["add", "-g"])]
         self.assertTrue(
             provision_indices,
             "expected a `bun add -g` provision call after the Bun bootstrap")

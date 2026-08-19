@@ -85,7 +85,10 @@ def _server_provision_argv(mock_run):
     (CR-CRU-066 §S1) -- or None if no such call was recorded / it wasn't a
     list-form call. Matching on the leading `bun add -g` tokens deliberately
     EXCLUDES the shell-form curl Bun-bootstrap call, so the bun-absent case
-    still isolates the provision argv. Returning the token list (not
+    still isolates the provision argv; argv[0] is matched by BASENAME because
+    CR-CRU-066 §S2 runs the RESOLVED ABSOLUTE bun path there, not the bare
+    `bun` token (that also excludes the `<abs-bun> --version` verification
+    call, whose argv[1] is not `add`). Returning the token list (not
     flattened text) gives a stronger assertion than a substring check on
     flattened text (catches a bare package-name token sitting ALONGSIDE a
     correctly pinned one, which a substring check on joined text would
@@ -94,7 +97,8 @@ def _server_provision_argv(mock_run):
         args = call.args[0] if call.args else call.kwargs.get("args")
         if not isinstance(args, (list, tuple)):
             continue
-        if [str(a) for a in args[:3]] == ["bun", "add", "-g"]:
+        if len(args) >= 3 and os.path.basename(str(args[0])) == "bun" \
+                and [str(a) for a in args[1:3]] == ["add", "-g"]:
             return list(args)
     return None
 

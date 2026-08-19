@@ -61,13 +61,29 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="re-run every stage even when already converged",
     )
+    p_install.add_argument(
+        "--no-bun-bootstrap",
+        action="store_true",
+        help="fail the install instead of bootstrapping Bun when it is absent "
+             f"(same as {install.BUN_NO_BOOTSTRAP_ENV_VAR}=1)",
+    )
     return parser
 
 
 def cmd_install(args) -> int:
-    ok, stages, warnings = install.run_install(args.target_dir, force=args.force)
+    ok, stages, warnings = install.run_install(
+        args.target_dir, force=args.force,
+        no_bun_bootstrap=args.no_bun_bootstrap)
     axi = _load_client_module("_crucible_axi")
-    stage_fields = [{"name": s["name"], "path": s["path"]} for s in stages]
+    # The `[server]` stage reports the ABSOLUTE Bun it resolved (CR-CRU-066
+    # §S2); it rides along in that stage's envelope row so the operator can see
+    # exactly which Bun provisioned the server.
+    stage_fields = []
+    for stage in stages:
+        fields = {"name": stage["name"], "path": stage["path"]}
+        if stage.get("bun"):
+            fields["bun"] = stage["bun"]
+        stage_fields.append(fields)
     result_fields = {
         "stages": stage_fields,
         "help": ["status"],
