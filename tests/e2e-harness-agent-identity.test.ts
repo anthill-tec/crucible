@@ -224,47 +224,17 @@ describe("§S4 — the ensure-registered guarantee is idempotent (CR-CRU-060)", 
   });
 });
 
-describe("AC — no file under src/ is modified (CR-CRU-060 is a harness-only fix)", () => {
-  test("git diff (this branch's commits + any uncommitted changes) touches no src/ path", () => {
-    const mergeBaseRes = Bun.spawnSync({
-      cmd: ["git", "merge-base", "develop", "HEAD"],
-      cwd: REPO_ROOT,
-    });
-    // Falls back to comparing against HEAD (committed diff empty, only the
-    // working tree matters) if `develop` is unreachable — still catches the
-    // one thing this guard exists for while GREEN is in progress.
-    const mergeBase = mergeBaseRes.exitCode === 0 ? mergeBaseRes.stdout.toString().trim() : "HEAD";
-
-    const committed = Bun.spawnSync({
-      cmd: ["git", "diff", "--name-only", `${mergeBase}..HEAD`],
-      cwd: REPO_ROOT,
-    });
-    const uncommitted = Bun.spawnSync({
-      cmd: ["git", "diff", "--name-only", "HEAD"],
-      cwd: REPO_ROOT,
-    });
-    expect(committed.exitCode).toBe(0);
-    expect(uncommitted.exitCode).toBe(0);
-
-    const touched = new Set(
-      [...committed.stdout.toString().split("\n"), ...uncommitted.stdout.toString().split("\n")]
-        .map((l) => l.trim())
-        .filter((l) => l.length > 0),
-    );
-    const srcTouched = [...touched].filter((p) => p.startsWith("src/"));
-
-    // POSITIVE — the exact AC: no src/ path anywhere in this branch's diff.
-    // This is a STANDING invariant (true today, before any GREEN code
-    // exists, and required to stay true through GREEN's harness-only fix —
-    // see docs/changes/CR-CRU-060-e2e-harness-identity-drift.md's Context:
-    // "the fix belongs entirely in the test harness, and nothing in src/
-    // should be relaxed to accommodate it"). Unlike the four tests above it
-    // is not a fail-now/pass-after-GREEN contract; it is a regression guard
-    // GREEN must not trip, mirroring this repo's own standing-invariant
-    // precedent for a structural rule (tests/suite-integrity.test.ts's
-    // bunfig.toml exclusion-key guard) and
-    // tests/e2e/teardown-contracts/crucible-db-isolation.test.ts's second,
-    // corroborating (not fail-now) assertion.
-    expect(srcTouched).toEqual([]);
-  });
-});
+// RETIRED (was: "AC — no file under src/ is modified"). That guard asserted
+// CR-CRU-060's own scope — a harness-only fix — by diffing
+// `merge-base develop..HEAD` of WHATEVER branch it ran on. CR-CRU-060 merged
+// at 0563621, so the fact it protected is now settled history and cannot be
+// re-verified from a moving branch diff: on develop the diff is empty (it
+// passed vacuously) and on every later feature branch that legitimately
+// touches src/ it fails. CR-CRU-068 (server discloses its resolved store) was
+// the first to trip it.
+//
+// Deliberately removed rather than loosened: a CR-scoped diff assertion cannot
+// outlive its CR's merge, and narrowing it to a frozen commit range would
+// assert a historical fact that the merged code already embodies. Do not
+// reintroduce a branch-diff scope guard here — scope belongs in the CR's own
+// review, not in a standing suite every future branch must satisfy.
