@@ -1669,6 +1669,33 @@ export class Store {
   }
 
   /**
+   * CR-CRU-017 §S1/§S3 — the OPEN runs a dashboard must paint as "running…",
+   * newest first, optionally scoped to one project. Read-only: the caller
+   * sweeps (`sweepOpenRuns`) BEFORE reading, so a dead run is already settled
+   * and never served here as still-running. Archived projects are excluded on
+   * the same grounds `listEvents` excludes them (CR-CRU-012 §S1b): an archived
+   * project contributes nothing to any live surface.
+   */
+  listOpenRuns(projectKey?: string): RunRecord[] {
+    const rows =
+      projectKey === undefined
+        ? this.db
+            .query<RunRow, []>(
+              `SELECT * FROM runs WHERE run_state = 'open' AND ${Store.NOT_ARCHIVED_SUBQUERY}
+               ORDER BY started_at DESC`,
+            )
+            .all()
+        : this.db
+            .query<RunRow, [string]>(
+              `SELECT * FROM runs
+               WHERE run_state = 'open' AND project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY}
+               ORDER BY started_at DESC`,
+            )
+            .all(projectKey);
+    return rows.map((row) => Store.toRun(row));
+  }
+
+  /**
    * §S1 — mark an OPEN run ENDED by the event that closed it. Guarded on
    * `run_state = 'open'`, so a lost end/end race changes nothing (the caller
    * has already refused the second close with a 409).

@@ -107,12 +107,19 @@ export default defineConfig({
   // (`chromium-drilldown-dual-axis-scroll`); no ordering requirement
   // relative to `chromium-drill-in` / `chromium-cycle-run-navigation`
   // (own namespaced "DDA …" fixtures), only relative to `chromium`.
+  //
+  // CR-CRU-017 §S3 — `run-lifecycle.feature` sorts alphabetically BEFORE
+  // shell-storyboard.feature ("r" < "s") too, so it would seed projects ahead
+  // of that same F1 empty-DB precondition. Same fix once more, its own
+  // dependent project (`chromium-run-lifecycle`); no ordering requirement
+  // relative to the other dependents (its fixtures are namespaced "RL …"),
+  // only relative to `chromium`.
   projects: [
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
       testIgnore:
-        /(drill-in|cycle-run-navigation|drilldown-dual-axis-scroll)\.feature\.spec\.js$/,
+        /(drill-in|cycle-run-navigation|drilldown-dual-axis-scroll|run-lifecycle)\.feature\.spec\.js$/,
     },
     {
       name: "chromium-drill-in",
@@ -130,6 +137,12 @@ export default defineConfig({
       name: "chromium-drilldown-dual-axis-scroll",
       use: { ...devices["Desktop Chrome"] },
       testMatch: /drilldown-dual-axis-scroll\.feature\.spec\.js$/,
+      dependencies: ["chromium"],
+    },
+    {
+      name: "chromium-run-lifecycle",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: /run-lifecycle\.feature\.spec\.js$/,
       dependencies: ["chromium"],
     },
   ],

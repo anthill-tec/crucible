@@ -9,7 +9,7 @@ import { authHints, hints, cycleHints, identityHints, projectDeleteHints } from 
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
 import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
-import type { ProjectPatch, RecordEventMeta, TouchAgentOpts } from "./store.ts";
+import type { ProjectPatch, RecordEventMeta, RunRecord, TouchAgentOpts } from "./store.ts";
 import type {
   AgentIdentity,
   AgentRole,
@@ -1832,6 +1832,36 @@ function eventBrief(event: RunEvent) {
           diagnostics: compile.diagnostics.slice(0, 2),
         }
       : {}),
+    // CR-CRU-017 §S1/§S3 (additive) — the RUN lifecycle, FORWARDED from the
+    // stored row exactly as `toEvent` served it, never recomputed here (one
+    // source of truth for runtime_ms). Each key is ABSENT — not null — on an
+    // event ingested without a runId, which is the §S1 graceful-degradation
+    // guard the brief must not weaken. `status` is the RUN's terminal state
+    // (`"aborted"` = ended for non-test reasons), unrelated to `Plan.status`.
+    ...(event.startedAt !== undefined ? { startedAt: event.startedAt } : {}),
+    ...(event.runtimeMs !== undefined ? { runtime_ms: event.runtimeMs } : {}),
+    ...(event.status !== undefined ? { status: event.status } : {}),
+    ...(event.abortReason !== undefined ? { abortReason: event.abortReason } : {}),
+  };
+}
+
+/**
+ * CR-CRU-017 §S3 — the wire shape of an OPEN run: identity, who is running it,
+ * and the `startedAt` the dashboard's elapsed timer counts from. Deliberately
+ * NOT an event brief — an open run has no counts, no duration and no id in the
+ * events table, and fabricating those keys is exactly what would let a running
+ * card be mistaken for a finished one. `state` is omitted for the same reason
+ * it cannot vary: everything here is open by construction.
+ */
+function openRunBrief(run: RunRecord) {
+  return {
+    runId: run.runId,
+    projectKey: run.projectKey,
+    agentId: run.agentId,
+    startedAt: run.startedAt,
+    ...(run.tier !== undefined ? { tier: run.tier } : {}),
+    ...(run.stack !== undefined ? { stack: run.stack } : {}),
+    ...(run.context !== undefined ? { context: run.context } : {}),
   };
 }
 
@@ -1861,7 +1891,22 @@ function handleEventsList(store: Store, req: Request, url: URL): Response {
   const rawLimit = Number(url.searchParams.get("limit") ?? "");
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 50;
   // store.listEvents is newest-first already.
-  return reply(req, url, { ok: true, events: store.listEvents(project, limit).map(eventBrief) });
+  //
+  // CR-CRU-017 §S3 (additive) — `openRuns`: the runs opened through
+  // /runs/start that have not yet settled, so the timeline can paint each as a
+  // live "running…" card. Additive and never a replacement: `events` is
+  // untouched (an open run has NO event yet — a start is not an end), so every
+  // existing consumer reads the same feed it always did, and a caller that
+  // ignores `openRuns` simply sees the pre-017 timeline. Served AFTER the
+  // sweep above, so a dead run is already aborted and appears as its aborted
+  // EVENT rather than as a run still pulsing here. The anchored `cycleId`
+  // branch above stays byte-unchanged: it answers "which runs does this cycle
+  // own", a settled-history question.
+  return reply(req, url, {
+    ok: true,
+    events: store.listEvents(project, limit).map(eventBrief),
+    openRuns: store.listOpenRuns(project).map(openRunBrief),
+  });
 }
 
 /** §S4 — per-suite counts derived from leaf statuses (no leaves in the reply). */
