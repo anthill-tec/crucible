@@ -142,6 +142,38 @@ unsatisfiable. The gate is owned HERE: a refused (AC5) or failed (AC7) migration
 must fail the upgrade with the backup path named, and must not leave a new binary
 pointed at a store it cannot open.
 
+**AC9 — an upgrade restarts the daemon (absorbed from CR-CRU-072 AC7).** After
+an upgrade the running service must BE the new version. Today it is not: the
+unit's `ExecStart` is `$BUN_INSTALL/bin/crucible-server`, a version-INDEPENDENT
+path, so the rendered unit is byte-identical on an upgrade, `_unit_stage`
+computes `changed=false`, and CR-CRU-070 deliberately leaves an already-active
+service alone (its docstring: *"a restart drops every live SSE subscriber"*).
+Meanwhile `bun add -g` has replaced the package on disk while the process holds
+the old code in memory — a new binary with an old process serving it.
+
+Neither shipped CR can fix that alone: the `unit` stage compares unit TEXT and
+cannot know the server advanced. Only the `server` stage knows, because it is the
+one that re-provisioned (version-aware since CR-CRU-066). So:
+
+- the `server` stage reports that it ADVANCED, and the `unit` stage restarts on
+  that signal ALONE — never by re-reading the installed version or re-resolving
+  the pin, because two sources of truth for "did the server advance?" is how this
+  bug appeared;
+- a run where the server converges and the unit text is unchanged still performs
+  NO write and NO restart, so CR-CRU-070's idempotence holds everywhere except a
+  real version change;
+- an absent or inactive unit means no restart and the run still converges
+  (`ok=True`, exit 0); absent systemd still skips with a reason;
+- `--force` still restarts an active service, keeping it the "make it match
+  whatever the state" escape hatch;
+- embedding a version in `ExecStart` to force a text change is REJECTED: it would
+  rewrite the unit on every upgrade and break the
+  unchanged-unit-is-not-rewritten guarantee.
+
+Verified by observing the service report the NEW version after an upgrade (health
+`version` or the journal startup line), on a non-default port and temp store so
+it can never collide with the dog-food instance on 3849.
+
 ## Notes
 
 - Raised 2026-08-20 by the maintainer while reviewing the install/uninstall

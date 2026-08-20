@@ -3,7 +3,7 @@
 - **Type**: bugfix
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 066, 069, 071
-- **Status**: PARTIAL (0.2.0) — AC1-AC4/AC6 merged at b6132ab; AC7 open; AC5 moved to CR-CRU-071 AC8
+- **Status**: COMPLETED (0.2.0) — merged at b6132ab; AC5 → CR-CRU-071 AC8, AC7 → CR-CRU-071 AC9
 
 ## Problem
 
@@ -92,7 +92,7 @@ pointed at a store it cannot open.
 fully-current machine converges: no reinstall, no re-provision, exit 0, and it
 says `already current`. Running it twice is indistinguishable from once.
 
-**AC7 — the unit follows too. → OPEN. This CR is NOT done.**
+**AC7 — the unit follows too. → MOVED to CR-CRU-071 AC9.**
 Verified after merge: the unit's `ExecStart` is
 `$BUN_INSTALL/bin/crucible-server`, which is version-INDEPENDENT, so on an
 upgrade the rendered unit is byte-identical, `_unit_stage` computes
@@ -104,9 +104,9 @@ shipped CRs contradict each other and neither can resolve it alone, because the
 unit stage compares unit TEXT and cannot know the server package advanced — only
 the `server` stage does, since it is the stage that re-provisioned.
 
-The fix belongs HERE, not in a new CR: this is an acceptance criterion that was
-merged unmet, so the remedy is to finish this CR rather than to renumber the
-debt. The `server` stage reports that it advanced and the `unit` stage restarts
+The fix lands in CR-CRU-071, which owns the in-place upgrade end to end and is
+still pending: the daemon that serves after an upgrade is part of the same
+transition as the store that survives it. There, the `server` stage reports that it advanced and the `unit` stage restarts
 on that signal ALONE, so a no-op re-run still never restarts and CR-CRU-070's
 idempotence (a restart drops every live SSE subscriber) holds everywhere except
 a real version change. Embedding a version in `ExecStart` to force a text change
