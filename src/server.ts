@@ -234,7 +234,14 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
       events: store.countEvents(),
     },
     // CR-CRU-068 §S1 — one site, so /api/health and /api/v2/health cannot drift.
-    store: { path: storeResolution.path, rule: storeResolution.rule },
+    // CR-CRU-071 §S1 — the same site carries the schema version and what this
+    // boot migrated, so an in-place upgrade is visible without shell forensics.
+    store: {
+      path: storeResolution.path,
+      rule: storeResolution.rule,
+      schemaVersion: store.schemaVersion,
+      migration: store.migration,
+    },
   });
 
   const server = Bun.serve({
@@ -293,8 +300,17 @@ if (import.meta.main) {
   // CR-CRU-068 §S1 — the store is disclosed at boot, taken from the handle rather
   // than re-resolved, so the banner can never name a store the server did not open.
   console.log(
-    `[crucible] store ${handle.storeResolution.path} (rule: ${handle.storeResolution.rule})`,
+    `[crucible] store ${handle.storeResolution.path} (rule: ${handle.storeResolution.rule}, schema v${handle.store.schemaVersion})`,
   );
+  // CR-CRU-071 §S1 — a boot that rewrote the store's schema says so, naming the
+  // recovery point it wrote first.
+  const migrated = handle.store.migration;
+  if (migrated !== null) {
+    console.log(
+      `[crucible] migrated store schema v${migrated.from} -> v${migrated.to}` +
+        (migrated.backupPath === null ? "" : ` (pre-upgrade backup: ${migrated.backupPath})`),
+    );
+  }
   // CR-CRU-024 §S5.2 — a graceful stop checkpoints EVERY active cycle's timer
   // (all plans, all projects) before exit, so an orderly shutdown never loses
   // in-flight epoch state; only a hard power cut falls back to the <=60s
