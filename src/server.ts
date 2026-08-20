@@ -31,6 +31,15 @@ export interface ResolveDbPathOpts {
   dbPath?: string;
 }
 
+/** CR-CRU-068 §S1 — which of the four cascade rules picked the store. */
+export type StoreRule = "explicit" | "CRUCIBLE_DB" | "cwd-data" | "user-data";
+
+/** CR-CRU-068 §S1 — a resolved store path together with the rule that matched. */
+export interface StoreResolution {
+  path: string;
+  rule: StoreRule;
+}
+
 /**
  * CR-CRU-043 §S1-§S3 — resolve the store path, first match wins:
  *   1. explicit `opts.dbPath` (returned verbatim, `":memory:"` included);
@@ -39,35 +48,49 @@ export interface ResolveDbPathOpts {
  *      which is what keeps the live dog-food instance in use from the repo root;
  *   4. `<XDG_DATA_HOME or <HOME>/.local/share>/crucible/crucible.db`.
  *
+ * CR-CRU-068 §S1 — reports WHICH rule matched alongside the path, so a surprising
+ * store is explicable instead of merely observable. Rule 3 is CWD-relative, so the
+ * same binary opens a different database depending on where it was launched from.
+ *
  * Pure: computes a string and never touches the filesystem beyond the rule-3
  * existence probe. The `HOME` fallback deliberately reads `env.HOME` rather than
  * `os.homedir()` — Bun caches `HOME` at process startup, so `os.homedir()` cannot
  * observe an injected env and the contract would be untestable.
  */
-export function resolveDbPath(opts?: ResolveDbPathOpts): string {
+export function resolveStore(opts?: ResolveDbPathOpts): StoreResolution {
   if (opts?.dbPath !== undefined) {
-    return opts.dbPath;
+    return { path: opts.dbPath, rule: "explicit" };
   }
   const env = opts?.env ?? process.env;
   const fromEnv = env.CRUCIBLE_DB;
   if (fromEnv !== undefined && fromEnv !== "") {
-    return fromEnv;
+    return { path: fromEnv, rule: "CRUCIBLE_DB" };
   }
   const cwd = opts?.cwd ?? process.cwd();
   const cwdDb = path.join(cwd, "data", "crucible.db");
   if (existsSync(cwdDb)) {
-    return cwdDb;
+    return { path: cwdDb, rule: "cwd-data" };
   }
   const xdg = env.XDG_DATA_HOME;
   const dataHome =
     xdg !== undefined && xdg !== "" ? xdg : path.join(env.HOME ?? "", ".local", "share");
-  return path.join(dataHome, "crucible", "crucible.db");
+  return { path: path.join(dataHome, "crucible", "crucible.db"), rule: "user-data" };
+}
+
+/**
+ * CR-CRU-043 §S1-§S3 — the bare-string store path: exactly {@link resolveStore}'s
+ * `path`, so the two entry points can never disagree.
+ */
+export function resolveDbPath(opts?: ResolveDbPathOpts): string {
+  return resolveStore(opts).path;
 }
 
 export interface ServerHandle {
   server: ReturnType<typeof Bun.serve>;
   store: Store;
   stop(): void;
+  /** CR-CRU-068 §S1 — the store this server opened, and the rule that chose it. */
+  storeResolution: StoreResolution;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -189,7 +212,10 @@ async function handleStatic(url: URL): Promise<Response> {
 export function startServer(opts?: StartServerOpts): ServerHandle {
   // CR-CRU-043 §S1-§S3 — no CWD-relative default: explicit opts, then CRUCIBLE_DB,
   // then an existing ./data/crucible.db, then the user data directory.
-  const dbPath = resolveDbPath({ dbPath: opts?.dbPath });
+  // CR-CRU-068 §S1 — resolved ONCE here; the rule travels with the path so the
+  // handle, both health routes and the boot banner all disclose the same identity.
+  const storeResolution = resolveStore({ dbPath: opts?.dbPath });
+  const dbPath = storeResolution.path;
   if (dbPath !== ":memory:") {
     mkdirSync(path.dirname(dbPath), { recursive: true });
   }
@@ -207,6 +233,8 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
       agents: store.listAgents().length,
       events: store.countEvents(),
     },
+    // CR-CRU-068 §S1 — one site, so /api/health and /api/v2/health cannot drift.
+    store: { path: storeResolution.path, rule: storeResolution.rule },
   });
 
   const server = Bun.serve({
@@ -252,6 +280,7 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
   return {
     server,
     store,
+    storeResolution,
     stop: () => {
       server.stop(true);
     },
@@ -261,6 +290,11 @@ export function startServer(opts?: StartServerOpts): ServerHandle {
 if (import.meta.main) {
   const handle = startServer();
   console.log(`[crucible] listening on http://localhost:${handle.server.port}`);
+  // CR-CRU-068 §S1 — the store is disclosed at boot, taken from the handle rather
+  // than re-resolved, so the banner can never name a store the server did not open.
+  console.log(
+    `[crucible] store ${handle.storeResolution.path} (rule: ${handle.storeResolution.rule})`,
+  );
   // CR-CRU-024 §S5.2 — a graceful stop checkpoints EVERY active cycle's timer
   // (all plans, all projects) before exit, so an orderly shutdown never loses
   // in-flight epoch state; only a hard power cut falls back to the <=60s
