@@ -80,18 +80,29 @@ printed over an upgrade that did not happen.
 version-aware convergence), so CLI and server land in lockstep. Asserted by an
 old→new transition, not by re-reading the pin.
 
-**AC5 — upgrade is gated on a safe store migration.** When the new version
-requires a schema change, the upgrade proceeds only if migration succeeds
-(CR-CRU-071): a refused or failed migration fails the upgrade with the backup
-path named, and does not leave a new binary pointed at a store it cannot open.
+**AC5 — upgrade is gated on a safe store migration. → MOVED to CR-CRU-071 AC8.**
+This AC was unsatisfiable when written: the gate needs a versioned migration to
+gate ON, and nothing in `install.sh` or `crucible_axi/` referenced migration at
+all. This CR was merged and closed with it outstanding — recorded here rather
+than quietly dropped. CR-CRU-071 AC8 now owns it: a refused or failed migration
+fails the upgrade with the backup path named, and never leaves a new binary
+pointed at a store it cannot open.
 
 **AC6 — idempotent and re-runnable.** Re-running the one-liner on a
 fully-current machine converges: no reinstall, no re-provision, exit 0, and it
 says `already current`. Running it twice is indistinguishable from once.
 
-**AC7 — the unit follows too.** When a systemd `--user` unit is installed
-(CR-CRU-070), an upgrade refreshes it and restarts the service so the running
-daemon is the new version — never a new binary with an old process still serving.
+**AC7 — the unit follows too. → NOT SATISFIED; see CR-CRU-074.**
+Verified after merge: the unit's `ExecStart` is
+`$BUN_INSTALL/bin/crucible-server`, which is version-INDEPENDENT, so on an
+upgrade the rendered unit is byte-identical, `_unit_stage` computes
+`changed=false`, and an already-active service is deliberately left alone
+(CR-CRU-070's idempotence: a restart drops every live SSE subscriber).
+`bun add -g` swaps the package on disk while the running process keeps
+serving the OLD code in memory — precisely what this AC forbids. The two
+shipped CRs contradict each other and neither can resolve it alone, because
+the unit stage cannot know the server package advanced. CR-CRU-074 owns the
+fix.
 
 ## Scope
 

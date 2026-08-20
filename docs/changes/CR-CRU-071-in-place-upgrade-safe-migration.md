@@ -76,16 +76,39 @@ contract is not yet true.
 
 **AC4 — a recovery point exists before any mutation.** Before the first
 migrating write, the store is copied to a timestamped sibling
-(`crucible-pre-upgrade-<version>-<date>.db`, matching the existing
-`crucible-pre-*.db` convention) using a WAL-safe copy — never a bare file copy
+(`<path>.pre-upgrade-<epoch>`, extending the store's EXISTING sibling-file
+convention `<path>.<kind>-<epoch>` — the same shape as `<path>.corrupt-<epoch>`
+from CR-CRU-001 §S5, so one cleanup rule and one docs paragraph cover both
+rather than two competing schemes) using a WAL-safe copy — never a bare file copy
 of a live WAL database. A failed or interrupted migration leaves the original
 recoverable, and the envelope/log names the backup path. `:memory:` is exempt.
 
-**AC5 — a newer store is REFUSED, not opened.** When `user_version` exceeds the
-version the running code knows, the server refuses to open it, explains both
-versions and the remedy (upgrade the server, or restore the backup), and exits
-non-zero. It never falls back to "open it anyway". This is the downgrade guard;
-it is asserted with a store stamped to a future version.
+**AC5 — a newer store is REFUSED, and refusal is NOT quarantine.** When
+`user_version` exceeds the version the running code knows, the server refuses to
+open it, explains both versions and the remedy (upgrade the server, or restore
+the backup), and exits non-zero. It never falls back to "open it anyway".
+
+**This is a deliberate, narrow exception to CR-CRU-001 §S5's "boot must never
+fail because of a bad file".** That invariant exists for a store that cannot be
+READ, and its remedy is to rename the file to `<path>.corrupt-<epoch>` and boot
+on a fresh empty db (`src/store.ts`, `tests/boot-safety.test.ts:32-45`,
+RUNBOOK §Corrupt database recovery). A store from a NEWER version is the
+opposite case: it is perfectly readable and holds the user's live data. Sending
+it down the quarantine path would rename a GOOD database aside and start empty —
+silent abandonment of live data, the worst outcome available. So:
+
+- a store that cannot be read → quarantine and boot (unchanged §S5 behaviour);
+- a store that reads fine but is from the future → refuse, exit non-zero, touch
+  NOTHING. No rename, no fresh db, no writes.
+
+The version check therefore runs AFTER the existing corruption probe (a
+too-new store must still be a readable one) and BEFORE the migration chain.
+CR-CRU-001 §S5's wording and RUNBOOK §Corrupt database recovery are amended by
+this CR to name the exception, so the invariant and the code agree.
+
+Asserted with a store stamped to a future version: exit non-zero, and the file
+is byte-identical afterwards with no `*.corrupt-*` or `*.pre-upgrade-*` sibling
+created.
 
 **AC6 — migration outcome is disclosed, not silent.** Startup and
 `GET /api/health` report the store's schema version alongside the store path and
@@ -109,6 +132,15 @@ Non-goals, explicitly:
 - No schema redesign; no table is added, dropped, or renamed by this CR beyond
   formalising the retrofits that already run.
 - No client-visible API change beyond the additive health/startup fields.
+
+**AC8 — the upgrade is gated on this migration (absorbed from CR-CRU-072 AC5).**
+CR-CRU-072 shipped its installer-upgrade path with an AC5 that reads "the
+upgrade proceeds only if migration succeeds (CR-CRU-071)". Nothing could
+implement that before this CR existed — `install.sh` and `crucible_axi/` contain
+no migration reference at all — so 072 was closed with that AC structurally
+unsatisfiable. The gate is owned HERE: a refused (AC5) or failed (AC7) migration
+must fail the upgrade with the backup path named, and must not leave a new binary
+pointed at a store it cannot open.
 
 ## Notes
 
