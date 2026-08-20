@@ -59,6 +59,21 @@ version it moves the store from and to, runs in a transaction, and is a no-op
 when already applied. Re-running the chain converges. The existing ad-hoc
 probe-and-ALTER retrofits become numbered steps; none of their effects change.
 
+**The existing order is load-bearing and must be preserved exactly.** The
+retrofits are not independent: `RENAME COLUMN phase TO role` must run BEFORE the
+additive `ADD COLUMN role`, or the rename is skipped and a fresh empty `role`
+column shadows CR-CRU-057's backfill — 299 of 338 events on the live dog-food
+store. `migrate()` keeps this coherent by mutating its own PRAGMA snapshot
+(`eventCols.delete("phase"); eventCols.add("role")`) so a later guard in the same
+pass sees the new name. Numbering the steps must reproduce that sequencing and
+that within-pass state, not merely the set of statements.
+
+Data backfills that live inside the current pass (`backfillInferredEventRoles`,
+and CR-CRU-057 §S4's labeled backfill) are part of the chain, not separate: a
+step that alters a column and the backfill that populates it must land in the
+same version, or a store can stop between them and report a version whose data
+contract is not yet true.
+
 **AC4 — a recovery point exists before any mutation.** Before the first
 migrating write, the store is copied to a timestamped sibling
 (`crucible-pre-upgrade-<version>-<date>.db`, matching the existing
