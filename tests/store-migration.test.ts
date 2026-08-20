@@ -327,6 +327,16 @@ const CORRUPT_RE = /\.corrupt-\d+$/;
  * A tmp snapshot of the live dog-food store, or null when there is none.
  * The live file is never opened by a Store — only read by `sqlite3 .backup`.
  */
+/** Put a snapshot back into the pre-CR-071 condition: unstamped. */
+function resetUserVersion(dbPath: string): void {
+  const db = new Database(dbPath);
+  try {
+    db.exec("PRAGMA user_version = 0");
+  } finally {
+    db.close();
+  }
+}
+
 function copyOfRealStore(): string | null {
   return snapshotLiveStore(path.join(tmpDir(), "crucible.db"));
 }
@@ -539,6 +549,15 @@ describe("CR-CRU-071 AC2 — existing stores are baselined without loss", () => 
     // Counts are MEASURED from the copy, never pinned as literals: the live
     // store grows, and the assertion AC2 actually demands is before-vs-after
     // EQUALITY ("no data movement"), which absolute numbers would not add to.
+    // The live store is STAMPED once this CR has shipped and actually run
+    // against it, so asserting it arrives unstamped would make this test
+    // self-invalidating — it would pass only until the feature worked. (It
+    // did: the dog-food store went to v5 the day CR-071 merged.) The AC is
+    // "an UNSTAMPED store is baselined losslessly", so the copy is put back
+    // into that condition explicitly. Legitimate because this is a throwaway
+    // snapshot, never the live file.
+    resetUserVersion(dbPath);
+
     const before = rowCounts(dbPath);
     const rolesBefore = eventRoleCount(dbPath);
     expect(userVersion(dbPath)).toBe(0);
