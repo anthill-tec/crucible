@@ -2,7 +2,7 @@
 
 - **Type**: bugfix
 - **Wave**: 5 (0.2.0)
-- **Depends on**: 013, 017
+- **Depends on**: 013 (and a release-completion signal — see Notes; NOT 017)
 - **Status**: PENDING (0.2.0)
 
 ## Problem
@@ -89,7 +89,12 @@ Non-goals, explicitly:
 - Raised 2026-08-20 by the maintainer: "once a release is finished it should be
   gone". Confirmed against the live store before filing — three stale gate
   events, all for shipped releases.
-- Ordering: this needs a release-completion signal to hook (CR-CRU-017's run
-  lifecycle is the closest existing concept) and a migration to retire the three
-  strays (CR-CRU-071). Sequence it after both, or implement AC5's retirement as
-  a standalone step if it lands first.
+- Ordering (corrected 2026-08-20 by CR-CRU-017's gap analysis): this CR was
+  filed depending on CR-CRU-017, on the assumption that its lifecycle work would
+  supply the "release finished" signal. It does not — CR-CRU-017 delivers a RUN
+  lifecycle (start / end / abort of a test run) and emits nothing about a
+  release. Shipping 017 would not unblock this CR.
+  The signal this needs is the RELEASE ceremony's completion — the point at
+  which a tag is cut and published (`scripts/release.sh finish`, the
+  `create-release` + publish workflows). CR-CRU-071's migration chain is still
+  the mechanism for retiring the three existing strays (AC5).

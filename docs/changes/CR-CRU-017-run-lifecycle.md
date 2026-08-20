@@ -21,6 +21,25 @@ LIFECYCLE: start → end (with the real data) | aborted (with a reason).
 
 ## Scope
 
+### §S0 Schema change goes through the migration chain (CR-CRU-071)
+This CR predates CR-CRU-071, which replaced ad-hoc probe-and-`ALTER` retrofits
+with a numbered, transactional chain. The `events` table today carries **no**
+`started_at`, `runtime_ms` or `status` column, so §S1/§S2 need a real schema
+change — and it MUST be a new chain step, not an inline `ALTER`:
+
+- append **step 5 → 6** to `MIGRATIONS` in `src/store.ts` and let
+  `SCHEMA_VERSION` follow from `MIGRATIONS.length` (it derives itself — do not
+  hand-edit a literal);
+- the step's `ALTER`s and any backfill live in the SAME version, inside the one
+  transaction that also stamps `user_version`, so a store can never report a
+  version whose structure or data contract is not yet true;
+- an existing store therefore migrates 5 → 6 on first boot of this build, writes
+  its `<path>.pre-upgrade-<epoch>` backup, and discloses the transition at
+  startup and on both health routes.
+
+Bypassing the chain would leave `user_version` claiming a shape the store does
+not have — the precise defect CR-CRU-071 exists to prevent.
+
 ### §S1 Run-start + run-end (server, additive)
 - `POST /api/v2/runs/start` `{projectKey, agentId, tier?, stack?, context?}` →
   202 `{runId, startedAt}` — records an OPEN run (implicit heartbeat, SSE).
@@ -34,12 +53,34 @@ LIFECYCLE: start → end (with the real data) | aborted (with a reason).
   tombstones (reason `agent died` — rides CR-011's lifecycle machinery) or
   after a configurable staleness timeout (`CRUCIBLE_RUN_ABANDON_MS`).
 
-### §S2 The Aborted state (third terminal state)
+### §S2 The Aborted state (third terminal RUN state)
+**Terminology note — `aborted` is already taken, on a different entity.**
+`Plan.status` is `"open" | "closed" | "aborted"` (`src/types.ts:250`), where
+CR-CRU-024 §S6 defines plan-`aborted` as *a declared workflow explicitly
+discarded, user-approved*. Run-`aborted` here means something unrelated: *a run
+ended for non-test reasons* (timeout, kill, infrastructure). The collision is
+deliberate and scoped — a run's abort is never a plan's abort, they live on
+different entities, and nothing may treat one as the other. Any API field, UI
+label, or rollup guard added by this CR states which entity it refers to.
+
 `POST /api/v2/runs/<runId>/abort` `{reason}` — for timeouts, agent kills,
 infrastructure failures: anything that ends a run for NON-TEST reasons. The
 stored event has `status:"aborted"` + the reason — it is neither pass nor
 fail and never pollutes pass/fail rollups, transition pairing (streaks ignore
-aborted runs), or coverage. Distinct rendering: struck/grey card with the
+aborted runs), or coverage.
+
+**How the exclusion works, because the existing mechanism cannot express it.**
+Rollup eligibility today is decided purely BY KIND —
+`Store.ROLLUP_ELIGIBLE_KINDS = {"test","compile"}` (`src/store.ts:1707`, applied
+at `:1736`) — and every current exclusion (`lifecycle`, `gate`, `milestone`)
+works by being a different kind. An aborted run is still `kind:"test"`, so
+there is NO precedent for excluding a row by a field VALUE inside an eligible
+kind. This CR therefore adds that guard explicitly: `foldIntoRollup` must skip a
+row whose run status is aborted, asserted by a fixture that folds a
+pass/fail/aborted trio and shows the rollup counted two.
+
+This is load-bearing because retention FOLDS THEN DELETES: a wrongly-folded
+abort is unrecoverable once its raw row is pruned. Distinct rendering: struck/grey card with the
 reason (a fourth presentation state — outside the pass/fail/pending palette).
 
 ### §S3 UI
