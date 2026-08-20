@@ -50,6 +50,17 @@ Rather not pipe a remote script into a shell? Install Bun yourself first and
 pass `--no-bun-bootstrap` (or set `CRUCIBLE_NO_BUN_BOOTSTRAP=1`): an absent Bun
 then fails immediately with the remedy instead of fetching an installer.
 
+**Upgrading is the same one-liner.** Re-run it (or `install.sh` directly) and
+the script advances an existing install instead of no-opping on it: it reports
+`crucible-axi upgraded: 0.1.1 -> 0.1.2`, then re-runs the staged install so the
+server half is re-provisioned to the new release's pin — CLI and server move in
+lockstep. On a machine that is already current it says so and stops, doing no
+work. Note that plain `uv tool upgrade crucible-axi` is *not* sufficient by
+hand: it resolves within the constraint the tool was installed under, so a
+pinned install reports "already current" forever. The installer uses
+`uv tool install --upgrade`, which ignores that pin. Version selection is
+entirely uv's — the installer never pins a `crucible-axi` version.
+
 Running the server is a separate, explicit step. Start it in the foreground and
 check its health:
 

@@ -128,6 +128,27 @@ same line is logged at startup beside the listen banner. Because rule
 where it was launched: check this field first whenever data looks missing, and
 compare it across instances before assuming anything was lost.
 
+## Upgrading
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/anthill-tec/crucible/master/install.sh | sh
+```
+
+The install one-liner is also the upgrade path (CR-CRU-072). It advances an
+existing install and then re-runs the staged install, so the CLI and the
+provisioned server move in lockstep; on an already-current machine it reports
+`already current` and does no work.
+
+- **`uv tool upgrade crucible-axi` alone is not enough by hand.** It resolves
+  within the constraint the tool was installed under, so a tool installed as
+  `crucible-axi==X` reports nothing-to-upgrade forever. The installer uses
+  `uv tool install --upgrade`, which ignores that pin. Measured against uv
+  0.11.8.
+- The server half follows because the `server` stage counts as converged only
+  when the installed server is exactly the new release's pinned version.
+- A systemd `--user` unit is refreshed by the same run, so the daemon is the new
+  version rather than a new binary behind an old process.
+
 ## Run as a service (systemd `--user`)
 
 `crucible-axi install` provisions `~/.config/systemd/user/crucible-server.service`
