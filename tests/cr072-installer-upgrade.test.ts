@@ -26,8 +26,11 @@
 // The stub `uv` is a faithful model of the uv semantics this CR turns on,
 // reproduced by the orchestrator in an isolated UV_TOOL_DIR:
 //   uv tool install crucible-axi   (already installed) -> NO-OP, version stays
-//   uv tool install --upgrade|-U|--force               -> advances
-//   uv tool upgrade crucible-axi                       -> advances
+//   uv tool install --upgrade|-U|--force               -> advances, ignores pins
+//   uv tool upgrade crucible-axi                       -> resolves WITHIN the
+//     constraint the tool was installed under, so a pinned install NEVER
+//     advances (measured against real uv 0.11.8: seeded 0.1.1, upgrade left it
+//     at 0.1.1). Modelling this as "advances" is what let the wrong verb pass.
 // `uv tool install` on a fresh machine materialises the `crucible-axi`
 // executable into the stub bin dir, so `command -v crucible-axi` is a genuine
 // signal rather than a fixture constant.
@@ -194,16 +197,16 @@ case "$verb" in
     fi
     ;;
   upgrade)
-    if [ -z "$cur" ]; then
+    # FAITHFUL to real uv 0.11.8, measured: \`uv tool upgrade\` resolves WITHIN
+    # the constraint the tool was installed under, so a tool installed as
+    # \`crucible-axi==X\` reports nothing-to-upgrade forever and never advances.
+    # The stub previously advanced unconditionally here, which let the WRONG
+    # verb pass GREEN — the defect only surfaced in a real-uv smoke. Only
+    # \`install --upgrade|-U|--force\` ignores the pin.
+    if [ -z "\$cur" ]; then
       echo "warning: \\\`crucible-axi\\\` is not installed; skipping" >&2
-    elif [ "$cur" = "$CR072_LATEST" ]; then
-      echo "Nothing to upgrade"
     else
-      printf '%s\\n' "$CR072_LATEST" > "$CR072_STATE"
-      materialise
-      echo " - crucible-axi==$cur"
-      echo " + crucible-axi==$CR072_LATEST"
-      echo "Installed 1 executable: crucible-axi"
+      echo "Nothing to upgrade"
     fi
     ;;
   uninstall)
