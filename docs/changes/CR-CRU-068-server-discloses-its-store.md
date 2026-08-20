@@ -46,23 +46,34 @@ Non-goals, explicitly:
 
 ## Acceptance criteria
 
-**AC1 — startup discloses the resolved store.** `startServer` logs the resolved
-absolute store path once, at startup, alongside the listen line, before the
-first request can be served. `:memory:` is disclosed verbatim as `:memory:`
-rather than being absolutised. The log line names which of the four rules
-matched, so a surprising store is self-explaining (`explicit` / `CRUCIBLE_DB` /
-`cwd-data` / `user-data`).
+**AC1 — startup discloses the resolved store.** `startServer` does not log at
+all today — the banner is printed by the `import.meta.main` boot block
+(`src/server.ts:261-263`). So `startServer` **returns** the resolution on its
+`ServerHandle` (additively, beside `server`/`store`/`stop`) and the boot block
+discloses it beside the existing `[crucible] listening on …` line, before the
+first request can be served. Keeping the log in the boot block means the
+disclosure is asserted from the returned value, not by capturing `console`.
+`:memory:` is disclosed verbatim as `:memory:` rather than being absolutised.
+The disclosure names which of the four rules matched, so a surprising store is
+self-explaining (`explicit` / `CRUCIBLE_DB` / `cwd-data` / `user-data`).
 
-**AC2 — the rule that matched is returned, not re-derived.** `resolveDbPath`
-returns the matched rule together with the path, so no caller has to re-run the
-cascade to describe it. The existing string-returning signature keeps working
-for every current call site (additive change only — a second, richer entry
-point, or a structured return whose consumers are all updated in this CR; the
-`":memory:"`-in/`":memory:"`-out identity is preserved either way).
+**AC2 — the rule that matched is returned, not re-derived — ADDITIVELY.** A
+second, richer entry point returns `{ path, rule }`; `resolveDbPath` keeps its
+exact `string` return and delegates to it. Enumerated consumers of the existing
+signature (Dimension 6, whole-workspace sweep): `src/server.ts:192`,
+`tests/db-path-resolution.test.ts` (10 call sites), and
+`tests/e2e/teardown-contracts/crucible-db-isolation.test.ts` (2 call sites).
+`playwright.config.ts` names `resolveDbPath` only in comments and imports
+nothing. **No existing call site may be edited by this CR** — changing the
+string return would churn two suites for no behavioural gain. The
+`":memory:"`-in/`":memory:"`-out identity holds for both entry points.
 
 **AC3 — `/api/health` reports store identity.** Both `GET /api/health` and
 `GET /api/v2/health` (health parity, CR-CRU-043 §S1) include the resolved store
-path and the matched rule. Existing health fields keep their current names and
+path and the matched rule. These already share one `healthPayload()` closure
+(`src/server.ts:200`, consumed by the direct route at 226 and passed into
+`handleV2` at 235), so parity comes from extending that single site — not from
+two edits that could drift. Existing health fields keep their current names and
 types; this is additive, so an old client parsing health does not break.
 
 **AC4 — the disclosure is real, not a formatting of intent.** The path reported
