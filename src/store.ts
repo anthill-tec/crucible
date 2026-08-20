@@ -129,6 +129,51 @@ interface EventRow {
   role: string | null;
   // CR-CRU-057 §S1 — 0 = declared, 1 = §S4 backfill-inferred. NULL when role is.
   role_inferred: number | null;
+  // CR-CRU-017 §S0 — RUN lifecycle (never a plan's): the open run's start
+  // instant, the SERVER-computed wall-clock runtime, and the run's exceptional
+  // terminal state ('aborted'). All three NULL on a single-shot ingest and on
+  // every pre-017 row (the §S0 chain step never retrofits history).
+  started_at: number | null;
+  runtime_ms: number | null;
+  status: string | null;
+}
+
+/** CR-CRU-017 §S1 — one issued run: `runs` is the OPEN-run store, on disk. */
+interface RunRow {
+  run_id: string;
+  project_key: string;
+  agent_id: string;
+  started_at: number;
+  tier: string | null;
+  stack: string | null;
+  context: string | null;
+  run_state: string;
+  settled_at: number | null;
+  abort_reason: string | null;
+  event_id: string | null;
+}
+
+/**
+ * CR-CRU-017 §S1 — a run's own lifecycle state. Named for the RUN entity: it
+ * is NOT `Plan.status`, whose `"aborted"` means a user-discarded workflow
+ * (CR-CRU-024 §S6). A run's `"aborted"` means it ended for non-test reasons.
+ */
+export type RunState = "open" | "ended" | "aborted";
+
+/** CR-CRU-017 §S1 — an issued run as served by startRun / getRun. */
+export interface RunRecord {
+  runId: string;
+  projectKey: string;
+  agentId: string;
+  startedAt: number;
+  state: RunState;
+  tier?: Tier;
+  stack?: string;
+  context?: RunContext;
+  settledAt?: number;
+  abortReason?: string;
+  /** The event that settled this run (end or abort); absent while open. */
+  eventId?: string;
 }
 
 interface RollupRow {
@@ -231,6 +276,13 @@ export interface RecordEventMeta {
    * `role` + `role_inferred = 0`; omitting it leaves both NULL.
    */
   role?: AgentRole;
+  /**
+   * CR-CRU-017 §S1 — the RUN lifecycle this event CLOSES: the open run's start
+   * instant and the server-computed wall-clock runtime. Present only when the
+   * ingest carried a `runId`; omitting it stores NULL in both columns, which is
+   * the graceful-degradation path (a single-shot ingest is unchanged).
+   */
+  lifecycle?: { startedAt: number; runtimeMs: number };
 }
 
 export type ChangeKind = "projects" | "agents" | "events";
@@ -238,6 +290,18 @@ export type ChangeListener = (kind: ChangeKind, projectKey?: string) => void;
 
 /** §S4 — default raw-event retention cap per project. */
 const DEFAULT_RETENTION = 100;
+
+/**
+ * CR-CRU-017 §S1 — how long an OPEN run may live before the sweep abandons it.
+ * Read per sweep, not cached: the deadline is operational configuration, and a
+ * long-lived process must see a change without a restart.
+ */
+const DEFAULT_RUN_ABANDON_MS = 30 * 60_000;
+
+function runAbandonAfterMs(): number {
+  const raw = Number(process.env.CRUCIBLE_RUN_ABANDON_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_RUN_ABANDON_MS;
+}
 
 /** CR-CRU-002 §S4 — project keys are UUIDs; ingest routes validate against this. */
 export const UUID_RE =
@@ -625,6 +689,32 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       return cols.has("role") && cols.has("bound_cycle_id") && !cols.has("phase");
     },
   },
+  {
+    description:
+      "events: CR-017 §S0 run lifecycle — started_at / runtime_ms / status (RUN status, not a plan's)",
+    apply(db) {
+      if (!tableExists(db, "events")) return;
+      // CR-CRU-017 §S0 — additive RUN-lifecycle columns; pre-017 db files lack
+      // them. Purely structural: history is NOT retrofitted (the CR's non-goal),
+      // so every existing row reads NULL for all three and keeps its
+      // tool-reported duration_ms untouched.
+      const eventCols = columnsOf(db, "events");
+      if (!eventCols.has("started_at")) {
+        db.exec(`ALTER TABLE events ADD COLUMN started_at INTEGER`);
+      }
+      if (!eventCols.has("runtime_ms")) {
+        db.exec(`ALTER TABLE events ADD COLUMN runtime_ms INTEGER`);
+      }
+      if (!eventCols.has("status")) {
+        db.exec(`ALTER TABLE events ADD COLUMN status TEXT`);
+      }
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "events")) return true;
+      const cols = columnsOf(db, "events");
+      return cols.has("started_at") && cols.has("runtime_ms") && cols.has("status");
+    },
+  },
 ];
 
 /** CR-CRU-071 §S1 — the ordered chain; positions ARE the version numbers. */
@@ -894,11 +984,42 @@ export class Store {
         first_seen INTEGER,
         payload TEXT,
         role TEXT,
-        role_inferred INTEGER
+        role_inferred INTEGER,
+        -- CR-CRU-017 §S0 — the RUN-lifecycle trio, in the base schema so a
+        -- brand-new store and the end of the chain agree.
+        started_at INTEGER,
+        runtime_ms INTEGER,
+        status TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_events_project_timestamp
         ON events (project_key, timestamp);
+
+      -- CR-CRU-017 §S1 — OPEN and settled RUNS. A new table, never a retrofit:
+      -- the base pass creates it whole for every store, old or new (which is
+      -- why the §S0 chain step only touches the events table).
+      --
+      -- One row per issued runId, kept AFTER the run settles (run_state
+      -- 'open' -> 'ended' | 'aborted') so the server can tell an unknown runId
+      -- (400) from a re-close of a settled one (409) — the CR's end/end and
+      -- end-after-abort race. run_state is spelled for the RUN entity: it is
+      -- not, and never maps onto, plans.status.
+      CREATE TABLE IF NOT EXISTS runs (
+        run_id TEXT PRIMARY KEY,
+        project_key TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        tier TEXT,
+        stack TEXT,
+        context TEXT,
+        run_state TEXT NOT NULL,
+        settled_at INTEGER,
+        abort_reason TEXT,
+        event_id TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_runs_open
+        ON runs (run_state, started_at);
 
       CREATE TABLE IF NOT EXISTS rollups (
         project_key TEXT NOT NULL,
@@ -1126,6 +1247,9 @@ export class Store {
         .query(`DELETE FROM plan_cycles WHERE project_key = ?`)
         .run(key).changes;
       counts.rollups = this.db.query(`DELETE FROM rollups WHERE project_key = ?`).run(key).changes;
+      // CR-CRU-017 §S1 — issued runs die with their project. Not a reported
+      // count: `ProjectDeleteCounts` is the CR-CRU-052 wire shape and stays it.
+      this.db.query(`DELETE FROM runs WHERE project_key = ?`).run(key);
       this.db.query(`DELETE FROM projects WHERE key = ?`).run(key);
     })();
     // Emitted only after the transaction COMMITS — a rolled-back teardown
@@ -1349,6 +1473,10 @@ export class Store {
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
       // CR-CRU-057 §S1 — a stamped role is DECLARED data by construction.
       ...(meta?.role !== undefined ? { role: meta.role, roleInferred: false } : {}),
+      // CR-CRU-017 §S1 — the closed run's lifecycle; absent on a single-shot.
+      ...(meta?.lifecycle !== undefined
+        ? { startedAt: meta.lifecycle.startedAt, runtimeMs: meta.lifecycle.runtimeMs }
+        : {}),
     };
     this.insertEvent(event);
     return event;
@@ -1358,7 +1486,7 @@ export class Store {
     projectKey: string,
     agentId: string,
     compile: unknown,
-    meta?: Pick<RecordEventMeta, "tier" | "stack" | "context" | "codec" | "role">,
+    meta?: Pick<RecordEventMeta, "tier" | "stack" | "context" | "codec" | "role" | "lifecycle">,
   ): RunEvent {
     // §S3 implicit heartbeat — creates the agent row if new, bumps lastSeen.
     this.touchAgent(projectKey, agentId);
@@ -1375,6 +1503,10 @@ export class Store {
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
       // CR-CRU-057 §S1 — a stamped role is DECLARED data by construction.
       ...(meta?.role !== undefined ? { role: meta.role, roleInferred: false } : {}),
+      // CR-CRU-017 §S1 — the closed run's lifecycle; absent on a single-shot.
+      ...(meta?.lifecycle !== undefined
+        ? { startedAt: meta.lifecycle.startedAt, runtimeMs: meta.lifecycle.runtimeMs }
+        : {}),
     };
     this.insertEvent(event);
     return event;
@@ -1483,6 +1615,162 @@ export class Store {
     return row?.timestamp ?? null;
   }
 
+  // ── Runs (CR-CRU-017 §S1 — the run LIFECYCLE) ─────────────────────────
+
+  /**
+   * §S1 — open a run and PERSIST it (SQLite, never a module-level Map: the CR's
+   * Risk section requires an open run to survive a server restart). Implicit
+   * heartbeat, like every other ingest surface. No event is stored: a start is
+   * not an end, so nothing lands on the timeline as a run yet.
+   */
+  startRun(
+    projectKey: string,
+    agentId: string,
+    opts?: { tier?: Tier; stack?: string; context?: RunContext },
+  ): RunRecord {
+    this.touchAgent(projectKey, agentId);
+    const run: RunRecord = {
+      runId: `run-${crypto.randomUUID()}`,
+      projectKey,
+      agentId,
+      startedAt: Date.now(),
+      state: "open",
+      ...(opts?.tier !== undefined ? { tier: opts.tier } : {}),
+      ...(opts?.stack !== undefined ? { stack: opts.stack } : {}),
+      ...(opts?.context !== undefined ? { context: opts.context } : {}),
+    };
+    this.db
+      .query(
+        `INSERT INTO runs (run_id, project_key, agent_id, started_at, tier, stack, context,
+           run_state, settled_at, abort_reason, event_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, NULL, NULL)`,
+      )
+      .run(
+        run.runId,
+        run.projectKey,
+        run.agentId,
+        run.startedAt,
+        run.tier ?? null,
+        run.stack ?? null,
+        run.context !== undefined ? JSON.stringify(run.context) : null,
+      );
+    // The dashboard's live "running…" card is driven off the same feed the
+    // events stream already refreshes.
+    this.emit("events", projectKey);
+    return run;
+  }
+
+  /** §S1 — the issued run behind a runId, settled or not; null when never issued. */
+  getRun(runId: string): RunRecord | null {
+    const row = this.db
+      .query<RunRow, [string]>(`SELECT * FROM runs WHERE run_id = ?`)
+      .get(runId);
+    return row === null ? null : Store.toRun(row);
+  }
+
+  /**
+   * §S1 — mark an OPEN run ENDED by the event that closed it. Guarded on
+   * `run_state = 'open'`, so a lost end/end race changes nothing (the caller
+   * has already refused the second close with a 409).
+   */
+  endRun(runId: string, eventId: string, endedAt: number): boolean {
+    const { changes } = this.db
+      .query(
+        `UPDATE runs SET run_state = 'ended', settled_at = ?, event_id = ?
+         WHERE run_id = ? AND run_state = 'open'`,
+      )
+      .run(endedAt, eventId, runId);
+    return changes > 0;
+  }
+
+  /**
+   * §S1 — the auto-abort sweep, riding CR-CRU-011's liveness machinery rather
+   * than a second staleness clock: an open run whose agent has TOMBSTONED (or
+   * whose agent row is gone) is aborted `agent died`; one that has outlived
+   * `CRUCIBLE_RUN_ABANDON_MS` is aborted `abandoned`. Idempotent — an aborted
+   * run leaves `run_state = 'aborted'` and is never swept again.
+   */
+  sweepOpenRuns(now: number = Date.now()): RunEvent[] {
+    const abandonAfterMs = runAbandonAfterMs();
+    const open = this.db
+      .query<RunRow, []>(`SELECT * FROM runs WHERE run_state = 'open' ORDER BY started_at ASC`)
+      .all();
+    const aborted: RunEvent[] = [];
+    for (const row of open) {
+      const run = Store.toRun(row);
+      const agent = this.getAgent(run.projectKey, run.agentId, now);
+      // A pruned/deleted agent row is a dead agent too — CR-011 already
+      // reports it as gone, and a run cannot outlive its runner.
+      const reason =
+        agent === null || this.livenessOf(agent, now) === "tombstoned"
+          ? "agent died"
+          : now - run.startedAt >= abandonAfterMs
+            ? "abandoned"
+            : null;
+      if (reason === null) continue;
+      aborted.push(this.abortRun(run, reason, now, agent?.role));
+    }
+    return aborted;
+  }
+
+  /**
+   * §S1 — settle an open run as ABORTED and store the event that records it,
+   * in ONE transaction: the run row and its event can never disagree, and a
+   * second sweep can never emit a duplicate abort.
+   *
+   * The event stays `kind: "test"` — an aborted run is still a run (§S2's
+   * rollup guard is what will read `status`, by VALUE, in a later cycle).
+   */
+  private abortRun(
+    run: RunRecord,
+    reason: string,
+    at: number,
+    role?: AgentRole,
+  ): RunEvent {
+    const event: RunEvent = {
+      id: this.nextEventId(),
+      projectKey: run.projectKey,
+      agentId: run.agentId,
+      kind: "test",
+      tier: run.tier ?? "unit",
+      timestamp: at,
+      startedAt: run.startedAt,
+      runtimeMs: at - run.startedAt,
+      status: "aborted",
+      abortReason: reason,
+      ...(run.stack !== undefined ? { stack: run.stack } : {}),
+      ...(run.context !== undefined ? { context: run.context } : {}),
+      // CR-CRU-057 §S1 — the declared role off the agent row, when it survives.
+      ...(role !== undefined ? { role, roleInferred: false } : {}),
+    };
+    this.db.transaction(() => {
+      this.db
+        .query(
+          `UPDATE runs SET run_state = 'aborted', settled_at = ?, abort_reason = ?, event_id = ?
+           WHERE run_id = ? AND run_state = 'open'`,
+        )
+        .run(at, reason, event.id, run.runId);
+      this.insertEvent(event);
+    })();
+    return event;
+  }
+
+  private static toRun(row: RunRow): RunRecord {
+    return {
+      runId: row.run_id,
+      projectKey: row.project_key,
+      agentId: row.agent_id,
+      startedAt: row.started_at,
+      state: row.run_state === "ended" || row.run_state === "aborted" ? row.run_state : "open",
+      ...(row.tier !== null ? { tier: row.tier as Tier } : {}),
+      ...(row.stack !== null ? { stack: row.stack } : {}),
+      ...(row.context !== null ? { context: JSON.parse(row.context) as RunContext } : {}),
+      ...(row.settled_at !== null ? { settledAt: row.settled_at } : {}),
+      ...(row.abort_reason !== null ? { abortReason: row.abort_reason } : {}),
+      ...(row.event_id !== null ? { eventId: row.event_id } : {}),
+    };
+  }
+
   listEvents(projectKey?: string, limit = 50): RunEvent[] {
     // CR-CRU-012 §S1b — archived projects' events are excluded (not deleted).
     const rows =
@@ -1581,6 +1869,9 @@ export class Store {
       ...(event.type !== undefined ? { type: event.type } : {}),
       ...(event.label !== undefined ? { label: event.label } : {}),
       ...(event.commit !== undefined ? { commit: event.commit } : {}),
+      // CR-CRU-017 §S1 — the RUN-abort reason rides the generic payload blob
+      // (no fourth column: §S0 pins exactly three).
+      ...(event.abortReason !== undefined ? { abortReason: event.abortReason } : {}),
       // CR-CRU-038 §S2b — run-level raw output rides the generic payload blob.
       ...(event.raw !== undefined ? { raw: event.raw } : {}),
     };
@@ -1590,8 +1881,8 @@ export class Store {
         `INSERT INTO events (id, project_key, agent_id, kind, tier, stack, codec,
            timestamp, name, total, passed, failed, pending, duration_ms,
            tree, coverage, compile, context, action, first_seen, payload,
-           role, role_inferred)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           role, role_inferred, started_at, runtime_ms, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         event.id,
@@ -1620,6 +1911,11 @@ export class Store {
         // would read as "declared nothing").
         event.role ?? null,
         event.role !== undefined ? (event.roleInferred === true ? 1 : 0) : null,
+        // CR-CRU-017 §S1 — the RUN lifecycle, NULL on every single-shot ingest
+        // (graceful degradation: no runId, no lifecycle).
+        event.startedAt ?? null,
+        event.runtimeMs ?? null,
+        event.status ?? null,
       );
     this.enforceRetention(event.projectKey);
     this.emit("events", event.projectKey);
@@ -1675,6 +1971,17 @@ export class Store {
       // absent on a role-less row (never fabricated into a null or a guess).
       ...(row.role !== null
         ? { role: row.role as AgentRole, roleInferred: row.role_inferred === 1 }
+        : {}),
+      // CR-CRU-017 §S1 — the RUN lifecycle: present exactly when the run was
+      // opened through /runs/start. A single-shot ingest's row is NULL in all
+      // three columns and therefore serves NONE of these keys (absence, never
+      // a fabricated null). `status` is the RUN's terminal state — unrelated to
+      // `Plan.status`, which lives on a different entity.
+      ...((row.started_at ?? null) !== null ? { startedAt: row.started_at! } : {}),
+      ...((row.runtime_ms ?? null) !== null ? { runtimeMs: row.runtime_ms! } : {}),
+      ...((row.status ?? null) !== null ? { status: row.status as RunEvent["status"] } : {}),
+      ...(typeof payload.abortReason === "string"
+        ? { abortReason: payload.abortReason }
         : {}),
     };
   }

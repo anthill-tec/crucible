@@ -188,6 +188,29 @@ export interface RunEvent {
   type?: string;
   label?: string;
   commit?: string;
+  /**
+   * CR-CRU-017 §S1 — the RUN's start instant, carried from the open run onto
+   * the event that CLOSED it. Absent on a single-shot ingest (no `runId`, no
+   * lifecycle) and on every pre-017 row.
+   */
+  startedAt?: number;
+  /**
+   * CR-CRU-017 §S1 — the SERVER-computed wall-clock runtime of the run
+   * (`endedAt - startedAt`), which includes queue, spawn and teardown time the
+   * tool-reported `summary.duration_ms` cannot see. The two are distinct
+   * values and both are kept.
+   */
+  runtimeMs?: number;
+  /**
+   * CR-CRU-017 §S1/§S2 — the RUN's exceptional terminal state: `"aborted"`
+   * means this run ended for NON-TEST reasons (timeout, kill, dead agent).
+   * It is a property of a RUN and has nothing to do with `Plan.status`'s
+   * `"aborted"` (a user-discarded workflow, CR-CRU-024 §S6) — nothing may
+   * treat one as the other. Absent on a normally-ended run.
+   */
+  status?: "aborted";
+  /** CR-CRU-017 §S1 — why the RUN was aborted; present exactly when `status` is. */
+  abortReason?: string;
 }
 
 // ── CR-CRU-011 §S0 — cycle plans (the orchestrator's declared todo list) ─────
