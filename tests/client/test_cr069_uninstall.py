@@ -79,11 +79,13 @@ MANIFEST_FILENAME = "crucible-clients.json"
 # (RUNBOOK "Database path" rule 4).
 STORE_DIR_NAME = "crucible"
 
-# The three stages the inverse owns, spec §"Design" (`[server]` on a plain run,
-# `[config]` + `[store]` additionally under `--purge`).
+# The stages the inverse owns, spec §"Design" (`[server]` on a plain run,
+# `[config]` + `[store]` additionally under `--purge`), plus the `[unit]`
+# teardown CR-CRU-070 prepended.
 CONFIG_STAGE = "config"
 STORE_STAGE = "store"
 SERVER_STAGE = "server"
+UNIT_STAGE = "unit"
 
 BOOTSTRAP_NEEDLE = "bun.sh/install"
 
@@ -474,8 +476,9 @@ class StageInversionAndInstallParityTest(_UninstallFixtureCase):
         return {name: make(name) for name in order}
 
     def test_uninstall_stage_order_puts_the_destructive_stages_last(self):
-        """AC2 — order is ("server", "config", "store"): the program artifact
-        first, the two DESTRUCTIVE stages last.
+        """AC2 — order is ("unit", "server", "config", "store") since
+        CR-CRU-070 prepended the unit teardown: the program artifacts first,
+        the two DESTRUCTIVE stages last.
 
         Deliberately NOT a naive reverse of `STAGE_ORDER`. Install's order
         (`server`, `manifest`) has no destructive step, so inverting it says
@@ -489,23 +492,30 @@ class StageInversionAndInstallParityTest(_UninstallFixtureCase):
             install, "UNINSTALL_STAGE_ORDER",
             "uninstall must declare its stage sequence the way install "
             "declares STAGE_ORDER, so the order is inspectable (AC2)")
+        # CR-CRU-070 -- the install order this relates to gained a third stage.
         self.assertEqual(
-            install.STAGE_ORDER, (SERVER_STAGE, "manifest"),
+            install.STAGE_ORDER, (SERVER_STAGE, "manifest", UNIT_STAGE),
             "fixture sanity: the install order this relates to")
         order = tuple(order)
+        # CR-CRU-070 -- ("server", "config", "store") is superseded by
+        # ("unit", "server", "config", "store"): the unit is torn down FIRST,
+        # or systemd is left restarting a deleted binary.
         self.assertEqual(
-            len(order), 3,
-            f"the inverse owns exactly three stages -- [{SERVER_STAGE}], "
-            f"[{CONFIG_STAGE}] and [{STORE_STAGE}] (spec AC2); got {order!r}")
-        for name in (SERVER_STAGE, CONFIG_STAGE, STORE_STAGE):
+            order, (UNIT_STAGE, SERVER_STAGE, CONFIG_STAGE, STORE_STAGE),
+            f"the inverse owns exactly four stages, in that order -- "
+            f"[{UNIT_STAGE}], [{SERVER_STAGE}], [{CONFIG_STAGE}] and "
+            f"[{STORE_STAGE}] (spec AC2 + CR-CRU-070 AC3); got {order!r}")
+        for name in (UNIT_STAGE, SERVER_STAGE, CONFIG_STAGE, STORE_STAGE):
             self.assertIn(
                 name, order,
                 f"[{name}] must be its own reported stage (AC2/AC4); "
                 f"got {order!r}")
-        self.assertEqual(
-            order[0], SERVER_STAGE,
-            f"[{SERVER_STAGE}] is the only NON-destructive stage, so it must "
-            f"run FIRST -- destructive-last (AC2); got {order!r}")
+        # CR-CRU-070 -- [server] is no longer first, but it is still the last
+        # NON-destructive stage: destructive-last is what this pins.
+        self.assertLess(
+            order.index(SERVER_STAGE), order.index(CONFIG_STAGE),
+            f"the NON-destructive stages must precede every destructive one -- "
+            f"destructive-last (AC2); got {order!r}")
         self.assertLess(
             order.index(CONFIG_STAGE), order.index(STORE_STAGE),
             f"among the destructive stages [{CONFIG_STAGE}] precedes "

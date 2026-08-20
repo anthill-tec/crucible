@@ -3,7 +3,8 @@
 `crucible_axi/install.py`.
 
 CR-CRU-042 §S1/§S1b flipped this file's contract to the TWO-stage
-installer: `STAGE_ORDER == ("server", "manifest")`. The `[skills]` stage
+installer; CR-CRU-070 then added a third, `[unit]`, so the contract this
+suite pins is now `STAGE_ORDER == ("server", "manifest", "unit")`. The `[skills]` stage
 (`_skills_stage`, `_skills_already_installed`, `SKILLS_CLI_SOURCE`) is
 Model-B's scope now (Sandesh 1337/1342) and is retired from this suite --
 Crucible no longer ships an `npx skills` invocation, and no envelope this
@@ -83,6 +84,7 @@ Fallback:
     python3 tests/client/test_crucible_axi_stages.py
 """
 
+import contextlib
 import importlib
 import json
 import os
@@ -141,6 +143,36 @@ def _bun_provision_argvs(mock_run):
                 and argv[1:3] == ["add", "-g"]:
             found.append(argv)
     return found
+
+
+# CR-CRU-070 -- the install grew a third stage, `[unit]`, which writes a
+# systemd `--user` unit and drives `systemctl --user`. The two end-to-end tests
+# below run the REAL default stage table, so each is guarded on two independent
+# axes: a `shutil.which` that never resolves `systemctl` (the stage then
+# reports skipped-with-reason and touches nothing) and a tmp
+# `$XDG_CONFIG_HOME`/`$HOME`, so BOTH unit-dir resolution rules land in tmp.
+UNIT_STAGE = "unit"
+SYSTEMCTL_BIN_NAME = "systemctl"
+
+
+def _which_without_systemctl(resolved="/usr/bin/bun"):
+    """A `shutil.which` stand-in that resolves everything EXCEPT `systemctl`."""
+    def _which(cmd, mode=os.F_OK | os.X_OK, path=None):
+        if os.path.basename(str(cmd)) == SYSTEMCTL_BIN_NAME:
+            return None
+        return resolved
+    return _which
+
+
+@contextlib.contextmanager
+def _unit_stage_sandboxed(tmp_dir):
+    """CR-CRU-070 isolation for a test that runs the REAL `[unit]` stage
+    runner: no resolvable `systemctl`, and a tmp `$XDG_CONFIG_HOME`/`$HOME`."""
+    with mock.patch.dict(os.environ,
+                         {"XDG_CONFIG_HOME": tmp_dir, "HOME": tmp_dir}), \
+            mock.patch("crucible_axi.install.shutil.which",
+                       side_effect=_which_without_systemctl()):
+        yield
 
 
 class ServerStageTest(unittest.TestCase):
@@ -646,16 +678,20 @@ class InstalledServerVersionProbeTest(_ProvisionedServerFixtureCase):
 
 
 class StageOrderContractTest(unittest.TestCase):
-    """CR-CRU-042 §S1 -- `STAGE_ORDER` is exactly the two surviving stages,
-    in order. The `[skills]` stage is retired (Model-B scope now)."""
+    """CR-CRU-042 §S1 -- `STAGE_ORDER` is exactly the surviving stages, in
+    order. The `[skills]` stage is retired (Model-B scope now); CR-CRU-070
+    appended `[unit]`, which must stay LAST because it hands work to another
+    supervisor."""
 
-    def test_stage_order_is_exactly_server_then_manifest(self):
+    def test_stage_order_is_exactly_server_then_manifest_then_unit(self):
         install = _import_fresh("crucible_axi.install")
+        # CR-CRU-070 -- (server, manifest) is superseded by (server, manifest,
+        # unit): the unit is provisioned only after the launcher it names.
         self.assertEqual(
-            install.STAGE_ORDER, ("server", "manifest"),
-            "STAGE_ORDER must be exactly the two-stage (server, manifest) "
-            "order -- the [skills] stage is Model-B's scope now "
-            "(CR-CRU-042)")
+            install.STAGE_ORDER, ("server", "manifest", UNIT_STAGE),
+            "STAGE_ORDER must be exactly (server, manifest, unit) -- the "
+            "[skills] stage is Model-B's scope now (CR-CRU-042) and the "
+            "[unit] stage is last (CR-CRU-070)")
 
 
 class StagedInstallEndToEndMockedTest(unittest.TestCase):
@@ -686,10 +722,12 @@ class StagedInstallEndToEndMockedTest(unittest.TestCase):
         stage-sequencing test."""
         install = _import_fresh("crucible_axi.install")
         axi = _import_fresh("crucible_axi")
+        # CR-CRU-070 -- `_unit_stage_sandboxed` replaces the bare
+        # `which -> /usr/bin/bun` patch: the REAL `[unit]` stage runs here, and
+        # it must never reach the operator's user manager or unit directory.
         with mock.patch.object(axi, "__version__", "0.1.0"), \
+                _unit_stage_sandboxed(self.tmp), \
                 mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
-                mock.patch("crucible_axi.install.shutil.which",
-                           return_value="/usr/bin/bun"), \
                 mock.patch("crucible_axi.install._server_already_installed",
                            return_value=False):
             mock_run.return_value.returncode = 0
@@ -699,8 +737,10 @@ class StagedInstallEndToEndMockedTest(unittest.TestCase):
             ok, f"expected ok:True with every sub-installer mocked to "
                 f"success, warnings={warnings}")
         self.assertEqual(
-            [s["name"] for s in stages], ["server", "manifest"],
-            "expected exactly the two surviving stages, in order -- no "
+            # CR-CRU-070 -- three stages now; `[unit]` reports
+            # skipped-with-reason because the fixture resolves no systemctl.
+            [s["name"] for s in stages], ["server", "manifest", UNIT_STAGE],
+            "expected exactly the three surviving stages, in order -- no "
             "'skills' key anywhere in the envelope")
         for stage in stages:
             self.assertTrue(stage["path"], f"empty path for stage {stage}")
@@ -734,10 +774,10 @@ class StagedInstallEndToEndMockedTest(unittest.TestCase):
         fresh-install branch above."""
         install = _import_fresh("crucible_axi.install")
         axi = _import_fresh("crucible_axi")
+        # CR-CRU-070 -- same two-axis systemd isolation as the sibling test.
         with mock.patch.object(axi, "__version__", "0.1.0"), \
+                _unit_stage_sandboxed(self.tmp), \
                 mock.patch("crucible_axi.install.subprocess.run") as mock_run, \
-                mock.patch("crucible_axi.install.shutil.which",
-                           return_value="/usr/bin/bun"), \
                 mock.patch("crucible_axi.install._server_already_installed",
                            return_value=True):
             mock_run.return_value.returncode = 0
@@ -745,7 +785,9 @@ class StagedInstallEndToEndMockedTest(unittest.TestCase):
 
         self.assertTrue(ok, f"expected ok:True on the converged re-run, "
                              f"warnings={warnings}")
-        self.assertEqual([s["name"] for s in stages], ["server", "manifest"])
+        # CR-CRU-070 -- (server, manifest, unit).
+        self.assertEqual([s["name"] for s in stages],
+                         ["server", "manifest", UNIT_STAGE])
 
         skills_calls = [c for c in mock_run.call_args_list
                         if "npx skills" in _call_command_text(c)]

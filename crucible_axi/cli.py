@@ -71,6 +71,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="fail the install instead of bootstrapping Bun when it is absent "
              f"(same as {install.BUN_NO_BOOTSTRAP_ENV_VAR}=1)",
     )
+    p_install.add_argument(
+        "--no-service",
+        action="store_true",
+        help="skip the systemd `--user` unit stage entirely and manage the "
+             "service yourself "
+             f"(same as {install.NO_SERVICE_ENV_VAR}=1)",
+    )
 
     p_serve = sub.add_parser(
         "serve",
@@ -111,16 +118,23 @@ def _build_parser() -> argparse.ArgumentParser:
 def cmd_install(args) -> int:
     ok, stages, warnings = install.run_install(
         args.target_dir, force=args.force,
-        no_bun_bootstrap=args.no_bun_bootstrap)
+        no_bun_bootstrap=args.no_bun_bootstrap,
+        no_service=args.no_service)
     axi = _load_client_module("_crucible_axi")
     # The `[server]` stage reports the ABSOLUTE Bun it resolved (CR-CRU-066
     # §S2); it rides along in that stage's envelope row so the operator can see
-    # exactly which Bun provisioned the server.
+    # exactly which Bun provisioned the server. The `[unit]` stage reports
+    # `skipped` + `reason` when it declined (CR-CRU-070 AC4) -- a machine that
+    # got no daemon must be told WHY, never left guessing.
     stage_fields = []
     for stage in stages:
         fields = {"name": stage["name"], "path": stage["path"]}
         if stage.get("bun"):
             fields["bun"] = stage["bun"]
+        if stage.get("skipped"):
+            fields["skipped"] = True
+        if stage.get("reason"):
+            fields["reason"] = stage["reason"]
         stage_fields.append(fields)
     result_fields = {
         "stages": stage_fields,
@@ -218,8 +232,10 @@ def cmd_uninstall(args) -> int:
     keys, exit 0 on ok / 1 on not-ok.
 
     Stage rows carry `converged` (an uninstall's interesting answer is whether
-    an artifact was still there) and `retained` on the stages that kept theirs,
-    with the path naming WHERE the retained data now lives.
+    an artifact was still there), `retained` on the stages that kept theirs,
+    with the path naming WHERE the retained data now lives, and `skipped` +
+    `reason` on a `[unit]` stage that declined to touch systemd at all
+    (CR-CRU-070 AC4).
     """
     ok, stages, warnings = install.run_uninstall(
         args.target_dir, purge=_resolve_purge(args))
@@ -232,6 +248,10 @@ def cmd_uninstall(args) -> int:
             fields["retained"] = True
         if stage.get("bun"):
             fields["bun"] = stage["bun"]
+        if stage.get("skipped"):
+            fields["skipped"] = True
+        if stage.get("reason"):
+            fields["reason"] = stage["reason"]
         stage_fields.append(fields)
     result_fields = {
         "stages": stage_fields,
@@ -254,8 +274,9 @@ def cmd_serve(args) -> int:
     of `install`. The child is launched by absolute path with an EXPLICITLY
     composed environment (`$CRUCIBLE_HOST`/`$CRUCIBLE_PORT`, the `--host`/
     `--port` flags overriding them), and its exit code is propagated verbatim
-    so a shell — and the follow-up systemd `--user` unit — sees the real
-    failure. No envelope is emitted: stdout belongs to the server. A launch that
+    so a shell — and the systemd `--user` unit the [unit] install stage writes
+    (CR-CRU-070) — sees the real failure. No envelope is emitted: stdout
+    belongs to the server. A launch that
     cannot be RESOLVED (no provisioned bin and no usable Bun) is definitive —
     the remedy on stderr, exit 1 — never a traceback.
 

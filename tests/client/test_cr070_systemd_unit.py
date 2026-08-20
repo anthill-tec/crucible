@@ -839,6 +839,49 @@ class UnitExecStartComesFromServerLaunchArgvTest(_UnitFixtureCase):
                 f"nothing (AC1); unit={bare!r}")
 
 
+class UnitMakesBunResolvableToTheLaunchedProcessTest(_UnitFixtureCase):
+    """AC1 -- an absolute `ExecStart` is NOT sufficient: the launched process
+    must be able to find Bun.
+
+    Found by the real end-to-end smoke on this machine, not by a unit test.
+    The unit's `ExecStart` was correctly absolute
+    (`$BUN_INSTALL/bin/crucible-server`), systemd started it, and it died
+    immediately, nine restarts deep:
+
+        crucible-server: failed to launch bun on
+          .../@anthill-tec/crucible-server/src/server.ts: spawn bun ENOENT
+        systemd: Main process exited, code=exited, status=127/n/a
+        systemd: Scheduled restart job, restart counter is at 9.
+
+    The published `crucible-server.mjs` bin is a SHIM that spawns bare `bun`
+    itself. CR-CRU-066 made *our* argv absolute; it cannot reach inside the npm
+    package's own launcher, which still assumes Bun is on `PATH`. A unit
+    inherits no shell `PATH`, so the shim's `spawn("bun")` resolves to nothing.
+
+    So the unit must guarantee Bun is resolvable to the process it starts. This
+    is the same class of defect CR-CRU-066 fixed, one level deeper, and it is
+    only reachable under a minimal `PATH` -- which is exactly what a unit
+    provides and what no mock-PATH test would have caught."""
+
+    def test_the_unit_puts_the_resolved_bun_directory_on_path(self):
+        install, = _import_fresh("crucible_axi.install")
+        recorder = _SystemctlRecorder(self)
+        with self._sandboxed(recorder):
+            unit = install._render_user_unit()
+        path_lines = [line for line in unit.splitlines()
+                      if line.startswith("Environment=PATH=")]
+        self.assertTrue(
+            path_lines,
+            f"the unit sets no PATH, so the crucible-server shim's own "
+            f"`spawn('bun')` resolves to nothing under systemd's minimal "
+            f"environment -- status=127 in a restart loop (AC1); unit={unit!r}")
+        self.assertIn(
+            self.bun_bin_dir, path_lines[0],
+            f"the RESOLVED bun's directory must be on the unit's PATH so the "
+            f"shim can spawn it (AC1); bun_dir={self.bun_bin_dir!r} "
+            f"line={path_lines[0]!r}")
+
+
 class UnitInstallStageWritesReloadsThenEnablesTest(_UnitFixtureCase):
     """AC2 (install half) -- the stage WRITES the unit, then `daemon-reload`s,
     then `enable --now`s: in that order, because reloading before the file
