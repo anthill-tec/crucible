@@ -65,8 +65,21 @@ provision, and on a plain run it **leaves both the store and the config
 untouched** — no `~/.local/share/crucible/`, no `~/.crucible/`. A plain
 uninstall is reversible by reinstalling; it destroys nothing.
 
-**AC2 — stage inversion is ordered and reported.** Stages run in reverse install
-order, each reported as its own stage, fail-fast, with the same TOON-AXI
+**AC2 — stage order is DESTRUCTIVE-LAST, and reported.** The order is
+`UNINSTALL_STAGE_ORDER = ("server", "config", "store")`: the program artifact
+first, then the two data stages, which are the only destructive ones and which
+delete nothing without `--purge` (AC4).
+
+This deliberately does NOT read as a naive "reverse of `STAGE_ORDER`". Install's
+order (`server`, `manifest`) contains no destructive step, so inverting it says
+nothing about where a purge belongs. Combined with fail-fast, destructive-last
+means data is destroyed only after every reversible step has already succeeded —
+the inverse order would let a failing server stage leave the store and config
+gone AND the program still installed, which is the worst reachable outcome.
+CR-CRU-070 extends the front of the sequence to `("unit", "server", …)` for the
+same reason.
+
+Each stage is reported as its own row, fail-fast, with the same TOON-AXI
 envelope shape and exit-code contract as `install` (`ok=False` → exit 1).
 Parity with `install` is asserted, not assumed.
 
