@@ -2,7 +2,7 @@
 
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
-- **Depends on**: 013, 071
+- **Depends on**: 013
 - **Status**: PENDING (0.2.0)
 
 ## Problem
@@ -43,16 +43,28 @@ whether anything downstream planned the full workflow.
 ## Scope
 
 ### §S1 A release is a recorded event
-`release` joins `MILESTONE_TYPES`, carrying the version and the commit it was cut
-from. Additive: every existing milestone type keeps its exact behaviour, and the
-route's validation error still enumerates the accepted set.
+`release` joins `MILESTONE_TYPES` (`src/v2.ts:1044`). **No schema change is
+needed** — `Store.recordMilestoneEvent(projectKey, agentId, type, meta?:
+{label?, commit?, context?})` (`src/store.ts:1580`) already persists both fields
+as conditional spreads, so `label` carries the version and `commit` the tagged
+sha. This is a one-line set change plus its tests, not a migration. Additive:
+every existing milestone type keeps its exact behaviour, and the route's
+validation error still enumerates the accepted set.
 
 ### §S2 The ceremony reports it
-`scripts/release.sh finish` (the step that merges to master, tags, and
-back-merges) reports the release to Crucible after the tag exists and before it
-returns, through the repo client — never a bare `curl`. A reporting failure must
-**not** fail the release: the tag is already cut and pushed, so the ceremony
-warns and continues rather than aborting half-done.
+`scripts/release.sh` `cmd_finish` (lines 297-338) reports the release through
+the repo client — never a bare `curl`. **Position is load-bearing:** the tag
+exists after `git flow finish` (line 335) but is only PUBLISHED by
+`git push origin master develop --tags` (line 337). Reporting between them would
+let a failed push leave a recorded release that no remote has. So the report
+fires **after the push succeeds**.
+
+Two further rules the position implies:
+- a reporting failure must **not** fail the release — by then the tag is pushed,
+  so the ceremony warns naming the version and exits 0 rather than aborting
+  something already shipped;
+- `--dry-run` returns before both git commands (line 328), so it must report
+  **nothing**; a dry run that records a release is a lie about the world.
 
 ### §S3 Reading releases back
 `GET /api/v2/projects/<key>/releases` returns recorded releases newest-first
@@ -72,11 +84,13 @@ carrying the version and commit; posting an unknown type still 400s and still
 lists the accepted set including `release`. Every pre-existing milestone type is
 asserted unchanged.
 
-**AC2 — the ceremony reports after the tag, and never blocks on it.** A release
-run records exactly one release event for the version, after the tag exists. With
-Crucible unreachable the ceremony still completes, warns naming the version, and
-exits 0 — asserted with the server down, because a half-reported release must
-never become a half-cut one.
+**AC2 — the ceremony reports after the PUSH, and never blocks on it.** A release
+run records exactly one release event for the version, after
+`git push … --tags` succeeds — not merely after the tag is created locally, so a
+failed push cannot leave a recorded release the remote never saw. With Crucible
+unreachable the ceremony still completes, warns naming the version, and exits 0,
+asserted with the server down. `--dry-run` records nothing at all, asserted
+separately.
 
 **AC3 — idempotent.** Re-reporting the same version records no duplicate; the
 second attempt converges. Re-running the ceremony (or a retry after a warned
@@ -110,5 +124,6 @@ not a guessed value.
 - Split out of CR-CRU-073 on 2026-08-20 at the maintainer's direction: the
   signal is independently useful, and 073 stays scoped to the stale gates it was
   filed for.
-- The dependency on CR-CRU-071 is for §S4's backfill, which rides the versioned
-  migration chain rather than a one-off script.
+- The CR-CRU-071 dependency was dropped by this CR's own gap analysis: milestones
+  already carry `label` + `commit`, so nothing here needs a schema change, and
+  §S4's backfill is simply one `release` milestone posted per existing tag.
