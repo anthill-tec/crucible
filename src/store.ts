@@ -280,8 +280,404 @@ function migrationOnlyRoleFromAgentIdSuffix(agentId: string): AgentRole | null {
   return match[1]!.toUpperCase() as AgentRole;
 }
 
+// ===========================================================================
+// CR-CRU-071 §S1 — the VERSIONED migration chain
+// ===========================================================================
+// Every retrofit the pre-071 boot fired ad hoc now lives in one NUMBERED,
+// TRANSACTED step, and `PRAGMA user_version` is stamped by the very
+// transaction that earns it — so a store is never left at a version whose
+// structure is absent (AC1), and this build can REFUSE a store written by a
+// newer one (AC5) instead of writing to a schema it does not understand.
+//
+// 🚨 THE ORDER OF THIS ARRAY IS LOAD-BEARING, and so is the order INSIDE each
+// step. `ALTER TABLE events RENAME COLUMN phase TO role` MUST run before the
+// additive `ADD COLUMN role`: swap them and the rename is skipped, a fresh
+// empty column shadows CR-CRU-057's backfilled values, and the §S4 backfill
+// then re-derives them from the agent-id suffix — exactly the orphaning
+// CR-CRU-059 §S0 forbids.
+//
+// ONE STEP PER TABLE BLOCK, in the pre-071 pass's own order: each block was a
+// single `PRAGMA table_info` snapshot that the pass MUTATED mid-pass as its
+// renames landed (`eventCols.delete("phase"); eventCols.add("role")`), and
+// each step below keeps that snapshot and that mutation verbatim. A block is
+// also the right atomic unit: a retrofit that throws rolls back its whole
+// block instead of leaving half a table and a version that lies about it
+// (AC7).
+
+export interface MigrationStep {
+  /** Version this step upgrades FROM ... */
+  readonly from: number;
+  /** ... and TO (always `from + 1`). */
+  readonly to: number;
+  readonly description?: string;
+  /** Runs inside ONE transaction that also stamps `to` into user_version. */
+  apply(db: Database): void;
+  /**
+   * AC2 — "is this retrofit already in the file?". Used ONLY to baseline a
+   * pre-071 store (user_version = 0), which carries no version to trust. A
+   * step WITHOUT this probe is never assumed applied, so an injected chain
+   * always runs from the beginning.
+   */
+  satisfiedBy?(db: Database): boolean;
+}
+
+/** CR-CRU-071 §S1 — what one boot actually migrated. */
+export interface StoreMigration {
+  from: number;
+  to: number;
+  /** The `<path>.pre-upgrade-<epoch>` recovery point; null for `:memory:`. */
+  backupPath: string | null;
+}
+
+export interface StoreOpenOpts {
+  /**
+   * CR-CRU-071 §S1 — REPLACES the default `MIGRATIONS` chain for this open.
+   * The failure-injection seam (AC7): production callers, the server boot
+   * included, always use the one-argument form.
+   */
+  migrations?: readonly MigrationStep[];
+}
+
+/**
+ * CR-CRU-071 AC5 — the store is from the future. A NARROW, deliberate
+ * exception to §S5's "boot must never fail because of a bad file": this file
+ * is not bad, it is NEWER, and quarantining it would rename the user's live
+ * data aside and boot empty. `Store.open` rethrows this instead.
+ */
+export class StoreVersionTooNewError extends Error {}
+
+/** CR-CRU-071 AC7 — a migration step threw; its transaction was rolled back. */
+export class StoreMigrationFailedError extends Error {}
+
+function tableExists(db: Database, table: string): boolean {
+  const row = db
+    .query<{ n: number }, [string]>(
+      `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = ?`,
+    )
+    .get(table);
+  return (row?.n ?? 0) > 0;
+}
+
+/** The pre-071 pass's per-block `PRAGMA table_info` snapshot, verbatim. */
+function columnsOf(db: Database, table: string): Set<string> {
+  return new Set(
+    db
+      .query<{ name: string }, []>(`PRAGMA table_info(${table})`)
+      .all()
+      .map((col) => col.name),
+  );
+}
+
+/** True for a file that holds no schema at all — a brand-new or `:memory:` db. */
+function hasSchemaObjects(db: Database): boolean {
+  const row = db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM sqlite_master`).get();
+  return (row?.n ?? 0) > 0;
+}
+
+function readUserVersion(db: Database): number {
+  return db.query<{ user_version: number }, []>(`PRAGMA user_version`).get()?.user_version ?? 0;
+}
+
+/** Interpolated, not bound: sqlite never parameterizes a PRAGMA value. */
+function stampUserVersion(db: Database, version: number): void {
+  db.exec(`PRAGMA user_version = ${Math.trunc(version)}`);
+}
+
+/**
+ * The rows CR-CRU-057 §S4's backfill still has work for: `role IS NULL` AND an
+ * agent id whose suffix parses. Empty means the backfill is DONE — which is
+ * also how a pre-071 store proves that retrofit is already applied (AC2), so
+ * baselining the live store never re-derives a single role.
+ */
+function pendingInferredEventRoles(db: Database): { id: string; role: AgentRole }[] {
+  return db
+    .query<{ id: string; agent_id: string }, []>(
+      `SELECT id, agent_id FROM events WHERE role IS NULL`,
+    )
+    .all()
+    .flatMap((row) => {
+      const role = migrationOnlyRoleFromAgentIdSuffix(row.agent_id);
+      // Unparseable ids stay NULL — no guessing, ever (§S4).
+      return role === null ? [] : [{ id: row.id, role }];
+    });
+}
+
+/**
+ * CR-CRU-057 §S4 — the ONE-TIME LABELED backfill of `events.role` for
+ * pre-057 history (user-decided 2026-08-01). CR-CRU-071 §S1 keeps it in the
+ * SAME VERSION as the §S1 ALTER it populates, inside that step's transaction,
+ * so a store can never stop between the column and the data. It runs nowhere
+ * else, and never opens a transaction of its own.
+ *
+ * ADDITIVE: the `role IS NULL` predicate is the whole safety story. A row
+ * whose agent DECLARED a role was written with a non-NULL `role` and
+ * `role_inferred = 0` (the single event write path, `insertEvent`, always
+ * writes the two columns together), so a declared row is invisible to this
+ * UPDATE and can never be re-derived or flipped from its id's shape.
+ *
+ * IDEMPOTENT BY CONSTRUCTION: every row it touches leaves with a non-NULL
+ * `role`, so a later scan no longer sees it — no "has it run" flag needed, and
+ * `role_inferred` is SET to 1, never incremented. Rows whose id does not parse
+ * are left NULL in BOTH columns (never 0 — that would read as "declared
+ * nothing" rather than "never classified") and render unclassified, which is
+ * also why re-running is harmless: they are simply re-examined and re-skipped.
+ *
+ * 🚨 The id parse it uses is migration-only — see the banner on
+ * `migrationOnlyRoleFromAgentIdSuffix`. It must never reach a runtime path.
+ */
+function backfillInferredEventRoles(db: Database): void {
+  const pending = pendingInferredEventRoles(db);
+  if (pending.length === 0) return;
+  const update = db.query<never, [string, string]>(
+    `UPDATE events SET role = ?, role_inferred = 1 WHERE id = ? AND role IS NULL`,
+  );
+  for (const row of pending) {
+    update.run(row.role, row.id);
+  }
+}
+
+type MigrationBody = Omit<MigrationStep, "from" | "to">;
+
+// A step whose table does not exist yet has NOTHING to retrofit: the base
+// `CREATE TABLE IF NOT EXISTS` pass writes every table in its CURRENT shape,
+// which is precisely why the pre-071 retrofits only ever fired for tables an
+// older binary had already created.
+const MIGRATION_BODIES: readonly MigrationBody[] = [
+  {
+    description:
+      "events: CR-011 action/first_seen, CR-013 payload, CR-059 phase->role RENAME, CR-057 role columns + §S4 labeled backfill",
+    apply(db) {
+      if (!tableExists(db, "events")) return;
+      // CR-CRU-011 §S1 — additive columns for lifecycle events; pre-011 db
+      // files lack them (CREATE TABLE IF NOT EXISTS never retrofits columns).
+      const eventCols = columnsOf(db, "events");
+      if (!eventCols.has("action")) {
+        db.exec(`ALTER TABLE events ADD COLUMN action TEXT`);
+      }
+      if (!eventCols.has("first_seen")) {
+        db.exec(`ALTER TABLE events ADD COLUMN first_seen INTEGER`);
+      }
+      // CR-CRU-013 §S1+§S4b — additive generic payload column for gate/milestone
+      // kind-specific fields; pre-013 db files lack it (same PRAGMA-checked
+      // retrofit pattern as action/first_seen above).
+      if (!eventCols.has("payload")) {
+        db.exec(`ALTER TABLE events ADD COLUMN payload TEXT`);
+      }
+      // CR-CRU-059 §S0 — RENAME, never re-create. Every db written before that
+      // CR carries the declared-role classification under the OLD column names
+      // `phase`/`phase_inferred` — including CR-CRU-057's backfill (299 of 338
+      // events on the live dog-food db). Adding fresh `role` columns and
+      // leaving the old ones behind would silently orphan all of it, so the
+      // columns are RENAMED IN PLACE (sqlite 3.25+), which moves every value
+      // untouched. 🚨 BEFORE the additive add below, and the snapshot is
+      // mutated so that add sees the renamed column, not a stale absence.
+      if (eventCols.has("phase") && !eventCols.has("role")) {
+        db.exec(`ALTER TABLE events RENAME COLUMN phase TO role`);
+        eventCols.delete("phase");
+        eventCols.add("role");
+      }
+      if (eventCols.has("phase_inferred") && !eventCols.has("role_inferred")) {
+        db.exec(`ALTER TABLE events RENAME COLUMN phase_inferred TO role_inferred`);
+        eventCols.delete("phase_inferred");
+        eventCols.add("role_inferred");
+      }
+      // CR-CRU-057 §S1 — additive declared-role columns; pre-057 db files lack
+      // them. The ALTER itself back-fills nothing — every historical row starts
+      // NULL; §S4's labeled backfill below then classifies the subset whose id
+      // suffix parses.
+      if (!eventCols.has("role")) {
+        db.exec(`ALTER TABLE events ADD COLUMN role TEXT`);
+      }
+      if (!eventCols.has("role_inferred")) {
+        db.exec(`ALTER TABLE events ADD COLUMN role_inferred INTEGER`);
+      }
+      backfillInferredEventRoles(db);
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "events")) return true;
+      const cols = columnsOf(db, "events");
+      return (
+        cols.has("action") &&
+        cols.has("first_seen") &&
+        cols.has("payload") &&
+        cols.has("role") &&
+        cols.has("role_inferred") &&
+        !cols.has("phase") &&
+        !cols.has("phase_inferred") &&
+        // The §S4 data half of this version, not just its columns.
+        pendingInferredEventRoles(db).length === 0
+      );
+    },
+  },
+  {
+    description:
+      "plan_cycles: CR-011 activated_at/done_at, CR-023 active_ms_accumulated, CR-024 seq + order-preserving backfill",
+    apply(db) {
+      if (!tableExists(db, "plan_cycles")) return;
+      // CR-CRU-011 §S0b — additive cycle-timestamp columns; pre-C4 db files
+      // lack them (same PRAGMA-checked retrofit pattern as events above).
+      const cycleCols = columnsOf(db, "plan_cycles");
+      if (!cycleCols.has("activated_at")) {
+        db.exec(`ALTER TABLE plan_cycles ADD COLUMN activated_at INTEGER`);
+      }
+      if (!cycleCols.has("done_at")) {
+        db.exec(`ALTER TABLE plan_cycles ADD COLUMN done_at INTEGER`);
+      }
+      // CR-CRU-023 §S3 (a) — additive accumulated-attention column; pre-023
+      // db files lack it (same PRAGMA-checked retrofit pattern as above).
+      if (!cycleCols.has("active_ms_accumulated")) {
+        db.exec(`ALTER TABLE plan_cycles ADD COLUMN active_ms_accumulated INTEGER`);
+      }
+      // CR-CRU-024 §S3.1 — additive display-order column; pre-024 db files lack
+      // it. Order-preserving backfill: seq = cycle_id for existing rows so
+      // pre-insert-before plans keep their historical (cycle_id-ascending)
+      // display order unchanged. Same version as the ALTER, so no store can
+      // stop between the column and the values it needs.
+      if (!cycleCols.has("seq")) {
+        db.exec(`ALTER TABLE plan_cycles ADD COLUMN seq REAL`);
+        db.exec(`UPDATE plan_cycles SET seq = cycle_id WHERE seq IS NULL`);
+      }
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "plan_cycles")) return true;
+      const cols = columnsOf(db, "plan_cycles");
+      return (
+        cols.has("activated_at") &&
+        cols.has("done_at") &&
+        cols.has("active_ms_accumulated") &&
+        cols.has("seq")
+      );
+    },
+  },
+  {
+    description: "plans: CR-021 §S6.11 title, CR-021 §S6 re-baseline orchestrator",
+    apply(db) {
+      if (!tableExists(db, "plans")) return;
+      // CR-CRU-021 §S6.11 — additive plan title column; pre-021 db files lack
+      // it (same PRAGMA-checked retrofit pattern as events/plan_cycles above).
+      const planCols = columnsOf(db, "plans");
+      if (!planCols.has("title")) {
+        db.exec(`ALTER TABLE plans ADD COLUMN title TEXT`);
+      }
+      // CR-CRU-021 §S6 re-baseline (cycle 19) — additive plan orchestrator
+      // column; pre-cycle-19 db files lack it (same PRAGMA-checked pattern).
+      if (!planCols.has("orchestrator")) {
+        db.exec(`ALTER TABLE plans ADD COLUMN orchestrator TEXT`);
+      }
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "plans")) return true;
+      const cols = columnsOf(db, "plans");
+      return cols.has("title") && cols.has("orchestrator");
+    },
+  },
+  {
+    description: "projects: CR-012 §S1b archived_at, CR-008 §S4 allow_run_deletion",
+    apply(db) {
+      if (!tableExists(db, "projects")) return;
+      // CR-CRU-012 §S1b — additive archive-timestamp column; pre-012 db files
+      // lack it (same PRAGMA-checked retrofit pattern as above).
+      const projectCols = columnsOf(db, "projects");
+      if (!projectCols.has("archived_at")) {
+        db.exec(`ALTER TABLE projects ADD COLUMN archived_at INTEGER`);
+      }
+      // CR-CRU-008 §S4 — additive guarded-deletion config column; pre-008 db
+      // files lack it (same PRAGMA-checked retrofit pattern as above).
+      if (!projectCols.has("allow_run_deletion")) {
+        db.exec(`ALTER TABLE projects ADD COLUMN allow_run_deletion INTEGER`);
+      }
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "projects")) return true;
+      const cols = columnsOf(db, "projects");
+      return cols.has("archived_at") && cols.has("allow_run_deletion");
+    },
+  },
+  {
+    description: "agents: CR-059 phase->role RENAME, CR-044 role, CR-056 bound_cycle_id",
+    apply(db) {
+      if (!tableExists(db, "agents")) return;
+      const agentCols = columnsOf(db, "agents");
+      // CR-CRU-059 §S0 — same RENAME-don't-re-create rule as events above: a
+      // pre-059 db stores the declared role under `agents.phase`, and that
+      // value is the agent's live classification. Rename it in place, then the
+      // additive guard below sees `role` and does nothing.
+      if (agentCols.has("phase") && !agentCols.has("role")) {
+        db.exec(`ALTER TABLE agents RENAME COLUMN phase TO role`);
+        agentCols.delete("phase");
+        agentCols.add("role");
+      }
+      // CR-CRU-044 §S1(d) — additive declared-role column; pre-044 db files
+      // lack it. No back-fill: historical rows keep a NULL role and read back
+      // as absent.
+      if (!agentCols.has("role")) {
+        db.exec(`ALTER TABLE agents ADD COLUMN role TEXT`);
+      }
+      // CR-CRU-056 §S1 — additive cycle-binding column; pre-056 db files lack
+      // it. No back-fill: historical rows keep a NULL binding.
+      if (!agentCols.has("bound_cycle_id")) {
+        db.exec(`ALTER TABLE agents ADD COLUMN bound_cycle_id INTEGER`);
+      }
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "agents")) return true;
+      const cols = columnsOf(db, "agents");
+      return cols.has("role") && cols.has("bound_cycle_id") && !cols.has("phase");
+    },
+  },
+];
+
+/** CR-CRU-071 §S1 — the ordered chain; positions ARE the version numbers. */
+export const MIGRATIONS: readonly MigrationStep[] = MIGRATION_BODIES.map((body, index) => ({
+  ...body,
+  from: index,
+  to: index + 1,
+}));
+
+/** The schema version THIS build writes — the end of the chain, by construction. */
+export const SCHEMA_VERSION = MIGRATIONS.length;
+
+/**
+ * CR-CRU-071 AC2 — a store at user_version 0 predates versioning entirely (the
+ * live 9.2 MB dog-food db included), so its version cannot be read; it is
+ * INSPECTED ONCE and matched to the schema it actually has. Every leading step
+ * whose retrofit is demonstrably already in the file is skipped, so baselining
+ * moves no data and re-runs no applied retrofit — it only stamps the truth.
+ */
+function baselineVersion(db: Database, chain: readonly MigrationStep[], from: number): number {
+  let at = from;
+  for (const step of chain) {
+    if (step.from !== at) break;
+    if (step.satisfiedBy?.(db) !== true) break;
+    at = step.to;
+  }
+  return at;
+}
+
+/**
+ * CR-CRU-071 AC4 — the recovery point, `<path>.pre-upgrade-<epoch>`, extending
+ * §S5's `<path>.<kind>-<epoch>` convention (`<path>.corrupt-<epoch>`).
+ *
+ * VACUUM INTO, never a file copy: the store runs in WAL mode, so copying the
+ * main file alone can land torn or stale (the committed tail lives in `-wal`).
+ * VACUUM INTO reads ONE consistent snapshot through the pager and preserves
+ * `user_version`, so the copy restores as the exact pre-migration store.
+ */
+function writePreUpgradeBackup(db: Database, dbPath: string): string {
+  const backupPath = `${dbPath}.pre-upgrade-${Date.now()}`;
+  db.exec(`VACUUM INTO '${backupPath.replaceAll("'", "''")}'`);
+  return backupPath;
+}
+
 export class Store {
   private readonly db: Database;
+  /**
+   * CR-CRU-071 §S1 — `PRAGMA user_version` as this open left it: the schema
+   * version this store IS, not the one the code hopes for.
+   */
+  readonly schemaVersion: number;
+  /** CR-CRU-071 §S1 — what THIS open migrated; null when nothing did. */
+  readonly migration: StoreMigration | null;
   /** Monotonic per-store sequence for event ids. */
   private seq = 0;
   private readonly listeners = new Set<ChangeListener>();
@@ -309,27 +705,77 @@ export class Store {
    */
   private readonly epochCheckpointAt = new Map<string, number>();
 
-  constructor(path: string) {
+  constructor(path: string, opts?: StoreOpenOpts) {
     this.bootedAt = Date.now();
     this.db = new Database(path, { create: true });
-    if (path !== ":memory:") {
-      this.db.exec("PRAGMA journal_mode = WAL;");
+    // §S5 — bun:sqlite may defer an open failure past `new Database`; force it
+    // NOW, before anything is written, so a genuinely unreadable file still
+    // reaches open()'s quarantine path.
+    this.db.query("PRAGMA schema_version").get();
+    const chain = opts?.migrations ?? MIGRATIONS;
+    const found = readUserVersion(this.db);
+    // CR-CRU-071 AC5 — AFTER the corruption probe, BEFORE the chain and before
+    // ANY write: a store from the future is REFUSED, untouched. The db is left
+    // open on purpose — closing the last connection to a WAL store would
+    // checkpoint it and mutate the very file we promised not to touch.
+    if (found > SCHEMA_VERSION) {
+      throw new StoreVersionTooNewError(
+        `[crucible] REFUSING TO OPEN ${path}: the store is at schema version ${found}, but this ` +
+          `build only understands version ${SCHEMA_VERSION} — a newer Crucible wrote it. Nothing ` +
+          `was touched: no quarantine, no fresh db, no write. Remedy: upgrade this Crucible to ` +
+          `the build that speaks version ${found}, or restore that build's ` +
+          `<store>.pre-upgrade-<epoch> backup and re-run this one.`,
+      );
     }
-    this.createTables();
+    const target = chain.length === 0 ? found : chain[chain.length - 1]!.to;
+    if (!hasSchemaObjects(this.db)) {
+      if (path !== ":memory:") {
+        // WAL is adopted when Crucible CREATES the store. A store it did NOT
+        // create keeps the journal mode its writer chose: switching that needs
+        // exclusive access to a db someone else may be reading, it rewrites the
+        // file header, and CR-CRU-071's refusal (AC5) and failure (AC7) paths
+        // promise a byte-identical file.
+        this.db.exec("PRAGMA journal_mode = WAL;");
+      }
+      // A brand-new store (or `:memory:`): the base schema IS `target`, so it
+      // is created and stamped in ONE transaction (AC1). Nothing was migrated
+      // and there is nothing to recover, so no backup and no report.
+      const create = this.db.transaction(() => {
+        this.createBaseTables();
+        stampUserVersion(this.db, target);
+      });
+      create();
+      this.migration = null;
+    } else {
+      this.migration = found < target ? this.migrateTo(path, chain, found, target) : null;
+      // AFTER the chain, never before: a step that throws must leave the file
+      // byte-identical (AC7). Tables a legacy store never had are written here
+      // in their CURRENT shape, which is exactly why no retrofit fires for
+      // them — and it always runs, so a crash between the last step and here
+      // self-heals on the next open.
+      this.createBaseTables();
+    }
+    this.schemaVersion = readUserVersion(this.db);
   }
 
   /**
    * §S5 boot safety — open a store at `path`, surviving a corrupt/unreadable db.
    * A bad file is renamed aside to `<path>.corrupt-<epoch>` and a fresh db is
    * opened at the original path. Boot must never fail because of a bad file.
+   *
+   * CR-CRU-071 §S1 — `opts.migrations` REPLACES the default chain for this open
+   * (the AC7 failure-injection seam); production callers omit it.
    */
-  static open(path: string): Store {
+  static open(path: string, opts?: StoreOpenOpts): Store {
     try {
-      const store = new Store(path);
-      // bun:sqlite may defer failure past open — force it with a trivial query.
-      store.db.query("PRAGMA schema_version").get();
-      return store;
+      return new Store(path, opts);
     } catch (error) {
+      // CR-CRU-071 AC5/AC7 — a READABLE store this build must not write is a
+      // REFUSAL, not a corruption: quarantining it would rename the user's live
+      // data aside and boot empty. Only an unreadable file takes the §S5 path.
+      if (error instanceof StoreVersionTooNewError || error instanceof StoreMigrationFailedError) {
+        throw error;
+      }
       const corruptPath = `${path}.corrupt-${Date.now()}`;
       console.error(
         `[crucible] CORRUPT DATABASE at ${path} — moving it aside to ${corruptPath} and starting with a fresh db (${String(error)})`,
@@ -339,7 +785,66 @@ export class Store {
     }
   }
 
-  private createTables(): void {
+  /**
+   * CR-CRU-071 §S1 — run the chain, one transaction per version, each stamping
+   * the version it earned (AC1). A recovery point is written BEFORE the first
+   * migrating write (AC4); a step that throws rolls its own transaction back,
+   * leaves user_version at the last committed value, and aborts the boot with
+   * an error naming that recovery point (AC7).
+   */
+  private migrateTo(
+    path: string,
+    chain: readonly MigrationStep[],
+    found: number,
+    target: number,
+  ): StoreMigration {
+    // `resume` is where the CHAIN restarts: for an unstamped store that is
+    // already structurally current, that is its baselined version, so no
+    // applied retrofit re-runs (AC2).
+    const resume = found === 0 ? baselineVersion(this.db, chain, found) : found;
+    const backupPath = path === ":memory:" ? null : writePreUpgradeBackup(this.db, path);
+    for (const step of chain) {
+      if (step.from < resume) continue;
+      const run = this.db.transaction(() => {
+        step.apply(this.db);
+        stampUserVersion(this.db, step.to);
+      });
+      try {
+        run();
+      } catch (error) {
+        throw new StoreMigrationFailedError(
+          `[crucible] MIGRATION FAILED on ${path}: step ${step.from} -> ${step.to}` +
+            `${step.description === undefined ? "" : ` (${step.description})`} threw, so its ` +
+            `transaction was rolled back and the store still reads schema version ` +
+            `${readUserVersion(this.db)}. It was NOT quarantined and NOT left half-migrated. ` +
+            (backupPath === null
+              ? `(in-memory store: no backup was needed.) `
+              : `Restore the pre-upgrade backup at ${backupPath} if this store looks wrong. `) +
+            `Cause: ${String(error)}`,
+        );
+      }
+    }
+    if (readUserVersion(this.db) !== target) {
+      // A baseline with nothing left to apply still has to be STAMPED (AC2).
+      const stamp = this.db.transaction(() => {
+        stampUserVersion(this.db, target);
+      });
+      stamp();
+    }
+    // `from` is the version the store REPORTED before this open, not where the
+    // chain resumed. A baseline moved user_version 0 -> target, so reporting
+    // `resume` here printed the nonsense "migrated store schema v5 -> v5";
+    // reporting the previous stamp keeps `from < to` true for every migrating
+    // open and makes the disclosure (AC6) honest.
+    return { from: found, to: target, backupPath };
+  }
+
+  /**
+   * The base schema in its CURRENT shape. Every table here is created whole —
+   * the numbered retrofits in `MIGRATIONS` exist only for tables an OLDER
+   * binary already created, which is why this pass may safely run after them.
+   */
+  private createBaseTables(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS projects (
         key TEXT PRIMARY KEY,
@@ -362,6 +867,7 @@ export class Store {
         first_seen INTEGER NOT NULL,
         last_seen INTEGER NOT NULL,
         role TEXT,
+        bound_cycle_id INTEGER,
         PRIMARY KEY (project_key, agent_id)
       );
 
@@ -435,186 +941,6 @@ export class Store {
         PRIMARY KEY (project_key, cycle_id)
       );
     `);
-    // CR-CRU-011 §S1 — additive columns for lifecycle events; pre-011 db
-    // files lack them (CREATE TABLE IF NOT EXISTS never retrofits columns).
-    const eventCols = new Set(
-      this.db
-        .query<{ name: string }, []>(`PRAGMA table_info(events)`)
-        .all()
-        .map((col) => col.name),
-    );
-    if (!eventCols.has("action")) {
-      this.db.exec(`ALTER TABLE events ADD COLUMN action TEXT`);
-    }
-    if (!eventCols.has("first_seen")) {
-      this.db.exec(`ALTER TABLE events ADD COLUMN first_seen INTEGER`);
-    }
-    // CR-CRU-013 §S1+§S4b — additive generic payload column for gate/milestone
-    // kind-specific fields; pre-013 db files lack it (same PRAGMA-checked
-    // retrofit pattern as action/first_seen above).
-    if (!eventCols.has("payload")) {
-      this.db.exec(`ALTER TABLE events ADD COLUMN payload TEXT`);
-    }
-    // CR-CRU-059 §S0 — RENAME, never re-create. Every db written before this
-    // CR carries the declared-role classification under the OLD column names
-    // `phase`/`phase_inferred` — including CR-CRU-057's one-time backfill
-    // (299 of 338 events on the live dog-food db). Adding fresh `role` columns
-    // and leaving the old ones behind would silently orphan all of it, so the
-    // columns are RENAMED IN PLACE with `ALTER TABLE ... RENAME COLUMN`
-    // (sqlite 3.25+), which moves every value untouched. Guarded on the same
-    // PRAGMA snapshot as the additive retrofits below, so a second open sees
-    // the old name already gone and does nothing.
-    if (eventCols.has("phase") && !eventCols.has("role")) {
-      this.db.exec(`ALTER TABLE events RENAME COLUMN phase TO role`);
-      eventCols.delete("phase");
-      eventCols.add("role");
-    }
-    if (eventCols.has("phase_inferred") && !eventCols.has("role_inferred")) {
-      this.db.exec(`ALTER TABLE events RENAME COLUMN phase_inferred TO role_inferred`);
-      eventCols.delete("phase_inferred");
-      eventCols.add("role_inferred");
-    }
-    // CR-CRU-057 §S1 — additive declared-role columns; pre-057 db files lack
-    // them (same PRAGMA-checked retrofit pattern as CR-CRU-044's agents.role
-    // and CR-CRU-056's agents.bound_cycle_id). The ALTER itself back-fills
-    // nothing — every historical row starts NULL; §S4's labeled backfill below
-    // then classifies the subset whose id suffix parses.
-    if (!eventCols.has("role")) {
-      this.db.exec(`ALTER TABLE events ADD COLUMN role TEXT`);
-    }
-    if (!eventCols.has("role_inferred")) {
-      this.db.exec(`ALTER TABLE events ADD COLUMN role_inferred INTEGER`);
-    }
-    this.backfillInferredEventRoles();
-    // CR-CRU-011 §S0b — additive cycle-timestamp columns; pre-C4 db files
-    // lack them (same PRAGMA-checked retrofit pattern as events above).
-    const cycleCols = new Set(
-      this.db
-        .query<{ name: string }, []>(`PRAGMA table_info(plan_cycles)`)
-        .all()
-        .map((col) => col.name),
-    );
-    if (!cycleCols.has("activated_at")) {
-      this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN activated_at INTEGER`);
-    }
-    if (!cycleCols.has("done_at")) {
-      this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN done_at INTEGER`);
-    }
-    // CR-CRU-023 §S3 (a) — additive accumulated-attention column; pre-023
-    // db files lack it (same PRAGMA-checked retrofit pattern as above).
-    if (!cycleCols.has("active_ms_accumulated")) {
-      this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN active_ms_accumulated INTEGER`);
-    }
-    // CR-CRU-024 §S3.1 — additive display-order column; pre-024 db files lack
-    // it (same PRAGMA-checked retrofit pattern as above). Order-preserving
-    // backfill: seq = cycle_id for existing rows so pre-insert-before plans
-    // keep their historical (cycle_id-ascending) display order unchanged.
-    if (!cycleCols.has("seq")) {
-      this.db.exec(`ALTER TABLE plan_cycles ADD COLUMN seq REAL`);
-      this.db.exec(`UPDATE plan_cycles SET seq = cycle_id WHERE seq IS NULL`);
-    }
-    // CR-CRU-021 §S6.11 — additive plan title column; pre-021 db files lack
-    // it (same PRAGMA-checked retrofit pattern as events/plan_cycles above).
-    const planCols = new Set(
-      this.db
-        .query<{ name: string }, []>(`PRAGMA table_info(plans)`)
-        .all()
-        .map((col) => col.name),
-    );
-    if (!planCols.has("title")) {
-      this.db.exec(`ALTER TABLE plans ADD COLUMN title TEXT`);
-    }
-    // CR-CRU-021 §S6 re-baseline (cycle 19) — additive plan orchestrator
-    // column; pre-cycle-19 db files lack it (same PRAGMA-checked pattern).
-    if (!planCols.has("orchestrator")) {
-      this.db.exec(`ALTER TABLE plans ADD COLUMN orchestrator TEXT`);
-    }
-    // CR-CRU-012 §S1b — additive archive-timestamp column; pre-012 db files
-    // lack it (same PRAGMA-checked retrofit pattern as above).
-    const projectCols = new Set(
-      this.db
-        .query<{ name: string }, []>(`PRAGMA table_info(projects)`)
-        .all()
-        .map((col) => col.name),
-    );
-    if (!projectCols.has("archived_at")) {
-      this.db.exec(`ALTER TABLE projects ADD COLUMN archived_at INTEGER`);
-    }
-    // CR-CRU-008 §S4 — additive guarded-deletion config column; pre-008 db
-    // files lack it (same PRAGMA-checked retrofit pattern as above).
-    if (!projectCols.has("allow_run_deletion")) {
-      this.db.exec(`ALTER TABLE projects ADD COLUMN allow_run_deletion INTEGER`);
-    }
-    // CR-CRU-044 §S1(d) — additive declared-role column; pre-044 db files
-    // lack it (same PRAGMA-checked retrofit pattern as above). No back-fill:
-    // historical rows keep a NULL role and read back as absent.
-    const agentCols = new Set(
-      this.db
-        .query<{ name: string }, []>(`PRAGMA table_info(agents)`)
-        .all()
-        .map((col) => col.name),
-    );
-    // CR-CRU-059 §S0 — same RENAME-don't-re-create rule as events above: a
-    // pre-059 db stores the declared role under `agents.phase`, and that value
-    // is the agent's live classification. Rename it in place; a second open
-    // finds only `role` and falls through to the additive guard below.
-    if (agentCols.has("phase") && !agentCols.has("role")) {
-      this.db.exec(`ALTER TABLE agents RENAME COLUMN phase TO role`);
-      agentCols.delete("phase");
-      agentCols.add("role");
-    }
-    if (!agentCols.has("role")) {
-      this.db.exec(`ALTER TABLE agents ADD COLUMN role TEXT`);
-    }
-    // CR-CRU-056 §S1 — additive cycle-binding column; pre-056 db files lack
-    // it (same PRAGMA-checked retrofit pattern as above). No back-fill:
-    // historical rows keep a NULL binding and read back as absent.
-    if (!agentCols.has("bound_cycle_id")) {
-      this.db.exec(`ALTER TABLE agents ADD COLUMN bound_cycle_id INTEGER`);
-    }
-  }
-
-  /**
-   * CR-CRU-057 §S4 — the ONE-TIME LABELED backfill of `events.role` for
-   * pre-057 history (user-decided 2026-08-01). Runs at store open, at the tail
-   * of `migrate()`, right after the §S1 columns are guaranteed to exist.
-   *
-   * ADDITIVE: the `role IS NULL` predicate is the whole safety story. A row
-   * whose agent DECLARED a role was written with a non-NULL `role` and
-   * `role_inferred = 0` (the single event write path, `insertEvent`, always
-   * writes the two columns together), so a declared row is invisible to this
-   * UPDATE and can never be re-derived or flipped from its id's shape.
-   *
-   * IDEMPOTENT BY CONSTRUCTION: every row it touches leaves with a non-NULL
-   * `role`, so the next open's `role IS NULL` scan no longer sees it — no
-   * "has it run" flag needed, and `role_inferred` is SET to 1, never
-   * incremented. Rows whose id does not parse are left NULL in BOTH columns
-   * (never 0 — that would read as "declared nothing" rather than "never
-   * classified") and render unclassified, which is also why re-running is
-   * harmless: they are simply re-examined and re-skipped.
-   *
-   * 🚨 The id parse it uses is migration-only — see the banner on
-   * `migrationOnlyRoleFromAgentIdSuffix`. It must never reach a runtime path.
-   */
-  private backfillInferredEventRoles(): void {
-    const pending = this.db
-      .query<{ id: string; agent_id: string }, []>(
-        `SELECT id, agent_id FROM events WHERE role IS NULL`,
-      )
-      .all();
-    if (pending.length === 0) return;
-    const update = this.db.query<never, [string, string]>(
-      `UPDATE events SET role = ?, role_inferred = 1 WHERE id = ? AND role IS NULL`,
-    );
-    const apply = this.db.transaction((rows: { id: string; agent_id: string }[]) => {
-      for (const row of rows) {
-        const role = migrationOnlyRoleFromAgentIdSuffix(row.agent_id);
-        // Unparseable ids stay NULL — no guessing, ever (§S4).
-        if (role === null) continue;
-        update.run(role, row.id);
-      }
-    });
-    apply(pending);
   }
 
   /**

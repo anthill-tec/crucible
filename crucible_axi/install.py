@@ -32,11 +32,18 @@ import subprocess
 
 from crucible_axi import manifest
 
+# The stage whose ADVANCE gates the upgrade restart (CR-CRU-071 AC9) -- named
+# once, so the threading in `run_install` cannot drift from `STAGE_ORDER`.
+SERVER_STAGE_NAME = "server"
+
 # CR-CRU-070 §Design -- `[unit]` is LAST: it is the only stage that hands work
 # to another supervisor, so the launcher its `ExecStart` names must already be
 # provisioned (enabling it earlier would `enable --now` a unit that cannot
 # start).
-STAGE_ORDER = ("server", "manifest", "unit")
+# CR-CRU-071 AC9 gives that ordering a second job: `[unit]` runs AFTER
+# `[server]`, so by the time it decides whether to restart, the stage that
+# re-provisioned has already reported that it did.
+STAGE_ORDER = (SERVER_STAGE_NAME, "manifest", "unit")
 
 # The INVERSE sequence (CR-CRU-069 §S1) -- DESTRUCTIVE-LAST, deliberately not a
 # naive reverse of `STAGE_ORDER`. Install has no destructive stage, so
@@ -116,6 +123,20 @@ SERVER_DB_ENV_VAR = "CRUCIBLE_DB"
 # escalation (CR-CRU-070 §Scope).
 SYSTEMCTL_BIN_NAME = "systemctl"
 _USER_SCOPE_FLAG = "--user"
+
+# The verb that re-execs an ALREADY-RUNNING service so the process becomes the
+# code `bun add -g` just laid down (CR-CRU-071 AC9). `restart` and not
+# `try-restart`: the stage has already PROBED the service active, so "restart
+# it only if it happens to be up" would hide a genuine failure to come back.
+_RESTART_VERB = "restart"
+
+# The READ-ONLY verb that shows a failed unit's own last output -- where the
+# server's store refusal / migration failure lands, since systemd captures a
+# `--user` unit's stderr into the journal (CR-CRU-071 AC8). `--no-pager`
+# because an install is not an interactive session. Fetched ONLY after a start
+# has failed: a probe on every install is chatter the happy path does not need.
+_UNIT_LOG_VERB = "status"
+_NO_PAGER_FLAG = "--no-pager"
 
 # The unit `systemctl --user` reads, and the directory it reads it from:
 # `$XDG_CONFIG_HOME/systemd/user`, falling back to `<HOME>/.config` by the XDG
@@ -475,6 +496,13 @@ def _server_stage(target_dir: str, force: bool,
     read -- is NOT converged, so an upgrade re-provisions through the same
     absolute-Bun `bun add -g <pkg>@<pin>` path instead of silently leaving the
     older server in place.
+
+    A re-provision reports `advanced: True` (CR-CRU-071 AC9). This stage is the
+    ONLY one that can know an upgrade happened -- the `[unit]` stage compares
+    unit TEXT, and `ExecStart` is a version-INDEPENDENT
+    `$BUN_INSTALL/bin/crucible-server`, so its text is byte-identical across an
+    upgrade. Without this signal `bun add -g` replaces the package on disk
+    while the running service keeps serving the old code from memory.
     """
     server_path = _provisioned_server_bin_path()
 
@@ -499,7 +527,8 @@ def _server_stage(target_dir: str, force: bool,
             f"server stage failed: `{' '.join(provision_argv)}` exited with "
             f"returncode {completed.returncode}")
 
-    return {"path": server_path, "converged": False, "bun": bun}
+    return {"path": server_path, "converged": False, "advanced": True,
+            "bun": bun}
 
 
 def server_launch_argv() -> list[str]:
@@ -590,6 +619,58 @@ def _run_systemctl(systemctl: str, *arguments: str):
             _BUS_FAILURE_NEEDLE in str(stderr).lower():
         return None
     return completed
+
+
+def _unit_log(systemctl: str) -> str:
+    """The failed unit's OWN last output, as `systemctl --user status` shows it.
+
+    systemd captures a `--user` unit's stdout/stderr into the journal, so this
+    is where the server's store refusal (`REFUSING TO OPEN ...`) or migration
+    failure (`MIGRATION FAILED on ...`) lands -- including the
+    `<store>.pre-upgrade-<epoch>` backup to restore from. Read-only, and only
+    ever called once a start has already failed.
+    """
+    completed = _run_systemctl(systemctl, _UNIT_LOG_VERB, _NO_PAGER_FLAG,
+                               UNIT_FILE_NAME)
+    if completed is None:
+        return ""
+    return str(getattr(completed, "stdout", None) or "")
+
+
+def _start_service_or_fail(systemctl: str, *arguments: str) -> None:
+    """Run a systemctl verb that STARTS the service, and FAIL when it could not
+    (CR-CRU-071 AC8).
+
+    Starting is where the new build opens the store and runs the migration
+    chain, so the start's outcome IS the upgrade's migration gate: a store this
+    build refuses to open (AC5 -- a newer Crucible wrote it) or a migration step
+    that threw (AC7) leaves the service dead, and swallowing the returncode is
+    what would leave a new binary pointed at a store it cannot open while the
+    install reported `ok: true`. The failure carries the server's own message,
+    fetched from the unit's log, so the operator reads the refusal and its
+    backup path instead of going digging in the journal.
+
+    An UNREACHABLE manager still DEGRADES (CR-CRU-070 AC4): `_run_systemctl`
+    answers None for a machine whose user bus went away, which is not a failed
+    start and must not fail the install.
+    """
+    completed = _run_systemctl(systemctl, *arguments)
+    if completed is None or completed.returncode == 0:
+        return
+    reported = "\n".join(
+        text.strip() for text in (
+            str(getattr(completed, "stdout", None) or ""),
+            str(getattr(completed, "stderr", None) or ""),
+            _unit_log(systemctl))
+        if text.strip())
+    raise RuntimeError(
+        f"`{SYSTEMCTL_BIN_NAME} {_USER_SCOPE_FLAG} {' '.join(arguments)}` "
+        f"exited with returncode {completed.returncode}, so the server never "
+        f"started and this upgrade is NOT complete (CR-CRU-071 AC8). The store "
+        f"is under {store_dir()}; a store this build REFUSES to open, or a "
+        f"migration that threw and rolled back, is reported below and names "
+        f"the pre-upgrade backup to restore from. "
+        f"{SYSTEMCTL_BIN_NAME} reported:\n{reported}")
 
 
 def _unit_manager(no_service: bool = False) -> tuple[str | None, str]:
@@ -725,8 +806,8 @@ def _skipped_unit(unit_path: str, reason: str) -> dict:
             "reason": reason}
 
 
-def _unit_stage(target_dir: str, force: bool,
-                no_service: bool = False) -> dict:
+def _unit_stage(target_dir: str, force: bool, no_service: bool = False,
+                server_advanced: bool = False) -> dict:
     """[unit] sub-installer -- provisions the systemd `--user` unit that runs
     the server the way `serve` does (CR-CRU-070 AC1/AC2).
 
@@ -740,6 +821,24 @@ def _unit_stage(target_dir: str, force: bool,
     service is not touched (a restart drops every live SSE subscriber for
     nothing). `force` re-asserts the manager state without rewriting identical
     bytes.
+
+    `server_advanced` is the ONE exception, and CR-CRU-071 AC9: when the
+    `[server]` stage re-provisioned IN THIS RUN, the live process is still
+    serving the code `bun add -g` replaced, so an ACTIVE service is restarted.
+    The signal comes from the stage sequence alone -- never from re-reading the
+    installed version or re-resolving the pin, because two sources of truth for
+    "did the server advance?" is exactly how the missing-restart bug appeared:
+    the `[server]` stage compared VERSIONS, this stage compared unit TEXT, and
+    `ExecStart` is version-independent so the text never changed. A converged
+    server plus an unchanged unit therefore still writes nothing and restarts
+    nothing. `force` restarts an active service too -- it is the "make it match
+    whatever the state" escape hatch.
+
+    Every START is GATED (AC8): starting is where the new build opens the store
+    and runs the migration chain, so a store it refuses to open or a migration
+    that threw makes the start fail, and that failure FAILS THE RUN with the
+    server's own message rather than being swallowed into an `ok: true`
+    install pointing a new binary at a store it cannot open.
 
     Absent systemd DEGRADES, never fails (AC4): no `systemctl`, no user bus, or
     an explicit opt-out reports skipped-with-reason, and the overall install
@@ -765,13 +864,22 @@ def _unit_stage(target_dir: str, force: bool,
     if changed or force:
         _run_systemctl(systemctl, "daemon-reload")
 
-    provisioned = (_unit_state(systemctl, "is-enabled")
-                   and _unit_state(systemctl, "is-active"))
+    # `is-active` FIRST: it is the probe the restart decision needs, and an
+    # inactive service short-circuits the enablement check exactly as before.
+    active = _unit_state(systemctl, "is-active")
+    provisioned = active and _unit_state(systemctl, "is-enabled")
     if force or not provisioned:
-        _run_systemctl(systemctl, "enable", "--now", UNIT_FILE_NAME)
+        _start_service_or_fail(systemctl, "enable", "--now", UNIT_FILE_NAME)
+
+    # AC9 -- an INACTIVE unit has no stale process to replace (`enable --now`
+    # above just started the new code), so only a running one is re-exec'd.
+    restarted = active and (server_advanced or force)
+    if restarted:
+        _start_service_or_fail(systemctl, _RESTART_VERB, UNIT_FILE_NAME)
 
     return {"path": unit_path,
-            "converged": not changed and not force and provisioned}
+            "converged": not changed and not force and provisioned,
+            "restarted": restarted}
 
 
 # Module-level, in-place-mutable stage table (patched by tests via
@@ -793,14 +901,18 @@ def _abbreviate_home(path: str) -> str:
     return path
 
 
-def _stage_options(runner, no_bun_bootstrap: bool, no_service: bool) -> dict:
+def _stage_options(runner, no_bun_bootstrap: bool, no_service: bool,
+                   server_advanced: bool = False) -> dict:
     """The extra keyword options a stage runner OPTS INTO by declaring them.
 
     Keeps the `(target_dir, force)` runner protocol intact -- injected doubles
     that take exactly those two arguments are called exactly as before -- while
     letting the real `[server]` stage receive `no_bun_bootstrap` (CR-CRU-066
-    §S2 AC4) and the real `[unit]` stage `no_service` (CR-CRU-070 AC4) instead
-    of either reaching for global state.
+    §S2 AC4), the real `[unit]` stage `no_service` (CR-CRU-070 AC4) and, since
+    CR-CRU-071 AC9, whatever the EARLIER stages of this very run reported:
+    `server_advanced` says the `[server]` stage re-provisioned, which is the
+    only thing that licenses restarting a live service. All three arrive as
+    declared parameters instead of any stage reaching for global state.
     """
     try:
         parameters = inspect.signature(runner).parameters
@@ -811,6 +923,8 @@ def _stage_options(runner, no_bun_bootstrap: bool, no_service: bool) -> dict:
         options["no_bun_bootstrap"] = no_bun_bootstrap
     if "no_service" in parameters:
         options["no_service"] = no_service
+    if "server_advanced" in parameters:
+        options["server_advanced"] = server_advanced
     return options
 
 
@@ -833,6 +947,12 @@ def run_install(target_dir, stage_runners=None, force=False,
     `no_bun_bootstrap` is the `--no-bun-bootstrap` opt-out and `no_service` the
     `--no-service` one (CR-CRU-070 AC4), each threaded down to the stages that
     accept it.
+
+    The sequence also carries what an EARLIER stage reported into the later
+    ones: an `advanced` `[server]` stage (it re-provisioned) becomes the
+    `[unit]` stage's `server_advanced`, which is the ONLY thing that licenses
+    restarting a live service (CR-CRU-071 AC9). Nothing re-derives it -- the
+    stage that did the work is the single source of truth.
     """
     runners = stage_runners if stage_runners is not None else DEFAULT_STAGE_RUNNERS
     stages: list[dict] = []
@@ -852,12 +972,17 @@ def run_install(target_dir, stage_runners=None, force=False,
         })
         return False, stages, warnings
 
+    # CR-CRU-071 AC9 -- what the `[server]` stage reported, carried forward to
+    # the `[unit]` stage. False until that stage has actually said otherwise,
+    # so an injected double that provisions nothing never restarts anything.
+    server_advanced = False
+
     for name in STAGE_ORDER:
         runner = runners[name]
         try:
             result = runner(target_dir, force,
                             **_stage_options(runner, no_bun_bootstrap,
-                                             no_service))
+                                             no_service, server_advanced))
         except Exception as exc:  # noqa: BLE001 — fail-fast: record + halt
             ok = False
             warnings.append({
@@ -865,6 +990,8 @@ def run_install(target_dir, stage_runners=None, force=False,
                 "detail": f"{name} stage failed: {exc}",
             })
             break
+        if name == SERVER_STAGE_NAME:
+            server_advanced = bool(result.get("advanced", False))
         stage = {
             "name": name,
             "path": _abbreviate_home(str(result.get("path", ""))),
@@ -882,6 +1009,11 @@ def run_install(target_dir, stage_runners=None, force=False,
         bun = result.get("bun")
         if bun:
             stage["bun"] = str(bun)
+        # A RESTART is disclosed (CR-CRU-071 AC9): it drops every live SSE
+        # subscriber, so an operator watching an upgrade must see that it
+        # happened on purpose rather than infer it from a broken stream.
+        if result.get("restarted"):
+            stage["restarted"] = True
         stages.append(stage)
 
     return ok, stages, warnings
