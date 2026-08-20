@@ -205,8 +205,17 @@ describe("§S1 install.sh bootstrap", () => {
     expect(script).toMatch(/command\s+-v\s+uv/);
     expect(script).toContain("astral.sh/uv/install.sh");
 
-    // Installs the PyPI primary orchestrator.
-    expect(script).toContain("uv tool install crucible-axi");
+    // Installs the PyPI primary orchestrator on a fresh machine, and advances an
+    // existing one — CR-CRU-072 superseded the bare-`uv tool install` assertion.
+    // The advancing verb is `uv tool install --upgrade`, NOT `uv tool upgrade`:
+    // measured against real uv 0.11.8, the latter resolves within the constraint
+    // the tool was installed under, so a pinned install reports "already
+    // current" forever. Behavioural coverage lives in
+    // tests/cr072-installer-upgrade.test.ts; this pins the flow's shape only.
+    expect({
+      fresh: script.includes("uv tool install crucible-axi"),
+      upgrade: script.includes("uv tool install --upgrade crucible-axi"),
+    }).toEqual({ fresh: true, upgrade: true });
   });
 });
 
