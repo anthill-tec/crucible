@@ -89,6 +89,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="port the server binds "
              f"(overrides ${install.SERVER_PORT_ENV_VAR})",
     )
+
+    p_uninstall = sub.add_parser(
+        "uninstall",
+        help="reverse the Crucible install (the inverse of `install`)",
+    )
+    p_uninstall.add_argument(
+        "--target-dir",
+        default=os.path.expanduser("~/.crucible"),
+        help="directory the client fleet + manifest were laid down under",
+    )
+    p_uninstall.add_argument(
+        "--purge",
+        action="store_true",
+        help="additionally DELETE the client config and the server's store "
+             "(the only destructive path; both are retained by default)",
+    )
     return parser
 
 
@@ -112,6 +128,117 @@ def cmd_install(args) -> int:
     }
     axi.emit_axi(
         verb="install",
+        ok=ok,
+        result_fields=result_fields,
+        context={},
+        warnings=warnings,
+    )
+    return 0 if ok else 1
+
+
+# Binary units, so the size the purge prompt states matches what `du -h`
+# reports for the same store.
+_SIZE_UNITS = ("B", "KiB", "MiB", "GiB", "TiB")
+
+# Answers that ESCALATE the interactive prompt to a purge. Everything else --
+# including empty input, EOF and Ctrl-C -- retains: the prompt is a
+# convenience, the default is the guard.
+_PURGE_ANSWERS = frozenset({"y", "yes", "purge"})
+
+
+def _format_size(num_bytes: int) -> str:
+    """A human size for the purge prompt (`4.0 KiB`, `12.0 MiB`)."""
+    size = float(num_bytes)
+    for unit in _SIZE_UNITS:
+        if size < 1024 or unit == _SIZE_UNITS[-1]:
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _tree_size(path: str) -> int:
+    """Total bytes of the files under `path` (symlinks counted as links, not as
+    their targets), 0 when it does not exist. Best-effort: a file that vanishes
+    or cannot be stat'd mid-walk must not abort a size REPORT."""
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                continue
+    return total
+
+
+def _stdin_is_interactive() -> bool:
+    stream = sys.stdin
+    if stream is None:
+        return False
+    try:
+        return bool(stream.isatty())
+    except (OSError, ValueError):
+        return False
+
+
+def _resolve_purge(args) -> bool:
+    """Whether this `uninstall` deletes the config and the store.
+
+    `--purge` says so outright. Otherwise the answer is NO unless an operator
+    is sitting at a TTY and says yes to a single prompt naming both paths and
+    the store's size. Non-interactive runs are never prompted (automation would
+    hang) and never escalated (automation must never silently lose a database),
+    and there is nothing to ask about when neither artifact exists.
+    """
+    if args.purge:
+        return True
+    store_path = install.store_dir()
+    config_path = install.config_path(args.target_dir)
+    if not os.path.isdir(store_path) and not os.path.exists(config_path):
+        return False
+    if not _stdin_is_interactive():
+        return False
+    prompt = (
+        "crucible-axi uninstall: the server package is removed; these are "
+        "RETAINED by default.\n"
+        f"  store:  {store_path} ({_format_size(_tree_size(store_path))})\n"
+        f"  config: {config_path}\n"
+        "Delete them too? This cannot be undone [y/N]: ")
+    try:
+        answer = input(prompt)
+    except (EOFError, KeyboardInterrupt):
+        # A closed stdin or a Ctrl-C is not consent. The newline keeps the
+        # shell prompt off the end of the question.
+        print("", file=sys.stderr)
+        return False
+    return answer.strip().lower() in _PURGE_ANSWERS
+
+
+def cmd_uninstall(args) -> int:
+    """The inverse of `cmd_install`: one TOON-AXI envelope, the same top-level
+    keys, exit 0 on ok / 1 on not-ok.
+
+    Stage rows carry `converged` (an uninstall's interesting answer is whether
+    an artifact was still there) and `retained` on the stages that kept theirs,
+    with the path naming WHERE the retained data now lives.
+    """
+    ok, stages, warnings = install.run_uninstall(
+        args.target_dir, purge=_resolve_purge(args))
+    axi = _load_client_module("_crucible_axi")
+    stage_fields = []
+    for stage in stages:
+        fields = {"name": stage["name"], "path": stage["path"],
+                  "converged": stage["converged"]}
+        if stage.get("retained"):
+            fields["retained"] = True
+        if stage.get("bun"):
+            fields["bun"] = stage["bun"]
+        stage_fields.append(fields)
+    result_fields = {
+        "stages": stage_fields,
+        "help": ["install"],
+    }
+    axi.emit_axi(
+        verb="uninstall",
         ok=ok,
         result_fields=result_fields,
         context={},
@@ -164,6 +291,7 @@ def cmd_serve(args) -> int:
 _COMMANDS = {
     "install": cmd_install,
     "serve": cmd_serve,
+    "uninstall": cmd_uninstall,
 }
 
 

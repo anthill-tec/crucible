@@ -33,6 +33,16 @@ from crucible_axi import manifest
 
 STAGE_ORDER = ("server", "manifest")
 
+# The INVERSE sequence (CR-CRU-069 §S1) -- DESTRUCTIVE-LAST, deliberately not a
+# naive reverse of `STAGE_ORDER`. Install has no destructive stage, so
+# inverting its order says nothing about where a purge belongs; combined with
+# fail-fast, destructive-last means data is destroyed only after every
+# reversible step has already succeeded. `[config]` is the inverse of the
+# `[manifest]` stage, named after the artifact it removes; `[store]` reverses
+# what the SERVER creates at runtime and goes absolutely last -- it is the one
+# irreplaceable artifact.
+UNINSTALL_STAGE_ORDER = ("server", "config", "store")
+
 # External sources for the concrete sub-installers. `SERVER_NPM_PACKAGE` is the
 # published npm package name and MUST stay equal to the repo package.json's
 # `name` field (CR-CRU-041 §S1 — asserted by a test so the two artifacts cannot
@@ -85,6 +95,16 @@ _PACKAGE_JSON_NAME_KEY = "name"
 SERVER_HOST_ENV_VAR = "CRUCIBLE_HOST"
 SERVER_PORT_ENV_VAR = "CRUCIBLE_PORT"
 
+# The server's STORE, resolved by the server's own documented rule 4
+# (CR-CRU-043 / RUNBOOK "Database path"): `$XDG_DATA_HOME/crucible`, falling
+# back to `<HOME>/.local/share/crucible` when `$XDG_DATA_HOME` is unset or
+# empty. `crucible-axi` never creates it -- the server does, on boot -- but
+# `uninstall --purge` is what removes it, so the resolution must MATCH
+# `resolveDbPath` in `src/server.ts` exactly or a purge would miss the store.
+XDG_DATA_HOME_ENV_VAR = "XDG_DATA_HOME"
+_DEFAULT_DATA_HOME_SUFFIX = (".local", "share")
+STORE_DIR_NAME = "crucible"
+
 
 def _bun_install_prefix() -> str:
     """Bun's global install prefix -- `$BUN_INSTALL` when set, else `~/.bun`,
@@ -104,6 +124,36 @@ def _provisioned_server_bin_path() -> str:
     return os.path.join(_bun_global_bin_dir(), SERVER_BIN_NAME)
 
 
+def _provisioned_server_package_dir() -> str:
+    """Absolute path of the package tree `bun add -g` unpacks the server into
+    -- `$BUN_INSTALL/install/global/node_modules/<pkg>`. Together with the bin
+    link it is what `bun remove -g` takes away, so it is also the PROBE an
+    uninstall answers "is anything still provisioned?" from."""
+    return os.path.join(_bun_install_prefix(), *BUN_GLOBAL_NODE_MODULES,
+                        *SERVER_NPM_PACKAGE.split("/"))
+
+
+def store_dir() -> str:
+    """The server's store directory, by the server's own rule 4 (CR-CRU-043).
+
+    Mirrors `resolveDbPath` in `src/server.ts`: `$XDG_DATA_HOME` when set and
+    non-empty, else `<HOME>/.local/share`, plus `crucible`. Read at call time,
+    so a test (or an operator) that redirects `$XDG_DATA_HOME`/`$HOME` is
+    observed rather than a value captured at import.
+    """
+    xdg = os.environ.get(XDG_DATA_HOME_ENV_VAR, "")
+    data_home = xdg if xdg else os.path.join(
+        os.path.expanduser("~"), *_DEFAULT_DATA_HOME_SUFFIX)
+    return os.path.join(os.path.expanduser(data_home), STORE_DIR_NAME)
+
+
+def config_path(target_dir: str) -> str:
+    """The client config/state artifact the [manifest] install stage writes --
+    `<target-dir>/crucible-clients.json`. The one locus both the [config]
+    uninstall stage and the interactive purge prompt derive it from."""
+    return os.path.join(target_dir, manifest.MANIFEST_FILENAME)
+
+
 def _installed_server_metadata_candidates() -> list[str]:
     """Every `package.json` path the PROVISIONED server's own metadata may sit
     at, most canonical first.
@@ -117,8 +167,8 @@ def _installed_server_metadata_candidates() -> list[str]:
     `package.json` files off the operator's disk.
     """
     prefix = _bun_install_prefix()
-    candidates = [os.path.join(prefix, *BUN_GLOBAL_NODE_MODULES,
-                               *SERVER_NPM_PACKAGE.split("/"), "package.json")]
+    candidates = [os.path.join(_provisioned_server_package_dir(),
+                               "package.json")]
 
     real_prefix = os.path.realpath(prefix)
     directory = os.path.dirname(
@@ -501,6 +551,137 @@ def run_install(target_dir, stage_runners=None, force=False,
         }
         # The resolved Bun path is reported verbatim (never ~-abbreviated): it
         # is the executable the install ran, so it must stay runnable as-is.
+        bun = result.get("bun")
+        if bun:
+            stage["bun"] = str(bun)
+        stages.append(stage)
+
+    return ok, stages, warnings
+
+
+def _server_uninstall_stage(target_dir: str, purge: bool) -> dict:
+    """[server] inverse -- DE-PROVISIONS the server with
+    `<abs-bun> remove -g <SERVER_NPM_PACKAGE>` (CR-CRU-069 §S1).
+
+    The exact inverse of `_server_stage`'s `bun add -g`, through the same
+    absolute-Bun resolution: Bun links the `crucible-server` bin into its
+    global prefix, so only Bun knows how to unlink it, and a bare `bun` token
+    off an inherited PATH is as wrong here as it is on the install path.
+
+    Idempotent, and the probe is answered from the FILESYSTEM before Bun is
+    touched at all: an already-absent artifact converges without spawning any
+    subprocess (not even `bun --version`), so a second uninstall -- or a
+    machine that never installed -- is a no-op rather than a failure.
+
+    Bun itself is NEVER removed (AC5): install only GUARANTEES Bun, it does not
+    own it. For the same reason the curl bootstrap is OPTED OUT here -- an
+    uninstall that pipes a remote installer to a shell to acquire the tool it
+    is about to stop using would be absurd.
+
+    `purge` is unused: the program artifacts are what a plain uninstall
+    removes, and no `--purge` escalation applies to them.
+    """
+    server_path = _provisioned_server_bin_path()
+    if not os.path.lexists(server_path) and \
+            not os.path.isdir(_provisioned_server_package_dir()):
+        return {"path": server_path, "converged": True}
+
+    bun = _guarantee_bun(no_bun_bootstrap=True)
+    removal_argv = [bun, "remove", "-g", SERVER_NPM_PACKAGE]
+    completed = subprocess.run(removal_argv, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"server stage failed: `{' '.join(removal_argv)}` exited with "
+            f"returncode {completed.returncode}")
+
+    return {"path": server_path, "converged": False, "bun": bun}
+
+
+def _config_uninstall_stage(target_dir: str, purge: bool) -> dict:
+    """[config] inverse -- removes `<target-dir>/crucible-clients.json`, the
+    artifact the [manifest] install stage wrote, but ONLY under `purge`.
+
+    Without `purge` the stage is a NO-OP that reports the path it RETAINED: a
+    plain uninstall destroys nothing and stays reversible by reinstalling, and
+    automation must never be left guessing where the state it kept now lives.
+    """
+    path = config_path(target_dir)
+    if not purge:
+        return {"path": path, "converged": True, "retained": True}
+    if not os.path.exists(path):
+        return {"path": path, "converged": True}
+    os.remove(path)
+    return {"path": path, "converged": False}
+
+
+def _store_uninstall_stage(target_dir: str, purge: bool) -> dict:
+    """[store] inverse -- removes the server's store directory (every
+    `crucible.db` and every `crucible-pre-*.db` backup in it), ONLY under
+    `purge`, and LAST of all stages.
+
+    The store is the one irreplaceable artifact, so retention is the default
+    and the stage otherwise only reports where the data it kept lives.
+    """
+    store_path = store_dir()
+    if not purge:
+        return {"path": store_path, "converged": True, "retained": True}
+    if not os.path.isdir(store_path):
+        return {"path": store_path, "converged": True}
+    shutil.rmtree(store_path)
+    return {"path": store_path, "converged": False}
+
+
+# The uninstall counterpart of `DEFAULT_STAGE_RUNNERS` -- module-level and
+# in-place-mutable, so a test injects doubles with `mock.patch.dict` exactly as
+# it does for install. `run_uninstall` reads this name at call time.
+DEFAULT_UNINSTALL_STAGE_RUNNERS: dict = {
+    "server": _server_uninstall_stage,
+    "config": _config_uninstall_stage,
+    "store": _store_uninstall_stage,
+}
+
+
+def run_uninstall(target_dir, stage_runners=None, purge=False):
+    """Run the staged uninstall; return `(ok, stages, warnings)` -- the same
+    triple, the same fail-fast semantics and the same runner protocol as
+    `run_install`, with `purge` where install has `force`.
+
+    `stages` is a list of `{"name", "path" (~-abbreviated), "converged"}` in
+    `UNINSTALL_STAGE_ORDER` up to (and excluding) the first failing stage, plus
+    whatever the runner reported (`retained` on a stage that kept its artifact,
+    the `[server]` stage's resolved absolute `bun`). A stage exception halts
+    the sequence and surfaces as `ok=False` plus a warning.
+
+    Unlike `run_install` this does NOT create `target_dir`: an uninstall that
+    materialises the directory it is dismantling would be a contradiction, and
+    an absent target simply means the config is already gone.
+    """
+    runners = (stage_runners if stage_runners is not None
+               else DEFAULT_UNINSTALL_STAGE_RUNNERS)
+    stages: list[dict] = []
+    warnings: list[dict] = []
+    ok = True
+
+    for name in UNINSTALL_STAGE_ORDER:
+        runner = runners[name]
+        try:
+            result = runner(target_dir, purge)
+        except Exception as exc:  # noqa: BLE001 — fail-fast: record + halt
+            ok = False
+            warnings.append({
+                "code": "stage-failed",
+                "detail": f"{name} stage failed: {exc}",
+            })
+            break
+        stage = {
+            "name": name,
+            "path": _abbreviate_home(str(result.get("path", ""))),
+            "converged": bool(result.get("converged", False)),
+        }
+        if result.get("retained"):
+            stage["retained"] = True
+        # Reported verbatim (never ~-abbreviated): it is the executable the
+        # uninstall ran, so it must stay runnable as-is.
         bun = result.get("bun")
         if bun:
             stage["bun"] = str(bun)

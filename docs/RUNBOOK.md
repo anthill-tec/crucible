@@ -113,12 +113,48 @@ per-project events are capped.
 
 ```sh
 curl -fsSL http://127.0.0.1:3849/api/health
-# → {"ok":true,"status":"healthy","version":"…","uptime_s":…,"counts":{…}}
+# → {"ok":true,"status":"healthy","version":"…","uptime_s":…,
+#    "store":{"path":"…","rule":"…"},"counts":{…}}
 ```
 
 `GET /api/health` and `GET /api/v2/health` return the same payload (version,
-uptime, and counts of projects/agents/events). Poll it after start to confirm
-the server is up.
+uptime, counts of projects/agents/events, and the resolved `store`). Poll it
+after start to confirm the server is up.
+
+`store` names the database this process actually opened and **which rule chose
+it** — `explicit`, `CRUCIBLE_DB`, `cwd-data`, or `user-data` (CR-CRU-068). The
+same line is logged at startup beside the listen banner. Because rule
+`cwd-data` is CWD-relative, the same binary opens different stores depending on
+where it was launched: check this field first whenever data looks missing, and
+compare it across instances before assuming anything was lost.
+
+## Teardown (uninstall)
+
+```sh
+crucible-axi uninstall          # program only — store and config survive
+uv tool uninstall crucible-axi  # LAST: a running tool cannot remove itself
+# or both in one step:
+curl -fsSL https://raw.githubusercontent.com/anthill-tec/crucible/master/install.sh | sh -s -- --uninstall
+```
+
+A plain uninstall reverses **program artifacts only** — the user-scoped server
+package and its `crucible-server` symlink (`bun remove -g`, using the same
+absolute Bun the install resolved). Stage order is `server`, `config`, `store`:
+destructive last, so a failing step can never leave data gone and the program
+installed.
+
+Kept by default, and named with their paths in the envelope:
+
+- the **store** — `$XDG_DATA_HOME/crucible`, else `~/.local/share/crucible`
+- the **config** — `<target-dir>/crucible-clients.json` (default `~/.crucible`)
+- **Bun** — the install only guarantees it, it does not own it, so it is never
+  removed
+
+Add `--purge` to destroy the store and config. Nothing else does: a
+non-interactive run always retains (automation cannot silently lose a
+database), and an interactive one asks once — naming both paths and the store's
+size — and keeps them on empty input, EOF, or Ctrl-C. Absent artifacts converge
+with no subprocess, so re-running is indistinguishable from running once.
 
 ## Environment variables (port / bind / database)
 
