@@ -70,7 +70,11 @@ The parent directory of the resolved path is created automatically on boot
 
 ## Corrupt database recovery
 
-Boot must never fail because of a bad db file. On start the server opens the
+Boot must never fail because of a bad db file. **One deliberate exception**
+(CR-CRU-071): a store from a NEWER Crucible is refused rather than
+quarantined — see Schema versions and migration. Quarantining a readable,
+newer database would rename live data aside and boot empty, so that case
+exits non-zero and touches nothing. On start the server opens the
 store defensively (`Store.open`): it opens the db and forces a trivial probe
 query (`PRAGMA schema_version`) to surface a corruption error that `bun:sqlite`
 might otherwise defer past open.
@@ -114,7 +118,8 @@ per-project events are capped.
 ```sh
 curl -fsSL http://127.0.0.1:3849/api/health
 # → {"ok":true,"status":"healthy","version":"…","uptime_s":…,
-#    "store":{"path":"…","rule":"…"},"counts":{…}}
+#    "store":{"path":"…","rule":"…","schemaVersion":5,"migration":null},
+#    "counts":{…}}
 ```
 
 `GET /api/health` and `GET /api/v2/health` return the same payload (version,
@@ -127,6 +132,40 @@ same line is logged at startup beside the listen banner. Because rule
 `cwd-data` is CWD-relative, the same binary opens different stores depending on
 where it was launched: check this field first whenever data looks missing, and
 compare it across instances before assuming anything was lost.
+
+## Schema versions and migration
+
+The store carries its schema version in `PRAGMA user_version`, and the server
+reports it as `store.schemaVersion` on both health routes and at startup:
+
+```
+[crucible] store /path/to/crucible.db (rule: cwd-data, schema v5)
+[crucible] migrated store schema v0 -> v5 (pre-upgrade backup: /path/to/crucible.db.pre-upgrade-1787213052079)
+```
+
+- **Migration is automatic and transactional.** Each step's schema change and
+  its version stamp share one transaction, so a store is never left at a version
+  whose structure is absent. A store already at the current version migrates
+  nothing and reports `migration: null`.
+- **A backup is written before the first mutating write**, WAL-safely, as
+  `<path>.pre-upgrade-<epoch>` — the same sibling convention as
+  `<path>.corrupt-<epoch>`. It holds the pre-migration state; keep it until the
+  upgrade looks right, then delete it. `:memory:` stores are exempt.
+- **A store from a NEWER Crucible is refused, not quarantined.** The server exits
+  non-zero naming both versions and the remedy, and touches nothing — no rename,
+  no fresh db, no writes. This is the one deliberate exception to the boot-safety
+  rule below: quarantining a readable, newer database would rename your live data
+  aside and start empty. Fix it by upgrading Crucible, or by restoring a backup.
+- **An UNREADABLE store still quarantines and boots** exactly as before (see
+  Corrupt database recovery) — that path is unchanged.
+- **A failed migration fails loudly**: the step's transaction rolls back, the
+  version stays where it was, the error names the backup, and the server does not
+  begin serving on a half-migrated store.
+- **An upgrade restarts the service.** When `crucible-axi install` re-provisions
+  the server to a new version and a systemd `--user` unit is active, the unit is
+  restarted so the running daemon is the new code — never a new binary behind an
+  old process. A re-run at the same version restarts nothing, so live SSE
+  subscribers are only dropped by a real version change.
 
 ## Upgrading
 
