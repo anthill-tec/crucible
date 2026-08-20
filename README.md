@@ -63,6 +63,36 @@ curl -fsSL http://127.0.0.1:3849/api/health
 `--port`), and passes the server's exit code straight through so a shell — or a
 process supervisor — sees the real failure.
 
+Uninstalling inverts the install along the same path — the verb reverses the
+stages it owns, then uv removes the tool that ran it:
+
+```sh
+crucible-axi uninstall          # program only: store and config survive
+uv tool uninstall crucible-axi  # LAST — a running tool cannot remove itself
+```
+
+A plain `crucible-axi uninstall` removes **program artifacts only**: the
+user-scoped server package and its `crucible-server` symlink, via
+`bun remove -g` with the same absolute Bun the install resolved. It reports each
+stage in the usual TOON-AXI envelope and names the two things it deliberately
+kept — the **store** (`$XDG_DATA_HOME/crucible`, else `~/.local/share/crucible`)
+and the **config** (`<target-dir>/crucible-clients.json`) — with their paths,
+marked `retained`. Stage order is `server`, `config`, `store`: destructive last,
+so a failing step can never leave your data gone and the program still installed.
+
+Destroying data is opt-in and explicit:
+
+```sh
+crucible-axi uninstall --purge  # also removes the store AND the config
+```
+
+Without `--purge` nothing is deleted: a non-interactive run always retains (so
+automation cannot silently lose a database), and an interactive one asks once,
+naming both paths and the store's size, keeping them on empty input, EOF, or
+Ctrl-C. **Bun is never removed** — the install only guarantees it, it does not
+own it. Absent artifacts converge with no subprocess, so re-running is
+indistinguishable from running once.
+
 ## Development
 
 Working on the Python client? Install the dev extras into your `.venv` so the

@@ -21,18 +21,58 @@
 #
 # Skip the staged install with `--no-install`, or `CRUCIBLE_NO_INSTALL=1`:
 #   curl -fsSL https://raw.githubusercontent.com/anthill-tec/crucible/master/install.sh | sh -s -- --no-install
+#
+# TEARDOWN — the exact inverse, along the same path (CR-CRU-069):
+#   curl -fsSL https://raw.githubusercontent.com/anthill-tec/crucible/master/install.sh | sh -s -- --uninstall
+# `crucible-axi uninstall` reverses the stages it owns (program artifacts only;
+# the store and config survive), and `uv tool uninstall` runs LAST because a
+# running tool cannot remove itself. Add `--purge` to also destroy the store and
+# config — nothing else deletes them.
 
 set -eu
 
 # --- args / flags -----------------------------------------------------------
 run_install="${CRUCIBLE_NO_INSTALL:+0}"
 run_install="${run_install:-1}"
+mode=install
+purge=0
 for arg in "$@"; do
   case "$arg" in
     --no-install) run_install=0 ;;
+    --uninstall) mode=uninstall ;;
+    --purge) purge=1 ;;
     *) echo "install.sh: ignoring unknown argument '$arg'" >&2 ;;
   esac
 done
+
+# --- teardown (inverse of everything below) ---------------------------------
+if [ "$mode" = uninstall ]; then
+  echo "==> Crucible teardown starting"
+  if command -v crucible-axi >/dev/null 2>&1; then
+    if [ "$purge" = 1 ]; then
+      echo "==> Reversing staged install: crucible-axi uninstall --purge"
+      crucible-axi uninstall --purge
+    else
+      echo "==> Reversing staged install: crucible-axi uninstall"
+      crucible-axi uninstall
+    fi
+  else
+    # A partially-uninstalled machine still converges: with the verb already
+    # gone there are no stages left for it to reverse.
+    echo "==> crucible-axi not present — skipping the staged teardown"
+  fi
+  # LAST: the tool that ran the verb. Tolerated when already absent so a
+  # re-run of this teardown is indistinguishable from one run.
+  if command -v uv >/dev/null 2>&1; then
+    echo "==> Removing the crucible-axi tool: uv tool uninstall crucible-axi"
+    uv tool uninstall crucible-axi || true
+  else
+    echo "==> uv not present — nothing to remove"
+  fi
+  echo "==> Crucible teardown complete (Bun left installed; the store and"
+  echo "    config are kept unless --purge was passed)"
+  exit 0
+fi
 
 echo "==> Crucible bootstrap starting"
 
