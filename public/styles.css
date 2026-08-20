@@ -1010,3 +1010,63 @@ body {
 }
 .app-milestone-glyph { color: var(--heat); }
 .app-milestone-type { color: var(--ink-dim); }
+
+/* ── CR-CRU-017 §S3 — the run lifecycle's two extra card presentations ─────
+   A FOURTH and FIFTH face beside pass/fail/pending: a run that is still
+   RUNNING, and a run that was ABORTED (ended for non-test reasons — never a
+   plan's abort, §S2). Neither borrows the pass/fail palette. */
+
+/* Running: pulsing ember edge, and — the user rule — the DEFAULT cursor with
+   no hover affordance, because a running card has no drill-in to offer until
+   it resolves. This overrides `.app-evt`'s pointer above, so the rule holds
+   for the running card wherever `.app-evt` is reused. */
+.app-evt-running {
+  cursor: default;
+  border-color: rgba(251, 146, 60, 0.45);
+  animation: app-run-pulse 1.6s ease-in-out infinite;
+}
+.app-evt-running:hover {
+  border-color: rgba(251, 146, 60, 0.45);
+  background: var(--bg);
+}
+.app-running-label {
+  color: var(--ember);
+  font: 600 9.5px var(--mono);
+  letter-spacing: 0.06em;
+}
+.app-running-elapsed {
+  color: var(--heat);
+  font: 600 9.5px var(--mono);
+}
+@keyframes app-run-pulse {
+  0%,
+  100% { border-color: rgba(251, 146, 60, 0.45); }
+  50% { border-color: rgba(251, 146, 60, 0.9); }
+}
+
+/* Aborted: struck through and greyed — legible as "this run does not count"
+   without reading a word of it. Clickable (its drill-in carries the reason),
+   so the pointer cursor `.app-evt` already sets is correct here. */
+.app-evt-aborted {
+  text-decoration: line-through;
+  opacity: 0.55;
+  border-style: dashed;
+  color: var(--ink-faint);
+}
+.app-evt-aborted:hover { opacity: 0.8; }
+.app-abort-reason {
+  text-decoration: none;
+  color: var(--ink-dim);
+  border-color: var(--line);
+  white-space: nowrap;
+}
+.app-drillin-abort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+/* The open span's running entry: same inline flow, no click affordance. */
+.app-inline-run-running { cursor: default; }
+.app-inline-run-running:hover { color: var(--ink); }

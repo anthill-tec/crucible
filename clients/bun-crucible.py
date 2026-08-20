@@ -51,8 +51,9 @@ Project + Crucible endpoint:
   Package (bun cwd) resolution: --package-dir > $BUN_CRUCIBLE_PACKAGE_DIR >
   <project-dir>/integrations/pi (if it has a package.json) > <project-dir>.
   Bun resolution: --bun > $BUN_CRUCIBLE_BUN > `bun` on PATH.
+  Run-lifecycle opt-out (CR-CRU-017 §S4): --no-lifecycle > $BUN_CRUCIBLE_NO_LIFECYCLE.
   Posts to $CRUCIBLE_URL (default http://localhost:3849), v2 endpoints ONLY:
-  /api/v2/agents/register|unregister, /api/v2/runs/parsed|compile,
+  /api/v2/agents/register|unregister, /api/v2/runs/start|parsed|compile,
   /api/v2/projects/<key>/plans. This in-repo clients/ copy is the SOURCE OF
   TRUTH (CR-CRU-008 Risk section) — ~/.claude/scripts/ mirrors it.
 
@@ -76,9 +77,11 @@ CR-SAN-013-C1-RED) are readability habits only. Identity carries displayName + s
 """
 
 import argparse
+import contextlib
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -296,7 +299,13 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None):
     optional `narrator` observes every line live for throttled progress
     heartbeats — while the captured output, run.log and echo stay byte-identical
     to the old capture-after-exit behavior (the §S2c failure-marrying parser
-    consumes `result.stdout` unchanged)."""
+    consumes `result.stdout` unchanged).
+
+    CR-CRU-017 §S4: an interruption of the streaming read (the SIGINT/SIGTERM
+    trap a wrapped run installs raises THROUGH this loop) reaps the runner
+    before it propagates, so a signalled run leaves no orphaned bun behind —
+    the same guarantee `subprocess.run` already gives the un-captured branch
+    above."""
     if not log_path and narrator is None:
         return subprocess.run(cmd, cwd=cwd, env=env)
     proc = subprocess.Popen(
@@ -304,10 +313,15 @@ def _run_logged(cmd, cwd, env, log_path, narrator=None):
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
     )
     lines = []
-    for line in proc.stdout:
-        lines.append(line)
-        if narrator is not None:
-            narrator.observe(line)
+    try:
+        for line in proc.stdout:
+            lines.append(line)
+            if narrator is not None:
+                narrator.observe(line)
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
     proc.stdout.close()
     returncode = proc.wait()
     out = "".join(lines)
@@ -673,7 +687,7 @@ def _run_context():
 
 
 def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=None,
-                   context=None, raw=None):
+                   context=None, raw=None, run_id=None):
     payload = {
         "projectKey": _project_key(project_dir),
         "agentId": agent_id,
@@ -694,6 +708,11 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     # server-stored run carries real output for the run-detail raw-toggle.
     if raw:
         payload["raw"] = raw
+    # CR-CRU-017 §S1/§S4 — the runId of the OPEN run this ingest CLOSES. Absent
+    # (single-shot, or `--no-lifecycle`) the body is byte-identical to the
+    # pre-lifecycle one and the server stores no lifecycle fields at all.
+    if run_id:
+        payload["runId"] = run_id
     resp = _post("/api/v2/runs/parsed", payload)
     cov_line = ""
     if coverage:
@@ -711,13 +730,17 @@ def _ingest_parsed(project_dir, agent_id, summary, tree, coverage=None, tier=Non
     return resp
 
 
-def _ingest_compile(project_dir, agent_id, errors_text):
+def _ingest_compile(project_dir, agent_id, errors_text, run_id=None):
     payload = {
         "projectKey": _project_key(project_dir),
         "format": "typescript",
         "errors": errors_text,
         "agentId": agent_id,
     }
+    # CR-CRU-017 §S4 — a collection/compile failure is still an END: it closes
+    # the run this client opened, so the span is measured instead of abandoned.
+    if run_id:
+        payload["runId"] = run_id
     resp = _post("/api/v2/runs/compile", payload)
     # CR-CRU-058 §S3 — the human ingest line is interactive-only (stderr); it
     # used to land on stdout AHEAD of the caller's envelope (`check`'s failure
@@ -726,6 +749,172 @@ def _ingest_compile(project_dir, agent_id, errors_text):
           + (f" error={resp['error']}" if resp.get("error") else ""),
           file=sys.stderr)
     return 0 if resp.get("ok") else 1
+
+
+# ── CR-CRU-017 §S4 — the RUN LIFECYCLE bracket around a wrapped run ─────────
+#
+# A wrapped run is two events, not one: `POST /api/v2/runs/start` fires BEFORE
+# the tool is spawned (so queue + spawn + teardown time sits INSIDE the
+# measured span) and the ordinary ingest CLOSES that run by carrying its
+# `runId`. The server then stores `startedAt` + a server-computed `runtime_ms`
+# alongside the tool-reported `duration_ms` — the wall-clock the tool's own
+# number structurally cannot see.
+#
+# Everything here is ADDITIVE. Without a runId the ingest body is byte-identical
+# to the pre-CR single-shot POST, which is what BOTH degradation paths fall back
+# to: the explicit opt-out (`--no-lifecycle` / $BUN_CRUCIBLE_NO_LIFECYCLE), and
+# an OLDER SERVER whose /runs/start route does not exist (404) — the latter
+# warns, naming the fallback, because it was not asked for.
+#
+# There is deliberately NO client-side abort. `POST /runs/<id>/abort` is §S2 and
+# does not exist yet; §S1 already ships the server-side sweep that settles an
+# open run (reason `agent died` when its agent tombstones, `abandoned` past
+# CRUCIBLE_RUN_ABANDON_MS). So the signal/no-result paths STATE that the run was
+# left to that sweep rather than inventing a route.
+
+NO_LIFECYCLE_ENV = "BUN_CRUCIBLE_NO_LIFECYCLE"
+_TRUTHY = ("1", "true", "yes", "on")
+
+
+def _lifecycle_enabled(args):
+    """Should this run be WRAPPED? `--no-lifecycle`, or its env twin
+    $BUN_CRUCIBLE_NO_LIFECYCLE, opts out; the argparse default is
+    `no_lifecycle=False`, so every real CLI `test`/`regression`/`pre-merge-gate`
+    invocation wraps.
+
+    A Namespace carrying NO `no_lifecycle` attribute at all is an internal
+    caller written against the pre-lifecycle signature, and gets the unchanged
+    single-shot path — the same absent-means-inert reading `log` and `cycle`
+    already get at their call sites here."""
+    if getattr(args, "no_lifecycle", True):
+        return False
+    return os.environ.get(NO_LIFECYCLE_ENV, "").strip().lower() not in _TRUTHY
+
+
+def _run_lifecycle_unavailable_warning(error):
+    """The structured warning for a start the SERVER refused — an older build
+    with no /runs/start route (404) being the case the CR names. Degradation is
+    not failure (the evidence still lands), but it is never SILENT: the caller
+    asked for a measured span and got a single-shot event instead."""
+    return {
+        "code": "run-lifecycle-unavailable",
+        "detail": (f"could not open a run lifecycle: {error} — fell back to a "
+                   f"single-shot ingest, so this run is stored with the "
+                   f"tool-reported duration_ms only (no startedAt, no "
+                   f"server-computed runtime_ms)"),
+    }
+
+
+def _run_left_open_warning(run_id, cause):
+    """The structured warning for a run this client OPENED and then could not
+    close. It names the settlement path precisely, because the alternative
+    reading — "the run was lost" — is wrong and would send an operator hunting
+    for a missing event."""
+    return {
+        "code": "run-left-open",
+        "detail": (f"{cause} — run {run_id} was never closed by an ingest. The "
+                   f"client posts NO abort (POST /api/v2/runs/<id>/abort is "
+                   f"CR-CRU-017 §S2 and does not exist yet): the server settles "
+                   f"it with its own auto-abort — reason `agent died` as soon as "
+                   f"this agent tombstones, else `abandoned` once the run is "
+                   f"older than CRUCIBLE_RUN_ABANDON_MS. The run is abandoned, "
+                   f"not lost"),
+    }
+
+
+def _run_left_open_help():
+    """CR-CRU-048's rule — the state actually reached is "an open run is being
+    settled by the server", so the next action is to WATCH that settlement and
+    then re-run, never the verb's normal successor."""
+    return ["status", "re-run the verb to record a fresh run"]
+
+
+def _start_run(project_dir, agent_id, tier=None, context=None):
+    """Open the run BEFORE the tool is spawned. Returns `(run_id, warnings)`.
+
+    A refusal degrades to single-shot with a warning naming the fallback. An
+    `ok` answer that carries no runId is a server that simply did not open one
+    (nothing failed, so there is nothing to report): the ingest is then the
+    unchanged single-shot POST."""
+    payload = {
+        "projectKey": _project_key(project_dir),
+        "agentId": agent_id,
+        "stack": "bun",
+    }
+    if tier:
+        payload["tier"] = tier
+    if context:
+        payload["context"] = context
+    resp = _post("/api/v2/runs/start", payload) or {}
+    run_id = resp.get("runId")
+    if run_id:
+        print(f"[crucible] run started: {run_id}", file=sys.stderr)
+        return run_id, []
+    if resp.get("ok"):
+        return None, []
+    error = resp.get("error") or "the server opened no run"
+    print(f"[crucible] WARN: run lifecycle unavailable ({error}) — "
+          f"single-shot ingest", file=sys.stderr)
+    return None, [_run_lifecycle_unavailable_warning(error)]
+
+
+class _RunAbandoned(Exception):
+    """SIGINT/SIGTERM arrived while a WRAPPED run was in flight. Carries the
+    signal number so the verb exits on the conventional 128+signum."""
+
+    def __init__(self, signum):
+        super().__init__(f"run abandoned on {signal.Signals(signum).name}")
+        self.signum = signum
+
+
+@contextlib.contextmanager
+def _abandon_trap(run_id):
+    """Trap SIGINT/SIGTERM for as long as `run_id` names an OPEN run, turning
+    the signal into a `_RunAbandoned` the verb can report on. Outside a wrapped
+    run (`run_id` None) this is inert and the default disposition stands —
+    there is nothing open to disclose.
+
+    The previous handlers are always restored, so the trap can never outlive
+    the run it guards. A non-main thread cannot install handlers at all
+    (`ValueError`); that is not a reason to fail a test run, so the wrap simply
+    proceeds untrapped."""
+    if run_id is None:
+        yield
+        return
+
+    def _handler(signum, _frame):
+        raise _RunAbandoned(signum)
+
+    previous = {}
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            previous[sig] = signal.signal(sig, _handler)
+    except ValueError:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+        yield
+        return
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _emit_run_abandoned(verb, project_dir, agent_id, run_id, abandoned):
+    """The signal path's ONLY output: one ok:false envelope naming the signal
+    and the open run the server will settle. No POST of any kind is made here —
+    the closing `_close_gate_identity` tombstone in the caller's `finally` is
+    what ARMS the server's `agent died` auto-abort."""
+    signame = signal.Signals(abandoned.signum).name
+    _emit_axi(
+        verb, False,
+        {"runId": run_id, "signal": signame, "help": _run_left_open_help()},
+        _axi_context(project_dir, agent_id=agent_id),
+        [_run_left_open_warning(run_id, f"{signame} interrupted the wrapped run")],
+        f"{verb}: ok=False — {signame} interrupted the run; run {run_id} left "
+        f"open for the server's auto-abort")
+    return 128 + abandoned.signum
 
 
 def cmd_test(args):
@@ -745,6 +934,10 @@ def cmd_test(args):
     # created; a caller who registered BEFORE the run keeps its registration
     # and its cycle binding. Omitted --agent: no lifecycle calls at all.
     identity = None
+    # CR-CRU-017 §S4 — the RUN lifecycle rides INSIDE the identity bracket: the
+    # server refuses a run-start from an unregistered caller, so the run can
+    # only be opened once the identity heartbeat above has landed.
+    run_id, run_warnings = None, []
     try:
         cmd = _bun_test_cmd(bun, args.tests, junit_path, False, None)
         env = os.environ.copy()
@@ -773,7 +966,18 @@ def cmd_test(args):
                     _register_agent(project_dir, args.agent, message)),
                 total_hint=_prescan_test_total(package_dir, args.tests),
             )
-        result = _run_logged(cmd, package_dir, env, log_path, narrator)
+            if _lifecycle_enabled(args):
+                run_id, run_warnings = _start_run(project_dir, args.agent,
+                                                  tier="unit",
+                                                  context=_run_context())
+        # §S4 — the wrapped span: the run is already OPEN, so a signal from here
+        # on has an open run to disclose (the trap is inert without one).
+        try:
+            with _abandon_trap(run_id):
+                result = _run_logged(cmd, package_dir, env, log_path, narrator)
+        except _RunAbandoned as abandoned:
+            return _emit_run_abandoned("test", project_dir, args.agent,
+                                       run_id, abandoned)
         print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
 
         if not args.agent:
@@ -786,8 +990,10 @@ def cmd_test(args):
             resp = _ingest_parsed(project_dir, args.agent, summary, tree,
                                   tier="unit",
                                   context=_run_context(),
-                                  raw=getattr(result, "stdout", None))
-            _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent)
+                                  raw=getattr(result, "stdout", None),
+                                  run_id=run_id)
+            _emit_ingest_axi("test", resp, summary, files, project_dir, args.agent,
+                             warnings=run_warnings, run_id=run_id)
             # A failing run exits non-zero even when the ingest succeeded —
             # the exit code carries the RUNNER verdict, not the POST's.
             if summary["failed"] > 0:
@@ -800,15 +1006,16 @@ def cmd_test(args):
         synthetic = ("bun-test(1,1): error TS0000: "
                      "bun test produced no JUnit XML (collection/compile failure)")
         rc = _ingest_compile(project_dir, args.agent,
-                             synthetic + ("\n\n" + tail if tail else ""))
+                             synthetic + ("\n\n" + tail if tail else ""),
+                             run_id=run_id)
         # CR-CRU-064 §S3 — the synthetic TS0000 ingest above is UNCHANGED
         # (errorCount=1, red card); the envelope is additive and the exit code
         # is still the ingest's own (AC5).
         _emit_axi("test", False,
                   {"help": _axi().no_report_help("test", "junit.xml")},
                   _axi_context(project_dir, agent_id=args.agent),
-                  [_axi().no_report_warning("test", "junit.xml",
-                                            result.returncode, tail)],
+                  run_warnings + [_axi().no_report_warning("test", "junit.xml",
+                                                           result.returncode, tail)],
                   "[crucible] ERROR: no JUnit XML produced — ingested as compile")
         return rc
     finally:
@@ -835,6 +1042,9 @@ def cmd_regression(args, verb="regression"):
     # the final ingest, try/finally, and (CR-CRU-056) removal ONLY of an
     # identity this run created.
     identity = None
+    # CR-CRU-017 §S4 — the run lifecycle, opened inside the identity bracket
+    # exactly as `cmd_test` does.
+    run_id, run_warnings = None, []
     try:
         cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
         print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
@@ -856,7 +1066,16 @@ def cmd_regression(args, verb="regression"):
                     _register_agent(project_dir, args.agent, message)),
                 total_hint=_prescan_test_total(package_dir, None),
             )
-        result = _run_logged(cmd, package_dir, env, log_path, narrator)
+            if _lifecycle_enabled(args):
+                run_id, run_warnings = _start_run(project_dir, args.agent,
+                                                  tier="regression",
+                                                  context=_run_context())
+        try:
+            with _abandon_trap(run_id):
+                result = _run_logged(cmd, package_dir, env, log_path, narrator)
+        except _RunAbandoned as abandoned:
+            return _emit_run_abandoned(verb, project_dir, args.agent,
+                                       run_id, abandoned)
         print(f"[crucible] bun test exit={result.returncode}", file=sys.stderr)
 
         if not os.path.exists(junit_path):
@@ -866,10 +1085,17 @@ def cmd_regression(args, verb="regression"):
             # `pre-merge-gate` speaks as the gate, never as the inner
             # `regression`. The capture exists here today and was simply
             # discarded; it now carries the cause.
+            # §S4 — nothing was produced, so nothing CLOSES the open run: say
+            # which sweep will settle it rather than leaving it silently open.
+            warnings = list(run_warnings)
+            if run_id:
+                warnings.append(_run_left_open_warning(
+                    run_id, "the runner produced no JUnit XML, so there was "
+                            "nothing to ingest"))
             _emit_axi(verb, False,
                       {"help": _axi().no_report_help(verb, "junit.xml")},
                       _axi_context(project_dir, agent_id=args.agent),
-                      [_axi().no_report_warning(
+                      warnings + [_axi().no_report_warning(
                           verb, "junit.xml", result.returncode,
                           getattr(result, "stdout", None) or "")],
                       f"{verb}: ok=False — no JUnit XML, nothing to ingest")
@@ -885,7 +1111,8 @@ def cmd_regression(args, verb="regression"):
                 print(f"[crucible] WARN: lcov coverage unavailable at {lcov_path}",
                       file=sys.stderr)
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
-                              tier="regression", context=_run_context())
+                              tier="regression", context=_run_context(),
+                              run_id=run_id)
         ok = bool(resp.get("ok")) and summary["failed"] == 0
         # §S2 — a GATE run's next step is derived from the run state it reached
         # (unrecorded / red / green); the plain `regression` verb keeps its
@@ -893,7 +1120,8 @@ def cmd_regression(args, verb="regression"):
         help_steps = (_axi().run_help(verb, ok, summary["failed"], CRUCIBLE_URL)
                       if verb != "regression" else None)
         _emit_ingest_axi(verb, resp, summary, files, project_dir, args.agent,
-                         help_steps=help_steps)
+                         help_steps=help_steps, warnings=run_warnings,
+                         run_id=run_id)
         return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
     finally:
         _close_gate_identity(project_dir, identity)
@@ -988,6 +1216,9 @@ def cmd_pre_merge_gate(args):
         agent=args.agent, coverage=True, reports=args.reports, bun=args.bun,
         package_dir=args.package_dir, project_dir=args.project_dir,
         log=getattr(args, "log", None), cycle=getattr(args, "cycle", None),
+        # CR-CRU-017 §S4 — the gate's own opt-out decision carries into the
+        # regression it runs; the step must never re-decide it.
+        no_lifecycle=getattr(args, "no_lifecycle", True),
     )
     # §S1 — the regression body emits under THIS gate's verb, so the gate puts
     # exactly one envelope on stdout under the name the caller invoked.
@@ -1263,7 +1494,8 @@ _HELP_STEPS = {
 }
 
 
-def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=None):
+def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=None,
+                     warnings=None, run_id=None):
     """Emit the §S1 envelope for an ingest verb
     (test/regression/auto-ingest): run{passed,failed,pending,total,files}.
     `files` (CR-CRU-047 §S2) is the distinct test-FILE count from
@@ -1273,7 +1505,11 @@ def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=
     (a stale binding gets a 409, surfaced via `error`). C5 — the envelope
     context ECHOES the attachment the SERVER reported (`context.cycleId` on the
     ingest response), so the agent sees which cycle absorbed its evidence
-    without a second `GET /api/v2/events`; absent → the key is omitted."""
+    without a second `GET /api/v2/events`; absent → the key is omitted.
+
+    CR-CRU-017 §S4 — a WRAPPED run also names the `runId` its ingest closed (so
+    the caller can correlate the stored span) and carries any lifecycle
+    `warnings` the run accumulated; a single-shot run adds neither key."""
     run = {"passed": summary["passed"], "failed": summary["failed"],
            "pending": summary.get("pending", 0),
            "total": summary["total"], "files": files}
@@ -1284,10 +1520,12 @@ def _emit_ingest_axi(verb, resp, summary, files, project_dir, agent, help_steps=
     # lets a GATE caller supply the STATE-DERIVED next step for the run it just
     # made (`_axi().run_help`); unset keeps today's behaviour exactly.
     result_fields = {"run": run, "help": help_steps or _HELP_STEPS.get(verb, ["status"])}
+    if run_id:
+        result_fields["runId"] = run_id
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
 
 
 def _agent_id(args):
@@ -1437,6 +1675,18 @@ def _add_log_arg(p):
                                  "in addition to streaming it.")
 
 
+def _add_no_lifecycle_arg(p):
+    """CR-CRU-017 §S4 — the run-lifecycle opt-out on a RUN verb. Default off:
+    a run wraps itself (run-start before the tool, ingest closing it) so the
+    board learns the real wall-clock span. Set the flag — or
+    $BUN_CRUCIBLE_NO_LIFECYCLE — for the unchanged single-shot ingest."""
+    p.add_argument("--no-lifecycle", action="store_true",
+                   help="Do NOT wrap the run in the CR-CRU-017 run lifecycle: skip "
+                        "POST /api/v2/runs/start and send no runId, so the ingest is "
+                        "the single-shot event it was before the lifecycle existed "
+                        "(env twin: $BUN_CRUCIBLE_NO_LIFECYCLE=1).")
+
+
 def _add_gate_cycle_arg(p):
     """CR-CRU-056 — bind `--cycle` on a GATED verb (CR-CRU-054 §S2 — delegates
     to the shared binding so all five clients document it identically)."""
@@ -1528,6 +1778,7 @@ def main():
     _add_package_dir_arg(t)
     _add_project_dir_arg(t)
     _add_log_arg(t)
+    _add_no_lifecycle_arg(t)
     t.set_defaults(func=cmd_test)
 
     g = sub.add_parser("regression", help="Full-suite `bun test` + ingest. --coverage for lcov.")
@@ -1540,6 +1791,7 @@ def main():
     _add_package_dir_arg(g)
     _add_project_dir_arg(g)
     _add_log_arg(g)
+    _add_no_lifecycle_arg(g)
     g.set_defaults(func=cmd_regression)
 
     a = sub.add_parser("auto-ingest", help="Ingest an already-produced junit file.")
@@ -1567,6 +1819,7 @@ def main():
     _add_package_dir_arg(pmg)
     _add_project_dir_arg(pmg)
     _add_log_arg(pmg)
+    _add_no_lifecycle_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
 
     pf = sub.add_parser("plan-file",

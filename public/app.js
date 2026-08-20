@@ -19,6 +19,14 @@
       agents: [],
       events: [],
       plans: [], // CR-CRU-011 §S3 — the workspace project's cycle plans
+      // CR-CRU-017 §S3 — the runs opened through /runs/start that have NOT
+      // settled yet, as served by the additive `openRuns` field on
+      // GET /api/v2/events. Each one is painted as a live "running…" card and
+      // leaves this slice the moment its ingest (or the server's auto-abort)
+      // turns it into a real event — which is what makes the card resolve IN
+      // PLACE with no reload. A vanX reactive array, replaced wholesale on
+      // every refetch tick exactly like `events`.
+      openRuns: [],
 
       health: null,
       selectedProject: null, // home filter pulldown (null = all projects)
@@ -212,6 +220,11 @@
         ]);
         vanX.replace(state.agents, () => agents.agents ?? []);
         vanX.replace(state.events, () => events.events ?? []);
+        // CR-CRU-017 §S3 — same feed, same tick: the running cards and the
+        // settled cards can never disagree about a run, because one response
+        // carries both. A server without the field degrades to no running
+        // cards, never to a stale one.
+        vanX.replace(state.openRuns, () => events.openRuns ?? []);
         state.health = health;
         state.backendUp = true;
         state.lastSynced = Date.now();
@@ -558,6 +571,17 @@
       tickNow.val = Date.now();
     }, 10_000);
 
+    // CR-CRU-017 §S3 — a RUN's elapsed timer needs SECOND resolution: a run is
+    // over in seconds, so the cycle badge's 10s cadence would render a card
+    // that looks frozen for most of its life. Its own singleton 1s interval,
+    // created once at module init for the same reason `tickNow` is: the ticking
+    // text is a van-derived binding, so a tick with no running card mounted
+    // re-derives nothing at all.
+    const runTickNow = van.state(Date.now());
+    setInterval(() => {
+      runTickNow.val = Date.now();
+    }, 1000);
+
     // §S3 — active-cycle timer: an ACTIVE cycle ticks `now − activatedAt`
     // (ember badge; `tickNow` supplies the visible updating at a ≤10s
     // cadence, on top of the poll/SSE refetch cadence);
@@ -771,6 +795,119 @@
         ),
         RatioPill(e),
       );
+
+    // ── CR-CRU-017 §S3 — the run lifecycle's two extra presentations ─────
+    //
+    // A RUNNING card and an ABORTED card sit BESIDE the pass/fail/pending
+    // palette, never inside it: an open run has no result yet, and an aborted
+    // run ended for non-test reasons (§S2), so neither may borrow a ratio pill
+    // or a pass/fail tint. Both are additive — `EventCard` above is unchanged
+    // for every run that passed, failed or is pending.
+
+    /** The live `⏱ 0m 07s` since `startedAt`, re-derived once a second. */
+    const RunningElapsed = (startedAt) =>
+      span(
+        { "data-testid": "running-elapsed", class: "app-running-elapsed" },
+        () => fmtCycleTimer(runTickNow.val - startedAt),
+      );
+
+    // §S3 — the open run's card: pulsing, elapsed timer off the SERVER's
+    // `startedAt`, and NOT CLICKABLE (user rule). "Not clickable" is enforced
+    // where it cannot drift: there is NO `onclick` handler at all, so no
+    // drill-in exists to fire, and the card's own class carries the default
+    // cursor. It resolves in place because the next refetch drops this run from
+    // `state.openRuns` in the same tick the settled event enters `state.events`.
+    const RunningCard = (run) =>
+      div(
+        {
+          "data-testid": "running-card",
+          "data-run-id": run.runId,
+          class: "app-evt app-evt-running",
+        },
+        span(
+          eventIconProps(run),
+          span({
+            "data-testid": "icon-glyph",
+            class: "app-icon-mask",
+            "data-kind": "test",
+          }),
+        ),
+        div(
+          { class: "app-evt-body" },
+          div(
+            { class: "app-evt-line" },
+            span({ class: "app-agent-id" }, run.agentId),
+            run.tier !== undefined && run.tier !== null
+              ? span({ "data-testid": "tier-badge", class: "app-pill app-tier-badge" }, run.tier)
+              : null,
+          ),
+          div(
+            { class: "app-evt-line app-card-meta" },
+            span({ "data-testid": "running-label", class: "app-running-label" }, "running…"),
+            RunningElapsed(run.startedAt),
+          ),
+        ),
+      );
+
+    // §S3 — the ABORTED run's card: struck/grey, carrying the reason, and
+    // clickable (its drill-in shows that reason plus whatever partial context
+    // the run left behind). Its own testid, not `event-card`: an abort is a
+    // fourth state, and every existing surface that counts run cards is asking
+    // about runs that produced a result.
+    const AbortedCard = (e) =>
+      div(
+        {
+          "data-testid": "aborted-card",
+          "data-run-id": e.id,
+          class: "app-evt app-evt-aborted",
+          onclick: () => openDrillin(e.id),
+        },
+        span(
+          eventIconProps(e),
+          span({
+            "data-testid": "icon-glyph",
+            class: "app-icon-mask",
+            "data-kind": "test",
+          }),
+        ),
+        div(
+          { class: "app-evt-body" },
+          div(
+            { class: "app-evt-line" },
+            span({ class: "app-agent-id" }, e.agentId),
+            span({ "data-testid": "tier-badge", class: "app-pill app-tier-badge" }, e.tier),
+            CardBadges(e),
+          ),
+          div(
+            { class: "app-evt-line app-card-meta" },
+            span({ "data-testid": "card-time" }, rel(e.timestamp)),
+            // The RUN's wall-clock runtime is the only duration an aborted run
+            // has: it never reported a tool duration, because it never finished.
+            typeof e.runtime_ms === "number"
+              ? span({ "data-testid": "card-duration" }, fmtDuration(e.runtime_ms))
+              : null,
+          ),
+        ),
+        span(
+          { "data-testid": "abort-reason", class: "app-pill app-abort-reason" },
+          `aborted — ${e.abortReason ?? "reason unrecorded"}`,
+        ),
+      );
+
+    /** §S3 — an event whose RUN was aborted (never a plan's abort — §S2). */
+    const isAbortedRun = (e) => e.status === "aborted";
+
+    // The open runs this surface should paint, under the SAME project/agent
+    // filters the event feed obeys, so a filtered timeline never shows a
+    // running card it would not show a finished card for.
+    function visibleOpenRuns() {
+      const { projectKey, agentId } = activeFilters();
+      return state.openRuns.filter(
+        (run) =>
+          (projectKey === null || projectKey === undefined || run.projectKey === projectKey) &&
+          (agentId === null || agentId === undefined || run.agentId === agentId),
+      );
+    }
 
     // ── §S2 (CR-CRU-007) — RED→GREEN transition markers (= Cycles) ──────
     // `RED f/t ➜ GREEN t/t · Cycle: "<label>" · <stem> · <tier> · closed in
@@ -1006,6 +1143,12 @@
     function runFeed(events, surface) {
       const home = surface === "home";
       const rows = [];
+      // CR-CRU-017 §S3 — a run that is happening NOW belongs at the head of a
+      // newest-first feed, above every settled row. They live outside
+      // `timelineRows` on purpose: an open run has no event, so it takes part in
+      // no transition pair, no declared span and no rollup — it is a card, not
+      // history.
+      for (const run of visibleOpenRuns()) rows.push(RunningCard(run));
       for (const row of L.timelineRows(events, state.plans)) {
         if (row.kind === "marker") rows.push(TransitionMarkerRow(row.marker));
         else if (row.kind === "cycle-span-open") rows.push(CycleSpanOpenRow(row.cycle, row.plan));
@@ -1025,13 +1168,17 @@
           // the active cycle's id can never be in the collapse set.
           const cid = row.event.context?.cycleId;
           if (cid !== undefined && cid !== null && isCycleCollapsed(cid)) continue;
-          rows.push(EventCard(row.event));
+          rows.push(isAbortedRun(row.event) ? AbortedCard(row.event) : EventCard(row.event));
         }
       }
       return rows;
     }
 
     const EmptyState = () => {
+      // CR-CRU-017 §S3 — a live run is content: while one is running the feed
+      // has something to show, so the "no runs yet" face must yield to it (the
+      // no-projects face is unaffected — there is no project to run under).
+      if (visibleOpenRuns().length > 0) return null;
       const empty = L.emptyStates({ projects: state.projects, events: state.events });
       if (empty === null) return null;
       return div(
@@ -1711,7 +1858,11 @@
           ),
           () => {
             const runs = visibleEvents();
-            return runs.length === 0
+            // CR-CRU-017 §S3 — a project whose FIRST run is still running has
+            // no events yet, and "no runs yet" would be a lie: the run is right
+            // there. The empty state is therefore about having nothing at all,
+            // open or settled.
+            return runs.length === 0 && visibleOpenRuns().length === 0
               ? div({ class: "app-empty" }, "no runs yet — ingest a run to light the forge")
               : div(runFeed(runs, "workspace"));
           },
@@ -2229,15 +2380,55 @@
         ),
       );
 
+    // CR-CRU-017 §S3 — the same inline entry for a run that is STILL RUNNING:
+    // agent + live elapsed timer instead of a ratio it does not have, and no
+    // click handler (the not-clickable-while-running rule holds wherever a
+    // running run is rendered, not just on the timeline card).
+    const InlineRunningEntry = (run) =>
+      span(
+        {
+          "data-testid": "open-span-running-entry",
+          "data-run-id": run.runId,
+          class: "app-inline-run app-inline-run-running",
+        },
+        span(
+          eventIconProps(run),
+          span({
+            "data-testid": "icon-glyph",
+            class: "app-icon-mask",
+            "data-kind": "test",
+          }),
+        ),
+        span({ class: "app-agent-id" }, run.agentId),
+        " ",
+        RunningElapsed(run.startedAt),
+      );
+
+    /** §S3 — this cycle's currently-running runs, from the open-run slice. */
+    const runningRunsFor = (cycleId) =>
+      state.openRuns.filter(
+        (run) =>
+          run.projectKey === state.route.projectKey && run.context?.cycleId === cycleId,
+      );
+
     // §S6 #3 (cycle 18, live-review) — the open-span row exists only WITH
     // linked runs; with ZERO cycleId-linked runs there is nothing awaiting
     // confirm, so NO container (and no annotation) renders at all.
+    // CR-CRU-017 §S3 — a currently-RUNNING run counts as content for the same
+    // reason: the active cycle's span must show it live. So the span renders
+    // when there is either a settled linked run or a running one.
     const OpenSpan = (cycleId) => {
       const runs = linkedRunsFor(cycleId);
-      if (runs.length === 0) return null;
+      const running = runningRunsFor(cycleId);
+      if (runs.length === 0 && running.length === 0) return null;
       const parts = [];
       for (const run of runs) {
         parts.push(InlineRunEntry(run), " · ");
+      }
+      // Running entries come LAST in this chronological flow: they started
+      // after everything already settled in the span.
+      for (const run of running) {
+        parts.push(InlineRunningEntry(run), " · ");
       }
       parts.push(
         span(
@@ -3706,17 +3897,37 @@
         if (next !== null) suiteWindow.val = next;
       };
 
+      // CR-CRU-017 §S3 — an aborted run's drill-in leads with WHY it was
+      // aborted, above whatever partial context the run left behind. It is a
+      // banner, not a replacement body: the run's suites/leaves (if it produced
+      // any before dying) still render underneath, which is exactly the
+      // "whatever partial context exists" the CR asks for.
+      const AbortBanner = (d) =>
+        div(
+          { class: "app-drillin-abort" },
+          span(
+            { "data-testid": "abort-reason", class: "app-pill app-abort-reason" },
+            `aborted — ${d.abortReason ?? "reason unrecorded"}`,
+          ),
+          typeof d.runtimeMs === "number"
+            ? span(
+                { "data-testid": "abort-runtime", class: "app-card-meta" },
+                `ran for ${fmtDuration(d.runtimeMs)} before it was aborted`,
+              )
+            : null,
+        );
+
       const body = div({ class: "app-drillin-body" }, () => {
         if (loadError.val !== null)
           return div({ class: "app-empty" }, loadError.val);
         const d = detail.val;
         if (d === null)
           return div({ class: "app-empty" }, "loading run detail…");
-        return d.kind === "gate"
-          ? GateBody(d)
-          : d.kind === "compile"
-            ? CompileBody(d)
-            : TestBody(d);
+        if (d.kind === "gate") return GateBody(d);
+        if (d.kind === "compile") return CompileBody(d);
+        return d.status === "aborted"
+          ? div(AbortBanner(d), TestBody(d))
+          : TestBody(d);
       });
 
       return { body, handlePaneScroll, headerControls };

@@ -9,7 +9,7 @@ import { authHints, hints, cycleHints, identityHints, projectDeleteHints } from 
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
 import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
-import type { ProjectPatch, RecordEventMeta, TouchAgentOpts } from "./store.ts";
+import type { ProjectPatch, RecordEventMeta, RunRecord, TouchAgentOpts } from "./store.ts";
 import type {
   AgentIdentity,
   AgentRole,
@@ -79,6 +79,9 @@ interface V2Body {
   // CR-CRU-008 §S4 — silent unregister + guarded run deletion
   silent?: unknown;
   userApproved?: unknown;
+  // CR-CRU-017 §S1 — the OPEN run this ingest closes (optional: no runId is
+  // the unchanged single-shot path).
+  runId?: unknown;
 }
 
 // §S3 — all help[] wording lives in src/hints.ts (one reviewable module).
@@ -572,6 +575,11 @@ async function handleAgentUnregister(store: Store, req: Request): Promise<Respon
 function handleAgentsList(store: Store, req: Request, url: URL): Response {
   const project = url.searchParams.get("project") ?? undefined;
   const now = Date.now();
+  // CR-CRU-017 §S1 — the auto-abort sweep rides CR-011's liveness, so it runs
+  // exactly where liveness is computed: an open run whose agent has tombstoned
+  // (or which has outlived CRUCIBLE_RUN_ABANDON_MS) is aborted here, before the
+  // dashboard reads a dead agent with a run still "running".
+  store.sweepOpenRuns(now);
   const agents = store.listAgents(project, now).map((agent) => ({
     ...agent,
     runtime_ms:
@@ -767,6 +775,96 @@ function runResponse(event: RunEvent, summary: RunSummary, help?: string[]): Res
   });
 }
 
+/**
+ * CR-CRU-017 §S1 — POST /api/v2/runs/start: open a run and answer 202
+ * {runId, startedAt}. No run event is stored — a start is not an end — and the
+ * open run is PERSISTED in SQLite (the CR's Risk: it must survive a restart).
+ * Same caller/attach boundary as every ingest: an unregistered poster is
+ * refused, and a bound agent's cycle is resolved server-side once, here, so
+ * the run carries the attachment it was opened under.
+ */
+async function handleRunStart(store: Store, req: Request): Promise<Response> {
+  const body = await readBody(req);
+  if (body === null) return fail(400, "malformed JSON body");
+  const pk = requireProject(store, body.projectKey);
+  if ("fail" in pk) return pk.fail;
+  const caller = requireRegisteredCaller(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  const { agentId } = caller;
+  const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
+  if (attach.fail !== undefined) return attach.fail;
+
+  const run = store.startRun(pk.key, agentId, {
+    ...runMeta(body),
+    ...(attach.context !== undefined ? { context: attach.context } : {}),
+  });
+  return json(
+    {
+      ok: true,
+      changed: true,
+      runId: run.runId,
+      startedAt: run.startedAt,
+      ...(attach.staleHelp !== undefined ? { help: attach.staleHelp } : {}),
+    },
+    202,
+  );
+}
+
+/**
+ * CR-CRU-017 §S1 — the OPTIONAL `runId` seam every ingest route shares.
+ *
+ * No `runId` → `{}`: the single-shot path is untouched, stores no lifecycle
+ * field and writes NULL in all three §S0 columns (graceful degradation).
+ * With one, the run is resolved and the server's own clock closes it:
+ *  - never issued / another project's / another agent's → 400, nothing stored;
+ *  - already ended or aborted → 409, nothing stored (the CR's end/end and
+ *    end-after-abort races);
+ *  - open → the lifecycle stamp for the ONE event about to be written.
+ */
+function resolveRunClose(
+  store: Store,
+  projectKey: string,
+  agentId: string,
+  body: V2Body,
+): {
+  fail?: Response;
+  runId?: string;
+  lifecycle?: { startedAt: number; runtimeMs: number };
+} {
+  if (body.runId === undefined || body.runId === null) return {};
+  if (typeof body.runId !== "string" || body.runId.length === 0) {
+    return { fail: fail(400, "runId must be a non-empty string — run NOT stored") };
+  }
+  const runId = body.runId;
+  const run = store.getRun(runId);
+  if (run === null) {
+    return {
+      fail: fail(
+        400,
+        `unknown runId: ${runId} — no run was started under it (POST /api/v2/runs/start first); run NOT stored`,
+      ),
+    };
+  }
+  if (run.projectKey !== projectKey || run.agentId !== agentId) {
+    return {
+      fail: fail(
+        400,
+        `runId ${runId} belongs to agent ${run.agentId} in another run context — run NOT stored`,
+      ),
+    };
+  }
+  if (run.state !== "open") {
+    return {
+      fail: fail(
+        409,
+        `run ${runId} is already ${run.state} — a settled run cannot be closed twice; run NOT stored`,
+      ),
+    };
+  }
+  const endedAt = Date.now();
+  return { runId, lifecycle: { startedAt: run.startedAt, runtimeMs: endedAt - run.startedAt } };
+}
+
 async function handleRuns(store: Store, req: Request): Promise<Response> {
   const body = await readBody(req);
   if (body === null) return fail(400, "malformed JSON body");
@@ -791,6 +889,10 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
   const { agentId } = caller;
   const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
   if (attach.fail !== undefined) return attach.fail;
+  // CR-CRU-017 §S1 — the optional run this ingest CLOSES, resolved before any
+  // write so a refused close (400/409) stores nothing.
+  const close = resolveRunClose(store, pk.key, agentId, body);
+  if (close.fail !== undefined) return close.fail;
 
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: codecName,
@@ -798,7 +900,13 @@ async function handleRuns(store: Store, req: Request): Promise<Response> {
     ...(attach.context !== undefined ? { context: attach.context } : {}),
     // CR-CRU-057 §S1 — the declared role off the same seam read.
     ...(attach.role !== undefined ? { role: attach.role } : {}),
+    ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
   });
+  // The run is settled by the event that closed it — recorded after the write,
+  // so a failed ingest leaves the run OPEN (and sweepable) rather than lost.
+  if (close.runId !== undefined && close.lifecycle !== undefined) {
+    store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);
+  }
   // §S3 — a RED ingest carries the transition hint; §S7 adds the stale note.
   const help = [
     ...(run.summary.failed > 0 ? hints.afterRed : []),
@@ -841,6 +949,10 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
   const { agentId } = caller;
   const attach = resolveIngestAttach(store, pk.key, agentId, body, true);
   if (attach.fail !== undefined) return attach.fail;
+  // CR-CRU-017 §S1 — the optional run this ingest CLOSES, resolved before any
+  // write so a refused close (400/409) stores nothing.
+  const close = resolveRunClose(store, pk.key, agentId, body);
+  if (close.fail !== undefined) return close.fail;
 
   const event = store.recordTestEvent(pk.key, agentId, run, {
     codec: "parsed",
@@ -849,7 +961,11 @@ async function handleRunsParsed(store: Store, req: Request): Promise<Response> {
     ...(attach.context !== undefined ? { context: attach.context } : {}),
     // CR-CRU-057 §S1 — the declared role off the same seam read.
     ...(attach.role !== undefined ? { role: attach.role } : {}),
+    ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
   });
+  if (close.runId !== undefined && close.lifecycle !== undefined) {
+    store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);
+  }
   // §S3 — RED transition hint; coverage arrived but the store dropped it
   // (failing run) — say so in help too. §S7 adds the stale-cycle note.
   const dropped = hasCoverage && event.coverage === undefined;
@@ -885,12 +1001,19 @@ async function handleRunsCompile(store: Store, req: Request): Promise<Response> 
   // validateUnbound stays false).
   const attach = resolveIngestAttach(store, pk.key, agentId, body, false);
   if (attach.fail !== undefined) return attach.fail;
+  // CR-CRU-017 §S1 — the optional run this compile ingest CLOSES.
+  const close = resolveRunClose(store, pk.key, agentId, body);
+  if (close.fail !== undefined) return close.fail;
   const event = store.recordCompileEvent(pk.key, agentId, report, {
     codec: report.format,
     ...runMeta(body),
     ...(attach.context !== undefined ? { context: attach.context } : {}),
     ...(attach.role !== undefined ? { role: attach.role } : {}),
+    ...(close.lifecycle !== undefined ? { lifecycle: close.lifecycle } : {}),
   });
+  if (close.runId !== undefined && close.lifecycle !== undefined) {
+    store.endRun(close.runId, event.id, close.lifecycle.startedAt + close.lifecycle.runtimeMs);
+  }
   const verdict =
     report.errorCount > 0
       ? `COMPILE FAILED — ${report.errorCount} errors, ${report.warningCount} warnings`
@@ -1709,11 +1832,44 @@ function eventBrief(event: RunEvent) {
           diagnostics: compile.diagnostics.slice(0, 2),
         }
       : {}),
+    // CR-CRU-017 §S1/§S3 (additive) — the RUN lifecycle, FORWARDED from the
+    // stored row exactly as `toEvent` served it, never recomputed here (one
+    // source of truth for runtime_ms). Each key is ABSENT — not null — on an
+    // event ingested without a runId, which is the §S1 graceful-degradation
+    // guard the brief must not weaken. `status` is the RUN's terminal state
+    // (`"aborted"` = ended for non-test reasons), unrelated to `Plan.status`.
+    ...(event.startedAt !== undefined ? { startedAt: event.startedAt } : {}),
+    ...(event.runtimeMs !== undefined ? { runtime_ms: event.runtimeMs } : {}),
+    ...(event.status !== undefined ? { status: event.status } : {}),
+    ...(event.abortReason !== undefined ? { abortReason: event.abortReason } : {}),
+  };
+}
+
+/**
+ * CR-CRU-017 §S3 — the wire shape of an OPEN run: identity, who is running it,
+ * and the `startedAt` the dashboard's elapsed timer counts from. Deliberately
+ * NOT an event brief — an open run has no counts, no duration and no id in the
+ * events table, and fabricating those keys is exactly what would let a running
+ * card be mistaken for a finished one. `state` is omitted for the same reason
+ * it cannot vary: everything here is open by construction.
+ */
+function openRunBrief(run: RunRecord) {
+  return {
+    runId: run.runId,
+    projectKey: run.projectKey,
+    agentId: run.agentId,
+    startedAt: run.startedAt,
+    ...(run.tier !== undefined ? { tier: run.tier } : {}),
+    ...(run.stack !== undefined ? { stack: run.stack } : {}),
+    ...(run.context !== undefined ? { context: run.context } : {}),
   };
 }
 
 function handleEventsList(store: Store, req: Request, url: URL): Response {
   const project = url.searchParams.get("project") ?? undefined;
+  // CR-CRU-017 §S1 — settle dead open runs before the timeline is served, so a
+  // hung run resolves into its aborted card instead of pulsing forever.
+  store.sweepOpenRuns();
   // CR-CRU-032 §S1 — anchored fetch: when a cycleId is supplied, return exactly
   // that cycle's linked runs plus its declared "Cycle done" boundary as an
   // additive top-level `cycle` field. Additive: the recent-N feed below is
@@ -1735,7 +1891,22 @@ function handleEventsList(store: Store, req: Request, url: URL): Response {
   const rawLimit = Number(url.searchParams.get("limit") ?? "");
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 50;
   // store.listEvents is newest-first already.
-  return reply(req, url, { ok: true, events: store.listEvents(project, limit).map(eventBrief) });
+  //
+  // CR-CRU-017 §S3 (additive) — `openRuns`: the runs opened through
+  // /runs/start that have not yet settled, so the timeline can paint each as a
+  // live "running…" card. Additive and never a replacement: `events` is
+  // untouched (an open run has NO event yet — a start is not an end), so every
+  // existing consumer reads the same feed it always did, and a caller that
+  // ignores `openRuns` simply sees the pre-017 timeline. Served AFTER the
+  // sweep above, so a dead run is already aborted and appears as its aborted
+  // EVENT rather than as a run still pulsing here. The anchored `cycleId`
+  // branch above stays byte-unchanged: it answers "which runs does this cycle
+  // own", a settled-history question.
+  return reply(req, url, {
+    ok: true,
+    events: store.listEvents(project, limit).map(eventBrief),
+    openRuns: store.listOpenRuns(project).map(openRunBrief),
+  });
 }
 
 /** §S4 — per-suite counts derived from leaf statuses (no leaves in the reply). */
@@ -1907,6 +2078,11 @@ export function handleV2(
   }
   if (req.method === "POST" && pathname === "/api/v2/runs") {
     return handleRuns(store, req);
+  }
+  // CR-CRU-017 §S1 — the run LIFECYCLE's opening verb, next to the ingests it
+  // wraps (the three routes below all take its runId, optionally).
+  if (req.method === "POST" && pathname === "/api/v2/runs/start") {
+    return handleRunStart(store, req);
   }
   if (req.method === "POST" && pathname === "/api/v2/runs/parsed") {
     return handleRunsParsed(store, req);
