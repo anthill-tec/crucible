@@ -125,7 +125,9 @@ def cmd_install(args) -> int:
     # §S2); it rides along in that stage's envelope row so the operator can see
     # exactly which Bun provisioned the server. The `[unit]` stage reports
     # `skipped` + `reason` when it declined (CR-CRU-070 AC4) -- a machine that
-    # got no daemon must be told WHY, never left guessing.
+    # got no daemon must be told WHY, never left guessing -- and `restarted`
+    # when an upgrade re-exec'd the live service (CR-CRU-071 AC9), which drops
+    # every SSE subscriber and so is never left to be inferred.
     stage_fields = []
     for stage in stages:
         fields = {"name": stage["name"], "path": stage["path"]}
@@ -135,6 +137,8 @@ def cmd_install(args) -> int:
             fields["skipped"] = True
         if stage.get("reason"):
             fields["reason"] = stage["reason"]
+        if stage.get("restarted"):
+            fields["restarted"] = True
         stage_fields.append(fields)
     result_fields = {
         "stages": stage_fields,
