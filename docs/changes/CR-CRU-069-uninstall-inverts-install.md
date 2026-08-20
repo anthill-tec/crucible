@@ -33,12 +33,14 @@ reverse order, because a running tool cannot remove itself:
 
 ```
 install:    install.sh → uv tool install crucible-axi → crucible-axi install   [bun guarantee] [server]
-uninstall:  install.sh → crucible-axi uninstall  [state] [server]  → uv tool uninstall crucible-axi
+uninstall:  install.sh → crucible-axi uninstall  [server]  → uv tool uninstall crucible-axi
+            (--purge additionally: [config] [store] — never on a plain run)
 ```
 
 The verb reverses the stages it owns; the script performs the one step the verb
 structurally cannot (removing the tool that is executing), and it does it
-**last**.
+**last**. A plain run reverses PROGRAM artifacts only — the store and config
+survive unless an explicit `--purge` asks for their removal.
 
 ## Scope
 
@@ -55,27 +57,40 @@ Non-goals, explicitly:
 
 ## Acceptance criteria
 
-**AC1 — `crucible-axi uninstall` reverses exactly what the stages provisioned.**
-It removes the global server package and its `crucible-server` symlink (the
+**AC1 — a plain `crucible-axi uninstall` removes PROGRAM artifacts only.** It
+removes the global server package and its `crucible-server` symlink (the
 inverse of the `[server]` stage's `bun add -g`, via the same absolute-Bun
-resolution — never a bare `bun` off PATH) and removes the client state written
-under the target dir. It removes nothing it did not provision.
+resolution — never a bare `bun` off PATH). It removes nothing it did not
+provision, and on a plain run it **leaves both the store and the config
+untouched** — no `~/.local/share/crucible/`, no `~/.crucible/`. A plain
+uninstall is reversible by reinstalling; it destroys nothing.
 
 **AC2 — stage inversion is ordered and reported.** Stages run in reverse install
-order (state before server), each reported as its own stage, fail-fast, with the
-same TOON-AXI envelope shape and exit-code contract as `install` (`ok=False` →
-exit 1). Parity with `install` is asserted, not assumed.
+order, each reported as its own stage, fail-fast, with the same TOON-AXI
+envelope shape and exit-code contract as `install` (`ok=False` → exit 1).
+Parity with `install` is asserted, not assumed.
 
 **AC3 — idempotent.** Running `uninstall` on an already-clean machine converges:
 every stage reports converged, `ok=True`, exit 0, and no subprocess is spawned
 for an artifact that is already absent. Running it twice is indistinguishable
 from running it once.
 
-**AC4 — data is opt-in, never collateral.** The store
-(`~/.local/share/crucible/`, including any `crucible-pre-*.db` backups) is
-**retained by default** and removed only under an explicit `--purge-data`. The
-default run states, in its envelope, that the store was retained and where it
-is. `--purge-data` on an absent store still converges.
+**AC4 — destroying data requires an EXPLICIT purge; it is never collateral.**
+The store (`~/.local/share/crucible/`, including every `crucible-pre-*.db`
+backup) and the config/state (`~/.crucible/`, e.g. `crucible-clients.json`) are
+**retained by default** and removed only under an explicit purge — `--purge`.
+Rules:
+
+- No flag, non-interactive (not a TTY): retain both, exit 0, and state in the
+  envelope that the store and config were retained **and where they are**.
+  Automation must never silently lose a database.
+- No flag, interactive (a TTY): prompt once, naming both paths and the store's
+  size, defaulting to **retain** on empty input, EOF, or interrupt. A prompt is
+  a convenience, never the only guard — `--purge` exists so the destructive path
+  is expressible without a human.
+- `--purge` on an absent store/config still converges (`ok=True`).
+- Purge is the *only* path that deletes either. No other flag, and no failure
+  mode of another stage, may remove them.
 
 **AC5 — `install.sh` gains the inverse path.** The script performs teardown by
 calling `crucible-axi uninstall` first and `uv tool uninstall crucible-axi`
@@ -84,13 +99,14 @@ uninstalled machine converges). The one-liner form is documented in README
 alongside the install one-liner, on the same `master` raw-GitHub ref.
 
 **AC6 — the inverse is proven against real artifacts.** A test provisions into a
-temp `$BUN_INSTALL` + temp target dir, runs `uninstall`, and asserts the package
-directory, the symlink, and the state file are gone — asserted by filesystem
-absence, not by mocking the remover. No test binds a port or runs a real server.
+temp `$BUN_INSTALL` + temp target dir + temp store, runs a plain `uninstall`,
+and asserts the package directory and symlink are gone WHILE the store and
+config still exist — then asserts `--purge` removes those two and nothing else.
+Both directions asserted by filesystem state, not by mocking the remover. No test binds a port or runs a real server.
 
 **AC7 — docs describe the reversal.** README and RUNBOOK document the teardown
-path and state plainly that Bun is left installed and that the store survives
-unless `--purge-data` is passed.
+path and state plainly that Bun is left installed and that the store AND config survive
+unless `--purge` is passed.
 
 ## Notes
 

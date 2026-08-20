@@ -36,13 +36,15 @@ delegation path as everything else, and teardown is the strict inverse
 
 ```
 install:    install.sh → crucible-axi install    [bun] [server] [unit: write, daemon-reload, enable --now]
-uninstall:  install.sh → crucible-axi uninstall  [unit: disable --now, rm, daemon-reload] [state] [server] → uv tool uninstall
+uninstall:  install.sh → crucible-axi uninstall  [unit: disable --now, rm, daemon-reload] [server] → uv tool uninstall
+            (--purge additionally: [config] [store])
 ```
 
 **The unit stage is torn down FIRST.** Removing the server package while an
 enabled unit still points at `~/.bun/bin/crucible-server` would leave systemd
-restarting a deleted binary — so this CR extends CR-CRU-069's inversion order
-(state → server) to (unit → state → server).
+restarting a deleted binary — so this CR extends CR-CRU-069's inversion order to put the
+unit FIRST: (unit → server), with `--purge` appending (config → store) last.
+The unit is a program artifact, so a plain uninstall always removes it.
 
 ## Scope
 
@@ -70,7 +72,8 @@ no rewrite, already-active → no restart). Teardown does `disable --now`, remov
 the unit file, and `daemon-reload`s, converging when the unit is already absent.
 
 **AC3 — teardown order is enforced, not documented.** `uninstall` runs the unit
-stage strictly before the server stage, asserted by a test that fails if the
+stage strictly before the server stage (and both strictly before any `--purge`
+of config/store), asserted by a test that fails if the
 order inverts — the failure mode is systemd restarting a deleted binary.
 
 **AC4 — absent systemd degrades, never fails.** With no `systemctl` on PATH (or
