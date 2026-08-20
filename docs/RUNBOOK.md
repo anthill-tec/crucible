@@ -128,6 +128,39 @@ same line is logged at startup beside the listen banner. Because rule
 where it was launched: check this field first whenever data looks missing, and
 compare it across instances before assuming anything was lost.
 
+## Run as a service (systemd `--user`)
+
+`crucible-axi install` provisions `~/.config/systemd/user/crucible-server.service`
+on any machine with systemd and a user D-Bus session, then `enable --now`s it.
+
+```sh
+systemctl --user status crucible-server
+systemctl --user restart crucible-server
+systemctl --user stop crucible-server      # clean: Result=success, never failed
+journalctl --user -u crucible-server -f
+```
+
+Facts worth knowing when it misbehaves:
+
+- **`--user` only.** No root, no `sudo`, nothing under `/etc/systemd/system` —
+  the same user scope as `bun add -g`.
+- **`ExecStart` is absolute** (the argv `serve` uses), and the unit sets
+  `PATH=<resolved bun dir>:/usr/local/bin:/usr/bin:/bin`. That PATH is load
+  bearing: the published `crucible-server` bin is a shim that spawns `bun`
+  itself, and a unit inherits no shell PATH. Without it the service dies
+  `status=127` (`spawn bun ENOENT`) in a `Restart=on-failure` loop.
+- **Only the `CRUCIBLE_*` vars that were set at install time are forwarded**, so
+  change the port or store by re-running `crucible-axi install` with the new
+  values (it rewrites the unit only when the text actually changes).
+- **`systemctl --user stop` is a clean stop**, not a failure: the server
+  checkpoints active cycles on SIGTERM and exits, and the unit reports
+  `Result=success`.
+- **Opt out** with `crucible-axi install --no-service` or
+  `CRUCIBLE_NO_SERVICE=1`. With no systemd or no user bus the stage reports
+  skipped-with-reason and the install still exits 0.
+- `crucible-axi uninstall` removes the unit **first**, before de-provisioning the
+  server — otherwise systemd would be left restarting a deleted binary.
+
 ## Teardown (uninstall)
 
 ```sh

@@ -135,6 +135,44 @@ def _load_toon_module():
     return module
 
 
+# CR-CRU-070 -- the install grew a third stage, `[unit]`, which writes a
+# systemd `--user` unit into `$XDG_CONFIG_HOME/systemd/user` and drives
+# `systemctl --user`. NOTHING in this suite may reach the operator's real user
+# manager, so every test that runs the REAL default stage table below is
+# guarded on two independent axes: a `shutil.which` that never resolves
+# `systemctl` (so the stage reports skipped-with-reason and touches nothing)
+# and a tmp `$XDG_CONFIG_HOME`/`$HOME` (so BOTH unit-dir resolution rules land
+# inside tmp even if the first guard ever regressed).
+UNIT_STAGE = "unit"
+SYSTEMCTL_BIN_NAME = "systemctl"
+
+
+def _which_without_systemctl(resolved="/usr/bin/bun"):
+    """A `shutil.which` stand-in that resolves everything EXCEPT `systemctl`."""
+    def _which(cmd, mode=os.F_OK | os.X_OK, path=None):
+        if os.path.basename(str(cmd)) == SYSTEMCTL_BIN_NAME:
+            return None
+        return resolved
+    return _which
+
+
+def _fast_unit_stage(target_dir, force):
+    """A `[unit]` stage double that provisions nothing: no unit file, no
+    `systemctl`. Matches the `(target_dir, force)` runner protocol."""
+    return {"path": os.path.join(target_dir, UNIT_STAGE), "converged": False}
+
+
+@contextlib.contextmanager
+def _unit_stage_sandboxed(tmp_dir):
+    """CR-CRU-070 isolation for a test that runs the REAL `[unit]` stage
+    runner: no resolvable `systemctl`, and a tmp `$XDG_CONFIG_HOME`/`$HOME`."""
+    with mock.patch.dict(os.environ,
+                         {"XDG_CONFIG_HOME": tmp_dir, "HOME": tmp_dir}), \
+            mock.patch("crucible_axi.install.shutil.which",
+                       side_effect=_which_without_systemctl()):
+        yield
+
+
 class PyprojectPackageEntryPointTest(unittest.TestCase):
     """S1 -- a `pyproject.toml` declares the `crucible-axi` PyPI package, its
     console-script entry point, and ships the client fleet + STATUS-CONTRACT
@@ -257,15 +295,19 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
                 return {"path": os.path.join(target_dir, name), "converged": False}
             return _runner
 
-        fakes = {name: make_fake(name) for name in ("server", "manifest")}
+        # CR-CRU-070 -- STAGE_ORDER gained `[unit]`, so the injected table has
+        # to carry a runner for it: `run_install` looks every stage up, and a
+        # missing key is a KeyError, not a skipped stage.
+        fakes = {name: make_fake(name)
+                 for name in ("server", "manifest", UNIT_STAGE)}
         ok, stages, warnings = install.run_install(self.tmp, stage_runners=fakes)
 
         self.assertEqual(
-            call_order, ["server", "manifest"],
+            call_order, ["server", "manifest", UNIT_STAGE],
             "stages must run in the exact S2 sequence")
         self.assertTrue(ok)
         self.assertEqual(
-            [s["name"] for s in stages], ["server", "manifest"])
+            [s["name"] for s in stages], ["server", "manifest", UNIT_STAGE])
 
     def test_run_install_stops_calling_further_stages_once_a_stage_raises(self):
         """Negative/bound path: a stage failure must NOT silently continue to
@@ -300,6 +342,11 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
                 "path": fake_server_path, "converged": False},
             "manifest": lambda target_dir, force: {
                 "path": os.path.join(target_dir, "crucible-clients.json"),
+                "converged": False},
+            # CR-CRU-070 -- the third stage needs a runner in the injected
+            # table too (`run_install` looks up every STAGE_ORDER name).
+            UNIT_STAGE: lambda target_dir, force: {
+                "path": os.path.join(target_dir, UNIT_STAGE),
                 "converged": False},
         }
         ok, stages, warnings = install.run_install(self.tmp, stage_runners=fakes)
@@ -336,11 +383,15 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
             completed.returncode = 0
             return completed
 
+        # CR-CRU-070 -- this test drives the REAL default stage table, which
+        # now includes `[unit]`. `_unit_stage_sandboxed` denies it a resolvable
+        # `systemctl` (so it reports skipped-with-reason and writes nothing)
+        # and points both unit-dir resolution rules at tmp, so the operator's
+        # real `~/.config/systemd/user` is unreachable on two independent axes.
         with mock.patch.object(axi, "__version__", "0.1.0"), \
+                _unit_stage_sandboxed(self.tmp), \
                 mock.patch("crucible_axi.install.subprocess.run",
                            side_effect=_fail_if_npx_server_run) as mock_run, \
-                mock.patch("crucible_axi.install.shutil.which",
-                           return_value="/usr/bin/bun"), \
                 mock.patch("crucible_axi.install._server_already_installed",
                            return_value=False):
             result = install.run_install(self.tmp)
@@ -355,8 +406,10 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
             f"server stage -- a `npx -y <server>` run would hang/fail here; "
             f"warnings={warnings}")
         self.assertEqual(
-            [s["name"] for s in stages], ["server", "manifest"],
-            "both stages must complete once the server stage provisions+exits")
+            # CR-CRU-070 -- `[unit]` is the third stage; with no systemctl it
+            # reports skipped-with-reason, and still reports.
+            [s["name"] for s in stages], ["server", "manifest", UNIT_STAGE],
+            "every stage must complete once the server stage provisions+exits")
         # argv[0] is matched by BASENAME: CR-CRU-066 §S2 provisions with the
         # RESOLVED ABSOLUTE bun path, never the bare `bun` token.
         provisioned = [
@@ -401,7 +454,8 @@ class InstallOrchestratorFrameworkTest(unittest.TestCase):
         self.assertEqual(axi["verb"], "install")
         self.assertIs(axi["ok"], True)
         stage_names = [s["name"] for s in axi["stages"]]
-        self.assertEqual(stage_names, ["server", "manifest"])
+        # CR-CRU-070 -- STAGE_ORDER is (server, manifest, unit).
+        self.assertEqual(stage_names, ["server", "manifest", UNIT_STAGE])
         for stage in axi["stages"]:
             self.assertIn("path", stage)
             self.assertTrue(stage["path"])
@@ -487,14 +541,17 @@ class InstallIdempotencyTest(unittest.TestCase):
                         "converged": calls[name] > 1}
             return _runner
 
-        return {"server": make("server")}
+        # CR-CRU-070 -- `[unit]` gets a double too: `mock.patch.dict` MERGES,
+        # so a table without it would leave the REAL systemd stage in place.
+        return {"server": make("server"), UNIT_STAGE: _fast_unit_stage}
 
     def test_running_install_twice_does_not_duplicate_the_manifest_file(self):
         install = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
         manifest_path = os.path.join(self.tmp, "crucible-clients.json")
 
-        with mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
+        with _unit_stage_sandboxed(self.tmp), \
+                mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
             ok1, _stages1, _w1 = install.run_install(self.tmp)
             with open(manifest_path) as f:
                 first_content = f.read()
@@ -518,7 +575,8 @@ class InstallIdempotencyTest(unittest.TestCase):
         install = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
 
-        with mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
+        with _unit_stage_sandboxed(self.tmp), \
+                mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
             ok1, stages1, _w1 = install.run_install(self.tmp)
             manifest_result_1 = next(s for s in stages1 if s["name"] == "manifest")
 
@@ -538,14 +596,16 @@ class InstallIdempotencyTest(unittest.TestCase):
         install = _import_fresh("crucible_axi.install")
         fakes = self._patched_server_fakes()
 
-        with mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
+        with _unit_stage_sandboxed(self.tmp), \
+                mock.patch.dict(install.DEFAULT_STAGE_RUNNERS, fakes):
             ok1, stages1, _w1 = install.run_install(self.tmp)
             ok2, stages2, _w2 = install.run_install(self.tmp)
 
         self.assertTrue(ok1)
         self.assertTrue(ok2)
-        self.assertEqual(len(stages1), 2)
-        self.assertEqual(len(stages2), 2)
+        # CR-CRU-070 -- three stages now: (server, manifest, unit).
+        self.assertEqual(len(stages1), 3)
+        self.assertEqual(len(stages2), 3)
 
 
 if __name__ == "__main__":

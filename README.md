@@ -63,6 +63,27 @@ curl -fsSL http://127.0.0.1:3849/api/health
 `--port`), and passes the server's exit code straight through so a shell — or a
 process supervisor — sees the real failure.
 
+On a systemd machine the install also provisions a **`--user` service**, so the
+server survives logout and comes back on login without a terminal held open:
+
+```sh
+systemctl --user status crucible-server     # provisioned by `crucible-axi install`
+systemctl --user stop crucible-server       # clean stop — leaves Result=success
+journalctl --user -u crucible-server -f
+```
+
+The unit is **`--user` only** — no root, no `sudo`, nothing in
+`/etc/systemd/system` — matching the user-scoped `bun add -g`. Its `ExecStart`
+is the same absolute argv `serve` uses, it carries `Restart=on-failure`, and it
+puts the resolved Bun's directory on `PATH`: the published `crucible-server` bin
+is a shim that spawns `bun` itself, and a unit inherits no shell `PATH`. Only
+the `CRUCIBLE_*` variables you actually set are forwarded.
+
+Don't want a daemon? `crucible-axi install --no-service` (or
+`CRUCIBLE_NO_SERVICE=1`) skips that stage. On a machine with no systemd — or no
+user D-Bus session — the stage reports itself skipped with the reason and the
+install still succeeds.
+
 Uninstalling inverts the install along the same path — the verb reverses the
 stages it owns, then uv removes the tool that ran it:
 

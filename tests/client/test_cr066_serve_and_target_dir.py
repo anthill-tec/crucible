@@ -548,6 +548,49 @@ def _fast_provision_server_stage(target_dir, force):
     return {"path": os.path.join(target_dir, "server"), "converged": False}
 
 
+# CR-CRU-070 -- `STAGE_ORDER` gained `[unit]`, which writes a systemd `--user`
+# unit and drives `systemctl --user`.
+UNIT_STAGE = "unit"
+SYSTEMCTL_BIN_NAME = "systemctl"
+
+
+def _fast_unit_stage(target_dir, force):
+    """A [unit] stage double that provisions nothing: no unit file, no
+    `systemctl`. Matches the `(target_dir, force)` runner protocol."""
+    return {"path": os.path.join(target_dir, UNIT_STAGE), "converged": False}
+
+
+def _resolves_nothing(cmd, mode=os.F_OK | os.X_OK, path=None):
+    """A `shutil.which` stand-in that resolves NOTHING -- in particular no
+    `systemctl`, so the REAL `[unit]` stage would report skipped-with-reason
+    rather than provision. Nothing in this test class needs a resolved tool:
+    the `[server]` stage is doubled and `[manifest]` shells out to nothing."""
+    return None
+
+
+@contextlib.contextmanager
+def _unit_stage_sandboxed(tmp_dir):
+    """CR-CRU-070 isolation for `InstallCreatesItsTargetDirTest`, which had
+    NONE: it patched `DEFAULT_STAGE_RUNNERS` with only a `[server]` double, and
+    `mock.patch.dict` MERGES -- so every later stage ran for real against the
+    operator's own environment. That was survivable while the remaining stage
+    only wrote a manifest into a tmp target dir; with `[unit]` it would write
+    into the operator's real `~/.config/systemd/user` and drive their user
+    manager. Guarded on three independent axes now: a `[unit]` double in the
+    table, a tmp `$XDG_CONFIG_HOME`/`$HOME` (so BOTH unit-dir resolution rules
+    land in tmp), and a `shutil.which` that resolves no `systemctl`.
+    """
+    with mock.patch.dict(os.environ,
+                         {"XDG_CONFIG_HOME": tmp_dir, "HOME": tmp_dir}), \
+            mock.patch("crucible_axi.install.shutil.which",
+                       side_effect=_resolves_nothing):
+        yield
+
+
+_TARGET_DIR_STAGE_DOUBLES = {"server": _fast_provision_server_stage,
+                             UNIT_STAGE: _fast_unit_stage}
+
+
 class InstallCreatesItsTargetDirTest(unittest.TestCase):
     """AC7 / §S1b -- `run_install` creates `target_dir` before any stage runs,
     so a first install on a clean machine writes its manifest and exits 0."""
@@ -567,8 +610,9 @@ class InstallCreatesItsTargetDirTest(unittest.TestCase):
 
     def test_run_install_creates_a_missing_target_dir_and_writes_the_manifest(self):
         install, = _import_fresh("crucible_axi.install")
-        with mock.patch.dict(install.DEFAULT_STAGE_RUNNERS,
-                             {"server": _fast_provision_server_stage}):
+        with _unit_stage_sandboxed(self.root), \
+                mock.patch.dict(install.DEFAULT_STAGE_RUNNERS,
+                                _TARGET_DIR_STAGE_DOUBLES):
             ok, stages, warnings = install.run_install(self.target)
 
         self.assertTrue(
@@ -585,15 +629,17 @@ class InstallCreatesItsTargetDirTest(unittest.TestCase):
                 f"ok:true (AC7) -- it dies FileNotFoundError today; "
                 f"warnings={warnings}")
         self.assertEqual(
-            [s["name"] for s in stages], ["server", "manifest"],
-            f"both stages must have run to completion; stages={stages}")
+            # CR-CRU-070 -- (server, manifest, unit).
+            [s["name"] for s in stages], ["server", "manifest", UNIT_STAGE],
+            f"every stage must have run to completion; stages={stages}")
 
     def test_run_install_twice_on_a_missing_target_dir_is_idempotent(self):
         """`exist_ok=True`: the second run neither raises on the now-existing
         directory nor rewrites a different manifest (AC7 idempotency)."""
         install, = _import_fresh("crucible_axi.install")
-        with mock.patch.dict(install.DEFAULT_STAGE_RUNNERS,
-                             {"server": _fast_provision_server_stage}):
+        with _unit_stage_sandboxed(self.root), \
+                mock.patch.dict(install.DEFAULT_STAGE_RUNNERS,
+                                _TARGET_DIR_STAGE_DOUBLES):
             ok1, stages1, warnings1 = install.run_install(self.target)
             first = Path(self._manifest_path()).read_text(encoding="utf-8") \
                 if os.path.isfile(self._manifest_path()) else None
@@ -623,8 +669,9 @@ class InstallCreatesItsTargetDirTest(unittest.TestCase):
         `cli.main(['install', '--target-dir', <missing>])` (server stage stubbed
         to a fast provision) and require exit 0 plus a manifest on disk."""
         install, cli = _import_fresh("crucible_axi.install", "crucible_axi.cli")
-        with mock.patch.dict(install.DEFAULT_STAGE_RUNNERS,
-                             {"server": _fast_provision_server_stage}):
+        with _unit_stage_sandboxed(self.root), \
+                mock.patch.dict(install.DEFAULT_STAGE_RUNNERS,
+                                _TARGET_DIR_STAGE_DOUBLES):
             code, out, err = _run_cli(
                 cli, ["install", "--target-dir", self.target])
 
