@@ -1841,6 +1841,27 @@ export class Store {
       .map(Store.toEvent);
   }
 
+  /**
+   * CR-CRU-074 §S3 — the releases a project has recorded, newest-first: the
+   * milestone events of type `release`, whose `label` carries the version and
+   * `commit` the tagged sha. Archived projects are excluded through the same
+   * subquery `listAgents`/`listEvents`/`listOpenRuns` use (CR-CRU-012 §S1b) —
+   * an archived project contributes nothing to any live surface, and nothing
+   * is deleted, so unarchiving restores its history. `type` is JSON in the
+   * payload column, so the match is done on the parsed value (same pattern as
+   * listEventsForCycle above); no other milestone type can leak in.
+   */
+  listReleases(projectKey: string): RunEvent[] {
+    const rows = this.db
+      .query<EventRow, [string]>(
+        `SELECT * FROM events WHERE project_key = ? AND kind = 'milestone'
+         AND ${Store.NOT_ARCHIVED_SUBQUERY}
+         ORDER BY timestamp DESC, rowid DESC`,
+      )
+      .all(projectKey);
+    return rows.map(Store.toEvent).filter((event) => event.type === "release");
+  }
+
   /** Cheap SQL count of raw (non-rolled-up) events, optionally scoped to a project. */
   countEvents(projectKey?: string): number {
     if (projectKey === undefined) {
