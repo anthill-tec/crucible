@@ -75,6 +75,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end + Aborted state | feature | PENDING (0.2.0 · track-3 cand.) | 008, 011 | 5 (0.2.0) |
 | [CR-CRU-018](CR-CRU-018-responsive-mobile.md) | Responsive: mobile + tablet media | feature | PENDING (0.2.0) | 016 | 5/6 (0.2.0) |
 | [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: velocity + burndown + forecast | feature | PENDING (0.2.0) | 011, 014 | 5/6 (0.2.0) |
+| [CR-CRU-068](CR-CRU-068-server-discloses-its-store.md) | The server never says which store it opened — `resolveDbPath`'s rule 3 is CWD-relative, so the same binary opens a different DB depending on where it was launched: repo dev server → `data/crucible.db` (9.2 MB, plans=70), installed `crucible-axi serve` from `$HOME` → `~/.local/share/crucible/crucible.db` (60 KB, all zeros). Both bind :3849, so whoever holds the port silently decides where every client writes, and neither startup nor `/api/health` discloses the store. Found by a human noticing absent data — today that is the only way it CAN be found. Disclosure only: resolution order, defaults and rule 3 stay exactly as they are | bugfix | PENDING (0.2.0) | 043, 066 | 5 (0.2.0) |
 
 ## Notes
 - 🚀 **2026-08-19 — Crucible v2 SHIPPED its first public release (0.1.0 + hotfix 0.1.1).**
