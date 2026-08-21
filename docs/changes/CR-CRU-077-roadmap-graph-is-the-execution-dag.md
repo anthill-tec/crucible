@@ -26,6 +26,26 @@ eight recorded decisions. This CR implements it.
 
 ## Design (F14a, as approved)
 
+### The wave/release model (user-stated, 2026-08-21 — governing)
+
+**A release is a milestone that acts as the END of a wave.** A wave exists because CRs inside it
+run in **parallel**; the CRs of that wave, and the features they bring, are **bundled into** the
+release that closes it. The roadmap then continues: another wave exists targeting another release.
+
+So the roadmap's spine is `wave → release → wave → release → …`, and this is the structure the
+graph draws:
+
+- a **wave** is the parallel-execution region — its CRs fan out subject only to `depends-on`;
+- its **release diamond terminates it**, and nothing in the next wave starts before that diamond;
+- **multiple waves** therefore mean multiple releases, in roadmap order.
+
+Two consequences the builder must respect. A release is **not** an annotation hanging beside the
+graph — it is the join point every CR of its wave flows into, which is exactly why an edgeless
+milestone node is the defect this CR fixes. And a wave is a **planning** grouping whose membership
+can be **reassigned** during refactoring or reprioritisation when targeting a release, so the graph
+renders the wave a CR is in *now* and never assumes today's label described a past release.
+
+
 **Flow composes four inputs**, not one:
 
 1. **depends-on** — hard prerequisite edges.
