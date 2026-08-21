@@ -1070,3 +1070,27 @@ body {
 /* The open span's running entry: same inline flow, no click affordance. */
 .app-inline-run-running { cursor: default; }
 .app-inline-run-running:hover { color: var(--ink); }
+
+/* CR-CRU-014 §S3 — roadmap table|graph view toggle + the Cytoscape graph
+   mount. The graph container needs a DEFINITE size for Cytoscape to lay out
+   its canvas (a zero-height container would collapse and never paint). */
+.app-roadmap-viewtoggle {
+  display: inline-flex;
+  gap: 2px;
+  margin: 6px 8px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.app-roadmap-viewtoggle .app-seg {
+  font: 600 11px/1.4 var(--mono);
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2, var(--ink));
+  cursor: pointer;
+}
+.app-roadmap-viewtoggle .app-seg.on { background: var(--bg-2, var(--line)); color: var(--ink); }
+.app-roadmap-graph { width: 100%; min-height: 520px; height: 72vh; }

@@ -2466,8 +2466,165 @@
       );
     };
 
+    // CR-CRU-014 §S3 — the exclusive table|graph view toggle. `viewMode`
+    // ("table" default) selects exactly one view; both segmented buttons stay
+    // mounted in either state so either view is one click away.
+    const roadmapViewMode = van.state("table");
+
+    // Mount a Cytoscape (dagre) graph into an already-created container once
+    // it is attached to the DOM. Guarded on the plain-HTML global
+    // `window.cytoscape` (the vendored UMD): absent in the unit DOM, so the
+    // container still renders with its data-cr-node-count attribute.
+    const mountRoadmapCy = (container, graph) => {
+      const cyto = typeof window !== "undefined" ? window.cytoscape : undefined;
+      if (typeof cyto !== "function") return;
+      setTimeout(() => {
+        if (!container.isConnected) return;
+        const cy = cyto({
+          container,
+          elements: graph,
+          layout: { name: "dagre", rankDir: "LR", nodeSep: 28, rankSep: 48 },
+          style: [
+            {
+              selector: "node",
+              style: {
+                label: "data(label)",
+                "text-valign": "center",
+                "text-halign": "center",
+                "font-size": 10,
+                color: "#e5e7eb",
+                "text-wrap": "wrap",
+                "text-max-width": "88px",
+              },
+            },
+            {
+              selector: 'node[type="cr"]',
+              style: {
+                shape: "round-rectangle",
+                "background-color": "#1f2937",
+                "border-width": 2,
+                "border-color": "#4b5563",
+                width: "104px",
+                height: "36px",
+              },
+            },
+            {
+              selector: 'node[type="terminal"]',
+              style: {
+                shape: "ellipse",
+                "background-color": "#374151",
+                "border-color": "#6b7280",
+                "border-width": 2,
+                width: "46px",
+                height: "46px",
+              },
+            },
+            {
+              selector: 'node[type="milestone"]',
+              style: {
+                shape: "diamond",
+                "background-color": "#78350f",
+                "border-color": "#f59e0b",
+                "border-width": 2,
+                width: "60px",
+                height: "60px",
+              },
+            },
+            {
+              selector: 'node[status="COMPLETED"]',
+              style: { "border-color": "#22c55e", "background-color": "#14532d" },
+            },
+            {
+              selector: 'node[status="IN_PROGRESS"]',
+              style: { "border-color": "#eab308", "background-color": "#3f2d0a" },
+            },
+            {
+              selector: 'node[status="PENDING"]',
+              style: { "border-color": "#6b7280", "background-color": "#1f2937" },
+            },
+            {
+              selector: "node[track]",
+              style: { "border-style": "double", "border-width": 3 },
+            },
+            {
+              selector: "edge",
+              style: {
+                width: 2,
+                "line-color": "#4b5563",
+                "target-arrow-color": "#4b5563",
+                "target-arrow-shape": "triangle",
+                "curve-style": "bezier",
+              },
+            },
+          ],
+        });
+        // Per-node tap → the same one-rule Workflow swap the table row uses.
+        cy.on("tap", "node", () => {
+          state.workspaceTab = "Workflow";
+        });
+        cy.fit(undefined, 24);
+        window.crucibleRoadmapCy = cy;
+        // SSE restyle: when the live queue's statuses change, patch node data
+        // and re-run the stylesheet in ONE batch — no full remount, pan/zoom
+        // preserved.
+        van.derive(() => {
+          const live = Array.from(state.queue);
+          if (!container.isConnected) return;
+          cy.batch(() => {
+            for (const e of live) {
+              const node = cy.$id(e.cr);
+              if (node.nonempty()) node.data("status", e.status);
+            }
+          });
+          cy.style().update();
+        });
+      }, 0);
+    };
+
+    const RoadmapGraphBody = () => {
+      const entries = Array.from(state.queue);
+      const releases = Array.from(state.releases);
+      const graph = L.buildRoadmapGraph(entries, releases);
+      const crCount = graph.nodes.filter((n) => n.data.type === "cr").length;
+      const container = div({
+        "data-testid": "roadmap-graph",
+        "data-cr-node-count": String(crCount),
+        class: "app-roadmap-graph",
+      });
+      mountRoadmapCy(container, graph);
+      return div(
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
+        paneRunway(container),
+      );
+    };
+
+    const RoadmapViewToggle = () =>
+      div(
+        { "data-testid": "roadmap-view-toggle", class: "app-roadmap-viewtoggle" },
+        button(
+          {
+            "data-testid": "roadmap-view-table",
+            class: () => `app-seg${roadmapViewMode.val === "table" ? " on" : ""}`,
+            onclick: () => (roadmapViewMode.val = "table"),
+          },
+          "table",
+        ),
+        button(
+          {
+            "data-testid": "roadmap-view-graph",
+            class: () => `app-seg${roadmapViewMode.val === "graph" ? " on" : ""}`,
+            onclick: () => (roadmapViewMode.val = "graph"),
+          },
+          "graph",
+        ),
+      );
+
     const RoadmapPanel = () =>
-      div({ class: greyed("app-center") }, () => RoadmapPanelBody());
+      div(
+        { class: greyed("app-center") },
+        RoadmapViewToggle(),
+        () => (roadmapViewMode.val === "graph" ? RoadmapGraphBody() : RoadmapPanelBody()),
+      );
 
     // ── CR-CRU-011 §S3 — Workflow tab: ACTIVE view (per-CR todo over the
     // open plan) + gate-pane placeholder. The HISTORY lens lands in C4.
