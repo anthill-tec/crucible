@@ -19,6 +19,13 @@
       agents: [],
       events: [],
       plans: [], // CR-CRU-011 §S3 — the workspace project's cycle plans
+      // CR-CRU-014 §S3 — the Roadmap tab's data slices: the execution queue
+      // (GET /api/v2/projects/<key>/queue, §S1) and the release ledger
+      // (GET /api/v2/projects/<key>/releases, CR-CRU-074). vanX reactive
+      // arrays, refetched over the same cadence as plans while a workspace
+      // is open, so the roadmap table + live overlay stay current.
+      queue: [],
+      releases: [],
       // CR-CRU-017 §S3 — the runs opened through /runs/start that have NOT
       // settled yet, as served by the additive `openRuns` field on
       // GET /api/v2/events. Each one is painted as a live "running…" card and
@@ -65,6 +72,11 @@
       // click re-renders the CoverageTrendCard.
       coverageDrillPath: [],
     });
+
+    // CR-CRU-014 §S3 — a cold /p/<key>/roadmap deep-link lands on the Roadmap
+    // tab (mirrors how a /run/<id> deep-link lands the run overlay); every
+    // other workspace entry keeps the Workflow primary default.
+    if (state.route.roadmap === true) state.workspaceTab = "Roadmap";
 
     // ── Routing (§S2 — hash-free History routing, parse in app-logic) ───
     // CR-CRU-016 §S1 — the run detail is a PANE STATE of the ACTIVE central
@@ -118,6 +130,8 @@
     // steady-state refresh; navigation no longer depends on it.
     function scopeChanged() {
       vanX.replace(state.plans, () => []);
+      vanX.replace(state.queue, () => []);
+      vanX.replace(state.releases, () => []);
       // CR-CRU-028 §S2 — bucket keys (YYYY-MM-DD / week-N / month-YYYY-MM) are
       // deterministic and collide across projects, so a leftover open drill
       // path would render a row pre-unfolded on the newly-navigated project.
@@ -134,6 +148,7 @@
       // vocabulary (CR-026 §S0 equivalence), not just a workspace landing.
       void refetchPlans();
       void refetchCore();
+      void refetchRoadmap();
     }
 
     // CR-CRU-016 AC2 — close the detail back to the underlying surface path
@@ -186,6 +201,7 @@
     async function refetch() {
       await refetchCore();
       await refetchPlans();
+      await refetchRoadmap();
     }
 
     // CR-CRU-026 §S1 — the core slice (projects/agents/events/health) split
@@ -252,6 +268,31 @@
         vanX.replace(state.plans, () => body.plans ?? []);
       } catch {
         // Keep the last-known plans visible while the route is unreachable.
+      }
+    }
+
+    // CR-CRU-014 §S3 — the Roadmap tab's queue + releases slices. Only a
+    // workspace has a scoped queue/release ledger; on home both stay empty.
+    // Guarded independently of core/plans so a queue hiccup never poisons
+    // the rest of the surface, and the last-known table survives a blip.
+    async function refetchRoadmap() {
+      if (state.route.page !== "workspace") {
+        vanX.replace(state.queue, () => []);
+        vanX.replace(state.releases, () => []);
+        return;
+      }
+      const key = encodeURIComponent(state.route.projectKey);
+      try {
+        const body = await getJson(`/api/v2/projects/${key}/queue`);
+        vanX.replace(state.queue, () => body.entries ?? []);
+      } catch {
+        // Keep the last-known queue visible while the route is unreachable.
+      }
+      try {
+        const body = await getJson(`/api/v2/projects/${key}/releases`);
+        vanX.replace(state.releases, () => body.releases ?? []);
+      } catch {
+        // Keep the last-known releases visible while the route is unreachable.
       }
     }
 
@@ -2169,6 +2210,17 @@
           const p = currentProject();
           return p === null ? div() : ProjectPaneCard(p);
         },
+        // CR-CRU-014 §S3 — the 🗺 roadmap chip: a one-rule tab swap to the
+        // Roadmap tab (same destination as the /p/<key>/roadmap deep-link),
+        // no slide-over.
+        button(
+          {
+            "data-testid": "roadmap-chip",
+            class: "app-chip app-roadmap-chip",
+            onclick: () => (state.workspaceTab = "Roadmap"),
+          },
+          "🗺 roadmap",
+        ),
         div({ class: "app-agent-subrows" }, () =>
           visibleAgents().length === 0
             ? div({ class: "app-empty" }, "no agents yet")
@@ -2270,6 +2322,152 @@
 
     const BddPlaceholder = () =>
       div({ class: greyed("app-center") }, BddFeed());
+
+    // ── CR-CRU-014 §S3 — Roadmap tab: TABLE view over the execution queue ──
+    // TABLE side only; the exclusive table|graph toggle's graph (Cytoscape)
+    // lands next cycle. The seam: RoadmapPanelBody owns the "table" render;
+    // a future graph render slots beside it behind the same toggle.
+
+    // Topological (depends-on) order — deps render before their dependants.
+    // DFS post-order; unknown deps and cycles are tolerated (skipped/guarded)
+    // so a malformed queue still paints in a stable, seq-preserving order.
+    const roadmapTopoOrder = (entries) => {
+      const byCr = new Map(entries.map((e) => [e.cr, e]));
+      const visited = new Set();
+      const out = [];
+      const visit = (cr, stack) => {
+        const entry = byCr.get(cr);
+        if (entry === undefined || visited.has(cr) || stack.has(cr)) return;
+        stack.add(cr);
+        for (const dep of entry.dependsOn ?? []) visit(dep, stack);
+        stack.delete(cr);
+        visited.add(cr);
+        out.push(entry);
+      };
+      for (const entry of entries) visit(entry.cr, new Set());
+      return out;
+    };
+
+    // The plan's live cycle position — `cycle a/b` where a is the 1-based
+    // index of the single active cycle and b the cycle count. null when no
+    // cycle is currently active.
+    const roadmapCyclePosition = (plan) => {
+      const cycles = plan.cycles ?? [];
+      const idx = cycles.findIndex((c) => c.status === "active");
+      return idx >= 0 ? `cycle ${idx + 1}/${cycles.length}` : null;
+    };
+
+    const roadmapLaneText = (plan) => {
+      const pos = roadmapCyclePosition(plan);
+      return pos === null ? `${plan.track} ▶` : `${plan.track} ▶ ${pos}`;
+    };
+
+    const RoadmapRow = (entry, opts) => {
+      const active = entry.status === "IN_PROGRESS";
+      const deps = entry.dependsOn ?? [];
+      const laneBadge =
+        active && opts.multiTrack && opts.plan
+          ? span(
+              { "data-testid": "roadmap-lane-badge", class: "app-roadmap-lane" },
+              roadmapLaneText(opts.plan),
+            )
+          : null;
+      return div(
+        {
+          "data-testid": "roadmap-row",
+          "data-cr": entry.cr,
+          "data-active": active ? "true" : "false",
+          class: `app-roadmap-row${active ? " on" : ""}`,
+          // One-rule tab swap (no overlay): an open (IN_PROGRESS) row lands on
+          // the Workflow tab at that CR's active section; a COMPLETED row
+          // lands on its Workflow history group; a PENDING row is inert.
+          onclick: () => {
+            if (entry.status === "IN_PROGRESS" || entry.status === "COMPLETED") {
+              state.workspaceTab = "Workflow";
+            }
+          },
+        },
+        span({ class: "app-roadmap-cr" }, entry.cr),
+        span({ class: "app-roadmap-title" }, entry.title ?? ""),
+        span({ class: "app-roadmap-wave" }, entry.wave),
+        div(
+          { class: "app-roadmap-deps" },
+          deps.map((d) =>
+            span(
+              { "data-testid": "roadmap-depends-chip", class: "app-chip app-roadmap-dep" },
+              d,
+            ),
+          ),
+        ),
+        span(
+          {
+            "data-testid": "roadmap-status-badge",
+            class: `app-badge app-roadmap-status ${entry.status.toLowerCase()}`,
+          },
+          entry.status,
+        ),
+        laneBadge,
+      );
+    };
+
+    const RoadmapPanelBody = () => {
+      const entries = Array.from(state.queue);
+      if (entries.length === 0) {
+        return div(
+          { "data-testid": "pane-scroll", class: "app-pane-content" },
+          paneRunway(
+            div(
+              { "data-testid": "roadmap-empty", class: "app-empty" },
+              // The imperative names the tool exactly as §S3 pins it — a
+              // LITERAL `<key>` placeholder, the orchestrator's own copy.
+              "No execution queue registered yet — register one via " +
+                "POST /projects/<key>/queue",
+            ),
+          ),
+        );
+      }
+      const ordered = roadmapTopoOrder(entries);
+      const plans = Array.from(state.plans);
+      const openPlans = plans.filter((p) => p.status === "open");
+      const multiTrack = openPlans.length > 1;
+      const planFor = (entry) =>
+        entry.planId === undefined
+          ? undefined
+          : plans.find((p) => String(p.planId) === String(entry.planId));
+      const children = [];
+      // Release-boundary dividers come from GET /releases (never wave numbers).
+      for (const rel of Array.from(state.releases)) {
+        children.push(
+          div(
+            {
+              "data-testid": "roadmap-release-divider",
+              class: "app-roadmap-divider app-roadmap-release",
+            },
+            `released ${rel.version}`,
+          ),
+        );
+      }
+      let prevWave;
+      for (const entry of ordered) {
+        if (entry.wave !== prevWave) {
+          children.push(
+            div(
+              { "data-testid": "roadmap-wave-divider", class: "app-roadmap-divider" },
+              `Wave ${entry.wave}`,
+            ),
+          );
+          prevWave = entry.wave;
+        }
+        children.push(RoadmapRow(entry, { multiTrack, plan: planFor(entry) }));
+      }
+      return div(
+        { "data-testid": "pane-scroll", class: "app-pane-content" },
+        paneRunway(div({ class: "app-roadmap-table" }, children)),
+      );
+    };
+
+    const RoadmapPanel = () =>
+      div({ class: greyed("app-center") }, () => RoadmapPanelBody());
 
     // ── CR-CRU-011 §S3 — Workflow tab: ACTIVE view (per-CR todo over the
     // open plan) + gate-pane placeholder. The HISTORY lens lands in C4.
@@ -3185,9 +3383,11 @@
             ? CoveragePanel()
             : state.workspaceTab === "Compile"
               ? CompilePanel()
-              : state.workspaceTab === "BDD"
-                ? BddPlaceholder()
-                : WorkspaceRuns();
+              : state.workspaceTab === "Roadmap"
+                ? RoadmapPanel()
+                : state.workspaceTab === "BDD"
+                  ? BddPlaceholder()
+                  : WorkspaceRuns();
       if (wsShowingDetail) {
         wsShowingDetail = false;
         queueMicrotask(() => {

@@ -305,7 +305,8 @@ describe("§S5 fidelity #1 — workspace tabs row is full-width, NOT inside a ra
     const tabButtons = Array.from(
       document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'),
     );
-    expect(tabButtons.length).toBe(5);
+    // SANCTIONED RE-TARGET (CR-CRU-014 §S3): the Roadmap tab lifts the count 5→6.
+    expect(tabButtons.length).toBe(6);
 
     for (const button of tabButtons) {
       button.click();
@@ -984,7 +985,8 @@ describe("§S5 Coverage tab (user defect 2026-07-15)", () => {
     });
 
     const tabs = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'));
-    expect(tabs.length).toBe(5);
+    // SANCTIONED RE-TARGET (CR-CRU-014 §S3): the Roadmap tab lifts the count 5→6.
+    expect(tabs.length).toBe(6);
     for (const tab of tabs) {
       if (tab.hasAttribute("disabled")) continue;
       tab.click();

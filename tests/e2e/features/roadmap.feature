@@ -16,5 +16,7 @@ Feature: CR-CRU-014 §S3 — the execution roadmap tab: a queued CR's row and it
     Then the roadmap row for "CR-RM-100" shows status "PENDING" within 2 seconds
     When a cycle plan is filed for cr "CR-RM-100" with a cycle labelled "C1"
     Then the roadmap row for "CR-RM-100" shows status "IN_PROGRESS" within 3 seconds
-    When the plan is closed with merge commit "deadbeef01"
+    When cycle 1 of that plan is activated
+    And cycle 1 of that plan is marked done
+    And the plan is closed with merge commit "deadbeef01"
     Then the roadmap row for "CR-RM-100" shows status "COMPLETED" within 3 seconds
