@@ -2,7 +2,7 @@
 
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
-- **Depends on**: 014, 076
+- **Depends on**: 014, 076, 080
 - **Status**: PENDING (0.2.0)
 
 ## Problem
@@ -87,8 +87,16 @@ is §S1's centrepiece, so RED has not been dispatched.
 AC6, AC7, AC8). **Not implementable:** AC1 (a diamond with inbound and outbound edges), because
 no data says which CRs sit on either side of it.
 
-**Verdict: SPEC_UPDATE_NEEDED — the release-gating half of §S1 needs a data prerequisite, and I
-will not fabricate the association.**
+**Verdict: RESOLVED by dependency (user decision, Option A, 2026-08-21).** The prerequisite is
+supplied by **CR-080 §S4**, which makes the release milestone record `releasedAt` (the tag's own
+commit date) and `crs` (the CR ids the tag shipped, computed from `git log <prev>..<tag>`
+intersected with the queue) — the association is produced by the ceremony, the only actor with
+git in reach. `GET …/releases` exposes both. This CR therefore **depends on 080** and gates flow
+from `crs`, never from ingest timestamps.
+
+F4 stands unresolved and is **out of scope here**: an uncut release still has no record, so a
+pending release diamond is **not drawn** rather than faked. The active wave flows to `End` until
+a planned-release concept exists.
 
 ## Scope
 

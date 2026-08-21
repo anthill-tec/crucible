@@ -69,6 +69,30 @@ exact recovery command.
 `backfill-releases` reports per tag and prints a final tally (`3/3 recorded`, or which failed
 and why). Re-running never duplicates a release for the same tag/commit.
 
+### §S4 A release records WHEN it shipped and WHAT it shipped
+
+CR-077's gap analysis proved the roadmap cannot gate flow by release because nothing links a CR
+to a release, and the one timestamp we store is the wrong one. Both are fixed at the source —
+the ceremony already knows the answers at report time.
+
+The release milestone carries two additions in its payload (the events table stores payload
+verbatim, so **no column and no migration**, matching CR-074's approach):
+
+- **`releasedAt`** — the tag's own commit date (`git log -1 --format=%ct <tag>`), i.e. when the
+  release actually shipped. Distinct from the event `timestamp`, which is when it was *recorded*
+  and is currently the only date we keep. Our three backfilled releases all say 2026-08-21 13:45
+  while the real tags are 2026-08-19 / 08-20 — that gap is the bug.
+- **`crs`** — the CR ids the release shipped, computed from the tag range
+  (`git log <prev-tag>..<tag>`, matching CR ids in merge subjects) intersected with the
+  registered queue. This is the association the roadmap needs, produced by the only actor that
+  can compute it reliably: the ceremony, standing in the repo with git available.
+
+`releaseBrief` exposes both on `GET …/releases`. Consumers order releases by `releasedAt`, never
+by ingest `timestamp`.
+
+Deliberately **not** doing commit-ancestry resolution server-side: it is the exact rule, but it
+would put git in the server's path. The ceremony computes it once, at the moment it is knowable.
+
 ## Acceptance criteria
 
 - **AC1** — `emit_release_milestone` passes `--agent`; a release ceremony with an identity
@@ -84,10 +108,20 @@ and why). Re-running never duplicates a release for the same tag/commit.
 - **AC6** — the existing contract test that stubs the client is strengthened to assert the
   **argv actually contains `--agent`**; the current stub passes without it, which is precisely
   why this shipped broken.
+- **AC7** — a recorded release carries **`releasedAt`** equal to the tag's commit date, **not**
+  the ingest time. Asserted with a tag whose date differs from "now", since identical values
+  would let the bug pass.
+- **AC8** — a recorded release carries **`crs`**: the CR ids in the tag range, intersected with
+  the registered queue. For 0.1.2 that set is non-empty and excludes CRs merged after the tag.
+- **AC9** — `GET …/releases` exposes `releasedAt` and `crs`, and releases sort by `releasedAt`.
+- **AC10** — a CR appears in **at most one** release's `crs` — the earliest tag containing it —
+  so the association is a partition, not an overlap.
+- **AC11** — re-running the backfill produces identical `releasedAt` / `crs` (idempotent, AC5).
 
 ## Estimated size
 
-S — one argument, a preflight check, a tally, and a strengthened assertion.
+S–M — one argument, a preflight check, a tally, a strengthened assertion, plus the tag-date and
+CR-set computation in the ceremony and their exposure in `releaseBrief`.
 
 ## Risk
 
@@ -103,3 +137,7 @@ that Crucible never learns about.
 - Making release reporting fatal after publication.
 - Release→gate association (still nothing answers "which gates belong to release X").
 - Roadmap row ordering and duplicate wave dividers — **CR-078 §S4**.
+- Consuming `releasedAt` / `crs` to gate the graph or group the table — that is **CR-077** and
+  **CR-078**. This CR only makes the data exist and exposes it.
+- A **planned/uncut** release. `crs` describes what a release *did* ship, so F14a's pending
+  0.2.0 diamond still has no data source; that remains open and is not fabricated here.
