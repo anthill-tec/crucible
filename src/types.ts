@@ -201,6 +201,21 @@ export interface RunEvent {
   label?: string;
   commit?: string;
   /**
+   * CR-CRU-080 §S4 — a `release` milestone's SHIP instant: the tag's own
+   * commit date in epoch SECONDS (`git log -1 --format=%ct <tag>`), computed
+   * by the ceremony — the only actor standing in the repo with git. Distinct
+   * from `timestamp`, which is when the release was RECORDED. ABSENT on a
+   * release recorded before §S4 and on every non-release event.
+   */
+  releasedAt?: number;
+  /**
+   * CR-CRU-080 §S4 — the CR ids a `release` shipped: the ceremony's tag-range
+   * scan INTERSECTED with the project's registered queue at record time.
+   * ABSENT on a pre-§S4 release; EMPTY when the queue knew none of the scanned
+   * ids (a truthful "nothing registered", never a fallback to the raw scan).
+   */
+  crs?: string[];
+  /**
    * CR-CRU-017 §S1 — the RUN's start instant, carried from the open run onto
    * the event that CLOSED it. Absent on a single-shot ingest (no `runId`, no
    * lifecycle) and on every pre-017 row.

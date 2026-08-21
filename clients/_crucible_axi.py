@@ -1561,6 +1561,32 @@ def milestone_help(ok, mtype, base_url):
             f"milestone --type {mtype} --agent <agentId>"]
 
 
+def release_crs(raw, project_dir, ops):
+    """CR-CRU-080 §S4 (PURE-ish: one GET) — the CR ids a release actually
+    shipped, from the ceremony's comma-separated tag-range scan INTERSECTED
+    with the project's REGISTERED QUEUE.
+
+    The two halves of the answer live in different places and neither may move:
+    only the ceremony can scan a tag range (it stands in the repo, git in
+    reach), and only the project's queue says which CR ids the project ever
+    registered. The intersection therefore happens HERE, on the ceremony's own
+    side of the wire, so the server never has to run git and never has to
+    guess whether a posted id is real.
+
+    Returns `None` when nothing was scanned (no §S4 data to record at all),
+    and a possibly EMPTY list otherwise: a queue that is unregistered,
+    unreachable or simply knows none of the scanned ids yields the truthful
+    empty set, NEVER a fall back to the raw scan — a release must not claim
+    CRs the project never registered."""
+    scanned = [cr.strip() for cr in (raw or "").split(",") if cr.strip()]
+    if not scanned:
+        return None
+    resp = ops.get(f"/api/v2/projects/{ops.project_key(project_dir)}/queue")
+    queued = {entry.get("cr") for entry in (resp.get("entries") or [])} \
+        if resp.get("ok") else set()
+    return [cr for cr in dict.fromkeys(scanned) if cr in queued]
+
+
 def cmd_milestone(args, project_dir, ops):
     """POST a workflow milestone. §S4b.
 
@@ -1571,22 +1597,36 @@ def cmd_milestone(args, project_dir, ops):
     CR-CRU-058 §S1 — the verb reached NO emitter at all: the stderr line was
     its only output, so a machine caller saw nothing on stdout. It now emits
     the fleet's standard envelope like every other write verb, in the shared
-    module, for all five clients at once."""
+    module, for all five clients at once.
+
+    CR-CRU-080 §S4 — a `release` milestone also carries its PROVENANCE:
+    `--released-at` (the tag's own commit date, epoch seconds — when the
+    release SHIPPED, as opposed to when it was recorded) and `--crs` (the CR
+    ids its tag range merged, kept only where the registered queue agrees).
+    Both are computed by the ceremony, which is the only actor that can."""
     context = fleet_context(cr=args.cr)
+    released_at = getattr(args, "released_at", None)
+    crs = release_crs(getattr(args, "crs", None), project_dir, ops)
     resp = ops.post_milestone(project_dir, ops.agent_id(args), args.type,
                               label=args.label, commit=getattr(args, "commit", None),
-                              context=context or None)
+                              context=context or None,
+                              released_at=released_at, crs=crs)
     ok = resp.get("ok", False)
     # The interactive line stays an EXPLICIT stderr print (CR-CRU-054 §S2b's
     # single locus for it) rather than riding the emitter's legacy channel —
     # the envelope below is an ADDITION to that line, not a replacement.
     print(f"milestone: ok={ok} type={args.type}"
           + (f" label={args.label}" if args.label else "")
+          + (f" releasedAt={released_at}" if released_at else "")
+          + (f" crs={','.join(crs) if crs else '(none registered)'}"
+             if crs is not None else "")
           + (f" error={resp.get('error')}" if resp.get("error") else ""),
           file=sys.stderr)
     ops.emit("milestone", bool(ok),
              {"type": args.type, "label": args.label,
               "commit": getattr(args, "commit", None),
+              **({"releasedAt": released_at} if released_at else {}),
+              **({"crs": crs} if crs is not None else {}),
               "help": milestone_help(bool(ok), args.type, ops.base_url)},
              ops.context(project_dir, cr=args.cr), [], None)
     return 0 if ok else 1
@@ -1802,14 +1842,25 @@ def post_gate(project_key, agent_id, gate, post_fn, context=None):
 
 
 def post_milestone(project_key, agent_id, mtype, post_fn,
-                   label=None, commit=None, context=None):
+                   label=None, commit=None, context=None,
+                   released_at=None, crs=None):
     """POST a workflow milestone (§S4b). Absent label/commit/context keys are
-    OMITTED rather than sent as nulls."""
+    OMITTED rather than sent as nulls.
+
+    CR-CRU-080 §S4 — a release's provenance travels the same way: `releasedAt`
+    (the tag's commit date, epoch seconds) only when it was computed, and
+    `crs` whenever a scan HAPPENED — including as an empty list, which says
+    "the queue registered none of them" and is a different fact from a release
+    that carries no CR set at all."""
     payload = {"projectKey": project_key, "agentId": agent_id, "type": mtype}
     if label:
         payload["label"] = label
     if commit:
         payload["commit"] = commit
+    if released_at:
+        payload["releasedAt"] = released_at
+    if crs is not None:
+        payload["crs"] = crs
     if context:
         payload["context"] = context
     return post_fn("/api/v2/milestones", payload)

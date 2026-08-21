@@ -78,6 +78,10 @@ interface V2Body {
   // CR-CRU-073 §S1 — optional top-level release version the gate gated.
   version?: unknown;
   commit?: unknown;
+  // CR-CRU-080 §S4 — a release milestone's provenance, computed by the
+  // ceremony: the tag's commit date (epoch seconds) and the CR ids it shipped.
+  releasedAt?: unknown;
+  crs?: unknown;
   // CR-CRU-008 §S4 — silent unregister + guarded run deletion
   silent?: unknown;
   userApproved?: unknown;
@@ -1141,12 +1145,31 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
+  // CR-CRU-080 §S4 — the two provenance fields only the ceremony can compute
+  // (it stands in the repo with git): `releasedAt`, the tag's own commit date
+  // in epoch SECONDS, and `crs`, the CR ids its tag range merged, already
+  // intersected with the registered queue by the reporter (the client's
+  // `release_crs`) — so this route carries them, verbatim, and re-derives
+  // nothing. Validated the CR-CRU-073 §S1 way: carried only when well-formed,
+  // never coerced — a finite positive number, and the non-empty strings of an
+  // array. An EMPTY array is meaningful and kept: it says the reporter looked
+  // and the queue held none of what the tag range merged.
+  const releasedAt =
+    typeof body.releasedAt === "number" && Number.isFinite(body.releasedAt) && body.releasedAt > 0
+      ? body.releasedAt
+      : undefined;
+  const crs = Array.isArray(body.crs)
+    ? body.crs.filter((cr: unknown): cr is string => typeof cr === "string" && cr.length > 0)
+    : undefined;
   // CR-CRU-080 §S3 — a replayed release (identical type/label/commit) is the
   // store's idempotent no-op, echoed as the codebase's uniform "nothing
-  // changed" answer with the event already held, never a second row.
+  // changed" answer with the event already held, never a second row. Its
+  // provenance is the FIRST recording's: a replay re-computes nothing.
   const { event, changed } = store.recordMilestoneEvent(pk.key, agentId, body.type, {
     ...(typeof body.label === "string" ? { label: body.label } : {}),
     ...(typeof body.commit === "string" ? { commit: body.commit } : {}),
+    ...(releasedAt !== undefined ? { releasedAt } : {}),
+    ...(crs !== undefined ? { crs } : {}),
     ...eventContext(body),
   });
   return json({ ok: true, changed, event: event.id }, changed ? 201 : 200);
@@ -1606,18 +1629,26 @@ function handleProjectArchive(store: Store, key: string, archive: boolean): Resp
 
 /**
  * CR-CRU-074 §S3 — the wire shape of a recorded release: the version (the
- * milestone's `label`), the sha its tag points at, and when it shipped.
+ * milestone's `label`), the sha its tag points at, and when it was recorded.
  * Deliberately NOT an event brief (openRunBrief's precedent): a release is a
- * shipped VERSION, not a run, and these three keys are exactly what
- * CR-CRU-014's boundary rows and CR-CRU-022's forecast band read. Each
- * carrying field is spread only when the stored event has it — a release
- * whose version or commit was never recorded is reported as missing, never
- * as an invented value (AC6).
+ * shipped VERSION, not a run, and these keys are exactly what CR-CRU-014's
+ * boundary rows and CR-CRU-022's forecast band read. Each carrying field is
+ * spread only when the stored event has it — a release whose version or commit
+ * was never recorded is reported as missing, never as an invented value (AC6).
+ *
+ * CR-CRU-080 §S4/AC9 — plus the provenance the ceremony computed: `releasedAt`
+ * (the tag's own commit date, epoch SECONDS — when the release actually
+ * SHIPPED, as opposed to `timestamp`, which is when it was RECORDED) and `crs`
+ * (the CR ids it shipped). Both follow the same absence rule: a release
+ * recorded before §S4 reports neither, rather than a fabricated date or an
+ * empty set that would claim the release shipped nothing.
  */
 function releaseBrief(event: RunEvent) {
   return {
     ...(event.label !== undefined ? { version: event.label } : {}),
     ...(event.commit !== undefined ? { commit: event.commit } : {}),
+    ...(event.releasedAt !== undefined ? { releasedAt: event.releasedAt } : {}),
+    ...(event.crs !== undefined ? { crs: event.crs } : {}),
     timestamp: event.timestamp,
   };
 }

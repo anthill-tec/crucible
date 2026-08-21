@@ -374,6 +374,55 @@ report_release() {
     return "$EXIT_SUCCESS"
 }
 
+# CR-CRU-080 §S4 — WHEN a release shipped: the commit date of the commit its tag
+# points at, in epoch SECONDS (git's `%ct`). This is deliberately NOT the ingest
+# time Crucible stamps when the report lands — that is when the release was
+# RECORDED, which is why the three hand-backfilled releases all claimed the
+# backfill's own minute while their tags were days older. Empty when git cannot
+# answer, in which case nothing is reported rather than a guessed date.
+release_ship_date() {
+    git log -1 --format=%ct "$1" 2>/dev/null || true
+}
+
+# CR-CRU-080 §S4 — every bare-SemVer tag that shipped BEFORE this version, in
+# version order. These are the left-hand side of the tag range below: excluding
+# ALL of them (rather than only the immediately preceding tag) is what makes a
+# CR belong to the EARLIEST tag containing it, so the per-release CR sets are a
+# partition and never overlapping "everything up to this tag" prefixes — a
+# guarantee that holds even when the tags are not one straight ancestry chain.
+earlier_release_tags() {
+    git tag 2>/dev/null \
+        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+        | sort -V \
+        | awk -v version="$1" '$0 == version { exit } { print }' || true
+}
+
+# CR-CRU-080 §S4 — WHAT a release shipped: the CR id carried by the subject of
+# every MERGE commit in the tag's range, comma-separated for the client's
+# `--crs`. The range is the tagged commit minus everything reachable from every
+# earlier release tag; for the EARLIEST tag there is nothing to exclude, so the
+# range runs back to the repo's root commit.
+#
+# This is the half only the repo can answer. The other half — which of those CR
+# ids the project actually REGISTERED — lives in Crucible's queue, so the
+# intersection happens in the client, on this side of the wire. Git therefore
+# never enters the server's path, and the ceremony never has to hold a copy of
+# the queue.
+release_crs() {
+    local version="$1" sha="$2" tag
+    local -a excludes=()
+
+    while IFS= read -r tag; do
+        [ -n "$tag" ] || continue
+        excludes+=("^$tag")
+    done < <(earlier_release_tags "$version")
+
+    git log --merges --format=%s "$sha" ${excludes[@]+"${excludes[@]}"} 2>/dev/null \
+        | grep -Eo 'CR-[A-Z]+-[0-9]+' \
+        | sort -u \
+        | paste -sd, - || true
+}
+
 # The SINGLE release-report path: report one (version, sha) pair as a `release`
 # milestone through the repo client (never a bare curl), declaring the
 # ceremony's identity (CR-CRU-080 §S1) — the client requires it and has no
@@ -384,21 +433,40 @@ report_release() {
 # comment that used to claim it here was false, and a re-run of the backfill
 # duplicated every release.
 #
+# CR-CRU-080 §S4 — the SAME single path also carries the release's provenance:
+# when it shipped and what it shipped, each reported only when git actually
+# answered, so an unanswerable field is omitted rather than invented.
+#
 # Returns non-zero when the report failed, having printed the warning AND the
-# single-line recovery command carrying the tag's sha. Whether that is fatal is
-# the CALLER's call: after publication it never is (report_release swallows it),
-# while the backfill counts it into its tally.
+# single-line recovery command carrying the tag's sha (and its provenance, so
+# the recovery records the same release, not a poorer one). Whether that is
+# fatal is the CALLER's call: after publication it never is (report_release
+# swallows it), while the backfill counts it into its tally.
 emit_release_milestone() {
-    local version="$1" sha="$2" client agent
+    local version="$1" sha="$2" client agent ship_date crs shown=""
+    local -a provenance=()
 
     agent="$(ceremony_agent)"
     client="$(repo_root)/clients/python-crucible.py"
-    if python3 "$client" milestone --type release --label "$version" --commit "$sha" --agent "$agent"; then
+
+    ship_date="$(release_ship_date "$sha")"
+    if [ -n "$ship_date" ]; then
+        provenance+=(--released-at "$ship_date")
+        shown="$shown --released-at $ship_date"
+    fi
+    crs="$(release_crs "$version" "$sha")"
+    if [ -n "$crs" ]; then
+        provenance+=(--crs "$crs")
+        shown="$shown --crs $crs"
+    fi
+
+    if python3 "$client" milestone --type release --label "$version" \
+        --commit "$sha" --agent "$agent" ${provenance[@]+"${provenance[@]}"}; then
         return "$EXIT_SUCCESS"
     fi
 
     info "WARN: release $version is NOT recorded in Crucible; the release itself is published and complete"
-    info "  recover with: python3 $client milestone --type release --label $version --commit $sha --agent $agent"
+    info "  recover with: python3 $client milestone --type release --label $version --commit $sha --agent $agent$shown"
     return "$EXIT_ERROR"
 }
 
