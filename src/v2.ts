@@ -1040,13 +1040,20 @@ const GATE_OUTCOMES: ReadonlySet<string> = new Set([
   "cancelled",
 ]);
 
-/** §S4b/§S4c — accepted milestone types ('cr-merged' joins the set). */
+/**
+ * §S4b/§S4c — accepted milestone types ('cr-merged' joins the set).
+ * CR-CRU-074 §S1 — 'release' joins it too: a shipped release is a recorded
+ * event whose `label` is the version and `commit` the tagged sha. Purely
+ * additive — every pre-existing type keeps its exact behaviour, and the
+ * validation error still enumerates the whole accepted set.
+ */
 const MILESTONE_TYPES: ReadonlySet<string> = new Set([
   "gap-analysis",
   "design-review",
   "stage-flip",
   "custom",
   "cr-merged",
+  "release",
 ]);
 
 /** §S2 — the optional graceful context, cast verbatim (runMeta convention). */
@@ -1585,6 +1592,43 @@ function handleProjectArchive(store: Store, key: string, archive: boolean): Resp
 }
 
 /**
+ * CR-CRU-074 §S3 — the wire shape of a recorded release: the version (the
+ * milestone's `label`), the sha its tag points at, and when it shipped.
+ * Deliberately NOT an event brief (openRunBrief's precedent): a release is a
+ * shipped VERSION, not a run, and these three keys are exactly what
+ * CR-CRU-014's boundary rows and CR-CRU-022's forecast band read. Each
+ * carrying field is spread only when the stored event has it — a release
+ * whose version or commit was never recorded is reported as missing, never
+ * as an invented value (AC6).
+ */
+function releaseBrief(event: RunEvent) {
+  return {
+    ...(event.label !== undefined ? { version: event.label } : {}),
+    ...(event.commit !== undefined ? { commit: event.commit } : {}),
+    timestamp: event.timestamp,
+  };
+}
+
+/**
+ * CR-CRU-074 §S3 — GET …/projects/<key>/releases. Existence is validated the
+ * way handleProjectArchive validates it (UUID shape, then the row) and NOT
+ * through requireProject: an archived project still exists and must answer,
+ * and the archived exclusion belongs to the store's NOT_ARCHIVED subquery,
+ * which yields an empty list rather than an error. A project with no releases
+ * is a 200 with an empty array — "none yet" is an answer, not a missing
+ * resource.
+ */
+function handleProjectReleases(store: Store, key: string, req: Request, url: URL): Response {
+  if (!UUID_RE.test(key)) {
+    return fail(400, "projectKey must be a UUID", { help: hints.unknownProject });
+  }
+  if (store.getProject(key) === null) {
+    return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
+  }
+  return reply(req, url, { ok: true, releases: store.listReleases(key).map(releaseBrief) });
+}
+
+/**
  * CR-CRU-052 §S1 — DELETE …/projects/<key>: the project row plus every row
  * keyed to it, in one transaction. The most destructive route in the system,
  * so it carries the SAME double gate as CR-CRU-032's lesser single-event
@@ -2051,6 +2095,10 @@ export function handleV2(
     // CR-CRU-024 §S5.3 — project stop: checkpoint every active cycle's timer.
     if (req.method === "POST" && segments.length === 2 && segments[1] === "stop") {
       return handleProjectStop(store, segments[0]!, req);
+    }
+    // CR-CRU-074 §S3 — the project's recorded releases, newest-first.
+    if (req.method === "GET" && segments.length === 2 && segments[1] === "releases") {
+      return handleProjectReleases(store, segments[0]!, req, url);
     }
     // CR-CRU-012 §S1 — PATCH project parameters (v2-only; the v1 shim has
     // no equivalent route).
