@@ -75,6 +75,8 @@ interface V2Body {
   merge?: unknown;
   // CR-CRU-013 §S1 (gate object) + §S4b/§S4c (milestone commit)
   gate?: unknown;
+  // CR-CRU-073 §S1 — optional top-level release version the gate gated.
+  version?: unknown;
   commit?: unknown;
   // CR-CRU-008 §S4 — silent unregister + guarded run deletion
   silent?: unknown;
@@ -1101,10 +1103,16 @@ async function handleGates(store: Store, req: Request): Promise<Response> {
   // (this route never ran §S7 validation — validateUnbound stays false).
   const attach = resolveIngestAttach(store, pk.key, agentId, body, false);
   if (attach.fail !== undefined) return attach.fail;
+  // CR-CRU-073 §S1 — an optional top-level `version` (SIBLING of `gate`, not
+  // inside the gate object) names the release this gate gated; stored
+  // first-class on the event. Ignored unless it is a non-empty string.
+  const version =
+    typeof body.version === "string" && body.version.length > 0 ? body.version : undefined;
   const event = store.recordGateEvent(pk.key, agentId, gate, {
     ...(attach.context !== undefined ? { context: attach.context } : eventContext(body)),
     // CR-CRU-057 §S1 — the declared role off the same seam read.
     ...(attach.role !== undefined ? { role: attach.role } : {}),
+    ...(version !== undefined ? { version } : {}),
   });
   // CR-CRU-056 §S3 (C5) — the second stamped surface echoes its attachment on
   // exactly the same `context.cycleId` path as the run-ingest response.
@@ -1864,6 +1872,11 @@ function eventBrief(event: RunEvent) {
     // CR-CRU-013 §S1+§S4b (additive) — gate/milestone carrying fields, keys
     // ABSENT on every other kind.
     ...(event.gate !== undefined ? { gate: event.gate } : {}),
+    // CR-CRU-073 §S1 (additive) — the gated release version (first-class on
+    // the event, never inside the gate object) and the retirement marker;
+    // both keys ABSENT when unset.
+    ...(event.version !== undefined ? { version: event.version } : {}),
+    ...(event.retiredAt !== undefined ? { retiredAt: event.retiredAt } : {}),
     ...(event.type !== undefined ? { type: event.type } : {}),
     ...(event.label !== undefined ? { label: event.label } : {}),
     ...(event.commit !== undefined ? { commit: event.commit } : {}),

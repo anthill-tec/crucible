@@ -91,7 +91,7 @@ export const hints: Record<
   ],
   /** CR-CRU-013 §S1 — a gate POST missing a required field. */
   gateFields: [
-    "POST /api/v2/gates {projectKey, agentId, context?, gate:{intent, outcome, steps:[…], fixes?, push?, pr?}} — record a no-mistakes gate outcome",
+    "POST /api/v2/gates {projectKey, agentId, version?, context?, gate:{intent, outcome, steps:[…], fixes?, push?, pr?}} — record a no-mistakes gate outcome (top-level `version` names the release it gated)",
     "gate.intent, gate.outcome, and gate.steps are all required",
   ],
   /** CR-CRU-013 §S1 — a gate POST with an out-of-set outcome. */
