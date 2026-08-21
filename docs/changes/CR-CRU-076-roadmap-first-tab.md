@@ -70,10 +70,30 @@ Four findings against the real sources. Two correct this spec.
   **no spec-vs-PRD conflict**; the storyboard (F14 / F14a / F14½, already at the target state) is
   the governing design record.
 
-Also corrected: `tests/storyboard-fidelity.test.ts` does **not** pin the tab order — it pins the
-tabs row being a full-width direct child — so it is not a re-target site. Of the four test files
-naming the order, only `app-logic.test.ts` and `workflow-primary-tab.test.ts` carry live
-assertions; `workflow-tab.test.ts:282` and `pane-scroll-floor.test.ts:7` are comments.
+**F5 — my own enumeration was wrong, caught in RED.** I first recorded
+`tests/workflow-tab.test.ts:282` as "comment only". It is not: lines **294–301** carry a **live
+DOM order assertion** (`expect(tabs.map(t => t.textContent?.trim())).toEqual([...])`). My sweep
+used a single-line regex, which cannot match a multi-line array literal — a false absence, and
+the second such miss this session. The RED agent found it and escalated correctly.
+
+Corrected, after a multi-line-aware re-sweep — the complete set:
+
+| kind | sites |
+|---|---|
+| **live order assertions** (must change) | `app-logic.test.ts:223`, `:252` (backend + frontend) · `workflow-primary-tab.test.ts:44`, `:56` · **`workflow-tab.test.ts:295`** |
+| source of truth | `app-logic.mjs:75` (+ comment `:72`) |
+| declaration | `app-logic.d.mts:64` — union missing `"Roadmap"` (F3) |
+| comments only | `pane-scroll-floor.test.ts:7` · `app-logic.test.ts:204/207/211/217/244` · `workflow-primary-tab.test.ts:1/33/39` · `workflow-tab.test.ts:277–282` · `storyboard-fidelity.test.ts:296` |
+| **count-only, stays green** | `storyboard-fidelity.test.ts:309` — `tabButtons.length` `toBe(6)`, order-agnostic |
+
+`tests/storyboard-fidelity.test.ts` therefore genuinely does **not** pin order (that original call
+was right); its only stale artefact is the test **title** at `:298`, which still reads
+`(Runs/Workflow/Coverage/Compile/BDD)` — stale twice over, since it predates Roadmap and puts
+Runs first. Title-only touch, no assertion change.
+
+**Method note for the next CR:** enumerate pinned sites with a multi-line-aware search. A
+single-line grep silently under-reports arrays spanning lines, and "no match" is not evidence of
+absence.
 
 **Verdict: READY.**
 
