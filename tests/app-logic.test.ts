@@ -192,7 +192,7 @@ describe("routeParse — hash-free History routing (§S2)", () => {
   });
 });
 
-describe("workspaceTabs — Runs/Workflow/Coverage/Compile/BDD, Agents dropped (§S5 shell final form)", () => {
+describe("workspaceTabs — Roadmap/Workflow/Runs/Coverage/Compile/BDD, Agents dropped (§S5 shell final form)", () => {
   // §S5.2 — agents nested under the workspace's Project pane everywhere;
   // `Agents` is removed from L.workspaceTabs for BOTH project types. This
   // REPLACES the CR-CRU-006 contract (which included an "Agents" tab) — the
@@ -216,15 +216,25 @@ describe("workspaceTabs — Runs/Workflow/Coverage/Compile/BDD, Agents dropped (
   // elevation user-locked 2026-07-16). Roadmap is NEVER gated (enabled for
   // both project types, same as Workflow/Runs/Compile). Was:
   // ["Workflow","Runs","Coverage","Compile","BDD"].
-  test("backend project: exactly [Workflow, Runs, Coverage, Compile, Roadmap, BDD(disabled)] — no Agents entry", () => {
+  // SANCTIONED RE-TARGET (CR-CRU-076 §S1/§S2, AC1): Roadmap moves from fifth
+  // to FIRST ("Roadmap · Workflow · Runs · Coverage · Compile · BDD"). This
+  // SUPERSEDES CR-CRU-021 §S1 AC1 above, and only that AC — the roadmap is
+  // the ORIGIN document (the CR backlog is registered at design time,
+  // CR-CRU-014 §S2 `queue-file`) and Workflow is the runtime view downstream
+  // of it; CR-CRU-021 predated the Roadmap tab entirely. CR-CRU-021 §S1 AC2
+  // (the workspace LANDS on the Workflow pane) is untouched — the landing is
+  // hard-coded, never TAB_NAMES[0]. Gating semantics are unchanged: the
+  // assertions below this array are deliberately byte-identical. Was:
+  // ["Workflow","Runs","Coverage","Compile","Roadmap","BDD"].
+  test("backend project: exactly [Roadmap, Workflow, Runs, Coverage, Compile, BDD(disabled)] — no Agents entry", () => {
     const tabs = workspaceTabs({ type: "backend" });
 
     expect(tabs.map((t: TabShape) => t.name)).toEqual([
+      "Roadmap",
       "Workflow",
       "Runs",
       "Coverage",
       "Compile",
-      "Roadmap",
       "BDD",
     ]);
     expect(tabs.find((t: TabShape) => t.name === "BDD")).toEqual({ name: "BDD", disabled: true });
@@ -243,17 +253,20 @@ describe("workspaceTabs — Runs/Workflow/Coverage/Compile/BDD, Agents dropped (
 
   // SANCTIONED RE-TARGET (CR-CRU-021 §S1): same Workflow-first order flip,
   // frontend project type. SANCTIONED RE-TARGET (CR-CRU-014 §S3): Roadmap
-  // inserted before BDD for the frontend project type too. Was:
-  // ["Workflow","Runs","Coverage","Compile","BDD"].
-  test("frontend project: same fixed order (Workflow-first), BDD enabled, Workflow enabled, no Agents entry", () => {
+  // inserted before BDD for the frontend project type too.
+  // SANCTIONED RE-TARGET (CR-CRU-076 §S1/§S2, AC1): Roadmap-first for the
+  // frontend project type too — the order is project-type-agnostic (same
+  // supersession rationale as the backend case above). Was:
+  // ["Workflow","Runs","Coverage","Compile","Roadmap","BDD"].
+  test("frontend project: same fixed order (Roadmap-first), BDD enabled, Workflow enabled, no Agents entry", () => {
     const tabs = workspaceTabs({ type: "frontend" });
 
     expect(tabs.map((t: TabShape) => t.name)).toEqual([
+      "Roadmap",
       "Workflow",
       "Runs",
       "Coverage",
       "Compile",
-      "Roadmap",
       "BDD",
     ]);
     expect(tabs.find((t: TabShape) => t.name === "BDD")).toEqual({

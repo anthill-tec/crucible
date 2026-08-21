@@ -4,7 +4,9 @@
 // minimum expected size on standard computer screens is 1024x640.").
 //
 // Spec (verbatim, §S1): "Every central content pane (workspace tab panes —
-// Workflow/Runs/Coverage/Compile/BDD —, the home timeline pane, and the
+// Roadmap/Workflow/Runs/Coverage/Compile/BDD (band order per CR-CRU-076 §S1;
+// the spec text predates both the Roadmap tab and the re-order) —, the home
+// timeline pane, and the
 // in-pane run detail) gains a MINIMUM CONTENT WIDTH floor with
 // `overflow-x: auto` on the pane container: when the viewport is narrower
 // than the supported minimum, the pane scrolls horizontally instead of
