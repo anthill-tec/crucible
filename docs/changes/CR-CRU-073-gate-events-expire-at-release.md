@@ -2,7 +2,7 @@
 
 - **Type**: bugfix
 - **Wave**: 5 (0.2.0)
-- **Depends on**: 013 (and a release-completion signal — see Notes; NOT 017)
+- **Depends on**: 013, 071 (migration chain for the `retired_at` marker), 074 (the release-completion signal)
 - **Status**: PENDING (0.2.0)
 
 ## Problem
@@ -42,35 +42,57 @@ done rather than when the store fills up.
 
 ## Acceptance criteria
 
-**AC1 — a gate event names the release it gated.** A gate carries the release it
-belongs to, so "has this release finished?" is answerable without parsing the
-free-text `intent`. Existing gate events (which carry no such field) are handled
-by AC5, never orphaned.
+**AC1 — a gate event names the release it gated, structurally.** The gate POST
+(`POST /api/v2/gates`, today `{intent, outcome, steps, fixes?, push?, pr?}`)
+gains an optional `version` (bare SemVer), captured at gate time from the
+`release/X.Y.Z` branch the no-mistakes run executes on. It is stored as a first-
+class field, never parsed back out of the free-text `intent`. A gate posted
+without a version is still accepted (graceful degradation) and simply never
+becomes retire-eligible. The three existing strays carry no `version` and are
+handled by AC5, never orphaned.
 
-**AC2 — finishing a release retires its gates.** When a release completes, every
-gate event for that release stops appearing in the workflow view, in the same
-transaction that records the completion. No second command, no manual cleanup,
-and no dependence on subsequent event traffic.
+**AC2 — finishing a release retires its gates, in the recording transaction
+(design (a), chosen 2026-08-20).** `recordMilestoneEvent` for `type:"release"`
+(CR-CRU-074) stamps a new `events.retired_at` on every gate whose `version`
+equals the released version, INSIDE the same transaction that inserts the
+release milestone. One atomic act, no second command, no dependence on later
+event traffic. A release recorded when no matching gate exists yet still
+succeeds — a gate that arrives afterward for an already-released version is
+stamped retired on insert, so ordering cannot leak a stale gate.
 
-**AC3 — an in-flight release keeps its gate.** A gate for a release that has not
+**AC3 — an in-flight release keeps its gate (immune to the retention cap).**
+A gate with `retired_at IS NULL` is EXEMPT from the per-project count cap
+(`enforceRetention`, DEFAULT_RETENTION) — the same protection test/compile events
+get by folding into rollups — so a busy project can never prune a live gate.
+Once retired (AC2), a gate becomes retention-eligible like any other event.
+Original AC3 intent follows:
+
+**AC3 (restated) — an in-flight release keeps its gate.** A gate for a release that has not
 finished stays fully visible regardless of how much other event traffic the
 project sees — the pane must not be able to lose a *current* gate to the
 retention cap. This is the converse defect and is asserted independently.
 
-**AC4 — retired means gone from the view, and auditable.** Retirement removes
-the gate from the workflow view but must not silently destroy the release record:
-the outcome stays retrievable for audit (a released/superseded marker excluded
-from the view, not an unconditional delete). A view query must not be able to
-return a retired gate.
+**AC4 — retired is a stored marker, excluded from the view, never deleted.**
+`retired_at` (epoch ms, NULL = live) is the marker; the gate ROW is never
+deleted. The workflow-pane gate query filters `retired_at IS NULL`, so a retired
+gate cannot be returned to the view, while an audit read that explicitly asks for
+retired gates still finds them intact. Asserted both ways: the pane query omits a
+retired gate, and the row plus its full gate object still exist on a direct
+fetch.
 
-**AC5 — the three existing gate events are retired by this CR.** The 0.1.0 ×2
-and 0.1.2 gates listed above belong to shipped releases and must be retired on
-migration, not left as permanently-current strays. Migration is idempotent and
-lossless (CR-CRU-071's chain, once it lands, is the mechanism).
+**AC5 — the three existing strays are retired by the migration that adds the
+column.** The `retired_at` column is added as CR-CRU-071 chain **step 6 → 7**
+(SCHEMA_VERSION derives to 7). Because the three pre-existing gates carry no
+`version` to match a release against, that same migration stamps `retired_at` on
+**every gate event that predates this column** — all of them are, by definition,
+from releases that shipped before the feature existed (0.1.0 ×2, 0.1.2). The step
+is idempotent and lossless: it only sets `retired_at` where NULL, moves no data,
+and a re-open re-stamps nothing.
 
-**AC6 — duplicate runs of one release collapse.** Two gate runs for the same
-release (as 0.1.0 has) render as that release's gate history, not as two
-independent current gates.
+**AC6 — duplicate runs of one release collapse on `version`.** Two gate runs
+sharing a `version` (as 0.1.0 has) are retired together by AC2's single stamp,
+so the pane shows that release's gate history rather than two independent current
+gates. For the pre-column strays this is subsumed by AC5 (all retired at once).
 
 ## Scope
 
