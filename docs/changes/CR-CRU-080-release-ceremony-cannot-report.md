@@ -46,6 +46,42 @@ Recovered by hand with `milestone --type release --label <tag> --commit <sha> --
 for each tag; all three now present. That is a manual workaround, not a fix: the next release
 will fail the same way.
 
+## Gap analysis (2026-08-21, pre-RED)
+
+Six findings. Two were proven empirically on an **ephemeral** server (port 38701, temp db) rather
+than read off the code, and one contradicts a comment in the script itself.
+
+- **G1 — one reporter, no identity.** `emit_release_milestone` (`scripts/release.sh:342–350`) is
+  the single reporter shared by `report_release` and `backfill-releases`, and it passes no
+  `--agent`. `release.sh` has **zero** identity plumbing anywhere (grep: no matches), so §S1
+  introduces it from scratch.
+- **G2 — the client is already correct.** `python-crucible.py milestone` already accepts
+  `--agent`, documented as *"REQUIRED (§S5): the identity is declared or the verb fails; there is
+  no fallback."* So §S1 is a **script-only** fix; no client change, and the no-fallback rule is
+  not to be worked around.
+- **G3 — §S4's fields are silently DROPPED today.** `handleMilestones` passes only `label`,
+  `commit` and `context` into `recordMilestoneEvent`, whose meta type is
+  `{label?, commit?, context?}`. Unknown body fields are **discarded, not rejected**. Proven: a
+  POST carrying `releasedAt` and `crs` returned `ok:true`, and `GET …/releases` came back with
+  only `{version, commit, timestamp}`. So §S4 needs handler validation + store meta extension +
+  `releaseBrief` exposure + two client flags.
+- **G4 — no migration.** `type`/`label`/`commit` already ride the generic `payload` TEXT column
+  (documented, `store.ts:1665–1667`), so `releasedAt`/`crs` join them there. `SCHEMA_VERSION`
+  stays **7**.
+- **G5 — precedent to mirror, not invent.** CR-073 §S1 added an optional first-class `version` to
+  **gate** events exactly this way: validated at the handler ("ignored unless a non-empty
+  string"), passed through `recordGateEvent`'s meta, stored on the event. §S4 follows that shape.
+- **G6 — the script's dedup claim is FALSE, and it matters.**
+  `release.sh` states *"Re-runs emit an identical (type, label, commit), so the server dedups."*
+  It does not. Posting the identical release milestone twice produced **two** events
+  (`evt-…-2`, `evt-…-3`) and `GET …/releases` returned **2 releases**. So a re-run of
+  `backfill-releases` would duplicate every release today, and AC5/AC11 are not "already true" —
+  dedup is real work in this CR. The three releases recovered by hand are clean only because that
+  command was run exactly once.
+
+**Verdict: READY.** G6 widens the CR slightly, but within its own "idempotent backfill" AC rather
+than into new territory.
+
 ## Scope
 
 ### §S1 Pass an identity
@@ -105,6 +141,10 @@ would put git in the server's path. The ceremony computes it once, at the moment
 - **AC4** — `backfill-releases` prints a per-tag result and a final tally; a partial failure is
   visible in the exit summary rather than only in the middle of the log.
 - **AC5** — re-running `backfill-releases` does not duplicate releases for tags already recorded.
+  **Currently false** (G6): two identical posts yield two releases, so this AC must fail before
+  the fix. Dedup is on `(type, label, commit)`, and the fix states plainly whether it lands in the
+  server or the ceremony — the script's existing comment claiming the server already dedups is
+  wrong and gets corrected.
 - **AC6** — the existing contract test that stubs the client is strengthened to assert the
   **argv actually contains `--agent`**; the current stub passes without it, which is precisely
   why this shipped broken.
