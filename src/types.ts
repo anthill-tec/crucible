@@ -171,6 +171,18 @@ export interface RunEvent {
   // (forward-tolerant: fields outside the ladder round-trip untouched).
   gate?: unknown;
   /**
+   * CR-CRU-073 §S1 — the release VERSION this gate gated (a bare SemVer),
+   * stored first-class on the event, never parsed back out of the free-text
+   * intent. ABSENT on a versionless gate and on every non-gate kind.
+   */
+  version?: string;
+  /**
+   * CR-CRU-073 §S1 — the release-retirement marker (epoch ms). Stamped when
+   * the gate's release ships (or on insert for an already-released version);
+   * a live gate has NO marker. ABSENT until retired.
+   */
+  retiredAt?: number;
+  /**
    * CR-CRU-057 §S1 — the posting agent's DECLARED role (CR-CRU-044), stamped
    * server-side at write time through CR-CRU-056's `resolveIngestAttach` seam
    * so classification survives the agent row's deletion at unregister. ABSENT

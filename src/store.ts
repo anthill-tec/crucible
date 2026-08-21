@@ -136,6 +136,9 @@ interface EventRow {
   started_at: number | null;
   runtime_ms: number | null;
   status: string | null;
+  // CR-CRU-073 §S1 — the release-retirement marker (epoch ms). NULL = a live
+  // gate (and NULL on every non-gate row); non-NULL once its release ships.
+  retired_at: number | null;
 }
 
 /** CR-CRU-017 §S1 — one issued run: `runs` is the OPEN-run store, on disk. */
@@ -715,6 +718,39 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       return cols.has("started_at") && cols.has("runtime_ms") && cols.has("status");
     },
   },
+  {
+    description:
+      "events: CR-073 §S1 retired_at — release-retirement marker + one-time stamp of pre-column gates",
+    apply(db) {
+      if (!tableExists(db, "events")) return;
+      // CR-CRU-073 §S1 — additive nullable marker; pre-073 db files lack it
+      // (same PRAGMA-checked retrofit pattern as the columns above).
+      const eventCols = columnsOf(db, "events");
+      if (!eventCols.has("retired_at")) {
+        db.exec(`ALTER TABLE events ADD COLUMN retired_at INTEGER`);
+      }
+      // The SAME step retires every gate that predates the column (the
+      // versionless strays): a gate written before the marker existed can
+      // never gain one from a future release (its version was never stored),
+      // so it is stamped once here. Idempotent (only NULL rows) and lossless
+      // (an UPDATE, never an insert/delete).
+      db.query(`UPDATE events SET retired_at = ? WHERE kind = 'gate' AND retired_at IS NULL`).run(
+        Date.now(),
+      );
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "events")) return true;
+      const cols = columnsOf(db, "events");
+      if (!cols.has("retired_at")) return false;
+      // The data half: no pre-column (live) gate may remain once this step ran.
+      const pending = db
+        .query<{ n: number }, []>(
+          `SELECT COUNT(*) AS n FROM events WHERE kind = 'gate' AND retired_at IS NULL`,
+        )
+        .get()!.n;
+      return pending === 0;
+    },
+  },
 ];
 
 /** CR-CRU-071 §S1 — the ordered chain; positions ARE the version numbers. */
@@ -989,7 +1025,10 @@ export class Store {
         -- brand-new store and the end of the chain agree.
         started_at INTEGER,
         runtime_ms INTEGER,
-        status TEXT
+        status TEXT,
+        -- CR-CRU-073 §S1 — the release-retirement marker, in the base schema
+        -- so a brand-new store and the end of the chain agree.
+        retired_at INTEGER
       );
 
       CREATE INDEX IF NOT EXISTS idx_events_project_timestamp
@@ -1547,14 +1586,22 @@ export class Store {
    * full gate object is stored verbatim in the generic payload column; codec
    * is fixed to "no-mistakes". Flows through retention like any event;
    * foldIntoRollup skips it (gate is not a rollup-eligible kind).
+   *
+   * CR-CRU-073 §S1 — `version` (the release the gate gated) is stored
+   * first-class on the event, never parsed back out of the free-text intent.
+   * A gate arriving for an ALREADY-released version is retired on insert
+   * (the release stamp already ran; this closes the late-arrival window).
    */
   recordGateEvent(
     projectKey: string,
     agentId: string,
     gate: unknown,
-    meta?: { context?: RunContext; role?: AgentRole },
+    meta?: { context?: RunContext; role?: AgentRole; version?: string },
   ): RunEvent {
     this.touchAgent(projectKey, agentId);
+    const version = meta?.version;
+    const alreadyReleased =
+      version !== undefined && this.listReleases(projectKey).some((r) => r.label === version);
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -1564,6 +1611,8 @@ export class Store {
       codec: "no-mistakes",
       timestamp: Date.now(),
       gate,
+      ...(version !== undefined ? { version } : {}),
+      ...(alreadyReleased ? { retiredAt: Date.now() } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
       // CR-CRU-057 §S1 — a stamped role is DECLARED data by construction.
       ...(meta?.role !== undefined ? { role: meta.role, roleInferred: false } : {}),
@@ -1576,6 +1625,11 @@ export class Store {
    * CR-CRU-013 §S4b/§S4c — append a milestone event. The flat type/label/
    * commit fields live in the generic payload column; context round-trips
    * verbatim. Rollup-excluded (not a rollup-eligible kind).
+   *
+   * CR-CRU-073 §S1 — a `release` milestone RETIRES its gates: in the SAME
+   * transaction that inserts the release, every gate whose `version` equals
+   * the release's `label` is stamped `retired_at`. A release with no matching
+   * gate still records; a gate arriving afterwards is retired on insert.
    */
   recordMilestoneEvent(
     projectKey: string,
@@ -1596,8 +1650,37 @@ export class Store {
       ...(meta?.commit !== undefined ? { commit: meta.commit } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
     };
-    this.insertEvent(event);
+    const version = type === "release" ? meta?.label : undefined;
+    if (version !== undefined) {
+      this.db.transaction(() => {
+        this.insertEvent(event);
+        this.stampGatesRetired(projectKey, version, Date.now());
+      })();
+    } else {
+      this.insertEvent(event);
+    }
     return event;
+  }
+
+  /**
+   * CR-CRU-073 §S1 — stamp `retired_at` on every LIVE gate whose stored
+   * `version` equals `version`. The version rides the generic payload blob, so
+   * the match is done on the parsed value (same JS-parse pattern as
+   * listReleases / listEventsForCycle rather than a JSON SQL predicate).
+   */
+  private stampGatesRetired(projectKey: string, version: string, at: number): void {
+    const rows = this.db
+      .query<{ id: string; payload: string | null }, [string]>(
+        `SELECT id, payload FROM events
+         WHERE project_key = ? AND kind = 'gate' AND retired_at IS NULL`,
+      )
+      .all(projectKey);
+    const update = this.db.query(`UPDATE events SET retired_at = ? WHERE id = ?`);
+    for (const row of rows) {
+      if (row.payload === null) continue;
+      const parsed = JSON.parse(row.payload) as { version?: unknown };
+      if (parsed.version === version) update.run(at, row.id);
+    }
   }
 
   /**
@@ -1800,17 +1883,20 @@ export class Store {
 
   listEvents(projectKey?: string, limit = 50): RunEvent[] {
     // CR-CRU-012 §S1b — archived projects' events are excluded (not deleted).
+    // CR-CRU-073 §S1 — the pane/timeline feed EXCLUDES retired gates
+    // (retired_at IS NOT NULL); getEvent still serves them for audit.
     const rows =
       projectKey === undefined
         ? this.db
             .query<EventRow, [number]>(
-              `SELECT * FROM events WHERE ${Store.NOT_ARCHIVED_SUBQUERY}
+              `SELECT * FROM events WHERE ${Store.NOT_ARCHIVED_SUBQUERY} AND retired_at IS NULL
                ORDER BY timestamp DESC, rowid DESC LIMIT ?`,
             )
             .all(limit)
         : this.db
             .query<EventRow, [string, number]>(
               `SELECT * FROM events WHERE project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY}
+               AND retired_at IS NULL
                ORDER BY timestamp DESC, rowid DESC LIMIT ?`,
             )
             .all(projectKey, limit);
@@ -1922,6 +2008,9 @@ export class Store {
       ...(event.abortReason !== undefined ? { abortReason: event.abortReason } : {}),
       // CR-CRU-038 §S2b — run-level raw output rides the generic payload blob.
       ...(event.raw !== undefined ? { raw: event.raw } : {}),
+      // CR-CRU-073 §S1 — the gated release version rides the generic payload
+      // blob (first-class on the event, never inside the gate object).
+      ...(event.version !== undefined ? { version: event.version } : {}),
     };
     const payload = Object.keys(payloadObj).length > 0 ? JSON.stringify(payloadObj) : null;
     this.db
@@ -1929,8 +2018,8 @@ export class Store {
         `INSERT INTO events (id, project_key, agent_id, kind, tier, stack, codec,
            timestamp, name, total, passed, failed, pending, duration_ms,
            tree, coverage, compile, context, action, first_seen, payload,
-           role, role_inferred, started_at, runtime_ms, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           role, role_inferred, started_at, runtime_ms, status, retired_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         event.id,
@@ -1964,6 +2053,9 @@ export class Store {
         event.startedAt ?? null,
         event.runtimeMs ?? null,
         event.status ?? null,
+        // CR-CRU-073 §S1 — the release-retirement marker; NULL for a live gate
+        // and for every non-gate row.
+        event.retiredAt ?? null,
       );
     this.enforceRetention(event.projectKey);
     this.emit("events", event.projectKey);
@@ -2031,6 +2123,10 @@ export class Store {
       ...(typeof payload.abortReason === "string"
         ? { abortReason: payload.abortReason }
         : {}),
+      // CR-CRU-073 §S1 — the gated version (payload) and the retirement marker
+      // (column); each ABSENT when its stored value is (never fabricated).
+      ...(typeof payload.version === "string" ? { version: payload.version } : {}),
+      ...((row.retired_at ?? null) !== null ? { retiredAt: row.retired_at! } : {}),
     };
   }
 
@@ -2066,9 +2162,17 @@ export class Store {
 
   private enforceRetention(projectKey: string): void {
     const cap = this.getProject(projectKey)?.retention ?? DEFAULT_RETENTION;
+    // CR-CRU-073 §S1 — a LIVE gate AWAITING its release (retired_at IS NULL
+    // AND a stored version) is EXEMPT from the count cap: it survives until
+    // its release ships and retires it, after which it prunes like any event.
+    // A VERSIONLESS gate is NOT exempt — it can never be retired, so exempting
+    // it would leak forever (the migration retires the pre-column strays for
+    // the same reason). `version` rides the payload blob, matched via
+    // json_extract (NULL payload / absent key → NOT NULL is false → prunable).
+    const LIVE_GATE = `(kind = 'gate' AND retired_at IS NULL AND json_extract(payload, '$.version') IS NOT NULL)`;
     const count = this.db
       .query<{ n: number }, [string]>(
-        `SELECT COUNT(*) AS n FROM events WHERE project_key = ?`,
+        `SELECT COUNT(*) AS n FROM events WHERE project_key = ? AND NOT ${LIVE_GATE}`,
       )
       .get(projectKey)!.n;
     const overflow = count - cap;
@@ -2077,7 +2181,7 @@ export class Store {
     }
     const expired = this.db
       .query<EventRow, [string, number]>(
-        `SELECT * FROM events WHERE project_key = ?
+        `SELECT * FROM events WHERE project_key = ? AND NOT ${LIVE_GATE}
          ORDER BY timestamp ASC, rowid ASC LIMIT ?`,
       )
       .all(projectKey, overflow);
