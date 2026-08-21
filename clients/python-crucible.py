@@ -1082,6 +1082,13 @@ def cmd_milestone(args):
     return _axi().cmd_milestone(args, _resolve_project_dir(args.project_dir), _ops())
 
 
+def cmd_queue_file(args):
+    """§S2 — parse docs/changes/README.md (or --from-file) into queue entries
+    and POST the full set to /api/v2/projects/<key>/queue. Delegates to the
+    shared implementation."""
+    return _axi().cmd_queue_file(args, _resolve_project_dir(args.project_dir), _ops())
+
+
 # ── argparse helpers + no-arg dashboard + main ──────────────────────────────
 
 
@@ -1414,6 +1421,15 @@ def main():
                          "the verb fails; there is no fallback.")
     _add_project_dir_arg(ms)
     ms.set_defaults(func=cmd_milestone)
+
+    qf = sub.add_parser(
+        "queue-file",
+        help="Parse docs/changes/README.md (or --from-file) queue table and "
+             "POST the full CR set → /api/v2/projects/<key>/queue (§S2).")
+    qf.add_argument("--from-file", dest="from_file",
+                    help="Source Markdown file (default: <project>/docs/changes/README.md).")
+    _add_project_dir_arg(qf)
+    qf.set_defaults(func=cmd_queue_file)
 
     args = p.parse_args()
     # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.

@@ -28,6 +28,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -1588,6 +1589,137 @@ def cmd_milestone(args, project_dir, ops):
               "commit": getattr(args, "commit", None),
               "help": milestone_help(bool(ok), args.type, ops.base_url)},
              ops.context(project_dir, cr=args.cr), [], None)
+    return 0 if ok else 1
+
+
+# ── CR-CRU-014 §S2 — the `queue-file` client verb ───────────────────────────
+
+class QueueParseError(ValueError):
+    """A queue-table row could not be parsed. Carries a message NAMING the
+    offending CR so the loud failure is actionable (§S2 Risk: the API is the
+    contract, the parser is a convenience — it must fail loudly, never
+    silently mis-register)."""
+
+
+# A queue-table data row opens with a Markdown link cell `[CR-XXX-NNN](…)`.
+_QUEUE_ROW_RE = re.compile(r"^\|\s*\[([A-Za-z]+-[A-Za-z]+-\d+)\]\([^)]*\)\s*\|")
+
+
+def _split_md_row(line):
+    """Split a Markdown table row into stripped cell strings."""
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def _find_col(header_cells, *keywords):
+    """Index of the first header cell whose lowercased text contains any of
+    `keywords`; None when absent."""
+    for i, cell in enumerate(header_cells):
+        low = cell.lower()
+        if any(k in low for k in keywords):
+            return i
+    return None
+
+
+def parse_queue_table(text):
+    """Parse a `docs/changes/README.md`-style queue table into §S1 entries.
+
+    Returns a list of `{cr, title, wave, dependsOn}` dicts, one per CR row, in
+    file order. `cr` is the full link id; `title` the Title cell; `wave` the
+    LEADING integer of the Wave cell (cells read like `4 (after 011)`);
+    `dependsOn` the comma list of the Depends-on cell, each bare number
+    normalized to a full CR id from THIS row's namespace (`007` → `CR-CRU-007`)
+    so the server's `unknownDependencies` join matches the `cr` set.
+
+    Raises QueueParseError (naming the CR) for a row whose column count differs
+    from the header's or whose Wave cell has no leading integer."""
+    header = None
+    idx = {}
+    entries = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        # separator row (|---|---|): skip
+        if set(stripped) <= set("|-: "):
+            continue
+        cells = _split_md_row(stripped)
+        if header is None:
+            low = [c.lower() for c in cells]
+            if "wave" in low and any(c == "cr" or c.startswith("cr ") for c in low):
+                header = cells
+                idx = {
+                    "cr": _find_col(cells, "cr"),
+                    "title": _find_col(cells, "title"),
+                    "depends": _find_col(cells, "depend"),
+                    "wave": _find_col(cells, "wave"),
+                }
+            continue
+        m = _QUEUE_ROW_RE.match(line)
+        if not m:
+            continue
+        cr = m.group(1)
+        if len(cells) != len(header):
+            raise QueueParseError(
+                f"malformed queue row for {cr}: expected {len(header)} columns, "
+                f"got {len(cells)} ({stripped!r})")
+        wave_cell = cells[idx["wave"]]
+        wave_m = re.match(r"\s*(\d+)", wave_cell)
+        if wave_m is None:
+            raise QueueParseError(
+                f"malformed queue row for {cr}: Wave cell has no leading integer "
+                f"({wave_cell!r})")
+        wave = wave_m.group(1)
+        title = cells[idx["title"]]
+        depends_cell = cells[idx["depends"]]
+        prefix_m = re.match(r"(.*-)\d+$", cr)
+        prefix = prefix_m.group(1) if prefix_m else ""
+        deps = []
+        if depends_cell and depends_cell != "—":
+            for tok in depends_cell.split(","):
+                tok = tok.strip()
+                if not tok:
+                    continue
+                deps.append(prefix + tok if re.fullmatch(r"\d+", tok) else tok)
+        entries.append({"cr": cr, "title": title, "wave": wave, "dependsOn": deps})
+    return entries
+
+
+def cmd_queue_file(args, project_dir, ops):
+    """§S2 — parse the project's `docs/changes/README.md` queue table (or the
+    `--from-file` override) and POST the WHOLE set once to the §S1 full-replace
+    endpoint `/api/v2/projects/<key>/queue`. A malformed row fails LOUDLY
+    (non-zero exit, nothing POSTed)."""
+    from_file = getattr(args, "from_file", None)
+    path = from_file or os.path.join(project_dir, "docs", "changes", "README.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError as e:
+        msg = f"could not read queue file {path}: {e}"
+        print(f"[crucible] ERROR: {msg}", file=sys.stderr)
+        ops.emit("queue-file", False, {"error": msg}, ops.context(project_dir),
+                 [], f"queue-file: ok=False error={msg}")
+        return 1
+    try:
+        entries = parse_queue_table(text)
+    except QueueParseError as e:
+        print(f"[crucible] ERROR: {e}", file=sys.stderr)
+        ops.emit("queue-file", False, {"error": str(e)}, ops.context(project_dir),
+                 [], f"queue-file: ok=False error={e}")
+        return 1
+    queue_path = f"/api/v2/projects/{ops.project_key(project_dir)}/queue"
+    resp = ops.post(queue_path, {"entries": entries})
+    resp = resp or {}
+    ok = resp.get("ok", False)
+    unknown = resp.get("unknownDependencies", [])
+    print(f"queue-file: ok={ok} entries={len(entries)}"
+          + (f" unknownDependencies={unknown}" if unknown else "")
+          + (f" error={resp.get('error')}" if resp.get("error") else ""),
+          file=sys.stderr)
+    ops.emit("queue-file", bool(ok),
+             {"entries": entries, "unknownDependencies": unknown,
+              "help": ["status"]},
+             ops.context(project_dir), [], None)
     return 0 if ok else 1
 
 
