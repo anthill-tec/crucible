@@ -30,18 +30,15 @@ eight recorded decisions. This CR implements it.
 
 1. **depends-on** — hard prerequisite edges.
 2. **wave order** — waves execute in sequence; a later wave's work follows earlier waves.
-3. **release boundaries as in-flow gates, resolved per CR** — a CR belongs to the release whose
-   `crs` contains it (CR-080's provenance), so a CR flows into that release's diamond and out of
-   the previous one. Diamonds also **chain to each other**, so a release that shipped **zero** CRs
-   (real case: `0.1.1`) is still a boundary in the flow. Gating is never inferred from wave
-   numbers — measured: wave 4 spans `0.1.0` and `0.1.2` and still has unreleased members.
+3. **release boundaries as in-flow gates** — everything in a release precedes its diamond;
+   post-release CRs follow it. The diamond sits *in* the flow, never beside it. Membership comes
+   from CR-080's `crs`, and consecutive diamonds chain so a release that shipped no CRs is still a
+   boundary rather than a floating node.
 4. **parallel fan-out** — where no dependency exists between CRs, branches run concurrently.
 
 **Scale:** each **closed** wave collapses to a single node carrying its CR count, expandable on
-click. The **active wave** gets a **cluster box**; completed waves stay collapsed. The cluster is a
-**presentation** grouping only — it does not define gating, because a wave can straddle releases
-(H1). CRs in **no** release form the trailing **unreleased region**, which spans waves by nature
-(H3) and flows after the newest diamond.
+click. Exactly **one wave is ACTIVE** at a time and it runs up to a release boundary, so only that
+wave gets a **cluster box**; completed waves stay collapsed.
 
 **Track lanes are purely data-driven.** The number of tracks is decided by the project's
 **mainline orchestrator** — never by Crucible, and never capped at the Crucible end. N distinct
@@ -103,49 +100,38 @@ F4 stands unresolved and is **out of scope here**: an uncut release still has no
 pending release diamond is **not drawn** rather than faked. The active wave flows to `End` until
 a planned-release concept exists.
 
-## Gap analysis round 2 (2026-08-21, post-CR-080) — **SPEC_UPDATE_NEEDED**
+## Gap analysis round 2 (2026-08-21, post-CR-080) — READY
 
-The data prerequisite landed: CR-080 shipped and our own three releases now carry real provenance
-(`0.1.0` shipped 2026-08-19 with 58 CRs, `0.1.1` 2026-08-19 with 0, `0.1.2` 2026-08-20 with
-`CR-CRU-066`). Ordering by `releasedAt` works. But querying that real data breaks two assumptions
-this spec and F14a were built on, and they must be fixed before RED.
+**Method correction.** My first pass at this derived design rules from Crucible's *own* CR history
+and got it backwards. That history is not a specification: it is one project's accidental record,
+carrying a first release that swept up four waves at once, CRs that landed without a naming merge
+commit, and waves legitimately **reassigned** during refactoring and reprioritisation when
+targeting a release. Those are artifacts. **F14a is the design contract**, and the graph is built
+to it; where our own data disagrees with the design, that is a data problem to fix, never a reason
+to bend the design.
 
-- **H1 — release gating must be per-CR, never per-wave. `wave 4 spans two releases.`**
-  Measured on the live board: `0.1.0` shipped 50 wave-4 CRs, `0.1.2` shipped one more wave-4 CR
-  (`CR-CRU-066`), and further wave-4 CRs are **still unreleased**. So a wave is **not** contained
-  by a release; waves and releases are orthogonal groupings. F14a decision 2's premise — *"there
-  will always be only one active wave i.e. leading to a release boundary"* — does not hold for this
-  project's actual history, and any rule of the form "the release diamond gates the wave" is
-  ill-defined. The gate is a property of a **CR**: a CR flows out of the diamond of the release
-  that preceded it and into the diamond of the release whose `crs` contains it. §S1 is re-scoped
-  accordingly, and the active-wave cluster box becomes a **presentation** grouping only, never the
-  unit of gating.
-- **H2 — a release can ship zero CRs. `0.1.1` did.**
-  It was the `repository`-field hotfix: a real, tagged, published release whose `crs` is empty. So
-  a diamond may legitimately have **no inbound CR edges**, and AC1 as written ("at least one
-  inbound and one outbound edge whenever CRs exist on both sides") silently permits it to dangle.
-  Consecutive diamonds must **chain to each other** (`0.1.0 → 0.1.1 → 0.1.2`) so an empty release
-  is still a boundary in the flow rather than a floating node — which is the exact defect this CR
-  exists to fix.
-- **H3 — the unreleased set is not a wave.** 20 queue entries are in no release's `crs`, spanning
-  waves **4, 5 and 6** simultaneously. They flow after the newest diamond. "Unreleased" is
-  therefore its own flow region, not a wave and not a release, and it mixes waves by nature.
-- **H4 — knock-on for CR-078, must be fixed there too.** I gave 078 an **AC10** requiring "every
-  wave divider appears exactly once" alongside **AC11** requiring grouping by release then wave.
-  On real data those are **contradictory**: wave 4 legitimately appears in the `0.1.0` group, again
-  in the `0.1.2` group, and again in the unreleased region. AC10 must become *"once per release
-  group"*, with duplicates **within** a group being the bug. Left unamended, 078 is unimplementable.
-- **H5 — no new plumbing needed.** The app already fetches `GET …/releases` into `state.releases`
-  (`app.js:292`), so `crs` and `releasedAt` arrive with no new endpoint or client work. PRD says
-  essentially nothing about the graph (one incidental mention), so the storyboard remains the
-  governing design record.
+- **Design source of truth**: storyboard **F14a**, decisions 1–8 (approved 2026-08-21). The PRD is
+  essentially silent on the graph (one incidental mention), so F14a governs.
+- **The data prerequisite landed.** CR-080 shipped, so a release now carries `releasedAt` (its tag's
+  own date) and `crs` (what it shipped). The app already fetches `GET …/releases` into
+  `state.releases` (`app.js:292`), so no new endpoint or client work: `crs` and `releasedAt` arrive
+  free. Release gating and ship-order sorting are therefore implementable as designed.
+- **Wave is a mutable planning field; release membership is immutable history.** A CR can be moved
+  between waves during refactoring or reprioritisation, so the graph renders the wave a CR is in
+  **now**, while a shipped CR's release is settled fact. The builder must read the current wave and
+  never assume a CR's wave label is what it was when a past release shipped.
+- **Pinned sites**, enumerated multi-line-aware: `tests/roadmap-graph.test.ts` (16 hits — the
+  contract suite), `public/app-logic.mjs` (7 — the builder), `public/app.js` (2 — the render seam).
+- **No public symbol is removed**; `buildRoadmapGraph(entries, releases)` keeps its signature.
 
-Pinned sites, enumerated multi-line-aware: `tests/roadmap-graph.test.ts` (16 hits — the contract
-suite), `public/app-logic.mjs` (7 — the builder itself), `public/app.js` (2 — the render seam).
+**One genuine data defect found, out of scope here and filed separately (CR-081):** CR-080's `crs`
+is computed by matching CR ids in **merge subjects**, so a CR that landed without a naming merge
+commit is silently omitted — `CR-CRU-021` and `CR-CRU-023` shipped in 0.1.0 yet appear in no
+release. Commit **ancestry** is the exact rule (CR-080's own F3 said so; plans already carry their
+merge sha). That is a bug in the provenance producer, not a constraint on this view, and this CR
+consumes `crs` as specified rather than compensating for it.
 
-**Verdict: SPEC_UPDATE_NEEDED, applied below.** §S1 now gates per-CR from `crs`, diamonds chain so
-an empty release still gates, and the unreleased region is explicit. F14a's decision-2 premise is
-corrected in the spec rather than silently coded around.
+**Verdict: READY.** Build F14a as approved.
 
 ## Scope
 
@@ -176,11 +162,9 @@ cycle position; everything else is static.
   inbound and one outbound edge, including a release that shipped **zero** CRs (`0.1.1`), which
   chains from the previous diamond to the next. A milestone with zero edges is the defect this CR
   fixes and must fail this AC.
-- **AC1b** — release membership comes from `crs`, **not** wave numbers: a CR in `0.1.2`'s `crs`
-  flows into the `0.1.2` diamond even though other CRs of the same wave shipped in `0.1.0`.
-  Asserted with the real straddle case (wave 4 across `0.1.0` and `0.1.2`).
-- **AC1c** — CRs in no release form a trailing region after the newest diamond, and a wave that
-  straddles a release boundary is **not** duplicated as a node.
+- **AC1b** — release membership comes from `crs`; a CR flows into the diamond of the release that
+  shipped it and out of the preceding one.
+- **AC1c** — CRs not yet in any release flow after the newest diamond.
 - **AC2** — for two CRs in different waves with **no** declared dependency, the graph still
   places the later wave downstream (via the wave/release chain), so execution order is readable
   without inventing a dependency.
