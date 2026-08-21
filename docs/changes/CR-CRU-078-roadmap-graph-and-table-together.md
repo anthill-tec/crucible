@@ -99,7 +99,10 @@ claims a "stable, seq-preserving order", which is not what it does. Live consequ
 
 New ordering rule:
 
-1. group by **release**, then by **wave** — groups never interleave;
+1. group by **release** (from CR-080's `crs`), then by **wave** — groups never interleave. A wave
+   that straddles releases appears once **in each** release group it has members in; that is
+   correct, not duplication (measured: wave 4 spans `0.1.0`, `0.1.2` and the unreleased region).
+   CRs in no release form a trailing **unreleased** group after the newest release;
 2. **within** a group, preserve the **authored `seq`** order verbatim;
 3. topology is used to **validate**, not to re-sequence: if the authored order places a CR before
    one of its own dependencies, that is surfaced as a **warning on the offending row**, because a
@@ -132,8 +135,11 @@ selecting a node highlights its rows.
 - **AC8** — an `IN_PROGRESS` row is clickable and marked as the drill-through source; the jump
   itself is CR-079's AC.
 - **AC9** — the surface renders the live 78-CR roadmap with both zones and no error.
-- **AC10** — every wave divider appears **exactly once**; the live duplicate sequence
-  (`Wave 1,2,3,4,3,4,5,6,5,6,5`) must fail this AC.
+- **AC10** — a wave divider appears **exactly once per release group**. Amended after CR-077's
+  round-2 gap analysis: "exactly once overall" is **impossible** on real data, because wave 4
+  genuinely ships in `0.1.0`, ships again in `0.1.2`, and still has unreleased members — so
+  `Wave 4` legitimately appears in three regions. The bug is a **repeat within one group**, which
+  is what the live sequence (`Wave 1,2,3,4,3,4,5,6,5,6,5`) exhibits and what must fail this AC.
 - **AC11** — rows group by release then wave and **preserve authored `seq`** within a group:
   **every** wave-6 row renders after every wave-5 row. Asserted with the real deferral
   (015/018/022 after 075–080), the case that exposed the bug.
