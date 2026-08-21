@@ -277,8 +277,9 @@ async function openWorkflowTab(): Promise<HTMLElement> {
 describe("Workflow tab — DOM wiring", () => {
   // SANCTIONED RE-TARGET (CR-CRU-021 §S1): the workspace-tab order flips —
   // Workflow is now the FIRST (default) tab, Runs moves to second position
-  // (AC1). Was: ["Runs", "Workflow", "Coverage", "Compile", "BDD"] with the
-  // title claiming "position 2, after Runs".
+  // (AC1). SANCTIONED RE-TARGET (CR-CRU-014 §S3): the Roadmap tab renders
+  // before BDD in the workspace-tabs row. Was:
+  // ["Workflow","Runs","Coverage","Compile","BDD"].
   test("a 'Workflow' workspace-tab button exists (position 1, the default tab) and becomes the active tab on click", async () => {
     const key = "wf-wiring-1";
     await mountApp({
@@ -295,6 +296,7 @@ describe("Workflow tab — DOM wiring", () => {
       "Runs",
       "Coverage",
       "Compile",
+      "Roadmap",
       "BDD",
     ]);
 

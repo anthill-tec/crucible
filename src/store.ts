@@ -15,6 +15,8 @@ import type {
   Plan,
   PlanCycle,
   Project,
+  QueueEntry,
+  QueueStatus,
   RunContext,
   RunEvent,
   RunSchema,
@@ -230,6 +232,27 @@ interface PlanCycleRow {
   // cycle strictly between two siblings via a fractional midpoint). Governs
   // cycles[] order AND the §S1 out-of-order guard — cycle_id no longer orders.
   seq: number;
+}
+
+/** CR-CRU-014 §S1 — one stored queue_entries row. */
+interface QueueEntryRow {
+  project_key: string;
+  cr: string;
+  title: string | null;
+  wave: string;
+  depends_on_json: string;
+  size: string | null;
+  filed_at: number;
+  seq: number;
+}
+
+/** CR-CRU-014 §S1 — a validated queue entry as accepted by replaceQueue. */
+export interface QueueEntryInput {
+  cr: string;
+  title?: string;
+  wave: string;
+  dependsOn: string[];
+  size?: string;
 }
 
 /**
@@ -1099,6 +1122,23 @@ export class Store {
         active_ms_accumulated INTEGER,
         seq REAL,
         PRIMARY KEY (project_key, cycle_id)
+      );
+
+      -- CR-CRU-014 §S1 — the CR execution queue (project roadmap). ADDITIVE
+      -- (CREATE TABLE IF NOT EXISTS, no migration chain step): SCHEMA_VERSION
+      -- stays 7. A full-replace POST rewrites a project's rows wholesale, so
+      -- (project_key, cr) is the natural key; seq preserves post order for a
+      -- stable read; depends_on_json holds the verbatim CR-id string list.
+      CREATE TABLE IF NOT EXISTS queue_entries (
+        project_key TEXT NOT NULL,
+        cr TEXT NOT NULL,
+        title TEXT,
+        wave TEXT NOT NULL,
+        depends_on_json TEXT NOT NULL,
+        size TEXT,
+        filed_at INTEGER NOT NULL,
+        seq INTEGER NOT NULL,
+        PRIMARY KEY (project_key, cr)
       );
     `);
   }
@@ -2781,6 +2821,93 @@ export class Store {
           (filter?.track === undefined || row.track === filter.track),
       )
       .map((row) => this.toPlan(row));
+  }
+
+  // ── CR-CRU-014 §S1 — the CR execution queue ─────────────────────────────
+
+  /**
+   * CR-CRU-014 §S1 — FULL-REPLACE a project's queue in one transaction: the
+   * prior rows are deleted and the posted set inserted wholesale, so absent
+   * entries vanish, re-posted entries carry no duplicates, and an edited wave
+   * takes effect. Notifies through the SAME onChange path SSE consumes (the
+   * existing "events" kind — the roadmap renders on that surface).
+   */
+  replaceQueue(projectKey: string, entries: QueueEntryInput[]): void {
+    const now = Date.now();
+    const replace = this.db.transaction(() => {
+      this.db.query(`DELETE FROM queue_entries WHERE project_key = ?`).run(projectKey);
+      entries.forEach((entry, index) => {
+        this.db
+          .query(
+            `INSERT INTO queue_entries
+               (project_key, cr, title, wave, depends_on_json, size, filed_at, seq)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            projectKey,
+            entry.cr,
+            entry.title ?? null,
+            entry.wave,
+            JSON.stringify(entry.dependsOn),
+            entry.size ?? null,
+            now,
+            index,
+          );
+      });
+    });
+    replace();
+    this.emit("events", projectKey);
+  }
+
+  /**
+   * CR-CRU-014 §S1 — the project's queue with each entry's DERIVED status
+   * (never stored): PENDING when no plan exists for the cr, IN_PROGRESS when
+   * an open plan does, COMPLETED when a plan is closed WITH a merge commit.
+   * `planId` is the linked plan's id, present only when a plan exists.
+   * Archived projects are excluded via the shared NOT_ARCHIVED subquery
+   * (rows survive; unarchive restores them) — the listReleases precedent.
+   */
+  listQueue(projectKey: string): QueueEntry[] {
+    const rows = this.db
+      .query<QueueEntryRow, [string]>(
+        `SELECT * FROM queue_entries WHERE project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY}
+         ORDER BY seq ASC`,
+      )
+      .all(projectKey);
+    return rows.map((row) => {
+      const derived = this.deriveQueueStatus(projectKey, row.cr);
+      return {
+        cr: row.cr,
+        ...(row.title !== null ? { title: row.title } : {}),
+        wave: row.wave,
+        dependsOn: JSON.parse(row.depends_on_json) as string[],
+        ...(row.size !== null ? { size: row.size } : {}),
+        status: derived.status,
+        ...(derived.planId !== undefined ? { planId: derived.planId } : {}),
+      };
+    });
+  }
+
+  /** CR-CRU-014 §S1 — derive a cr's queue status + plan link from its plans. */
+  private deriveQueueStatus(
+    projectKey: string,
+    cr: string,
+  ): { status: QueueStatus; planId?: number } {
+    const plans = this.listPlans(projectKey, { cr });
+    if (plans.length === 0) {
+      return { status: "PENDING" };
+    }
+    const open = plans.find((plan) => plan.status === "open");
+    if (open !== undefined) {
+      return { status: "IN_PROGRESS", planId: open.planId };
+    }
+    const completed = plans.find(
+      (plan) => plan.status === "closed" && plan.merge !== undefined,
+    );
+    if (completed !== undefined) {
+      return { status: "COMPLETED", planId: completed.planId };
+    }
+    return { status: "PENDING", planId: plans[plans.length - 1]!.planId };
   }
 
   /**

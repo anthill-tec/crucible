@@ -288,3 +288,25 @@ export interface Plan {
   closedAt?: number;
   commitBoundary?: CommitBoundary;
 }
+
+// ── CR-CRU-014 §S1 — the CR execution queue (project roadmap registration) ──
+
+/** CR-CRU-014 §S1 — a queued CR's derived lifecycle, computed from its plan. */
+export type QueueStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED";
+
+/**
+ * CR-CRU-014 §S1 — one registered queue entry as served by GET …/queue. The
+ * caller supplies {cr, title?, wave, dependsOn, size?}; `status` and `planId`
+ * are DERIVED on read from the cr's plan (never stored): PENDING = no plan,
+ * IN_PROGRESS = an open plan, COMPLETED = a plan closed with a merge commit.
+ * `dependsOn` is a string[] of CR ids, stored and returned verbatim.
+ */
+export interface QueueEntry {
+  cr: string;
+  title?: string;
+  wave: string;
+  dependsOn: string[];
+  size?: string;
+  status: QueueStatus;
+  planId?: number;
+}

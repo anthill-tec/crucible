@@ -9,7 +9,7 @@ import { authHints, hints, cycleHints, identityHints, projectDeleteHints } from 
 import { Store, UUID_RE } from "./store.ts";
 import { toToon } from "./toon.ts";
 import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
-import type { ProjectPatch, RecordEventMeta, RunRecord, TouchAgentOpts } from "./store.ts";
+import type { ProjectPatch, QueueEntryInput, RecordEventMeta, RunRecord, TouchAgentOpts } from "./store.ts";
 import type {
   AgentIdentity,
   AgentRole,
@@ -84,6 +84,8 @@ interface V2Body {
   // CR-CRU-017 §S1 — the OPEN run this ingest closes (optional: no runId is
   // the unchanged single-shot path).
   runId?: unknown;
+  // CR-CRU-014 §S1 — the queue full-replace payload.
+  entries?: unknown;
 }
 
 // §S3 — all help[] wording lives in src/hints.ts (one reviewable module).
@@ -1637,6 +1639,83 @@ function handleProjectReleases(store: Store, key: string, req: Request, url: URL
 }
 
 /**
+ * CR-CRU-014 §S1 — GET …/projects/<key>/queue. Existence is validated the
+ * handleProjectReleases way (UUID shape, then the row); an archived project
+ * still answers 200 but the store's NOT_ARCHIVED exclusion yields an empty
+ * list. Each entry carries its DERIVED status + plan link.
+ */
+function handleQueueGet(store: Store, key: string, req: Request, url: URL): Response {
+  if (!UUID_RE.test(key)) {
+    return fail(400, "projectKey must be a UUID", { help: hints.unknownProject });
+  }
+  if (store.getProject(key) === null) {
+    return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
+  }
+  return reply(req, url, { ok: true, entries: store.listQueue(key) });
+}
+
+/**
+ * CR-CRU-014 §S1 — POST …/projects/<key>/queue: FULL-REPLACE the queue.
+ * Validation 400s name the offending field AND index. Unknown dependsOn
+ * targets (forward refs to CRs not in the posted set) are ACCEPTED and
+ * flagged in `unknownDependencies`, never rejected.
+ */
+async function handleQueuePost(store: Store, key: string, req: Request): Promise<Response> {
+  if (!UUID_RE.test(key)) {
+    return fail(400, "projectKey must be a UUID", { help: hints.unknownProject });
+  }
+  if (store.getProject(key) === null) {
+    return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
+  }
+  const body = (await readBody(req)) ?? {};
+  const rawEntries = body.entries;
+  if (!Array.isArray(rawEntries)) {
+    return fail(400, "queue body must carry an `entries` array");
+  }
+  const entries: QueueEntryInput[] = [];
+  for (let index = 0; index < rawEntries.length; index++) {
+    const raw: unknown = rawEntries[index];
+    if (raw === null || typeof raw !== "object") {
+      return fail(400, `entry at index ${index} is not an object`);
+    }
+    // Narrowed to a plain object at the JSON boundary; each field is validated
+    // individually below before use.
+    const fields = raw as Record<string, unknown>;
+    if (typeof fields.cr !== "string" || fields.cr.length === 0) {
+      return fail(400, `entry at index ${index} is missing required field \`cr\``);
+    }
+    if (fields.wave === undefined || fields.wave === null) {
+      return fail(400, `entry at index ${index} is missing required field \`wave\``);
+    }
+    if (fields.dependsOn !== undefined && !Array.isArray(fields.dependsOn)) {
+      return fail(400, `entry at index ${index} has a non-array \`dependsOn\``);
+    }
+    const dependsOn = Array.isArray(fields.dependsOn)
+      ? fields.dependsOn.map((dep) => String(dep))
+      : [];
+    entries.push({
+      cr: fields.cr,
+      ...(fields.title !== undefined && fields.title !== null
+        ? { title: String(fields.title) }
+        : {}),
+      wave: String(fields.wave),
+      dependsOn,
+      ...(fields.size !== undefined && fields.size !== null
+        ? { size: String(fields.size) }
+        : {}),
+    });
+  }
+  store.replaceQueue(key, entries);
+  const known = new Set(entries.map((entry) => entry.cr));
+  const unknownDependencies = [
+    ...new Set(
+      entries.flatMap((entry) => entry.dependsOn).filter((dep) => !known.has(dep)),
+    ),
+  ];
+  return json({ ok: true, entries: store.listQueue(key), unknownDependencies });
+}
+
+/**
  * CR-CRU-052 §S1 — DELETE …/projects/<key>: the project row plus every row
  * keyed to it, in one transaction. The most destructive route in the system,
  * so it carries the SAME double gate as CR-CRU-032's lesser single-event
@@ -2112,6 +2191,15 @@ export function handleV2(
     // CR-CRU-074 §S3 — the project's recorded releases, newest-first.
     if (req.method === "GET" && segments.length === 2 && segments[1] === "releases") {
       return handleProjectReleases(store, segments[0]!, req, url);
+    }
+    // CR-CRU-014 §S1 — the project's CR execution queue (roadmap).
+    if (segments.length === 2 && segments[1] === "queue") {
+      if (req.method === "GET") {
+        return handleQueueGet(store, segments[0]!, req, url);
+      }
+      if (req.method === "POST") {
+        return handleQueuePost(store, segments[0]!, req);
+      }
     }
     // CR-CRU-012 §S1 — PATCH project parameters (v2-only; the v1 shim has
     // no equivalent route).
