@@ -1670,14 +1670,28 @@ export class Store {
    * transaction that inserts the release, every gate whose `version` equals
    * the release's `label` is stamped `retired_at`. A release with no matching
    * gate still records; a gate arriving afterwards is retired on insert.
+   *
+   * CR-CRU-080 §S3 — a release is IDENTIFIED by (type, label, commit), so a
+   * repeat of one already held is a replay, not a second release: the held
+   * event is returned with `changed:false` and nothing is inserted. Recording
+   * a release is therefore idempotent for EVERY caller, which is the point of
+   * putting it here rather than in the one ceremony that noticed — replaying
+   * `release.sh backfill-releases` used to duplicate every release. The
+   * caller is still touched on the agent rail: it did report, truthfully.
    */
   recordMilestoneEvent(
     projectKey: string,
     agentId: string,
     type: string,
     meta?: { label?: string; commit?: string; context?: RunContext },
-  ): RunEvent {
+  ): { event: RunEvent; changed: boolean } {
     this.touchAgent(projectKey, agentId);
+    if (type === "release" && meta?.label !== undefined && meta.commit !== undefined) {
+      const held = this.listReleases(projectKey).find(
+        (r) => r.label === meta.label && r.commit === meta.commit,
+      );
+      if (held !== undefined) return { event: held, changed: false };
+    }
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -1699,7 +1713,7 @@ export class Store {
     } else {
       this.insertEvent(event);
     }
-    return event;
+    return { event, changed: true };
   }
 
   /**

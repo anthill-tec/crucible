@@ -1141,12 +1141,15 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   const caller = requireRegisteredCaller(store, pk.key, body);
   if ("fail" in caller) return caller.fail;
   const { agentId } = caller;
-  const event = store.recordMilestoneEvent(pk.key, agentId, body.type, {
+  // CR-CRU-080 §S3 — a replayed release (identical type/label/commit) is the
+  // store's idempotent no-op, echoed as the codebase's uniform "nothing
+  // changed" answer with the event already held, never a second row.
+  const { event, changed } = store.recordMilestoneEvent(pk.key, agentId, body.type, {
     ...(typeof body.label === "string" ? { label: body.label } : {}),
     ...(typeof body.commit === "string" ? { commit: body.commit } : {}),
     ...eventContext(body),
   });
-  return json({ ok: true, changed: true, event: event.id }, 201);
+  return json({ ok: true, changed, event: event.id }, changed ? 201 : 200);
 }
 
 // ── CR-CRU-011 §S0 — cycle-plan routes (plans are NOT events) ───────────────
