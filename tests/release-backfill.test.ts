@@ -43,6 +43,20 @@
 // today (`grep backfill-releases scripts/release.sh` → nothing; the dispatch
 // `*)` arm exits 2 "unknown subcommand"), so no `release` milestone is ever
 // recorded. Every positive test FAILS for exactly that missing contract.
+//
+// ── CR-CRU-080 (§S1 identity, §S3 honest tally) ─────────────────────────────
+// Spec: docs/changes/CR-CRU-080-release-ceremony-cannot-report.md AC4/AC6.
+// G1: `emit_release_milestone` is the ONE reporter both this backfill and the
+// ceremony share, and it passes no `--agent`, so the REAL backfill of
+// 0.1.0/0.1.1/0.1.2 emitted three `agent-identity-required` errors and recorded
+// nothing while this stub suite stayed green. Two additions:
+//   AC6  the client stub REFUSES an argv without `--agent` (as the real client
+//        does), and every per-tag report's `--agent` value is asserted.
+//   AC4  a per-tag result plus a final `N/M recorded` tally, with a partial
+//        failure visible in the exit SUMMARY (new `failLabel` knob fails one
+//        tag's report only).
+// The world supplies `$CRUCIBLE_AGENT` by default, so the pre-existing tests
+// above exercise a backfill that CAN report.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,6 +76,10 @@ const SHIPPED: ReadonlyArray<readonly [string, string]> = [
 /** Non-release noise a real repo also carries: a `v`-prefixed tag and a
  * non-SemVer moving tag. Neither is bare SemVer, so neither is a release. */
 const NOISE_TAGS = ["v1.2.3", "nightly"];
+
+/** CR-CRU-080 §S1 — the identity the backfill declares, sourced from the
+ *  documented `$CRUCIBLE_AGENT` environment variable. */
+const BACKFILL_AGENT = "release-ceremony-1";
 
 /** Every stack's Crucible client — a recorder is dropped for each so the test
  * does not presuppose which one GREEN invokes. */
@@ -130,13 +148,31 @@ esac
 
 /**
  * Stub Crucible client. Records its full argv to $CR074_LOG, so each release
- * report (its --type/--label/--commit) is directly observable. Exits non-zero
- * when $CR074_REPORT_FAIL="1", so warns-not-fails can be exercised.
+ * report (its --type/--label/--commit/--agent) is directly observable. Exits
+ * non-zero when $CR074_REPORT_FAIL="1", so warns-not-fails can be exercised,
+ * and when the reported label matches $CR074_FAIL_LABEL, so a PARTIAL failure
+ * (CR-CRU-080 AC4) can be exercised per tag.
+ *
+ * CR-CRU-080 AC6 — the stub is no longer permissive: the REAL client requires
+ * `--agent` with no fallback (CR-CRU-057), so a stub accepting any argv is what
+ * let a backfill that reported nothing look healthy here. It now refuses the
+ * identical way, with the identical error code.
  */
 const CLIENT_STUB = `#!/usr/bin/env python3
 import os, sys
+argv = sys.argv[1:]
 with open(os.environ["CR074_LOG"], "a", encoding="utf-8") as fh:
-    fh.write("client " + os.path.basename(sys.argv[0]) + " " + " ".join(sys.argv[1:]) + "\\n")
+    fh.write("client " + os.path.basename(sys.argv[0]) + " " + " ".join(argv) + "\\n")
+if "--agent" not in argv or not argv[argv.index("--agent") + 1 :]:
+    sys.stderr.write(
+        "error: agent-identity-required - no agent identity was declared; "
+        "supply it with \`--agent <agentId>\`. Nothing was posted.\\n"
+    )
+    sys.exit(2)
+fail_label = os.environ.get("CR074_FAIL_LABEL", "")
+if fail_label and "--label" in argv and argv[argv.index("--label") + 1] == fail_label:
+    sys.stderr.write("error: connection refused\\n")
+    sys.exit(1)
 sys.exit(1 if os.environ.get("CR074_REPORT_FAIL") == "1" else 0)
 `;
 
@@ -154,7 +190,15 @@ interface RunResult {
 
 interface World {
   root: string;
-  run(opts?: { tags?: string[]; reportFail?: boolean }): RunResult;
+  run(opts?: {
+    tags?: string[];
+    reportFail?: boolean;
+    /** CR-CRU-080 §S1 — the identity in $CRUCIBLE_AGENT; `null` removes it. */
+    agent?: string | null;
+    /** CR-CRU-080 AC4 — the ONE version whose report fails, for the partial
+     *  failure the exit summary must surface. */
+    failLabel?: string;
+  }): RunResult;
   dispose(): void;
 }
 
@@ -188,19 +232,25 @@ function makeWorld(): World {
     root,
     run(opts = {}): RunResult {
       const tags = opts.tags ?? SHIPPED.map(([v]) => v);
+      // CR-CRU-080 §S1 — the backfill's identity source, supplied by default so
+      // the pre-existing suite exercises a backfill that CAN report.
+      const agent = opts.agent === undefined ? BACKFILL_AGENT : opts.agent;
+      const env: Record<string, string> = {
+        PATH: pathDirs.join(":"),
+        HOME: home,
+        SHELL: "/bin/sh",
+        CR074_LOG: log,
+        CR074_ROOT: root,
+        CR074_BRANCH: "develop",
+        CR074_TAGS: tags.join(" "),
+        CR074_REPORT_FAIL: opts.reportFail ? "1" : "0",
+        CR074_FAIL_LABEL: opts.failLabel ?? "",
+      };
+      if (agent !== null) env.CRUCIBLE_AGENT = agent;
       const res = Bun.spawnSync({
         cmd: ["bash", RELEASE_SH, "backfill-releases"],
         cwd: root,
-        env: {
-          PATH: pathDirs.join(":"),
-          HOME: home,
-          SHELL: "/bin/sh",
-          CR074_LOG: log,
-          CR074_ROOT: root,
-          CR074_BRANCH: "develop",
-          CR074_TAGS: tags.join(" "),
-          CR074_REPORT_FAIL: opts.reportFail ? "1" : "0",
-        },
+        env,
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -225,11 +275,21 @@ function makeWorld(): World {
 const isReleaseReportLine = (l: string): boolean =>
   /^client \S+-crucible\.py\b/.test(l) && /\bmilestone\b/.test(l) && /--type\s+release\b/.test(l);
 
-/** The `--label`/`--commit` values a release report carried, or null. */
-function reportFields(line: string): { label: string | null; commit: string | null } {
+/** The `--label`/`--commit`/`--agent` values a release report carried, or null.
+ *  CR-CRU-080 AC6 — `--agent` is captured because it is REQUIRED. */
+function reportFields(line: string): {
+  label: string | null;
+  commit: string | null;
+  agent: string | null;
+} {
   const label = line.match(/--label\s+(\S+)/);
   const commit = line.match(/--commit\s+(\S+)/);
-  return { label: label ? label[1] : null, commit: commit ? commit[1] : null };
+  const agent = line.match(/--agent\s+(\S+)/);
+  return {
+    label: label ? label[1] : null,
+    commit: commit ? commit[1] : null,
+    agent: agent ? agent[1] : null,
+  };
 }
 
 /** version→commit map of every release the run reported. */
@@ -347,5 +407,142 @@ describe("CR-CRU-074 §S4/AC6 — only bare-SemVer tags are reported as releases
     expect(r.exitCode).toBe(0);
     // Nothing is bare SemVer, so no release milestone is reported at all.
     expect(r.log.filter(isReleaseReportLine).length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CR-CRU-080 §S1/AC6 — every backfilled report declares an identity
+//
+// Spec: docs/changes/CR-CRU-080-release-ceremony-cannot-report.md §S1 + AC6.
+// `emit_release_milestone` is the SINGLE reporter shared by report_release and
+// backfill-releases (G1), and it passes no `--agent`, so the real backfill run
+// for 0.1.0/0.1.1/0.1.2 emitted three `agent-identity-required` errors and
+// recorded nothing. RED: no report carries `--agent`.
+// ---------------------------------------------------------------------------
+
+describe("CR-CRU-080 §S1/AC6 — each backfilled release report carries the ceremony's identity", () => {
+  test("every per-tag report's argv contains --agent with the identity from $CRUCIBLE_AGENT", () => {
+    const r = world.run();
+    const reports = r.log.filter(isReleaseReportLine);
+    expect(reports.length).toBe(SHIPPED.length);
+
+    // POSITIVE — every one of the three declares the SAME exact identity.
+    expect(reports.map((l) => reportFields(l).agent)).toEqual([
+      BACKFILL_AGENT,
+      BACKFILL_AGENT,
+      BACKFILL_AGENT,
+    ]);
+    // BOUND — the identity is an addition: each report still carries its own
+    // version and tagged commit.
+    expect([...reportedIdentities(r.log).entries()].sort()).toEqual([
+      ["0.1.0", "c07274c8"],
+      ["0.1.1", "abc30d57"],
+      ["0.1.2", "9ef24b18"],
+    ]);
+  });
+
+  test("with NO identity available the backfill refuses up front and reports nothing at all", () => {
+    // §S2 makes an absent identity a PREFLIGHT failure, and the backfill shares
+    // the one reporter — so it cannot spend three client calls discovering that
+    // it has no identity.
+    const r = world.run({ agent: null });
+    expect(r.log.filter((l) => l.startsWith("client ")).length).toBe(0);
+    const combined = `${r.stdout}\n${r.stderr}`;
+    expect(combined).toContain("--agent");
+    expect(combined).toContain("CRUCIBLE_AGENT");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CR-CRU-080 §S3/AC4 — per-tag result + a final tally in the exit summary
+//
+// Spec §S3: "`backfill-releases` reports per tag and prints a final tally
+// (`3/3 recorded`, or which failed and why)." AC4 adds that a partial failure
+// must be visible in the EXIT SUMMARY rather than only mid-log. RED: today the
+// loop prints nothing on success and no tally at all.
+// ---------------------------------------------------------------------------
+
+/** The output lines of one stream, trimmed and non-empty. */
+function lines(text: string): string[] {
+  return text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+}
+
+/** The tally line (`N/M recorded`) and its position, from whichever stream the
+ *  ceremony printed it on — plus that stream's other lines, so "after the last
+ *  per-tag line" is a same-stream ordering claim rather than an interleave. */
+function tally(r: { stdout: string; stderr: string }): { line: string; index: number; stream: string[] } | null {
+  for (const stream of [lines(r.stdout), lines(r.stderr)]) {
+    const index = stream.findIndex((l) => /\b\d+\/\d+\b/.test(l) && /recorded/i.test(l));
+    if (index >= 0) return { line: stream[index], index, stream };
+  }
+  return null;
+}
+
+describe("CR-CRU-080 §S3/AC4 — the backfill reports per tag and tallies at the end", () => {
+  test("a fully successful backfill names each tag it recorded and ends with a `3/3 recorded` tally", () => {
+    const r = world.run();
+    expect(r.exitCode).toBe(0);
+
+    const combined = `${r.stdout}\n${r.stderr}`;
+    // Per-tag result: each shipped version is named in the output.
+    for (const [version] of SHIPPED) {
+      expect(combined).toContain(version);
+    }
+
+    // POSITIVE — the exact tally §S3 pins.
+    const t = tally(r);
+    expect(t).not.toBeNull();
+    expect(t!.line).toMatch(/\b3\/3\b/);
+
+    // The tally is the SUMMARY: it comes after the last per-tag line on its own
+    // stream, not buried among them.
+    const lastPerTag = t!.stream.reduce(
+      (acc, line, i) => (SHIPPED.some(([v]) => line.includes(v)) && i !== t!.index ? i : acc),
+      -1,
+    );
+    expect(t!.index).toBeGreaterThan(lastPerTag);
+  });
+
+  test("a partial failure tallies `2/3` and names the failed tag in the exit summary", () => {
+    const r = world.run({ failLabel: "0.1.1" });
+
+    // Reporting stays non-fatal (a published release is never rolled back for
+    // a tracking call), so the run still exits 0 — which is exactly why the
+    // summary has to say what did NOT land.
+    expect(r.exitCode).toBe(0);
+
+    const t = tally(r);
+    expect(t).not.toBeNull();
+    // POSITIVE — two of three recorded, not a bare "done".
+    expect(t!.line).toMatch(/\b2\/3\b/);
+    // NEGATIVE — it must not claim all three.
+    expect(t!.line).not.toMatch(/\b3\/3\b/);
+
+    // The failed version is named at the END (in the tally line or the summary
+    // block around it), not only in a warning in the middle of the log.
+    const summaryBlock = t!.stream.slice(t!.index).join("\n");
+    expect(summaryBlock).toContain("0.1.1");
+  });
+
+  test("the per-tag results distinguish the failure from the successes rather than warning generically", () => {
+    const r = world.run({ failLabel: "0.1.1" });
+    const combined = `${r.stdout}\n${r.stderr}`;
+
+    // The two that landed and the one that did not are all named, so an
+    // operator can act on the specific tag.
+    expect(combined).toContain("0.1.0");
+    expect(combined).toContain("0.1.2");
+    expect(combined).toMatch(/0\.1\.1/);
+    // The successful tags are NOT reported as failures: only the failing label
+    // rides a failure/NOT-recorded line.
+    const failureLines = lines(r.stdout)
+      .concat(lines(r.stderr))
+      .filter((l) => /fail|not recorded|NOT backfilled|unrecorded/i.test(l));
+    expect(failureLines.length).toBeGreaterThan(0);
+    expect(failureLines.some((l) => l.includes("0.1.1"))).toBe(true);
+    expect(failureLines.some((l) => l.includes("0.1.0") || l.includes("0.1.2"))).toBe(false);
   });
 });
