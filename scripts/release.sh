@@ -294,6 +294,43 @@ cmd_checkpoint() {
     gh workflow run release.yml --ref "$branch"
 }
 
+# CR-CRU-074 §S2 — report the shipped release to Crucible, through the repo
+# client (never a bare curl). Called ONLY after `git push … --tags` has
+# published the tag, so a recorded release always corresponds to a tag the
+# remote actually received. The version is the TAG's bare SemVer and the commit
+# is the tagged sha — never a value guessed from the CLI argument. A reporting
+# failure (including an absent/malformed tag) must NOT fail the release, since
+# the tag is already public: warn, naming the version, and return success.
+# Re-runs emit an identical (type, label, commit), so the server dedups.
+report_release() {
+    local tag prefix version sha client
+
+    if ! tag="$(git describe --tags --abbrev=0 2>/dev/null)" || [ -z "$tag" ]; then
+        info "WARN: could not read the release tag; release $VERSION was NOT reported to Crucible"
+        return "$EXIT_SUCCESS"
+    fi
+
+    # Strip the git-flow versiontag prefix (guarded to empty) to get bare SemVer.
+    prefix="$(git config --get gitflow.prefix.versiontag 2>/dev/null || true)"
+    version="${tag#"$prefix"}"
+
+    if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        info "WARN: release tag '$tag' is not bare SemVer; release $VERSION was NOT reported to Crucible"
+        return "$EXIT_SUCCESS"
+    fi
+
+    if ! sha="$(git rev-list -n 1 "$tag" 2>/dev/null)" || [ -z "$sha" ]; then
+        info "WARN: could not resolve the commit for tag '$tag'; release $version was NOT reported to Crucible"
+        return "$EXIT_SUCCESS"
+    fi
+
+    client="$(repo_root)/clients/python-crucible.py"
+    if ! python3 "$client" milestone --type release --label "$version" --commit "$sha"; then
+        info "WARN: reporting release $version to Crucible failed; the release is published and complete"
+        return "$EXIT_SUCCESS"
+    fi
+}
+
 cmd_finish() {
     local branch
     branch="$(require_release_branch)"
@@ -335,6 +372,9 @@ cmd_finish() {
     GIT_MERGE_AUTOEDIT=no git flow "$kind" finish -m "Release $VERSION" "$VERSION"
     debug "pushing: $push_cmd"
     git push origin master develop --tags
+
+    # CR-CRU-074 §S2 — the tag is now published; record the release.
+    report_release
 }
 
 cmd_status() {
