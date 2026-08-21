@@ -210,7 +210,13 @@ describe("workspaceTabs — Runs/Workflow/Coverage/Compile/BDD, Agents dropped (
   // flips to Workflow-first ("Workflow · Runs · Coverage · Compile · BDD")
   // — user direction at the CR-020 gate review, "the Workflow should be the
   // primary view ... followed by runs". Was: ["Runs","Workflow",...].
-  test("backend project: exactly [Workflow, Runs, Coverage, Compile, BDD(disabled)] — no Agents entry", () => {
+  // SANCTIONED RE-TARGET (CR-CRU-014 §S3, dispatch-approved): the Roadmap
+  // tab is inserted right BEFORE BDD ("Workflow · Runs · Coverage · Compile ·
+  // Roadmap · BDD") — the roadmap is a first-class workspace tab (§S3, tab
+  // elevation user-locked 2026-07-16). Roadmap is NEVER gated (enabled for
+  // both project types, same as Workflow/Runs/Compile). Was:
+  // ["Workflow","Runs","Coverage","Compile","BDD"].
+  test("backend project: exactly [Workflow, Runs, Coverage, Compile, Roadmap, BDD(disabled)] — no Agents entry", () => {
     const tabs = workspaceTabs({ type: "backend" });
 
     expect(tabs.map((t: TabShape) => t.name)).toEqual([
@@ -218,6 +224,7 @@ describe("workspaceTabs — Runs/Workflow/Coverage/Compile/BDD, Agents dropped (
       "Runs",
       "Coverage",
       "Compile",
+      "Roadmap",
       "BDD",
     ]);
     expect(tabs.find((t: TabShape) => t.name === "BDD")).toEqual({ name: "BDD", disabled: true });
@@ -235,7 +242,9 @@ describe("workspaceTabs — Runs/Workflow/Coverage/Compile/BDD, Agents dropped (
   });
 
   // SANCTIONED RE-TARGET (CR-CRU-021 §S1): same Workflow-first order flip,
-  // frontend project type. Was: ["Runs","Workflow",...].
+  // frontend project type. SANCTIONED RE-TARGET (CR-CRU-014 §S3): Roadmap
+  // inserted before BDD for the frontend project type too. Was:
+  // ["Workflow","Runs","Coverage","Compile","BDD"].
   test("frontend project: same fixed order (Workflow-first), BDD enabled, Workflow enabled, no Agents entry", () => {
     const tabs = workspaceTabs({ type: "frontend" });
 
@@ -244,6 +253,7 @@ describe("workspaceTabs — Runs/Workflow/Coverage/Compile/BDD, Agents dropped (
       "Runs",
       "Coverage",
       "Compile",
+      "Roadmap",
       "BDD",
     ]);
     expect(tabs.find((t: TabShape) => t.name === "BDD")).toEqual({

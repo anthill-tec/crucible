@@ -1,0 +1,482 @@
+// CR-CRU-014 §S3 — the Roadmap workspace tab + TABLE view. Drives the REAL
+// production public/app.js shell inside a happy-dom window — the SAME harness
+// pattern as tests/workflow-tab.test.ts / tests/workflow-primary-tab.test.ts:
+// real VanJS/VanX vendor bundles, real public/app-logic.mjs, real
+// public/app.js; `fetch` is scripted, including the C1 queue endpoint
+// (GET /api/v2/projects/<key>/queue), the CR-CRU-074 releases endpoint
+// (GET /api/v2/projects/<key>/releases) and the project-scoped plans endpoint
+// (GET /api/v2/projects/<key>/plans) the roadmap live-overlay joins against.
+//
+// RED phase: expected to FAIL against CURRENT production, whose
+// public/app-logic.mjs TAB_NAMES has NO "Roadmap" entry and whose
+// public/app.js WorkspaceBody() ternary has no "Roadmap" branch, no Roadmap
+// pane, no `roadmap-empty`/`roadmap-row`/`roadmap-chip` testids, and whose
+// routeParse ignores the `/p/<key>/roadmap` deep-link segment — every test
+// below fails at its "the Roadmap tab / pane does not exist yet" assertion.
+//
+// SCOPE — §S3 TABLE view ONLY. The graph-view toggle (Cytoscape) is the NEXT
+// cycle and is deliberately NOT exercised here.
+import { describe, test, expect, afterEach } from "bun:test";
+import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const VAN_SRC = readFileSync(
+  path.join(REPO_ROOT, "public/vendor/van-1.5.5.nomodule.min.js"),
+  "utf8",
+);
+const VAN_X_SRC = readFileSync(
+  path.join(REPO_ROOT, "public/vendor/van-x-0.6.3.nomodule.min.js"),
+  "utf8",
+);
+const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
+const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
+
+// ── Fixture shapes (queue = the GET …/queue wire contract, §S1) ────────────
+type QueueStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED";
+interface QueueEntryFixture {
+  cr: string;
+  title?: string;
+  wave: string;
+  dependsOn: string[];
+  size?: string;
+  status: QueueStatus;
+  planId?: number;
+}
+interface ReleaseFixture {
+  version: string;
+  commit?: string;
+  timestamp: number;
+}
+interface ProjectFixture {
+  key: string;
+  name: string;
+  type: "backend" | "frontend";
+  agentsOnline: number;
+  agentsTotal: number;
+  active?: boolean;
+  lastActivity?: number;
+  latestCoverageEventId?: string;
+}
+interface CycleFixture {
+  id: number;
+  label: string;
+  status: "pending" | "active" | "done" | "skipped" | "failed";
+}
+interface PlanFixture {
+  planId: number | string;
+  cr: string;
+  projectKey: string;
+  status: "open" | "closed";
+  track?: string;
+  cycles: CycleFixture[];
+}
+interface MountOpts {
+  pathname?: string;
+  projects: ProjectFixture[];
+  queue: QueueEntryFixture[];
+  releases?: ReleaseFixture[];
+  plans?: PlanFixture[];
+}
+
+let cacheBust = 0;
+
+async function mountApp(opts: MountOpts): Promise<void> {
+  const pathname = opts.pathname ?? "/";
+  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
+  document.body.innerHTML = '<div id="app"></div>';
+
+  (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (url: string) => {
+    let body: unknown;
+    // Order matters: /queue and /releases both contain "/api/v2/projects".
+    if (/\/api\/v2\/projects\/[^/]+\/queue/.test(url)) {
+      body = { ok: true, entries: opts.queue };
+    } else if (/\/api\/v2\/projects\/[^/]+\/releases/.test(url)) {
+      body = { ok: true, releases: opts.releases ?? [] };
+    } else if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
+      body = { ok: true, plans: opts.plans ?? [] };
+    } else if (url.includes("/api/v2/projects")) {
+      body = { ok: true, projects: opts.projects };
+    } else if (url.includes("/api/v2/agents")) {
+      body = { ok: true, agents: [] };
+    } else if (url.includes("/api/v2/events")) {
+      body = { ok: true, events: [] };
+    } else if (url.includes("/api/v2/health")) {
+      body = { ok: true, version: "2.0.0-test", counts: { events: 0 } };
+    } else {
+      throw new Error(`roadmap-pane.test.ts mountApp: unexpected fetch url ${url}`);
+    }
+    return { ok: true, status: 200, json: async () => body } as Response;
+  }) as typeof fetch;
+
+  (0, eval)(VAN_SRC);
+  (0, eval)(VAN_X_SRC);
+
+  cacheBust += 1;
+  await import(`${APP_LOGIC_PATH}?roadmapPane=${cacheBust}`);
+
+  (0, eval)(APP_JS_SRC);
+
+  await settle();
+}
+
+async function settle(ticks = 8): Promise<void> {
+  for (let i = 0; i < ticks; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+afterEach(async () => {
+  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+});
+
+function findByText(root: ParentNode, selector: string, text: string): HTMLElement | undefined {
+  return Array.from(root.querySelectorAll(selector)).find((el) =>
+    (el.textContent ?? "").trim() === text,
+  ) as HTMLElement | undefined;
+}
+
+function project(overrides: Partial<ProjectFixture> & { key: string }): ProjectFixture {
+  const now = Date.now();
+  return {
+    name: overrides.key,
+    type: "backend",
+    agentsOnline: 0,
+    agentsTotal: 0,
+    active: true,
+    lastActivity: now,
+    ...overrides,
+  };
+}
+
+function tabButton(name: string): HTMLElement | undefined {
+  return findByText(document, '[data-testid="workspace-tab"]', name);
+}
+
+function tabIsOn(name: string): boolean {
+  const tab = tabButton(name);
+  return tab !== undefined && tab.classList.contains("on");
+}
+
+function roadmapRows(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('[data-testid="roadmap-row"]'));
+}
+
+function roadmapRow(cr: string): HTMLElement | undefined {
+  return roadmapRows().find((r) => r.getAttribute("data-cr") === cr);
+}
+
+// ── AC (tab-list AC) — the Roadmap tab exists and the deep-link opens it ────
+
+describe("§S3 — Roadmap is a first-class workspace tab", () => {
+  test("cold /p/<key>/roadmap load renders the workspace with the Roadmap tab `on` and its pane mounted", async () => {
+    const key = "roadmap-deeplink-1";
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "Deep Link Project" })],
+      queue: [],
+    });
+
+    const tab = tabButton("Roadmap");
+    expect(tab).toBeDefined();
+    expect(tab!.classList.contains("on")).toBe(true);
+    // The Roadmap pane (empty-state here, no queue) is what mounted, not Runs.
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
+    expect(tabIsOn("Workflow")).toBe(false);
+  });
+
+  test("the Project pane's 🗺 roadmap chip activates the Roadmap tab (same destination, one-rule tab swap)", async () => {
+    const key = "roadmap-chip-1";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Chip Project" })],
+      queue: [],
+    });
+
+    // Cold /p/<key> defaults to Workflow — the chip must flip to Roadmap.
+    expect(tabIsOn("Workflow")).toBe(true);
+    const chip = document.querySelector<HTMLElement>('[data-testid="roadmap-chip"]');
+    expect(chip).not.toBeNull();
+    expect((chip!.textContent ?? "")).toContain("🗺");
+
+    chip!.click();
+    await settle();
+
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+  });
+
+  test("the Roadmap surface is a TAB, not a slide-over — no scrim and no overlay element exist while it is active", async () => {
+    const key = "roadmap-noscrim-1";
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "No Scrim Project" })],
+      queue: [],
+    });
+
+    expect(tabIsOn("Roadmap")).toBe(true);
+    // The tabs ROW stays present (a tab surface), unlike a detail overlay
+    // which parks it (`workspace-tabs-parked`).
+    expect(document.querySelector('[data-testid="workspace-tabs"]')).not.toBeNull();
+    // No slide-over / scrim chrome of any kind.
+    expect(document.querySelector(".app-scrim")).toBeNull();
+    expect(document.querySelector('[data-testid="roadmap-overlay"]')).toBeNull();
+  });
+});
+
+// ── AC (roadmap-empty AC) — the Model-B imperative empty state ──────────────
+
+describe("§S3 — Roadmap empty state carries the register imperative", () => {
+  test("with no queue registered the Roadmap pane renders `roadmap-empty` containing exactly `POST /projects/<key>/queue`", async () => {
+    const key = "roadmap-empty-1";
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "Empty Roadmap Project" })],
+      queue: [],
+    });
+
+    const empty = document.querySelector<HTMLElement>('[data-testid="roadmap-empty"]');
+    expect(empty).not.toBeNull();
+    // The imperative names the tool the way §S3 pins it — a LITERAL `<key>`
+    // placeholder, the same copy an orchestrator sees in the tool.
+    expect(empty!.textContent ?? "").toContain("POST /projects/<key>/queue");
+    // bound: no data rows when the queue is empty.
+    expect(roadmapRows().length).toBe(0);
+  });
+});
+
+// ── AC (topological-rows AC) — one row per CR in execution order ────────────
+
+describe("§S3 — Roadmap table renders CR rows in topological execution order", () => {
+  test("rows appear in depends-on (topological) order, one per CR, each carrying CR · title · wave · depends-on chips · status badge matching GET /queue", async () => {
+    const key = "roadmap-topo-1";
+    // A linear dependency chain, deliberately POSTed out of order so a plain
+    // seq-order render would fail: C3←C2←C1. Topological order is [C1,C2,C3].
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "Topo Project" })],
+      queue: [
+        { cr: "CR-RM-003", title: "Third", wave: "5", dependsOn: ["CR-RM-002"], status: "PENDING" },
+        { cr: "CR-RM-001", title: "First", wave: "5", dependsOn: [], status: "COMPLETED", planId: 71 },
+        { cr: "CR-RM-002", title: "Second", wave: "5", dependsOn: ["CR-RM-001"], status: "IN_PROGRESS", planId: 72 },
+      ],
+      plans: [
+        { planId: 71, cr: "CR-RM-001", projectKey: key, status: "closed", cycles: [{ id: 1, label: "C1", status: "done" }] },
+        { planId: 72, cr: "CR-RM-002", projectKey: key, status: "open", cycles: [{ id: 2, label: "C1", status: "active" }] },
+      ],
+    });
+
+    const rows = roadmapRows();
+    expect(rows.map((r) => r.getAttribute("data-cr"))).toEqual([
+      "CR-RM-001",
+      "CR-RM-002",
+      "CR-RM-003",
+    ]);
+
+    // Row content — CR id, title, wave, and the derived status badge.
+    const second = roadmapRow("CR-RM-002")!;
+    expect(second.textContent ?? "").toContain("CR-RM-002");
+    expect(second.textContent ?? "").toContain("Second");
+    expect(second.textContent ?? "").toContain("5");
+    const badge = second.querySelector<HTMLElement>('[data-testid="roadmap-status-badge"]');
+    expect(badge).not.toBeNull();
+    expect((badge!.textContent ?? "").trim()).toBe("IN_PROGRESS");
+
+    // depends-on rendered as chips (not free text), naming the upstream CR.
+    const chips = Array.from(
+      second.querySelectorAll<HTMLElement>('[data-testid="roadmap-depends-chip"]'),
+    ).map((c) => (c.textContent ?? "").trim());
+    expect(chips).toEqual(["CR-RM-001"]);
+
+    // Each derived status badge matches GET /queue exactly.
+    expect(
+      (roadmapRow("CR-RM-001")!.querySelector('[data-testid="roadmap-status-badge"]')!.textContent ?? "").trim(),
+    ).toBe("COMPLETED");
+    expect(
+      (roadmapRow("CR-RM-003")!.querySelector('[data-testid="roadmap-status-badge"]')!.textContent ?? "").trim(),
+    ).toBe("PENDING");
+  });
+});
+
+// ── AC (topological-rows AC, dividers) — wave + release boundary rows ───────
+
+describe("§S3 — Roadmap table carries wave and release boundary dividers", () => {
+  test("a wave-boundary divider heads the change into a new wave, and a release-boundary divider (from GET /releases, never wave numbers) carries the release version", async () => {
+    const key = "roadmap-dividers-1";
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "Dividers Project" })],
+      queue: [
+        { cr: "CR-RM-010", title: "Wave five A", wave: "5", dependsOn: [], status: "COMPLETED", planId: 81 },
+        { cr: "CR-RM-011", title: "Wave six A", wave: "6", dependsOn: ["CR-RM-010"], status: "PENDING" },
+      ],
+      releases: [{ version: "0.1.0", commit: "abc1234", timestamp: Date.now() }],
+      plans: [
+        { planId: 81, cr: "CR-RM-010", projectKey: key, status: "closed", cycles: [{ id: 1, label: "C1", status: "done" }] },
+      ],
+    });
+
+    // A wave-boundary divider marks the transition into wave 6.
+    const waveDividers = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="roadmap-wave-divider"]'),
+    );
+    expect(waveDividers.length).toBeGreaterThan(0);
+    expect(waveDividers.some((d) => (d.textContent ?? "").includes("6"))).toBe(true);
+
+    // A release-boundary divider carries the release version from listReleases.
+    const releaseDividers = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="roadmap-release-divider"]'),
+    );
+    expect(releaseDividers.length).toBeGreaterThan(0);
+    expect(releaseDividers.some((d) => (d.textContent ?? "").includes("0.1.0"))).toBe(true);
+
+    // Execution sequence: the wave-5 CR row precedes the wave-6 CR row.
+    const order = roadmapRows().map((r) => r.getAttribute("data-cr"));
+    expect(order.indexOf("CR-RM-010")).toBeLessThan(order.indexOf("CR-RM-011"));
+  });
+});
+
+// ── AC (topological-rows AC, row interactions) — highlight + tab swap ───────
+
+describe("§S3 — Roadmap row interactions swap tabs by status", () => {
+  test("the open-plan (IN_PROGRESS) row carries the active highlight and clicking it swaps to the Workflow tab (one-rule, no overlay)", async () => {
+    const key = "roadmap-open-1";
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "Open Plan Project" })],
+      queue: [
+        { cr: "CR-RM-020", title: "Running now", wave: "5", dependsOn: [], status: "IN_PROGRESS", planId: 91 },
+      ],
+      plans: [
+        { planId: 91, cr: "CR-RM-020", projectKey: key, status: "open", track: "track-1", cycles: [{ id: 1, label: "C1", status: "active" }] },
+      ],
+    });
+
+    const row = roadmapRow("CR-RM-020");
+    expect(row).toBeDefined();
+    // The open-plan row is the one carrying the active highlight.
+    expect(row!.getAttribute("data-active")).toBe("true");
+
+    row!.click();
+    await settle();
+
+    // A one-rule tab swap — Workflow becomes active, no overlay opens.
+    expect(tabIsOn("Workflow")).toBe(true);
+    expect(document.querySelector('[data-testid="workspace-tabs-parked"]')).toBeNull();
+  });
+
+  test("a PENDING row is inert beyond its badge (clicking it does NOT change tab); a COMPLETED row swaps to the Workflow tab", async () => {
+    const key = "roadmap-status-clicks-1";
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "Status Clicks Project" })],
+      queue: [
+        { cr: "CR-RM-030", title: "Pending one", wave: "5", dependsOn: [], status: "PENDING" },
+        { cr: "CR-RM-031", title: "Done one", wave: "5", dependsOn: [], status: "COMPLETED", planId: 95 },
+      ],
+      plans: [
+        { planId: 95, cr: "CR-RM-031", projectKey: key, status: "closed", cycles: [{ id: 1, label: "C1", status: "done" }] },
+      ],
+    });
+
+    // PENDING: inert — the Roadmap tab stays active, Workflow does not.
+    const pending = roadmapRow("CR-RM-030")!;
+    expect(pending.getAttribute("data-active")).not.toBe("true");
+    pending.click();
+    await settle();
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+
+    // COMPLETED: lands on the Workflow tab (its expanded history group).
+    roadmapRow("CR-RM-031")!.click();
+    await settle();
+    expect(tabIsOn("Workflow")).toBe(true);
+  });
+});
+
+// ── AC (live-overlay AC) — lane badge + cycle position vs plain highlight ───
+
+describe("§S3 — Roadmap live execution overlay (multi-track vs single-track)", () => {
+  test("with two open plans on track-1/track-2, each in-progress row shows its lane badge + live cycle position (track-N ▶ cycle a/b)", async () => {
+    const key = "roadmap-multitrack-1";
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "Multi Track Project" })],
+      queue: [
+        { cr: "CR-RM-040", title: "Lane one", wave: "5", dependsOn: [], status: "IN_PROGRESS", planId: 201 },
+        { cr: "CR-RM-041", title: "Lane two", wave: "5", dependsOn: [], status: "IN_PROGRESS", planId: 202 },
+      ],
+      plans: [
+        {
+          planId: 201,
+          cr: "CR-RM-040",
+          projectKey: key,
+          status: "open",
+          track: "track-1",
+          cycles: [
+            { id: 1, label: "C1", status: "active" },
+            { id: 2, label: "C2", status: "pending" },
+          ],
+        },
+        {
+          planId: 202,
+          cr: "CR-RM-041",
+          projectKey: key,
+          status: "open",
+          track: "track-2",
+          cycles: [
+            { id: 3, label: "C1", status: "done" },
+            { id: 4, label: "C2", status: "active" },
+            { id: 5, label: "C3", status: "pending" },
+          ],
+        },
+      ],
+    });
+
+    const laneOne = roadmapRow("CR-RM-040")!.querySelector<HTMLElement>(
+      '[data-testid="roadmap-lane-badge"]',
+    );
+    expect(laneOne).not.toBeNull();
+    const laneOneText = (laneOne!.textContent ?? "").trim();
+    expect(laneOneText).toContain("track-1");
+    expect(laneOneText).toContain("▶");
+    expect(laneOneText).toContain("cycle 1/2");
+
+    const laneTwo = roadmapRow("CR-RM-041")!.querySelector<HTMLElement>(
+      '[data-testid="roadmap-lane-badge"]',
+    );
+    expect(laneTwo).not.toBeNull();
+    const laneTwoText = (laneTwo!.textContent ?? "").trim();
+    expect(laneTwoText).toContain("track-2");
+    expect(laneTwoText).toContain("cycle 2/3");
+  });
+
+  test("a single-track project's active row shows the plain highlight with NO lane badge", async () => {
+    const key = "roadmap-singletrack-1";
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "Single Track Project" })],
+      queue: [
+        { cr: "CR-RM-050", title: "Only lane", wave: "5", dependsOn: [], status: "IN_PROGRESS", planId: 301 },
+      ],
+      plans: [
+        {
+          planId: 301,
+          cr: "CR-RM-050",
+          projectKey: key,
+          status: "open",
+          track: "track-1",
+          cycles: [{ id: 1, label: "C1", status: "active" }],
+        },
+      ],
+    });
+
+    const row = roadmapRow("CR-RM-050")!;
+    // Plain active highlight, but no lane noise for a single-track project.
+    expect(row.getAttribute("data-active")).toBe("true");
+    expect(row.querySelector('[data-testid="roadmap-lane-badge"]')).toBeNull();
+  });
+});

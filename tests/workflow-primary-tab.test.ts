@@ -34,6 +34,9 @@ interface TabShape {
 // existing enable/disable semantics untouched.
 // ─────────────────────────────────────────────────────────────────────────
 
+// SANCTIONED RE-TARGET (CR-CRU-014 §S3, dispatch-approved): the Roadmap tab
+// is inserted before BDD in L.workspaceTabs for both project types. Was:
+// ["Workflow","Runs","Coverage","Compile","BDD"].
 describe("§S1 AC1 — L.workspaceTabs order flips to Workflow-first (both project types)", () => {
   test("backend project: exact order [Workflow, Runs, Coverage, Compile, BDD]", () => {
     const tabs = workspaceTabs({ type: "backend" });
@@ -42,6 +45,7 @@ describe("§S1 AC1 — L.workspaceTabs order flips to Workflow-first (both proje
       "Runs",
       "Coverage",
       "Compile",
+      "Roadmap",
       "BDD",
     ]);
   });
@@ -53,6 +57,7 @@ describe("§S1 AC1 — L.workspaceTabs order flips to Workflow-first (both proje
       "Runs",
       "Coverage",
       "Compile",
+      "Roadmap",
       "BDD",
     ]);
   });
