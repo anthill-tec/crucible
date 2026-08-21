@@ -47,8 +47,13 @@ title, depends-on, wave columns) → POST; `--from-file` override.
 The Roadmap is a **first-class workspace tab** — hierarchy matches importance:
 Model-B tracking requires a roadmap, so it sits at the same level as Workflow.
 - **Tab order:** `Workflow · Runs · Coverage · Compile · Roadmap · BDD` —
-  amends CR-CRU-021 §S1's five-tab list additively (tab-list assertions
-  re-target under THIS CR's sanction at its RED).
+  amends CR-CRU-021 §S1's five-tab list additively. The list lives at
+  `public/app-logic.mjs` `TAB_NAMES` (today
+  `["Workflow","Runs","Coverage","Compile","BDD"]`). RED MUST enumerate EVERY
+  pinned site up front (D6 discipline) — at least `tests/app-logic.test.ts`
+  (workspaceTabs describe), plus any storyboard-fidelity / workflow-tab /
+  pane-scroll suite asserting the 5-name list — and re-target them all under
+  this CR's sanction, not discover them mid-GREEN.
 - **Deep link:** `/p/<key>/roadmap` opens the workspace with the Roadmap tab
   active (mirrors `/p/<key>/run/<id>`); no slide-over, no scrim. The CR-016
   one-rule applies: drill-downs from roadmap rows are pane states of the
@@ -62,7 +67,10 @@ Model-B tracking requires a roadmap, so it sits at the same level as Workflow.
 **Design inspiration (user-directed): the lavish review board's CR Queue &
 Status table** — rows in EXECUTION SEQUENCE derived from the depends-on graph
 (topological order), one line per CR, minimal status flags, wave-boundary and
-release-boundary divider rows. Columns: CR · title · wave · depends-on chips ·
+release-boundary divider rows — **release boundaries read from
+`Store.listReleases` (CR-CRU-074), never derived from wave numbers** (waves
+number continuously across releases, so a wave change is not a release
+boundary). Columns: CR · title · wave · depends-on chips ·
 status badge (derived: PENDING / IN_PROGRESS / COMPLETED). A **graph view
 toggle** renders the same depends-on graph as nodes/edges — an **EXCLUSIVE
 toggle** with the table badge (table is the default; exactly ONE of
@@ -71,13 +79,20 @@ table | graph renders at a time — user-clarified).
 (Start/End) · rectangles = **action nodes** (CRs) · diamonds = **milestone
 nodes** (release boundaries, gates) · wave/track/status carried by **node
 styling** (color, border, lane bands) — never crammed into label text.
-**Graph library (user-directed):** mermaid is representation-only — the
-product needs a real interactive graph library: vendored, zero-build,
-VanJS-compatible, with DAG layout, per-node styling hooks, pan/zoom,
-click-through to the Workflow tab, and SSE-driven live restyling.
-Candidate: **Cytoscape.js + cytoscape-dagre** (single vendorable files, no
-build step — matches the van.js/Tailwind-runtime philosophy); final pick is
-a gap-analysis decision with those requirements as the gate.
+**Graph library — DECIDED (gap analysis, 2026-08-20, source-verified):
+Cytoscape.js 3.34.1 + cytoscape-dagre 4.0.0.** Two vendored UMD files under
+public/ (`cytoscape.umd.js` + `cytoscape-dagre.js`); cytoscape-dagre 4.0.0
+BUNDLES dagre v3 with zero further deps and auto-registers in plain HTML, so it
+is genuinely zero-build — no bundler, no transitive lodash/dagre chain. ~165-175
+KB gzip total (112 KB gzip core), MIT. It mounts into a handed div and owns only
+its own <canvas> (`cy.mount(container)`), so it coexists with van.js's reactive
+DOM rather than fighting it; DAG layout via the dagre plugin, per-node styling by
+selector, pan/zoom, per-node `tap` click events, and runtime restyle via
+`cy.style()` / `cy.batch()` for SSE live updates — all 8 requirements met. The
+vetting rejected vis-network (no topological DAG layout), dagre-d3 (unmaintained
+7y, pulls d3+lodash+graphlib), elkjs (layout-only, 1.3 MB), d3-dag (layout-only).
+The one accepted cost is the ~170 KB gzip weight. mermaid stays rejected
+(representation-only).
 **Live execution overlay (multi-track):** when the project has >1 active
 track, in-progress rows carry a live overlay — the executing track's lane
 badge + current cycle position (e.g. `track-2 ▶ cycle 3/5`), streaming over
