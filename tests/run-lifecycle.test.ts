@@ -199,6 +199,54 @@ function missingLifecycleColumns(dbPath: string): string[] {
   return LIFECYCLE_COLUMNS.filter((c) => !present.has(c));
 }
 
+/** The pre-CR `events` DDL column list, shared by the fixture and the by-effect probe. */
+function preCrEventColumnDdl(): string {
+  return Object.entries(PRE_CR_EVENT_COLUMNS)
+    .map(([name, kind]) => {
+      if (kind === "pk") return `${name} TEXT PRIMARY KEY`;
+      if (kind === "notnull-text") return `${name} TEXT NOT NULL`;
+      if (kind === "notnull-int") return `${name} INTEGER NOT NULL`;
+      return `${name} ${kind === "int" ? "INTEGER" : "TEXT"}`;
+    })
+    .join(",\n        ");
+}
+
+/** Whether an in-memory probe's `events` table already carries all three lifecycle columns. */
+function lifecycleColumnsPresent(db: Database): boolean {
+  const cols = new Set<string>(
+    db.query<{ name: string }, []>(`PRAGMA table_info(events)`).all().map((r) => r.name),
+  );
+  return LIFECYCLE_COLUMNS.every((c) => cols.has(c));
+}
+
+/**
+ * §S0 — the migration step identified BY EFFECT, never by chain position: the
+ * one step whose `apply`, run against an events table that still LACKS the
+ * three lifecycle columns, makes all three exist. Each candidate is applied in
+ * ISOLATION on a fresh pre-CR events table, so the identification cannot depend
+ * on where the step sits in the chain (nor assume it is the last/terminal
+ * step). Re-aims itself the day another CR appends more steps after it.
+ */
+function lifecycleStep(): MigrationStep {
+  const columnDdl = preCrEventColumnDdl();
+  for (const step of MIGRATIONS) {
+    const probe = new Database(":memory:");
+    try {
+      probe.exec(`CREATE TABLE events (${columnDdl});`);
+      if (lifecycleColumnsPresent(probe)) continue;
+      try {
+        step.apply(probe);
+      } catch {
+        continue;
+      }
+      if (lifecycleColumnsPresent(probe)) return step;
+    } finally {
+      probe.close();
+    }
+  }
+  throw new Error("no MIGRATIONS step adds the lifecycle columns started_at/runtime_ms/status");
+}
+
 // ── §S0 fixture: a store at the version JUST BEFORE this CR's step ─────────
 
 interface PreLifecycleStore {
@@ -208,21 +256,14 @@ interface PreLifecycleStore {
 
 /**
  * A file-backed store whose `events` table has exactly the pre-CR columns and
- * whose `user_version` is `SCHEMA_VERSION - 1` — i.e. "everything this build
- * writes EXCEPT the last chain step". Derived, so it re-aims itself the day
- * another CR appends a step. Rows are pre-seeded so the upgrade has real data
- * to lose.
+ * whose `user_version` is the lifecycle step's `.from` — the version JUST
+ * BEFORE the step that adds the lifecycle columns, identified BY EFFECT (not by
+ * chain position). Derived, so it re-aims itself the day another CR appends
+ * steps around it. Rows are pre-seeded so the upgrade has real data to lose.
  */
 function makePreLifecycleStore(rows = 3): PreLifecycleStore {
   const dbPath = path.join(tmpDir(), "crucible.db");
-  const columnDdl = Object.entries(PRE_CR_EVENT_COLUMNS)
-    .map(([name, kind]) => {
-      if (kind === "pk") return `${name} TEXT PRIMARY KEY`;
-      if (kind === "notnull-text") return `${name} TEXT NOT NULL`;
-      if (kind === "notnull-int") return `${name} INTEGER NOT NULL`;
-      return `${name} ${kind === "int" ? "INTEGER" : "TEXT"}`;
-    })
-    .join(",\n        ");
+  const columnDdl = preCrEventColumnDdl();
   const db = new Database(dbPath, { create: true });
   try {
     db.exec("PRAGMA journal_mode = DELETE;");
@@ -273,8 +314,9 @@ function makePreLifecycleStore(rows = 3): PreLifecycleStore {
   } finally {
     db.close();
   }
-  // DERIVED, never a literal: one step short of what this build writes.
-  stampUserVersion(dbPath, SCHEMA_VERSION - 1);
+  // DERIVED, never a literal: the version JUST BEFORE the lifecycle step, found
+  // by effect — so its events table provably still lacks all three columns.
+  stampUserVersion(dbPath, lifecycleStep().from);
   return {
     dbPath,
     counts: {
@@ -488,7 +530,7 @@ async function settleOpenRuns(
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("CR-CRU-017 §S0-1 — the lifecycle columns arrive as a NUMBERED CHAIN STEP, and SCHEMA_VERSION derives itself", () => {
-  test("the chain is contiguous, SCHEMA_VERSION is still MIGRATIONS.length (never a hand-edited literal), and the FINAL step is the one that ALTERs `events` with started_at/runtime_ms/status", () => {
+  test("the chain is contiguous, SCHEMA_VERSION is still MIGRATIONS.length (never a hand-edited literal), and the LIFECYCLE step — identified by effect, not by chain position — is the one that ALTERs `events` with started_at/runtime_ms/status", () => {
     expect(SCHEMA_VERSION).toBe(MIGRATIONS.length);
     MIGRATIONS.forEach((step, index) => {
       expect(step.from).toBe(index);
@@ -496,11 +538,13 @@ describe("CR-CRU-017 §S0-1 — the lifecycle columns arrive as a NUMBERED CHAIN
     });
     expect(MIGRATIONS[MIGRATIONS.length - 1]!.to).toBe(SCHEMA_VERSION);
 
-    // A store one step short of this build: only the LAST chain step is left
-    // to run, so whatever it adds is provably that step's work — never an
-    // inline ALTER in createTables and never the base CREATE TABLE.
+    // The lifecycle step, found BY EFFECT (never by index/'last'): a store
+    // stamped at the version JUST BEFORE it still lacks all three columns, and
+    // running the chain from there adds exactly them — provably that step's
+    // work, never an inline ALTER in createTables nor the base CREATE TABLE.
+    const step = lifecycleStep();
     const { dbPath } = makePreLifecycleStore();
-    expect(userVersion(dbPath)).toBe(SCHEMA_VERSION - 1);
+    expect(userVersion(dbPath)).toBe(step.from);
     expect(missingLifecycleColumns(dbPath)).toEqual([...LIFECYCLE_COLUMNS]);
 
     expect(Store.open(dbPath).schemaVersion).toBe(SCHEMA_VERSION);
@@ -550,39 +594,41 @@ describe("CR-CRU-017 §S0-2 — the ALTERs and the user_version stamp are ONE tr
       expect(missing.length).toBeGreaterThan(0);
     }
   });
-
   test("when the lifecycle step THROWS, its ALTERs roll back WITH the stamp — the same fixture that gains all three columns on a clean run keeps none of them and stays at the old version", () => {
-    // (a) clean run — the last step really is what adds the columns.
+    const step = lifecycleStep();
+    const stepIndex = MIGRATIONS.indexOf(step);
+
+    // (a) clean run — the lifecycle step really is what adds the columns.
     const clean = makePreLifecycleStore();
     expect(Store.open(clean.dbPath).schemaVersion).toBe(SCHEMA_VERSION);
     expect(missingLifecycleColumns(clean.dbPath)).toEqual([]);
     expect(userVersion(clean.dbPath)).toBe(SCHEMA_VERSION);
 
-    // (b) same fixture, same chain, last step wrapped to apply-then-throw
-    // (CR-CRU-071 AC7's injection seam is the only way to fail a step without
-    // editing source).
+    // (b) same fixture, same chain, the LIFECYCLE step (by effect, not by
+    // position) wrapped to apply-then-throw (CR-CRU-071 AC7's injection seam is
+    // the only way to fail a step without editing source).
     const poisoned = makePreLifecycleStore();
-    const last = MIGRATIONS[MIGRATIONS.length - 1]!;
-    const chain: MigrationStep[] = [
-      ...MIGRATIONS.slice(0, -1),
-      {
-        from: last.from,
-        to: last.to,
-        description: `${last.description ?? ""} (CR-CRU-017 RED: apply-then-throw)`,
-        apply(db) {
-          last.apply(db);
-          throw new Error("CR-CRU-017 RED: injected failure AFTER the step's writes");
-        },
-        ...(last.satisfiedBy !== undefined
-          ? { satisfiedBy: (db: Database) => last.satisfiedBy!(db) }
-          : {}),
-      },
-    ];
+    const chain: MigrationStep[] = MIGRATIONS.map((s, i) =>
+      i === stepIndex
+        ? {
+            from: step.from,
+            to: step.to,
+            description: `${step.description ?? ""} (CR-CRU-017 RED: apply-then-throw)`,
+            apply(db) {
+              step.apply(db);
+              throw new Error("CR-CRU-017 RED: injected failure AFTER the step's writes");
+            },
+            ...(step.satisfiedBy !== undefined
+              ? { satisfiedBy: (db: Database) => step.satisfiedBy!(db) }
+              : {}),
+          }
+        : s,
+    );
 
     expect(() => Store.open(poisoned.dbPath, { migrations: chain })).toThrow();
 
     expect(missingLifecycleColumns(poisoned.dbPath)).toEqual([...LIFECYCLE_COLUMNS]);
-    expect(userVersion(poisoned.dbPath)).toBe(SCHEMA_VERSION - 1);
+    expect(userVersion(poisoned.dbPath)).toBe(step.from);
   });
 });
 
