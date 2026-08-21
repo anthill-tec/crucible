@@ -145,6 +145,49 @@ pip install -e '.[dev]'
 - `clients/STATUS-CONTRACT.md` — the status/dashboard payload contract the
   orchestrators read.
 
+## Telling Crucible a release shipped
+
+Crucible does not observe your release process, so a release only appears on the
+board if something reports it. This is worth stating explicitly because **not
+every stack has a release script** — the pattern below is the strategy, and the
+script is only one way to run it.
+
+The unit is a `release` **milestone**, posted through any stack's client:
+
+```sh
+<stack>-crucible.py milestone --type release \
+  --label 1.4.0 --commit "$(git rev-list -n1 1.4.0)" --agent <agentId>
+```
+
+`--agent` is **required** and has no fallback: an agent identity is a real
+registration, and a derived default would plant a phantom row on the agent rail.
+`$WORKFLOW_ROLE` is a track lane (`mainline` | `track-n`), not an identity.
+
+**What depends on it.** Skip this and the loss is silent but wide: the roadmap
+draws no release-boundary rows (nothing distinguishes work *in* a release from
+work deferred past it), gate retirement has no completion event to fire on, and
+delivery forecasting has no release to anchor to. Three releases of this project
+shipped with no record at all before the gap was noticed.
+
+**Adoption strategies**, in the order most projects should consider them:
+
+1. **Release script / ceremony hook** — if the stack has one (`release.sh`, a
+   Maven release plugin, `cargo release`), post the milestone *after the push
+   succeeds*, so a recorded release always corresponds to a real remote tag.
+2. **CI on tag push** — no release script needed: a tag-triggered job posts the
+   milestone. Best fit for stacks whose release *is* "push a tag".
+3. **By hand, once per release** — a single command, entirely acceptable for
+   small projects. Better a manual report than an unrecorded release.
+4. **Backfill** — already shipped releases can be replayed from their tags at
+   any time; reporting is idempotent per tag/commit.
+
+**Two rules learned the hard way.** Make reporting **non-fatal** — never roll
+back or fail a published release because a tracking call failed; the artifact is
+already public and the record can be backfilled. But check the **identity at
+preflight**, before the tag exists, because a non-fatal report that fails at the
+end is a warning nobody reads: this project's ceremony exited clean while
+recording nothing, three times. Fail early, warn late.
+
 ## Version
 
 `0.1.2` (set on the release branch per the git-flow release ceremony).
