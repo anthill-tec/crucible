@@ -90,6 +90,12 @@ Subcommands:
                     (git describe --tags). Tags are bare SemVer (X.Y.Z).
                     Exit 0.
 
+  backfill-releases
+                    Retroactively record every already-shipped release as a
+                    `release` milestone in Crucible, from the repo's bare-SemVer
+                    tags (git tag + git rev-list -1 <tag>). Idempotent (server
+                    dedups) and warns-not-fails on a reporting error. Exit 0.
+
 Options:
   --dry-run         Print the commands that would run without executing them.
                     Preflight guards still run and still refuse.
@@ -303,7 +309,7 @@ cmd_checkpoint() {
 # the tag is already public: warn, naming the version, and return success.
 # Re-runs emit an identical (type, label, commit), so the server dedups.
 report_release() {
-    local tag prefix version sha client
+    local tag prefix version sha
 
     if ! tag="$(git describe --tags --abbrev=0 2>/dev/null)" || [ -z "$tag" ]; then
         info "WARN: could not read the release tag; release $VERSION was NOT reported to Crucible"
@@ -324,11 +330,50 @@ report_release() {
         return "$EXIT_SUCCESS"
     fi
 
+    emit_release_milestone "$version" "$sha"
+}
+
+# The SINGLE release-report path: report one (version, sha) pair as a `release`
+# milestone through the repo client (never a bare curl). Re-runs emit an
+# identical (type, label, commit), so the server dedups. A reporting failure
+# must NOT fail the caller (the tag is already public): warn, naming the
+# version, and return success. Shared by report_release (§S2) and the §S4
+# backfill, so there is exactly ONE reporter.
+emit_release_milestone() {
+    local version="$1" sha="$2" client
+
     client="$(repo_root)/clients/python-crucible.py"
     if ! python3 "$client" milestone --type release --label "$version" --commit "$sha"; then
         info "WARN: reporting release $version to Crucible failed; the release is published and complete"
         return "$EXIT_SUCCESS"
     fi
+}
+
+# CR-CRU-074 §S4 — retroactively record the releases that already shipped, so
+# the board is not permanently missing its own history. Enumerate the repo's
+# tags (`git tag`), keep ONLY bare SemVer (X.Y.Z) — a v-prefixed or non-release
+# tag is never a release — and report each as a `release` milestone through the
+# SAME path §S2 built (emit_release_milestone → the repo client), with the
+# commit resolved from `git rev-list -n 1 <tag>`, never a guessed value or a
+# gate's intent text. Idempotent via server-side dedup (a re-run emits the
+# identical (type,label,commit) set). Warns-not-fails on a client error, like
+# the ceremony, and exits 0 even when there are no SemVer tags.
+cmd_backfill_releases() {
+    local tags tag sha
+
+    tags="$(git tag)"
+    for tag in $tags; do
+        if ! printf '%s' "$tag" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            continue
+        fi
+        if ! sha="$(git rev-list -n 1 "$tag" 2>/dev/null)" || [ -z "$sha" ]; then
+            info "WARN: could not resolve the commit for tag '$tag'; release $tag was NOT backfilled"
+            continue
+        fi
+        emit_release_milestone "$tag" "$sha"
+    done
+
+    return "$EXIT_SUCCESS"
 }
 
 cmd_finish() {
@@ -450,6 +495,9 @@ case "$SUBCOMMAND" in
         ;;
     status)
         cmd_status
+        ;;
+    backfill-releases)
+        cmd_backfill_releases
         ;;
     *)
         echo "ERROR: unknown subcommand: $SUBCOMMAND" >&2
