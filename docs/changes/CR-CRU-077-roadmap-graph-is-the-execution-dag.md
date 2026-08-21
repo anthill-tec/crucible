@@ -54,6 +54,42 @@ idle nodes are completely static, so motion always means "work is happening righ
 **No synthetic wave→wave edge** between waves that share no dependency; column position
 conveys ordering.
 
+## Gap analysis (2026-08-21, pre-RED) — **BLOCKED on one decision**
+
+Verified against the running app and the live store. Wave sequencing, fan-out, collapse, lanes,
+labels and motion are all implementable from data that exists. **Release gating is not**, and it
+is §S1's centrepiece, so RED has not been dispatched.
+
+- **F1 — release diamonds have no edges *and* no association data.** Confirmed in
+  `buildRoadmapGraph`: milestone nodes are pushed and never referenced by any edge. The deeper
+  problem is that nothing links a CR to a release. `queue_entries` has **no release column**
+  (CR-074's own spec flagged this), and the renderer does not associate either — all release
+  dividers are emitted in one loop **at the top of the table**, before any CR row
+  (`app.js:2439–2449`), so today's "release boundaries" are three labels stacked at the head.
+  `rel.version` itself is fine (`releaseBrief` maps `label`→`version`; live payload carries
+  `version`, `commit`, `timestamp`).
+- **F2 — timestamp association is unusable.** A release's `timestamp` is when it was
+  **recorded**, not when it shipped. All three of ours were backfilled today (2026-08-21 13:45)
+  while the real tags are 2026-08-19 / 08-20, and **all 62 closed plans predate every recorded
+  release timestamp**. So a `closedAt < releaseTs` rule would attribute the entire backlog to
+  0.1.0. The tag date is known to git and **not stored** anywhere in Crucible.
+- **F3 — commit-ancestry association is exact but unavailable client-side.** Plans carry `merge`
+  and `commitBoundary`; releases carry `commit`. "CR's merge commit is an ancestor of the release
+  commit" is the correct rule and is timestamp-proof — but it needs git, and neither the browser
+  nor the server runs it.
+- **F4 — an uncut release has no record at all.** F14a draws a pending `Release 0.2.0` diamond
+  gating the active wave, but a release is only recorded at tag time, so nothing describes an
+  upcoming release. Crucible has no concept of a planned release or horizon; "0.2.0" exists only
+  as a storyboard annotation.
+
+**Implementable now, from real data:** §S2 wave containers and collapse, §S3 data-driven lanes,
+§S4 labels and live motion, plus wave-order sequencing and parallel fan-out (AC2, AC3, AC4, AC5,
+AC6, AC7, AC8). **Not implementable:** AC1 (a diamond with inbound and outbound edges), because
+no data says which CRs sit on either side of it.
+
+**Verdict: SPEC_UPDATE_NEEDED — the release-gating half of §S1 needs a data prerequisite, and I
+will not fabricate the association.**
+
 ## Scope
 
 ### §S1 Compose the flow
