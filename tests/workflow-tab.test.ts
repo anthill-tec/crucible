@@ -278,9 +278,18 @@ describe("Workflow tab — DOM wiring", () => {
   // SANCTIONED RE-TARGET (CR-CRU-021 §S1): the workspace-tab order flips —
   // Workflow is now the FIRST (default) tab, Runs moves to second position
   // (AC1). SANCTIONED RE-TARGET (CR-CRU-014 §S3): the Roadmap tab renders
-  // before BDD in the workspace-tabs row. Was:
-  // ["Workflow","Runs","Coverage","Compile","BDD"].
-  test("a 'Workflow' workspace-tab button exists (position 1, the default tab) and becomes the active tab on click", async () => {
+  // before BDD in the workspace-tabs row.
+  // SANCTIONED RE-TARGET (CR-CRU-076 §S1/§S2, AC2): the RENDERED strip is now
+  // "Roadmap · Workflow · Runs · Coverage · Compile · BDD" — Roadmap moves
+  // from fifth to first, superseding CR-CRU-021 §S1 AC1 (roadmap is the
+  // origin document; CR-021 predated the Roadmap tab). Workflow is still the
+  // LANDING pane (CR-CRU-021 §S1 AC2, hard-coded in app.js, untouched) — it
+  // is simply no longer the first tab in the band, hence the renamed test.
+  // NOTE: the CR-076 gap analysis recorded this file as "comment only"; it is
+  // NOT — this is a live DOM order assertion and it is re-targeted here
+  // (confirmed by the orchestrator, 2026-08-21).
+  // Was: ["Workflow","Runs","Coverage","Compile","Roadmap","BDD"].
+  test("a 'Workflow' workspace-tab button exists (second in the band, still the default landing tab) and becomes the active tab on click", async () => {
     const key = "wf-wiring-1";
     await mountApp({
       pathname: `/p/${key}`,
@@ -292,11 +301,11 @@ describe("Workflow tab — DOM wiring", () => {
 
     const tabs = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="workspace-tab"]'));
     expect(tabs.map((t) => t.textContent?.trim())).toEqual([
+      "Roadmap",
       "Workflow",
       "Runs",
       "Coverage",
       "Compile",
-      "Roadmap",
       "BDD",
     ]);
 

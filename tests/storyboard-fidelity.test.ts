@@ -295,7 +295,7 @@ describe("§S5 fidelity #1 — workspace tabs row is full-width, NOT inside a ra
   // SANCTIONED RE-TARGET (CR-CRU-011 §S3, dispatch-approved): the tab count
   // grows from 4 to 5 with the new Workflow tab inserted after Runs. Inner
   // fidelity assertions (no-rail, 2-column body) are unchanged per tab.
-  test("every workspace tab (Runs/Workflow/Coverage/Compile/BDD) keeps the same full-width, no-rail treatment", async () => {
+  test("every workspace tab (Roadmap/Workflow/Runs/Coverage/Compile/BDD) keeps the same full-width, no-rail treatment", async () => {
     const key = "fid1-p3";
     await mountApp({
       pathname: `/p/${key}`,

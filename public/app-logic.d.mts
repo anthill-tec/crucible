@@ -61,8 +61,10 @@ export interface WorkspaceProjectLike {
 }
 
 export interface WorkspaceTab {
-  // CR-CRU-021 §S1 — "Workflow" leads the fixed order (primary tab).
-  name: "Workflow" | "Runs" | "Coverage" | "Compile" | "BDD";
+  // CR-CRU-076 §S1 — "Roadmap" leads the fixed order (the origin document);
+  // supersedes CR-CRU-021 §S1 AC1 (Workflow-first). "Roadmap" was missing
+  // from this union — inherited CR-CRU-014 drift, fixed here (CR-076 F3).
+  name: "Roadmap" | "Workflow" | "Runs" | "Coverage" | "Compile" | "BDD";
   disabled: boolean;
   /** RED-phase declaration only — present when `disabled` explains why
    * (Coverage: "coverage lands with the first green regression"). */
