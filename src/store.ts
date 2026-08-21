@@ -1670,14 +1670,51 @@ export class Store {
    * transaction that inserts the release, every gate whose `version` equals
    * the release's `label` is stamped `retired_at`. A release with no matching
    * gate still records; a gate arriving afterwards is retired on insert.
+   *
+   * CR-CRU-080 §S3 — a release is IDENTIFIED by (type, label, commit), so a
+   * repeat of one already held is a replay, not a second release: the held
+   * event is returned with `changed:false` and nothing is inserted. Recording
+   * a release is therefore idempotent for EVERY caller, which is the point of
+   * putting it here rather than in the one ceremony that noticed — replaying
+   * `release.sh backfill-releases` used to duplicate every release. The
+   * caller is still touched on the agent rail: it did report, truthfully. A
+   * replay keeps the provenance the FIRST recording captured, since nothing
+   * is re-computed or overwritten.
+   *
+   * CR-CRU-080 §S4 — a release also records WHEN it shipped (`releasedAt`,
+   * the tag's commit date) and WHAT it shipped (`crs`). Both ride the generic
+   * payload column, so there is no column and no migration.
    */
   recordMilestoneEvent(
     projectKey: string,
     agentId: string,
     type: string,
-    meta?: { label?: string; commit?: string; context?: RunContext },
-  ): RunEvent {
+    meta?: {
+      label?: string;
+      commit?: string;
+      context?: RunContext;
+      releasedAt?: number;
+      crs?: string[];
+    },
+  ): { event: RunEvent; changed: boolean } {
     this.touchAgent(projectKey, agentId);
+    if (type === "release" && meta?.label !== undefined && meta.commit !== undefined) {
+      const held = this.listReleases(projectKey).find(
+        (r) => r.label === meta.label && r.commit === meta.commit,
+      );
+      if (held !== undefined) return { event: held, changed: false };
+    }
+    // CR-CRU-080 §S4 — provenance belongs to a release and nothing else, and
+    // it is stored VERBATIM: both halves are facts about a repo the server
+    // cannot see, so it carries them rather than re-deriving them. The tag
+    // range comes from git and the intersection with the registered queue is
+    // done by the reporter before it posts (the client's `release_crs`), which
+    // keeps git out of the server's path entirely. A stored set is therefore a
+    // SNAPSHOT of what the queue knew when the release was recorded: a CR
+    // registered afterwards does not retroactively join a release it was never
+    // part of.
+    const releasedAt = type === "release" ? meta?.releasedAt : undefined;
+    const crs = type === "release" ? meta?.crs : undefined;
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -1688,6 +1725,8 @@ export class Store {
       type,
       ...(meta?.label !== undefined ? { label: meta.label } : {}),
       ...(meta?.commit !== undefined ? { commit: meta.commit } : {}),
+      ...(releasedAt !== undefined ? { releasedAt } : {}),
+      ...(crs !== undefined ? { crs } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
     };
     const version = type === "release" ? meta?.label : undefined;
@@ -1699,7 +1738,7 @@ export class Store {
     } else {
       this.insertEvent(event);
     }
-    return event;
+    return { event, changed: true };
   }
 
   /**
@@ -1976,6 +2015,14 @@ export class Store {
    * is deleted, so unarchiving restores its history. `type` is JSON in the
    * payload column, so the match is done on the parsed value (same pattern as
    * listEventsForCycle above); no other milestone type can leak in.
+   *
+   * CR-CRU-080 §S4/AC9 — "newest-first" means newest SHIPPED, not newest
+   * ingested: the order is by `releasedAt` (the tag's own date), which the
+   * backfill's ingest minute could never reproduce. A release recorded before
+   * §S4 carries none, so its ingest instant stands in for its ship instant —
+   * that keeps the pre-§S4 rows in exactly the newest-ingest-first order they
+   * have always had, instead of sinking them behind an invented zero. The SQL
+   * order is the tiebreaker: `Array#sort` is stable.
    */
   listReleases(projectKey: string): RunEvent[] {
     const rows = this.db
@@ -1985,7 +2032,16 @@ export class Store {
          ORDER BY timestamp DESC, rowid DESC`,
       )
       .all(projectKey);
-    return rows.map(Store.toEvent).filter((event) => event.type === "release");
+    return rows
+      .map(Store.toEvent)
+      .filter((event) => event.type === "release")
+      .sort((a, b) => {
+        // `releasedAt` is epoch SECONDS (git's `%ct`); the ingest `timestamp`
+        // is epoch MS and stands in for a release that carries no ship date.
+        const shippedA = a.releasedAt !== undefined ? a.releasedAt * 1000 : a.timestamp;
+        const shippedB = b.releasedAt !== undefined ? b.releasedAt * 1000 : b.timestamp;
+        return shippedB - shippedA;
+      });
   }
 
   /** Cheap SQL count of raw (non-rolled-up) events, optionally scoped to a project. */
@@ -2051,6 +2107,11 @@ export class Store {
       // CR-CRU-073 §S1 — the gated release version rides the generic payload
       // blob (first-class on the event, never inside the gate object).
       ...(event.version !== undefined ? { version: event.version } : {}),
+      // CR-CRU-080 §S4 — release provenance (the tag's ship date and the CR
+      // ids the release shipped) rides the SAME generic payload blob, which is
+      // why §S4 needs no column and no migration (SCHEMA_VERSION stays 7).
+      ...(event.releasedAt !== undefined ? { releasedAt: event.releasedAt } : {}),
+      ...(event.crs !== undefined ? { crs: event.crs } : {}),
     };
     const payload = Object.keys(payloadObj).length > 0 ? JSON.stringify(payloadObj) : null;
     this.db
@@ -2125,6 +2186,10 @@ export class Store {
       ...(typeof payload.type === "string" ? { type: payload.type } : {}),
       ...(typeof payload.label === "string" ? { label: payload.label } : {}),
       ...(typeof payload.commit === "string" ? { commit: payload.commit } : {}),
+      // CR-CRU-080 §S4 — release provenance, served from the payload blob it
+      // was stored in; a pre-§S4 release row simply has neither key.
+      ...(typeof payload.releasedAt === "number" ? { releasedAt: payload.releasedAt } : {}),
+      ...(Array.isArray(payload.crs) ? { crs: payload.crs as string[] } : {}),
       // CR-CRU-038 §S2b — run-level raw output served verbatim from the payload.
       ...(typeof payload.raw === "string" ? { raw: payload.raw } : {}),
       ...(row.action !== null ? { action: row.action as "registered" | "unregistered" } : {}),

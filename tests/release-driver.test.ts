@@ -38,6 +38,13 @@ const GIT_IDENTITY_ENV = {
   GIT_AUTHOR_EMAIL: "release-sh-test@example.com",
   GIT_COMMITTER_NAME: "release-sh-test",
   GIT_COMMITTER_EMAIL: "release-sh-test@example.com",
+  // CR-CRU-080 §S2 — a ceremony identity must be AVAILABLE, or `finish`
+  // refuses at preflight (the identity guard joins guard_manifest_version and
+  // guard_tag_prefix, which already fire under --dry-run). These tests are
+  // about the branch/manifest/tag-prefix guards, so the identity is supplied
+  // and never the variable under test; tests/release-reporting.test.ts owns
+  // the absent-identity refusal.
+  CRUCIBLE_AGENT: "release-sh-test",
 };
 
 function runGit(args: string[], cwd: string): RunResult {

@@ -39,6 +39,10 @@ SUBCOMMAND=""
 VERSION=""
 DRY_RUN=false
 VERBOSE=false
+# CR-CRU-080 §S1 — the ceremony's Crucible identity, from `--agent <id>`. Empty
+# means "not given on the command line"; ceremony_agent() then falls back to
+# $CRUCIBLE_AGENT.
+AGENT=""
 
 # ============================================================================
 # Helper Functions
@@ -65,7 +69,7 @@ debug() {
 # Show usage information (to stdout)
 usage() {
     cat <<'EOF'
-Usage: release.sh <subcommand> [args] [--dry-run] [--verbose] [-h|--help]
+Usage: release.sh <subcommand> [args] [--agent <agentId>] [--dry-run] [--verbose] [-h|--help]
 
 Branch-gated release driver for Crucible.
 
@@ -81,10 +85,11 @@ Subcommands:
                     Runs: gh workflow run release.yml --ref <branch>
 
   finish <X.Y.Z>    Align package.json to X.Y.Z (committing it, so it lands on
-                    the merge — no separate set-version run is needed), run both
-                    preflight guards (manifest version, tag prefix), then finish
-                    the git-flow release/hotfix and push master + develop +
-                    tags. Allowed only on release/* or hotfix/*.
+                    the merge — no separate set-version run is needed), run the
+                    preflight guards (ceremony identity, manifest version, tag
+                    prefix), then finish the git-flow release/hotfix and push
+                    master + develop + tags. Allowed only on release/* or
+                    hotfix/*.
 
   status            Print the current branch and the derived version
                     (git describe --tags). Tags are bare SemVer (X.Y.Z).
@@ -93,10 +98,19 @@ Subcommands:
   backfill-releases
                     Retroactively record every already-shipped release as a
                     `release` milestone in Crucible, from the repo's bare-SemVer
-                    tags (git tag + git rev-list -1 <tag>). Idempotent (server
-                    dedups) and warns-not-fails on a reporting error. Exit 0.
+                    tags (git tag + git rev-list -1 <tag>). Prints a per-tag
+                    result and a final `N/M recorded` tally, and warns-not-fails
+                    on a reporting error. Idempotent: the server collapses a
+                    repeated (type, label, commit) release onto the row it
+                    already holds (CR-CRU-080 §S3). Exit 0.
 
 Options:
+  --agent <agentId> The Crucible identity the release report is attributed to.
+                    Falls back to $CRUCIBLE_AGENT when the flag is absent; the
+                    flag wins when both are present. REQUIRED for `finish` and
+                    `backfill-releases` — both refuse at preflight without one,
+                    because the client has no identity fallback (CR-CRU-057) and
+                    a report with no identity silently records nothing.
   --dry-run         Print the commands that would run without executing them.
                     Preflight guards still run and still refuse.
   --verbose         Print debug output.
@@ -248,6 +262,30 @@ guard_tag_prefix() {
     fi
 }
 
+# Guard (c) (CR-CRU-080 §S1/§S2): the ceremony's Crucible identity, resolved
+# EXPLICITLY — `--agent <id>` first, then the documented $CRUCIBLE_AGENT. There
+# is deliberately no third source: $WORKFLOW_ROLE carries the track lane rather
+# than an identity, and a filename- or role-derived default would plant a
+# phantom row on the agent rail (CR-CRU-057). Echoes the identity, or nothing.
+ceremony_agent() {
+    if [ -n "$AGENT" ]; then
+        echo "$AGENT"
+        return 0
+    fi
+    echo "${CRUCIBLE_AGENT:-}"
+}
+
+# An absent identity is a PREFLIGHT refusal, not a warning after the fact: the
+# client requires `--agent` and has no fallback, so a ceremony without one
+# publishes a tag Crucible never learns about. Refusing here means the operator
+# finds out BEFORE the tag exists, when it is still free to fix.
+guard_agent_identity() {
+    if [ -n "$(ceremony_agent)" ]; then
+        return 0
+    fi
+    error "no Crucible identity for the release report — pass --agent <agentId> or set \$CRUCIBLE_AGENT. There is no fallback and no default (CR-CRU-057), and a release reported without one records nothing." "$EXIT_ERROR"
+}
+
 # ============================================================================
 # Subcommand implementations
 # ============================================================================
@@ -307,7 +345,6 @@ cmd_checkpoint() {
 # is the tagged sha — never a value guessed from the CLI argument. A reporting
 # failure (including an absent/malformed tag) must NOT fail the release, since
 # the tag is already public: warn, naming the version, and return success.
-# Re-runs emit an identical (type, label, commit), so the server dedups.
 report_release() {
     local tag prefix version sha
 
@@ -330,23 +367,107 @@ report_release() {
         return "$EXIT_SUCCESS"
     fi
 
-    emit_release_milestone "$version" "$sha"
+    # CR-CRU-080 §S2/AC3 — non-fatal AFTER publication: the tag is already
+    # public, so a transport failure warns (with its recovery command, printed
+    # by the reporter) and the ceremony still exits successfully.
+    emit_release_milestone "$version" "$sha" || true
+    return "$EXIT_SUCCESS"
+}
+
+# CR-CRU-080 §S4 — WHEN a release shipped: the commit date of the commit its tag
+# points at, in epoch SECONDS (git's `%ct`). This is deliberately NOT the ingest
+# time Crucible stamps when the report lands — that is when the release was
+# RECORDED, which is why the three hand-backfilled releases all claimed the
+# backfill's own minute while their tags were days older. Empty when git cannot
+# answer, in which case nothing is reported rather than a guessed date.
+release_ship_date() {
+    git log -1 --format=%ct "$1" 2>/dev/null || true
+}
+
+# CR-CRU-080 §S4 — every bare-SemVer tag that shipped BEFORE this version, in
+# version order. These are the left-hand side of the tag range below: excluding
+# ALL of them (rather than only the immediately preceding tag) is what makes a
+# CR belong to the EARLIEST tag containing it, so the per-release CR sets are a
+# partition and never overlapping "everything up to this tag" prefixes — a
+# guarantee that holds even when the tags are not one straight ancestry chain.
+earlier_release_tags() {
+    git tag 2>/dev/null \
+        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+        | sort -V \
+        | awk -v version="$1" '$0 == version { exit } { print }' || true
+}
+
+# CR-CRU-080 §S4 — WHAT a release shipped: the CR id carried by the subject of
+# every MERGE commit in the tag's range, comma-separated for the client's
+# `--crs`. The range is the tagged commit minus everything reachable from every
+# earlier release tag; for the EARLIEST tag there is nothing to exclude, so the
+# range runs back to the repo's root commit.
+#
+# This is the half only the repo can answer. The other half — which of those CR
+# ids the project actually REGISTERED — lives in Crucible's queue, so the
+# intersection happens in the client, on this side of the wire. Git therefore
+# never enters the server's path, and the ceremony never has to hold a copy of
+# the queue.
+release_crs() {
+    local version="$1" sha="$2" tag
+    local -a excludes=()
+
+    while IFS= read -r tag; do
+        [ -n "$tag" ] || continue
+        excludes+=("^$tag")
+    done < <(earlier_release_tags "$version")
+
+    git log --merges --format=%s "$sha" ${excludes[@]+"${excludes[@]}"} 2>/dev/null \
+        | grep -Eo 'CR-[A-Z]+-[0-9]+' \
+        | sort -u \
+        | paste -sd, - || true
 }
 
 # The SINGLE release-report path: report one (version, sha) pair as a `release`
-# milestone through the repo client (never a bare curl). Re-runs emit an
-# identical (type, label, commit), so the server dedups. A reporting failure
-# must NOT fail the caller (the tag is already public): warn, naming the
-# version, and return success. Shared by report_release (§S2) and the §S4
-# backfill, so there is exactly ONE reporter.
+# milestone through the repo client (never a bare curl), declaring the
+# ceremony's identity (CR-CRU-080 §S1) — the client requires it and has no
+# fallback, so a report without one posts nothing.
+#
+# Idempotent: the server collapses a repeated (type, label, commit) release onto
+# the row it already holds (CR-CRU-080 §S3). It did NOT do so before — the
+# comment that used to claim it here was false, and a re-run of the backfill
+# duplicated every release.
+#
+# CR-CRU-080 §S4 — the SAME single path also carries the release's provenance:
+# when it shipped and what it shipped, each reported only when git actually
+# answered, so an unanswerable field is omitted rather than invented.
+#
+# Returns non-zero when the report failed, having printed the warning AND the
+# single-line recovery command carrying the tag's sha (and its provenance, so
+# the recovery records the same release, not a poorer one). Whether that is
+# fatal is the CALLER's call: after publication it never is (report_release
+# swallows it), while the backfill counts it into its tally.
 emit_release_milestone() {
-    local version="$1" sha="$2" client
+    local version="$1" sha="$2" client agent ship_date crs shown=""
+    local -a provenance=()
 
+    agent="$(ceremony_agent)"
     client="$(repo_root)/clients/python-crucible.py"
-    if ! python3 "$client" milestone --type release --label "$version" --commit "$sha"; then
-        info "WARN: reporting release $version to Crucible failed; the release is published and complete"
+
+    ship_date="$(release_ship_date "$sha")"
+    if [ -n "$ship_date" ]; then
+        provenance+=(--released-at "$ship_date")
+        shown="$shown --released-at $ship_date"
+    fi
+    crs="$(release_crs "$version" "$sha")"
+    if [ -n "$crs" ]; then
+        provenance+=(--crs "$crs")
+        shown="$shown --crs $crs"
+    fi
+
+    if python3 "$client" milestone --type release --label "$version" \
+        --commit "$sha" --agent "$agent" ${provenance[@]+"${provenance[@]}"}; then
         return "$EXIT_SUCCESS"
     fi
+
+    info "WARN: release $version is NOT recorded in Crucible; the release itself is published and complete"
+    info "  recover with: python3 $client milestone --type release --label $version --commit $sha --agent $agent$shown"
+    return "$EXIT_ERROR"
 }
 
 # CR-CRU-074 §S4 — retroactively record the releases that already shipped, so
@@ -355,23 +476,46 @@ emit_release_milestone() {
 # tag is never a release — and report each as a `release` milestone through the
 # SAME path §S2 built (emit_release_milestone → the repo client), with the
 # commit resolved from `git rev-list -n 1 <tag>`, never a guessed value or a
-# gate's intent text. Idempotent via server-side dedup (a re-run emits the
-# identical (type,label,commit) set). Warns-not-fails on a client error, like
-# the ceremony, and exits 0 even when there are no SemVer tags.
+# gate's intent text.
+#
+# CR-CRU-080 §S1/§S3 — the identity is a PREFLIGHT: a backfill with none cannot
+# spend one client call per tag discovering that it has no identity, so it
+# refuses before the first. Idempotent through the SERVER's dedup on
+# (type, label, commit), so a re-run converges on the rows already held rather
+# than duplicating each release. Every tag gets a named result, and the run ends
+# with an `N/M recorded` tally naming whatever did not land — a partial failure
+# has to be readable in the exit summary, not only mid-log. Reporting stays
+# warns-not-fails, so the exit is 0 even with a failed tag or no SemVer tags.
 cmd_backfill_releases() {
-    local tags tag sha
+    local tags tag sha total=0 recorded=0
+    local -a failed=()
+
+    guard_agent_identity
 
     tags="$(git tag)"
     for tag in $tags; do
         if ! printf '%s' "$tag" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             continue
         fi
+        total=$((total + 1))
         if ! sha="$(git rev-list -n 1 "$tag" 2>/dev/null)" || [ -z "$sha" ]; then
-            info "WARN: could not resolve the commit for tag '$tag'; release $tag was NOT backfilled"
+            info "  $tag: NOT backfilled — could not resolve the tag's commit"
+            failed+=("$tag")
             continue
         fi
-        emit_release_milestone "$tag" "$sha"
+        if emit_release_milestone "$tag" "$sha"; then
+            info "  $tag: recorded ($sha)"
+            recorded=$((recorded + 1))
+        else
+            failed+=("$tag")
+        fi
     done
+
+    if [ "${#failed[@]}" -eq 0 ]; then
+        info "backfill-releases: $recorded/$total recorded"
+    else
+        info "backfill-releases: $recorded/$total recorded; NOT recorded: ${failed[*]}"
+    fi
 
     return "$EXIT_SUCCESS"
 }
@@ -383,6 +527,12 @@ cmd_finish() {
     if [ -z "$VERSION" ]; then
         error "finish requires a version: release.sh finish <X.Y.Z>" "$EXIT_USAGE"
     fi
+
+    # CR-CRU-080 §S2/AC2 — the identity guard runs FIRST, before the manifest
+    # is even aligned: a ceremony that cannot report must refuse to start, so
+    # the operator learns while the tag does not yet exist. Everything after
+    # this point either publishes or is a local, revertible commit.
+    guard_agent_identity
 
     # CR-CRU-061 §S7 — align the manifest to the finish version OURSELVES, so a
     # release is ONE command. This write + commit is REAL even under --dry-run:
@@ -445,6 +595,24 @@ while [ $# -gt 0 ]; do
         -h|--help)
             usage
             exit "$EXIT_SUCCESS"
+            ;;
+        # CR-CRU-080 §S1 — the explicit identity source; wins over
+        # $CRUCIBLE_AGENT (see ceremony_agent).
+        --agent)
+            if [ $# -lt 2 ] || [ -z "$2" ]; then
+                echo "ERROR: --agent requires an agentId" >&2
+                exit "$EXIT_USAGE"
+            fi
+            AGENT="$2"
+            shift 2
+            ;;
+        --agent=*)
+            AGENT="${1#--agent=}"
+            if [ -z "$AGENT" ]; then
+                echo "ERROR: --agent requires an agentId" >&2
+                exit "$EXIT_USAGE"
+            fi
+            shift
             ;;
         --dry-run)
             DRY_RUN=true

@@ -851,12 +851,14 @@ def _post_gate(project_dir, agent_id, gate, context=None):
 
 
 def _post_milestone(project_dir, agent_id, mtype, label=None, commit=None,
-                    context=None):
+                    context=None, released_at=None, crs=None):
     """POST a workflow milestone (CR-CRU-054 §S2 — delegates to the shared
-    builder)."""
+    builder). CR-CRU-080 §S4 — `released_at`/`crs` carry a release's
+    provenance through the same builder."""
     return _axi().post_milestone(_project_key(project_dir), agent_id, mtype,
                                  _post, label=label, commit=commit,
-                                 context=context)
+                                 context=context, released_at=released_at,
+                                 crs=crs)
 
 
 def cmd_gate_report(args):
@@ -1089,6 +1091,17 @@ def main():
     ms.add_argument("--label", help="Human-readable milestone label.")
     ms.add_argument("--cr", help="CR id (rides context.cr).")
     ms.add_argument("--commit", help="Optional commit sha.")
+    # CR-CRU-080 §S4 — a release's provenance, computed by the ceremony (the
+    # only actor standing in the repo with git in reach).
+    ms.add_argument("--released-at", dest="released_at", type=int,
+                    help="Release SHIP date: the tag's own commit date in epoch "
+                         "SECONDS (`git log -1 --format=%%ct <tag>`), which is "
+                         "when the release shipped rather than when it was "
+                         "recorded (§S4).")
+    ms.add_argument("--crs",
+                    help="Comma-separated CR ids the release shipped (the merges "
+                         "in its tag range). Only the ids the project's "
+                         "registered queue holds are recorded (§S4).")
     ms.set_defaults(func=cmd_milestone)
 
     args = p.parse_args()
