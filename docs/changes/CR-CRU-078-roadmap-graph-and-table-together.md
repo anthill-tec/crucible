@@ -77,7 +77,23 @@ until CR-022 lands. Default with nothing selected: the active wave's CRs.
 Rows carry **CR-id + bare deps + status + terse track/cycle overlay**. The full title is
 removed as a row field; it may remain a hover affordance but never occupies row width.
 
-### §S4 Bidirectional highlight
+### §S4 Row order respects wave and release grouping
+
+Verified live on the 78-CR board and **broken today**: rows are ordered topologically from
+`dependsOn` alone, so a wave is revisited as the walk proceeds. Two visible consequences:
+
+- **wave-6 rows render before wave-5 rows** — CR-015 lands at row 62 and CR-022 at row 65,
+  while CR-076 is at 74 and CR-079 at 77. Work explicitly deferred *past* 0.2.0 therefore
+  appears above the 0.2.0 work, so a reader cannot tell what is in the release.
+- **wave dividers repeat** — the live sequence is
+  `Wave 1, 2, 3, 4, 3, 4, 5, 6, 5, 6, 5`, because a divider is emitted on every wave change
+  rather than once per wave.
+
+Rows group by **release, then wave**, and order topologically **within** a group. Each wave
+divider appears exactly once. This is what makes "in this release" vs "deferred" legible, which
+is the entire point of a release boundary.
+
+### §S5 Bidirectional highlight
 
 Expanding a graph container expands its rows; selecting a row highlights its graph node, and
 selecting a node highlights its rows.
@@ -100,6 +116,14 @@ selecting a node highlights its rows.
 - **AC8** — an `IN_PROGRESS` row is clickable and marked as the drill-through source; the jump
   itself is CR-079's AC.
 - **AC9** — the surface renders the live 78-CR roadmap with both zones and no error.
+- **AC10** — every wave divider appears **exactly once**; the live duplicate sequence
+  (`Wave 1,2,3,4,3,4,5,6,5,6,5`) must fail this AC.
+- **AC11** — rows sort by release then wave, topologically within a group: **every** wave-6 row
+  renders **after** every wave-5 row. Asserted with the real deferral (015/018/022 after
+  075–079), since that is the case that exposed the bug.
+- **AC12** — with releases recorded, release dividers render in order and each CR row sits under
+  the release it belongs to; deferred work sits after the last release boundary, visibly outside
+  the release.
 
 ## Estimated size
 
