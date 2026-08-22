@@ -1152,6 +1152,80 @@ def cmd_status(args, project_dir, ops):
     return 0
 
 
+# ── CR-CRU-081 §S2 — the `queue` READ verb (the landing-record sources) ─────
+
+# The whole feed depth the cr-merged scan reads. The events collection has no
+# type filter, so the milestone source is a bounded scan of the newest N events
+# rather than a query; N is deliberately far above any real project's milestone
+# count so a `cr-merged` marker is not missed by truncation.
+QUEUE_EVENTS_LIMIT = 5000
+
+
+def build_queue_rows(entries):
+    """CR-CRU-081 §S2 (PURE) — the project's registered CR queue as
+    uniform-table-safe rows: one dict per entry with the SAME scalar-only
+    key-set, so the list round-trips as a TOON Construct-3 table (the same
+    rule `build_status_rows` follows). `planId` is null when the queue entry
+    has no plan at all — which IS the fact the release ceremony needs."""
+    return [{"cr": e.get("cr"), "wave": e.get("wave"),
+             "status": e.get("status"), "planId": e.get("planId")}
+            for e in entries or []]
+
+
+def cr_merged_crs(events):
+    """CR-CRU-081 §S2 (PURE) — the CR ids carrying a `cr-merged` milestone: the
+    project's SECOND landing source, beside the closed plan record. A CR absent
+    from BOTH has no landing record at any source, which is exactly the class
+    the release ceremony must name rather than drop in silence."""
+    return sorted({e.get("label") for e in events or []
+                   if e.get("kind") == "milestone"
+                   and e.get("type") == "cr-merged" and e.get("label")})
+
+
+def cmd_queue(args, project_dir, ops):
+    """CR-CRU-081 §S2 — the queue READ verb (no --agent): the two DB-side
+    landing sources the release ceremony's provenance needs, in ONE read — the
+    registered CR queue (GET …/queue) and the CR ids a `cr-merged` milestone
+    covers (GET /api/v2/events). A pure carrier: every set operation over these
+    ids stays in the ceremony, which is the only actor that also has git.
+
+    Tolerant like `cmd_status`: an unreachable or non-ok source yields the empty
+    set plus a structured warning, never an error — a release is PUBLISHED
+    before it is reported and must never fail on its own provenance."""
+    key = ops.project_key(project_dir)
+    warnings = []
+
+    resp = ops.get(f"/api/v2/projects/{key}/queue")
+    if resp.get("ok"):
+        rows = build_queue_rows(resp.get("entries"))
+    else:
+        rows = []
+        warnings.append({
+            "code": "queue-unavailable",
+            "detail": (f"could not read the registered CR queue: "
+                       f"{resp.get('error')}"),
+        })
+
+    events = ops.get(f"/api/v2/events?project={key}"
+                     f"&limit={QUEUE_EVENTS_LIMIT}")
+    if events.get("ok"):
+        merged = cr_merged_crs(events.get("events"))
+    else:
+        merged = []
+        warnings.append({
+            "code": "milestones-unavailable",
+            "detail": (f"could not read the cr-merged milestones: "
+                       f"{events.get('error')}"),
+        })
+
+    ops.emit("queue", True,
+             {"queue": rows, "crMerged": merged, "count": len(rows),
+              "help": ["status"]},
+             ops.context(project_dir), warnings,
+             f"queue: ok=True entries={len(rows)} crMerged={len(merged)}")
+    return 0
+
+
 def status_namespace(**extra_fields):
     """§S14 (PARAMETERISED, DN §2) — the `cmd_status` args Namespace the no-arg
     dashboard forwards.
@@ -1603,14 +1677,22 @@ def cmd_milestone(args, project_dir, ops):
     `--released-at` (the tag's own commit date, epoch seconds — when the
     release SHIPPED, as opposed to when it was recorded) and `--crs` (the CR
     ids its tag range merged, kept only where the registered queue agrees).
-    Both are computed by the ceremony, which is the only actor that can."""
+    Both are computed by the ceremony, which is the only actor that can.
+
+    CR-CRU-081 §S3 — `--repair-provenance` turns the post from a REPLAY of an
+    already-recorded release into a CORRECTION of it: the server re-derives
+    that release's `releasedAt`/`crs` from what this post carries, and changes
+    nothing else about it. Explicit and non-default: an ordinary post never
+    sets it, so a release record cannot be rewritten by accident."""
     context = fleet_context(cr=args.cr)
     released_at = getattr(args, "released_at", None)
     crs = release_crs(getattr(args, "crs", None), project_dir, ops)
+    repair = bool(getattr(args, "repair_provenance", False))
     resp = ops.post_milestone(project_dir, ops.agent_id(args), args.type,
                               label=args.label, commit=getattr(args, "commit", None),
                               context=context or None,
-                              released_at=released_at, crs=crs)
+                              released_at=released_at, crs=crs,
+                              repair_provenance=repair)
     ok = resp.get("ok", False)
     # The interactive line stays an EXPLICIT stderr print (CR-CRU-054 §S2b's
     # single locus for it) rather than riding the emitter's legacy channel —
@@ -1618,6 +1700,7 @@ def cmd_milestone(args, project_dir, ops):
     print(f"milestone: ok={ok} type={args.type}"
           + (f" label={args.label}" if args.label else "")
           + (f" releasedAt={released_at}" if released_at else "")
+          + (" repair=provenance" if repair else "")
           + (f" crs={','.join(crs) if crs else '(none registered)'}"
              if crs is not None else "")
           + (f" error={resp.get('error')}" if resp.get("error") else ""),
@@ -1843,7 +1926,7 @@ def post_gate(project_key, agent_id, gate, post_fn, context=None):
 
 def post_milestone(project_key, agent_id, mtype, post_fn,
                    label=None, commit=None, context=None,
-                   released_at=None, crs=None):
+                   released_at=None, crs=None, repair_provenance=False):
     """POST a workflow milestone (§S4b). Absent label/commit/context keys are
     OMITTED rather than sent as nulls.
 
@@ -1851,7 +1934,12 @@ def post_milestone(project_key, agent_id, mtype, post_fn,
     (the tag's commit date, epoch seconds) only when it was computed, and
     `crs` whenever a scan HAPPENED — including as an empty list, which says
     "the queue registered none of them" and is a different fact from a release
-    that carries no CR set at all."""
+    that carries no CR set at all.
+
+    CR-CRU-081 §S3 — `repairProvenance` is sent ONLY when the caller asked for
+    it, so an ordinary post is byte-identical to the pre-081 one and stays the
+    server's dedup replay. It is the whole opt-in: without this key on the
+    wire a held release cannot be rewritten."""
     payload = {"projectKey": project_key, "agentId": agent_id, "type": mtype}
     if label:
         payload["label"] = label
@@ -1861,6 +1949,8 @@ def post_milestone(project_key, agent_id, mtype, post_fn,
         payload["releasedAt"] = released_at
     if crs is not None:
         payload["crs"] = crs
+    if repair_provenance:
+        payload["repairProvenance"] = True
     if context:
         payload["context"] = context
     return post_fn("/api/v2/milestones", payload)

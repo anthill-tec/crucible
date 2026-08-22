@@ -43,6 +43,11 @@ VERBOSE=false
 # means "not given on the command line"; ceremony_agent() then falls back to
 # $CRUCIBLE_AGENT.
 AGENT=""
+# CR-CRU-081 §S3 — the OPT-IN provenance repair, from `--repair-provenance`.
+# Default false, and there is deliberately no environment fallback: a release
+# record that CR-CRU-080 §S3 made immutable may only be corrected because this
+# run's own command line asked for it.
+REPAIR_PROVENANCE=false
 
 # ============================================================================
 # Helper Functions
@@ -103,6 +108,8 @@ Subcommands:
                     on a reporting error. Idempotent: the server collapses a
                     repeated (type, label, commit) release onto the row it
                     already holds (CR-CRU-080 §S3). Exit 0.
+                    Add --repair-provenance to CORRECT the records already
+                    held instead of replaying them (CR-CRU-081 §S3).
 
 Options:
   --agent <agentId> The Crucible identity the release report is attributed to.
@@ -111,6 +118,15 @@ Options:
                     `backfill-releases` — both refuse at preflight without one,
                     because the client has no identity fallback (CR-CRU-057) and
                     a report with no identity silently records nothing.
+  --repair-provenance
+                    Re-derive an already-recorded release's provenance
+                    (`releasedAt` + the CR ids it shipped) from the repo's
+                    CURRENT ancestry, instead of replaying the record the
+                    server holds. Opt-in and non-default, because CR-CRU-080
+                    §S3 made release records immutable: version, commit and the
+                    row itself are never touched, and a repair changes nothing
+                    when the stored provenance is already correct
+                    (CR-CRU-081 §S3).
   --dry-run         Print the commands that would run without executing them.
                     Preflight guards still run and still refuse.
   --verbose         Print debug output.
@@ -371,6 +387,9 @@ report_release() {
     # public, so a transport failure warns (with its recovery command, printed
     # by the reporter) and the ceremony still exits successfully.
     emit_release_milestone "$version" "$sha" || true
+    # CR-CRU-081 §S2 — same tally on the live path: an incomplete `crs` must be
+    # visible at the moment it is produced, not only in a backfill.
+    report_unplaceable_crs
     return "$EXIT_SUCCESS"
 }
 
@@ -384,43 +403,189 @@ release_ship_date() {
     git log -1 --format=%ct "$1" 2>/dev/null || true
 }
 
-# CR-CRU-080 §S4 — every bare-SemVer tag that shipped BEFORE this version, in
-# version order. These are the left-hand side of the tag range below: excluding
-# ALL of them (rather than only the immediately preceding tag) is what makes a
-# CR belong to the EARLIEST tag containing it, so the per-release CR sets are a
-# partition and never overlapping "everything up to this tag" prefixes — a
-# guarantee that holds even when the tags are not one straight ancestry chain.
-earlier_release_tags() {
+# CR-CRU-081 §S1 — the release tags in ship order: bare SemVer only (a
+# v-prefixed or non-release tag is never a release), version-sorted, so
+# "the EARLIEST tag containing a commit" is well defined.
+release_tags() {
     git tag 2>/dev/null \
         | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-        | sort -V \
-        | awk -v version="$1" '$0 == version { exit } { print }' || true
+        | sort -V || true
 }
 
-# CR-CRU-080 §S4 — WHAT a release shipped: the CR id carried by the subject of
-# every MERGE commit in the tag's range, comma-separated for the client's
-# `--crs`. The range is the tagged commit minus everything reachable from every
-# earlier release tag; for the EARLIEST tag there is nothing to exclude, so the
-# range runs back to the repo's root commit.
+# CR-CRU-081 §S1 — the CR → landing-sha map the project ALREADY keeps: every
+# CLOSED plan's `merge.commit`, read through the client's existing `plans` verb
+# (its `mergeCommit` column). One line per closed plan, `<cr> <sha>`, with the
+# sha absent when the plan recorded none. No new read surface, no DB access,
+# and — the whole point of CR-CRU-081 — no prose parsed.
 #
-# This is the half only the repo can answer. The other half — which of those CR
-# ids the project actually REGISTERED — lives in Crucible's queue, so the
-# intersection happens in the client, on this side of the wire. Git therefore
-# never enters the server's path, and the ceremony never has to hold a copy of
-# the queue.
-release_crs() {
-    local version="$1" sha="$2" tag
-    local -a excludes=()
+# Tolerant by construction: an unreachable or failing client yields NO lines, so
+# provenance is simply omitted rather than invented. A release is published
+# before it is reported and must never fail on its own provenance.
+plan_merge_map() {
+    local client
+    client="$(repo_root)/clients/python-crucible.py"
+
+    python3 "$client" plans --fields mergeCommit 2>/dev/null \
+        | awk '
+            /^[[:space:]]*plans\[[0-9]+\]\{/ {
+                header = $0
+                sub(/^[^{]*\{/, "", header)
+                sub(/\}.*$/, "", header)
+                cols = split(header, name, ",")
+                for (i = 1; i <= cols; i++) col[name[i]] = i
+                next
+            }
+            cols > 0 {
+                row = $0
+                gsub(/"/, "", row)
+                if (split(row, v, ",") < cols) next
+                cr = v[col["cr"]]
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", cr)
+                if (cr !~ /^CR-[A-Z]+-[0-9]+$/) next
+                if (v[col["status"]] != "closed") next
+                sha = v[col["mergeCommit"]]
+                print cr, (sha == "null" ? "" : sha)
+            }' \
+        | sort -u || true
+}
+
+# CR-CRU-081 §S1 — the EARLIEST bare-SemVer tag whose history contains `sha`
+# (`git merge-base --is-ancestor`, the ancestry primitive itself), or EMPTY when
+# no tag contains it. Empty is not a gap: it is a CR that landed after the
+# newest tag and has simply not shipped yet.
+earliest_tag_containing() {
+    local sha="$1" tag
 
     while IFS= read -r tag; do
         [ -n "$tag" ] || continue
-        excludes+=("^$tag")
-    done < <(earlier_release_tags "$version")
+        if git merge-base --is-ancestor "$sha" "$tag" >/dev/null 2>&1; then
+            printf '%s\n' "$tag"
+            return "$EXIT_SUCCESS"
+        fi
+    done < <(release_tags)
 
-    git log --merges --format=%s "$sha" ${excludes[@]+"${excludes[@]}"} 2>/dev/null \
-        | grep -Eo 'CR-[A-Z]+-[0-9]+' \
-        | sort -u \
-        | paste -sd, - || true
+    return "$EXIT_SUCCESS"
+}
+
+# CR-CRU-081 §S1 — WHAT a release shipped: every CR whose RECORDED landing
+# commit is an ancestor of this tag and of no earlier one, comma-separated for
+# the client's `--crs`.
+#
+# This replaces CR-CRU-080 §S4's scan of MERGE-COMMIT SUBJECTS, which silently
+# dropped every CR that landed by fast-forward or squash (measured: CR-CRU-021
+# and CR-CRU-023 shipped in 0.1.0 and appeared in no release's `crs`). Ancestry
+# is exact and text-independent (AC6): nothing here reads a commit message.
+#
+# Attributing to the EARLIEST containing tag keeps the per-release sets a
+# partition (CR-080 AC10), which holds even when the tags are not one straight
+# ancestry chain.
+#
+# Git is still the half only the repo can answer; which of these ids the project
+# actually REGISTERED is the queue's half, intersected in the client on this
+# side of the wire, so git never enters the server's path.
+release_crs() {
+    local version="$1" cr sha
+    local -a shipped=()
+
+    while read -r cr sha; do
+        [ -n "$sha" ] || continue
+        if [ "$(earliest_tag_containing "$sha")" = "$version" ]; then
+            shipped+=("$cr")
+        fi
+    done < <(plan_merge_map)
+
+    [ "${#shipped[@]}" -gt 0 ] || return "$EXIT_SUCCESS"
+    printf '%s\n' "${shipped[@]}" | sort -u | paste -sd, - || true
+}
+
+# CR-CRU-081 §S2 — the project's registered CR QUEUE and its `cr-merged` landing
+# markers, read through the client's `queue` verb (one call, both sources). The
+# queue is what says which CR ids the project ever filed; the two landing
+# sources together say which of them Crucible knows the landing of.
+#
+# Tolerant exactly as `plan_merge_map` is: an unreachable or failing client
+# yields NO output, so the ceremony reports what it can rather than failing on
+# its own reporting — a published release must never be blocked by a gap in the
+# report about it.
+queue_read() {
+    python3 "$(repo_root)/clients/python-crucible.py" queue 2>/dev/null || true
+}
+
+# The CR ids the queue holds, one per line, from a `queue` envelope on stdin.
+queued_crs() {
+    awk '
+        /^[[:space:]]*queue\[[0-9]+\]\{/ {
+            header = $0
+            sub(/^[^{]*\{/, "", header)
+            sub(/\}.*$/, "", header)
+            cols = split(header, name, ",")
+            for (i = 1; i <= cols; i++) col[name[i]] = i
+            next
+        }
+        cols > 0 {
+            row = $0
+            gsub(/"/, "", row)
+            if (split(row, v, ",") < cols) next
+            cr = v[col["cr"]]
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", cr)
+            if (cr ~ /^CR-[A-Z]+-[0-9]+$/) print cr
+        }' | sort -u || true
+}
+
+# The CR ids a `cr-merged` milestone covers — the SECOND landing source — from
+# the same envelope, one per line.
+cr_merged_crs() {
+    awk -F': ' '/^[[:space:]]*crMerged\[[0-9]+\]:/ {
+            gsub(/,/, "\n", $2)
+            print $2
+        }' | tr -d ' ' | grep -E '^CR-[A-Z]+-[0-9]+$' | sort -u || true
+}
+
+# CR-CRU-081 §S2 — name and COUNT the CRs ancestry could not place, in the TWO
+# distinct classes §S2 defines, so "tracked, but the landing sha is missing" is
+# never read as "Crucible has no record of this CR landing at all":
+#
+#   1. a plan that is CLOSED (the CR landed) yet records no merge commit, so
+#      there is no sha to test ancestry against;
+#   2. a CR the project QUEUED for which no landing record exists at any source
+#      — no closed plan, and no `cr-merged` milestone either. This is the class
+#      that was invisible: ancestry cannot place such a CR and nothing reported
+#      it, so 0.1.0's provenance shrank from 58 CRs to 51 in total silence.
+#
+# Each class is counted and described SEPARATELY, on its own line, with disjoint
+# id sets — one shared total would re-create exactly the confusion §S2 names.
+#
+# Reporting places nothing: a named CR stays absent from every release's `crs`,
+# because Crucible genuinely does not know where it landed and inventing a
+# placement would be fabrication.
+#
+# A CR whose sha IS recorded but precedes no tag is in NEITHER class: it landed
+# after the newest tag, which is placement, not a gap.
+report_unplaceable_crs() {
+    local cr sha queue_out tracked="" merged=""
+    local -a missing_sha=() no_record=()
+
+    while read -r cr sha; do
+        [ -n "$cr" ] || continue
+        tracked="$tracked $cr"
+        [ -n "$sha" ] || missing_sha+=("$cr")
+    done < <(plan_merge_map)
+
+    queue_out="$(queue_read)"
+    merged=" $(printf '%s\n' "$queue_out" | cr_merged_crs | paste -sd' ' -) "
+    while IFS= read -r cr; do
+        [ -n "$cr" ] || continue
+        [[ " $tracked " != *" $cr "* ]] || continue
+        [[ "$merged" != *" $cr "* ]] || continue
+        no_record+=("$cr")
+    done < <(printf '%s\n' "$queue_out" | queued_crs)
+
+    if [ "${#missing_sha[@]}" -gt 0 ]; then
+        info "provenance: ${#missing_sha[@]} unplaceable CR(s) — tracked, but the landing sha is missing: the plan is closed and records no merge commit, so there is no commit to test ancestry against: ${missing_sha[*]}"
+    fi
+    if [ "${#no_record[@]}" -gt 0 ]; then
+        info "provenance: ${#no_record[@]} unplaceable queued CR(s) — no landing record at all: Crucible holds neither a closed plan nor a cr-merged milestone for them, so where they landed is unknown: ${no_record[*]}"
+    fi
 }
 
 # The SINGLE release-report path: report one (version, sha) pair as a `release`
@@ -442,6 +607,13 @@ release_crs() {
 # the recovery records the same release, not a poorer one). Whether that is
 # fatal is the CALLER's call: after publication it never is (report_release
 # swallows it), while the backfill counts it into its tally.
+#
+# CR-CRU-081 §S3 — the SAME single path also carries the OPT-IN repair. With
+# --repair-provenance the client is told to CORRECT the record the server
+# already holds for this (type, label, commit) — re-deriving `releasedAt` and
+# `crs` from what this run just computed — instead of replaying it. Without
+# the flag the argv is byte-identical to the pre-081 one, so the ordinary
+# re-run remains CR-CRU-080 §S3's replay and cannot rewrite a release.
 emit_release_milestone() {
     local version="$1" sha="$2" client agent ship_date crs shown=""
     local -a provenance=()
@@ -454,10 +626,14 @@ emit_release_milestone() {
         provenance+=(--released-at "$ship_date")
         shown="$shown --released-at $ship_date"
     fi
-    crs="$(release_crs "$version" "$sha")"
+    crs="$(release_crs "$version")"
     if [ -n "$crs" ]; then
         provenance+=(--crs "$crs")
         shown="$shown --crs $crs"
+    fi
+    if [ "$REPAIR_PROVENANCE" = true ]; then
+        provenance+=(--repair-provenance)
+        shown="$shown --repair-provenance"
     fi
 
     if python3 "$client" milestone --type release --label "$version" \
@@ -510,6 +686,10 @@ cmd_backfill_releases() {
             failed+=("$tag")
         fi
     done
+
+    # CR-CRU-081 §S2 — the provenance gap, once per ceremony run: whatever
+    # ancestry could not place is named here rather than left invisible.
+    report_unplaceable_crs
 
     if [ "${#failed[@]}" -eq 0 ]; then
         info "backfill-releases: $recorded/$total recorded"
@@ -620,6 +800,12 @@ while [ $# -gt 0 ]; do
             ;;
         --verbose)
             VERBOSE=true
+            shift
+            ;;
+        # CR-CRU-081 §S3 — the opt-in correction switch (see
+        # emit_release_milestone); absent, every re-post stays the replay.
+        --repair-provenance)
+            REPAIR_PROVENANCE=true
             shift
             ;;
         -*)

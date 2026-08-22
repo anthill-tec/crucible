@@ -53,7 +53,13 @@ empty states, and **no** synthetic plan or cycle rows are created to make the de
 ## Acceptance criteria
 
 - **AC1** — a CR present in some release's `crs` with **no** plan record does **not** derive
-  `PENDING`. Asserted with the real case: `CR-CRU-001`, in `0.1.0`, no plan.
+  `PENDING`.
+- **AC1b** — a CR with **no plan AND no release membership** — because Crucible has no landing
+  record for it at all — must **not** be asserted `COMPLETED` either. Measured class:
+  `CR-CRU-001`–`007`, `010`, `016`, which shipped in `0.1.0` but are absent from `crs` by design
+  (CR-081 §S2 class 2, reported as unplaceable). Their honest status is **unknown**, not
+  `PENDING` and not `COMPLETED` — claiming either would fabricate evidence the store does not
+  hold. This case invalidated `CR-CRU-001` as AC1's example.
 - **AC2** — a CR with no plan and no release membership still derives `PENDING`; the genuinely
   unstarted case is unchanged.
 - **AC3** — a CR completed with full plan tracking is distinguishable from one completed without it;
@@ -74,9 +80,11 @@ Derived status is consumed in several places, so this visibly moves numbers on t
 the intent — the current numbers are wrong — but expect the shift rather than reading it as a
 regression.
 
-Second risk: treating release membership as proof of completion depends on `crs` being correct.
-**CR-081** fixes its known under-reporting; until then a CR missing from `crs` keeps today's
-behaviour, so this degrades safely rather than asserting something false.
+Second risk: treating release membership as proof of completion depends on `crs` being correct —
+and it is now known that **nine shipped CRs will never appear in any `crs`**, because Crucible has
+no landing record for them (CR-081 §S2 class 2). So release membership alone cannot rehabilitate
+them, and this CR must not pretend otherwise: they resolve to an explicit unknown, which is why
+AC1b exists. Anything stronger would be the same fabrication this CR is fixing.
 
 ## Non-goals
 

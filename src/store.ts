@@ -1684,6 +1684,13 @@ export class Store {
    * CR-CRU-080 §S4 — a release also records WHEN it shipped (`releasedAt`,
    * the tag's commit date) and WHAT it shipped (`crs`). Both ride the generic
    * payload column, so there is no column and no migration.
+   *
+   * CR-CRU-081 §S3 — the ONE correction path through that immutability, and
+   * it is opt-in: `repairProvenance` must be asked for EXPLICITLY, in the
+   * call itself. With it, a held release keeps its identity — the same row,
+   * id, ingest timestamp, `label` and `commit` — and only the provenance
+   * fields the caller actually re-derived are written over. Without it the
+   * dedup replay is untouched, so no ordinary re-post can rewrite a release.
    */
   recordMilestoneEvent(
     projectKey: string,
@@ -1695,6 +1702,7 @@ export class Store {
       context?: RunContext;
       releasedAt?: number;
       crs?: string[];
+      repairProvenance?: boolean;
     },
   ): { event: RunEvent; changed: boolean } {
     this.touchAgent(projectKey, agentId);
@@ -1702,7 +1710,13 @@ export class Store {
       const held = this.listReleases(projectKey).find(
         (r) => r.label === meta.label && r.commit === meta.commit,
       );
-      if (held !== undefined) return { event: held, changed: false };
+      if (held !== undefined) {
+        // CR-CRU-081 §S3 — the ONE way a held release changes: the caller
+        // asked for it, in this call, on purpose. Everything else replays.
+        return meta.repairProvenance === true
+          ? this.repairReleaseProvenance(held, meta.releasedAt, meta.crs)
+          : { event: held, changed: false };
+      }
     }
     // CR-CRU-080 §S4 — provenance belongs to a release and nothing else, and
     // it is stored VERBATIM: both halves are facts about a repo the server
@@ -1739,6 +1753,41 @@ export class Store {
       this.insertEvent(event);
     }
     return { event, changed: true };
+  }
+
+  /**
+   * CR-CRU-081 §S3 — re-derive a HELD release's provenance IN PLACE.
+   *
+   * A correction, never a second recording: the row is UPDATEd, so the
+   * release keeps its id, its ingest timestamp, its `label` and its `commit`,
+   * and no tag ever gains a second release row. Only the fields the reporter
+   * actually computed move — an absent `releasedAt`/`crs` means git could not
+   * answer, which leaves the stored value alone rather than erasing it.
+   *
+   * Idempotent by construction: the repaired payload is built through the
+   * SAME projection the insert uses, so an unchanged answer is byte-identical
+   * to the stored one and the repair writes nothing and reports
+   * `changed:false`.
+   *
+   * Gates are deliberately untouched (CR-CRU-073 §S1): the release already
+   * exists, so its gates were retired when it was first recorded, and a gate
+   * arriving later is retired on insert. Re-deriving what a release shipped
+   * says nothing new about what gated it.
+   */
+  private repairReleaseProvenance(
+    held: RunEvent,
+    releasedAt: number | undefined,
+    crs: string[] | undefined,
+  ): { event: RunEvent; changed: boolean } {
+    const repaired: RunEvent = {
+      ...held,
+      ...(releasedAt !== undefined ? { releasedAt } : {}),
+      ...(crs !== undefined ? { crs } : {}),
+    };
+    const payload = Store.payloadColumn(repaired);
+    if (payload === Store.payloadColumn(held)) return { event: held, changed: false };
+    this.db.query(`UPDATE events SET payload = ? WHERE id = ?`).run(payload, held.id);
+    return { event: repaired, changed: true };
   }
 
   /**
@@ -2091,9 +2140,16 @@ export class Store {
     return `evt-${Date.now()}-${++this.seq}`;
   }
 
-  private insertEvent(event: RunEvent): void {
-    // CR-CRU-013 §S1+§S4b — collect the kind-specific carrying fields into the
-    // one generic payload column (NULL when the event carries none).
+  /**
+   * CR-CRU-013 §S1+§S4b — the kind-specific carrying fields an event stores in
+   * the ONE generic payload column (NULL when it carries none).
+   *
+   * CR-CRU-081 §S3 — a single projection, shared by the INSERT below and by
+   * the in-place provenance repair, so a repaired row's payload is identical
+   * in shape and key order to a freshly inserted one (which is what lets the
+   * repair decide "nothing changed" by comparing the two strings).
+   */
+  private static payloadColumn(event: RunEvent): string | null {
     const payloadObj: Record<string, unknown> = {
       ...(event.gate !== undefined ? { gate: event.gate } : {}),
       ...(event.type !== undefined ? { type: event.type } : {}),
@@ -2113,7 +2169,11 @@ export class Store {
       ...(event.releasedAt !== undefined ? { releasedAt: event.releasedAt } : {}),
       ...(event.crs !== undefined ? { crs: event.crs } : {}),
     };
-    const payload = Object.keys(payloadObj).length > 0 ? JSON.stringify(payloadObj) : null;
+    return Object.keys(payloadObj).length > 0 ? JSON.stringify(payloadObj) : null;
+  }
+
+  private insertEvent(event: RunEvent): void {
+    const payload = Store.payloadColumn(event);
     this.db
       .query(
         `INSERT INTO events (id, project_key, agent_id, kind, tier, stack, codec,

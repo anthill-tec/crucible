@@ -1367,6 +1367,14 @@ def cmd_status(args):
     return _axi().cmd_status(args, _resolve_project_dir(args.project_dir), _ops())
 
 
+def cmd_queue(args):
+    """CR-CRU-081 §S2 — the queue READ verb (no --agent): the registered CR
+    queue (GET …/queue) plus the CR ids a `cr-merged` milestone covers, the two
+    landing-record sources the release ceremony's provenance needs. Delegates
+    to the shared implementation."""
+    return _axi().cmd_queue(args, _resolve_project_dir(args.project_dir), _ops())
+
+
 # ── CR-CRU-013 §S5 — fleet gate / milestone verbs ──────────────────────────
 #
 # `gate-run`    axi PROXY: launch `no-mistakes axi run`, poll `axi status`
@@ -1603,14 +1611,17 @@ def _post_gate(project_dir, agent_id, gate, context=None):
 
 
 def _post_milestone(project_dir, agent_id, mtype, label=None, commit=None,
-                    context=None, released_at=None, crs=None):
+                    context=None, released_at=None, crs=None,
+                    repair_provenance=False):
     """POST a workflow milestone (CR-CRU-054 §S2 — delegates to the shared
     builder). CR-CRU-080 §S4 — `released_at`/`crs` carry a release's
-    provenance through the same builder."""
+    provenance through the same builder. CR-CRU-081 §S3 —
+    `repair_provenance` carries the opt-in that CORRECTS an already-recorded
+    release instead of replaying it."""
     return _axi().post_milestone(_project_key(project_dir), agent_id, mtype,
                                  _post, label=label, commit=commit,
                                  context=context, released_at=released_at,
-                                 crs=crs)
+                                 crs=crs, repair_provenance=repair_provenance)
 
 
 # §S8 (CR-CRU-030): gate-run is the AXI streaming standard; gate-report is
@@ -1925,6 +1936,13 @@ def main():
         _add_project_dir_arg(sv)
         sv.set_defaults(func=cmd_status)
 
+    # ── CR-CRU-081 §S2 — the landing-record READ verb (no --agent) ──
+    qv = sub.add_parser("queue",
+                        help="Read the registered CR queue (GET …/queue) plus the "
+                             "cr-merged milestone ids as a TOON-AXI table. Read-only.")
+    _add_project_dir_arg(qv)
+    qv.set_defaults(func=cmd_queue)
+
     # ── CR-CRU-013 §S5 — fleet gate / milestone verbs ──
     gr = sub.add_parser("gate-run",
                         help="axi PROXY: run `no-mistakes axi run`, post throttled interim "
@@ -1974,6 +1992,16 @@ def main():
                     help="Comma-separated CR ids the release shipped (the merges "
                          "in its tag range). Only the ids the project's "
                          "registered queue holds are recorded (§S4).")
+    # CR-CRU-081 §S3 — the OPT-IN correction path: without this flag a
+    # re-post of an already-recorded release is the server's dedup replay
+    # (CR-CRU-080 §S3), which is what keeps an ordinary run unable to
+    # rewrite release history by accident.
+    ms.add_argument("--repair-provenance", dest="repair_provenance",
+                    action="store_true",
+                    help="RE-DERIVE an already-recorded release's provenance "
+                         "from this post's --released-at/--crs instead of "
+                         "replaying it. Opt-in and non-default; the release's "
+                         "version, commit and row are never touched (§S3).")
     ms.add_argument("--agent", help="Agent id — REQUIRED (§S5): the identity is declared or "
                          "the verb fails; there is no fallback.")
     _add_project_dir_arg(ms)
