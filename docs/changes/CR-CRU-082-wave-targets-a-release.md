@@ -31,6 +31,35 @@ This is the same class of gap CR-080 closed for shipped releases, one step earli
 a release had shipped and nothing recorded *what* it shipped; here, a wave is executing and nothing
 records *what it is for*.
 
+## Gap analysis (2026-08-22, pre-RED) — decision needed before RED
+
+- **J1 — a per-wave queue field is already DESIGNED, and I am not the first to want one.**
+  `DN-crucible-analytics` and CR-022 §S2 both define `targetDate?` **per wave**, with
+  `scheduleHealth` derived from it. It exists in **design only**: `targetDate` has **zero**
+  occurrences in `src/` or `public/`. So this CR is not inventing a per-wave channel — it is the
+  first to *implement* one, and its shape must be chosen so CR-022's `targetDate` later rides the
+  **same** channel instead of a second, parallel one.
+- **J2 — the existing design is ambiguous about where the field lives, and that is the fork.**
+  CR-022's prose says "additive queue field `targetDate?` **per wave**", but its acceptance
+  criterion says "**queue entries** accept optional `targetDate`". Per-wave and per-entry are
+  different contracts: per-entry allows the CRs of one wave to disagree about their wave's target,
+  which the governing model forbids (a wave's CRs bundle into **one** release).
+- **J3 — storage consequence.** `queue_entries` is strictly per-CR and `replaceQueue` is a
+  DELETE+INSERT transaction over it, so a genuine per-wave channel needs a **sibling table plus a
+  migration step** (`SCHEMA_VERSION` 7→8; the chain is additive and already exercised by CR-071).
+  A per-entry column needs **no** migration (`size` is the precedent for an optional entry column).
+- **J4 — this is a design concept on a shared surface, so it needs a DN and approval.** Standing
+  rules: a locked design model gets a **DN** in `docs/research/` first (the CR implements it), and
+  design/reference-doc edits need approval because they are cross-CR surfaces. The natural home is
+  an amendment to `DN-crucible-analytics`, which already owns per-wave scheduling fields — not a
+  new DN competing with it.
+- **J5 — no public symbol is removed**, and the PRD says nothing about a planned or target release,
+  so the DN is the governing record.
+
+**Verdict: PREREQUISITE_NEEDED — a design decision, not an implementation gap.** The shape of the
+per-wave channel is shared with CR-022, so it is settled with the user and recorded in the DN
+before this CR's RED, rather than chosen inside an implementation cycle.
+
 ## Scope
 
 ### §S1 A wave carries its target release
