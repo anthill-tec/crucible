@@ -86,6 +86,24 @@ The ceremony reports a count of CRs it could not place, with their ids. Silence 
 bug live: a release that quietly under-reports looks identical to a release that genuinely shipped
 less. A tally makes an incomplete `crs` visible at the moment it is produced.
 
+**Unplaceable covers TWO classes, not one** — the narrower definition was a hole in this spec,
+found by verifying the implementation against real history rather than by reading it:
+
+1. **a closed plan with no recorded merge sha** — tracked, but the landing commit is missing;
+2. **a queued CR with no landing record at ANY source** — no closed plan, and no `cr-merged`
+   milestone either. Measured on this repo: `CR-CRU-001`–`007`, `010` and `016` — nine CRs that
+   demonstrably shipped in `0.1.0`, predating plan tracking entirely, with `cr-merged` covering
+   **none** of them.
+
+Class 2 is the dangerous one because it is invisible: ancestry cannot place such a CR (there is no
+sha to test), and under the narrow definition it was not reported either, so provenance simply
+shrank in silence — `0.1.0` went from 58 CRs to 51 with no signal at all. Both classes are named
+and counted.
+
+**These CRs are legitimately absent from `crs`.** Crucible does not know where they landed, and the
+old rule "found" them only by matching text in a merge subject, which §S1 and AC6 forbid relying
+on. Inventing a placement would be fabrication; the honest answer is to say so out loud.
+
 ### §S3 Repair the existing records
 
 The three recorded releases carry provenance produced by the old rule (0.1.0 shows 58 CRs and is
@@ -100,11 +118,18 @@ did during CR-080's dog-food.
   no merge subject mentions it**. Asserted with a fixture whose CR lands via fast-forward or squash,
   which the subject rule cannot see.
 - **AC2** — `CR-CRU-021` and `CR-CRU-023` appear in `0.1.0`'s `crs` after the repair. This is the
-  concrete regression that exposed the bug.
+  concrete regression that exposed the bug. Conversely the nine no-record CRs are absent **and
+  reported** (AC4b), so the set shrinking from 58 to 51 is explained rather than silent.
 - **AC3** — attribution stays a **partition**: each CR appears in exactly one release's `crs`, the
   earliest tag containing it (CR-080 AC10 preserved).
-- **AC4** — a CR with no recorded merge sha is counted and named as **unplaceable** in the
-  ceremony's output; it is never silently omitted.
+- **AC4** — a CR with a closed plan but **no recorded merge sha** is counted and named as
+  **unplaceable**; it is never silently omitted.
+- **AC4b** — a **queued CR with no landing record at any source** (no closed plan, no `cr-merged`
+  milestone) is **also** counted and named as unplaceable. Asserted with the real class:
+  `CR-CRU-001`–`007`, `010`, `016`. A CR that simply landed *after* the last tag is **not**
+  reported — it has a sha and is placed nowhere, which is normal.
+- **AC4c** — the tally distinguishes the two classes, so "tracked but the sha is missing" is not
+  confused with "Crucible has no record of this CR landing at all".
 - **AC5** — the repair path re-derives provenance for an already-recorded release, and is opt-in:
   an ordinary `backfill-releases` re-run remains the idempotent replay CR-080 §S3 defined.
 - **AC6** — provenance never depends on commit-message text: a test that rewrites a merge subject
