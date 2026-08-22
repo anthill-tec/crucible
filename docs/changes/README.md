@@ -101,11 +101,12 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   → release packages) the supporting docs currently support a document that does not exist. It will
   be produced **later**, by **distilling the entire Lavish storyboard together with the other design
   docs** — a specific set of design tasks in its own right, deliberately out of the 0.2.0 release.
-  - **Dependency to protect:** the distillation's primary input is
-    `.lavish/crucible-v2-design.html`, which is **gitignored** (`.gitignore:12`) and therefore
-    unbacked. Its roadmap-view decisions were rescued into `DN-crucible-roadmap-view.md`, but the
-    remaining ~20 frames are not captured anywhere tracked. If that file is lost before the
-    distillation, the input is lost.
+  - **How the design survives:** `.lavish/` is gitignored deliberately — the storyboard is a
+    working design surface, not a repo artifact. Durability comes from **distilling decisions into
+    DNs**, which is the tracked path: the roadmap-view decisions are already captured in
+    `DN-crucible-roadmap-view.md`, and the wave/track/release model in
+    `DN-crucible-wave-track-release.md`. The architecture-document effort distils the remaining
+    frames the same way.
 
 ## Notes
 - 🚀 **2026-08-19 — Crucible v2 SHIPPED its first public release (0.1.0 + hotfix 0.1.1).**
