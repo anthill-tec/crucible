@@ -846,6 +846,22 @@ const ANCESTRY_QUEUED_CRS: readonly string[] = [
   UNPLACEABLE_CR,
 ];
 
+/** §S2 class 2 / AC4b — QUEUED CRs with NO landing record at ANY source: no
+ *  plan at all (so the closed-plan map cannot see them, not even with a null
+ *  sha) and no `cr-merged` milestone either. This is the real, measured class
+ *  — `CR-CRU-001`–`007`, `010`, `016`, nine CRs that demonstrably shipped in
+ *  `0.1.0` before plan tracking existed — and the dangerous one, because
+ *  ancestry cannot place them AND the narrow §S2 definition never reported
+ *  them, so provenance shrank from 58 to 51 CRs in total silence.
+ *
+ *  TWO of them, deliberately: the class's count is then provably its own (2)
+ *  and not the class-1 count (1) reused, which is what AC4c turns on.
+ *
+ *  They are queued through `extraQueued` rather than added to
+ *  `ANCESTRY_QUEUED_CRS`, so the AC1/AC2/AC3/AC4/AC6 fixtures above keep the
+ *  exact world they were written against. */
+const NO_RECORD_CRS: readonly string[] = ["CR-CRU-101", "CR-CRU-102"];
+
 /** Land `cr` by FAST-FORWARD: master simply advances onto the branch's single
  *  commit, so NO merge commit is created and no subject in the history names
  *  the CR. The recorded landing sha is that commit — an ancestor of every later
@@ -1004,6 +1020,42 @@ function isAncestor(repo: string, sha: string, tag: string): boolean {
   return r.exitCode === 0;
 }
 
+/** The CR ids the project's queue actually holds — the left-hand premise of
+ *  AC4b: a CR can only be "queued with no landing record" if it IS queued. */
+async function queuedCrs(base: string, key: string): Promise<string[]> {
+  const res = await fetch(`${base}/api/v2/projects/${key}/queue`);
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { entries?: Array<{ cr?: string }> };
+  return (body.entries ?? []).map((e) => e.cr ?? "");
+}
+
+/** Every plan the project holds for `cr` — zero means there is no plan record
+ *  of the CR landing at all (not even a closed one with a null sha), which is
+ *  the half of AC4b's premise that `plan_merge_map` is structurally blind to. */
+async function plansFor(base: string, key: string, cr: string): Promise<unknown[]> {
+  const res = await fetch(`${base}/api/v2/projects/${key}/plans?cr=${cr}`);
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { plans?: unknown[] };
+  return body.plans ?? [];
+}
+
+/** The project's whole event feed as raw text — used only to PROVE the other
+ *  landing source is empty too: no `cr-merged` milestone exists for the CR, so
+ *  Crucible genuinely has no record of where it landed. */
+async function eventFeedText(base: string, key: string): Promise<string> {
+  const res = await fetch(`${base}/api/v2/events?project=${key}&limit=500`);
+  expect(res.status).toBe(200);
+  return await res.text();
+}
+
+/** The ceremony's own unplaceable report, one trimmed line per mention. */
+function unplaceableLines(output: string): string[] {
+  return output
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => /unplaceable/i.test(l));
+}
+
 describe("release provenance is computed from COMMIT ANCESTRY, not merge-subject text (CR-CRU-081 §S1/§S2)", () => {
   let handle: ServerHandle | undefined;
   const dbDirs: string[] = [];
@@ -1027,12 +1079,17 @@ describe("release provenance is computed from COMMIT ANCESTRY, not merge-subject
 
   /** A project, the ceremony's identity, the registered queue, and the CLOSED
    *  PLANS that carry each CR's landing sha — plus `UNPLACEABLE_CR`'s plan,
-   *  closed with NO merge sha at all (§S2/AC4). */
+   *  closed with NO merge sha at all (§S2/AC4).
+   *
+   *  `extraQueued` ids are QUEUED AND NOTHING ELSE — no plan is filed for them
+   *  and no milestone mentions them — so the queue deliberately holds MORE CRs
+   *  than the plan board covers, which is §S2 class 2 / AC4b's whole premise. */
   async function seedAncestryProject(
     base: string,
     repo: string,
     mergeShas: Map<string, string>,
     name: string,
+    extraQueued: readonly string[] = [],
   ): Promise<string> {
     const res = await postJson(base, "/api/v2/projects", { name });
     const body = (await res.json()) as { project: { key: string } };
@@ -1046,7 +1103,11 @@ describe("release provenance is computed from COMMIT ANCESTRY, not merge-subject
     expect(reg.status).toBe(200);
 
     const queue = await postJson(base, `/api/v2/projects/${key}/queue`, {
-      entries: ANCESTRY_QUEUED_CRS.map((cr) => ({ cr, title: `${cr} work`, wave: "1" })),
+      entries: [...ANCESTRY_QUEUED_CRS, ...extraQueued].map((cr) => ({
+        cr,
+        title: `${cr} work`,
+        wave: "1",
+      })),
     });
     expect(queue.status).toBe(200);
 
@@ -1062,16 +1123,19 @@ describe("release provenance is computed from COMMIT ANCESTRY, not merge-subject
   async function backfilledAncestry(
     name: string,
     namedSubjects = true,
+    extraQueued: readonly string[] = [],
   ): Promise<{
     repo: string;
     mergeShas: Map<string, string>;
     releases: ReleaseBrief[];
     output: string;
+    base: string;
+    key: string;
   }> {
     const { repo, mergeShas } = buildAncestryRepo(namedSubjects);
     repos.push(repo);
     const base = boot();
-    const key = await seedAncestryProject(base, repo, mergeShas, name);
+    const key = await seedAncestryProject(base, repo, mergeShas, name, extraQueued);
     const run = await runBackfill(repo, base);
     // The failure channel must be clean, or every assertion below is meaningless.
     expect(run.exitCode).toBe(0);
@@ -1079,7 +1143,7 @@ describe("release provenance is computed from COMMIT ANCESTRY, not merge-subject
     expect(run.output).not.toMatch(/NOT recorded/);
     const releases = await listReleases(base, key);
     expect(releases.length).toBe(3);
-    return { repo, mergeShas, releases, output: run.output };
+    return { repo, mergeShas, releases, output: run.output, base, key };
   }
 
   // ── AC1 — ancestry sees what no merge subject mentions ───────────────────
@@ -1230,6 +1294,153 @@ describe("release provenance is computed from COMMIT ANCESTRY, not merge-subject
       // And, being unplaceable, it is in no release's crs — the tally is the
       // only reason its absence is visible at all.
       for (const rel of releases) expect(rel.crs).not.toContain(UNPLACEABLE_CR);
+    },
+  );
+
+  // ── AC4b / AC4c — the SECOND unplaceable class: no landing record at all ─
+  //
+  // RED expectation (measured against 9f09563): `report_unplaceable_crs`
+  // (scripts/release.sh:493) iterates `plan_merge_map` ALONE, which emits one
+  // line per CLOSED PLAN. A queued CR with NO plan produces no line at all, so
+  // it is neither placed nor reported — the exact silence that took 0.1.0 from
+  // 58 CRs to 51 with no signal. Each test below asserts its preconditions
+  // (queued / no plan / no cr-merged milestone) FIRST, so a failure is the
+  // missing contract and never a broken fixture.
+
+  test(
+    "AC4b a QUEUED CR with NO landing record at any source — no closed plan and no cr-merged " +
+      "milestone — is counted and named as unplaceable, and stays absent from every " +
+      "release's crs",
+    async () => {
+      const { output, releases, base, key } = await backfilledAncestry(
+        "ancestry-no-landing-record",
+        true,
+        NO_RECORD_CRS,
+      );
+
+      // FIXTURE PRECONDITIONS — the three premises of "queued, and unknown".
+      const queue = await queuedCrs(base, key);
+      const feed = await eventFeedText(base, key);
+      for (const cr of NO_RECORD_CRS) {
+        // (1) It IS in the queue — the project filed it.
+        expect(queue).toContain(cr);
+        // (2) There is NO plan for it — not even a closed one with a null sha,
+        //     so the closed-plan map is structurally blind to it.
+        expect(await plansFor(base, key, cr)).toEqual([]);
+        // (3) And no `cr-merged` milestone covers it either — the second
+        //     landing source is empty too, so Crucible truly has no record.
+        expect(feed).not.toContain(cr);
+      }
+      expect(feed).not.toContain("cr-merged");
+      // NON-VACUITY: the queue really does hold MORE CRs than the plan board
+      // covers, which is the condition the old rule could not see.
+      expect(queue.length).toBeGreaterThan(ANCESTRY_QUEUED_CRS.length);
+
+      // POSITIVE — each no-record CR is NAMED in the ceremony's own report.
+      const reported = unplaceableLines(output);
+      expect(reported.length).toBeGreaterThan(0);
+      for (const cr of NO_RECORD_CRS) {
+        expect(reported.filter((l) => l.includes(cr)).length).toBeGreaterThan(0);
+      }
+      // COUNTED — the report carries a count for this class, and the fixture
+      // has exactly two such CRs.
+      const noRecordLines = reported.filter((l) => NO_RECORD_CRS.some((cr) => l.includes(cr)));
+      expect(noRecordLines.join("\n")).toMatch(/\b2\b/);
+
+      // NEGATIVE — reporting must not smuggle them into provenance: they are
+      // legitimately absent from every release's crs, and the report is the
+      // only reason that absence is visible.
+      for (const rel of releases) {
+        for (const cr of NO_RECORD_CRS) expect(rel.crs ?? []).not.toContain(cr);
+      }
+    },
+  );
+
+  test(
+    "AC4b a CR that simply landed AFTER the last tag — its merge sha recorded, an ancestor of " +
+      "no tag — is NOT in the unplaceable tally, while the no-record CRs are: normal " +
+      "placement is never reported as a gap",
+    async () => {
+      const { repo, mergeShas, output } = await backfilledAncestry(
+        "ancestry-after-last-tag-not-a-gap",
+        true,
+        NO_RECORD_CRS,
+      );
+
+      // FIXTURE PRECONDITION — CR-CRU-199's sha IS recorded and resolves, yet
+      // it precedes no tag, so ancestry legitimately places it nowhere.
+      const sha = mergeShas.get(ANCESTRY_UNRELEASED_CR)!;
+      expect(sha).toMatch(/^[0-9a-f]{40}$/);
+      for (const tag of ["0.1.0", "0.1.1", "0.1.2"]) {
+        expect(isAncestor(repo, sha, tag)).toBe(false);
+      }
+
+      const reported = unplaceableLines(output);
+      // NON-VACUITY: the tally EXISTS and does report the genuine gaps, so the
+      // negative below is not "nothing was reported at all".
+      expect(reported.length).toBeGreaterThan(0);
+      for (const cr of [UNPLACEABLE_CR, ...NO_RECORD_CRS]) {
+        expect(reported.filter((l) => l.includes(cr)).length).toBeGreaterThan(0);
+      }
+
+      // NEGATIVE — and the after-the-last-tag CR is in NO reported line.
+      expect(reported.filter((l) => l.includes(ANCESTRY_UNRELEASED_CR))).toEqual([]);
+      // Nor is any successfully placed CR reported.
+      for (const cr of Object.values(ANCESTRY_SHIPPED).flat()) {
+        expect(reported.filter((l) => l.includes(cr))).toEqual([]);
+      }
+    },
+  );
+
+  test(
+    "AC4c the tally DISTINGUISHES the two unplaceable classes — 'tracked, but the landing sha " +
+      "is missing' and 'no landing record at all' are reported as separately counted, " +
+      "disjoint, differently described groups, never one undifferentiated list",
+    async () => {
+      const { output } = await backfilledAncestry(
+        "ancestry-unplaceable-classes",
+        true,
+        NO_RECORD_CRS,
+      );
+
+      const reported = unplaceableLines(output);
+      expect(reported.length).toBeGreaterThan(0);
+
+      // Class 1 — a CLOSED plan carrying no merge sha (CR-CRU-170).
+      const classOne = reported.filter((l) => l.includes(UNPLACEABLE_CR));
+      // Class 2 — queued with no landing record anywhere (CR-CRU-101/102).
+      const classTwo = reported.filter((l) => NO_RECORD_CRS.some((cr) => l.includes(cr)));
+      expect(classOne.length).toBeGreaterThan(0);
+      expect(classTwo.length).toBeGreaterThan(0);
+
+      // DISTINGUISHED — no reported line mixes the two classes' ids, so a
+      // reader is never handed one undifferentiated list.
+      for (const line of classOne) {
+        for (const cr of NO_RECORD_CRS) expect(line).not.toContain(cr);
+      }
+      for (const line of classTwo) expect(line).not.toContain(UNPLACEABLE_CR);
+      expect(classOne.some((l) => classTwo.includes(l))).toBe(false);
+
+      // SEPARATELY COUNTED — one CR in class 1, two in class 2, so a single
+      // shared "3 unplaceable" count cannot satisfy both.
+      expect(classOne.join("\n")).toMatch(/\b1\b/);
+      expect(classOne.join("\n")).not.toMatch(/\b(2|3)\b/);
+      expect(classTwo.join("\n")).toMatch(/\b2\b/);
+      expect(classTwo.join("\n")).not.toMatch(/\b3\b/);
+
+      // DIFFERENTLY DESCRIBED — with the ids and counts stripped, the two
+      // groups' prose still differs: they demand different responses from a
+      // reader ("find the sha" vs "Crucible never saw this CR land").
+      const prose = (lines: string[]): string =>
+        lines
+          .join(" ")
+          .replace(/CR-[A-Z]+-[0-9]+/g, "")
+          .replace(/\d+/g, "")
+          .replace(/\s+/g, " ")
+          .trim();
+      expect(prose(classOne)).not.toBe("");
+      expect(prose(classTwo)).not.toBe("");
+      expect(prose(classOne)).not.toBe(prose(classTwo));
     },
   );
 
