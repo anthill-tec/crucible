@@ -41,6 +41,35 @@ This is more dangerous than the bug CR-081 fixed. Under-reporting provenance is 
 erasing it destroys the record of what a release delivered, and CR-083 is about to treat release
 membership as proof of completion.
 
+## Gap analysis (2026-08-22, pre-RED) — READY
+
+Run per the `gap-analysis` skill.
+
+- **D2 — the defect, read verbatim, is one operator.** `Store.repairReleaseProvenance`
+  (`src/store.ts:1777`) spreads with `...(crs !== undefined ? { crs } : {})`. So `undefined` is
+  guarded and **`[]` is treated as a legitimate answer** and persisted. Same for `releasedAt`. The
+  fix is a value check on the repair path, not a redesign.
+- **D4 — the empty set's origin is CORRECT and must not change.** The client's `release_crs`
+  returns the truthful empty set when the queue knows none of the scanned ids (CR-080 §S4: never
+  fall back to the raw scan). That is right **at record time** — a new release genuinely has no
+  registered CRs — and destructive only when persisted **over an existing set** at repair time. So
+  the fix belongs on the repair write path, exactly as §S1 scopes it; the client and the ancestry
+  derivation stay untouched.
+- **D4 — the distinction AC3 needs already exists, partly.** The client emits structured warnings
+  `queue-unavailable` and `milestones-unavailable` (`clients/_crucible_axi.py:1203/1215`) when a
+  source cannot be read, and the new `queue` verb reports `ok: true` with `count: 0` when the queue
+  is **reachable but empty** — measured just now against the live board. So "unreachable" and
+  "registered but empty" are distinguishable today, and §S2's refusal can name which it hit without
+  new plumbing.
+- **D3 — the fix aligns with the DN.** A release is a specific activity set
+  (`DN-crucible-wave-track-release.md`); erasing its membership destroys the very thing the record
+  exists to hold. Nothing in the design supports a write that blanks it.
+- **D5 / D6 — nothing is retired and no public symbol is removed.** This adds a guard, a refusal
+  path and a shrink report; `--repair-provenance` keeps its surface, so CR-084 AC7 (which depends on
+  that path) is unaffected.
+
+**Verdict: READY.**
+
 ## Scope
 
 ### §S1 An empty derivation never overwrites a stored set
