@@ -26,9 +26,11 @@ nothing to users is not a release.
 A release is **three things at once**, and a design that captures only the first is incomplete:
 
 1. **A grouping** — the set of CRs whose features it bundles (one or more waves' worth).
-2. **A specific TYPE OF WORKFLOW** — not merely a marker on someone else's timeline. The release
-   ceremony is itself a workflow with its own steps, gates and outcome, in the same sense that a CR
-   has a plan and cycles.
+2. **A specific TYPE OF WORKFLOW** — but **not** shaped like the CR workflow unit. Clarified by the
+   user 2026-08-22: the only part we actually **track** is the **no-mistakes run**, which has its
+   own specific flow steps, together with a **release task set**. It is therefore *unlike* a CR's
+   plan-and-cycles unit and must not be modelled as one — no RED/GREEN, no cycle ladder. The
+   release workflow's tracked trace is the gate run plus its release tasks.
 3. **A MILESTONE**, carrying:
    - a **release version**, and
    - a **package or packages** of the software developed so far.
@@ -71,6 +73,9 @@ RELEASE   bundles the features defined by the CRs of ONE OR MORE waves,
 - **A wave is temporal and abstract; a release is concrete and user-facing.** A wave bounds *when*
   coordinated work happens; a release enumerates *what* was delivered **and ships it to users**.
   Consumers must never treat one as a restatement of the other.
+- **The release workflow is already partially tracked, as a gate.** The no-mistakes run's flow
+  steps are the release workflow's observable trace; a release is not a CR-shaped workflow unit and
+  gains nothing from being forced into plans and cycles.
 - **A release without a published package is not a release.** This is why a release is recorded at
   publish/tag time (CR-CRU-074, CR-CRU-080) rather than declared in advance: the record follows the
   artifact reaching users. For Crucible that means PyPI + npm.

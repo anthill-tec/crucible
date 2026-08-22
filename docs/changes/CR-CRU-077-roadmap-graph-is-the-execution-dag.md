@@ -2,7 +2,7 @@
 
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
-- **Depends on**: 014, 076, 080
+- **Depends on**: 014, 076, 080, 083, 084
 - **Status**: PENDING (0.2.0)
 - **Design**: `docs/research/DN-crucible-roadmap-view.md` (decisions) · `docs/research/DN-crucible-wave-track-release.md` (model) · `docs/research/PRD-crucible-v2.md`
 
@@ -54,8 +54,8 @@ What this view must honour:
 3. **Release boundaries** — the **primary grouping**. A release bundles the CRs in its `crs`
    (CR-080), spanning one or more waves; those CRs precede its diamond and later work follows it.
    A release always ships a package to users, so a diamond marks a real delivery.
-4. **Parallel fan-out across tracks** — where a wave holds more than one track, its CRs run
-   concurrently; with no dependency between them they fan out rather than chain.
+4. **Parallel fan-out** — CRs with no dependency between them fan out rather than chain, which is
+   what makes concurrency visible. Drawing that fan-out inside per-track lanes is CR-085.
 
 **Waves are containers, not gates.** A wave is an abstract temporal container of one or more
 parallel tracks and is largely a synchronization indicator for orchestrators — so it renders as a
@@ -163,10 +163,12 @@ and the diamond flows into the CRs that follow it. Start/End terminals bracket t
 Closed waves render as one expandable node with a CR count; the single active wave renders as a
 cluster box holding its CRs. Expansion state is UI state, not persisted.
 
-### §S3 Data-driven lanes
+### §S3 Track data is carried, not drawn
 
-Lanes are derived from reported track assignments. No policy, no cap, no default track count.
-One track → no lane chrome. No track data → no lanes, no error.
+The builder attaches each CR's reported track to its node so the information is present and
+testable, but **this CR draws no wave container and no swimlanes** — that chrome is
+**CR-CRU-085**, deferred post-0.2.0. Crucible is single-track, so lanes would correctly render
+nothing here anyway, and nesting them is the layout-fragile part of the graph.
 
 ### §S4 Labels and live state
 
@@ -191,9 +193,9 @@ cycle position; everything else is static.
   count and expands on click, while the unreleased region stays expanded. A wave container renders
   only when informative (more than one track, or more than one wave in a release) — never as a
   gate.
-- **AC5** — lanes are data-driven: with N distinct tracks the graph renders N lanes; with one
-  track it renders no lane chrome; with **no** track data it renders no lanes and **no error**.
-  No test may assert a hard-coded track count.
+- **AC5** — each CR node carries its reported track when one is present, and its absence is not an
+  error. No wave container and no lane is rendered by this CR (that is CR-085), and no test asserts
+  a hard-coded track count.
 - **AC6** — every CR node label **starts with the CR id**; a node label never consists of the
   title alone.
 - **AC7** — only nodes for `IN_PROGRESS` CRs carry live/animated state; `COMPLETED` and
