@@ -53,6 +53,19 @@ export interface ProjectDeleteCounts {
   rollups: number;
 }
 
+/**
+ * CR-CRU-086 §S3 — what a provenance REPAIR removed from a stored `crs`: the
+ * count before, the count after, and the ids dropped. Carried out of the store
+ * so the reporter can SAY it, because a shrink nobody sees is exactly how
+ * 0.1.0 lost its 58 CRs. Present only when ids were actually removed — an
+ * unchanged or purely additive repair carries none.
+ */
+export interface ProvenanceShrink {
+  before: number;
+  after: number;
+  removed: string[];
+}
+
 interface ProjectRow {
   key: string;
   name: string;
@@ -1704,7 +1717,7 @@ export class Store {
       crs?: string[];
       repairProvenance?: boolean;
     },
-  ): { event: RunEvent; changed: boolean } {
+  ): { event: RunEvent; changed: boolean; shrink?: ProvenanceShrink } {
     this.touchAgent(projectKey, agentId);
     if (type === "release" && meta?.label !== undefined && meta.commit !== undefined) {
       const held = this.listReleases(projectKey).find(
@@ -1764,6 +1777,16 @@ export class Store {
    * actually computed move — an absent `releasedAt`/`crs` means git could not
    * answer, which leaves the stored value alone rather than erasing it.
    *
+   * CR-CRU-086 §S1 — and an EMPTY `crs` is *no answer* too, not *the answer*.
+   * `undefined` was always guarded here; `[]` is a PRESENT, well-formed
+   * "nothing" — the truthful output of the client's queue intersection when
+   * the registered queue knows none of the scanned ids (CR-CRU-080 §S4) —
+   * which this path dutifully persisted, erasing 58 CRs from 0.1.0 the first
+   * time it ran for real. So the line between the two is drawn HERE, at the
+   * write: only a NON-EMPTY derivation may replace a stored set, and a
+   * release the repair cannot compute is left ENTIRELY alone, `releasedAt`
+   * included, rather than half-rewritten.
+   *
    * Idempotent by construction: the repaired payload is built through the
    * SAME projection the insert uses, so an unchanged answer is byte-identical
    * to the stored one and the repair writes nothing and reports
@@ -1778,7 +1801,8 @@ export class Store {
     held: RunEvent,
     releasedAt: number | undefined,
     crs: string[] | undefined,
-  ): { event: RunEvent; changed: boolean } {
+  ): { event: RunEvent; changed: boolean; shrink?: ProvenanceShrink } {
+    if (crs !== undefined && crs.length === 0) return { event: held, changed: false };
     const repaired: RunEvent = {
       ...held,
       ...(releasedAt !== undefined ? { releasedAt } : {}),
@@ -1787,7 +1811,18 @@ export class Store {
     const payload = Store.payloadColumn(repaired);
     if (payload === Store.payloadColumn(held)) return { event: held, changed: false };
     this.db.query(`UPDATE events SET payload = ? WHERE id = ?`).run(payload, held.id);
-    return { event: repaired, changed: true };
+    // CR-CRU-086 §S3 — a legitimate shrink stays possible (the measured 58→51
+    // case, where nine CRs have no landing record) and is APPLIED, but it
+    // never leaves in silence: what it dropped travels back with it.
+    const kept = repaired.crs ?? [];
+    const removed = (held.crs ?? []).filter((cr) => !kept.includes(cr));
+    return {
+      event: repaired,
+      changed: true,
+      ...(removed.length > 0
+        ? { shrink: { before: (held.crs ?? []).length, after: kept.length, removed } }
+        : {}),
+    };
   }
 
   /**

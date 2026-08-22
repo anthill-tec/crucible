@@ -1933,3 +1933,743 @@ describe("an already-recorded release can be REPAIRED, and only on purpose (CR-C
     },
   );
 });
+
+// ---------------------------------------------------------------------------
+// E. CR-CRU-086 — the provenance REPAIR must never ERASE provenance (RED).
+//
+// Spec: docs/changes/CR-CRU-086-repair-must-not-erase-provenance.md
+// §S1 + §S2 + §S3 + AC1-AC7.
+//
+//   §S1  on the repair path an EMPTY `crs` is *no answer*, not *the answer*:
+//        only a NON-EMPTY derivation may replace a stored set, and a missing
+//        or unresolvable date never blanks a stored `releasedAt`.
+//   §S2  a repair that cannot compute REFUSES that release and says why —
+//        per-release and non-fatal, having written nothing.
+//   §S3  a repair that would SHRINK a stored set reports the count before,
+//        the count after and the CR ids being removed. A legitimate shrink
+//        stays possible; a SILENT one does not.
+//
+// WHY THIS SECTION EXISTS — measured, not hypothetical. Dog-fooding
+// `backfill-releases --repair-provenance` on this project ERASED the
+// provenance it was built to correct: `0.1.0` went from 58 CRs to 0, and the
+// wiped store is kept as data/crucible.db.wiped-by-081-repair for forensics.
+// The mechanism is one operator: `Store.repairReleaseProvenance`
+// (src/store.ts:1777) spreads `...(crs !== undefined ? { crs } : {})`, so
+// `undefined` is guarded and `[]` — a PRESENT, well-formed "nothing" — is
+// persisted over the stored set. The ceremony even said so out loud:
+// `crs=(none registered)`, and then wrote anyway.
+//
+// The empty set's ORIGIN is correct and is deliberately untouched here: the
+// client's `release_crs` (clients/_crucible_axi.py:1638) truthfully returns
+// the empty intersection when the registered queue knows none of the scanned
+// ids (CR-CRU-080 §S4 — never fall back to the raw scan). That is right at
+// RECORD time and destructive only when persisted over an existing set at
+// REPAIR time, so every test below aims at the WRITE decision.
+//
+// WHY THE EXISTING §S3 FIXTURES MISSED IT — the crux of this section. Every
+// CR-CRU-081 §S3 fixture above (`seedRepairProject`) REGISTERS a queue before
+// repairing, so the intersection is never empty in test. The destructive path
+// needs a queue that is unregistered or empty — precisely a project that just
+// cleared its roadmap, or one before its first `queue-file`. Both are built
+// here, through the real paths:
+//
+//   * `clearedQueueWorld` — REGISTERED-BUT-EMPTY. The queue is registered, the
+//     ceremony records all three releases with full provenance, and only THEN
+//     is the queue cleared through `POST …/queue {entries: []}` — the
+//     full-replace CR-CRU-014 §S1 defines, not a hand-edited row. The stored
+//     sets under test were therefore computed by the ceremony itself.
+//   * `unregisteredQueueWorld` — NO QUEUE AT ALL. The queue endpoint is never
+//     posted, so the project has none, and `0.1.0` is planted at the server's
+//     own `POST /api/v2/milestones` carrying the LIVE shape: 58 CRs.
+//
+// Each ceremony test proves its PRE-state before asserting any outcome, and
+// proves it through the real paths rather than by assumption
+// (`provenanceIsUnderivable`): an ORDINARY, non-repair backfill runs first —
+// CR-CRU-080 §S3's dedup replay, which writes nothing — and the REAL client's
+// own line for that release reads `crs=(none registered)`, so the derivation
+// is shown to be empty by the code that computes it, while the stored set is
+// re-read and is still the full one. Only then does the repair run.
+//
+// SAFETY: unchanged from sections A/C/D — in-process server on `port: 0` over
+// a per-test `mktemp` db (never 3849, never data/crucible.db), stopped through
+// its own handle; every git fixture under `mktemp`, no remote, no push.
+//
+// RED expectation (measured against 7fa6a8e):
+//   * `repairReleaseProvenance` persists `[]`, so AC1 / AC2b / AC7 fail with
+//     the stored set replaced by an empty one, and the route answering
+//     `201 changed:true` where the contract requires `200 changed:false`.
+//   * nothing anywhere refuses a degraded repair or reports a shrink — no
+//     RUNTIME output line of the backfill matches /refus/i or /shrink|remov/i
+//     — so AC3's refusal lines and AC5's shrink report are absent entirely and
+//     those tests fail on an empty report before they reach the store.
+//   * AC2a and AC4 pin behaviour that must SURVIVE the guard (an absent date
+//     still preserves; a NON-EMPTY derivation still replaces), so the fix can
+//     never be implemented as "never write". They pass today by design, in the
+//     same spirit as section D's opt-in halves.
+// ---------------------------------------------------------------------------
+
+/** The live shape that was wiped: `0.1.0`'s 58 CRs as data/crucible.db held
+ *  them before `--repair-provenance` ran. Fifty-eight ids exactly, because AC1
+ *  names the count — a stored set this large cannot be mistaken for a fixture
+ *  artefact, and "58 after" is a claim only a real guard can satisfy. */
+const LIVE_010_CRS: readonly string[] = Array.from(
+  { length: 58 },
+  (_, i) => `CR-CRU-${String(i + 1).padStart(3, "0")}`,
+);
+
+/** The CR-CRU-080-era `releasedAt` the three real releases carried: the
+ *  BACKFILL's own ingest minute, a month after the tags it described. Stored
+ *  deliberately WRONG so "unchanged" is a specific wrong value the current
+ *  code demonstrably overwrites — never two copies of the right answer. */
+const INGEST_MINUTE_RELEASED_AT = Date.UTC(2026, 7, 21, 13, 45, 0) / 1000;
+
+/** The ceremony's own per-release provenance line, printed by the REAL client
+ *  (`milestone: ok=… label=<v> … crs=…`). It is the derivation as the code that
+ *  computed it reports it, which is what makes "the derivation was empty" an
+ *  observation rather than an assumption. */
+function milestoneLinesFor(output: string, version: string): string[] {
+  const label = new RegExp(`\\blabel=${version.replace(/\./g, "\\.")}(\\s|$)`);
+  return output
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("milestone:") && label.test(l));
+}
+
+/** §S2's refusal, as the ceremony prints it: the lines that say a release was
+ *  REFUSED. Silence here is the whole defect — the run that wiped 0.1.0 said
+ *  `crs=(none registered)` and nothing else. */
+function refusalLines(output: string): string[] {
+  return output
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => /refus/i.test(l));
+}
+
+/** §S3's shrink report: the lines that surface a stored set being REDUCED. */
+function shrinkLines(output: string): string[] {
+  return output
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => /shrink|shrank|shrunk|remov/i.test(l));
+}
+
+describe("an EMPTY derivation never overwrites a stored provenance set (CR-CRU-086 §S1/AC1/AC2/AC4)", () => {
+  let handle: ServerHandle | undefined;
+  const dbDirs: string[] = [];
+  let base = "";
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    for (const d of dbDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  /** In-process server on an OS-assigned port over a throwaway on-disk db —
+   *  never 3849, never data/crucible.db. Stopped by handle in afterEach. */
+  function boot(): void {
+    const dir = mkdtempSync(join(tmpdir(), "release-guard-db-"));
+    dbDirs.push(dir);
+    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    base = `http://localhost:${handle.server.port}`;
+  }
+
+  async function createProject(name: string): Promise<string> {
+    const res = await postJson(base, "/api/v2/projects", { name });
+    const body = (await res.json()) as { project: { key: string } };
+    const key = body.project.key;
+    const reg = await postJson(base, "/api/v2/agents/register", {
+      projectKey: key,
+      agentId: AGENT_ID,
+      role: "ORCHESTRATOR",
+    });
+    expect(reg.status).toBe(200);
+    return key;
+  }
+
+  /**
+   * A release post at the server's OWN production entry — the path the client
+   * posts to, so the guard is exercised where it has to live rather than
+   * around it. Every field is forwarded exactly as given, so a deliberately
+   * EMPTY `crs` stays a PRESENT field on the wire (which is the whole defect),
+   * and `repair` carries CR-CRU-081 §S3's opt-in.
+   *
+   * Returns the route's own answer — status plus `changed` — because "wrote
+   * nothing" is a contract the caller must be able to SEE, not merely infer
+   * from a later read.
+   */
+  async function postRelease(
+    key: string,
+    fields: {
+      label: string;
+      commit: string;
+      releasedAt?: number;
+      crs?: readonly string[];
+      repair?: boolean;
+    },
+  ): Promise<{ status: number; changed: boolean }> {
+    const res = await postJson(base, "/api/v2/milestones", {
+      projectKey: key,
+      agentId: AGENT_ID,
+      type: "release",
+      label: fields.label,
+      commit: fields.commit,
+      ...(fields.releasedAt !== undefined ? { releasedAt: fields.releasedAt } : {}),
+      ...(fields.crs !== undefined ? { crs: fields.crs } : {}),
+      ...(fields.repair === true ? { repairProvenance: true } : {}),
+    });
+    const body = (await res.json()) as { changed?: boolean };
+    return { status: res.status, changed: body.changed === true };
+  }
+
+  test(
+    "AC1 the live shape that was wiped: a release holding 58 CRs, repaired with an EMPTY " +
+      "derivation, still holds the SAME 58 afterwards — the repair reports nothing changed " +
+      "and writes nothing",
+    async () => {
+      boot();
+      const key = await createProject("guard-empty-crs-keeps-58");
+      const commit = "a".repeat(40);
+
+      const planted = await postRelease(key, {
+        label: "0.1.0",
+        commit,
+        releasedAt: ANCESTRY_RELEASED_AT["0.1.0"]!,
+        crs: LIVE_010_CRS,
+      });
+      expect(planted.status).toBe(201);
+
+      // PRE-STATE 1 — the stored set really is non-empty, and it is the live
+      // shape: 58 ids, exactly those. Without this the "58 after" below could
+      // be satisfied by a fixture that never stored anything.
+      const before = byVersion(await listReleases(base, key));
+      expect(before.get("0.1.0")!.crs!.length).toBe(58);
+      expect(sortedCrs(before.get("0.1.0")!.crs)).toEqual([...LIVE_010_CRS].sort());
+
+      // PRE-STATE 2 — an EMPTY `crs` is a PRESENT, well-formed field on this
+      // wire and not an omitted one: recorded fresh on a sibling label it
+      // lands as `[]`, an array. That is precisely why the repair persisted it
+      // over 58 good CRs, and it proves the derivation this test hands the
+      // repair below is an ANSWER OF NOTHING rather than a missing field.
+      const control = await postRelease(key, { label: "0.0.9", commit: "b".repeat(40), crs: [] });
+      expect(control.status).toBe(201);
+      expect(byVersion(await listReleases(base, key)).get("0.0.9")!.crs).toEqual([]);
+
+      // THE DESTRUCTIVE CALL, verbatim: the same (label, commit), the opt-in
+      // repair, and the empty intersection the client computes when the queue
+      // knows none of the scanned ids.
+      const repaired = await postRelease(key, {
+        label: "0.1.0",
+        commit,
+        releasedAt: ANCESTRY_RELEASED_AT["0.1.0"]!,
+        crs: [],
+        repair: true,
+      });
+
+      const releases = await listReleases(base, key);
+      const after = byVersion(releases);
+      // POSITIVE and EXACT — the same 58, not "at least" and not a subset.
+      // Asserted FIRST, so a failure names the data loss itself.
+      expect(after.get("0.1.0")!.crs!.length).toBe(58);
+      expect(sortedCrs(after.get("0.1.0")!.crs)).toEqual([...LIVE_010_CRS].sort());
+      // NEGATIVE — the erasure specifically did not happen.
+      expect(after.get("0.1.0")!.crs).not.toEqual([]);
+      // A refusal is not a second recording either.
+      expect(releases.filter((r) => r.version === "0.1.0").length).toBe(1);
+      // WROTE NOTHING, and SAID so: the codebase's uniform "nothing changed"
+      // answer, not a 201 announcing a write.
+      expect(repaired.changed).toBe(false);
+      expect(repaired.status).toBe(200);
+    },
+  );
+
+  test(
+    "AC2a a repair that carries NO releasedAt — the shape emit_release_milestone posts when " +
+      "git could not answer the tag's date — leaves the stored releasedAt untouched while it " +
+      "still corrects crs, so a missing date never blanks a stored one",
+    async () => {
+      boot();
+      const key = await createProject("guard-missing-date-preserves");
+      const commit = "c".repeat(40);
+      const stale = ["CR-CRU-041"];
+
+      expect(
+        (
+          await postRelease(key, {
+            label: "0.1.0",
+            commit,
+            releasedAt: INGEST_MINUTE_RELEASED_AT,
+            crs: stale,
+          })
+        ).status,
+      ).toBe(201);
+
+      // PRE-STATE — both fields are stored, and the date is a specific value.
+      const before = byVersion(await listReleases(base, key));
+      expect(before.get("0.1.0")!.releasedAt).toBe(INGEST_MINUTE_RELEASED_AT);
+      expect(sortedCrs(before.get("0.1.0")!.crs)).toEqual(stale);
+
+      // The repair answers the CR set and NOT the date — `releasedAt` is
+      // omitted entirely, exactly as the ceremony omits `--released-at` when
+      // `release_ship_date` comes back empty.
+      const corrected = ["CR-CRU-041", "CR-CRU-042"];
+      const repaired = await postRelease(key, { label: "0.1.0", commit, crs: corrected, repair: true });
+      expect(repaired.status).toBe(201);
+      expect(repaired.changed).toBe(true);
+
+      const after = byVersion(await listReleases(base, key));
+      // The date SURVIVED, at its exact stored value.
+      expect(after.get("0.1.0")!.releasedAt).toBe(INGEST_MINUTE_RELEASED_AT);
+      // NON-VACUITY — the repair genuinely ran and wrote the half it answered.
+      expect(sortedCrs(after.get("0.1.0")!.crs)).toEqual(corrected);
+    },
+  );
+
+  test(
+    "AC2b a repair whose CR derivation is EMPTY writes NEITHER field: the stored releasedAt " +
+      "keeps its own value even though the post carries a different, derivable date, because " +
+      "a release the repair cannot compute is left alone rather than half-rewritten",
+    async () => {
+      boot();
+      const key = await createProject("guard-empty-crs-preserves-date");
+      const commit = "d".repeat(40);
+
+      expect(
+        (
+          await postRelease(key, {
+            label: "0.1.0",
+            commit,
+            releasedAt: INGEST_MINUTE_RELEASED_AT,
+            crs: LIVE_010_CRS,
+          })
+        ).status,
+      ).toBe(201);
+
+      // PRE-STATE — a stored, non-empty set AND a stored date that DIFFERS
+      // from the one the repair will carry, so "unchanged" below is a claim
+      // about a specific value the current code overwrites.
+      const before = byVersion(await listReleases(base, key));
+      expect(before.get("0.1.0")!.crs!.length).toBe(58);
+      expect(before.get("0.1.0")!.releasedAt).toBe(INGEST_MINUTE_RELEASED_AT);
+      expect(ANCESTRY_RELEASED_AT["0.1.0"]).not.toBe(INGEST_MINUTE_RELEASED_AT);
+
+      const repaired = await postRelease(key, {
+        label: "0.1.0",
+        commit,
+        releasedAt: ANCESTRY_RELEASED_AT["0.1.0"]!,
+        crs: [],
+        repair: true,
+      });
+
+      const after = byVersion(await listReleases(base, key));
+      // The stored date SURVIVED — asserted before the route's own answer, so
+      // a failure names the value that was overwritten.
+      expect(after.get("0.1.0")!.releasedAt).toBe(INGEST_MINUTE_RELEASED_AT);
+      expect(after.get("0.1.0")!.releasedAt).not.toBe(ANCESTRY_RELEASED_AT["0.1.0"]);
+      expect(sortedCrs(after.get("0.1.0")!.crs)).toEqual([...LIVE_010_CRS].sort());
+      expect(repaired.changed).toBe(false);
+      expect(repaired.status).toBe(200);
+    },
+  );
+
+  test(
+    "AC4 the guard is not 'never write': a NON-EMPTY derivation still replaces a stale stored " +
+      "set and a stale stored date in the same repair, and the route answers 201 changed:true",
+    async () => {
+      boot();
+      const key = await createProject("guard-non-empty-still-replaces");
+      const commit = "e".repeat(40);
+      const stale = ["CR-CRU-041", "CR-CRU-999"];
+      const corrected = ["CR-CRU-041", "CR-CRU-042", "CR-CRU-043"];
+
+      expect(
+        (
+          await postRelease(key, {
+            label: "0.1.0",
+            commit,
+            releasedAt: INGEST_MINUTE_RELEASED_AT,
+            crs: stale,
+          })
+        ).status,
+      ).toBe(201);
+
+      const before = byVersion(await listReleases(base, key));
+      expect(sortedCrs(before.get("0.1.0")!.crs)).toEqual([...stale].sort());
+      expect(before.get("0.1.0")!.releasedAt).toBe(INGEST_MINUTE_RELEASED_AT);
+
+      const repaired = await postRelease(key, {
+        label: "0.1.0",
+        commit,
+        releasedAt: ANCESTRY_RELEASED_AT["0.1.0"]!,
+        crs: corrected,
+        repair: true,
+      });
+      expect(repaired.status).toBe(201);
+      expect(repaired.changed).toBe(true);
+
+      const releases = await listReleases(base, key);
+      const after = byVersion(releases);
+      // The stale set was genuinely REPLACED — exactly, and by the new answer.
+      expect(sortedCrs(after.get("0.1.0")!.crs)).toEqual([...corrected].sort());
+      expect(after.get("0.1.0")!.crs).not.toContain("CR-CRU-999");
+      expect(after.get("0.1.0")!.releasedAt).toBe(ANCESTRY_RELEASED_AT["0.1.0"]);
+      // Still a correction, never a second recording.
+      expect(releases.length).toBe(1);
+    },
+  );
+});
+
+describe("a repair that cannot compute REFUSES loudly and never shrinks in silence (CR-CRU-086 §S2/§S3/AC3/AC5/AC6/AC7)", () => {
+  let handle: ServerHandle | undefined;
+  const dbDirs: string[] = [];
+  const repos: string[] = [];
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    for (const d of dbDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+    for (const r of repos.splice(0)) rmSync(r, { recursive: true, force: true });
+  });
+
+  /** In-process server on an OS-assigned port over a throwaway on-disk db —
+   *  never 3849, never data/crucible.db. Stopped by handle in afterEach. */
+  function boot(): string {
+    const dir = mkdtempSync(join(tmpdir(), "release-refusal-db-"));
+    dbDirs.push(dir);
+    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    return `http://localhost:${handle.server.port}`;
+  }
+
+  /**
+   * The ancestry world with the QUEUE as an explicit knob — the one thing
+   * every existing §S3 fixture holds fixed, and therefore the one thing that
+   * has to move for this CR:
+   *
+   *   "registered"   — the queue holds `queued`, as `seedRepairProject` does.
+   *   "empty"        — the queue is REGISTERED and holds nothing (`entries:
+   *                    []`, CR-CRU-014 §S1's full replace): a project that
+   *                    cleared its roadmap.
+   *   "unregistered" — the queue endpoint is NEVER posted: a project before
+   *                    its first `queue-file`.
+   *
+   * The CLOSED PLANS are seeded in every variant, so the ceremony's ancestry
+   * derivation is always NON-empty and the empty answer provably comes from
+   * the queue intersection — the CR-CRU-080 §S4 path this CR must not change.
+   */
+  async function seedWorld(
+    base: string,
+    repo: string,
+    mergeShas: Map<string, string>,
+    name: string,
+    queue: "registered" | "empty" | "unregistered",
+    queued: readonly string[] = ANCESTRY_QUEUED_CRS,
+  ): Promise<string> {
+    const res = await postJson(base, "/api/v2/projects", { name });
+    const body = (await res.json()) as { project: { key: string } };
+    const key = body.project.key;
+
+    const reg = await postJson(base, "/api/v2/agents/register", {
+      projectKey: key,
+      agentId: AGENT_ID,
+      role: "ORCHESTRATOR",
+    });
+    expect(reg.status).toBe(200);
+
+    if (queue !== "unregistered") {
+      const posted = await postJson(base, `/api/v2/projects/${key}/queue`, {
+        entries: queue === "empty" ? [] : queued.map((cr) => ({ cr, title: `${cr} work`, wave: "1" })),
+      });
+      expect(posted.status).toBe(200);
+    }
+
+    for (const [cr, commit] of mergeShas) await seedClosedPlan(base, key, cr, commit);
+    await seedClosedPlan(base, key, UNPLACEABLE_CR, null);
+
+    writeFileSync(join(repo, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
+    return key;
+  }
+
+  /** The queue is EMPTY as the server reports it — the premise every test in
+   *  this block rests on, read back through the same GET the client's
+   *  `release_crs` intersects against. */
+  async function expectQueueEmpty(base: string, key: string): Promise<void> {
+    expect(await queuedCrs(base, key)).toEqual([]);
+  }
+
+  /**
+   * REGISTERED-BUT-EMPTY. The queue is registered, the ceremony records all
+   * three releases with genuine ancestry-derived provenance, and only THEN is
+   * the queue cleared. Nothing is planted: the stored sets under test are the
+   * ceremony's own output, so "the repair erased what the ceremony computed"
+   * is the literal claim.
+   */
+  async function clearedQueueWorld(
+    name: string,
+  ): Promise<{ repo: string; base: string; key: string; recorded: Map<string, ReleaseBrief> }> {
+    const { repo, mergeShas } = buildAncestryRepo(true);
+    repos.push(repo);
+    const base = boot();
+    const key = await seedWorld(base, repo, mergeShas, name, "registered");
+
+    const first = await runBackfill(repo, base);
+    expect(first.exitCode).toBe(0);
+    expect(first.output).toContain("3/3 recorded");
+    const recorded = byVersion(await listReleases(base, key));
+    // The pre-state is REAL provenance, not an artefact: each release holds
+    // exactly what its tag range shipped.
+    expect(recorded.size).toBe(3);
+    for (const [version, crs] of Object.entries(ANCESTRY_SHIPPED)) {
+      expect(sortedCrs(recorded.get(version)!.crs)).toEqual([...crs].sort());
+      expect(recorded.get(version)!.crs!.length).toBeGreaterThan(0);
+    }
+
+    // THE ROADMAP IS CLEARED — the full-replace verb, with nothing in it.
+    const cleared = await postJson(base, `/api/v2/projects/${key}/queue`, { entries: [] });
+    expect(cleared.status).toBe(200);
+    await expectQueueEmpty(base, key);
+
+    return { repo, base, key, recorded };
+  }
+
+  /**
+   * NO QUEUE AT ALL — AC7's world. The queue endpoint is never posted, and
+   * `0.1.0` is planted at the server's own production entry carrying the LIVE
+   * shape (58 CRs and the backfill-era ingest-minute date), so the run under
+   * test is the one that actually happened on this repo.
+   */
+  async function unregisteredQueueWorld(
+    name: string,
+  ): Promise<{ repo: string; base: string; key: string }> {
+    const { repo, mergeShas } = buildAncestryRepo(true);
+    repos.push(repo);
+    const base = boot();
+    const key = await seedWorld(base, repo, mergeShas, name, "unregistered");
+    await expectQueueEmpty(base, key);
+
+    const planted = await postJson(base, "/api/v2/milestones", {
+      projectKey: key,
+      agentId: AGENT_ID,
+      type: "release",
+      label: "0.1.0",
+      commit: git(repo, ["rev-list", "-n", "1", "0.1.0"]),
+      releasedAt: INGEST_MINUTE_RELEASED_AT,
+      crs: LIVE_010_CRS,
+    });
+    expect(planted.status).toBe(201);
+
+    return { repo, base, key };
+  }
+
+  /**
+   * The PRE-STATE proof, through the real paths and BEFORE any repair runs:
+   * an ORDINARY backfill (CR-CRU-080 §S3's dedup replay, so it writes nothing)
+   * whose own client line for each named release reads `crs=(none registered)`
+   * — the derivation is empty as reported by the code that computes it — while
+   * the stored sets are re-read and are still exactly `stored`.
+   *
+   * This is what makes the outcome assertions non-vacuous: without it, "the
+   * set survived" could mean the repair had nothing to erase.
+   */
+  async function provenanceIsUnderivable(
+    repo: string,
+    base: string,
+    key: string,
+    stored: Map<string, ReleaseBrief>,
+  ): Promise<void> {
+    const probe = await runBackfill(repo, base);
+    expect(probe.exitCode).toBe(0);
+    expect(probe.output).not.toMatch(/NOT recorded/);
+
+    for (const version of stored.keys()) {
+      const lines = milestoneLinesFor(probe.output, version);
+      // The ceremony DID compute and post provenance for this release...
+      expect(lines.length).toBeGreaterThan(0);
+      // ...and the CR half of that answer came back EMPTY, in the client's own
+      // words. This is the exact line the run that wiped 0.1.0 printed.
+      expect(lines.some((l) => l.includes("crs=(none registered)"))).toBe(true);
+    }
+
+    const still = byVersion(await listReleases(base, key));
+    for (const [version, brief] of stored) {
+      expect(sortedCrs(still.get(version)!.crs)).toEqual(sortedCrs(brief.crs));
+      expect(still.get(version)!.crs!.length).toBeGreaterThan(0);
+      expect(still.get(version)!.releasedAt).toBe(brief.releasedAt);
+    }
+  }
+
+  test(
+    "AC3 with the roadmap CLEARED the repair REFUSES every affected release, names each one " +
+      "and the queue as the reason, exits non-fatally, and leaves all three stored crs sets " +
+      "byte-identical to what the ceremony had computed",
+    async () => {
+      const { repo, base, key, recorded } = await clearedQueueWorld("refuse-cleared-queue");
+      await provenanceIsUnderivable(repo, base, key, recorded);
+
+      const repaired = await runBackfill(repo, base, [REPAIR_FLAG]);
+      // NON-FATAL: a refusal is per-release, so the ceremony finishes.
+      expect(repaired.output).not.toMatch(/unknown flag/);
+      expect(repaired.exitCode).toBe(0);
+
+      // LOUD — silence is what made this destructive.
+      const refused = refusalLines(repaired.output);
+      expect(refused.length).toBeGreaterThan(0);
+      const said = refused.join("\n");
+      // NAMES THEM — every release it declined to repair.
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) expect(said).toContain(version);
+      // AND THE REASON — the registered queue, not a bare "skipped".
+      expect(said).toMatch(/queue/i);
+
+      // WROTE NOTHING — every set is exactly what it was, and nothing is empty.
+      const after = byVersion(await listReleases(base, key));
+      expect(after.size).toBe(3);
+      for (const [version, crs] of Object.entries(ANCESTRY_SHIPPED)) {
+        expect(sortedCrs(after.get(version)!.crs)).toEqual([...crs].sort());
+        expect(sortedCrs(after.get(version)!.crs)).toEqual(sortedCrs(recorded.get(version)!.crs));
+        expect(after.get(version)!.crs).not.toEqual([]);
+        expect(after.get(version)!.releasedAt).toBe(ANCESTRY_RELEASED_AT[version]!);
+      }
+    },
+  );
+
+  test(
+    "AC5 a repair that legitimately SHRINKS a stored set reports the count before, the count " +
+      "after and the removed CR ids — the 58-to-51 case, where CRs in the stored set have no " +
+      "landing record — and still applies the shrink",
+    async () => {
+      const { repo, mergeShas } = buildAncestryRepo(true);
+      repos.push(repo);
+      const base = boot();
+      const key = await seedWorld(base, repo, mergeShas, "report-legitimate-shrink", "registered", [
+        ...ANCESTRY_QUEUED_CRS,
+        ...NO_RECORD_CRS,
+      ]);
+
+      // The stored set is the CURRENT set plus two CRs that are QUEUED yet
+      // have no landing record at any source — the real 58-to-51 shape, where
+      // nine such CRs made 0.1.0's stored set larger than ancestry can place.
+      const overstated = [...ANCESTRY_SHIPPED["0.1.0"]!, ...NO_RECORD_CRS];
+      const planted = await postJson(base, "/api/v2/milestones", {
+        projectKey: key,
+        agentId: AGENT_ID,
+        type: "release",
+        label: "0.1.0",
+        commit: git(repo, ["rev-list", "-n", "1", "0.1.0"]),
+        releasedAt: ANCESTRY_RELEASED_AT["0.1.0"]!,
+        crs: overstated,
+      });
+      expect(planted.status).toBe(201);
+
+      // PRE-STATE — five stored, and the two extras genuinely have no landing
+      // record, so the shrink about to happen is a CORRECTION and not a loss.
+      const before = byVersion(await listReleases(base, key));
+      expect(before.get("0.1.0")!.crs!.length).toBe(5);
+      expect(sortedCrs(before.get("0.1.0")!.crs)).toEqual([...overstated].sort());
+      for (const cr of NO_RECORD_CRS) {
+        expect(await plansFor(base, key, cr)).toEqual([]);
+        expect(await queuedCrs(base, key)).toContain(cr);
+      }
+
+      const repaired = await runBackfill(repo, base, [REPAIR_FLAG]);
+      expect(repaired.output).not.toMatch(/unknown flag/);
+      expect(repaired.exitCode).toBe(0);
+
+      // REPORTED — never silent.
+      const reported = shrinkLines(repaired.output);
+      expect(reported.length).toBeGreaterThan(0);
+      const said = reported.join("\n");
+      expect(said).toContain("0.1.0");
+      // The COUNT BEFORE and the COUNT AFTER, both, on the shrink report only
+      // — so the ceremony's other tallies cannot satisfy this.
+      expect(said).toMatch(/\b5\b/);
+      expect(said).toMatch(/\b3\b/);
+      // The IDS BEING REMOVED, named.
+      for (const cr of NO_RECORD_CRS) expect(said).toContain(cr);
+
+      // AND APPLIED — a legitimate shrink must remain possible.
+      const after = byVersion(await listReleases(base, key));
+      expect(sortedCrs(after.get("0.1.0")!.crs)).toEqual([...ANCESTRY_SHIPPED["0.1.0"]!].sort());
+      expect(after.get("0.1.0")!.crs!.length).toBe(3);
+      for (const cr of NO_RECORD_CRS) expect(after.get("0.1.0")!.crs).not.toContain(cr);
+    },
+  );
+
+  test(
+    "AC6 the guard keeps the repair IDEMPOTENT and the attribution a PARTITION: over a cleared " +
+      "queue two consecutive repairs leave identical sets, one row per tag, and every placed CR " +
+      "still in exactly one release",
+    async () => {
+      const { repo, base, key, recorded } = await clearedQueueWorld("guard-keeps-idempotent");
+      await provenanceIsUnderivable(repo, base, key, recorded);
+
+      const first = await runBackfill(repo, base, [REPAIR_FLAG]);
+      expect(first.output).not.toMatch(/unknown flag/);
+      expect(first.exitCode).toBe(0);
+      const once = byVersion(await listReleases(base, key));
+
+      const second = await runBackfill(repo, base, [REPAIR_FLAG]);
+      expect(second.output).not.toMatch(/unknown flag/);
+      expect(second.exitCode).toBe(0);
+
+      const releases = await listReleases(base, key);
+      // NO DUPLICATION — a refused repair is not a recording either.
+      expect(releases.length).toBe(3);
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) {
+        expect(releases.filter((r) => r.version === version).length).toBe(1);
+      }
+
+      const twice = byVersion(releases);
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) {
+        // IDEMPOTENT — and non-vacuously so: the sets are the real, non-empty
+        // provenance the ceremony computed, not two copies of nothing.
+        expect(sortedCrs(twice.get(version)!.crs)).toEqual(sortedCrs(once.get(version)!.crs));
+        expect(sortedCrs(twice.get(version)!.crs)).toEqual(
+          [...ANCESTRY_SHIPPED[version]!].sort(),
+        );
+        expect(twice.get(version)!.releasedAt).toBe(ANCESTRY_RELEASED_AT[version]!);
+        expect(twice.get(version)!.commit).toBe(recorded.get(version)!.commit);
+      }
+
+      // PARTITION — pairwise disjoint, every placed CR counted exactly once.
+      const all = releases.flatMap((r) => r.crs ?? []);
+      expect(all.length).toBeGreaterThan(0);
+      expect(new Set(all).size).toBe(all.length);
+      for (const cr of Object.values(ANCESTRY_SHIPPED).flat()) {
+        expect(all.filter((c) => c === cr).length).toBe(1);
+      }
+    },
+  );
+
+  test(
+    "AC7 regression: with NO queue registered at all the repair leaves a release holding 58 " +
+      "CRs holding the same 58, and says so — the exact path that shipped broken and wiped " +
+      "0.1.0 on this project",
+    async () => {
+      const { repo, base, key } = await unregisteredQueueWorld("regression-no-queue-registered");
+
+      const planted = byVersion(await listReleases(base, key));
+      expect(planted.size).toBe(1);
+      await provenanceIsUnderivable(repo, base, key, planted);
+
+      // THE RUN THAT WIPED IT — same command, same world, one flag.
+      const repaired = await runBackfill(repo, base, [REPAIR_FLAG]);
+      expect(repaired.output).not.toMatch(/unknown flag/);
+      expect(repaired.exitCode).toBe(0);
+
+      const releases = await listReleases(base, key);
+      const after = byVersion(releases);
+      // THE ERASURE DID NOT HAPPEN: 58 before, 58 after, the same ids.
+      expect(after.get("0.1.0")!.crs!.length).toBe(58);
+      expect(sortedCrs(after.get("0.1.0")!.crs)).toEqual([...LIVE_010_CRS].sort());
+      expect(after.get("0.1.0")!.crs).not.toEqual([]);
+      // The stored date survives with it — nothing about the release was
+      // half-rewritten.
+      expect(after.get("0.1.0")!.releasedAt).toBe(INGEST_MINUTE_RELEASED_AT);
+      // One row, still.
+      expect(releases.filter((r) => r.version === "0.1.0").length).toBe(1);
+      // AND IT WAS SAID: the release is named as refused, with the queue as
+      // the reason. `crs=(none registered)` followed by silence is the defect.
+      const said = refusalLines(repaired.output).join("\n");
+      expect(said).toContain("0.1.0");
+      expect(said).toMatch(/queue/i);
+    },
+  );
+});

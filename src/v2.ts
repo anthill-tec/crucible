@@ -1176,7 +1176,7 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   // accident gets. The route carries the flag; deciding what a repair means
   // stays in the store, next to the dedup it is the exception to.
   const repairProvenance = body.repairProvenance === true;
-  const { event, changed } = store.recordMilestoneEvent(pk.key, agentId, body.type, {
+  const { event, changed, shrink } = store.recordMilestoneEvent(pk.key, agentId, body.type, {
     ...(typeof body.label === "string" ? { label: body.label } : {}),
     ...(typeof body.commit === "string" ? { commit: body.commit } : {}),
     ...(releasedAt !== undefined ? { releasedAt } : {}),
@@ -1184,7 +1184,13 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
     ...(repairProvenance ? { repairProvenance } : {}),
     ...eventContext(body),
   });
-  return json({ ok: true, changed, event: event.id }, changed ? 201 : 200);
+  // CR-CRU-086 §S3 — a repair that SHRANK a stored `crs` carries what it
+  // dropped back to the reporter, which is the only actor that can say it out
+  // loud where a human will read it.
+  return json(
+    { ok: true, changed, event: event.id, ...(shrink !== undefined ? { shrink } : {}) },
+    changed ? 201 : 200,
+  );
 }
 
 // ── CR-CRU-011 §S0 — cycle-plan routes (plans are NOT events) ───────────────

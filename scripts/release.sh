@@ -33,6 +33,9 @@ set -euo pipefail
 EXIT_SUCCESS=0
 EXIT_ERROR=1
 EXIT_USAGE=2
+# CR-CRU-086 §S2 — the client's REFUSED-repair status (its EXIT_REPAIR_REFUSED):
+# it wrote nothing, on purpose, and said why. Neither recorded nor failed.
+EXIT_REFUSED=3
 
 # Script variables (set via argument parsing)
 SUBCOMMAND=""
@@ -636,10 +639,21 @@ emit_release_milestone() {
         shown="$shown --repair-provenance"
     fi
 
-    if python3 "$client" milestone --type release --label "$version" \
-        --commit "$sha" --agent "$agent" ${provenance[@]+"${provenance[@]}"}; then
-        return "$EXIT_SUCCESS"
-    fi
+    local status=0
+    python3 "$client" milestone --type release --label "$version" \
+        --commit "$sha" --agent "$agent" ${provenance[@]+"${provenance[@]}"} || status=$?
+    case "$status" in
+        "$EXIT_SUCCESS")
+            return "$EXIT_SUCCESS"
+            ;;
+        # CR-CRU-086 §S2 — a refusal is not a failed report: the client has
+        # already named the release and the reason on the interactive channel,
+        # and a "recover with" line would invite the caller to re-run the very
+        # write that was refused. Passed through for the caller to tally.
+        "$EXIT_REFUSED")
+            return "$EXIT_REFUSED"
+            ;;
+    esac
 
     info "WARN: release $version is NOT recorded in Crucible; the release itself is published and complete"
     info "  recover with: python3 $client milestone --type release --label $version --commit $sha --agent $agent$shown"
@@ -663,8 +677,8 @@ emit_release_milestone() {
 # has to be readable in the exit summary, not only mid-log. Reporting stays
 # warns-not-fails, so the exit is 0 even with a failed tag or no SemVer tags.
 cmd_backfill_releases() {
-    local tags tag sha total=0 recorded=0
-    local -a failed=()
+    local tags tag sha status total=0 recorded=0
+    local -a failed=() refused=()
 
     guard_agent_identity
 
@@ -679,9 +693,18 @@ cmd_backfill_releases() {
             failed+=("$tag")
             continue
         fi
-        if emit_release_milestone "$tag" "$sha"; then
+        status=0
+        emit_release_milestone "$tag" "$sha" || status=$?
+        if [ "$status" -eq "$EXIT_SUCCESS" ]; then
             info "  $tag: recorded ($sha)"
             recorded=$((recorded + 1))
+        elif [ "$status" -eq "$EXIT_REFUSED" ]; then
+            # CR-CRU-086 §S2 — REFUSED, not recorded and not failed: the repair
+            # could not compute this release's provenance, so it wrote nothing
+            # and the client said why. Named here too, so the tally below is
+            # never read as "recorded".
+            info "  $tag: REFUSED — the repair wrote nothing (reason above)"
+            refused+=("$tag")
         else
             failed+=("$tag")
         fi
@@ -691,10 +714,14 @@ cmd_backfill_releases() {
     # ancestry could not place is named here rather than left invisible.
     report_unplaceable_crs
 
+    local tally="backfill-releases: $recorded/$total recorded"
+    if [ "${#refused[@]}" -gt 0 ]; then
+        tally="$tally; REFUSED (nothing written): ${refused[*]}"
+    fi
     if [ "${#failed[@]}" -eq 0 ]; then
-        info "backfill-releases: $recorded/$total recorded"
+        info "$tally"
     else
-        info "backfill-releases: $recorded/$total recorded; NOT recorded: ${failed[*]}"
+        info "$tally; NOT recorded: ${failed[*]}"
     fi
 
     return "$EXIT_SUCCESS"
