@@ -4,6 +4,7 @@
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 014, 076, 080
 - **Status**: PENDING (0.2.0)
+- **Design**: `docs/research/DN-crucible-roadmap-view.md` (decisions) · `docs/research/DN-crucible-wave-track-release.md` (model) · `docs/research/PRD-crucible-v2.md`
 
 ## Problem
 
