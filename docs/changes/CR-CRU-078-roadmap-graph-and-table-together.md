@@ -2,7 +2,7 @@
 
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
-- **Depends on**: 077
+- **Depends on**: 077, 084
 - **Status**: PENDING (0.2.0)
 
 ## Problem
@@ -40,7 +40,7 @@ selected.
 | graph selection | table shows |
 |---|---|
 | an **executable container** (a wave) is opened | that wave's **CRs** — id, deps, status, terse track/cycle overlay |
-| a **release diamond** is clicked | that release's **metadata** — tag, commit, date, CR count / waves |
+| a **release diamond** is clicked | that release's **milestone**: version, the **package(s) delivered** (registry + name + version), commit, date, and the CRs it bundled |
 
 **Gate detail is deliberately excluded.** Nothing today can answer "which gates belong to
 release X", so the table does not pretend to. Recorded as a decision, not an omission.
@@ -117,8 +117,11 @@ selecting a node highlights its rows.
   roadmap surface.
 - **AC2** — the graph renders **above** the table (asserted geometrically, not by source order).
 - **AC3** — opening a wave container makes the table list exactly that wave's CRs.
-- **AC4** — clicking a release diamond makes the table show that release's metadata: tag,
-  commit, date, CR count. It shows **no gate rows**.
+- **AC4** — clicking a release diamond makes the table show that release's milestone: version,
+  its **delivered package(s)** (registry, name, version — CR-084), commit, date and bundled CR
+  count. It shows **no gate rows**. Where `packages` is empty it renders an explicit "no package
+  recorded" state, never an apparently complete release — a release that delivered nothing to users
+  is not a complete release (see the DN).
 - **AC5** — for a release **not yet cut**, the table shows its CR counts and **omits** the
   possible-date row entirely. No estimated, interpolated or placeholder date may render while
   CR-022 is unshipped.

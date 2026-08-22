@@ -21,6 +21,39 @@ Neither is derivable from the other — one is a span of time, the other a membe
 release: it terminates in a published artifact users can obtain. An internal checkpoint that ships
 nothing to users is not a release.
 
+## What a release IS (user-stated, 2026-08-22)
+
+A release is **three things at once**, and a design that captures only the first is incomplete:
+
+1. **A grouping** — the set of CRs whose features it bundles (one or more waves' worth).
+2. **A specific TYPE OF WORKFLOW** — not merely a marker on someone else's timeline. The release
+   ceremony is itself a workflow with its own steps, gates and outcome, in the same sense that a CR
+   has a plan and cycles.
+3. **A MILESTONE**, carrying:
+   - a **release version**, and
+   - a **package or packages** of the software developed so far.
+
+The rest of the release definition lives where it already is — the **Model-B skill and memory** —
+and is deliberately not duplicated here.
+
+## The Model-B workflow ontology (user-stated, 2026-08-22)
+
+The typical Model-B workflow is **CR-centric**, with specs pre-defined during the **design phase**:
+
+```
+DESIGN PHASE          →  CR SPECS        the most TANGIBLE specification element of the workflow
+  execution           →  SOURCE CODE     the assets generated
+    release workflow  →  RELEASE PACKAGES  version + package(s) delivered to users
+```
+
+- **The CR is the most tangible specification element** — the unit everything else hangs off.
+- **The produced source code is the asset generated** by executing that specification.
+- **The release packages follow** — the artifacts users actually receive.
+
+So the roadmap's job is to show this chain honestly: specs (CRs) → assets (merged code) →
+packages (releases). A release node is the terminal, user-facing end of that chain, which is why it
+must carry its version and its package(s), not just a date.
+
 ## The three levels
 
 ```
