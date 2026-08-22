@@ -3,9 +3,23 @@
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 014, 074
-- **Status**: PENDING (0.2.0)
+- **Status**: VOID — premise corrected 2026-08-22
 
-## Problem
+## VOID — the premise was wrong
+
+Filed on the belief that **a release is the milestone that ends a wave**, so the active wave needed
+a declared target release to have a drawable terminator. That belief was wrong.
+
+Corrected model: a **wave is a parallelism concept** for synchronising CRs across tracks, with very
+little relevance in a single-track project; a **release bundles the CRs of one or more waves**, and
+always contains the features of at least one wave leading to it. A wave therefore has no "target
+release" to declare — the bundling is expressed by the release, and CR-080's `crs` already records
+it. Nothing here to build.
+
+Kept rather than deleted so the corrected model sits next to the mistake it replaced.
+**CR-077 no longer depends on this.**
+
+## Problem (as originally, and wrongly, framed)
 
 The governing model is that **a release is a milestone that ends a wave**: a wave's CRs run in
 parallel, their features bundle into the release that closes it, and the roadmap then continues

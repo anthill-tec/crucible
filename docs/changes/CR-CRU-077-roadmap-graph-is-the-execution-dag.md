@@ -26,45 +26,41 @@ eight recorded decisions. This CR implements it.
 
 ## Design (F14a, as approved)
 
-### The wave/release model (user-stated, 2026-08-21 — governing)
+### The wave / track / release model — see the DN
 
-**A release is a milestone that acts as the END of a wave.** A wave exists because CRs inside it
-run in **parallel**; the CRs of that wave, and the features they bring, are **bundled into** the
-release that closes it. The roadmap then continues: another wave exists targeting another release.
+The model is **locked** and lives in one canonical place:
+**`docs/research/DN-crucible-wave-track-release.md`** (FINAL, 2026-08-22). This CR **implements** it
+and deliberately does not restate it.
 
-So the roadmap's spine is `wave → release → wave → release → …`, and this is the structure the
-graph draws:
+What this view must honour:
 
-- a **wave** is the parallel-execution region — its CRs fan out subject only to `depends-on`;
-- its **release diamond terminates it**, and nothing in the next wave starts before that diamond;
-- **multiple waves** therefore mean multiple releases, in roadmap order.
+- **A wave is an abstract temporal concept; a release is a specific activity set that always ships a
+  package to users.** Neither is derived from the other.
+- **The release is the primary grouping**, expressed by CR-080's `crs` — the CRs a release bundled,
+  spanning one or more waves.
+- **A wave contains one or more parallel tracks** and is largely a synchronization indicator for
+  orchestrators; **tracks are the lanes inside it**, lane count data-driven.
+- **Order comes from `depends-on` plus the orchestrator-assigned order.** The graph never re-derives
+  an order of its own.
+- **No release boundary is derived from wave structure**, and no wave renders as though it terminated
+  in a release.
 
-Two consequences the builder must respect. A release is **not** an annotation hanging beside the
-graph — it is the join point every CR of its wave flows into, which is exactly why an edgeless
-milestone node is the defect this CR fixes. And a wave is a **planning** grouping whose membership
-can be **reassigned** during refactoring or reprioritisation when targeting a release, so the graph
-renders the wave a CR is in *now* and never assumes today's label described a past release.
+**Flow composes these inputs**, per the DN:
 
+1. **`depends-on`** — hard prerequisite edges; a CR never precedes a dependency.
+2. **Orchestrator-assigned order** — the authored queue sequence, which is the *other* half of
+   ordering and is **editable** by re-registering the queue. The graph never invents an order.
+3. **Release boundaries** — the **primary grouping**. A release bundles the CRs in its `crs`
+   (CR-080), spanning one or more waves; those CRs precede its diamond and later work follows it.
+   A release always ships a package to users, so a diamond marks a real delivery.
+4. **Parallel fan-out across tracks** — where a wave holds more than one track, its CRs run
+   concurrently; with no dependency between them they fan out rather than chain.
 
-**Flow composes four inputs**, not one:
-
-1. **depends-on** — hard prerequisite edges.
-2. **wave order** — waves execute in sequence; a later wave's work follows earlier waves.
-3. **release boundaries as in-flow gates** — everything in a release precedes its diamond;
-   post-release CRs follow it. The diamond sits *in* the flow, never beside it. Membership comes
-   from CR-080's `crs`, and consecutive diamonds chain so a release that shipped no CRs is still a
-   boundary rather than a floating node.
-4. **parallel fan-out** — where no dependency exists between CRs, branches run concurrently.
-
-**Scale:** each **closed** wave collapses to a single node carrying its CR count, expandable on
-click. Exactly **one wave is ACTIVE** at a time and it runs up to a release boundary, so only that
-wave gets a **cluster box**; completed waves stay collapsed.
-
-**Track lanes are purely data-driven.** The number of tracks is decided by the project's
-**mainline orchestrator** — never by Crucible, and never capped at the Crucible end. N distinct
-tracks render N lanes; one track renders a single sequential chain with no lane chrome; absent
-track data renders no lanes and is **not** an error state. Lanes must be derived, never
-hard-coded or assumed.
+**Waves are containers, not gates.** A wave is an abstract temporal container of one or more
+parallel tracks and is largely a synchronization indicator for orchestrators — so it renders as a
+grouping around its tracks and **never** as a boundary that terminates in a release. In a
+single-track project (Crucible itself) the wave carries almost no information, so wave chrome is
+drawn only where it says something: more than one track, or more than one wave inside a release.
 
 **Labels lead with the CR id** plus a terse status suffix: `CR-NAI-040 ✓ merged`,
 `CR-NAI-042 ▶ 2/3`, bare id when PENDING.
@@ -185,13 +181,15 @@ cycle position; everything else is static.
 - **AC1b** — release membership comes from `crs`; a CR flows into the diamond of the release that
   shipped it and out of the preceding one.
 - **AC1c** — CRs not yet in any release flow after the newest diamond.
-- **AC2** — for two CRs in different waves with **no** declared dependency, the graph still
-  places the later wave downstream (via the wave/release chain), so execution order is readable
-  without inventing a dependency.
+- **AC2** — ordering within a region follows `depends-on` **and** the orchestrator-assigned queue
+  sequence: two CRs with no dependency between them keep their authored order, and the graph never
+  substitutes an order of its own.
 - **AC3** — two CRs in the same wave with no dependency between them render as **parallel
   branches** from the same upstream node, not a chain.
-- **AC4** — a closed wave renders as a single node whose label carries its CR count; expanding
-  it reveals its CRs. Exactly one wave renders as a cluster box, and it is the active one.
+- **AC4** — collapse is by **release**: a shipped release renders as one node carrying its CR
+  count and expands on click, while the unreleased region stays expanded. A wave container renders
+  only when informative (more than one track, or more than one wave in a release) — never as a
+  gate.
 - **AC5** — lanes are data-driven: with N distinct tracks the graph renders N lanes; with one
   track it renders no lane chrome; with **no** track data it renders no lanes and **no error**.
   No test may assert a hard-coded track count.
@@ -200,7 +198,8 @@ cycle position; everything else is static.
 - **AC7** — only nodes for `IN_PROGRESS` CRs carry live/animated state; `COMPLETED` and
   `PENDING` nodes are static. Asserted on the rendered output, since the previous animation
   attempt looked correct in source while binding nothing.
-- **AC8** — no synthetic wave→wave edge exists between waves sharing no dependency.
+- **AC8** — no synthetic edge is derived from wave structure: a wave boundary never becomes an
+  edge, and no wave is drawn as terminating in a release.
 - **AC9** — the graph renders the live 78-CR roadmap without a parse/layout error, and
   `unknownDependencies` stays empty.
 

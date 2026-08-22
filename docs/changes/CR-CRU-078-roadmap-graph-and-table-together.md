@@ -79,35 +79,31 @@ removed as a row field; it may remain a hover affordance but never occupies row 
 
 ### §S4 Row order is the AUTHORED order, and it is editable
 
-The queue is a **full replace of an ordered list**, and the store already keeps that authored
-position: `queue_entries.seq INTEGER NOT NULL`. `GET …/queue` returns entries in `seq` order
-(verified: `001 … 080` exactly as written in the queue file). So the execution order is already
-the author's to edit — reorder rows in the queue file, re-register with `queue-file`, and the new
-sequence is stored. **This is the mechanism for mid-flight re-sequencing** after a refactor or
-redesign changes the plan, and it must not be second-guessed by the renderer.
+Ordering follows the model in `docs/research/DN-crucible-wave-track-release.md`: a CR's position
+comes from **`depends-on` plus the orchestrator-assigned order**, and nothing else. The queue is a
+full replace of an ordered list and the store already keeps that authored position
+(`queue_entries.seq`); `GET …/queue` returns it (verified). So **re-sequencing is done by reordering
+the queue file and re-registering** — that is the supported way to re-plan after refactoring or
+reprioritisation, and the renderer must not override it.
 
-Today the renderer overrides it. `roadmapTopoOrder` (`public/app.js:2334`) walks `dependsOn`
-depth-first and emits each dependency before its dependent, so any CR whose dependencies sit
-*later* in `seq` is pulled forward, and **wave is never consulted at all**. Its own comment
-claims a "stable, seq-preserving order", which is not what it does. Live consequences on the
-78-CR board:
+Today it does. `roadmapTopoOrder` (`public/app.js:2334`) walks `dependsOn` depth-first, emitting
+each dependency before its dependent, so any CR whose dependencies sit later in `seq` is pulled
+forward — discarding the orchestrator's assigned order despite a comment claiming to preserve it.
+It also emits a wave divider on every wave change, so the live board repeats waves
+(`Wave 1,2,3,4,3,4,5,6,5,6,5`).
 
-- wave-6 rows render **above** wave-5 rows — CR-015 (deps 004, 007, both early) lands at row 62
-  while CR-076 is at 74 — so work deliberately deferred *out* of 0.2.0 still appears inside it;
-- wave dividers repeat: `Wave 1, 2, 3, 4, 3, 4, 5, 6, 5, 6, 5`, because a divider is emitted on
-  every wave change and the walk revisits waves.
+New rule:
 
-New ordering rule:
-
-1. group by **release**, then by **wave** — groups never interleave;
-2. **within** a group, preserve the **authored `seq`** order verbatim;
-3. topology is used to **validate**, not to re-sequence: if the authored order places a CR before
-   one of its own dependencies, that is surfaced as a **warning on the offending row**, because a
-   plan that executes a CR before its prerequisite is an authoring error the author must see and
-   fix — silently reshuffling it hides the mistake and destroys the author's intent.
-
-Each wave divider appears exactly once. Ordering therefore stays editable, and what you wrote is
-what you see.
+1. **Group by release** — the primary grouping (a release bundles the CRs of one or more waves and
+   ships a package to users). Work not yet in any release forms the trailing current region.
+2. **Within a release, group by wave only where it is informative** — a wave is an abstract
+   temporal container of tracks and largely an orchestrator synchronization indicator, so single
+   track and single wave means no wave chrome at all. It is never rendered as a boundary that ends
+   a release.
+3. **Within a group, preserve the authored `seq` verbatim.**
+4. **Topology validates, it does not re-sequence.** An authored order placing a CR before its own
+   dependency raises a **warning on that row** rather than being silently reshuffled — quiet
+   reshuffling hides an authoring error and overrides the orchestrator's intent.
 
 ### §S5 Bidirectional highlight
 
@@ -132,11 +128,12 @@ selecting a node highlights its rows.
 - **AC8** — an `IN_PROGRESS` row is clickable and marked as the drill-through source; the jump
   itself is CR-079's AC.
 - **AC9** — the surface renders the live 78-CR roadmap with both zones and no error.
-- **AC10** — every wave divider appears **exactly once**; the live duplicate sequence
-  (`Wave 1,2,3,4,3,4,5,6,5,6,5`) must fail this AC.
-- **AC11** — rows group by release then wave and **preserve authored `seq`** within a group:
-  **every** wave-6 row renders after every wave-5 row. Asserted with the real deferral
-  (015/018/022 after 075–080), the case that exposed the bug.
+- **AC10** — no wave is rendered twice inside one region, and the live repeated sequence
+  (`Wave 1,2,3,4,3,4,5,6,5,6,5`) must fail this AC. Where a single track and a single wave carry no
+  information, no wave chrome renders at all.
+- **AC11** — rows group by **release** first, preserve authored `seq` within a group, and place
+  work not yet released in a trailing current region. Asserted against a fixture whose authored
+  order differs from a dependency-only walk, so a renderer that re-derives order fails.
 - **AC11b** — **order is editable**: re-registering the queue with two CRs swapped (same waves,
   same deps) changes their rendered order accordingly. This is the mid-flight re-sequencing
   contract; a renderer that re-derives order would fail this AC.
