@@ -82,6 +82,9 @@ interface V2Body {
   // ceremony: the tag's commit date (epoch seconds) and the CR ids it shipped.
   releasedAt?: unknown;
   crs?: unknown;
+  // CR-CRU-081 §S3 — the opt-in that lets a re-post CORRECT an already-held
+  // release's provenance instead of replaying it.
+  repairProvenance?: unknown;
   // CR-CRU-008 §S4 — silent unregister + guarded run deletion
   silent?: unknown;
   userApproved?: unknown;
@@ -1165,11 +1168,20 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   // store's idempotent no-op, echoed as the codebase's uniform "nothing
   // changed" answer with the event already held, never a second row. Its
   // provenance is the FIRST recording's: a replay re-computes nothing.
+  //
+  // CR-CRU-081 §S3 — unless the caller asks, in this request, for the held
+  // record's provenance to be RE-DERIVED. The opt-in is a literal `true` and
+  // nothing else (the CR-CRU-073 §S1 never-coerce rule): a missing, absent or
+  // merely truthy field is an ordinary post, so the replay is what an
+  // accident gets. The route carries the flag; deciding what a repair means
+  // stays in the store, next to the dedup it is the exception to.
+  const repairProvenance = body.repairProvenance === true;
   const { event, changed } = store.recordMilestoneEvent(pk.key, agentId, body.type, {
     ...(typeof body.label === "string" ? { label: body.label } : {}),
     ...(typeof body.commit === "string" ? { commit: body.commit } : {}),
     ...(releasedAt !== undefined ? { releasedAt } : {}),
     ...(crs !== undefined ? { crs } : {}),
+    ...(repairProvenance ? { repairProvenance } : {}),
     ...eventContext(body),
   });
   return json({ ok: true, changed, event: event.id }, changed ? 201 : 200);

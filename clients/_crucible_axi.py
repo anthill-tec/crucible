@@ -1677,14 +1677,22 @@ def cmd_milestone(args, project_dir, ops):
     `--released-at` (the tag's own commit date, epoch seconds — when the
     release SHIPPED, as opposed to when it was recorded) and `--crs` (the CR
     ids its tag range merged, kept only where the registered queue agrees).
-    Both are computed by the ceremony, which is the only actor that can."""
+    Both are computed by the ceremony, which is the only actor that can.
+
+    CR-CRU-081 §S3 — `--repair-provenance` turns the post from a REPLAY of an
+    already-recorded release into a CORRECTION of it: the server re-derives
+    that release's `releasedAt`/`crs` from what this post carries, and changes
+    nothing else about it. Explicit and non-default: an ordinary post never
+    sets it, so a release record cannot be rewritten by accident."""
     context = fleet_context(cr=args.cr)
     released_at = getattr(args, "released_at", None)
     crs = release_crs(getattr(args, "crs", None), project_dir, ops)
+    repair = bool(getattr(args, "repair_provenance", False))
     resp = ops.post_milestone(project_dir, ops.agent_id(args), args.type,
                               label=args.label, commit=getattr(args, "commit", None),
                               context=context or None,
-                              released_at=released_at, crs=crs)
+                              released_at=released_at, crs=crs,
+                              repair_provenance=repair)
     ok = resp.get("ok", False)
     # The interactive line stays an EXPLICIT stderr print (CR-CRU-054 §S2b's
     # single locus for it) rather than riding the emitter's legacy channel —
@@ -1692,6 +1700,7 @@ def cmd_milestone(args, project_dir, ops):
     print(f"milestone: ok={ok} type={args.type}"
           + (f" label={args.label}" if args.label else "")
           + (f" releasedAt={released_at}" if released_at else "")
+          + (" repair=provenance" if repair else "")
           + (f" crs={','.join(crs) if crs else '(none registered)'}"
              if crs is not None else "")
           + (f" error={resp.get('error')}" if resp.get("error") else ""),
@@ -1917,7 +1926,7 @@ def post_gate(project_key, agent_id, gate, post_fn, context=None):
 
 def post_milestone(project_key, agent_id, mtype, post_fn,
                    label=None, commit=None, context=None,
-                   released_at=None, crs=None):
+                   released_at=None, crs=None, repair_provenance=False):
     """POST a workflow milestone (§S4b). Absent label/commit/context keys are
     OMITTED rather than sent as nulls.
 
@@ -1925,7 +1934,12 @@ def post_milestone(project_key, agent_id, mtype, post_fn,
     (the tag's commit date, epoch seconds) only when it was computed, and
     `crs` whenever a scan HAPPENED — including as an empty list, which says
     "the queue registered none of them" and is a different fact from a release
-    that carries no CR set at all."""
+    that carries no CR set at all.
+
+    CR-CRU-081 §S3 — `repairProvenance` is sent ONLY when the caller asked for
+    it, so an ordinary post is byte-identical to the pre-081 one and stays the
+    server's dedup replay. It is the whole opt-in: without this key on the
+    wire a held release cannot be rewritten."""
     payload = {"projectKey": project_key, "agentId": agent_id, "type": mtype}
     if label:
         payload["label"] = label
@@ -1935,6 +1949,8 @@ def post_milestone(project_key, agent_id, mtype, post_fn,
         payload["releasedAt"] = released_at
     if crs is not None:
         payload["crs"] = crs
+    if repair_provenance:
+        payload["repairProvenance"] = True
     if context:
         payload["context"] = context
     return post_fn("/api/v2/milestones", payload)

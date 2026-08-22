@@ -43,6 +43,11 @@ VERBOSE=false
 # means "not given on the command line"; ceremony_agent() then falls back to
 # $CRUCIBLE_AGENT.
 AGENT=""
+# CR-CRU-081 §S3 — the OPT-IN provenance repair, from `--repair-provenance`.
+# Default false, and there is deliberately no environment fallback: a release
+# record that CR-CRU-080 §S3 made immutable may only be corrected because this
+# run's own command line asked for it.
+REPAIR_PROVENANCE=false
 
 # ============================================================================
 # Helper Functions
@@ -103,6 +108,8 @@ Subcommands:
                     on a reporting error. Idempotent: the server collapses a
                     repeated (type, label, commit) release onto the row it
                     already holds (CR-CRU-080 §S3). Exit 0.
+                    Add --repair-provenance to CORRECT the records already
+                    held instead of replaying them (CR-CRU-081 §S3).
 
 Options:
   --agent <agentId> The Crucible identity the release report is attributed to.
@@ -111,6 +118,15 @@ Options:
                     `backfill-releases` — both refuse at preflight without one,
                     because the client has no identity fallback (CR-CRU-057) and
                     a report with no identity silently records nothing.
+  --repair-provenance
+                    Re-derive an already-recorded release's provenance
+                    (`releasedAt` + the CR ids it shipped) from the repo's
+                    CURRENT ancestry, instead of replaying the record the
+                    server holds. Opt-in and non-default, because CR-CRU-080
+                    §S3 made release records immutable: version, commit and the
+                    row itself are never touched, and a repair changes nothing
+                    when the stored provenance is already correct
+                    (CR-CRU-081 §S3).
   --dry-run         Print the commands that would run without executing them.
                     Preflight guards still run and still refuse.
   --verbose         Print debug output.
@@ -591,6 +607,13 @@ report_unplaceable_crs() {
 # the recovery records the same release, not a poorer one). Whether that is
 # fatal is the CALLER's call: after publication it never is (report_release
 # swallows it), while the backfill counts it into its tally.
+#
+# CR-CRU-081 §S3 — the SAME single path also carries the OPT-IN repair. With
+# --repair-provenance the client is told to CORRECT the record the server
+# already holds for this (type, label, commit) — re-deriving `releasedAt` and
+# `crs` from what this run just computed — instead of replaying it. Without
+# the flag the argv is byte-identical to the pre-081 one, so the ordinary
+# re-run remains CR-CRU-080 §S3's replay and cannot rewrite a release.
 emit_release_milestone() {
     local version="$1" sha="$2" client agent ship_date crs shown=""
     local -a provenance=()
@@ -607,6 +630,10 @@ emit_release_milestone() {
     if [ -n "$crs" ]; then
         provenance+=(--crs "$crs")
         shown="$shown --crs $crs"
+    fi
+    if [ "$REPAIR_PROVENANCE" = true ]; then
+        provenance+=(--repair-provenance)
+        shown="$shown --repair-provenance"
     fi
 
     if python3 "$client" milestone --type release --label "$version" \
@@ -773,6 +800,12 @@ while [ $# -gt 0 ]; do
             ;;
         --verbose)
             VERBOSE=true
+            shift
+            ;;
+        # CR-CRU-081 §S3 — the opt-in correction switch (see
+        # emit_release_milestone); absent, every re-post stays the replay.
+        --repair-provenance)
+            REPAIR_PROVENANCE=true
             shift
             ;;
         -*)
