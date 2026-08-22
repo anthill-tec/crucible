@@ -1661,6 +1661,71 @@ def release_crs(raw, project_dir, ops):
     return [cr for cr in dict.fromkeys(scanned) if cr in queued]
 
 
+# CR-CRU-086 §S2 — the exit status a REFUSED repair leaves: not 0 (nothing was
+# recorded, so a caller must never tally it as recorded) and not 1 (nothing
+# failed either — the refusal is the correct outcome, per-release and
+# non-fatal). The ceremony reads it to say "refused" rather than "recorded".
+EXIT_REPAIR_REFUSED = 3
+
+
+def repair_refusal_reason(project_dir, ops):
+    """CR-CRU-086 §S2 (one GET) — WHY a repair's CR derivation came back empty,
+    named rather than left as a bare "skipped".
+
+    Three distinguishable states, all of them the QUEUE (the intersection's
+    right-hand side is the only half that can empty a non-empty scan):
+    UNREACHABLE (the read itself failed), holds NO CR ids at all (never
+    registered, or the roadmap was cleared — the wire cannot separate those
+    two: `GET …/queue` answers `entries: []` for both), or registered and
+    simply disjoint from what this tag range landed."""
+    resp = ops.get(f"/api/v2/projects/{ops.project_key(project_dir)}/queue")
+    if not resp.get("ok"):
+        return ("the registered CR queue is UNREACHABLE "
+                f"({resp.get('error')})")
+    if not (resp.get("entries") or []):
+        return ("the registered CR queue holds NO CR ids — it was never "
+                "registered, or the roadmap was cleared")
+    return ("the registered CR queue knows NONE of the CRs this tag range "
+            "landed")
+
+
+def refuse_repair(args, project_dir, ops):
+    """CR-CRU-086 §S2 — refuse ONE release's repair, loudly, having posted
+    nothing.
+
+    Silence is what made the defect destructive: the run that wiped 0.1.0
+    printed `crs=(none registered)` and then wrote the empty set over 58 good
+    CRs. So the refusal is stated on the interactive channel — named release,
+    named reason — and carried as a structured warning for a machine caller,
+    and the post never happens."""
+    detail = (f"the re-derived CR set came back EMPTY, and an empty derivation "
+              f"is NO ANSWER rather than an answer of nothing: "
+              f"{repair_refusal_reason(project_dir, ops)}. Nothing was "
+              f"written; the stored provenance stands.")
+    print(f"milestone: REFUSED to repair type={args.type}"
+          + (f" label={args.label}" if args.label else "")
+          + f" — {detail}", file=sys.stderr)
+    ops.emit("milestone", True,
+             {"type": args.type, "label": args.label,
+              "commit": getattr(args, "commit", None),
+              "refused": True, "recorded": False,
+              "help": ["queue-file", "status"]},
+             ops.context(project_dir, cr=args.cr),
+             [{"code": "repair-refused", "detail": detail}], None)
+    return EXIT_REPAIR_REFUSED
+
+
+def shrink_report(label, shrink):
+    """CR-CRU-086 §S3 (PURE) — a repair that REDUCED a stored `crs`, as the
+    ceremony says it: the count before, the count after, and the ids dropped.
+
+    A legitimate shrink stays possible (the measured 58→51 case, where nine
+    CRs have no landing record at any source) — it is simply never silent."""
+    return (f"milestone: {label} provenance SHRANK — "
+            f"{shrink.get('before')} CR(s) before, {shrink.get('after')} "
+            f"after; removed: {', '.join(shrink.get('removed') or [])}")
+
+
 def cmd_milestone(args, project_dir, ops):
     """POST a workflow milestone. §S4b.
 
@@ -1683,11 +1748,18 @@ def cmd_milestone(args, project_dir, ops):
     already-recorded release into a CORRECTION of it: the server re-derives
     that release's `releasedAt`/`crs` from what this post carries, and changes
     nothing else about it. Explicit and non-default: an ordinary post never
-    sets it, so a release record cannot be rewritten by accident."""
+    sets it, so a release record cannot be rewritten by accident.
+
+    CR-CRU-086 §S1/§S2/§S3 — a repair whose derivation is EMPTY never reaches
+    the wire: it is REFUSED here, per-release and non-fatally, because an
+    empty set posted as a correction erases the stored one. A repair that
+    goes through and SHRINKS a stored set says what it dropped."""
     context = fleet_context(cr=args.cr)
     released_at = getattr(args, "released_at", None)
     crs = release_crs(getattr(args, "crs", None), project_dir, ops)
     repair = bool(getattr(args, "repair_provenance", False))
+    if repair and crs is not None and not crs:
+        return refuse_repair(args, project_dir, ops)
     resp = ops.post_milestone(project_dir, ops.agent_id(args), args.type,
                               label=args.label, commit=getattr(args, "commit", None),
                               context=context or None,
@@ -1705,11 +1777,15 @@ def cmd_milestone(args, project_dir, ops):
              if crs is not None else "")
           + (f" error={resp.get('error')}" if resp.get("error") else ""),
           file=sys.stderr)
+    shrink = resp.get("shrink") if ok else None
+    if shrink:
+        print(shrink_report(args.label, shrink), file=sys.stderr)
     ops.emit("milestone", bool(ok),
              {"type": args.type, "label": args.label,
               "commit": getattr(args, "commit", None),
               **({"releasedAt": released_at} if released_at else {}),
               **({"crs": crs} if crs is not None else {}),
+              **({"shrink": shrink} if shrink else {}),
               "help": milestone_help(bool(ok), args.type, ops.base_url)},
              ops.context(project_dir, cr=args.cr), [], None)
     return 0 if ok else 1
