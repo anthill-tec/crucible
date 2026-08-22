@@ -93,6 +93,20 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-078](CR-CRU-078-roadmap-graph-and-table-together.md) | Graph and table are an **exclusive toggle** (`roadmap-view-table` / `roadmap-view-graph` + exclusive view state), forcing you to lose one to see the other, and the table row renders the full CR title (text bloat). They are complementary readings of one dataset: render **both on one surface, no buttons**. Graph occupies the top as the 360° view with openable containers; the table below is **selection-driven** — open a wave container → its CRs; click a release diamond → that release's metadata and possible release date (CR-022's confidence-gated P50/P80, never a fabricated date), explicitly NOT gate detail since nothing can yet answer which gates belong to a release. Row grammar: CR-id + bare deps + status + terse track/cycle overlay, no titles | feature | PENDING (0.2.0) | 077, 084 | 5 (0.2.0) |
 | [CR-CRU-079](CR-CRU-079-roadmap-deep-link-and-drill-through.md) | Two roadmap entry points, one broken contract — F14 requires both the Roadmap tab and the Project pane's `🗺 roadmap` chip to be deep-linkable, but the chip only swaps tab state and never updates the URL (verified live: `location.pathname` stays `/p/<key>`), so the chip path is unshareable. The row drill-through is worse: clicking a roadmap row swaps to Workflow but does **not** target the clicked CR — verified live, all 63 CR groups stay collapsed, none expanded, highlighted or scrolled to. Fix both: chip updates the URL, and clicking an IN_PROGRESS CR row lands on **that CR's active cycles** as they are tracked, with `← roadmap` returning | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 
+## Deferred — post-0.2.0
+
+- **Primary architecture document** (design effort, NOT a CR, NOT in 0.2.0). Crucible has
+  `PRD-crucible-v2.md` and 10 DNs but no Architecture document at the top of the chain, so per the
+  Model-B ontology (Architecture → PRDs for complex features / DNs for micro features → CR → source
+  → release packages) the supporting docs currently support a document that does not exist. It will
+  be produced **later**, by **distilling the entire Lavish storyboard together with the other design
+  docs** — a specific set of design tasks in its own right, deliberately out of the 0.2.0 release.
+  - **Dependency to protect:** the distillation's primary input is
+    `.lavish/crucible-v2-design.html`, which is **gitignored** (`.gitignore:12`) and therefore
+    unbacked. Its roadmap-view decisions were rescued into `DN-crucible-roadmap-view.md`, but the
+    remaining ~20 frames are not captured anywhere tracked. If that file is lost before the
+    distillation, the input is lost.
+
 ## Notes
 - 🚀 **2026-08-19 — Crucible v2 SHIPPED its first public release (0.1.0 + hotfix 0.1.1).**
   `crucible-axi` on PyPI: **0.1.0** then **0.1.1** (OIDC trusted publishing, pending publisher

@@ -10,6 +10,9 @@ playwright-report/
 test-results/
 blob-report/
 .lavish/
+# ...but the storyboard IS the approved design contract (21 frames) and the primary
+# input to the deferred architecture-document distillation — it must be tracked.
+!.lavish/crucible-v2-design.html
 .features-gen/
 __pycache__/
 .venv/
