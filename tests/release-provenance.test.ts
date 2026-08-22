@@ -332,10 +332,16 @@ async function listReleases(base: string, key: string): Promise<ReleaseBrief[]> 
  * the LIVE server. ASYNC on purpose (measured in
  * tests/release-reporting-live.test.ts): `Bun.spawnSync` blocks the event
  * loop, so the in-process server could never answer the client's POST.
+ *
+ * `flags` are appended verbatim after the subcommand, so the SAME entry point
+ * drives both the ordinary re-run and CR-CRU-081 §S3's opt-in repair — the two
+ * paths differ by nothing except the flag, which is what makes "opt-in"
+ * assertable rather than asserted about two different commands.
  */
 async function runBackfill(
   repo: string,
   base: string,
+  flags: readonly string[] = [],
 ): Promise<{ exitCode: number; output: string }> {
   const env: Record<string, string> = {
     PATH: process.env.PATH ?? "",
@@ -348,7 +354,7 @@ async function runBackfill(
     PY_CRUCIBLE_PROJECT_DIR: repo,
   };
   const proc = Bun.spawn({
-    cmd: ["bash", RELEASE_SH, "backfill-releases"],
+    cmd: ["bash", RELEASE_SH, "backfill-releases", ...flags],
     cwd: repo,
     env,
     stdout: "pipe",
@@ -1467,6 +1473,463 @@ describe("release provenance is computed from COMMIT ANCESTRY, not merge-subject
         expect(sortedCrs(after.get(version)!.crs)).toEqual([...crs].sort());
         expect(sortedCrs(after.get(version)!.crs)).toEqual(sortedCrs(before.get(version)!.crs));
       }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// D. CR-CRU-081 §S3 — the OPT-IN REPAIR path (RED).
+//
+// Spec: docs/changes/CR-CRU-081-release-provenance-uses-ancestry.md §S3 + AC5
+// (and CR-CRU-084 AC7, which reuses this path and requires it to be
+// idempotent). §S1/§S2 shipped already and are covered by section C.
+//
+//   §S3  the three recorded releases carry provenance produced by the OLD
+//        rule. CR-CRU-080 §S3 made release records IMMUTABLE under
+//        dedup-replay, so a re-run cannot correct them — this CR adds an
+//        explicit, OPT-IN repair path that RE-DERIVES provenance for an
+//        already-recorded release.
+//   AC5  the repair re-derives provenance for an already-recorded release,
+//        AND is opt-in: an ordinary `backfill-releases` re-run remains the
+//        idempotent replay CR-CRU-080 §S3 defined.
+//
+// WHY THIS SECTION EXISTS. `Store.recordMilestoneEvent` (src/store.ts:1701)
+// short-circuits a `release` whose (label, commit) it already holds and
+// returns the HELD event with `changed:false`; `handleMilestones`
+// (src/v2.ts:1164) documents that as "a replay re-computes nothing". That is
+// exactly right for idempotency and exactly wrong for correction: provenance
+// recorded under the subject-scan rule can never acquire the ancestry-derived
+// answer, no matter how many times the ceremony runs. On this repo the only
+// way to correct `0.1.0` during CR-CRU-080's dog-food was to hand-delete event
+// rows from the live store — the manual workaround §S3 exists to replace.
+//
+// TECHNIQUE — two ways a release ends up with provenance that is WRONG, both
+// built through the REAL paths, never by hand-editing a row:
+//
+//   * STALE `crs`, ceremony-produced. The project is seeded WITHOUT CR-CRU-141's
+//     closed plan, so ancestry has no landing sha for it and the ceremony
+//     honestly records `0.1.0` as shipping two CRs. The missing plan is then
+//     filed — the landing record arriving late, which is precisely what
+//     happened to CR-CRU-021/CR-CRU-023 — so the CURRENT derivation now yields
+//     three. Nothing about the world is faked: the stale record was computed,
+//     not planted.
+//   * MISSING provenance, wire-recorded. `0.1.0` is posted at the server's own
+//     `POST /api/v2/milestones` with type/label/commit and NOTHING else — the
+//     exact shape the three real releases carried before CR-CRU-080 §S4. The
+//     ordinary backfill then records its two SIBLINGS with full provenance in
+//     the SAME run while `0.1.0` stays bare, which is an undeniable
+//     demonstration that the run computed provenance and the dedup replay
+//     refused to write it.
+//
+// Every test drives `scripts/release.sh` — the same single entry point, the
+// same fixture, the same live server — and the ordinary run and the repair
+// differ by NOTHING except the flag, so "opt-in" is proven rather than
+// asserted about two unrelated commands. Each asserts its preconditions (the
+// pre-repair state really is wrong, and the current derivation really would
+// say otherwise) BEFORE the outcome, so a broken fixture can never read as a
+// RED on the contract.
+//
+// SAFETY: unchanged from sections A/C — in-process server on `port: 0` over a
+// per-test `mktemp` db (never 3849, never data/crucible.db), stopped through
+// its own handle; every git fixture under `mktemp`, no remote, no push.
+//
+// RED expectation (measured against 0f922b6): `scripts/release.sh` has NO
+// repair path at all — its argument parser (`:778`) rejects every unrecognised
+// flag with `ERROR: unknown flag` and exits `$EXIT_USAGE`, and no code
+// anywhere re-derives provenance for a held release (`grep -c repair
+// scripts/release.sh src/store.ts src/v2.ts` is 0). So every repair run below
+// exits non-zero having recorded nothing, and every post-repair assertion
+// fails on provenance that is still the stale/absent value — the missing
+// contract, not a broken fixture. The OPT-IN halves (the ordinary re-run
+// leaving the record untouched) already PASS today, which is the point: they
+// pin the CR-CRU-080 §S3 behaviour that must survive §S3's addition.
+
+/** §S3's opt-in switch on the ceremony's existing entry point. Explicit and
+ *  non-default by construction: an ordinary `backfill-releases` never carries
+ *  it, so a release record cannot be rewritten by accident (CR-CRU-081 Risk). */
+const REPAIR_FLAG = "--repair-provenance";
+
+/** The ancestry fixture's tag dates in epoch SECONDS — the unit `git log -1
+ *  --format=%ct <tag>` speaks. `tagRelease` pins each tag's commit to exactly
+ *  these instants, so a repaired `releasedAt` has ONE correct value and the
+ *  assertion cannot be satisfied by any plausible wrong answer. */
+const ANCESTRY_RELEASED_AT: Record<string, number> = {
+  "0.1.0": Date.UTC(2026, 6, 10, 12, 0, 0) / 1000,
+  "0.1.1": Date.UTC(2026, 6, 15, 9, 30, 0) / 1000,
+  "0.1.2": Date.UTC(2026, 6, 20, 16, 45, 0) / 1000,
+};
+
+/** The `crs` the ceremony honestly computes for 0.1.0 while CR-CRU-141's
+ *  landing record is missing: everything ancestry CAN place, and no more. */
+const STALE_010_CRS: readonly string[] = [SQUASH_CR, "CR-CRU-143"];
+
+describe("an already-recorded release can be REPAIRED, and only on purpose (CR-CRU-081 §S3/AC5)", () => {
+  let handle: ServerHandle | undefined;
+  const dbDirs: string[] = [];
+  const repos: string[] = [];
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    for (const d of dbDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+    for (const r of repos.splice(0)) rmSync(r, { recursive: true, force: true });
+  });
+
+  /** In-process server on an OS-assigned port over a throwaway on-disk db —
+   *  never 3849, never data/crucible.db. Stopped by handle in afterEach. */
+  function boot(): string {
+    const dir = mkdtempSync(join(tmpdir(), "release-repair-db-"));
+    dbDirs.push(dir);
+    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    return `http://localhost:${handle.server.port}`;
+  }
+
+  /** Section C's world, with one knob: `withoutPlan` CRs get NO closed plan, so
+   *  ancestry has no landing sha for them and the ceremony legitimately leaves
+   *  them out of `crs`. That is how a STALE record is produced by the real
+   *  path instead of planted. */
+  async function seedRepairProject(
+    base: string,
+    repo: string,
+    mergeShas: Map<string, string>,
+    name: string,
+    withoutPlan: readonly string[] = [],
+  ): Promise<string> {
+    const res = await postJson(base, "/api/v2/projects", { name });
+    const body = (await res.json()) as { project: { key: string } };
+    const key = body.project.key;
+
+    const reg = await postJson(base, "/api/v2/agents/register", {
+      projectKey: key,
+      agentId: AGENT_ID,
+      role: "ORCHESTRATOR",
+    });
+    expect(reg.status).toBe(200);
+
+    const queue = await postJson(base, `/api/v2/projects/${key}/queue`, {
+      entries: ANCESTRY_QUEUED_CRS.map((cr) => ({ cr, title: `${cr} work`, wave: "1" })),
+    });
+    expect(queue.status).toBe(200);
+
+    for (const [cr, commit] of mergeShas) {
+      if (withoutPlan.includes(cr)) continue;
+      await seedClosedPlan(base, key, cr, commit);
+    }
+    await seedClosedPlan(base, key, UNPLACEABLE_CR, null);
+
+    writeFileSync(join(repo, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
+    return key;
+  }
+
+  interface StaleWorld {
+    repo: string;
+    mergeShas: Map<string, string>;
+    base: string;
+    key: string;
+    /** The three releases exactly as the ceremony first recorded them. */
+    stale: Map<string, ReleaseBrief>;
+  }
+
+  /**
+   * A world whose 0.1.0 provenance is WRONG, and provably so:
+   *
+   *   1. the project is seeded WITHOUT CR-CRU-141's closed plan;
+   *   2. the ceremony runs and honestly records 0.1.0 as shipping two CRs;
+   *   3. CR-CRU-141's closed plan — carrying the landing sha that IS an
+   *      ancestor of 0.1.0 — is filed afterwards.
+   *
+   * From step 3 on, the CURRENT derivation says three CRs while the STORED
+   * record says two. That gap is the whole subject of §S3, and it is real:
+   * step 2's value was computed by the ceremony, not written by the test.
+   */
+  async function staleCrsWorld(name: string): Promise<StaleWorld> {
+    const { repo, mergeShas } = buildAncestryRepo(true);
+    repos.push(repo);
+    const base = boot();
+    const key = await seedRepairProject(base, repo, mergeShas, name, [FF_CR]);
+
+    const first = await runBackfill(repo, base);
+    expect(first.exitCode).toBe(0);
+    expect(first.output).not.toMatch(/NOT recorded/);
+    const stale = byVersion(await listReleases(base, key));
+    expect(stale.size).toBe(3);
+
+    // PRECONDITION 1 — the stored provenance really IS wrong, and wrong in the
+    // exact way the bug is: a CR that shipped in 0.1.0 is missing from its set.
+    expect(Array.isArray(stale.get("0.1.0")!.crs)).toBe(true);
+    expect(sortedCrs(stale.get("0.1.0")!.crs)).toEqual([...STALE_010_CRS].sort());
+    expect(stale.get("0.1.0")!.crs).not.toContain(FF_CR);
+
+    // The landing record ARRIVES — late, exactly as CR-CRU-021/023's did.
+    await seedClosedPlan(base, key, FF_CR, mergeShas.get(FF_CR)!);
+
+    // PRECONDITION 2 — the CURRENT derivation would now place it: the sha is
+    // recorded on a closed plan AND is a real ancestor of the 0.1.0 tag. So a
+    // stored set that still omits it is stale, not correct.
+    expect(await plansFor(base, key, FF_CR)).not.toEqual([]);
+    expect(isAncestor(repo, mergeShas.get(FF_CR)!, "0.1.0")).toBe(true);
+
+    return { repo, mergeShas, base, key, stale };
+  }
+
+  /**
+   * A world whose 0.1.0 record carries NO provenance at all — the CR-CRU-080-era
+   * shape, posted at the server's own production entry with type/label/commit
+   * and nothing else. Its commit is the tag's real commit, so the ceremony's
+   * own emit collapses onto it under the (type, label, commit) dedup.
+   */
+  async function bareProvenanceWorld(
+    name: string,
+  ): Promise<{ repo: string; base: string; key: string }> {
+    const { repo, mergeShas } = buildAncestryRepo(true);
+    repos.push(repo);
+    const base = boot();
+    const key = await seedRepairProject(base, repo, mergeShas, name);
+
+    const posted = await postJson(base, "/api/v2/milestones", {
+      projectKey: key,
+      agentId: AGENT_ID,
+      type: "release",
+      label: "0.1.0",
+      commit: git(repo, ["rev-list", "-n", "1", "0.1.0"]),
+    });
+    expect(posted.status).toBe(201);
+
+    return { repo, base, key };
+  }
+
+  // ── AC5 — the repair RE-DERIVES provenance for an already-recorded release ─
+
+  test(
+    "AC5 a release whose recorded crs is STALE — computed before the landing record arrived, " +
+      "and missing a CR ancestry now places in it — carries the CURRENT ancestry-derived set " +
+      "after the opt-in repair",
+    async () => {
+      const { repo, base, key, stale } = await staleCrsWorld("repair-stale-crs");
+
+      const repaired = await runBackfill(repo, base, [REPAIR_FLAG]);
+      // The repair path must EXIST and must run clean, or nothing below means
+      // anything.
+      expect(repaired.output).not.toMatch(/unknown flag/);
+      expect(repaired.exitCode).toBe(0);
+      expect(repaired.output).not.toMatch(/NOT recorded/);
+
+      const after = byVersion(await listReleases(base, key));
+      // POSITIVE and EXACT: 0.1.0's set is now precisely what it shipped — not
+      // "at least", and not the stale two.
+      expect(sortedCrs(after.get("0.1.0")!.crs)).toEqual([...ANCESTRY_SHIPPED["0.1.0"]!].sort());
+      expect(after.get("0.1.0")!.crs).toContain(FF_CR);
+      // CHANGED: the repaired set genuinely differs from the one it replaced.
+      expect(sortedCrs(after.get("0.1.0")!.crs)).not.toEqual(sortedCrs(stale.get("0.1.0")!.crs));
+      // And `releasedAt` is the CURRENT derivation too — the tag's own commit
+      // date, to the second, not the minute the repair ran.
+      expect(after.get("0.1.0")!.releasedAt).toBe(ANCESTRY_RELEASED_AT["0.1.0"]);
+    },
+  );
+
+  test(
+    "AC5 a release recorded with NO provenance at all — the pre-CR-CRU-080 shape — gains both " +
+      "its real releasedAt and its ancestry-derived crs from the opt-in repair, while an " +
+      "ordinary re-run that provably COMPUTES both leaves it bare",
+    async () => {
+      const { repo, base, key } = await bareProvenanceWorld("repair-missing-provenance");
+
+      // PRECONDITION — the record exists and carries neither field.
+      const seeded = byVersion(await listReleases(base, key));
+      expect(seeded.size).toBe(1);
+      expect(seeded.get("0.1.0")!.releasedAt).toBeUndefined();
+      expect(seeded.get("0.1.0")!.crs).toBeUndefined();
+
+      // THE OPT-IN GUARD, in its strongest form: one ordinary run records the
+      // two SIBLING tags WITH full provenance — so the run demonstrably
+      // computed provenance — and 0.1.0 stays bare, because the dedup replay
+      // refuses to write over a held record.
+      const ordinary = await runBackfill(repo, base);
+      expect(ordinary.exitCode).toBe(0);
+      expect(ordinary.output).toContain("3/3 recorded");
+      const replayed = byVersion(await listReleases(base, key));
+      expect(replayed.size).toBe(3);
+      for (const version of ["0.1.1", "0.1.2"]) {
+        expect(replayed.get(version)!.releasedAt).toBe(ANCESTRY_RELEASED_AT[version]!);
+        expect(sortedCrs(replayed.get(version)!.crs)).toEqual(
+          [...ANCESTRY_SHIPPED[version]!].sort(),
+        );
+      }
+      expect(replayed.get("0.1.0")!.releasedAt).toBeUndefined();
+      expect(replayed.get("0.1.0")!.crs).toBeUndefined();
+
+      // THE REPAIR — the same command, the same world, one flag.
+      const repaired = await runBackfill(repo, base, [REPAIR_FLAG]);
+      expect(repaired.output).not.toMatch(/unknown flag/);
+      expect(repaired.exitCode).toBe(0);
+
+      const after = byVersion(await listReleases(base, key));
+      expect(after.size).toBe(3);
+      expect(after.get("0.1.0")!.releasedAt).toBe(ANCESTRY_RELEASED_AT["0.1.0"]);
+      expect(sortedCrs(after.get("0.1.0")!.crs)).toEqual([...ANCESTRY_SHIPPED["0.1.0"]!].sort());
+    },
+  );
+
+  // ── AC5 — and the repair is OPT-IN: an ordinary re-run must NOT do it ─────
+
+  test(
+    "AC5 an ordinary backfill-releases re-run does NOT repair: over the SAME stale record it " +
+      "reports 3/3 recorded and leaves crs and releasedAt byte-identical, while the same " +
+      "command with the repair flag corrects them — so the two paths are provably distinct",
+    async () => {
+      const { repo, base, key, stale } = await staleCrsWorld("repair-is-opt-in");
+
+      // THE GUARD — an ordinary re-run, with the corrected derivation fully
+      // available to it (proven by staleCrsWorld's preconditions).
+      const ordinary = await runBackfill(repo, base);
+      expect(ordinary.exitCode).toBe(0);
+      expect(ordinary.output).toContain("3/3 recorded");
+      // NEGATIVE — it must not have taken the repair path implicitly.
+      const replayed = byVersion(await listReleases(base, key));
+      expect(replayed.size).toBe(3);
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) {
+        expect(sortedCrs(replayed.get(version)!.crs)).toEqual(sortedCrs(stale.get(version)!.crs));
+        expect(replayed.get(version)!.releasedAt).toBe(stale.get(version)!.releasedAt);
+      }
+      // Said plainly: the stale set survived the re-run untouched.
+      expect(replayed.get("0.1.0")!.crs).not.toContain(FF_CR);
+      expect(sortedCrs(replayed.get("0.1.0")!.crs)).toEqual([...STALE_010_CRS].sort());
+
+      // THE OTHER PATH — identical command, identical world, plus the flag.
+      const repaired = await runBackfill(repo, base, [REPAIR_FLAG]);
+      expect(repaired.output).not.toMatch(/unknown flag/);
+      expect(repaired.exitCode).toBe(0);
+
+      // DISTINCT: what the ordinary re-run would not change, the repair does.
+      const after = byVersion(await listReleases(base, key));
+      expect(after.get("0.1.0")!.crs).toContain(FF_CR);
+      expect(sortedCrs(after.get("0.1.0")!.crs)).toEqual([...ANCESTRY_SHIPPED["0.1.0"]!].sort());
+    },
+  );
+
+  // ── AC7 (CR-CRU-084) — the repair is IDEMPOTENT ──────────────────────────
+
+  test(
+    "AC7 running the repair TWICE changes nothing the second time: crs and releasedAt are " +
+      "identical to the first repair's for every release, and the store still holds exactly " +
+      "one row per tag",
+    async () => {
+      const { repo, base, key } = await staleCrsWorld("repair-is-idempotent");
+
+      const firstRepair = await runBackfill(repo, base, [REPAIR_FLAG]);
+      expect(firstRepair.output).not.toMatch(/unknown flag/);
+      expect(firstRepair.exitCode).toBe(0);
+      const once = byVersion(await listReleases(base, key));
+      // NON-VACUITY: the first repair actually did something, so "identical"
+      // below is not two copies of the unrepaired state.
+      expect(sortedCrs(once.get("0.1.0")!.crs)).toEqual([...ANCESTRY_SHIPPED["0.1.0"]!].sort());
+
+      const secondRepair = await runBackfill(repo, base, [REPAIR_FLAG]);
+      expect(secondRepair.output).not.toMatch(/unknown flag/);
+      expect(secondRepair.exitCode).toBe(0);
+
+      const twice = await listReleases(base, key);
+      // NO DUPLICATION — a repair is a correction, never a second recording.
+      expect(twice.length).toBe(3);
+      expect(twice.map((r) => r.version).sort()).toEqual(["0.1.0", "0.1.1", "0.1.2"]);
+
+      const settled = byVersion(twice);
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) {
+        expect(sortedCrs(settled.get(version)!.crs)).toEqual(sortedCrs(once.get(version)!.crs));
+        expect(settled.get(version)!.releasedAt).toBe(once.get(version)!.releasedAt);
+        expect(settled.get(version)!.commit).toBe(once.get(version)!.commit);
+      }
+    },
+  );
+
+  // ── the partition CR-CRU-080 AC10 guarantees survives a repair ────────────
+
+  test(
+    "a repair keeps attribution a PARTITION: every placed CR is still in exactly ONE release's " +
+      "crs, each release's set is exactly what it shipped, and the newly repaired CR is " +
+      "attributed to the EARLIEST tag containing it rather than smeared across all three",
+    async () => {
+      const { repo, mergeShas, base, key } = await staleCrsWorld("repair-keeps-partition");
+
+      const repaired = await runBackfill(repo, base, [REPAIR_FLAG]);
+      expect(repaired.output).not.toMatch(/unknown flag/);
+      expect(repaired.exitCode).toBe(0);
+
+      const releases = await listReleases(base, key);
+      const found = byVersion(releases);
+
+      // Guard: three non-empty sets, or disjointness would pass vacuously.
+      expect(releases.length).toBe(3);
+      for (const rel of releases) {
+        expect(Array.isArray(rel.crs)).toBe(true);
+        expect(rel.crs!.length).toBeGreaterThan(0);
+      }
+
+      // EXACT per-release sets — the repair corrected 0.1.0 without disturbing
+      // what its siblings shipped.
+      for (const [version, crs] of Object.entries(ANCESTRY_SHIPPED)) {
+        expect(sortedCrs(found.get(version)!.crs)).toEqual([...crs].sort());
+      }
+
+      // DISJOINT: every placed CR is counted exactly once across the union.
+      const all = releases.flatMap((r) => r.crs ?? []);
+      expect(new Set(all).size).toBe(all.length);
+      for (const cr of Object.values(ANCESTRY_SHIPPED).flat()) {
+        expect(all.filter((c) => c === cr).length).toBe(1);
+      }
+
+      // EARLIEST, for the repaired CR specifically: its sha is an ancestor of
+      // all three tags, so a repair that re-derived without the partition rule
+      // would list it in every one of them.
+      const sha = mergeShas.get(FF_CR)!;
+      for (const tag of ["0.1.0", "0.1.1", "0.1.2"]) {
+        expect(isAncestor(repo, sha, tag)).toBe(true);
+      }
+      expect(found.get("0.1.0")!.crs).toContain(FF_CR);
+      expect(found.get("0.1.1")!.crs).not.toContain(FF_CR);
+      expect(found.get("0.1.2")!.crs).not.toContain(FF_CR);
+    },
+  );
+
+  // ── a repair corrects provenance and NOTHING else ────────────────────────
+
+  test(
+    "a repair changes provenance ONLY: every release keeps the identical version and commit, " +
+      "no tag gains a second release row, and the two releases whose provenance was already " +
+      "correct come back unchanged",
+    async () => {
+      const { repo, base, key, stale } = await staleCrsWorld("repair-no-collateral-change");
+
+      const repaired = await runBackfill(repo, base, [REPAIR_FLAG]);
+      expect(repaired.output).not.toMatch(/unknown flag/);
+      expect(repaired.exitCode).toBe(0);
+
+      const releases = await listReleases(base, key);
+      // NO SECOND ROW — for any tag, not just in aggregate.
+      expect(releases.length).toBe(3);
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) {
+        expect(releases.filter((r) => r.version === version).length).toBe(1);
+      }
+
+      const after = byVersion(releases);
+      // IDENTITY UNTOUCHED — a repair re-derives provenance, never the release
+      // it belongs to. The commits are real 40-hex tag commits, so this is a
+      // comparison of values, not of two undefineds.
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) {
+        expect(stale.get(version)!.commit).toMatch(/^[0-9a-f]{40}$/);
+        expect(after.get(version)!.commit).toBe(stale.get(version)!.commit);
+        expect(after.get(version)!.version).toBe(stale.get(version)!.version);
+      }
+
+      // NEIGHBOURS UNTOUCHED — only the stale release moved.
+      for (const version of ["0.1.1", "0.1.2"]) {
+        expect(sortedCrs(after.get(version)!.crs)).toEqual(sortedCrs(stale.get(version)!.crs));
+        expect(after.get(version)!.releasedAt).toBe(stale.get(version)!.releasedAt);
+        expect(after.get(version)!.releasedAt).toBe(ANCESTRY_RELEASED_AT[version]!);
+      }
+      // …and it moved in exactly one respect.
+      expect(sortedCrs(after.get("0.1.0")!.crs)).not.toEqual(sortedCrs(stale.get("0.1.0")!.crs));
+      expect(after.get("0.1.0")!.releasedAt).toBe(stale.get("0.1.0")!.releasedAt);
     },
   );
 });

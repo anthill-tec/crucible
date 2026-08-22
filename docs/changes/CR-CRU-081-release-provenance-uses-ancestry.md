@@ -115,6 +115,11 @@ on. Inventing a placement would be fabrication; the honest answer is to say so o
 
 ### §S3 Repair the existing records
 
+**Surface:** `bash scripts/release.sh backfill-releases --repair-provenance`. Named here because it
+is a public CLI surface and belongs in the spec, not derived in a test — the RED agent had to invent
+it because §S3 described the behaviour without naming the command. The flag reuses the existing tag
+loop, sha resolution, ancestry and unplaceable tally, which is what keeps this an "S".
+
 The three recorded releases carry provenance produced by the old rule (0.1.0 shows 58 CRs and is
 missing at least two). Because CR-080 §S3 made release records **immutable** under dedup-replay, a
 re-run cannot correct them — so this CR provides an explicit, opt-in repair path that re-derives
@@ -143,6 +148,12 @@ did during CR-080's dog-food.
   an ordinary `backfill-releases` re-run remains the idempotent replay CR-080 §S3 defined.
 - **AC6** — provenance never depends on commit-message text: a test that rewrites a merge subject
   to remove the CR id must not change the computed `crs`.
+- **AC7** — the repair is **idempotent**: running it twice yields identical `crs` and `releasedAt`,
+  creates no second release row for the same tag, and leaves `version` and `commit` untouched.
+  Added because CR-084 AC7 depends on this path being repeatable ("repaired via the CR-081 repair
+  path, and the repair is idempotent"), and CR-081 had no such AC — the RED agent caught the gap.
+- **AC8** — after a repair, attribution is still a **partition**: each CR appears in exactly one
+  release's `crs` (CR-080 AC10). A repair must not smear a CR across releases.
 
 ## Estimated size
 
