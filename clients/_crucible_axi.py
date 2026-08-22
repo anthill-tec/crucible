@@ -1152,6 +1152,80 @@ def cmd_status(args, project_dir, ops):
     return 0
 
 
+# ── CR-CRU-081 §S2 — the `queue` READ verb (the landing-record sources) ─────
+
+# The whole feed depth the cr-merged scan reads. The events collection has no
+# type filter, so the milestone source is a bounded scan of the newest N events
+# rather than a query; N is deliberately far above any real project's milestone
+# count so a `cr-merged` marker is not missed by truncation.
+QUEUE_EVENTS_LIMIT = 5000
+
+
+def build_queue_rows(entries):
+    """CR-CRU-081 §S2 (PURE) — the project's registered CR queue as
+    uniform-table-safe rows: one dict per entry with the SAME scalar-only
+    key-set, so the list round-trips as a TOON Construct-3 table (the same
+    rule `build_status_rows` follows). `planId` is null when the queue entry
+    has no plan at all — which IS the fact the release ceremony needs."""
+    return [{"cr": e.get("cr"), "wave": e.get("wave"),
+             "status": e.get("status"), "planId": e.get("planId")}
+            for e in entries or []]
+
+
+def cr_merged_crs(events):
+    """CR-CRU-081 §S2 (PURE) — the CR ids carrying a `cr-merged` milestone: the
+    project's SECOND landing source, beside the closed plan record. A CR absent
+    from BOTH has no landing record at any source, which is exactly the class
+    the release ceremony must name rather than drop in silence."""
+    return sorted({e.get("label") for e in events or []
+                   if e.get("kind") == "milestone"
+                   and e.get("type") == "cr-merged" and e.get("label")})
+
+
+def cmd_queue(args, project_dir, ops):
+    """CR-CRU-081 §S2 — the queue READ verb (no --agent): the two DB-side
+    landing sources the release ceremony's provenance needs, in ONE read — the
+    registered CR queue (GET …/queue) and the CR ids a `cr-merged` milestone
+    covers (GET /api/v2/events). A pure carrier: every set operation over these
+    ids stays in the ceremony, which is the only actor that also has git.
+
+    Tolerant like `cmd_status`: an unreachable or non-ok source yields the empty
+    set plus a structured warning, never an error — a release is PUBLISHED
+    before it is reported and must never fail on its own provenance."""
+    key = ops.project_key(project_dir)
+    warnings = []
+
+    resp = ops.get(f"/api/v2/projects/{key}/queue")
+    if resp.get("ok"):
+        rows = build_queue_rows(resp.get("entries"))
+    else:
+        rows = []
+        warnings.append({
+            "code": "queue-unavailable",
+            "detail": (f"could not read the registered CR queue: "
+                       f"{resp.get('error')}"),
+        })
+
+    events = ops.get(f"/api/v2/events?project={key}"
+                     f"&limit={QUEUE_EVENTS_LIMIT}")
+    if events.get("ok"):
+        merged = cr_merged_crs(events.get("events"))
+    else:
+        merged = []
+        warnings.append({
+            "code": "milestones-unavailable",
+            "detail": (f"could not read the cr-merged milestones: "
+                       f"{events.get('error')}"),
+        })
+
+    ops.emit("queue", True,
+             {"queue": rows, "crMerged": merged, "count": len(rows),
+              "help": ["status"]},
+             ops.context(project_dir), warnings,
+             f"queue: ok=True entries={len(rows)} crMerged={len(merged)}")
+    return 0
+
+
 def status_namespace(**extra_fields):
     """§S14 (PARAMETERISED, DN §2) — the `cmd_status` args Namespace the no-arg
     dashboard forwards.

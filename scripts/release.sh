@@ -482,26 +482,94 @@ release_crs() {
     printf '%s\n' "${shipped[@]}" | sort -u | paste -sd, - || true
 }
 
-# CR-CRU-081 §S2 — name and COUNT the CRs ancestry could not place: a plan that
-# is CLOSED (the CR landed) yet records no merge commit, so there is no sha to
-# test ancestry against. Silence is what let CR-080's under-report hide — a
-# release that quietly under-reports looks exactly like one that shipped less —
-# so the ceremony states the gap at the moment it produces provenance.
+# CR-CRU-081 §S2 — the project's registered CR QUEUE and its `cr-merged` landing
+# markers, read through the client's `queue` verb (one call, both sources). The
+# queue is what says which CR ids the project ever filed; the two landing
+# sources together say which of them Crucible knows the landing of.
 #
-# A CR whose sha IS recorded but precedes no tag is NOT reported here: it landed
+# Tolerant exactly as `plan_merge_map` is: an unreachable or failing client
+# yields NO output, so the ceremony reports what it can rather than failing on
+# its own reporting — a published release must never be blocked by a gap in the
+# report about it.
+queue_read() {
+    python3 "$(repo_root)/clients/python-crucible.py" queue 2>/dev/null || true
+}
+
+# The CR ids the queue holds, one per line, from a `queue` envelope on stdin.
+queued_crs() {
+    awk '
+        /^[[:space:]]*queue\[[0-9]+\]\{/ {
+            header = $0
+            sub(/^[^{]*\{/, "", header)
+            sub(/\}.*$/, "", header)
+            cols = split(header, name, ",")
+            for (i = 1; i <= cols; i++) col[name[i]] = i
+            next
+        }
+        cols > 0 {
+            row = $0
+            gsub(/"/, "", row)
+            if (split(row, v, ",") < cols) next
+            cr = v[col["cr"]]
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", cr)
+            if (cr ~ /^CR-[A-Z]+-[0-9]+$/) print cr
+        }' | sort -u || true
+}
+
+# The CR ids a `cr-merged` milestone covers — the SECOND landing source — from
+# the same envelope, one per line.
+cr_merged_crs() {
+    awk -F': ' '/^[[:space:]]*crMerged\[[0-9]+\]:/ {
+            gsub(/,/, "\n", $2)
+            print $2
+        }' | tr -d ' ' | grep -E '^CR-[A-Z]+-[0-9]+$' | sort -u || true
+}
+
+# CR-CRU-081 §S2 — name and COUNT the CRs ancestry could not place, in the TWO
+# distinct classes §S2 defines, so "tracked, but the landing sha is missing" is
+# never read as "Crucible has no record of this CR landing at all":
+#
+#   1. a plan that is CLOSED (the CR landed) yet records no merge commit, so
+#      there is no sha to test ancestry against;
+#   2. a CR the project QUEUED for which no landing record exists at any source
+#      — no closed plan, and no `cr-merged` milestone either. This is the class
+#      that was invisible: ancestry cannot place such a CR and nothing reported
+#      it, so 0.1.0's provenance shrank from 58 CRs to 51 in total silence.
+#
+# Each class is counted and described SEPARATELY, on its own line, with disjoint
+# id sets — one shared total would re-create exactly the confusion §S2 names.
+#
+# Reporting places nothing: a named CR stays absent from every release's `crs`,
+# because Crucible genuinely does not know where it landed and inventing a
+# placement would be fabrication.
+#
+# A CR whose sha IS recorded but precedes no tag is in NEITHER class: it landed
 # after the newest tag, which is placement, not a gap.
 report_unplaceable_crs() {
-    local cr sha
-    local -a unplaceable=()
+    local cr sha queue_out tracked="" merged=""
+    local -a missing_sha=() no_record=()
 
     while read -r cr sha; do
-        if [ -z "$sha" ]; then
-            unplaceable+=("$cr")
-        fi
+        [ -n "$cr" ] || continue
+        tracked="$tracked $cr"
+        [ -n "$sha" ] || missing_sha+=("$cr")
     done < <(plan_merge_map)
 
-    [ "${#unplaceable[@]}" -gt 0 ] || return "$EXIT_SUCCESS"
-    info "provenance: ${#unplaceable[@]} unplaceable CR(s) — closed with no recorded merge commit, so ancestry cannot place them: ${unplaceable[*]}"
+    queue_out="$(queue_read)"
+    merged=" $(printf '%s\n' "$queue_out" | cr_merged_crs | paste -sd' ' -) "
+    while IFS= read -r cr; do
+        [ -n "$cr" ] || continue
+        [[ " $tracked " != *" $cr "* ]] || continue
+        [[ "$merged" != *" $cr "* ]] || continue
+        no_record+=("$cr")
+    done < <(printf '%s\n' "$queue_out" | queued_crs)
+
+    if [ "${#missing_sha[@]}" -gt 0 ]; then
+        info "provenance: ${#missing_sha[@]} unplaceable CR(s) — tracked, but the landing sha is missing: the plan is closed and records no merge commit, so there is no commit to test ancestry against: ${missing_sha[*]}"
+    fi
+    if [ "${#no_record[@]}" -gt 0 ]; then
+        info "provenance: ${#no_record[@]} unplaceable queued CR(s) — no landing record at all: Crucible holds neither a closed plan nor a cr-merged milestone for them, so where they landed is unknown: ${no_record[*]}"
+    fi
 }
 
 # The SINGLE release-report path: report one (version, sha) pair as a `release`

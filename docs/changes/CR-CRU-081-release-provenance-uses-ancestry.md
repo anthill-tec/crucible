@@ -95,6 +95,15 @@ found by verifying the implementation against real history rather than by readin
    demonstrably shipped in `0.1.0`, predating plan tracking entirely, with `cr-merged` covering
    **none** of them.
 
+**§S2 requires a public surface this spec failed to name.** Class 2 is defined over the project's
+**queue**, which the ceremony could not read: the client exposed `plans` but nothing for the queue,
+and a bare `curl` is forbidden (the live suite asserts the ceremony shells only to the client). So
+delivering AC4b added a **`queue` read verb**, wired into **all five** clients from the shared
+module — fleet-wide deliberately, because adding it to one client is precisely the drift CR-CRU-075
+exists to fix. It is a pure carrier: it GETs the queue and the event feed and emits them as a TOON
+table; every set operation stays in the ceremony, and the server still never runs git.
+This does **not** pre-empt CR-075, which is about `queue-file`'s **write** parity.
+
 Class 2 is the dangerous one because it is invisible: ancestry cannot place such a CR (there is no
 sha to test), and under the narrow definition it was not reported either, so provenance simply
 shrank in silence — `0.1.0` went from 58 CRs to 51 with no signal at all. Both classes are named

@@ -1908,6 +1908,14 @@ def cmd_status(args):
     return _axi().cmd_status(args, _resolve_project_dir(args.project_dir), _ops())
 
 
+def cmd_queue(args):
+    """CR-CRU-081 §S2 — the queue READ verb (no --agent): the registered CR
+    queue (GET …/queue) plus the CR ids a `cr-merged` milestone covers, the two
+    landing-record sources the release ceremony's provenance needs. Delegates
+    to the shared implementation."""
+    return _axi().cmd_queue(args, _resolve_project_dir(args.project_dir), _ops())
+
+
 # ── CR-CRU-013 §S5 — fleet gate / milestone verbs ───────────────────────────
 
 
@@ -2442,6 +2450,13 @@ def main():
                              "cr,wave,status,activeCycleId set (§S10).")
         _add_project_dir_arg(sv)
         sv.set_defaults(func=cmd_status)
+
+    # ── CR-CRU-081 §S2 — the landing-record READ verb (no --agent) ──
+    qv = sub.add_parser("queue",
+                        help="Read the registered CR queue (GET …/queue) plus the "
+                             "cr-merged milestone ids as a TOON-AXI table. Read-only.")
+    _add_project_dir_arg(qv)
+    qv.set_defaults(func=cmd_queue)
 
     gr = sub.add_parser("gate-run",
                         help="axi PROXY: run `no-mistakes axi run`, post throttled interim "
