@@ -28,6 +28,45 @@ flow with it, CR-078 groups the table with it). An omitted CR renders on the wro
 release boundary, so the view misreports what shipped — the exact class of defect the roadmap work
 exists to remove.
 
+## Gap analysis (2026-08-22, pre-RED) — READY
+
+Run per the `gap-analysis` skill, all six dimensions.
+
+- **D2 / D4 — the mechanism this CR assumes exists, and the fix is proven before any code.**
+  Every one of the **63** closed plans carries a merge sha, and all 63 resolve as real commits, so
+  ancestry has full coverage with no fallback needed. The decisive check: `CR-CRU-021`'s merge
+  `c4c192e` and `CR-CRU-023`'s `b99b547` are **both ancestors of `0.1.0`** — so ancestry does place
+  the two CRs the subject-scan drops, and AC2 is achievable rather than hopeful.
+  **Spec precision:** the plan's field is an object, `merge: {commit: "…"}`, not a bare string.
+- **D4 — no reinvention; two existing mechanisms are consumed as-is.** The client already exposes a
+  `plans` verb, so the ceremony reads the CR→merge-sha map through it rather than inventing a
+  queue-read or touching the DB. And `git merge-base --is-ancestor` is the ancestry primitive — no
+  graph walking of our own.
+  There is a **second** CR→commit source (40 `cr-merged` milestones). The plan record is chosen as
+  authoritative: it is structured, exactly one per CR, and already the close-out artifact, whereas
+  the milestone is an event stream that can carry repeats.
+- **Where ancestry runs — decided here, not in the cycle.** CR-080 set the boundary: **git lives in
+  the ceremony, the DB in the server**, and its GREEN phase then put the queue intersection in the
+  shared client because the wire tests pin the server as a verbatim carrier. Ancestry needs *both*
+  git and the CR→sha map, so it runs in the **ceremony**: it fetches plans via the client's `plans`
+  verb and resolves ancestry with git locally. That preserves 080's boundary — the server still
+  never runs git and still stores what it is given.
+- **D6 — consumers of the symbol being replaced are enumerated.** `release_crs` exists twice and the
+  two are different things: `scripts/release.sh:411` (the subject scan being **replaced**, called
+  only at `:457`) and `clients/_crucible_axi.py:1564` (the queue **intersection**, called at
+  `:1609`, and **kept** — it is referenced by design comments in `src/store.ts:1711` and
+  `src/v2.ts:1152`). Only the shell function's rule changes; the client's intersection stays, so a
+  release still never claims CRs the project never registered.
+- **D1 / D3 — no PRD conflict.** `DN-release-process.md` mentions provenance but mandates no
+  detection rule, and `crs` has no consumer in code yet (it shipped with CR-080), so there are no
+  callers passing wrong values. Downstream consumers are **CR-083** (release membership as proof of
+  completion) and **CR-078** (the release reading) — 083 is the reason this CR runs first: on
+  incomplete `crs` it would leave exactly `CR-021`/`023` wrong after the "fix".
+- **D5 — nothing is retired on a claim.** The subject-scan is replaced because it was measured to
+  drop real CRs, not because it looked unused.
+
+**Verdict: READY.**
+
 ## Scope
 
 ### §S1 Ancestry, not text
@@ -36,8 +75,9 @@ exists to remove.
 merge commit is an ancestor of that tag (`git merge-base --is-ancestor <cr-merge-sha> <tag>`), and
 it is attributed to the **earliest** tag satisfying that, preserving CR-080 AC10's partition.
 
-The per-CR merge sha comes from the plan record the project already keeps (plans carry `merge`),
-so the ceremony resolves CR → sha without parsing prose. A CR with no recorded merge sha cannot be
+The per-CR merge sha comes from the plan record the project already keeps — `merge: {commit}` on a
+closed plan, read through the client's existing `plans` verb — so the ceremony resolves CR → sha
+without parsing prose and without a new read surface. A CR with no recorded merge sha cannot be
 placed by ancestry and is reported as **unplaceable** rather than dropped in silence (§S2).
 
 ### §S2 Unplaceable CRs are surfaced, never silently dropped
