@@ -33,23 +33,73 @@ The docstring states the assumption explicitly: *"Detail printed AFTER the fail 
 holds on the version this repo develops on (`bun 1.3.14`) and does **not** hold on the newer bun CI
 installs, which emits the timeout detail where the parser marries it.
 
-**Root cause: the toolchain is unpinned.** All five `oven-sh/setup-bun@v2` steps in `release.yml` name
-no `bun-version` (`grep -rn bun-version .github/` → nothing), so CI silently tracks the newest bun
-while local development sits on 1.3.14. Tests that parse bun's own console format are therefore
-contract-bearing against an input that changes without a commit. This is a class defect, not one
-test's bad luck: `§S1b (CR-CRU-055)` already records one such flip (an uncoloured pipe emitting a
-second legal wire form), which was absorbed by widening the matchers.
+**Root cause: the version CI resolves is an open-ended range, not a pin.** Read from
+`oven-sh/setup-bun@v2`'s own documented resolution order, with no `bun-version` given it takes
+(1) `package.json`'s `packageManager` field, (2) `package.json`'s `engines.bun`, (3) otherwise
+`latest`. This repo has no `packageManager` field and declares `"engines": { "bun": ">=1.2" }`
+(`package.json:20-22`), so all five steps resolve through an **open range that matches every current
+release** — CI tracks the newest bun while local development sits on 1.3.14, with no commit in
+between. Tests that parse bun's own console format are therefore contract-bearing against an input
+that changes on bun's release schedule. This is a class defect, not one test's bad luck:
+`§S1b (CR-CRU-055)` already records one such flip (an uncoloured pipe emitting a second legal wire
+form), which was absorbed by widening the matchers.
+
+**On the ordering claim, stated honestly:** that the newer bun prints the timeout detail BEFORE the
+`(fail)` line is DEDUCED, not observed on that version — the parser's only path to a message is an
+`error:` block preceding a fail line, and CI produced one. §S3's fixtures make the fix independent of
+which bun any runner installs, so nothing rests on the deduction.
+
+**The gating is correct and must not be "fixed".** `publish-pypi` (`:201`) and `publish-npm` (`:260`)
+both `needs: [build, test-bun, test-python, test-e2e]` **by design** — CR-062 §S4 made the dependency
+graph the gate so a failed suite blocks a publish by construction rather than by discipline. This CR
+fixes the red suite; it must not loosen the graph.
 
 **The assertion is also over-specified.** It defends an ABSENCE that was an artifact of one version's
 line ordering. Carrying `"test timed out"` is *better* data than carrying nothing; what actually
 matters is that a married message belongs to the leaf it is attached to.
 
+## Gap analysis (2026-08-23, pre-RED) — READY (after the corrections folded in above)
+
+Run per the `gap-analysis` skill, all six dimensions. This CR was filed hours earlier in the same
+session and its own analysis corrected it twice — recorded rather than quietly rewritten.
+
+- **D4 — the spec reinvented a mechanism that already exists.** As filed, §S1 said "every `setup-bun`
+  step names an explicit `bun-version`" — five near-duplicate YAML edits. `setup-bun@v2`'s documented
+  resolution order reads `package.json`'s `packageManager` FIRST, so ONE line pins all five jobs with
+  no workflow change. Corrected in §S1/AC1.
+- **D2 — the "no pin at all" premise was wrong.** `package.json:20-22` already declares
+  `"engines": { "bun": ">=1.2" }`, which `setup-bun` consumes as step 2 of its order. So CI is not
+  falling through to `latest` for lack of any declaration; it is resolving an OPEN RANGE. The
+  observable outcome is the same, the mechanism is not, and the fix differs. Corrected in Problem.
+- **D3 — the gating is design, not collateral.** `publish-pypi` (`:201`) and `publish-npm` (`:260`)
+  gate on all three suites deliberately (CR-062 §S4: "the gate IS the dependency graph"). The spec now
+  says so explicitly, so no one relaxes `needs:` to unblock a release.
+- **D2 — every cited line verified:** the failing assertion at
+  `tests/clients-bun-crucible.test.ts:696-701`; the parser at `clients/bun-crucible.py:587-631` with
+  its boundary guard at `:576-578`; five `setup-bun` steps and zero `bun-version` occurrences in
+  `.github/`; local `bun --version` = 1.3.14; CI's received value `"test timed out"` from run
+  32565982939.
+- **D1 — no design conflict.** `DN-release-process.md` mandates no toolchain policy, so this adds a
+  rule where the DN is silent; its §4 "treat a skip as a failed gate" is consistent with AC5 refusing
+  to close on a local green.
+- **D5/D6 — nothing retired, no public symbol removed.** The parser's algorithm is untouched; only a
+  test's version-specific assumption changes.
+- **Adjacent, deliberately out of scope:** `astral-sh/setup-uv@v6` is unpinned in the same workflow —
+  the identical class. The python suite is green, so folding it in would be scope growth; noted for the
+  next SCRUM.
+
 ## Scope
 
-### §S1 Pin the toolchain
+### §S1 One declaration, consumed by every job
 
-Every `setup-bun` step in `.github/workflows/**` names an explicit `bun-version` equal to the version
-the repo develops on. A bun upgrade then becomes a deliberate, reviewable commit that re-runs the
+The version lives in **one** place: `package.json`'s `packageManager` field, pinned to the exact
+version the repo develops on (`bun@1.3.14`). `setup-bun` reads that field FIRST, so all five steps
+inherit it with **no workflow edit and nothing duplicated** — a pin repeated in five steps is five
+places to drift.
+
+`engines.bun` keeps its own, different meaning: the compatibility FLOOR consumers must satisfy
+(`>=1.2`). The two are complementary — "what we support" vs "what we build and test with" — and only
+the latter may be exact. A bun upgrade then becomes a one-line reviewable commit that re-runs the
 format-parsing suites, instead of an invisible input change that reds the gate overnight.
 
 ### §S2 Assert attribution, not absence
@@ -67,8 +117,13 @@ as **fixtures** — so version-robustness is proven without depending on which b
 
 ## Acceptance criteria
 
-- **AC1** — every `setup-bun` step in `.github/workflows/**` pins `bun-version`; the pinned value
-  equals the locally developed version (`1.3.14` at filing). No step is left floating.
+- **AC1** — `package.json` declares `"packageManager": "bun@<exact>"` at the version the repo develops
+  on (`1.3.14` at filing), and `engines.bun` is left as the compatibility floor. No `bun-version` is
+  added to any workflow step: the single declaration is what all five `setup-bun` steps resolve, which
+  a test or check asserts rather than a reviewer eyeballing five YAML blocks.
+- **AC1b** — the resolved version is observable in CI: the `setup-bun` step's `bun-version` output (or
+  a `bun --version` line in the job log) reads `1.3.14`, proving the declaration is what the runner
+  actually installed and not merely what the file says.
 - **AC2** — the §S2c timeout assertion no longer asserts `toBeUndefined()`. It asserts attribution:
   when a message is present it is the timed-out leaf's own, and no other leaf gains a message it did
   not produce.
@@ -79,12 +134,15 @@ as **fixtures** — so version-robustness is proven without depending on which b
   (the existing §S2c matched-failure tests stay green, unmodified).
 - **AC5** — `test-bun` is GREEN in CI on a push to `develop`, and `publish-pypi`/`publish-npm` are no
   longer skipped for this reason. This is the observable gate; a local green does not close this CR.
-- **AC6** — the pin is documented where an operator will meet it (the workflow comment and
-  `RELEASING.md`): bumping bun is a deliberate change that must re-run the client-format suites.
+- **AC6** — the pin is documented where an operator will meet it (`RELEASING.md` and a comment beside
+  the `packageManager` field): bumping bun is a deliberate change that must re-run the client-format
+  suites. `engines.bun` vs `packageManager` — floor vs build version — is stated so a future reader
+  does not "tidy" one into the other.
 
 ## Estimated size
 
-S — a pin in five workflow steps, one re-specified assertion, and a second fixture ordering.
+S — one `packageManager` line, one re-specified assertion, a second fixture ordering, and a check that
+the declaration is what CI resolves.
 
 ## Risk
 
