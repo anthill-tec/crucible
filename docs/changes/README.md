@@ -122,6 +122,15 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `PENDING`); the write-side guard — refuse the removal, or require it to be explicit per id — has
   no CR yet.
 
+- **`develop` is RED in CI as of 2026-08-23 (run 32657142250 on `0d0ccf2`) — two separate failures,
+  both environment-driven, neither reproducible locally** (local: bun 1567 pass / 0 fail, python 920 OK,
+  e2e 46). (a) CI now installs **bun 1.4.0** while development is on 1.3.14, and CR-088's echo-based
+  attribution does NOT hold there: the AC4 end-to-end assertion gets `Received: "leaked boom"`, i.e. the
+  aftermath still reaches the next leaf on 1.4.0. The parser fix is measured correct on 1.3.14 only, so
+  either the discriminator needs 1.4.0's shape or that assertion must move to frozen fixtures (AC7's
+  own intent). (b) `npm pack --dry-run --json failed` in the same job — separate cause, not the
+  corepack tax (that field was reverted). FIRST THING NEXT RUN: reproduce (a) against bun 1.4.0 before
+  touching 077.
 - CI runs an unpinned bun deliberately. Pinning was tried in CR-087 and **reverted** (`93f42f7`): `packageManager` makes npm provision through corepack (958 ms → 13082 ms on the npm-pack test). The both-orderings fixtures catch a console-format flip instead. [CR-CRU-089](CR-CRU-089-pin-bun-without-telling-npm.md) is VOID; revisit only if a flip recurs.
 - The bun failure-detail mis-attribution (a leaked async throw landing on the next leaf) is
   **fixed** by [CR-CRU-088](CR-CRU-088-failure-detail-marries-the-wrong-leaf.md) §S1: a detail block
