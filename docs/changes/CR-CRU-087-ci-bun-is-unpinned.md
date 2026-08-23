@@ -130,8 +130,18 @@ as **fixtures** — so version-robustness is proven without depending on which b
 - **AC3** — `_parse_console_failures` is exercised against BOTH orderings as fixtures — detail before
   the `(fail)` line and detail after it — and the leaf-attribution assertions hold in both, so the
   suite's verdict does not depend on the runner's bun.
-- **AC4** — the cross-leaf guarantee is unchanged: a detail block never marries onto a later leaf
-  (the existing §S2c matched-failure tests stay green, unmodified).
+- **AC4** — the cross-leaf guarantee is asserted for the shapes the parser handles correctly today: a
+  pending detail block is ended by a `(pass)`/`(skip)`/`(todo)` boundary and never marries backwards.
+  The existing §S2c matched-failure tests stay green, unmodified.
+  **AC4 as filed was wrong and is corrected here.** It claimed the cross-leaf guarantee "is
+  unchanged", i.e. that it held. C2 measured that it does **not**: an `error:` block printed AFTER its
+  own leaf's `(fail)` line and BEFORE the next leaf's marries onto that **later** leaf. Not
+  hypothetical — reproduced on bun 1.3.14, where a leaked async throw prints
+  `error: leaked boom` between the two fail lines and the ingested tree reports it as the NEXT test's
+  failure message. Fixing it needs a way to tell "alpha's aftermath" from "beta's prelude", which are
+  positionally identical in bun's stream — a design question, not a wording fix. It is therefore
+  **out of scope here and filed as its own CR** (see Risk); this CR does not pretend the invariant
+  holds, and the failing guard tests travel with that CR rather than being committed red.
 - **AC5** — `test-bun` is GREEN in CI on a push to `develop`, and `publish-pypi`/`publish-npm` are no
   longer skipped for this reason. This is the observable gate; a local green does not close this CR.
 - **AC6** — the pin is documented where an operator will meet it: `RELEASING.md` carries the bump
