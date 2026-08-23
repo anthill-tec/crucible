@@ -42,12 +42,32 @@
 //       error: expect(received).toBe(expected)
 //       ...
 //       (fail) mismatched expectation [0.12ms]
-//   - a TIMEOUT's detail line ("^ this test timed out after Nms.") is
-//     printed AFTER the "(fail) <name>" line instead — structurally NOT a
-//     "preceding block". A marrying parser built to the spec's described
-//     mechanism ("the error:/assertion block preceding each (fail) <name>
-//     line") cannot associate it with that leaf. That is the deliberate
-//     "unmatched failing leaf" fixture case below (degrades to type-only).
+//   - a TIMEOUT's detail line is printed with the OPPOSITE ordering, and
+//     WHICH ordering you get is a property of the runner's bun, not of the
+//     client: 1.3.14 prints "^ this test timed out after Nms." AFTER the
+//     "(fail) <name>" line (structurally not a preceding block, so the leaf
+//     degrades to type-only), while a newer bun surfaces "test timed out"
+//     for the same leaf. CR-CRU-087 §S2/AC2: this suite therefore asserts
+//     ATTRIBUTION for that leaf — it is `fail`, and any message it carries
+//     is its OWN — never the ABSENCE of a message, which was only ever an
+//     artifact of one bun's line ordering. The version-sensitive
+//     both-orderings fixture coverage (§S3/AC3) lives in
+//     tests/client/test_cr087_console_failure_attribution.py, where the
+//     real parser is fed both orderings directly instead of whichever one
+//     the installed bun happens to print.
+//   - CROSS-LEAF BLEED, stated honestly: only the halves the parser gets
+//     right today are guarded there — a `(pass)`/`(skip)`/`(todo)` result
+//     line ends a pending detail block, and a block trailing its own
+//     `(fail)` line never marries BACKWARDS onto that leaf. The FORWARD
+//     case is NOT guarded, because it is broken: a detail block printed
+//     after its own leaf's `(fail)` line and before the NEXT leaf's
+//     marries onto that later leaf. That is a MEASURED, UNFIXED defect
+//     (reproduced on bun 1.3.14's leaked-async-throw output, and it
+//     reaches the ingested tree), deliberately OUT OF SCOPE for
+//     CR-CRU-087 and recorded in the deferred register in
+//     docs/changes/README.md. The python file pins the current defective
+//     attribution as a characterisation test rather than asserting a
+//     guard that does not exist.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -306,7 +326,8 @@ function runGit(args: string[], cwd: string): void {
 }
 
 // 1 passing + 3 failing (mismatch, thrown-with-detail, timeout) — see the
-// file header for why the timeout case is the deliberate "unmatched" leaf.
+// file header for why the timeout leaf is asserted by ATTRIBUTION rather
+// than by absence of a message.
 const FIXTURE_TEST_SOURCE = `import { test, expect } from "bun:test";
 
 test("adds numbers correctly", () => {
@@ -693,11 +714,36 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
     expect(thrown?.failure?.message ?? "").toContain("boom with detail");
   });
 
-  test("§S2c: an unmatched failing leaf (timeout — detail line falls AFTER '(fail)', not before) degrades to type-only, no message", () => {
+  test("§S2c/AC2 (CR-CRU-087): the timed-out leaf is ATTRIBUTED, not asserted ABSENT — it is 'fail', and any message it carries is its OWN, never a neighbouring leaf's console detail", () => {
     const leaves = (event?.tree ?? []).flatMap((suite) => suite.children);
     const timedOut = leaves.find((l) => l.name === "times out unmatched");
+    const mismatch = leaves.find((l) => l.name === "mismatched expectation");
+    const thrown = leaves.find((l) => l.name === "throws with detail");
     expect(timedOut?.status).toBe("fail");
-    expect(timedOut?.failure?.message).toBeUndefined();
+
+    // Whether the timeout's detail lands BEFORE or AFTER its own "(fail)"
+    // line is the runner's bun talking (see the file header): 1.3.14 leaves
+    // this leaf type-only, a newer bun hands it "test timed out". Both are
+    // legal output, so the invariant pinned here is ATTRIBUTION — IF a
+    // message is present it must be this leaf's own timeout detail, and in
+    // particular must not be either neighbour's console block.
+    const timeoutMessage = timedOut?.failure?.message;
+    if (timeoutMessage !== undefined) {
+      expect(timeoutMessage).toMatch(/tim(?:e|ed)\s*out/i);
+      expect(timeoutMessage).not.toContain("expect(");
+      expect(timeoutMessage).not.toContain("boom with detail");
+      expect(timeoutMessage).not.toBe(mismatch?.failure?.message);
+      expect(timeoutMessage).not.toBe(thrown?.failure?.message);
+    }
+
+    // The converse half of the same invariant — the half THIS bun does
+    // exercise, since it is the timeout's detail that goes homeless here:
+    // neither matched leaf absorbs it, and both keep exactly the messages
+    // the preceding test asserts.
+    expect(mismatch?.failure?.message ?? "").toContain("expect(");
+    expect(mismatch?.failure?.message ?? "").not.toMatch(/tim(?:e|ed)\s*out/i);
+    expect(thrown?.failure?.message ?? "").toContain("boom with detail");
+    expect(thrown?.failure?.message ?? "").not.toMatch(/tim(?:e|ed)\s*out/i);
   });
 });
 
