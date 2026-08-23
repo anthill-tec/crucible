@@ -69,7 +69,7 @@ interface BuilderEntry {
   title?: string;
   wave: string;
   dependsOn: string[];
-  status: "PENDING" | "IN_PROGRESS" | "COMPLETED";
+  status: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "COMPLETED_UNTRACKED";
   track?: string;
 }
 interface BuilderRelease {
@@ -225,6 +225,29 @@ describe("§S3 — buildRoadmapGraph brackets the DAG with Start/End terminals a
   });
 });
 
+// ── CR-CRU-083 AC7 — the fourth derived status reaches the GRAPH consumer ───
+
+describe("CR-CRU-083 AC7 — buildRoadmapGraph carries COMPLETED_UNTRACKED through verbatim", () => {
+  test("an untracked-completion entry keeps its wire status on data.status (never normalised to COMPLETED/PENDING) and never leaks it into the label", () => {
+    const g = buildRoadmapGraph(
+      [
+        { cr: "CR-U", title: "Untracked", wave: "5", dependsOn: [], status: "COMPLETED_UNTRACKED" },
+        { cr: "CR-T", title: "Tracked", wave: "5", dependsOn: ["CR-U"], status: "COMPLETED" },
+      ],
+      [],
+    );
+    const untracked = nodeById(g, "CR-U");
+    expect(untracked).toBeDefined();
+    // The style-driving data field is the wire value itself — the stylesheet
+    // selects on it, so any normalisation silently restyles it as COMPLETED.
+    expect(untracked!.data.status).toBe("COMPLETED_UNTRACKED");
+    expect(untracked!.data.label).toBe("Untracked");
+    expect(untracked!.data.label).not.toContain("COMPLETED");
+    // The tracked sibling is untouched — the two remain distinct in the graph.
+    expect(nodeById(g, "CR-T")!.data.status).toBe("COMPLETED");
+  });
+});
+
 // ── §S3 exclusive table|graph toggle — real app.js in happy-dom ─────────────
 
 interface QueueEntryFixture {
@@ -232,7 +255,7 @@ interface QueueEntryFixture {
   title?: string;
   wave: string;
   dependsOn: string[];
-  status: "PENDING" | "IN_PROGRESS" | "COMPLETED";
+  status: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "COMPLETED_UNTRACKED";
   planId?: number;
 }
 interface ProjectFixture {
@@ -249,6 +272,66 @@ interface MountOpts {
   pathname?: string;
   projects: ProjectFixture[];
   queue: QueueEntryFixture[];
+  // Opt-in: also load the vendored Cytoscape UMDs so public/app.js really
+  // instantiates the graph (see installCytoscape). Off for the toggle tests,
+  // which only need the container's presence/absence.
+  cytoscape?: boolean;
+}
+
+// A Cytoscape stylesheet rule as `cy.style().json()` returns it.
+interface CyStyleRule {
+  selector: string;
+  style: Record<string, unknown>;
+}
+interface CyCollection {
+  length: number;
+  nonempty: () => boolean;
+  emit: (event: string) => unknown;
+}
+interface CyHandle {
+  style: () => { json: () => CyStyleRule[] };
+  $id: (id: string) => CyCollection;
+}
+
+// public/app.js guards its Cytoscape mount on the plain-HTML global
+// `window.cytoscape` (the vendored UMD, loaded by index.html) and publishes the
+// live instance as `window.crucibleRoadmapCy`. happy-dom ships no canvas
+// backend, so cytoscape's canvas renderer aborts with "Could not create canvas
+// of type 2d" and never yields an instance — hence the minimal 2d-context stub.
+// Test-harness only: no production seam, the stylesheet read below is the real
+// one app.js hands to cytoscape.
+function installCytoscape(): void {
+  const ctx2d = new Proxy(
+    {},
+    {
+      get: (_target, prop) => {
+        if (prop === "canvas") return { width: 300, height: 150 };
+        if (prop === "measureText") return () => ({ width: 10 });
+        if (prop === "getImageData") return () => ({ data: new Uint8ClampedArray(4) });
+        if (prop === "createLinearGradient" || prop === "createPattern") {
+          return () => ({ addColorStop: () => undefined });
+        }
+        return () => undefined;
+      },
+      set: () => true,
+    },
+  );
+  const canvasProto: { getContext: unknown } = HTMLCanvasElement.prototype;
+  canvasProto.getContext = () => ctx2d;
+  // cytoscape's texture cache renders into an OffscreenCanvas when the global
+  // exists (happy-dom provides one whose getContext yields null).
+  const offscreen: { prototype: { getContext: unknown } } | undefined =
+    (globalThis as { OffscreenCanvas?: { prototype: { getContext: unknown } } }).OffscreenCanvas;
+  if (offscreen !== undefined) offscreen.prototype.getContext = () => ctx2d;
+  (0, eval)(readFileSync(path.join(REPO_ROOT, "public/cytoscape.umd.js"), "utf8"));
+  (0, eval)(readFileSync(path.join(REPO_ROOT, "public/cytoscape-dagre.js"), "utf8"));
+}
+
+// The live instance app.js publishes on the window (public/app.js) — the DOM
+// lib has no declaration for it, so the known shape is asserted once here.
+function roadmapCy(): CyHandle | undefined {
+  const win = window as unknown as { crucibleRoadmapCy?: CyHandle };
+  return win.crucibleRoadmapCy;
 }
 
 let cacheBust = 0;
@@ -283,6 +366,8 @@ async function mountApp(opts: MountOpts): Promise<void> {
 
   (0, eval)(VAN_SRC);
   (0, eval)(VAN_X_SRC);
+
+  if (opts.cytoscape === true) installCytoscape();
 
   cacheBust += 1;
   // Runtime-selected specifier (cache-bust query) — each mount re-evals the
@@ -371,5 +456,121 @@ describe("§S3 — the roadmap view is an EXCLUSIVE table|graph toggle (table de
     await settle();
     expect(rowCount()).toBeGreaterThan(0);
     expect(graphCount()).toBe(0);
+  });
+});
+
+// ── CR-CRU-083 AC7 — the graph STYLE half of the same consumer contract ─────
+
+describe("CR-CRU-083 AC7 — the graph stylesheet styles COMPLETED_UNTRACKED distinctly", () => {
+  test("the live Cytoscape stylesheet carries its own node[status=\"COMPLETED_UNTRACKED\"] rule, visually distinct from the COMPLETED rule", async () => {
+    await mountApp({
+      pathname: "/p/toggle-key/roadmap",
+      projects: [project({ key: "toggle-key" })],
+      queue: [
+        { cr: "CR-A", title: "Alpha", wave: "5", dependsOn: [], status: "COMPLETED" },
+        { cr: "CR-U", title: "Untracked", wave: "5", dependsOn: ["CR-A"], status: "COMPLETED_UNTRACKED" },
+      ],
+      cytoscape: true,
+    });
+    document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]')!.click();
+    await settle();
+
+    const cy = roadmapCy();
+    expect(cy).toBeDefined();
+    const rules = cy!.style().json();
+    // cytoscape re-serialises selectors with spaces around `=`.
+    const norm = (selector: string): string => selector.replace(/\s+/g, "");
+    const ruleFor = (status: string): CyStyleRule | undefined =>
+      rules.find((r) => norm(r.selector) === `node[status="${status}"]`);
+
+    // Guard the reader itself: the three shipped status rules are found this way.
+    const completed = ruleFor("COMPLETED");
+    expect(completed).toBeDefined();
+    expect(ruleFor("IN_PROGRESS")).toBeDefined();
+    expect(ruleFor("PENDING")).toBeDefined();
+
+    const untracked = ruleFor("COMPLETED_UNTRACKED");
+    expect(untracked).toBeDefined();
+    // Distinct STYLE, not merely a distinct selector — an untracked node must
+    // not read as a fully tracked completion.
+    expect(JSON.stringify(untracked!.style)).not.toBe(JSON.stringify(completed!.style));
+  });
+});
+
+// ── CR-CRU-083 AC7 — the graph TAP half of the same consumer contract ───────
+//
+// The table row is already status-gated (public/app.js:2391 — swap only for
+// IN_PROGRESS or COMPLETED, everything else inert). The graph node's tap
+// handler (public/app.js:2579-2581) is status-BLIND: `cy.on("tap","node",…)`
+// swaps to Workflow for every node, so tapping a COMPLETED_UNTRACKED (or
+// PENDING) node lands the user on a Workflow tab with nothing to show, while
+// the row for the SAME cr does nothing. AC7 forbids exactly that: no consumer
+// of derived status may fall through to a default. The two surfaces must agree.
+//
+// Driven through the live cytoscape instance the real app.js published —
+// `cy.$id(<cr>).emit("tap")` is cytoscape's own event dispatch, so the
+// delegated `("tap","node")` handler is reached the way a real pointer tap
+// reaches it. Nothing calls the handler directly (that would bypass the gate
+// under test).
+
+function findByText(root: ParentNode, selector: string, text: string): HTMLElement | undefined {
+  return Array.from(root.querySelectorAll(selector)).find(
+    (el) => (el.textContent ?? "").trim() === text,
+  ) as HTMLElement | undefined;
+}
+
+function tabIsOn(name: string): boolean {
+  const tab = findByText(document, '[data-testid="workspace-tab"]', name);
+  return tab !== undefined && tab.classList.contains("on");
+}
+
+describe("CR-CRU-083 AC7 — tapping a graph node is status-gated exactly like the table row", () => {
+  test("tapping a COMPLETED_UNTRACKED node (and a PENDING one) does NOT swap to Workflow; tapping a COMPLETED node does", async () => {
+    await mountApp({
+      pathname: "/p/toggle-key/roadmap",
+      projects: [project({ key: "toggle-key" })],
+      queue: [
+        { cr: "CR-A", title: "Alpha", wave: "5", dependsOn: [], status: "COMPLETED" },
+        {
+          cr: "CR-U",
+          title: "Untracked",
+          wave: "5",
+          dependsOn: ["CR-A"],
+          status: "COMPLETED_UNTRACKED",
+        },
+        { cr: "CR-P", title: "Pending", wave: "6", dependsOn: ["CR-A"], status: "PENDING" },
+      ],
+      cytoscape: true,
+    });
+    document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]')!.click();
+    await settle();
+
+    const cy = roadmapCy();
+    expect(cy).toBeDefined();
+    // GUARD — the three nodes really are in the live graph, so an "inert"
+    // verdict below cannot come from tapping nothing at all.
+    expect(cy!.$id("CR-A").nonempty()).toBe(true);
+    expect(cy!.$id("CR-U").nonempty()).toBe(true);
+    expect(cy!.$id("CR-P").nonempty()).toBe(true);
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+
+    // COMPLETED_UNTRACKED — there is no plan to land on, so the tap is inert.
+    cy!.$id("CR-U").emit("tap");
+    await settle();
+    expect(tabIsOn("Workflow")).toBe(false);
+    expect(tabIsOn("Roadmap")).toBe(true);
+
+    // PENDING — inert for the same reason (the row already is).
+    cy!.$id("CR-P").emit("tap");
+    await settle();
+    expect(tabIsOn("Workflow")).toBe(false);
+    expect(tabIsOn("Roadmap")).toBe(true);
+
+    // COMPLETED — DOES land on Workflow: gating is a distinction, not a dead
+    // surface. Last, because the swap unmounts the graph.
+    cy!.$id("CR-A").emit("tap");
+    await settle();
+    expect(tabIsOn("Workflow")).toBe(true);
   });
 });

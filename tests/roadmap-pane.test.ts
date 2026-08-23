@@ -35,7 +35,7 @@ const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 
 // ── Fixture shapes (queue = the GET …/queue wire contract, §S1) ────────────
-type QueueStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED";
+type QueueStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED" | "COMPLETED_UNTRACKED";
 interface QueueEntryFixture {
   cr: string;
   title?: string;
@@ -478,5 +478,73 @@ describe("§S3 — Roadmap live execution overlay (multi-track vs single-track)"
     // Plain active highlight, but no lane noise for a single-track project.
     expect(row.getAttribute("data-active")).toBe("true");
     expect(row.querySelector('[data-testid="roadmap-lane-badge"]')).toBeNull();
+  });
+});
+
+// ── CR-CRU-083 §S2 + AC3/AC7 — the fourth derived status, COMPLETED_UNTRACKED ─
+// A CR that shipped in a release but carries NO plan record: completed, with
+// its execution history absent. §S2 names both the wire value and the badge
+// copy, so both are contract surface asserted verbatim here.
+
+describe("CR-CRU-083 §S2 — COMPLETED_UNTRACKED is a distinct roadmap consumer state", () => {
+  test("AC3 — the untracked row's badge reads `completed · tracking absent` on its own status class, and a COMPLETED sibling still reads COMPLETED", async () => {
+    const key = "roadmap-untracked-badge-1";
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "Untracked Completion Project" })],
+      queue: [
+        // Shipped inside a release, no plan record → no planId on the wire.
+        { cr: "CR-RM-060", title: "Shipped untracked", wave: "5", dependsOn: [], status: "COMPLETED_UNTRACKED" },
+        { cr: "CR-RM-061", title: "Shipped tracked", wave: "5", dependsOn: [], status: "COMPLETED", planId: 96 },
+      ],
+      plans: [
+        { planId: 96, cr: "CR-RM-061", projectKey: key, status: "closed", cycles: [{ id: 1, label: "C1", status: "done" }] },
+      ],
+    });
+
+    const untracked = roadmapRow("CR-RM-060");
+    expect(untracked).toBeDefined();
+    const badge = untracked!.querySelector<HTMLElement>('[data-testid="roadmap-status-badge"]');
+    expect(badge).not.toBeNull();
+    // §S2 verbatim copy: middle dot U+00B7, single spaces.
+    expect((badge!.textContent ?? "").trim()).toBe("completed · tracking absent");
+    expect(Array.from(badge!.classList)).toContain("completed_untracked");
+
+    // AC3 — the two completion states never collapse into one badge.
+    const tracked = roadmapRow("CR-RM-061")!.querySelector<HTMLElement>(
+      '[data-testid="roadmap-status-badge"]',
+    )!;
+    expect((tracked.textContent ?? "").trim()).toBe("COMPLETED");
+    expect(Array.from(tracked.classList)).toContain("completed");
+    expect(Array.from(tracked.classList)).not.toContain("completed_untracked");
+  });
+
+  test("AC7 — clicking an untracked row is inert (there is no plan to land on); a COMPLETED row in the same table still swaps to Workflow", async () => {
+    const key = "roadmap-untracked-clicks-1";
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "Untracked Clicks Project" })],
+      queue: [
+        { cr: "CR-RM-070", title: "Shipped untracked", wave: "5", dependsOn: [], status: "COMPLETED_UNTRACKED" },
+        { cr: "CR-RM-071", title: "Shipped tracked", wave: "5", dependsOn: [], status: "COMPLETED", planId: 97 },
+      ],
+      plans: [
+        { planId: 97, cr: "CR-RM-071", projectKey: key, status: "closed", cycles: [{ id: 1, label: "C1", status: "done" }] },
+      ],
+    });
+
+    // Inert exactly like PENDING: no highlight, no tab change.
+    const untracked = roadmapRow("CR-RM-070")!;
+    expect(untracked.getAttribute("data-active")).not.toBe("true");
+    untracked.click();
+    await settle();
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+
+    // The tracked sibling DOES land on Workflow — inertness is a distinction,
+    // not a dead surface.
+    roadmapRow("CR-RM-071")!.click();
+    await settle();
+    expect(tabIsOn("Workflow")).toBe(true);
   });
 });

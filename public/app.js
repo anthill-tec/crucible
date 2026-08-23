@@ -2362,6 +2362,12 @@
       return pos === null ? `${plan.track} ▶` : `${plan.track} ▶ ${pos}`;
     };
 
+    // CR-CRU-083 §S2 — a derived status whose wire value is not readable copy.
+    // Only COMPLETED_UNTRACKED is re-worded; every other status renders its raw
+    // wire value, so the badge stays a faithful echo of the queue.
+    const ROADMAP_STATUS_LABELS = { COMPLETED_UNTRACKED: "completed · tracking absent" };
+    const roadmapStatusLabel = (status) => ROADMAP_STATUS_LABELS[status] ?? status;
+
     const RoadmapRow = (entry, opts) => {
       const active = entry.status === "IN_PROGRESS";
       const deps = entry.dependsOn ?? [];
@@ -2380,7 +2386,8 @@
           class: `app-roadmap-row${active ? " on" : ""}`,
           // One-rule tab swap (no overlay): an open (IN_PROGRESS) row lands on
           // the Workflow tab at that CR's active section; a COMPLETED row
-          // lands on its Workflow history group; a PENDING row is inert.
+          // lands on its Workflow history group; a PENDING or
+          // COMPLETED_UNTRACKED row is inert — there is no plan to land on.
           onclick: () => {
             if (entry.status === "IN_PROGRESS" || entry.status === "COMPLETED") {
               state.workspaceTab = "Workflow";
@@ -2404,7 +2411,7 @@
             "data-testid": "roadmap-status-badge",
             class: `app-badge app-roadmap-status ${entry.status.toLowerCase()}`,
           },
-          entry.status,
+          roadmapStatusLabel(entry.status),
         ),
         laneBadge,
       );
@@ -2535,6 +2542,17 @@
               style: { "border-color": "#22c55e", "background-color": "#14532d" },
             },
             {
+              // Shipped, but with no execution history to vouch for it — a
+              // dashed slate-green border on the neutral CR fill reads as
+              // "done, unproven" rather than COMPLETED's solid green-on-green.
+              selector: 'node[status="COMPLETED_UNTRACKED"]',
+              style: {
+                "border-color": "#6b9080",
+                "background-color": "#1f2937",
+                "border-style": "dashed",
+              },
+            },
+            {
               selector: 'node[status="IN_PROGRESS"]',
               style: { "border-color": "#eab308", "background-color": "#3f2d0a" },
             },
@@ -2558,9 +2576,15 @@
             },
           ],
         });
-        // Per-node tap → the same one-rule Workflow swap the table row uses.
-        cy.on("tap", "node", () => {
-          state.workspaceTab = "Workflow";
+        // Per-node tap → the same one-rule Workflow swap the table row uses,
+        // status-gated by the SAME predicate: only a node whose own status is
+        // IN_PROGRESS or COMPLETED has a plan to land on. A PENDING or
+        // COMPLETED_UNTRACKED node is inert, exactly like its row.
+        cy.on("tap", "node", (evt) => {
+          const status = evt.target.data("status");
+          if (status === "IN_PROGRESS" || status === "COMPLETED") {
+            state.workspaceTab = "Workflow";
+          }
         });
         cy.fit(undefined, 24);
         window.crucibleRoadmapCy = cy;

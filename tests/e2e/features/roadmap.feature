@@ -1,8 +1,10 @@
 Feature: CR-CRU-014 §S3 — the execution roadmap tab: a queued CR's row and its live-derived status
   §S3's roadmap tab renders the registered CR queue as a table whose per-CR
-  status badge is DERIVED, zero extra reporting: PENDING with no plan filed,
-  IN_PROGRESS while an open plan exists, COMPLETED once the plan closes with a
-  merge commit. This scenario drives the REAL server through the same routes a
+  status badge is DERIVED, zero extra reporting: IN_PROGRESS while an open plan
+  exists, COMPLETED once the plan closes with a merge commit,
+  COMPLETED_UNTRACKED when no plan is evidence of work (none filed, or all
+  abandoned) but some release's crs names the CR, and PENDING otherwise. This
+  scenario drives the REAL server through the same routes a
   wrapped client uses (POST …/queue, POST …/plans, PATCH …/plans/<id>) and
   asserts the SPA's own DOM row flip in place over SSE — never a fixture
   stubbed into the page.

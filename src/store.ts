@@ -3020,10 +3020,22 @@ export class Store {
   }
 
   /**
-   * CR-CRU-014 §S1 — the project's queue with each entry's DERIVED status
-   * (never stored): PENDING when no plan exists for the cr, IN_PROGRESS when
-   * an open plan does, COMPLETED when a plan is closed WITH a merge commit.
-   * `planId` is the linked plan's id, present only when a plan exists.
+   * CR-CRU-014 §S1 / CR-CRU-083 §S2 — the project's queue with each entry's
+   * DERIVED status (never stored), in precedence order: IN_PROGRESS when an
+   * open plan exists for the cr, COMPLETED when a plan is closed WITH a merge
+   * commit, COMPLETED_UNTRACKED when the cr has no plan that is EVIDENCE OF
+   * WORK (no plan at all, or only abandoned ones) and some release's `crs`
+   * names it, PENDING otherwise. `planId` is the linked plan's id, present
+   * only when a plan exists AND it is the one that decided the status — a
+   * COMPLETED_UNTRACKED entry has no plan to link and so omits the key
+   * entirely (§S3/AC5: nothing is synthesised to fill it).
+   *
+   * Release membership is read ONCE per call, not per row: `listReleases`
+   * re-queries and re-JSON-parses the whole milestone table, and this maps
+   * over every queue row (85 on the live board), so the cr-id set is built
+   * here and handed to the derivation — and skipped altogether when there is
+   * no row to derive for, since that whole read would then buy nothing.
+   *
    * Archived projects are excluded via the shared NOT_ARCHIVED subquery
    * (rows survive; unarchive restores them) — the listReleases precedent.
    */
@@ -3034,8 +3046,16 @@ export class Store {
          ORDER BY seq ASC`,
       )
       .all(projectKey);
+    // Nothing to derive for — the membership read below is pure cost here.
+    if (rows.length === 0) return [];
+    const shipped = new Set<string>();
+    for (const release of this.listReleases(projectKey)) {
+      for (const cr of release.crs ?? []) {
+        shipped.add(cr);
+      }
+    }
     return rows.map((row) => {
-      const derived = this.deriveQueueStatus(projectKey, row.cr);
+      const derived = this.deriveQueueStatus(projectKey, row.cr, shipped);
       return {
         cr: row.cr,
         ...(row.title !== null ? { title: row.title } : {}),
@@ -3048,14 +3068,29 @@ export class Store {
     });
   }
 
-  /** CR-CRU-014 §S1 — derive a cr's queue status + plan link from its plans. */
+  /**
+   * CR-CRU-014 §S1 — derive a cr's queue status + plan link from its plans.
+   *
+   * CR-CRU-083 §S2/AC4 (amended) — `shipped` (every cr id any release's
+   * `crs` names, built once by the caller) is consulted on BOTH non-evidence
+   * paths: the cr has no plan at all, and the cr's plans are ALL abandoned
+   * (closed or aborted without a merge commit). A plan record outranks
+   * release membership only where it is EVIDENCE OF WORK — an open plan
+   * (IN_PROGRESS) or a plan closed WITH a merge (COMPLETED). An abandoned
+   * plan does not un-ship a release, so a cr some release names stays
+   * COMPLETED_UNTRACKED, and an implemented cr never reads back PENDING
+   * (AC9). A cr in NO release's `crs` keeps its prior answer, PENDING with
+   * the trailing plan's id.
+   */
   private deriveQueueStatus(
     projectKey: string,
     cr: string,
+    shipped: ReadonlySet<string>,
   ): { status: QueueStatus; planId?: number } {
     const plans = this.listPlans(projectKey, { cr });
     if (plans.length === 0) {
-      return { status: "PENDING" };
+      // No plan to link, and none is invented (AC5) — the key is omitted.
+      return shipped.has(cr) ? { status: "COMPLETED_UNTRACKED" } : { status: "PENDING" };
     }
     const open = plans.find((plan) => plan.status === "open");
     if (open !== undefined) {
@@ -3067,7 +3102,9 @@ export class Store {
     if (completed !== undefined) {
       return { status: "COMPLETED", planId: completed.planId };
     }
-    return { status: "PENDING", planId: plans[plans.length - 1]!.planId };
+    return shipped.has(cr)
+      ? { status: "COMPLETED_UNTRACKED" }
+      : { status: "PENDING", planId: plans[plans.length - 1]!.planId };
   }
 
   /**
