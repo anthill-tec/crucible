@@ -123,9 +123,12 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   no CR yet.
 
 - CI runs an unpinned bun deliberately. Pinning was tried in CR-087 and **reverted** (`93f42f7`): `packageManager` makes npm provision through corepack (958 ms → 13082 ms on the npm-pack test). The both-orderings fixtures catch a console-format flip instead. [CR-CRU-089](CR-CRU-089-pin-bun-without-telling-npm.md) is VOID; revisit only if a flip recurs.
-- The bun failure-detail mis-attribution (a leaked async throw landing on the next leaf) is now
-  **filed as [CR-CRU-088](CR-CRU-088-failure-detail-marries-the-wrong-leaf.md)** — reproducer in
-  `tests/client/test_cr087_console_failure_attribution.py`.
+- The bun failure-detail mis-attribution (a leaked async throw landing on the next leaf) is
+  **fixed** by [CR-CRU-088](CR-CRU-088-failure-detail-marries-the-wrong-leaf.md) §S1: a detail block
+  is attributed to the test its source echo NAMES, falling back to the positional rule only when
+  the echo names no resolvable test. Guarded in `tests/client/test_cr088_failure_detail_names_its_leaf.py`
+  (the rule plus the six declaration shapes) and `tests/client/test_cr087_console_failure_attribution.py`
+  (`ForwardMarryingGuardTest`, which the CR promoted from a characterisation to a real assertion).
 
 ## Notes
 - 🚀 **2026-08-19 — Crucible v2 SHIPPED its first public release (0.1.0 + hotfix 0.1.1).**

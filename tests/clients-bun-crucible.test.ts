@@ -55,19 +55,22 @@
 //     tests/client/test_cr087_console_failure_attribution.py, where the
 //     real parser is fed both orderings directly instead of whichever one
 //     the installed bun happens to print.
-//   - CROSS-LEAF BLEED, stated honestly: only the halves the parser gets
-//     right today are guarded there — a `(pass)`/`(skip)`/`(todo)` result
-//     line ends a pending detail block, and a block trailing its own
-//     `(fail)` line never marries BACKWARDS onto that leaf. The FORWARD
-//     case is NOT guarded, because it is broken: a detail block printed
-//     after its own leaf's `(fail)` line and before the NEXT leaf's
-//     marries onto that later leaf. That is a MEASURED, UNFIXED defect
-//     (reproduced on bun 1.3.14's leaked-async-throw output, and it
-//     reaches the ingested tree), deliberately OUT OF SCOPE for
-//     CR-CRU-087 and recorded in the deferred register in
-//     docs/changes/README.md. The python file pins the current defective
-//     attribution as a characterisation test rather than asserting a
-//     guard that does not exist.
+//   - CROSS-LEAF BLEED, all three halves guarded now. A `(pass)`/`(skip)`/
+//     `(todo)` result line ends a pending detail block, and a block trailing
+//     its own `(fail)` line never marries BACKWARDS onto that leaf — both
+//     pinned in tests/client/test_cr087_console_failure_attribution.py. The
+//     FORWARD case — a detail block printed after its own leaf's `(fail)`
+//     line and before the NEXT leaf's, which bun 1.3.14 emits for a leaked
+//     async throw — was the one defect CR-CRU-087 left open, deliberately
+//     out of its scope and only characterised at the time. CR-CRU-088 §S1
+//     FIXED it in `clients/bun-crucible.py::_parse_console_failures`: a
+//     block is attributed to the test its source echo NAMES, and falls back
+//     to the positional rule only when the echo names no resolvable test. It
+//     is a real assertion now rather than a deferred candidate —
+//     `ForwardMarryingGuardTest` in that same python module, the six
+//     declaration shapes in
+//     tests/client/test_cr088_failure_detail_names_its_leaf.py, and the AC4
+//     E2E describes at the foot of THIS file.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -828,8 +831,11 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
 // (None, leaf):` → `if error_idx is not None:`, i.e. marrying positionally
 // again), the run goes 29 pass / 1 fail — the AC4 assertion below failing on
 // the `delta fails later` leaf with
-//   error: expect(received).toBeUndefined()   Received: "leaked boom"
-// The file was then restored verbatim (`git checkout --`).
+//   error: expect(received).not.toContain(expected)   Received: "leaked boom"
+// The file was then restored verbatim. RE-MEASURED after C3 restated that
+// assertion as ATTRIBUTION rather than absence: same 29 pass / 1 fail, same
+// leaf — the attribution form keeps the whole of the absence form's
+// mutation-detecting power without pinning bun's line ordering.
 describe("clients/bun-crucible.py — CR-CRU-088 AC4 (E2E): an aftermath block never reaches the NEXT leaf in the INGESTED tree", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratchDirs: string[] = [];
@@ -869,19 +875,42 @@ describe("clients/bun-crucible.py — CR-CRU-088 AC4 (E2E): an aftermath block n
     }
   });
 
-  test("ground truth: the installed bun really prints the leaked throw's 'error: leaked boom' block BETWEEN the two '(fail)' lines — the defect's input shape, observed rather than assumed", () => {
+  test("ground truth: the leaked throw's block and both '(fail)' lines are all present — and WHERE bun prints that block relative to them is OBSERVED and reported, never pinned", () => {
     const console_ = runResult?.stderr ?? "";
     const gammaFail = console_.indexOf("gamma leaks after failing [");
     const leaked = console_.indexOf("error: leaked boom");
     const deltaFail = console_.indexOf("delta fails later [");
+
+    // Version-INDEPENDENT: both leaves fail and the leaked throw is reported
+    // somewhere on the stream. Every bun that runs this fixture prints all
+    // three.
     expect(gammaFail).toBeGreaterThan(-1);
     expect(leaked).toBeGreaterThan(-1);
     expect(deltaFail).toBeGreaterThan(-1);
-    expect(leaked).toBeGreaterThan(gammaFail);
-    expect(deltaFail).toBeGreaterThan(leaked);
+
+    // Version-SENSITIVE, and so NOT asserted — the rule this file already
+    // applies to the timed-out leaf above: WHICH ordering the runner's bun
+    // prints is that bun's property, and CR-CRU-087 had to DELETE the one
+    // assertion in this file that pinned bun's stream (it turned `test-bun`
+    // red on a bun that reordered it and blocked every publish). The
+    // defect's exact input shape is therefore observed and reported here,
+    // and pinned fatally only over FROZEN BYTES — in
+    // tests/client/test_cr088_failure_detail_names_its_leaf.py and
+    // tests/client/test_cr087_console_failure_attribution.py, where no
+    // installed bun can move it. The fix's own guarantee is asserted
+    // version-independently in the next test.
+    const orderingHolds = leaked > gammaFail && deltaFail > leaked;
+    if (!orderingHolds) {
+      console.log(
+        "[CR-CRU-088 AC4] this bun does not print the aftermath shape " +
+          `(gamma=${gammaFail}, leaked=${leaked}, delta=${deltaFail}); ` +
+          "attribution below still holds, and the shape itself stays pinned " +
+          "over frozen bytes in the two python modules.",
+      );
+    }
   });
 
-  test("AC4: in the STORED tree the leaking leaf keeps its OWN message, and the following leaf carries NO failure.message — never 'leaked boom'", () => {
+  test("AC4: in the STORED tree the leaking leaf keeps its OWN message and gamma's aftermath reaches NOBODY — the following leaf carries no trace of 'leaked boom'", () => {
     expect(runResult?.code).not.toBe(0);
     expect(event?.summary?.total).toBe(2);
     expect(event?.summary?.failed).toBe(2);
@@ -895,14 +924,22 @@ describe("clients/bun-crucible.py — CR-CRU-088 AC4 (E2E): an aftermath block n
     expect(gamma?.failure?.message ?? "").toContain("expect(");
     expect(gamma?.failure?.message ?? "").not.toContain("leaked boom");
 
-    // The next leaf is still reported as failing (bun's junit says so) but
-    // it produced no detail of its own, so it must carry none — the defect
-    // handed it gamma's aftermath and Crucible then stated a falsehood
-    // about which test failed and why.
+    // ATTRIBUTION, not ABSENCE (AC7, and the rule this file already applies
+    // to the timed-out leaf above): gamma's aftermath must never reach
+    // delta, but whether delta carries a message of its OWN is the runner's
+    // bun talking — this bun prints no prelude block for delta, while a bun
+    // that does would legitimately hand it delta's own `expect(3).toBe(4)`
+    // detail. `toBeUndefined()` would pin that, and pinning bun's stream is
+    // exactly what CR-CRU-087 had to delete. So: nothing of gamma's, and
+    // anything present is delta's own.
     expect(delta?.status).toBe("fail");
-    expect(delta?.failure?.message).toBeUndefined();
     expect(delta?.failure?.message ?? "").not.toContain("leaked boom");
     expect(delta?.failure?.trace ?? "").not.toContain("leaked boom");
+    const deltaMessage = delta?.failure?.message;
+    if (deltaMessage !== undefined) {
+      expect(deltaMessage).toContain("expect(");
+      expect(deltaMessage).not.toContain("boom");
+    }
   });
 });
 

@@ -590,6 +590,12 @@ _RESULT_BOUNDARY_LINE = re.compile(
 _ECHO_TEST_DECL = re.compile(
     r"^\s*\d+\s*\|\s*(?:test|it)(?:\.\w+)*\s*\(\s*(?P<q>[\"'`])(?P<name>.*?)(?P=q)"
 )
+# The `test(`/`it(` DECLARATION LINE, whether or not its name is readable. §S1
+# (CR-CRU-088 C3): a declaration the pattern above cannot read (`test.each`, a
+# variable, a name on the next source line) must NULL the window rather than
+# leave the PREVIOUS declaration's name standing — an inherited name disagrees
+# with the result line and would drop the producer's own block.
+_ECHO_TEST_LINE = re.compile(r"^\s*\d+\s*\|\s*(?:test|it)(?:\.\w+)*\s*\(")
 # The caret marking the offending column. §S1: the producing test is the LAST
 # declaration echoed AT OR ABOVE it — the window routinely spans a test
 # boundary, so its FIRST declaration is usually the PREVIOUS test's, and
@@ -611,6 +617,10 @@ def _parse_console_failures(log_text):
     detail exists only on the console stream, as an `error: <detail>` block
     under a source echo of the code that raised.
 
+    Detail printed AFTER the fail line (a timeout's `^ this test timed out
+    after Nms.`) is structurally NOT a preceding block and stays unmatched —
+    that leaf degrades to type-only.
+
     §S1 (CR-CRU-088) — POSITION ALONE CANNOT ATTRIBUTE THAT BLOCK. A test's own
     prelude and an earlier test's aftermath (a leaked async throw, printed
     after its own producer's result line) are positionally identical: both sit
@@ -621,8 +631,11 @@ def _parse_console_failures(log_text):
       - echo names X, next `(fail)` line is Y → the block is X's aftermath, so
         it marries to NOBODY (X already carries its own message; overwriting Y's
         leaf would state a falsehood about which test failed and why);
-      - no `test("…")` line in the echo → keep the positional rule, so shapes
-        the echo does not cover behave exactly as before.
+      - no RESOLVABLE `test("…")` literal in the echo — no declaration at all,
+        or one whose name the echo cannot yield (`test.each`, a variable, a
+        declaration split across source lines, an interpolated template, an
+        escaped quote) → keep the positional rule, so shapes the echo does not
+        cover behave exactly as before.
 
     Under nested describes the echo carries the BARE name while the result line
     carries the composed `suite > name` key, so the comparison is against that
@@ -667,12 +680,23 @@ def _parse_console_failures(log_text):
             error_idx = len(block)
             # The window just read belongs to THIS block; the next one starts
             # fresh, so a second block in the same run is attributed to its own
-            # echo rather than inheriting this one's.
+            # echo rather than inheriting this one's. The DEGRADATION that buys
+            # (unchanged from before §S1, and rare — bun prints a fresh echo
+            # per error): a SECOND `error:` under ONE echo window sees
+            # `echo_name is None` and so marries POSITIONALLY, to whatever the
+            # next `(fail)` line is, with no echo vouching for it.
             echo_name, window, caret = window, None, False
         elif not caret:
-            declared = _ECHO_TEST_DECL.match(plain)
-            if declared:
-                window = declared.group("name")
+            if _ECHO_TEST_LINE.match(plain):
+                declared = _ECHO_TEST_DECL.match(plain)
+                echoed = declared.group("name") if declared else None
+                # `test.each`, a variable, a multi-line declaration, an
+                # interpolated template literal or an escaped quote names no
+                # resolvable producer -- NULL the window so the block falls
+                # back to the positional rule instead of inheriting the
+                # PREVIOUS declaration's name and being dropped.
+                window = (None if echoed is None or "${" in echoed
+                          or "\\" in echoed else echoed)
             elif _ECHO_CARET.match(plain):
                 caret = True
         block.append(plain)
