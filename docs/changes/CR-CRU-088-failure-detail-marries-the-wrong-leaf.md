@@ -48,23 +48,57 @@ this CR's work, not collateral.
 
 ## Scope
 
-### §S1 Choose the discriminator on evidence, not preference
+### §S1 The discriminator, settled by measurement (bun 1.3.14, 2026-08-23)
 
-The candidates, to be settled by MEASURING bun's real output before any parser change — the CR is not
-authorised to guess:
+**Candidate 1 (source-echo/stack correlation) WINS, and it needs nothing bun does not already print.**
+Measured on real `bun test` output, two fixtures:
 
-1. **Stack-trace correlation.** An aftermath block's `at <anonymous> (<file>:<line>:<col>)` frame points
-   at the leaf that *produced* it. If a leaf's own source location is knowable (junit `file`/`classname`,
-   or the `N | <source>` echo bun prints above the caret), a block whose frame disagrees with the leaf
-   it would marry is an aftermath block and must not marry forward.
-2. **A structured reporter.** If the installed bun exposes a machine-readable failure stream, the
-   console heuristic is replaced by it and the whole class disappears. Must be checked against the
-   pinned version (CR-087 fixed it at `bun@1.3.14`), never assumed from release notes.
-3. **Adjacency.** Whether bun separates an aftermath block from the next test's prelude in a way that
-   is stable (blank line, indentation, ordering relative to the source echo) — cheapest if it holds,
-   worthless if it is incidental to one version.
+*Legitimate case — two consecutive failing tests, each with its own prelude block:*
 
-The chosen rule is recorded here before implementation, with the measurement that chose it.
+```
+  3 | test("alpha asserts wrongly", () => {
+  4 |   expect(1).toBe(2);
+error: expect(received).toBe(expected)
+      at <anonymous> (…/a.test.ts:4:13)
+(fail) alpha asserts wrongly [0.09ms]
+  7 | test("beta asserts wrongly", () => {
+  8 |   expect(3).toBe(4);
+error: expect(received).toBe(expected)
+      at <anonymous> (…/a.test.ts:8:13)
+(fail) beta asserts wrongly [0.04ms]
+```
+
+*Defect case — a leaked async throw:*
+
+```
+  3 | test("gamma leaks after failing", () => {
+  5 |   expect(1).toBe(2);
+error: expect(received).toBe(expected)
+      at <anonymous> (…/b.test.ts:5:13)
+(fail) gamma leaks after failing [0.13ms]
+  3 | test("gamma leaks after failing", () => {      ← names GAMMA
+  4 |   setTimeout(() => { throw new Error("leaked boom"); }, 5);
+error: leaked boom
+      at <anonymous> (…/b.test.ts:4:51)               ← GAMMA's body (delta starts at line 7)
+(fail) delta fails later [5.00ms]                     ← married HERE. Wrong.
+```
+
+**The rule: a detail block is attributed to the test its own source echo names.** bun prints the
+enclosing `N | test("<name>", …` line above the caret for every block, and its stack frame points into
+that same test's body. So the block carries its producer's identity — the parser was simply ignoring it
+and using position instead.
+
+Derived behaviour:
+- echo names test X, and the following `(fail)` line is X → marry to X (the legitimate case, unchanged);
+- echo names test X, and the following `(fail)` line is Y → the block is X's aftermath: it does **not**
+  marry to Y. X already carries its own message, so the aftermath is dropped rather than overwriting it;
+- no `test("…"` line in the echo → fall back to today's positional rule, so nothing regresses on shapes
+  the echo does not cover.
+
+Candidates 2 (structured reporter) and 3 (adjacency) are **not pursued**: 1 is sufficient, needs no new
+bun surface, and rests on bytes bun already emits for every failure. Adjacency in particular is
+identical for both cases above — the two blocks are positionally indistinguishable, which is exactly
+why the defect exists.
 
 ### §S2 The withheld guard becomes real
 
