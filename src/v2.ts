@@ -17,6 +17,7 @@ import type {
   CycleKind,
   CycleStatus,
   LivenessConfig,
+  PackageRef,
   Project,
   RunContext,
   RunEvent,
@@ -82,6 +83,9 @@ interface V2Body {
   // ceremony: the tag's commit date (epoch seconds) and the CR ids it shipped.
   releasedAt?: unknown;
   crs?: unknown;
+  // CR-CRU-084 §S1 — the packages that release delivered, declared by the
+  // ceremony (registry + name + version per artifact).
+  packages?: unknown;
   // CR-CRU-081 §S3 — the opt-in that lets a re-post CORRECT an already-held
   // release's provenance instead of replaying it.
   repairProvenance?: unknown;
@@ -1128,6 +1132,25 @@ async function handleGates(store: Store, req: Request): Promise<Response> {
   return json({ ok: true, changed: true, event: event.id, ...attachEcho(event) }, 201);
 }
 
+/**
+ * CR-CRU-084 §S1 — a well-formed `packages` MEMBER: an object whose `registry`,
+ * `name` and `version` are all non-empty strings. The same bar a `crs` member
+ * has to clear (`typeof === "string" && length > 0`), applied to each of the
+ * three coordinates, because a half-identified artifact identifies nothing.
+ */
+function isPackageRef(entry: unknown): entry is PackageRef {
+  if (typeof entry !== "object" || entry === null) return false;
+  const { registry, name, version } = entry as Record<string, unknown>;
+  return (
+    typeof registry === "string" &&
+    registry.length > 0 &&
+    typeof name === "string" &&
+    name.length > 0 &&
+    typeof version === "string" &&
+    version.length > 0
+  );
+}
+
 /** §S4b/§S4c — POST /api/v2/milestones: a workflow marker → a milestone event. */
 async function handleMilestones(store: Store, req: Request): Promise<Response> {
   const body = await readBody(req);
@@ -1164,6 +1187,21 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
   const crs = Array.isArray(body.crs)
     ? body.crs.filter((cr: unknown): cr is string => typeof cr === "string" && cr.length > 0)
     : undefined;
+  // CR-CRU-084 §S1 — and the packages the release DELIVERED, carried the same
+  // way and for the same reason: only the ceremony knows what its publish jobs
+  // put on a registry, and Crucible never verifies that a publish happened
+  // (spec Non-goals) — so the route stores what it was given, verbatim.
+  //
+  // Never-coerce at BOTH granularities `crs` uses above: a value that is not
+  // an ARRAY drops the whole FIELD (the record carries no key, never the empty
+  // array AC4 makes mean "delivered nothing"), while an array drops its
+  // ill-formed MEMBERS and keeps the well-formed ones — an entry being
+  // well-formed exactly when `registry`, `name` and `version` are all
+  // non-empty strings. Nothing is ever stringified or filled in, and nothing
+  // is fatal: a published release must not be blocked by a reporting gap.
+  const packages = Array.isArray(body.packages)
+    ? body.packages.filter(isPackageRef)
+    : undefined;
   // CR-CRU-080 §S3 — a replayed release (identical type/label/commit) is the
   // store's idempotent no-op, echoed as the codebase's uniform "nothing
   // changed" answer with the event already held, never a second row. Its
@@ -1181,6 +1219,7 @@ async function handleMilestones(store: Store, req: Request): Promise<Response> {
     ...(typeof body.commit === "string" ? { commit: body.commit } : {}),
     ...(releasedAt !== undefined ? { releasedAt } : {}),
     ...(crs !== undefined ? { crs } : {}),
+    ...(packages !== undefined ? { packages } : {}),
     ...(repairProvenance ? { repairProvenance } : {}),
     ...eventContext(body),
   });
@@ -1660,6 +1699,12 @@ function handleProjectArchive(store: Store, key: string, archive: boolean): Resp
  * (the CR ids it shipped). Both follow the same absence rule: a release
  * recorded before §S4 reports neither, rather than a fabricated date or an
  * empty set that would claim the release shipped nothing.
+ *
+ * CR-CRU-084 §S2 — and `packages`, the artifacts the release DELIVERED, on the
+ * same absence rule for the same reason: a release recorded before CR-CRU-084
+ * carries no key at all, which is a different fact from the EMPTY array a
+ * ceremony that looked and delivered none records (AC4), so the two must stay
+ * distinguishable here on the wire.
  */
 function releaseBrief(event: RunEvent) {
   return {
@@ -1667,6 +1712,7 @@ function releaseBrief(event: RunEvent) {
     ...(event.commit !== undefined ? { commit: event.commit } : {}),
     ...(event.releasedAt !== undefined ? { releasedAt: event.releasedAt } : {}),
     ...(event.crs !== undefined ? { crs: event.crs } : {}),
+    ...(event.packages !== undefined ? { packages: event.packages } : {}),
     timestamp: event.timestamp,
   };
 }

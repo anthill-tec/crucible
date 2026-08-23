@@ -143,6 +143,19 @@ export interface RunContext {
 
 export type Tier = "unit" | "module" | "integration" | "e2e" | "regression" | "bdd";
 
+/**
+ * CR-CRU-084 §S1 — ONE artifact a `release` delivered: the registry it was
+ * published to, the package NAME it carries there (which is registry-specific
+ * and NOT the project name), and the version. Crucible never verifies that the
+ * publish happened or that the package is reachable (spec Non-goals): this is
+ * what the release ceremony DECLARED it shipped.
+ */
+export interface PackageRef {
+  registry: string;
+  name: string;
+  version: string;
+}
+
 export interface RunEvent {
   id: string;
   projectKey: string;
@@ -215,6 +228,15 @@ export interface RunEvent {
    * ids (a truthful "nothing registered", never a fallback to the raw scan).
    */
   crs?: string[];
+  /**
+   * CR-CRU-084 §S1 — the packages a `release` DELIVERED, in the order the
+   * ceremony declared them. AC2: each entry's `version` IS the release tag's,
+   * because the tag is what the publish jobs build from. ABSENT on a release
+   * recorded before this CR and on every non-release event; EMPTY when the
+   * ceremony looked and delivered none — a meaningful fact (§S3), and a
+   * DIFFERENT one from absent (AC4), so the two are never collapsed.
+   */
+  packages?: PackageRef[];
   /**
    * CR-CRU-017 §S1 — the RUN's start instant, carried from the open run onto
    * the event that CLOSED it. Absent on a single-shot ingest (no `runId`, no
