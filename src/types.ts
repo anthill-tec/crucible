@@ -306,14 +306,28 @@ export interface Plan {
 
 // ── CR-CRU-014 §S1 — the CR execution queue (project roadmap registration) ──
 
-/** CR-CRU-014 §S1 — a queued CR's derived lifecycle, computed from its plan. */
-export type QueueStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED";
+/**
+ * CR-CRU-014 §S1 / CR-CRU-083 §S2 — a queued CR's derived lifecycle. Three of
+ * the four values come from the cr's plans; `COMPLETED_UNTRACKED` is the
+ * fourth, and the only one derived from release membership — a cr some release
+ * SHIPPED but no plan ever tracked, which `PENDING` used to misreport as
+ * "never started".
+ */
+export type QueueStatus =
+  | "PENDING"
+  | "IN_PROGRESS"
+  | "COMPLETED"
+  | "COMPLETED_UNTRACKED";
 
 /**
  * CR-CRU-014 §S1 — one registered queue entry as served by GET …/queue. The
  * caller supplies {cr, title?, wave, dependsOn, size?}; `status` and `planId`
- * are DERIVED on read from the cr's plan (never stored): PENDING = no plan,
- * IN_PROGRESS = an open plan, COMPLETED = a plan closed with a merge commit.
+ * are DERIVED on read from the cr's plan (never stored), in this PRECEDENCE
+ * order (CR-CRU-083 §S2): IN_PROGRESS = an open plan; COMPLETED = a plan
+ * closed with a merge commit; COMPLETED_UNTRACKED = NO plan at all and the cr
+ * named in some release's `crs`; PENDING = otherwise. `planId` is present only
+ * when a plan exists, so a COMPLETED_UNTRACKED entry never carries one — the
+ * key is omitted, and §S3/AC5 forbid inventing a plan to fill it.
  * `dependsOn` is a string[] of CR ids, stored and returned verbatim.
  */
 export interface QueueEntry {

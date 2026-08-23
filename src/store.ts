@@ -3020,10 +3020,20 @@ export class Store {
   }
 
   /**
-   * CR-CRU-014 §S1 — the project's queue with each entry's DERIVED status
-   * (never stored): PENDING when no plan exists for the cr, IN_PROGRESS when
-   * an open plan does, COMPLETED when a plan is closed WITH a merge commit.
-   * `planId` is the linked plan's id, present only when a plan exists.
+   * CR-CRU-014 §S1 / CR-CRU-083 §S2 — the project's queue with each entry's
+   * DERIVED status (never stored), in precedence order: IN_PROGRESS when an
+   * open plan exists for the cr, COMPLETED when a plan is closed WITH a merge
+   * commit, COMPLETED_UNTRACKED when the cr has NO plan at all and some
+   * release's `crs` names it, PENDING otherwise. `planId` is the linked plan's
+   * id, present only when a plan exists — a COMPLETED_UNTRACKED entry has no
+   * plan to link and so omits the key entirely (§S3/AC5: nothing is
+   * synthesised to fill it).
+   *
+   * Release membership is read ONCE per call, not per row: `listReleases`
+   * re-queries and re-JSON-parses the whole milestone table, and this maps
+   * over every queue row (85 on the live board), so the cr-id set is built
+   * here and handed to the derivation.
+   *
    * Archived projects are excluded via the shared NOT_ARCHIVED subquery
    * (rows survive; unarchive restores them) — the listReleases precedent.
    */
@@ -3034,8 +3044,14 @@ export class Store {
          ORDER BY seq ASC`,
       )
       .all(projectKey);
+    const shipped = new Set<string>();
+    for (const release of this.listReleases(projectKey)) {
+      for (const cr of release.crs ?? []) {
+        shipped.add(cr);
+      }
+    }
     return rows.map((row) => {
-      const derived = this.deriveQueueStatus(projectKey, row.cr);
+      const derived = this.deriveQueueStatus(projectKey, row.cr, shipped);
       return {
         cr: row.cr,
         ...(row.title !== null ? { title: row.title } : {}),
@@ -3048,14 +3064,23 @@ export class Store {
     });
   }
 
-  /** CR-CRU-014 §S1 — derive a cr's queue status + plan link from its plans. */
+  /**
+   * CR-CRU-014 §S1 — derive a cr's queue status + plan link from its plans.
+   *
+   * CR-CRU-083 §S2/AC4 — `shipped` (every cr id any release's `crs` names,
+   * built once by the caller) is consulted ONLY on the no-plan path: a plan
+   * record always outranks release membership, so a cr with an aborted or
+   * in-flight plan keeps exactly the answer it had before this CR.
+   */
   private deriveQueueStatus(
     projectKey: string,
     cr: string,
+    shipped: ReadonlySet<string>,
   ): { status: QueueStatus; planId?: number } {
     const plans = this.listPlans(projectKey, { cr });
     if (plans.length === 0) {
-      return { status: "PENDING" };
+      // No plan to link, and none is invented (AC5) — the key is omitted.
+      return shipped.has(cr) ? { status: "COMPLETED_UNTRACKED" } : { status: "PENDING" };
     }
     const open = plans.find((plan) => plan.status === "open");
     if (open !== undefined) {
