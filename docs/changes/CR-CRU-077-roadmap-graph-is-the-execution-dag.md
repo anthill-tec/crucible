@@ -150,6 +150,36 @@ consumes `crs` as specified rather than compensating for it.
 
 **Verdict: READY.** Build F14a as approved.
 
+## Gap analysis round 3 (2026-08-23, pre-RED) — READY after the AC corrections below
+
+Re-run because round 2 predates six merged CRs (081, 083, 084, 086, 087, 088) — gap-analysis is not
+batched, and the tree moved under this spec. The design is unchanged and the data prerequisites are all
+in place; four ACs had gone stale or self-contradictory and are corrected in place.
+
+- **DRIFT-1 (blocking) — AC4 and AC5 contradicted each other.** AC4 said a wave container "renders only
+  when informative"; AC5 and §S3 say **no** wave container or lane is rendered by this CR because
+  CR-CRU-085 was split out to take that chrome. §S3 is the intent, so AC4's container clause is a
+  leftover from before the split and is removed. AC5 is now the single authority.
+- **DRIFT-2 — AC7 predated the fourth derived status.** CR-083 shipped `COMPLETED_UNTRACKED`, already
+  styled at `public/app.js:2548`. AC7 named only `COMPLETED` and `PENDING` as static, leaving the one
+  value an "animate what isn't listed" implementation would animate. Now named.
+- **DRIFT-3 — AC9 hard-coded 78 CRs.** Measured today: **87** rows (`COMPLETED 69 ·
+  COMPLETED_UNTRACKED 9 · PENDING 9`). A pinned count fails on the next filing rather than on a defect,
+  so the AC now says "the live roadmap at whatever size it currently is".
+- **DRIFT-4 — AC1's zero-CR release is now measured, not hypothetical.** `0.1.1` really carries
+  `crs=[]` (and, since CR-084, `packages=2`), so the "a release that shipped zero CRs still chains" case
+  has live data behind it. Cited.
+- **D4 — nothing to reinvent, all prerequisites present.** `state.releases` is fetched
+  (`public/app.js:292`); `crs`, `releasedAt` and `packages` arrive free; cytoscape-dagre is vendored; the
+  graph mount and all four status style rules exist. `buildRoadmapGraph(entries, releases)` keeps its
+  signature — **no public symbol removed** (D6), nothing retired on a claim (D5).
+- **D3 — the live-data caveat still resolves correctly.** `0.1.0`'s `crs` is 58 and includes the nine
+  pre-tracking CRs, so release gating has real membership. The provenance producer's own hazards
+  (CR-081, and the shrink item in the deferred register) stay out of scope: this CR consumes `crs` as
+  specified rather than compensating for it.
+
+**Verdict: READY** with the four corrections applied below.
+
 ## Scope
 
 ### §S1 Compose the flow
@@ -178,9 +208,10 @@ cycle position; everything else is static.
 ## Acceptance criteria
 
 - **AC1** — **no milestone node is ever edgeless.** Every release diamond has at least one
-  inbound and one outbound edge, including a release that shipped **zero** CRs (`0.1.1`), which
-  chains from the previous diamond to the next. A milestone with zero edges is the defect this CR
-  fixes and must fail this AC.
+  inbound and one outbound edge, including a release that shipped **zero** CRs, which chains from the
+  previous diamond to the next. Measured, not hypothetical: `0.1.1` really carries `crs=[]` (and, since
+  CR-084, `packages=2`, so an empty membership is distinguishable from a release that delivered
+  nothing). A milestone with zero edges is the defect this CR fixes and must fail this AC.
 - **AC1b** — release membership comes from `crs`; a CR flows into the diamond of the release that
   shipped it and out of the preceding one.
 - **AC1c** — CRs not yet in any release flow after the newest diamond.
@@ -189,22 +220,23 @@ cycle position; everything else is static.
   substitutes an order of its own.
 - **AC3** — two CRs in the same wave with no dependency between them render as **parallel
   branches** from the same upstream node, not a chain.
-- **AC4** — collapse is by **release**: a shipped release renders as one node carrying its CR
-  count and expands on click, while the unreleased region stays expanded. A wave container renders
-  only when informative (more than one track, or more than one wave in a release) — never as a
-  gate.
+- **AC4** — collapse is by **release**: a shipped release renders as one node carrying its CR count and
+  expands on click, while the unreleased region stays expanded. (The wave-container clause that used to
+  live here is removed — §S3/AC5 govern containers, and the chrome is CR-CRU-085's.)
 - **AC5** — each CR node carries its reported track when one is present, and its absence is not an
   error. No wave container and no lane is rendered by this CR (that is CR-085), and no test asserts
   a hard-coded track count.
 - **AC6** — every CR node label **starts with the CR id**; a node label never consists of the
   title alone.
-- **AC7** — only nodes for `IN_PROGRESS` CRs carry live/animated state; `COMPLETED` and
-  `PENDING` nodes are static. Asserted on the rendered output, since the previous animation
-  attempt looked correct in source while binding nothing.
+- **AC7** — only nodes for `IN_PROGRESS` CRs carry live/animated state; `COMPLETED`,
+  `COMPLETED_UNTRACKED` (CR-083's fourth derived value, already styled at `public/app.js:2548`) and
+  `PENDING` nodes are static. Asserted on the rendered output, since the previous animation attempt
+  looked correct in source while binding nothing.
 - **AC8** — no synthetic edge is derived from wave structure: a wave boundary never becomes an
   edge, and no wave is drawn as terminating in a release.
-- **AC9** — the graph renders the live 78-CR roadmap without a parse/layout error, and
-  `unknownDependencies` stays empty.
+- **AC9** — the graph renders the **live roadmap at whatever size it currently is** (87 CRs as of
+  2026-08-23) without a parse/layout error, and `unknownDependencies` stays empty. The count is
+  deliberately not pinned: a hard-coded size fails on the next CR filed rather than on a defect.
 
 ## Estimated size
 
