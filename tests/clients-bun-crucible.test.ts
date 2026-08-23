@@ -55,19 +55,22 @@
 //     tests/client/test_cr087_console_failure_attribution.py, where the
 //     real parser is fed both orderings directly instead of whichever one
 //     the installed bun happens to print.
-//   - CROSS-LEAF BLEED, stated honestly: only the halves the parser gets
-//     right today are guarded there — a `(pass)`/`(skip)`/`(todo)` result
-//     line ends a pending detail block, and a block trailing its own
-//     `(fail)` line never marries BACKWARDS onto that leaf. The FORWARD
-//     case is NOT guarded, because it is broken: a detail block printed
-//     after its own leaf's `(fail)` line and before the NEXT leaf's
-//     marries onto that later leaf. That is a MEASURED, UNFIXED defect
-//     (reproduced on bun 1.3.14's leaked-async-throw output, and it
-//     reaches the ingested tree), deliberately OUT OF SCOPE for
-//     CR-CRU-087 and recorded in the deferred register in
-//     docs/changes/README.md. The python file pins the current defective
-//     attribution as a characterisation test rather than asserting a
-//     guard that does not exist.
+//   - CROSS-LEAF BLEED, all three halves guarded now. A `(pass)`/`(skip)`/
+//     `(todo)` result line ends a pending detail block, and a block trailing
+//     its own `(fail)` line never marries BACKWARDS onto that leaf — both
+//     pinned in tests/client/test_cr087_console_failure_attribution.py. The
+//     FORWARD case — a detail block printed after its own leaf's `(fail)`
+//     line and before the NEXT leaf's, which bun 1.3.14 emits for a leaked
+//     async throw — was the one defect CR-CRU-087 left open, deliberately
+//     out of its scope and only characterised at the time. CR-CRU-088 §S1
+//     FIXED it in `clients/bun-crucible.py::_parse_console_failures`: a
+//     block is attributed to the test its source echo NAMES, and falls back
+//     to the positional rule only when the echo names no resolvable test. It
+//     is a real assertion now rather than a deferred candidate —
+//     `ForwardMarryingGuardTest` in that same python module, the six
+//     declaration shapes in
+//     tests/client/test_cr088_failure_detail_names_its_leaf.py, and the AC4
+//     E2E describes at the foot of THIS file.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -412,6 +415,74 @@ test.skip("the skipped corroboration case", () => {
 });
 `;
 
+// CR-CRU-088 §S1/AC4 — the DEFECT shape, end to end. PROBED against the
+// installed bun (1.3.14, 0d9b296a) rather than assumed: bun really does
+// print the leaked throw's block BETWEEN the two `(fail)` lines, and its
+// source echo names GAMMA, not delta:
+//
+//   3 | test("gamma leaks after failing", () => {
+//   5 |   expect(1).toBe(2);
+//   error: expect(received).toBe(expected)
+//   (fail) gamma leaks after failing [0.12ms]
+//   3 | test("gamma leaks after failing", () => {      ← names GAMMA
+//   4 |   setTimeout(() => { throw new Error("leaked boom"); }, 5);
+//   error: leaked boom
+//   (fail) delta fails later [4.99ms]                  ← positionally married HERE
+//
+// The junit XML carries two bare `<failure type="AssertionError"/>` nodes,
+// so BOTH leaves depend entirely on console marrying for their detail —
+// which is why the defect reached the ingested tree.
+//
+// The real `setTimeout`/`await` below are the SUT's INPUT, not this suite's
+// own timing: the defect only exists because a throw ESCAPES its test body
+// into a later test's window, which is a property of the real event loop
+// inside the spawned `bun test` child process. Fake timers cannot express
+// it — there is no clock to advance from here, and a synchronous throw
+// would simply be its own test's failure. The fixture is the §S1 reproducer
+// verbatim, and the total delay is ~35ms inside one child process.
+const FIXTURE_AFTERMATH_BLEED_SOURCE = `import { test, expect } from "bun:test";
+
+test("gamma leaks after failing", () => {
+  setTimeout(() => { throw new Error("leaked boom"); }, 5);
+  expect(1).toBe(2);
+});
+
+test("delta fails later", async () => {
+  await new Promise((r) => setTimeout(r, 30));
+  expect(3).toBe(4);
+});
+`;
+
+// CR-CRU-088 AC2/AC4 — the COMMON case, end to end: two consecutive
+// failing leaves, each printing its OWN prelude block. The messages are
+// deliberately DISTINCT strings (not two `expect(...).toBe(...)` blocks,
+// whose first `error:` line is byte-identical) so a swap or a double-marry
+// is visible in the stored tree instead of masked by equal text.
+//
+// PROBED on bun 1.3.14: zeta's own prelude echo WINDOW spans the test
+// boundary and shows BOTH declarations —
+//
+//   3 | test("epsilon fails on its own", () => {
+//   ...
+//   7 | test("zeta fails on its own", () => {
+//   8 |   throw new Error("zeta detail only");
+//   error: zeta detail only
+//   (fail) zeta fails on its own [0.04ms]
+//
+// — so this fixture is also the live guard for §S1 reading 1: taking the
+// FIRST declaration in the window would read zeta's own prelude as
+// epsilon's aftermath and blank zeta's message.
+const FIXTURE_CONSECUTIVE_OWN_DETAIL_SOURCE = `import { test, expect } from "bun:test";
+
+test("epsilon fails on its own", () => {
+  throw new Error("epsilon detail only");
+});
+
+test("zeta fails on its own", () => {
+  throw new Error("zeta detail only");
+});
+`;
+
 /**
  * Extracts the 4-space-indented body of the TOON `  run:` block from a
  * bun-crucible.py stdout envelope (the §S2 printed run: block under
@@ -744,6 +815,197 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
     expect(mismatch?.failure?.message ?? "").not.toMatch(/tim(?:e|ed)\s*out/i);
     expect(thrown?.failure?.message ?? "").toContain("boom with detail");
     expect(thrown?.failure?.message ?? "").not.toMatch(/tim(?:e|ed)\s*out/i);
+  });
+});
+
+// CR-CRU-088 AC4 — the fix holds END TO END. Every other assertion for this
+// CR drives `_parse_console_failures` by direct import; these two describes
+// run the REAL client over REAL `bun test` output, POST to
+// /api/v2/runs/parsed, and read the STORED event back over HTTP, so what is
+// asserted is what a reader of Crucible evidence actually sees.
+//
+// HONEST LABEL: this is a BACKFILL, not a RED — the production fix landed in
+// C1, so these assertions passed on their first run. Their worth was proved
+// by MUTATION instead: with the echo-name comparison dropped from
+// `_parse_console_failures` (`if error_idx is not None and echo_name in
+// (None, leaf):` → `if error_idx is not None:`, i.e. marrying positionally
+// again), the run goes 29 pass / 1 fail — the AC4 assertion below failing on
+// the `delta fails later` leaf with
+//   error: expect(received).not.toContain(expected)   Received: "leaked boom"
+// The file was then restored verbatim. RE-MEASURED after C3 restated that
+// assertion as ATTRIBUTION rather than absence: same 29 pass / 1 fail, same
+// leaf — the attribution form keeps the whole of the absence form's
+// mutation-detecting power without pinning bun's line ordering.
+describe("clients/bun-crucible.py — CR-CRU-088 AC4 (E2E): an aftermath block never reaches the NEXT leaf in the INGESTED tree", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratchDirs: string[] = [];
+  let runResult: RunResult | undefined;
+  let event: FullEvent | undefined;
+
+  function scratchDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    scratchDirs.push(dir);
+    return dir;
+  }
+
+  beforeAll(async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-cr088-aftermath");
+    const dir = scratchDir("bun-crucible-cr088-aftermath-");
+    writeBunProjectWithSource(dir, key, FIXTURE_AFTERMATH_BLEED_SOURCE);
+    await ensureRegistered("cr088-aftermath-agent", {
+      cwd: dir,
+      crucibleUrl: baseUrl,
+      projectDir: dir,
+    });
+
+    runResult = await runScript(
+      ["test", "--agent", "cr088-aftermath-agent", "--tests", "sample.test.ts", "--project-dir", dir, "--package-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+    const events = await getEvents(baseUrl, key);
+    event = events.length > 0 ? await getFullEvent(baseUrl, events[0]!.id) : undefined;
+  });
+
+  afterAll(() => {
+    handle?.stop();
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  test("ground truth: the leaked throw's block and both '(fail)' lines are all present — and WHERE bun prints that block relative to them is OBSERVED and reported, never pinned", () => {
+    const console_ = runResult?.stderr ?? "";
+    const gammaFail = console_.indexOf("gamma leaks after failing [");
+    const leaked = console_.indexOf("error: leaked boom");
+    const deltaFail = console_.indexOf("delta fails later [");
+
+    // Version-INDEPENDENT: both leaves fail and the leaked throw is reported
+    // somewhere on the stream. Every bun that runs this fixture prints all
+    // three.
+    expect(gammaFail).toBeGreaterThan(-1);
+    expect(leaked).toBeGreaterThan(-1);
+    expect(deltaFail).toBeGreaterThan(-1);
+
+    // Version-SENSITIVE, and so NOT asserted — the rule this file already
+    // applies to the timed-out leaf above: WHICH ordering the runner's bun
+    // prints is that bun's property, and CR-CRU-087 had to DELETE the one
+    // assertion in this file that pinned bun's stream (it turned `test-bun`
+    // red on a bun that reordered it and blocked every publish). The
+    // defect's exact input shape is therefore observed and reported here,
+    // and pinned fatally only over FROZEN BYTES — in
+    // tests/client/test_cr088_failure_detail_names_its_leaf.py and
+    // tests/client/test_cr087_console_failure_attribution.py, where no
+    // installed bun can move it. The fix's own guarantee is asserted
+    // version-independently in the next test.
+    const orderingHolds = leaked > gammaFail && deltaFail > leaked;
+    if (!orderingHolds) {
+      console.log(
+        "[CR-CRU-088 AC4] this bun does not print the aftermath shape " +
+          `(gamma=${gammaFail}, leaked=${leaked}, delta=${deltaFail}); ` +
+          "attribution below still holds, and the shape itself stays pinned " +
+          "over frozen bytes in the two python modules.",
+      );
+    }
+  });
+
+  test("AC4: in the STORED tree the leaking leaf keeps its OWN message and gamma's aftermath reaches NOBODY — the following leaf carries no trace of 'leaked boom'", () => {
+    expect(runResult?.code).not.toBe(0);
+    expect(event?.summary?.total).toBe(2);
+    expect(event?.summary?.failed).toBe(2);
+
+    const leaves = (event?.tree ?? []).flatMap((suite) => suite.children);
+    const gamma = leaves.find((l) => l.name === "gamma leaks after failing");
+    const delta = leaves.find((l) => l.name === "delta fails later");
+
+    // The producer keeps its own prelude detail.
+    expect(gamma?.status).toBe("fail");
+    expect(gamma?.failure?.message ?? "").toContain("expect(");
+    expect(gamma?.failure?.message ?? "").not.toContain("leaked boom");
+
+    // ATTRIBUTION, not ABSENCE (AC7, and the rule this file already applies
+    // to the timed-out leaf above): gamma's aftermath must never reach
+    // delta, but whether delta carries a message of its OWN is the runner's
+    // bun talking — this bun prints no prelude block for delta, while a bun
+    // that does would legitimately hand it delta's own `expect(3).toBe(4)`
+    // detail. `toBeUndefined()` would pin that, and pinning bun's stream is
+    // exactly what CR-CRU-087 had to delete. So: nothing of gamma's, and
+    // anything present is delta's own.
+    expect(delta?.status).toBe("fail");
+    expect(delta?.failure?.message ?? "").not.toContain("leaked boom");
+    expect(delta?.failure?.trace ?? "").not.toContain("leaked boom");
+    const deltaMessage = delta?.failure?.message;
+    if (deltaMessage !== undefined) {
+      expect(deltaMessage).toContain("expect(");
+      expect(deltaMessage).not.toContain("boom");
+    }
+  });
+});
+
+describe("clients/bun-crucible.py — CR-CRU-088 AC2/AC4 (E2E): two consecutive failing leaves each arrive with their OWN distinct message", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  const scratchDirs: string[] = [];
+  let runResult: RunResult | undefined;
+  let event: FullEvent | undefined;
+
+  function scratchDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    scratchDirs.push(dir);
+    return dir;
+  }
+
+  beforeAll(async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    const baseUrl = `http://localhost:${handle.server.port}`;
+    const key = await createProject(baseUrl, "clients-bc-cr088-consecutive");
+    const dir = scratchDir("bun-crucible-cr088-consecutive-");
+    writeBunProjectWithSource(dir, key, FIXTURE_CONSECUTIVE_OWN_DETAIL_SOURCE);
+    await ensureRegistered("cr088-consecutive-agent", {
+      cwd: dir,
+      crucibleUrl: baseUrl,
+      projectDir: dir,
+    });
+
+    runResult = await runScript(
+      ["test", "--agent", "cr088-consecutive-agent", "--tests", "sample.test.ts", "--project-dir", dir, "--package-dir", dir],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+    const events = await getEvents(baseUrl, key);
+    event = events.length > 0 ? await getFullEvent(baseUrl, events[0]!.id) : undefined;
+  });
+
+  afterAll(() => {
+    handle?.stop();
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  test("AC2/AC4: each leaf in the STORED tree carries its own detail — epsilon's is not zeta's, zeta's is not epsilon's, and neither is blank (the over-tightening regression the CR's Risk section names)", () => {
+    expect(runResult?.code).not.toBe(0);
+    expect(event?.summary?.total).toBe(2);
+    expect(event?.summary?.failed).toBe(2);
+
+    const leaves = (event?.tree ?? []).flatMap((suite) => suite.children);
+    const epsilon = leaves.find((l) => l.name === "epsilon fails on its own");
+    const zeta = leaves.find((l) => l.name === "zeta fails on its own");
+
+    expect(epsilon?.status).toBe("fail");
+    expect(zeta?.status).toBe("fail");
+
+    // Present (not blanked by an over-tight "discard anything after a fail
+    // line" rule)...
+    expect(epsilon?.failure?.message).toBeDefined();
+    expect(zeta?.failure?.message).toBeDefined();
+    // ...each its OWN...
+    expect(epsilon?.failure?.message ?? "").toContain("epsilon detail only");
+    expect(zeta?.failure?.message ?? "").toContain("zeta detail only");
+    // ...and not the other's, so neither a swap nor a double-marry hides
+    // behind equal text.
+    expect(epsilon?.failure?.message ?? "").not.toContain("zeta detail only");
+    expect(zeta?.failure?.message ?? "").not.toContain("epsilon detail only");
+    expect(epsilon?.failure?.message).not.toBe(zeta?.failure?.message);
   });
 });
 

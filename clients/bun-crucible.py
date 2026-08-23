@@ -576,6 +576,31 @@ _FAIL_LINE = re.compile(
 _RESULT_BOUNDARY_LINE = re.compile(
     r"^" + _ANSI_SGR_RUN + r"(?:[✓»✎]" + _ANSI_SGR_RUN + r"|\((?:pass|skip|todo)\))\s"
 )
+# CR-CRU-088 §S1: the block's PRODUCER, named by the source echo bun prints
+# above the caret for every failure — `N | test("<name>", …`. Position alone
+# cannot attribute a block (a test's own prelude and an earlier test's
+# aftermath are positionally identical — both sit between two result lines),
+# but the echo can: it is a window onto the source that actually raised.
+# Matched on the STRIPPED line, because the echo is colourised too
+# (`test(\x1b[0m\x1b[32m"name"\x1b[0m, …`), and the gutter is right-aligned
+# once line numbers reach two digits (` 9 |` … `10 |`). `describe(`
+# deliberately does not match: only a test declaration names a producer. A
+# name that is not a plain string literal (`test.each`, a variable) yields no
+# echo name and so falls back to the positional rule.
+_ECHO_TEST_DECL = re.compile(
+    r"^\s*\d+\s*\|\s*(?:test|it)(?:\.\w+)*\s*\(\s*(?P<q>[\"'`])(?P<name>.*?)(?P=q)"
+)
+# The `test(`/`it(` DECLARATION LINE, whether or not its name is readable. §S1
+# (CR-CRU-088 C3): a declaration the pattern above cannot read (`test.each`, a
+# variable, a name on the next source line) must NULL the window rather than
+# leave the PREVIOUS declaration's name standing — an inherited name disagrees
+# with the result line and would drop the producer's own block.
+_ECHO_TEST_LINE = re.compile(r"^\s*\d+\s*\|\s*(?:test|it)(?:\.\w+)*\s*\(")
+# The caret marking the offending column. §S1: the producing test is the LAST
+# declaration echoed AT OR ABOVE it — the window routinely spans a test
+# boundary, so its FIRST declaration is usually the PREVIOUS test's, and
+# anything echoed below the caret belongs to the next block's window.
+_ECHO_CARET = re.compile(r"^\s*\^\s*$")
 
 
 def _strip_ansi(text):
@@ -589,12 +614,32 @@ def _parse_console_failures(log_text):
 
     bun's JUnit reporter writes a BARE `<failure type="..."/>` for EVERY
     failure kind (assertion mismatch, thrown Error, timeout alike) — the human
-    detail exists only on the console stream. For assertion mismatches and
-    thrown Errors an `error: <detail>` block appears IMMEDIATELY BEFORE the
-    `✗ <name>` result line; that block is captured here, keyed by leaf name.
-    Detail printed AFTER the fail line (e.g. a timeout's `^ this test timed
-    out after Nms.`) is structurally NOT a preceding block and stays
-    unmatched — the leaf degrades to type-only.
+    detail exists only on the console stream, as an `error: <detail>` block
+    under a source echo of the code that raised.
+
+    Detail printed AFTER the fail line (a timeout's `^ this test timed out
+    after Nms.`) is structurally NOT a preceding block and stays unmatched —
+    that leaf degrades to type-only.
+
+    §S1 (CR-CRU-088) — POSITION ALONE CANNOT ATTRIBUTE THAT BLOCK. A test's own
+    prelude and an earlier test's aftermath (a leaked async throw, printed
+    after its own producer's result line) are positionally identical: both sit
+    between two result lines. So a block is attributed to the test its ECHO
+    NAMES, and marries the following `(fail)` line only when the two agree:
+
+      - echo names X, next `(fail)` line is X → marry to X (the common case);
+      - echo names X, next `(fail)` line is Y → the block is X's aftermath, so
+        it marries to NOBODY (X already carries its own message; overwriting Y's
+        leaf would state a falsehood about which test failed and why);
+      - no RESOLVABLE `test("…")` literal in the echo — no declaration at all,
+        or one whose name the echo cannot yield (`test.each`, a variable, a
+        declaration split across source lines, an interpolated template, an
+        escaped quote) → keep the positional rule, so shapes the echo does not
+        cover behave exactly as before.
+
+    Under nested describes the echo carries the BARE name while the result line
+    carries the composed `suite > name` key, so the comparison is against that
+    key's trailing segment — the only form in which the two are comparable.
 
     Every line is ANSI-colourised — including the `error:` prefix, which
     arrives as `\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m ` — so the block is
@@ -604,29 +649,56 @@ def _parse_console_failures(log_text):
     details = {}
     block = []        # stripped lines since the last result-line boundary
     error_idx = None  # index in `block` of the most recent "error:" line
+    echo_name = None  # producer named by the echo above that "error:" line
+    window = None     # last declaration echoed in the window being read
+    caret = False     # the window's caret is behind us
     for line in log_text.splitlines():
         m = _FAIL_LINE.match(line)
         if m:
-            if error_idx is not None:
+            name = _strip_ansi(m.group("name")).strip()
+            # Nested describes print "suite > name"; junit leaves carry the
+            # bare test name, which is also what the echo names.
+            leaf = name.split(" > ")[-1]
+            if error_idx is not None and echo_name in (None, leaf):
                 detail = block[error_idx:]
                 message = detail[0][len("error:"):].strip()
                 married = {"message": message[:1000]}
                 trace = "\n".join(detail).rstrip()
                 if trace:
                     married["trace"] = trace[:8000]
-                name = _strip_ansi(m.group("name")).strip()
                 details[name] = married
-                # Nested describes print "suite > name"; junit leaves carry
-                # the bare test name — index the last segment too.
-                details.setdefault(name.split(" > ")[-1], married)
+                details.setdefault(leaf, married)
             block, error_idx = [], None
+            echo_name, window, caret = None, None, False
             continue
         if _RESULT_BOUNDARY_LINE.match(line):
             block, error_idx = [], None
+            echo_name, window, caret = None, None, False
             continue
         plain = _strip_ansi(line)
         if plain.startswith("error:"):
             error_idx = len(block)
+            # The window just read belongs to THIS block; the next one starts
+            # fresh, so a second block in the same run is attributed to its own
+            # echo rather than inheriting this one's. The DEGRADATION that buys
+            # (unchanged from before §S1, and rare — bun prints a fresh echo
+            # per error): a SECOND `error:` under ONE echo window sees
+            # `echo_name is None` and so marries POSITIONALLY, to whatever the
+            # next `(fail)` line is, with no echo vouching for it.
+            echo_name, window, caret = window, None, False
+        elif not caret:
+            if _ECHO_TEST_LINE.match(plain):
+                declared = _ECHO_TEST_DECL.match(plain)
+                echoed = declared.group("name") if declared else None
+                # `test.each`, a variable, a multi-line declaration, an
+                # interpolated template literal or an escaped quote names no
+                # resolvable producer -- NULL the window so the block falls
+                # back to the positional rule instead of inheriting the
+                # PREVIOUS declaration's name and being dropped.
+                window = (None if echoed is None or "${" in echoed
+                          or "\\" in echoed else echoed)
+            elif _ECHO_CARET.match(plain):
+                caret = True
         block.append(plain)
     return details
 

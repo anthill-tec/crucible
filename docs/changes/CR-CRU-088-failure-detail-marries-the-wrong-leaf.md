@@ -100,6 +100,24 @@ bun surface, and rests on bytes bun already emits for every failure. Adjacency i
 identical for both cases above — the two blocks are positionally indistinguishable, which is exactly
 why the defect exists.
 
+**Two readings §S1 left open, settled here (both measured in C1 RED, 2026-08-23):**
+
+1. **WHICH `test("…")` line — the LAST one at or above the caret.** bun's echo is a source *window*, so
+   it routinely spans a test boundary and contains SEVERAL `test("…")` lines: in the legitimate
+   consecutive-failure fixture, beta's OWN prelude echo shows alpha's `test(` line (3) *and* beta's (7).
+   Taking the FIRST would read beta's own prelude as alpha's aftermath and DROP it — breaking AC2, the
+   common case, which Risk names as worse than the defect. The innermost enclosing test is the last
+   `test("…")` line at or above the caret, and that reading fits every measured fixture.
+2. **Compare the echo's BARE name against the fail line's TRAILING segment.** Under nested describes the
+   echo carries the bare name (`test("epsilon leaks after failing"`) while the fail line carries the
+   composed key (`(fail) outer > inner > zeta fails later`). Comparing against the whole fail-line name
+   would read a legitimate nested prelude as an aftermath and blank it. The two are comparable only on
+   the fail line's trailing `" > "` segment.
+
+And because `_parse_console_failures` indexes BOTH the composed key and the bare trailing segment
+(`clients/bun-crucible.py:617-621`), a fix that guards only the composed key still lies to any consumer
+keyed on the junit leaf name. Both keys must be correct.
+
 ### §S2 The withheld guard becomes real
 
 CR-087 measured the defect and deliberately did not commit its guard tests. They land here: a detail
