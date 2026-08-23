@@ -4,8 +4,12 @@ test its ECHO NAMES.
 Per docs/changes/CR-CRU-088-failure-detail-marries-the-wrong-leaf.md, §S1 (the
 measured discriminator), §S2 (the withheld guard becomes real), §S3, AC1-AC7.
 
-THIS MODULE SPECIFIES THE SHIPPED RULE, and every test below passes against it.
-The fix lives in `clients/bun-crucible.py::_parse_console_failures` (lines
+THIS MODULE SPECIFIES THE ATTRIBUTION RULE. Gates (a)-(f) state the rule the
+change shipped and pass against it. Gates (g)-(l), added by cycle C3 after VERIFY
+measured the shipped discriminator OVER-TIGHTENING, state the other half of the
+same rule -- a failing leaf keeps its own message whatever SYNTAX declared it --
+and FAIL today (see §S1 GAP 3 below). They are the C3 RED gates.
+The rule lives in `clients/bun-crucible.py::_parse_console_failures` (lines
 606-679) and landed in this same change, per CR-CRU-088 §S1. BEFORE it, the
 parser married a pending `error:` block to the NEXT `(fail)` line by POSITION,
 so a block that arrived after its own leaf's fail line -- a leaked async
@@ -13,9 +17,10 @@ throw's aftermath -- was handed to a later leaf that never produced it, and
 Crucible stated a falsehood about which test failed and why.
 
 WHY A SIBLING MODULE, NOT AN EXTENSION OF THE CR-087 FILE.
-This module is the §S1 SPECIFICATION of the attribution rule, stated over six
-verbatim bun captures ((a)-(f) below): the legitimate consecutive and nested
-shapes, the leaked-async shapes the rule must refuse, and the echoless fallback.
+This module is the §S1 SPECIFICATION of the attribution rule, stated over twelve
+verbatim bun captures ((a)-(l) below): the legitimate consecutive and nested
+shapes, the leaked-async shapes the rule must refuse, the echoless fallback, and
+the six declaration shapes whose own detail the shipped discriminator drops.
 The sibling tests/client/test_cr087_console_failure_attribution.py holds the
 ordering fixtures and the real-bytes forward-marrying guard
 (`ForwardMarryingGuardTest`), which was flipped from a characterisation of the
@@ -60,6 +65,30 @@ and, for GAP 1, asserts only the outcome both readings agree on.
   and the bare trailing segment (clients/bun-crucible.py:656-657), so a
   mis-attribution under nesting poisons TWO keys.
 
+  GAP 3 -- WHICH SYNTAX THE ECHO CAN NAME (the C3 RED gates, (g)-(l)). §S1's
+  third clause reads "no `test("…")` line in the echo -> fall back to the
+  positional rule", which presumes the echo either names the PRODUCER or names
+  NOBODY. Measured on bun 1.3.14, there is a third outcome that §S1 does not
+  admit: the echo names the WRONG test. Two mechanisms produce it.
+    - A NAME THE PATTERN CANNOT READ. `_ECHO_TEST_DECL` needs a plain string
+      literal on the same line as `test(`, so `test.each([…])(…)`, `it.each(…)`,
+      `test(NAME, …)` and any declaration split across lines match nothing. That
+      alone would be harmless -- it is exactly the documented fallback -- except
+      that `window` (clients/bun-crucible.py:640) is ASSIGNED on every match and
+      NEVER INVALIDATED. Because the echo window spans the test boundary (GAP 1),
+      it still holds the PRECEDING test's name, so the block is attributed to a
+      test that did not raise it and is discarded as that test's aftermath.
+      The fallback never runs; the leaf loses its only message.
+    - A NAME READ AS SOURCE RATHER THAN VALUE. A template-literal name yields
+      the un-interpolated source and an escaped quote inside a plain literal
+      truncates at the first inner quote, so the echo yields a name bun never
+      reports. These two drop unconditionally, stale window or not.
+  Six ordinary shapes, every one silent: the board shows a failing leaf with no
+  reason, on every bun ingest in the fleet. CR-CRU-088's Risk section calls this
+  over-tightening worse than the original defect, so (g)-(l) below pin the
+  contract that survives both: a failing leaf carries ITS OWN message, and its
+  predecessor keeps ITS OWN, whatever syntax declared either.
+
 WIRE FORMS (AC3). Every gate runs over BOTH legal result-line families
 documented at clients/bun-crucible.py:544-564 -- the ANSI-colourised `✗` form
 bun emits even through a pipe, and the plain `(fail)` form. The ANSI fixtures
@@ -70,7 +99,8 @@ FIXTURE PROVENANCE (AC7). Every constant below is VERBATIM `bun test` 1.3.14
 (0d9b296a) stdout+stderr piped to a file, from a scratch project created with
 `mktemp -d`. The ONLY edit is normalising that scratch directory to
 `/tmp/bun-fixture/` in the echoed paths, exactly as the CR-087 module does.
-Nothing here is hand-written output. Because every assertion runs over fixtures,
+Nothing here is hand-written output. (g)-(l) were captured the same way, one
+scratch project per shape, plain and FORCE_COLOR=1 twins per capture. Because every assertion runs over fixtures,
 the suite's verdict cannot flip with a toolchain bump -- the CR-087 lesson.
 
 No production code is touched by this file.
@@ -570,6 +600,509 @@ LEAK_ONELINER_ANSI = (
 LEAK_ONELINER = {"plain": LEAK_ONELINER_PLAIN, "ansi": LEAK_ONELINER_ANSI}
 
 
+# ── (g) OVER-TIGHTENING: `test.each` (C3 RED) ───────────────────────────────
+# Fixture (g), the `test.each` shape (echoed below as the scratch file `g`) — a
+# plainly-declared failing test followed by a `test.each([…])("beta each %i", …)`
+# that fails with its own distinct message:
+#   3 | test("alpha asserts wrongly", () => {
+#   7 | test.each([1])("beta each %i", (n) => {
+#   8 |   throw new Error("beta each boom");
+# MEASURED: bun expands `%i`, so the result line reads `(fail) beta each 1`,
+# and beta's own prelude echo spans the boundary — it shows alpha's `test(` line
+# (3) AND beta's `test.each(` line (7). `_ECHO_TEST_DECL` cannot read the
+# `test.each([…])(…)` form (a `[` sits where the name literal would be), so the
+# window is never overwritten and still holds `alpha asserts wrongly` when
+# `error: beta each boom` arrives. The names disagree, the block is read as
+# alpha's aftermath, and beta each 1 arrives with NO message at all.
+
+EACH_TEST_PLAIN = """bun test v1.3.14 (0d9b296a)
+
+g.test.ts:
+1 | import { expect, test } from "bun:test";
+2 | 
+3 | test("alpha asserts wrongly", () => {
+4 |   expect(1).toBe(2);
+                ^
+error: expect(received).toBe(expected)
+
+Expected: 2
+Received: 1
+
+      at <anonymous> (/tmp/bun-fixture/g.test.ts:4:13)
+(fail) alpha asserts wrongly [0.12ms]
+3 | test("alpha asserts wrongly", () => {
+4 |   expect(1).toBe(2);
+5 | });
+6 | 
+7 | test.each([1])("beta each %i", (n) => {
+8 |   throw new Error("beta each boom");
+                                      ^
+error: beta each boom
+      at <anonymous> (/tmp/bun-fixture/g.test.ts:8:35)
+(fail) beta each 1 [0.04ms]
+
+ 0 pass
+ 2 fail
+ 1 expect() calls
+Ran 2 tests across 1 file. [8.00ms]
+"""
+
+EACH_TEST_ANSI = (
+    "\x1b[0m\x1b[1mbun test \x1b[0m\x1b[2mv1.3.14 (0d9b296a)\x1b[0m\n"
+    "\x1b[0m\n"
+    "g.test.ts:\n"
+    "\x1b[0m\x1b[1m1 |\x1b[0m \x1b[0m\x1b[35mimport\x1b[0m { expect, test } \x1b[0m\x1b[35mfrom\x1b[0m \x1b[0m\x1b[32m\"bun:test\"\x1b[0m\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m2 |\x1b[0m \n"
+    "\x1b[0m\x1b[1m3 |\x1b[0m test(\x1b[0m\x1b[32m\"alpha asserts wrongly\"\x1b[0m, () => {\n"
+    "\x1b[0m\x1b[1m4 |\x1b[0m   expect(\x1b[0m\x1b[33m1\x1b[0m)\x1b[0m\x1b[3m\x1b[1m.toBe\x1b[0m(\x1b[0m\x1b[33m2\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    "                \x1b[31m\x1b[1m^\x1b[0m\n"
+    "\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m \x1b[1m\x1b[2mexpect(\x1b[0m\x1b[31mreceived\x1b[0m\x1b[2m).\x1b[0mtoBe\x1b[2m(\x1b[0m\x1b[32mexpected\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\n"
+    "Expected: \x1b[32m2\x1b[0m\n"
+    "Received: \x1b[31m1\x1b[0m\n"
+    "\x1b[0m\n"
+    "\x1b[0m      \x1b[2mat \x1b[0m\x1b[0m\x1b[2m<anonymous>\x1b[0m\x1b[2m (\x1b[0m\x1b[0m\x1b[36m\x1b[2m/tmp/bun-fixture/\x1b[0m\x1b[36mg.test.ts\x1b[0m\x1b[2m:\x1b[0m\x1b[33m4\x1b[0m\x1b[2m:\x1b[33m13\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m alpha asserts wrongly\x1b[0m \x1b[0m\x1b[2m[0.12ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    "\x1b[0m\x1b[1m3 |\x1b[0m test(\x1b[0m\x1b[32m\"alpha asserts wrongly\"\x1b[0m, () => {\n"
+    "\x1b[0m\x1b[1m4 |\x1b[0m   expect(\x1b[0m\x1b[33m1\x1b[0m)\x1b[0m\x1b[3m\x1b[1m.toBe\x1b[0m(\x1b[0m\x1b[33m2\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m5 |\x1b[0m })\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m6 |\x1b[0m \n"
+    "\x1b[0m\x1b[1m7 |\x1b[0m test\x1b[0m\x1b[3m\x1b[1m.each\x1b[0m([\x1b[0m\x1b[33m1\x1b[0m])(\x1b[0m\x1b[32m\"beta each %i\"\x1b[0m, (n) => {\n"
+    "\x1b[0m\x1b[1m8 |\x1b[0m   \x1b[0m\x1b[35mthrow\x1b[0m \x1b[0m\x1b[35mnew\x1b[0m \x1b[0m\x1b[1mError\x1b[0m(\x1b[0m\x1b[32m\"beta each boom\"\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    "                                      \x1b[31m\x1b[1m^\x1b[0m\n"
+    "\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m \x1b[1mbeta each boom\x1b[0m\n"
+    "\x1b[0m      \x1b[2mat \x1b[0m\x1b[0m\x1b[2m<anonymous>\x1b[0m\x1b[2m (\x1b[0m\x1b[0m\x1b[36m\x1b[2m/tmp/bun-fixture/\x1b[0m\x1b[36mg.test.ts\x1b[0m\x1b[2m:\x1b[0m\x1b[33m8\x1b[0m\x1b[2m:\x1b[33m35\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m beta each 1\x1b[0m \x1b[0m\x1b[2m[0.05ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    "\n"
+    " 0 pass\x1b[0m\n"
+    "\x1b[0m\x1b[31m 2 fail\x1b[0m\n"
+    " 1 expect() calls\n"
+    "Ran 2 tests across 1 file. \x1b[0m\x1b[2m[\x1b[1m8.00ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    ""
+)
+
+EACH_TEST = {"plain": EACH_TEST_PLAIN, "ansi": EACH_TEST_ANSI}
+
+# ── (h) OVER-TIGHTENING: `it.each` (C3 RED) ─────────────────────────────────
+# Fixture (h), the `it.each` shape (echoed below as the scratch file `h`) — the
+# (g) shape spelled with bun's `it` alias, because `_ECHO_TEST_DECL` accepts
+# `test` and `it` alike and both must survive:
+#   7 | it.each([2])("gamma each %i", (n) => {
+#   8 |   throw new Error("gamma each boom");
+# Same mechanism, same measured outcome: `(fail) gamma each 2` loses
+# `gamma each boom`.
+
+EACH_IT_PLAIN = """bun test v1.3.14 (0d9b296a)
+
+h.test.ts:
+1 | import { expect, test, it } from "bun:test";
+2 | 
+3 | test("alpha asserts wrongly", () => {
+4 |   expect(1).toBe(2);
+                ^
+error: expect(received).toBe(expected)
+
+Expected: 2
+Received: 1
+
+      at <anonymous> (/tmp/bun-fixture/h.test.ts:4:13)
+(fail) alpha asserts wrongly [0.11ms]
+3 | test("alpha asserts wrongly", () => {
+4 |   expect(1).toBe(2);
+5 | });
+6 | 
+7 | it.each([2])("gamma each %i", (n) => {
+8 |   throw new Error("gamma each boom");
+                                       ^
+error: gamma each boom
+      at <anonymous> (/tmp/bun-fixture/h.test.ts:8:36)
+(fail) gamma each 2 [0.05ms]
+
+ 0 pass
+ 2 fail
+ 1 expect() calls
+Ran 2 tests across 1 file. [8.00ms]
+"""
+
+EACH_IT_ANSI = (
+    "\x1b[0m\x1b[1mbun test \x1b[0m\x1b[2mv1.3.14 (0d9b296a)\x1b[0m\n"
+    "\x1b[0m\n"
+    "h.test.ts:\n"
+    "\x1b[0m\x1b[1m1 |\x1b[0m \x1b[0m\x1b[35mimport\x1b[0m { expect, test, it } \x1b[0m\x1b[35mfrom\x1b[0m \x1b[0m\x1b[32m\"bun:test\"\x1b[0m\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m2 |\x1b[0m \n"
+    "\x1b[0m\x1b[1m3 |\x1b[0m test(\x1b[0m\x1b[32m\"alpha asserts wrongly\"\x1b[0m, () => {\n"
+    "\x1b[0m\x1b[1m4 |\x1b[0m   expect(\x1b[0m\x1b[33m1\x1b[0m)\x1b[0m\x1b[3m\x1b[1m.toBe\x1b[0m(\x1b[0m\x1b[33m2\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    "                \x1b[31m\x1b[1m^\x1b[0m\n"
+    "\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m \x1b[1m\x1b[2mexpect(\x1b[0m\x1b[31mreceived\x1b[0m\x1b[2m).\x1b[0mtoBe\x1b[2m(\x1b[0m\x1b[32mexpected\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\n"
+    "Expected: \x1b[32m2\x1b[0m\n"
+    "Received: \x1b[31m1\x1b[0m\n"
+    "\x1b[0m\n"
+    "\x1b[0m      \x1b[2mat \x1b[0m\x1b[0m\x1b[2m<anonymous>\x1b[0m\x1b[2m (\x1b[0m\x1b[0m\x1b[36m\x1b[2m/tmp/bun-fixture/\x1b[0m\x1b[36mh.test.ts\x1b[0m\x1b[2m:\x1b[0m\x1b[33m4\x1b[0m\x1b[2m:\x1b[33m13\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m alpha asserts wrongly\x1b[0m \x1b[0m\x1b[2m[0.18ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    "\x1b[0m\x1b[1m3 |\x1b[0m test(\x1b[0m\x1b[32m\"alpha asserts wrongly\"\x1b[0m, () => {\n"
+    "\x1b[0m\x1b[1m4 |\x1b[0m   expect(\x1b[0m\x1b[33m1\x1b[0m)\x1b[0m\x1b[3m\x1b[1m.toBe\x1b[0m(\x1b[0m\x1b[33m2\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m5 |\x1b[0m })\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m6 |\x1b[0m \n"
+    "\x1b[0m\x1b[1m7 |\x1b[0m it\x1b[0m\x1b[3m\x1b[1m.each\x1b[0m([\x1b[0m\x1b[33m2\x1b[0m])(\x1b[0m\x1b[32m\"gamma each %i\"\x1b[0m, (n) => {\n"
+    "\x1b[0m\x1b[1m8 |\x1b[0m   \x1b[0m\x1b[35mthrow\x1b[0m \x1b[0m\x1b[35mnew\x1b[0m \x1b[0m\x1b[1mError\x1b[0m(\x1b[0m\x1b[32m\"gamma each boom\"\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    "                                       \x1b[31m\x1b[1m^\x1b[0m\n"
+    "\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m \x1b[1mgamma each boom\x1b[0m\n"
+    "\x1b[0m      \x1b[2mat \x1b[0m\x1b[0m\x1b[2m<anonymous>\x1b[0m\x1b[2m (\x1b[0m\x1b[0m\x1b[36m\x1b[2m/tmp/bun-fixture/\x1b[0m\x1b[36mh.test.ts\x1b[0m\x1b[2m:\x1b[0m\x1b[33m8\x1b[0m\x1b[2m:\x1b[33m36\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m gamma each 2\x1b[0m \x1b[0m\x1b[2m[0.06ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    "\n"
+    " 0 pass\x1b[0m\n"
+    "\x1b[0m\x1b[31m 2 fail\x1b[0m\n"
+    " 1 expect() calls\n"
+    "Ran 2 tests across 1 file. \x1b[0m\x1b[2m[\x1b[1m9.00ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    ""
+)
+
+EACH_IT = {"plain": EACH_IT_PLAIN, "ansi": EACH_IT_ANSI}
+
+# ── (i) OVER-TIGHTENING: a variable-named test (C3 RED) ─────────────────────
+# Fixture (i), the variable-named shape (echoed below as the scratch file `i`) —
+# the name is a `const`, the single most ordinary way a real suite parameterises
+# a test name:
+#   3 | const NAME = "delta named by a variable";
+#   9 | test(NAME, () => {
+#  10 |   throw new Error("delta boom");
+# MEASURED: the result line carries the RESOLVED name
+# (`(fail) delta named by a variable`) while the echo's `test(NAME,` line has no
+# string literal to read, so the window still holds `alpha asserts wrongly`
+# (line 5, inside the same six-line window) and delta's own block is discarded.
+# Note also the right-aligned gutter once line numbers reach two digits.
+
+VARIABLE_NAME_PLAIN = """bun test v1.3.14 (0d9b296a)
+
+i.test.ts:
+1 | import { expect, test } from "bun:test";
+2 | 
+3 | const NAME = "delta named by a variable";
+4 | 
+5 | test("alpha asserts wrongly", () => {
+6 |   expect(1).toBe(2);
+                ^
+error: expect(received).toBe(expected)
+
+Expected: 2
+Received: 1
+
+      at <anonymous> (/tmp/bun-fixture/i.test.ts:6:13)
+(fail) alpha asserts wrongly [0.14ms]
+ 5 | test("alpha asserts wrongly", () => {
+ 6 |   expect(1).toBe(2);
+ 7 | });
+ 8 | 
+ 9 | test(NAME, () => {
+10 |   throw new Error("delta boom");
+                                   ^
+error: delta boom
+      at <anonymous> (/tmp/bun-fixture/i.test.ts:10:31)
+(fail) delta named by a variable [0.05ms]
+
+ 0 pass
+ 2 fail
+ 1 expect() calls
+Ran 2 tests across 1 file. [9.00ms]
+"""
+
+VARIABLE_NAME_ANSI = (
+    "\x1b[0m\x1b[1mbun test \x1b[0m\x1b[2mv1.3.14 (0d9b296a)\x1b[0m\n"
+    "\x1b[0m\n"
+    "i.test.ts:\n"
+    "\x1b[0m\x1b[1m1 |\x1b[0m \x1b[0m\x1b[35mimport\x1b[0m { expect, test } \x1b[0m\x1b[35mfrom\x1b[0m \x1b[0m\x1b[32m\"bun:test\"\x1b[0m\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m2 |\x1b[0m \n"
+    "\x1b[0m\x1b[1m3 |\x1b[0m \x1b[0m\x1b[35mconst\x1b[0m NAME = \x1b[0m\x1b[32m\"delta named by a variable\"\x1b[0m\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m4 |\x1b[0m \n"
+    "\x1b[0m\x1b[1m5 |\x1b[0m test(\x1b[0m\x1b[32m\"alpha asserts wrongly\"\x1b[0m, () => {\n"
+    "\x1b[0m\x1b[1m6 |\x1b[0m   expect(\x1b[0m\x1b[33m1\x1b[0m)\x1b[0m\x1b[3m\x1b[1m.toBe\x1b[0m(\x1b[0m\x1b[33m2\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    "                \x1b[31m\x1b[1m^\x1b[0m\n"
+    "\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m \x1b[1m\x1b[2mexpect(\x1b[0m\x1b[31mreceived\x1b[0m\x1b[2m).\x1b[0mtoBe\x1b[2m(\x1b[0m\x1b[32mexpected\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\n"
+    "Expected: \x1b[32m2\x1b[0m\n"
+    "Received: \x1b[31m1\x1b[0m\n"
+    "\x1b[0m\n"
+    "\x1b[0m      \x1b[2mat \x1b[0m\x1b[0m\x1b[2m<anonymous>\x1b[0m\x1b[2m (\x1b[0m\x1b[0m\x1b[36m\x1b[2m/tmp/bun-fixture/\x1b[0m\x1b[36mi.test.ts\x1b[0m\x1b[2m:\x1b[0m\x1b[33m6\x1b[0m\x1b[2m:\x1b[33m13\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m alpha asserts wrongly\x1b[0m \x1b[0m\x1b[2m[0.13ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    " \x1b[0m\x1b[1m5 |\x1b[0m test(\x1b[0m\x1b[32m\"alpha asserts wrongly\"\x1b[0m, () => {\n"
+    " \x1b[0m\x1b[1m6 |\x1b[0m   expect(\x1b[0m\x1b[33m1\x1b[0m)\x1b[0m\x1b[3m\x1b[1m.toBe\x1b[0m(\x1b[0m\x1b[33m2\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    " \x1b[0m\x1b[1m7 |\x1b[0m })\x1b[0m\x1b[2m;\x1b[0m\n"
+    " \x1b[0m\x1b[1m8 |\x1b[0m \n"
+    " \x1b[0m\x1b[1m9 |\x1b[0m test(NAME, () => {\n"
+    "\x1b[0m\x1b[1m10 |\x1b[0m   \x1b[0m\x1b[35mthrow\x1b[0m \x1b[0m\x1b[35mnew\x1b[0m \x1b[0m\x1b[1mError\x1b[0m(\x1b[0m\x1b[32m\"delta boom\"\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    "                                   \x1b[31m\x1b[1m^\x1b[0m\n"
+    "\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m \x1b[1mdelta boom\x1b[0m\n"
+    "\x1b[0m      \x1b[2mat \x1b[0m\x1b[0m\x1b[2m<anonymous>\x1b[0m\x1b[2m (\x1b[0m\x1b[0m\x1b[36m\x1b[2m/tmp/bun-fixture/\x1b[0m\x1b[36mi.test.ts\x1b[0m\x1b[2m:\x1b[0m\x1b[33m10\x1b[0m\x1b[2m:\x1b[33m31\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m delta named by a variable\x1b[0m \x1b[0m\x1b[2m[0.05ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    "\n"
+    " 0 pass\x1b[0m\n"
+    "\x1b[0m\x1b[31m 2 fail\x1b[0m\n"
+    " 1 expect() calls\n"
+    "Ran 2 tests across 1 file. \x1b[0m\x1b[2m[\x1b[1m9.00ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    ""
+)
+
+VARIABLE_NAME = {"plain": VARIABLE_NAME_PLAIN, "ansi": VARIABLE_NAME_ANSI}
+
+# ── (j) OVER-TIGHTENING: a split declaration (C3 RED) ───────────────────────
+# Fixture (j), the split-declaration shape (echoed below as the scratch file
+# `j`) — the declaration spread over several source lines, as a formatter
+# produces for any long name or option object:
+#   3 | test("alpha asserts wrongly", () => { expect(1).toBe(2); });
+#   5 | test(
+#   6 |   "epsilon split over lines",
+#   7 |   () => { throw new Error("epsilon boom"); },
+# MEASURED: `test(` and the name literal sit on DIFFERENT lines, so the
+# single-line `_ECHO_TEST_DECL` matches neither, and the window keeps alpha's
+# name (line 3).
+#
+# PRECONDITION, measured: bun's echo window is the caret line plus the five
+# above it. This shape only loses its message when the PRECEDING declaration
+# still falls inside that window — spread the same declaration wider (bodies on
+# their own lines, caret on line 10) and alpha's line 3 drops out of the window,
+# the echo names nobody, the §S1 positional fallback takes over and the message
+# survives. So the defect is not merely "this syntax", it is "this syntax within
+# five lines of a readable declaration" — which is where test code normally is.
+
+SPLIT_DECL_PLAIN = """bun test v1.3.14 (0d9b296a)
+
+j.test.ts:
+1 | import { expect, test } from "bun:test";
+2 | 
+3 | test("alpha asserts wrongly", () => { expect(1).toBe(2); });
+                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: 2
+Received: 1
+
+      at <anonymous> (/tmp/bun-fixture/j.test.ts:3:49)
+(fail) alpha asserts wrongly [0.09ms]
+2 | 
+3 | test("alpha asserts wrongly", () => { expect(1).toBe(2); });
+4 | 
+5 | test(
+6 |   "epsilon split over lines",
+7 |   () => { throw new Error("epsilon boom"); },
+                                            ^
+error: epsilon boom
+      at <anonymous> (/tmp/bun-fixture/j.test.ts:7:41)
+(fail) epsilon split over lines [0.04ms]
+
+ 0 pass
+ 2 fail
+ 1 expect() calls
+Ran 2 tests across 1 file. [8.00ms]
+"""
+
+SPLIT_DECL_ANSI = (
+    "\x1b[0m\x1b[1mbun test \x1b[0m\x1b[2mv1.3.14 (0d9b296a)\x1b[0m\n"
+    "\x1b[0m\n"
+    "j.test.ts:\n"
+    "\x1b[0m\x1b[1m1 |\x1b[0m \x1b[0m\x1b[35mimport\x1b[0m { expect, test } \x1b[0m\x1b[35mfrom\x1b[0m \x1b[0m\x1b[32m\"bun:test\"\x1b[0m\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m2 |\x1b[0m \n"
+    "\x1b[0m\x1b[1m3 |\x1b[0m test(\x1b[0m\x1b[32m\"alpha asserts wrongly\"\x1b[0m, () => { expect(\x1b[0m\x1b[33m1\x1b[0m)\x1b[0m\x1b[3m\x1b[1m.toBe\x1b[0m(\x1b[0m\x1b[33m2\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m })\x1b[0m\x1b[2m;\x1b[0m\n"
+    "                                                    \x1b[31m\x1b[1m^\x1b[0m\n"
+    "\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m \x1b[1m\x1b[2mexpect(\x1b[0m\x1b[31mreceived\x1b[0m\x1b[2m).\x1b[0mtoBe\x1b[2m(\x1b[0m\x1b[32mexpected\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\n"
+    "Expected: \x1b[32m2\x1b[0m\n"
+    "Received: \x1b[31m1\x1b[0m\n"
+    "\x1b[0m\n"
+    "\x1b[0m      \x1b[2mat \x1b[0m\x1b[0m\x1b[2m<anonymous>\x1b[0m\x1b[2m (\x1b[0m\x1b[0m\x1b[36m\x1b[2m/tmp/bun-fixture/\x1b[0m\x1b[36mj.test.ts\x1b[0m\x1b[2m:\x1b[0m\x1b[33m3\x1b[0m\x1b[2m:\x1b[33m49\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m alpha asserts wrongly\x1b[0m \x1b[0m\x1b[2m[0.12ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    "\x1b[0m\x1b[1m2 |\x1b[0m \n"
+    "\x1b[0m\x1b[1m3 |\x1b[0m test(\x1b[0m\x1b[32m\"alpha asserts wrongly\"\x1b[0m, () => { expect(\x1b[0m\x1b[33m1\x1b[0m)\x1b[0m\x1b[3m\x1b[1m.toBe\x1b[0m(\x1b[0m\x1b[33m2\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m })\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m4 |\x1b[0m \n"
+    "\x1b[0m\x1b[1m5 |\x1b[0m test(\n"
+    "\x1b[0m\x1b[1m6 |\x1b[0m   \x1b[0m\x1b[32m\"epsilon split over lines\"\x1b[0m,\n"
+    "\x1b[0m\x1b[1m7 |\x1b[0m   () => { \x1b[0m\x1b[35mthrow\x1b[0m \x1b[0m\x1b[35mnew\x1b[0m \x1b[0m\x1b[1mError\x1b[0m(\x1b[0m\x1b[32m\"epsilon boom\"\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m },\n"
+    "                                            \x1b[31m\x1b[1m^\x1b[0m\n"
+    "\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m \x1b[1mepsilon boom\x1b[0m\n"
+    "\x1b[0m      \x1b[2mat \x1b[0m\x1b[0m\x1b[2m<anonymous>\x1b[0m\x1b[2m (\x1b[0m\x1b[0m\x1b[36m\x1b[2m/tmp/bun-fixture/\x1b[0m\x1b[36mj.test.ts\x1b[0m\x1b[2m:\x1b[0m\x1b[33m7\x1b[0m\x1b[2m:\x1b[33m41\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m epsilon split over lines\x1b[0m \x1b[0m\x1b[2m[0.05ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    "\n"
+    " 0 pass\x1b[0m\n"
+    "\x1b[0m\x1b[31m 2 fail\x1b[0m\n"
+    " 1 expect() calls\n"
+    "Ran 2 tests across 1 file. \x1b[0m\x1b[2m[\x1b[1m7.00ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    ""
+)
+
+SPLIT_DECL = {"plain": SPLIT_DECL_PLAIN, "ansi": SPLIT_DECL_ANSI}
+
+# ── (k) OVER-TIGHTENING: a template-literal name (C3 RED) ───────────────────
+# Fixture (k), the template-literal shape (echoed below as the scratch file
+# `k`) — the name is an interpolated template:
+#   3 | const n = 3;
+#   9 | test(`zeta ${n} interpolated`, () => {
+#  10 |   throw new Error("zeta boom");
+# MEASURED: `_ECHO_TEST_DECL` DOES match here — its quote class includes the
+# backtick — but it lifts the UN-INTERPOLATED SOURCE, `zeta ${n} interpolated`,
+# while the result line carries the evaluated `(fail) zeta 3 interpolated`. So
+# the echo names a test that does not exist and the block is dropped
+# UNCONDITIONALLY: unlike (g)-(j) this needs no stale window, because the name
+# the echo yields can never equal the name bun reports.
+
+TEMPLATE_NAME_PLAIN = """bun test v1.3.14 (0d9b296a)
+
+k.test.ts:
+1 | import { expect, test } from "bun:test";
+2 | 
+3 | const n = 3;
+4 | 
+5 | test("alpha asserts wrongly", () => {
+6 |   expect(1).toBe(2);
+                ^
+error: expect(received).toBe(expected)
+
+Expected: 2
+Received: 1
+
+      at <anonymous> (/tmp/bun-fixture/k.test.ts:6:13)
+(fail) alpha asserts wrongly [0.14ms]
+ 5 | test("alpha asserts wrongly", () => {
+ 6 |   expect(1).toBe(2);
+ 7 | });
+ 8 | 
+ 9 | test(`zeta ${n} interpolated`, () => {
+10 |   throw new Error("zeta boom");
+                                  ^
+error: zeta boom
+      at <anonymous> (/tmp/bun-fixture/k.test.ts:10:30)
+(fail) zeta 3 interpolated [0.05ms]
+
+ 0 pass
+ 2 fail
+ 1 expect() calls
+Ran 2 tests across 1 file. [8.00ms]
+"""
+
+TEMPLATE_NAME_ANSI = (
+    "\x1b[0m\x1b[1mbun test \x1b[0m\x1b[2mv1.3.14 (0d9b296a)\x1b[0m\n"
+    "\x1b[0m\n"
+    "k.test.ts:\n"
+    "\x1b[0m\x1b[1m1 |\x1b[0m \x1b[0m\x1b[35mimport\x1b[0m { expect, test } \x1b[0m\x1b[35mfrom\x1b[0m \x1b[0m\x1b[32m\"bun:test\"\x1b[0m\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m2 |\x1b[0m \n"
+    "\x1b[0m\x1b[1m3 |\x1b[0m \x1b[0m\x1b[35mconst\x1b[0m n = \x1b[0m\x1b[33m3\x1b[0m\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m4 |\x1b[0m \n"
+    "\x1b[0m\x1b[1m5 |\x1b[0m test(\x1b[0m\x1b[32m\"alpha asserts wrongly\"\x1b[0m, () => {\n"
+    "\x1b[0m\x1b[1m6 |\x1b[0m   expect(\x1b[0m\x1b[33m1\x1b[0m)\x1b[0m\x1b[3m\x1b[1m.toBe\x1b[0m(\x1b[0m\x1b[33m2\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    "                \x1b[31m\x1b[1m^\x1b[0m\n"
+    "\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m \x1b[1m\x1b[2mexpect(\x1b[0m\x1b[31mreceived\x1b[0m\x1b[2m).\x1b[0mtoBe\x1b[2m(\x1b[0m\x1b[32mexpected\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\n"
+    "Expected: \x1b[32m2\x1b[0m\n"
+    "Received: \x1b[31m1\x1b[0m\n"
+    "\x1b[0m\n"
+    "\x1b[0m      \x1b[2mat \x1b[0m\x1b[0m\x1b[2m<anonymous>\x1b[0m\x1b[2m (\x1b[0m\x1b[0m\x1b[36m\x1b[2m/tmp/bun-fixture/\x1b[0m\x1b[36mk.test.ts\x1b[0m\x1b[2m:\x1b[0m\x1b[33m6\x1b[0m\x1b[2m:\x1b[33m13\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m alpha asserts wrongly\x1b[0m \x1b[0m\x1b[2m[0.13ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    " \x1b[0m\x1b[1m5 |\x1b[0m test(\x1b[0m\x1b[32m\"alpha asserts wrongly\"\x1b[0m, () => {\n"
+    " \x1b[0m\x1b[1m6 |\x1b[0m   expect(\x1b[0m\x1b[33m1\x1b[0m)\x1b[0m\x1b[3m\x1b[1m.toBe\x1b[0m(\x1b[0m\x1b[33m2\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    " \x1b[0m\x1b[1m7 |\x1b[0m })\x1b[0m\x1b[2m;\x1b[0m\n"
+    " \x1b[0m\x1b[1m8 |\x1b[0m \n"
+    " \x1b[0m\x1b[1m9 |\x1b[0m test(\x1b[0m\x1b[32m`zeta \x1b[0m${n}\x1b[0m\x1b[32m interpolated`\x1b[0m, () => {\n"
+    "\x1b[0m\x1b[1m10 |\x1b[0m   \x1b[0m\x1b[35mthrow\x1b[0m \x1b[0m\x1b[35mnew\x1b[0m \x1b[0m\x1b[1mError\x1b[0m(\x1b[0m\x1b[32m\"zeta boom\"\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    "                                  \x1b[31m\x1b[1m^\x1b[0m\n"
+    "\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m \x1b[1mzeta boom\x1b[0m\n"
+    "\x1b[0m      \x1b[2mat \x1b[0m\x1b[0m\x1b[2m<anonymous>\x1b[0m\x1b[2m (\x1b[0m\x1b[0m\x1b[36m\x1b[2m/tmp/bun-fixture/\x1b[0m\x1b[36mk.test.ts\x1b[0m\x1b[2m:\x1b[0m\x1b[33m10\x1b[0m\x1b[2m:\x1b[33m30\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m zeta 3 interpolated\x1b[0m \x1b[0m\x1b[2m[0.05ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    "\n"
+    " 0 pass\x1b[0m\n"
+    "\x1b[0m\x1b[31m 2 fail\x1b[0m\n"
+    " 1 expect() calls\n"
+    "Ran 2 tests across 1 file. \x1b[0m\x1b[2m[\x1b[1m7.00ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    ""
+)
+
+TEMPLATE_NAME = {"plain": TEMPLATE_NAME_PLAIN, "ansi": TEMPLATE_NAME_ANSI}
+
+# ── (l) OVER-TIGHTENING: an escaped quote in the name (C3 RED) ──────────────
+# Fixture (l), the escaped-quote shape (echoed below as the scratch file `l`) —
+# a perfectly ordinary plain string literal that happens to quote something:
+#   7 | test("lambda says \"hi\" loudly", () => {
+#   8 |   throw new Error("lambda boom");
+# MEASURED: `_ECHO_TEST_DECL`'s non-greedy `(?P<name>.*?)(?P=q)` stops at the
+# FIRST inner quote, so the echo name TRUNCATES to `lambda says \` while the
+# result line carries the whole `(fail) lambda says "hi" loudly`. Dropped
+# UNCONDITIONALLY, like (k), and for the same reason: the regex reads source
+# text where it needs a value.
+
+ESCAPED_QUOTE_PLAIN = r"""bun test v1.3.14 (0d9b296a)
+
+l.test.ts:
+1 | import { expect, test } from "bun:test";
+2 | 
+3 | test("alpha asserts wrongly", () => {
+4 |   expect(1).toBe(2);
+                ^
+error: expect(received).toBe(expected)
+
+Expected: 2
+Received: 1
+
+      at <anonymous> (/tmp/bun-fixture/l.test.ts:4:13)
+(fail) alpha asserts wrongly [0.10ms]
+3 | test("alpha asserts wrongly", () => {
+4 |   expect(1).toBe(2);
+5 | });
+6 | 
+7 | test("lambda says \"hi\" loudly", () => {
+8 |   throw new Error("lambda boom");
+                                   ^
+error: lambda boom
+      at <anonymous> (/tmp/bun-fixture/l.test.ts:8:32)
+(fail) lambda says "hi" loudly [0.04ms]
+
+ 0 pass
+ 2 fail
+ 1 expect() calls
+Ran 2 tests across 1 file. [8.00ms]
+"""
+
+ESCAPED_QUOTE_ANSI = (
+    "\x1b[0m\x1b[1mbun test \x1b[0m\x1b[2mv1.3.14 (0d9b296a)\x1b[0m\n"
+    "\x1b[0m\n"
+    "l.test.ts:\n"
+    "\x1b[0m\x1b[1m1 |\x1b[0m \x1b[0m\x1b[35mimport\x1b[0m { expect, test } \x1b[0m\x1b[35mfrom\x1b[0m \x1b[0m\x1b[32m\"bun:test\"\x1b[0m\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m2 |\x1b[0m \n"
+    "\x1b[0m\x1b[1m3 |\x1b[0m test(\x1b[0m\x1b[32m\"alpha asserts wrongly\"\x1b[0m, () => {\n"
+    "\x1b[0m\x1b[1m4 |\x1b[0m   expect(\x1b[0m\x1b[33m1\x1b[0m)\x1b[0m\x1b[3m\x1b[1m.toBe\x1b[0m(\x1b[0m\x1b[33m2\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    "                \x1b[31m\x1b[1m^\x1b[0m\n"
+    "\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m \x1b[1m\x1b[2mexpect(\x1b[0m\x1b[31mreceived\x1b[0m\x1b[2m).\x1b[0mtoBe\x1b[2m(\x1b[0m\x1b[32mexpected\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\n"
+    "Expected: \x1b[32m2\x1b[0m\n"
+    "Received: \x1b[31m1\x1b[0m\n"
+    "\x1b[0m\n"
+    "\x1b[0m      \x1b[2mat \x1b[0m\x1b[0m\x1b[2m<anonymous>\x1b[0m\x1b[2m (\x1b[0m\x1b[0m\x1b[36m\x1b[2m/tmp/bun-fixture/\x1b[0m\x1b[36ml.test.ts\x1b[0m\x1b[2m:\x1b[0m\x1b[33m4\x1b[0m\x1b[2m:\x1b[33m13\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m alpha asserts wrongly\x1b[0m \x1b[0m\x1b[2m[0.11ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    "\x1b[0m\x1b[1m3 |\x1b[0m test(\x1b[0m\x1b[32m\"alpha asserts wrongly\"\x1b[0m, () => {\n"
+    "\x1b[0m\x1b[1m4 |\x1b[0m   expect(\x1b[0m\x1b[33m1\x1b[0m)\x1b[0m\x1b[3m\x1b[1m.toBe\x1b[0m(\x1b[0m\x1b[33m2\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m5 |\x1b[0m })\x1b[0m\x1b[2m;\x1b[0m\n"
+    "\x1b[0m\x1b[1m6 |\x1b[0m \n"
+    "\x1b[0m\x1b[1m7 |\x1b[0m test(\x1b[0m\x1b[32m\"lambda says \\\"hi\\\" loudly\"\x1b[0m, () => {\n"
+    "\x1b[0m\x1b[1m8 |\x1b[0m   \x1b[0m\x1b[35mthrow\x1b[0m \x1b[0m\x1b[35mnew\x1b[0m \x1b[0m\x1b[1mError\x1b[0m(\x1b[0m\x1b[32m\"lambda boom\"\x1b[0m)\x1b[0m\x1b[2m;\x1b[0m\n"
+    "                                   \x1b[31m\x1b[1m^\x1b[0m\n"
+    "\x1b[0m\x1b[31merror\x1b[0m\x1b[2m:\x1b[0m \x1b[1mlambda boom\x1b[0m\n"
+    "\x1b[0m      \x1b[2mat \x1b[0m\x1b[0m\x1b[2m<anonymous>\x1b[0m\x1b[2m (\x1b[0m\x1b[0m\x1b[36m\x1b[2m/tmp/bun-fixture/\x1b[0m\x1b[36ml.test.ts\x1b[0m\x1b[2m:\x1b[0m\x1b[33m8\x1b[0m\x1b[2m:\x1b[33m32\x1b[0m\x1b[2m)\x1b[0m\n"
+    "\x1b[0m\x1b[31m✗\x1b[0m\x1b[0m\x1b[1m lambda says \"hi\" loudly\x1b[0m \x1b[0m\x1b[2m[0.04ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    "\n"
+    " 0 pass\x1b[0m\n"
+    "\x1b[0m\x1b[31m 2 fail\x1b[0m\n"
+    " 1 expect() calls\n"
+    "Ran 2 tests across 1 file. \x1b[0m\x1b[2m[\x1b[1m8.00ms\x1b[0m\x1b[2m]\x1b[0m\n"
+    ""
+)
+
+ESCAPED_QUOTE = {"plain": ESCAPED_QUOTE_PLAIN, "ansi": ESCAPED_QUOTE_ANSI}
+
+
+# Every (g)-(l) fixture pairs the shape under test with the SAME plainly-declared
+# predecessor, so the only variable across the six is the producing test's
+# declaration syntax.
+SHAPED_PREDECESSOR = "alpha asserts wrongly"
+SHAPED_PREDECESSOR_MESSAGE = "expect(received).toBe(expected)"
+
+
 class _ParserCase(unittest.TestCase):
     """Shared plumbing: the real `_parse_console_failures`, no test doubles."""
 
@@ -789,6 +1322,113 @@ class NestedDescribeAttributionTest(_ParserCase):
                     details, "kappa throws its own boom", "kappa boom",
                     "AC2 under nesting: the bare-segment index must marry too "
                     f"({wire} wire form).")
+
+
+class ShapedDeclarationKeepsItsOwnMessageTest(_ParserCase):
+    r"""§S1 OVER-TIGHTENING -- a failing leaf keeps its own message whatever
+    SYNTAX declared it.
+
+    The §S1 discriminator compares the name the echo yields against the
+    following result line's name and, on disagreement, DISCARDS the block as an
+    aftermath. That comparison is sound only when the echo actually yields the
+    producing test's name. Measured on bun 1.3.14, it does not for six ordinary
+    declaration shapes, in two distinct ways:
+
+      - `test.each`, `it.each`, a variable name and a split declaration yield NO
+        name at all -- and `window` (clients/bun-crucible.py:640, 671-675) is
+        ASSIGNED on every declaration match but NEVER INVALIDATED, so it still
+        holds the PRECEDING test's name from the same six-line echo window
+        (§S1 GAP 1's window really does span the boundary; here that is not a
+        harmless surplus, it is a wrong answer);
+      - a template-literal name and a name containing an escaped quote yield the
+        WRONG name -- the regex reads SOURCE TEXT (`zeta ${n} interpolated`,
+        `lambda says \`) where it needs the VALUE bun reports (`zeta 3
+        interpolated`, `lambda says "hi" loudly`). These two drop
+        unconditionally, with no stale window required.
+
+    Either way the names disagree and the producer's OWN prelude block -- the
+    only place bun ever prints its reason -- is thrown away. The leaf still shows
+    as failing, with no reason: a silent hole on every bun ingest in the fleet
+    (`_marry_failures`, clients/bun-crucible.py:682-699). CR-CRU-088's own Risk
+    section names this over-tightening the worse outcome of the two, and the six
+    C1 fixtures cannot see it because every one of them declares its tests as a
+    plain, single-line, double-quoted literal.
+
+    THE CONTRACT ASSERTED, once per shape: the producing leaf carries ITS OWN
+    message, the predecessor carries ITS OWN, and the two differ -- so a swap is
+    as detectable as a drop.
+    """
+
+    def assertBothLeavesKeepTheirOwn(self, capture, leaf, message, shape):
+        """The shared contract for (g)-(l): two independently-failing leaves,
+        two distinct messages, each on its own leaf."""
+        for wire in WIRE_FORMS:
+            with self.subTest(wire=wire):
+                details = self.parse(capture, wire)
+                self.assertMessage(
+                    details, leaf, message,
+                    f"§S1 OVER-TIGHTENING ({shape}): this leaf FAILED and bun "
+                    "printed its reason, so the leaf must carry it. The echo "
+                    "above that block does not name this leaf -- so the §S1 "
+                    "discriminator reads the leaf's OWN prelude as somebody "
+                    "else's aftermath and discards the only detail that exists "
+                    f"({wire} wire form).")
+                self.assertMessage(
+                    details, SHAPED_PREDECESSOR, SHAPED_PREDECESSOR_MESSAGE,
+                    f"§S1 ({shape}): the PRECEDING leaf, plainly declared, must "
+                    "keep its own message -- the fix for the shape above must "
+                    f"not be bought by breaking the ordinary case ({wire} wire "
+                    "form).")
+                self.assertNotEqual(
+                    details.get(leaf, {}).get("message"),
+                    details.get(SHAPED_PREDECESSOR, {}).get("message"),
+                    f"§S1 ({shape}): the two leaves failed for DIFFERENT "
+                    "reasons, so they must carry different messages; equal "
+                    "messages mean the predecessor's block was married twice "
+                    f"({wire} wire form); parsed={_messages(details)!r}")
+
+    def test_each_declared_test_keeps_its_own_message(self):
+        """(g) `test.each([1])("beta each %i", …)` -- `_ECHO_TEST_DECL` cannot
+        read the `.each([…])(…)` form, so the window keeps alpha's name."""
+        self.assertBothLeavesKeepTheirOwn(
+            EACH_TEST, "beta each 1", "beta each boom", "test.each")
+
+    def test_each_declared_it_keeps_its_own_message(self):
+        """(h) the same through bun's `it` alias, which `_ECHO_TEST_DECL`
+        accepts equally, so it must be covered equally."""
+        self.assertBothLeavesKeepTheirOwn(
+            EACH_IT, "gamma each 2", "gamma each boom", "it.each")
+
+    def test_variable_named_test_keeps_its_own_message(self):
+        """(i) `const NAME = "…"; test(NAME, …)` -- the echo has no literal to
+        read while the result line carries the resolved name."""
+        self.assertBothLeavesKeepTheirOwn(
+            VARIABLE_NAME, "delta named by a variable", "delta boom",
+            "variable name")
+
+    def test_split_declaration_keeps_its_own_message(self):
+        """(j) a declaration spread over several source lines, as a formatter
+        produces -- `test(` and the name literal never share a line, so the
+        single-line echo pattern matches neither."""
+        self.assertBothLeavesKeepTheirOwn(
+            SPLIT_DECL, "epsilon split over lines", "epsilon boom",
+            "split declaration")
+
+    def test_template_literal_named_test_keeps_its_own_message(self):
+        """(k) an interpolated template name -- the echo yields the
+        UN-INTERPOLATED SOURCE, which can never equal the name bun reports, so
+        this one drops with no stale window involved."""
+        self.assertBothLeavesKeepTheirOwn(
+            TEMPLATE_NAME, "zeta 3 interpolated", "zeta boom",
+            "template-literal name")
+
+    def test_escaped_quote_in_name_keeps_its_own_message(self):
+        """(l) a plain literal containing an escaped quote -- the non-greedy
+        name group stops at the first inner quote and truncates the echo name.
+        Also unconditional."""
+        self.assertBothLeavesKeepTheirOwn(
+            ESCAPED_QUOTE, 'lambda says "hi" loudly', "lambda boom",
+            "escaped quote in name")
 
 
 if __name__ == "__main__":
