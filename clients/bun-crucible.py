@@ -1997,14 +1997,20 @@ def main():
     # CR-CRU-084 §S1 — WHAT the release delivered, declared by the ceremony:
     # Crucible never verifies a publish, so the pair is a DECLARATION (§S1
     # Non-goals). Absent means "this ceremony said nothing" and the key never
-    # reaches the wire; `--packages ""` means "this release delivered none",
-    # which is a different and recordable fact (§S3/AC4).
+    # reaches the wire; on a RECORDING, `--packages ""` means "this release
+    # delivered none", which is a different and recordable fact (§S3/AC4). On
+    # `--repair-provenance` the empty value writes NOTHING instead: an empty
+    # derivation never overwrites a stored set, and a repair left with nothing
+    # to write is REFUSED (CR-CRU-086 §S2).
     ms.add_argument("--packages",
                     help="Comma-separated `registry:name:version` entries the "
                          "release DELIVERED, e.g. `pypi:crucible-axi:0.4.0,"
                          "npm:@anthill-tec/crucible-server:0.4.0`. Pass an "
                          "empty string to record that it delivered none "
-                         "(§S1/§S3).")
+                         "(§S1/§S3) — on a recording only: with "
+                         "--repair-provenance an empty value writes nothing "
+                         "(it never overwrites a stored set) and the repair is "
+                         "REFUSED (§S4, CR-CRU-086 §S2).")
     # CR-CRU-081 §S3 — the OPT-IN correction path: without this flag a
     # re-post of an already-recorded release is the server's dedup replay
     # (CR-CRU-080 §S3), which is what keeps an ordinary run unable to

@@ -1662,8 +1662,8 @@ def release_crs(raw, project_dir, ops):
 
 
 def release_packages(raw):
-    """CR-CRU-084 §S1 (PURE) — the artifacts a release DELIVERED, parsed out of
-    the ceremony's one delimited flag into one entry per artifact.
+    """CR-CRU-084 §S1 — the artifacts a release DELIVERED, parsed out of the
+    ceremony's one delimited flag into one entry per artifact.
 
     The format is `registry:name:version`, entries separated by `,` — the same
     single-flag shape `--crs` already uses for a computed multi-value
@@ -1679,22 +1679,37 @@ def release_packages(raw):
     Three states, identical to `crs`': `None` when the flag was never given
     (the key never reaches the wire), an EMPTY list when it was given empty
     (§S3/AC4 — "this release delivered nothing" is a recordable fact), and one
-    dict per entry otherwise, in declaration order. A malformed entry is
-    carried as the partial coordinates it spelled rather than raising: a
-    release is published before it is reported, so its report must never
-    explode, and the route drops any entry whose three fields are not all
-    non-empty strings (src/routes/v2.ts `isPackageRef`).
+    dict per entry otherwise, in declaration order.
+
+    A malformed entry is DROPPED — never raised, never carried. Never raised
+    because a release is published before it is reported, so its report must
+    not explode over a typo. Never carried because the route keeps only
+    entries whose three fields are all non-empty strings (src/v2.ts
+    `isPackageRef`) while the §S1 envelope echoes THIS value: carrying a
+    partial entry the wire discards would show the operator a package the
+    server never stored. The drop is instead STATED on the interactive
+    channel, the one `crs=(none registered)` already speaks on, so a mistyped
+    `--packages` is not silent; an all-malformed value still yields `[]`,
+    which on a recording remains the §S3 "declared none" fact.
     """
     if raw is None:
         return None
-    entries = []
+    entries, dropped = [], []
     for entry in raw.split(","):
         entry = entry.strip()
         if not entry:
             continue
         registry, _, rest = entry.partition(":")
         name, _, version = rest.rpartition(":")
-        entries.append({"registry": registry, "name": name, "version": version})
+        if registry and name and version:
+            entries.append({"registry": registry, "name": name,
+                            "version": version})
+        else:
+            dropped.append(entry)
+    if dropped:
+        print(f"milestone: packages=(dropped {len(dropped)} malformed: "
+              f"{', '.join(dropped)} — each entry must spell "
+              f"registry:name:version)", file=sys.stderr)
     return entries
 
 
@@ -1726,7 +1741,28 @@ def repair_refusal_reason(project_dir, ops):
             "landed")
 
 
-def refuse_repair(args, project_dir, ops):
+def repair_refusal_detail(crs, packages, project_dir, ops):
+    """CR-CRU-086 §S2 + CR-CRU-084 §S4 — WHAT a refused repair offered and why
+    none of it is derivable, named per OFFERED set (`None` = never offered).
+
+    Symmetric across the two provenance fields, because the refusal is: a
+    packages-only refusal whose detail blamed the registered CR queue would be
+    a false statement about which read came back empty — and the queue GET
+    `repair_refusal_reason` makes is not worth making when no `--crs` was
+    offered at all."""
+    clauses = []
+    if crs is not None:
+        clauses.append("the re-derived CR set came back EMPTY "
+                       f"({repair_refusal_reason(project_dir, ops)})")
+    if packages is not None:
+        clauses.append("the declared package set came back EMPTY (no entry "
+                       "spelled a registry, a name and a version)")
+    return (f"{'; '.join(clauses)}, and an empty derivation is NO ANSWER "
+            f"rather than an answer of nothing. Nothing was written; the "
+            f"stored provenance stands.")
+
+
+def refuse_repair(args, project_dir, ops, crs=None, packages=None):
     """CR-CRU-086 §S2 — refuse ONE release's repair, loudly, having posted
     nothing.
 
@@ -1734,11 +1770,12 @@ def refuse_repair(args, project_dir, ops):
     printed `crs=(none registered)` and then wrote the empty set over 58 good
     CRs. So the refusal is stated on the interactive channel — named release,
     named reason — and carried as a structured warning for a machine caller,
-    and the post never happens."""
-    detail = (f"the re-derived CR set came back EMPTY, and an empty derivation "
-              f"is NO ANSWER rather than an answer of nothing: "
-              f"{repair_refusal_reason(project_dir, ops)}. Nothing was "
-              f"written; the stored provenance stands.")
+    and the post never happens.
+
+    CR-CRU-084 §S4 — `crs`/`packages` are the DERIVED sets this repair
+    offered, so the reason names the ones that actually came back empty
+    instead of always speaking about `crs`."""
+    detail = repair_refusal_detail(crs, packages, project_dir, ops)
     print(f"milestone: REFUSED to repair type={args.type}"
           + (f" label={args.label}" if args.label else "")
           + f" — {detail}", file=sys.stderr)
@@ -1803,8 +1840,19 @@ def cmd_milestone(args, project_dir, ops):
     crs = release_crs(getattr(args, "crs", None), project_dir, ops)
     packages = release_packages(getattr(args, "packages", None))
     repair = bool(getattr(args, "repair_provenance", False))
-    if repair and crs is not None and not crs and not packages:
-        return refuse_repair(args, project_dir, ops)
+    # CR-CRU-086 §S2 + CR-CRU-084 §S4 — refuse a repair with NOTHING to write,
+    # symmetrically across the two provenance fields: at least one set was
+    # OFFERED and nothing is derivable from ANY offered set. Each set carries
+    # three states and only the middle one is a refusal input — `None` = never
+    # offered, `[]` = offered and derived nothing, non-empty = something to
+    # write. A repair that offers NEITHER set is not refused (it corrects
+    # `releasedAt` alone). A repair that offers one and derives nothing from it
+    # would otherwise post the empty set that erased 0.1.0's 58 CRs, or — once
+    # the server's `offeredNothing` declines to write it — exit 0, which
+    # `cmd_backfill_releases` tallies as a recorded release that never was.
+    offered = crs is not None or packages is not None
+    if repair and offered and not crs and not packages:
+        return refuse_repair(args, project_dir, ops, crs, packages)
     resp = ops.post_milestone(project_dir, ops.agent_id(args), args.type,
                               label=args.label, commit=getattr(args, "commit", None),
                               context=context or None,
