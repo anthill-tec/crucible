@@ -110,6 +110,16 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
     `DN-crucible-wave-track-release.md`. The architecture-document effort distils the remaining
     frames the same way.
 
+- **The provenance repair may still drop a shipped CR's release membership** (candidate CR, raise at
+  the next SCRUM). CR-086 §S1/§S2 stopped the empty-set overwrite and the unregistered-queue write,
+  but §S3 still *permits* a shrink that removes ids ancestry cannot place — and the measured case is
+  nine CRs (`CR-CRU-001`–`007`, `010`, `016`) that demonstrably shipped in `0.1.0`. Per
+  `DN-crucible-wave-track-release.md` a shipped CR's release membership is **settled fact**, and
+  per the user's 2026-08-23 rule an implemented CR cannot be edited, so a repair that deletes those
+  ids edits settled fact. CR-083 AC9 pins the derivation side (an implemented CR never reads back
+  `PENDING`); the write-side guard — refuse the removal, or require it to be explicit per id — has
+  no CR yet.
+
 ## Notes
 - 🚀 **2026-08-19 — Crucible v2 SHIPPED its first public release (0.1.0 + hotfix 0.1.1).**
   `crucible-axi` on PyPI: **0.1.0** then **0.1.1** (OIDC trusted publishing, pending publisher

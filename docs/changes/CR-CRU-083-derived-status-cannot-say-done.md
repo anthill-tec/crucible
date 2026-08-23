@@ -110,6 +110,16 @@ empty states, and **no** synthetic plan or cycle rows are created to make the de
 - **AC7** — every consumer of derived status handles the new value explicitly — the table badge, the
   row's click behaviour (inert), and the graph node's style — so none falls through to a default
   that renders it as `PENDING` or `COMPLETED`.
+- **AC8** — tracking records attach **after** the CR exists, and derived status follows them with no
+  queue re-registration: a `PENDING` CR that gains a plan reads `IN_PROGRESS`, then `COMPLETED` when
+  that plan closes with a merge; a `PENDING` CR that gains release membership reads
+  `COMPLETED_UNTRACKED`. Status is a live derivation over the records that exist at read time.
+- **AC9** — the editable window **closes at implementation**. Once a CR is implemented — a plan
+  closed with a merge (`COMPLETED`), or membership in a shipped release (`COMPLETED_UNTRACKED`) —
+  its tracking records are settled fact and no derivation, repair or re-registration may rewrite or
+  drop them (`DN-crucible-wave-track-release.md`: *a shipped CR's release membership is settled
+  fact*). Asserted as a derivation invariant: the two implemented states never move backwards to
+  `PENDING`.
 
 ## Estimated size
 
@@ -121,13 +131,18 @@ Derived status is consumed in several places, so this visibly moves numbers on t
 the intent — the current numbers are wrong — but expect the shift rather than reading it as a
 regression.
 
-**Accepted risk (settled with the user 2026-08-23).** Release membership is only as complete as
-`crs`. The nine pre-tracking CRs are members of `0.1.0` today, but CR-086 §S3 deliberately keeps
-the legitimate 58→51 shrink possible: an opt-in `--repair-provenance` run against a registered
-queue cannot place them by ancestry and drops them, after which they satisfy AC2 and render
-`PENDING` again. Persisting CR-081's unplaceable tally as a third evidence source was weighed and
-declined — `PENDING` keeps one honest meaning, and once ancestry cannot place a CR, Crucible
-genuinely holds no evidence for it. The shrink is reported, never silent (CR-086 AC5).
+**Bounded editability (user direction, 2026-08-23).** A plan and a release are both attachable
+*after* a CR is created — `plan-file` files a plan for any registered CR, and
+`milestone --type release --repair-provenance --crs …` amends a recorded release's membership
+without touching its version, commit or row (CR-081 §S3, guarded by CR-086 §S1/§S2). **But once a
+CR is implemented it cannot be edited**, which is AC9 and is already the governing DN's rule.
+
+That exposes a hazard this CR does **not** own: CR-086 §S3 still permits the 58→51 shrink, and those
+nine CRs are *shipped*, so dropping their membership edits settled fact and would read them back as
+`PENDING`. Under AC9 that shrink is a defect in the repair, not a state this derivation should model
+— recorded in the deferred register for the next SCRUM rather than absorbed here. `crs` is correct
+today (measured: 58 ids including all nine), so CR-083 lands on sound evidence, and persisting
+CR-081's unplaceable tally stays declined.
 
 ## Non-goals
 
