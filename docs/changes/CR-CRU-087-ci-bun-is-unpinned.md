@@ -37,7 +37,7 @@ installs, which emits the timeout detail where the parser marries it.
 `oven-sh/setup-bun@v2`'s own documented resolution order, with no `bun-version` given it takes
 (1) `package.json`'s `packageManager` field, (2) `package.json`'s `engines.bun`, (3) otherwise
 `latest`. This repo has no `packageManager` field and declares `"engines": { "bun": ">=1.2" }`
-(`package.json:20-22`), so all five steps resolve through an **open range that matches every current
+(`package.json:20-22`), so all **four** steps (`release.yml:73, :130, :271, :317` — a fifth textual match at `:76` is a comment) resolve through an **open range that matches every current
 release** — CI tracks the newest bun while local development sits on 1.3.14, with no commit in
 between. Tests that parse bun's own console format are therefore contract-bearing against an input
 that changes on bun's release schedule. This is a class defect, not one test's bad luck:
@@ -64,8 +64,8 @@ Run per the `gap-analysis` skill, all six dimensions. This CR was filed hours ea
 session and its own analysis corrected it twice — recorded rather than quietly rewritten.
 
 - **D4 — the spec reinvented a mechanism that already exists.** As filed, §S1 said "every `setup-bun`
-  step names an explicit `bun-version`" — five near-duplicate YAML edits. `setup-bun@v2`'s documented
-  resolution order reads `package.json`'s `packageManager` FIRST, so ONE line pins all five jobs with
+  step names an explicit `bun-version`" — four near-duplicate YAML edits. `setup-bun@v2`'s documented
+  resolution order reads `package.json`'s `packageManager` FIRST, so ONE line pins all four jobs with
   no workflow change. Corrected in §S1/AC1.
 - **D2 — the "no pin at all" premise was wrong.** `package.json:20-22` already declares
   `"engines": { "bun": ">=1.2" }`, which `setup-bun` consumes as step 2 of its order. So CI is not
@@ -76,7 +76,7 @@ session and its own analysis corrected it twice — recorded rather than quietly
   says so explicitly, so no one relaxes `needs:` to unblock a release.
 - **D2 — every cited line verified:** the failing assertion at
   `tests/clients-bun-crucible.test.ts:696-701`; the parser at `clients/bun-crucible.py:587-631` with
-  its boundary guard at `:576-578`; five `setup-bun` steps and zero `bun-version` occurrences in
+  its boundary guard at `:576-578`; **four** `setup-bun` steps (`:73, :130, :271, :317`; the `:76` hit is a comment — a filing-time `grep -c` miscounted it as five) and zero `bun-version` occurrences in
   `.github/`; local `bun --version` = 1.3.14; CI's received value `"test timed out"` from run
   32565982939.
 - **D1 — no design conflict.** `DN-release-process.md` mandates no toolchain policy, so this adds a
@@ -93,8 +93,8 @@ session and its own analysis corrected it twice — recorded rather than quietly
 ### §S1 One declaration, consumed by every job
 
 The version lives in **one** place: `package.json`'s `packageManager` field, pinned to the exact
-version the repo develops on (`bun@1.3.14`). `setup-bun` reads that field FIRST, so all five steps
-inherit it with **no workflow edit and nothing duplicated** — a pin repeated in five steps is five
+version the repo develops on (`bun@1.3.14`). `setup-bun` reads that field FIRST, so all four steps
+inherit it with **no workflow edit and nothing duplicated** — a pin repeated in four steps is four
 places to drift.
 
 `engines.bun` keeps its own, different meaning: the compatibility FLOOR consumers must satisfy
@@ -119,8 +119,8 @@ as **fixtures** — so version-robustness is proven without depending on which b
 
 - **AC1** — `package.json` declares `"packageManager": "bun@<exact>"` at the version the repo develops
   on (`1.3.14` at filing), and `engines.bun` is left as the compatibility floor. No `bun-version` is
-  added to any workflow step: the single declaration is what all five `setup-bun` steps resolve, which
-  a test or check asserts rather than a reviewer eyeballing five YAML blocks.
+  added to any workflow step: the single declaration is what all four `setup-bun` steps resolve, which
+  a test asserts (`tests/suite-integrity.test.ts`) rather than a reviewer eyeballing YAML blocks.
 - **AC1b** — the resolved version is observable in CI: the `setup-bun` step's `bun-version` output (or
   a `bun --version` line in the job log) reads `1.3.14`, proving the declaration is what the runner
   actually installed and not merely what the file says.
@@ -134,10 +134,11 @@ as **fixtures** — so version-robustness is proven without depending on which b
   (the existing §S2c matched-failure tests stay green, unmodified).
 - **AC5** — `test-bun` is GREEN in CI on a push to `develop`, and `publish-pypi`/`publish-npm` are no
   longer skipped for this reason. This is the observable gate; a local green does not close this CR.
-- **AC6** — the pin is documented where an operator will meet it (`RELEASING.md` and a comment beside
-  the `packageManager` field): bumping bun is a deliberate change that must re-run the client-format
-  suites. `engines.bun` vs `packageManager` — floor vs build version — is stated so a future reader
-  does not "tidy" one into the other.
+- **AC6** — the pin is documented where an operator will meet it: `RELEASING.md` carries the bump
+  procedure, and the invariant test's own header comment carries the mechanism. (`package.json` is
+  JSON and cannot hold a comment — the filed wording asked for an impossible one.) `engines.bun` vs
+  `packageManager` — floor vs build version — is stated so a future reader does not "tidy" one into
+  the other.
 
 ## Estimated size
 
