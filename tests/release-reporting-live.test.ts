@@ -69,10 +69,43 @@ const SHIPPED: ReadonlyArray<readonly [string, string]> = [
   ["0.1.2", "9ef24b1800000000000000000000000000000cc0"],
 ];
 
+/** CR-CRU-084 §S1/AC1 — the two artifacts every Crucible release delivers, as
+ *  the bundling strategy version-locks them: PyPI `crucible-axi` and npm
+ *  `@anthill-tec/crucible-server`. The ceremony DECLARES this pair; it never
+ *  verifies a publish (user ruling 2026-08-23, recorded in the CR's gap
+ *  analysis D1/D3 and its Non-goals).
+ *
+ *  AC2 is structural and is why this takes the version as its ONLY argument:
+ *  both entries are stamped from the same tag the release record is built
+ *  from, so the two can never diverge and there is nothing to reconcile. */
+const declaredPackages = (version: string): PackageRef[] => [
+  { registry: "pypi", name: "crucible-axi", version },
+  { registry: "npm", name: "@anthill-tec/crucible-server", version },
+];
+
+/** The tag's own commit date the git stub reports for `git log -1 --format=%ct`
+ *  — the source CR-CRU-080 §S4 gives `releasedAt`. Pinned in 2026-06 so it can
+ *  never coincide with the ingest clock, which is what makes "packages did not
+ *  disturb provenance" a real comparison rather than two undefineds. */
+const SHIP_DATE = Date.UTC(2026, 5, 12, 8, 15, 0) / 1000;
+
+/** CR-CRU-084 §S1 — one delivered artifact's coordinates: WHERE it can be
+ *  installed from, WHAT it is called there, and at WHICH version. */
+interface PackageRef {
+  registry: string;
+  name: string;
+  version: string;
+}
+
 interface ReleaseBrief {
   version?: string;
   commit?: string;
   timestamp: number;
+  releasedAt?: number;
+  crs?: string[];
+  /** CR-CRU-084 §S1/§S3 — the artifacts the release DELIVERED. Absent on a
+   *  pre-CR-084 release; EMPTY when the ceremony declared none. */
+  packages?: PackageRef[];
 }
 
 interface ReleasesResponse {
@@ -101,6 +134,11 @@ interface EventsResponse {
  *   RSH_TAG    — the tag `git flow finish` cut ("" models an absent tag)
  *   RSH_SHA    — the sha RSH_TAG points at
  *   RSH_TAGS   — the tag list `git tag` enumerates (the backfill's input)
+ *   RSH_SHIP   — `log -1 --format=%ct <sha>`, the tag's own commit date in
+ *                epoch SECONDS (CR-CRU-080 §S4's `releasedAt` source). Answered
+ *                so the CR-CRU-084 tests below can prove that adding `packages`
+ *                left the release's existing provenance intact (AC5) rather
+ *                than comparing two absent fields.
  * `rev-list … <tag>` maps each shipped tag to ITS OWN commit, so a recorded
  * commit provably came from the tag rather than from any argument.
  */
@@ -119,6 +157,8 @@ case "$1" in
   describe)
     [ -n "$RSH_TAG" ] || exit 128
     echo "$RSH_TAG"; exit 0 ;;
+  log)
+    echo "$RSH_SHIP"; exit 0 ;;
   tag)
     for t in $RSH_TAGS; do echo "$t"; done
     exit 0 ;;
@@ -250,6 +290,7 @@ describe("the release ceremony reports through the REAL client to a LIVE server 
       RSH_TAG: opts.tag ?? VERSION,
       RSH_SHA: TAGGED_SHA,
       RSH_TAGS: (opts.tags ?? SHIPPED.map(([v]) => v)).join(" "),
+      RSH_SHIP: String(SHIP_DATE),
       // The real client's own contract: where the server is, and which project
       // root holds the .env carrying CRUCIBLE_PROJECT_KEY.
       CRUCIBLE_URL: base,
@@ -399,6 +440,248 @@ describe("the release ceremony reports through the REAL client to a LIVE server 
       expect(afterSecond.map((r) => r.version).sort()).toEqual(["0.1.0", "0.1.1", "0.1.2"]);
       expect(afterSecond.map((r) => r.version)).not.toContain("v1.2.3");
       expect(afterSecond.map((r) => r.version)).not.toContain("nightly");
+    },
+  );
+
+  // ── CR-CRU-084 §S1/AC1/AC2 — `finish` DECLARES the delivered packages ────
+  //
+  // Spec: docs/changes/CR-CRU-084-release-records-its-packages.md §S1 (capture
+  // at `finish`, through the existing single reporter) + AC1 (two entries,
+  // each naming registry, package name and version) + AC2 (every entry's
+  // version IS the release version, structurally).
+  //
+  // The server half shipped in C1 (`PackageRef` + `packages` carried verbatim
+  // by `handleMilestones` and exposed by `releaseBrief`), and is proven at the
+  // wire in tests/release-provenance.test.ts section F. What is missing is the
+  // ACTOR: nothing between `report_release` and the client ever declares a
+  // package, so the field the route would happily carry is never sent.
+  //
+  // RED expectation (measured, 2026-08-23):
+  //   * `emit_release_milestone` (scripts/release.sh:620-644) builds its argv
+  //     from `--released-at`/`--crs`/`--repair-provenance` only — `grep -c
+  //     packages scripts/release.sh` is 0 — so the post carries no packages.
+  //   * even if it did, no client accepts the flag: the `milestone` subparser
+  //     is duplicated five times (bun:1978, mvn:1959, python:1434, rust:2495,
+  //     arduino:1104) and none declares `--packages`, so argparse would exit 2
+  //     on an unrecognised argument.
+  // Both assertions below therefore fail on `packages` being `undefined` — the
+  // missing contract, not a broken fixture.
+
+  test(
+    "AC1 a finish declares the release's TWO delivered packages — PyPI crucible-axi and npm " +
+      "@anthill-tec/crucible-server — and the release keeps the releasedAt the same run " +
+      "computed, so packages ride ALONGSIDE provenance rather than displacing it",
+    async () => {
+      const base = boot();
+      const key = await seedProject(base, "live-finish-packages");
+      const world = makeWorld(key);
+
+      const r = await runCeremony(base, world, ["finish", VERSION]);
+      expect(r.exitCode).toBe(0);
+      // The ceremony's own argv must stay clean: an unknown flag would make
+      // every assertion below fail for the wrong reason.
+      expect(`${r.stdout}\n${r.stderr}`).not.toMatch(/unrecognized arguments/);
+
+      const releases = await listReleases(base, key);
+      expect(releases.length).toBe(1);
+      const rel = releases[0]!;
+
+      // AC1 — the declared pair, in the order declared, each entry complete.
+      expect(rel.packages).toEqual(declaredPackages(VERSION));
+      // …spelled out, so a future edit that keeps two entries but loses a
+      // registry or renames an artifact cannot slip through the deep-equal.
+      expect(rel.packages!.map((p) => p.registry)).toEqual(["pypi", "npm"]);
+      expect(rel.packages!.map((p) => p.name)).toEqual([
+        "crucible-axi",
+        "@anthill-tec/crucible-server",
+      ]);
+
+      // AC5 / no provenance regression — the release still carries what
+      // CR-CRU-080 §S4 gave it. `releasedAt` is the tag's own commit date the
+      // ceremony read from git in THIS run, not the ingest clock.
+      expect(rel.releasedAt).toBe(SHIP_DATE);
+      expect(rel.timestamp).not.toBe(SHIP_DATE);
+      expect(rel.version).toBe(VERSION);
+      expect(rel.commit).toBe(TAGGED_SHA);
+      // Still reported through the repo client, never a bare curl or a `gh`
+      // call at a registry — declaring is not verifying (§S1, Non-goals).
+      expect(r.log.some((l) => l.startsWith("curl "))).toBe(false);
+    },
+  );
+
+  test(
+    "AC2 structurally: driven at a TAG that differs from the version on the command line, both " +
+      "declared packages carry the TAG's version — the same value the release record itself is " +
+      "built from — and no per-registry version is supplied anywhere in the invocation",
+    async () => {
+      const base = boot();
+      const key = await seedProject(base, "live-finish-packages-are-the-tag");
+      const world = makeWorld(key);
+
+      // The tag `git flow finish` actually cut, deliberately NOT the argument
+      // the operator typed. `report_release` reads the tag (`git describe`),
+      // so the recorded release is 0.7.1 while the CLI said 0.4.0 — which is
+      // what makes "the version IS the tag" falsifiable rather than a
+      // tautology satisfied by echoing the argument back.
+      const TAG = "0.7.1";
+      expect(TAG).not.toBe(VERSION);
+
+      const argv = ["finish", VERSION];
+      const r = await runCeremony(base, world, argv, { tag: TAG });
+      expect(r.exitCode).toBe(0);
+
+      const releases = await listReleases(base, key);
+      expect(releases.length).toBe(1);
+      const rel = releases[0]!;
+
+      // The release record itself is built from the tag…
+      const recorded = rel.version!;
+      expect(recorded).toBe(TAG);
+      // …and every declared package's version is that SAME value.
+      expect(rel.packages).toBeDefined();
+      expect(rel.packages!.length).toBe(2);
+      for (const pkg of rel.packages!) {
+        expect(pkg.version).toBe(recorded);
+        expect(pkg.version).toBe(TAG);
+        expect(pkg.version).not.toBe(VERSION);
+      }
+
+      // NO SEPARATE VERSION INPUT: the whole invocation is the subcommand and
+      // one version, and no argument names a registry or a per-artifact
+      // version. There is nothing for the two entries to diverge from.
+      expect(argv).toEqual(["finish", VERSION]);
+      expect(argv.some((a) => /^--(pypi|npm|package|packages|artifact)/.test(a))).toBe(false);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// CR-CRU-084 §S1 / Non-goals — the ceremony DECLARES; it never VERIFIES.
+//
+// The user ruling of 2026-08-23 (recorded in the CR's gap analysis D1/D3) is
+// the whole reason `packages` can be captured at `finish` at all: at record
+// time no artifact exists yet — `cmd_finish` pushes the tag and reports
+// immediately, while `publish-pypi`/`publish-npm` run afterwards in CI. So the
+// pair is a DECLARATION, and the gate ladder before `finish` is the assurance.
+//
+// That makes "no publish verification" a load-bearing NEGATIVE: the moment a
+// well-meaning change adds `gh run view` or a registry probe to the reporting
+// path, the ceremony acquires a network-and-CI dependency it must not have,
+// and a published tag becomes blockable by its own report. A negative is not
+// observable from a passing run, so it is pinned against the script text —
+// the honest instrument for it — with a POSITIVE CONTROL proving the reader
+// actually bites (`cmd_checkpoint` legitimately shells out to `gh`, and the
+// same reader must find it there).
+//
+// RED expectation (measured, 2026-08-23): the coordinates are asserted to be
+// PRESENT in the script and are not — `grep -c 'crucible-axi\|anthill-tec'
+// scripts/release.sh` is 0 — so the declaration half fails today while the
+// prohibition half already holds and must keep holding.
+describe("the ceremony declares the delivered pair WITHOUT consulting CI or a registry (CR-CRU-084 §S1/Non-goals)", () => {
+  const SOURCE = readFileSync(RELEASE_SH, "utf8");
+
+  /** The body of a top-level bash function `name() {` … `}` in `source`, with
+   *  comment-only lines removed. `release.sh` writes every function opener and
+   *  its closing brace in column 0, which is what makes this exact rather than
+   *  a heuristic — and `bashFunctions()` below asserts that premise. */
+  function bashFunctionBody(source: string, name: string): string | undefined {
+    const lines = source.split("\n");
+    const start = lines.findIndex((l) => l === `${name}() {`);
+    if (start < 0) return undefined;
+    const end = lines.findIndex((l, i) => i > start && l === "}");
+    if (end < 0) return undefined;
+    return lines
+      .slice(start + 1, end)
+      .filter((l) => !/^\s*#/.test(l))
+      .join("\n");
+  }
+
+  /** Every top-level function the script defines, by name. */
+  function bashFunctions(source: string): string[] {
+    return source
+      .split("\n")
+      .map((l) => /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{$/.exec(l)?.[1])
+      .filter((n): n is string => n !== undefined);
+  }
+
+  /**
+   * The RELEASE-REPORTING PATH: `report_release` and the backfill, everything
+   * `emit_release_milestone` reaches to compute what it posts, and — the
+   * future-proofing clause — ANY function whose name mentions a package, so a
+   * helper added by the GREEN phase is covered without this list naming it and
+   * without pinning what that helper must be called or whether it exists.
+   */
+  const REPORTING_PATH = [
+    "report_release",
+    "emit_release_milestone",
+    "cmd_backfill_releases",
+    "release_ship_date",
+    "release_tags",
+    "release_crs",
+    "earliest_tag_containing",
+    "plan_merge_map",
+    "queue_read",
+    "report_unplaceable_crs",
+    // `emit_release_milestone`'s own two callees (scripts/release.sh:649-650):
+    // the identity it posts under and the path it resolves the client from are
+    // on the reporting path as much as anything that computes provenance.
+    "ceremony_agent",
+    "repo_root",
+    ...bashFunctions(SOURCE).filter((n) => /pack/i.test(n)),
+  ];
+
+  /** Shelling out to CI, or to a registry, from the reporting path. Matched as
+   *  COMMANDS, never as bare words: the registry IDS `pypi` and `npm` are
+   *  exactly what a declaration must contain, so a word-level ban would forbid
+   *  the very thing AC1 requires. */
+  const FORBIDDEN: ReadonlyArray<readonly [string, RegExp]> = [
+    ["the gh CLI", /(^|[\s;|&(`$])gh\s/m],
+    ["curl", /(^|[\s;|&(`$])curl\s/m],
+    ["wget", /(^|[\s;|&(`$])wget\s/m],
+    ["an npm registry read", /(^|[\s;|&(`$])npm\s+(view|info|show|dist-tag|ping)/m],
+    ["a pip registry read", /(^|[\s;|&(`$])pip3?\s+(index|download|install)/m],
+    ["pypi.org", /pypi\.org/],
+    ["the npm registry host", /npmjs\.(org|com)/],
+    ["the GitHub API host", /api\.github\.com/],
+  ];
+
+  test(
+    "the reader BITES: cmd_checkpoint really does shell out to `gh`, and the same extractor " +
+      "finds it there — so a clean reporting path below is a measurement, not a broken regex",
+    () => {
+      const checkpoint = bashFunctionBody(SOURCE, "cmd_checkpoint");
+      expect(checkpoint).toBeDefined();
+      expect(FORBIDDEN[0]![1].test(checkpoint!)).toBe(true);
+      // …and the function list the sweep is built from is real, not empty.
+      expect(bashFunctions(SOURCE)).toContain("emit_release_milestone");
+      for (const name of REPORTING_PATH) {
+        expect(bashFunctionBody(SOURCE, name)).toBeDefined();
+      }
+    },
+  );
+
+  test(
+    "no function on the release-reporting path consults CI or a registry: no gh, no curl/wget, " +
+      "no `npm view`/`pip index`, and no pypi.org/npmjs/api.github.com host anywhere in it",
+    () => {
+      const offenders: string[] = [];
+      for (const name of REPORTING_PATH) {
+        const body = bashFunctionBody(SOURCE, name)!;
+        for (const [what, pattern] of FORBIDDEN) {
+          if (pattern.test(body)) offenders.push(`${name}: ${what}`);
+        }
+      }
+      expect(offenders).toEqual([]);
+    },
+  );
+
+  test(
+    "and the pair it declares is version-locked COORDINATES held in the ceremony itself: the " +
+      "script names PyPI crucible-axi and npm @anthill-tec/crucible-server, so what is recorded " +
+      "comes from the declaration rather than from a lookup",
+    () => {
+      expect(SOURCE).toContain("crucible-axi");
+      expect(SOURCE).toContain("@anthill-tec/crucible-server");
     },
   );
 });

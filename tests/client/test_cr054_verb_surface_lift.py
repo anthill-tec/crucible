@@ -160,6 +160,7 @@ Fallback:
 import argparse
 import ast
 import contextlib
+import copy
 import io
 import os
 import sys
@@ -1590,6 +1591,205 @@ class IdentitySourceOnTheWireDriftCorrectionTest(unittest.TestCase, _ProjectDirF
             "test for the new/moved site (and update "
             "COVERED_IDENTITY_PAYLOAD_SITES) rather than relying on the "
             "source-text scans in test_cr054_fleet_inventory.py")
+
+
+# ---------------------------------------------------------------------------
+# CR-CRU-084 §S1 -- the `--packages` flag, on all FIVE clients at once.
+#
+# WHY HERE. The `milestone` subparser is duplicated per client (arduino:1104,
+# bun:1978, mvn:1959, python:1434, rust:2495), each with its OWN
+# --released-at/--crs/--repair-provenance definitions, while `cmd_milestone`
+# and `post_milestone` are shared. CR-CRU-080 added those three flags to all
+# five and NO test anywhere pinned that they are all five: `grep -rn
+# released_at tests/client` finds nothing (measured 2026-08-23). So a new
+# release flag added to one client is invisible drift -- precisely what
+# CR-CRU-075 exists to fix.
+#
+# This module is the fleet's VERB-SURFACE suite: it already loads all five
+# clients, drives them through the REAL argparse entry point, and owns the one
+# existing fleet-wide FLAG contract (`_add_gate_cycle_arg`'s --cycle, above).
+# A per-client flag census therefore belongs next to it, not in a CR-084-named
+# file that nobody re-reads when the sixth client is written.
+#
+# THE ARGUMENT FORMAT PINNED BELOW, and why:
+#
+#   --packages "pypi:crucible-axi:0.4.0,npm:@anthill-tec/crucible-server:0.4.0"
+#
+# ONE flag carrying a DELIMITED string, exactly as `--crs` does -- not a
+# repeatable `--package`. That is the fleet's existing style for a computed
+# multi-value provenance field, and it is what `emit_release_milestone`'s
+# `provenance+=(--crs "$crs")` shape already builds: one array append, one
+# `shown` concatenation, no loop.
+#
+# Entries are separated by `,` (as `--crs` separates CR ids); the three fields
+# of an entry by `:`. That choice is what makes the round trip LOSSLESS for the
+# real coordinates: `@anthill-tec/crucible-server` contains `@` and `/` -- both
+# ordinary characters here -- and neither a PyPI name (`crucible-axi`), an npm
+# name, nor a SemVer version may contain `:` or `,`, so splitting can never
+# straddle a field. A `,`-only scheme could not express three fields; a `/`
+# scheme would split the npm scope in half.
+#
+# Absent vs empty, mirroring `crs` (CR-CRU-084 §S3/AC4): the flag ABSENT means
+# "this ceremony says nothing about packages" -> the key never reaches the
+# wire; `--packages ""` means "this release declared NONE" -> an explicit empty
+# list on the wire. Without the second, AC4's meaningful-empty state is not
+# reachable from any client at all.
+#
+# RED expectation (measured 2026-08-23): no client declares --packages, so
+# argparse exits 2 with "unrecognized arguments: --packages ..." for all five,
+# and no client's `_post_milestone` accepts a `packages` kwarg (TypeError).
+# ---------------------------------------------------------------------------
+
+
+PYPI_PACKAGE = "crucible-axi"
+NPM_PACKAGE = "@anthill-tec/crucible-server"
+
+
+def _packages_flag_value(version):
+    """The `--packages` string the ceremony hands a client for `version`."""
+    return f"pypi:{PYPI_PACKAGE}:{version},npm:{NPM_PACKAGE}:{version}"
+
+
+def _packages_payload(version):
+    """The parsed form that same string must reach the wire as."""
+    return [
+        {"registry": "pypi", "name": PYPI_PACKAGE, "version": version},
+        {"registry": "npm", "name": NPM_PACKAGE, "version": version},
+    ]
+
+
+class MilestonePackagesFlagFleetParityTest(unittest.TestCase, _ProjectDirFixture):
+    """CR-CRU-084 §S1 -- `--packages` must exist, with the same dest and the
+    same parsed shape, on ALL FIVE clients' `milestone` subparser, and the
+    per-client `_post_milestone` wrapper must relay it to the shared builder.
+
+    Behavioural, not a source grep: every assertion goes through the REAL
+    argparse dispatch (`module.main()` with sys.argv patched), so it pins what
+    an operator can actually type rather than what a line of source looks
+    like."""
+
+    VERSION = "0.4.0"
+    COMMIT = "abc1234def5678abc1234def5678abc1234def56"
+
+    def setUp(self):
+        self.tmpdir = self._make_project_dir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _argv(self, extra):
+        return ["milestone", "--type", "release", "--label", self.VERSION,
+                "--commit", self.COMMIT, "--agent", "release-ceremony-1",
+                "--project-dir", self.tmpdir] + extra
+
+    def _drive(self, module, extra):
+        """Run the milestone verb with `_post` recorded, returning the single
+        /api/v2/milestones payload."""
+        calls = []
+
+        def fake_post(path, payload, _calls=calls):
+            _calls.append((path, copy.deepcopy(payload)))
+            return {"ok": True}
+
+        with mock.patch.object(module, "_post", side_effect=fake_post):
+            code, out, err = _run_main(module, self._argv(extra))
+        return code, out, err, [p for path, p in calls
+                                if path == "/api/v2/milestones"]
+
+    def test_packages_flag_exists_with_the_same_shape_on_every_client(self):
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                module = _load_client_module(client)
+                code, out, err = self._drive(
+                    module, ["--packages", _packages_flag_value(self.VERSION)])[:3]
+                # The flag must be RECOGNISED before anything else is meaningful:
+                # argparse's own "unrecognized arguments" exit is the RED today.
+                self.assertNotIn(
+                    "unrecognized arguments", out + err,
+                    f"{client}-crucible.py's milestone subparser must declare "
+                    f"--packages -- the flag is defined per client (five "
+                    f"copies), so adding it to one is the drift CR-CRU-075 "
+                    f"exists to fix: {(out + err)!r}")
+                self.assertEqual(
+                    code, 0,
+                    f"{client}: milestone --packages must succeed against a "
+                    f"mocked transport; stdout={out!r} stderr={err!r}")
+
+    def test_packages_reaches_the_wire_parsed_and_lossless_on_every_client(self):
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                module = _load_client_module(client)
+                _code, out, err, posts = self._drive(
+                    module, ["--packages", _packages_flag_value(self.VERSION)])
+                self.assertEqual(
+                    len(posts), 1,
+                    f"{client}: expected exactly ONE milestone POST; "
+                    f"stdout={out!r} stderr={err!r}")
+                self.assertEqual(
+                    posts[0].get("packages"), _packages_payload(self.VERSION),
+                    f"{client}: --packages must reach the wire as one entry "
+                    f"per artifact, each naming registry/name/version, in the "
+                    f"order declared")
+                # LOSSLESS: the npm scope survives the split byte for byte --
+                # `@` and `/` are ordinary characters in this format, and the
+                # delimiters (`,` and `:`) appear in no field.
+                self.assertEqual(
+                    posts[0]["packages"][1]["name"], NPM_PACKAGE,
+                    f"{client}: the scoped npm name must round-trip exactly")
+
+    def test_packages_absent_omits_the_key_and_empty_sends_an_empty_list(self):
+        """CR-CRU-084 §S3/AC4 -- "declared none" and "said nothing" are two
+        different facts, and both must be expressible from the CLI or the
+        empty state AC4 makes meaningful is unreachable. Mirrors exactly how
+        `crs` already distinguishes them on the wire."""
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                module = _load_client_module(client)
+
+                _c, out, err, absent = self._drive(module, [])
+                self.assertEqual(len(absent), 1, f"{client}: {out!r} {err!r}")
+                self.assertNotIn(
+                    "packages", absent[0],
+                    f"{client}: a milestone posted WITHOUT --packages must "
+                    f"omit the key entirely -- never an invented empty list, "
+                    f"which AC4 gives a different meaning")
+
+                _c2, out2, err2, empty = self._drive(module, ["--packages", ""])
+                self.assertNotIn("unrecognized arguments", out2 + err2)
+                self.assertEqual(len(empty), 1, f"{client}: {out2!r} {err2!r}")
+                self.assertEqual(
+                    empty[0].get("packages"), [],
+                    f"{client}: --packages \"\" must send an EXPLICIT empty "
+                    f"list -- the release declared none (§S3), which is not "
+                    f"the same as saying nothing")
+
+    def test_post_milestone_relays_packages_in_every_client(self):
+        """The per-client `_post_milestone` wrapper is a hand-written kwarg
+        list (bun:1613-1624 and its four siblings), so `packages` has to be
+        added to five signatures, not one. A client that keeps the flag but
+        drops the kwarg would silently post a release with no packages."""
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                module = _load_client_module(client)
+                calls = []
+
+                def fake_post(path, payload, _calls=calls):
+                    _calls.append((path, payload))
+                    return {"ok": True}
+
+                with mock.patch.object(module, "_project_key", return_value="pk"), \
+                        mock.patch.object(module, "_post", side_effect=fake_post):
+                    module._post_milestone(
+                        "/fake/dir", "A1", "release",
+                        label=self.VERSION, commit=self.COMMIT,
+                        packages=_packages_payload(self.VERSION))
+                path, payload = calls[0]
+                self.assertEqual(path, "/api/v2/milestones")
+                self.assertEqual(
+                    payload.get("packages"), _packages_payload(self.VERSION),
+                    f"{client}-crucible.py's _post_milestone must relay a "
+                    f"`packages` kwarg to the shared builder verbatim")
+
 
 
 if __name__ == "__main__":

@@ -129,12 +129,27 @@ const QUEUED_CRS = [
   AFTER_LAST_TAG_CR,
 ];
 
+/**
+ * CR-CRU-084 §S1 — one delivered artifact's coordinates: the registry it went
+ * to, the package NAME on that registry, and its version. Declared by the
+ * ceremony at `finish` (never a publish OUTCOME Crucible verified) and carried
+ * verbatim, so the wire shape is exactly these three strings.
+ */
+interface PackageRef {
+  registry: string;
+  name: string;
+  version: string;
+}
+
 interface ReleaseBrief {
   version?: string;
   commit?: string;
   timestamp: number;
   releasedAt?: number;
   crs?: string[];
+  /** CR-CRU-084 §S2 — the artifacts the release DELIVERED. Absent on a
+   *  pre-CR-084 release; EMPTY when the ceremony declared none (§S3). */
+  packages?: PackageRef[];
 }
 
 interface ReleasesResponse {
@@ -1842,6 +1857,90 @@ describe("an already-recorded release can be REPAIRED, and only on purpose (CR-C
     },
   );
 
+  // ── CR-CRU-084 §S1/§S4/AC7 — the SAME path also carries `packages` ───────
+  //
+  // Spec: docs/changes/CR-CRU-084-release-records-its-packages.md §S4 — the
+  // three shipped releases are corrected "through the CR-081 §S3 repair path
+  // (--repair-provenance) rather than a second mechanism" — and AC7, which
+  // requires that repair to be idempotent.
+  //
+  // Placed HERE, inside the §S3 repair section, on purpose: §S4's whole claim
+  // is that packages need NO new machinery, so the test that proves it must be
+  // the neighbour of the repair tests it reuses — same fixture, same
+  // `runBackfill(repo, base, [REPAIR_FLAG])` entry point, one flag apart from
+  // the ordinary run.
+  //
+  // The declared pair is `packagesFor`, the SAME fixture section F pins the
+  // wire contract with, so the ceremony's declaration and the server's
+  // carriage can never drift into two different answers about what Crucible
+  // ships. (A forward reference to a `const` defined lower in the file: legal
+  // and evaluated by the time any test body runs.)
+  //
+  // RED expectation (measured, 2026-08-23): `emit_release_milestone`
+  // (scripts/release.sh:620-644) appends only `--released-at`, `--crs` and
+  // `--repair-provenance` — `grep -c packages scripts/release.sh` is 0 — and
+  // no client's `milestone` subparser declares `--packages`. So both the
+  // first recording and the repair post nothing about packages, and every
+  // assertion below fails on `undefined`. The crs/releasedAt halves already
+  // pass today, which is the point: they are the non-regression this addition
+  // must not cost.
+
+  test(
+    "AC7/§S4 the repair carries PACKAGES through the SAME path: the ordinary backfill already " +
+      "records each release's declared pair at its OWN tag's version, the opt-in repair leaves " +
+      "them intact while it corrects crs, and a second repair changes neither — identical " +
+      "packages, identical provenance, still exactly one row per tag",
+    async () => {
+      const { repo, base, key, stale } = await staleCrsWorld("repair-carries-packages");
+
+      // FIRST RECORDING (§S1, through the ordinary ceremony run staleCrsWorld
+      // already performed): every release declares its two artifacts, each
+      // stamped with that release's OWN tag — three different versions, so a
+      // single hard-coded pair could not satisfy all three.
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) {
+        expect(stale.get(version)!.packages).toEqual(packagesFor(version));
+      }
+
+      const firstRepair = await runBackfill(repo, base, [REPAIR_FLAG]);
+      expect(firstRepair.output).not.toMatch(/unknown flag/);
+      expect(firstRepair.output).not.toMatch(/unrecognized arguments/);
+      expect(firstRepair.exitCode).toBe(0);
+
+      const once = byVersion(await listReleases(base, key));
+      // NON-VACUITY — the repair really did correct something, so "unchanged"
+      // below is not two copies of an untouched world.
+      expect(sortedCrs(once.get("0.1.0")!.crs)).toEqual([...ANCESTRY_SHIPPED["0.1.0"]!].sort());
+      expect(sortedCrs(once.get("0.1.0")!.crs)).not.toEqual([...STALE_010_CRS].sort());
+
+      // …and it carried the packages with it, per release, still at its tag.
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) {
+        expect(once.get(version)!.packages).toEqual(packagesFor(version));
+        expect(once.get(version)!.packages!.map((p) => p.version)).toEqual([version, version]);
+      }
+
+      const secondRepair = await runBackfill(repo, base, [REPAIR_FLAG]);
+      expect(secondRepair.output).not.toMatch(/unknown flag/);
+      expect(secondRepair.exitCode).toBe(0);
+
+      const twice = await listReleases(base, key);
+      // IDEMPOTENT — a repair is a correction, never a second recording.
+      expect(twice.length).toBe(3);
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) {
+        expect(twice.filter((r) => r.version === version).length).toBe(1);
+      }
+
+      const settled = byVersion(twice);
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) {
+        expect(settled.get(version)!.packages).toEqual(once.get(version)!.packages);
+        // NO PROVENANCE REGRESSION — CR-CRU-080's two fields ride through
+        // untouched, so `packages` was added ALONGSIDE them, not over them.
+        expect(sortedCrs(settled.get(version)!.crs)).toEqual(sortedCrs(once.get(version)!.crs));
+        expect(settled.get(version)!.releasedAt).toBe(ANCESTRY_RELEASED_AT[version]!);
+        expect(settled.get(version)!.commit).toBe(once.get(version)!.commit);
+      }
+    },
+  );
+
   // ── the partition CR-CRU-080 AC10 guarantees survives a repair ────────────
 
   test(
@@ -2670,6 +2769,783 @@ describe("a repair that cannot compute REFUSES loudly and never shrinks in silen
       const said = refusalLines(repaired.output).join("\n");
       expect(said).toContain("0.1.0");
       expect(said).toMatch(/queue/i);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// F. CR-CRU-084 — a release records the PACKAGES it delivered (C1 RED).
+//
+// Spec: docs/changes/CR-CRU-084-release-records-its-packages.md
+// §S1 + §S2 + §S3 + §S4 + AC1/AC2/AC3/AC4/AC5/AC6/AC7.
+//
+//   §S1  the release milestone gains `packages`: per delivered artifact, its
+//        registry, its package NAME and its version. Recorded at `finish`,
+//        payload-carried, so NO column and NO migration (AC6).
+//   §S2  `releaseBrief` exposes it on GET …/releases, alongside `version`,
+//        `commit`, `releasedAt` and `crs`.
+//   §S3  an EMPTY `packages` on a FIRST recording is a MEANINGFUL fact and is
+//        kept; a release recorded BEFORE this CR carries no `packages` key at
+//        all, and the two are distinguishable on the wire (AC4).
+//   §S4  the CR-CRU-081 §S3 repair path carries `packages` too, inheriting
+//        CR-CRU-086's write rule extended to the field (AC7).
+//
+// SERVER-SIDE ONLY, deliberately: this cycle pins the WIRE. The ceremony's
+// capture (`--packages`, `emit_release_milestone`, the §S4 backfill run) is a
+// LATER cycle and is not tested here — which is why every test below drives
+// the server's own production entry (`POST /api/v2/milestones`) over real
+// HTTP, the way sections B and E do, and never `Store` directly. Rendering
+// the empty state is CR-CRU-078's and is not tested here either (§S3).
+//
+// Crucible does NOT verify that a publish succeeded or that a package is
+// reachable (user ruling 2026-08-23, spec Non-goals): `packages` is what the
+// ceremony DECLARED. So no test below consults CI, a registry or a network.
+//
+// RED expectation (measured against the current tree) — `packages` has no
+// notion anywhere on the server side, at FIVE seams, so every assertion about
+// it fails and the field never reaches the wire:
+//   * `src/v2.ts:1160-1186` whitelists `releasedAt`/`crs`/`repairProvenance`
+//     and nothing else, so the field is dropped at the route.
+//   * `Store.recordMilestoneEvent`'s `meta` (src/store.ts:1712-1719) has no
+//     `packages` member.
+//   * `Store.payloadColumn` (src/store.ts:2187-2207) is a WHITELIST, so even a
+//     carried field would not be persisted…
+//   * …nor read back: `toEvent` (src/store.ts:2286-2287) projects exactly
+//     `releasedAt` and `crs` out of the payload blob.
+//   * `releaseBrief` (src/v2.ts:1664-1672) spreads neither.
+// And AC7 arm (b) fails for a SIXTH, sharper reason that survives all of the
+// above: `repairReleaseProvenance` (src/store.ts:1800-1805) takes
+// `(held, releasedAt, crs)` and opens with a WHOLE-REPAIR, `crs`-KEYED early
+// return — `if (crs !== undefined && crs.length === 0) return {held, false}` —
+// so a packages-only correction is silently dropped by a guard about a
+// different field. That guard must become PER-FIELD.
+//
+// SAFETY: unchanged from sections A-E — in-process server on `port: 0` over a
+// per-test `mktemp` db (never 3849, never data/crucible.db), stopped through
+// its own handle. No git fixture is needed at all here: the ceremony is not
+// under test in this cycle.
+// ---------------------------------------------------------------------------
+
+/** The release these tests record. A version distinct from every fixture tag
+ *  above, so no assertion can be satisfied by another section's data. */
+const PKG_VERSION = "0.9.9";
+
+/**
+ * AC1/AC2 — the two artifacts every Crucible release delivers, version-locked
+ * to the release tag. Built FROM the version rather than beside it, because
+ * AC2 is structural: the entries' version IS the release version, so a test
+ * that spelled it twice could not tell a locked pair from a coincidence.
+ */
+const packagesFor = (version: string): PackageRef[] => [
+  { registry: "pypi", name: "crucible-axi", version },
+  { registry: "npm", name: "@anthill-tec/crucible-server", version },
+];
+
+describe("a release records the PACKAGES it delivered, on the wire (CR-CRU-084 §S1/§S2/§S3/AC1-AC7)", () => {
+  let handle: ServerHandle | undefined;
+  const dbDirs: string[] = [];
+  let base = "";
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    for (const d of dbDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  /** In-process server on an OS-assigned port over a throwaway on-disk db —
+   *  never 3849, never data/crucible.db. Stopped by handle in afterEach. */
+  function boot(): void {
+    const dir = mkdtempSync(join(tmpdir(), "release-packages-db-"));
+    dbDirs.push(dir);
+    handle = startServer({ port: 0, dbPath: join(dir, "crucible.db") });
+    base = `http://localhost:${handle.server.port}`;
+  }
+
+  async function createProject(name: string): Promise<string> {
+    const res = await postJson(base, "/api/v2/projects", { name });
+    const body = (await res.json()) as { project: { key: string } };
+    const key = body.project.key;
+    const reg = await postJson(base, "/api/v2/agents/register", {
+      projectKey: key,
+      agentId: AGENT_ID,
+      role: "ORCHESTRATOR",
+    });
+    expect(reg.status).toBe(200);
+    return key;
+  }
+
+  /**
+   * A release post at the server's OWN production entry — the same helper
+   * shape section E uses, plus `packages`.
+   *
+   * `packages` is keyed on PRESENCE (`"packages" in fields`), never on
+   * `undefined`, because AC4's whole point is that an omitted field and an
+   * empty array are DIFFERENT facts; and it is typed `unknown` so a malformed
+   * value (a non-array, an entry missing a field) reaches the route exactly as
+   * a careless caller would send it, which is what the never-coerce tests
+   * need.
+   *
+   * Returns the route's own answer — status, `changed` and the event id —
+   * because "wrote nothing" and "the SAME row" are contracts the caller must
+   * be able to SEE rather than infer from a later read.
+   */
+  async function postRelease(
+    key: string,
+    fields: {
+      label: string;
+      commit: string;
+      releasedAt?: number;
+      crs?: readonly unknown[];
+      packages?: unknown;
+      repair?: boolean;
+    },
+  ): Promise<{ status: number; changed: boolean; event: string | undefined }> {
+    const res = await postJson(base, "/api/v2/milestones", {
+      projectKey: key,
+      agentId: AGENT_ID,
+      type: "release",
+      label: fields.label,
+      commit: fields.commit,
+      ...(fields.releasedAt !== undefined ? { releasedAt: fields.releasedAt } : {}),
+      ...(fields.crs !== undefined ? { crs: fields.crs } : {}),
+      ...("packages" in fields ? { packages: fields.packages } : {}),
+      ...(fields.repair === true ? { repairProvenance: true } : {}),
+    });
+    const body = (await res.json()) as { changed?: boolean; event?: string };
+    return { status: res.status, changed: body.changed === true, event: body.event };
+  }
+
+  /** The single release of a project, read back OFF THE WIRE. */
+  async function onlyRelease(key: string): Promise<ReleaseBrief> {
+    const releases = await listReleases(base, key);
+    expect(releases.length).toBe(1);
+    return releases[0]!;
+  }
+
+  // ── AC1/AC2/AC3 — the round trip ────────────────────────────────────────
+
+  test(
+    "AC1/AC3 a release recorded with its two declared packages reads back off GET …/releases " +
+      "carrying BOTH, in the order they were declared, alongside version/commit/releasedAt/crs",
+    async () => {
+      boot();
+      const key = await createProject("packages-wire-round-trip");
+      const commit = "f".repeat(40);
+      const shipped = ["CR-CRU-084", "CR-CRU-086"];
+      const declared = packagesFor(PKG_VERSION);
+
+      const posted = await postRelease(key, {
+        label: PKG_VERSION,
+        commit,
+        releasedAt: ANCESTRY_RELEASED_AT["0.1.2"]!,
+        crs: shipped,
+        packages: declared,
+      });
+      expect(posted.status).toBe(201);
+      expect(posted.changed).toBe(true);
+
+      const rel = await onlyRelease(key);
+      // AC1/AC3 — both delivered artifacts, verbatim, ORDER PRESERVED.
+      // Asserted first, so a failure names the missing fact itself.
+      expect(rel.packages).toEqual(declared);
+      expect(rel.packages!.map((p) => p.registry)).toEqual(["pypi", "npm"]);
+      expect(rel.packages!.map((p) => p.name)).toEqual([
+        "crucible-axi",
+        "@anthill-tec/crucible-server",
+      ]);
+      // AC2, structurally: every entry's version IS the release version, read
+      // from the SAME record — never a second copy of a literal.
+      const recordedVersion = rel.version!;
+      for (const pkg of rel.packages!) expect(pkg.version).toBe(recordedVersion);
+      // AC3 — "alongside": the CR-CRU-074/080 fields come from the same brief
+      // and are unchanged neighbours, not casualties of the new one.
+      expect(rel.version).toBe(PKG_VERSION);
+      expect(rel.commit).toBe(commit);
+      expect(rel.releasedAt).toBe(ANCESTRY_RELEASED_AT["0.1.2"]);
+      expect(sortedCrs(rel.crs)).toEqual([...shipped].sort());
+      expect(typeof rel.timestamp).toBe("number");
+    },
+  );
+
+  // ── AC4 — an empty declaration and no declaration are DIFFERENT facts ────
+
+  test(
+    "AC4 empty vs absent, in ONE test so neither half can pass vacuously: a release recorded " +
+      "with packages:[] reads back with an EXPLICIT empty array, while a pre-CR-084-shaped " +
+      "release recorded without the key omits `packages` entirely",
+    async () => {
+      boot();
+      const key = await createProject("packages-empty-vs-absent");
+
+      // Recorded WITH the field, declaring nothing — §S3's meaningful fact.
+      expect(
+        (await postRelease(key, { label: "0.9.8", commit: "a".repeat(40), packages: [] })).status,
+      ).toBe(201);
+      // Recorded WITHOUT the field at all — the shape every release predating
+      // this CR carries.
+      expect((await postRelease(key, { label: "0.9.7", commit: "b".repeat(40) })).status).toBe(201);
+
+      const releases = byVersion(await listReleases(base, key));
+      const declaredNone = releases.get("0.9.8")!;
+      const preCr084 = releases.get("0.9.7")!;
+
+      // HALF 1 — PRESENT and empty: the ceremony looked and delivered none.
+      expect("packages" in declaredNone).toBe(true);
+      expect(declaredNone.packages).toEqual([]);
+      expect(Array.isArray(declaredNone.packages)).toBe(true);
+      expect(declaredNone.packages!.length).toBe(0);
+
+      // HALF 2 — ABSENT: a pre-CR-084 release makes no claim at all, and is
+      // NOT reported as an empty delivery (which would say it shipped nothing).
+      expect("packages" in preCr084).toBe(false);
+      expect(preCr084.packages).toBeUndefined();
+
+      // THE DISTINCTION ITSELF — stated once, on the two records together, so
+      // no implementation can satisfy both halves by collapsing them.
+      expect("packages" in declaredNone).not.toBe("packages" in preCr084);
+    },
+  );
+
+  // ── never-coerce validation (CR-CRU-073 §S1, as `crs` does it) ───────────
+  //
+  // DROP GRANULARITY, read off `src/v2.ts:1164-1166` — `crs` is
+  // `Array.isArray(body.crs) ? body.crs.filter(wellFormed) : undefined`, which
+  // is TWO rules at TWO granularities:
+  //   * a value that is NOT AN ARRAY drops the whole FIELD (→ `undefined`, so
+  //     the record carries no key), and
+  //   * an array drops ill-formed MEMBERS, keeping the well-formed ones.
+  // `packages` inherits both, with a well-formed entry being one whose
+  // `registry`, `name` and `version` are all NON-EMPTY strings (the same bar
+  // `crs` sets for a member: `typeof === "string" && length > 0`).
+  // Malformed input is never fatal — a published release must not be blocked
+  // by a reporting gap (§S3) — so each case asserts what the route STORED,
+  // read back off the wire, not merely its HTTP status.
+
+  test(
+    "never-coerce (member granularity, missing fields): entries lacking registry, name or " +
+      "version are DROPPED individually while the well-formed sibling is kept, and the post is " +
+      "not fatal",
+    async () => {
+      boot();
+      const key = await createProject("packages-drop-incomplete-entries");
+      const wellFormed = packagesFor(PKG_VERSION)[0]!;
+
+      const posted = await postRelease(key, {
+        label: PKG_VERSION,
+        commit: "c".repeat(40),
+        packages: [
+          { name: "crucible-axi", version: PKG_VERSION }, // no registry
+          { registry: "pypi", version: PKG_VERSION }, // no name
+          { registry: "npm", name: "@anthill-tec/crucible-server" }, // no version
+          wellFormed,
+        ],
+      });
+      // Carried, never refused.
+      expect(posted.status).toBe(201);
+
+      const rel = await onlyRelease(key);
+      expect(rel.packages).toEqual([wellFormed]);
+      // NEGATIVE — no half-entry was stored, and nothing was invented to fill
+      // a missing field.
+      for (const pkg of rel.packages!) {
+        expect(typeof pkg.registry).toBe("string");
+        expect(typeof pkg.name).toBe("string");
+        expect(typeof pkg.version).toBe("string");
+      }
+    },
+  );
+
+  test(
+    "never-coerce (member granularity, wrong types): entries whose registry/name/version are " +
+      "not non-empty STRINGS are DROPPED individually — never stringified — while the " +
+      "well-formed sibling is kept",
+    async () => {
+      boot();
+      const key = await createProject("packages-drop-mistyped-entries");
+      const wellFormed = packagesFor(PKG_VERSION)[1]!;
+
+      const posted = await postRelease(key, {
+        label: PKG_VERSION,
+        commit: "d".repeat(40),
+        packages: [
+          { registry: 42, name: "crucible-axi", version: PKG_VERSION },
+          { registry: "npm", name: null, version: PKG_VERSION },
+          { registry: "pypi", name: "crucible-axi", version: 0.99 },
+          { registry: "", name: "crucible-axi", version: PKG_VERSION },
+          { registry: "pypi", name: "crucible-axi", version: "" },
+          "crucible-axi@0.9.9",
+          null,
+          wellFormed,
+        ],
+      });
+      expect(posted.status).toBe(201);
+
+      const rel = await onlyRelease(key);
+      expect(rel.packages).toEqual([wellFormed]);
+      // NEGATIVE — the numbers were dropped, not coerced to "42"/"0.99", and
+      // the empty strings did not survive as blank coordinates.
+      const flat = JSON.stringify(rel.packages);
+      expect(flat).not.toContain("42");
+      expect(flat).not.toContain("0.99");
+      expect(rel.packages!.every((p) => p.registry.length > 0 && p.name.length > 0)).toBe(true);
+      expect(rel.packages!.every((p) => p.version.length > 0)).toBe(true);
+    },
+  );
+
+  test(
+    "never-coerce (FIELD granularity): a `packages` that is not an array drops the whole FIELD " +
+      "— the record carries NO packages key, and specifically NOT the empty array AC4 makes " +
+      "mean 'delivered nothing'; anchored in the same test by a WELL-FORMED array that IS " +
+      "carried, so 'absent' can never be satisfied by a server with no notion of the field",
+    async () => {
+      boot();
+      const key = await createProject("packages-drop-non-array");
+
+      const cases: Array<{ label: string; commit: string; packages: unknown }> = [
+        { label: "0.9.1", commit: "1".repeat(40), packages: "crucible-axi@0.9.9" },
+        {
+          label: "0.9.2",
+          commit: "2".repeat(40),
+          packages: { registry: "pypi", name: "crucible-axi", version: PKG_VERSION },
+        },
+        { label: "0.9.3", commit: "3".repeat(40), packages: null },
+        { label: "0.9.4", commit: "4".repeat(40), packages: 2 },
+      ];
+      for (const c of cases) {
+        expect((await postRelease(key, c)).status).toBe(201);
+      }
+
+      const releases = byVersion(await listReleases(base, key));
+      expect(releases.size).toBe(cases.length);
+      for (const c of cases) {
+        const rel = releases.get(c.label)!;
+        // The FIELD is gone — a malformed value must not fabricate the §S3
+        // fact that the ceremony declared no packages.
+        expect("packages" in rel).toBe(false);
+        expect(rel.packages).toBeUndefined();
+        expect(rel.packages).not.toEqual([]);
+        // …and the release itself was still recorded.
+        expect(rel.commit).toBe(c.commit);
+      }
+
+      // NON-VACUITY ANCHOR — without this the whole test is satisfied by a
+      // server that simply has no `packages` at all (which is exactly the tree
+      // this RED runs against). A WELL-FORMED array, in the SAME project and
+      // through the SAME route, must come back PRESENT: only then is "absent"
+      // above a statement about the malformed VALUE rather than about the
+      // field's very existence.
+      const declared = packagesFor(PKG_VERSION);
+      expect(
+        (await postRelease(key, { label: "0.9.5", commit: "5".repeat(40), packages: declared }))
+          .status,
+      ).toBe(201);
+      const carried = byVersion(await listReleases(base, key)).get("0.9.5")!;
+      expect("packages" in carried).toBe(true);
+      expect(carried.packages).toEqual(declared);
+    },
+  );
+
+  test(
+    "never-coerce, the granularity CONSEQUENCE stated on purpose: an ARRAY whose every entry " +
+      "is ill-formed filters down to a PRESENT empty array (not an absent field), exactly as " +
+      "today's `crs: [42]` does — asserted side by side so the two fields cannot drift",
+    async () => {
+      boot();
+      const key = await createProject("packages-all-entries-dropped");
+
+      const posted = await postRelease(key, {
+        label: PKG_VERSION,
+        commit: "5".repeat(40),
+        // The SIBLING PRECEDENT, in the same request: `crs` filters its
+        // members, so an all-bad array becomes `[]` — a PRESENT field. This
+        // half passes against the current tree and is what fixes the reading.
+        crs: [42, null, ""],
+        packages: [{ registry: 42 }, null, "pypi/crucible-axi"],
+      });
+      expect(posted.status).toBe(201);
+
+      const rel = await onlyRelease(key);
+      // The precedent, observed rather than assumed.
+      expect("crs" in rel).toBe(true);
+      expect(rel.crs).toEqual([]);
+      // `packages` follows it, member-filter for member-filter.
+      expect("packages" in rel).toBe(true);
+      expect(rel.packages).toEqual([]);
+    },
+  );
+
+  // ── AC5 — provenance intact, and the dedup replay unchanged ─────────────
+
+  test(
+    "AC5 adding packages changes neither `crs` nor `releasedAt`, and a REPLAY (identical " +
+      "type/label/commit) returns the HELD event with its packages unchanged — changed:false, " +
+      "the same event id, no second release row",
+    async () => {
+      boot();
+      const key = await createProject("packages-provenance-intact-and-replay");
+      const commit = "6".repeat(40);
+      const shipped = ["CR-CRU-080", "CR-CRU-084"];
+      const declared = packagesFor(PKG_VERSION);
+
+      const first = await postRelease(key, {
+        label: PKG_VERSION,
+        commit,
+        releasedAt: ANCESTRY_RELEASED_AT["0.1.2"]!,
+        crs: shipped,
+        packages: declared,
+      });
+      expect(first.status).toBe(201);
+      expect(first.changed).toBe(true);
+
+      // PRE-STATE — all three facts stored, so "unchanged" below is a claim
+      // about specific values a re-recording would have replaced.
+      const before = await onlyRelease(key);
+      expect(before.releasedAt).toBe(ANCESTRY_RELEASED_AT["0.1.2"]);
+      expect(sortedCrs(before.crs)).toEqual([...shipped].sort());
+      expect(before.packages).toEqual(declared);
+
+      // THE REPLAY — same type/label/commit, NO repair opt-in, deliberately
+      // carrying a DIFFERENT date, an EMPTY crs and DIFFERENT packages. CR-080
+      // §S3: a replay re-computes nothing and writes nothing.
+      const replay = await postRelease(key, {
+        label: PKG_VERSION,
+        commit,
+        releasedAt: INGEST_MINUTE_RELEASED_AT,
+        crs: [],
+        packages: [{ registry: "npm", name: "not-what-shipped", version: "9.9.9" }],
+      });
+      expect(replay.status).toBe(200);
+      expect(replay.changed).toBe(false);
+      // The HELD event, by identity — not a look-alike second row.
+      expect(replay.event).toBe(first.event);
+
+      const after = await onlyRelease(key);
+      expect(after.packages).toEqual(declared);
+      expect(after.packages).not.toContainEqual({
+        registry: "npm",
+        name: "not-what-shipped",
+        version: "9.9.9",
+      });
+      expect(after.releasedAt).toBe(ANCESTRY_RELEASED_AT["0.1.2"]);
+      expect(sortedCrs(after.crs)).toEqual([...shipped].sort());
+      expect(after.timestamp).toBe(before.timestamp);
+    },
+  );
+
+  // ── AC7 — the repair path carries packages, and is idempotent ───────────
+
+  test(
+    "AC7 a --repair-provenance post carrying a NON-EMPTY packages UPDATES the held release IN " +
+      "PLACE — same event id, `label`, `commit` and ingest timestamp — and running it twice is " +
+      "idempotent: the second run writes nothing and the record is byte-identical",
+    async () => {
+      boot();
+      const key = await createProject("packages-repair-in-place");
+      const commit = "7".repeat(40);
+      const shipped = ["CR-CRU-060", "CR-CRU-061"];
+      const declared = packagesFor("0.1.2");
+
+      // The pre-CR-084 shape §S4 exists to correct: provenance recorded by the
+      // CR-080 ceremony, NO packages — so there is nothing to inherit and the
+      // repair below is the only possible source of the field.
+      const planted = await postRelease(key, {
+        label: "0.1.2",
+        commit,
+        releasedAt: ANCESTRY_RELEASED_AT["0.1.2"]!,
+        crs: shipped,
+      });
+      expect(planted.status).toBe(201);
+      const before = await onlyRelease(key);
+      expect("packages" in before).toBe(false);
+
+      const repaired = await postRelease(key, {
+        label: "0.1.2",
+        commit,
+        releasedAt: ANCESTRY_RELEASED_AT["0.1.2"]!,
+        crs: shipped,
+        packages: declared,
+        repair: true,
+      });
+      expect(repaired.status).toBe(201);
+      expect(repaired.changed).toBe(true);
+
+      const after = await onlyRelease(key);
+      expect(after.packages).toEqual(declared);
+      // A CORRECTION, never a second recording: the SAME row throughout.
+      expect(repaired.event).toBe(planted.event);
+      expect(after.version).toBe("0.1.2");
+      expect(after.commit).toBe(commit);
+      expect(after.timestamp).toBe(before.timestamp);
+      expect(after.releasedAt).toBe(ANCESTRY_RELEASED_AT["0.1.2"]);
+      expect(sortedCrs(after.crs)).toEqual([...shipped].sort());
+
+      // IDEMPOTENT — the identical repair again writes nothing, says so, and
+      // leaves a byte-identical record.
+      const twice = await postRelease(key, {
+        label: "0.1.2",
+        commit,
+        releasedAt: ANCESTRY_RELEASED_AT["0.1.2"]!,
+        crs: shipped,
+        packages: declared,
+        repair: true,
+      });
+      expect(twice.status).toBe(200);
+      expect(twice.changed).toBe(false);
+      expect(twice.event).toBe(planted.event);
+      expect(await onlyRelease(key)).toEqual(after);
+    },
+  );
+
+  test(
+    "AC7 + CR-CRU-086, arm (a): a repair whose derived packages is EMPTY leaves a stored " +
+      "NON-EMPTY packages untouched — on the repair path an empty derivation is *no answer*, " +
+      "not *the answer*, exactly as CR-CRU-086 §S1 drew the line for `crs`",
+    async () => {
+      boot();
+      const key = await createProject("packages-guard-empty-never-overwrites");
+      const commit = "8".repeat(40);
+      const shipped = ["CR-CRU-060", "CR-CRU-061"];
+      const stored = packagesFor("0.1.2");
+
+      expect(
+        (
+          await postRelease(key, {
+            label: "0.1.2",
+            commit,
+            releasedAt: ANCESTRY_RELEASED_AT["0.1.2"]!,
+            crs: shipped,
+            packages: stored,
+          })
+        ).status,
+      ).toBe(201);
+
+      // PRE-STATE 1 — the stored set really is non-empty.
+      const before = byVersion(await listReleases(base, key)).get("0.1.2")!;
+      expect(before.packages).toEqual(stored);
+
+      // PRE-STATE 2 — an EMPTY `packages` is a PRESENT, well-formed field on
+      // this wire and not an omitted one (AC4 above): recorded fresh on a
+      // sibling label it lands as `[]`. That is what makes the derivation
+      // handed to the repair below an ANSWER OF NOTHING rather than a missing
+      // field — and therefore what makes it destructive if persisted.
+      expect(
+        (await postRelease(key, { label: "0.0.9", commit: "9".repeat(40), packages: [] })).status,
+      ).toBe(201);
+      expect(byVersion(await listReleases(base, key)).get("0.0.9")!.packages).toEqual([]);
+
+      const repaired = await postRelease(key, {
+        label: "0.1.2",
+        commit,
+        releasedAt: ANCESTRY_RELEASED_AT["0.1.2"]!,
+        crs: shipped,
+        packages: [],
+        repair: true,
+      });
+
+      const releases = await listReleases(base, key);
+      const after = byVersion(releases).get("0.1.2")!;
+      // POSITIVE and EXACT — asserted first, so a failure names the data loss.
+      expect(after.packages).toEqual(stored);
+      // NEGATIVE — the erasure specifically did not happen.
+      expect(after.packages).not.toEqual([]);
+      // WROTE NOTHING, and SAID so.
+      expect(repaired.changed).toBe(false);
+      expect(repaired.status).toBe(200);
+      // A refusal is not a second recording either.
+      expect(releases.filter((r) => r.version === "0.1.2").length).toBe(1);
+    },
+  );
+
+  test(
+    "AC7 + CR-CRU-086, arm (b) — THE PER-FIELD CLAIM: a repair carrying a NON-EMPTY packages " +
+      "and an EMPTY crs still APPLIES the packages — and the corrected releasedAt that arrived " +
+      "with them — while leaving the stored crs alone, so a packages-only correction is never " +
+      "dropped by a guard about `crs`",
+    async () => {
+      boot();
+      const key = await createProject("packages-guard-is-per-field");
+      const commit = "b".repeat(40);
+
+      // The measured live shape of `0.1.0`: 58 CRs, no packages at all (as
+      // every release recorded before this CR), and — CR-CRU-081 §S3's own
+      // motivating defect — a `releasedAt` stamped at the INGEST minute
+      // rather than at the tag's own commit date.
+      //
+      // That stored date is deliberately WRONG, and deliberately different
+      // from the one the repair posts below: cell 6b of the write rule (a
+      // `releasedAt` DOES land when `crs` derived empty but `packages` did
+      // not — the narrowing of CR-CRU-086's "releasedAt included" clause to
+      // "only when EVERY offered set was empty") is unobservable if the
+      // repair re-posts the value already stored. Then "the date moved" and
+      // "the whole record was left alone" read identically.
+      expect(
+        (
+          await postRelease(key, {
+            label: "0.1.0",
+            commit,
+            releasedAt: INGEST_MINUTE_RELEASED_AT,
+            crs: LIVE_010_CRS,
+          })
+        ).status,
+      ).toBe(201);
+
+      const before = byVersion(await listReleases(base, key)).get("0.1.0")!;
+      expect(before.crs!.length).toBe(58);
+      expect("packages" in before).toBe(false);
+      // …and the stored date really is the wrong one, so the assertion below
+      // discriminates a WRITE from a no-op instead of restating the fixture.
+      expect(before.releasedAt).toBe(INGEST_MINUTE_RELEASED_AT);
+
+      // THE PACKAGES-ONLY REPAIR, in the §S4 backfill's real shape for 0.1.0:
+      // the ONE package that release actually put on a registry (PyPI; its npm
+      // publish job failed, gap analysis "measured history"), supplied by hand
+      // as a historical fact — while the queue intersection comes back EMPTY,
+      // which is precisely the input today's whole-repair, `crs`-keyed early
+      // return (src/store.ts:1805) turns into a silent no-op.
+      const only: PackageRef[] = [{ registry: "pypi", name: "crucible-axi", version: "0.1.0" }];
+      const repaired = await postRelease(key, {
+        label: "0.1.0",
+        commit,
+        releasedAt: ANCESTRY_RELEASED_AT["0.1.0"]!,
+        crs: [],
+        packages: only,
+        repair: true,
+      });
+
+      const after = await onlyRelease(key);
+      // (b1) the packages half APPLIED — asserted first, so a failure names
+      // the dropped correction itself.
+      expect(after.packages).toEqual(only);
+      // (b2) the crs half PRESERVED — the empty derivation still wrote nothing
+      // THERE. Both halves in one record: that is what "per field" means.
+      expect(after.crs!.length).toBe(58);
+      expect(sortedCrs(after.crs)).toEqual([...LIVE_010_CRS].sort());
+      expect(after.crs).not.toEqual([]);
+      // (b3) the DATE that arrived with the applied half LANDED — the repair
+      // offered one derivable set, so this is a write, not the whole-record
+      // abort CR-CRU-086 reserves for a repair that derived nothing at all.
+      expect(after.releasedAt).toBe(ANCESTRY_RELEASED_AT["0.1.0"]);
+      expect(after.releasedAt).not.toBe(INGEST_MINUTE_RELEASED_AT);
+      // …and the identity survived with it.
+      expect(after.commit).toBe(commit);
+      expect(after.timestamp).toBe(before.timestamp);
+      // And the route reported a WRITE, not the whole-repair abort.
+      expect(repaired.status).toBe(201);
+      expect(repaired.changed).toBe(true);
+    },
+  );
+
+  test(
+    "AC7 + CR-CRU-086, arm (c) — OFFERED A SET, DERIVED NOTHING: a repair whose ONLY offered " +
+      "set is an EMPTY packages (no crs on the post at all) leaves the WHOLE record standing — " +
+      "the stored packages, the stored crs and the stored releasedAt, even though the post " +
+      "carried a DIFFERENT date — and answers `changed:false`, so a caller can never tally a " +
+      "write that never happened",
+    async () => {
+      boot();
+      const key = await createProject("packages-guard-offered-nothing");
+      const commit = "c".repeat(40);
+      const shipped = ["CR-CRU-060", "CR-CRU-061"];
+      const stored = packagesFor("0.1.2");
+
+      expect(
+        (
+          await postRelease(key, {
+            label: "0.1.2",
+            commit,
+            releasedAt: ANCESTRY_RELEASED_AT["0.1.2"]!,
+            crs: shipped,
+            packages: stored,
+          })
+        ).status,
+      ).toBe(201);
+
+      // PRE-STATE — all three provenance fields are stored and non-empty, so
+      // "untouched" below cannot pass vacuously.
+      const before = await onlyRelease(key);
+      expect(before.releasedAt).toBe(ANCESTRY_RELEASED_AT["0.1.2"]!);
+      expect(sortedCrs(before.crs)).toEqual([...shipped].sort());
+      expect(before.packages).toEqual(stored);
+
+      // The repair offers exactly ONE set — `packages` — and derives NOTHING
+      // from it, while `crs` is ABSENT rather than empty: the operator-reachable
+      // shape `--repair-provenance --packages ""` with no `--crs`. Arm (a)
+      // covers "packages empty BESIDE a non-empty crs"; this is the cell where
+      // the emptiness is all the repair brought.
+      //
+      // The date it carries DIFFERS from the stored one, which is what makes
+      // "the whole record stood still" observable rather than a re-post of what
+      // is already there — a repair that wrote nothing must not move the date
+      // either, because a date is only as trustworthy as the derivation that
+      // arrived with it.
+      const repaired = await postRelease(key, {
+        label: "0.1.2",
+        commit,
+        releasedAt: INGEST_MINUTE_RELEASED_AT,
+        packages: [],
+        repair: true,
+      });
+
+      const after = await onlyRelease(key);
+      // THE DATE — asserted first, because a moved date on a repair that wrote
+      // nothing is exactly the half-rewrite this cell forbids.
+      expect(after.releasedAt).toBe(ANCESTRY_RELEASED_AT["0.1.2"]!);
+      expect(after.releasedAt).not.toBe(INGEST_MINUTE_RELEASED_AT);
+      // …and both sets with it, positively and negatively.
+      expect(after.packages).toEqual(stored);
+      expect(after.packages).not.toEqual([]);
+      expect(sortedCrs(after.crs)).toEqual([...shipped].sort());
+      expect(after.crs).not.toEqual([]);
+      // WROTE NOTHING, and SAID so on the wire: `changed:false` is the only
+      // thing standing between this shape and a ceremony that reports a
+      // recorded release (scripts/release.sh's backfill tally) for a post that
+      // changed not one byte.
+      expect(repaired.changed).toBe(false);
+      expect(repaired.status).toBe(200);
+      // Not a second recording either — `onlyRelease` pinned the count, and
+      // the row is the SAME row.
+      expect(after.commit).toBe(commit);
+      expect(after.timestamp).toBe(before.timestamp);
+    },
+  );
+
+  // ── AC6 — payload-carried, so no migration ──────────────────────────────
+
+  test(
+    "AC6 no migration: a full packages round trip (record → read → repair → read) succeeds " +
+      "against a FRESHLY booted store while that store still reports schemaVersion === 7 — " +
+      "`packages` rides the generic payload blob, exactly as CR-CRU-080's provenance does",
+    async () => {
+      boot();
+      const key = await createProject("packages-no-migration");
+      const commit = "e".repeat(40);
+      const atBoot = handle!.store.schemaVersion;
+      const declared = packagesFor(PKG_VERSION);
+      const corrected: PackageRef[] = [
+        { registry: "pypi", name: "crucible-axi", version: PKG_VERSION },
+      ];
+
+      expect(
+        (await postRelease(key, { label: PKG_VERSION, commit, packages: declared })).status,
+      ).toBe(201);
+      expect((await onlyRelease(key)).packages).toEqual(declared);
+
+      const repaired = await postRelease(key, {
+        label: PKG_VERSION,
+        commit,
+        packages: corrected,
+        repair: true,
+      });
+      expect(repaired.status).toBe(201);
+      // NON-VACUITY — the field genuinely round-tripped through BOTH write
+      // paths, so "no migration" is a claim about a store that really stores it.
+      expect((await onlyRelease(key)).packages).toEqual(corrected);
+
+      // The design guard, a LITERAL on purpose (the queue-registration.test.ts
+      // precedent): a 7→8 chain step would be the signal GREEN diverged from
+      // the payload-carried design AC6 pins.
+      expect(handle!.store.schemaVersion).toBe(atBoot);
+      expect(handle!.store.schemaVersion).toBe(7);
     },
   );
 });

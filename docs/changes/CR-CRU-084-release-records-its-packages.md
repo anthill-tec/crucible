@@ -112,6 +112,16 @@ overwrites a stored non-empty one (it is "no answer", not "the answer"), while a
 a FIRST recording is kept, because §S3 makes it a meaningful fact. Without that distinction this CR
 re-opens the defect CR-086 was filed for.
 
+**The ceremony declares the pair on the RECORDING path only — never on a repair** (settled during
+C2, measured). A repair CORRECTS an already-recorded release, while the pair is a DECLARATION made
+when the release was recorded and is not re-derivable afterwards: `0.1.0` delivered PyPI only,
+a historical fact no constant can know. Re-declaring the pair on every repair would overwrite that
+per-release correction with a wrong one, and it would hand CR-086's refusal something to write — so a
+repair whose CR derivation came back empty would stop refusing and start rewriting the release
+(measured: 2 of the CR-086 regressions go red). §S4's corrections are therefore made **per release,
+hand-supplied** through the client's `--packages` on its repair path; CR-086's refusal narrows to
+"nothing at all to write" so those corrections can land.
+
 ## Acceptance criteria
 
 - **AC1** — a release recorded by the ceremony at `finish` carries `packages` with one entry per

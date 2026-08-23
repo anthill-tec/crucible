@@ -12,6 +12,7 @@ import type {
   CycleKind,
   CycleStatus,
   LivenessConfig,
+  PackageRef,
   Plan,
   PlanCycle,
   Project,
@@ -1715,6 +1716,7 @@ export class Store {
       context?: RunContext;
       releasedAt?: number;
       crs?: string[];
+      packages?: PackageRef[];
       repairProvenance?: boolean;
     },
   ): { event: RunEvent; changed: boolean; shrink?: ProvenanceShrink } {
@@ -1727,7 +1729,7 @@ export class Store {
         // CR-CRU-081 §S3 — the ONE way a held release changes: the caller
         // asked for it, in this call, on purpose. Everything else replays.
         return meta.repairProvenance === true
-          ? this.repairReleaseProvenance(held, meta.releasedAt, meta.crs)
+          ? this.repairReleaseProvenance(held, meta.releasedAt, meta.crs, meta.packages)
           : { event: held, changed: false };
       }
     }
@@ -1740,8 +1742,14 @@ export class Store {
     // SNAPSHOT of what the queue knew when the release was recorded: a CR
     // registered afterwards does not retroactively join a release it was never
     // part of.
+    //
+    // CR-CRU-084 §S1 — `packages` rides along on exactly the same terms: what
+    // the ceremony's publish jobs delivered is a fact about a world the server
+    // cannot see, so it is stored verbatim and never checked against a
+    // registry (spec Non-goals).
     const releasedAt = type === "release" ? meta?.releasedAt : undefined;
     const crs = type === "release" ? meta?.crs : undefined;
+    const packages = type === "release" ? meta?.packages : undefined;
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -1754,6 +1762,7 @@ export class Store {
       ...(meta?.commit !== undefined ? { commit: meta.commit } : {}),
       ...(releasedAt !== undefined ? { releasedAt } : {}),
       ...(crs !== undefined ? { crs } : {}),
+      ...(packages !== undefined ? { packages } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
     };
     const version = type === "release" ? meta?.label : undefined;
@@ -1774,18 +1783,29 @@ export class Store {
    * A correction, never a second recording: the row is UPDATEd, so the
    * release keeps its id, its ingest timestamp, its `label` and its `commit`,
    * and no tag ever gains a second release row. Only the fields the reporter
-   * actually computed move — an absent `releasedAt`/`crs` means git could not
-   * answer, which leaves the stored value alone rather than erasing it.
+   * actually computed move — an absent `releasedAt`/`crs`/`packages` means the
+   * reporter could not answer, which leaves the stored value alone rather than
+   * erasing it.
    *
-   * CR-CRU-086 §S1 — and an EMPTY `crs` is *no answer* too, not *the answer*.
+   * CR-CRU-086 §S1 — and an EMPTY set is *no answer* too, not *the answer*.
    * `undefined` was always guarded here; `[]` is a PRESENT, well-formed
    * "nothing" — the truthful output of the client's queue intersection when
    * the registered queue knows none of the scanned ids (CR-CRU-080 §S4) —
    * which this path dutifully persisted, erasing 58 CRs from 0.1.0 the first
    * time it ran for real. So the line between the two is drawn HERE, at the
-   * write: only a NON-EMPTY derivation may replace a stored set, and a
-   * release the repair cannot compute is left ENTIRELY alone, `releasedAt`
-   * included, rather than half-rewritten.
+   * write: only a NON-EMPTY derivation may replace a stored set.
+   *
+   * CR-CRU-084 §S4 — and that rule is PER FIELD, because there are now two
+   * sets a repair can derive and they fail independently: the §S4 backfill's
+   * real shape for 0.1.0 is a hand-supplied `packages` beside a queue
+   * intersection that legitimately comes back EMPTY. So an empty `crs` leaves
+   * the stored `crs` alone WITHOUT dropping a `packages` correction, and an
+   * empty `packages` leaves the stored `packages` alone without touching
+   * `crs`. What stays whole-record is CR-CRU-086's other half: when EVERY set
+   * the repair offered is empty — it tried and answered nothing — the release
+   * is left ENTIRELY alone, `releasedAt` included, rather than
+   * half-rewritten, because a date is only as trustworthy as the derivation
+   * that arrived with it.
    *
    * Idempotent by construction: the repaired payload is built through the
    * SAME projection the insert uses, so an unchanged answer is byte-identical
@@ -1801,12 +1821,23 @@ export class Store {
     held: RunEvent,
     releasedAt: number | undefined,
     crs: string[] | undefined,
+    packages: PackageRef[] | undefined,
   ): { event: RunEvent; changed: boolean; shrink?: ProvenanceShrink } {
-    if (crs !== undefined && crs.length === 0) return { event: held, changed: false };
+    // Per field: a set is DERIVED only when it is present and non-empty.
+    const derivedCrs = crs !== undefined && crs.length > 0 ? crs : undefined;
+    const derivedPackages = packages !== undefined && packages.length > 0 ? packages : undefined;
+    // …and when the repair offered a set yet derived none of them, it answered
+    // nothing at all: the whole record stands, `releasedAt` included.
+    const offeredNothing =
+      (crs?.length === 0 || packages?.length === 0) &&
+      derivedCrs === undefined &&
+      derivedPackages === undefined;
+    if (offeredNothing) return { event: held, changed: false };
     const repaired: RunEvent = {
       ...held,
       ...(releasedAt !== undefined ? { releasedAt } : {}),
-      ...(crs !== undefined ? { crs } : {}),
+      ...(derivedCrs !== undefined ? { crs: derivedCrs } : {}),
+      ...(derivedPackages !== undefined ? { packages: derivedPackages } : {}),
     };
     const payload = Store.payloadColumn(repaired);
     if (payload === Store.payloadColumn(held)) return { event: held, changed: false };
@@ -2203,6 +2234,9 @@ export class Store {
       // why §S4 needs no column and no migration (SCHEMA_VERSION stays 7).
       ...(event.releasedAt !== undefined ? { releasedAt: event.releasedAt } : {}),
       ...(event.crs !== undefined ? { crs: event.crs } : {}),
+      // CR-CRU-084 §S1/AC6 — and the packages the release delivered, in the
+      // SAME blob for the SAME reason: no column, no migration.
+      ...(event.packages !== undefined ? { packages: event.packages } : {}),
     };
     return Object.keys(payloadObj).length > 0 ? JSON.stringify(payloadObj) : null;
   }
@@ -2285,6 +2319,9 @@ export class Store {
       // was stored in; a pre-§S4 release row simply has neither key.
       ...(typeof payload.releasedAt === "number" ? { releasedAt: payload.releasedAt } : {}),
       ...(Array.isArray(payload.crs) ? { crs: payload.crs as string[] } : {}),
+      // CR-CRU-084 §S1 — the delivered packages, read back from the same blob;
+      // a release recorded before this CR simply has no key (AC4).
+      ...(Array.isArray(payload.packages) ? { packages: payload.packages as PackageRef[] } : {}),
       // CR-CRU-038 §S2b — run-level raw output served verbatim from the payload.
       ...(typeof payload.raw === "string" ? { raw: payload.raw } : {}),
       ...(row.action !== null ? { action: row.action as "registered" | "unregistered" } : {}),
