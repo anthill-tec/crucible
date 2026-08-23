@@ -1661,6 +1661,43 @@ def release_crs(raw, project_dir, ops):
     return [cr for cr in dict.fromkeys(scanned) if cr in queued]
 
 
+def release_packages(raw):
+    """CR-CRU-084 §S1 (PURE) — the artifacts a release DELIVERED, parsed out of
+    the ceremony's one delimited flag into one entry per artifact.
+
+    The format is `registry:name:version`, entries separated by `,` — the same
+    single-flag shape `--crs` already uses for a computed multi-value
+    provenance field, and lossless for the real coordinates:
+    `@anthill-tec/crucible-server` carries an `@` and a `/`, both ordinary
+    characters here, while no registry id, package name or SemVer version may
+    contain a `:` or a `,`, so a split can never straddle a field.
+
+    Parsed HERE rather than by a `type=` callable in five duplicated
+    subparsers — that would be exactly the drift CR-CRU-075 exists to fix — so
+    the clients carry the flag and the shared module owns its meaning.
+
+    Three states, identical to `crs`': `None` when the flag was never given
+    (the key never reaches the wire), an EMPTY list when it was given empty
+    (§S3/AC4 — "this release delivered nothing" is a recordable fact), and one
+    dict per entry otherwise, in declaration order. A malformed entry is
+    carried as the partial coordinates it spelled rather than raising: a
+    release is published before it is reported, so its report must never
+    explode, and the route drops any entry whose three fields are not all
+    non-empty strings (src/routes/v2.ts `isPackageRef`).
+    """
+    if raw is None:
+        return None
+    entries = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        registry, _, rest = entry.partition(":")
+        name, _, version = rest.rpartition(":")
+        entries.append({"registry": registry, "name": name, "version": version})
+    return entries
+
+
 # CR-CRU-086 §S2 — the exit status a REFUSED repair leaves: not 0 (nothing was
 # recorded, so a caller must never tally it as recorded) and not 1 (nothing
 # failed either — the refusal is the correct outcome, per-release and
@@ -1753,18 +1790,26 @@ def cmd_milestone(args, project_dir, ops):
     CR-CRU-086 §S1/§S2/§S3 — a repair whose derivation is EMPTY never reaches
     the wire: it is REFUSED here, per-release and non-fatally, because an
     empty set posted as a correction erases the stored one. A repair that
-    goes through and SHRINKS a stored set says what it dropped."""
+    goes through and SHRINKS a stored set says what it dropped.
+
+    CR-CRU-084 §S1/§S4 — a `release` also declares the PACKAGES it delivered,
+    parsed from `--packages` by `release_packages` and handed on unchanged.
+    The CR-086 refusal narrows accordingly: the server's repair applies
+    `crs` and `packages` INDEPENDENTLY (`repairReleaseProvenance`), so a
+    packages-only correction — §S4's real shape for 0.1.0 — has something to
+    write and must travel. Only a repair with NOTHING to write is refused."""
     context = fleet_context(cr=args.cr)
     released_at = getattr(args, "released_at", None)
     crs = release_crs(getattr(args, "crs", None), project_dir, ops)
+    packages = release_packages(getattr(args, "packages", None))
     repair = bool(getattr(args, "repair_provenance", False))
-    if repair and crs is not None and not crs:
+    if repair and crs is not None and not crs and not packages:
         return refuse_repair(args, project_dir, ops)
     resp = ops.post_milestone(project_dir, ops.agent_id(args), args.type,
                               label=args.label, commit=getattr(args, "commit", None),
                               context=context or None,
                               released_at=released_at, crs=crs,
-                              repair_provenance=repair)
+                              packages=packages, repair_provenance=repair)
     ok = resp.get("ok", False)
     # The interactive line stays an EXPLICIT stderr print (CR-CRU-054 §S2b's
     # single locus for it) rather than riding the emitter's legacy channel —
@@ -1785,6 +1830,7 @@ def cmd_milestone(args, project_dir, ops):
               "commit": getattr(args, "commit", None),
               **({"releasedAt": released_at} if released_at else {}),
               **({"crs": crs} if crs is not None else {}),
+              **({"packages": packages} if packages is not None else {}),
               **({"shrink": shrink} if shrink else {}),
               "help": milestone_help(bool(ok), args.type, ops.base_url)},
              ops.context(project_dir, cr=args.cr), [], None)
@@ -2002,7 +2048,8 @@ def post_gate(project_key, agent_id, gate, post_fn, context=None):
 
 def post_milestone(project_key, agent_id, mtype, post_fn,
                    label=None, commit=None, context=None,
-                   released_at=None, crs=None, repair_provenance=False):
+                   released_at=None, crs=None, packages=None,
+                   repair_provenance=False):
     """POST a workflow milestone (§S4b). Absent label/commit/context keys are
     OMITTED rather than sent as nulls.
 
@@ -2015,7 +2062,14 @@ def post_milestone(project_key, agent_id, mtype, post_fn,
     CR-CRU-081 §S3 — `repairProvenance` is sent ONLY when the caller asked for
     it, so an ordinary post is byte-identical to the pre-081 one and stays the
     server's dedup replay. It is the whole opt-in: without this key on the
-    wire a held release cannot be rewritten."""
+    wire a held release cannot be rewritten.
+
+    CR-CRU-084 §S1/§S3 — `packages` rides on `crs`' exact terms, because AC4
+    gives its empty state the same kind of meaning: the key is OMITTED when
+    the ceremony said nothing about packages, and SENT as `[]` when it
+    declared none. Hence `is not None` rather than a truthiness test — a
+    falsy check here would silently turn "this release delivered nothing"
+    into "this ceremony said nothing"."""
     payload = {"projectKey": project_key, "agentId": agent_id, "type": mtype}
     if label:
         payload["label"] = label
@@ -2025,6 +2079,8 @@ def post_milestone(project_key, agent_id, mtype, post_fn,
         payload["releasedAt"] = released_at
     if crs is not None:
         payload["crs"] = crs
+    if packages is not None:
+        payload["packages"] = packages
     if repair_provenance:
         payload["repairProvenance"] = True
     if context:

@@ -406,6 +406,24 @@ release_ship_date() {
     git log -1 --format=%ct "$1" 2>/dev/null || true
 }
 
+# CR-CRU-084 §S1/AC1 — WHAT a release delivers: the two artifacts every
+# Crucible release publishes, as the client's `registry:name:version` entries.
+#
+# The coordinates live HERE and only here — the registries and the two package
+# names are fixed properties of this project, not something to discover. The
+# ceremony DECLARES them: it never asks PyPI, npm or CI whether a publish
+# happened (§S1 Non-goals — at `finish` no artifact exists yet, the publish
+# jobs run afterwards, and the gate ladder before `finish` is the assurance).
+#
+# AC2 is structural rather than compared: both entries are stamped with the
+# caller's `$1`, which is the TAG's bare SemVer the release record itself is
+# built from, so a per-artifact version has no second input to diverge from.
+release_packages() {
+    local version="$1"
+    printf 'pypi:crucible-axi:%s,npm:@anthill-tec/crucible-server:%s' \
+        "$version" "$version"
+}
+
 # CR-CRU-081 §S1 — the release tags in ship order: bare SemVer only (a
 # v-prefixed or non-release tag is never a release), version-sorted, so
 # "the EARLIEST tag containing a commit" is well defined.
@@ -617,8 +635,15 @@ report_unplaceable_crs() {
 # `crs` from what this run just computed — instead of replaying it. Without
 # the flag the argv is byte-identical to the pre-081 one, so the ordinary
 # re-run remains CR-CRU-080 §S3's replay and cannot rewrite a release.
+#
+# CR-CRU-084 §S1 — and the SAME single path also carries WHAT the release
+# DELIVERED: the declared package pair, needing no git answer because it is
+# derived from the version this reporter was already given (AC2). Both callers
+# — the live `finish` and §S4's backfill — reach it here, so there is one
+# reporter and never a second mechanism. It is scoped to the RECORDING path;
+# the body says why.
 emit_release_milestone() {
-    local version="$1" sha="$2" client agent ship_date crs shown=""
+    local version="$1" sha="$2" client agent ship_date crs packages shown=""
     local -a provenance=()
 
     agent="$(ceremony_agent)"
@@ -633,6 +658,25 @@ emit_release_milestone() {
     if [ -n "$crs" ]; then
         provenance+=(--crs "$crs")
         shown="$shown --crs $crs"
+    fi
+    # CR-CRU-084 §S1/AC1 — WHAT this release delivered, declared on the
+    # RECORDING path and deliberately NOT on the repair path.
+    #
+    # A repair CORRECTS an already-recorded release, and the pair is a
+    # DECLARATION made when the release was recorded — not something
+    # re-derivable afterwards. 0.1.0 is the proof: it delivered PyPI only (its
+    # npm publish failed), a historical fact `release_packages` cannot know.
+    # Re-declaring the constant pair on every repair would overwrite that
+    # per-release correction with a wrong one; it would also hand CR-CRU-086's
+    # refusal something to write, so a repair whose CR derivation came back
+    # EMPTY would stop refusing and start rewriting the release. §S4's
+    # corrections are made per release through the client's OWN repair path,
+    # which carries `--packages` for exactly that (the refusal narrowed to
+    # "nothing at all to write" so they can).
+    if [ "$REPAIR_PROVENANCE" != true ]; then
+        packages="$(release_packages "$version")"
+        provenance+=(--packages "$packages")
+        shown="$shown --packages $packages"
     fi
     if [ "$REPAIR_PROVENANCE" = true ]; then
         provenance+=(--repair-provenance)
