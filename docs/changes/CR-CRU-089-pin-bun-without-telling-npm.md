@@ -1,10 +1,26 @@
-# CR-CRU-089 — patch: pin bun without routing every npm call through corepack
+# CR-CRU-089 — VOID — patch: pin bun without routing every npm call through corepack
 
 - **Type**: patch
 - **Wave**: 5
 - **Depends on**: 087
-- **Status**: PENDING
+- **Status**: VOID (2026-08-23, never started)
 
+## VOID — the thing this patched no longer exists
+
+This CR existed to replace CR-087's `packageManager` pin with a `.bun-version` mechanism. That pin has
+been **reverted outright** (`93f42f7`), so there is nothing left to re-mechanise.
+
+The pin was never needed for the job CR-087 was filed to do. CI was red because ONE assertion demanded
+that a timed-out leaf carry no failure message — true only on the bun this repo develops on.
+Re-specifying it as attribution fixed it under any bun, and that alone turned CI green: run
+32646793234 on `93f42f7` reports `test-bun` success, alongside `test-python`, `test-e2e`, `build` and
+`pack-server`. The pin was added scope, and it cost a 12-second corepack tax on every npm call in CI
+(958 ms → 13082 ms on the npm-pack test) for a drift the fixtures now catch anyway.
+
+Kept as a record of the measurement, not as work. Removed from the queue table. If pinning the
+toolchain is ever wanted, it is a fresh decision at SCRUM — not this CR resurrected.
+
+The problem statement below is preserved verbatim for its evidence.
 ## Problem
 
 CR-087 pinned the bun toolchain with `package.json`'s `packageManager` field, chosen because
