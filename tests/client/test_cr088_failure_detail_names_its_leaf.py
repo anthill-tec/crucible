@@ -111,7 +111,8 @@ def _messages(details):
 
 
 # ── (a) LEGITIMATE, the COMMON case (AC2) ───────────────────────────────────
-# Fixture `a.test.ts` — two consecutive failing tests, each printing its own
+# Fixture (a), the consecutive-failure shape (echoed below as the scratch file
+# `a`) — two consecutive failing tests, each printing its own
 # prelude block:
 #   3 | test("alpha asserts wrongly", () => { expect(1).toBe(2); });
 #   7 | test("beta throws its own boom", () => { throw new Error("beta boom"); });
@@ -194,7 +195,8 @@ LEGIT_CONSECUTIVE = {"plain": LEGIT_CONSECUTIVE_PLAIN, "ansi": LEGIT_CONSECUTIVE
 
 
 # ── (b) THE DEFECT, §S1's own measured shape (AC1) ──────────────────────────
-# Fixture `b.test.ts` — `gamma` leaks an async throw and also asserts wrongly;
+# Fixture (b), the leaked-async multi-line shape (echoed below as the scratch
+# file `b`) — `gamma` leaks an async throw and also asserts wrongly;
 # `delta` fails 30ms later on its own assertion. bun prints gamma's assertion
 # block, gamma's `(fail)` line, then GAMMA's leaked-throw block (its echo names
 # gamma, its frame points at gamma's line 4), then DELTA's `(fail)` line.
@@ -268,7 +270,8 @@ LEAK_MULTILINE = {"plain": LEAK_MULTILINE_PLAIN, "ansi": LEAK_MULTILINE_ANSI}
 
 
 # ── (c) THE DEFECT under NESTED describes (gate 5) ──────────────────────────
-# Fixture `c.test.ts` — the (b) shape inside `describe("outer") >
+# Fixture (c), the nested-describe leak (echoed below as the scratch file `c`)
+# — the (b) shape inside `describe("outer") >
 # describe("inner")`. This is the case a naive name-match breaks: the ECHO
 # names the BARE test (`epsilon leaks after failing`) while the `(fail)` line
 # carries the COMPOSED key (`outer > inner > zeta fails later`). See §S1 GAP 2.
@@ -347,7 +350,8 @@ LEAK_NESTED = {"plain": LEAK_NESTED_PLAIN, "ansi": LEAK_NESTED_ANSI}
 
 
 # ── (d) NO `test("…")` LINE IN THE ECHO — the fallback (gate 4) ─────────────
-# Fixture `d.test.ts` — both failures are thrown inside a shared helper defined
+# Fixture (d), the echoless shared-helper shape (echoed below as the scratch
+# file `d`) — both failures are thrown inside a shared helper defined
 # at the top of the file, so bun's echo window shows the HELPER's source only;
 # no `test("…")` line appears in either block. §S1's third clause says such a
 # block falls back to the positional rule, so both leaves keep the message
@@ -422,7 +426,8 @@ ECHOLESS_HELPER = {"plain": ECHOLESS_HELPER_PLAIN, "ansi": ECHOLESS_HELPER_ANSI}
 
 
 # ── (e) LEGITIMATE under NESTED describes (gate 5, non-regression half) ─────
-# Fixture `e.test.ts` — the (a) shape inside `describe("outer") >
+# Fixture (e), the legitimate nested shape (echoed below as the scratch file
+# `e`) — the (a) shape inside `describe("outer") >
 # describe("inner")`. Echo names the bare test, `(fail)` line carries the
 # composed key, and the block IS the following leaf's own prelude. Also note
 # the right-aligned gutter once line numbers reach two digits (` 5 |` … `10 |`).
@@ -501,7 +506,8 @@ LEGIT_NESTED = {"plain": LEGIT_NESTED_PLAIN, "ansi": LEGIT_NESTED_ANSI}
 
 
 # ── (f) THE DEFECT on AC1's literal bytes (alpha/beta) ─────────────────────
-# Fixture `f.test.ts` — the same source CR-087 captured as
+# Fixture (f), the one-liner leak (echoed below as the scratch file `f`) — the
+# same source CR-087 captured as
 # REAL_LEAKED_ASYNC_ERROR_LOG_PLAIN, recaptured here so this module is
 # self-contained (AC7) and so the ANSI twin exists as real bytes too. AC1 names
 # these two leaves: `beta fails` must carry NO message, `alpha fails and leaks`
