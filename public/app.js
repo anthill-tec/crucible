@@ -2362,6 +2362,12 @@
       return pos === null ? `${plan.track} ▶` : `${plan.track} ▶ ${pos}`;
     };
 
+    // CR-CRU-083 §S2 — a derived status whose wire value is not readable copy.
+    // Only COMPLETED_UNTRACKED is re-worded; every other status renders its raw
+    // wire value, so the badge stays a faithful echo of the queue.
+    const ROADMAP_STATUS_LABELS = { COMPLETED_UNTRACKED: "completed · tracking absent" };
+    const roadmapStatusLabel = (status) => ROADMAP_STATUS_LABELS[status] ?? status;
+
     const RoadmapRow = (entry, opts) => {
       const active = entry.status === "IN_PROGRESS";
       const deps = entry.dependsOn ?? [];
@@ -2404,7 +2410,7 @@
             "data-testid": "roadmap-status-badge",
             class: `app-badge app-roadmap-status ${entry.status.toLowerCase()}`,
           },
-          entry.status,
+          roadmapStatusLabel(entry.status),
         ),
         laneBadge,
       );
@@ -2533,6 +2539,17 @@
             {
               selector: 'node[status="COMPLETED"]',
               style: { "border-color": "#22c55e", "background-color": "#14532d" },
+            },
+            {
+              // Shipped, but with no execution history to vouch for it — a
+              // dashed slate-green border on the neutral CR fill reads as
+              // "done, unproven" rather than COMPLETED's solid green-on-green.
+              selector: 'node[status="COMPLETED_UNTRACKED"]',
+              style: {
+                "border-color": "#6b9080",
+                "background-color": "#1f2937",
+                "border-style": "dashed",
+              },
             },
             {
               selector: 'node[status="IN_PROGRESS"]',
