@@ -1857,6 +1857,90 @@ describe("an already-recorded release can be REPAIRED, and only on purpose (CR-C
     },
   );
 
+  // ── CR-CRU-084 §S1/§S4/AC7 — the SAME path also carries `packages` ───────
+  //
+  // Spec: docs/changes/CR-CRU-084-release-records-its-packages.md §S4 — the
+  // three shipped releases are corrected "through the CR-081 §S3 repair path
+  // (--repair-provenance) rather than a second mechanism" — and AC7, which
+  // requires that repair to be idempotent.
+  //
+  // Placed HERE, inside the §S3 repair section, on purpose: §S4's whole claim
+  // is that packages need NO new machinery, so the test that proves it must be
+  // the neighbour of the repair tests it reuses — same fixture, same
+  // `runBackfill(repo, base, [REPAIR_FLAG])` entry point, one flag apart from
+  // the ordinary run.
+  //
+  // The declared pair is `packagesFor`, the SAME fixture section F pins the
+  // wire contract with, so the ceremony's declaration and the server's
+  // carriage can never drift into two different answers about what Crucible
+  // ships. (A forward reference to a `const` defined lower in the file: legal
+  // and evaluated by the time any test body runs.)
+  //
+  // RED expectation (measured, 2026-08-23): `emit_release_milestone`
+  // (scripts/release.sh:620-644) appends only `--released-at`, `--crs` and
+  // `--repair-provenance` — `grep -c packages scripts/release.sh` is 0 — and
+  // no client's `milestone` subparser declares `--packages`. So both the
+  // first recording and the repair post nothing about packages, and every
+  // assertion below fails on `undefined`. The crs/releasedAt halves already
+  // pass today, which is the point: they are the non-regression this addition
+  // must not cost.
+
+  test(
+    "AC7/§S4 the repair carries PACKAGES through the SAME path: the ordinary backfill already " +
+      "records each release's declared pair at its OWN tag's version, the opt-in repair leaves " +
+      "them intact while it corrects crs, and a second repair changes neither — identical " +
+      "packages, identical provenance, still exactly one row per tag",
+    async () => {
+      const { repo, base, key, stale } = await staleCrsWorld("repair-carries-packages");
+
+      // FIRST RECORDING (§S1, through the ordinary ceremony run staleCrsWorld
+      // already performed): every release declares its two artifacts, each
+      // stamped with that release's OWN tag — three different versions, so a
+      // single hard-coded pair could not satisfy all three.
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) {
+        expect(stale.get(version)!.packages).toEqual(packagesFor(version));
+      }
+
+      const firstRepair = await runBackfill(repo, base, [REPAIR_FLAG]);
+      expect(firstRepair.output).not.toMatch(/unknown flag/);
+      expect(firstRepair.output).not.toMatch(/unrecognized arguments/);
+      expect(firstRepair.exitCode).toBe(0);
+
+      const once = byVersion(await listReleases(base, key));
+      // NON-VACUITY — the repair really did correct something, so "unchanged"
+      // below is not two copies of an untouched world.
+      expect(sortedCrs(once.get("0.1.0")!.crs)).toEqual([...ANCESTRY_SHIPPED["0.1.0"]!].sort());
+      expect(sortedCrs(once.get("0.1.0")!.crs)).not.toEqual([...STALE_010_CRS].sort());
+
+      // …and it carried the packages with it, per release, still at its tag.
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) {
+        expect(once.get(version)!.packages).toEqual(packagesFor(version));
+        expect(once.get(version)!.packages!.map((p) => p.version)).toEqual([version, version]);
+      }
+
+      const secondRepair = await runBackfill(repo, base, [REPAIR_FLAG]);
+      expect(secondRepair.output).not.toMatch(/unknown flag/);
+      expect(secondRepair.exitCode).toBe(0);
+
+      const twice = await listReleases(base, key);
+      // IDEMPOTENT — a repair is a correction, never a second recording.
+      expect(twice.length).toBe(3);
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) {
+        expect(twice.filter((r) => r.version === version).length).toBe(1);
+      }
+
+      const settled = byVersion(twice);
+      for (const version of Object.keys(ANCESTRY_SHIPPED)) {
+        expect(settled.get(version)!.packages).toEqual(once.get(version)!.packages);
+        // NO PROVENANCE REGRESSION — CR-CRU-080's two fields ride through
+        // untouched, so `packages` was added ALONGSIDE them, not over them.
+        expect(sortedCrs(settled.get(version)!.crs)).toEqual(sortedCrs(once.get(version)!.crs));
+        expect(settled.get(version)!.releasedAt).toBe(ANCESTRY_RELEASED_AT[version]!);
+        expect(settled.get(version)!.commit).toBe(once.get(version)!.commit);
+      }
+    },
+  );
+
   // ── the partition CR-CRU-080 AC10 guarantees survives a repair ────────────
 
   test(
