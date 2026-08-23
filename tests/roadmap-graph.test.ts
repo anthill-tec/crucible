@@ -283,8 +283,14 @@ interface CyStyleRule {
   selector: string;
   style: Record<string, unknown>;
 }
+interface CyCollection {
+  length: number;
+  nonempty: () => boolean;
+  emit: (event: string) => unknown;
+}
 interface CyHandle {
   style: () => { json: () => CyStyleRule[] };
+  $id: (id: string) => CyCollection;
 }
 
 // public/app.js guards its Cytoscape mount on the plain-HTML global
@@ -488,5 +494,83 @@ describe("CR-CRU-083 AC7 — the graph stylesheet styles COMPLETED_UNTRACKED dis
     // Distinct STYLE, not merely a distinct selector — an untracked node must
     // not read as a fully tracked completion.
     expect(JSON.stringify(untracked!.style)).not.toBe(JSON.stringify(completed!.style));
+  });
+});
+
+// ── CR-CRU-083 AC7 — the graph TAP half of the same consumer contract ───────
+//
+// The table row is already status-gated (public/app.js:2391 — swap only for
+// IN_PROGRESS or COMPLETED, everything else inert). The graph node's tap
+// handler (public/app.js:2579-2581) is status-BLIND: `cy.on("tap","node",…)`
+// swaps to Workflow for every node, so tapping a COMPLETED_UNTRACKED (or
+// PENDING) node lands the user on a Workflow tab with nothing to show, while
+// the row for the SAME cr does nothing. AC7 forbids exactly that: no consumer
+// of derived status may fall through to a default. The two surfaces must agree.
+//
+// Driven through the live cytoscape instance the real app.js published —
+// `cy.$id(<cr>).emit("tap")` is cytoscape's own event dispatch, so the
+// delegated `("tap","node")` handler is reached the way a real pointer tap
+// reaches it. Nothing calls the handler directly (that would bypass the gate
+// under test).
+
+function findByText(root: ParentNode, selector: string, text: string): HTMLElement | undefined {
+  return Array.from(root.querySelectorAll(selector)).find(
+    (el) => (el.textContent ?? "").trim() === text,
+  ) as HTMLElement | undefined;
+}
+
+function tabIsOn(name: string): boolean {
+  const tab = findByText(document, '[data-testid="workspace-tab"]', name);
+  return tab !== undefined && tab.classList.contains("on");
+}
+
+describe("CR-CRU-083 AC7 — tapping a graph node is status-gated exactly like the table row", () => {
+  test("tapping a COMPLETED_UNTRACKED node (and a PENDING one) does NOT swap to Workflow; tapping a COMPLETED node does", async () => {
+    await mountApp({
+      pathname: "/p/toggle-key/roadmap",
+      projects: [project({ key: "toggle-key" })],
+      queue: [
+        { cr: "CR-A", title: "Alpha", wave: "5", dependsOn: [], status: "COMPLETED" },
+        {
+          cr: "CR-U",
+          title: "Untracked",
+          wave: "5",
+          dependsOn: ["CR-A"],
+          status: "COMPLETED_UNTRACKED",
+        },
+        { cr: "CR-P", title: "Pending", wave: "6", dependsOn: ["CR-A"], status: "PENDING" },
+      ],
+      cytoscape: true,
+    });
+    document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]')!.click();
+    await settle();
+
+    const cy = roadmapCy();
+    expect(cy).toBeDefined();
+    // GUARD — the three nodes really are in the live graph, so an "inert"
+    // verdict below cannot come from tapping nothing at all.
+    expect(cy!.$id("CR-A").nonempty()).toBe(true);
+    expect(cy!.$id("CR-U").nonempty()).toBe(true);
+    expect(cy!.$id("CR-P").nonempty()).toBe(true);
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+
+    // COMPLETED_UNTRACKED — there is no plan to land on, so the tap is inert.
+    cy!.$id("CR-U").emit("tap");
+    await settle();
+    expect(tabIsOn("Workflow")).toBe(false);
+    expect(tabIsOn("Roadmap")).toBe(true);
+
+    // PENDING — inert for the same reason (the row already is).
+    cy!.$id("CR-P").emit("tap");
+    await settle();
+    expect(tabIsOn("Workflow")).toBe(false);
+    expect(tabIsOn("Roadmap")).toBe(true);
+
+    // COMPLETED — DOES land on Workflow: gating is a distinction, not a dead
+    // surface. Last, because the swap unmounts the graph.
+    cy!.$id("CR-A").emit("tap");
+    await settle();
+    expect(tabIsOn("Workflow")).toBe(true);
   });
 });

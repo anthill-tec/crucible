@@ -712,6 +712,43 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
       return out;
     }
 
+    /** Drives the plan to CLOSED-WITHOUT-MERGE — the ABANDONED plan: the
+     *  cycle is activated then done (a plan cannot close over a non-terminal
+     *  cycle), and the closing PATCH omits `merge` entirely. `merge` is
+     *  OPTIONAL on PATCH …/plans/<id> (src/v2.ts:1480-1491) — the body is
+     *  `{agentId, status:"closed"}` and nothing else — so this is a reachable
+     *  production state, not a contrived one. Mirrors closePlanWithMerge in
+     *  every other respect. */
+    async function closePlanWithoutMerge(
+      key: string,
+      planId: number,
+      cycleId: number,
+    ): Promise<void> {
+      const act = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+        agentId: ORCH,
+        status: "active",
+      });
+      expect(act.status).toBe(200);
+      const done = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+        agentId: ORCH,
+        status: "done",
+      });
+      expect(done.status).toBe(200);
+      const close = await patchJson(plansPath(key, `/${planId}`), {
+        agentId: ORCH,
+        status: "closed",
+      });
+      expect(close.status).toBe(200);
+      // PROVE the plan really is closed WITHOUT a merge — otherwise every
+      // assertion below would be measuring a plan that never closed, or one
+      // that closed with a merge and is legitimately COMPLETED.
+      const plans = await plansFor(key);
+      const row = plans.find((p) => p.planId === planId);
+      expect(row).toBeDefined();
+      expect(row!.status).toBe("closed");
+      expect(row!.merge).toBeUndefined();
+    }
+
     test(
       "AC1 a queued cr with NO plan that a recorded release's crs names derives " +
         "COMPLETED_UNTRACKED and carries NO planId — the plan-only derivation answers PENDING, " +
@@ -974,6 +1011,131 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         expect(shipped.status).toBe("COMPLETED_UNTRACKED");
         // And the genuinely unstarted cr is still PENDING (nothing drifted).
         expect(after[UNSTARTED_CR]).toBe("PENDING/-");
+      },
+    );
+
+    // ── AC4 (amended) / AC9 — the ABANDONED-plan backwards path ────────────
+    //
+    // The gap the VERIFY of cycle 253 measured. `deriveQueueStatus`
+    // (src/store.ts:3095) consults `shipped` ONLY on the zero-plans path; the
+    // fallthrough — plans exist, none open, none closed-with-merge — returns
+    // PENDING without ever asking whether a release shipped the cr. Because
+    // `merge` is OPTIONAL on PATCH …/plans/<id> (src/v2.ts:1480-1491), closing
+    // a plan with no merge body is a plain production route call, so a shipped
+    // cr that reads COMPLETED_UNTRACKED can be walked BACKWARDS to PENDING by
+    // filing a plan and abandoning it. That is exactly the contradiction AC9
+    // forbids ("an implemented cr never reads back PENDING").
+    //
+    // AC4 as amended by this CR settles the answer: an abandoned plan is not
+    // evidence of work and does NOT un-ship a release — for a cr in some
+    // release's `crs` whose plans are all closed-or-aborted WITHOUT a merge
+    // the answer stays COMPLETED_UNTRACKED. Open plans and merged plans keep
+    // their current answers untouched.
+    test(
+      "AC4/AC9 an ABANDONED plan does not un-ship a release: a shipped cr walks " +
+        "COMPLETED_UNTRACKED → IN_PROGRESS (plan filed) → back to COMPLETED_UNTRACKED once that " +
+        "plan closes with NO merge commit — never backwards to PENDING",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-abandoned-plan-shipped");
+
+        expect([200, 202]).toContain(
+          (
+            await postQueue(key, [
+              { cr: SHIPPED_CR, wave: 1, dependsOn: [] },
+              { cr: UNSTARTED_CR, wave: 2, dependsOn: [] },
+            ])
+          ).status,
+        );
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+
+        // GUARD — release membership genuinely drives this cr before any plan
+        // exists, so the final assertion is a real "the plan did not un-ship
+        // it" claim and not a value that was never there.
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("COMPLETED_UNTRACKED");
+        }
+
+        // An open plan still outranks membership (AC4's untouched half).
+        const { planId, cycleId } = await filePlan(key, SHIPPED_CR);
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("IN_PROGRESS");
+          expect(e.planId).toBe(planId);
+        }
+
+        // The plan is ABANDONED — closed through the production route with no
+        // `merge` in the body. The release that shipped this cr is unchanged.
+        await closePlanWithoutMerge(key, planId, cycleId);
+
+        const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+        // The invariant, stated as AC9 words it…
+        expect(e.status).not.toBe("PENDING");
+        // …and the value AC4 (amended) names.
+        expect(e.status).toBe("COMPLETED_UNTRACKED");
+        // Nothing else drifted: the unshipped, unplanned sibling is untouched.
+        expect(findEntry((await getQueue(key)).entries, UNSTARTED_CR).status).toBe("PENDING");
+      },
+    );
+
+    test(
+      "AC4 boundary — the fix is membership-gated, not a blanket rewrite: a cr in NO release's " +
+        "crs whose only plan closed WITHOUT a merge still reads PENDING, and still carries that " +
+        "trailing plan's id",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-abandoned-plan-unshipped");
+
+        expect([200, 202]).toContain(
+          (await postQueue(key, [{ cr: UNSTARTED_CR, wave: 1, dependsOn: [] }])).status,
+        );
+        // A release EXISTS but names a different cr — so PENDING below is a
+        // membership decision, not "no releases were ever recorded".
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+
+        const { planId, cycleId } = await filePlan(key, UNSTARTED_CR);
+        expect(findEntry((await getQueue(key)).entries, UNSTARTED_CR).status).toBe("IN_PROGRESS");
+
+        await closePlanWithoutMerge(key, planId, cycleId);
+
+        const e = findEntry((await getQueue(key)).entries, UNSTARTED_CR);
+        expect(e.status).toBe("PENDING");
+        expect(e.status).not.toBe("COMPLETED_UNTRACKED");
+        // The trailing plan link survives — an abandoned plan is still the
+        // plan record this cr has, and the wire keeps pointing at it.
+        expect(e.planId).toBe(planId);
+      },
+    );
+
+    test(
+      "AC5/§S2 wire shape — a shipped cr whose plan was abandoned carries NO planId: " +
+        "COMPLETED_UNTRACKED omits the key entirely (QueueEntry, src/types.ts), so no consumer " +
+        "can link an untracked completion to a plan that never delivered it",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-abandoned-plan-no-planid");
+
+        expect([200, 202]).toContain(
+          (await postQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
+        );
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+
+        const { planId, cycleId } = await filePlan(key, SHIPPED_CR);
+        await closePlanWithoutMerge(key, planId, cycleId);
+
+        const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+        expect(e.status).toBe("COMPLETED_UNTRACKED");
+        // The KEY is absent, not merely undefined — `planId is present only
+        // when a plan exists, so a COMPLETED_UNTRACKED entry never carries
+        // one` (src/types.ts QueueEntry doc), pinned as written.
+        expect("planId" in e).toBe(false);
+        // AC5 — and nothing was synthesised or deleted to make that tidy: the
+        // abandoned plan row is still there, exactly one of it.
+        const plans = await plansFor(key, SHIPPED_CR);
+        expect(plans.length).toBe(1);
+        expect(plans[0]!.planId).toBe(planId);
+        expect(plans[0]!.status).toBe("closed");
       },
     );
   });
