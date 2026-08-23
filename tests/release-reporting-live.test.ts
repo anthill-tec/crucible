@@ -622,6 +622,11 @@ describe("the ceremony declares the delivered pair WITHOUT consulting CI or a re
     "plan_merge_map",
     "queue_read",
     "report_unplaceable_crs",
+    // `emit_release_milestone`'s own two callees (scripts/release.sh:649-650):
+    // the identity it posts under and the path it resolves the client from are
+    // on the reporting path as much as anything that computes provenance.
+    "ceremony_agent",
+    "repo_root",
     ...bashFunctions(SOURCE).filter((n) => /pack/i.test(n)),
   ];
 

@@ -51,12 +51,28 @@ while `test_a_repair_with_nothing_at_all_to_write_is_still_refused` PASSES --
 the CR-CRU-086 behaviour this addition must NOT cost, proving the harness
 drives the real `cmd_milestone` code path rather than a stub.
 
+C3 VERIFY addition (M2, measured 2026-08-23 against the C2 GREEN tree): a TENTH
+test, `test_a_repair_offering_only_an_empty_packages_is_refused_too`, pins the
+other half of "a repair with NOTHING to write". The guard narrowed in C1/C2
+reads `if repair and crs is not None and not crs and not packages`
+(`clients/_crucible_axi.py:1806`), so it can only fire when a `--crs` was
+given. The symmetric shape -- `--repair-provenance --packages ""` with NO
+`--crs` -- offers a set, derives nothing from it, and slips PAST the guard: it
+posts, the server's `offeredNothing` early return (`src/store.ts:1831-1835`)
+declines to write anything, the client exits 0, and
+`cmd_backfill_releases` (`scripts/release.sh:742-744`) tallies it as RECORDED.
+That is the CR-CRU-086 silence class again, one field over: a reported write
+that never happened. So this test FAILS today (the post reaches the wire and
+the return code is 0, not `EXIT_REPAIR_REFUSED`) and the other nine stay green.
+
 Invocation:
     python3 -m unittest tests.client.test_cr084_release_packages -v
 """
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import unittest
 from pathlib import Path
 
@@ -320,6 +336,57 @@ class CmdMilestoneForwardsPackagesTest(unittest.TestCase):
             "a repair with an empty crs and no packages must post NOTHING "
             "(CR-CRU-086 §S1/§S2)")
         self.assertEqual(rc, AXI.EXIT_REPAIR_REFUSED)
+
+    def test_a_repair_offering_only_an_empty_packages_is_refused_too(self):
+        """M2 -- the SYMMETRIC shape of the same rule, and the one the guard
+        cannot see.
+
+        `test_a_repair_with_nothing_at_all_to_write_is_still_refused` above
+        covers "an empty crs and no packages". This is the mirror image: a set
+        WAS offered -- `--packages ""` -- nothing was derivable from it, and no
+        `--crs` was given at all, so `crs is not None` is FALSE and the refusal
+        never triggers. The post travels, the server's per-record guard
+        (`offeredNothing`, src/store.ts:1831-1835) writes nothing and answers
+        `changed:false`, and the client returns 0 -- which the ceremony's
+        backfill counts as a RECORDED release. A repair that wrote nothing must
+        never be tallied as a write; that conflation is the exact defect
+        CR-CRU-086 exists to forbid, and `--repair-provenance --packages ""` is
+        operator-reachable (as is an all-malformed `--packages`, which the route
+        filters to `[]`).
+
+        Asserted symmetrically with the crs shape: nothing posted, the refusal
+        exit code, and -- because silence is what made the original defect
+        destructive -- the release NAMED on the interactive channel plus the
+        structured warning a machine caller reads."""
+        rec = _RecordingOps(queue_crs=[])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = AXI.cmd_milestone(
+                _args(packages="", repair_provenance=True), "/fake/dir", rec.ops)
+        self.assertEqual(
+            rec.milestone_calls, [],
+            "a repair that offered a set and derived NOTHING from it must post "
+            "NOTHING -- an empty packages beside an absent crs has nothing to "
+            "write, exactly like an empty crs beside an absent packages")
+        self.assertEqual(
+            rc, AXI.EXIT_REPAIR_REFUSED,
+            "the refusal exit code is what keeps the ceremony from tallying an "
+            "unwritten repair as a recorded release: 0 would report a write "
+            "that never happened (scripts/release.sh cmd_backfill_releases)")
+        self.assertIn(
+            "REFUSED", err.getvalue(),
+            "the refusal must be STATED on the interactive channel, not left "
+            "as a bare exit code (CR-CRU-086 §S2)")
+        self.assertIn(
+            VERSION, err.getvalue(),
+            "…and it must NAME the release it refused, per-release")
+        codes = [w.get("code")
+                 for (_verb, _ok, _data, warnings) in rec.emits
+                 for w in (warnings or [])]
+        self.assertEqual(
+            codes, ["repair-refused"],
+            "a machine caller must see the structured refusal too -- the same "
+            "warning the crs shape emits")
 
 
 if __name__ == "__main__":

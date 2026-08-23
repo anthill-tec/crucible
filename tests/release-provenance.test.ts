@@ -3358,21 +3358,32 @@ describe("a release records the PACKAGES it delivered, on the wire (CR-CRU-084 �
 
   test(
     "AC7 + CR-CRU-086, arm (b) — THE PER-FIELD CLAIM: a repair carrying a NON-EMPTY packages " +
-      "and an EMPTY crs still APPLIES the packages while leaving the stored crs (and date) " +
-      "alone, so a packages-only correction is never dropped by a guard about `crs`",
+      "and an EMPTY crs still APPLIES the packages — and the corrected releasedAt that arrived " +
+      "with them — while leaving the stored crs alone, so a packages-only correction is never " +
+      "dropped by a guard about `crs`",
     async () => {
       boot();
       const key = await createProject("packages-guard-is-per-field");
       const commit = "b".repeat(40);
 
-      // The measured live shape of `0.1.0`: 58 CRs, a real ship date, and — as
-      // every release recorded before this CR — no packages at all.
+      // The measured live shape of `0.1.0`: 58 CRs, no packages at all (as
+      // every release recorded before this CR), and — CR-CRU-081 §S3's own
+      // motivating defect — a `releasedAt` stamped at the INGEST minute
+      // rather than at the tag's own commit date.
+      //
+      // That stored date is deliberately WRONG, and deliberately different
+      // from the one the repair posts below: cell 6b of the write rule (a
+      // `releasedAt` DOES land when `crs` derived empty but `packages` did
+      // not — the narrowing of CR-CRU-086's "releasedAt included" clause to
+      // "only when EVERY offered set was empty") is unobservable if the
+      // repair re-posts the value already stored. Then "the date moved" and
+      // "the whole record was left alone" read identically.
       expect(
         (
           await postRelease(key, {
             label: "0.1.0",
             commit,
-            releasedAt: ANCESTRY_RELEASED_AT["0.1.0"]!,
+            releasedAt: INGEST_MINUTE_RELEASED_AT,
             crs: LIVE_010_CRS,
           })
         ).status,
@@ -3381,6 +3392,9 @@ describe("a release records the PACKAGES it delivered, on the wire (CR-CRU-084 �
       const before = byVersion(await listReleases(base, key)).get("0.1.0")!;
       expect(before.crs!.length).toBe(58);
       expect("packages" in before).toBe(false);
+      // …and the stored date really is the wrong one, so the assertion below
+      // discriminates a WRITE from a no-op instead of restating the fixture.
+      expect(before.releasedAt).toBe(INGEST_MINUTE_RELEASED_AT);
 
       // THE PACKAGES-ONLY REPAIR, in the §S4 backfill's real shape for 0.1.0:
       // the ONE package that release actually put on a registry (PyPI; its npm
@@ -3407,13 +3421,91 @@ describe("a release records the PACKAGES it delivered, on the wire (CR-CRU-084 �
       expect(after.crs!.length).toBe(58);
       expect(sortedCrs(after.crs)).toEqual([...LIVE_010_CRS].sort());
       expect(after.crs).not.toEqual([]);
-      // The date and the identity survived with them.
+      // (b3) the DATE that arrived with the applied half LANDED — the repair
+      // offered one derivable set, so this is a write, not the whole-record
+      // abort CR-CRU-086 reserves for a repair that derived nothing at all.
       expect(after.releasedAt).toBe(ANCESTRY_RELEASED_AT["0.1.0"]);
+      expect(after.releasedAt).not.toBe(INGEST_MINUTE_RELEASED_AT);
+      // …and the identity survived with it.
       expect(after.commit).toBe(commit);
       expect(after.timestamp).toBe(before.timestamp);
       // And the route reported a WRITE, not the whole-repair abort.
       expect(repaired.status).toBe(201);
       expect(repaired.changed).toBe(true);
+    },
+  );
+
+  test(
+    "AC7 + CR-CRU-086, arm (c) — OFFERED A SET, DERIVED NOTHING: a repair whose ONLY offered " +
+      "set is an EMPTY packages (no crs on the post at all) leaves the WHOLE record standing — " +
+      "the stored packages, the stored crs and the stored releasedAt, even though the post " +
+      "carried a DIFFERENT date — and answers `changed:false`, so a caller can never tally a " +
+      "write that never happened",
+    async () => {
+      boot();
+      const key = await createProject("packages-guard-offered-nothing");
+      const commit = "c".repeat(40);
+      const shipped = ["CR-CRU-060", "CR-CRU-061"];
+      const stored = packagesFor("0.1.2");
+
+      expect(
+        (
+          await postRelease(key, {
+            label: "0.1.2",
+            commit,
+            releasedAt: ANCESTRY_RELEASED_AT["0.1.2"]!,
+            crs: shipped,
+            packages: stored,
+          })
+        ).status,
+      ).toBe(201);
+
+      // PRE-STATE — all three provenance fields are stored and non-empty, so
+      // "untouched" below cannot pass vacuously.
+      const before = await onlyRelease(key);
+      expect(before.releasedAt).toBe(ANCESTRY_RELEASED_AT["0.1.2"]!);
+      expect(sortedCrs(before.crs)).toEqual([...shipped].sort());
+      expect(before.packages).toEqual(stored);
+
+      // The repair offers exactly ONE set — `packages` — and derives NOTHING
+      // from it, while `crs` is ABSENT rather than empty: the operator-reachable
+      // shape `--repair-provenance --packages ""` with no `--crs`. Arm (a)
+      // covers "packages empty BESIDE a non-empty crs"; this is the cell where
+      // the emptiness is all the repair brought.
+      //
+      // The date it carries DIFFERS from the stored one, which is what makes
+      // "the whole record stood still" observable rather than a re-post of what
+      // is already there — a repair that wrote nothing must not move the date
+      // either, because a date is only as trustworthy as the derivation that
+      // arrived with it.
+      const repaired = await postRelease(key, {
+        label: "0.1.2",
+        commit,
+        releasedAt: INGEST_MINUTE_RELEASED_AT,
+        packages: [],
+        repair: true,
+      });
+
+      const after = await onlyRelease(key);
+      // THE DATE — asserted first, because a moved date on a repair that wrote
+      // nothing is exactly the half-rewrite this cell forbids.
+      expect(after.releasedAt).toBe(ANCESTRY_RELEASED_AT["0.1.2"]!);
+      expect(after.releasedAt).not.toBe(INGEST_MINUTE_RELEASED_AT);
+      // …and both sets with it, positively and negatively.
+      expect(after.packages).toEqual(stored);
+      expect(after.packages).not.toEqual([]);
+      expect(sortedCrs(after.crs)).toEqual([...shipped].sort());
+      expect(after.crs).not.toEqual([]);
+      // WROTE NOTHING, and SAID so on the wire: `changed:false` is the only
+      // thing standing between this shape and a ceremony that reports a
+      // recorded release (scripts/release.sh's backfill tally) for a post that
+      // changed not one byte.
+      expect(repaired.changed).toBe(false);
+      expect(repaired.status).toBe(200);
+      // Not a second recording either — `onlyRelease` pinned the count, and
+      // the row is the SAME row.
+      expect(after.commit).toBe(commit);
+      expect(after.timestamp).toBe(before.timestamp);
     },
   );
 
