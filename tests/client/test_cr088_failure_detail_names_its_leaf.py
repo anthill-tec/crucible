@@ -1,25 +1,27 @@
-"""CR-CRU-088 C1 RED -- a failure detail block belongs to the test its ECHO NAMES.
+"""CR-CRU-088 C1 -- the SHIPPED rule: a failure detail block belongs to the
+test its ECHO NAMES.
 
 Per docs/changes/CR-CRU-088-failure-detail-marries-the-wrong-leaf.md, §S1 (the
 measured discriminator), §S2 (the withheld guard becomes real), §S3, AC1-AC7.
 
-THIS IS A RED MODULE. Some tests below FAIL against the production code as it
-ships; that is the point. `_parse_console_failures`
-(clients/bun-crucible.py:587-631) marries a pending `error:` block to the NEXT
-`(fail)` line by POSITION, so a block that arrives after its own leaf's fail
-line -- a leaked async throw's aftermath -- is handed to a later leaf that never
-produced it. Crucible then states a falsehood about which test failed and why.
+THIS MODULE SPECIFIES THE SHIPPED RULE, and every test below passes against it.
+The fix lives in `clients/bun-crucible.py::_parse_console_failures` (lines
+606-679) and landed in this same change, per CR-CRU-088 §S1. BEFORE it, the
+parser married a pending `error:` block to the NEXT `(fail)` line by POSITION,
+so a block that arrived after its own leaf's fail line -- a leaked async
+throw's aftermath -- was handed to a later leaf that never produced it, and
+Crucible stated a falsehood about which test failed and why.
 
 WHY A SIBLING MODULE, NOT AN EXTENSION OF THE CR-087 FILE.
-tests/client/test_cr087_console_failure_attribution.py is a BACKFILL module: its
-docstring declares "every fixture below passes against the production code as it
-already ships", declares the forward-marrying guard "DELIBERATELY ABSENT", and
-carries `test_characterisation_leaked_async_throw_bleeds_forward_onto_next_leaf`,
-which asserts TODAY'S WRONG ANSWER on purpose and must stay GREEN until the
-production fix lands. Putting a RED specification of the opposite behaviour in
-that file would make one module simultaneously assert X and not-X and would make
-its own docstring false. CR-088 AC5 rewrites that file in the same commit as the
-fix; until then the two concerns stay in separate modules.
+This module is the §S1 SPECIFICATION of the attribution rule, stated over six
+verbatim bun captures ((a)-(f) below): the legitimate consecutive and nested
+shapes, the leaked-async shapes the rule must refuse, and the echoless fallback.
+The sibling tests/client/test_cr087_console_failure_attribution.py holds the
+ordering fixtures and the real-bytes forward-marrying guard
+(`ForwardMarryingGuardTest`), which was flipped from a characterisation of the
+old defect into a real guard in the same commit that shipped the fix. The two
+concerns stay in separate modules: the rule's specification here, the ordering
+fixtures and the real-capture regression guard there.
 
 THE RULE UNDER TEST (§S1, measured on bun 1.3.14 / 0d9b296a, 2026-08-23).
 bun prints the enclosing `N | test("<name>", …` source line above the caret for
@@ -29,11 +31,11 @@ body. So the block carries its PRODUCER's identity:
   - echo names X and the following `(fail)` line is Y  -> the block is X's
     AFTERMATH: it marries to NOBODY. X already carries its own message, so the
     aftermath is dropped rather than overwriting it;
-  - no `test("…"` line in the echo -> fall back to today's positional rule.
+  - no `test("…"` line in the echo -> fall back to the positional rule.
 
-WHERE §S1 IS UNDER-SPECIFIED FOR SHAPES MEASURED HERE. Both gaps are DESIGN
-decisions for the GREEN phase; this module only records the measurement and, for
-GAP 1, asserts only the outcome both readings agree on.
+WHERE §S1 IS UNDER-SPECIFIED FOR SHAPES MEASURED HERE. Both gaps were DESIGN
+decisions, settled by the shipped parser; this module records the measurement
+and, for GAP 1, asserts only the outcome both readings agree on.
 
   GAP 1 -- WHICH `test("…")` LINE. §S1 says "the echo names test X" as if the
   echo named exactly one test. It does not. bun's echo window is a source
@@ -44,8 +46,9 @@ GAP 1, asserts only the outcome both readings agree on.
   such line, would read beta's own prelude as alpha's aftermath and DROP it --
   breaking AC2, the common case. The reading that matches every fixture here is
   "the LAST `test("…")` line at or above the caret", i.e. the innermost
-  enclosing test. §S1 does not say this. Naming the rule is not this module's
-  call.
+  enclosing test. §S1 does not say this; the shipped parser does -- it keeps
+  the LAST declaration echoed before the caret (`_ECHO_TEST_DECL` /
+  `_ECHO_CARET`, clients/bun-crucible.py:590-597).
 
   GAP 2 -- BARE ECHO NAME vs COMPOSED FAIL-LINE KEY. Under nested describes the
   echo carries the BARE test name (`test("epsilon leaks after failing"`) while
@@ -54,7 +57,7 @@ GAP 1, asserts only the outcome both readings agree on.
   line is X" does not say which side is normalised for the comparison. Measured:
   they are only comparable on the fail line's TRAILING `" > "` segment. This
   matters doubly because `_parse_console_failures` indexes BOTH the composed key
-  and the bare trailing segment (clients/bun-crucible.py:617-621), so a
+  and the bare trailing segment (clients/bun-crucible.py:656-657), so a
   mis-attribution under nesting poisons TWO keys.
 
 WIRE FORMS (AC3). Every gate runs over BOTH legal result-line families
@@ -347,8 +350,8 @@ LEAK_NESTED = {"plain": LEAK_NESTED_PLAIN, "ansi": LEAK_NESTED_ANSI}
 # Fixture `d.test.ts` — both failures are thrown inside a shared helper defined
 # at the top of the file, so bun's echo window shows the HELPER's source only;
 # no `test("…")` line appears in either block. §S1's third clause says such a
-# block falls back to today's positional rule, so both leaves must keep the
-# message they get today. Distinct messages (`helper boom for 5` / `… 10`) and
+# block falls back to the positional rule, so both leaves keep the message
+# that rule gives them. Distinct messages (`helper boom for 5` / `… 10`) and
 # distinct trace call-sites (`:11:3` / `:15:3`) make the pairing checkable.
 
 ECHOLESS_HELPER_PLAIN = """bun test v1.3.14 (0d9b296a)
@@ -584,7 +587,8 @@ class _ParserCase(unittest.TestCase):
 class AftermathDoesNotMarryForwardTest(_ParserCase):
     """AC1 -- a block whose echo names test X never marries onto a later leaf Y.
 
-    RED: both tests here fail today, because the parser hands X's aftermath to Y.
+    Both assertions FAILED before the §S1 fix -- the parser handed X's
+    aftermath to Y -- and now pin the shipped behaviour.
     """
 
     def test_ac1_oneliner_leak_aftermath_is_not_handed_to_the_next_leaf(self):
@@ -634,7 +638,7 @@ class CommonCaseNonRegressionTest(_ParserCase):
     message on every leaf but the first of every red suite. It must be
     unmissable.
 
-    GREEN today; it must STAY green through the fix."""
+    Green before the §S1 fix and green after it; it must STAY green."""
 
     def test_ac2_two_consecutive_failures_each_keep_their_own_message(self):
         for wire in WIRE_FORMS:
@@ -674,10 +678,11 @@ class CommonCaseNonRegressionTest(_ParserCase):
 
 class EcholessFallbackTest(_ParserCase):
     """§S1's third clause -- a block with no `test("…")` line in its echo still
-    marries POSITIONALLY, so shapes the echo does not cover keep exactly today's
-    behaviour. Asserted so the fallback is a CONTRACT rather than an accident.
+    marries POSITIONALLY, so shapes the echo does not cover keep exactly the
+    pre-CR-088 positional behaviour. Asserted so the fallback is a CONTRACT
+    rather than an accident.
 
-    GREEN today; it must STAY green through the fix."""
+    Green before the §S1 fix and green after it; it must STAY green."""
 
     def test_echoless_block_still_marries_to_the_following_leaf(self):
         for wire in WIRE_FORMS:
@@ -719,13 +724,14 @@ class NestedDescribeAttributionTest(_ParserCase):
     """The rule under nested describes -- the shape most likely to break a naive
     name-matching implementation, because the echo names the BARE test while the
     `(fail)` line carries the COMPOSED `suite > name` key, and
-    `_parse_console_failures` indexes BOTH (clients/bun-crucible.py:617-621).
+    `_parse_console_failures` indexes BOTH (clients/bun-crucible.py:656-657).
     Decidable from bun's bytes: measured, the echo's bare name and the fail
     line's trailing segment line up exactly (see §S1 GAP 2 for what §S1 leaves
     open)."""
 
     def test_nested_aftermath_is_not_handed_to_the_next_nested_leaf(self):
-        """RED. Today the nested aftermath poisons BOTH of zeta's keys."""
+        """Before the §S1 fix the nested aftermath poisoned BOTH of zeta's
+        keys; now neither carries it."""
         for wire in WIRE_FORMS:
             with self.subTest(wire=wire):
                 details = self.parse(LEAK_NESTED, wire)
@@ -756,7 +762,7 @@ class NestedDescribeAttributionTest(_ParserCase):
         """AC2 under nesting: the block IS the following nested leaf's own
         prelude, so it must still marry -- on both indexed keys.
 
-        GREEN today; it must STAY green through the fix."""
+        Green before the §S1 fix and green after it; it must STAY green."""
         for wire in WIRE_FORMS:
             with self.subTest(wire=wire):
                 details = self.parse(LEGIT_NESTED, wire)
