@@ -16,9 +16,9 @@ But `PENDING` carries two incompatible meanings, and the view cannot tell them a
 1. this CR has not been started;
 2. this CR **is finished**, but was executed before plan tracking existed, so no plan row exists.
 
-On the live board that produced a visibly wrong roadmap: **`CR-CRU-001`–`007` and `010` all
+On the live board that produced a visibly wrong roadmap: **`CR-CRU-001`–`007`, `010` and `016` all
 rendered `PENDING`** while in reality they are long finished — the earliest work, done before the
-plan mechanism was in place. Eight CRs of shipped work presented as not-yet-started, which is what
+plan mechanism was in place. Nine CRs of shipped work presented as not-yet-started, which is what
 the user identified when calling the loaded roadmap fundamentally wrong.
 
 It is self-contradictory, not merely untidy: those CRs are in `0.1.0`'s `crs`, so the same board
@@ -98,12 +98,17 @@ empty states, and **no** synthetic plan or cycle rows are created to make the de
 - **AC2** — a CR with **no plan and no release membership** derives `PENDING`. This is the settled
   resolution of the two-meaning problem: `PENDING` carries exactly one meaning — *Crucible holds no
   evidence for this CR* — so the genuinely unstarted case is unchanged. Measured class:
-  `CR-CRU-015`, `018`, `022`, `075`, `077`, `078`, `079`, `082`, `083`, `084`, `085`.
+  `CR-CRU-015`, `018`, `022`, `075`, `077`, `078`, `079`, `082`, `083`, `084`, `085` (measured before
+  this CR filed its own plan; `083` reads `IN_PROGRESS` while it executes).
 - **AC3** — a CR completed with full plan tracking is distinguishable from one completed without it:
   `COMPLETED` and `COMPLETED_UNTRACKED` are distinct wire values with distinct badges; the two never
   collapse into one.
-- **AC4** — existing derivations are untouched where plans exist: open plan → `IN_PROGRESS`, closed
-  plan + merge → `COMPLETED`. A plan record always outranks release membership.
+- **AC4** — a plan record outranks release membership wherever the plan is evidence of work: an open
+  plan → `IN_PROGRESS`, a plan closed WITH a merge → `COMPLETED`. Both are untouched by this CR. An
+  **abandoned** plan is not such evidence and does not un-ship a release: for a cr in some release's
+  `crs` whose plans are all closed-or-aborted WITHOUT a merge, the answer stays
+  `COMPLETED_UNTRACKED` (this is the AC9 boundary — the earlier unqualified wording "a plan record
+  always outranks release membership" contradicted AC9 and is corrected here).
 - **AC5** — no synthetic plan or cycle row is created to satisfy any of the above.
 - **AC6** — re-registering the queue changes no derived status (status is not queue data), so the
   fix survives a full replace.
