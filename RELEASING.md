@@ -117,7 +117,11 @@ then `engines.bun`, then `latest` — so all four `setup-bun` steps in
 `engines.bun` (`>=1.2`) is a **different fact**: the consumer-facing compatibility
 **floor** for anyone installing this package. It stays a range. Do not collapse either
 field into the other — tightening `engines.bun` to an exact version silently locks out
-consumers on 1.2.
+consumers on 1.2. Note the asymmetry this creates: **running this repo's suite requires
+EXACTLY the pinned bun**, because `tests/suite-integrity.test.ts` compares the
+`packageManager` declaration against the live `Bun.version` — so `engines.bun` is the
+consumer floor, **not** a supported development range, and a local bun anywhere else in
+that range reds the suite.
 
 **To bump bun:** edit that one field, then re-run the client-format suites —
 `tests/clients-bun-crucible.test.ts` and `tests/suite-integrity.test.ts`. Those parse

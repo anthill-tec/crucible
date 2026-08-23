@@ -1,6 +1,6 @@
-"""CR-CRU-087 C2 RED -- `_parse_console_failures` leaf ATTRIBUTION, both orderings.
+"""CR-CRU-087 C2 BACKFILL -- `_parse_console_failures` leaf ATTRIBUTION, both orderings.
 
-Per docs/changes/CR-CRU-087-ci-bun-is-unpinned.md §S2/§S3, AC3/AC4.
+Per docs/changes/CR-CRU-087-ci-bun-is-unpinned.md §S2/§S3, AC3.
 
 WHY THIS FILE EXISTS. `tests/clients-bun-crucible.test.ts` proves §S2c marrying
 end-to-end (real client, real server, real `bun test`), but it can only observe
@@ -22,7 +22,7 @@ from the installed `bun test` binary (1.3.14, 0d9b296a) piped to a file, and
 REAL_LEAKED_ASYNC_ERROR_LOG_PLAIN is a verbatim such capture (only the scratch
 directory in the two stack-trace paths was normalised).
 
-MEASURED DEFECT (AC4, the RED of this cycle). `_parse_console_failures` resets
+MEASURED DEFECT (out of scope for CR-087). `_parse_console_failures` resets
 its block on each result line and marries a pending `error:` block to the NEXT
 `(fail)` line. So a detail block that arrives AFTER its own leaf's fail line and
 BEFORE the next leaf's fail line is married onto that LATER leaf -- a leaf that
@@ -33,8 +33,20 @@ tests/clients-bun-crucible.test.ts never caught it because its only
 after-the-fail-line detail belongs to the LAST test in the file, so there is no
 later leaf to bleed onto.
 
-RED phase: this file asserts the FIX. The AC4 tests fail today for exactly the
-reason above. No production code is touched by this file.
+BACKFILL phase, NOT a RED. Every fixture below passes against the production
+code as it already ships -- they are characterisations of existing behaviour,
+not a specification of a fix. Their value is proven by MUTATION rather than by
+a red run: disabling the `_RESULT_BOUNDARY_LINE` branch's block reset in
+`clients/bun-crucible.py` fails 2 of the 4 fixtures.
+
+A FORWARD-MARRYING GUARD IS DELIBERATELY ABSENT. The defect above is UNFIXED
+-- telling "alpha's aftermath" from "beta's prelude" is a design question, the
+two shapes being positionally identical in bun's stream -- so asserting the
+guard here would commit a red test. Instead the defect is PINNED as a
+characterisation (see `test_characterisation_...` below) and carried in the
+deferred register in docs/changes/README.md as a candidate CR.
+
+No production code is touched by this file.
 
 Module-loading convention copied from the sibling bun-client harnesses
 (test_bun_crucible_axi_conventions.py et al): load `clients/bun-crucible.py` by
@@ -113,8 +125,11 @@ def _error_block(message, wire, at="/tmp/bun-fixture/sample.test.ts:2:107"):
 #   });
 # Only the scratch directory in the two `at <anonymous>` paths was normalised.
 # `error: leaked boom` is ALPHA's leaked async throw, printed AFTER alpha's
-# `(fail)` line and BEFORE beta's -- the exact shape AC4 forbids marrying
-# forward. The ANSI capture of the same run parses identically.
+# `(fail)` line and BEFORE beta's -- the exact shape the parser mis-marries
+# FORWARD onto beta. That mis-attribution is an UNFIXED, out-of-scope defect,
+# so this capture is the real-bytes reproducer behind the characterisation test
+# at the bottom of this file. The ANSI capture of the same run parses
+# identically.
 REAL_LEAKED_ASYNC_ERROR_LOG_PLAIN = """bun test v1.3.14 (0d9b296a)
 
 unc.test.ts:
@@ -218,7 +233,8 @@ class ConsoleFailureOrderingFixturesTest(unittest.TestCase):
     def test_ac3_a_result_boundary_line_ends_a_pending_block(self):
         """`(pass)`/`(skip)`/`(todo)` (and their ANSI glyphs) end the block, so
         an orphaned detail cannot cross a finished test. Already true today --
-        pinned in both wire forms so it stays true under the AC4 fix."""
+        pinned in both wire forms so a future forward-marrying fix cannot
+        regress it."""
         for wire in WIRE_FORMS:
             with self.subTest(wire=wire):
                 log = "\n".join([
@@ -234,3 +250,41 @@ class ConsoleFailureOrderingFixturesTest(unittest.TestCase):
                     f"a boundary result line must discard the pending block "
                     f"({wire} wire form); got {details!r}",
                 )
+
+
+class ForwardMarryingDefectCharacterisationTest(unittest.TestCase):
+    """CHARACTERISATION, NOT A SPECIFICATION. This pins the DOCUMENTED DEFECT
+    described in the module docstring, on the real bun 1.3.14 bytes captured in
+    REAL_LEAKED_ASYNC_ERROR_LOG_PLAIN, so the mis-attribution is a measured,
+    executable fact rather than prose.
+
+    In plain words: what this test asserts is WRONG BEHAVIOUR that the parser
+    exhibits today. It is here to stop the defect being silently forgotten and
+    to give the eventual fix a tripwire -- when the forward-marrying bug IS
+    fixed, this test WILL FAIL, and that failure is the fix working. Whoever
+    fixes it must delete or invert this test DELIBERATELY, not paper over it.
+    See the deferred register in docs/changes/README.md."""
+
+    def setUp(self):
+        self.module = _load_client_module()
+
+    def test_characterisation_leaked_async_throw_bleeds_forward_onto_next_leaf(self):
+        details = self.module._parse_console_failures(
+            REAL_LEAKED_ASYNC_ERROR_LOG_PLAIN)
+        # Alpha's OWN assertion detail is attributed correctly -- that half works.
+        self.assertEqual(
+            details.get("alpha fails and leaks", {}).get("message"),
+            "expect(received).toBe(expected)",
+            f"alpha's own preceding block must stay its own; got {details!r}",
+        )
+        # DEFECT: `leaked boom` is ALPHA's async throw, printed after alpha's
+        # `(fail)` line. beta never produced it, yet beta is what carries it --
+        # and this reaches the INGESTED tree, not just the parser's return value.
+        self.assertEqual(
+            details.get("beta fails", {}).get("message"),
+            "leaked boom",
+            f"characterisation drift: the forward-marrying defect no longer "
+            f"reproduces on the real capture. If this is because the defect was "
+            f"FIXED, update this test and the deferred register instead of "
+            f"loosening it; got {details!r}",
+        )

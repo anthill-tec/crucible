@@ -16,7 +16,9 @@ Because `publish-pypi` and `publish-npm` `needs: [build, test-bun, test-python, 
 So the current state is: 0.2.0 cannot ship, and the reason is not a product defect.
 
 **One test fails, and it fails on an environment difference, not on behaviour.**
-`tests/clients-bun-crucible.test.ts:696-701` asserts that a timed-out leaf carries **no**
+`tests/clients-bun-crucible.test.ts:696-701` (pre-fix line reference — the assertion was
+re-specified by this CR, so the citation resolves only against the commit that filed it) asserts that
+a timed-out leaf carries **no**
 `failure.message`:
 
 ```
@@ -111,7 +113,7 @@ that crossed a completed test. The existing cross-leaf boundary guarantee
 
 ### §S3 Both orderings are known shapes, tested as fixtures
 
-The parser's accepted wire forms are already enumerated in its header (`:540-564`). The
+The parser's accepted wire forms are already enumerated in its header (`:544-564`). The
 timeout-detail-BEFORE-fail ordering is added as a third known shape, and both orderings are exercised
 as **fixtures** — so version-robustness is proven without depending on which bun the runner installed.
 
@@ -140,8 +142,13 @@ as **fixtures** — so version-robustness is proven without depending on which b
   `error: leaked boom` between the two fail lines and the ingested tree reports it as the NEXT test's
   failure message. Fixing it needs a way to tell "alpha's aftermath" from "beta's prelude", which are
   positionally identical in bun's stream — a design question, not a wording fix. It is therefore
-  **out of scope here and filed as its own CR** (see Risk); this CR does not pretend the invariant
-  holds, and the failing guard tests travel with that CR rather than being committed red.
+  **out of scope here and recorded in the deferred register** (`docs/changes/README.md`,
+  *Deferred — post-0.2.0*) as a **candidate CR to raise at the next SCRUM**; this CR does not pretend
+  the invariant holds, and no forward-marrying guard is committed red. What DOES ship is a
+  **characterisation** test pinning the current defective attribution on the real captured bytes
+  (`tests/client/test_cr087_console_failure_attribution.py`,
+  `test_characterisation_leaked_async_throw_bleeds_forward_onto_next_leaf`), so the fix has a
+  tripwire.
 - **AC5** — `test-bun` is GREEN in CI on a push to `develop`, and `publish-pypi`/`publish-npm` are no
   longer skipped for this reason. This is the observable gate; a local green does not close this CR.
 - **AC6** — the pin is documented where an operator will meet it: `RELEASING.md` carries the bump

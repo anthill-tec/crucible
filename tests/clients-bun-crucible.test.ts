@@ -51,11 +51,23 @@
 //     ATTRIBUTION for that leaf — it is `fail`, and any message it carries
 //     is its OWN — never the ABSENCE of a message, which was only ever an
 //     artifact of one bun's line ordering. The version-sensitive
-//     both-orderings fixture coverage (§S3/AC3) and the cross-leaf
-//     no-bleed guard (AC4) live in
+//     both-orderings fixture coverage (§S3/AC3) lives in
 //     tests/client/test_cr087_console_failure_attribution.py, where the
 //     real parser is fed both orderings directly instead of whichever one
 //     the installed bun happens to print.
+//   - CROSS-LEAF BLEED, stated honestly: only the halves the parser gets
+//     right today are guarded there — a `(pass)`/`(skip)`/`(todo)` result
+//     line ends a pending detail block, and a block trailing its own
+//     `(fail)` line never marries BACKWARDS onto that leaf. The FORWARD
+//     case is NOT guarded, because it is broken: a detail block printed
+//     after its own leaf's `(fail)` line and before the NEXT leaf's
+//     marries onto that later leaf. That is a MEASURED, UNFIXED defect
+//     (reproduced on bun 1.3.14's leaked-async-throw output, and it
+//     reaches the ingested tree), deliberately OUT OF SCOPE for
+//     CR-CRU-087 and recorded in the deferred register in
+//     docs/changes/README.md. The python file pins the current defective
+//     attribution as a characterisation test rather than asserting a
+//     guard that does not exist.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

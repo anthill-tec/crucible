@@ -121,6 +121,25 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `PENDING`); the write-side guard — refuse the removal, or require it to be explicit per id — has
   no CR yet.
 
+- **A leaked async throw is mis-attributed to the NEXT test leaf** (candidate CR, raise at the next
+  SCRUM). `_parse_console_failures` (`clients/bun-crucible.py`) resets its pending detail block on
+  every result line and marries it to the **next** `(fail)` line, so an `error:` block printed AFTER
+  its own leaf's `(fail)` line and BEFORE the next leaf's is married onto that **later** leaf — a leaf
+  that never produced it. Measured on real bun 1.3.14 output, not hypothetical: a test that leaks an
+  async throw prints `error: leaked boom` between the two fail lines, and the parser returns
+  `{'alpha fails and leaks': 'expect(received).toBe(expected)', 'beta fails': 'leaked boom'}`. It is
+  **not** confined to the parser — the wrong message reaches the **ingested tree**, so the board
+  attributes one test's failure to another. CR-CRU-087 §S3/AC3 pinned the halves that DO work (a
+  `(pass)`/`(skip)`/`(todo)` boundary ends a pending block; a trailing block never marries backwards)
+  and left this one out of scope rather than commit a red guard. **Reproducer already in the tree:**
+  `tests/client/test_cr087_console_failure_attribution.py` —
+  `test_characterisation_leaked_async_throw_bleeds_forward_onto_next_leaf` over the verbatim capture
+  `REAL_LEAKED_ASYNC_ERROR_LOG_PLAIN`; it asserts the CURRENT defective attribution, so a fix trips it
+  by design. **Why it is not a one-liner:** "alpha's aftermath" and "beta's prelude" are
+  **positionally identical** in bun's stream, so the fix needs a discriminator bun does not hand us
+  (leaf-scoped stack-trace/file-and-line correlation, or bun's own structured reporter) — a design
+  question, which is why it is a CR and not a wording fix.
+
 ## Notes
 - 🚀 **2026-08-19 — Crucible v2 SHIPPED its first public release (0.1.0 + hotfix 0.1.1).**
   `crucible-axi` on PyPI: **0.1.0** then **0.1.1** (OIDC trusted publishing, pending publisher
