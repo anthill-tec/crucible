@@ -7,10 +7,19 @@
 // DERIVED `status` (PENDING/IN_PROGRESS/COMPLETED via plans) + the plan link
 // when present. SSE on change.
 //
-// Derived-status rule (spec §Context, authoritative):
-//   PENDING     = no plan filed for the cr
-//   IN_PROGRESS = an OPEN plan exists for the cr
-//   COMPLETED   = a plan for the cr is closed WITH a merge commit
+// Derived-status rule — AUTHORITATIVE, as amended by CR-CRU-083 §S1/§S2 (it
+// was three plan-only values; the fourth consults release membership, because
+// a CR that a release SHIPPED cannot honestly read "never started"). In
+// PRECEDENCE order, for a cr registered in the queue:
+//   1. an OPEN plan for the cr                      → IN_PROGRESS (+ planId)
+//   2. a plan for the cr CLOSED WITH a merge commit → COMPLETED    (+ planId)
+//   3. no such plan, but the cr appears in SOME release's `crs`
+//                                                   → COMPLETED_UNTRACKED
+//                                                      (NO planId — there is no
+//                                                      plan to link to)
+//   4. otherwise                                    → PENDING
+// A plan record ALWAYS outranks release membership (CR-CRU-083 AC4), and
+// nothing synthesises plan or cycle rows to make the answer tidy (AC5).
 // `plans.cr` is the STABLE (verbatim, never-normalized) join key (spec
 // §Forward-compatibility contract).
 //
@@ -19,9 +28,11 @@
 //                         string[] } — 200 or 202.
 //   GET  /queue reply : { ok:true, entries: QueueEntry[] }.
 //   QueueEntry        : { cr, title?, wave, dependsOn: string[], size?,
-//                         status: "PENDING"|"IN_PROGRESS"|"COMPLETED",
+//                         status: "PENDING"|"IN_PROGRESS"|"COMPLETED"
+//                                 |"COMPLETED_UNTRACKED" (CR-CRU-083 §S2),
 //                         planId? } — planId is the plan link, present only
-//                         when a plan exists for the cr.
+//                         when a plan exists for the cr, so a
+//                         COMPLETED_UNTRACKED entry never carries one.
 //
 // ── Schema design this file ASSUMES (stated per dispatch) ──────────────────
 // The queue_entries table is created ADDITIVELY via CREATE TABLE IF NOT
@@ -60,7 +71,9 @@ interface QueueEntry {
   wave: string | number;
   dependsOn: string[];
   size?: string;
-  status: "PENDING" | "IN_PROGRESS" | "COMPLETED";
+  /** CR-CRU-083 §S2 — the fourth derived value: shipped by a release, never
+   *  plan-tracked. */
+  status: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "COMPLETED_UNTRACKED";
   planId?: number;
   [key: string]: unknown;
 }
@@ -588,6 +601,379 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         expect((await getQueue(key)).entries.length).toBe(1);
 
         expect(handle.store.schemaVersion).toBe(7);
+      },
+    );
+  });
+
+  // ── CR-CRU-083 §S1/§S2/§S3 — the FOURTH derived value ───────────────────
+  //
+  // Spec: docs/changes/CR-CRU-083-derived-status-cannot-say-done.md
+  //       §S1/§S2/§S3 + AC1/AC2/AC3/AC4/AC5/AC6/AC8/AC9. (AC7 — the badge,
+  //       the inert row click and the graph node style — is a UI cycle and is
+  //       deliberately NOT touched here.)
+  //
+  // WHY THESE EXIST. `PENDING` carries two incompatible meanings today: "not
+  // started" and "finished before plan tracking existed". Measured on the live
+  // board, CR-CRU-001–007, 010 and 016 render PENDING while `0.1.0`'s `crs`
+  // carries all nine — the same board asserting both "never started" and "a
+  // release bundled and shipped it". §S1 makes release membership authoritative
+  // evidence of completion; §S2 names the honest state COMPLETED_UNTRACKED
+  // rather than borrowing the fully-tracked COMPLETED presentation.
+  //
+  // RED expectation (measured against src/store.ts:3052): `deriveQueueStatus`
+  // reads `listPlans` ALONE — zero plans returns `{ status: "PENDING" }` and no
+  // second source is ever consulted — and `QueueStatus` (src/types.ts:310) has
+  // three members. So every COMPLETED_UNTRACKED assertion below fails with the
+  // derivation answering "PENDING": the missing contract, not a fixture bug.
+  //
+  // A release is recorded through the ceremony's OWN production entry — POST
+  // /api/v2/milestones with {type:"release", label:<version>, commit,
+  // releasedAt, crs} — the same route and body shape
+  // tests/release-provenance.test.ts drives (CR-CRU-080 §S4/AC9). No route is
+  // invented, `handleMilestones` (src/v2.ts:1164) carries `crs` verbatim and
+  // `listReleases` (src/store.ts:2111) serves it, so membership here is real
+  // stored evidence read back off the wire, never a fixture side-channel.
+  describe("CR-CRU-083 §S1/§S2 — a shipped CR derives COMPLETED_UNTRACKED, never PENDING", () => {
+    /** Shipped in a release, never plan-tracked — the measured class
+     *  (CR-CRU-001–007, 010, 016). */
+    const SHIPPED_CR = "CR-CRU-001";
+    /** Genuinely unstarted: no plan, in no release's `crs` (AC2's class). */
+    const UNSTARTED_CR = "CR-CRU-015";
+    /** Fully plan-tracked through merge — the COMPLETED comparison arm (AC3). */
+    const TRACKED_CR = "CR-CRU-021";
+
+    /** Epoch SECONDS — the unit §S4 names as `releasedAt`'s source (`git log
+     *  -1 --format=%ct <tag>`). A month back, so it can never be read as the
+     *  ingest clock. */
+    const SHIPPED_AT = Date.UTC(2026, 6, 10, 12, 0, 0) / 1000;
+
+    interface ReleaseBrief {
+      version?: string;
+      crs?: string[];
+      [key: string]: unknown;
+    }
+
+    interface ReleasesResponse extends OkResponse {
+      releases: ReleaseBrief[];
+    }
+
+    interface PlansResponse extends OkResponse {
+      plans: Array<Record<string, unknown>>;
+    }
+
+    async function listReleases(key: string): Promise<ReleaseBrief[]> {
+      const res = await getJson(`/api/v2/projects/${key}/releases`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as ReleasesResponse;
+      return body.releases;
+    }
+
+    /** Records a real `release` milestone carrying `crs` exactly as the
+     *  ceremony does, then PROVES the membership landed by reading it back off
+     *  GET …/releases — so no membership assertion below can pass, or fail, on
+     *  a release that was never actually recorded. */
+    async function recordRelease(
+      key: string,
+      version: string,
+      commit: string,
+      crs: readonly string[],
+    ): Promise<void> {
+      const res = await postJson("/api/v2/milestones", {
+        projectKey: key,
+        agentId: ORCH,
+        type: "release",
+        label: version,
+        commit,
+        releasedAt: SHIPPED_AT,
+        crs,
+      });
+      expect(res.status).toBe(201);
+      const rel = (await listReleases(key)).find((r) => r.version === version);
+      expect(rel).toBeDefined();
+      expect([...(rel!.crs ?? [])].sort()).toEqual([...crs].sort());
+    }
+
+    /** The project's plan rows, optionally narrowed to one cr — AC5's
+     *  instrument (a synthesised plan would show up here). */
+    async function plansFor(key: string, cr?: string): Promise<Array<Record<string, unknown>>> {
+      const res = await getJson(plansPath(key, cr === undefined ? "" : `?cr=${cr}`));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as PlansResponse;
+      return body.plans;
+    }
+
+    /** Every entry's derived answer, cr-keyed and order-independent — the unit
+     *  AC6/AC9 compare across a re-registration. */
+    function derivations(entries: QueueEntry[]): Record<string, string> {
+      const out: Record<string, string> = {};
+      for (const e of entries) {
+        out[e.cr] = `${e.status}/${e.planId ?? "-"}`;
+      }
+      return out;
+    }
+
+    test(
+      "AC1 a queued cr with NO plan that a recorded release's crs names derives " +
+        "COMPLETED_UNTRACKED and carries NO planId — the plan-only derivation answers PENDING, " +
+        "which is the contradiction: the same board would say both 'never started' and 'shipped'",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-completed-untracked");
+
+        expect(
+          [200, 202],
+        ).toContain(
+          (
+            await postQueue(key, [
+              { cr: SHIPPED_CR, title: "pre-tracking work", wave: 1, dependsOn: [] },
+              { cr: UNSTARTED_CR, title: "not started", wave: 1, dependsOn: [] },
+            ])
+          ).status,
+        );
+
+        // PRECONDITION — with no release recorded yet BOTH read PENDING, so the
+        // flip below is caused by the release membership and nothing else.
+        {
+          const q = await getQueue(key);
+          expect(findEntry(q.entries, SHIPPED_CR).status).toBe("PENDING");
+          expect(findEntry(q.entries, UNSTARTED_CR).status).toBe("PENDING");
+        }
+
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+
+        const q = await getQueue(key);
+        const shipped = findEntry(q.entries, SHIPPED_CR);
+        expect(shipped.status).toBe("COMPLETED_UNTRACKED");
+        // NO plan link: there is no plan, and §S3/AC5 forbid inventing one.
+        expect(shipped.planId).toBeUndefined();
+        expect("planId" in shipped).toBe(false);
+        // AC3 — distinct from BOTH neighbours; the values never collapse.
+        expect(shipped.status).not.toBe("COMPLETED");
+        expect(shipped.status).not.toBe("PENDING");
+        // NON-VACUITY — membership is read PER CR, not "some release exists":
+        // the cr this release did not ship is untouched.
+        expect(findEntry(q.entries, UNSTARTED_CR).status).toBe("PENDING");
+      },
+    );
+
+    test(
+      "AC2 a queued cr with no plan and in NO release's crs stays PENDING: PENDING now carries " +
+        "exactly one meaning — Crucible holds no evidence for this cr — so the genuinely " +
+        "unstarted case is unchanged even while a sibling in the same queue is shipped",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-pending-unchanged");
+
+        expect([200, 202]).toContain(
+          (
+            await postQueue(key, [
+              { cr: SHIPPED_CR, wave: 1, dependsOn: [] },
+              { cr: UNSTARTED_CR, wave: 2, dependsOn: [] },
+              { cr: "CR-CRU-018", wave: 2, dependsOn: [] },
+            ])
+          ).status,
+        );
+
+        // Two releases exist and neither names the unstarted CRs — the
+        // exclusion is membership-based, not "no releases recorded".
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+        await recordRelease(key, "0.1.1", "aaa0002", ["CR-CRU-041"]);
+
+        const q = await getQueue(key);
+        // GUARD — the new contract must EXIST, or the PENDING claims below are
+        // vacuous (a plan-only derivation would satisfy them by accident).
+        expect(findEntry(q.entries, SHIPPED_CR).status).toBe("COMPLETED_UNTRACKED");
+
+        for (const cr of [UNSTARTED_CR, "CR-CRU-018"]) {
+          const e = findEntry(q.entries, cr);
+          expect(e.status).toBe("PENDING");
+          expect(e.planId).toBeUndefined();
+        }
+      },
+    );
+
+    test(
+      "AC4 a plan record ALWAYS outranks release membership: the SAME cr, present in a release's " +
+        "crs, reads IN_PROGRESS while its plan is open and COMPLETED once that plan closes with " +
+        "a merge — never COMPLETED_UNTRACKED, and carrying that plan's id throughout",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-plan-outranks-release");
+
+        expect([200, 202]).toContain(
+          (await postQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
+        );
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+
+        // GUARD — release membership genuinely drives this cr's status first,
+        // so "the plan outranks it" is a real precedence claim and not a
+        // statement about a source the derivation never consulted.
+        expect(findEntry((await getQueue(key)).entries, SHIPPED_CR).status).toBe(
+          "COMPLETED_UNTRACKED",
+        );
+
+        const { planId, cycleId } = await filePlan(key, SHIPPED_CR);
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("IN_PROGRESS");
+          expect(e.planId).toBe(planId);
+          expect(e.status).not.toBe("COMPLETED_UNTRACKED");
+        }
+
+        await closePlanWithMerge(key, planId, cycleId, "deadbee001");
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("COMPLETED");
+          expect(e.planId).toBe(planId);
+          expect(e.status).not.toBe("COMPLETED_UNTRACKED");
+        }
+      },
+    );
+
+    test(
+      "AC5 no synthetic plan or cycle row is created to satisfy the derivation: a cr reading " +
+        "COMPLETED_UNTRACKED still has NO plan row on GET …/plans — before the read, and " +
+        "unchanged after it — so nothing was fabricated to make the answer tidy",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-no-synthetic-rows");
+
+        expect([200, 202]).toContain(
+          (await postQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
+        );
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+
+        // Before: the project holds no plans at all.
+        expect(await plansFor(key)).toEqual([]);
+
+        expect(findEntry((await getQueue(key)).entries, SHIPPED_CR).status).toBe(
+          "COMPLETED_UNTRACKED",
+        );
+
+        // After: still none — neither for this cr nor anywhere in the project,
+        // and therefore no cycles either (cycles hang off a plan row).
+        expect(await plansFor(key, SHIPPED_CR)).toEqual([]);
+        expect(await plansFor(key)).toEqual([]);
+      },
+    );
+
+    test(
+      "AC6 re-registering the queue changes no derived status: a full REPLACE with the identical " +
+        "entries reads back byte-identical derivations, COMPLETED_UNTRACKED included — status is " +
+        "derived at read time, never queue data",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-replace-preserves");
+
+        const set = [
+          { cr: SHIPPED_CR, title: "pre-tracking work", wave: 1, dependsOn: [] },
+          { cr: TRACKED_CR, title: "tracked", wave: 2, dependsOn: [SHIPPED_CR] },
+          { cr: UNSTARTED_CR, title: "not started", wave: 3, dependsOn: [] },
+        ];
+        expect([200, 202]).toContain((await postQueue(key, set)).status);
+
+        // One of each: shipped-without-tracking, tracked through merge, unstarted.
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+        const tracked = await filePlan(key, TRACKED_CR);
+        await closePlanWithMerge(key, tracked.planId, tracked.cycleId, "deadbee021");
+
+        const before = derivations((await getQueue(key)).entries);
+        // GUARD — all three distinct values are actually present, so the
+        // equality below is not three PENDINGs matching three PENDINGs.
+        expect(before[SHIPPED_CR]).toBe("COMPLETED_UNTRACKED/-");
+        expect(before[TRACKED_CR]).toBe(`COMPLETED/${tracked.planId}`);
+        expect(before[UNSTARTED_CR]).toBe("PENDING/-");
+
+        expect([200, 202]).toContain((await postQueue(key, set)).status);
+
+        const after = derivations((await getQueue(key)).entries);
+        expect(after).toEqual(before);
+        expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+      },
+    );
+
+    test(
+      "AC8 tracking attaches AFTER the cr exists and status follows it with NO queue " +
+        "re-registration: one fixture walks PENDING → COMPLETED_UNTRACKED (a release names it) " +
+        "→ IN_PROGRESS (an open plan is filed) → COMPLETED (that plan closes with a merge)",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-attach-after-creation");
+
+        // Registered ONCE — the queue is never posted again in this walk.
+        expect([200, 202]).toContain(
+          (await postQueue(key, [{ cr: SHIPPED_CR, wave: 1, dependsOn: [] }])).status,
+        );
+
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("PENDING");
+          expect(e.planId).toBeUndefined();
+        }
+
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("COMPLETED_UNTRACKED");
+          expect(e.planId).toBeUndefined();
+        }
+
+        const { planId, cycleId } = await filePlan(key, SHIPPED_CR);
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("IN_PROGRESS");
+          expect(e.planId).toBe(planId);
+        }
+
+        await closePlanWithMerge(key, planId, cycleId, "deadbee101");
+        {
+          const e = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+          expect(e.status).toBe("COMPLETED");
+          expect(e.planId).toBe(planId);
+        }
+      },
+    );
+
+    test(
+      "AC9 an implemented cr never reads back PENDING: with one cr COMPLETED (plan closed with a " +
+        "merge) and one COMPLETED_UNTRACKED (release membership), a full queue replace AND a " +
+        "further unrelated release recording both leave the two statuses exactly as they were",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-083-implemented-never-pending");
+
+        const set = [
+          { cr: TRACKED_CR, wave: 1, dependsOn: [] },
+          { cr: SHIPPED_CR, wave: 1, dependsOn: [] },
+          { cr: UNSTARTED_CR, wave: 2, dependsOn: [] },
+        ];
+        expect([200, 202]).toContain((await postQueue(key, set)).status);
+
+        const tracked = await filePlan(key, TRACKED_CR);
+        await closePlanWithMerge(key, tracked.planId, tracked.cycleId, "deadbee021");
+        await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
+
+        const before = derivations((await getQueue(key)).entries);
+        expect(before[TRACKED_CR]).toBe(`COMPLETED/${tracked.planId}`);
+        expect(before[SHIPPED_CR]).toBe("COMPLETED_UNTRACKED/-");
+
+        // Two things that could plausibly rewrite settled fact: a full queue
+        // replace, and a later release that names neither cr.
+        expect([200, 202]).toContain((await postQueue(key, set)).status);
+        await recordRelease(key, "0.2.0", "aaa0002", ["CR-CRU-900"]);
+
+        const after = derivations((await getQueue(key)).entries);
+        expect(after[TRACKED_CR]).toBe(before[TRACKED_CR]);
+        expect(after[SHIPPED_CR]).toBe(before[SHIPPED_CR]);
+        // Stated as the invariant itself: neither implemented state moves
+        // backwards to PENDING.
+        const implemented = findEntry((await getQueue(key)).entries, TRACKED_CR);
+        expect(implemented.status).not.toBe("PENDING");
+        const shipped = findEntry((await getQueue(key)).entries, SHIPPED_CR);
+        expect(shipped.status).not.toBe("PENDING");
+        expect(shipped.status).toBe("COMPLETED_UNTRACKED");
+        // And the genuinely unstarted cr is still PENDING (nothing drifted).
+        expect(after[UNSTARTED_CR]).toBe("PENDING/-");
       },
     );
   });
