@@ -100,38 +100,6 @@ they exist to prevent.
 
 ---
 
-## The bun toolchain is pinned by one field
-
-`package.json`'s **`packageManager`** field is the single declaration of the bun version
-that CI and local development both run:
-
-```json
-"packageManager": "bun@1.3.14"
-```
-
-`oven-sh/setup-bun@v2` resolves its version in a documented order — `packageManager`,
-then `engines.bun`, then `latest` — so all four `setup-bun` steps in
-`.github/workflows/release.yml` inherit this pin and **none of them carries a
-`bun-version:` input**. A pin repeated per job is one more place per job to drift.
-
-`engines.bun` (`>=1.2`) is a **different fact**: the consumer-facing compatibility
-**floor** for anyone installing this package. It stays a range. Do not collapse either
-field into the other — tightening `engines.bun` to an exact version silently locks out
-consumers on 1.2. Note the asymmetry this creates: **running this repo's suite requires
-EXACTLY the pinned bun**, because `tests/suite-integrity.test.ts` compares the
-`packageManager` declaration against the live `Bun.version` — so `engines.bun` is the
-consumer floor, **not** a supported development range, and a local bun anywhere else in
-that range reds the suite.
-
-**To bump bun:** edit that one field, then re-run the client-format suites —
-`tests/clients-bun-crucible.test.ts` and `tests/suite-integrity.test.ts`. Those parse
-bun's own console output, so a format change in a new bun reds them.
-
-Why this matters: while the version was an unpinned range, CI drifted to a newer bun on
-its own and **both publish jobs were skipped by construction** — no commit in between.
-
----
-
 ## One-time setup
 
 ### Per clone: the git-flow tag prefix
