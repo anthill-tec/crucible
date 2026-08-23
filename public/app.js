@@ -2386,7 +2386,8 @@
           class: `app-roadmap-row${active ? " on" : ""}`,
           // One-rule tab swap (no overlay): an open (IN_PROGRESS) row lands on
           // the Workflow tab at that CR's active section; a COMPLETED row
-          // lands on its Workflow history group; a PENDING row is inert.
+          // lands on its Workflow history group; a PENDING or
+          // COMPLETED_UNTRACKED row is inert — there is no plan to land on.
           onclick: () => {
             if (entry.status === "IN_PROGRESS" || entry.status === "COMPLETED") {
               state.workspaceTab = "Workflow";
@@ -2575,9 +2576,15 @@
             },
           ],
         });
-        // Per-node tap → the same one-rule Workflow swap the table row uses.
-        cy.on("tap", "node", () => {
-          state.workspaceTab = "Workflow";
+        // Per-node tap → the same one-rule Workflow swap the table row uses,
+        // status-gated by the SAME predicate: only a node whose own status is
+        // IN_PROGRESS or COMPLETED has a plan to land on. A PENDING or
+        // COMPLETED_UNTRACKED node is inert, exactly like its row.
+        cy.on("tap", "node", (evt) => {
+          const status = evt.target.data("status");
+          if (status === "IN_PROGRESS" || status === "COMPLETED") {
+            state.workspaceTab = "Workflow";
+          }
         });
         cy.fit(undefined, 24);
         window.crucibleRoadmapCy = cy;
