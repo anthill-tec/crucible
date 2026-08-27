@@ -93,9 +93,12 @@ be readable.
 - [ ] **AC6 — ordering is enforced, not incidental.** With the `fleet` stage stubbed to
       fail, the `manifest` stage does not run (existing fail-fast contract), so a manifest
       is never written naming paths that were not laid down.
-- [ ] **AC7 — one resolver.** `grep -c "installed package data" crucible_axi/*.py` is 1;
-      `cli.py` holds no private candidate list and calls
-      `manifest.source_clients_dir()`.
+- [ ] **AC7 — one resolver.** `manifest.source_clients_dir()` exists and is THE resolver;
+      BOTH `cli._load_client_module` and `install.run_fleet_stage` go through it (provable
+      by patching that attribute and observing both behaviours change); neither module
+      defines a private candidate list or resolver; and the candidate ORDER is preserved
+      (source checkout, then installed package data, falling back to the checkout path so a
+      failure names the location an operator expects).
 - [ ] **AC8 — integration, real entry point.** The test drives `cli.main()` with
       `install --target-dir <scratch>` (not `run_install` in isolation) with the `server`
       stage stubbed, and asserts AC2 + AC3 from the resulting on-disk state.
