@@ -37,9 +37,13 @@ verified by running `bun --version`; if Bun still cannot be resolved the install
 fails outright with that remedy), provisions the server user-scoped via
 `bun add -g @anthill-tec/crucible-server@<pinned>` — Bun's global prefix lives
 under `$HOME`, so there is no system-permission problem — then creates its
-target directory (`--target-dir`, default `~/.crucible`) and writes the client
-discovery **manifest** into it. Those two stages, `server` and `manifest`, are
-the whole install. It reports a TOON-AXI envelope naming each stage's installed
+target directory (`--target-dir`, default `~/.crucible`), lays the
+`*-crucible.py` **client fleet** (the five clients, the two shared modules they
+load by path, and `STATUS-CONTRACT.md`) down in `<target-dir>/clients/`, and
+writes the client discovery **manifest** naming those paths into it. Those
+three stages — `server`, `fleet`, `manifest`, in that order, so the manifest is
+written only after the paths it names exist — are the whole install. It reports
+a TOON-AXI envelope naming each stage's installed
 path plus the absolute Bun it resolved. A second run at the same version is a
 no-op; re-running after an upgrade re-provisions the server, because the
 `server` stage counts as converged only when the installed server is exactly

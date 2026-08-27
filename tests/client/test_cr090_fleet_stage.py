@@ -11,8 +11,9 @@ publishes `clients[stack] = <install_dir>/clients/<stack>-crucible.py` and
 `status = <install_dir>/clients/STATUS-CONTRACT.md`. The manifest therefore
 writes successfully, converges idempotently, and names SIX paths that do not
 exist. `cli.py` hides the gap because it resolves the fleet from the package
-for its own use (`_clients_dir()`), so no in-repo path exercises the
-declaration `--target-dir` actually makes.
+for its own use (through `manifest.source_clients_dir()`, §S2's single
+resolver), so no in-repo path exercises the declaration `--target-dir`
+actually makes.
 
 - AC1 pins the ORDER as data: `STAGE_ORDER == ("server", "fleet", "manifest")`,
   `fleet` strictly before `manifest`, a runner registered under that key, and a
@@ -44,6 +45,15 @@ every copied client RUNS from `<target-dir>/clients/` -- `--help` exits 0 with
 output, and each client's own by-path loader resolves BOTH shared modules out
 of the copied directory. That is the clients-only-copy defect's only trap.
 
+C7 (the FIX round on §S1's own stated rules) pins the two guarantees the stage
+DECLARED but did not enforce: the copy is CONFINED to `<target-dir>/clients/`
+-- a pre-existing symlink at one of the eight destination names is replaced,
+never followed, because both `os.path.isfile` and `Path.write_bytes` traverse a
+link and would otherwise write a client's bytes into a file the operator never
+pointed `--target-dir` at -- and a landed file carries its SOURCE's mode bits,
+so the three executable clients do not arrive 0o644 under the umask and die
+with "Permission denied" when run directly.
+
 NOT this cycle (owned elsewhere in plan 89): the
 `manifest.source_clients_dir()` single resolver (§S2/AC7) and the `cli.main()`
 integration (AC8).
@@ -59,6 +69,7 @@ import importlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -69,8 +80,8 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # The SOURCE of truth for the copy: the repo checkout's own fleet directory,
-# which is what `cli._clients_dir()` resolves to in a source checkout and what
-# the wheel force-includes as `crucible_axi/clients`.
+# which is what `manifest.source_clients_dir()` resolves to in a source
+# checkout and what the wheel force-includes as `crucible_axi/clients`.
 SOURCE_CLIENTS_DIR = REPO_ROOT / "clients"
 
 # §S1 -- the packaged fleet, exactly. Five clients plus the two shared modules
@@ -1005,6 +1016,267 @@ class CopiedClientsActuallyRunTest(_ScratchInstallCase):
             f"AC4/§S1 -- every copied client must load `_crucible_axi.py` AND "
             f"`toon.py` from {expected_dir!r} through its own by-path loader; "
             f"{len(broken)} problem(s):\n" + "\n".join(broken))
+
+
+# --- CR-CRU-090 C7 FIX -- §S1's own confinement + mode rules, ENFORCED ------
+
+# The stage's docstring and §S1 both state "the copy is confined to
+# `<target-dir>/clients/`". On the C1/C2 implementation that is an INTENTION,
+# not a guarantee: `os.path.isfile()` and `Path.write_bytes()` BOTH traverse a
+# symlink, so a pre-existing link at one of the eight destination names makes a
+# single `run_install` read -- and write ~70 KB of client source into -- a file
+# outside the target dir entirely, leaving the link in place so every later run
+# does it again. Two link shapes are exercised, because they escape through
+# DIFFERENT branches of the copy:
+#
+#   - a link to an EXISTING outside file: `os.path.isfile(destination)` is
+#     True, so the compare reads the outside file and the write OVERWRITES it;
+#   - a DANGLING link: `os.path.isfile(destination)` is False, so the write
+#     CREATES an outside file that was never there.
+#
+# The second rule is the mode: `Path.write_bytes` creates with the process
+# umask, so `bun-crucible.py`, `rust-crucible.py` and `mvn-crucible.py` (0o755
+# at source) land 0o644 and an operator running
+# `~/.crucible/clients/rust-crucible.py` directly gets "Permission denied".
+# Source modes are read at RUNTIME, never hardcoded: the repo fleet's modes are
+# deliberately mixed (three of the eight executable), and hardcoding them here
+# would just re-assert the fixture.
+
+SENTINEL_TEMPLATE = (
+    b"operator's own file, OUTSIDE the install root -- the [fleet] stage must "
+    b"never write here (hijack name: %s)\n")
+
+# One client entry point and one shared module, so confinement is proven as a
+# property of the EIGHT rather than of whatever a `*-crucible.py`-shaped guard
+# happens to notice.
+HIJACKED_NAMES = ("python-crucible.py", "_crucible_axi.py")
+
+# Two stand-in source modes chosen so the assertion cannot pass by umask
+# coincidence -- both files are 0o644 in the repo checkout, so a copy that
+# merely inherits the umask lands 0o644 and fails BOTH:
+#   - 0o755: the executable bit must be CARRIED (the real defect);
+#   - 0o600: a restrictive mode must be carried too, not widened to the umask's
+#     0o644 -- which pins "copy the source's mode", not "chmod +x".
+MODE_STAND_IN_EXECUTABLE = ("STATUS-CONTRACT.md", 0o755)
+MODE_STAND_IN_PRIVATE = ("python-crucible.py", 0o600)
+
+
+class FleetStageConfinementAndModeTest(_FleetConvergenceCase):
+    """§S1/C7 -- the two rules `run_fleet_stage` STATES: every write lands
+    inside `<target-dir>/clients/`, and a landed file carries its source's
+    mode bits."""
+
+    def setUp(self):
+        super().setUp()
+        # A scratch root OUTSIDE the install target, with its own lifetime --
+        # if the stage escapes confinement, this is where it lands, and the
+        # evidence must survive the target's teardown.
+        self.outside = tempfile.mkdtemp(prefix="cr090-fleet-outside-")
+        self.addCleanup(shutil.rmtree, self.outside, ignore_errors=True)
+        os.makedirs(self.clients_dir(), exist_ok=True)
+
+    def sentinel_bytes(self, name):
+        return SENTINEL_TEMPLATE % name.encode()
+
+    def plant_hijack_symlink(self, name):
+        """An operator file outside the install root, plus a symlink at
+        `<target>/clients/<name>` pointing at it. Returns the outside path."""
+        sentinel = Path(os.path.join(self.outside, f"sentinel-{name}"))
+        sentinel.write_bytes(self.sentinel_bytes(name))
+        os.symlink(str(sentinel), self.landed_path(name))
+        return sentinel
+
+    def stand_in_source_dir(self):
+        """A scratch SOURCE fleet holding all eight files with DIFFERENT modes
+        from the repo's, so `manifest.source_clients_dir()` can be pointed at
+        it and the landed modes compared against a known, non-coincidental
+        set. `shutil.copyfile` copies bytes only, so every file starts at the
+        umask's mode and the two stand-ins are then chmod'd explicitly."""
+        source_dir = os.path.join(self.outside, "stand-in-source")
+        os.makedirs(source_dir, exist_ok=True)
+        for name in sorted(EXPECTED_FLEET_FILES):
+            shutil.copyfile(str(SOURCE_CLIENTS_DIR / name),
+                            os.path.join(source_dir, name))
+        for name, mode in (MODE_STAND_IN_EXECUTABLE, MODE_STAND_IN_PRIVATE):
+            os.chmod(os.path.join(source_dir, name), mode)
+        return source_dir
+
+    @staticmethod
+    def file_mode(path):
+        return stat.S_IMODE(os.stat(path).st_mode)
+
+    def test_a_destination_symlink_is_replaced_and_never_followed(self):
+        """§S1 -- "the copy is confined to `<target-dir>/clients/`". The
+        outside file must be byte-for-byte untouched, the destination must no
+        longer be a link, and it must hold the source's bytes as a regular
+        file."""
+        sentinels = {name: self.plant_hijack_symlink(name)
+                     for name in HIJACKED_NAMES}
+
+        ok, stages, warnings = self.run_install_with_stubbed_server()
+
+        violations = []
+        for name, sentinel in sorted(sentinels.items()):
+            expected = self.sentinel_bytes(name)
+            actual = sentinel.read_bytes()
+            if actual != expected:
+                violations.append(
+                    f"{name}: ESCAPED confinement -- the outside file "
+                    f"{sentinel} was written THROUGH the symlink "
+                    f"({len(actual)} bytes now, {len(expected)} before)")
+            landed = self.landed_path(name)
+            if os.path.islink(landed):
+                violations.append(
+                    f"{name}: {landed} is STILL a symlink -> "
+                    f"{os.readlink(landed)}, so every later run escapes too")
+            elif not os.path.isfile(landed):
+                violations.append(
+                    f"{name}: {landed} is not a regular file after the "
+                    f"install")
+            elif Path(landed).read_bytes() != self.source_bytes(name):
+                violations.append(
+                    f"{name}: {landed} is a regular file but does not hold "
+                    f"its source's bytes")
+        self.assertEqual(
+            [], violations,
+            f"§S1 -- a symlink at one of the eight destination names must be "
+            f"REPLACED by a regular file, never followed: `os.path.isfile` "
+            f"and `Path.write_bytes` both traverse a link, so the stage "
+            f"writes the client's bytes outside {self.clients_dir()!r} while "
+            f"claiming the copy is confined to it. "
+            f"{len(violations)} violation(s):\n" + "\n".join(violations)
+            + f"\nok={ok} stages={stages} warnings={warnings}")
+
+    def test_a_dangling_destination_symlink_creates_no_file_outside(self):
+        """The other escape branch: `os.path.isfile()` is False for a dangling
+        link, so the write CREATES the outside file. Nothing the operator did
+        not create may appear outside `<target-dir>/clients/`."""
+        dangling = {}
+        for name in HIJACKED_NAMES:
+            dangling[name] = os.path.join(self.outside, f"never-created-{name}")
+            os.symlink(dangling[name], self.landed_path(name))
+
+        ok, stages, warnings = self.run_install_with_stubbed_server()
+
+        created = sorted(
+            f"{name} -> {path} ({os.path.getsize(path)} bytes)"
+            for name, path in dangling.items() if os.path.isfile(path))
+        self.assertEqual(
+            [], created,
+            f"§S1 -- a DANGLING symlink at a destination name must be "
+            f"replaced, not written through: the stage created "
+            f"{len(created)} file(s) outside {self.clients_dir()!r}: "
+            f"{created}; ok={ok} warnings={warnings}")
+        still_links = sorted(
+            name for name in HIJACKED_NAMES
+            if os.path.islink(self.landed_path(name)))
+        self.assertEqual(
+            [], still_links,
+            f"§S1 -- the dangling link must be gone, replaced by the real "
+            f"file; still symlinks: {still_links}")
+        for name in HIJACKED_NAMES:
+            self.assertEqual(
+                Path(self.landed_path(name)).read_bytes(),
+                self.source_bytes(name),
+                f"§S1 -- {name} must have landed byte-identical to its source "
+                f"in place of the dangling link")
+
+    def test_replacing_a_symlink_still_converges_on_the_following_run(self):
+        """Confinement must not be bought with a permanently non-converging
+        stage: the run that replaces the link reports `converged: False`
+        (something WAS written), and the next run -- now comparing regular
+        files -- converges and rewrites nothing."""
+        for name in HIJACKED_NAMES:
+            self.plant_hijack_symlink(name)
+
+        first = self.fleet_stage(self.run_install_with_stubbed_server()[1])
+        self.assertFalse(
+            first["converged"],
+            f"the run that replaces a hijacking symlink WROTE files, so it "
+            f"must report converged:False; got {first!r}")
+        still_links = sorted(
+            name for name in HIJACKED_NAMES
+            if os.path.islink(self.landed_path(name)))
+        self.assertEqual(
+            [], still_links,
+            f"§S1 -- the first run must have replaced every hijacking "
+            f"symlink; still links: {still_links}")
+
+        self.pin_landed_mtimes()
+        ok, stages, warnings = self.run_install_with_stubbed_server()
+        stage = self.fleet_stage(stages)
+        self.assertTrue(
+            stage["converged"],
+            f"AC5 -- once the links are replaced the target is normal, so the "
+            f"second run must report converged:True; an unconditional unlink "
+            f"would make the stage never converge again. Got {stage!r}; "
+            f"ok={ok} warnings={warnings}")
+        rewritten = sorted(
+            name for name, mtime in self.landed_mtimes().items()
+            if mtime != PINNED_MTIME_NS)
+        self.assertEqual(
+            [], rewritten,
+            f"AC5 -- the converged second run must rewrite nothing; "
+            f"rewritten={rewritten}")
+
+    def test_every_landed_file_carries_its_sources_mode_bits(self):
+        """§S1 -- the payload includes the mode. Read from the sources at
+        RUNTIME, because the repo fleet's own modes are deliberately mixed and
+        hardcoding them would assert the fixture instead of the copy."""
+        self.land_the_fleet()
+        wrong = []
+        for name in sorted(EXPECTED_FLEET_FILES):
+            expected = self.file_mode(SOURCE_CLIENTS_DIR / name)
+            landed = self.landed_path(name)
+            if not os.path.isfile(landed):
+                wrong.append(f"{name}: absent")
+                continue
+            actual = self.file_mode(landed)
+            if actual != expected:
+                wrong.append(
+                    f"{name}: landed 0o{actual:o} vs source 0o{expected:o}")
+        self.assertEqual(
+            [], wrong,
+            f"§S1 -- every landed file must carry its source's mode bits. "
+            f"`Path.write_bytes` creates with the process umask, so the "
+            f"executable clients land 0o644 and "
+            f"`{self.clients_dir()}/rust-crucible.py` cannot be run "
+            f"directly. Offenders: {wrong}")
+
+    def test_a_sources_exact_mode_is_carried_even_against_the_umask(self):
+        """The distinction forced: a stand-in source dir whose modes are NOT
+        the repo's (one 0o755, one 0o600, both 0o644 in the checkout), pointed
+        at through §S2's single resolver. A copy that inherits the umask lands
+        0o644 for both."""
+        source_dir = self.stand_in_source_dir()
+        with mock.patch.object(self.install.manifest, "source_clients_dir",
+                               return_value=source_dir):
+            ok, stages, warnings = self.run_install_with_stubbed_server()
+        self.assertTrue(
+            ok,
+            f"fixture invariant -- the install against the stand-in source "
+            f"must succeed; stages={stages} warnings={warnings}")
+
+        wrong = []
+        for name in sorted(EXPECTED_FLEET_FILES):
+            expected = self.file_mode(os.path.join(source_dir, name))
+            actual = self.file_mode(self.landed_path(name))
+            if actual != expected:
+                wrong.append(
+                    f"{name}: landed 0o{actual:o} vs source 0o{expected:o}")
+        self.assertEqual(
+            [], wrong,
+            f"§S1 -- the landed mode must equal the SOURCE's mode, whatever "
+            f"it is, not the umask's default; source dir={source_dir!r}; "
+            f"offenders: {wrong}")
+
+        for name, mode in (MODE_STAND_IN_EXECUTABLE, MODE_STAND_IN_PRIVATE):
+            self.assertEqual(
+                mode, self.file_mode(self.landed_path(name)),
+                f"§S1 -- {name} is 0o{mode:o} in the stand-in source (and "
+                f"0o644 in the repo checkout), so the landed copy must be "
+                f"0o{mode:o}: the mode is COPIED, never inferred from the "
+                f"filename or left to the umask")
 
 
 if __name__ == "__main__":

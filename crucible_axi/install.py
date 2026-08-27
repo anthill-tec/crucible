@@ -446,7 +446,15 @@ def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
     [manifest]: the manifest is written only after the paths it names exist.
 
     The copy is confined to `<target-dir>/clients/` (created when absent) and
-    is byte-for-byte. Destination files that are not one of the eight are left
+    is byte-for-byte, MODE INCLUDED: each landed file carries its source's
+    permission bits, so the three executable clients arrive executable instead
+    of 0o644 under the operator's umask (which would make
+    `<target-dir>/clients/rust-crucible.py` unrunnable directly). Confinement
+    is ENFORCED, not merely intended: a SYMLINK sitting at one of the eight
+    destination names is REPLACED by a regular file and never followed, because
+    both the read-compare and the write traverse a link and would otherwise
+    land a client's bytes in a file the operator never pointed `--target-dir`
+    at. Destination files that are not one of the eight are left
     untouched — the install never removes what it does not manage. A missing
     SOURCE file fails the stage definitively with that path named: `run_install`
     is fail-fast, so it surfaces as `ok=False` plus a `stage-failed` warning
@@ -464,7 +472,9 @@ def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
     only — an unmanaged destination file is never read for it, so it can
     neither be rewritten nor defeat convergence. Bytes are the only input:
     never a size or an mtime, either of which a truncated or touched copy
-    would pass.
+    would pass. A destination symlink is always replaced, so the run that
+    replaces one reports `converged: False` and the next run — comparing a
+    regular file — converges normally.
     """
     source_dir = manifest.source_clients_dir()
     clients_dir = os.path.join(target_dir, FLEET_DIRNAME)
@@ -476,12 +486,30 @@ def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
             raise FileNotFoundError(
                 f"packaged fleet file missing at source: {source}")
         destination = os.path.join(clients_dir, name)
+        # §S1's confinement rule, ENFORCED: the copy lands inside
+        # `<target-dir>/clients/` and nowhere else. `os.path.isfile` and
+        # `Path.write_bytes` BOTH traverse a symlink, so a link left at one of
+        # the eight names would make the compare read — and the write
+        # overwrite — a file outside the target dir, and would leave the link
+        # in place for every later run to escape through again. Unlinking
+        # BEFORE the compare also stops a link whose target happens to match
+        # the source from masquerading as an already-converged destination.
+        # `islink` is true for a DANGLING link too, which is the shape that
+        # would otherwise CREATE the outside file.
+        if os.path.islink(destination):
+            os.unlink(destination)
         fresh = Path(source).read_bytes()
         if (not force
                 and os.path.isfile(destination)
                 and Path(destination).read_bytes() == fresh):
             continue
         Path(destination).write_bytes(fresh)
+        # The mode is part of the payload: `write_bytes` creates with the
+        # process umask, which strips the executable bit three of the eight
+        # carry at source. `copymode` also NORMALISES an existing
+        # destination's mode to the source's, so a `--force` re-copy repairs a
+        # mode that drifted out of band.
+        shutil.copymode(source, destination)
         converged = False
     return {"path": clients_dir, "converged": converged}
 
