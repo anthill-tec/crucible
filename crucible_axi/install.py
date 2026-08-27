@@ -92,19 +92,6 @@ _PACKAGE_JSON_NAME_KEY = "name"
 SERVER_HOST_ENV_VAR = "CRUCIBLE_HOST"
 SERVER_PORT_ENV_VAR = "CRUCIBLE_PORT"
 
-# CR-CRU-090 §S1 — where the [fleet] stage copies FROM: the repo checkout's own
-# `clients/` first, then the wheel's force-included `crucible_axi/clients`.
-# This deliberately mirrors `cli._CLIENTS_CANDIDATES` / `cli._clients_dir()`
-# rather than calling them: `cli` imports `install`, so importing `cli` here
-# would be circular. CR-CRU-090 §S2 retires BOTH copies into the single
-# `manifest.source_clients_dir()` resolver — the duplication is dated, not
-# accidental.
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_CLIENTS_CANDIDATES = (
-    os.path.join(os.path.dirname(_HERE), "clients"),   # source checkout (repo root)
-    os.path.join(_HERE, "clients"),                    # installed package data
-)
-
 # The packaged fleet, exactly (CR-CRU-090 §S1). The five stack clients plus:
 # `_crucible_axi.py` (the shared AXI envelope) and `toon.py` (the codec) —
 # which the five load BY FILE PATH from their OWN directory, so a clients-only
@@ -450,16 +437,6 @@ def server_launch_argv() -> list[str]:
     return [bun, "x", f"{SERVER_NPM_PACKAGE}@{server_version}"]
 
 
-def _source_clients_dir() -> str:
-    """The SOURCE fleet directory the [fleet] stage copies FROM — the first
-    existing candidate, falling back to the source-checkout path so a failure
-    names the location an operator expects."""
-    for candidate in _CLIENTS_CANDIDATES:
-        if os.path.isdir(candidate):
-            return candidate
-    return _CLIENTS_CANDIDATES[0]
-
-
 def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
     """[fleet] sub-installer — lay the eight packaged fleet files down under
     `<target-dir>/clients/` (CR-CRU-090 §S1).
@@ -489,7 +466,7 @@ def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
     never a size or an mtime, either of which a truncated or touched copy
     would pass.
     """
-    source_dir = _source_clients_dir()
+    source_dir = manifest.source_clients_dir()
     clients_dir = os.path.join(target_dir, FLEET_DIRNAME)
     os.makedirs(clients_dir, exist_ok=True)
     converged = not force
