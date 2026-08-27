@@ -24,15 +24,15 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-011](CR-CRU-011-workflow-lens.md) | Cycle plans + workflow lens + agent runtimes | feature | COMPLETED | 007 | 4 (after 016) |
 | [CR-CRU-020](CR-CRU-020-patch-workflow-history-refinements.md) | Patch: workflow history view refinements | patch | COMPLETED | 011, 019 | 4 (after 019) |
 | [CR-CRU-021](CR-CRU-021-patch-workflow-primary-tab.md) | Patch: Workflow as the primary workspace tab | patch | COMPLETED | 020 | 4 (after 020) |
-| [CR-CRU-023](CR-CRU-023-patch-pane-min-width-scroll.md) | Patch: gate-review defects — pane scroll floor · vitals trend chart · timer | patch | COMPLETED | 021 | 4 |
+| [CR-CRU-023](CR-CRU-023-patch-pane-min-width-scroll.md) | Patch: gate-review defects — pane scroll floor · vitals trend chart · timer restart semantics | patch | COMPLETED | 021 | 4 |
 | [CR-CRU-012](CR-CRU-012-projects-manager.md) | Projects manager: add + edit project parameters | feature | COMPLETED | 004, 007 | 4 (before 009) |
 | [CR-CRU-013](CR-CRU-013-gate-events.md) | Workflow events: gates (no-mistakes) + milestones | feature | COMPLETED | 008, 011 | 4 |
-| [CR-CRU-031](CR-CRU-031-wave-classification-fix.md) | Wave-classification fix: server wave-backfill + `plan-file --wave` + CR-021 | patch | COMPLETED | 011, 013 | 4 (right after 013) |
-| [CR-CRU-030](CR-CRU-030-fleet-toon-axi-compliance.md) | Fleet-wide TOON-AXI conversion + mandatory classification context (all crucible | patch | COMPLETED | 013 | 4 (before 009) |
-| [CR-CRU-036](CR-CRU-036-patch-client-axi-transition-fixes.md) | Patch: client TOON-AXI transition fixes (§S9 server-active-cycle + CR-008 test | patch | COMPLETED | 030 | 4 |
-| [CR-CRU-037](CR-CRU-037-patch-workflow-card-correctness.md) | Patch: workflow-card correctness (parallel-agent liveness dimming + plan-title | patch | COMPLETED | 011, 008 | 4 |
-| [CR-CRU-038](CR-CRU-038-patch-run-detail-controls.md) | Patch: run-detail drill-in controls | patch | COMPLETED | 016, 034 | 4 |
-| [CR-CRU-035](CR-CRU-035-ambient-context-session-hooks.md) | Ambient-context read-path contract (AXI principle 7) | feature | COMPLETED | 030 | 4 |
+| [CR-CRU-031](CR-CRU-031-wave-classification-fix.md) | Wave-classification fix: server wave-backfill + `plan-file --wave` + CR-021 correction | patch | COMPLETED | 011, 013 | 4 (right after 013) |
+| [CR-CRU-030](CR-CRU-030-fleet-toon-axi-compliance.md) | Fleet-wide TOON-AXI conversion + mandatory classification context (all crucible clients) | patch | COMPLETED | 013 | 4 (before 009) |
+| [CR-CRU-036](CR-CRU-036-patch-client-axi-transition-fixes.md) | Patch: client TOON-AXI transition fixes (§S9 server-active-cycle + CR-008 test retarget + fleet coverage-uniformity) | patch | COMPLETED | 030 | 4 |
+| [CR-CRU-037](CR-CRU-037-patch-workflow-card-correctness.md) | Patch: workflow-card correctness (parallel-agent liveness dimming + plan-title guard/fallback) | patch | COMPLETED | 011, 008 | 4 |
+| [CR-CRU-038](CR-CRU-038-patch-run-detail-controls.md) | Patch: run-detail drill-in controls — minimized error tree, raw-output toggle, header-relocated controls | patch | COMPLETED | 016, 034 | 4 |
+| [CR-CRU-035](CR-CRU-035-ambient-context-session-hooks.md) | Ambient-context read-path contract (AXI principle 7) — coordinated Crucible↔Model-B | feature | COMPLETED | 030 | 4 |
 | [CR-CRU-024](CR-CRU-024-patch-cycle-activation-guards.md) | Patch: plan-cycle activation guards + AXI invalid-action responses | patch | COMPLETED | 011 | 4 |
 | [CR-CRU-025](CR-CRU-025-cycle-run-boundary-navigation.md) | Cycle ↔ run-boundary navigation (bidirectional, with locate blink) | feature | COMPLETED | 011, 012 | 4 |
 | [CR-CRU-026](CR-CRU-026-patch-workspace-plan-scoping.md) | Patch: workspace plan scoping — navigation refetch + render guard | patch | COMPLETED | 011, 021 | 4 |
@@ -50,26 +50,26 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-044](CR-CRU-044-phase-as-first-class-data.md) | Agent phase must be declared data, not an agentId naming convention | patch | COMPLETED | 030, 036 | 4 |
 | [CR-CRU-045](CR-CRU-045-coverage-shadow-regression.md) | Patch: the `coverage/` shadow test over-specifies its contract | patch | COMPLETED | 036, 040 | 4 |
 | [CR-CRU-046](CR-CRU-046-toon-conformance.md) | Adopt the official TOON libraries on both stacks; retire our hand-written codecs | patch | COMPLETED | 005, 030, 009 | 4 |
-| [CR-CRU-047](CR-CRU-047-narration-gate-integrity.md) | Bun gate integrity: narration tests fail deterministically + an unexplained | patch | COMPLETED | 038, 039 | 4 |
-| [CR-CRU-048](CR-CRU-048-state-derived-help-and-close-guard.md) | AXI `help[]` must be state-derived | patch | COMPLETED | 011, 024, 030, 036 | 4 |
+| [CR-CRU-047](CR-CRU-047-narration-gate-integrity.md) | Bun gate integrity: narration tests fail deterministically + an unexplained test-count drop | patch | COMPLETED | 038, 039 | 4 |
+| [CR-CRU-048](CR-CRU-048-state-derived-help-and-close-guard.md) | AXI `help[]` must be state-derived, and `cr-close` must refuse an incomplete plan | patch | COMPLETED | 011, 024, 030, 036 | 4 |
 | [CR-CRU-049](CR-CRU-049-mvn-narration-hardening.md) | Harden `mvn-crucible.py` narration: real-format fixtures + pinned output mode | patch | COMPLETED | 008, 047 | 4 |
 | [CR-CRU-050](CR-CRU-050-skip-folds-into-passed.md) | Skipped/todo tests are counted as PASSED in the ingest envelope | patch | COMPLETED | 039, 047 | 4 |
 | [CR-CRU-051](CR-CRU-051-files-count-fleet-parity.md) | Propagate the run-envelope `files` count to the other four clients | patch | COMPLETED | 047, 050 | 4 |
-| [CR-CRU-052](CR-CRU-052-project-teardown.md) | Projects can be created but never deleted; seeded fixtures leave permanent dead | feature | COMPLETED | 012, 032 | 4 |
-| [CR-CRU-060](CR-CRU-060-e2e-harness-identity-drift.md) | The e2e harness predates the registered-caller hard stop; 19 scenarios fail | patch | COMPLETED | 056, 052 | 4 |
-| [CR-CRU-061](CR-CRU-061-tag-derived-versioning.md) | Bare-SemVer tags, and the npm version DERIVED from the tag instead of | patch | COMPLETED | 041 | 4 |
+| [CR-CRU-052](CR-CRU-052-project-teardown.md) | Projects can be created but never deleted; seeded fixtures leave permanent dead state | feature | COMPLETED | 012, 032 | 4 |
+| [CR-CRU-060](CR-CRU-060-e2e-harness-identity-drift.md) | The e2e harness predates the registered-caller hard stop; 19 scenarios fail against it | patch | COMPLETED | 056, 052 | 4 |
+| [CR-CRU-061](CR-CRU-061-tag-derived-versioning.md) | Bare-SemVer tags, and the npm version DERIVED from the tag instead of hand-bumped | patch | COMPLETED | 041 | 4 |
 | [CR-CRU-062](CR-CRU-062-ci-runs-the-gates.md) | CI publishes but never tests: no workflow runs the suite | feature | COMPLETED | 041, 052, 060 | 4 |
 | [CR-CRU-053](CR-CRU-053-retired-mirror-references.md) | Test files still point readers at the retired `~/.claude/scripts` client mirror | patch | COMPLETED | 008, 009, 042 | 4 |
 | [CR-CRU-054](CR-CRU-054-client-fleet-dry.md) | The client fleet is 44 functions copy-pasted five times | maintenance | COMPLETED | 030 | 4 |
-| [CR-CRU-055](CR-CRU-055-ai-agent-quieting-strip.md) | Patch: bun env-quieting strip misses `AI_AGENT` (narration + failure-marrying | patch | COMPLETED | 047, 038 | 4 |
-| [CR-CRU-056](CR-CRU-056-ambiguous-auto-attach-throws.md) | Agent registration binds its cycle EXPLICITLY; server-side auto-attach guessing | patch | COMPLETED | 036, 024, 044 | 4 |
-| [CR-CRU-057](CR-CRU-057-phase-survives-the-agent.md) | Patch: phase must survive the agent | patch | COMPLETED | 044, 011 | 4 |
-| [CR-CRU-058](CR-CRU-058-rust-axi-envelope-parity.md) | 40 of 118 client verbs emit no TOON-AXI envelope | patch | COMPLETED | 030, 054 | 4 |
-| [CR-CRU-059](CR-CRU-059-identity-source-validation.md) | The registration identity contract | patch | COMPLETED | 044, 054, 056, 057 | 4 |
-| [CR-CRU-063](CR-CRU-063-ci-provisions-the-toolchain.md) | CI runs the gates but provisions no toolchain | patch | COMPLETED | 062 | 4 |
-| [CR-CRU-064](CR-CRU-064-toolchain-starved-runs-emit-no-envelope.md) | A toolchain-starved run emits no envelope | patch | COMPLETED (0.1.0 · release prerequisite) | 030, 054, 058, 063 | 4 |
-| [CR-CRU-065](CR-CRU-065-cause-selection-fits-maven.md) | The no-report cause is selected by "last non-empty line" | patch | COMPLETED (0.1.0 · release prerequisite) | 064 | 4 |
-| [CR-CRU-066](CR-CRU-066-install-provisions-not-runs-plus-serve.md) | `crucible-axi install` hangs (runs the server) and exposes no run command | bugfix | COMPLETED (0.1.2 · release blocker) | 009, 041 | 4 |
+| [CR-CRU-055](CR-CRU-055-ai-agent-quieting-strip.md) | Patch: bun env-quieting strip misses `AI_AGENT` (narration + failure-marrying die in agent sessions) | patch | COMPLETED | 047, 038 | 4 |
+| [CR-CRU-056](CR-CRU-056-ambiguous-auto-attach-throws.md) | Agent registration binds its cycle EXPLICITLY; server-side auto-attach guessing is DELETED | patch | COMPLETED | 036, 024, 044 | 4 |
+| [CR-CRU-057](CR-CRU-057-phase-survives-the-agent.md) | Patch: phase must survive the agent — persist it on events, delete the name fallback | patch | COMPLETED | 044, 011 | 4 |
+| [CR-CRU-058](CR-CRU-058-rust-axi-envelope-parity.md) | 40 of 118 client verbs emit no TOON-AXI envelope, including the pre-merge gate in all five clients | patch | COMPLETED | 030, 054 | 4 |
+| [CR-CRU-059](CR-CRU-059-identity-source-validation.md) | The registration identity contract: rename `phase` → `role` fleet-wide, and validate `identity.source` | patch | COMPLETED | 044, 054, 056, 057 | 4 |
+| [CR-CRU-063](CR-CRU-063-ci-provisions-the-toolchain.md) | CI runs the gates but provisions no toolchain: 102 bun + 9 python failures on a real runner | patch | COMPLETED | 062 | 4 |
+| [CR-CRU-064](CR-CRU-064-toolchain-starved-runs-emit-no-envelope.md) | A toolchain-starved run emits no envelope: seven no-report fallbacks return an exit code and nothing machine-readable | patch | COMPLETED (0.1.0 · release prerequisite) | 030, 054, 058, 063 | 4 |
+| [CR-CRU-065](CR-CRU-065-cause-selection-fits-maven.md) | The no-report cause is selected by "last non-empty line", which fits python and node but not maven | patch | COMPLETED (0.1.0 · release prerequisite) | 064 | 4 |
+| [CR-CRU-066](CR-CRU-066-install-provisions-not-runs-plus-serve.md) | `crucible-axi install` hangs (runs the server) and exposes no run command; provision-and-exit + a `serve` verb + bun guarantee | bugfix | COMPLETED (0.1.2 · release blocker) | 009, 041 | 4 |
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue registration + Wave/CR sequence table | feature | COMPLETED (0.2.0) | 011, 013 | 5 (0.2.0) |
 | [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Crucible executes Playwright for frontend projects | feature | PENDING | 004, 007 | 6 (post-0.2.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end events + the Aborted state | feature | COMPLETED (0.2.0) | 008, 011 | 5 (0.2.0) |
@@ -79,8 +79,8 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-069](CR-CRU-069-uninstall-inverts-install.md) | Install has no inverse: `crucible-axi uninstall` + `install.sh` teardown | feature | COMPLETED (0.2.0) | 009, 066 | 5 (0.2.0) |
 | [CR-CRU-070](CR-CRU-070-systemd-user-unit.md) | systemd `--user` unit: install script provisions and reverses it | feature | COMPLETED (0.2.0) | 066, 069 | 5 (0.2.0) |
 | [CR-CRU-071](CR-CRU-071-in-place-upgrade-safe-migration.md) | In-place upgrade: versioned, backed-up, refusable DB migration | feature | COMPLETED (0.2.0 — incl. AC8 upgrade gate + AC9 daemon restart, absorbed from 072) | 001, 043, 068 | 5 (0.2.0) |
-| [CR-CRU-072](CR-CRU-072-installer-upgrades-in-place.md) | The installer cannot upgrade: bare `uv tool install` no-ops on an existing | bugfix | COMPLETED (0.2.0 — AC5 → 071 AC8, AC7 → 071 AC9) | 066, 069, 071 | 5 (0.2.0) |
-| [CR-CRU-073](CR-CRU-073-gate-events-expire-at-release.md) | Finished releases keep showing their gate | bugfix | COMPLETED (0.2.0) | 013, 071, 074 | 5 (0.2.0) |
+| [CR-CRU-072](CR-CRU-072-installer-upgrades-in-place.md) | The installer cannot upgrade: bare `uv tool install` no-ops on an existing install | bugfix | COMPLETED (0.2.0 — AC5 → 071 AC8, AC7 → 071 AC9) | 066, 069, 071 | 5 (0.2.0) |
+| [CR-CRU-073](CR-CRU-073-gate-events-expire-at-release.md) | Finished releases keep showing their gate: no-mistakes events outlive their release | bugfix | COMPLETED (0.2.0) | 013, 071, 074 | 5 (0.2.0) |
 | [CR-CRU-074](CR-CRU-074-releases-are-first-class.md) | Crucible has never been told a release happened | feature | COMPLETED (0.2.0) | 013 | 5 (0.2.0) |
 | [CR-CRU-076](CR-CRU-076-roadmap-first-tab.md) | Roadmap is first in the workspace tab band | patch | COMPLETED (0.2.0) | 014, 021 | 5 (0.2.0) |
 | [CR-CRU-080](CR-CRU-080-release-ceremony-cannot-report.md) | the release ceremony cannot report a release (no agent identity) | bugfix | COMPLETED (0.2.0) | 074 | 5 (0.2.0) |
@@ -88,7 +88,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-081](CR-CRU-081-release-provenance-uses-ancestry.md) | release provenance must use commit ancestry, not merge subjects | bugfix | COMPLETED (0.2.0) | 080 | 5 (0.2.0) |
 | [CR-CRU-086](CR-CRU-086-repair-must-not-erase-provenance.md) | the provenance repair must never erase provenance | bugfix | COMPLETED | 081 | 5 |
 | [CR-CRU-083](CR-CRU-083-derived-status-cannot-say-done.md) | derived status conflates "never started" with "done before tracking existed" | bugfix | COMPLETED | 014, 081 | 5 |
-| [CR-CRU-087](CR-CRU-087-ci-bun-is-unpinned.md) | CI floats to the newest bun, so a format-parsing test flips and blocks every | bugfix | COMPLETED (0.2.0) | — | 5 |
+| [CR-CRU-087](CR-CRU-087-ci-bun-is-unpinned.md) | CI floats to the newest bun, so a format-parsing test flips and blocks every publish | bugfix | COMPLETED (0.2.0) | — | 5 |
 | [CR-CRU-088](CR-CRU-088-failure-detail-marries-the-wrong-leaf.md) | a failure detail printed after its own leaf is attributed to the NEXT test | bugfix | COMPLETED | 087 | 5 |
 | [CR-CRU-090](CR-CRU-090-install-lays-the-fleet-down.md) | `install` never lays the client fleet down, so every manifest path is dead | hotfix | COMPLETED (0.1.3 · shipped) | — | 5 |
 | [CR-CRU-084](CR-CRU-084-release-records-its-packages.md) | a release records the package(s) it delivered | feature | COMPLETED | 080, 081 | 5 |
