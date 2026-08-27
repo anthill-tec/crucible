@@ -1226,9 +1226,10 @@ Ran 4 tests across 1 file. [58.00ms]
 // CI run 33056533678 reddened the live AC4 E2E assertion above for the same
 // class of reason CR-CRU-087 hit: a CLIENT contract was riding bytes a
 // toolchain release owns. Two-version probe (2026-08-27, one machine, one
-// fixture — FIXTURE_AFTERMATH_BLEED_SOURCE — run as `bun test sample.test.ts
-// --reporter=junit --reporter-outfile=...` with CLAUDECODE/AGENT/REPL_ID/
-// AI_AGENT unset exactly as `cmd_test` unsets them):
+// fixture — FIXTURE_AFTERMATH_BLEED_SOURCE, written out as the fixture
+// project's one generated test file — run as `bun test <that generated
+// file> --reporter=junit --reporter-outfile=...` with CLAUDECODE/AGENT/
+// REPL_ID/AI_AGENT unset exactly as `cmd_test` unsets them):
 //
 //   CONSOLE stream — byte-identical on 1.3.14 and 1.4.0 apart from the
 //   version banner and three duration tails (diffed, not eyeballed). The

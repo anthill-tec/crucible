@@ -246,7 +246,9 @@ class QueueFileAgainstRealReadmeTest(_QueueFileTestBase):
             ["CR-CRU-007", "CR-CRU-008", "CR-CRU-011",
              "CR-CRU-012", "CR-CRU-013", "CR-CRU-016"],
             "CR-CRU-009's dependsOn must be its exact README depends-on list")
-        self.assertEqual(entry.get("title"), "Release 0.1.0 skill bundle")
+        self.assertEqual(
+            entry.get("title"),
+            "Release 0.1.0: distro-agnostic installer + multi-harness skill bundle")
         self.assertEqual(str(entry.get("wave")), "4")
 
     def test_wave_cell_with_parenthetical_yields_leading_integer(self):
