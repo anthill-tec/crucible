@@ -226,8 +226,10 @@ cycle position; everything else is static.
 - **AC5** — each CR node carries its reported track when one is present, and its absence is not an
   error. No wave container and no lane is rendered by this CR (that is CR-085), and no test asserts
   a hard-coded track count.
-- **AC6** — every CR node label **starts with the CR id**; a node label never consists of the
-  title alone.
+- **AC6** — a CR node label is the **CR id plus a terse status suffix and nothing else** — no title
+  text at all, per the DN's row grammar ("**No titles** — the identifier is what every other surface
+  keys on"): `CR-CRU-090 ✓ merged`, `CR-CRU-077 ▶ 2/3`, bare id when `PENDING`. Asserted by checking
+  that no node label contains its own entry's `title` string, so an `id + title` label fails.
 - **AC7** — only nodes for `IN_PROGRESS` CRs carry live/animated state; `COMPLETED`,
   `COMPLETED_UNTRACKED` (CR-083's fourth derived value, already styled at `public/app.js:2548`) and
   `PENDING` nodes are static. Asserted on the rendered output, since the previous animation attempt
