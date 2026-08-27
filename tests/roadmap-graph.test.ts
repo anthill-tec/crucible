@@ -1319,6 +1319,15 @@ interface MountOpts {
   // instantiates the graph (see installCytoscape). Off for the toggle tests,
   // which only need the container's presence/absence.
   cytoscape?: boolean;
+  // CR-CRU-077 §S2/AC4 — the release ledger the collapse assertions need. The
+  // toggle/style/tap tests above ran with an EMPTY ledger, which is still the
+  // default, so nothing they assert changes.
+  releases?: BuilderRelease[];
+  // Runs INSIDE the freshly registered window, after the scripted `fetch` and
+  // BEFORE the app boots — the only place a test can pre-seed a would-be
+  // persistence store (localStorage/sessionStorage) so AC4's "not persisted"
+  // can be asserted as an ABSENCE of restore, not just an absence of write.
+  beforeBoot?: () => void;
 }
 
 // A Cytoscape stylesheet rule as `cy.style().json()` returns it.
@@ -1329,11 +1338,23 @@ interface CyStyleRule {
 interface CyCollection {
   length: number;
   nonempty: () => boolean;
+  empty: () => boolean;
   emit: (event: string) => unknown;
+  // `data(key)` is cytoscape's own per-element read — the RENDERED value, not
+  // the builder's input object. Typed `unknown` and narrowed at each use.
+  data: (key: string) => unknown;
+  // Cytoscape's own "is this element actually drawn" predicate (it folds in
+  // `display`/`visibility` and a hidden parent), so an assertion on it holds
+  // whether a collapse implementation REMOVES its members or HIDES them.
+  visible: () => boolean;
+  isParent: () => boolean;
+  map: <T>(fn: (ele: CyCollection) => T) => T[];
 }
 interface CyHandle {
   style: () => { json: () => CyStyleRule[] };
   $id: (id: string) => CyCollection;
+  nodes: (selector?: string) => CyCollection;
+  edges: (selector?: string) => CyCollection;
 }
 
 // public/app.js guards its Cytoscape mount on the plain-HTML global
@@ -1390,7 +1411,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
     if (/\/api\/v2\/projects\/[^/]+\/queue/.test(url)) {
       body = { ok: true, entries: opts.queue };
     } else if (/\/api\/v2\/projects\/[^/]+\/releases/.test(url)) {
-      body = { ok: true, releases: [] };
+      body = { ok: true, releases: opts.releases ?? [] };
     } else if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
       body = { ok: true, plans: [] };
     } else if (url.includes("/api/v2/projects")) {
@@ -1406,6 +1427,8 @@ async function mountApp(opts: MountOpts): Promise<void> {
     }
     return { ok: true, status: 200, json: async () => body } as Response;
   }) as typeof fetch;
+
+  opts.beforeBoot?.();
 
   (0, eval)(VAN_SRC);
   (0, eval)(VAN_X_SRC);
@@ -1615,5 +1638,419 @@ describe("CR-CRU-083 AC7 — tapping a graph node is status-gated exactly like t
     cy!.$id("CR-A").emit("tap");
     await settle();
     expect(tabIsOn("Workflow")).toBe(true);
+  });
+});
+
+// ── CR-CRU-077 §S2 / AC4 — collapse is by RELEASE ───────────────────────────
+//
+// Spec: docs/changes/CR-CRU-077-roadmap-graph-is-the-execution-dag.md §S2 +
+// AC4 (as corrected by gap-analysis round 3): "collapse is by **release**: a
+// shipped release renders as one node carrying its CR count and expands on
+// click, while the unreleased region stays expanded", plus §S2's "Expansion
+// state is UI state, not persisted." AC4's old wave-container clause was
+// REMOVED by DRIFT-1 — §S3/AC5 govern containers and that chrome is
+// CR-CRU-085's — so the last test below FORBIDS wave chrome, to stop AC4 being
+// satisfied by grouping on waves instead of on releases.
+//
+// THE SEAM, and why it is a RENDER assertion (the CR's Risk section requires
+// one: "a source-only check already gave a false positive once this cycle"):
+// these tests drive the REAL public/app.js in happy-dom and the REAL vendored
+// cytoscape + dagre (mountApp's `cytoscape: true` → installCytoscape), then
+// read the LIVE instance app.js publishes on `window.crucibleRoadmapCy`. So
+// every assertion below is on cytoscape's own rendered element registry —
+// which nodes exist and which are actually drawn — never on a call count and
+// never on app.js source. Cytoscape draws to a <canvas>, so there is no
+// per-node DOM element to query or click: node presence is read through
+// `cy.$id(...)` and the click is `…emit("tap")`, cytoscape's own dispatch into
+// the delegated `cy.on("tap", …)` handler — exactly the precedent the CR-083
+// tap test above already relies on.
+//
+// Fixtures are the LIVE shape (REAL_ENTRIES, 88 parsed queue rows; and the
+// verbatim 4-release REAL_RELEASES ledger), so the counts AC4 talks about are
+// the measured ones. Feasibility measured, not assumed: this mount lays 94
+// nodes out in ~0.4s under happy-dom.
+//
+// THE PINNED CONTRACT — the four render-side decisions AC4 leaves open, each
+// derived from an AC already shipped rather than invented here:
+//   1. A release's ONE node IS the existing `milestone:<version>` diamond. The
+//      builder already emits exactly one node per release, and AC1 requires it
+//      to keep an inbound and an outbound edge; a SECOND "collapsed" node
+//      beside it would duplicate the release in the flow.
+//   2. The count rides that node as `data.crCount` AND is visible in its
+//      `label`: "carrying its CR count" is a claim about what the user sees, so
+//      a count nobody can read is not rendered.
+//   3. Collapse state is `data.collapsed` — `true` while collapsed, `false`
+//      once expanded. The node PERSISTS through expansion (it is marked, not
+//      removed): AC1 forbids a release whose diamond has no edges, and
+//      `rel:chain:` wires the diamonds to each other, so a diamond that
+//      vanished on expand would break the release chain mid-graph.
+//   4. "Not individually present" is measured as NOT RENDERED — absent from
+//      the graph, or present-but-not-drawn (`visible()` false, which folds in
+//      `display`/`visibility` and a hidden parent). Both are honest collapse
+//      implementations; pinning one would pin a mechanism, not AC4's outcome.
+//
+// THE DEFECT UNDER TEST, measured against today's render (real cytoscape,
+// live shape, graph view up): `cy.$id("CR-CRU-001").nonempty()` is `true` —
+// a CR that shipped in 0.1.0 renders as its own node — and
+// `cy.$id("milestone:0.1.0")` carries `data.crCount === undefined` with
+// `label === "0.1.0"`. There is no collapse of any kind and no count anywhere,
+// so all four of 0.1.0 / 0.1.1 / 0.1.2 / 0.1.3 render 62 member CRs loose in
+// the flow.
+
+/** The release ledger's per-version membership count, measured 2026-08-27. */
+const EXPECTED_RELEASE_CR_COUNTS: Record<string, number> = {
+  "0.1.0": 60,
+  "0.1.1": 0,
+  "0.1.2": 1,
+  "0.1.3": 1,
+};
+
+/** The node id the builder already gives a release diamond. */
+const releaseNodeId = (version: string): string => `milestone:${version}`;
+
+/** The CRs a release shipped that the queue actually carries — the collapsible members. */
+const membersInQueue = (rel: BuilderRelease): string[] => {
+  const queued = new Set(REAL_ENTRIES.map((e) => e.cr));
+  return membersOf(rel).filter((cr) => queued.has(cr));
+};
+
+/** Every CR in NO release — AC4's "unreleased region", which stays expanded. */
+const UNRELEASED_CRS = REAL_ENTRIES.map((e) => e.cr).filter((cr) => !ALL_RELEASED.has(cr));
+
+/** The live instance, or a named failure — a missing handle is never a pass. */
+function liveCy(): CyHandle {
+  const cy = roadmapCy();
+  if (cy === undefined) {
+    throw new Error("no cytoscape instance was published on window.crucibleRoadmapCy");
+  }
+  return cy;
+}
+
+/** cytoscape's `data(key)` is untyped by construction — narrow, never assert. */
+const stringData = (node: CyCollection, key: string): string => {
+  const value = node.data(key);
+  return typeof value === "string" ? value : "";
+};
+
+/** Rendered = in the graph AND actually drawn (see pinned decision 4). */
+const isRendered = (cy: CyHandle, id: string): boolean => {
+  const node = cy.$id(id);
+  return node.nonempty() && node.visible();
+};
+
+/** Every CR id the graph currently DRAWS, whatever the collapse mechanism. */
+const renderedCrIds = (cy: CyHandle): string[] =>
+  cy
+    .nodes('[type="cr"]')
+    .map((n) => (n.visible() ? stringData(n, "id") : ""))
+    .filter((id) => id !== "")
+    .sort();
+
+/**
+ * The endpoints of every edge the graph currently DRAWS. Read off cytoscape's
+ * own edge elements (their `source`/`target` data), so a collapse that leaves
+ * an edge behind pointing at a hidden CR is visible to the assertions below.
+ */
+const visibleEdgeEnds = (cy: CyHandle): { source: string; target: string }[] => {
+  const ends: { source: string; target: string }[] = [];
+  const drawn = cy
+    .edges()
+    .map((e) =>
+      e.visible() ? { source: stringData(e, "source"), target: stringData(e, "target") } : undefined,
+    );
+  for (const end of drawn) {
+    if (end !== undefined) ends.push(end);
+  }
+  return ends;
+};
+
+/** The live roadmap in the GRAPH view, real cytoscape, real app.js. */
+async function mountLiveRoadmapGraph(
+  opts: { pathname?: string; beforeBoot?: () => void } = {},
+): Promise<void> {
+  await mountApp({
+    pathname: opts.pathname ?? "/p/live-roadmap/roadmap",
+    projects: [project({ key: "live-roadmap" })],
+    queue: REAL_ENTRIES,
+    releases: REAL_RELEASES,
+    cytoscape: true,
+    beforeBoot: opts.beforeBoot,
+  });
+  const toGraph = document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]');
+  expect(toGraph).not.toBeNull();
+  toGraph!.click();
+  await settle();
+}
+
+describe("CR-CRU-077 §S2/AC4 — a shipped release renders as ONE node carrying its CR count", () => {
+  test("the live fixture really carries the release membership every assertion below keys on", () => {
+    // Non-vacuity guard, pure — no render. If the ledger fixture or the README
+    // queue table stopped yielding membership, "the members are not rendered"
+    // would pass against a graph that collapses nothing at all.
+    expect(REAL_RELEASES.map((r) => r.version).sort()).toEqual(["0.1.0", "0.1.1", "0.1.2", "0.1.3"]);
+    for (const rel of REAL_RELEASES) {
+      // Every CR the ledger claims is a real queue row, so the collapsed count
+      // and the hidden node set are the SAME number by construction.
+      expect(membersInQueue(rel)).toEqual(membersOf(rel));
+      expect(membersInQueue(rel).length).toBe(EXPECTED_RELEASE_CR_COUNTS[rel.version]);
+    }
+    // The unreleased region is substantial and holds the CRs in flight — so
+    // "stays expanded" is a claim about real nodes.
+    expect(UNRELEASED_CRS.length).toBeGreaterThan(20);
+    expect(UNRELEASED_CRS).toContain("CR-CRU-077");
+    expect(UNRELEASED_CRS).toContain("CR-CRU-085");
+    // …and the two regions together are the whole queue, nothing double-counted.
+    const membersTotal = REAL_RELEASES.reduce((sum, rel) => sum + membersInQueue(rel).length, 0);
+    expect(membersTotal + UNRELEASED_CRS.length).toBe(REAL_ENTRIES.length);
+  });
+
+  test("each shipped release renders as EXACTLY ONE node, collapsed, whose CR count is on the node AND in its label", async () => {
+    await mountLiveRoadmapGraph();
+    const cy = liveCy();
+
+    for (const rel of REAL_RELEASES) {
+      const id = releaseNodeId(rel.version);
+      // Exactly one node per release — the diamond, not a second collapsed twin.
+      const sameVersion = cy
+        .nodes(`[version="${rel.version}"]`)
+        .map((n) => stringData(n, "id"))
+        .sort();
+      expect(sameVersion).toEqual([id]);
+      const node = cy.$id(id);
+      expect(isRendered(cy, id)).toBe(true);
+      // Collapsed by DEFAULT — no interaction has happened yet.
+      expect(node.data("collapsed")).toBe(true);
+      // The count it carries is its OWN membership, not the whole queue.
+      expect(node.data("crCount")).toBe(EXPECTED_RELEASE_CR_COUNTS[rel.version]);
+    }
+
+    // …and the count is VISIBLE, not merely stored — measured on the label with
+    // the version text REMOVED, because every version string here already
+    // contains the digits `0` and `1` ("0.1.2" would satisfy a naive "the label
+    // mentions 1" check on its own). The zero-CR release (0.1.1) is asserted on
+    // `crCount` alone: rendering the literal text "0 CRs" is a caption choice
+    // AC4 does not force, while the count itself is still carried.
+    for (const rel of REAL_RELEASES) {
+      const count = EXPECTED_RELEASE_CR_COUNTS[rel.version];
+      const label = stringData(cy.$id(releaseNodeId(rel.version)), "label");
+      expect(label).toContain(rel.version);
+      if (count === 0) continue;
+      const withoutVersion = label.split(rel.version).join(" ");
+      expect(withoutVersion).toMatch(new RegExp(`(^|\\D)${count}(\\D|$)`));
+    }
+  });
+
+  test("while collapsed, the member CRs are NOT individually rendered — the hidden set is exactly RELEASE membership", async () => {
+    await mountLiveRoadmapGraph();
+    const cy = liveCy();
+
+    // Every shipped CR is folded into its release node…
+    const stillRendered = REAL_RELEASES.flatMap(membersInQueue).filter((cr) => isRendered(cy, cr));
+    expect(stillRendered).toEqual([]);
+    // …and what remains drawn is EXACTLY the unreleased complement. A GREEN
+    // that collapsed on waves (or on status, or on anything else) fails here
+    // even if its node count happened to match.
+    expect(renderedCrIds(cy)).toEqual([...UNRELEASED_CRS].sort());
+  });
+
+  test("collapsing a release strands nothing: its node keeps inbound AND outbound flow, and no drawn edge dangles into a hidden CR", async () => {
+    // The AC1 × AC4 interaction, and the reason it needs its own test: a
+    // release's inflow is its MEMBER CRs (`rel:ship:<cr>-><ver>`). Fold those
+    // members away and a naive collapse leaves the diamond with no inbound edge
+    // at all — the exact defect AC1 exists to forbid ("no milestone node is
+    // ever edgeless") — or leaves an edge drawn to a node that is no longer
+    // there. Read off the rendered edge set, so either failure is caught.
+    await mountLiveRoadmapGraph();
+    const cy = liveCy();
+    const ends = visibleEdgeEnds(cy);
+    expect(ends.length).toBeGreaterThan(0);
+
+    for (const rel of REAL_RELEASES) {
+      const id = releaseNodeId(rel.version);
+      expect(ends.filter((e) => e.target === id).length).toBeGreaterThan(0);
+      expect(ends.filter((e) => e.source === id).length).toBeGreaterThan(0);
+    }
+    // No dangling half-edge: everything an edge touches is itself drawn.
+    const dangling = ends
+      .filter((e) => !isRendered(cy, e.source) || !isRendered(cy, e.target))
+      .map((e) => `${e.source}->${e.target}`);
+    expect(dangling).toEqual([]);
+  });
+
+  test("the unreleased region stays expanded: every CR in no release is drawn individually, with no interaction at all", async () => {
+    await mountLiveRoadmapGraph();
+    const cy = liveCy();
+
+    const missing = UNRELEASED_CRS.filter((cr) => !isRendered(cy, cr));
+    expect(missing).toEqual([]);
+    // Named, so this cannot pass on an empty unreleased set.
+    expect(isRendered(cy, "CR-CRU-077")).toBe(true);
+    expect(isRendered(cy, "CR-CRU-085")).toBe(true);
+  });
+
+  test("tapping a collapsed release node EXPANDS it: its members render, and the node stays, marked expanded", async () => {
+    await mountLiveRoadmapGraph();
+    const target = REAL_RELEASES.find((r) => r.version === "0.1.0")!;
+    const id = releaseNodeId(target.version);
+    const members = membersInQueue(target);
+
+    // Precondition (collapsed) — read through the live instance, not assumed.
+    expect(liveCy().$id(id).data("collapsed")).toBe(true);
+    expect(members.filter((cr) => isRendered(liveCy(), cr))).toEqual([]);
+
+    liveCy().$id(id).emit("tap");
+    await settle();
+
+    // Re-read the handle: an implementation may remount the instance.
+    const cy = liveCy();
+    const notRendered = members.filter((cr) => !isRendered(cy, cr));
+    expect(notRendered).toEqual([]);
+    // The diamond is still there and now reads as expanded (pinned decision 3:
+    // AC1 forbids the release chain losing a node).
+    expect(isRendered(cy, id)).toBe(true);
+    expect(cy.$id(id).data("collapsed")).toBe(false);
+    // Expanding ONE release does not expand the others.
+    const other = releaseNodeId("0.1.2");
+    expect(cy.$id(other).data("collapsed")).toBe(true);
+    expect(isRendered(cy, "CR-CRU-066")).toBe(false);
+  });
+
+  test("tapping the same release node again RE-COLLAPSES it — the state is a toggle, not one-way", async () => {
+    await mountLiveRoadmapGraph();
+    const target = REAL_RELEASES.find((r) => r.version === "0.1.2")!;
+    const id = releaseNodeId(target.version);
+    const members = membersInQueue(target);
+    expect(members).toEqual(["CR-CRU-066"]);
+
+    liveCy().$id(id).emit("tap");
+    await settle();
+    expect(members.filter((cr) => !isRendered(liveCy(), cr))).toEqual([]);
+    expect(liveCy().$id(id).data("collapsed")).toBe(false);
+
+    liveCy().$id(id).emit("tap");
+    await settle();
+
+    const cy = liveCy();
+    expect(members.filter((cr) => isRendered(cy, cr))).toEqual([]);
+    expect(cy.$id(id).data("collapsed")).toBe(true);
+    // Re-collapsing restores the count-carrying node, it does not blank it.
+    expect(cy.$id(id).data("crCount")).toBe(EXPECTED_RELEASE_CR_COUNTS[target.version]);
+  });
+
+  test("expansion is UI state, not persisted: toggling writes NOTHING — no fetch, no storage, no history or URL write", async () => {
+    await mountLiveRoadmapGraph();
+    const id = releaseNodeId("0.1.0");
+    const members = membersInQueue(REAL_RELEASES.find((r) => r.version === "0.1.0")!);
+
+    // Spies installed AFTER boot, so the app's own startup fetches and the
+    // density-mode storage read are not counted — only what the TOGGLE does.
+    // `globalThis` carries no `fetch` declaration in this project's lib set, so
+    // the scripted global is reached through the same named boundary const
+    // mountApp uses above (a DOM/global shape the compiler cannot see).
+    const globalScope: { fetch: typeof fetch } = globalThis as unknown as {
+      fetch: typeof fetch;
+    };
+    const scriptedFetch = globalScope.fetch;
+    let fetchCalls = 0;
+    globalScope.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls += 1;
+      return scriptedFetch(input, init);
+    }) as typeof fetch;
+    const storage = window.localStorage;
+    const session = window.sessionStorage;
+    let storageWrites = 0;
+    storage.setItem = () => {
+      storageWrites += 1;
+    };
+    session.setItem = () => {
+      storageWrites += 1;
+    };
+    let historyWrites = 0;
+    window.history.pushState = () => {
+      historyWrites += 1;
+    };
+    window.history.replaceState = () => {
+      historyWrites += 1;
+    };
+    const hrefBefore = window.location.href;
+
+    liveCy().$id(id).emit("tap");
+    await settle();
+    // Restored before the assertions, so a failing expectation cannot leak the
+    // counting wrapper into the next test.
+    globalScope.fetch = scriptedFetch;
+
+    // The toggle really happened — otherwise "nothing was written" is vacuous.
+    expect(members.filter((cr) => !isRendered(liveCy(), cr))).toEqual([]);
+    expect(liveCy().$id(id).data("collapsed")).toBe(false);
+
+    // …and it reached no server, no storage, no history entry, no URL.
+    expect(fetchCalls).toBe(0);
+    expect(storageWrites).toBe(0);
+    expect(historyWrites).toBe(0);
+    expect(window.location.href).toBe(hrefBefore);
+    expect(window.location.search).toBe("");
+    expect(window.location.hash).toBe("");
+  });
+
+  test("expansion survives NOTHING: a fresh mount starts collapsed even when a seeded store and URL claim otherwise", async () => {
+    // The other half of "not persisted": a fresh app must not RESTORE an
+    // expansion from anywhere. Every plausible carrier is pre-seeded before the
+    // app boots — storage keys in the app's own `crucible.*` namespace, plus a
+    // query and a hash on the URL — and the graph must still come up collapsed.
+    const seeded = ["0.1.0"];
+    await mountLiveRoadmapGraph({
+      pathname: "/p/live-roadmap/roadmap?expand=0.1.0#expand=0.1.0",
+      beforeBoot: () => {
+        for (const key of [
+          "crucible.roadmap.expanded",
+          "crucible.roadmap.collapse",
+          "crucible.roadmap.releases.expanded",
+        ]) {
+          window.localStorage.setItem(key, JSON.stringify(seeded));
+          window.sessionStorage.setItem(key, JSON.stringify(seeded));
+        }
+      },
+    });
+    const cy = liveCy();
+
+    // Guard: this really is the roadmap graph, and the seeded URL did not
+    // derail the route (routeParse reads `location.pathname` only).
+    expect(window.location.search).toBe("?expand=0.1.0");
+    expect(document.querySelector('[data-testid="roadmap-graph"]')).not.toBeNull();
+
+    const id = releaseNodeId("0.1.0");
+    expect(cy.$id(id).data("collapsed")).toBe(true);
+    expect(membersInQueue(REAL_RELEASES.find((r) => r.version === "0.1.0")!).filter((cr) =>
+      isRendered(cy, cr),
+    )).toEqual([]);
+  });
+
+  test("collapse is by RELEASE and by nothing else: the graph draws no wave container and no lane", async () => {
+    // AC5/§S3 — that chrome is CR-CRU-085's, so a GREEN cannot satisfy AC4 by
+    // grouping the flow on waves. `data.wave` ON a CR node is legitimate
+    // carried data (AC8); a wave CONTAINER is the forbidden thing, and in
+    // cytoscape a container box IS a compound parent.
+    await mountLiveRoadmapGraph();
+    const cy = liveCy();
+
+    const types = [...new Set(cy.nodes().map((n) => stringData(n, "type")))].sort();
+    expect(types).toEqual(["cr", "milestone", "terminal"]);
+    const compoundParents = cy
+      .nodes()
+      .map((n) => (n.isParent() ? stringData(n, "id") : ""))
+      .filter((id) => id !== "");
+    expect(compoundParents).toEqual([]);
+    const compoundChildren = cy
+      .nodes()
+      .map((n) => (stringData(n, "parent") === "" ? "" : stringData(n, "id")))
+      .filter((id) => id !== "");
+    expect(compoundChildren).toEqual([]);
+
+    // Nor as DOM chrome around the canvas.
+    const container = document.querySelector('[data-testid="roadmap-graph"]');
+    expect(container).not.toBeNull();
+    expect(container!.querySelectorAll('[data-testid*="wave"], [data-testid*="lane"]').length).toBe(0);
+    expect(document.querySelectorAll('[data-testid="roadmap-wave-divider"]').length).toBe(0);
   });
 });
