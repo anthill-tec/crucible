@@ -35,9 +35,13 @@ stage reports `converged: True` only when ALL eight already matched, `--force`
 re-copies unconditionally and reports `converged: False`, and destination files
 the install does not manage are never touched.
 
-NOT this cycle (owned elsewhere in plan 89): every manifest path resolving
-(AC3), a copied client running (AC4), the `manifest.source_clients_dir()`
-single resolver (§S2/AC7), the `cli.main()` integration (AC8).
+C3 (§S3, AC3) BACKFILLS the guard the whole CR exists for: after a real
+`run_install`, every path the on-disk manifest publishes resolves -- readable,
+non-empty, and anchored under `<target-dir>/clients/`.
+
+NOT this cycle (owned elsewhere in plan 89): a copied client running (AC4),
+the `manifest.source_clients_dir()` single resolver (§S2/AC7), the
+`cli.main()` integration (AC8).
 
 Every test owns a `tempfile.mkdtemp` scratch target under `/tmp` and removes
 it; the `[server]` stage is always stubbed to a no-subprocess provision double,
@@ -47,6 +51,7 @@ written inside the repo or into `~/.crucible`.
 
 import filecmp
 import importlib
+import json
 import os
 import shutil
 import sys
@@ -611,6 +616,162 @@ class UnmanagedDestinationFilesSurviveTest(_FleetConvergenceCase):
             os.stat(self.unmanaged).st_mtime_ns, PINNED_MTIME_NS,
             f"§S1 -- an unmanaged file must not even be touched by a "
             f"converged run")
+
+
+# --- CR-CRU-090 C3 (§S3, AC3) -- every path the manifest publishes resolves --
+
+# BACKFILL, not RED: the `fleet` stage (C1/C2) already lays the eight files
+# down, so this guard passes on its first execution. Its worth was proved by
+# MUTATION instead: with `"fleet"` removed from `install.STAGE_ORDER`, or with
+# the stage skipping `STATUS-CONTRACT.md`, or with `build_manifest` publishing
+# the package-internal location, or with an extra top-level manifest key, the
+# class fails. That is exactly the 0.1.2 defect this CR exists for.
+
+# §S3 -- the manifest's shape is UNCHANGED by this CR, so the guard pins it:
+# these three top-level keys, no more, and exactly the five client stacks.
+EXPECTED_MANIFEST_KEYS = frozenset({"version", "clients", "status"})
+EXPECTED_CLIENT_STACKS = frozenset({
+    "bun", "python", "rust", "mvn", "arduino",
+})
+
+# The `status` entry is published at top level, not inside `clients`; the guard
+# treats it as a sixth published path with identical obligations.
+STATUS_MANIFEST_KEY = "status"
+
+
+class ManifestPublishedPathsResolveTest(_ScratchInstallCase):
+    """AC3/§S3 -- after a REAL `run_install` (only `[server]` stubbed; `fleet`
+    and `manifest` both real), every path the manifest document on disk
+    publishes must be a readable, non-empty file anchored under
+    `<target-dir>/clients/`.
+
+    Read from `<target-dir>/crucible-clients.json` -- the artefact a consumer
+    actually consumes -- never from `build_manifest`'s return value, which
+    would only re-assert the builder against itself.
+
+    CR-CRU-009's acceptance asked only that the manifest "exists with a stable
+    schema"; that is satisfiable while all six paths dangle, which is how this
+    defect shipped in 0.1.0 and survived two releases. So existence alone is
+    not enough here: each path is opened and read.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ok, self.stages, self.warnings = \
+            self.run_install_with_stubbed_server()
+        manifest_file = Path(self.manifest_path())
+        self.assertTrue(
+            manifest_file.exists(),
+            f"AC3 -- no manifest at {manifest_file}; ok={self.ok} "
+            f"stages={self.stages} warnings={self.warnings}")
+        self.document = json.loads(manifest_file.read_text(encoding="utf-8"))
+
+    def published_paths(self):
+        """The six published paths, keyed by the manifest key that publishes
+        each -- so a failure names the offending key, not just a path."""
+        published = {
+            f"clients.{stack}": path
+            for stack, path in self.document.get("clients", {}).items()
+        }
+        published[STATUS_MANIFEST_KEY] = self.document.get(STATUS_MANIFEST_KEY)
+        return published
+
+    def test_all_six_published_paths_are_present_and_exist_on_disk(self):
+        """AC3 -- the five `clients[stack]` values and `status` are present as
+        manifest keys AND `os.path.exists()`. This is the assertion that fails
+        on 0.1.2, where all six name package-external paths nothing created."""
+        self.assertEqual(
+            set(self.document.get("clients", {})), EXPECTED_CLIENT_STACKS,
+            f"AC3 -- the manifest must publish exactly the five client stacks "
+            f"{sorted(EXPECTED_CLIENT_STACKS)}; got "
+            f"{sorted(self.document.get('clients', {}))}")
+        published = self.published_paths()
+        self.assertIsNotNone(
+            published[STATUS_MANIFEST_KEY],
+            f"AC3 -- the manifest must publish a {STATUS_MANIFEST_KEY!r} "
+            f"path; document keys={sorted(self.document)}")
+        missing = sorted(
+            f"{key} -> {path}"
+            for key, path in published.items()
+            if not os.path.exists(path))
+        self.assertEqual(
+            [], missing,
+            f"AC3 -- every path the manifest publishes must exist on disk; "
+            f"{len(missing)} of {len(published)} dangle: {missing}. A "
+            f"consumer reading {self.manifest_path()!r} gets a dead feed.")
+
+    def test_every_published_path_is_a_readable_non_empty_file(self):
+        """AC3 -- "exist and be readable". Existence alone was the weak
+        CR-CRU-009 acceptance; a directory, an unreadable file or an empty
+        stub all satisfy `exists` and are all useless to a consumer, so each
+        path is stat'd, access-checked and actually read."""
+        broken = []
+        for key, path in sorted(self.published_paths().items()):
+            if not os.path.isfile(path):
+                broken.append(f"{key} -> {path}: not a regular file")
+                continue
+            if not os.access(path, os.R_OK):
+                broken.append(f"{key} -> {path}: not readable (R_OK)")
+                continue
+            try:
+                content = Path(path).read_bytes()
+            except OSError as exc:
+                broken.append(f"{key} -> {path}: unreadable ({exc})")
+                continue
+            if not content:
+                broken.append(f"{key} -> {path}: readable but EMPTY")
+        self.assertEqual(
+            [], broken,
+            f"AC3/§S3 -- every published path must be a readable, non-empty "
+            f"file: {broken}")
+
+    def test_every_published_path_is_anchored_under_the_target_clients_dir(self):
+        """§S3 -- "consumers anchor on `<target-dir>/clients/`, never on the
+        package's internal location, which moves with the interpreter". A
+        manifest publishing `.../site-packages/crucible_axi/clients/...` could
+        satisfy exists+readable on the build machine and still be the very
+        defect this CR fixes, so the anchor is pinned separately."""
+        expected_dir = os.path.realpath(self.clients_dir())
+        stray = sorted(
+            f"{key} -> {path}"
+            for key, path in self.published_paths().items()
+            if os.path.dirname(os.path.realpath(path)) != expected_dir)
+        self.assertEqual(
+            [], stray,
+            f"§S3 -- every published path must sit directly in "
+            f"{expected_dir!r} (the declared `--target-dir` anchor); "
+            f"off-anchor: {stray}")
+
+    def test_the_manifest_shape_is_unchanged_by_this_cr(self):
+        """§S3 -- `build_manifest` "keeps its signature and its keys": the
+        contract is tightened by TEST, not by shape. So the guard also pins
+        that nothing was ADDED -- exactly `{version, clients, status}` at top
+        level, `clients` a five-entry mapping of stack to string path, and a
+        non-empty `version`."""
+        self.assertEqual(
+            EXPECTED_MANIFEST_KEYS, set(self.document),
+            f"§S3 -- the manifest's top-level keys must stay exactly "
+            f"{sorted(EXPECTED_MANIFEST_KEYS)} (the consumer contract is "
+            f"byte-compatible; only the values become real); got "
+            f"{sorted(self.document)}")
+        clients = self.document["clients"]
+        self.assertEqual(
+            EXPECTED_CLIENT_STACKS, set(clients),
+            f"§S3 -- `clients` must map exactly the five stacks; got "
+            f"{sorted(clients)}")
+        non_strings = sorted(
+            f"clients.{stack} -> {value!r}"
+            for stack, value in clients.items()
+            if not isinstance(value, str))
+        self.assertEqual(
+            [], non_strings,
+            f"§S3 -- every `clients[stack]` value must be a path string; "
+            f"got {non_strings}")
+        self.assertIsInstance(self.document[STATUS_MANIFEST_KEY], str)
+        self.assertTrue(
+            self.document["version"],
+            f"§S3 -- the manifest must carry a non-empty `version`; got "
+            f"{self.document['version']!r}")
 
 
 if __name__ == "__main__":
