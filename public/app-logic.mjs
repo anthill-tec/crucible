@@ -784,64 +784,209 @@ export function workflowLens({ plans, events }) {
 }
 
 /**
- * CR-CRU-014 §S3 — pure, browser-free roadmap graph-data builder. Maps the
- * execution queue + release ledger into a Cytoscape elements shape
- * ({nodes, edges}): one rectangle type:"cr" node per entry (wave/track/status
- * ride DATA fields, never the label — label is the human title, falling back
- * to the CR id); one directed edge per dependsOn (prereq SOURCE → dependant
- * TARGET); one diamond type:"milestone" node per release boundary; and a
- * single Start/End ellipse type:"terminal" pair bracketing the DAG (Start →
- * every root CR, every sink CR → End).
+ * CR-CRU-077 §S4/AC6 — the terse status suffix a CR node's label carries after
+ * its id, keyed by the four derived `QueueStatus` values. Each is derivable
+ * from the status value ALONE, so the builder's own two inputs are enough:
+ * `COMPLETED` is a merged plan, `COMPLETED_UNTRACKED` is shipped-but-never-
+ * tracked (CR-CRU-083's fourth value, which must not read as "merged"),
+ * `IN_PROGRESS` is active, and `PENDING` has nothing to say yet.
+ *
+ * A cycle position (`2/3`) is deliberately NOT here: it lives on `plan.cycles`
+ * and the builder is handed queue entries + releases only, so rendering one
+ * would pin fabricated data. The active marker stands alone instead — the same
+ * degradation the table's lane badge already makes when the position is null.
+ */
+const CR_STATUS_SUFFIX = new Map([
+  ["COMPLETED", " ✓ merged"],
+  ["COMPLETED_UNTRACKED", " ✓ untracked"],
+  ["IN_PROGRESS", " ▶"],
+  ["PENDING", ""],
+]);
+
+/**
+ * AC6's whole CR node label: the CR id plus that suffix, and NOTHING else. The
+ * title is absent by design — it crowds the identifier out of the node box —
+ * and the raw wire status never appears as text either; it stays on
+ * `data.status`, where the stylesheet selects on it.
+ *
+ * An unknown or absent status yields the BARE id: a suffix is a claim about
+ * execution state, and an unrecognised value supports no claim. So the node
+ * still reads (and never renders `undefined`) without inventing a marker.
+ */
+const crNodeLabel = (e) => `${e.cr}${CR_STATUS_SUFFIX.get(e.status) ?? ""}`;
+
+/**
+ * CR-CRU-014 §S3 + CR-CRU-077 §S1 — pure, browser-free roadmap graph-data
+ * builder. Maps the execution queue + release ledger into a Cytoscape elements
+ * shape ({nodes, edges}): one rectangle type:"cr" node per entry (wave/track/
+ * status ride DATA fields, never the label — the label is the CR id plus a
+ * terse status suffix and never the title, CR-CRU-077 §S4/AC6); one directed
+ * edge per dependsOn (prereq SOURCE →
+ * dependant TARGET); one diamond type:"milestone" node per release, wired INTO
+ * the flow (DN decision 3) — the CRs a release shipped flow into its diamond,
+ * the diamond gates the CRs that follow it, and the diamonds chain in ship
+ * order; and a single Start/End ellipse type:"terminal" pair bracketing
+ * whatever the flow itself does not already feed or drain.
+ *
+ * No edge is invented to express sequence (DN decision 5): every edge comes
+ * from `dependsOn`, from `crs` membership, or from the release chain. The
+ * orchestrator-assigned queue position instead RIDES the CR node as
+ * `data.seq` — a monotonic tie-break a layout can rank same-rank siblings on.
+ * It is DATA and not an edge for two independent reasons: decision 5 forbids
+ * inventing any edge to express sequence whatever it is typed, and an edge
+ * a→b would make b reachable from a, which is exactly the CHAIN that §S1/AC3
+ * rules out for two same-wave CRs with no dependency between them. Do not
+ * "improve" this into an edge.
  */
 export function buildRoadmapGraph(entries, releases) {
   const nodes = [];
   const edges = [];
-  const crIds = new Set((entries ?? []).map((e) => e.cr));
+  const queue = entries ?? [];
+  const crIds = new Set(queue.map((e) => e.cr));
 
-  for (const e of entries ?? []) {
+  queue.forEach((e, index) => {
     const data = {
       id: e.cr,
       type: "cr",
-      label: e.title ?? e.cr,
+      label: crNodeLabel(e),
       cr: e.cr,
       wave: e.wave,
       status: e.status,
+      // The AUTHORED position, and nothing else: never the CR id, never the
+      // wave (AC8), never the status. Re-author the queue and this follows.
+      // Absent on milestone and terminal nodes — a release boundary and a
+      // bracket hold no queue position — and never rendered into `label`.
+      seq: index,
     };
     if (e.track !== undefined && e.track !== null) data.track = e.track;
     nodes.push({ data });
-  }
+  });
 
   // Dependency edges: the prerequisite is the SOURCE (execution flows
   // deps-first). Guard against dangling deps (a dep not in the queue).
-  const hasDependant = new Set();
-  for (const e of entries ?? []) {
+  for (const e of queue) {
     for (const dep of e.dependsOn ?? []) {
       if (!crIds.has(dep)) continue;
       edges.push({ data: { id: `dep:${dep}->${e.cr}`, source: dep, target: e.cr } });
-      hasDependant.add(dep);
     }
   }
 
-  // Start/End terminals bracket the DAG.
+  // Ship order is `releasedAt` (the tag's OWN commit date, epoch SECONDS), not
+  // the payload order — the live ledger arrives newest-first, and `timestamp`
+  // is only the ingest instant. A release with no `releasedAt` (a pre-CR-080
+  // ledger row) sorts OLDEST: an undated tag is legacy history, and calling it
+  // the newest would hand it the gating of every unshipped CR on a date nobody
+  // recorded. Ties — and the undated group — fall back to the payload order
+  // reversed, which is that newest-first arrival read as ship order.
+  const ordered = (releases ?? [])
+    .map((rel, index) => ({
+      rel,
+      index,
+      at: Number.isFinite(rel.releasedAt) ? rel.releasedAt : null,
+    }))
+    .sort((a, b) => {
+      if (a.at === b.at) return b.index - a.index;
+      if (a.at === null) return -1;
+      if (b.at === null) return 1;
+      return a.at - b.at;
+    })
+    .map((o) => o.rel);
+  const milestoneId = (rel) => `milestone:${rel.version}`;
+  for (const rel of ordered) {
+    nodes.push({
+      data: {
+        id: milestoneId(rel),
+        type: "milestone",
+        version: rel.version,
+        label: rel.version,
+        // CR-CRU-077 §S2/AC4 — how many CRs this release shipped, derived from
+        // the ledger's `crs` and therefore builder data, not render state. A
+        // release that shipped none carries 0 (never absent): "zero CRs" is a
+        // measured fact about the tag, the same as sixty. The RENDER layer owns
+        // whether that region is folded (`data.collapsed`) — expansion is UI
+        // state and is not persisted, so it never appears here.
+        crCount: (rel.crs ?? []).length,
+      },
+    });
+  }
+
+  // Membership is `crs` and NOTHING else — never an ingest timestamp, never
+  // wave structure. A missing `crs` is EMPTY membership (the live 0.1.1), never
+  // unknown; if two tags claim one CR the older claim wins, since that is when
+  // it shipped.
+  const shipStage = new Map();
+  ordered.forEach((rel, stage) => {
+    for (const cr of rel.crs ?? []) {
+      if (crIds.has(cr) && !shipStage.has(cr)) shipStage.set(cr, stage);
+    }
+  });
+  // The unshipped region is the ledger's COMPLEMENT, so it exists only once the
+  // ledger actually places a CR: a membership-free ledger (every `crs` absent
+  // or empty, as the whole pre-CR-080 payload was) orders no CR at all, and
+  // gating one off a boundary there would be exactly the synthetic sequence
+  // decision 5 forbids. The diamonds still chain — a release is a real,
+  // ordered fact on its own.
+  const unshipped = ordered.length;
+  const stageOf = (cr) => shipStage.get(cr) ?? (shipStage.size > 0 ? unshipped : null);
+
+  // A diamond brackets its region the way the terminals bracket the DAG: it
+  // takes the region's SINKS as inflow and gates the next region's ROOTS,
+  // leaving every intra-region position to `dependsOn` alone.
+  const stagePrereq = new Set();
+  const stageDependant = new Set();
+  for (const e of queue) {
+    const stage = stageOf(e.cr);
+    if (stage === null) continue;
+    for (const dep of e.dependsOn ?? []) {
+      if (!crIds.has(dep) || stageOf(dep) !== stage) continue;
+      stagePrereq.add(e.cr);
+      stageDependant.add(dep);
+    }
+  }
+  for (const e of queue) {
+    const stage = stageOf(e.cr);
+    if (stage === null) continue;
+    if (stage < unshipped && !stageDependant.has(e.cr)) {
+      const rel = ordered[stage];
+      edges.push({
+        data: { id: `rel:ship:${e.cr}->${rel.version}`, source: e.cr, target: milestoneId(rel) },
+      });
+    }
+    if (stage > 0 && !stagePrereq.has(e.cr)) {
+      const gate = ordered[stage - 1];
+      edges.push({
+        data: { id: `rel:gate:${gate.version}->${e.cr}`, source: milestoneId(gate), target: e.cr },
+      });
+    }
+  }
+  // The boundaries chain in ship order, so a release that shipped ZERO CRs
+  // still sits IN the flow instead of floating beside it.
+  for (let i = 1; i < ordered.length; i += 1) {
+    const from = ordered[i - 1];
+    const to = ordered[i];
+    edges.push({
+      data: {
+        id: `rel:chain:${from.version}->${to.version}`,
+        source: milestoneId(from),
+        target: milestoneId(to),
+      },
+    });
+  }
+
+  // Start/End terminals bracket the DAG: every flow node nothing else feeds
+  // hangs off Start, every one that feeds nothing hangs onto End — CR node and
+  // release diamond alike. A CR a diamond gates is NOT also bracketed straight
+  // off Start: work after a release boundary does not start before it.
   const startId = "__roadmap_start__";
   const endId = "__roadmap_end__";
+  const flowIds = nodes.map((n) => n.data.id);
   nodes.push({ data: { id: startId, type: "terminal", terminal: "start", label: "Start" } });
   nodes.push({ data: { id: endId, type: "terminal", terminal: "end", label: "End" } });
-  for (const e of entries ?? []) {
-    const deps = (e.dependsOn ?? []).filter((d) => crIds.has(d));
-    if (deps.length === 0) {
-      edges.push({ data: { id: `start->${e.cr}`, source: startId, target: e.cr } });
-    }
-    if (!hasDependant.has(e.cr)) {
-      edges.push({ data: { id: `${e.cr}->end`, source: e.cr, target: endId } });
-    }
-  }
-
-  // Release boundaries become diamond milestone nodes.
-  for (const rel of releases ?? []) {
-    nodes.push({
-      data: { id: `milestone:${rel.version}`, type: "milestone", version: rel.version, label: rel.version },
-    });
+  const fed = new Set(edges.map((e) => e.data.target));
+  const feeds = new Set(edges.map((e) => e.data.source));
+  for (const id of flowIds) {
+    if (!fed.has(id)) edges.push({ data: { id: `start->${id}`, source: startId, target: id } });
+    if (!feeds.has(id)) edges.push({ data: { id: `${id}->end`, source: id, target: endId } });
   }
 
   return { nodes, edges };
