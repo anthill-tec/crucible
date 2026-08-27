@@ -1027,6 +1027,267 @@ describe("CR-CRU-077 §S1 — the ordering assertions above cannot pass on an em
   });
 });
 
+// ── CR-CRU-077 §S4 (AC6) labels + §S3 (AC5) track — the pure builder half ───
+//
+// Spec: docs/changes/CR-CRU-077-roadmap-graph-is-the-execution-dag.md §S3, §S4,
+// AC5 / AC6. Design authority: docs/research/DN-crucible-roadmap-view.md "Row
+// grammar" — "`CR-id` + bare `depends-on` + status + a terse track/cycle
+// overlay. **No titles** — the identifier is what every other surface keys on,
+// and a full title crowds it out."
+//
+// THE DEFECT UNDER TEST, verified in public/app-logic.mjs:818 —
+// `label: e.title ?? e.cr`. The node label is the human TITLE, so the id every
+// other surface keys on is invisible (or truncated away) on the graph, and the
+// status the DN's grammar puts in the row is nowhere in the text at all. That
+// is defect 3 of the Problem section.
+//
+// THE PINNED SUFFIX VOCABULARY, and why each element is DERIVABLE from the
+// builder's OWN two inputs (`entries`, `releases`) — nothing here is guessed:
+//   • COMPLETED           → `<id> ✓ merged`      — AC6's verbatim example
+//     (`CR-CRU-090 ✓ merged`). Derivable: `COMPLETED` IS "a plan closed with a
+//     merge commit" (src/types.ts:348), so "merged" restates the wire value.
+//   • COMPLETED_UNTRACKED → `<id> ✓ untracked`   — CR-083's fourth derived
+//     value. Derivable: it means "a cr some release SHIPPED but no plan ever
+//     tracked" (src/types.ts:334), i.e. a completion (same ✓ family) that is
+//     NOT a merge — and the terse form of the wording the table badge already
+//     uses for it, "completed · tracking absent" (public/app.js:2368).
+//   • IN_PROGRESS         → `<id> ▶`             — ▶ is already this view's
+//     active marker (public/app.js:2362). Carries NO cycle position: see the
+//     gap note below.
+//   • PENDING             → `<id>`               — bare id, per AC6.
+//
+// THE CYCLE-POSITION GAP (AC6's `CR-CRU-077 ▶ 2/3` example), asserted NOWHERE
+// here because it is NOT DERIVABLE IN THIS BUILDER, and faking it would pin a
+// contract GREEN could only satisfy by inventing data:
+//   • A cycle position is computed from a PLAN: `roadmapCyclePosition(plan)`
+//     reads `plan.cycles` and returns `cycle <i>/<n>` (public/app.js:2354-2358).
+//     `cycles: PlanCycle[]` is a field of `Plan` (src/types.ts:323).
+//   • The builder's queue input is `QueueEntry` — `{cr, title?, wave,
+//     dependsOn, size?, status, planId?}` (src/types.ts:355-363). It carries
+//     NO cycles. `planId` is an identifier, not a position: resolving it to
+//     `2/3` needs the plan payload, a THIRD input this builder is never handed
+//     (`buildRoadmapGraph(entries, releases)` keeps its signature — the CR's
+//     own D6, spec line 142).
+//   • So the in-progress marker is asserted WITHOUT a position, which is also
+//     the existing precedent: the table's own lane badge degrades to
+//     `<track> ▶` whenever the position is null (public/app.js:2362).
+//   The suffix is therefore either a DATA PREREQUISITE (plans reach the
+//   builder) or belongs to the render cycle — an orchestrator call, not a
+//   test's to fabricate.
+
+/** The terse status suffix, keyed by the four derived `QueueStatus` values. */
+const STATUS_SUFFIX: Record<BuilderEntry["status"], string> = {
+  COMPLETED: " ✓ merged",
+  COMPLETED_UNTRACKED: " ✓ untracked",
+  IN_PROGRESS: " ▶",
+  PENDING: "",
+};
+/** AC6's whole label: the CR id plus a terse status suffix and NOTHING else. */
+const expectedLabel = (e: BuilderEntry): string => `${e.cr}${STATUS_SUFFIX[e.status]}`;
+
+describe("CR-CRU-077 §S4/AC6 — a CR node label is the id plus a terse status suffix, and NO title", () => {
+  test("the real 88-row shape has titles worth crowding out — the no-title assertions below are not vacuous", () => {
+    // Non-vacuity guard: if the README table stopped yielding titles, "no
+    // label contains its title" would pass against a builder that renders
+    // nothing but titles.
+    const untitled = REAL_ENTRIES.filter((e) => (e.title ?? "").length === 0).map((e) => e.cr);
+    expect(untitled).toEqual([]);
+    // …and they are long prose, which is exactly why AC6 removes them: a
+    // title crowds the identifier out of the node box.
+    expect(REAL_ENTRIES.filter((e) => (e.title ?? "").length > 20).length).toBeGreaterThan(40);
+  });
+
+  test("EVERY type:'cr' node label LEADS with its own CR id — the offenders are named", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    expect(crNodes(g).length).toBe(REAL_ENTRIES.length);
+    const notLeading = crNodes(g)
+      .filter((n) => !(n.data.label ?? "").startsWith(n.data.id))
+      .map((n) => `${n.data.id} → ${JSON.stringify(n.data.label)}`);
+    expect(notLeading).toEqual([]);
+  });
+
+  test("NO node label contains its own entry's `title` string — the offenders are named", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    // AC6's own stated measurement: "asserted by checking that no node label
+    // contains its own entry's `title` string, so an `id + title` label
+    // fails". Matched per-entry, so a title is never mistaken for a suffix.
+    const leaking = crNodes(g)
+      .map((n) => ({ node: n, entry: entryFor(n.data.id) }))
+      .filter(({ node, entry }) => (node.data.label ?? "").includes(entry.title ?? "\u0000"))
+      .map(({ node, entry }) => `${node.data.id}: label ${JSON.stringify(node.data.label)} carries title ${JSON.stringify(entry.title)}`);
+    expect(leaking).toEqual([]);
+  });
+
+  test("every label is EXACTLY id + terse status suffix across the real shape — nothing else is in the text", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    // The tightest form of AC6: the whole label, for every node, byte-exact.
+    // Stronger than the containment check above, which a one-word title could
+    // slip past.
+    const wrong = crNodes(g)
+      .map((n) => ({ id: n.data.id, label: n.data.label, want: expectedLabel(entryFor(n.data.id)) }))
+      .filter((r) => r.label !== r.want);
+    expect(wrong).toEqual([]);
+  });
+
+  test("a PENDING entry's label is the BARE id — no suffix at all", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    const pending = REAL_ENTRIES.filter((e) => e.status === "PENDING");
+    expect(pending.length).toBeGreaterThan(0);
+    const suffixed = pending
+      .map((e) => nodeById(g, e.cr)!)
+      .filter((n) => n.data.label !== n.data.id)
+      .map((n) => `${n.data.id} → ${JSON.stringify(n.data.label)}`);
+    expect(suffixed).toEqual([]);
+  });
+});
+
+describe("CR-CRU-077 §S4/AC6 — each derived status maps to its own terse suffix", () => {
+  /** One entry, one status, one label — the suffix in isolation. */
+  const labelFor = (status: BuilderEntry["status"]): string => {
+    const g = buildRoadmapGraph(
+      [{ cr: "CR-CRU-099", title: "A title long enough to crowd the identifier out", wave: "9", dependsOn: [], status }],
+      [],
+    );
+    return nodeById(g, "CR-CRU-099")!.data.label!;
+  };
+
+  test("COMPLETED → `<id> ✓ merged` (AC6's verbatim example shape)", () => {
+    expect(labelFor("COMPLETED")).toBe("CR-CRU-099 ✓ merged");
+  });
+
+  test("COMPLETED_UNTRACKED → `<id> ✓ untracked`, DISTINCT from COMPLETED (CR-083's fourth value)", () => {
+    expect(labelFor("COMPLETED_UNTRACKED")).toBe("CR-CRU-099 ✓ untracked");
+    // The two completions must not collapse into one another: the graph has to
+    // read "shipped, never tracked" differently from "merged".
+    expect(labelFor("COMPLETED_UNTRACKED")).not.toBe(labelFor("COMPLETED"));
+  });
+
+  test("IN_PROGRESS → `<id> ▶` — the active marker WITHOUT a cycle position (not derivable here)", () => {
+    // See the gap note above: `2/3` lives on `plan.cycles`, and the builder is
+    // handed queue entries + releases only. Asserting a position would pin
+    // fabricated data, so the marker stands alone — the same degradation the
+    // table's lane badge already makes when the position is null.
+    expect(labelFor("IN_PROGRESS")).toBe("CR-CRU-099 ▶");
+    // Nothing numeric may appear beyond the id itself.
+    expect(labelFor("IN_PROGRESS").slice("CR-CRU-099".length)).not.toMatch(/\d/);
+  });
+
+  test("PENDING → the bare `<id>`, byte for byte", () => {
+    expect(labelFor("PENDING")).toBe("CR-CRU-099");
+  });
+
+  test("the four statuses yield four DISTINCT labels — no status is unreadable off the node", () => {
+    const all = (["COMPLETED", "COMPLETED_UNTRACKED", "IN_PROGRESS", "PENDING"] as const).map(labelFor);
+    expect(new Set(all).size).toBe(4);
+    // The status is text on the node, but the raw wire value never is — it
+    // stays on data.status for the stylesheet (the pre-existing contract).
+    for (const label of all) {
+      expect(label).not.toContain("COMPLETED");
+      expect(label).not.toContain("PENDING");
+      expect(label).not.toContain("IN_PROGRESS");
+    }
+  });
+});
+
+describe("CR-CRU-077 §S4/AC6 — the title leaks NOWHERE, and non-CR labels are untouched", () => {
+  test("a SHORT title cannot hide inside the suffix — a 3-char title is absent from every label", () => {
+    // The containment check against the real shape leans on long titles; a
+    // terse title is the case where an `id + title` label looks plausible.
+    // "Zed" shares no character run with the id or with any pinned suffix.
+    const entries: BuilderEntry[] = [
+      { cr: "CR-CRU-091", title: "Zed", wave: "9", dependsOn: [], status: "COMPLETED" },
+      { cr: "CR-CRU-092", title: "Zed", wave: "9", dependsOn: ["CR-CRU-091"], status: "IN_PROGRESS" },
+      { cr: "CR-CRU-093", title: "Zed", wave: "9", dependsOn: ["CR-CRU-092"], status: "PENDING" },
+      { cr: "CR-CRU-094", title: "Zed", wave: "9", dependsOn: ["CR-CRU-093"], status: "COMPLETED_UNTRACKED" },
+    ];
+    const g = buildRoadmapGraph(entries, []);
+    const leaking = crNodes(g)
+      .filter((n) => (n.data.label ?? "").includes("Zed"))
+      .map((n) => `${n.data.id} → ${JSON.stringify(n.data.label)}`);
+    expect(leaking).toEqual([]);
+    // …and each is still its own exact id + suffix.
+    expect(crNodes(g).map((n) => n.data.label)).toEqual(entries.map(expectedLabel));
+  });
+
+  test("a milestone label stays the BARE version string and a terminal stays Start/End — AC6 governs CR nodes only", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    expect(milestoneNodes(g).map((n) => n.data.label).sort()).toEqual(["0.1.0", "0.1.1", "0.1.2", "0.1.3"]);
+    for (const m of milestoneNodes(g)) expect(m.data.label).toBe(m.data.version);
+    const t = terminals(g);
+    expect(t.find((n) => n.data.terminal === "start")!.data.label).toBe("Start");
+    expect(t.find((n) => n.data.terminal === "end")!.data.label).toBe("End");
+    // A diamond and a bracket hold no status, so neither may grow a suffix.
+    for (const n of [...milestoneNodes(g), ...t]) {
+      expect(n.data.label).not.toContain("✓");
+      expect(n.data.label).not.toContain("▶");
+    }
+  });
+});
+
+describe("CR-CRU-077 §S3/AC5 — the reported track RIDES the node, and its absence is not an error", () => {
+  test("an entry WITH a track carries it verbatim on data.track", () => {
+    const g = buildRoadmapGraph(
+      [{ cr: "CR-CRU-095", title: "Tracked", wave: "9", dependsOn: [], status: "IN_PROGRESS", track: "track-2" }],
+      [],
+    );
+    expect(nodeById(g, "CR-CRU-095")!.data.track).toBe("track-2");
+  });
+
+  test("an entry with NO track omits the key entirely — never null, never the empty string", () => {
+    const g = buildRoadmapGraph(
+      [
+        { cr: "CR-CRU-096", title: "Untracked", wave: "9", dependsOn: [], status: "PENDING" },
+        // A wire null is the live shape too: `track` is a PLAN column
+        // (src/store.ts:226) and the plan payload omits it when null
+        // (src/store.ts:3280), so the builder must not turn one into a key.
+        { cr: "CR-CRU-097", title: "Nulled", wave: "9", dependsOn: [], status: "PENDING", track: null as unknown as string },
+      ],
+      [],
+    );
+    for (const cr of ["CR-CRU-096", "CR-CRU-097"]) {
+      const data = nodeById(g, cr)!.data;
+      expect("track" in data).toBe(false);
+      expect(data.track).toBeUndefined();
+      expect(data.track).not.toBe(null);
+      expect(data.track).not.toBe("");
+    }
+  });
+
+  test("the LIVE queue shape reports no track at all, and the graph is complete anyway — absence is not an error", () => {
+    // `QueueEntry` (src/types.ts:355-363) has no `track` field: track lives on
+    // `Plan` (src/types.ts:318). So the real roadmap payload carries none, and
+    // AC5's "its absence is not an error" is the MEASURED case, not a corner.
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    expect(REAL_ENTRIES.filter((e) => e.track !== undefined)).toEqual([]);
+    expect(crNodes(g).filter((n) => "track" in n.data)).toEqual([]);
+    // Nothing degraded: every entry still became a node, with its status text.
+    expect(crNodes(g).length).toBe(REAL_ENTRIES.length);
+    expect(crNodes(g).filter((n) => (n.data.label ?? "") === "")).toEqual([]);
+    // AC5 forbids a hard-coded track COUNT, so the distinct tracks present are
+    // DERIVED and reported, never compared against a pinned number.
+    const tracks = new Set(crNodes(g).map((n) => n.data.track).filter((t) => t !== undefined));
+    expect([...tracks]).toEqual([...new Set(REAL_ENTRIES.map((e) => e.track).filter((t) => t !== undefined))]);
+  });
+
+  test("§S3 draws no lane and no wave container: track is DATA, and never text on the node", () => {
+    const g = buildRoadmapGraph(
+      [
+        { cr: "CR-CRU-098", title: "Laned", wave: "9", dependsOn: [], status: "IN_PROGRESS", track: "track-2" },
+      ],
+      [],
+    );
+    const n = nodeById(g, "CR-CRU-098")!;
+    expect(n.data.track).toBe("track-2");
+    // The overlay the DN's row grammar puts in the TABLE row is not the graph
+    // label: AC6 admits the id and a status suffix and nothing else.
+    expect(n.data.label).not.toContain("track-2");
+    expect(n.data.label).toBe("CR-CRU-098 ▶");
+    // No container/lane node type is invented here — that chrome is CR-085's.
+    expect(new Set(g.nodes.map((x) => x.data.type))).toEqual(new Set(["cr", "terminal"]));
+  });
+});
+
+
 // ── §S3 exclusive table|graph toggle — real app.js in happy-dom ─────────────
 
 interface QueueEntryFixture {
