@@ -1388,6 +1388,9 @@ interface CyHandle {
   // honest way to observe that a retired mount was DISPOSED rather than
   // abandoned with its canvas layers, renderer and window listeners.
   destroyed: () => boolean;
+  // …and cytoscape's own disposal, which the per-test teardown calls so no
+  // retired mount survives into another test file.
+  destroy: () => void;
 }
 
 // public/app.js guards its Cytoscape mount on the plain-HTML global
@@ -1397,6 +1400,19 @@ interface CyHandle {
 // of type 2d" and never yields an instance — hence the minimal 2d-context stub.
 // Test-harness only: no production seam, the stylesheet read below is the real
 // one app.js hands to cytoscape.
+//
+// The 2d-context stub is PER MOUNT: `HTMLCanvasElement` (and `OffscreenCanvas`)
+// are classes of the freshly registered happy-dom window, so their prototypes
+// have to be patched again on every mount. The two vendored UMDs are NOT: they
+// are 1.18 MB of source that attaches `cytoscape` to the real globalThis (the
+// object happy-dom aliases `window` to, and one unregister does not delete),
+// and cytoscape reads `window.*`/`document` through that live global rather
+// than capturing either at load time. Re-evaluating them per mount cost this
+// file 28 parses of that 1.18 MB and left the compiled code of all 28 resident
+// for the REST of the bun process — the cross-file load that starved a
+// poll-tick test 100 files later. One eval, reused by every mount.
+let cytoscapeLoaded = false;
+
 function installCytoscape(): void {
   const ctx2d = new Proxy(
     {},
@@ -1420,8 +1436,10 @@ function installCytoscape(): void {
   const offscreen: { prototype: { getContext: unknown } } | undefined =
     (globalThis as { OffscreenCanvas?: { prototype: { getContext: unknown } } }).OffscreenCanvas;
   if (offscreen !== undefined) offscreen.prototype.getContext = () => ctx2d;
+  if (cytoscapeLoaded) return;
   (0, eval)(readFileSync(path.join(REPO_ROOT, "public/cytoscape.umd.js"), "utf8"));
   (0, eval)(readFileSync(path.join(REPO_ROOT, "public/cytoscape-dagre.js"), "utf8"));
+  cytoscapeLoaded = true;
 }
 
 // The live instance app.js publishes on the window (public/app.js) — the DOM
@@ -1433,9 +1451,40 @@ function roadmapCy(): CyHandle | undefined {
 
 let cacheBust = 0;
 
+/**
+ * Close the current mount for good: DESTROY the live Cytoscape instance, drop
+ * the reference app.js published, then close the happy-dom window.
+ *
+ * The destroy is the point, and so is its order. `window.crucibleRoadmapCy` is
+ * written on the REAL globalThis (happy-dom aliases `window` to it) and is not
+ * one of the keys `unregister()` restores, so a mount that is merely
+ * unregistered leaves a fully live instance — renderer, canvas layers,
+ * animation queue — reachable for the rest of the bun process. Measured on this
+ * file before this teardown existed: 81 tests finished with 27 undestroyed
+ * instances, 92 MB of retained heap and 63 MB external AFTER a forced GC, and
+ * an abandoned instance re-armed its redraw against whatever happy-dom window
+ * was current LATER — work, and a null-2d-context throw, charged to other test
+ * files. With the teardown: 0 undestroyed instances, 41 MB retained heap, 20 MB
+ * external. `cy.destroy()` is the app's own retirement path (the remount at
+ * public/app.js:2547-2556 calls the live teardown and then destroys, in that
+ * order, so the generation guard has already orphaned every in-flight
+ * `complete` callback before the instance goes), and dropping the global
+ * reference is what lets the instance be collected.
+ */
+async function closeMount(): Promise<void> {
+  if (!GlobalRegistrator.isRegistered) return;
+  const win = globalThis as { crucibleRoadmapCy?: CyHandle };
+  const cy = win.crucibleRoadmapCy;
+  if (cy !== undefined) {
+    if (!cy.destroyed()) cy.destroy();
+    delete win.crucibleRoadmapCy;
+  }
+  await GlobalRegistrator.unregister();
+}
+
 async function mountApp(opts: MountOpts): Promise<void> {
   const pathname = opts.pathname ?? "/";
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
+  await closeMount();
   await GlobalRegistrator.register({ url: `http://localhost${pathname}` });
   document.body.innerHTML = '<div id="app"></div>';
 
@@ -1499,9 +1548,7 @@ async function settle(ticks = 8): Promise<void> {
   }
 }
 
-afterEach(async () => {
-  if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
-});
+afterEach(closeMount);
 
 function project(overrides: Partial<ProjectFixture> & { key: string }): ProjectFixture {
   const now = Date.now();
