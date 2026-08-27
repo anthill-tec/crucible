@@ -92,7 +92,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-088](CR-CRU-088-failure-detail-marries-the-wrong-leaf.md) | a failure detail printed after its own leaf is attributed to the NEXT test | bugfix | COMPLETED | 087 | 5 |
 | [CR-CRU-090](CR-CRU-090-install-lays-the-fleet-down.md) | `install` never lays the client fleet down, so every manifest path is dead | hotfix | COMPLETED (0.1.3 · shipped) | — | 5 |
 | [CR-CRU-084](CR-CRU-084-release-records-its-packages.md) | a release records the package(s) it delivered | feature | COMPLETED | 080, 081 | 5 |
-| [CR-CRU-077](CR-CRU-077-roadmap-graph-is-the-execution-dag.md) | the roadmap graph is the execution DAG, not a relationship web | feature | PENDING (0.2.0) | 014, 076, 080, 083, 084 | 5 (0.2.0) |
+| [CR-CRU-077](CR-CRU-077-roadmap-graph-is-the-execution-dag.md) | the roadmap graph is the execution DAG, not a relationship web | feature | COMPLETED (0.2.0) | 014, 076, 080, 083, 084 | 5 (0.2.0) |
 | [CR-CRU-078](CR-CRU-078-roadmap-graph-and-table-together.md) | graph and table are complementary, shown together | feature | PENDING (0.2.0) | 077, 084 | 5 (0.2.0) |
 | [CR-CRU-079](CR-CRU-079-roadmap-deep-link-and-drill-through.md) | roadmap deep-link parity and active-CR drill-through | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-075](CR-CRU-075-queue-file-fleet-parity.md) | queue-file fleet parity + AXI verb-surface census enforcement | patch | PENDING (post-0.2.0) | 014 | 6 (post-0.2.0) |

@@ -3,7 +3,7 @@
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 014, 076, 080, 083, 084
-- **Status**: PENDING (0.2.0)
+- **Status**: COMPLETED (shipped 2026-08-27)
 - **Design**: `docs/research/DN-crucible-roadmap-view.md` (decisions) · `docs/research/DN-crucible-wave-track-release.md` (model) · `docs/research/PRD-crucible-v2.md`
 
 ## Problem
