@@ -76,6 +76,14 @@ interface BuilderRelease {
   version: string;
   commit?: string;
   timestamp: number;
+  // CR-CRU-077 §S1 — the release-gating inputs CR-080/084 added to the live
+  // payload: `releasedAt` is the tag's OWN commit date (epoch SECONDS) and is
+  // ship order; `crs` is membership; `packages` is what the tag delivered.
+  // All optional because the live ledger OMITS `crs` entirely for a release
+  // that shipped none (measured on 0.1.1, 2026-08-27).
+  releasedAt?: number;
+  crs?: string[];
+  packages?: { registry: string; name: string; version: string }[];
 }
 // The ambient tests/app-logic.d.ts predates this export, so cast the module to
 // the builder boundary ONCE (GREEN adds both the runtime export and its
@@ -245,6 +253,379 @@ describe("CR-CRU-083 AC7 — buildRoadmapGraph carries COMPLETED_UNTRACKED throu
     expect(untracked!.data.label).not.toContain("COMPLETED");
     // The tracked sibling is untouched — the two remain distinct in the graph.
     expect(nodeById(g, "CR-T")!.data.status).toBe("COMPLETED");
+  });
+});
+
+// ── CR-CRU-077 §S1 — release gating: the diamond sits IN the flow ───────────
+//
+// Spec: docs/changes/CR-CRU-077-roadmap-graph-is-the-execution-dag.md §S1,
+// AC1 / AC1b / AC1c. Design authority: docs/research/DN-crucible-roadmap-view.md
+// decision 3 ("Release boundaries gate the flow. Work after a release boundary
+// does not start before it; the boundary sits *in* the flow, never beside it")
+// and decision 5 ("No synthetic ordering edges … nothing invents an edge to
+// express sequence").
+//
+// THE DEFECT UNDER TEST, verified in public/app-logic.mjs:840-845: milestone
+// nodes are pushed as nodes and never referenced by any edge, so every release
+// diamond floats BESIDE the DAG. Edges come from `dependsOn` plus the
+// Start/End brackets alone, so a release — the hardest ordering constraint in
+// the project — is currently decorative.
+//
+// FIXTURE PROVENANCE — pure builder, no server, no network, no git at test time:
+//   • ENTRIES are PARSED from the checked-in `docs/changes/README.md` queue
+//     table (88 rows as of 2026-08-27). That table is the authored queue which
+//     `queue register` ingests, so it IS the real shape, and parsing keeps the
+//     size unpinned — AC9 deliberately refuses a hard-coded count. Every
+//     `Depends on` cell resolves inside the table, which is `unknownDependencies`
+//     empty (asserted below, so a README edit that breaks the shape is loud).
+//   • RELEASES are a LITERAL fixture captured verbatim from
+//     `GET /api/v2/projects/<key>/releases` on 2026-08-27. The release ledger
+//     has NO checked-in source — the tracked `crucible.db` is an empty
+//     placeholder and there is no changelog — so the measured payload is pinned
+//     as data rather than fetched, keeping the builder contract deterministic
+//     and offline. It is kept NEWEST-FIRST exactly as the live payload arrives:
+//     ship order is the builder's job to derive from `releasedAt`, never the
+//     array order's.
+
+const crIdList = (numbers: string): string[] =>
+  numbers.split(/\s+/).filter(Boolean).map((n) => `CR-CRU-${n}`);
+
+/** The two published artefacts, as the live `packages` array carries them. */
+const relPackages = (version: string, ...registries: string[]) =>
+  registries.map((registry) => ({
+    registry,
+    name: registry === "pypi" ? "crucible-axi" : "@anthill-tec/crucible-server",
+    version,
+  }));
+
+// Verbatim live ledger, newest-first. `releasedAt` is epoch SECONDS (the tag's
+// own commit date); `timestamp` is the ingest instant in ms and is NOT ship
+// order — CR-077's gap analysis F2 measured that using it attributes the whole
+// backlog to 0.1.0.
+const REAL_RELEASES: BuilderRelease[] = [
+  {
+    version: "0.1.3",
+    commit: "74088863dfb250dfb8d75917b79ec4e29de8b685",
+    releasedAt: 1787819729,
+    crs: ["CR-CRU-090"],
+    packages: relPackages("0.1.3", "pypi", "npm"),
+    timestamp: 1787830734630,
+  },
+  {
+    version: "0.1.2",
+    commit: "9ef24b1867ab33f34c66c7acf4633fb3995bf339",
+    releasedAt: 1787181002,
+    crs: ["CR-CRU-066"],
+    packages: relPackages("0.1.2", "pypi", "npm"),
+    timestamp: 1787325487922,
+  },
+  {
+    // AC1's measured zero-CR release. The live payload OMITS `crs` altogether
+    // rather than sending `[]`, and CR-084's `packages` still carries 2
+    // entries — so "shipped no CRs" is distinguishable from "delivered
+    // nothing", and the builder must treat a MISSING `crs` as empty membership
+    // rather than as unknown.
+    version: "0.1.1",
+    commit: "abc30d5732e71ed11f8d0b81d6248f95b68b2b12",
+    releasedAt: 1787151205,
+    packages: relPackages("0.1.1", "pypi", "npm"),
+    timestamp: 1787325487410,
+  },
+  {
+    version: "0.1.0",
+    commit: "c07274c853088fb9b6c40e3c05b1e763b1d29e78",
+    releasedAt: 1787149125,
+    crs: crIdList(`
+      001 002 003 004 005 006 007 008 009 010 011 012 013 016 019 020 021 023 024 025 026
+      027 028 029 030 031 032 033 034 035 036 037 038 039 040 041 042 043 044 045 046 047
+      048 049 050 051 052 053 054 055 056 057 058 059 060 061 062 063 064 065
+    `),
+    packages: relPackages("0.1.0", "pypi"),
+    timestamp: 1787325487188,
+  },
+];
+
+/**
+ * The authored queue, read off the checked-in CR-queue table. One row is
+ * `| [CR-NNN](file) | title | type | status | depends-on | wave |`.
+ *
+ * `status` keeps the leading token only — the table annotates it with a target
+ * release (`COMPLETED (0.2.0)`), which is prose, not a status. `VOID` is mapped
+ * to `PENDING` because that is what the live board reports for the one VOID row
+ * (CR-CRU-082, measured 2026-08-27); nothing here depends on that row.
+ */
+function parseQueueTable(src: string): BuilderEntry[] {
+  const entries: BuilderEntry[] = [];
+  for (const raw of src.split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("| [CR-")) continue;
+    const cells = line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+    if (cells.length < 6) continue;
+    const cr = /CR-[A-Z]+-\d{3}/.exec(cells[0])?.[0];
+    if (cr === undefined) continue;
+    const statusToken = /^[A-Z_]+/.exec(cells[3])?.[0];
+    entries.push({
+      cr,
+      title: cells[1],
+      wave: /^\d+/.exec(cells[5])?.[0] ?? cells[5],
+      dependsOn: (cells[4].match(/\d{3}/g) ?? []).map((n) => `CR-CRU-${n}`),
+      status: statusToken === "COMPLETED" ? "COMPLETED" : "PENDING",
+    });
+  }
+  return entries;
+}
+
+const REAL_ENTRIES: BuilderEntry[] = parseQueueTable(
+  readFileSync(path.join(REPO_ROOT, "docs/changes/README.md"), "utf8"),
+);
+
+const milestoneNodes = (g: RoadmapGraph): GraphNode[] =>
+  g.nodes.filter((n) => n.data.type === "milestone");
+const milestoneFor = (g: RoadmapGraph, version: string): GraphNode | undefined =>
+  milestoneNodes(g).find((n) => n.data.version === version);
+const edgesInto = (g: RoadmapGraph, id: string): GraphEdge[] =>
+  g.edges.filter((e) => e.data.target === id);
+const edgesOutOf = (g: RoadmapGraph, id: string): GraphEdge[] =>
+  g.edges.filter((e) => e.data.source === id);
+
+/** Directed reachability — "flows into" is a PATH, not necessarily one edge. */
+function reachable(g: RoadmapGraph, from: string, to: string): boolean {
+  const outgoing = new Map<string, string[]>();
+  for (const e of g.edges) {
+    const bucket = outgoing.get(e.data.source);
+    if (bucket === undefined) outgoing.set(e.data.source, [e.data.target]);
+    else bucket.push(e.data.target);
+  }
+  const seen = new Set<string>([from]);
+  const frontier = [from];
+  while (frontier.length > 0) {
+    for (const next of outgoing.get(frontier.pop()!) ?? []) {
+      if (next === to) return true;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      frontier.push(next);
+    }
+  }
+  return false;
+}
+
+/** Membership is `crs` and NOTHING else; a missing `crs` is empty membership. */
+const membersOf = (rel: BuilderRelease): string[] => rel.crs ?? [];
+const ALL_RELEASED = new Set(REAL_RELEASES.flatMap(membersOf));
+
+describe("CR-CRU-077 §S1/AC1 — no release diamond is edgeless (live 4-release / 88-entry shape)", () => {
+  test("the parsed queue fixture is the real shape and every declared dependency resolves (unknownDependencies empty)", () => {
+    // Guard on the fixture itself, not a pinned size (AC9): if the README
+    // table stops parsing, every assertion below would pass vacuously.
+    expect(REAL_ENTRIES.length).toBeGreaterThan(80);
+    const ids = new Set(REAL_ENTRIES.map((e) => e.cr));
+    const unknownDependencies = [
+      ...new Set(REAL_ENTRIES.flatMap((e) => e.dependsOn).filter((d) => !ids.has(d))),
+    ].sort();
+    expect(unknownDependencies).toEqual([]);
+    // The named CRs the release assertions below key on are all present.
+    for (const cr of ["CR-CRU-090", "CR-CRU-066", "CR-CRU-078", "CR-CRU-085"]) {
+      expect(ids.has(cr)).toBe(true);
+    }
+    expect(REAL_RELEASES.length).toBe(4);
+  });
+
+  test("EVERY milestone node has at least one inbound AND one outbound edge — the edgeless versions are named", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    expect(milestoneNodes(g).length).toBe(4);
+    // The failure diff names the offending versions with their edge counts,
+    // because "a milestone with zero edges is the defect this CR fixes".
+    const edgeless = milestoneNodes(g)
+      .filter(
+        (m) =>
+          edgesInto(g, m.data.id).length === 0 || edgesOutOf(g, m.data.id).length === 0,
+      )
+      .map(
+        (m) =>
+          `${m.data.version}: in=${edgesInto(g, m.data.id).length} out=${edgesOutOf(g, m.data.id).length}`,
+      );
+    expect(edgeless).toEqual([]);
+  });
+
+  test("per diamond: 0.1.0, 0.1.1, 0.1.2 and 0.1.3 each gate the flow (inbound and outbound)", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    for (const version of ["0.1.0", "0.1.1", "0.1.2", "0.1.3"]) {
+      const m = milestoneFor(g, version);
+      expect(m).toBeDefined();
+      expect({
+        version,
+        inbound: edgesInto(g, m!.data.id).length > 0,
+        outbound: edgesOutOf(g, m!.data.id).length > 0,
+      }).toEqual({ version, inbound: true, outbound: true });
+    }
+  });
+
+  test("0.1.1 shipped ZERO CRs and still chains: 0.1.0 → 0.1.1 → 0.1.2", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    const zeroCr = REAL_RELEASES.find((r) => r.version === "0.1.1")!;
+    // Live shape, not hypothetical: no membership, yet two delivered packages.
+    expect(membersOf(zeroCr)).toEqual([]);
+    expect(zeroCr.packages!.length).toBe(2);
+    const prev = milestoneFor(g, "0.1.0")!;
+    const zero = milestoneFor(g, "0.1.1")!;
+    const next = milestoneFor(g, "0.1.2")!;
+    expect(edgesInto(g, zero.data.id).length).toBeGreaterThan(0);
+    expect(edgesOutOf(g, zero.data.id).length).toBeGreaterThan(0);
+    expect(reachable(g, prev.data.id, zero.data.id)).toBe(true);
+    expect(reachable(g, zero.data.id, next.data.id)).toBe(true);
+  });
+
+  test("the diamond chain runs in SHIP order (releasedAt), not in payload order", () => {
+    // The live payload arrives newest-first, so a builder that trusts the array
+    // order chains the releases backwards.
+    expect(REAL_RELEASES.map((r) => r.version)).toEqual(["0.1.3", "0.1.2", "0.1.1", "0.1.0"]);
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    const oldest = milestoneFor(g, "0.1.0")!;
+    const newest = milestoneFor(g, "0.1.3")!;
+    expect(reachable(g, oldest.data.id, newest.data.id)).toBe(true);
+    expect(reachable(g, newest.data.id, oldest.data.id)).toBe(false);
+  });
+});
+
+describe("CR-CRU-077 AC1b — release membership comes from `crs`, and nothing else", () => {
+  test("synthetic two-release shape: each CR flows INTO its own diamond and OUT of the preceding one", () => {
+    // Unambiguous by construction: one CR per release, no dependencies, so
+    // only `crs` can place either CR relative to either diamond.
+    const entries: BuilderEntry[] = [
+      { cr: "CR-1", title: "First", wave: "1", dependsOn: [], status: "COMPLETED" },
+      { cr: "CR-2", title: "Second", wave: "2", dependsOn: [], status: "COMPLETED" },
+    ];
+    const releases: BuilderRelease[] = [
+      { version: "1.0.0", commit: "bbb", releasedAt: 2000, crs: ["CR-2"], timestamp: 20 },
+      { version: "0.9.0", commit: "aaa", releasedAt: 1000, crs: ["CR-1"], timestamp: 10 },
+    ];
+    const g = buildRoadmapGraph(entries, releases);
+    const first = milestoneFor(g, "0.9.0");
+    const second = milestoneFor(g, "1.0.0");
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    // Into its own diamond.
+    expect(reachable(g, "CR-1", first!.data.id)).toBe(true);
+    expect(reachable(g, "CR-2", second!.data.id)).toBe(true);
+    // Out of the preceding diamond — the release gates the work that follows.
+    expect(reachable(g, first!.data.id, "CR-2")).toBe(true);
+    // And never the other way round: a shipped CR does not follow its own
+    // diamond, and a later CR never precedes an earlier release.
+    expect(reachable(g, first!.data.id, "CR-1")).toBe(false);
+    expect(reachable(g, "CR-2", first!.data.id)).toBe(false);
+  });
+
+  test("real shape: CR-CRU-090 gates 0.1.3 and follows 0.1.2; CR-CRU-066 gates 0.1.2 and follows 0.1.1", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    const m011 = milestoneFor(g, "0.1.1")!;
+    const m012 = milestoneFor(g, "0.1.2")!;
+    const m013 = milestoneFor(g, "0.1.3")!;
+    // Membership is the only claim: these two ids ARE the `crs` of those tags.
+    expect(membersOf(REAL_RELEASES.find((r) => r.version === "0.1.3")!)).toEqual(["CR-CRU-090"]);
+    expect(membersOf(REAL_RELEASES.find((r) => r.version === "0.1.2")!)).toEqual(["CR-CRU-066"]);
+    expect(reachable(g, "CR-CRU-090", m013.data.id)).toBe(true);
+    expect(reachable(g, m012.data.id, "CR-CRU-090")).toBe(true);
+    expect(reachable(g, "CR-CRU-066", m012.data.id)).toBe(true);
+    expect(reachable(g, m011.data.id, "CR-CRU-066")).toBe(true);
+  });
+
+  test("every CR→diamond edge's source is a member of THAT release's `crs`", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    const crIds = new Set(crNodes(g).map((n) => n.data.id));
+    const byId = new Map(milestoneNodes(g).map((m) => [m.data.id, m.data.version!]));
+    const memberships = new Map(REAL_RELEASES.map((r) => [r.version, new Set(membersOf(r))]));
+    const inboundCrEdges = g.edges.filter(
+      (e) => byId.has(e.data.target) && crIds.has(e.data.source),
+    );
+    // Non-vacuous: 0.1.3 must actually be gated by the CR it shipped.
+    expect(
+      inboundCrEdges.filter((e) => byId.get(e.data.target) === "0.1.3").length,
+    ).toBeGreaterThan(0);
+    const foreign = inboundCrEdges
+      .filter((e) => !memberships.get(byId.get(e.data.target)!)!.has(e.data.source))
+      .map((e) => `${e.data.source} → ${byId.get(e.data.target)}`);
+    expect(foreign).toEqual([]);
+  });
+});
+
+describe("CR-CRU-077 AC1c — CRs in no release flow AFTER the newest diamond", () => {
+  test("named unreleased CRs (CR-CRU-078, CR-CRU-085) are downstream of 0.1.3 and upstream of no diamond", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    const newest = milestoneFor(g, "0.1.3")!;
+    for (const cr of ["CR-CRU-078", "CR-CRU-085"]) {
+      expect(REAL_ENTRIES.find((e) => e.cr === cr)!.status).toBe("PENDING");
+      expect(ALL_RELEASED.has(cr)).toBe(false);
+      expect({ cr, afterNewest: reachable(g, newest.data.id, cr) }).toEqual({
+        cr,
+        afterNewest: true,
+      });
+      const gated = milestoneNodes(g)
+        .filter((m) => reachable(g, cr, m.data.id))
+        .map((m) => `${cr} → ${m.data.version}`);
+      expect(gated).toEqual([]);
+    }
+  });
+
+  test("EVERY entry absent from every `crs` sits after the newest diamond and before none", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    const newest = milestoneFor(g, "0.1.3")!;
+    const unreleased = REAL_ENTRIES.map((e) => e.cr).filter((cr) => !ALL_RELEASED.has(cr));
+    expect(unreleased.length).toBeGreaterThan(0);
+    const notDownstream = unreleased.filter((cr) => !reachable(g, newest.data.id, cr));
+    expect(notDownstream).toEqual([]);
+    const upstreamOfADiamond = unreleased.flatMap((cr) =>
+      milestoneNodes(g).filter((m) => reachable(g, cr, m.data.id)).map((m) => `${cr} → ${m.data.version}`),
+    );
+    expect(upstreamOfADiamond).toEqual([]);
+  });
+});
+
+describe("CR-CRU-077 §S1 — a diamond's edges are never manufactured from wave structure", () => {
+  test("with NO releases there are no milestone nodes and no milestone edges at all", () => {
+    // The fence against a fake fix that invents diamonds (or edges to them)
+    // out of wave structure: waves 1…6 are all present in the real queue, and
+    // an empty ledger must still yield a diamond-free graph.
+    const g = buildRoadmapGraph(REAL_ENTRIES, []);
+    expect(milestoneNodes(g)).toEqual([]);
+    const milestoneish = g.edges
+      .filter((e) => /milestone|release/i.test(`${e.data.id} ${e.data.source} ${e.data.target}`))
+      .map((e) => e.data.id);
+    expect(milestoneish).toEqual([]);
+    // …and the wave labels really are varied, so the fence is not vacuous.
+    expect(new Set(REAL_ENTRIES.map((e) => e.wave)).size).toBeGreaterThan(1);
+  });
+
+  test("releases with EMPTY membership gain no CR edges from shared waves, yet still chain to each other", () => {
+    // Four CRs, no dependencies, two waves; two releases that shipped nothing.
+    // `crs` is the only membership channel, so a wave-derived (or `wave`-field
+    // derived) edge would show up here as a CR↔diamond edge.
+    const entries: BuilderEntry[] = [
+      { cr: "CR-W1a", title: "a", wave: "1", dependsOn: [], status: "COMPLETED" },
+      { cr: "CR-W1b", title: "b", wave: "1", dependsOn: [], status: "COMPLETED" },
+      { cr: "CR-W2a", title: "c", wave: "2", dependsOn: [], status: "PENDING" },
+      { cr: "CR-W2b", title: "d", wave: "2", dependsOn: [], status: "PENDING" },
+    ];
+    const releases: BuilderRelease[] = [
+      { version: "2.0.0", commit: "bbb", releasedAt: 2000, crs: [], timestamp: 20 },
+      { version: "1.0.0", commit: "aaa", releasedAt: 1000, crs: [], timestamp: 10 },
+    ];
+    const g = buildRoadmapGraph(entries, releases);
+    const diamondIds = new Set(milestoneNodes(g).map((m) => m.data.id));
+    const crIds = new Set(entries.map((e) => e.cr));
+    const fabricated = g.edges
+      .filter(
+        (e) =>
+          (diamondIds.has(e.data.source) && crIds.has(e.data.target)) ||
+          (crIds.has(e.data.source) && diamondIds.has(e.data.target)),
+      )
+      .map((e) => `${e.data.source} → ${e.data.target}`);
+    expect(fabricated).toEqual([]);
+    // But the boundaries themselves still sit IN the flow (DN decision 3).
+    const older = milestoneFor(g, "1.0.0")!;
+    const newer = milestoneFor(g, "2.0.0")!;
+    expect(edgesInto(g, older.data.id).length).toBeGreaterThan(0);
+    expect(edgesOutOf(g, newer.data.id).length).toBeGreaterThan(0);
+    expect(reachable(g, older.data.id, newer.data.id)).toBe(true);
   });
 });
 
