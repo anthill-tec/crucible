@@ -1,6 +1,6 @@
 """CR-CRU-009 §S2 — the staged install orchestrator framework.
 
-`run_install` sequences the server -> manifest sub-installers through
+`run_install` sequences the server -> fleet -> manifest sub-installers through
 an INJECTABLE stage-runner table (no real subprocess/network in this cycle) and
 aggregates each stage's result into `(ok, stages, warnings)`. Stages run in
 `STAGE_ORDER`; a stage exception is FAIL-FAST (remaining stages are skipped and
@@ -19,6 +19,12 @@ detects it, bootstraps it when absent (unless `--no-bun-bootstrap` /
 `$CRUCIBLE_NO_BUN_BOOTSTRAP` opts out), RE-RESOLVES `$BUN_INSTALL/bin`, VERIFIES
 that it runs, and otherwise fails the install with a named remedy. The provision
 then runs that resolved ABSOLUTE Bun path, reported as the stage's `bun` output.
+
+CR-CRU-090 §S1 — the `[fleet]` stage lays the eight packaged client files down
+under `<target-dir>/clients/`, ordered strictly BEFORE `[manifest]`: the
+manifest publishes six paths anchored on that directory, so it must be written
+only after they exist. Before this, nothing materialised the directory and
+every published path dangled.
 """
 
 from __future__ import annotations
@@ -31,7 +37,7 @@ import subprocess
 
 from crucible_axi import manifest
 
-STAGE_ORDER = ("server", "manifest")
+STAGE_ORDER = ("server", "fleet", "manifest")
 
 # External sources for the concrete sub-installers. `SERVER_NPM_PACKAGE` is the
 # published npm package name and MUST stay equal to the repo package.json's
@@ -84,6 +90,39 @@ _PACKAGE_JSON_NAME_KEY = "name"
 # operator's PATH nor their exports.
 SERVER_HOST_ENV_VAR = "CRUCIBLE_HOST"
 SERVER_PORT_ENV_VAR = "CRUCIBLE_PORT"
+
+# CR-CRU-090 §S1 — where the [fleet] stage copies FROM: the repo checkout's own
+# `clients/` first, then the wheel's force-included `crucible_axi/clients`.
+# This deliberately mirrors `cli._CLIENTS_CANDIDATES` / `cli._clients_dir()`
+# rather than calling them: `cli` imports `install`, so importing `cli` here
+# would be circular. CR-CRU-090 §S2 retires BOTH copies into the single
+# `manifest.source_clients_dir()` resolver — the duplication is dated, not
+# accidental.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_CLIENTS_CANDIDATES = (
+    os.path.join(os.path.dirname(_HERE), "clients"),   # source checkout (repo root)
+    os.path.join(_HERE, "clients"),                    # installed package data
+)
+
+# The packaged fleet, exactly (CR-CRU-090 §S1). The five stack clients plus:
+# `_crucible_axi.py` (the shared AXI envelope) and `toon.py` (the codec) —
+# which the five load BY FILE PATH from their OWN directory, so a clients-only
+# copy lays down five UNRUNNABLE clients — plus `STATUS-CONTRACT.md`, the path
+# `manifest.build_manifest` publishes as `status`.
+FLEET_FILES = (
+    "bun-crucible.py",
+    "python-crucible.py",
+    "rust-crucible.py",
+    "mvn-crucible.py",
+    "arduino-crucible.py",
+    "_crucible_axi.py",
+    "toon.py",
+    "STATUS-CONTRACT.md",
+)
+
+# The directory the fleet lands in, under `--target-dir`. `manifest` anchors
+# every path it publishes on this same name, so the two MUST agree.
+FLEET_DIRNAME = "clients"
 
 
 def _bun_install_prefix() -> str:
@@ -410,10 +449,54 @@ def server_launch_argv() -> list[str]:
     return [bun, "x", f"{SERVER_NPM_PACKAGE}@{server_version}"]
 
 
+def _source_clients_dir() -> str:
+    """The SOURCE fleet directory the [fleet] stage copies FROM — the first
+    existing candidate, falling back to the source-checkout path so a failure
+    names the location an operator expects."""
+    for candidate in _CLIENTS_CANDIDATES:
+        if os.path.isdir(candidate):
+            return candidate
+    return _CLIENTS_CANDIDATES[0]
+
+
+def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
+    """[fleet] sub-installer — lay the eight packaged fleet files down under
+    `<target-dir>/clients/` (CR-CRU-090 §S1).
+
+    This is the directory `manifest.build_manifest` anchors all six of its
+    published paths on, which is why the stage is ordered strictly BEFORE
+    [manifest]: the manifest is written only after the paths it names exist.
+
+    The copy is confined to `<target-dir>/clients/` (created when absent) and
+    is byte-for-byte. Destination files that are not one of the eight are left
+    untouched — the install never removes what it does not manage. A missing
+    SOURCE file fails the stage definitively with that path named: `run_install`
+    is fail-fast, so it surfaces as `ok=False` plus a `stage-failed` warning
+    instead of a silent partial laydown, which is the exact defect class this
+    CR exists to kill.
+
+    `converged` is False on every run because the copy is unconditional — a
+    truthful report that the files were rewritten. Convergence detection and
+    `--force` re-copy semantics are §S1/AC5's own cycle; `force` is accepted
+    here only to satisfy the `(target_dir, force)` runner protocol.
+    """
+    source_dir = _source_clients_dir()
+    clients_dir = os.path.join(target_dir, FLEET_DIRNAME)
+    os.makedirs(clients_dir, exist_ok=True)
+    for name in FLEET_FILES:
+        source = os.path.join(source_dir, name)
+        if not os.path.isfile(source):
+            raise FileNotFoundError(
+                f"packaged fleet file missing at source: {source}")
+        shutil.copyfile(source, os.path.join(clients_dir, name))
+    return {"path": clients_dir, "converged": False}
+
+
 # Module-level, in-place-mutable stage table (patched by tests via
 # mock.patch.dict). `run_install` reads this name at call time.
 DEFAULT_STAGE_RUNNERS: dict = {
     "server": _server_stage,
+    "fleet": run_fleet_stage,
     "manifest": manifest.run_manifest_stage,
 }
 
