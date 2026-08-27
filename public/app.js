@@ -2486,6 +2486,33 @@
     // see any more.
     let roadmapLiveTeardown = null;
 
+    // CR-CRU-077 §S2/AC4 — the release versions the user has EXPANDED, keyed
+    // OUTSIDE the render tree exactly like lensOpenKeys and state.collapsedCycles
+    // (see the comment on `collapsedCycles` above: "so poll-tick re-renders …
+    // never reset an expansion"). RoadmapGraphBody re-runs on every
+    // state.queue/plans/releases change, so a mount-local Set silently
+    // re-collapsed whatever the user had opened on the very next SSE frame.
+    // Keyed by PROJECT so one workspace's expansion cannot surface in another's
+    // graph. Still written NOWHERE else — no request, no storage, no history, no
+    // URL — so a page load re-creates it empty and every release comes up
+    // collapsed (§S2: expansion is UI state, not persisted).
+    const roadmapExpandedKeys = new Set();
+    const roadmapExpandKey = (version) => `${state.route.projectKey}\u0000${version}`;
+    const roadmapExpanded = {
+      has: (version) => roadmapExpandedKeys.has(roadmapExpandKey(version)),
+      toggle: (version) => {
+        const key = roadmapExpandKey(version);
+        if (!roadmapExpandedKeys.delete(key)) roadmapExpandedKeys.add(key);
+      },
+    };
+
+    // CR-CRU-077 §S4 — the MOUNTED cytoscape instance, or null. A cytoscape
+    // instance owns canvas layers, a renderer and window-level listeners, and
+    // none of that is reclaimed by dropping the reference: every remount used to
+    // abandon one. Retiring the live animations (roadmapLiveTeardown) is a
+    // SEPARATE concern from disposing the instance, so both handoffs run.
+    let roadmapCyInstance = null;
+
     // The two ends of the live ring's pulse and the inflow's dash march.
     // Canvas-side properties only — see mountRoadmapCy for why a keyframe
     // cannot reach a cytoscape node.
@@ -2516,9 +2543,16 @@
       const layout = { name: "dagre", rankDir: "LR", nodeSep: 28, rankSep: 48 };
       setTimeout(() => {
         if (!container.isConnected) return;
-        // The previous mount's live animations die before this one is built.
+        // The previous mount's live animations die before this one is built…
         if (roadmapLiveTeardown !== null) roadmapLiveTeardown();
         roadmapLiveTeardown = null;
+        // …and then the instance those animations ran on is DISPOSED. Stopping
+        // the chains leaves the canvas layers, the renderer and its window
+        // listeners alive; only destroy() reclaims them.
+        if (roadmapCyInstance !== null && !roadmapCyInstance.destroyed()) {
+          roadmapCyInstance.destroy();
+        }
+        roadmapCyInstance = null;
         const cy = cyto({
           container,
           elements: graph,
@@ -2609,6 +2643,22 @@
               },
             },
             {
+              // CR-CRU-077 §S2 — a `fold:` edge is never a declared dependency:
+              // it is either a REROUTE (a real edge whose folded endpoint moved
+              // onto a diamond) or a Start/End re-bracket the fold left needed.
+              // Drawing it like a `dependsOn` arrow reads as a dependency the
+              // queue never declared, so it is dimmer, thinner and dotted.
+              // Placed BEFORE the live rules so a rerouted inflow into an
+              // IN_PROGRESS CR still wins its marching-ant colour.
+              selector: "edge.roadmap-fold",
+              style: {
+                width: 1,
+                "line-style": "dotted",
+                "line-color": "#374151",
+                "target-arrow-color": "#374151",
+              },
+            },
+            {
               // CR-CRU-077 §S4/AC7 — the live ring, AT REST. DN decision 6:
               // motion means live, so only an IN_PROGRESS CR is ever given
               // this class, and the PULSE that makes it read as "running right
@@ -2637,16 +2687,38 @@
         // ── CR-CRU-077 §S2/AC4 — collapse is by RELEASE ─────────────────
         // A shipped release's diamond IS the one node that stands for it: it
         // carries the count the BUILDER measured (`data.crCount`) and, while
-        // collapsed, the CRs it shipped are not drawn. Expansion is UI STATE —
-        // this Set lives and dies with the mounted instance and is written
-        // NOWHERE else (no request, no storage, no history, no URL), so every
-        // fresh mount comes up collapsed and nothing can restore an expansion.
-        const expanded = new Set();
-        // Membership read straight off the ledger's `crs` — the same input the
-        // builder counted, never re-derived here. First claim wins, so a CR two
-        // tags both list folds into one release instead of two.
+        // collapsed, the CRs it shipped are not drawn. Which releases are open
+        // is `roadmapExpanded` — hoisted OUT of this mount, because the body
+        // re-renders on every live payload change and a mount-local Set made
+        // every expansion last exactly until the next SSE frame.
+        //
+        // Membership is read straight off the ledger's `crs` — the same input
+        // the builder counted, never re-derived here.
+        //
+        // A doubly-claimed CR is resolved in SHIP ORDER, oldest claim first,
+        // because that is the tie-break the BUILDER applies ("if two tags claim
+        // one CR the older claim wins, since that is when it shipped" —
+        // app-logic.mjs) and the two sides must not disagree: the live ledger
+        // arrives NEWEST-first, so iterating it as given would fold the CR under
+        // the newer diamond while its `rel:ship:` edge still points at the older
+        // one, and the reroute would draw a fold edge running backwards along
+        // the release chain. Same comparator as the builder's `ordered`:
+        // `releasedAt` ascending, undated first, ties by reversed payload order.
+        const shipOrdered = (releases ?? [])
+          .map((rel, index) => ({
+            rel,
+            index,
+            at: Number.isFinite(rel.releasedAt) ? rel.releasedAt : null,
+          }))
+          .sort((a, b) => {
+            if (a.at === b.at) return b.index - a.index;
+            if (a.at === null) return -1;
+            if (b.at === null) return 1;
+            return a.at - b.at;
+          })
+          .map((o) => o.rel);
         const releaseOf = new Map();
-        for (const rel of releases ?? []) {
+        for (const rel of shipOrdered) {
           for (const cr of rel.crs ?? []) {
             if (!releaseOf.has(cr) && cy.$id(cr).nonempty()) releaseOf.set(cr, rel.version);
           }
@@ -2655,21 +2727,45 @@
         cy.nodes('[type="milestone"]').forEach((m) => diamondOf.set(m.data("version"), m.id()));
         const startId = cy.nodes('[terminal="start"]').first().id();
         const endId = cy.nodes('[terminal="end"]').first().id();
-        // The count is a fact about the TAG, not about the fold, so it goes
-        // into the diamond's label once and stays through expansion: a count
-        // nobody can read is not rendered. Second line, so the diamond keeps
-        // reading as a version boundary first.
-        cy.nodes('[type="milestone"]').forEach((m) => {
-          const count = m.data("crCount");
-          if (typeof count !== "number") return;
-          m.data("label", `${m.data("version")}\n${count} ${count === 1 ? "CR" : "CRs"}`);
-        });
         // A CR of a COLLAPSED release stands for that release's diamond;
         // everything else stands for itself.
         const foldTarget = (id) => {
           const version = releaseOf.get(id);
-          if (version === undefined || expanded.has(version)) return id;
+          if (version === undefined || roadmapExpanded.has(version)) return id;
           return diamondOf.get(version) ?? id;
+        };
+
+        // ── CR-CRU-077 §S1/AC2 — the authored order, made VISIBLE ────────
+        // `data.seq` is the orchestrator's queue position, and DN decision 5
+        // forbids expressing it as an edge, so the drawing is the only place it
+        // can land. cytoscape-dagre's documented `sort` hook is NOT enough: it
+        // only seeds dagre's insertion order, and dagre then runs its own
+        // crossing-minimisation over each rank and re-permutes it — measured on
+        // the live shape, passing `sort` left all 44 out-of-order same-rank pairs
+        // byte-identical. So the order is applied to dagre's OUTPUT: within one
+        // rank the y SLOTS dagre chose are kept exactly, and the CR nodes are
+        // re-seated into them in `seq` order. Ranks, spacing, and every non-CR
+        // node's place stay dagre's; only which CR sits in which of its own
+        // rank's slots is the queue's. Under `rankDir: "LR"` a rank is a column,
+        // so one rank is one x.
+        const seatCrsInAuthoredOrder = (laidOut) => {
+          const byRank = new Map();
+          laidOut.nodes('[type="cr"]').forEach((n) => {
+            const key = String(n.position("x"));
+            const rank = byRank.get(key);
+            if (rank === undefined) byRank.set(key, [n]);
+            else rank.push(n);
+          });
+          cy.batch(() => {
+            for (const rank of byRank.values()) {
+              if (rank.length < 2) continue;
+              const slots = rank.map((n) => n.position("y")).sort((a, b) => a - b);
+              rank
+                .slice()
+                .sort((a, b) => (a.data("seq") ?? 0) - (b.data("seq") ?? 0))
+                .forEach((n, i) => n.position("y", slots[i]));
+            }
+          });
         };
 
         // Fold every release the user has not expanded, then lay out exactly
@@ -2690,7 +2786,7 @@
         const applyReleaseCollapse = () => {
           const hidden = new Set();
           for (const [cr, version] of releaseOf) {
-            if (!expanded.has(version)) hidden.add(cr);
+            if (!roadmapExpanded.has(version)) hidden.add(cr);
           }
           const endsKey = (source, target) => `${source}\u0000${target}`;
           const drawn = new Set();
@@ -2732,14 +2828,36 @@
           cy.batch(() => {
             cy.edges(".roadmap-fold").remove();
             cy.nodes().forEach((n) => n.style("display", hidden.has(n.id()) ? "none" : "element"));
-            cy.nodes('[type="milestone"]').forEach((m) =>
-              m.data("collapsed", !expanded.has(m.data("version"))),
-            );
+            cy.nodes('[type="milestone"]').forEach((m) => {
+              const version = m.data("version");
+              const collapsed = !roadmapExpanded.has(version);
+              m.data("collapsed", collapsed);
+              // DN decision 1 makes a release node "expandable on click", so its
+              // collapse state has to be READABLE on it — otherwise collapsed
+              // and expanded are pixel-identical and the affordance is
+              // undiscoverable. It rides the LABEL as the app's own drill-in
+              // glyph (ToggleGlyph's ▸/▾), not as a style rule: the canvas
+              // already spends border colour on four statuses and shape on three
+              // node types, and a fifth visual vocabulary for "openable" would
+              // compete with those, while ▸/▾ is the affordance this app already
+              // uses everywhere else for expand/collapse — and it is text, so a
+              // user (and an assertion) can read it. The count AC4 puts on the
+              // node keeps its own second line.
+              const head = `${collapsed ? "▸" : "▾"} ${version}`;
+              const count = m.data("crCount");
+              m.data(
+                "label",
+                typeof count === "number"
+                  ? `${head}\n${count} ${count === 1 ? "CR" : "CRs"}`
+                  : head,
+              );
+            });
             for (const ends of bracket) addFold(ends[0], ends[1]);
             cy.add(added);
           });
           const visible = cy.elements(":visible");
           visible.layout(layout).run();
+          seatCrsInAuthoredOrder(visible);
           cy.fit(visible, 24);
           // The fold changed what is DRAWN and replaced the `fold:` edges, so
           // the live set is re-derived against the new drawing: a chain left
@@ -2875,7 +2993,7 @@
           const node = evt.target;
           if (node.data("type") === "milestone") {
             const version = node.data("version");
-            if (!expanded.delete(version)) expanded.add(version);
+            roadmapExpanded.toggle(version);
             applyReleaseCollapse();
             return;
           }
@@ -2886,11 +3004,19 @@
         });
         applyReleaseCollapse();
         roadmapLiveTeardown = retireLiveState;
+        roadmapCyInstance = cy;
         window.crucibleRoadmapCy = cy;
-        // SSE restyle: when the live queue's statuses change, patch node data
-        // and re-run the stylesheet in ONE batch — no full remount, pan/zoom
-        // preserved. The live state is re-derived on that SAME cadence (DN
-        // decision 6), which is what makes the motion mean "right now".
+        // Live status restyle: patch node data and re-run the stylesheet in ONE
+        // batch, and re-derive the live set on that SAME cadence (DN decision 6),
+        // which is what makes the motion mean "right now".
+        //
+        // This is NOT the whole live path, and it does not spare a remount: the
+        // same `state.queue` change also re-runs RoadmapGraphBody, which builds a
+        // new container and a new instance, so pan/zoom is NOT preserved across a
+        // live frame. It stays because it is the only thing that repaints an
+        // already-mounted instance in place — a status change arriving between
+        // this mount and its replacement, and the folded-away nodes whose labels
+        // refreshLiveState still has to carry.
         van.derive(() => {
           const live = Array.from(state.queue);
           if (!container.isConnected) return;

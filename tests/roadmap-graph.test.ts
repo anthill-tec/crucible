@@ -179,7 +179,11 @@ describe("§S3 — buildRoadmapGraph maps one CR to one rectangle (action) node"
     expect(b!.data.label).toBe("CR-B ▶");
   });
 
-  test("a CR with no title falls back to its CR id as the label", () => {
+  // "Falls back to" was CR-014 semantics, when a title WOULD have been the
+  // label. CR-CRU-077 §S4/AC6 made the label the id regardless, so what a
+  // missing title has to be is a non-event: no placeholder, no "(untitled)",
+  // and no throw.
+  test("a CR with NO title still labels as its bare id — a missing title adds no placeholder", () => {
     const g = buildRoadmapGraph(
       [{ cr: "CR-Z", wave: "5", dependsOn: [], status: "PENDING" }],
       [],
@@ -1380,6 +1384,10 @@ interface CyHandle {
   $id: (id: string) => CyCollection;
   nodes: (selector?: string) => CyCollection;
   edges: (selector?: string) => CyCollection;
+  // Cytoscape's own "has this instance been torn down" predicate — the only
+  // honest way to observe that a retired mount was DISPOSED rather than
+  // abandoned with its canvas layers, renderer and window listeners.
+  destroyed: () => boolean;
 }
 
 // public/app.js guards its Cytoscape mount on the plain-HTML global
@@ -1450,7 +1458,17 @@ async function mountApp(opts: MountOpts): Promise<void> {
     } else {
       throw new Error(`roadmap-graph.test.ts mountApp: unexpected fetch url ${url}`);
     }
-    return { ok: true, status: 200, json: async () => body } as Response;
+    // A real `Response.json()` PARSES the wire bytes, so every call yields a
+    // FRESH object graph. Resolving the same `body` object made every poll a
+    // no-op for vanX (`replace` writes the identical object identities back, so
+    // nothing notifies and no binding re-runs), which silently made a live
+    // re-render UNOBSERVABLE to every test in this file. Round-trip through
+    // JSON so the harness has the identity behaviour the browser has.
+    return {
+      ok: true,
+      status: 200,
+      json: async () => JSON.parse(JSON.stringify(body)) as unknown,
+    } as Response;
   }) as typeof fetch;
 
   opts.beforeBoot?.();
@@ -2534,5 +2552,431 @@ describe("CR-CRU-077 AC9 — the live roadmap renders at its current size, with 
     expect(new Set(expanded.map((d) => d.x)).size).toBeGreaterThan(1);
     expect(new Set(expanded.map((d) => d.y)).size).toBeGreaterThan(1);
     expect(edgeEndsWithoutNode(cy)).toEqual([]);
+  });
+});
+
+// ── CR-CRU-077 VERIFY round (cycle 287) — the RENDERED half of AC2/AC4 ──────
+//
+// Nine ACs passed at the BUILDER boundary. Two of them do not hold once the
+// graph is actually DRAWN and actually LIVE, and one harness defect is what hid
+// them: mountApp's scripted `Response.json()` resolved the SAME body object on
+// every call, so `vanX.replace` wrote identical identities back, nothing
+// notified, and no test in this file had ever observed a second render. With
+// `json()` parsing fresh objects the way a real Response does, both defects are
+// reachable:
+//
+//   1. EXPANSION DOES NOT SURVIVE A LIVE RE-RENDER. `expanded` is a `const
+//      expanded = new Set()` INSIDE the mount callback (public/app.js), and
+//      `RoadmapGraphBody` re-runs on every `state.queue`/`state.plans`/
+//      `state.releases` change, so one poll tick silently re-collapses whatever
+//      the user opened. This file already holds the precedent for the fix —
+//      `lensOpenKeys` (app.js) and `state.collapsedCycles` (app.js:45-51,
+//      "Keyed OUTSIDE the render tree … so poll-tick re-renders … never reset an
+//      expansion").
+//   2. THE CARRIED ORDER NEVER REACHES THE LAYOUT. AC2's `data.seq` is consumed
+//      by nothing: cytoscape-dagre's documented `sort` option
+//      (public/cytoscape-dagre.js:206-213, applied at :419/:445) is not passed,
+//      so dagre orders same-rank siblings on its own and the authored queue
+//      order is invisible on the canvas.
+//
+// Both are RENDER assertions on the live instance, driven the same way the AC4
+// collapse tests above are: real app.js, real vendored cytoscape + dagre, live
+// shape. No new production seam — happy-dom ships no `EventSource`, so app.js
+// takes its own §S5 poll fallback (`setInterval(refetch, 5000)`), which is the
+// same re-render an SSE change frame drives in the browser.
+
+/** cytoscape's `data(key)` for a numeric field — narrowed, never asserted. */
+const numberData = (node: CyCollection, key: string): number => {
+  const value = node.data(key);
+  return typeof value === "number" ? value : Number.NaN;
+};
+
+/**
+ * happy-dom ships NO `EventSource`, so public/app.js normally degrades to its
+ * §S5 5s `setInterval(refetch, 5000)` poll. Installing a SCRIPTABLE one lets a
+ * test drive the app's OWN live path — an SSE change frame → `refetch()`
+ * (app.js `connectStream`) — with no wall-clock wait and no guessed duration.
+ * The handlers invoked are app.js's own; nothing here is a production seam,
+ * exactly like installCytoscape's 2d-context stub above.
+ */
+interface ScriptedStream {
+  /** Deliver one SSE change frame to every stream the app opened. */
+  changeFrame: () => void;
+}
+function installEventSource(): ScriptedStream {
+  const opened: { onmessage: (() => void) | null }[] = [];
+  class StubEventSource {
+    static readonly CLOSED = 2;
+    readyState = 1;
+    onopen: (() => void) | null = null;
+    onmessage: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor(_url: string) {
+      opened.push(this);
+    }
+    close(): void {
+      this.readyState = StubEventSource.CLOSED;
+    }
+  }
+  // The global EventSource slot. happy-dom leaves it undefined and this
+  // project's lib set carries no declaration for it, so the write goes through
+  // ONE named boundary const — the same shape the `canvasProto` stub above uses.
+  const globalScope: { EventSource: unknown } = globalThis as unknown as {
+    EventSource: unknown;
+  };
+  globalScope.EventSource = StubEventSource;
+  return {
+    changeFrame: () => {
+      if (opened.length === 0) throw new Error("public/app.js opened no EventSource");
+      for (const stream of opened) stream.onmessage?.();
+    },
+  };
+}
+
+/**
+ * The live roadmap graph over a MUTABLE COPY of the queue payload plus the
+ * stream handle: a test edits the copy, delivers one change frame, and the app
+ * refetches and re-renders on its own. The shared fixture arrays stay untouched.
+ */
+async function mountStreamedRoadmapGraph(): Promise<{
+  served: BuilderEntry[];
+  changeFrame: () => Promise<void>;
+}> {
+  const served: BuilderEntry[] = REAL_ENTRIES.map((e) => ({ ...e }));
+  let stream: ScriptedStream | undefined;
+  await mountApp({
+    pathname: "/p/live-roadmap/roadmap",
+    projects: [project({ key: "live-roadmap" })],
+    queue: served,
+    releases: REAL_RELEASES,
+    cytoscape: true,
+    beforeBoot: () => {
+      stream = installEventSource();
+    },
+  });
+  const toGraph = document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]');
+  expect(toGraph).not.toBeNull();
+  toGraph!.click();
+  await settle();
+  return {
+    served,
+    changeFrame: async () => {
+      stream!.changeFrame();
+      await settle();
+    },
+  };
+}
+
+describe("CR-CRU-077 §S2/AC4 — an expansion SURVIVES the live re-render, and still survives no reload", () => {
+  test("one CHANGED queue payload re-renders the graph and the expanded release STAYS expanded", async () => {
+    const { served, changeFrame } = await mountStreamedRoadmapGraph();
+    const id = releaseNodeId("0.1.0");
+    const members = membersInQueue(REAL_RELEASES.find((r) => r.version === "0.1.0")!);
+    expect(members.length).toBeGreaterThan(0);
+
+    const before = liveCy();
+    expect(before.$id(id).data("collapsed")).toBe(true);
+    before.$id(id).emit("tap");
+    await settle();
+    // Precondition, measured: the expansion really happened.
+    expect(members.filter((cr) => !isRendered(liveCy(), cr))).toEqual([]);
+    expect(liveCy().$id(id).data("collapsed")).toBe(false);
+
+    // ONE changed payload. The churn is a status flip on an UNRELEASED CR, so
+    // release membership — and therefore the fold set — is untouched and only
+    // the re-render is under test.
+    const churned = served.find((e) => e.cr === "CR-CRU-078")!;
+    expect(churned.status).toBe("PENDING");
+    expect(ALL_RELEASED.has(churned.cr)).toBe(false);
+    churned.status = "IN_PROGRESS";
+    await changeFrame();
+
+    // The re-render REALLY happened — the changed payload landed AND the body
+    // rebuilt its instance. Without both, "the expansion survived" is vacuous.
+    const after = liveCy();
+    expect(after.$id("CR-CRU-078").data("status")).toBe("IN_PROGRESS");
+    expect(after).not.toBe(before);
+
+    // …and the expansion is still there, on the release the user opened only.
+    expect(members.filter((cr) => !isRendered(after, cr))).toEqual([]);
+    expect(after.$id(id).data("collapsed")).toBe(false);
+    expect(after.$id(releaseNodeId("0.1.2")).data("collapsed")).toBe(true);
+    expect(isRendered(after, "CR-CRU-066")).toBe(false);
+  });
+
+  test("a FRESH page load still comes up collapsed — surviving a re-render is not surviving a reload (§S2)", async () => {
+    // The fence against fixing the test above with storage/URL: the expansion
+    // must live in the PAGE and nowhere a reload can reach.
+    await mountStreamedRoadmapGraph();
+    const id = releaseNodeId("0.1.0");
+    const members = membersInQueue(REAL_RELEASES.find((r) => r.version === "0.1.0")!);
+    liveCy().$id(id).emit("tap");
+    await settle();
+    expect(liveCy().$id(id).data("collapsed")).toBe(false);
+
+    // A real reload: a brand-new window and a brand-new app.js evaluation.
+    await mountLiveRoadmapGraph();
+    const cy = liveCy();
+    expect(cy.$id(id).data("collapsed")).toBe(true);
+    expect(members.filter((cr) => isRendered(cy, cr))).toEqual([]);
+  });
+
+  test("the retired instance is DESTROYED on remount, not abandoned with its canvas and listeners", async () => {
+    const { served, changeFrame } = await mountStreamedRoadmapGraph();
+    const before = liveCy();
+    expect(before.destroyed()).toBe(false);
+
+    served.find((e) => e.cr === "CR-CRU-078")!.status = "IN_PROGRESS";
+    await changeFrame();
+
+    const after = liveCy();
+    // Non-vacuous: a remount really happened, so "the old one is gone" is a
+    // claim about a retired instance rather than about the live one.
+    expect(after).not.toBe(before);
+    expect(after.destroyed()).toBe(false);
+    expect(before.destroyed()).toBe(true);
+  });
+});
+
+// ── CR-CRU-077 §S1/AC2 — the carried order reaches the DRAWING ──────────────
+//
+// Under `rankDir: "LR"` a dagre rank is a COLUMN: every node of one rank shares
+// an x (no `boundingBox` is passed, so the positions are dagre's own), and y is
+// the within-rank order the layout chose. `data.seq` is the authored queue
+// position. So "the authored order is visible" is exactly: within each column,
+// increasing y means increasing seq.
+
+interface RankedCr {
+  id: string;
+  seq: number;
+  x: number;
+  y: number;
+}
+
+/** Every DRAWN CR node with its authored position and the place dagre gave it. */
+const drawnRankedCrs = (cy: CyHandle): RankedCr[] => {
+  const rows: RankedCr[] = [];
+  for (const row of cy
+    .nodes('[type="cr"]')
+    .map((n) =>
+      n.visible()
+        ? { id: stringData(n, "id"), seq: numberData(n, "seq"), at: n.position() }
+        : undefined,
+    )) {
+    if (row !== undefined) rows.push({ id: row.id, seq: row.seq, x: row.at.x, y: row.at.y });
+  }
+  return rows;
+};
+
+/** The drawn CR columns, each sorted by the y the layout assigned. */
+const drawnCrColumns = (cy: CyHandle): RankedCr[][] => {
+  const columns = new Map<string, RankedCr[]>();
+  for (const cr of drawnRankedCrs(cy)) {
+    // Rounded so float noise cannot split one rank into two columns.
+    const key = cr.x.toFixed(6);
+    const bucket = columns.get(key);
+    if (bucket === undefined) columns.set(key, [cr]);
+    else bucket.push(cr);
+  }
+  return [...columns.values()]
+    .filter((bucket) => bucket.length > 1)
+    .map((bucket) => [...bucket].sort((a, b) => a.y - b.y));
+};
+
+/** Adjacent same-rank CR pairs the drawing puts out of authored order, NAMED. */
+const outOfAuthoredOrder = (cy: CyHandle): string[] => {
+  const wrong: string[] = [];
+  for (const column of drawnCrColumns(cy)) {
+    for (let i = 1; i < column.length; i++) {
+      const above = column[i - 1];
+      const below = column[i];
+      if (above.seq > below.seq) {
+        wrong.push(
+          `rank x=${above.x.toFixed(1)}: ${above.id} (seq ${above.seq}) drawn above ` +
+            `${below.id} (seq ${below.seq})`,
+        );
+      }
+    }
+  }
+  return wrong;
+};
+
+/** How many adjacent same-rank CR pairs the drawing even has — non-vacuity. */
+const adjacentSameRankPairs = (cy: CyHandle): number =>
+  drawnCrColumns(cy).reduce((total, column) => total + column.length - 1, 0);
+
+describe("CR-CRU-077 §S1/AC2 — the authored queue order is visible in the DRAWN graph", () => {
+  test("within every drawn rank, the CRs are laid out in authored `data.seq` order — the out-of-order pairs are named", async () => {
+    await mountLiveRoadmapGraph();
+    const cy = liveCy();
+
+    // Non-vacuity, both halves: the layout really ran (finite positions) and it
+    // really does stack CRs within ranks, so "in order" is a claim about a
+    // populated set of same-rank pairs rather than about no pairs at all.
+    const drawn = drawnRankedCrs(cy);
+    expect(drawn.length).toBeGreaterThan(20);
+    expect(drawn.filter((c) => !Number.isFinite(c.x) || !Number.isFinite(c.y))).toEqual([]);
+    expect(drawn.filter((c) => !Number.isFinite(c.seq))).toEqual([]);
+    expect(adjacentSameRankPairs(cy)).toBeGreaterThan(10);
+
+    expect(outOfAuthoredOrder(cy)).toEqual([]);
+  });
+
+  test("…and in the fully EXPANDED state too, where every released CR is drawn as well", async () => {
+    await mountLiveRoadmapGraph();
+    for (const rel of REAL_RELEASES) {
+      liveCy().$id(releaseNodeId(rel.version)).emit("tap");
+      await settle();
+    }
+    const cy = liveCy();
+    expect(drawnRankedCrs(cy).length).toBe(REAL_ENTRIES.length);
+    expect(adjacentSameRankPairs(cy)).toBeGreaterThan(10);
+
+    expect(outOfAuthoredOrder(cy)).toEqual([]);
+  });
+});
+
+// ── CR-CRU-077 §S2/AC4 — the fold credits the SAME diamond the builder does ──
+
+/** A graph mount over an arbitrary queue + ledger, real cytoscape. */
+async function mountGraph(
+  key: string,
+  queue: BuilderEntry[],
+  releases: BuilderRelease[],
+): Promise<void> {
+  await mountApp({
+    pathname: `/p/${key}/roadmap`,
+    projects: [project({ key })],
+    queue,
+    releases,
+    cytoscape: true,
+  });
+  document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]')!.click();
+  await settle();
+}
+
+// One CR claimed by TWO tags. The builder resolves it in SHIP order — the older
+// claim wins, "since that is when it shipped" (app-logic.mjs) — so
+// `rel:ship:CR-DUP->0.2.0` is the edge it emits. The live payload arrives
+// NEWEST-FIRST, so a render that iterates the ledger as given credits the
+// NEWEST claim instead and folds CR-DUP under the wrong diamond, leaving a
+// backwards `fold:milestone:0.3.0->milestone:0.2.0` where its ship edge was.
+const OVERLAP_QUEUE: BuilderEntry[] = [
+  { cr: "CR-DUP", title: "Doubly claimed", wave: "1", dependsOn: [], status: "COMPLETED" },
+  { cr: "CR-LATER", title: "Later", wave: "2", dependsOn: ["CR-DUP"], status: "COMPLETED" },
+  { cr: "CR-OPEN", title: "Open", wave: "3", dependsOn: ["CR-LATER"], status: "PENDING" },
+];
+const OVERLAP_RELEASES: BuilderRelease[] = [
+  { version: "0.3.0", releasedAt: 2000, crs: ["CR-DUP", "CR-LATER"], timestamp: 20 },
+  { version: "0.2.0", releasedAt: 1000, crs: ["CR-DUP"], timestamp: 10 },
+];
+
+describe("CR-CRU-077 §S2/AC4 — a doubly-claimed CR folds under the diamond the BUILDER credits", () => {
+  test("the older claim wins on BOTH sides: no backwards diamond→diamond fold, and expanding 0.2.0 is what reveals CR-DUP", async () => {
+    // Fixture guard: the builder really credits the OLDER tag, so the render's
+    // tie-break has a definite right answer to match.
+    const g = buildRoadmapGraph(OVERLAP_QUEUE, OVERLAP_RELEASES);
+    expect(hasEdge(g, "CR-DUP", "milestone:0.2.0")).toBe(true);
+    expect(hasEdge(g, "CR-DUP", "milestone:0.3.0")).toBe(false);
+
+    await mountGraph("overlap-older", OVERLAP_QUEUE, OVERLAP_RELEASES);
+    const cy = liveCy();
+    expect(cy.$id("milestone:0.2.0").nonempty()).toBe(true);
+    expect(cy.$id("milestone:0.3.0").nonempty()).toBe(true);
+    // Collapsed, so CR-DUP is folded away under exactly one of them.
+    expect(isRendered(cy, "CR-DUP")).toBe(false);
+    // A fold that credits the newer diamond reroutes CR-DUP's ship edge into a
+    // 0.3.0 → 0.2.0 edge, which runs against the release chain.
+    const backwards = visibleEdgeEnds(cy).filter(
+      (e) => e.source === "milestone:0.3.0" && e.target === "milestone:0.2.0",
+    );
+    expect(backwards).toEqual([]);
+
+    // Expanding the diamond the builder credits is what reveals it…
+    cy.$id("milestone:0.2.0").emit("tap");
+    await settle();
+    expect(isRendered(liveCy(), "CR-DUP")).toBe(true);
+  });
+
+  test("expanding the NEWER claimant does not reveal it — the two sides cannot disagree", async () => {
+    await mountGraph("overlap-newer", OVERLAP_QUEUE, OVERLAP_RELEASES);
+    liveCy().$id("milestone:0.3.0").emit("tap");
+    await settle();
+    const cy = liveCy();
+    // 0.3.0's own member is revealed, so the tap was not a no-op…
+    expect(isRendered(cy, "CR-LATER")).toBe(true);
+    // …while CR-DUP stays folded under 0.2.0.
+    expect(isRendered(cy, "CR-DUP")).toBe(false);
+  });
+});
+
+// ── CR-CRU-077 §S2/AC4 — a collapsed diamond has a RENDERED affordance ──────
+//
+// DN decision 1 makes a release node "expandable on click", and `data.collapsed`
+// is written on every mount — but nothing renders it, so a collapsed diamond and
+// an expanded one are pixel-identical and the affordance is undiscoverable. The
+// app's own design language for exactly this is the ▸/▾ drill-in glyph
+// (`ToggleGlyph`, public/app.js), so the state rides the diamond's label line —
+// text on the node, which is what an assertion (and a user) can actually read.
+
+describe("CR-CRU-077 §S2/AC4 — the collapse state is VISIBLE on the diamond", () => {
+  test("a collapsed diamond reads ▸ and an expanded one reads ▾, on the label, and the version and count stay", async () => {
+    await mountLiveRoadmapGraph();
+    const id = releaseNodeId("0.1.0");
+
+    const collapsed = stringData(liveCy().$id(id), "label");
+    expect(liveCy().$id(id).data("collapsed")).toBe(true);
+    expect(collapsed).toContain("▸");
+    expect(collapsed).not.toContain("▾");
+    // The affordance is ADDED to what AC4 already renders, never instead of it.
+    expect(collapsed).toContain("0.1.0");
+    expect(collapsed).toContain(`${EXPECTED_RELEASE_CR_COUNTS["0.1.0"]} CRs`);
+
+    liveCy().$id(id).emit("tap");
+    await settle();
+
+    const expanded = stringData(liveCy().$id(id), "label");
+    expect(liveCy().$id(id).data("collapsed")).toBe(false);
+    expect(expanded).toContain("▾");
+    expect(expanded).not.toContain("▸");
+    expect(expanded).toContain("0.1.0");
+    expect(expanded).toContain(`${EXPECTED_RELEASE_CR_COUNTS["0.1.0"]} CRs`);
+
+    // Every diamond carries one, including the zero-CR release.
+    const glyphless = liveCy()
+      .nodes('[type="milestone"]')
+      .map((m) => (/[▸▾]/.test(stringData(m, "label")) ? "" : stringData(m, "id")))
+      .filter((name) => name !== "");
+    expect(glyphless).toEqual([]);
+  });
+});
+
+// ── CR-CRU-077 §S2 — a `fold:` reroute does not read as a declared dependency ─
+
+describe("CR-CRU-077 §S2 — a fold reroute is drawn distinctly from a declared dependency", () => {
+  test("the stylesheet carries its own edge.roadmap-fold rule, and a drawn fold edge resolves differently from a dep edge", async () => {
+    await mountLiveRoadmapGraph();
+    const cy = liveCy();
+
+    const norm = (selector: string): string => selector.replace(/\s+/g, "");
+    const foldRule = cy
+      .style()
+      .json()
+      .find((r) => norm(r.selector) === "edge.roadmap-fold");
+    expect(foldRule).toBeDefined();
+
+    // …and it actually reaches the drawing: a rerouted edge and a declared
+    // dependency edge, both drawn, resolve to different styles.
+    const foldIds = cy
+      .edges()
+      .map((e) => (stringData(e, "id").startsWith("fold:") && e.visible() ? stringData(e, "id") : ""))
+      .filter((id) => id !== "");
+    const depIds = cy
+      .edges()
+      .map((e) => (stringData(e, "id").startsWith("dep:") && e.visible() ? stringData(e, "id") : ""))
+      .filter((id) => id !== "");
+    expect(foldIds.length).toBeGreaterThan(0);
+    expect(depIds.length).toBeGreaterThan(0);
+    expect(elementStyleJson(cy.$id(foldIds[0]))).not.toBe(elementStyleJson(cy.$id(depIds[0])));
   });
 });
