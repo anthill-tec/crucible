@@ -39,9 +39,14 @@ C3 (§S3, AC3) BACKFILLS the guard the whole CR exists for: after a real
 `run_install`, every path the on-disk manifest publishes resolves -- readable,
 non-empty, and anchored under `<target-dir>/clients/`.
 
-NOT this cycle (owned elsewhere in plan 89): a copied client running (AC4),
-the `manifest.source_clients_dir()` single resolver (§S2/AC7), the
-`cli.main()` integration (AC8).
+C4 (§S1, AC4) BACKFILLS the executability guard: after a real `run_install`,
+every copied client RUNS from `<target-dir>/clients/` -- `--help` exits 0 with
+output, and each client's own by-path loader resolves BOTH shared modules out
+of the copied directory. That is the clients-only-copy defect's only trap.
+
+NOT this cycle (owned elsewhere in plan 89): the
+`manifest.source_clients_dir()` single resolver (§S2/AC7) and the `cli.main()`
+integration (AC8).
 
 Every test owns a `tempfile.mkdtemp` scratch target under `/tmp` and removes
 it; the `[server]` stage is always stubbed to a no-subprocess provision double,
@@ -54,6 +59,7 @@ import importlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -772,6 +778,233 @@ class ManifestPublishedPathsResolveTest(_ScratchInstallCase):
             self.document["version"],
             f"§S3 -- the manifest must carry a non-empty `version`; got "
             f"{self.document['version']!r}")
+
+
+# --- CR-CRU-090 C4 (§S1, AC4) -- a copied client actually RUNS ---------------
+
+# BACKFILL, not RED: the `fleet` stage (C1/C2) already lays all eight files
+# down, so this guard passes on its first execution. Its worth was proved by
+# MUTATION: dropping `"_crucible_axi.py"` from `install.FLEET_FILES` kills the
+# `--help` guards (all five copied clients die at import), and dropping
+# `"toon.py"` kills the shared-module seam guard. Those two mutations ARE the
+# clients-only-copy defect §S1 warns about -- "a copy without them yields five
+# unrunnable clients".
+
+# The five stacks, as the manifest keys them. Parity matters: the `fleet` stage
+# copies a tuple, and a guard that only exercised `python` would pass a stage
+# that dropped, truncated or mis-copied any of the other four.
+COPIED_CLIENT_STACKS = ("bun", "python", "rust", "mvn", "arduino")
+
+# AC4's literal subject: `python3 <target-dir>/clients/python-crucible.py --help`.
+AC4_CLIENT_STACK = "python"
+
+# The two shared modules the five load BY FILE PATH from their own directory
+# (`os.path.dirname(os.path.abspath(__file__))`), reached through each client's
+# own `_axi()` / `_toon()` loader.
+SHARED_MODULE_LOADERS = (("_axi", "_crucible_axi.py"), ("_toon", "toon.py"))
+
+# Bounded so a wedged interpreter fails the test instead of hanging the suite.
+# `--help` is argparse-only work; a second would do, 60 is slack for a loaded
+# CI box.
+CLIENT_SUBPROCESS_TIMEOUT_SECONDS = 60
+
+# The copied client must load its shared modules THROUGH ITS OWN LOADER, from
+# the directory it was copied into. Printed on stdout as `<key>:<path>` so a
+# failure names the resolved path, which is what distinguishes "loaded from the
+# copy" (correct) from "loaded from the repo checkout" (a false pass).
+_SHARED_MODULE_PROBE = """\
+import importlib.util, sys
+
+client_path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("copied_client_under_test",
+                                              client_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+for loader_name, _filename in %(loaders)r:
+    resolved = getattr(module, loader_name)()
+    sys.stdout.write("%%s:%%s\\n" %% (loader_name, resolved.__file__))
+"""
+
+
+class CopiedClientsActuallyRunTest(_ScratchInstallCase):
+    """AC4/§S1 -- after a REAL `run_install` (only `[server]` stubbed), a client
+    copied into `<target-dir>/clients/` actually RUNS there.
+
+    This is the only guard that catches the obvious wrong implementation: a
+    clients-only copy. The five clients load `_crucible_axi.py` (the shared AXI
+    envelope) and `toon.py` (the codec) BY FILE PATH from their own directory,
+    so a stage that laid down five `*-crucible.py` files and nothing else would
+    satisfy "the clients are there" and yield five entry points that die on
+    import. AC2's byte-comparison would catch that particular shape, but only
+    because it enumerates the eight names; nothing there proves the copied
+    tree is EXECUTABLE.
+
+    Two hygiene rules make the pass meaningful rather than accidental:
+
+    - `cwd` is the scratch target, never the repo. Run from the repo root, a
+      client that resolved a shared module relative to the CWD instead of to
+      its own `__file__` would import the repo's `clients/` copy and the test
+      would pass on a broken install -- defeating the entire point.
+    - the subprocess env is BUILT, not inherited. `PYTHONPATH` could put the
+      repo tree on `sys.path`, and `PY_CRUCIBLE_*` / `CRUCIBLE_*` could point
+      the client back at the checkout or at a live server. `HOME` is pinned to
+      the scratch target so nothing can touch the real `~/.crucible`.
+
+    Nothing here contacts the Crucible server or registers anything: `--help`
+    is argparse-only, and the shared-module probe only imports two modules.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ok, self.stages, self.warnings = \
+            self.run_install_with_stubbed_server()
+        self.assertTrue(
+            os.path.isdir(self.clients_dir()),
+            f"AC4 -- the install laid down no {self.clients_dir()!r} to run "
+            f"from; ok={self.ok} stages={self.stages} "
+            f"warnings={self.warnings}")
+
+    def copied_client(self, stack):
+        return os.path.join(self.clients_dir(), f"{stack}-crucible.py")
+
+    def isolated_env(self):
+        """A minimal env BUILT from nothing, so no inherited variable can point
+        the copied client at the repo tree or at a live server. Locale and IO
+        encoding are pinned because the clients' help text carries non-ASCII
+        (em dashes), and a C-locale interpreter must not fail writing it."""
+        return {
+            "PATH": os.defpath,
+            "HOME": self.target,
+            "LC_ALL": "C.UTF-8",
+            "PYTHONIOENCODING": "utf-8",
+        }
+
+    def run_from_the_copy(self, *argv):
+        """Run `sys.executable <argv...>` with the scratch target as CWD and a
+        built-from-nothing env. `sys.executable` is the "bare `python3`" AC4
+        names: the clients declare PEP 723 `dependencies = []`, so no venv, no
+        `uv` and no third-party import is in play."""
+        return subprocess.run(
+            [sys.executable, *argv],
+            cwd=self.target,
+            env=self.isolated_env(),
+            capture_output=True,
+            text=True,
+            timeout=CLIENT_SUBPROCESS_TIMEOUT_SECONDS,
+            check=False)
+
+    @staticmethod
+    def _diagnose(stack, completed):
+        """The failure text. A bare "exit != 0" makes a future regression
+        unreadable -- the traceback naming the missing shared module IS the
+        diagnosis, so both streams are always reported."""
+        return (
+            f"{stack}: exit={completed.returncode}\n"
+            f"  stdout: {completed.stdout.strip() or '<empty>'}\n"
+            f"  stderr: {completed.stderr.strip() or '<empty>'}")
+
+    def test_the_copied_python_client_runs_with_help(self):
+        """AC4, verbatim -- `python3 <target-dir>/clients/python-crucible.py
+        --help` exits 0, proving the shared-module-by-path load works from the
+        copied location. `python-crucible.py` binds `_crucible_axi` at MODULE
+        level (`_AXI_UNSET = _axi().AXI_UNSET`), so this exit code really does
+        traverse the envelope-module seam; it is not a hollow argparse call."""
+        client = self.copied_client(AC4_CLIENT_STACK)
+        completed = self.run_from_the_copy(client, "--help")
+        self.assertEqual(
+            0, completed.returncode,
+            f"AC4 -- `python3 {client} --help` must exit 0 from the COPIED "
+            f"location (cwd={self.target}, env built from nothing). A "
+            f"clients-only copy -- five clients without `_crucible_axi.py` / "
+            f"`toon.py` -- fails exactly here.\n"
+            f"{self._diagnose(AC4_CLIENT_STACK, completed)}")
+        self.assertTrue(
+            completed.stdout.strip(),
+            f"AC4 -- `--help` exited 0 but printed nothing to stdout, which is "
+            f"not a working client.\n"
+            f"{self._diagnose(AC4_CLIENT_STACK, completed)}")
+
+    def test_all_five_copied_clients_run_with_help(self):
+        """AC4/§S1 fleet parity -- the stage copies five clients, so all five
+        must run from the copy, not just the one AC4 names. Every failing stack
+        is collected and reported in ONE message: dying on the first would hide
+        whether the breakage is fleet-wide (a missing shared module) or
+        stack-local (one truncated client)."""
+        broken = []
+        for stack in COPIED_CLIENT_STACKS:
+            client = self.copied_client(stack)
+            if not os.path.isfile(client):
+                broken.append(f"{stack}: not copied at all ({client})")
+                continue
+            try:
+                completed = self.run_from_the_copy(client, "--help")
+            except subprocess.TimeoutExpired:
+                broken.append(
+                    f"{stack}: `--help` did not finish within "
+                    f"{CLIENT_SUBPROCESS_TIMEOUT_SECONDS}s")
+                continue
+            if completed.returncode != 0:
+                broken.append(self._diagnose(stack, completed))
+            elif not completed.stdout.strip():
+                broken.append(
+                    f"{stack}: exit=0 but stdout was EMPTY\n"
+                    f"{self._diagnose(stack, completed)}")
+        self.assertEqual(
+            [], broken,
+            f"AC4/§S1 -- all {len(COPIED_CLIENT_STACKS)} copied clients must "
+            f"exit 0 on `--help` from {self.clients_dir()!r}; "
+            f"{len(broken)} failed:\n" + "\n".join(broken))
+
+    def test_each_copied_client_loads_both_shared_modules_from_the_copy(self):
+        """AC4/§S1, the seam DIRECTLY -- "the shared envelope + codec modules
+        the five load BY FILE PATH from their own directory".
+
+        `--help` alone cannot prove this half: `_toon()` is LAZY in all five
+        clients, so a copy missing `toon.py` still exits 0 on `--help`. Rather
+        than accept that hole -- or run a real verb, which a test must never do
+        (it would need the server) -- this drives each COPIED client's OWN
+        loaders, `_axi()` and `_toon()`, in a subprocess. Importing a client is
+        side-effect free: `main()` sits behind an `if __name__ == "__main__"`
+        guard, so nothing is registered and no request is made.
+
+        The resolved `__file__` of each loaded module is asserted to sit in the
+        COPIED clients dir. Bare importability is not enough -- a module
+        resolved out of the repo checkout would import fine and still mean the
+        install laid nothing down."""
+        probe = _SHARED_MODULE_PROBE % {"loaders": SHARED_MODULE_LOADERS}
+        expected_dir = os.path.realpath(self.clients_dir())
+        broken = []
+        for stack in COPIED_CLIENT_STACKS:
+            client = self.copied_client(stack)
+            try:
+                completed = self.run_from_the_copy("-c", probe, client)
+            except subprocess.TimeoutExpired:
+                broken.append(
+                    f"{stack}: shared-module probe did not finish within "
+                    f"{CLIENT_SUBPROCESS_TIMEOUT_SECONDS}s")
+                continue
+            if completed.returncode != 0:
+                broken.append(self._diagnose(stack, completed))
+                continue
+            resolved = dict(
+                line.split(":", 1)
+                for line in completed.stdout.splitlines() if ":" in line)
+            for loader_name, filename in SHARED_MODULE_LOADERS:
+                path = resolved.get(loader_name)
+                if path is None:
+                    broken.append(
+                        f"{stack}: {loader_name}() resolved no path for "
+                        f"{filename}\n{self._diagnose(stack, completed)}")
+                elif os.path.dirname(os.path.realpath(path)) != expected_dir:
+                    broken.append(
+                        f"{stack}: {loader_name}() loaded {filename} from "
+                        f"{path!r}, OUTSIDE the copied fleet dir "
+                        f"{expected_dir!r}")
+        self.assertEqual(
+            [], broken,
+            f"AC4/§S1 -- every copied client must load `_crucible_axi.py` AND "
+            f"`toon.py` from {expected_dir!r} through its own by-path loader; "
+            f"{len(broken)} problem(s):\n" + "\n".join(broken))
 
 
 if __name__ == "__main__":
