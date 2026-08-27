@@ -481,20 +481,25 @@ class StageInversionAndInstallParityTest(_UninstallFixtureCase):
         the two DESTRUCTIVE stages last.
 
         Deliberately NOT a naive reverse of `STAGE_ORDER`. Install's order
-        (`server`, `manifest`) has no destructive step, so inverting it says
-        nothing about where a purge belongs. Combined with fail-fast,
-        destructive-last means data is destroyed only after every reversible
-        step has already succeeded -- the inverse order would let a failing
-        server stage leave the store and config GONE and the program still
-        installed, the worst reachable outcome."""
+        (`server`, `fleet`, `manifest`, `unit`) has no destructive step, so
+        inverting it says nothing about where a purge belongs. Combined with
+        fail-fast, destructive-last means data is destroyed only after every
+        reversible step has already succeeded -- the inverse order would let a
+        failing server stage leave the store and config GONE and the program
+        still installed, the worst reachable outcome."""
         install, = _import_fresh("crucible_axi.install")
         order = self._require(
             install, "UNINSTALL_STAGE_ORDER",
             "uninstall must declare its stage sequence the way install "
             "declares STAGE_ORDER, so the order is inspectable (AC2)")
-        # CR-CRU-070 -- the install order this relates to gained a third stage.
+        # CR-CRU-070 gave the install order `[unit]` and CR-CRU-090's merge-back
+        # gave it `[fleet]`, so the order this inverse relates to is FOUR
+        # stages. `[fleet]` has no inverse here yet -- CR-CRU-090 §S1 defers the
+        # uninstall counterpart to a follow-up CR, which is why this inverse
+        # stays at four stages of its own without a `fleet` entry.
         self.assertEqual(
-            install.STAGE_ORDER, (SERVER_STAGE, "manifest", UNIT_STAGE),
+            install.STAGE_ORDER,
+            (SERVER_STAGE, "fleet", "manifest", UNIT_STAGE),
             "fixture sanity: the install order this relates to")
         order = tuple(order)
         # CR-CRU-070 -- ("server", "config", "store") is superseded by

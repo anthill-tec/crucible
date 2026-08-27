@@ -17,29 +17,14 @@ import os
 import subprocess
 import sys
 
-from crucible_axi import install
-
-# The client fleet (envelope + TOON codec) lives beside the package in the
-# source checkout, and is force-included as package data when installed.
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_CLIENTS_CANDIDATES = (
-    os.path.join(os.path.dirname(_HERE), "clients"),   # source checkout (repo root)
-    os.path.join(_HERE, "clients"),                    # installed package data
-)
-
-
-def _clients_dir() -> str:
-    for candidate in _CLIENTS_CANDIDATES:
-        if os.path.isdir(candidate):
-            return candidate
-    return _CLIENTS_CANDIDATES[0]
+from crucible_axi import install, manifest
 
 
 def _load_client_module(name: str):
     """Load a sibling `clients/<name>.py` module by file path (the hyphenated
     clients are not importable as normal module names, so the shared envelope
     module is vendored by path exactly as the clients load it)."""
-    path = os.path.join(_clients_dir(), f"{name}.py")
+    path = os.path.join(manifest.source_clients_dir(), f"{name}.py")
     spec = importlib.util.spec_from_file_location(f"crucible_axi_vendored_{name}", path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"could not load client module at {path}")

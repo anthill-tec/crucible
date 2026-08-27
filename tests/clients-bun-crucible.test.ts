@@ -31,51 +31,82 @@
 // hardcoded `http://localhost:3849` the current script uses — the C2
 // upgrade must read this env var.
 //
-// §S2c ground truth (PROBED directly against the installed bun binary,
-// 1.3.14-canary, not assumed from the spec prose): `bun test
-// --reporter=junit` writes a BARE `<failure type="AssertionError"/>` (no
-// message attribute, no element text) for every failure kind — assertion
-// mismatch, thrown Error, AND timeout alike. Detail lives only in the
-// console stream:
-//   - assertion mismatch / thrown Error: an "error: <detail>" block
-//     appears IMMEDIATELY BEFORE the "(fail) <name>" line, e.g.:
-//       error: expect(received).toBe(expected)
-//       ...
-//       (fail) mismatched expectation [0.12ms]
-//   - a TIMEOUT's detail line is printed with the OPPOSITE ordering, and
-//     WHICH ordering you get is a property of the runner's bun, not of the
-//     client: 1.3.14 prints "^ this test timed out after Nms." AFTER the
-//     "(fail) <name>" line (structurally not a preceding block, so the leaf
-//     degrades to type-only), while a newer bun surfaces "test timed out"
-//     for the same leaf. CR-CRU-087 §S2/AC2: this suite therefore asserts
-//     ATTRIBUTION for that leaf — it is `fail`, and any message it carries
-//     is its OWN — never the ABSENCE of a message, which was only ever an
-//     artifact of one bun's line ordering. The version-sensitive
-//     both-orderings fixture coverage (§S3/AC3) lives in
-//     tests/client/test_cr087_console_failure_attribution.py, where the
-//     real parser is fed both orderings directly instead of whichever one
-//     the installed bun happens to print.
-//   - CROSS-LEAF BLEED, all three halves guarded now. A `(pass)`/`(skip)`/
-//     `(todo)` result line ends a pending detail block, and a block trailing
-//     its own `(fail)` line never marries BACKWARDS onto that leaf — both
-//     pinned in tests/client/test_cr087_console_failure_attribution.py. The
-//     FORWARD case — a detail block printed after its own leaf's `(fail)`
-//     line and before the NEXT leaf's, which bun 1.3.14 emits for a leaked
-//     async throw — was the one defect CR-CRU-087 left open, deliberately
-//     out of its scope and only characterised at the time. CR-CRU-088 §S1
-//     FIXED it in `clients/bun-crucible.py::_parse_console_failures`: a
-//     block is attributed to the test its source echo NAMES, and falls back
-//     to the positional rule only when the echo names no resolvable test. It
-//     is a real assertion now rather than a deferred candidate —
-//     `ForwardMarryingGuardTest` in that same python module, the six
-//     declaration shapes in
-//     tests/client/test_cr088_failure_detail_names_its_leaf.py, and the AC4
-//     E2E describes at the foot of THIS file.
+// §S2c ground truth — PROBED directly against real bun binaries, 1.3.14 AND
+// 1.4.0, never assumed from the spec prose. TWO channels carry failure
+// detail, and they drifted apart across those versions:
+//
+//   CONSOLE STREAM — IDENTICAL on 1.3.14 and 1.4.0 (diffed line-for-line,
+//   modulo the version banner and durations):
+//     - assertion mismatch / thrown Error: an "error: <detail>" block
+//       appears IMMEDIATELY BEFORE the "(fail) <name>" line, e.g.:
+//         error: expect(received).toBe(expected)
+//         ...
+//         (fail) mismatched expectation [0.12ms]
+//     - a TIMEOUT's detail line ("  ^ this test timed out after Nms.") is
+//       printed AFTER the "(fail) <name>" line instead — structurally NOT a
+//       "preceding block". A marrying parser built to the spec's described
+//       mechanism ("the error:/assertion block preceding each (fail) <name>
+//       line") cannot associate it with that leaf, so the leaf degrades to
+//       type-only. STILL TRUE on 1.4.0: bun did not move this line.
+//
+//   JUNIT REPORTER — CHANGED at 1.4.0, and THIS is what broke CI (run
+//   33045758701), not the console format:
+//     - bun 1.3.14 writes a BARE `<failure type="AssertionError"/>` (no
+//       message attribute, no element text) for EVERY failure kind —
+//       assertion mismatch, thrown Error AND timeout alike — so the console
+//       stream is the ONLY detail source and §S2c marrying is the only
+//       thing that can fill a leaf's `failure.message` in.
+//     - bun 1.4.0 writes `message="..."` PLUS element text on `<failure>`
+//       for every kind, including `message="test timed out"` on a
+//       TimeoutError. `_parse_junit_file` lifts that straight off the XML
+//       (correctly — richer reporter detail wins) and `_marry_failures`
+//       then SKIPS the leaf, because it already carries a message. So on
+//       1.4.0 a live timeout leaf is not an unmatched leaf at all, and its
+//       message never passed through the marrying parser.
+//
+// Consequence for this file: the §S2c marrying CONTRACT — a matched leaf
+// carries its own detail; a leaf whose detail CANNOT be matched degrades to
+// type-only and NEVER inherits a neighbour's message — is pinned against
+// FROZEN bytes (a captured console stream + a captured bare-node JUnit XML,
+// fed through the real client via its `--bun` seam; see the "§S2c ... on
+// FROZEN bytes" describe block below). The live-bun fixture keeps covering
+// only what is version-stable: which leaves FAIL, and that a failing leaf
+// carries its own detail from whichever channel supplied it.
+//
+// ATTRIBUTION, the live-fixture rule (CR-CRU-087 §S2/AC2). Because WHICH
+// channel supplies a timed-out leaf's message is the runner's bun talking,
+// the live assertions for that leaf pin ATTRIBUTION — it is `fail`, and any
+// message it carries is its OWN — never the ABSENCE of a message, which was
+// only ever an artifact of one bun's line ordering. The version-sensitive
+// both-orderings fixture coverage (§S3/AC3) lives in
+// tests/client/test_cr087_console_failure_attribution.py, where the real
+// parser is fed both orderings directly instead of whichever one the
+// installed bun happens to print — and, since CR-CRU-090, in the
+// frozen-bytes describe at the foot of THIS file, which drives the real
+// client end to end over the same immovable input.
+//
+// CROSS-LEAF BLEED, all three halves guarded now. A `(pass)`/`(skip)`/
+// `(todo)` result line ends a pending detail block, and a block trailing
+// its own `(fail)` line never marries BACKWARDS onto that leaf — both
+// pinned in tests/client/test_cr087_console_failure_attribution.py. The
+// FORWARD case — a detail block printed after its own leaf's `(fail)`
+// line and before the NEXT leaf's, which bun 1.3.14 emits for a leaked
+// async throw — was the one defect CR-CRU-087 left open, deliberately
+// out of its scope and only characterised at the time. CR-CRU-088 §S1
+// FIXED it in `clients/bun-crucible.py::_parse_console_failures`: a
+// block is attributed to the test its source echo NAMES, and falls back
+// to the positional rule only when the echo names no resolvable test. It
+// is a real assertion now rather than a deferred candidate —
+// `ForwardMarryingGuardTest` in that same python module, the six
+// declaration shapes in
+// tests/client/test_cr088_failure_detail_names_its_leaf.py, and the AC4
+// E2E describes at the foot of THIS file.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
+import type { ServerHandle } from "../src/server.ts";
 
 const SCRIPT_PATH = join(import.meta.dir, "..", "clients", "bun-crucible.py");
 
@@ -328,9 +359,13 @@ function runGit(args: string[], cwd: string): void {
   }
 }
 
-// 1 passing + 3 failing (mismatch, thrown-with-detail, timeout) — see the
-// file header for why the timeout leaf is asserted by ATTRIBUTION rather
-// than by absence of a message.
+// 1 passing + 3 failing (mismatch, thrown-with-detail, timeout). The timeout
+// leaf is NOT a stable "unmatched" case: bun ≤1.3.14 leaves its <failure>
+// bare (detail unmatchable → type-only) while bun ≥1.4.0 stamps
+// message="test timed out" on it (see the file header). On this LIVE fixture
+// the leaf is therefore asserted by ATTRIBUTION rather than by absence of a
+// message; the unmatched-leaf contract itself is pinned over FROZEN bytes in
+// the frozen-stream describe below.
 const FIXTURE_TEST_SOURCE = `import { test, expect } from "bun:test";
 
 test("adds numbers correctly", () => {
@@ -773,6 +808,12 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
     );
   });
 
+  // Version-stable across BOTH probed bun versions, but via DIFFERENT
+  // channels: on 1.3.14 these messages are §S2c console-married (the junit
+  // <failure> nodes are bare), on 1.4.0 they are lifted from the reporter's
+  // own `message=`. What is asserted here is the version-stable OUTCOME (a
+  // failing leaf carries its own detail); the marrying MECHANISM is pinned
+  // on frozen bytes in the block below.
   test("§S2c: matched failing leaves carry failure.message married from the console stream (expect(...) / thrown detail)", () => {
     const leaves = (event?.tree ?? []).flatMap((suite) => suite.children);
     const mismatch = leaves.find((l) => l.name === "mismatched expectation");
@@ -785,6 +826,14 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
     expect(thrown?.failure?.message ?? "").toContain("boom with detail");
   });
 
+  // The MESSAGE half of this leaf's original assertion is deliberately NOT
+  // pinned on the live fixture: `failure.message` is absent on bun ≤1.3.14
+  // (bare <failure>, detail unmatchable) and "test timed out" on bun ≥1.4.0
+  // (reporter-supplied), so pinning either value pins a bun version — and an
+  // `undefined`-OR-"test timed out" assertion would assert nothing while
+  // hiding a real marrying regression. ATTRIBUTION is version-stable, so that
+  // is what stays here; the unmatched-leaf MESSAGE contract is asserted over
+  // frozen bytes in the "§S2c ... on FROZEN bytes" describe below.
   test("§S2c/AC2 (CR-CRU-087): the timed-out leaf is ATTRIBUTED, not asserted ABSENT — it is 'fail', and any message it carries is its OWN, never a neighbouring leaf's console detail", () => {
     const leaves = (event?.tree ?? []).flatMap((suite) => suite.children);
     const timedOut = leaves.find((l) => l.name === "times out unmatched");
@@ -1006,6 +1055,294 @@ describe("clients/bun-crucible.py — CR-CRU-088 AC2/AC4 (E2E): two consecutive 
     expect(epsilon?.failure?.message ?? "").not.toContain("zeta detail only");
     expect(zeta?.failure?.message ?? "").not.toContain("epsilon detail only");
     expect(epsilon?.failure?.message).not.toBe(zeta?.failure?.message);
+  });
+});
+
+// ── §S2c on FROZEN bytes — the marrying parser, decoupled from bun ─────────
+//
+// CI run 33045758701 failed here because the unmatched-leaf assertion rode a
+// LIVE bun run: bun 1.4.0's JUnit reporter started stamping
+// `message="test timed out"` on TimeoutError nodes, so the leaf stopped
+// being unmatched and the test's own premise evaporated (full two-version
+// probe in the file header). Pinning CI's bun was tried and REVERTED
+// (CR-CRU-087: a `packageManager` field routes npm through corepack, 958ms →
+// 13082ms on the npm-pack test), so the fix is the other direction — stop
+// asserting a PARSER contract on bytes a toolchain release owns.
+//
+// Seam (reused, not invented): the client's own `--bun` flag
+// (`_resolve_bun`, clients/bun-crucible.py:120) driven by a FAKE bun binary —
+// exactly the technique tests/clients-narration.test.ts already uses
+// (`writeFakeAnsiTickBun` / `writeFakeEnvCaptureBun` + `--bun <script>`).
+// The fake binary writes a frozen JUnit XML to whatever
+// `--reporter-outfile=` the client passed and prints a frozen console
+// stream, so the REAL client path runs end to end — `_run_logged` →
+// `_parse_junit_file` → `_marry_failures` → POST /api/v2/runs/parsed — over
+// bytes no bun release can move, and the assertions read the INGESTED tree,
+// never a reimplementation of the parser. `--bun` beats $BUN_CRUCIBLE_BUN in
+// `_resolve_bun`, so these runs are immune to that env var too.
+//
+// BOTH orderings are pinned, which is what CR-CRU-087's revert note asks
+// for: a console-format FLIP must be caught by a failing assertion here
+// instead of by pinning the toolchain.
+
+// Captured VERBATIM (2026-08-27) from a real `bun test --reporter=junit` run
+// of FIXTURE_TEST_SOURCE on bun 1.3.14 — BARE `<failure>` nodes, no message
+// attribute and no element text, for all three failure kinds. This is the
+// precondition of the §S2c contract: with this XML the console stream is the
+// ONLY possible source of a leaf's failure.message, so a married message
+// cannot be a reporter message in disguise. (bun 1.4.0 emits the same
+// document with `message=` + element text added — the change under test.)
+const FROZEN_BARE_JUNIT_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="4" assertions="2" failures="3" skipped="0" time="0.05815347">
+  <testsuite name="sample.test.ts" file="sample.test.ts" tests="4" assertions="2" failures="3" skipped="0" time="0.05" hostname="AntoPC">
+    <testcase name="adds numbers correctly" classname="" time="0.000058" file="sample.test.ts" line="3" assertions="1" />
+    <testcase name="mismatched expectation" classname="" time="0.000081" file="sample.test.ts" line="7" assertions="1">
+      <failure type="AssertionError" />
+    </testcase>
+    <testcase name="throws with detail" classname="" time="0.000036" file="sample.test.ts" line="11" assertions="0">
+      <failure type="AssertionError" />
+    </testcase>
+    <testcase name="times out unmatched" classname="" time="0.050003" file="sample.test.ts" line="15" assertions="0">
+      <failure type="TimeoutError" />
+    </testcase>
+  </testsuite>
+</testsuites>
+`;
+
+// Captured VERBATIM (2026-08-27) alongside the XML above — the SAME run's
+// combined stdout+stderr through a pipe, with CLAUDECODE/AGENT/REPL_ID/
+// AI_AGENT unset exactly as `cmd_test` unsets them, so the `(pass)`/`(fail)`
+// result-line family (the parser's block boundaries) is present. bun 1.4.0
+// produces this document line-for-line, banner and durations aside — which
+// is why freezing it costs no fidelity. Hand-typing was avoided on purpose:
+// per CR-CRU-047 a hand-typed result line can validate a regex that matches
+// ZERO real bun output.
+//
+// Ordering #1, the one bun actually emits: the timeout's detail line lands
+// AFTER its `(fail)` line, so it is not a preceding block → UNMATCHED.
+const FROZEN_STREAM_TIMEOUT_DETAIL_AFTER_FAIL = `bun test v1.3.14 (0d9b296a)
+
+sample.test.ts:
+(pass) adds numbers correctly [0.06ms]
+3 | test("adds numbers correctly", () => {
+4 |   expect(1 + 1).toBe(2);
+5 | });
+6 | 
+7 | test("mismatched expectation", () => {
+8 |   expect(1 + 1).toBe(3);
+                    ^
+error: expect(received).toBe(expected)
+
+Expected: 3
+Received: 2
+
+      at <anonymous> (/tmp/s2c-probe/sample.test.ts:8:17)
+(fail) mismatched expectation [0.08ms]
+ 7 | test("mismatched expectation", () => {
+ 8 |   expect(1 + 1).toBe(3);
+ 9 | });
+10 | 
+11 | test("throws with detail", () => {
+12 |   throw new Error("boom with detail");
+                                         ^
+error: boom with detail
+      at <anonymous> (/tmp/s2c-probe/sample.test.ts:12:37)
+(fail) throws with detail [0.04ms]
+(fail) times out unmatched [50.00ms]
+  ^ this test timed out after 50ms.
+
+ 1 pass
+ 3 fail
+ 2 expect() calls
+Ran 4 tests across 1 file. [58.00ms]
+`;
+
+// Ordering #2 — the FLIP, and the only part of these fixtures that is not a
+// verbatim capture: the captured stream above with the timeout's detail line
+// RELOCATED into the preceding-`error:` position (the shape a future bun
+// would emit if it moved that line, and the shape the parser's rule says
+// MUST marry). Nothing else differs. If bun ever ships this ordering, the
+// flip test below is what records the outcome — a failing assertion in this
+// file, never a silently-changed message in the ingested tree.
+const FROZEN_STREAM_TIMEOUT_DETAIL_BEFORE_FAIL = `bun test v1.3.14 (0d9b296a)
+
+sample.test.ts:
+(pass) adds numbers correctly [0.06ms]
+3 | test("adds numbers correctly", () => {
+4 |   expect(1 + 1).toBe(2);
+5 | });
+6 | 
+7 | test("mismatched expectation", () => {
+8 |   expect(1 + 1).toBe(3);
+                    ^
+error: expect(received).toBe(expected)
+
+Expected: 3
+Received: 2
+
+      at <anonymous> (/tmp/s2c-probe/sample.test.ts:8:17)
+(fail) mismatched expectation [0.08ms]
+ 7 | test("mismatched expectation", () => {
+ 8 |   expect(1 + 1).toBe(3);
+ 9 | });
+10 | 
+11 | test("throws with detail", () => {
+12 |   throw new Error("boom with detail");
+                                         ^
+error: boom with detail
+      at <anonymous> (/tmp/s2c-probe/sample.test.ts:12:37)
+(fail) throws with detail [0.04ms]
+error: this test timed out after 50ms.
+(fail) times out unmatched [50.00ms]
+
+ 1 pass
+ 3 fail
+ 2 expect() calls
+Ran 4 tests across 1 file. [58.00ms]
+`;
+
+/**
+ * A fake `bun` binary (same technique as clients-narration.test.ts's
+ * `writeFakeAnsiTickBun`) that runs no tests at all: it writes
+ * FROZEN_BARE_JUNIT_XML to whatever `--reporter-outfile=` the client passed
+ * and prints `stream` verbatim, then exits 1 like a failing run. Everything
+ * downstream of the subprocess — capture, junit parse, §S2c marrying,
+ * ingest — is the real client.
+ */
+function writeFrozenStreamBun(path: string, stream: string): void {
+  const lines = [
+    "#!/bin/sh",
+    'outfile=""',
+    'for arg in "$@"; do',
+    '  case "$arg" in',
+    '    --reporter-outfile=*) outfile="${arg#--reporter-outfile=}" ;;',
+    "  esac",
+    "done",
+    "cat > \"$outfile\" <<'__FROZEN_JUNIT_XML__'",
+    FROZEN_BARE_JUNIT_XML.trimEnd(),
+    "__FROZEN_JUNIT_XML__",
+    "cat <<'__FROZEN_CONSOLE_STREAM__'",
+    stream.trimEnd(),
+    "__FROZEN_CONSOLE_STREAM__",
+    "exit 1",
+    "",
+  ];
+  writeFileSync(path, lines.join("\n"));
+  chmodSync(path, 0o755);
+}
+
+describe("clients/bun-crucible.py — §S2c failure-marrying contract on FROZEN bytes (no live bun in the assertion path)", () => {
+  let handle: ServerHandle | undefined;
+  const scratchDirs: string[] = [];
+  let baseUrl = "";
+  let detailAfterLeaves: EventLeaf[] = [];
+  let detailBeforeLeaves: EventLeaf[] = [];
+
+  function scratchDir(prefix: string): string {
+    const dir = mkdtempSync(join(tmpdir(), prefix));
+    scratchDirs.push(dir);
+    return dir;
+  }
+
+  /** Drives one real `bun-crucible.py test` run whose ONLY input is frozen
+   * bytes, and returns the leaves of the tree the server actually stored. */
+  async function ingestFrozenStream(
+    projectName: string,
+    agentId: string,
+    stream: string,
+  ): Promise<EventLeaf[]> {
+    const key = await createProject(baseUrl, projectName);
+    const dir = scratchDir("bun-crucible-frozen-");
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "clients-bun-crucible-frozen", version: "0.0.0", private: true }),
+    );
+    writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
+    // The client's own target resolution + `_prescan_test_total` read this
+    // file; the fake bun never does — the frozen stream IS this run's output.
+    writeFileSync(join(dir, "sample.test.ts"), FIXTURE_TEST_SOURCE);
+    const fakeBun = join(dir, "frozen-stream-bun.sh");
+    writeFrozenStreamBun(fakeBun, stream);
+    await ensureRegistered(agentId, { cwd: dir, crucibleUrl: baseUrl, projectDir: dir });
+    await runScript(
+      [
+        "test",
+        "--agent",
+        agentId,
+        "--tests",
+        "sample.test.ts",
+        "--project-dir",
+        dir,
+        "--package-dir",
+        dir,
+        "--bun",
+        fakeBun,
+      ],
+      { cwd: dir, crucibleUrl: baseUrl },
+    );
+    const events = await getEvents(baseUrl, key);
+    const event = events.length > 0 ? await getFullEvent(baseUrl, events[0]!.id) : undefined;
+    return (event?.tree ?? []).flatMap((suite) => suite.children);
+  }
+
+  beforeAll(async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    baseUrl = `http://localhost:${handle.server.port}`;
+    detailAfterLeaves = await ingestFrozenStream(
+      "clients-bc-frozen-detail-after",
+      "frozen-detail-after-agent",
+      FROZEN_STREAM_TIMEOUT_DETAIL_AFTER_FAIL,
+    );
+    detailBeforeLeaves = await ingestFrozenStream(
+      "clients-bc-frozen-detail-before",
+      "frozen-detail-before-agent",
+      FROZEN_STREAM_TIMEOUT_DETAIL_BEFORE_FAIL,
+    );
+  });
+
+  afterAll(() => {
+    handle?.stop();
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  test("MATCHED: a leaf whose `error:` block precedes its `(fail)` line carries that block's message AND its multi-line trace — which a bare-node junit XML could not have supplied", () => {
+    const mismatch = detailAfterLeaves.find((l) => l.name === "mismatched expectation");
+    const thrown = detailAfterLeaves.find((l) => l.name === "throws with detail");
+    expect(mismatch?.status).toBe("fail");
+    expect(mismatch?.failure?.message).toBe("expect(received).toBe(expected)");
+    // Non-vacuity: the junit `<failure>` is bare, so a multi-line trace can
+    // only have come off the console stream via §S2c marrying.
+    expect(mismatch?.failure?.trace ?? "").toContain("Expected: 3");
+    expect(mismatch?.failure?.trace ?? "").toContain("Received: 2");
+    expect(thrown?.status).toBe("fail");
+    expect(thrown?.failure?.message).toBe("boom with detail");
+  });
+
+  test("UNMATCHED: a leaf whose detail line falls AFTER its `(fail)` line degrades to type-only — no message at all, and NOTHING married off a neighbouring leaf", () => {
+    const timedOut = detailAfterLeaves.find((l) => l.name === "times out unmatched");
+    expect(timedOut?.status).toBe("fail");
+    expect(timedOut?.failure?.message).toBeUndefined();
+    // Type-only means the junit type SURVIVES — the leaf is not stripped of
+    // its failure object, it simply gains no console detail.
+    expect(timedOut?.failure?.type).toBe("TimeoutError");
+    // The anti-smear half: the two leaves printed immediately before this one
+    // both HAVE detail, and neither may bleed onto it through any field.
+    const serialised = JSON.stringify(timedOut?.failure ?? {});
+    expect(serialised).not.toContain("boom with detail");
+    expect(serialised).not.toContain("expect(received)");
+    expect(serialised).not.toContain("timed out");
+  });
+
+  test("ORDERING FLIP: with the SAME timeout leaf's detail relocated into a preceding `error:` block, it IS married — and only it (its neighbours keep their own messages)", () => {
+    const timedOut = detailBeforeLeaves.find((l) => l.name === "times out unmatched");
+    expect(timedOut?.status).toBe("fail");
+    expect(timedOut?.failure?.message).toBe("this test timed out after 50ms.");
+    const mismatch = detailBeforeLeaves.find((l) => l.name === "mismatched expectation");
+    const thrown = detailBeforeLeaves.find((l) => l.name === "throws with detail");
+    expect(mismatch?.failure?.message).toBe("expect(received).toBe(expected)");
+    expect(thrown?.failure?.message).toBe("boom with detail");
   });
 });
 

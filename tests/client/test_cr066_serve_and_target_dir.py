@@ -629,8 +629,9 @@ class InstallCreatesItsTargetDirTest(unittest.TestCase):
                 f"ok:true (AC7) -- it dies FileNotFoundError today; "
                 f"warnings={warnings}")
         self.assertEqual(
-            # CR-CRU-070 -- (server, manifest, unit).
-            [s["name"] for s in stages], ["server", "manifest", UNIT_STAGE],
+            # CR-CRU-070 + CR-CRU-090 -- (server, fleet, manifest, unit).
+            [s["name"] for s in stages],
+            ["server", "fleet", "manifest", UNIT_STAGE],
             f"every stage must have run to completion; stages={stages}")
 
     def test_run_install_twice_on_a_missing_target_dir_is_idempotent(self):

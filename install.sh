@@ -13,8 +13,9 @@
 # binary that brings its own Python, and it installs the `crucible-axi`
 # primary orchestrator from PyPI. `crucible-axi install` then provisions the
 # rest and EXITS — it guarantees Bun (the server's runtime), provisions the
-# Bun server user-scoped, and writes the client discovery manifest under its
-# target dir (the `server` and `manifest` stages) — see §S2.
+# Bun server user-scoped, lays the `*-crucible.py` client fleet down under its
+# target dir, and writes the client discovery manifest naming those paths
+# (the `server`, `fleet` and `manifest` stages, in that order) — see §S2.
 #
 # Re-running this script is also how you UPGRADE (CR-CRU-072): an existing
 # install is advanced with `uv tool upgrade` — uv's `install` alone no-ops over

@@ -86,9 +86,11 @@ BUN_GLOBAL_NODE_MODULES = ("install", "global", "node_modules")
 
 SYSTEMCTL_BIN_NAME = "systemctl"
 
-# The stage names: the four the inverse owns, and the three install runs.
+# The stage names: the four the inverse owns, and the four install runs
+# (CR-CRU-090's merge-back added `[fleet]` ahead of `[manifest]`).
 UNIT_STAGE = "unit"
 SERVER_STAGE = "server"
+FLEET_STAGE = "fleet"
 MANIFEST_STAGE = "manifest"
 CONFIG_STAGE = "config"
 STORE_STAGE = "store"
@@ -649,9 +651,13 @@ class UnitStageIsOrderedInBothDirectionsTest(_UnitFixtureCase):
             f"`STAGE_ORDER` has no [{UNIT_STAGE}] stage -- nothing provisions "
             f"the systemd `--user` unit, so the only persistent run is still a "
             f"foreground `serve` in a terminal (CR-CRU-070 AC1); got {order!r}")
+        # CR-CRU-090's merge-back inserted `[fleet]` between `[server]` and
+        # `[manifest]`; `[unit]` still comes LAST, which is what this class
+        # exists to pin.
         self.assertEqual(
-            order, (SERVER_STAGE, MANIFEST_STAGE, UNIT_STAGE),
-            f"install order must be (server, manifest, unit); got {order!r}")
+            order, (SERVER_STAGE, FLEET_STAGE, MANIFEST_STAGE, UNIT_STAGE),
+            f"install order must be (server, fleet, manifest, unit); "
+            f"got {order!r}")
         self.assertGreater(
             order.index(UNIT_STAGE), order.index(SERVER_STAGE),
             f"the [{UNIT_STAGE}] stage must run AFTER [{SERVER_STAGE}]: the "
