@@ -894,7 +894,19 @@ export function buildRoadmapGraph(entries, releases) {
   const milestoneId = (rel) => `milestone:${rel.version}`;
   for (const rel of ordered) {
     nodes.push({
-      data: { id: milestoneId(rel), type: "milestone", version: rel.version, label: rel.version },
+      data: {
+        id: milestoneId(rel),
+        type: "milestone",
+        version: rel.version,
+        label: rel.version,
+        // CR-CRU-077 §S2/AC4 — how many CRs this release shipped, derived from
+        // the ledger's `crs` and therefore builder data, not render state. A
+        // release that shipped none carries 0 (never absent): "zero CRs" is a
+        // measured fact about the tag, the same as sixty. The RENDER layer owns
+        // whether that region is folded (`data.collapsed`) — expansion is UI
+        // state and is not persisted, so it never appears here.
+        crCount: (rel.crs ?? []).length,
+      },
     });
   }
 

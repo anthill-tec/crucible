@@ -2482,15 +2482,24 @@
     // it is attached to the DOM. Guarded on the plain-HTML global
     // `window.cytoscape` (the vendored UMD): absent in the unit DOM, so the
     // container still renders with its data-cr-node-count attribute.
-    const mountRoadmapCy = (container, graph) => {
+    //
+    // `releases` is the ledger the builder was handed: the render layer reads
+    // `crs` off it for MEMBERSHIP (which CRs a release folds away) and reads
+    // the COUNT off the builder's own `data.crCount` — it re-derives neither.
+    // The dagre layout is not a CONSTRUCTOR option: applyReleaseCollapse runs
+    // it over the drawn subgraph, so a mount lays out once (the constructor's
+    // own layout is the no-op `null` one — cytoscape's default is `grid`, which
+    // would both waste a pass and place folded-away nodes).
+    const mountRoadmapCy = (container, graph, releases) => {
       const cyto = typeof window !== "undefined" ? window.cytoscape : undefined;
       if (typeof cyto !== "function") return;
+      const layout = { name: "dagre", rankDir: "LR", nodeSep: 28, rankSep: 48 };
       setTimeout(() => {
         if (!container.isConnected) return;
         const cy = cyto({
           container,
           elements: graph,
-          layout: { name: "dagre", rankDir: "LR", nodeSep: 28, rankSep: 48 },
+          layout: { name: "null" },
           style: [
             {
               selector: "node",
@@ -2527,14 +2536,16 @@
               },
             },
             {
+              // Two label lines (version, then the CR count §S2/AC4 puts on
+              // it), so the diamond is sized for both.
               selector: 'node[type="milestone"]',
               style: {
                 shape: "diamond",
                 "background-color": "#78350f",
                 "border-color": "#f59e0b",
                 "border-width": 2,
-                width: "60px",
-                height: "60px",
+                width: "84px",
+                height: "84px",
               },
             },
             {
@@ -2576,17 +2587,136 @@
             },
           ],
         });
+
+        // ── CR-CRU-077 §S2/AC4 — collapse is by RELEASE ─────────────────
+        // A shipped release's diamond IS the one node that stands for it: it
+        // carries the count the BUILDER measured (`data.crCount`) and, while
+        // collapsed, the CRs it shipped are not drawn. Expansion is UI STATE —
+        // this Set lives and dies with the mounted instance and is written
+        // NOWHERE else (no request, no storage, no history, no URL), so every
+        // fresh mount comes up collapsed and nothing can restore an expansion.
+        const expanded = new Set();
+        // Membership read straight off the ledger's `crs` — the same input the
+        // builder counted, never re-derived here. First claim wins, so a CR two
+        // tags both list folds into one release instead of two.
+        const releaseOf = new Map();
+        for (const rel of releases ?? []) {
+          for (const cr of rel.crs ?? []) {
+            if (!releaseOf.has(cr) && cy.$id(cr).nonempty()) releaseOf.set(cr, rel.version);
+          }
+        }
+        const diamondOf = new Map();
+        cy.nodes('[type="milestone"]').forEach((m) => diamondOf.set(m.data("version"), m.id()));
+        const startId = cy.nodes('[terminal="start"]').first().id();
+        const endId = cy.nodes('[terminal="end"]').first().id();
+        // The count is a fact about the TAG, not about the fold, so it goes
+        // into the diamond's label once and stays through expansion: a count
+        // nobody can read is not rendered. Second line, so the diamond keeps
+        // reading as a version boundary first.
+        cy.nodes('[type="milestone"]').forEach((m) => {
+          const count = m.data("crCount");
+          if (typeof count !== "number") return;
+          m.data("label", `${m.data("version")}\n${count} ${count === 1 ? "CR" : "CRs"}`);
+        });
+        // A CR of a COLLAPSED release stands for that release's diamond;
+        // everything else stands for itself.
+        const foldTarget = (id) => {
+          const version = releaseOf.get(id);
+          if (version === undefined || expanded.has(version)) return id;
+          return diamondOf.get(version) ?? id;
+        };
+
+        // Fold every release the user has not expanded, then lay out exactly
+        // what is drawn.
+        //
+        // EDGES ACROSS THE FOLD: hiding a node already makes cytoscape treat
+        // its edges as undrawn, so nothing dangles into a hidden CR — but
+        // dropping them is not enough either, because a release's whole inflow
+        // is `rel:ship:` from the very CRs being folded, and AC1 forbids an
+        // edgeless diamond. So each edge with a folded endpoint is REPLAYED
+        // with that endpoint moved onto the diamond; an edge internal to one
+        // collapsed release (both ends land on the same diamond) is a
+        // fold-away, not a reroute, and is not drawn at all. Whatever the fold
+        // leaves unfed or undrained is re-bracketed onto the SAME Start/End
+        // terminals the builder brackets the full DAG with. Dagre sees the
+        // drawn subgraph ONLY — the layout runs over `:visible`, so a folded
+        // region contributes no rank and leaves no hole where it used to be.
+        const applyReleaseCollapse = () => {
+          const hidden = new Set();
+          for (const [cr, version] of releaseOf) {
+            if (!expanded.has(version)) hidden.add(cr);
+          }
+          const endsKey = (source, target) => `${source}\u0000${target}`;
+          const drawn = new Set();
+          const reroute = new Map();
+          for (const e of graph.edges) {
+            const source = foldTarget(e.data.source);
+            const target = foldTarget(e.data.target);
+            if (source === target) continue;
+            const key = endsKey(source, target);
+            if (source === e.data.source && target === e.data.target) drawn.add(key);
+            else if (!reroute.has(key)) reroute.set(key, { source, target });
+          }
+          const added = [];
+          const addFold = (source, target) => {
+            const key = endsKey(source, target);
+            if (drawn.has(key)) return;
+            drawn.add(key);
+            added.push({
+              group: "edges",
+              data: { id: `fold:${source}->${target}`, source, target },
+              classes: "roadmap-fold",
+            });
+          };
+          for (const ends of reroute.values()) addFold(ends.source, ends.target);
+          const fed = new Set();
+          const feeds = new Set();
+          for (const key of drawn) {
+            const [source, target] = key.split("\u0000");
+            feeds.add(source);
+            fed.add(target);
+          }
+          const bracket = [];
+          cy.nodes().forEach((n) => {
+            const id = n.id();
+            if (hidden.has(id) || n.data("type") === "terminal") return;
+            if (startId !== undefined && !fed.has(id)) bracket.push([startId, id]);
+            if (endId !== undefined && !feeds.has(id)) bracket.push([id, endId]);
+          });
+          cy.batch(() => {
+            cy.edges(".roadmap-fold").remove();
+            cy.nodes().forEach((n) => n.style("display", hidden.has(n.id()) ? "none" : "element"));
+            cy.nodes('[type="milestone"]').forEach((m) =>
+              m.data("collapsed", !expanded.has(m.data("version"))),
+            );
+            for (const ends of bracket) addFold(ends[0], ends[1]);
+            cy.add(added);
+          });
+          const visible = cy.elements(":visible");
+          visible.layout(layout).run();
+          cy.fit(visible, 24);
+        };
+
         // Per-node tap → the same one-rule Workflow swap the table row uses,
         // status-gated by the SAME predicate: only a node whose own status is
         // IN_PROGRESS or COMPLETED has a plan to land on. A PENDING or
-        // COMPLETED_UNTRACKED node is inert, exactly like its row.
+        // COMPLETED_UNTRACKED node is inert, exactly like its row. A release
+        // diamond is not a CR and has no plan: its tap is the collapse
+        // affordance, handled on the SAME delegated listener.
         cy.on("tap", "node", (evt) => {
-          const status = evt.target.data("status");
+          const node = evt.target;
+          if (node.data("type") === "milestone") {
+            const version = node.data("version");
+            if (!expanded.delete(version)) expanded.add(version);
+            applyReleaseCollapse();
+            return;
+          }
+          const status = node.data("status");
           if (status === "IN_PROGRESS" || status === "COMPLETED") {
             state.workspaceTab = "Workflow";
           }
         });
-        cy.fit(undefined, 24);
+        applyReleaseCollapse();
         window.crucibleRoadmapCy = cy;
         // SSE restyle: when the live queue's statuses change, patch node data
         // and re-run the stylesheet in ONE batch — no full remount, pan/zoom
@@ -2615,7 +2745,7 @@
         "data-cr-node-count": String(crCount),
         class: "app-roadmap-graph",
       });
-      mountRoadmapCy(container, graph);
+      mountRoadmapCy(container, graph, releases);
       return div(
         { "data-testid": "pane-scroll", class: "app-pane-content" },
         paneRunway(container),
