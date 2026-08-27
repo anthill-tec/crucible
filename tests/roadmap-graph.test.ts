@@ -1301,6 +1301,21 @@ interface QueueEntryFixture {
   status: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "COMPLETED_UNTRACKED";
   planId?: number;
 }
+interface CycleFixture {
+  id: number;
+  label: string;
+  status: "pending" | "active" | "done" | "skipped" | "failed";
+}
+// CR-CRU-077 §S4 — the plan payload the CYCLE POSITION lives on. Same shape
+// the table's lane badge is already fed by (tests/roadmap-pane.test.ts).
+interface PlanFixture {
+  planId: number;
+  cr: string;
+  projectKey: string;
+  status: "open" | "closed";
+  track?: string;
+  cycles: CycleFixture[];
+}
 interface ProjectFixture {
   key: string;
   name: string;
@@ -1323,6 +1338,10 @@ interface MountOpts {
   // toggle/style/tap tests above ran with an EMPTY ledger, which is still the
   // default, so nothing they assert changes.
   releases?: BuilderRelease[];
+  // CR-CRU-077 §S4 — the cycle plans `GET …/plans` returns. Defaults to the
+  // EMPTY array every test above already received, so nothing they assert
+  // changes; only the live-state tests below pass one.
+  plans?: PlanFixture[];
   // Runs INSIDE the freshly registered window, after the scripted `fetch` and
   // BEFORE the app boots — the only place a test can pre-seed a would-be
   // persistence store (localStorage/sessionStorage) so AC4's "not persisted"
@@ -1349,6 +1368,12 @@ interface CyCollection {
   visible: () => boolean;
   isParent: () => boolean;
   map: <T>(fn: (ele: CyCollection) => T) => T[];
+  // cytoscape's own per-element style reader: `style()` is every RESOLVED
+  // property of the drawn element, `style(name)` just one. Untyped by
+  // construction (it mirrors the stylesheet), so narrowed at each use.
+  style: (name?: string) => unknown;
+  // The laid-out model position dagre wrote — the layout's own output.
+  position: () => { x: number; y: number };
 }
 interface CyHandle {
   style: () => { json: () => CyStyleRule[] };
@@ -1413,7 +1438,7 @@ async function mountApp(opts: MountOpts): Promise<void> {
     } else if (/\/api\/v2\/projects\/[^/]+\/releases/.test(url)) {
       body = { ok: true, releases: opts.releases ?? [] };
     } else if (/\/api\/v2\/projects\/[^/]+\/plans/.test(url)) {
-      body = { ok: true, plans: [] };
+      body = { ok: true, plans: opts.plans ?? [] };
     } else if (url.includes("/api/v2/projects")) {
       body = { ok: true, projects: opts.projects };
     } else if (url.includes("/api/v2/agents")) {
@@ -2052,5 +2077,462 @@ describe("CR-CRU-077 §S2/AC4 — a shipped release renders as ONE node carrying
     expect(container).not.toBeNull();
     expect(container!.querySelectorAll('[data-testid*="wave"], [data-testid*="lane"]').length).toBe(0);
     expect(document.querySelectorAll('[data-testid="roadmap-wave-divider"]').length).toBe(0);
+  });
+});
+
+// ── CR-CRU-077 §S4 / AC7 — live state is MOTION, and only IN_PROGRESS has it ─
+//
+// Spec: §S4 ("Labels lead with the CR id + terse status. Active CRs carry
+// animated inflow, a pulsing ring and cycle position; everything else is
+// static"), AC7 ("only nodes for `IN_PROGRESS` CRs carry live/animated state;
+// `COMPLETED`, `COMPLETED_UNTRACKED` … and `PENDING` nodes are static.
+// Asserted on the rendered output, since the previous animation attempt looked
+// correct in source while binding nothing"), and DN decision 6, "Motion means
+// live … so motion always means 'work is happening right now'".
+//
+// WHAT ACTUALLY DRIVES ANIMATION IN THIS STACK — measured, not assumed:
+//   • Nothing does, today. The graph's entire live-state vocabulary is four
+//     STATIC stylesheet rules (public/app.js:2552-2573): each derived status
+//     maps to a border/background colour pair, IN_PROGRESS included (#eab308
+//     on #3f2d0a). No cytoscape class, no animation, no overlay, no timer.
+//   • A CSS keyframe cannot reach a node. Cytoscape draws to a <canvas>, so
+//     the app's own keyframe idiom (`app-run-pulse`, public/styles.css:1026)
+//     has no per-node element to land on. The only things that can move a
+//     node or an edge here are cytoscape's own element animations
+//     (`ele.animate`, which drives the canvas-side `overlay-*`/border/
+//     `line-dash-offset` properties) or a timer/SSE-driven restyle.
+//   • Both DO run and DO step under this harness — measured with the real
+//     vendored cytoscape in happy-dom: one `ele.animate({style:{…}})` moved
+//     the rendered `border-width` 2 → 6.99 → 12 across 800ms with
+//     `ele.animated()` true throughout, and a self-restarting animation kept
+//     the rendered value moving indefinitely (5.0 / 4.0 / 2.99 / 5.99 / 3.01
+//     at 150ms intervals). So the mechanism AC7 needs is available AND
+//     observable here; nothing below asks for something the stack cannot do.
+//   • An un-animated element is byte-stable. The full rendered style of a
+//     COMPLETED, a PENDING and an IN_PROGRESS node, plus their edges, was
+//     IDENTICAL over 600ms, 2.6s and 5.6s — the last window crossing the
+//     app's own 5s poll and the SSE restyle at public/app.js:2724 — on one
+//     cytoscape instance that is never remounted.
+//
+// SO AC7 IS ASSERTED AS MOTION, on the rendered output, and as nothing else:
+//   1. LIVE = the node's own rendered style CHANGES over a real window with
+//      no interaction (§S4's pulsing ring) AND at least one of its INBOUND
+//      edges does too (§S4's animated inflow). This is the assertion the CR's
+//      Risk section demands: a declaration that binds nothing — the mermaid
+//      animation directive that "looked correct in source" — cannot move a
+//      rendered value, so it fails here. A source string, a class name or a
+//      stylesheet rule alone would not.
+//   2. STATIC = the same fingerprint, over the same window, unchanged.
+//      Measured stable above, so this is a real discriminator, not a race.
+//   3. A node's fingerprint is its OWN rendering plus its OWN inflow. An edge
+//      feeding a live CR is that CR's inflow and is never counted against its
+//      upstream node's staticness.
+//   4. Sampled FOUR times across ~480ms against the first sample, so a
+//      periodic animation cannot alias back to its starting phase and read as
+//      static.
+//
+// THE CYCLE POSITION — the data path, measured. A position lives on
+// `plan.cycles`, and public/app.js:2354 already computes it:
+// `roadmapCyclePosition(plan)` → `cycle <i+1>/<n>` for the plan's ACTIVE
+// cycle, `null` when no cycle is active (the table's lane badge then degrades
+// to a bare `▶`, public/app.js:2362). The BUILDER cannot supply it — it is
+// handed queue entries and releases only — but the RENDERER can:
+// `state.plans` sits in the same module scope as `mountRoadmapCy`, and
+// `RoadmapPanelBody` already reads it (`Array.from(state.plans)`, :2437) for
+// that badge. The missing piece is WIRING, not data: `RoadmapGraphBody`
+// (:2738) reads `state.queue` + `state.releases` and hands `mountRoadmapCy`
+// no plans at all, so today the mount has no cycle in reach and the rendered
+// label of an IN_PROGRESS node is exactly `<cr> ▶` (measured). The tests
+// below therefore feed plans through the app's OWN
+// `GET /api/v2/projects/<key>/plans` payload — the same wire that badge is
+// fed by — and read the position back off the rendered node. Nothing is
+// fabricated: with no active cycle, the marker must appear with NO position.
+
+/** Four CRs, one per derived status, wired so each has its own inflow. */
+const LIVE_STATE_QUEUE: QueueEntryFixture[] = [
+  { cr: "CR-DONE", title: "Merged", wave: "5", dependsOn: [], status: "COMPLETED", planId: 401 },
+  {
+    cr: "CR-UNTRACKED",
+    title: "Shipped, unproven",
+    wave: "5",
+    dependsOn: ["CR-DONE"],
+    status: "COMPLETED_UNTRACKED",
+  },
+  {
+    cr: "CR-LIVE",
+    title: "Running now",
+    wave: "6",
+    dependsOn: ["CR-DONE"],
+    status: "IN_PROGRESS",
+    planId: 402,
+  },
+  { cr: "CR-PEND", title: "Not started", wave: "6", dependsOn: ["CR-LIVE"], status: "PENDING" },
+];
+
+/** CR-LIVE's plan, mid-flight: cycle 2 of 3 is the ACTIVE one. */
+const LIVE_STATE_PLANS: PlanFixture[] = [
+  {
+    planId: 401,
+    cr: "CR-DONE",
+    projectKey: "live-state",
+    status: "closed",
+    cycles: [{ id: 1, label: "C1", status: "done" }],
+  },
+  {
+    planId: 402,
+    cr: "CR-LIVE",
+    projectKey: "live-state",
+    status: "open",
+    track: "track-1",
+    cycles: [
+      { id: 2, label: "C1", status: "done" },
+      { id: 3, label: "C2", status: "active" },
+      { id: 4, label: "C3", status: "pending" },
+    ],
+  },
+];
+
+/**
+ * The same plan with NO active cycle — `roadmapCyclePosition` returns null
+ * here, which is the case a fabricated position would paper over.
+ */
+const NO_ACTIVE_CYCLE_PLANS: PlanFixture[] = [
+  {
+    planId: 402,
+    cr: "CR-LIVE",
+    projectKey: "live-state",
+    status: "open",
+    track: "track-1",
+    cycles: [
+      { id: 2, label: "C1", status: "done" },
+      { id: 3, label: "C2", status: "done" },
+    ],
+  },
+];
+
+/** The live-state shape in the GRAPH view, real cytoscape, real app.js. */
+async function mountLiveStateGraph(plans: PlanFixture[] = []): Promise<void> {
+  await mountApp({
+    pathname: "/p/live-state/roadmap",
+    projects: [project({ key: "live-state" })],
+    queue: LIVE_STATE_QUEUE,
+    plans,
+    cytoscape: true,
+  });
+  const toGraph = document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]');
+  expect(toGraph).not.toBeNull();
+  toGraph!.click();
+  await settle();
+}
+
+/** One element's whole RESOLVED style, as cytoscape currently draws it. */
+const elementStyleJson = (ele: CyCollection): string => {
+  const resolved = ele.style();
+  return typeof resolved === "object" && resolved !== null ? JSON.stringify(resolved) : String(resolved);
+};
+
+/** The ids of the drawn edges that flow INTO a node — its inflow. */
+const inflowEdgeIds = (cy: CyHandle, id: string): string[] =>
+  cy
+    .edges()
+    .map((e) => (stringData(e, "target") === id ? stringData(e, "id") : ""))
+    .filter((edgeId) => edgeId !== "")
+    .sort();
+
+/** A node's rendering, and its inflow's rendering, as two comparable strings. */
+interface Fingerprint {
+  node: string;
+  inflow: string;
+}
+const fingerprint = (cy: CyHandle, id: string): Fingerprint => ({
+  node: elementStyleJson(cy.$id(id)),
+  inflow: cy
+    .edges()
+    .map((e) =>
+      stringData(e, "target") === id ? `${stringData(e, "id")}=${elementStyleJson(e)}` : "",
+    )
+    .filter((sample) => sample !== "")
+    .sort()
+    .join("\u0000"),
+});
+
+/** Did it MOVE? — per node, node-side and inflow-side, separately. */
+interface Motion {
+  node: boolean;
+  inflow: boolean;
+}
+
+/**
+ * Sample the rendered fingerprints of `ids` four times across ~480ms with NO
+ * interaction, and report what changed against the first sample. The live
+ * instance is re-read each round, so an implementation that remounts is
+ * measured on whatever it publishes rather than on a stale handle.
+ *
+ * Real elapsed time is the point (see `settle`'s note): fake timers would
+ * freeze van's scheduler AND cytoscape's animation loop, which is the very
+ * thing under test.
+ */
+async function motionByNode(ids: string[]): Promise<Record<string, Motion>> {
+  const first: Record<string, Fingerprint> = {};
+  const moved: Record<string, Motion> = {};
+  for (const id of ids) {
+    first[id] = fingerprint(liveCy(), id);
+    moved[id] = { node: false, inflow: false };
+  }
+  for (let round = 0; round < 4; round += 1) {
+    await settle(6);
+    for (const id of ids) {
+      const now = fingerprint(liveCy(), id);
+      if (now.node !== first[id].node) moved[id].node = true;
+      if (now.inflow !== first[id].inflow) moved[id].inflow = true;
+    }
+  }
+  return moved;
+}
+
+/**
+ * Every piece of text the graph RENDERS for a node: its resolved label (the
+ * canvas text cytoscape paints, read through the stylesheet's own `label`
+ * mapper) plus any DOM text the graph container carries, so a DOM overlay is
+ * measured as fairly as a canvas label. Neither is pinned by AC7.
+ */
+const renderedNodeText = (cy: CyHandle, id: string): string => {
+  const label = cy.$id(id).style("label");
+  const container = document.querySelector('[data-testid="roadmap-graph"]');
+  return `${typeof label === "string" ? label : ""} ${container?.textContent ?? ""}`;
+};
+
+describe("CR-CRU-077 §S4/AC7 — only an IN_PROGRESS CR carries live state, and live means MOTION", () => {
+  test("the fixture really carries all FOUR derived statuses, each rendered with its own inflow — the negatives below cannot pass on an empty set", async () => {
+    // Non-vacuity, both halves: every status value AC7 names is present as a
+    // real drawn node, and every one of them has at least one drawn inbound
+    // edge, so "its inflow is static" is never a claim about no edges.
+    expect([...new Set(LIVE_STATE_QUEUE.map((e) => e.status))].sort()).toEqual([
+      "COMPLETED",
+      "COMPLETED_UNTRACKED",
+      "IN_PROGRESS",
+      "PENDING",
+    ]);
+    await mountLiveStateGraph();
+    const cy = liveCy();
+    for (const entry of LIVE_STATE_QUEUE) {
+      expect({ cr: entry.cr, rendered: isRendered(cy, entry.cr) }).toEqual({
+        cr: entry.cr,
+        rendered: true,
+      });
+      // The RENDERED status, read off cytoscape — the value the stylesheet and
+      // any live-state rule actually see.
+      expect(stringData(cy.$id(entry.cr), "status")).toBe(entry.status);
+      expect(inflowEdgeIds(cy, entry.cr).length).toBeGreaterThan(0);
+    }
+  });
+
+  test("an IN_PROGRESS CR's node AND its inflow MOVE with no interaction — a declaration that binds nothing fails here", async () => {
+    await mountLiveStateGraph();
+    // Guard: the inflow being measured exists, so "the inflow moved" is a
+    // claim about a real edge.
+    expect(inflowEdgeIds(liveCy(), "CR-LIVE")).toEqual(["dep:CR-DONE->CR-LIVE"]);
+
+    const moved = await motionByNode(["CR-LIVE"]);
+    // §S4's two live affordances, separately: the pulsing ring is the node
+    // moving, the animated inflow is its inbound edge moving.
+    expect(moved["CR-LIVE"]).toEqual({ node: true, inflow: true });
+  });
+
+  test("COMPLETED, COMPLETED_UNTRACKED and PENDING nodes are STATIC — one assertion per derived value, so 'animate anything not listed' fails on the fourth", async () => {
+    await mountLiveStateGraph();
+    const moved = await motionByNode(["CR-LIVE", "CR-DONE", "CR-UNTRACKED", "CR-PEND"]);
+
+    // WINDOW FENCE, first: the live CR moved in the SAME sampling window, so
+    // "nothing moved" below is a fact about those nodes and not about a window
+    // too short to see motion at all.
+    expect(moved["CR-LIVE"]).toEqual({ node: true, inflow: true });
+
+    // One assertion per value AC7 names as static.
+    expect(moved["CR-DONE"]).toEqual({ node: false, inflow: false });
+    expect(moved["CR-UNTRACKED"]).toEqual({ node: false, inflow: false });
+    expect(moved["CR-PEND"]).toEqual({ node: false, inflow: false });
+    // …and the whole picture in one diff, so a failure names the status that
+    // leaked motion (CR-PEND's inflow is the LIVE node's outflow: motion there
+    // would read as "work is happening" on a CR nobody has started).
+    expect(moved).toEqual({
+      "CR-LIVE": { node: true, inflow: true },
+      "CR-DONE": { node: false, inflow: false },
+      "CR-UNTRACKED": { node: false, inflow: false },
+      "CR-PEND": { node: false, inflow: false },
+    });
+  });
+
+  test("the live node renders its CYCLE POSITION in roadmapCyclePosition's own N/M form", async () => {
+    await mountLiveStateGraph(LIVE_STATE_PLANS);
+    const cy = liveCy();
+    expect(isRendered(cy, "CR-LIVE")).toBe(true);
+
+    // The position the app's OWN helper computes for this plan — index of the
+    // ACTIVE cycle, one-based, over the cycle count (public/app.js:2354).
+    const plan = LIVE_STATE_PLANS.find((p) => p.cr === "CR-LIVE")!;
+    const activeIndex = plan.cycles.findIndex((c) => c.status === "active");
+    expect(activeIndex).toBe(1);
+    expect(plan.cycles.length).toBe(3);
+    const expectedPosition = `${activeIndex + 1}/${plan.cycles.length}`;
+
+    const text = renderedNodeText(cy, "CR-LIVE");
+    expect(text).toContain(expectedPosition);
+    // …and it is the RIGHT position: no OTHER N/M is rendered for it, so an
+    // off-by-one or a hard-coded "1/1" fails instead of passing on containment.
+    expect([...new Set(text.match(/\d+\/\d+/g) ?? [])]).toEqual([expectedPosition]);
+  });
+
+  test("with NO active cycle the live marker still appears, and NO position is fabricated", async () => {
+    await mountLiveStateGraph(NO_ACTIVE_CYCLE_PLANS);
+    const cy = liveCy();
+    // Fixture guard: this plan really has no active cycle, so `null` is what
+    // the helper returns for it.
+    const plan = NO_ACTIVE_CYCLE_PLANS.find((p) => p.cr === "CR-LIVE")!;
+    expect(plan.cycles.some((c) => c.status === "active")).toBe(false);
+
+    // No invented position — the lane badge's own degradation (a bare `▶`).
+    expect(renderedNodeText(cy, "CR-LIVE").match(/\d+\/\d+/g)).toBeNull();
+    // …and the CR is still LIVE: an absent position never downgrades an
+    // IN_PROGRESS CR to static.
+    expect(await motionByNode(["CR-LIVE"])).toEqual({
+      "CR-LIVE": { node: true, inflow: true },
+    });
+  });
+});
+
+// ── CR-CRU-077 AC9 — the LIVE roadmap renders, at whatever size it is ───────
+//
+// AC9: "the graph renders the live roadmap at whatever size it currently is
+// … without a parse/layout error, and `unknownDependencies` stays empty. The
+// count is deliberately not pinned: a hard-coded size fails on the next CR
+// filed rather than on a defect." So nothing below asserts a CR count — only
+// that the fixture is the real thing and big enough to be a real layout.
+//
+// "No parse/layout error" is measured three ways, all on the render:
+//   • no window `error`, no `unhandledrejection` and no `console.error` from
+//     boot through the mounted graph (measured baseline today: zero of each);
+//   • the instance is PUBLISHED — a throw inside the mount callback never
+//     reaches `window.crucibleRoadmapCy = cy`, so `liveCy()` failing names it;
+//   • every DRAWN node has a finite, non-NaN position, and those positions are
+//     spread over more than one rank/row — dagre really ran, rather than
+//     leaving 94 nodes piled on one point. Positions are read for the DRAWN
+//     set only: the collapse layout runs over `:visible` by design, so a
+//     folded-away node legitimately keeps its pre-layout (0,0).
+//
+// `unknownDependencies` is not a builder output — it is the queue-side fact
+// that every declared `depends-on` resolves to a real row, and it is asserted
+// here on the SAME live fixture the render is driven from, plus its rendered
+// consequence: no drawn edge may reference a node the graph does not have.
+
+/** The drawn nodes and the positions the layout gave them. */
+interface DrawnNode {
+  id: string;
+  x: number;
+  y: number;
+}
+const drawnNodes = (cy: CyHandle): DrawnNode[] => {
+  const rows: DrawnNode[] = [];
+  for (const row of cy
+    .nodes()
+    .map((n) => (n.visible() ? { id: stringData(n, "id"), at: n.position() } : undefined))) {
+    if (row !== undefined) rows.push({ id: row.id, x: row.at.x, y: row.at.y });
+  }
+  return rows;
+};
+
+/** Names the nodes a layout failure would leave at NaN/Infinity. */
+const notLaidOut = (drawn: DrawnNode[]): string[] =>
+  drawn
+    .filter((d) => !Number.isFinite(d.x) || !Number.isFinite(d.y))
+    .map((d) => `${d.id}@${d.x},${d.y}`);
+
+/** Any edge END that is not a node of the graph — a dependency to nowhere. */
+const edgeEndsWithoutNode = (cy: CyHandle): string[] =>
+  cy
+    .edges()
+    .map((e) => {
+      const source = stringData(e, "source");
+      const target = stringData(e, "target");
+      const missing = [source, target].filter((end) => !cy.$id(end).nonempty());
+      return missing.length === 0 ? "" : `${source}->${target} missing ${missing.join("+")}`;
+    })
+    .filter((problem) => problem !== "");
+
+describe("CR-CRU-077 AC9 — the live roadmap renders at its current size, with no parse or layout error", () => {
+  test("the live shape mounts clean: nothing thrown or logged, every drawn node laid out, unknownDependencies empty", async () => {
+    // The queue-side half of AC9, on the same fixture the render uses. Guarded
+    // on the fixture being the real thing rather than on its size.
+    expect(REAL_ENTRIES.length).toBeGreaterThan(80);
+    expect(REAL_RELEASES.length).toBe(4);
+    const queued = new Set(REAL_ENTRIES.map((e) => e.cr));
+    const unknownDependencies = [
+      ...new Set(REAL_ENTRIES.flatMap((e) => e.dependsOn).filter((d) => !queued.has(d))),
+    ].sort();
+    expect(unknownDependencies).toEqual([]);
+
+    const failures: string[] = [];
+    let restoreConsole = (): void => undefined;
+    await mountLiveRoadmapGraph({
+      // Installed INSIDE the freshly registered window, before the app boots,
+      // so a throw or an error log from the mount itself is captured.
+      beforeBoot: () => {
+        window.addEventListener("error", (event) => failures.push(`error: ${event.message}`));
+        window.addEventListener("unhandledrejection", (event) =>
+          failures.push(`unhandledrejection: ${String(event.reason)}`),
+        );
+        const original = console.error;
+        restoreConsole = () => {
+          console.error = original;
+        };
+        console.error = (...args: unknown[]) => {
+          failures.push(`console.error: ${args.map((a) => String(a)).join(" ")}`);
+        };
+      },
+    });
+    // Restored before any assertion, so a failing expectation cannot leak the
+    // capturing console into the next test.
+    restoreConsole();
+
+    // The instance exists — a parse/layout throw never gets this far.
+    const cy = liveCy();
+    expect(failures).toEqual([]);
+
+    // Everything the builder emitted for the live shape is IN the graph…
+    const graph = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    expect(cy.nodes().length).toBe(graph.nodes.length);
+    expect(edgeEndsWithoutNode(cy)).toEqual([]);
+
+    // …and everything DRAWN was actually laid out, over a real 2-D spread.
+    const drawn = drawnNodes(cy);
+    expect(notLaidOut(drawn)).toEqual([]);
+    expect(drawn.length).toBeGreaterThan(20);
+    expect(new Set(drawn.map((d) => d.x)).size).toBeGreaterThan(1);
+    expect(new Set(drawn.map((d) => d.y)).size).toBeGreaterThan(1);
+  });
+
+  test("AC9 holds in BOTH collapse states — the fold reroute changes the graph dagre is given", async () => {
+    await mountLiveRoadmapGraph();
+    const collapsed = drawnNodes(liveCy());
+    expect(notLaidOut(collapsed)).toEqual([]);
+    expect(collapsed.length).toBeGreaterThan(20);
+
+    // Expand every release: each tap re-routes the `fold:` edges and re-runs
+    // dagre over a different drawn subgraph — the layout C4 made conditional.
+    for (const rel of REAL_RELEASES) {
+      liveCy().$id(releaseNodeId(rel.version)).emit("tap");
+      await settle();
+    }
+    const cy = liveCy();
+    const expanded = drawnNodes(cy);
+
+    // Non-vacuous: the two states really are different graphs, and the second
+    // one draws the whole roadmap.
+    expect(expanded.length).toBeGreaterThan(collapsed.length);
+    expect(expanded.length).toBe(cy.nodes().length);
+    expect(notLaidOut(expanded)).toEqual([]);
+    expect(new Set(expanded.map((d) => d.x)).size).toBeGreaterThan(1);
+    expect(new Set(expanded.map((d) => d.y)).size).toBeGreaterThan(1);
+    expect(edgeEndsWithoutNode(cy)).toEqual([]);
   });
 });
