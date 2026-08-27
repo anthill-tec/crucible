@@ -585,8 +585,8 @@ class InstallCreatesItsTargetDirTest(unittest.TestCase):
                 f"ok:true (AC7) -- it dies FileNotFoundError today; "
                 f"warnings={warnings}")
         self.assertEqual(
-            [s["name"] for s in stages], ["server", "manifest"],
-            f"both stages must have run to completion; stages={stages}")
+            [s["name"] for s in stages], ["server", "fleet", "manifest"],
+            f"all three stages must have run to completion; stages={stages}")
 
     def test_run_install_twice_on_a_missing_target_dir_is_idempotent(self):
         """`exist_ok=True`: the second run neither raises on the now-existing

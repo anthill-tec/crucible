@@ -1,6 +1,6 @@
 """CR-CRU-009 §S2 — the staged install orchestrator framework.
 
-`run_install` sequences the server -> manifest sub-installers through
+`run_install` sequences the server -> fleet -> manifest sub-installers through
 an INJECTABLE stage-runner table (no real subprocess/network in this cycle) and
 aggregates each stage's result into `(ok, stages, warnings)`. Stages run in
 `STAGE_ORDER`; a stage exception is FAIL-FAST (remaining stages are skipped and
@@ -19,6 +19,12 @@ detects it, bootstraps it when absent (unless `--no-bun-bootstrap` /
 `$CRUCIBLE_NO_BUN_BOOTSTRAP` opts out), RE-RESOLVES `$BUN_INSTALL/bin`, VERIFIES
 that it runs, and otherwise fails the install with a named remedy. The provision
 then runs that resolved ABSOLUTE Bun path, reported as the stage's `bun` output.
+
+CR-CRU-090 §S1 — the `[fleet]` stage lays the eight packaged client files down
+under `<target-dir>/clients/`, ordered strictly BEFORE `[manifest]`: the
+manifest publishes six paths anchored on that directory, so it must be written
+only after they exist. Before this, nothing materialised the directory and
+every published path dangled.
 """
 
 from __future__ import annotations
@@ -28,10 +34,11 @@ import json
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 from crucible_axi import manifest
 
-STAGE_ORDER = ("server", "manifest")
+STAGE_ORDER = ("server", "fleet", "manifest")
 
 # External sources for the concrete sub-installers. `SERVER_NPM_PACKAGE` is the
 # published npm package name and MUST stay equal to the repo package.json's
@@ -84,6 +91,26 @@ _PACKAGE_JSON_NAME_KEY = "name"
 # operator's PATH nor their exports.
 SERVER_HOST_ENV_VAR = "CRUCIBLE_HOST"
 SERVER_PORT_ENV_VAR = "CRUCIBLE_PORT"
+
+# The packaged fleet, exactly (CR-CRU-090 §S1). The five stack clients plus:
+# `_crucible_axi.py` (the shared AXI envelope) and `toon.py` (the codec) —
+# which the five load BY FILE PATH from their OWN directory, so a clients-only
+# copy lays down five UNRUNNABLE clients — plus `STATUS-CONTRACT.md`, the path
+# `manifest.build_manifest` publishes as `status`.
+FLEET_FILES = (
+    "bun-crucible.py",
+    "python-crucible.py",
+    "rust-crucible.py",
+    "mvn-crucible.py",
+    "arduino-crucible.py",
+    "_crucible_axi.py",
+    "toon.py",
+    "STATUS-CONTRACT.md",
+)
+
+# The directory the fleet lands in, under `--target-dir`. `manifest` anchors
+# every path it publishes on this same name, so the two MUST agree.
+FLEET_DIRNAME = "clients"
 
 
 def _bun_install_prefix() -> str:
@@ -410,10 +437,88 @@ def server_launch_argv() -> list[str]:
     return [bun, "x", f"{SERVER_NPM_PACKAGE}@{server_version}"]
 
 
+def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
+    """[fleet] sub-installer — lay the eight packaged fleet files down under
+    `<target-dir>/clients/` (CR-CRU-090 §S1).
+
+    This is the directory `manifest.build_manifest` anchors all six of its
+    published paths on, which is why the stage is ordered strictly BEFORE
+    [manifest]: the manifest is written only after the paths it names exist.
+
+    The copy is confined to `<target-dir>/clients/` (created when absent) and
+    is byte-for-byte, MODE INCLUDED: each landed file carries its source's
+    permission bits, so the three executable clients arrive executable instead
+    of 0o644 under the operator's umask (which would make
+    `<target-dir>/clients/rust-crucible.py` unrunnable directly). Confinement
+    is ENFORCED, not merely intended: a SYMLINK sitting at one of the eight
+    destination names is REPLACED by a regular file and never followed, because
+    both the read-compare and the write traverse a link and would otherwise
+    land a client's bytes in a file the operator never pointed `--target-dir`
+    at. Destination files that are not one of the eight are left
+    untouched — the install never removes what it does not manage. A missing
+    SOURCE file fails the stage definitively with that path named: `run_install`
+    is fail-fast, so it surfaces as `ok=False` plus a `stage-failed` warning
+    instead of a silent partial laydown, which is the exact defect class this
+    CR exists to kill.
+
+    `converged` mirrors `manifest.run_manifest_stage`'s contract — the in-repo
+    precedent for this exact read-compare-then-write shape: a destination file
+    whose bytes ALREADY match its source is left alone (not rewritten, so its
+    mtime survives), and `converged` is True only when EVERY one of the eight
+    already matched. Convergence is all-or-nothing: one stale or missing file
+    makes the stage report `converged: False`, and only that file is rewritten.
+    `--force` re-copies all eight unconditionally and reports
+    `converged: False`. The verdict is decided over the eight SOURCE files
+    only — an unmanaged destination file is never read for it, so it can
+    neither be rewritten nor defeat convergence. Bytes are the only input:
+    never a size or an mtime, either of which a truncated or touched copy
+    would pass. A destination symlink is always replaced, so the run that
+    replaces one reports `converged: False` and the next run — comparing a
+    regular file — converges normally.
+    """
+    source_dir = manifest.source_clients_dir()
+    clients_dir = os.path.join(target_dir, FLEET_DIRNAME)
+    os.makedirs(clients_dir, exist_ok=True)
+    converged = not force
+    for name in FLEET_FILES:
+        source = os.path.join(source_dir, name)
+        if not os.path.isfile(source):
+            raise FileNotFoundError(
+                f"packaged fleet file missing at source: {source}")
+        destination = os.path.join(clients_dir, name)
+        # §S1's confinement rule, ENFORCED: the copy lands inside
+        # `<target-dir>/clients/` and nowhere else. `os.path.isfile` and
+        # `Path.write_bytes` BOTH traverse a symlink, so a link left at one of
+        # the eight names would make the compare read — and the write
+        # overwrite — a file outside the target dir, and would leave the link
+        # in place for every later run to escape through again. Unlinking
+        # BEFORE the compare also stops a link whose target happens to match
+        # the source from masquerading as an already-converged destination.
+        # `islink` is true for a DANGLING link too, which is the shape that
+        # would otherwise CREATE the outside file.
+        if os.path.islink(destination):
+            os.unlink(destination)
+        fresh = Path(source).read_bytes()
+        if (not force
+                and os.path.isfile(destination)
+                and Path(destination).read_bytes() == fresh):
+            continue
+        Path(destination).write_bytes(fresh)
+        # The mode is part of the payload: `write_bytes` creates with the
+        # process umask, which strips the executable bit three of the eight
+        # carry at source. `copymode` also NORMALISES an existing
+        # destination's mode to the source's, so a `--force` re-copy repairs a
+        # mode that drifted out of band.
+        shutil.copymode(source, destination)
+        converged = False
+    return {"path": clients_dir, "converged": converged}
+
+
 # Module-level, in-place-mutable stage table (patched by tests via
 # mock.patch.dict). `run_install` reads this name at call time.
 DEFAULT_STAGE_RUNNERS: dict = {
     "server": _server_stage,
+    "fleet": run_fleet_stage,
     "manifest": manifest.run_manifest_stage,
 }
 

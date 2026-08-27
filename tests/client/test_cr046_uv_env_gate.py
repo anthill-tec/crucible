@@ -15,7 +15,7 @@ with the repo's own interpreter and cwd on `sys.path`.
 This suite builds the real wheel, installs it into a SCRATCH uv venv (so
 the on-disk client copies are the ACTUAL installed artifact, not an
 unzipped wheel member), locates the installed `crucible_axi` package's own
-`clients/` directory (mirroring `crucible_axi/cli.py`'s `_clients_dir()`
+`clients/` directory (mirroring `manifest.source_clients_dir()`'s
 "installed package data" candidate and `manifest.py`'s
 `<dir>/{stack}-crucible.py` naming), then drives `uv run <installed
 path> --help` through a SANITIZED environment (no `PYTHONPATH`, no
@@ -207,8 +207,8 @@ class Cr046UvEnvironmentGateTest(unittest.TestCase):
     @classmethod
     def _resolve_installed_clients_dir(cls):
         """Ask the SCRATCH venv's own interpreter where it laid down the
-        installed `crucible_axi` package, mirroring `crucible_axi/cli.py`'s
-        `_clients_dir()` "installed package data" candidate
+        installed `crucible_axi` package, mirroring
+        `manifest.source_clients_dir()`'s "installed package data" candidate
         (`<package-dir>/clients`) and `manifest.py`'s
         `{stack}-crucible.py` naming. Run from `cls.tmp_root` (NOT the
         repo) so `-c`'s implicit cwd-on-sys.path cannot shadow the
