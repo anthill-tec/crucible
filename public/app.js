@@ -2478,6 +2478,23 @@
     // mounted in either state so either view is one click away.
     const roadmapViewMode = van.state("table");
 
+    // CR-CRU-077 §S4/AC7 — the MOUNTED graph's live-state teardown, or null
+    // when no graph is mounted. The roadmap body re-renders on every poll tick
+    // and on every view toggle, so each mount retires the previous mount's
+    // animations before building its own: without that handoff every render
+    // would stack another self-restarting chain onto an instance nobody can
+    // see any more.
+    let roadmapLiveTeardown = null;
+
+    // The two ends of the live ring's pulse and the inflow's dash march.
+    // Canvas-side properties only — see mountRoadmapCy for why a keyframe
+    // cannot reach a cytoscape node.
+    const ROADMAP_LIVE_RING_REST = { "overlay-padding": 3, "overlay-opacity": 0.05 };
+    const ROADMAP_LIVE_RING_PEAK = { "overlay-padding": 11, "overlay-opacity": 0.32 };
+    const ROADMAP_LIVE_DASH_MARCH = { "line-dash-offset": 20 };
+    const ROADMAP_LIVE_PULSE_MS = 900;
+    const ROADMAP_LIVE_MARCH_MS = 700;
+
     // Mount a Cytoscape (dagre) graph into an already-created container once
     // it is attached to the DOM. Guarded on the plain-HTML global
     // `window.cytoscape` (the vendored UMD): absent in the unit DOM, so the
@@ -2486,16 +2503,22 @@
     // `releases` is the ledger the builder was handed: the render layer reads
     // `crs` off it for MEMBERSHIP (which CRs a release folds away) and reads
     // the COUNT off the builder's own `data.crCount` — it re-derives neither.
+    // `plans` is the SAME wire RoadmapPanelBody's lane badge reads: the cycle
+    // position lives on `plan.cycles`, so the builder (handed queue entries
+    // and releases only) cannot supply it and the renderer must (§S4/AC7).
     // The dagre layout is not a CONSTRUCTOR option: applyReleaseCollapse runs
     // it over the drawn subgraph, so a mount lays out once (the constructor's
     // own layout is the no-op `null` one — cytoscape's default is `grid`, which
     // would both waste a pass and place folded-away nodes).
-    const mountRoadmapCy = (container, graph, releases) => {
+    const mountRoadmapCy = (container, graph, releases, plans) => {
       const cyto = typeof window !== "undefined" ? window.cytoscape : undefined;
       if (typeof cyto !== "function") return;
       const layout = { name: "dagre", rankDir: "LR", nodeSep: 28, rankSep: 48 };
       setTimeout(() => {
         if (!container.isConnected) return;
+        // The previous mount's live animations die before this one is built.
+        if (roadmapLiveTeardown !== null) roadmapLiveTeardown();
+        roadmapLiveTeardown = null;
         const cy = cyto({
           container,
           elements: graph,
@@ -2583,6 +2606,29 @@
                 "target-arrow-color": "#4b5563",
                 "target-arrow-shape": "triangle",
                 "curve-style": "bezier",
+              },
+            },
+            {
+              // CR-CRU-077 §S4/AC7 — the live ring, AT REST. DN decision 6:
+              // motion means live, so only an IN_PROGRESS CR is ever given
+              // this class, and the PULSE that makes it read as "running right
+              // now" is driven by cytoscape's own element animation (see
+              // refreshLiveState) rather than by CSS: a node here is painted
+              // into a <canvas> and has no DOM element for the app's
+              // `app-run-pulse` keyframes to land on.
+              selector: "node.roadmap-live",
+              style: { "overlay-color": "#eab308", ...ROADMAP_LIVE_RING_REST },
+            },
+            {
+              // …and its INFLOW: marching ants, the edge half of decision 6's
+              // "animated inflow". Placed after the base `edge` rule so it
+              // wins on the properties it restates.
+              selector: "edge.roadmap-live-inflow",
+              style: {
+                "line-style": "dashed",
+                "line-dash-pattern": [6, 4],
+                "line-color": "#eab308",
+                "target-arrow-color": "#eab308",
               },
             },
           ],
@@ -2695,6 +2741,128 @@
           const visible = cy.elements(":visible");
           visible.layout(layout).run();
           cy.fit(visible, 24);
+          // The fold changed what is DRAWN and replaced the `fold:` edges, so
+          // the live set is re-derived against the new drawing: a chain left
+          // running on a `removed()` edge animates nothing and, without the
+          // generation bump this does, would never end on its own.
+          refreshLiveState();
+        };
+
+        // ── CR-CRU-077 §S4/AC7 — motion means live ──────────────────────
+        // DN decision 6: a currently-active CR carries a pulsing ring, an
+        // animated inflow and its cycle position, while merged, untracked and
+        // pending CRs are COMPLETELY static — so motion on this canvas always
+        // means work is happening right now. Only edges flowing INTO a live CR
+        // march: an edge OUT of one is a PENDING CR's inflow, and motion there
+        // would read as work happening on a CR nobody has started.
+        //
+        // LIFECYCLE. A self-restarting animation is a leak unless something can
+        // end it, and three things must:
+        //   • a status change — the SSE derive below, so a CR that just merged
+        //     goes static and one that just started begins moving;
+        //   • a collapse toggle — applyReleaseCollapse removes and re-adds the
+        //     `fold:` edges, so a live CR's inflow can be a DIFFERENT edge
+        //     object afterwards and the old one is `removed()`;
+        //   • teardown/remount — the body re-renders on every poll tick and on
+        //     the view toggle (roadmapLiveTeardown).
+        // All three route through ONE generation token: retiring bumps it,
+        // which orphans every in-flight `complete` callback (each restart is
+        // gated on the generation it was started in), stops the elements that
+        // generation animated and drops the bypasses it wrote, returning them
+        // to the stylesheet. `container.isConnected` is checked on the same
+        // gate, so a chain whose container was swapped out also ends at its
+        // next step even if nothing called the teardown.
+        let liveGeneration = 0;
+        let liveNodes = cy.collection();
+        let liveEdges = cy.collection();
+
+        const liveRunning = (generation) =>
+          generation === liveGeneration && container.isConnected;
+
+        const pulseLiveRing = (node, generation, to) => {
+          if (!liveRunning(generation) || node.removed()) return;
+          node.animate({
+            style: to,
+            duration: ROADMAP_LIVE_PULSE_MS,
+            complete: () =>
+              pulseLiveRing(
+                node,
+                generation,
+                to === ROADMAP_LIVE_RING_PEAK ? ROADMAP_LIVE_RING_REST : ROADMAP_LIVE_RING_PEAK,
+              ),
+          });
+        };
+
+        // A sawtooth rather than a ping-pong: the ants march one way, reset,
+        // and march again, which is what a directed inflow reads as.
+        const marchLiveInflow = (edge, generation) => {
+          if (!liveRunning(generation) || edge.removed()) return;
+          edge.style("line-dash-offset", 0);
+          edge.animate({
+            style: ROADMAP_LIVE_DASH_MARCH,
+            duration: ROADMAP_LIVE_MARCH_MS,
+            complete: () => marchLiveInflow(edge, generation),
+          });
+        };
+
+        // Retire the current generation: stop it, un-class it, and drop the
+        // bypasses it wrote so its elements go back to being drawn by the
+        // stylesheet alone. NAMED properties only — `display` is a bypass
+        // applyReleaseCollapse owns, and a bare removeStyle() would wipe it.
+        const retireLiveState = () => {
+          liveGeneration += 1;
+          liveNodes
+            .stop(true, false)
+            .removeClass("roadmap-live")
+            .removeStyle("overlay-padding overlay-opacity");
+          liveEdges
+            .stop(true, false)
+            .removeClass("roadmap-live-inflow")
+            .removeStyle("line-dash-offset");
+          liveNodes = cy.collection();
+          liveEdges = cy.collection();
+        };
+
+        // The position the TABLE's lane badge shows, from the SAME helper over
+        // the same `plans` wire (roadmapCyclePosition). Only an OPEN plan's
+        // ACTIVE cycle yields one; with no active cycle the helper returns null
+        // and the marker stands alone, exactly as the lane badge degrades to a
+        // bare `▶`. Nothing is fabricated.
+        const livePositionOf = new Map();
+        for (const plan of plans ?? []) {
+          if (plan.status !== "open") continue;
+          const position = roadmapCyclePosition(plan);
+          if (position !== null && !livePositionOf.has(plan.cr)) {
+            livePositionOf.set(plan.cr, position);
+          }
+        }
+        // The builder's own label, kept so a position is appended to THAT and
+        // never to an already-suffixed one.
+        const baseLabelOf = new Map();
+        cy.nodes('[type="cr"]').forEach((n) => baseLabelOf.set(n.id(), n.data("label")));
+
+        const refreshLiveState = () => {
+          retireLiveState();
+          const generation = liveGeneration;
+          // The position rides the label of every IN_PROGRESS CR, drawn or
+          // folded away: it is data, not motion, so it does not depend on the
+          // node being visible.
+          cy.nodes('[type="cr"]').forEach((n) => {
+            const base = baseLabelOf.get(n.id());
+            if (base === undefined) return;
+            const position =
+              n.data("status") === "IN_PROGRESS" ? livePositionOf.get(n.id()) : undefined;
+            const label = position === undefined ? base : `${base} ${position}`;
+            if (n.data("label") !== label) n.data("label", label);
+          });
+          if (!container.isConnected) return;
+          // Motion, by contrast, is only ever started on what is DRAWN.
+          liveNodes = cy.nodes('[type="cr"][status="IN_PROGRESS"]').filter((n) => n.visible());
+          liveEdges = liveNodes.incomers("edge").filter((e) => e.visible());
+          liveNodes.addClass("roadmap-live");
+          liveEdges.addClass("roadmap-live-inflow");
+          liveNodes.forEach((n) => pulseLiveRing(n, generation, ROADMAP_LIVE_RING_PEAK));
+          liveEdges.forEach((e) => marchLiveInflow(e, generation));
         };
 
         // Per-node tap → the same one-rule Workflow swap the table row uses,
@@ -2717,10 +2885,12 @@
           }
         });
         applyReleaseCollapse();
+        roadmapLiveTeardown = retireLiveState;
         window.crucibleRoadmapCy = cy;
         // SSE restyle: when the live queue's statuses change, patch node data
         // and re-run the stylesheet in ONE batch — no full remount, pan/zoom
-        // preserved.
+        // preserved. The live state is re-derived on that SAME cadence (DN
+        // decision 6), which is what makes the motion mean "right now".
         van.derive(() => {
           const live = Array.from(state.queue);
           if (!container.isConnected) return;
@@ -2731,6 +2901,7 @@
             }
           });
           cy.style().update();
+          refreshLiveState();
         });
       }, 0);
     };
@@ -2738,6 +2909,9 @@
     const RoadmapGraphBody = () => {
       const entries = Array.from(state.queue);
       const releases = Array.from(state.releases);
+      // §S4/AC7 — the same `plans` wire the table's lane badge reads (the
+      // cycle position lives on `plan.cycles`, which the builder never sees).
+      const plans = Array.from(state.plans);
       const graph = L.buildRoadmapGraph(entries, releases);
       const crCount = graph.nodes.filter((n) => n.data.type === "cr").length;
       const container = div({
@@ -2745,7 +2919,7 @@
         "data-cr-node-count": String(crCount),
         class: "app-roadmap-graph",
       });
-      mountRoadmapCy(container, graph, releases);
+      mountRoadmapCy(container, graph, releases, plans);
       return div(
         { "data-testid": "pane-scroll", class: "app-pane-content" },
         paneRunway(container),
