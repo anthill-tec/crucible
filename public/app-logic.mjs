@@ -784,11 +784,44 @@ export function workflowLens({ plans, events }) {
 }
 
 /**
+ * CR-CRU-077 §S4/AC6 — the terse status suffix a CR node's label carries after
+ * its id, keyed by the four derived `QueueStatus` values. Each is derivable
+ * from the status value ALONE, so the builder's own two inputs are enough:
+ * `COMPLETED` is a merged plan, `COMPLETED_UNTRACKED` is shipped-but-never-
+ * tracked (CR-CRU-083's fourth value, which must not read as "merged"),
+ * `IN_PROGRESS` is active, and `PENDING` has nothing to say yet.
+ *
+ * A cycle position (`2/3`) is deliberately NOT here: it lives on `plan.cycles`
+ * and the builder is handed queue entries + releases only, so rendering one
+ * would pin fabricated data. The active marker stands alone instead — the same
+ * degradation the table's lane badge already makes when the position is null.
+ */
+const CR_STATUS_SUFFIX = new Map([
+  ["COMPLETED", " ✓ merged"],
+  ["COMPLETED_UNTRACKED", " ✓ untracked"],
+  ["IN_PROGRESS", " ▶"],
+  ["PENDING", ""],
+]);
+
+/**
+ * AC6's whole CR node label: the CR id plus that suffix, and NOTHING else. The
+ * title is absent by design — it crowds the identifier out of the node box —
+ * and the raw wire status never appears as text either; it stays on
+ * `data.status`, where the stylesheet selects on it.
+ *
+ * An unknown or absent status yields the BARE id: a suffix is a claim about
+ * execution state, and an unrecognised value supports no claim. So the node
+ * still reads (and never renders `undefined`) without inventing a marker.
+ */
+const crNodeLabel = (e) => `${e.cr}${CR_STATUS_SUFFIX.get(e.status) ?? ""}`;
+
+/**
  * CR-CRU-014 §S3 + CR-CRU-077 §S1 — pure, browser-free roadmap graph-data
  * builder. Maps the execution queue + release ledger into a Cytoscape elements
  * shape ({nodes, edges}): one rectangle type:"cr" node per entry (wave/track/
- * status ride DATA fields, never the label — label is the human title, falling
- * back to the CR id); one directed edge per dependsOn (prereq SOURCE →
+ * status ride DATA fields, never the label — the label is the CR id plus a
+ * terse status suffix and never the title, CR-CRU-077 §S4/AC6); one directed
+ * edge per dependsOn (prereq SOURCE →
  * dependant TARGET); one diamond type:"milestone" node per release, wired INTO
  * the flow (DN decision 3) — the CRs a release shipped flow into its diamond,
  * the diamond gates the CRs that follow it, and the diamonds chain in ship
@@ -815,7 +848,7 @@ export function buildRoadmapGraph(entries, releases) {
     const data = {
       id: e.cr,
       type: "cr",
-      label: e.title ?? e.cr,
+      label: crNodeLabel(e),
       cr: e.cr,
       wave: e.wave,
       status: e.status,

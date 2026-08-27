@@ -167,14 +167,16 @@ describe("§S3 — buildRoadmapGraph maps one CR to one rectangle (action) node"
     // status/wave live in style-driving data fields.
     expect(a!.data.status).toBe("COMPLETED");
     expect(a!.data.wave).toBe("5");
-    // label is the human title only — NOT the status/wave text.
-    expect(a!.data.label).toBe("Alpha");
+    // CR-CRU-077 §S4/AC6 — the label is the CR id plus a terse status suffix,
+    // and NEVER the human title; the raw status and the wave stay out of the
+    // text entirely (they ride data.status / data.wave for the stylesheet).
+    expect(a!.data.label).toBe("CR-A ✓ merged");
     expect(a!.data.label).not.toContain("COMPLETED");
     expect(a!.data.label).not.toContain("5");
     // track rides its own data field for lane styling.
     expect(b!.data.status).toBe("IN_PROGRESS");
     expect(b!.data.track).toBe("track-2");
-    expect(b!.data.label).toBe("Beta");
+    expect(b!.data.label).toBe("CR-B ▶");
   });
 
   test("a CR with no title falls back to its CR id as the label", () => {
@@ -252,7 +254,8 @@ describe("CR-CRU-083 AC7 — buildRoadmapGraph carries COMPLETED_UNTRACKED throu
     // The style-driving data field is the wire value itself — the stylesheet
     // selects on it, so any normalisation silently restyles it as COMPLETED.
     expect(untracked!.data.status).toBe("COMPLETED_UNTRACKED");
-    expect(untracked!.data.label).toBe("Untracked");
+    // CR-CRU-077 §S4/AC6 — id + suffix, and the untracked suffix is its own.
+    expect(untracked!.data.label).toBe("CR-U ✓ untracked");
     expect(untracked!.data.label).not.toContain("COMPLETED");
     // The tracked sibling is untouched — the two remain distinct in the graph.
     expect(nodeById(g, "CR-T")!.data.status).toBe("COMPLETED");
