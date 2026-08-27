@@ -796,7 +796,14 @@ export function workflowLens({ plans, events }) {
  * whatever the flow itself does not already feed or drain.
  *
  * No edge is invented to express sequence (DN decision 5): every edge comes
- * from `dependsOn`, from `crs` membership, or from the release chain.
+ * from `dependsOn`, from `crs` membership, or from the release chain. The
+ * orchestrator-assigned queue position instead RIDES the CR node as
+ * `data.seq` — a monotonic tie-break a layout can rank same-rank siblings on.
+ * It is DATA and not an edge for two independent reasons: decision 5 forbids
+ * inventing any edge to express sequence whatever it is typed, and an edge
+ * a→b would make b reachable from a, which is exactly the CHAIN that §S1/AC3
+ * rules out for two same-wave CRs with no dependency between them. Do not
+ * "improve" this into an edge.
  */
 export function buildRoadmapGraph(entries, releases) {
   const nodes = [];
@@ -804,7 +811,7 @@ export function buildRoadmapGraph(entries, releases) {
   const queue = entries ?? [];
   const crIds = new Set(queue.map((e) => e.cr));
 
-  for (const e of queue) {
+  queue.forEach((e, index) => {
     const data = {
       id: e.cr,
       type: "cr",
@@ -812,10 +819,15 @@ export function buildRoadmapGraph(entries, releases) {
       cr: e.cr,
       wave: e.wave,
       status: e.status,
+      // The AUTHORED position, and nothing else: never the CR id, never the
+      // wave (AC8), never the status. Re-author the queue and this follows.
+      // Absent on milestone and terminal nodes — a release boundary and a
+      // bracket hold no queue position — and never rendered into `label`.
+      seq: index,
     };
     if (e.track !== undefined && e.track !== null) data.track = e.track;
     nodes.push({ data });
-  }
+  });
 
   // Dependency edges: the prerequisite is the SOURCE (execution flows
   // deps-first). Guard against dangling deps (a dep not in the queue).
