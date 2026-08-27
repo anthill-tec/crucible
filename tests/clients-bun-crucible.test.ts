@@ -63,6 +63,16 @@
 //       then SKIPS the leaf, because it already carries a message. So on
 //       1.4.0 a live timeout leaf is not an unmatched leaf at all, and its
 //       message never passed through the marrying parser.
+//     - bun 1.4.0 ALSO attributes a LEAKED ASYNC THROW in the XML. The
+//       aftermath of a throw that escaped an earlier test arrives as
+//       `<failure type="Error" message="leaked boom">` on the leaf that was
+//       RUNNING when the timer fired — i.e. the NEXT test — where 1.3.14
+//       wrote a bare node. Same mechanism, second casualty: CI run
+//       33056533678 reddened the CR-CRU-088 AC4 E2E assertion, which read
+//       that leaf's message as evidence about the CLIENT's marrying when on
+//       1.4.0 it is evidence about BUN's reporter. The full two-version
+//       probe, and the frozen-bytes replacement, sit above
+//       FROZEN_BARE_JUNIT_XML_AFTERMATH.
 //
 // Consequence for this file: the §S2c marrying CONTRACT — a matched leaf
 // carries its own detail; a leaf whose detail CANNOT be matched degrades to
@@ -99,8 +109,10 @@
 // is a real assertion now rather than a deferred candidate —
 // `ForwardMarryingGuardTest` in that same python module, the six
 // declaration shapes in
-// tests/client/test_cr088_failure_detail_names_its_leaf.py, and the AC4
-// E2E describes at the foot of THIS file.
+// tests/client/test_cr088_failure_detail_names_its_leaf.py, and — over
+// FROZEN bytes, immune to the reporter drift above — the CR-CRU-088 AC4
+// describe in the frozen-bytes section of THIS file. Its live twin at the
+// foot of this file keeps only the version-stable half.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -878,13 +890,23 @@ describe("clients/bun-crucible.py — test-run ingest: tier, full context, §S2c
 // by MUTATION instead: with the echo-name comparison dropped from
 // `_parse_console_failures` (`if error_idx is not None and echo_name in
 // (None, leaf):` → `if error_idx is not None:`, i.e. marrying positionally
-// again), the run goes 29 pass / 1 fail — the AC4 assertion below failing on
-// the `delta fails later` leaf with
+// again), the run goes 29 pass / 1 fail — the AC4 assertion failing on the
+// `delta fails later` leaf with
 //   error: expect(received).not.toContain(expected)   Received: "leaked boom"
 // The file was then restored verbatim. RE-MEASURED after C3 restated that
 // assertion as ATTRIBUTION rather than absence: same 29 pass / 1 fail, same
-// leaf — the attribution form keeps the whole of the absence form's
-// mutation-detecting power without pinning bun's line ordering.
+// leaf.
+//
+// That mutation-detecting assertion now lives over FROZEN bytes — the
+// CR-CRU-088 AC4 describe in the frozen-bytes section — because bun 1.4.0's
+// JUnit reporter stamps `message="leaked boom"` onto the delta leaf ITSELF:
+// bun's own attribution of a leaked async throw, which `_parse_junit_file`
+// lifts (correctly — richer reporter detail wins) and `_marry_failures` then
+// correctly leaves alone. Over LIVE bytes that leaf's message therefore
+// stopped being evidence about the client at all (CI run 33056533678). What
+// remains here is the live half the file header calls version-stable: which
+// leaves FAIL, and that the leaking leaf carries detail of its OWN from
+// whichever channel supplied it.
 describe("clients/bun-crucible.py — CR-CRU-088 AC4 (E2E): an aftermath block never reaches the NEXT leaf in the INGESTED tree", () => {
   let handle: ReturnType<typeof startServer> | undefined;
   const scratchDirs: string[] = [];
@@ -959,7 +981,7 @@ describe("clients/bun-crucible.py — CR-CRU-088 AC4 (E2E): an aftermath block n
     }
   });
 
-  test("AC4: in the STORED tree the leaking leaf keeps its OWN message and gamma's aftermath reaches NOBODY — the following leaf carries no trace of 'leaked boom'", () => {
+  test("AC4 (live half — version-stable): both leaves arrive FAILING in the STORED tree, and the leaking leaf carries detail of its OWN", () => {
     expect(runResult?.code).not.toBe(0);
     expect(event?.summary?.total).toBe(2);
     expect(event?.summary?.failed).toBe(2);
@@ -968,27 +990,25 @@ describe("clients/bun-crucible.py — CR-CRU-088 AC4 (E2E): an aftermath block n
     const gamma = leaves.find((l) => l.name === "gamma leaks after failing");
     const delta = leaves.find((l) => l.name === "delta fails later");
 
-    // The producer keeps its own prelude detail.
+    // WHICH leaves fail is every bun's property, and on this fixture both do.
     expect(gamma?.status).toBe("fail");
-    expect(gamma?.failure?.message ?? "").toContain("expect(");
-    expect(gamma?.failure?.message ?? "").not.toContain("leaked boom");
-
-    // ATTRIBUTION, not ABSENCE (AC7, and the rule this file already applies
-    // to the timed-out leaf above): gamma's aftermath must never reach
-    // delta, but whether delta carries a message of its OWN is the runner's
-    // bun talking — this bun prints no prelude block for delta, while a bun
-    // that does would legitimately hand it delta's own `expect(3).toBe(4)`
-    // detail. `toBeUndefined()` would pin that, and pinning bun's stream is
-    // exactly what CR-CRU-087 had to delete. So: nothing of gamma's, and
-    // anything present is delta's own.
     expect(delta?.status).toBe("fail");
-    expect(delta?.failure?.message ?? "").not.toContain("leaked boom");
-    expect(delta?.failure?.trace ?? "").not.toContain("leaked boom");
-    const deltaMessage = delta?.failure?.message;
-    if (deltaMessage !== undefined) {
-      expect(deltaMessage).toContain("expect(");
-      expect(deltaMessage).not.toContain("boom");
-    }
+
+    // The producer keeps detail of its OWN — its own failed assertion, not
+    // the throw it went on to leak. WHICH CHANNEL supplied that detail
+    // differs by bun version (1.3.14: §S2c console marrying, the XML node
+    // being bare; 1.4.0: the JUnit reporter's own `message=`), so what is
+    // asserted is the CONTENT, never the channel.
+    expect(gamma?.failure?.message ?? "").toContain("expect(");
+
+    // The OTHER half of AC4 — that gamma's aftermath reaches NOBODY — is
+    // deliberately NOT asserted over these live bytes: bun 1.4.0's reporter
+    // stamps `message="leaked boom"` onto delta's own `<failure>` node, so
+    // here that leaf's message measures BUN's attribution of a leaked throw
+    // rather than the client's. It is asserted FATALLY over frozen bytes,
+    // against a bare-node junit XML in which nothing but §S2c marrying could
+    // put a message on that leaf, in the CR-CRU-088 AC4 describe of the
+    // frozen-bytes section.
   });
 });
 
@@ -1201,15 +1221,107 @@ error: this test timed out after 50ms.
 Ran 4 tests across 1 file. [58.00ms]
 `;
 
+// ── CR-CRU-088 AC4 on FROZEN bytes — ATTRIBUTION, decoupled from bun ──────
+//
+// CI run 33056533678 reddened the live AC4 E2E assertion above for the same
+// class of reason CR-CRU-087 hit: a CLIENT contract was riding bytes a
+// toolchain release owns. Two-version probe (2026-08-27, one machine, one
+// fixture — FIXTURE_AFTERMATH_BLEED_SOURCE — run as `bun test sample.test.ts
+// --reporter=junit --reporter-outfile=...` with CLAUDECODE/AGENT/REPL_ID/
+// AI_AGENT unset exactly as `cmd_test` unsets them):
+//
+//   CONSOLE stream — byte-identical on 1.3.14 and 1.4.0 apart from the
+//   version banner and three duration tails (diffed, not eyeballed). The
+//   aftermath block still lands BETWEEN the two `(fail)` lines and its
+//   source echo still names GAMMA. Freezing it costs no fidelity.
+//
+//   JUNIT XML — DRIFTED. 1.3.14 writes a bare node for the following leaf:
+//     <testcase name="delta fails later" ...><failure type="AssertionError" /></testcase>
+//   1.4.0 stamps the leaked throw onto that same leaf:
+//     <testcase name="delta fails later" ...><failure type="Error"
+//       message="leaked boom">Error: leaked boom ...</failure></testcase>
+//
+// So on 1.4.0 `delta.failure.message === "leaked boom"` with the client's
+// marrying having attributed NOTHING — `_parse_junit_file` lifted bun's own
+// message and `_marry_failures` skipped the leaf, both correct. The client is
+// unchanged and right; it was the ASSERTION that was measuring the wrong
+// thing.
+//
+// AC4's contract is about the CLIENT's attribution, so it is pinned here
+// instead: the frozen console stream below (carrying the aftermath shape)
+// over a frozen junit XML whose `<failure>` nodes are BARE. With bare nodes
+// the console stream is the ONLY possible source of any `failure.message`,
+// so "the following leaf carries no trace of 'leaked boom'" can be satisfied
+// only by §S1's echo-name rule refusing to marry gamma's aftermath onto
+// delta — the same claim, now fatal AND version-proof, since no bun release
+// can move these bytes. Same `--bun` seam as the §S2c describe above; the
+// real client runs end to end and the assertions read the INGESTED tree.
+
+// Captured VERBATIM (2026-08-27) from a real bun 1.3.14 `--reporter=junit`
+// run of FIXTURE_AFTERMATH_BLEED_SOURCE — BARE `<failure>` nodes for BOTH
+// leaves, which is exactly what makes the assertions over it non-vacuous.
+const FROZEN_BARE_JUNIT_XML_AFTERMATH = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="2" assertions="1" failures="2" skipped="0" time="0.01244087">
+  <testsuite name="sample.test.ts" file="sample.test.ts" tests="2" assertions="1" failures="2" skipped="0" time="0.004" hostname="AntoPC">
+    <testcase name="gamma leaks after failing" classname="" time="0.000122" file="sample.test.ts" line="3" assertions="1">
+      <failure type="AssertionError" />
+    </testcase>
+    <testcase name="delta fails later" classname="" time="0.004978" file="sample.test.ts" line="8" assertions="0">
+      <failure type="AssertionError" />
+    </testcase>
+  </testsuite>
+</testsuites>
+`;
+
+// Captured VERBATIM (2026-08-27) from the SAME run — combined stdout+stderr
+// through a pipe, so the plain `(fail)` result-line family (the parser's
+// block boundaries) is present and uncoloured. THE DEFECT SHAPE: gamma's own
+// prelude precedes its `(fail)` line, then the leaked throw's block sits
+// between gamma's `(fail)` line and delta's — positionally delta's prelude,
+// but its echo names GAMMA. bun 1.4.0 prints this document line-for-line
+// (banner and durations aside). The ONLY edit is the scratch directory in the
+// two `at` lines, normalised to /tmp/cr088-probe: a real mkdtemp path is
+// unstable and carries nothing the parser reads.
+const FROZEN_STREAM_AFTERMATH_BLEED = `bun test v1.3.14 (0d9b296a)
+
+sample.test.ts:
+1 | import { test, expect } from "bun:test";
+2 | 
+3 | test("gamma leaks after failing", () => {
+4 |   setTimeout(() => { throw new Error("leaked boom"); }, 5);
+5 |   expect(1).toBe(2);
+                ^
+error: expect(received).toBe(expected)
+
+Expected: 2
+Received: 1
+
+      at <anonymous> (/tmp/cr088-probe/sample.test.ts:5:13)
+(fail) gamma leaks after failing [0.12ms]
+1 | import { test, expect } from "bun:test";
+2 | 
+3 | test("gamma leaks after failing", () => {
+4 |   setTimeout(() => { throw new Error("leaked boom"); }, 5);
+                                                      ^
+error: leaked boom
+      at <anonymous> (/tmp/cr088-probe/sample.test.ts:4:51)
+(fail) delta fails later [4.98ms]
+
+ 0 pass
+ 2 fail
+ 1 expect() calls
+Ran 2 tests across 1 file. [12.00ms]
+`;
+
 /**
  * A fake `bun` binary (same technique as clients-narration.test.ts's
- * `writeFakeAnsiTickBun`) that runs no tests at all: it writes
- * FROZEN_BARE_JUNIT_XML to whatever `--reporter-outfile=` the client passed
- * and prints `stream` verbatim, then exits 1 like a failing run. Everything
- * downstream of the subprocess — capture, junit parse, §S2c marrying,
- * ingest — is the real client.
+ * `writeFakeAnsiTickBun`) that runs no tests at all: it writes `xml` to
+ * whatever `--reporter-outfile=` the client passed and prints `stream`
+ * verbatim, then exits 1 like a failing run. Everything downstream of the
+ * subprocess — capture, junit parse, §S2c marrying, ingest — is the real
+ * client.
  */
-function writeFrozenStreamBun(path: string, stream: string): void {
+function writeFrozenStreamBun(path: string, stream: string, xml: string): void {
   const lines = [
     "#!/bin/sh",
     'outfile=""',
@@ -1219,7 +1331,7 @@ function writeFrozenStreamBun(path: string, stream: string): void {
     "  esac",
     "done",
     "cat > \"$outfile\" <<'__FROZEN_JUNIT_XML__'",
-    FROZEN_BARE_JUNIT_XML.trimEnd(),
+    xml.trimEnd(),
     "__FROZEN_JUNIT_XML__",
     "cat <<'__FROZEN_CONSOLE_STREAM__'",
     stream.trimEnd(),
@@ -1231,6 +1343,61 @@ function writeFrozenStreamBun(path: string, stream: string): void {
   chmodSync(path, 0o755);
 }
 
+/**
+ * Drives ONE real `bun-crucible.py test` run whose ONLY inputs are FROZEN
+ * bytes — `stream` on the console, `xml` in the reporter outfile — and
+ * returns the leaves of the tree the server actually STORED. Shared by the
+ * §S2c describe and the CR-CRU-088 AC4 describe below, so both ride the one
+ * `--bun` seam instead of a second mechanism.
+ */
+async function ingestFrozenStream(opts: {
+  baseUrl: string;
+  projectName: string;
+  agentId: string;
+  stream: string;
+  xml: string;
+  source: string;
+  scratchDirs: string[];
+}): Promise<EventLeaf[]> {
+  const key = await createProject(opts.baseUrl, opts.projectName);
+  const dir = mkdtempSync(join(tmpdir(), "bun-crucible-frozen-"));
+  opts.scratchDirs.push(dir);
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({ name: "clients-bun-crucible-frozen", version: "0.0.0", private: true }),
+  );
+  writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
+  // The client's own target resolution + `_prescan_test_total` read this
+  // file; the fake bun never does — the frozen stream IS this run's output.
+  writeFileSync(join(dir, "sample.test.ts"), opts.source);
+  const fakeBun = join(dir, "frozen-stream-bun.sh");
+  writeFrozenStreamBun(fakeBun, opts.stream, opts.xml);
+  await ensureRegistered(opts.agentId, {
+    cwd: dir,
+    crucibleUrl: opts.baseUrl,
+    projectDir: dir,
+  });
+  await runScript(
+    [
+      "test",
+      "--agent",
+      opts.agentId,
+      "--tests",
+      "sample.test.ts",
+      "--project-dir",
+      dir,
+      "--package-dir",
+      dir,
+      "--bun",
+      fakeBun,
+    ],
+    { cwd: dir, crucibleUrl: opts.baseUrl },
+  );
+  const events = await getEvents(opts.baseUrl, key);
+  const event = events.length > 0 ? await getFullEvent(opts.baseUrl, events[0]!.id) : undefined;
+  return (event?.tree ?? []).flatMap((suite) => suite.children);
+}
+
 describe("clients/bun-crucible.py — §S2c failure-marrying contract on FROZEN bytes (no live bun in the assertion path)", () => {
   let handle: ServerHandle | undefined;
   const scratchDirs: string[] = [];
@@ -1238,66 +1405,27 @@ describe("clients/bun-crucible.py — §S2c failure-marrying contract on FROZEN 
   let detailAfterLeaves: EventLeaf[] = [];
   let detailBeforeLeaves: EventLeaf[] = [];
 
-  function scratchDir(prefix: string): string {
-    const dir = mkdtempSync(join(tmpdir(), prefix));
-    scratchDirs.push(dir);
-    return dir;
-  }
-
-  /** Drives one real `bun-crucible.py test` run whose ONLY input is frozen
-   * bytes, and returns the leaves of the tree the server actually stored. */
-  async function ingestFrozenStream(
-    projectName: string,
-    agentId: string,
-    stream: string,
-  ): Promise<EventLeaf[]> {
-    const key = await createProject(baseUrl, projectName);
-    const dir = scratchDir("bun-crucible-frozen-");
-    writeFileSync(
-      join(dir, "package.json"),
-      JSON.stringify({ name: "clients-bun-crucible-frozen", version: "0.0.0", private: true }),
-    );
-    writeFileSync(join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${key}\n`);
-    // The client's own target resolution + `_prescan_test_total` read this
-    // file; the fake bun never does — the frozen stream IS this run's output.
-    writeFileSync(join(dir, "sample.test.ts"), FIXTURE_TEST_SOURCE);
-    const fakeBun = join(dir, "frozen-stream-bun.sh");
-    writeFrozenStreamBun(fakeBun, stream);
-    await ensureRegistered(agentId, { cwd: dir, crucibleUrl: baseUrl, projectDir: dir });
-    await runScript(
-      [
-        "test",
-        "--agent",
-        agentId,
-        "--tests",
-        "sample.test.ts",
-        "--project-dir",
-        dir,
-        "--package-dir",
-        dir,
-        "--bun",
-        fakeBun,
-      ],
-      { cwd: dir, crucibleUrl: baseUrl },
-    );
-    const events = await getEvents(baseUrl, key);
-    const event = events.length > 0 ? await getFullEvent(baseUrl, events[0]!.id) : undefined;
-    return (event?.tree ?? []).flatMap((suite) => suite.children);
-  }
-
   beforeAll(async () => {
     handle = startServer({ port: 0, dbPath: ":memory:" });
     baseUrl = `http://localhost:${handle.server.port}`;
-    detailAfterLeaves = await ingestFrozenStream(
-      "clients-bc-frozen-detail-after",
-      "frozen-detail-after-agent",
-      FROZEN_STREAM_TIMEOUT_DETAIL_AFTER_FAIL,
-    );
-    detailBeforeLeaves = await ingestFrozenStream(
-      "clients-bc-frozen-detail-before",
-      "frozen-detail-before-agent",
-      FROZEN_STREAM_TIMEOUT_DETAIL_BEFORE_FAIL,
-    );
+    detailAfterLeaves = await ingestFrozenStream({
+      baseUrl,
+      projectName: "clients-bc-frozen-detail-after",
+      agentId: "frozen-detail-after-agent",
+      stream: FROZEN_STREAM_TIMEOUT_DETAIL_AFTER_FAIL,
+      xml: FROZEN_BARE_JUNIT_XML,
+      source: FIXTURE_TEST_SOURCE,
+      scratchDirs,
+    });
+    detailBeforeLeaves = await ingestFrozenStream({
+      baseUrl,
+      projectName: "clients-bc-frozen-detail-before",
+      agentId: "frozen-detail-before-agent",
+      stream: FROZEN_STREAM_TIMEOUT_DETAIL_BEFORE_FAIL,
+      xml: FROZEN_BARE_JUNIT_XML,
+      source: FIXTURE_TEST_SOURCE,
+      scratchDirs,
+    });
   });
 
   afterAll(() => {
@@ -1343,6 +1471,64 @@ describe("clients/bun-crucible.py — §S2c failure-marrying contract on FROZEN 
     const thrown = detailBeforeLeaves.find((l) => l.name === "throws with detail");
     expect(mismatch?.failure?.message).toBe("expect(received).toBe(expected)");
     expect(thrown?.failure?.message).toBe("boom with detail");
+  });
+});
+
+// The AC4 claim the live describe above can no longer carry — asserted on
+// bytes this repo owns. See the probe note above FROZEN_BARE_JUNIT_XML_AFTERMATH.
+describe("clients/bun-crucible.py — CR-CRU-088 AC4 on FROZEN bytes: an aftermath block reaches NOBODY, over a junit XML that could not have supplied a message", () => {
+  let handle: ServerHandle | undefined;
+  const scratchDirs: string[] = [];
+  let leaves: EventLeaf[] = [];
+
+  beforeAll(async () => {
+    handle = startServer({ port: 0, dbPath: ":memory:" });
+    leaves = await ingestFrozenStream({
+      baseUrl: `http://localhost:${handle.server.port}`,
+      projectName: "clients-bc-frozen-cr088-aftermath",
+      agentId: "frozen-cr088-aftermath-agent",
+      stream: FROZEN_STREAM_AFTERMATH_BLEED,
+      xml: FROZEN_BARE_JUNIT_XML_AFTERMATH,
+      source: FIXTURE_AFTERMATH_BLEED_SOURCE,
+      scratchDirs,
+    });
+  });
+
+  afterAll(() => {
+    handle?.stop();
+    while (scratchDirs.length > 0) {
+      rmSync(scratchDirs.pop()!, { recursive: true, force: true });
+    }
+  });
+
+  test("AC4: the LEAKING leaf keeps its OWN message and trace — married off the console stream, which this bare-node junit XML could not have supplied", () => {
+    const gamma = leaves.find((l) => l.name === "gamma leaks after failing");
+    expect(gamma?.status).toBe("fail");
+    expect(gamma?.failure?.message).toBe("expect(received).toBe(expected)");
+    // Non-vacuity: the `<failure>` node is bare, so a multi-line trace can
+    // only have come off the console stream via §S2c marrying.
+    expect(gamma?.failure?.trace ?? "").toContain("Expected: 2");
+    expect(gamma?.failure?.trace ?? "").toContain("Received: 1");
+    // Its OWN failed assertion — never the aftermath it went on to leak.
+    expect(gamma?.failure?.message ?? "").not.toContain("leaked boom");
+  });
+
+  test("AC4: gamma's aftermath reaches NOBODY — the FOLLOWING leaf is married nothing at all and carries no trace of 'leaked boom' in any field", () => {
+    const delta = leaves.find((l) => l.name === "delta fails later");
+    expect(delta?.status).toBe("fail");
+    // `toBeUndefined()` is legitimate here and pins NOTHING about bun: the
+    // bytes are frozen and this XML's node is bare, so the only thing that
+    // could put a message on this leaf is the positional rule marrying
+    // gamma's aftermath onto it — precisely the defect AC4 forbids. (Drop the
+    // echo-name comparison from `_parse_console_failures` and this line is
+    // what goes red, with Received: "leaked boom".)
+    expect(delta?.failure?.message).toBeUndefined();
+    // Type-only, not stripped: the junit type survives the non-marrying.
+    expect(delta?.failure?.type).toBe("AssertionError");
+    // The anti-smear half, across every field of the stored failure object.
+    const serialised = JSON.stringify(delta?.failure ?? {});
+    expect(serialised).not.toContain("leaked boom");
+    expect(serialised).not.toContain("expect(received)");
   });
 });
 
