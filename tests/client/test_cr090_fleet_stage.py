@@ -1,5 +1,6 @@
-"""CR-CRU-090 C1 (§S1, ACs 1, 2 and 6) -- the `fleet` stage: the eight client
-files land under `<target-dir>/clients/` BEFORE the manifest that names them.
+"""CR-CRU-090 C1 (§S1, ACs 1, 2 and 6) + C2 (§S1 "Rules", AC5) -- the `fleet`
+stage: the eight client files land under `<target-dir>/clients/` BEFORE the
+manifest that names them, and land only when they are actually stale.
 
 Why these three assertions, and why they are the whole of this cycle:
 
@@ -28,10 +29,15 @@ declaration `--target-dir` actually makes.
   not in `STAGE_ORDER`, so the stub is never reached and `manifest` writes
   anyway.
 
-NOT this cycle (owned elsewhere in plan 89): convergence/`--force` (AC5), every
-manifest path resolving (AC3), a copied client running (AC4), the
-`manifest.source_clients_dir()` single resolver (§S2/AC7), the `cli.main()`
-integration (AC8).
+C2 (§S1's "Rules" block, AC5) pins the CONVERGENCE half of the same stage: a
+destination file whose bytes already match its source is not rewritten, the
+stage reports `converged: True` only when ALL eight already matched, `--force`
+re-copies unconditionally and reports `converged: False`, and destination files
+the install does not manage are never touched.
+
+NOT this cycle (owned elsewhere in plan 89): every manifest path resolving
+(AC3), a copied client running (AC4), the `manifest.source_clients_dir()`
+single resolver (§S2/AC7), the `cli.main()` integration (AC8).
 
 Every test owns a `tempfile.mkdtemp` scratch target under `/tmp` and removes
 it; the `[server]` stage is always stubbed to a no-subprocess provision double,
@@ -324,6 +330,287 @@ class FleetBeforeManifestIsEnforcedTest(_ScratchInstallCase):
             f"AC6 -- a {STAGE_FAILED_CODE!r} warning must NAME the "
             f"{FLEET_STAGE_NAME!r} stage so the operator knows which stage "
             f"halted the install; warnings={warnings}")
+
+
+# --- CR-CRU-090 C2 (§S1 "Rules", AC5) -- convergence and `--force` ---------
+
+# A timestamp no filesystem clock can produce incidentally: epoch + 1,000,000 s
+# (1970-01-12). Pinning each landed file to this EXACT value and re-asserting
+# it after a second run turns "nothing was rewritten" into a byte-exact claim
+# instead of a race against mtime granularity: `shutil.copyfile` stamps its
+# destination with the current time, so one rewritten file is unmissable and a
+# converged one is provably untouched.
+PINNED_MTIME_NS = 1_000_000 * 1_000_000_000
+
+# A destination file that is NOT one of the eight -- the install manages the
+# fleet, never the directory.
+UNMANAGED_FILENAME = "operator-note.txt"
+UNMANAGED_CONTENT = b"operator's own note; the install does not manage me\n"
+
+# The two halves of the fleet the all-or-nothing rule must hold for
+# identically: a client entry point and a shared module the clients load by
+# file path. A convergence check keyed off filename shape or extension would
+# pass one and fail the other.
+TAMPERED_CLIENT_FILE = "python-crucible.py"
+TAMPERED_SHARED_MODULE = "_crucible_axi.py"
+
+
+class _FleetConvergenceCase(_ScratchInstallCase):
+    """Fixture for §S1's convergence rules: land the fleet, pin every landed
+    file's mtime into the past, then observe what a SECOND run does."""
+
+    def fleet_stage(self, stages):
+        matches = [s for s in stages if s["name"] == FLEET_STAGE_NAME]
+        self.assertEqual(
+            len(matches), 1,
+            f"AC5 -- run_install must report exactly one {FLEET_STAGE_NAME!r} "
+            f"stage to read `converged` off; stages={stages}")
+        return matches[0]
+
+    def landed_path(self, name):
+        return os.path.join(self.clients_dir(), name)
+
+    def source_bytes(self, name):
+        return (SOURCE_CLIENTS_DIR / name).read_bytes()
+
+    def land_the_fleet(self):
+        """First install: the eight land. Returns the reported fleet stage."""
+        ok, stages, warnings = self.run_install_with_stubbed_server()
+        self.assertTrue(
+            ok,
+            f"fixture invariant -- the first install (only [server] stubbed) "
+            f"must succeed; stages={stages} warnings={warnings}")
+        return self.fleet_stage(stages)
+
+    def reach_convergence(self):
+        """Land the fleet, then run again so the target is CONVERGED -- the
+        precondition the `--force` and all-or-nothing rules are measured
+        against, asserted explicitly rather than assumed. On an unconditional
+        copy this baseline is the first thing to fail, and that IS the
+        diagnostic: with no convergence detection there is no converged state
+        for `--force` to override or for a tampered file to flip."""
+        self.land_the_fleet()
+        ok, stages, warnings = self.run_install_with_stubbed_server()
+        stage = self.fleet_stage(stages)
+        self.assertTrue(
+            stage["converged"],
+            f"AC5 baseline -- a second, unchanged run must leave the target "
+            f"CONVERGED: all eight files already match their sources "
+            f"byte-for-byte, so the {FLEET_STAGE_NAME!r} stage must report "
+            f"converged:True. Got {stage!r}; ok={ok} warnings={warnings}")
+        return stage
+
+    def pin_landed_mtimes(self):
+        """Stamp all eight landed files with PINNED_MTIME_NS."""
+        for name in sorted(EXPECTED_FLEET_FILES):
+            path = self.landed_path(name)
+            self.assertTrue(
+                os.path.isfile(path),
+                f"fixture invariant -- {name} must have landed at {path!r} "
+                f"before its mtime can be pinned")
+            os.utime(path, ns=(PINNED_MTIME_NS, PINNED_MTIME_NS))
+
+    def landed_mtimes(self):
+        """name -> st_mtime_ns for every one of the eight present on disk."""
+        return {
+            name: os.stat(self.landed_path(name)).st_mtime_ns
+            for name in sorted(EXPECTED_FLEET_FILES)
+            if os.path.isfile(self.landed_path(name))
+        }
+
+
+class FleetStageConvergesOnASecondRunTest(_FleetConvergenceCase):
+    """AC5, first half -- a second run with nothing changed converges and
+    rewrites nothing."""
+
+    def test_a_second_unchanged_run_reports_the_fleet_stage_converged(self):
+        self.land_the_fleet()
+        ok, stages, warnings = self.run_install_with_stubbed_server()
+        stage = self.fleet_stage(stages)
+        self.assertTrue(
+            stage["converged"],
+            f"AC5 -- the second run changes nothing, so the "
+            f"{FLEET_STAGE_NAME!r} stage must report converged:True, "
+            f"mirroring the [manifest] stage's contract. Today the copy is "
+            f"unconditional and `converged` is hard-coded False, so an "
+            f"operator can never tell a no-op install from a real laydown. "
+            f"Got {stage!r}; ok={ok} warnings={warnings}")
+
+    def test_a_converged_second_run_rewrites_not_one_of_the_eight_files(self):
+        """The bytes-level rule behind `converged`: a destination file whose
+        bytes already match its source is NOT rewritten. Measured against a
+        pinned past mtime, so the assertion cannot pass by clock luck."""
+        self.land_the_fleet()
+        self.pin_landed_mtimes()
+        before = self.landed_mtimes()
+        self.assertEqual(
+            sorted(before), sorted(EXPECTED_FLEET_FILES),
+            f"fixture invariant -- all eight files must be on disk and pinned "
+            f"before the second run; pinned={sorted(before)}")
+
+        ok, stages, warnings = self.run_install_with_stubbed_server()
+        after = self.landed_mtimes()
+        rewritten = sorted(
+            name for name, mtime in after.items()
+            if mtime != PINNED_MTIME_NS)
+
+        self.assertEqual(
+            rewritten, [],
+            f"AC5 -- a file already byte-identical to its source must NOT be "
+            f"rewritten: every landed file's mtime must still be the pinned "
+            f"{PINNED_MTIME_NS} ns. rewritten={rewritten} "
+            f"stage={self.fleet_stage(stages) if stages else None} "
+            f"ok={ok} warnings={warnings}")
+
+
+class FleetForceRecopiesUnconditionallyTest(_FleetConvergenceCase):
+    """AC5, second half -- `--force` re-copies unconditionally and reports
+    `converged: False`, which is only a distinguishable behaviour once
+    convergence exists to be overridden."""
+
+    def test_force_reports_non_convergence_against_a_converged_target(self):
+        self.reach_convergence()
+        ok, stages, warnings = self.run_install_with_stubbed_server(force=True)
+        stage = self.fleet_stage(stages)
+        self.assertFalse(
+            stage["converged"],
+            f"AC5 -- `--force` re-copies unconditionally, so it must report "
+            f"converged:False even on a target that converged a moment ago; "
+            f"got {stage!r}; ok={ok} warnings={warnings}")
+
+    def test_force_rewrites_all_eight_files_it_would_otherwise_skip(self):
+        self.reach_convergence()
+        self.pin_landed_mtimes()
+
+        ok, stages, warnings = self.run_install_with_stubbed_server(force=True)
+        after = self.landed_mtimes()
+        self.assertEqual(
+            sorted(after), sorted(EXPECTED_FLEET_FILES),
+            f"fixture invariant -- all eight must still be on disk after a "
+            f"forced run; present={sorted(after)}")
+        skipped = sorted(
+            name for name, mtime in after.items()
+            if mtime == PINNED_MTIME_NS)
+
+        self.assertEqual(
+            skipped, [],
+            f"AC5 -- `--force` must REWRITE all eight, so not one may still "
+            f"carry the pinned mtime {PINNED_MTIME_NS} ns that convergence "
+            f"would have preserved; skipped={skipped} "
+            f"stage={self.fleet_stage(stages) if stages else None} "
+            f"ok={ok} warnings={warnings}")
+        for name in sorted(EXPECTED_FLEET_FILES):
+            self.assertEqual(
+                Path(self.landed_path(name)).read_bytes(),
+                self.source_bytes(name),
+                f"AC5 -- a forced re-copy must still land {name} "
+                f"byte-identical to its source")
+
+
+class FleetConvergenceIsAllOrNothingTest(_FleetConvergenceCase):
+    """AC5 -- `converged: True` is claimed ONLY when every one of the eight
+    already matched. One stale file flips the whole stage to False and is
+    restored, for a client entry point and for a shared module alike."""
+
+    def _tamper_and_rerun(self, name):
+        """Converge, corrupt exactly ONE landed file, run again; return the
+        reported fleet stage."""
+        self.reach_convergence()
+        victim = Path(self.landed_path(name))
+        victim.write_bytes(
+            self.source_bytes(name) + b"\n# tampered out of band\n")
+        self.assertNotEqual(
+            victim.read_bytes(), self.source_bytes(name),
+            f"fixture invariant -- {name} must actually differ from its "
+            f"source after tampering")
+        self.pin_landed_mtimes()
+
+        ok, stages, warnings = self.run_install_with_stubbed_server()
+        return self.fleet_stage(stages), ok, warnings
+
+    def _assert_one_stale_file_breaks_convergence(self, name):
+        stage, ok, warnings = self._tamper_and_rerun(name)
+        self.assertFalse(
+            stage["converged"],
+            f"AC5 -- convergence is ALL-OR-NOTHING: with {name} no longer "
+            f"matching its source, the {FLEET_STAGE_NAME!r} stage must report "
+            f"converged:False, never True because the other seven matched; "
+            f"got {stage!r}; ok={ok} warnings={warnings}")
+        self.assertEqual(
+            Path(self.landed_path(name)).read_bytes(), self.source_bytes(name),
+            f"AC5 -- the stale file {name} must be RE-COPIED, restoring it "
+            f"byte-identical to {SOURCE_CLIENTS_DIR / name}; a convergence "
+            f"check that skips it would leave a corrupt client installed")
+        self.assertNotEqual(
+            os.stat(self.landed_path(name)).st_mtime_ns, PINNED_MTIME_NS,
+            f"AC5 -- {name} must have been rewritten, so its pinned mtime "
+            f"{PINNED_MTIME_NS} ns must be gone")
+        others = sorted(
+            other for other, mtime in self.landed_mtimes().items()
+            if other != name and mtime != PINNED_MTIME_NS)
+        self.assertEqual(
+            others, [],
+            f"AC5 -- only the stale file is rewritten: the seven that still "
+            f"match their sources must keep the pinned mtime; "
+            f"rewritten={others}")
+
+    def test_one_tampered_client_file_flips_the_stage_to_non_converged(self):
+        self._assert_one_stale_file_breaks_convergence(TAMPERED_CLIENT_FILE)
+
+    def test_one_tampered_shared_module_flips_the_stage_to_non_converged(self):
+        """The same rule for a shared module the five clients load by file
+        path -- so convergence is a property of the eight, not of whatever
+        subset a `*-crucible.py` shaped check happens to notice."""
+        self._assert_one_stale_file_breaks_convergence(TAMPERED_SHARED_MODULE)
+
+
+class UnmanagedDestinationFilesSurviveTest(_FleetConvergenceCase):
+    """AC5/§S1 -- "files present in the destination but not in the source set
+    are left untouched": the install never removes what it does not manage,
+    and an unmanaged file is not evidence of divergence either."""
+
+    def setUp(self):
+        super().setUp()
+        os.makedirs(self.clients_dir(), exist_ok=True)
+        self.unmanaged = Path(
+            os.path.join(self.clients_dir(), UNMANAGED_FILENAME))
+        self.unmanaged.write_bytes(UNMANAGED_CONTENT)
+
+    def test_an_unmanaged_file_survives_the_laydown_with_its_bytes_intact(self):
+        self.land_the_fleet()
+        self.assertTrue(
+            self.unmanaged.is_file(),
+            f"§S1 -- {UNMANAGED_FILENAME!r} is not one of the eight, so the "
+            f"[fleet] stage must leave it alone; it is gone from "
+            f"{self.clients_dir()!r} (contents="
+            f"{sorted(os.listdir(self.clients_dir()))})")
+        self.assertEqual(
+            self.unmanaged.read_bytes(), UNMANAGED_CONTENT,
+            f"§S1 -- an unmanaged destination file must keep its own bytes")
+
+    def test_an_unmanaged_file_does_not_defeat_convergence(self):
+        """The eight all match, so the stage converges -- the extra file is
+        not in the source set and therefore cannot be 'divergent'."""
+        self.land_the_fleet()
+        self.pin_landed_mtimes()
+        os.utime(self.unmanaged, ns=(PINNED_MTIME_NS, PINNED_MTIME_NS))
+
+        ok, stages, warnings = self.run_install_with_stubbed_server()
+        stage = self.fleet_stage(stages)
+        self.assertTrue(
+            stage["converged"],
+            f"AC5 -- an unmanaged {UNMANAGED_FILENAME!r} sitting beside the "
+            f"eight must not make the {FLEET_STAGE_NAME!r} stage claim "
+            f"non-convergence: convergence is decided over the eight source "
+            f"files only. Got {stage!r}; ok={ok} warnings={warnings}")
+        self.assertEqual(
+            self.unmanaged.read_bytes(), UNMANAGED_CONTENT,
+            f"§S1 -- {UNMANAGED_FILENAME!r} must still hold its own bytes "
+            f"after a converged run")
+        self.assertEqual(
+            os.stat(self.unmanaged).st_mtime_ns, PINNED_MTIME_NS,
+            f"§S1 -- an unmanaged file must not even be touched by a "
+            f"converged run")
 
 
 if __name__ == "__main__":
