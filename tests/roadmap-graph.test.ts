@@ -53,6 +53,9 @@ interface GraphNode {
     wave?: string;
     track?: string;
     status?: string;
+    // CR-CRU-077 §S1/AC2 — the orchestrator-assigned queue position, carried
+    // as node DATA a layout can rank on. NOT an edge (DN decision 5).
+    seq?: number;
     terminal?: "start" | "end";
     version?: string;
   };
@@ -626,6 +629,401 @@ describe("CR-CRU-077 §S1 — a diamond's edges are never manufactured from wave
     expect(edgesInto(g, older.data.id).length).toBeGreaterThan(0);
     expect(edgesOutOf(g, newer.data.id).length).toBeGreaterThan(0);
     expect(reachable(g, older.data.id, newer.data.id)).toBe(true);
+  });
+});
+
+// ── CR-CRU-077 §S1 — ORDERING: AC2 (authored queue sequence), AC3 (parallel
+//    branches, never a chain), AC8 (no edge derived from wave structure) ─────
+//
+// THE TENSION, resolved before a line was asserted. AC2 requires the
+// orchestrator-assigned queue sequence to be HONOURED for two CRs with no
+// dependency between them; DN decision 5 forbids inventing any edge to express
+// sequence; AC3 requires those same two CRs to remain PARALLEL BRANCHES. Read
+// "honoured" as "drawn", and AC2 contradicts both decision 5 and AC3.
+//
+// It is not a contradiction, because decision 5 already names the resolution:
+// "Order comes from `depends-on` plus the orchestrator-assigned queue
+// sequence". The queue sequence is INPUT DATA, not something the graph
+// derives. So the builder owes exactly two things, and neither is an edge:
+//
+//   1. CARRY the authored position onto each CR node as data (`data.seq`, a
+//      monotonic numeric field) so a layout can RANK on it — dagre orders
+//      same-rank siblings by a tie-break it is given, so a carried sequence is
+//      honourable without a single edge.
+//   2. NEVER SUBSTITUTE an order of its own — not the CR id, not the wave, not
+//      the status. Re-author the queue and the carried order must follow the
+//      re-authoring, exactly and only.
+//
+// Why the alternatives fail:
+//   • An explicitly-typed non-dependency "order" edge (`seq:<a>-><b>`) fails
+//     TWICE: decision 5 forbids inventing an edge to express sequence at all,
+//     whatever it is typed, and an edge a→b makes b reachable from a, which is
+//     the CHAIN that AC3 explicitly rules out.
+//   • Node EMISSION order alone is too weak to be the carrier: it is implicit,
+//     it says nothing once the nodes array is filtered or interleaved with
+//     diamonds and terminals (which it already is), and no layout contract
+//     promises to read it. It is asserted below as a corroborating property,
+//     never as the load-bearing one.
+//
+// So AC2 is satisfied by node data, AC3 by the continued ABSENCE of an edge,
+// and decision 5 by both. All three hold simultaneously; nothing is traded.
+
+/** CR nodes in EMISSION order — the order the builder pushed them. */
+const crOrder = (g: RoadmapGraph): string[] => crNodes(g).map((n) => n.data.id);
+
+/** CR nodes lacking a numeric carried position, by id. */
+const missingSeq = (g: RoadmapGraph): string[] =>
+  crNodes(g)
+    .filter((n) => typeof n.data.seq !== "number" || !Number.isFinite(n.data.seq))
+    .map((n) => n.data.id);
+
+/**
+ * CR ids ordered by their CARRIED queue position. A node with no numeric `seq`
+ * is reported as `<id>:no-seq` rather than silently falling back to emission
+ * order — a fallback would let every re-authoring assertion below pass
+ * vacuously against a builder that carries no sequence at all.
+ */
+const bySeq = (g: RoadmapGraph): string[] => {
+  const missing = missingSeq(g);
+  if (missing.length > 0) return crOrder(g).map((id) => (missing.includes(id) ? `${id}:no-seq` : id));
+  return [...crNodes(g)].sort((a, b) => a.data.seq! - b.data.seq!).map((n) => n.data.id);
+};
+
+/** Canonical, order-independent edge SET: every edge's whole `data`, sorted. */
+const edgeSet = (g: RoadmapGraph): string[] => g.edges.map((e) => JSON.stringify(e.data)).sort();
+
+/** Transitive `depends-on` closure, computed from the ENTRIES alone. */
+function dependencyClosure(entries: BuilderEntry[]): Map<string, Set<string>> {
+  const dependants = new Map<string, string[]>();
+  for (const e of entries) {
+    for (const dep of e.dependsOn) {
+      const bucket = dependants.get(dep);
+      if (bucket === undefined) dependants.set(dep, [e.cr]);
+      else bucket.push(e.cr);
+    }
+  }
+  const closure = new Map<string, Set<string>>();
+  for (const e of entries) {
+    const seen = new Set<string>();
+    const frontier = [e.cr];
+    while (frontier.length > 0) {
+      for (const next of dependants.get(frontier.pop()!) ?? []) {
+        if (seen.has(next)) continue;
+        seen.add(next);
+        frontier.push(next);
+      }
+    }
+    closure.set(e.cr, seen);
+  }
+  return closure;
+}
+const REAL_CLOSURE = dependencyClosure(REAL_ENTRIES);
+/** "No dependency between them" — in EITHER direction, transitively. */
+const dependencyRelated = (a: string, b: string): boolean =>
+  (REAL_CLOSURE.get(a)?.has(b) ?? false) || (REAL_CLOSURE.get(b)?.has(a) ?? false);
+
+const authoredIndex = (cr: string): number => REAL_ENTRIES.findIndex((e) => e.cr === cr);
+const entryFor = (cr: string): BuilderEntry => REAL_ENTRIES[authoredIndex(cr)];
+
+/**
+ * Which release REGION a CR sits in — its `crs` index in ship order, or the
+ * unshipped region after the newest diamond. Membership only, never wave:
+ * AC2/AC3 scope ordering to "within a region", and a release boundary
+ * legitimately adds cross-region reachability (AC1c).
+ */
+const SHIP_ORDER = [...REAL_RELEASES].sort((a, b) => (a.releasedAt ?? 0) - (b.releasedAt ?? 0));
+const REGION = new Map<string, number>();
+SHIP_ORDER.forEach((rel, stage) => {
+  for (const cr of membersOf(rel)) if (!REGION.has(cr)) REGION.set(cr, stage);
+});
+const regionOf = (cr: string): number => REGION.get(cr) ?? SHIP_ORDER.length;
+
+/** Every same-wave, same-region pair the queue leaves genuinely independent. */
+const SAME_WAVE_INDEPENDENT: [string, string][] = (() => {
+  const pairs: [string, string][] = [];
+  for (let i = 0; i < REAL_ENTRIES.length; i += 1) {
+    for (let j = i + 1; j < REAL_ENTRIES.length; j += 1) {
+      const a = REAL_ENTRIES[i].cr;
+      const b = REAL_ENTRIES[j].cr;
+      if (REAL_ENTRIES[i].wave !== REAL_ENTRIES[j].wave) continue;
+      if (regionOf(a) !== regionOf(b)) continue;
+      if (dependencyRelated(a, b)) continue;
+      pairs.push([a, b]);
+    }
+  }
+  return pairs;
+})();
+
+/** Authored-adjacent pairs with no declared dependency either way. */
+const ADJACENT_INDEPENDENT: [string, string][] = REAL_ENTRIES.slice(1)
+  .map((e, i): [string, string] => [REAL_ENTRIES[i].cr, e.cr])
+  .filter(([a, b]) => !dependencyRelated(a, b));
+
+/**
+ * Deterministic RE-AUTHORINGS of the same queue. Reversal is the maximal
+ * permutation; the 3-stride interleave is a non-trivial one that is neither
+ * the original nor its reverse.
+ */
+const reversed = <T,>(xs: T[]): T[] => [...xs].reverse();
+const strided = <T,>(xs: T[]): T[] => {
+  const out: T[] = [];
+  for (let start = 0; start < 3; start += 1) {
+    for (let i = start; i < xs.length; i += 3) out.push(xs[i]);
+  }
+  return out;
+};
+
+/**
+ * The three wave profiles AC8 must be completely blind to: every entry in ONE
+ * wave, every entry in its OWN wave, and no `wave` field at all.
+ */
+const WAVE_MUTATIONS: { name: string; entries: BuilderEntry[] }[] = [
+  { name: "every wave identical", entries: REAL_ENTRIES.map((e) => ({ ...e, wave: "1" })) },
+  {
+    name: "every wave distinct",
+    entries: REAL_ENTRIES.map((e, i) => ({ ...e, wave: String(i + 1) })),
+  },
+  {
+    name: "every wave absent",
+    entries: REAL_ENTRIES.map(({ wave: _wave, ...rest }) => rest as BuilderEntry),
+  },
+];
+
+/**
+ * The AC2 anti-substitution pair, measured off the checked-in queue table on
+ * 2026-08-27: CR-CRU-082 is authored BEFORE CR-CRU-081, so authored order and
+ * CR-id order DISAGREE, and neither depends on the other. A builder that
+ * "orders by CR number" gets this pair backwards; only carrying the authored
+ * sequence gets it right.
+ */
+const AUTHORED_BEFORE = "CR-CRU-082";
+const AUTHORED_AFTER = "CR-CRU-081";
+
+/**
+ * The AC3 fan-out pairs: same wave, same region, each pair declaring one
+ * SHARED prerequisite and no dependency on each other, so the only correct
+ * shape is two parallel branches off that prerequisite.
+ */
+const PARALLEL_PAIRS: { upstream: string; a: string; b: string }[] = [
+  { upstream: "CR-CRU-074", a: "CR-CRU-080", b: "CR-CRU-082" },
+  { upstream: "CR-CRU-066", a: "CR-CRU-068", b: "CR-CRU-069" },
+];
+
+describe("CR-CRU-077 §S1/AC2 — the authored queue sequence is CARRIED as data, never invented as an edge", () => {
+  test("every CR node carries its orchestrator-assigned queue position as a numeric `data.seq`, strictly increasing in authored order", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    expect(REAL_ENTRIES.length).toBeGreaterThan(80);
+    expect(crNodes(g).length).toBe(REAL_ENTRIES.length);
+    // Named diff: which CRs arrive with no carried position at all.
+    expect(missingSeq(g)).toEqual([]);
+    // Distinct — a layout cannot tie-break on a repeated rank.
+    const values = crNodes(g).map((n) => n.data.seq!);
+    expect(new Set(values).size).toBe(values.length);
+    // Monotonic in AUTHORED order: entry i is carried before entry i+1.
+    const outOfOrder = REAL_ENTRIES.slice(1)
+      .map((e, i) => ({ before: REAL_ENTRIES[i].cr, after: e.cr }))
+      .filter(({ before, after }) => !(nodeById(g, before)!.data.seq! < nodeById(g, after)!.data.seq!))
+      .map(({ before, after }) => `${before} !< ${after}`);
+    expect(outOfOrder).toEqual([]);
+  });
+
+  test("two CRs with no dependency between them keep their AUTHORED order — CR-CRU-082 before CR-CRU-081, which is NOT their id order", () => {
+    // Fixture guards first: if the queue table is re-authored these fail with
+    // a readable cause instead of blaming the builder.
+    expect(entryFor(AUTHORED_BEFORE).wave).toBe(entryFor(AUTHORED_AFTER).wave);
+    expect(regionOf(AUTHORED_BEFORE)).toBe(regionOf(AUTHORED_AFTER));
+    expect(dependencyRelated(AUTHORED_BEFORE, AUTHORED_AFTER)).toBe(false);
+    expect(authoredIndex(AUTHORED_BEFORE)).toBeLessThan(authoredIndex(AUTHORED_AFTER));
+    // …and the trap is live: id order is the OPPOSITE of authored order.
+    expect(AUTHORED_BEFORE > AUTHORED_AFTER).toBe(true);
+
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    expect(missingSeq(g)).toEqual([]);
+    expect(nodeById(g, AUTHORED_BEFORE)!.data.seq!).toBeLessThan(
+      nodeById(g, AUTHORED_AFTER)!.data.seq!,
+    );
+  });
+
+  test("a RE-AUTHORED queue yields correspondingly re-authored order — the graph never substitutes an order of its own", () => {
+    const authored = REAL_ENTRIES.map((e) => e.cr);
+    for (const { name, entries } of [
+      { name: "as authored", entries: REAL_ENTRIES },
+      { name: "reversed", entries: reversed(REAL_ENTRIES) },
+      { name: "3-strided", entries: strided(REAL_ENTRIES) },
+    ]) {
+      const g = buildRoadmapGraph(entries, REAL_RELEASES);
+      // The carried order IS the input order — not the original, not the id
+      // order, not the wave order.
+      expect({ name, order: bySeq(g) }).toEqual({ name, order: entries.map((e) => e.cr) });
+    }
+    // The permutations are real: neither degenerates to the authored order.
+    expect(reversed(authored)).not.toEqual(authored);
+    expect(strided(authored)).not.toEqual(authored);
+    expect(strided(authored)).not.toEqual(reversed(authored));
+    // Re-authoring changes the carried ORDER and NOTHING structural: sequence
+    // is not an edge channel, so the edge SET is untouched (decision 5).
+    const base = edgeSet(buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES));
+    expect(base.length).toBeGreaterThan(100);
+    expect(edgeSet(buildRoadmapGraph(reversed(REAL_ENTRIES), REAL_RELEASES))).toEqual(base);
+    expect(edgeSet(buildRoadmapGraph(strided(REAL_ENTRIES), REAL_RELEASES))).toEqual(base);
+  });
+
+  test("the queue position rides DATA only: no CR-to-CR edge expresses sequence, and re-authoring changes no label", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    expect(missingSeq(g)).toEqual([]);
+    // Only CR nodes are sequenced — a diamond and a terminal have no queue
+    // position, so nothing can rank the flow's brackets by one.
+    expect(
+      g.nodes.filter((n) => n.data.type !== "cr" && n.data.seq !== undefined).map((n) => n.data.id),
+    ).toEqual([]);
+    // No edge joins an authored-adjacent, dependency-free pair: adjacency in
+    // the queue is a position, never a prerequisite.
+    expect(ADJACENT_INDEPENDENT.length).toBeGreaterThan(0);
+    const sequenceEdges = ADJACENT_INDEPENDENT.filter(
+      ([a, b]) => hasEdge(g, a, b) || hasEdge(g, b, a),
+    ).map(([a, b]) => `${a} ~ ${b}`);
+    expect(sequenceEdges).toEqual([]);
+    // The position never leaks into text: re-authoring the queue moves every
+    // `seq` and must leave every label byte-identical.
+    const labels = (gr: RoadmapGraph): [string, string][] =>
+      [...crNodes(gr)].sort((x, y) => (x.data.id < y.data.id ? -1 : 1)).map((n) => [n.data.id, n.data.label!]);
+    expect(labels(buildRoadmapGraph(reversed(REAL_ENTRIES), REAL_RELEASES))).toEqual(labels(g));
+  });
+});
+
+describe("CR-CRU-077 §S1/AC3 — same-wave CRs with no dependency between them fan OUT, they never chain", () => {
+  test("synthetic fan-out: two same-wave dependants of one root are parallel branches off it, AND still carry their authored order", () => {
+    // Unambiguous by construction: X and Y share wave 4 and one prerequisite,
+    // and neither depends on the other. AC3 (parallel) and AC2 (ordered) must
+    // hold in the SAME graph — that is the whole tension, in three entries.
+    const entries: BuilderEntry[] = [
+      { cr: "CR-R", title: "Root", wave: "3", dependsOn: [], status: "COMPLETED" },
+      { cr: "CR-X", title: "Left", wave: "4", dependsOn: ["CR-R"], status: "PENDING" },
+      { cr: "CR-Y", title: "Right", wave: "4", dependsOn: ["CR-R"], status: "PENDING" },
+    ];
+    const g = buildRoadmapGraph(entries, []);
+    // Parallel branches from the SAME upstream node.
+    expect(hasEdge(g, "CR-R", "CR-X")).toBe(true);
+    expect(hasEdge(g, "CR-R", "CR-Y")).toBe(true);
+    // Not a chain: no edge and no PATH between them, either way.
+    expect(hasEdge(g, "CR-X", "CR-Y")).toBe(false);
+    expect(hasEdge(g, "CR-Y", "CR-X")).toBe(false);
+    expect(reachable(g, "CR-X", "CR-Y")).toBe(false);
+    expect(reachable(g, "CR-Y", "CR-X")).toBe(false);
+    // …and the authored order is still honoured, edgelessly.
+    expect(missingSeq(g)).toEqual([]);
+    expect(nodeById(g, "CR-X")!.data.seq!).toBeLessThan(nodeById(g, "CR-Y")!.data.seq!);
+  });
+
+  test("real shape: CR-CRU-080/CR-CRU-082 off CR-CRU-074 and CR-CRU-068/CR-CRU-069 off CR-CRU-066 are parallel branches", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    for (const { upstream, a, b } of PARALLEL_PAIRS) {
+      // Fixture guards: the pair really is same-wave, same-region, mutually
+      // independent, and really does share that one declared prerequisite.
+      expect({
+        pair: `${a}~${b}`,
+        sameWave: entryFor(a).wave === entryFor(b).wave,
+        sameRegion: regionOf(a) === regionOf(b),
+        related: dependencyRelated(a, b),
+        sharedPrereq:
+          entryFor(a).dependsOn.includes(upstream) && entryFor(b).dependsOn.includes(upstream),
+      }).toEqual({
+        pair: `${a}~${b}`,
+        sameWave: true,
+        sameRegion: true,
+        related: false,
+        sharedPrereq: true,
+      });
+      // Parallel branches off the shared upstream, and no chain between them.
+      expect({
+        pair: `${a}~${b}`,
+        fanA: hasEdge(g, upstream, a),
+        fanB: hasEdge(g, upstream, b),
+        chainAB: reachable(g, a, b),
+        chainBA: reachable(g, b, a),
+      }).toEqual({ pair: `${a}~${b}`, fanA: true, fanB: true, chainAB: false, chainBA: false });
+    }
+  });
+
+  test("EVERY same-wave, same-region pair the queue leaves independent is unreachable in the graph, both ways", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    // Non-vacuous: the live queue really does hold hundreds of such pairs.
+    expect(SAME_WAVE_INDEPENDENT.length).toBeGreaterThan(20);
+    const chained = SAME_WAVE_INDEPENDENT.filter(
+      ([a, b]) => reachable(g, a, b) || reachable(g, b, a),
+    ).map(([a, b]) => `${a} ~ ${b}`);
+    expect(chained).toEqual([]);
+  });
+});
+
+describe("CR-CRU-077 §S1/AC8 — no edge, and no carried order, is derived from wave structure", () => {
+  test("mutating EVERY entry's wave (all identical / all distinct / all absent) leaves the edge SET byte-identical", () => {
+    const base = edgeSet(buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES));
+    // Non-vacuous on both sides: real edges, and genuinely varied real waves.
+    expect(base.length).toBeGreaterThan(100);
+    expect(new Set(REAL_ENTRIES.map((e) => e.wave)).size).toBeGreaterThan(1);
+    // The three profiles really are three different profiles.
+    const profile = (entries: BuilderEntry[]): string => JSON.stringify(entries.map((e) => e.wave));
+    const profiles = WAVE_MUTATIONS.map((m) => profile(m.entries));
+    expect(new Set([...profiles, profile(REAL_ENTRIES)]).size).toBe(4);
+    for (const { name, entries } of WAVE_MUTATIONS) {
+      // Same CR set, same dependencies, same releases — ONLY `wave` differs.
+      expect(entries.map((e) => e.cr)).toEqual(REAL_ENTRIES.map((e) => e.cr));
+      expect({ name, edges: edgeSet(buildRoadmapGraph(entries, REAL_RELEASES)) }).toEqual({
+        name,
+        edges: base,
+      });
+    }
+  });
+
+  test("the carried queue order is not wave-derived either: the same wave mutations leave every `data.seq` ordering identical", () => {
+    // The trap this closes: deriving `seq` by sorting on wave (then index) is
+    // both "an order of its own" (AC2) and wave-derived structure (AC8), and
+    // it would sail past an edge-only AC8 assertion.
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    expect(missingSeq(g)).toEqual([]);
+    const base = bySeq(g);
+    expect(base).toEqual(REAL_ENTRIES.map((e) => e.cr));
+    for (const { name, entries } of WAVE_MUTATIONS) {
+      expect({ name, order: bySeq(buildRoadmapGraph(entries, REAL_RELEASES)) }).toEqual({
+        name,
+        order: base,
+      });
+    }
+  });
+
+  test("no edge id, source or target names a wave — not a boundary, and not a wave terminating in a release", () => {
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    expect(g.edges.length).toBeGreaterThan(100);
+    const waveish = g.edges
+      .filter((e) => /wave/i.test(`${e.data.id} ${e.data.source} ${e.data.target}`))
+      .map((e) => e.data.id);
+    expect(waveish).toEqual([]);
+    // Every edge is accounted for by a NON-wave channel: a declared
+    // dependency, release membership, the release chain, or a terminal.
+    const known = /^(dep:|rel:ship:|rel:gate:|rel:chain:|start->)|->end$/;
+    expect(g.edges.filter((e) => !known.test(e.data.id)).map((e) => e.data.id)).toEqual([]);
+  });
+});
+
+describe("CR-CRU-077 §S1 — the ordering assertions above cannot pass on an empty graph", () => {
+  test("an empty queue yields no CR nodes, no ordering pairs and no edges, so every quantifier above is non-vacuous only against the real fixture", () => {
+    const empty = buildRoadmapGraph([], []);
+    expect(crNodes(empty)).toEqual([]);
+    expect(crOrder(empty)).toEqual([]);
+    expect(bySeq(empty)).toEqual([]);
+    expect(missingSeq(empty)).toEqual([]);
+    // The universally-quantified sets above are all empty here — which is
+    // exactly why each of those tests asserts its own population size.
+    expect(dependencyClosure([]).size).toBe(0);
+    // …and the real fixture populates every one of them.
+    const g = buildRoadmapGraph(REAL_ENTRIES, REAL_RELEASES);
+    expect(crNodes(g).length).toBeGreaterThan(80);
+    expect(g.edges.length).toBeGreaterThan(100);
+    expect(SAME_WAVE_INDEPENDENT.length).toBeGreaterThan(20);
+    expect(ADJACENT_INDEPENDENT.length).toBeGreaterThan(0);
+    expect(PARALLEL_PAIRS.length).toBe(2);
+    expect(REAL_CLOSURE.size).toBe(REAL_ENTRIES.length);
   });
 });
 
