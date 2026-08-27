@@ -123,39 +123,13 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `PENDING`); the write-side guard — refuse the removal, or require it to be explicit per id — has
   no CR yet.
 
-- 🚀 **2026-08-27 — 0.1.3 shipped (hotfix).** [CR-CRU-090](CR-CRU-090-install-lays-the-fleet-down.md)
-  merged to `master` as `7408886`, tag `0.1.3`; **PyPI `crucible-axi` 0.1.3** (wheel + sdist) and
-  **npm `@anthill-tec/crucible-server` 0.1.3** both published from release run `33056578406`.
-  `install` now lays the eight fleet files down under `<target-dir>/clients/` BEFORE the manifest,
-  so the six published paths resolve for the first time since 0.1.0. Two defects VERIFY caught and
-  the fix round closed: the copy wrote THROUGH a destination symlink (69,803 bytes landed outside
-  the install root; a dangling link CREATED the outside file), and `write_bytes` normalised modes so
-  the three 0o755 clients landed non-executable. **Process note worth keeping:** the tag was NOT cut
-  blind — a `pull_request` pre-flight on the exact commit caught a red `test-bun` that would have
-  skipped both publish jobs, i.e. a tag with nothing behind it. Pre-flight every tag; `push` only
-  triggers CI on `develop`/`master`, so a PR is the only way to see the suites before tagging.
-- **`develop` is RED in CI — NARROWED to exactly ONE test as of 2026-08-27 (run 33056533678).**
-  Supersedes the 2026-08-23 two-failure note. (a) The §S2c half is **FIXED** and the root cause was
-  measured, not guessed: the console stream is **byte-identical** on bun 1.3.14 and 1.4.0 — what
-  changed is the **JUnit reporter**, which at 1.4.0 stamps `message="test timed out"` on a
-  `TimeoutError` node where 1.3.14 wrote a bare `<failure/>`. `_parse_junit_file` lifts that off the
-  XML and `_marry_failures` skips a leaf that already has a message, so the leaf stopped being
-  "unmatched" and the test's premise evaporated. `clients/bun-crucible.py` is CORRECT; the test was
-  pinning bun's reporter. Fixed by moving the §S2c contract onto frozen bytes (captured bare-node
-  XML + captured console stream, fed through the real client via its `--bun` seam), both orderings
-  pinned. (b) `npm pack --dry-run --json failed` **no longer reproduces** — `pack-server` is green
-  on develop. **What REMAINS:** one test, `clients/bun-crucible.py — CR-CRU-088 AC4 (E2E) … the
-  following leaf carries no trace of 'leaked boom'` in `tests/clients-bun-crucible.test.ts`. Same
-  class, same remedy: it rides a LIVE bun run, so move that attribution assertion onto frozen bytes
-  (CR-088 AC7's own stated intent) rather than pinning CI's bun.
-- **Deferred (needs a CR, file at SCRUM): the `[fleet]` uninstall inverse.** CR-CRU-090's Non-goals
-  deferred it because `uninstall` does not exist on the 0.1.x line; the merge-back landed `fleet` in
-  develop's four-stage `STAGE_ORDER = (SERVER_STAGE_NAME, "fleet", "manifest", "unit")` while
-  `UNINSTALL_STAGE_ORDER` stays `("unit", "server", "config", "store")`. Two in-tree comments
-  (`install.py`'s uninstall note and `test_cr069_uninstall.py`'s fixture-sanity comment) mark the
-  asymmetry as intentional. Also worth folding in: three stale stage-count comments the merge left
-  (`install.py`'s CR-042 "exactly the two surviving stages", `test_cr069_uninstall.py`'s header
-  contract bullet, `tests/cr009-release-bundle.test.ts:1233`) — none is read by an assertion.
+- 2026-08-27 — **0.1.3 shipped**: CR-CRU-090, PyPI + npm both at 0.1.3. Pre-flight every tag via a
+  PR — push-triggered CI only runs on `develop`/`master`, and a red suite silently skips the publish.
+- 2026-08-27 — `develop` RED narrowed to ONE test: `CR-CRU-088 AC4 (E2E)` in
+  `tests/clients-bun-crucible.test.ts`. Cause is bun 1.4.0's JUnit reporter, not its console stream;
+  remedy is frozen bytes, as already done for §S2c. The `npm pack` half no longer reproduces.
+- 2026-08-27 — deferred: the `[fleet]` uninstall inverse (CR-CRU-090 Non-goals); `STAGE_ORDER` has
+  four stages, `UNINSTALL_STAGE_ORDER` three.
 - CI runs an unpinned bun deliberately. Pinning was tried in CR-087 and **reverted** (`93f42f7`): `packageManager` makes npm provision through corepack (958 ms → 13082 ms on the npm-pack test). The both-orderings fixtures catch a console-format flip instead. [CR-CRU-089](CR-CRU-089-pin-bun-without-telling-npm.md) is VOID; revisit only if a flip recurs.
 - The bun failure-detail mis-attribution (a leaked async throw landing on the next leaf) is
   **fixed** by [CR-CRU-088](CR-CRU-088-failure-detail-marries-the-wrong-leaf.md) §S1: a detail block
