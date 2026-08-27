@@ -34,6 +34,7 @@ import json
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 from crucible_axi import manifest
 
@@ -475,21 +476,37 @@ def run_fleet_stage(target_dir: str, force: bool = False) -> dict:
     instead of a silent partial laydown, which is the exact defect class this
     CR exists to kill.
 
-    `converged` is False on every run because the copy is unconditional — a
-    truthful report that the files were rewritten. Convergence detection and
-    `--force` re-copy semantics are §S1/AC5's own cycle; `force` is accepted
-    here only to satisfy the `(target_dir, force)` runner protocol.
+    `converged` mirrors `manifest.run_manifest_stage`'s contract — the in-repo
+    precedent for this exact read-compare-then-write shape: a destination file
+    whose bytes ALREADY match its source is left alone (not rewritten, so its
+    mtime survives), and `converged` is True only when EVERY one of the eight
+    already matched. Convergence is all-or-nothing: one stale or missing file
+    makes the stage report `converged: False`, and only that file is rewritten.
+    `--force` re-copies all eight unconditionally and reports
+    `converged: False`. The verdict is decided over the eight SOURCE files
+    only — an unmanaged destination file is never read for it, so it can
+    neither be rewritten nor defeat convergence. Bytes are the only input:
+    never a size or an mtime, either of which a truncated or touched copy
+    would pass.
     """
     source_dir = _source_clients_dir()
     clients_dir = os.path.join(target_dir, FLEET_DIRNAME)
     os.makedirs(clients_dir, exist_ok=True)
+    converged = not force
     for name in FLEET_FILES:
         source = os.path.join(source_dir, name)
         if not os.path.isfile(source):
             raise FileNotFoundError(
                 f"packaged fleet file missing at source: {source}")
-        shutil.copyfile(source, os.path.join(clients_dir, name))
-    return {"path": clients_dir, "converged": False}
+        destination = os.path.join(clients_dir, name)
+        fresh = Path(source).read_bytes()
+        if (not force
+                and os.path.isfile(destination)
+                and Path(destination).read_bytes() == fresh):
+            continue
+        Path(destination).write_bytes(fresh)
+        converged = False
+    return {"path": clients_dir, "converged": converged}
 
 
 # Module-level, in-place-mutable stage table (patched by tests via
