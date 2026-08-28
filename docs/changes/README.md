@@ -139,6 +139,27 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   0.2.0: the roadmap verbs work correctly when used as intended, and the gap is authority
   enforcement, not correctness.
 
+- **`public/app-logic.mjs` is classified as BINARY, so pattern search silently skips it**
+  (candidate patch CR, found during CR-CRU-091 C4 2026-08-28). The file holds **five literal NUL
+  bytes (0x00)** — raw characters, not `\u0000` escapes — used as composite-key separators in
+  template literals (lines 230, 523, 530: `` `${event.projectKey}\x00${stemKey(event.agentId)}` ``).
+  `file` reports `data`; `grep`/`rg` and the harness search tool report no matches for ANY pattern
+  in the file. Consequence: every agent that greps this 1000-line core module gets a false
+  negative, and "not found" reads as "absent". It already bit twice in one session — C4 had to
+  work around it, and an orchestrator search of the same file came back empty. The fix is five
+  bytes, replacing each raw NUL with the `\u0000` escape: the runtime string is byte-identical
+  (still U+0000), only the SOURCE becomes text. Deliberately NOT folded into CR-CRU-091 — it is
+  unrelated to roadmap registration and the repo rule is a patch CR over an inline scope edit.
+
+- **`tsc` does not type-check `public/`** (candidate, same origin). `tsconfig.json`'s `include` is
+  `[src, cli, tests, playwright.config.ts]`, `allowJs` is unset, and `tests/app-logic.d.ts`'s
+  `declare module "../public/app-logic.mjs"` SHADOWS the real file — so `public/app-logic.mjs`'s
+  body is never checked and `public/app-logic.d.mts` sits outside `include`. A clean
+  `bunx tsc --noEmit` therefore says nothing about the frontend logic module, which is where
+  `buildRoadmapGraph` and the renderer's shared helpers live. Not a CR-CRU-091 defect — it is the
+  standing state for all of `public/` — but 091 added code there, so the gap is now load-bearing
+  for a shipped feature.
+
 - 2026-08-27 — **0.1.3 shipped**: CR-CRU-090, PyPI + npm both at 0.1.3. Pre-flight every tag via a
   PR — push-triggered CI only runs on `develop`/`master`, and a red suite silently skips the publish.
 - 2026-08-27 — `develop` RED narrowed to ONE test: `CR-CRU-088 AC4 (E2E)` in
