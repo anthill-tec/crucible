@@ -44,6 +44,11 @@ interface QueueEntryFixture {
   size?: string;
   status: QueueStatus;
   planId?: number;
+  // CR-CRU-091/AC18 — the STORED authored position the live read publishes on
+  // every entry. `listQueue` is `ORDER BY seq`, so a fixture's ARRAY order and
+  // its stamped `seq` are the same authored fact arriving on two channels; a
+  // fixture that permutes one without the other is not a re-authored queue.
+  seq?: number;
 }
 interface ReleaseFixture {
   version: string;
@@ -169,6 +174,49 @@ function roadmapRow(cr: string): HTMLElement | undefined {
   return roadmapRows().find((r) => r.getAttribute("data-cr") === cr);
 }
 
+/** The rendered row order — the CR ids, top to bottom. */
+function rowOrder(): (string | null)[] {
+  return roadmapRows().map((r) => r.getAttribute("data-cr"));
+}
+
+/** Every wave divider's text, in the order the table renders them. */
+function waveDividerText(): string[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>('[data-testid="roadmap-wave-divider"]'),
+  ).map((d) => (d.textContent ?? "").trim());
+}
+
+/** The CRs whose row carries an authored-order warning (CR-CRU-078 AC15). */
+function warnedRows(): string[] {
+  return roadmapRows()
+    .filter((r) => r.querySelector('[data-testid="roadmap-order-warning"]') !== null)
+    .map((r) => r.getAttribute("data-cr") ?? "");
+}
+
+/**
+ * A dependency-only walk of the queue: the order a renderer that RE-DERIVES
+ * sequence from `dependsOn` produces (DFS post-order, deps first). Present so
+ * the AC13 fixture's disagreement with such a walk is PROVEN in the test
+ * rather than asserted by comment — a fixture whose authored order and
+ * dependency walk agree proves nothing about which one the renderer used.
+ */
+function dependencyWalk(entries: QueueEntryFixture[]): string[] {
+  const byCr = new Map(entries.map((e) => [e.cr, e]));
+  const visited = new Set<string>();
+  const out: string[] = [];
+  const visit = (cr: string, stack: Set<string>): void => {
+    const entry = byCr.get(cr);
+    if (entry === undefined || visited.has(cr) || stack.has(cr)) return;
+    stack.add(cr);
+    for (const dep of entry.dependsOn) visit(dep, stack);
+    stack.delete(cr);
+    visited.add(cr);
+    out.push(cr);
+  };
+  for (const entry of entries) visit(entry.cr, new Set());
+  return out;
+}
+
 // ── AC (tab-list AC) — the Roadmap tab exists and the deep-link opens it ────
 
 describe("§S3 — Roadmap is a first-class workspace tab", () => {
@@ -248,33 +296,48 @@ describe("§S3 — Roadmap empty state carries the register imperative", () => {
   });
 });
 
-// ── AC (topological-rows AC) — one row per CR in execution order ────────────
+// ── AC13/AC15 (rows carry the authored order) — one row per CR, as authored ──
+//
+// CORRECTED by CR-CRU-078 §S6, and the correction is the point of the cycle.
+// This suite previously asserted rows in DEPENDS-ON (topological) order, on a
+// fixture "deliberately POSTed out of order so a plain seq-order render would
+// fail" — it encoded `roadmapTopoOrder`'s re-sequencing as the contract. §S6
+// retires that: topology VALIDATES, it does not re-sequence. The fixture is
+// kept EXACTLY as it was, because an authored order that disagrees with a
+// dependency walk is now the interesting case rather than the broken one; only
+// the expected order flips to the authored one, and the inverted row's AC15
+// warning is asserted where the reshuffle used to be.
 
-describe("§S3 — Roadmap table renders CR rows in topological execution order", () => {
-  test("rows appear in depends-on (topological) order, one per CR, each carrying CR · title · wave · depends-on chips · status badge matching GET /queue", async () => {
+describe("CR-CRU-078 §S6/AC13 — Roadmap table renders CR rows in the AUTHORED order", () => {
+  test("rows appear in the order the queue publishes (never re-derived from depends-on), one per CR, each carrying CR · title · wave · depends-on chips · status badge matching GET /queue", async () => {
     const key = "roadmap-topo-1";
-    // A linear dependency chain, deliberately POSTed out of order so a plain
-    // seq-order render would fail: C3←C2←C1. Topological order is [C1,C2,C3].
+    // The authored order places CR-RM-003 before CR-RM-002, which it depends
+    // on: an authoring error, and therefore an AC15 warning — never a licence
+    // to reshuffle. `seq` is stamped to match, since `listQueue` is
+    // `ORDER BY seq` and the two channels cannot disagree on the wire.
+    const queue: QueueEntryFixture[] = [
+      { cr: "CR-RM-003", title: "Third", wave: "5", dependsOn: ["CR-RM-002"], status: "PENDING", seq: 10 },
+      { cr: "CR-RM-001", title: "First", wave: "5", dependsOn: [], status: "COMPLETED", planId: 71, seq: 20 },
+      { cr: "CR-RM-002", title: "Second", wave: "5", dependsOn: ["CR-RM-001"], status: "IN_PROGRESS", planId: 72, seq: 30 },
+    ];
     await mountApp({
       pathname: `/p/${key}/roadmap`,
       projects: [project({ key, name: "Topo Project" })],
-      queue: [
-        { cr: "CR-RM-003", title: "Third", wave: "5", dependsOn: ["CR-RM-002"], status: "PENDING" },
-        { cr: "CR-RM-001", title: "First", wave: "5", dependsOn: [], status: "COMPLETED", planId: 71 },
-        { cr: "CR-RM-002", title: "Second", wave: "5", dependsOn: ["CR-RM-001"], status: "IN_PROGRESS", planId: 72 },
-      ],
+      queue,
       plans: [
         { planId: 71, cr: "CR-RM-001", projectKey: key, status: "closed", cycles: [{ id: 1, label: "C1", status: "done" }] },
         { planId: 72, cr: "CR-RM-002", projectKey: key, status: "open", cycles: [{ id: 2, label: "C1", status: "active" }] },
       ],
     });
 
-    const rows = roadmapRows();
-    expect(rows.map((r) => r.getAttribute("data-cr"))).toEqual([
-      "CR-RM-001",
-      "CR-RM-002",
-      "CR-RM-003",
-    ]);
+    // Non-vacuity: the authored order really does disagree with a dependency
+    // walk, so this assertion can only pass on a renderer that carries the
+    // authored order rather than deriving one.
+    expect(dependencyWalk(queue)).not.toEqual(queue.map((e) => e.cr));
+    expect(rowOrder()).toEqual(["CR-RM-003", "CR-RM-001", "CR-RM-002"]);
+
+    // AC15 — the inversion is FLAGGED on its own row, and only there.
+    expect(warnedRows()).toEqual(["CR-RM-003"]);
 
     // Row content — CR id, title, wave, and the derived status badge.
     const second = roadmapRow("CR-RM-002")!;
@@ -546,5 +609,153 @@ describe("CR-CRU-083 §S2 — COMPLETED_UNTRACKED is a distinct roadmap consumer
     roadmapRow("CR-RM-071")!.click();
     await settle();
     expect(tabIsOn("Workflow")).toBe(true);
+  });
+});
+
+// ── CR-CRU-078 §S6 — the live repeated-wave shape, reproduced ───────────────
+//
+// THE DEFECT, exactly as the live board showed it: `roadmapTopoOrder` walks
+// `dependsOn` depth-first and pulls a CR whose dependency is authored LATER
+// forward, so the wave-contiguous authored order is shredded and the wave
+// dividers repeat — `Wave 1,2,3,4,3,4,5,6,5,6,5`.
+//
+// This fixture reproduces that string byte-for-byte. The authored order is
+// wave-contiguous (1,1,3,3,4,4,5,5,5,6,6 by wave), and THREE rows are authored
+// before a dependency of their own: CR-RM-105 (dep CR-RM-104), CR-RM-109 (dep
+// CR-RM-108) and CR-RM-111 (dep CR-RM-110). A depth-first walk therefore pulls
+// 104, 108 and 110 forward, producing the interleaving above; carrying the
+// authored order produces each wave exactly once.
+const INTERLEAVED_QUEUE: QueueEntryFixture[] = [
+  { cr: "CR-RM-101", title: "One", wave: "1", dependsOn: [], status: "COMPLETED", seq: 10 },
+  { cr: "CR-RM-102", title: "Two", wave: "2", dependsOn: ["CR-RM-101"], status: "COMPLETED", seq: 20 },
+  { cr: "CR-RM-103", title: "Three", wave: "3", dependsOn: ["CR-RM-102"], status: "COMPLETED", seq: 30 },
+  { cr: "CR-RM-105", title: "Five", wave: "3", dependsOn: ["CR-RM-104"], status: "PENDING", seq: 40 },
+  { cr: "CR-RM-104", title: "Four", wave: "4", dependsOn: ["CR-RM-103"], status: "COMPLETED", seq: 50 },
+  { cr: "CR-RM-106", title: "Six", wave: "4", dependsOn: ["CR-RM-104"], status: "PENDING", seq: 60 },
+  { cr: "CR-RM-107", title: "Seven", wave: "5", dependsOn: ["CR-RM-106"], status: "PENDING", seq: 70 },
+  { cr: "CR-RM-109", title: "Nine", wave: "5", dependsOn: ["CR-RM-108"], status: "PENDING", seq: 80 },
+  { cr: "CR-RM-111", title: "Eleven", wave: "5", dependsOn: ["CR-RM-110"], status: "PENDING", seq: 90 },
+  { cr: "CR-RM-108", title: "Eight", wave: "6", dependsOn: ["CR-RM-107"], status: "PENDING", seq: 100 },
+  { cr: "CR-RM-110", title: "Ten", wave: "6", dependsOn: ["CR-RM-109"], status: "PENDING", seq: 110 },
+];
+
+/** The wave dividers a divider-per-wave-CHANGE render emits over the walk. */
+const REPEATED_WAVES = [1, 2, 3, 4, 3, 4, 5, 6, 5, 6, 5].map((w) => `Wave ${w}`);
+
+describe("CR-CRU-078 §S6/AC16 — no wave is rendered twice inside one region", () => {
+  test("the live repeated sequence (Wave 1,2,3,4,3,4,5,6,5,6,5) is gone: each wave heads its rows exactly once, in authored first-appearance order", async () => {
+    const key = "roadmap-waves-1";
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "Interleaved Waves Project" })],
+      queue: INTERLEAVED_QUEUE,
+    });
+
+    // Non-vacuity: a dependency walk really does interleave this fixture's
+    // waves into the live sequence, so the assertion below is a claim about a
+    // shape that reproduces the defect rather than about a tidy queue.
+    const walkWaves = dependencyWalk(INTERLEAVED_QUEUE).map(
+      (cr) => `Wave ${INTERLEAVED_QUEUE.find((e) => e.cr === cr)!.wave}`,
+    );
+    expect(walkWaves).toEqual(REPEATED_WAVES);
+
+    const dividers = waveDividerText();
+    expect(dividers).toEqual(["Wave 1", "Wave 2", "Wave 3", "Wave 4", "Wave 5", "Wave 6"]);
+    // Stated as its own claim, so a future render that adds chrome still owes
+    // uniqueness: no wave label appears twice.
+    expect(new Set(dividers).size).toBe(dividers.length);
+  });
+
+  test("AC13 — and the rows themselves keep the authored order, dependency inversions and all", async () => {
+    const key = "roadmap-waves-2";
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "Interleaved Waves Project" })],
+      queue: INTERLEAVED_QUEUE,
+    });
+
+    const authored = INTERLEAVED_QUEUE.map((e) => e.cr);
+    expect(dependencyWalk(INTERLEAVED_QUEUE)).not.toEqual(authored);
+    expect(rowOrder()).toEqual(authored);
+  });
+
+  test("AC15 — every inverted row is warned, and no other row is; the warning names the dependency", async () => {
+    const key = "roadmap-waves-3";
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "Interleaved Waves Project" })],
+      queue: INTERLEAVED_QUEUE,
+    });
+
+    expect(warnedRows()).toEqual(["CR-RM-105", "CR-RM-109", "CR-RM-111"]);
+    // The warning is actionable: it says WHICH dependency is authored later.
+    const warning = roadmapRow("CR-RM-105")!.querySelector<HTMLElement>(
+      '[data-testid="roadmap-order-warning"]',
+    )!;
+    expect(warning.getAttribute("title") ?? "").toContain("CR-RM-104");
+  });
+
+  test("AC16 — a single wave carries no information, so it renders no wave chrome at all", async () => {
+    const key = "roadmap-waves-4";
+    await mountApp({
+      pathname: `/p/${key}/roadmap`,
+      projects: [project({ key, name: "One Wave Project" })],
+      queue: [
+        { cr: "CR-RM-121", title: "A", wave: "7", dependsOn: [], status: "COMPLETED", seq: 10 },
+        { cr: "CR-RM-122", title: "B", wave: "7", dependsOn: ["CR-RM-121"], status: "PENDING", seq: 20 },
+        { cr: "CR-RM-123", title: "C", wave: "7", dependsOn: ["CR-RM-122"], status: "PENDING", seq: 30 },
+      ],
+    });
+
+    // The rows are there — the absence below is chrome, not an empty table.
+    expect(roadmapRows().length).toBe(3);
+    expect(waveDividerText()).toEqual([]);
+    // A clean authoring warns nowhere: the AC15 assertions above are not a
+    // warning the table paints on every row.
+    expect(warnedRows()).toEqual([]);
+  });
+});
+
+// ── CR-CRU-078 §S6/AC14 — the authored order is EDITABLE ───────────────────
+//
+// Re-registering the queue with two CRs swapped is the orchestrator changing
+// its mind, and the render owes it obedience. The pair shares a wave and a
+// dependency, so nothing but the authoring can order them — and `seq` is
+// re-stamped rather than the array merely permuted, because `listQueue` is
+// `ORDER BY seq` and a permutation without a re-stamp is not a re-authored
+// queue at all (CR-CRU-091/AC18).
+
+describe("CR-CRU-078 §S6/AC14 — swapping two CRs in the queue swaps their rows", () => {
+  const ROOT: QueueEntryFixture = {
+    cr: "CR-RM-130",
+    title: "Shared prerequisite",
+    wave: "2",
+    dependsOn: [],
+    status: "COMPLETED",
+    seq: 10,
+  };
+  const pair = (first: string, second: string): QueueEntryFixture[] => [
+    ROOT,
+    { cr: first, title: first, wave: "3", dependsOn: [ROOT.cr], status: "PENDING", seq: 20 },
+    { cr: second, title: second, wave: "3", dependsOn: [ROOT.cr], status: "PENDING", seq: 30 },
+  ];
+
+  test("as authored the rows read 131 then 132; re-authored the other way round they read 132 then 131, with nothing else changed", async () => {
+    await mountApp({
+      pathname: "/p/roadmap-editable-1/roadmap",
+      projects: [project({ key: "roadmap-editable-1", name: "Editable Order Project" })],
+      queue: pair("CR-RM-131", "CR-RM-132"),
+    });
+    expect(rowOrder()).toEqual([ROOT.cr, "CR-RM-131", "CR-RM-132"]);
+    // Neither ordering is an authoring error, so neither is warned.
+    expect(warnedRows()).toEqual([]);
+
+    await mountApp({
+      pathname: "/p/roadmap-editable-2/roadmap",
+      projects: [project({ key: "roadmap-editable-2", name: "Editable Order Project" })],
+      queue: pair("CR-RM-132", "CR-RM-131"),
+    });
+    expect(rowOrder()).toEqual([ROOT.cr, "CR-RM-132", "CR-RM-131"]);
+    expect(warnedRows()).toEqual([]);
   });
 });

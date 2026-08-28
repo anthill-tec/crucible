@@ -3052,3 +3052,58 @@ describe("CR-CRU-077 §S2 — a fold reroute is drawn distinctly from a declared
     expect(elementStyleJson(cy.$id(foldIds[0]))).not.toBe(elementStyleJson(cy.$id(depIds[0])));
   });
 });
+
+// ── CR-CRU-078 §S6 — a node with NO carried position is not "position 0" ────
+//
+// CR-CRU-091/AC18 made `data.seq` the stored integer, OMITTED when unusable
+// rather than defaulted, precisely so "no carried position" stays a readable
+// state — the one milestone and terminal nodes occupy by design. The render's
+// within-rank re-seating then sorted on `(a.data("seq") ?? 0)`, which undoes
+// that omission at the last possible moment: a CR with no position sorts ahead
+// of every positioned one, as though the queue had authored it first.
+//
+// THE DECISION: a positionless node KEEPS the slot the layout gave it. Only
+// the nodes that carry a position are re-seated, and only into the slots those
+// same nodes already occupy. Nothing is invented — not "first", not "last",
+// both of which are positions the queue never authored — and a node with no
+// position can never displace one that has it. With every CR positioned (the
+// live shape) this is byte-identical to seating the whole rank.
+const POSITIONLESS_QUEUE: BuilderEntry[] = [
+  { cr: "CR-ROOT", title: "Root", wave: "1", dependsOn: [], status: "COMPLETED", seq: 10 },
+  // Emitted (and therefore laid out) in the order A, NOSEQ, B; authored LAST
+  // of the three by `seq`, so a render that carries the position must lift
+  // CR-B above CR-A.
+  { cr: "CR-A", title: "Alpha", wave: "2", dependsOn: ["CR-ROOT"], status: "PENDING", seq: 40 },
+  { cr: "CR-NOSEQ", title: "Unpositioned", wave: "2", dependsOn: ["CR-ROOT"], status: "PENDING" },
+  { cr: "CR-B", title: "Beta", wave: "2", dependsOn: ["CR-ROOT"], status: "PENDING", seq: 20 },
+];
+
+/** The drawn CR columns as ids, top to bottom — the within-rank order drawn. */
+const drawnColumnIds = (cy: CyHandle): string[][] =>
+  drawnCrColumns(cy).map((column) => column.map((cr) => cr.id));
+
+describe("CR-CRU-078 §S6 — a CR with no carried `seq` keeps its laid-out slot, and never sorts as position 0", () => {
+  test("the fan-out rank draws CR-B above CR-A (carried order) with CR-NOSEQ left exactly where the layout put it — never hoisted to the top", async () => {
+    // Fixture guard: the builder really OMITS the position, so the render is
+    // being handed the state under test rather than a zero.
+    const g = buildRoadmapGraph(POSITIONLESS_QUEUE, []);
+    expect(missingSeq(g)).toEqual(["CR-NOSEQ"]);
+
+    await mountGraph("positionless", POSITIONLESS_QUEUE, []);
+    const columns = drawnColumnIds(liveCy());
+    // Non-vacuity: the three same-wave dependants really do share one rank, so
+    // there is a within-rank order to be right or wrong about.
+    const rank = columns.find((column) => column.includes("CR-NOSEQ"));
+    expect(rank).toBeDefined();
+    expect(rank!.length).toBe(3);
+
+    // The positioned pair is drawn in CARRIED order…
+    expect(rank!.filter((id) => id !== "CR-NOSEQ")).toEqual(["CR-B", "CR-A"]);
+    // …and the positionless node is NOT hoisted above them. `?? 0` puts it
+    // first every time, whatever the layout chose, so this is the fence.
+    expect(rank![0]).not.toBe("CR-NOSEQ");
+    // It kept the middle slot dagre gave it: the re-seating moved the two
+    // positioned nodes around it, not it around them.
+    expect(rank!).toEqual(["CR-B", "CR-NOSEQ", "CR-A"]);
+  });
+});

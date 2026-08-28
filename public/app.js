@@ -2364,25 +2364,16 @@
     // lands next cycle. The seam: RoadmapPanelBody owns the "table" render;
     // a future graph render slots beside it behind the same toggle.
 
-    // Topological (depends-on) order — deps render before their dependants.
-    // DFS post-order; unknown deps and cycles are tolerated (skipped/guarded)
-    // so a malformed queue still paints in a stable, seq-preserving order.
-    const roadmapTopoOrder = (entries) => {
-      const byCr = new Map(entries.map((e) => [e.cr, e]));
-      const visited = new Set();
-      const out = [];
-      const visit = (cr, stack) => {
-        const entry = byCr.get(cr);
-        if (entry === undefined || visited.has(cr) || stack.has(cr)) return;
-        stack.add(cr);
-        for (const dep of entry.dependsOn ?? []) visit(dep, stack);
-        stack.delete(cr);
-        visited.add(cr);
-        out.push(entry);
-      };
-      for (const entry of entries) visit(entry.cr, new Set());
-      return out;
-    };
+    // CR-CRU-078 §S6 — the authored order is CARRIED, never re-derived. There
+    // is deliberately no ordering helper here: `listQueue` is `ORDER BY seq`,
+    // so the payload arrives in the orchestrator's own order and the render's
+    // whole duty is to leave it alone. What stood here was `roadmapTopoOrder`,
+    // a depends-on DFS that pulled any CR whose dependency sat later in `seq`
+    // forward — discarding the assigned order under a comment claiming to
+    // preserve it, and shredding the wave-contiguous authoring into the live
+    // board's repeated `Wave 1,2,3,4,3,4,5,6,5,6,5`. Topology VALIDATES now:
+    // an inversion is flagged where it stands (`roadmapLateDeps`) and never
+    // reshuffled, the same commitment CR-CRU-091 §S5 makes on the write path.
 
     // The plan's live cycle position — `cycle a/b` where a is the 1-based
     // index of the single active cycle and b the cycle count. null when no
@@ -2404,9 +2395,20 @@
     const ROADMAP_STATUS_LABELS = { COMPLETED_UNTRACKED: "completed · tracking absent" };
     const roadmapStatusLabel = (status) => ROADMAP_STATUS_LABELS[status] ?? status;
 
+    // CR-CRU-078 §S6/AC15 — the dependencies of `entry` the AUTHORING places
+    // after it. A dependency outside the rendered region is not an inversion:
+    // it is either unqueued (already named in the write path's
+    // `unknownDependencies`, CR-CRU-091 §S5) or simply not in view.
+    const roadmapLateDeps = (entry, positionOf, at) =>
+      (entry.dependsOn ?? []).filter((dep) => {
+        const depAt = positionOf.get(dep);
+        return depAt !== undefined && depAt > at;
+      });
+
     const RoadmapRow = (entry, opts) => {
       const active = entry.status === "IN_PROGRESS";
       const deps = entry.dependsOn ?? [];
+      const lateDeps = opts.lateDeps ?? [];
       const laneBadge =
         active && opts.multiTrack && opts.plan
           ? span(
@@ -2414,6 +2416,19 @@
               roadmapLaneText(opts.plan),
             )
           : null;
+      // AC15 — an authoring error is REPORTED, never silently repaired: the row
+      // stays exactly where the orchestrator put it and says what is wrong.
+      const orderWarning =
+        lateDeps.length === 0
+          ? null
+          : span(
+              {
+                "data-testid": "roadmap-order-warning",
+                class: "app-roadmap-order-warning",
+                title: `authored before its dependency ${lateDeps.join(", ")}`,
+              },
+              "⚠ before its dependency",
+            );
       return div(
         {
           "data-testid": "roadmap-row",
@@ -2449,6 +2464,7 @@
           },
           roadmapStatusLabel(entry.status),
         ),
+        orderWarning,
         laneBadge,
       );
     };
@@ -2469,7 +2485,7 @@
           ),
         );
       }
-      const ordered = roadmapTopoOrder(entries);
+      // AC13 — the rendered order IS the published order. No sort, no walk.
       const plans = Array.from(state.plans);
       const openPlans = plans.filter((p) => p.status === "open");
       const multiTrack = openPlans.length > 1;
@@ -2490,19 +2506,42 @@
           ),
         );
       }
-      let prevWave;
-      for (const entry of ordered) {
-        if (entry.wave !== prevWave) {
+      // AC16 — each wave heads its rows AT MOST ONCE inside this region. The
+      // divider used to fire on every wave CHANGE, which repeated a wave the
+      // moment the authoring was not wave-contiguous; a re-appearance now adds
+      // no second heading, and the rows stay where they were authored either
+      // way. A wave with no name is no heading, and a region carrying a single
+      // wave carries no information, so it gets no wave chrome at all.
+      const waveOf = (entry) =>
+        entry.wave === undefined || entry.wave === null || String(entry.wave).trim() === ""
+          ? undefined
+          : String(entry.wave);
+      const waveChrome =
+        new Set(entries.map(waveOf).filter((wave) => wave !== undefined)).size > 1;
+      const headed = new Set();
+      // AC15 — the authored POSITION of every CR in view, for the inversion
+      // check. Last row wins on a duplicated id: a repeated CR is a queue
+      // defect this render neither hides nor adjudicates.
+      const positionOf = new Map(entries.map((entry, at) => [entry.cr, at]));
+      entries.forEach((entry, at) => {
+        const wave = waveOf(entry);
+        if (waveChrome && wave !== undefined && !headed.has(wave)) {
+          headed.add(wave);
           children.push(
             div(
               { "data-testid": "roadmap-wave-divider", class: "app-roadmap-divider" },
-              `Wave ${entry.wave}`,
+              `Wave ${wave}`,
             ),
           );
-          prevWave = entry.wave;
         }
-        children.push(RoadmapRow(entry, { multiTrack, plan: planFor(entry) }));
-      }
+        children.push(
+          RoadmapRow(entry, {
+            multiTrack,
+            plan: planFor(entry),
+            lateDeps: roadmapLateDeps(entry, positionOf, at),
+          }),
+        );
+      });
       return div(
         { "data-testid": "pane-scroll", class: "app-pane-content" },
         paneRunway(div({ class: "app-roadmap-table" }, children)),
@@ -2794,11 +2833,24 @@
           });
           cy.batch(() => {
             for (const rank of byRank.values()) {
-              if (rank.length < 2) continue;
-              const slots = rank.map((n) => n.position("y")).sort((a, b) => a - b);
-              rank
+              // CR-CRU-078 §S6 — a node with NO carried position keeps the slot
+              // the layout gave it. CR-CRU-091/AC18 OMITS `data.seq` when the
+              // payload carries none rather than defaulting it, and the sort
+              // here used to read `?? 0`, which put an unpositioned CR ahead of
+              // every positioned one — the omission quietly undone at the last
+              // possible moment. "First" and "last" are both positions the
+              // queue never authored, so neither is invented: only the nodes
+              // that CARRY a position are re-seated, and only into the slots
+              // those same nodes already occupy. An unpositioned node therefore
+              // never moves and never displaces one that has a position, and
+              // with every CR positioned (the live shape) this is identical to
+              // seating the whole rank.
+              const positioned = rank.filter((n) => Number.isFinite(n.data("seq")));
+              if (positioned.length < 2) continue;
+              const slots = positioned.map((n) => n.position("y")).sort((a, b) => a - b);
+              positioned
                 .slice()
-                .sort((a, b) => (a.data("seq") ?? 0) - (b.data("seq") ?? 0))
+                .sort((a, b) => a.data("seq") - b.data("seq"))
                 .forEach((n, i) => n.position("y", slots[i]));
             }
           });
