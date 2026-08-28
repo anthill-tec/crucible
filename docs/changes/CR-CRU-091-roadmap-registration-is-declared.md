@@ -52,7 +52,27 @@ newest would hand it the gating of every unshipped CR on a date nobody recorded"
 - **Isolation from settled history.** `listReleases` is untouched — its filter is
   `event.type === "release"` (`src/store.ts:2152`), so a proposal cannot leak in. Proposals are
   read through a new `listReleaseProposals(projectKey)` beside it, with the same archived-project
-  exclusion.
+  exclusion. **It returns LIVE proposals only** (`retired_at IS NULL`) — a consumed proposal has
+  been superseded by the release that shipped it, and returning it would render the pair this
+  section forbids. **It sorts ASCENDING by version** — AC1's literal order (`0.2.1`, then `0.3.0`)
+  — deliberately the opposite direction from `listReleases`' newest-first, so a consumer
+  concatenating "shipped, then proposed" needs no reversal. Both facts are settled here because
+  §S8's routes and the strip render depend on them.
+- **A revision retires its predecessor; it never edits one in place.** `release-propose` for a
+  label that already holds a LIVE proposal with a DIFFERENT `targetAt` stamps that proposal's
+  `retired_at` and inserts the new one, in ONE transaction — the same idiom as consumption above,
+  and the reason no new column is needed. Exactly one live proposal per label ever exists, and the
+  revision history stays auditable through `getEvent`. Editing the held event's payload in place
+  would destroy the fact that the target moved, which is precisely the signal a slipping plan
+  needs to leave behind. An identical re-post (same label, same `targetAt`) writes NOTHING and
+  reports `converged: true` (§S7).
+- **A live proposal is authored data and survives the retention cap.** `enforceRetention`'s
+  count-cap exemption is scoped to `kind === "gate"` carrying a stored version, so without a
+  change a live `release-proposal` is prunable exactly like a `release` milestone. The two are not
+  alike: a pruned `release` is rebuildable from its git tag (`repair-provenance`), whereas a
+  pruned proposal is authored intent with no external source and is gone for good. The exemption
+  extends to `release-proposal` rows with `retired_at IS NULL`. A CONSUMED proposal is prunable
+  again — the release it became now carries the fact.
 - **A proposal retires no gate.** `recordMilestoneEvent` stamps gates only for
   `type === "release"` (`src/store.ts:1768-1773`); CR-CRU-073's rule stays scoped to real releases.
 - **`--target` is optional and revisable**, stored as `targetAt` in **epoch SECONDS** — the same
@@ -93,7 +113,21 @@ Three additive nullable columns on `queue_entries` (`src/store.ts:1146-1156`):
   (`public/app-logic.mjs:861`); nothing has ever supplied it.
 - **`lifecycle_json TEXT`** — `{"state":"SUPERSEDED","by":"CR-CRU-088","at":<epoch ms>}` or
   `{"state":"VOID","reason":"…","at":<epoch ms>}`. One JSON column rather than three flat ones, the
-  in-table precedent being `depends_on_json` (`src/store.ts:1151`).
+  in-table precedent being `depends_on_json` (`src/store.ts:1151`). Projected as the exported
+  `QueueLifecycle { state: "SUPERSEDED" | "VOID"; by?: string; reason?: string; at: number }`, with
+  `at` in epoch **MILLISECONDS** — matching `filed_at` / `retired_at`, the two in-table neighbours
+  it will be compared against. The seconds unit belongs to the git-sourced dates alone
+  (`releasedAt` / `targetAt`), which is why the formatter in §S1 takes seconds and this does not.
+
+**A defaulted `seq` beside declared ones is reported, never silently invented.** Carry-forward
+preserves an explicit `seq`, and the posted array index remains the fallback for an entry that has
+neither a posted nor a held value. A `queue-file` that ADDS a CR to a backlog already sequenced by
+`wave-sequence` therefore mixes scales: carried values `10, 20, 30` beside a new row's index `1`,
+which sorts it between `0` and `10` — deterministic, but not authored. The write emits a warning
+naming every CR whose `seq` was defaulted while a sibling in the same wave carries an explicit one,
+with `wave-sequence` as the remedy. This is the §S3 severity ladder's *warn-and-write* rung: the
+post is not refused, because a backlog edit must not require re-authoring the order, but silence
+would let an arbitrary position read as an authored one.
 
 **Migration.** ONE new step appended to `MIGRATION_BODIES` (`src/store.ts:549`): `tableExists`
 guard, then a PRAGMA-checked `ALTER TABLE queue_entries ADD COLUMN` per column — the pattern every
@@ -429,6 +463,23 @@ non-conformant regardless of whether its writes are correct.
   fails without needing a live server — and the server answers those five paths while returning 404
   for the neighbouring shapes a guess would produce (`…/queue/cr-plan`, `…/proposals`,
   `PATCH …/queue/<cr>`). No PATCH/PUT/DELETE route is added (§S8).
+- **AC21** — **a revision retires its predecessor, in one transaction.** Proposing `0.4.0` with a
+  target, then re-proposing `0.4.0` with a DIFFERENT target, leaves exactly ONE live proposal for
+  `0.4.0` carrying the new target; the previous one is retired, absent from
+  `listReleaseProposals` and from the live feed, and still returned by `getEvent`. Re-proposing
+  with the SAME target writes nothing and reports `converged: true`. `listReleaseProposals`
+  returns live rows only, ascending by version — a fixture proposing `0.3.0` then `0.2.1` reads
+  back `0.2.1, 0.3.0`, and a consumed proposal never appears.
+- **AC22** — **a live proposal outlives the retention cap; a consumed one does not.** With the
+  count cap driven below the event total, a live `release-proposal` survives pruning exactly as a
+  versioned `gate` does, while a CONSUMED proposal is pruned like any other retired record. The
+  test asserts the surviving row is still readable through `listReleaseProposals`, because a
+  proposal has no git tag to rebuild it from.
+- **AC23** — **a defaulted `seq` is named in a warning, and the write still lands.** Posting a
+  queue whose entries carry `seq` `10, 20, 30`, then re-posting with a NEW CR declaring no `seq`:
+  the post succeeds, the three carried values are unchanged, and the envelope carries a warning
+  naming the new CR and offering `wave-sequence`. A post where NO entry carries an explicit `seq`
+  emits NO such warning — index-only is the ordinary case, not a defect.
 
 ## Estimated size
 
