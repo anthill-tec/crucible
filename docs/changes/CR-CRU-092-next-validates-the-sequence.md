@@ -4,7 +4,10 @@
 - **Wave**: 6 (post-0.2.0)
 - **Depends on**: 091
 - **Status**: PENDING (post-0.2.0)
-- **Design**: `.lavish/crucible-workflow-flowchart.html` §13 (also §7 conditional rule, §10 call chain + division of labour, §12 severities) · `docs/research/DN-crucible-roadmap-view.md`
+- **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §13 (approved 2026-08-28). Absolute path so it resolves from a worktree; it carries the NEXT / HOLD / DRAINED vocabulary and the track rule.
+
+> The design document is the contract for this CR. Implement what it specifies — do not
+> re-derive the model, the vocabulary or the look from scratch.
 
 ## Problem
 

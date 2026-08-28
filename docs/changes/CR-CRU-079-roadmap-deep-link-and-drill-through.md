@@ -4,7 +4,10 @@
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 078
 - **Status**: PENDING (0.2.0) — AC3/AC5 re-based 2026-08-28 on the paged release model
-- **Design**: `.lavish/crucible-workflow-flowchart.html` §6 §14 (approved 2026-08-28) · `docs/research/DN-crucible-roadmap-view.md` (decisions) · `docs/research/DN-crucible-wave-track-release.md` (model)
+- **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §6, §14 (approved 2026-08-28). Absolute path so it resolves from a worktree; it carries selection/navigation and the paging model the landing must respect.
+
+> The design document is the contract for this CR. Implement what it specifies — do not
+> re-derive the model, the vocabulary or the look from scratch.
 
 ## Problem
 

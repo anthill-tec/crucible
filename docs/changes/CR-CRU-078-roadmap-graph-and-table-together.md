@@ -4,7 +4,14 @@
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 077, 084, 091
 - **Status**: PENDING (0.2.0) — re-based 2026-08-28 on the approved flowchart design
-- **Design**: `.lavish/crucible-workflow-flowchart.html` §1–§8 §14 (approved 2026-08-28) · `docs/research/DN-crucible-roadmap-view.md` (decisions) · `docs/research/DN-crucible-wave-track-release.md` (model)
+- **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §1–§8, §14 (approved 2026-08-28). Absolute path so it resolves from a worktree. Mirrored in `docs/research/DN-crucible-roadmap-view.md` §Visual contract.
+- **Also**: `docs/research/DN-crucible-wave-track-release.md` (wave/track/release model)
+
+> **The look is specified. Read the design document and implement what it shows.**
+> Zone order, shape grammar, colour semantics, motion, and the whole-container paging invariant are
+> all fixed there. Do not substitute another visual vocabulary, layout engine or colour scheme.
+> AC21–AC26 exist to fail an implementation that looks different from the approved design even when
+> every behavioural AC passes.
 
 ## Problem
 
@@ -155,6 +162,35 @@ Workflow — the jump itself is **CR-079**. Selecting on either side highlights 
   empty board renders **no** terminals, no strip and no wave box, only the empty state.
 - **AC20** — **zero dependency edges are drawn.** A rendered edge whose meaning is `dependsOn`
   fails this AC; dependency is stated only as the table's column.
+
+### Visual fidelity — asserted against the design document, not taste
+
+These are as binding as the behavioural ACs. An implementation that passes AC1–AC20 but looks
+different from `.lavish/crucible-workflow-flowchart.html` §1–§8/§14 is **not** done.
+
+- **AC21 — shape grammar.** Each element renders as its declared shape: `Start`/`End` as
+  **stadium/pill** terminals (exactly one of each), a release as a **diamond**, a **proposed**
+  release as a **dashed-border diamond**, a wave as a **box** containing its CRs, a CR as a **leaf
+  rectangle**. Asserted on computed style/geometry, not on class names — a diamond rendered as a
+  rectangle fails even if its class says `gate`.
+- **AC22 — colour semantics.** `COMPLETED` green · `COMPLETED_UNTRACKED` dimmed green ·
+  `IN_PROGRESS` ember · `PENDING` plain/neutral · a release amber · a non-focused release dimmed.
+  Asserted per state against the rendered colour.
+- **AC23 — colour is never the only channel.** For every state, the status is **also present as
+  text**. Test: with colour stripped (greyscale / `filter: grayscale(1)` or comparing text content
+  alone), every node's state is still determinable. A node whose state is legible only from its
+  colour fails.
+- **AC24 — motion means live, and only that.** Only an `IN_PROGRESS` CR animates; `COMPLETED`,
+  `COMPLETED_UNTRACKED` and `PENDING` nodes are **completely static**. Asserted by sampling rendered
+  state across at least two animation frames: a static node that changes fails, and an
+  `IN_PROGRESS` node that never changes fails.
+- **AC25 — zone order and identity.** Exactly three zones render, in order: release strip, then the
+  focused release's flowchart, then its table. Asserted geometrically (vertical order), and each
+  zone is individually identifiable.
+- **AC26 — no layout engine decides position.** Every node's position is derived from declared data
+  (ship order, version order, wave membership, authored `seq`). A force-directed, crossing-minimising
+  or otherwise heuristic layout fails this AC — CR-CRU-077 was reverted for exactly that, and the
+  price was measured (+41% adjacent-rank crossings, 94 nodes / 208 edges on the live board).
 
 ## Estimated size
 

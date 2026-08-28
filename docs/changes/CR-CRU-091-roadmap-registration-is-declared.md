@@ -4,7 +4,10 @@
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 014, 084
 - **Status**: PENDING (0.2.0) — the declared-data prerequisite for CR-078, so it ships in the same release
-- **Design**: `.lavish/crucible-workflow-flowchart.html` §9 §10 §11 §12 (approved 2026-08-28) · `docs/research/DN-crucible-roadmap-view.md`
+- **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §9, §10, §11, §12 (approved 2026-08-28). Absolute path so it resolves from a worktree; it carries the declared containment model, the AXI call chain and the client-asks behaviour, editing semantics, and the dependency severities.
+
+> The design document is the contract for this CR. Implement what it specifies — do not
+> re-derive the model, the vocabulary or the look from scratch.
 
 ## Problem
 

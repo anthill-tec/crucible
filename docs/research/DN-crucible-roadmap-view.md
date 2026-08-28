@@ -56,3 +56,64 @@ load-bearing:
   and a full title crowds it out. Unchanged.
 - **The table carries a brief title column**, sourced from the CR's own H1. This is the DN's own
   division of labour made explicit: structure in the picture, detail in the rows.
+
+## Visual contract (approved 2026-08-28) — BINDING on implementation
+
+**Why this is here and not only in `.lavish/`:** the storyboard and the flowchart design artifact
+are **gitignored**, so an agent working in a worktree or a clean checkout cannot read them. This
+section is the **tracked, authoritative** copy of the approved look. Where the artifact
+`.lavish/crucible-workflow-flowchart.html` is present it is the richer visual reference and the two
+must agree; where it is absent, **this section governs**. Implementing agents may not substitute
+their own visual vocabulary.
+
+### Zones, in this order
+
+1. **Release strip** — the release sequence: `Start → ◇release … → End`.
+2. **Flowchart of the focused release** — wave container(s) holding its CRs, ending at its gate.
+3. **Table scoped to the focused release** — never the whole project.
+
+### Shape says what a thing IS
+
+| Shape | Means |
+|---|---|
+| **Stadium** (pill) | terminal — exactly one `Start`, one `End` |
+| **Diamond** | a release gate, sitting **in** the flow |
+| **Diamond, dashed border** | a release **proposed** by the orchestrator, not yet cut |
+| **Box** (rectangle container) | a **wave** — the abstract container of CRs |
+| **Rectangle** (leaf) | one CR — id + terse status, **never** a title |
+| **Dashed divider** | a track swimlane; multi-track only (CR-CRU-085) |
+
+### Colour says WHERE IT STANDS — an independent channel
+
+| Colour | State |
+|---|---|
+| **Green** | `COMPLETED` — merged |
+| **Green, dimmed** | `COMPLETED_UNTRACKED` — shipped before plan tracking |
+| **Ember / orange** | `IN_PROGRESS` — and it is **the only thing that ever moves** |
+| **Plain / neutral** | `PENDING` — nothing to report yet |
+| **Amber** | a release, shipped or proposed |
+| **Dimmed** | not the focused release; click to focus |
+
+**Two hard rules on colour:**
+
+- Colour **never encodes anything shape already says**. They are independent channels.
+- **No element relies on colour alone.** Status is *also* written as text, so the view survives a
+  greyscale screenshot and a colour-blind reader.
+
+### Motion
+
+Motion means **live**. Only an `IN_PROGRESS` CR animates. `COMPLETED`, `COMPLETED_UNTRACKED` and
+`PENDING` nodes are completely static, so movement on the surface always means "work is happening
+right now".
+
+### Invariants that are part of the look
+
+- **Whole containers only.** The strip renders `floor(width / pitch)` gates and **never a fraction
+  of one**; the remainder becomes a clickable `◀ N earlier` / `N later ▶` tag which pages a whole
+  window. A tag with nothing behind it is **not rendered**, not disabled.
+- **Landing focuses the release in progress**, and the strip's window contains it — never offset 0.
+- **A gate carries its date beneath it**: a shipped gate its ship date, a proposed gate its declared
+  target, or an explicit "no target declared" empty state. Both render through **one shared
+  formatter** (`releasedAt` is epoch **seconds**; a naive `new Date()` yields 1970).
+- **Zero dependency edges are drawn.** Dependency is stated once, as a table column.
+- **An empty board draws no chrome** — no terminals, no strip, no wave box; only the empty state.
