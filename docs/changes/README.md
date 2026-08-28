@@ -126,6 +126,19 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `PENDING`); the write-side guard — refuse the removal, or require it to be explicit per id — has
   no CR yet.
 
+- **Nothing distinguishes a mainline orchestrator from a track one** (candidate CR, raised by
+  CR-091's gap analysis 2026-08-28, no CR filed). `AGENT_ROLES` (`src/types.ts:53`) is
+  `RED · GREEN · FIX · VERIFY · ORCHESTRATOR · report`: there is **no MAINLINE role**, and a track
+  orchestrator registers as `ORCHESTRATOR` exactly as the mainline one does. The PRD's hierarchy —
+  "MAINLINE ORCHESTRATOR (widest: allocates lanes, launches waves, gates boundaries) → ORCHESTRATOR
+  (track scope: one lane's CR queue)" (`PRD-crucible-v2.md:310-316`) — is therefore a **convention
+  Crucible does not model as data**. Consequence, stated plainly in CR-091 §S3: its role gate stops
+  RED/GREEN/FIX/VERIFY/report and unregistered callers, and **cannot** stop a track orchestrator
+  from re-planning the roadmap. Closing it needs either a new stored role or an identity check
+  (schema + registration surface), which is why CR-091 refused to smuggle it in. Not required for
+  0.2.0: the roadmap verbs work correctly when used as intended, and the gap is authority
+  enforcement, not correctness.
+
 - 2026-08-27 — **0.1.3 shipped**: CR-CRU-090, PyPI + npm both at 0.1.3. Pre-flight every tag via a
   PR — push-triggered CI only runs on `develop`/`master`, and a red suite silently skips the publish.
 - 2026-08-27 — `develop` RED narrowed to ONE test: `CR-CRU-088 AC4 (E2E)` in
