@@ -132,19 +132,30 @@ export function releaseStripGates(releases, proposals) {
 }
 
 /**
- * CR-CRU-078 §S2/AC5 — which gate the strip LANDS on: "the release in
- * progress".
+ * CR-CRU-078 §S2/AC5 + §S4/§S5/AC10 — which gate the strip is FOCUSED on, and
+ * therefore which release zones 2 and 3 follow. There is exactly one notion of
+ * focus on this surface and this is it.
  *
- * That is the FIRST live proposal — proposals arrive ascending by version, so
- * the first one is the next release to ship, and CR-091 gives it the `waves[]`
- * zone 2 draws. With nothing proposed there is no release in flight, so the
- * strip lands on the newest shipped tag, which `listReleases`' newest-first
- * order puts at index 0.
+ * `focusedVersion` is the release the USER clicked, when there is one. It wins
+ * over the default, and a version no longer in the sequence (a proposal a
+ * release just consumed, a project switch) falls back rather than focusing
+ * nothing — a strip with gates and no focus would blank the two zones below it
+ * on a data change the user did not make.
+ *
+ * The default is "the release in progress": the FIRST live proposal, since
+ * proposals arrive ascending by version, so the first is the next release to
+ * ship and CR-091 gives it the `waves[]` zone 2 draws. With nothing proposed
+ * there is no release in flight, so the strip lands on the newest shipped tag,
+ * which `listReleases`' newest-first order puts at index 0.
  *
  * -1 for an empty sequence: no gate exists to focus, and 0 would name one.
  */
-export function releaseStripFocusIndex(gates) {
+export function releaseStripFocusIndex(gates, focusedVersion) {
   if (!Array.isArray(gates) || gates.length === 0) return -1;
+  if (typeof focusedVersion === "string" && focusedVersion !== "") {
+    const chosen = gates.findIndex((gate) => gate.version === focusedVersion);
+    if (chosen >= 0) return chosen;
+  }
   const proposed = gates.findIndex((gate) => gate.kind === "proposed");
   return proposed >= 0 ? proposed : 0;
 }
@@ -963,221 +974,206 @@ export function workflowLens({ plans, events }) {
 }
 
 /**
- * CR-CRU-077 §S4/AC6 — the terse status suffix a CR node's label carries after
- * its id, keyed by the four derived `QueueStatus` values. Each is derivable
- * from the status value ALONE, so the builder's own two inputs are enough:
- * `COMPLETED` is a merged plan, `COMPLETED_UNTRACKED` is shipped-but-never-
- * tracked (CR-CRU-083's fourth value, which must not read as "merged"),
- * `IN_PROGRESS` is active, and `PENDING` has nothing to say yet.
+ * CR-CRU-078 §S4 (superseding CR-CRU-077 §S4/AC6) — the terse status a CR
+ * states on its flowchart NODE, keyed by the four derived `QueueStatus`
+ * values. Each is derivable from the status value ALONE.
  *
- * A cycle position (`2/3`) is deliberately NOT here: it lives on `plan.cycles`
- * and the builder is handed queue entries + releases only, so rendering one
- * would pin fabricated data. The active marker stands alone instead — the same
- * degradation the table's lane badge already makes when the position is null.
+ * It is TEXT, not a colour and not an attribute: AC23 requires every state to
+ * remain determinable with colour stripped, so `PENDING` — which CR-CRU-077
+ * left as the bare id, having "nothing to say yet" — says so here.
+ *
+ * A cycle position (`2/3`) is deliberately NOT here: it lives on
+ * `plan.cycles`, which this module never sees, so rendering one would pin
+ * fabricated data. The table's lane badge is where the live position lands.
+ *
+ * An unknown or absent status yields `""`: a mark is a claim about execution
+ * state, and an unrecognised value supports no claim.
  */
-const CR_STATUS_SUFFIX = new Map([
-  ["COMPLETED", " ✓ merged"],
-  ["COMPLETED_UNTRACKED", " ✓ untracked"],
-  ["IN_PROGRESS", " ▶"],
-  ["PENDING", ""],
-]);
+const CR_STATUS_MARK = {
+  COMPLETED: "✓ merged",
+  COMPLETED_UNTRACKED: "✓ untracked",
+  IN_PROGRESS: "▶ in progress",
+  PENDING: "pending",
+};
+
+export function crStatusMark(status) {
+  return typeof status === "string" && Object.hasOwn(CR_STATUS_MARK, status)
+    ? CR_STATUS_MARK[status]
+    : "";
+}
+
+/** The id prefix a CR's own H1 opens with, and the separator that ends it. */
+const TITLE_ID_SEPARATOR = /^\s*[—–:·|-]+\s*/;
 
 /**
- * AC6's whole CR node label: the CR id plus that suffix, and NOTHING else. The
- * title is absent by design — it crowds the identifier out of the node box —
- * and the raw wire status never appears as text either; it stays on
- * `data.status`, where the stylesheet selects on it.
+ * CR-CRU-078 §S5/AC11 — the table's BRIEF title: the CR's own H1 with the id
+ * the row already carries in its own column removed from the front.
  *
- * An unknown or absent status yields the BARE id: a suffix is a claim about
- * execution state, and an unrecognised value supports no claim. So the node
- * still reads (and never renders `undefined`) without inventing a marker.
+ * §S5 calls the full title bloat ("the identifier competes with a sentence"),
+ * and on this board every H1 opens `CR-CRU-078 — …`, so the row rendered the
+ * id twice. Only that leading self-reference goes, and only when a real
+ * separator follows it: `CR-CRU-077 is superseded` on CR-CRU-078's row is
+ * CONTENT, and a title that never names itself is returned exactly as
+ * authored. Nothing is truncated here — a clamp is the stylesheet's job, and
+ * cutting the string would make the row's own copy unsearchable.
  */
-const crNodeLabel = (e) => `${e.cr}${CR_STATUS_SUFFIX.get(e.status) ?? ""}`;
+export function briefCrTitle(title, cr) {
+  if (typeof title !== "string") return "";
+  const text = title.trim();
+  if (typeof cr !== "string" || cr === "" || !text.startsWith(cr)) return text;
+  const rest = text.slice(cr.length);
+  const stripped = rest.replace(TITLE_ID_SEPARATOR, "");
+  return stripped === rest ? text : stripped.trim();
+}
 
 /**
- * CR-CRU-014 §S3 + CR-CRU-077 §S1 — pure, browser-free roadmap graph-data
- * builder. Maps the execution queue + release ledger into a Cytoscape elements
- * shape ({nodes, edges}): one rectangle type:"cr" node per entry (wave/track/
- * status ride DATA fields, never the label — the label is the CR id plus a
- * terse status suffix and never the title, CR-CRU-077 §S4/AC6); one directed
- * edge per dependsOn (prereq SOURCE →
- * dependant TARGET); one diamond type:"milestone" node per release, wired INTO
- * the flow (DN decision 3) — the CRs a release shipped flow into its diamond,
- * the diamond gates the CRs that follow it, and the diamonds chain in ship
- * order; and a single Start/End ellipse type:"terminal" pair bracketing
- * whatever the flow itself does not already feed or drain.
+ * CR-CRU-078 AC27 — the SECOND AXIS as one badge, or nothing.
  *
- * No edge is invented to express sequence (DN decision 5): every edge comes
- * from `dependsOn`, from `crs` membership, or from the release chain. The
- * orchestrator-assigned queue position instead RIDES the CR node as
- * `data.seq` — a monotonic tie-break a layout can rank same-rank siblings on.
- * It is DATA and not an edge for two independent reasons: decision 5 forbids
- * inventing any edge to express sequence whatever it is typed, and an edge
- * a→b would make b reachable from a, which is exactly the CHAIN that §S1/AC3
- * rules out for two same-wave CRs with no dependency between them. Do not
- * "improve" this into an edge.
+ * CR-CRU-091 §S2 stores `lifecycle.state` deliberately OUTSIDE `QueueStatus`,
+ * so the two axes are additive and this never replaces a status: `SUPERSEDED`
+ * names its successor (the work still happens, elsewhere) and `VOID` reads as
+ * abandoned (it does not). Neither wording repeats a status value, so neither
+ * can be mistaken for `PENDING`.
+ *
+ * An absent, malformed or unrecognised axis yields `null` — never a default.
+ * A `SUPERSEDED` record with no `by` still says superseded rather than naming
+ * an `undefined` successor.
  */
-export function buildRoadmapGraph(entries, releases) {
-  const nodes = [];
-  const edges = [];
-  const queue = entries ?? [];
-  const crIds = new Set(queue.map((e) => e.cr));
-
-  for (const e of queue) {
-    const data = {
-      id: e.cr,
-      type: "cr",
-      label: crNodeLabel(e),
-      cr: e.cr,
-      wave: e.wave,
-      status: e.status,
+export function lifecycleBadge(lifecycle) {
+  if (lifecycle === null || typeof lifecycle !== "object") return null;
+  const nonEmpty = (value) =>
+    typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+  if (lifecycle.state === "SUPERSEDED") {
+    const by = nonEmpty(lifecycle.by);
+    return { state: "SUPERSEDED", text: by === null ? "superseded" : `superseded by ${by}` };
+  }
+  if (lifecycle.state === "VOID") {
+    const reason = nonEmpty(lifecycle.reason);
+    return {
+      state: "VOID",
+      text: reason === null ? "void · abandoned" : `void · abandoned — ${reason}`,
     };
-    // The AUTHORED position, and nothing else: never the CR id, never the
-    // wave (AC8), never the status. Re-author the queue and this follows.
-    // Absent on milestone and terminal nodes — a release boundary and a
-    // bracket hold no queue position — and never rendered into `label`.
-    //
-    // CR-CRU-091/AC18 — the STORED `seq` the read publishes on every entry
-    // (`src/types.ts:397-404`), carried VERBATIM. Never the response index:
-    // `listQueue` is `ORDER BY seq`, so an index derivation preserves the
-    // authored ORDER and therefore survives every other assertion while making
-    // `seq` mean two different numbers on one surface. A payload arriving
-    // without a usable `seq` is a defect, so the position is OMITTED — the
-    // "no carried position" state milestone nodes already occupy — rather than
-    // defaulted to the index, which is that same ambiguity by another name.
-    if (typeof e.seq === "number" && Number.isFinite(e.seq)) data.seq = e.seq;
-    if (e.track !== undefined && e.track !== null) data.track = e.track;
-    nodes.push({ data });
+  }
+  return null;
+}
+
+/** A declared container label, or `undefined` when the entry declares none —
+ *  an empty string is not a wave, and `"Wave undefined"` is not a heading. */
+const declaredLabel = (entry, field) => {
+  const raw = entry === null || entry === undefined ? undefined : entry[field];
+  if (raw === undefined || raw === null) return undefined;
+  const text = String(raw).trim();
+  return text === "" ? undefined : text;
+};
+
+/** The distinct declared labels, in first-appearance (authored) order. */
+const distinctLabels = (rows, field) => {
+  const seen = new Set();
+  for (const row of rows) {
+    const label = declaredLabel(row, field);
+    if (label !== undefined) seen.add(label);
+  }
+  return [...seen];
+};
+
+/** §S5 — the row grammar every table carries: id, brief title, bare
+ *  depends-on, derived status. `wave` and `track` are the two AC12 extras. */
+const ROADMAP_BASE_COLUMNS = ["cr", "title", "deps", "status"];
+
+/**
+ * CR-CRU-078 §S5/AC12 — which columns zone 3 shows for the rows it was given.
+ *
+ * `wave` only when the region spans more than one, `track` only when more than
+ * one is REPORTED: a column whose every cell repeats the same value states
+ * nothing the region's own heading does not, and this is AC16's "a single
+ * container carries no information" applied to the table.
+ *
+ * The decision is made from the ROWS, once, so the head and every cell cannot
+ * disagree about which columns exist.
+ */
+export function roadmapTableColumns(entries) {
+  const rows = Array.isArray(entries) ? entries : [];
+  const columns = [...ROADMAP_BASE_COLUMNS];
+  if (distinctLabels(rows, "wave").length > 1) columns.push("wave");
+  if (distinctLabels(rows, "track").length > 1) columns.push("track");
+  return columns;
+}
+
+/**
+ * CR-CRU-078 §S4/§S5 — everything zones 2 and 3 draw for ONE focused release.
+ * Pure: the gate the strip focused, the release ledger, and the queue as
+ * `listQueue` published it (`ORDER BY seq`).
+ *
+ * MEMBERSHIP has two sources, because a release has two lives (DN §8/§9):
+ *   - shipped  — the ledger's `crs`, a settled fact frozen at ship time. A row
+ *                absent from `crs` is not in the release, and a ledger with no
+ *                `crs` at all shipped nothing this surface can name.
+ *   - proposed — the CRs the orchestrator DECLARED into it (`entry.release`),
+ *                revisable until it ships. The same join the server makes for
+ *                a proposal's `waves[]` (`src/v2.ts:2053`).
+ * Either way the ORDER is the queue's own: the payload is already the
+ * orchestrator's authored sequence (§S6), so membership filters it and nothing
+ * re-sorts it.
+ *
+ * WAVES are that membership grouped by declared wave in FIRST-APPEARANCE
+ * order, so a wave interleaved by the authoring still appears exactly once
+ * (AC16) with its own CRs in the order they were authored (AC9). A member
+ * declaring no wave groups under `wave: null` — a real group the renderer
+ * draws without chrome, never a heading reading `Wave `.
+ *
+ * `crCount` is what the release DELIVERED: for a shipped tag that is the
+ * ledger's own `crs.length`, the measured fact, not how many of them the queue
+ * still lists.
+ *
+ * `packagesState` keeps CR-CRU-084 AC4's distinction alive on the surface:
+ * `empty` is a ceremony that looked and delivered none, `absent` is a ledger
+ * row recorded before packages existed. AC8 forbids either reading as an
+ * apparently complete release, but they are not the same fact.
+ */
+export function focusedReleaseView(gate, releases, entries) {
+  const version = typeof gate?.version === "string" ? gate.version : "";
+  const kind = gate?.kind === "shipped" ? "shipped" : "proposed";
+  const rows = Array.isArray(entries) ? entries : [];
+  const ledger = Array.isArray(releases) ? releases : [];
+  const record = kind === "shipped" ? ledger.find((rel) => rel?.version === version) : undefined;
+
+  let members;
+  if (kind === "shipped") {
+    const shipped = new Set(record?.crs ?? []);
+    members = rows.filter((entry) => shipped.has(entry?.cr));
+  } else {
+    members = rows.filter((entry) => entry?.release === version);
   }
 
-  // Dependency edges: the prerequisite is the SOURCE (execution flows
-  // deps-first). Guard against dangling deps (a dep not in the queue).
-  for (const e of queue) {
-    for (const dep of e.dependsOn ?? []) {
-      if (!crIds.has(dep)) continue;
-      edges.push({ data: { id: `dep:${dep}->${e.cr}`, source: dep, target: e.cr } });
+  const waves = [];
+  const boxOf = new Map();
+  for (const entry of members) {
+    const wave = declaredLabel(entry, "wave") ?? null;
+    let box = boxOf.get(wave);
+    if (box === undefined) {
+      box = { wave, entries: [] };
+      boxOf.set(wave, box);
+      waves.push(box);
     }
+    box.entries.push(entry);
   }
 
-  // Ship order is `releasedAt` (the tag's OWN commit date, epoch SECONDS), not
-  // the payload order — the live ledger arrives newest-first, and `timestamp`
-  // is only the ingest instant. A release with no `releasedAt` (a pre-CR-080
-  // ledger row) sorts OLDEST: an undated tag is legacy history, and calling it
-  // the newest would hand it the gating of every unshipped CR on a date nobody
-  // recorded. Ties — and the undated group — fall back to the payload order
-  // reversed, which is that newest-first arrival read as ship order.
-  const ordered = (releases ?? [])
-    .map((rel, index) => ({
-      rel,
-      index,
-      at: Number.isFinite(rel.releasedAt) ? rel.releasedAt : null,
-    }))
-    .sort((a, b) => {
-      if (a.at === b.at) return b.index - a.index;
-      if (a.at === null) return -1;
-      if (b.at === null) return 1;
-      return a.at - b.at;
-    })
-    .map((o) => o.rel);
-  const milestoneId = (rel) => `milestone:${rel.version}`;
-  for (const rel of ordered) {
-    nodes.push({
-      data: {
-        id: milestoneId(rel),
-        type: "milestone",
-        version: rel.version,
-        label: rel.version,
-        // CR-CRU-077 §S2/AC4 — how many CRs this release shipped, derived from
-        // the ledger's `crs` and therefore builder data, not render state. A
-        // release that shipped none carries 0 (never absent): "zero CRs" is a
-        // measured fact about the tag, the same as sixty. The RENDER layer owns
-        // whether that region is folded (`data.collapsed`) — expansion is UI
-        // state and is not persisted, so it never appears here.
-        crCount: (rel.crs ?? []).length,
-      },
-    });
-  }
+  const packages =
+    kind === "shipped" && Array.isArray(record?.packages) ? record.packages : undefined;
 
-  // Membership is `crs` and NOTHING else — never an ingest timestamp, never
-  // wave structure. A missing `crs` is EMPTY membership (the live 0.1.1), never
-  // unknown; if two tags claim one CR the older claim wins, since that is when
-  // it shipped.
-  const shipStage = new Map();
-  ordered.forEach((rel, stage) => {
-    for (const cr of rel.crs ?? []) {
-      if (crIds.has(cr) && !shipStage.has(cr)) shipStage.set(cr, stage);
-    }
-  });
-  // The unshipped region is the ledger's COMPLEMENT, so it exists only once the
-  // ledger actually places a CR: a membership-free ledger (every `crs` absent
-  // or empty, as the whole pre-CR-080 payload was) orders no CR at all, and
-  // gating one off a boundary there would be exactly the synthetic sequence
-  // decision 5 forbids. The diamonds still chain — a release is a real,
-  // ordered fact on its own.
-  const unshipped = ordered.length;
-  const stageOf = (cr) => shipStage.get(cr) ?? (shipStage.size > 0 ? unshipped : null);
-
-  // A diamond brackets its region the way the terminals bracket the DAG: it
-  // takes the region's SINKS as inflow and gates the next region's ROOTS,
-  // leaving every intra-region position to `dependsOn` alone.
-  const stagePrereq = new Set();
-  const stageDependant = new Set();
-  for (const e of queue) {
-    const stage = stageOf(e.cr);
-    if (stage === null) continue;
-    for (const dep of e.dependsOn ?? []) {
-      if (!crIds.has(dep) || stageOf(dep) !== stage) continue;
-      stagePrereq.add(e.cr);
-      stageDependant.add(dep);
-    }
-  }
-  for (const e of queue) {
-    const stage = stageOf(e.cr);
-    if (stage === null) continue;
-    if (stage < unshipped && !stageDependant.has(e.cr)) {
-      const rel = ordered[stage];
-      edges.push({
-        data: { id: `rel:ship:${e.cr}->${rel.version}`, source: e.cr, target: milestoneId(rel) },
-      });
-    }
-    if (stage > 0 && !stagePrereq.has(e.cr)) {
-      const gate = ordered[stage - 1];
-      edges.push({
-        data: { id: `rel:gate:${gate.version}->${e.cr}`, source: milestoneId(gate), target: e.cr },
-      });
-    }
-  }
-  // The boundaries chain in ship order, so a release that shipped ZERO CRs
-  // still sits IN the flow instead of floating beside it.
-  for (let i = 1; i < ordered.length; i += 1) {
-    const from = ordered[i - 1];
-    const to = ordered[i];
-    edges.push({
-      data: {
-        id: `rel:chain:${from.version}->${to.version}`,
-        source: milestoneId(from),
-        target: milestoneId(to),
-      },
-    });
-  }
-
-  // Start/End terminals bracket the DAG: every flow node nothing else feeds
-  // hangs off Start, every one that feeds nothing hangs onto End — CR node and
-  // release diamond alike. A CR a diamond gates is NOT also bracketed straight
-  // off Start: work after a release boundary does not start before it.
-  const startId = "__roadmap_start__";
-  const endId = "__roadmap_end__";
-  const flowIds = nodes.map((n) => n.data.id);
-  nodes.push({ data: { id: startId, type: "terminal", terminal: "start", label: "Start" } });
-  nodes.push({ data: { id: endId, type: "terminal", terminal: "end", label: "End" } });
-  const fed = new Set(edges.map((e) => e.data.target));
-  const feeds = new Set(edges.map((e) => e.data.source));
-  for (const id of flowIds) {
-    if (!fed.has(id)) edges.push({ data: { id: `start->${id}`, source: startId, target: id } });
-    if (!feeds.has(id)) edges.push({ data: { id: `${id}->end`, source: id, target: endId } });
-  }
-
-  return { nodes, edges };
+  return {
+    version,
+    kind,
+    date: typeof gate?.date === "string" ? gate.date : "",
+    dateState: gate?.dateState ?? "absent",
+    members,
+    waves,
+    crCount: kind === "shipped" ? (record?.crs ?? []).length : members.length,
+    packages,
+    packagesState:
+      packages === undefined ? "absent" : packages.length === 0 ? "empty" : "listed",
+    tracks: distinctLabels(members, "track"),
+  };
 }
 
 // Bridge for the nomodule app shell (app.js consumes window.CrucibleLogic).
@@ -1194,7 +1190,11 @@ if (typeof window !== "undefined") {
     livenessGlyph,
     routeParse,
     workspaceTabs,
-    buildRoadmapGraph,
+    focusedReleaseView,
+    roadmapTableColumns,
+    briefCrTitle,
+    lifecycleBadge,
+    crStatusMark,
     projectRollupLabel,
     projectActivity,
     orderProjects,

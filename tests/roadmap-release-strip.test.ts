@@ -132,6 +132,10 @@ interface QueueFixture {
   dependsOn: string[];
   status: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "COMPLETED_UNTRACKED";
   seq?: number;
+  /** CR-CRU-091 §S2 — the DECLARED target release. Zone 3 scopes on it
+   *  (CR-CRU-078 §S5/AC10), so a queue with none is a queue no focused
+   *  release claims. */
+  release?: string;
 }
 
 /** The measured 0.1.0 ledger row tests/roadmap-gate-date.test.ts pins:
@@ -174,8 +178,8 @@ const PROPOSED_030_UNDATED: ProposalFixture = {
 };
 
 const QUEUE: QueueFixture[] = [
-  { cr: "CR-A", title: "Alpha", wave: "5", dependsOn: [], status: "COMPLETED", seq: 10 },
-  { cr: "CR-B", title: "Beta", wave: "5", dependsOn: ["CR-A"], status: "IN_PROGRESS", seq: 20 },
+  { cr: "CR-A", title: "Alpha", wave: "5", dependsOn: [], status: "COMPLETED", seq: 10, release: "0.1.0" },
+  { cr: "CR-B", title: "Beta", wave: "5", dependsOn: ["CR-A"], status: "IN_PROGRESS", seq: 20, release: "0.2.0" },
 ];
 
 /**
@@ -618,11 +622,18 @@ describe("CR-CRU-078 §S3/AC30 — every gate date comes from the ONE formatter"
 // ── §S1/AC1 — the toggle is gone ───────────────────────────────────────────
 
 describe("CR-CRU-078 §S1/AC1 — no exclusive toggle: every zone renders unconditionally", () => {
-  test("a cold /p/<key>/roadmap load renders the strip, the flowchart container AND the table rows at once", async () => {
+  test("a cold /p/<key>/roadmap load renders the strip, the flowchart AND the focused release's table rows at once", async () => {
     await mountApp({ releases: [SHIPPED_010], proposals: [PROPOSED_020] });
     expect(stripEl()).not.toBeNull();
-    expect(document.querySelectorAll('[data-testid="roadmap-graph"]').length).toBe(1);
-    expect(document.querySelectorAll('[data-testid="roadmap-row"]').length).toBe(QUEUE.length);
+    expect(document.querySelectorAll('[data-testid="roadmap-flow"]').length).toBe(1);
+    // C3 scoped zone 3 to the FOCUSED release (§S5/AC10), so the row count is
+    // that release's membership rather than the whole queue: landing focuses
+    // the in-flight 0.2.0, and CR-B is the entry declared into it.
+    expect(
+      Array.from(document.querySelectorAll<HTMLElement>('[data-testid="roadmap-row"]')).map((r) =>
+        r.getAttribute("data-cr"),
+      ),
+    ).toEqual(["CR-B"]);
   });
 
   test("neither toggle button exists in the DOM", async () => {
@@ -647,7 +658,7 @@ describe("CR-CRU-078 §S1/AC1 — no exclusive toggle: every zone renders uncond
     expect(panes.length).toBe(1);
     const zones = document.querySelector('[data-testid="roadmap-zones"]');
     expect(zones).not.toBeNull();
-    const order = ["roadmap-strip", "roadmap-graph", "roadmap-row"].map((id) =>
+    const order = ["roadmap-strip", "roadmap-flow", "roadmap-row"].map((id) =>
       Array.from(zones!.querySelectorAll<HTMLElement>("*")).findIndex(
         (el) => el.getAttribute("data-testid") === id,
       ),

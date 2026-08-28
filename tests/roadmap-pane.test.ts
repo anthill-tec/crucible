@@ -54,6 +54,9 @@ interface ReleaseFixture {
   version: string;
   commit?: string;
   timestamp: number;
+  /** CR-CRU-080 §S4 — the CR ids the release shipped. CR-CRU-078 §S5 scopes
+   *  the table on it, so a fixture that omits it shipped nothing. */
+  crs?: string[];
 }
 interface ProjectFixture {
   key: string;
@@ -339,11 +342,15 @@ describe("CR-CRU-078 §S6/AC13 — Roadmap table renders CR rows in the AUTHORED
     // AC15 — the inversion is FLAGGED on its own row, and only there.
     expect(warnedRows()).toEqual(["CR-RM-003"]);
 
-    // Row content — CR id, title, wave, and the derived status badge.
+    // Row content — CR id, brief title, and the derived status badge.
+    // CR-CRU-078 §S5/AC12 RETIRED the unconditional wave cell this line used
+    // to assert: every row here sits in wave 5, and a column whose every cell
+    // repeats one value states nothing the region does not. The absence is
+    // asserted below rather than left implicit.
     const second = roadmapRow("CR-RM-002")!;
     expect(second.textContent ?? "").toContain("CR-RM-002");
     expect(second.textContent ?? "").toContain("Second");
-    expect(second.textContent ?? "").toContain("5");
+    expect(second.querySelector('[data-column="wave"]')).toBeNull();
     const badge = second.querySelector<HTMLElement>('[data-testid="roadmap-status-badge"]');
     expect(badge).not.toBeNull();
     expect((badge!.textContent ?? "").trim()).toBe("IN_PROGRESS");
@@ -366,8 +373,14 @@ describe("CR-CRU-078 §S6/AC13 — Roadmap table renders CR rows in the AUTHORED
 
 // ── AC (topological-rows AC, dividers) — wave + release boundary rows ───────
 
-describe("§S3 — Roadmap table carries wave and release boundary dividers", () => {
-  test("a wave-boundary divider heads the change into a new wave, and a release-boundary divider (from GET /releases, never wave numbers) carries the release version", async () => {
+// CR-CRU-078 §S5 RETIRED the release-boundary divider this suite also
+// asserted. It existed because the table rendered the WHOLE project and had
+// to mark where one release ended; §S5 scopes the table to ONE focused
+// release, so an in-table release boundary can no longer occur — the boundary
+// IS the table. The wave divider, which §S6/AC16 keeps, is asserted here as
+// before, now inside the focused release's own region.
+describe("§S3 — Roadmap table carries wave boundary dividers", () => {
+  test("a wave-boundary divider heads the change into a new wave, inside the focused release's rows", async () => {
     const key = "roadmap-dividers-1";
     await mountApp({
       pathname: `/p/${key}/roadmap`,
@@ -376,7 +389,16 @@ describe("§S3 — Roadmap table carries wave and release boundary dividers", ()
         { cr: "CR-RM-010", title: "Wave five A", wave: "5", dependsOn: [], status: "COMPLETED", planId: 81 },
         { cr: "CR-RM-011", title: "Wave six A", wave: "6", dependsOn: ["CR-RM-010"], status: "PENDING" },
       ],
-      releases: [{ version: "0.1.0", commit: "abc1234", timestamp: Date.now() }],
+      // Membership is the ledger's `crs` (CR-CRU-080 §S4): with the release
+      // focused, these are the rows the table shows.
+      releases: [
+        {
+          version: "0.1.0",
+          commit: "abc1234",
+          timestamp: Date.now(),
+          crs: ["CR-RM-010", "CR-RM-011"],
+        },
+      ],
       plans: [
         { planId: 81, cr: "CR-RM-010", projectKey: key, status: "closed", cycles: [{ id: 1, label: "C1", status: "done" }] },
       ],
@@ -389,12 +411,14 @@ describe("§S3 — Roadmap table carries wave and release boundary dividers", ()
     expect(waveDividers.length).toBeGreaterThan(0);
     expect(waveDividers.some((d) => (d.textContent ?? "").includes("6"))).toBe(true);
 
-    // A release-boundary divider carries the release version from listReleases.
-    const releaseDividers = Array.from(
-      document.querySelectorAll<HTMLElement>('[data-testid="roadmap-release-divider"]'),
-    );
-    expect(releaseDividers.length).toBeGreaterThan(0);
-    expect(releaseDividers.some((d) => (d.textContent ?? "").includes("0.1.0"))).toBe(true);
+    // The release is stated by the strip and the flowchart gate now, not by a
+    // divider between rows.
+    expect(document.querySelectorAll('[data-testid="roadmap-release-divider"]').length).toBe(0);
+    expect(
+      document
+        .querySelector('[data-testid="roadmap-flow-gate"]')
+        ?.getAttribute("data-version") ?? "",
+    ).toBe("0.1.0");
 
     // Execution sequence: the wave-5 CR row precedes the wave-6 CR row.
     const order = roadmapRows().map((r) => r.getAttribute("data-cr"));

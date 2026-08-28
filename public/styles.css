@@ -1080,8 +1080,7 @@ body {
    so the pitch is declared HERE — the stylesheet owns it — and a gate cell IS
    exactly one pitch wide: a FIXED flex basis, never a growing one, or the
    measurement and the drawing would disagree and AC3 would fail on a partial
-   gate. The Cytoscape graph container still needs a DEFINITE size for its
-   canvas to lay out (a zero-height container would collapse and never paint). */
+   gate. */
 .app-roadmap-zones {
   display: flex;
   flex-direction: column;
@@ -1167,4 +1166,111 @@ body {
   visibility: hidden;
   pointer-events: none;
 }
-.app-roadmap-graph { width: 100%; min-height: 520px; height: 72vh; }
+
+/* CR-CRU-078 §S4 — ZONE 2: the focused release's flowchart. Plain DOM, laid
+   out by containment (release ⊃ wave ⊃ CR) and the authored order alone — no
+   layout engine, no crossing heuristic, no compound-graph library (AC26), and
+   no edge element of any kind (AC20). Structure only: the shape grammar, the
+   colour semantics and the motion are CR-CRU-078 C5. */
+.app-roadmap-flow {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.app-flow-terminal {
+  align-self: center;
+  font: 600 10px/1.4 var(--mono);
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 12px;
+}
+.app-flow-waves,
+.app-flow-wave-body,
+.app-flow-loose,
+.app-flow-packages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.app-flow-waves { flex-direction: column; }
+.app-flow-wave {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+}
+.app-flow-wave-label {
+  display: block;
+  font: 600 10px/1.4 var(--mono);
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  padding-bottom: 6px;
+}
+.app-flow-node {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.app-flow-node-cr { font: 600 11px/1.4 var(--mono); color: var(--ink); }
+.app-flow-node-status,
+.app-flow-node-lifecycle { font: 400 10px/1.4 var(--mono); color: var(--ink-dim); }
+.app-flow-delivered {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  font: 400 11px/1.4 var(--mono);
+  color: var(--ink-dim);
+}
+.app-flow-gate { align-self: center; text-align: center; }
+.app-flow-gate-version {
+  display: block;
+  font: 600 11px/1.4 var(--mono);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 10px;
+}
+.app-flow-gate.proposed .app-flow-gate-version { border-style: dashed; }
+.app-flow-gate-date { display: block; font: 400 10px/1.4 var(--mono); color: var(--ink-dim); }
+
+/* CR-CRU-078 §S5 — ZONE 3: the scoped table. The head and the rows share one
+   row box so the declared columns line up; which columns exist is AC12's
+   decision and is made in `roadmapTableColumns`, never here. The brief title
+   is the one cell allowed to grow, and it CLAMPS rather than wrapping — §S5's
+   whole complaint was the identifier competing with a sentence. */
+.app-roadmap-table { display: flex; flex-direction: column; }
+.app-roadmap-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+}
+.app-roadmap-head {
+  font: 600 9px/1.4 var(--mono);
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  border-bottom: 1px solid var(--line);
+}
+.app-roadmap-cell { min-width: 0; }
+.app-roadmap-cr { flex: 0 0 auto; font: 600 11px/1.4 var(--mono); }
+.app-roadmap-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-roadmap-deps { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 4px; }
+.app-roadmap-status,
+.app-roadmap-wave,
+.app-roadmap-track,
+.app-roadmap-lifecycle { flex: 0 0 auto; }
