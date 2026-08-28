@@ -12,7 +12,7 @@
 // and the AC19 empty state are C4; the visual grammar (AC21–AC26) is C5.
 //
 // WHY THIS FILE IS A SIBLING SUITE, and what it replaces.
-// tests/roadmap-graph.test.ts pinned CR-CRU-077's composition: a
+// The now-DELETED tests/roadmap-graph.test.ts pinned CR-CRU-077's composition: a
 // dependency-composed whole-project DAG laid out by cytoscape-dagre, 94 nodes
 // and 208 edges on the live board, 160 of them `dependsOn`. That composition is
 // what THIS CR replaces (spec Problem + AC20), so the file is retired with its

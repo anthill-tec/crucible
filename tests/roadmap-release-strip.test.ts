@@ -70,7 +70,7 @@ const APP_LOGIC_PATH = path.join(REPO_ROOT, "public/app-logic.mjs");
 // ── The pure boundary ──────────────────────────────────────────────────────
 //
 // The ambient tests/app-logic.d.ts predates these exports, so the module is
-// cast to the boundary under test ONCE (the tests/roadmap-graph.test.ts and
+// cast to the boundary under test ONCE (the now-DELETED tests/roadmap-graph.test.ts and
 // tests/roadmap-gate-date.test.ts pattern). Until GREEN adds them each call is
 // "is not a function" — the intended missing-export RED signal.
 
