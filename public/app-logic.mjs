@@ -87,6 +87,124 @@ export function resolveGateDate(record, kind) {
   return { kind, field, state: resolution, date };
 }
 
+/**
+ * CR-CRU-078 §S9/AC28 — the strip's ONE sequence: every shipped release as the
+ * ledger published it, then every live proposal as the proposals read published
+ * it. Concatenation only — no sort, no reverse, no merge.
+ *
+ * CR-CRU-091 §S1 fixed the two reads' directions deliberately opposite
+ * (`listReleases` newest-first, `listReleaseProposals` ascending by version) so
+ * that a consumer appends "shipped, then proposed" with NO reversal, and AC28
+ * fails a build that re-sorts either half: version orders the strip, while a
+ * declared target is a plan that can slip, so a target contradicting version
+ * order is a planning conflict to surface — never a reason to re-order.
+ *
+ * A gate is the pair (which release, what date) and nothing else this cycle:
+ * `version` (a shipped row's `version`, a proposal's `label`) plus
+ * `resolveGateDate`'s answer for its OWN authored field. Membership, waves and
+ * packages belong to zones 2/3, which read the records themselves.
+ *
+ * AC29 needs no de-duplication here and must not grow one: CR-091 retires a
+ * consumed proposal in the SAME transaction that records the release, and
+ * `refetchRoadmap` reads the ledger BEFORE the proposals, so no interleaving
+ * can hand this function both records for one version. A filter would hide
+ * that data defect rather than surface it.
+ */
+export function releaseStripGates(releases, proposals) {
+  const gates = [];
+  const legs = [
+    { records: releases, kind: "shipped", label: "version" },
+    { records: proposals, kind: "proposed", label: "label" },
+  ];
+  for (const leg of legs) {
+    for (const record of Array.isArray(leg.records) ? leg.records : []) {
+      const resolved = resolveGateDate(record, leg.kind);
+      const version = record === null || record === undefined ? undefined : record[leg.label];
+      gates.push({
+        version: typeof version === "string" ? version : "",
+        kind: leg.kind,
+        date: resolved.date,
+        dateState: resolved.state,
+      });
+    }
+  }
+  return gates;
+}
+
+/**
+ * CR-CRU-078 §S2/AC5 — which gate the strip LANDS on: "the release in
+ * progress".
+ *
+ * That is the FIRST live proposal — proposals arrive ascending by version, so
+ * the first one is the next release to ship, and CR-091 gives it the `waves[]`
+ * zone 2 draws. With nothing proposed there is no release in flight, so the
+ * strip lands on the newest shipped tag, which `listReleases`' newest-first
+ * order puts at index 0.
+ *
+ * -1 for an empty sequence: no gate exists to focus, and 0 would name one.
+ */
+export function releaseStripFocusIndex(gates) {
+  if (!Array.isArray(gates) || gates.length === 0) return -1;
+  const proposed = gates.findIndex((gate) => gate.kind === "proposed");
+  return proposed >= 0 ? proposed : 0;
+}
+
+/**
+ * CR-CRU-078 §S2/AC3 — how many WHOLE gates the strip's MEASURED track holds.
+ *
+ * Both arguments are measurements (the track's own box, and the pitch of the
+ * CSS-owned ruler the strip renders): `floor` is the whole-container invariant
+ * itself, since the remainder is a REMAINDER and becomes AC4's tag, never a
+ * fraction of a drawn container.
+ *
+ * An unmeasurable strip yields 0 — deliberately NOT a fallback constant. A
+ * default that happens to fit today is exactly the hardcoding §S2 forbids: the
+ * available width changes when the project rail collapses (CR-093), and a
+ * constant would keep claiming the old one.
+ */
+export function stripWindowSize(availableWidth, gatePitch) {
+  if (typeof availableWidth !== "number" || !Number.isFinite(availableWidth)) return 0;
+  if (typeof gatePitch !== "number" || !Number.isFinite(gatePitch)) return 0;
+  if (availableWidth <= 0 || gatePitch <= 0) return 0;
+  return Math.floor(availableWidth / gatePitch);
+}
+
+/**
+ * CR-CRU-078 §S2/AC4/AC5 — the strip's page window: where it starts, how many
+ * gates it shows, and how many are hidden on each side.
+ *
+ * The windows are a PAGE GRID of `size`: `offset` is always a multiple of it,
+ * so a click pages by a whole window (AC4) and the landing window is the page
+ * that CONTAINS the focus rather than one offset from it (AC5). A requested
+ * offset is snapped onto the grid and clamped to the last page, which is what
+ * makes repeated clicks at either end idempotent instead of drifting into
+ * offsets no window occupies.
+ *
+ * `size` in the RESULT is the VISIBLE count — `min(pageSize, what is left)` —
+ * because the last page of a non-multiple sequence is short. It is never
+ * rounded up: a window is short, or it is full; it is never partly a gate.
+ *
+ * `earlier`/`later` are the hidden counts AC4 renders as its two tags, and a
+ * zero there is the reason a tag is ABSENT rather than disabled. An unmeasured
+ * strip (`size` 0) hides nothing by this contract: with no window to page
+ * into, a tag would promise a view that cannot exist.
+ */
+export function releaseStripPage({ count, size, focusIndex, offset }) {
+  const total = typeof count === "number" && Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+  const pageSize = typeof size === "number" && Number.isFinite(size) && size > 0 ? Math.floor(size) : 0;
+  if (total === 0 || pageSize === 0) return { size: 0, offset: 0, earlier: 0, later: 0 };
+  const anchor =
+    typeof offset === "number" && Number.isFinite(offset)
+      ? offset
+      : typeof focusIndex === "number" && Number.isFinite(focusIndex)
+        ? focusIndex
+        : 0;
+  const lastStart = Math.floor((total - 1) / pageSize) * pageSize;
+  const start = Math.min(Math.floor(Math.max(anchor, 0) / pageSize) * pageSize, lastStart);
+  const visible = Math.min(pageSize, total - start);
+  return { size: visible, offset: start, earlier: start, later: total - start - visible };
+}
+
 /** Agent rail dot + tombstone marker. tombstoned carries diedAgo from lastSeen. */
 export function livenessGlyph(agent) {
   if (agent.liveness === "tombstoned") {
@@ -1069,6 +1187,10 @@ if (typeof window !== "undefined") {
     relativeTime,
     formatReleaseDate,
     resolveGateDate,
+    releaseStripGates,
+    releaseStripFocusIndex,
+    stripWindowSize,
+    releaseStripPage,
     livenessGlyph,
     routeParse,
     workspaceTabs,

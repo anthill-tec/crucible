@@ -13,17 +13,16 @@
 //      "milestone") node; Start/End ellipse (type "terminal") nodes bracket
 //      the DAG. wave/track/status ride node DATA fields (style-driving), never
 //      the label text.
-//   3. The EXCLUSIVE toggle: table is the default; switching to graph removes
-//      the table rows from the DOM and mounts the graph container, and back —
-//      exactly ONE view is present at a time.
+//   3. CR-CRU-078 §S1/AC1 — the toggle is RETIRED: the graph renders
+//      UNCONDITIONALLY, beside the table, with no view state to select one.
 //
 // RED phase — expected to FAIL against CURRENT production:
 //   • public/cytoscape.umd.js + public/cytoscape-dagre.js are ABSENT.
 //   • public/app-logic.mjs exports no `buildRoadmapGraph` (call is
 //     "not a function").
 //   • public/app.js RoadmapPanel renders the table only — there is no
-//     `roadmap-view-graph`/`roadmap-view-table` toggle and no `roadmap-graph`
-//     container, so every toggle assertion fails at its first query.
+//     `roadmap-graph` container at all, so every graph assertion below fails
+//     at its first query.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { existsSync, readFileSync } from "node:fs";
@@ -1604,39 +1603,25 @@ function mountToggle(): Promise<void> {
   });
 }
 
-describe("§S3 — the roadmap view is an EXCLUSIVE table|graph toggle (table default)", () => {
-  test("cold /p/<key>/roadmap load offers the table|graph toggle and defaults to the TABLE view", async () => {
+// CR-CRU-078 §S1 — RETIRED (2 assertion sites, stated rather than vanished):
+// the two `roadmap-view-table`/`roadmap-view-graph` EXISTENCE assertions
+// (previously :1612-1613) and the two EXCLUSIVITY tests that went with them
+// ("switching to graph removes the table rows", "switching back restores
+// them") defended a contract AC1 deletes — one body at a time, selected by
+// `roadmapViewMode`. There is no button to query and no exclusion to observe:
+// the zones render together. Their surviving value — the graph container
+// mounts on a cold load, and the table rows are there too — is asserted below
+// unconditionally, and the whole-surface contract (three zones, one pane,
+// neither testid in DOM or source) is pinned in
+// tests/roadmap-release-strip.test.ts.
+describe("CR-CRU-078 §S1/AC1 — a cold /p/<key>/roadmap load renders the graph UNCONDITIONALLY", () => {
+  test("the graph container mounts with no view switch, and the table rows render beside it", async () => {
     await mountToggle();
-    // The segmented view control is present in BOTH view states so either
-    // view is one click away — both options exist on the default load.
-    expect(document.querySelector('[data-testid="roadmap-view-table"]')).not.toBeNull();
-    expect(document.querySelector('[data-testid="roadmap-view-graph"]')).not.toBeNull();
-    // Default arm: the table is rendered, the graph container is not.
-    expect(rowCount()).toBeGreaterThan(0);
-    expect(graphCount()).toBe(0);
-  });
-
-  test("switching to graph REMOVES the table rows and mounts exactly one graph container", async () => {
-    await mountToggle();
-    const toGraph = document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]');
-    expect(toGraph).not.toBeNull();
-    toGraph!.click();
-    await settle();
-    // Exactly one view: graph container up, table rows gone.
     expect(graphCount()).toBe(1);
-    expect(rowCount()).toBe(0);
-  });
-
-  test("switching back to table REMOVES the graph container and restores the rows", async () => {
-    await mountToggle();
-    document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]')!.click();
-    await settle();
-    const toTable = document.querySelector<HTMLElement>('[data-testid="roadmap-view-table"]');
-    expect(toTable).not.toBeNull();
-    toTable!.click();
-    await settle();
     expect(rowCount()).toBeGreaterThan(0);
-    expect(graphCount()).toBe(0);
+    // The retired affordance is gone from the DOM, not merely unused.
+    expect(document.querySelector('[data-testid="roadmap-view-table"]')).toBeNull();
+    expect(document.querySelector('[data-testid="roadmap-view-graph"]')).toBeNull();
   });
 });
 
@@ -1653,8 +1638,7 @@ describe("CR-CRU-083 AC7 — the graph stylesheet styles COMPLETED_UNTRACKED dis
       ],
       cytoscape: true,
     });
-    document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]')!.click();
-    await settle();
+    // §S1 — no navigation preamble: the graph is already mounted.
 
     const cy = roadmapCy();
     expect(cy).toBeDefined();
@@ -1723,8 +1707,6 @@ describe("CR-CRU-083 AC7 — tapping a graph node is status-gated exactly like t
       ],
       cytoscape: true,
     });
-    document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]')!.click();
-    await settle();
 
     const cy = roadmapCy();
     expect(cy).toBeDefined();
@@ -1891,10 +1873,7 @@ async function mountLiveRoadmapGraph(
     cytoscape: true,
     beforeBoot: opts.beforeBoot,
   });
-  const toGraph = document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]');
-  expect(toGraph).not.toBeNull();
-  toGraph!.click();
-  await settle();
+  // §S1 — the graph renders unconditionally; nothing to click.
 }
 
 describe("CR-CRU-077 §S2/AC4 — a shipped release renders as ONE node carrying its CR count", () => {
@@ -2162,11 +2141,15 @@ describe("CR-CRU-077 §S2/AC4 — a shipped release renders as ONE node carrying
       .filter((id) => id !== "");
     expect(compoundChildren).toEqual([]);
 
-    // Nor as DOM chrome around the canvas.
+    // Nor as DOM chrome around the canvas. SCOPED to the graph container:
+    // CR-CRU-078 §S1 renders the TABLE zone beside the graph, and the table's
+    // own `roadmap-wave-divider` headings are AC16's legitimate chrome — a
+    // document-wide query only equalled "the graph draws none" while the
+    // exclusive toggle guaranteed the table was absent.
     const container = document.querySelector('[data-testid="roadmap-graph"]');
     expect(container).not.toBeNull();
     expect(container!.querySelectorAll('[data-testid*="wave"], [data-testid*="lane"]').length).toBe(0);
-    expect(document.querySelectorAll('[data-testid="roadmap-wave-divider"]').length).toBe(0);
+    expect(container!.querySelectorAll('[data-testid="roadmap-wave-divider"]').length).toBe(0);
   });
 });
 
@@ -2309,10 +2292,7 @@ async function mountLiveStateGraph(plans: PlanFixture[] = []): Promise<void> {
     plans,
     cytoscape: true,
   });
-  const toGraph = document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]');
-  expect(toGraph).not.toBeNull();
-  toGraph!.click();
-  await settle();
+  // §S1 — the graph renders unconditionally; nothing to click.
 }
 
 /** One element's whole RESOLVED style, as cytoscape currently draws it. */
@@ -2726,10 +2706,7 @@ async function mountStreamedRoadmapGraph(): Promise<{
       stream = installEventSource();
     },
   });
-  const toGraph = document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]');
-  expect(toGraph).not.toBeNull();
-  toGraph!.click();
-  await settle();
+  // §S1 — the graph renders unconditionally; nothing to click.
   return {
     served,
     changeFrame: async () => {
@@ -2923,8 +2900,6 @@ async function mountGraph(
     releases,
     cytoscape: true,
   });
-  document.querySelector<HTMLElement>('[data-testid="roadmap-view-graph"]')!.click();
-  await settle();
 }
 
 // One CR claimed by TWO tags. The builder resolves it in SHIP order — the older

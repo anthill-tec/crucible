@@ -1,11 +1,18 @@
-// CR-CRU-014 §S3 — roadmap-graph.feature steps: the exclusive table|graph
-// toggle's GRAPH half, driven against the SPA over the real server. Reuses
+// CR-CRU-014 §S3, as amended by CR-CRU-078 §S1 — roadmap-graph.feature steps:
+// the roadmap's GRAPH zone, driven against the SPA over the real server. Reuses
 // seeding.steps.ts (project/agent), roadmap.steps.ts ("a CR queue registering
 // cr … is posted"), navigation.steps.ts ("I open the workspace for that
 // project"), and workflow.steps.ts ("I click the {string} workspace tab",
 // "a cycle plan is filed for cr … with a cycle labelled …") — only the
-// graph-view toggle, node-count, per-node status, on-node-tap, and
-// tab-active assertions are new here.
+// node-count, per-node status, on-node-tap, and tab-active assertions are new
+// here.
+//
+// CR-CRU-078 §S1 RETIRED two steps with the exclusive toggle they drove:
+// "I switch the roadmap view to graph" (it clicked `roadmap-view-graph`, a
+// button that no longer exists — leaving it would break the e2e harness) and
+// "no roadmap table row is present" (the exclusion itself: AC1 renders the
+// table BESIDE the graph, so the assertion is now false by design). Neither
+// had another consumer.
 import { expect } from "@playwright/test";
 import { Step } from "./world.ts";
 
@@ -22,13 +29,6 @@ interface RoadmapCyHandle {
   $id: (id: string) => RoadmapCyNode;
 }
 
-// The exclusive toggle's graph switch — the segmented control's graph option.
-Step("I switch the roadmap view to graph", async ({ page }) => {
-  const toGraph = page.getByTestId("roadmap-view-graph");
-  await expect(toGraph).toBeVisible();
-  await toGraph.click();
-});
-
 // The graph container renders and reports its builder-derived CR node count
 // (canvas internals aren't selector-addressable — the count rides a data attr).
 Step(
@@ -41,11 +41,6 @@ Step(
     });
   },
 );
-
-// Exclusive toggle: switching to graph removed the table entirely.
-Step("no roadmap table row is present", async ({ page }) => {
-  await expect(page.getByTestId("roadmap-row")).toHaveCount(0);
-});
 
 // CR-CRU-083 AC7 — the per-node derived status the tap gate reads, observed
 // live through the same published instance. Two jobs, both real: it pins the

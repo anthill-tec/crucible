@@ -1,10 +1,11 @@
-Feature: CR-CRU-014 §S3, amended by CR-CRU-083 AC7 — the roadmap GRAPH view (Cytoscape): exclusive toggle + status-gated node→Workflow swap
-  §S3's roadmap view is an EXCLUSIVE table|graph toggle (table default). The
-  graph half renders the SAME registered CR queue as a depends-on DAG — CRs as
+Feature: CR-CRU-014 §S3, amended by CR-CRU-083 AC7 and CR-CRU-078 §S1 — the roadmap GRAPH zone (Cytoscape): unconditional render + status-gated node→Workflow swap
+  The roadmap renders every zone at once (CR-CRU-078 §S1/AC1 retired the
+  exclusive table|graph toggle this scenario used to click). The graph zone
+  renders the SAME registered CR queue as a depends-on DAG — CRs as
   rectangle action nodes, Start/End ellipse terminals, release-boundary
   diamonds — laid out with cytoscape-dagre. This scenario drives the REAL
-  server (POST …/queue, POST …/plans) and the SPA's own toggle, then exercises
-  the on-node tap's one-rule swap to the Workflow tab (the graph mirror of the
+  server (POST …/queue, POST …/plans) and the SPA, then exercises the
+  on-node tap's one-rule swap to the Workflow tab (the graph mirror of the
   table row's behaviour).
 
   Gating rule (CR-CRU-083 AC7, mirroring the row since CR-CRU-014): the tap is
@@ -27,15 +28,13 @@ Feature: CR-CRU-014 §S3, amended by CR-CRU-083 AC7 — the roadmap GRAPH view (
   through the mounted cytoscape instance the app publishes on
   `window.crucibleRoadmapCy`, the `tap` event an on-canvas pointer fires.
 
-  Scenario: toggling to the graph view renders the queued CRs as a DAG whose node tap is inert while PENDING and swaps to the Workflow tab once a filed plan makes it IN_PROGRESS
+  Scenario: the roadmap graph zone renders the queued CRs as a DAG whose node tap is inert while PENDING and swaps to the Workflow tab once a filed plan makes it IN_PROGRESS
     Given a project named "RM Graph" is registered
     And an online agent "rm-graph" with message "graph runner" is registered on that project
     And a CR queue registering cr "CR-RG-200" titled "Graph CR" in wave "5" is posted for that project
     When I open the workspace for that project
     And I click the "Roadmap" workspace tab
-    And I switch the roadmap view to graph
     Then the roadmap graph container renders 1 CR nodes within 3 seconds
-    And no roadmap table row is present
     And the roadmap graph node for "CR-RG-200" carries status "PENDING" within 3 seconds
     When I tap the roadmap graph node for "CR-RG-200"
     Then the "Roadmap" workspace tab is still active 500 milliseconds later

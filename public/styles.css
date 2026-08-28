@@ -1071,26 +1071,100 @@ body {
 .app-inline-run-running { cursor: default; }
 .app-inline-run-running:hover { color: var(--ink); }
 
-/* CR-CRU-014 §S3 — roadmap table|graph view toggle + the Cytoscape graph
-   mount. The graph container needs a DEFINITE size for Cytoscape to lay out
-   its canvas (a zero-height container would collapse and never paint). */
-.app-roadmap-viewtoggle {
-  display: inline-flex;
-  gap: 2px;
-  margin: 6px 8px;
-  padding: 2px;
+/* CR-CRU-078 §S1/§S2 — the roadmap's three zones stack in one pane (the
+   table|graph view toggle is retired), and zone 1 is the PAGED release strip.
+   Visual fidelity (shape grammar, colour semantics, motion) is CR-CRU-078 C5;
+   what is here is the structure paging correctness depends on.
+
+   The window size is MEASURED from the track's box divided by the gate pitch,
+   so the pitch is declared HERE — the stylesheet owns it — and a gate cell IS
+   exactly one pitch wide: a FIXED flex basis, never a growing one, or the
+   measurement and the drawing would disagree and AC3 would fail on a partial
+   gate. The Cytoscape graph container still needs a DEFINITE size for its
+   canvas to lay out (a zero-height container would collapse and never paint). */
+.app-roadmap-zones {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.app-roadmap-strip {
+  --app-strip-gate-pitch: 132px;
+  --app-strip-tag-slot: 96px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
 }
-.app-roadmap-viewtoggle .app-seg {
-  font: 600 11px/1.4 var(--mono);
+.app-strip-terminal {
+  flex: 0 0 auto;
+  font: 600 10px/1.4 var(--mono);
   text-transform: uppercase;
-  padding: 3px 10px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 12px;
+}
+/* The tag SLOT is reserved on both sides whether or not a tag is in it: the
+   window is measured from the track, so a tag appearing must not change the
+   track's width — that feedback loop would oscillate the hidden counts. */
+.app-strip-rail {
+  flex: 0 0 var(--app-strip-tag-slot);
+  display: flex;
+  align-items: center;
+}
+.app-strip-rail.later { justify-content: flex-end; }
+.app-strip-tag {
+  font: 600 10px/1.4 var(--mono);
   color: var(--ink-2, var(--ink));
+  background: transparent;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
   cursor: pointer;
 }
-.app-roadmap-viewtoggle .app-seg.on { background: var(--bg-2, var(--line)); color: var(--ink); }
+.app-strip-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.app-strip-gates {
+  display: flex;
+  flex-wrap: nowrap;
+}
+.app-strip-gate {
+  flex: 0 0 var(--app-strip-gate-pitch);
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 4px 6px;
+  text-align: center;
+}
+.app-strip-gate-version {
+  display: block;
+  font: 600 11px/1.4 var(--mono);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 4px;
+}
+.app-strip-gate.proposed .app-strip-gate-version { border-style: dashed; }
+.app-strip-gate-date {
+  display: block;
+  font: 400 10px/1.4 var(--mono);
+  color: var(--ink-dim);
+  padding-top: 2px;
+}
+/* The pitch PROBE: out of flow, so it takes no width from the track it is
+   measured inside, but still LAID OUT — `display: none` would measure 0. */
+.app-strip-ruler {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 0;
+  width: var(--app-strip-gate-pitch);
+  visibility: hidden;
+  pointer-events: none;
+}
 .app-roadmap-graph { width: 100%; min-height: 520px; height: 72vh; }

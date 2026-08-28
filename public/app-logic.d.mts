@@ -159,6 +159,54 @@ export declare function resolveGateDate(
   kind: ReleaseGateKind,
 ): GateDateResult;
 
+/** CR-CRU-078 §S2 — ONE gate of the release strip: which release, and the date
+ *  it carries (or the state that says it has none). */
+export interface ReleaseStripGate {
+  /** A shipped row's `version`, a proposal's `label`; `""` when unlabelled. */
+  version: string;
+  kind: ReleaseGateKind;
+  /** `resolveGateDate`'s answer — `""` unless `dateState` is `dated`. */
+  date: string;
+  dateState: GateDateResult["state"];
+}
+
+/** CR-CRU-078 §S2/AC4 — the strip's page window. `size` is the VISIBLE gate
+ *  count (the last page of a non-multiple sequence is short); `earlier`/`later`
+ *  are the hidden counts, and a zero is why a tag is absent, not disabled. */
+export interface ReleaseStripPage {
+  size: number;
+  offset: number;
+  earlier: number;
+  later: number;
+}
+
+/** CR-CRU-078 §S9/AC28 — shipped as published, then proposals as published.
+ *  Concatenation only: re-sorting either half fails AC28. */
+export declare function releaseStripGates(
+  releases: readonly unknown[] | null | undefined,
+  proposals: readonly unknown[] | null | undefined,
+): ReleaseStripGate[];
+
+/** CR-CRU-078 §S2/AC5 — the index of the release in progress (the first live
+ *  proposal, else the newest shipped tag); -1 for an empty sequence. */
+export declare function releaseStripFocusIndex(gates: readonly ReleaseStripGate[]): number;
+
+/** CR-CRU-078 §S2/AC3 — how many WHOLE gates a MEASURED track holds. 0 when
+ *  either measurement is unusable — never a fallback constant. */
+export declare function stripWindowSize(
+  availableWidth: number | null | undefined,
+  gatePitch: number | null | undefined,
+): number;
+
+/** CR-CRU-078 §S2/AC4/AC5 — the page window: snapped to the page grid, clamped
+ *  to the ends, landing on the page that CONTAINS `focusIndex`. */
+export declare function releaseStripPage(input: {
+  count: number;
+  size: number;
+  focusIndex?: number;
+  offset?: number;
+}): ReleaseStripPage;
+
 export declare function livenessGlyph(agent: CrucibleAgentLike): LivenessGlyphResult;
 
 export declare function routeParse(pathname: string): RouteState;
