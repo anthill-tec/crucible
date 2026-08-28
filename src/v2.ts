@@ -6,7 +6,7 @@ import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { authHints, hints, cycleHints, identityHints, projectDeleteHints, roadmapHints } from "./hints.ts";
-import { compareVersionLabels, normalizeTrack, Store, UUID_RE } from "./store.ts";
+import { compareVersionLabels, normalizeTrack, Store, UUID_RE, WAVE_SEQ_STRIDE } from "./store.ts";
 import { toToon } from "./toon.ts";
 import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
 import type { ProjectPatch, QueueEntryInput, RecordEventMeta, RunRecord, TouchAgentOpts } from "./store.ts";
@@ -1899,9 +1899,9 @@ function defaultedSeqWarnings(crs: string[]): QueueWarning[] {
     {
       code: "defaulted-seq",
       message:
-        `seq was defaulted to a position index for ${crs.join(", ")} while a sibling in the ` +
-        `same wave carries an authored one — run wave-sequence --release <v> --wave <n> ` +
-        `--crs <the whole ordered list> to author the position`,
+        `seq was defaulted for ${crs.join(", ")} while a sibling in the same wave carries ` +
+        `one on a DIFFERENT SCALE — the two interleave in an order nobody authored; run ` +
+        `wave-sequence --release <v> --wave <n> --crs <the whole ordered list> to author it`,
       crs,
     },
   ];
@@ -2226,6 +2226,24 @@ async function handleWaveSequence(store: Store, key: string, req: Request): Prom
   const container = `${body.release}/${wave}`;
   const entries = store.listQueue(pk.key);
   const byCr = new Map(entries.map((entry) => [entry.cr, entry]));
+  // §S4 — the wave's seq block is `WAVE_SEQ_STRIDE` positions wide, so the
+  // thousandth member would take the NEXT wave's base. Refused BY NAME rather
+  // than written as a silent collision, and refused before the per-cr lookups
+  // because it is a property of the call, not of any one cr.
+  const members = new Set([
+    ...crs,
+    ...entries
+      .filter((entry) => entry.release === body.release && entry.wave === wave)
+      .map((entry) => entry.cr),
+  ]);
+  if (members.size >= WAVE_SEQ_STRIDE) {
+    return fail(
+      400,
+      `wave ${wave} would hold ${members.size} crs — a wave's seq block is ${WAVE_SEQ_STRIDE} ` +
+        `positions wide, so it carries at most ${WAVE_SEQ_STRIDE - 1}; nothing was written`,
+      { help: roadmapHints.waveOverflow(container, members.size) },
+    );
+  }
   for (const cr of crs) {
     const held = byCr.get(cr);
     if (held === undefined) {

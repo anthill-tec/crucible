@@ -290,14 +290,16 @@ export interface QueueEntryInput {
 /**
  * CR-CRU-091 §S2/AC23 — what a queue write DEFAULTED rather than was told.
  *
- * `defaultedSeq` names every cr whose `seq` this write chose from a position
- * index while a SIBLING IN THE SAME WAVE carries an explicit one (posted, or
- * held and carried forward). That mix of scales — carried `10, 20, 30` beside
- * a new row's index `1` — is deterministic but not authored, so the route
- * turns it into a warning naming those crs with `wave-sequence` as the
- * remedy. It is the §S3 severity ladder's warn-and-write rung: the write is
- * never refused, because a backlog edit must not require re-authoring an
- * order — but silence would let an arbitrary position read as an authored one.
+ * `defaultedSeq` names every cr whose `seq` this write CHOSE while a sibling
+ * in the same wave holds one on a DIFFERENT SCALE — the bulk post's array
+ * index beside a carried `10, 20, 30`, or `cr-plan`'s wave-block offset beside
+ * either. That mix is deterministic but not authored (the two scales interleave
+ * in an order nobody chose), so the route turns it into a warning naming those
+ * crs with `wave-sequence` as the remedy. It is the §S3 severity ladder's
+ * warn-and-write rung: the write is never refused, because a backlog edit must
+ * not require re-authoring an order — but silence would let a position from
+ * another scale read as an authored one. A chosen position that agrees with
+ * every sibling's scale is the ORDINARY case and is silent.
  */
 export interface QueueSeqReport {
   defaultedSeq: string[];
@@ -375,14 +377,21 @@ export function compareVersionLabels(a: string, b: string): number {
  * would have to renumber every later wave the moment one wave gains a member.
  *
  * So a wave's block starts at its own number times this stride, and the
- * authored position is the offset within it. The stride bounds a wave at 999
- * crs — three orders of magnitude past the largest real wave, and a wave that
- * somehow exceeded it would overlap the next wave's block (an ordering
- * anomaly the read tolerates) rather than lose or overwrite a row. The same
- * arithmetic assumes a wave belongs to exactly ONE release, which is how the
- * queue has numbered its lanes since CR-CRU-014 ("Wave 5 (0.2.0)").
+ * authored position is the offset within it. The stride bounds a wave at
+ * `WAVE_SEQ_STRIDE - 1` crs — three orders of magnitude past the largest real
+ * wave — and rather than let the thousandth member silently take the NEXT
+ * wave's base, `wave-sequence` REFUSES a wave that would reach the stride,
+ * naming the limit and the count.
+ *
+ * The same arithmetic assumes a wave belongs to exactly ONE release, which is
+ * how the queue has numbered its lanes since CR-CRU-014 ("Wave 5 (0.2.0)").
+ * Two releases sharing a wave NUMBER therefore share one block and can hold
+ * the same seq VALUE — tolerated and not refused (§S8), because the ordering
+ * anomaly is confined to a comparison across releases that no read makes.
+ * What is NOT tolerated is one release's call MUTATING the other's row: every
+ * write here is scoped to `(release, wave)` (AC8).
  */
-const WAVE_SEQ_STRIDE = 1000;
+export const WAVE_SEQ_STRIDE = 1000;
 
 /**
  * §S4 — the first seq of a wave's block. `wave` is TEXT (the queue has always
@@ -3527,6 +3536,7 @@ export class Store {
       return { changed: false, defaultedSeq: [] };
     }
     const moved = held === null || held.wave !== input.wave;
+    const base = waveSeqBase(input.wave);
     const siblings = moved
       ? this.db
           .query<QueueEntryRow, [string, string]>(
@@ -3535,7 +3545,7 @@ export class Store {
           .all(projectKey, input.wave)
           .filter((row) => row.cr !== input.cr)
       : [];
-    const seq = moved ? waveSeqBase(input.wave) + siblings.length + 1 : held!.seq;
+    const seq = moved ? base + siblings.length + 1 : held!.seq;
     const now = Date.now();
     this.db.transaction(() => {
       if (held === null) {
@@ -3558,11 +3568,18 @@ export class Store {
       }
     })();
     this.emit("events", projectKey);
-    // §S2/AC23 — cr-plan carries no seq, so a NEW position in a wave whose
-    // siblings already hold authored ones is exactly the mixed-scale case.
+    // §S2/AC23 — cr-plan's position is the WAVE'S OWN BLOCK offset, never an
+    // array index, so it cannot mismatch a sibling authored in that block: the
+    // ordinary append is silent. What it CAN mismatch is a sibling whose seq
+    // sits OUTSIDE the block — an explicit `seq: 10` or a position index that
+    // rode the bulk post — and then the two are on different scales and the
+    // appended position does not read as authored. Only that is reported.
     return {
       changed: true,
-      defaultedSeq: moved && siblings.length > 0 ? [input.cr] : [],
+      defaultedSeq:
+        moved && siblings.some((row) => row.seq <= base || row.seq >= base + WAVE_SEQ_STRIDE)
+          ? [input.cr]
+          : [],
     };
   }
 
@@ -3594,41 +3611,59 @@ export class Store {
    * block (`waveSeqBase`) so the block sits after every earlier wave of the
    * same release and re-sequencing touches no other wave (AC8).
    *
-   * `omitted` names members of the wave the list did not carry: they keep
-   * their relative order and are appended AFTER the authored block, and the
-   * route warns — Crucible never invents a position and never silently leaves
-   * one interleaved with authored ones.
+   * `omitted` names members of the SAME (release, wave) the list did not
+   * carry: they keep their relative order and are appended AFTER the authored
+   * block, and the route warns — Crucible never invents a position and never
+   * silently leaves one interleaved with authored ones. A row of another
+   * release that happens to share the wave NUMBER is not a member of this
+   * container at all: it shares the seq block (§S8, documented at
+   * `WAVE_SEQ_STRIDE`) and is never read, renumbered or re-tracked here (AC8).
    *
-   * Converged (§S7) when the stored order and, where declared, the track
-   * already equal the posted list. An ABSENT `track` is undeclared, so it is
-   * neither compared nor written (§S2's absent-leaves-it-alone rule).
+   * `track` lands on exactly the crs `crs` NAMES (§S4: "every cr in the
+   * list"). An omitted member is re-positioned but keeps the track it holds —
+   * a lane is a declaration about the crs the caller listed.
+   *
+   * Converged (§S7) when the stored order and, where declared, the track of
+   * the LISTED crs already equal the posted list. An ABSENT `track` is
+   * undeclared, so it is neither compared nor written (§S2's
+   * absent-leaves-it-alone rule).
    */
   sequenceQueueWave(
     projectKey: string,
     input: WaveSequenceInput,
   ): { changed: boolean; omitted: string[] } {
     const members = this.db
-      .query<QueueEntryRow, [string, string]>(
-        `SELECT * FROM queue_entries WHERE project_key = ? AND wave = ? ORDER BY seq ASC`,
+      .query<QueueEntryRow, [string, string, string]>(
+        `SELECT * FROM queue_entries
+         WHERE project_key = ? AND release = ? AND wave = ? ORDER BY seq ASC`,
       )
-      .all(projectKey, input.wave);
+      .all(projectKey, input.release, input.wave);
     const omitted = members.map((row) => row.cr).filter((cr) => !input.crs.includes(cr));
+    // The authored list, then the wave's omitted members: an index below
+    // `input.crs.length` IS the test for "the caller named this cr".
     const order = [...input.crs, ...omitted];
     const base = waveSeqBase(input.wave);
     const held = new Map(members.map((row) => [row.cr, row]));
     const converged = order.every((cr, index) => {
       const row = held.get(cr)!;
-      return (
-        row.seq === base + index + 1 && (input.track === undefined || row.track === input.track)
-      );
+      if (row.seq !== base + index + 1) return false;
+      // An omitted member's track is never WRITTEN, so it is never compared.
+      return input.track === undefined || index >= input.crs.length || row.track === input.track;
     });
     if (converged) return { changed: false, omitted };
     this.db.transaction(() => {
-      const update = this.db.query(
+      const reposition = this.db.query(
+        `UPDATE queue_entries SET seq = ? WHERE project_key = ? AND cr = ?`,
+      );
+      const repositionAndTrack = this.db.query(
         `UPDATE queue_entries SET seq = ?, track = ? WHERE project_key = ? AND cr = ?`,
       );
       order.forEach((cr, index) => {
-        update.run(base + index + 1, input.track ?? held.get(cr)!.track, projectKey, cr);
+        if (input.track !== undefined && index < input.crs.length) {
+          repositionAndTrack.run(base + index + 1, input.track, projectKey, cr);
+        } else {
+          reposition.run(base + index + 1, projectKey, cr);
+        }
       });
     })();
     this.emit("events", projectKey);

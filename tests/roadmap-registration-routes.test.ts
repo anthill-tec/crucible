@@ -278,6 +278,13 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
     }
   }
 
+  /** The same rows keyed by cr. AC8's "no row in any other wave or release
+   *  changes ANY field" is a WHOLE-ROW comparison — a seq-only one would miss
+   *  a stray `track`. */
+  function rowsByCr(key: string): Map<string, Record<string, unknown>> {
+    return new Map(storedRows(key).map((row) => [String(row.cr), row]));
+  }
+
   // ── §S8 — the five routes answer at exactly their named path/method ───────
 
   describe("§S8 — the five routes, at the exact method + path + body the table names", () => {
@@ -761,35 +768,123 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
           await plan(key, cr, "0.2.0", 5, `title ${cr}`);
         }
         await plan(key, "OTHER-WAVE", "0.2.0", 6, "another wave");
-        // A wave belongs to exactly ONE release (the queue numbers its lanes
-        // globally — "Wave 5 (0.2.0)"), so the other release gets its own.
-        await plan(key, "OTHER-RELEASE", "0.3.0", 7, "another release");
+        // §S8 settled that two releases sharing a wave NUMBER share the seq
+        // block, so the other release is planned into wave 5 TOO. Sharing the
+        // block is the documented concession; having a row rewritten by the
+        // other release's call never was.
+        await plan(key, "OTHER-RELEASE", "0.3.0", 5, "another release");
         await sequence(key, "0.2.0", 6, ["OTHER-WAVE"]);
-        await sequence(key, "0.3.0", 7, ["OTHER-RELEASE"]);
+        await sequence(key, "0.3.0", 5, ["OTHER-RELEASE"], "7");
 
         await sequence(key, "0.2.0", 5, ["A", "B", "C", "D"]);
-        const first = new Map((await queueEntries(key)).map((e) => [e.cr, e.seq]));
+        const first = rowsByCr(key);
 
         const swapped = await sequence(key, "0.2.0", 5, ["A", "C", "B", "D"]);
         expect(swapped.status).toBe(200);
-        const after = new Map((await queueEntries(key)).map((e) => [e.cr, e.seq]));
-        expect(after.get("A")).toBe(first.get("A"));
-        expect(after.get("D")).toBe(first.get("D"));
-        expect(after.get("B")).toBe(first.get("C"));
-        expect(after.get("C")).toBe(first.get("B"));
-        expect(after.get("OTHER-WAVE")).toBe(first.get("OTHER-WAVE"));
-        expect(after.get("OTHER-RELEASE")).toBe(first.get("OTHER-RELEASE"));
+        const after = rowsByCr(key);
+        expect(after.get("A")!.seq).toBe(first.get("A")!.seq);
+        expect(after.get("D")!.seq).toBe(first.get("D")!.seq);
+        expect(after.get("B")!.seq).toBe(first.get("C")!.seq);
+        expect(after.get("C")!.seq).toBe(first.get("B")!.seq);
+        // "changes any field" — whole row, so seq, track, filed_at and
+        // lifecycle_json are all inside the comparison.
+        expect(after.get("OTHER-WAVE")).toEqual(first.get("OTHER-WAVE")!);
+        expect(after.get("OTHER-RELEASE")).toEqual(first.get("OTHER-RELEASE")!);
 
         // Inserting X shifts C and D by one and leaves every other container alone.
         await sequence(key, "0.2.0", 5, ["A", "B", "X", "C", "D"]);
-        const inserted = new Map((await queueEntries(key)).map((e) => [e.cr, e.seq]));
-        expect(inserted.get("A")).toBe(first.get("A"));
-        expect(inserted.get("B")).toBe(first.get("B"));
-        expect(inserted.get("X")).toBe(first.get("C"));
-        expect(inserted.get("C")).toBe(first.get("D"));
-        expect(inserted.get("D")).toBe(first.get("D")! + 1);
-        expect(inserted.get("OTHER-WAVE")).toBe(first.get("OTHER-WAVE"));
-        expect(inserted.get("OTHER-RELEASE")).toBe(first.get("OTHER-RELEASE"));
+        const inserted = rowsByCr(key);
+        expect(inserted.get("A")!.seq).toBe(first.get("A")!.seq);
+        expect(inserted.get("B")!.seq).toBe(first.get("B")!.seq);
+        expect(inserted.get("X")!.seq).toBe(first.get("C")!.seq);
+        expect(inserted.get("C")!.seq).toBe(first.get("D")!.seq);
+        expect(inserted.get("D")!.seq).toBe((first.get("D")!.seq as number) + 1);
+        expect(inserted.get("OTHER-WAVE")).toEqual(first.get("OTHER-WAVE")!);
+        expect(inserted.get("OTHER-RELEASE")).toEqual(first.get("OTHER-RELEASE")!);
+      },
+    );
+
+    test(
+      "§S4 — --track lands on the crs the list NAMES and on no other member of " +
+        "the wave, while an omitted member is still re-seqed after the authored block",
+      async () => {
+        boot();
+        const key = await seed("s4-track-scope");
+        await propose(key, "0.13.0");
+        for (const cr of ["CR-W1", "CR-W2", "CR-W3"]) {
+          await plan(key, cr, "0.13.0", 13, `title ${cr}`);
+        }
+        await sequence(key, "0.13.0", 13, ["CR-W1", "CR-W2", "CR-W3"], "4");
+
+        const res = await sequence(key, "0.13.0", 13, ["CR-W2", "CR-W1"], "9");
+        expect(res.status).toBe(200);
+        const rows = rowsByCr(key);
+        expect(rows.get("CR-W1")!.track).toBe("track-9");
+        expect(rows.get("CR-W2")!.track).toBe("track-9");
+        // "--track applies to every cr in the list" — CR-W3 is not in the list,
+        // so it keeps the track it already held.
+        expect(rows.get("CR-W3")!.track).toBe("track-4");
+        // It IS still re-seqed and appended after the authored block (§S8).
+        expect(rows.get("CR-W2")!.seq).toBe(13001);
+        expect(rows.get("CR-W1")!.seq).toBe(13002);
+        expect(rows.get("CR-W3")!.seq).toBe(13003);
+        expect(res.body.warnings!.find((w) => w.code === "unsequenced-members")!.crs).toEqual([
+          "CR-W3",
+        ]);
+      },
+    );
+
+    test(
+      "§S4/AC8 — a call naming ONE release does not touch a row of ANOTHER " +
+        "release sharing the wave number: not its seq, not its track, no field",
+      async () => {
+        boot();
+        const key = await seed("s4-release-scope");
+        await propose(key, "0.11.0");
+        await propose(key, "0.12.0");
+        for (const cr of ["CR-U1", "CR-U2", "CR-U3"]) {
+          await plan(key, cr, "0.11.0", 11, `title ${cr}`);
+        }
+        await plan(key, "CR-OTHER-REL", "0.12.0", 11, "same wave number, other release");
+        await sequence(key, "0.12.0", 11, ["CR-OTHER-REL"], "8");
+        const before = rowsByCr(key).get("CR-OTHER-REL")!;
+
+        const res = await sequence(key, "0.11.0", 11, ["CR-U1", "CR-U2", "CR-U3"], "5");
+        expect(res.status).toBe(200);
+        // The other release is not a member of this container, so it is not an
+        // omitted member either — the answer names exactly the three.
+        expect(res.body.entries!.map((e) => e.cr).sort()).toEqual(["CR-U1", "CR-U2", "CR-U3"]);
+        expect(res.body.warnings!.find((w) => w.code === "unsequenced-members")).toBeUndefined();
+
+        const after = rowsByCr(key);
+        expect(after.get("CR-OTHER-REL")).toEqual(before);
+        expect([...new Set(["CR-U1", "CR-U2", "CR-U3"].map((cr) => after.get(cr)!.track))]).toEqual(
+          ["track-5"],
+        );
+        // §S8's tolerated consequence, pinned: the two releases SHARE the wave's
+        // block, so they can hold the same seq VALUE. What is not tolerated is
+        // one release's call rewriting the other release's row.
+        expect(after.get("CR-OTHER-REL")!.seq).toBe(after.get("CR-U1")!.seq);
+      },
+    );
+
+    test(
+      "§S4 — a wave-sequence whose member count would REACH the seq stride is " +
+        "refused naming the limit and the count, and writes nothing",
+      async () => {
+        boot();
+        const key = await seed("s4-stride");
+        await propose(key, "0.2.0");
+        await plan(key, "CR-1", "0.2.0", 5, "title CR-1");
+        const before = storedRows(key);
+
+        const crs = Array.from({ length: 1001 }, (_, index) => `CR-${index + 1}`);
+        const refused = await sequence(key, "0.2.0", 5, crs);
+        expect(refused.status).toBe(400);
+        expect(refused.body.error).toContain("wave 5");
+        expect(refused.body.error).toContain("1001");
+        expect(refused.body.error).toContain("999");
+        expect(storedRows(key)).toEqual(before);
       },
     );
 
@@ -1035,12 +1130,14 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         const cyclic = await plan(key, "CR-A", "0.2.0", 5, "in a cycle");
         expect(cyclic.status).toBe(409);
         expect(cyclic.body.ok).toBe(false);
-        expect(cyclic.body.error).toContain("CR-A");
-        expect(cyclic.body.error).toContain("CR-B");
+        // AC9 — the members named IN ORDER, closing the ring: a set-shaped
+        // error naming the same two crs does not satisfy it.
+        expect(cyclic.body.error).toContain("CR-A → CR-B → CR-A");
         expect(JSON.stringify(await queueEntries(key))).toBe(before);
 
         const cyclicSequence = await sequence(key, "0.2.0", 5, ["CR-A", "CR-B"]);
         expect(cyclicSequence.status).toBe(409);
+        expect(cyclicSequence.body.error).toContain("CR-A → CR-B → CR-A");
         expect(JSON.stringify(await queueEntries(key))).toBe(before);
 
         // The OTHER severity, in the same fixture: accepted and flagged.
@@ -1048,6 +1145,33 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         expect(unknown.status).toBe(200);
         expect(unknown.body.unknownDependencies).toEqual(["CR-CRU-999"]);
         expect((await entryOf(key, "CR-C"))!.release).toBe("0.2.0");
+      },
+    );
+
+    test(
+      "§S8 — a cycle refusal OUTRANKS convergence: an IDENTICAL re-post of a cr " +
+        "sitting in a cycle is still 409 and still writes nothing",
+      async () => {
+        boot();
+        const key = await seed("s8-cycle-outranks");
+        await propose(key, "0.2.0");
+        await plan(key, "CR-C1", "0.2.0", 5, "title CR-C1");
+        await plan(key, "CR-C2", "0.2.0", 5, "title CR-C2");
+        // The graph rides the full replace, which carries release and seq
+        // forward; the titles are re-declared so the re-post below is IDENTICAL
+        // to the held row — the case §S7 would otherwise converge on.
+        await seedGraph(key, [
+          { cr: "CR-C1", wave: 5, title: "title CR-C1", dependsOn: ["CR-C2"] },
+          { cr: "CR-C2", wave: 5, title: "title CR-C2", dependsOn: ["CR-C1"] },
+        ]);
+        const before = storedRows(key);
+
+        const identical = await plan(key, "CR-C1", "0.2.0", 5, "title CR-C1");
+        expect(identical.status).toBe(409);
+        expect(identical.body.ok).toBe(false);
+        expect(identical.body.error).toContain("CR-C1 → CR-C2 → CR-C1");
+        expect(identical.body.converged).toBeUndefined();
+        expect(storedRows(key)).toEqual(before);
       },
     );
 
@@ -1097,6 +1221,8 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         const warning = res.body.warnings!.find((w) => w.code === "cross-wave-backwards");
         expect(warning).toBeDefined();
         expect(warning!.containers).toEqual(["0.2.0/4", "0.2.0/5"]);
+        // "naming BOTH CONTAINERS, not the two crs" — so no `crs` at all.
+        expect(warning!.crs).toBeUndefined();
         expect((await entryOf(key, "CR-EARLY"))!.wave).toBe("4");
       },
     );
@@ -1430,25 +1556,104 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
     });
 
     test(
-      "cr-plan into a wave whose siblings already carry authored seq values warns " +
-        "naming the new cr, and STILL WRITES (warn-and-write)",
+      "cr-plan into a wave whose siblings carry seq values from ANOTHER scale " +
+        "warns naming the new cr, and STILL WRITES (warn-and-write)",
       async () => {
         boot();
         const key = await seed("ac23-cr-plan");
         await propose(key, "0.2.0");
-        await plan(key, "CR-A", "0.2.0", 5, "first");
-        await plan(key, "CR-B", "0.2.0", 5, "second");
-        await sequence(key, "0.2.0", 5, ["CR-A", "CR-B"]);
+        // The only way into the mixed-scale case: an explicitly authored seq
+        // riding the bulk post, outside wave 5's own block.
+        const seeded = await post(queuePath(key), {
+          agentId: ORCH,
+          entries: [
+            { cr: "CR-A", wave: 5, dependsOn: [], seq: 10 },
+            { cr: "CR-B", wave: 5, dependsOn: [], seq: 20 },
+          ],
+        });
+        expect(seeded.status).toBe(200);
 
         const added = await plan(key, "CR-NEW", "0.2.0", 5, "unauthored position");
         expect(added.status).toBe(200);
         const warning = added.body.warnings!.find((w) => w.code === "defaulted-seq");
         expect(warning).toBeDefined();
         expect(warning!.crs).toEqual(["CR-NEW"]);
+        expect(warning!.message).toContain("CR-NEW");
         expect(warning!.message).toContain("wave-sequence");
         expect((await entryOf(key, "CR-NEW"))!.release).toBe("0.2.0");
+        // The mismatch the warning reports is real: the siblings kept 10 and 20
+        // while the new position came from wave 5's block.
+        const seqs = new Map((await queueEntries(key)).map((e) => [e.cr, e.seq]));
+        expect([seqs.get("CR-A"), seqs.get("CR-B")]).toEqual([10, 20]);
+        expect(seqs.get("CR-NEW")! > 5000).toBe(true);
       },
     );
+
+    test(
+      "cr-plan into a wave whose seq values were NEVER authored emits no " +
+        "defaulted-seq warning — an appended block position is the ordinary case",
+      async () => {
+        boot();
+        const key = await seed("ac23-cr-plan-quiet");
+        await propose(key, "0.2.0");
+        const first = await plan(key, "CR-N1", "0.2.0", 9, "first into the wave");
+        expect(first.status).toBe(200);
+        expect(first.body.warnings).toEqual([]);
+
+        const second = await plan(key, "CR-N2", "0.2.0", 9, "second into the wave");
+        expect(second.status).toBe(200);
+        expect(second.body.warnings).toEqual([]);
+        const seqs = new Map((await queueEntries(key)).map((e) => [e.cr, e.seq]));
+        expect([seqs.get("CR-N1"), seqs.get("CR-N2")]).toEqual([9001, 9002]);
+      },
+    );
+  });
+
+  // ── §S8 — an omitted member is appended and NAMED, never interleaved ──────
+
+  describe("§S8 — the posted list is the wave's WHOLE order, and says so when it is not", () => {
+    test(
+      "the members the posted list omits keep their RELATIVE order, land AFTER " +
+        "the authored block, and are named in an unsequenced-members warning",
+      async () => {
+        boot();
+        const key = await seed("s8-unsequenced");
+        await propose(key, "0.11.0");
+        for (const cr of ["CR-U1", "CR-U2", "CR-U3", "CR-U4"]) {
+          await plan(key, cr, "0.11.0", 11, `title ${cr}`);
+        }
+        await sequence(key, "0.11.0", 11, ["CR-U1", "CR-U2", "CR-U3", "CR-U4"]);
+
+        const res = await sequence(key, "0.11.0", 11, ["CR-U4"]);
+        expect(res.status).toBe(200);
+        const warning = res.body.warnings!.find((w) => w.code === "unsequenced-members");
+        expect(warning).toBeDefined();
+        expect(warning!.crs).toEqual(["CR-U1", "CR-U2", "CR-U3"]);
+        expect(warning!.message).toContain("CR-U1");
+        expect(warning!.message).toContain("wave 11");
+
+        // The authored block first, then the omitted three in their own order.
+        const seqs = new Map((await queueEntries(key)).map((e) => [e.cr, e.seq]));
+        expect(["CR-U4", "CR-U1", "CR-U2", "CR-U3"].map((cr) => seqs.get(cr))).toEqual([
+          11001, 11002, 11003, 11004,
+        ]);
+      },
+    );
+
+    test("a posted list covering the WHOLE wave emits no such warning", async () => {
+      boot();
+      const key = await seed("s8-sequenced-whole");
+      await propose(key, "0.11.0");
+      for (const cr of ["CR-U1", "CR-U2"]) {
+        await plan(key, cr, "0.11.0", 11, `title ${cr}`);
+      }
+
+      const res = await sequence(key, "0.11.0", 11, ["CR-U2", "CR-U1"]);
+      expect(res.status).toBe(200);
+      expect(res.body.warnings!.find((w) => w.code === "unsequenced-members")).toBeUndefined();
+      const seqs = new Map((await queueEntries(key)).map((e) => [e.cr, e.seq]));
+      expect([seqs.get("CR-U2"), seqs.get("CR-U1")]).toEqual([11001, 11002]);
+    });
   });
 
   // ── §S3 — moving a cr out of a wave leaves that wave dense ────────────────

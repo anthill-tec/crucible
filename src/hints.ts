@@ -362,6 +362,11 @@ export const roadmapHints = {
       : `cr-plan --cr ${cr} --release <v> --wave <n> --title <brief> to move it into ${container}, or re-send --crs without it — it is planned into ${planned}`,
     `GET /api/v2/projects/<key>/queue — the crs actually registered in ${container}`,
   ],
+  /** §S4 — a wave-sequence whose member count would reach the seq stride. */
+  waveOverflow: (container: string, count: number): string[] => [
+    `split ${container} across two waves: cr-plan --cr <cr> --release <v> --wave <n+1> --title <brief> moves a cr out, then re-send --crs for each wave`,
+    `${count} crs in one wave is past the block a wave's seq values live in — nothing was written, so the stored order is still the last authored one`,
+  ],
   /** §S5 — the ONE finding that refuses: a dependency cycle. */
   dependencyCycle: (members: string[]): string[] => [
     `POST /api/v2/projects/<key>/queue — re-post the queue with ${members[0] ?? "the cycle"}'s dependsOn corrected; the cycle is ${members.join(" → ")}`,
