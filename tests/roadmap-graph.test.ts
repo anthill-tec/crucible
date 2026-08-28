@@ -74,6 +74,10 @@ interface BuilderEntry {
   dependsOn: string[];
   status: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "COMPLETED_UNTRACKED";
   track?: string;
+  // CR-CRU-091 §S2/AC18 — the STORED queue position `listQueue` publishes on
+  // EVERY entry. Optional here only so the fixtures that assert nothing about
+  // ordering stay untouched; the live read always carries it.
+  seq?: number;
 }
 interface BuilderRelease {
   version: string;
@@ -363,6 +367,13 @@ const REAL_RELEASES: BuilderRelease[] = [
  * release (`COMPLETED (0.2.0)`), which is prose, not a status. `VOID` is mapped
  * to `PENDING` because that is what the live board reports for the one VOID row
  * (CR-CRU-082, measured 2026-08-27); nothing here depends on that row.
+ *
+ * CR-CRU-091 §S2/AC18 — each row also carries the STORED `seq` the live read
+ * publishes on every entry, since that is now what the builder consumes. The
+ * value is the row's authored POSITION on a 10-stride, not its array index:
+ * stored `seq` is stamped per (release, wave) block by `wave-sequence`, so it
+ * is never globally the index, and a stride keeps every ordering assertion
+ * below able to tell a consumed `seq` from a re-derived one.
  */
 function parseQueueTable(src: string): BuilderEntry[] {
   const entries: BuilderEntry[] = [];
@@ -380,6 +391,7 @@ function parseQueueTable(src: string): BuilderEntry[] {
       wave: /^\d+/.exec(cells[5])?.[0] ?? cells[5],
       dependsOn: (cells[4].match(/\d{3}/g) ?? []).map((n) => `CR-CRU-${n}`),
       status: statusToken === "COMPLETED" ? "COMPLETED" : "PENDING",
+      seq: entries.length * 10,
     });
   }
   return entries;
@@ -781,6 +793,19 @@ const strided = <T,>(xs: T[]): T[] => {
 };
 
 /**
+ * A permutation RE-AUTHORED: the rows in their new order, each carrying the
+ * stored `seq` that order implies.
+ *
+ * CR-CRU-091/AC18 — re-authoring the real queue means re-stamping the stored
+ * `seq` (that is what `wave-sequence` does), not shuffling a response array:
+ * `listQueue` is `ORDER BY seq`, so a payload permuted WITHOUT re-stamping is
+ * not a re-authored queue at all. The builder consumes the published value, so
+ * an ordering assertion has to move the value it consumes.
+ */
+const reauthored = (xs: BuilderEntry[]): BuilderEntry[] =>
+  xs.map((e, i) => ({ ...e, seq: i * 10 }));
+
+/**
  * The three wave profiles AC8 must be completely blind to: every entry in ONE
  * wave, every entry in its OWN wave, and no `wave` field at all.
  */
@@ -855,8 +880,8 @@ describe("CR-CRU-077 §S1/AC2 — the authored queue sequence is CARRIED as data
     const authored = REAL_ENTRIES.map((e) => e.cr);
     for (const { name, entries } of [
       { name: "as authored", entries: REAL_ENTRIES },
-      { name: "reversed", entries: reversed(REAL_ENTRIES) },
-      { name: "3-strided", entries: strided(REAL_ENTRIES) },
+      { name: "reversed", entries: reauthored(reversed(REAL_ENTRIES)) },
+      { name: "3-strided", entries: reauthored(strided(REAL_ENTRIES)) },
     ]) {
       const g = buildRoadmapGraph(entries, REAL_RELEASES);
       // The carried order IS the input order — not the original, not the id
@@ -904,9 +929,9 @@ describe("CR-CRU-077 §S1/AC3 — same-wave CRs with no dependency between them 
     // and neither depends on the other. AC3 (parallel) and AC2 (ordered) must
     // hold in the SAME graph — that is the whole tension, in three entries.
     const entries: BuilderEntry[] = [
-      { cr: "CR-R", title: "Root", wave: "3", dependsOn: [], status: "COMPLETED" },
-      { cr: "CR-X", title: "Left", wave: "4", dependsOn: ["CR-R"], status: "PENDING" },
-      { cr: "CR-Y", title: "Right", wave: "4", dependsOn: ["CR-R"], status: "PENDING" },
+      { cr: "CR-R", title: "Root", wave: "3", dependsOn: [], status: "COMPLETED", seq: 10 },
+      { cr: "CR-X", title: "Left", wave: "4", dependsOn: ["CR-R"], status: "PENDING", seq: 20 },
+      { cr: "CR-Y", title: "Right", wave: "4", dependsOn: ["CR-R"], status: "PENDING", seq: 30 },
     ];
     const g = buildRoadmapGraph(entries, []);
     // Parallel branches from the SAME upstream node.
