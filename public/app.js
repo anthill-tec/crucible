@@ -26,6 +26,20 @@
       // is open, so the roadmap table + live overlay stay current.
       queue: [],
       releases: [],
+      // CR-CRU-078 §S9 — the release strip's SECOND read: the LIVE release
+      // proposals (GET /api/v2/projects/<key>/release-proposals, CR-CRU-091
+      // §S8, answering `{ok, proposals:[{label, targetAt?, timestamp,
+      // waves[]}], totalCount}`). Held SEPARATELY from `releases` and
+      // concatenated only at render: CR-091 §S1 fixed the two reads' sort
+      // directions deliberately opposite — `listReleases` newest-first,
+      // `listReleaseProposals` ascending by version — so a consumer appends
+      // "shipped, then proposed" with NO reversal, and merging them here
+      // would throw that away. Records are held VERBATIM: `targetAt` is
+      // optional (an absent target must stay absent, never 0/1970) and in
+      // epoch SECONDS like `releasedAt`, `waves` is joined server-side so
+      // five clients cannot join it differently, and there is no `status` —
+      // every returned proposal is live by construction.
+      releaseProposals: [],
       // CR-CRU-017 §S3 — the runs opened through /runs/start that have NOT
       // settled yet, as served by the additive `openRuns` field on
       // GET /api/v2/events. Each one is painted as a live "running…" card and
@@ -132,6 +146,11 @@
       vanX.replace(state.plans, () => []);
       vanX.replace(state.queue, () => []);
       vanX.replace(state.releases, () => []);
+      // CR-CRU-078 §S9 — the proposals slice is cleared with `releases`, in
+      // the same synchronous scope-change step: a project switch whose
+      // proposals read then fails or lags must not leave the previous
+      // project's plan painted under this one's shipped gates.
+      vanX.replace(state.releaseProposals, () => []);
       // CR-CRU-028 §S2 — bucket keys (YYYY-MM-DD / week-N / month-YYYY-MM) are
       // deterministic and collide across projects, so a leftover open drill
       // path would render a row pre-unfolded on the newly-navigated project.
@@ -271,14 +290,16 @@
       }
     }
 
-    // CR-CRU-014 §S3 — the Roadmap tab's queue + releases slices. Only a
-    // workspace has a scoped queue/release ledger; on home both stay empty.
+    // CR-CRU-014 §S3 — the Roadmap tab's queue + releases slices, plus
+    // CR-CRU-078 §S9's release-proposals slice. Only a workspace has a scoped
+    // queue/release ledger; on home all three stay empty.
     // Guarded independently of core/plans so a queue hiccup never poisons
     // the rest of the surface, and the last-known table survives a blip.
     async function refetchRoadmap() {
       if (state.route.page !== "workspace") {
         vanX.replace(state.queue, () => []);
         vanX.replace(state.releases, () => []);
+        vanX.replace(state.releaseProposals, () => []);
         return;
       }
       const key = encodeURIComponent(state.route.projectKey);
@@ -293,6 +314,21 @@
         vanX.replace(state.releases, () => body.releases ?? []);
       } catch {
         // Keep the last-known releases visible while the route is unreachable.
+      }
+      try {
+        // CR-CRU-078 §S9 / CR-CRU-091 §S8 — the strip's second read, on the
+        // SAME path and cadence as the ledger above so the two halves of one
+        // sequence can never be a tick apart. Its own try/catch: the reads
+        // fail INDEPENDENTLY, and shipped gates with proposals unavailable is
+        // a legitimate degraded strip (never the AC19 empty state, which
+        // means nothing is registered at all).
+        const body = await getJson(`/api/v2/projects/${key}/release-proposals`);
+        vanX.replace(state.releaseProposals, () => body.proposals ?? []);
+      } catch {
+        // Degraded, not broken: keep the last-known proposals and leave
+        // state.releases entirely alone. No sentinel, no error state — this
+        // cycle renders nothing, and a banner over working data is precisely
+        // what §S9 forbids.
       }
     }
 
