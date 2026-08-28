@@ -96,7 +96,13 @@ Resolution, over the lane's entries in declared `(release, wave, seq)` order:
 - `in-flight` — the lane already holds an `IN_PROGRESS` entry. Carries that CR id. Evaluated
   FIRST: an occupied lane holds everything behind it.
 - `dependency` — one or more `dependsOn` CRs are unmerged and still alive. Carries each blocking
-  CR id with its live status.
+  CR id with its live status. **Reachability, found while building C1's fixtures:** a blocker
+  sitting in the SAME lane at a lower `seq` cannot produce this trigger, because that blocker is
+  itself the lowest-`seq` actionable entry and the answer there is `NEXT` **on the blocker**. So an
+  ordinary `dependency` HOLD is only expressible when the blocker lies OUTSIDE the lane — another
+  track, or a wave the lane does not cover. A fixture that puts the blocker behind its dependant in
+  one lane is testing nothing, and a resolver that returns `dependency` for it is scanning past the
+  front entry, which §S4 forbids.
 - `dead-dependency` — a `dependsOn` CR that is `VOID` or `SUPERSEDED`. Carries the dep id, its
   `lifecycle.state`, and its `by` when superseded. **Distinct from `dependency` because it never
   clears by waiting**: a dependency on a dead CR is a roadmap defect the orchestrator must fix by
@@ -311,6 +317,18 @@ A faked `--full` on a one-record answer is as wrong as a missing one.
   spelling. Cross-implementation: for each accepted spelling, the value `wave-sequence` causes the
   server to store equals the value the shared Python helper produces — a divergence between
   `normalizeTrack` (TypeScript, write path) and the client helper (read path) fails this AC.
+
+  **Toolchain dependency, decided 2026-08-28.** The cross-implementation half needs a real server,
+  so it boots a scratch one (free port, `mkdtemp` DB) and drives the actual write path. Where `bun`
+  is absent the class raises `SkipTest` with a message stating that AC18's cross-implementation
+  half is NOT proven, rather than passing silently. That is the right trade: CR-CRU-066 §S2 makes
+  Bun a GUARANTEED install dependency — the `server` stage detects it, bootstraps it when absent
+  and fails the install with a named remedy otherwise — so its absence means a broken install, not
+  a legitimate lean environment, and a loud skip names that. A hard failure would punish a
+  deliberately minimal checkout for a condition the installer already guarantees. Every other test
+  in the file is pure and needs no toolchain. A source-text guard on `store.ts` was the first
+  attempt and was DELETED when this landed: it would break on a harmless refactor and pass while
+  the surrounding logic changed.
 
 ## Estimated size
 
