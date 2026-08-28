@@ -62,18 +62,31 @@ frozen at the CR-054 snapshot:
 | `tests/client/test_cr054_fleet_inventory.py` | verb/function **presence** — the frozen `THE_42` set, hard-asserted to contain exactly 42 names (`:128-130`) |
 | `tests/client/test_client_fleet_envelope_census.py` | **envelope** conformance — CR-058's detector, that every verb in every client emits a real TOON-AXI envelope |
 
-This release adds **six** fleet verbs, not one, so the frozen count moves once,
-here, with all six named:
+This release adds **six new verbs** and promotes a seventh existing one, so the
+frozen set gains **seven names** and the count moves once, here:
 
-- `queue_file` — this CR's §S1 parity fix.
+- `queue_file` — not a new verb, but new to the FLEET set: it exists today on
+  python only, and this CR's §S1 is what makes it fleet-wide and therefore
+  countable. This is why the set gains seven while only six verbs are new.
 - `release_propose`, `cr_plan`, `wave_sequence`, `cr_supersede`, `cr_void` — CR-CRU-091 §S3.
 - `next` — CR-CRU-092.
 
-`THE_42` becomes **`THE_49`** (42 + 6 + `queue_file`), renamed rather than
-silently re-pointed so the name never lies about its own count again, with a
-comment naming each new member and its CR. The classification partition
-(`:123-163`) is extended so every new name lands in a category — an unclassified
-name fails the partition assertion, which is the guardrail working.
+`THE_42` becomes **`THE_49`** — **42 + 7**, renamed rather than silently
+re-pointed so the name never lies about its own count again, with a comment
+naming each new member and its CR. The classification partition (`:123-163`) is
+extended so every new name lands in a category — an unclassified name fails the
+partition assertion, which is the guardrail working.
+
+**What CR-CRU-091 C3 already built for this, and what it deliberately did not.**
+091 did NOT touch `THE_42`: its count is CR-054's own measurement and is
+load-bearing for that file's partition arithmetic (four category counts summing
+to 42), so moving it there would have claimed this CR's number early and split
+one renumbering across two CRs. Instead C3 added two SEPARATE frozen sets —
+`CR091_ROADMAP_VERB_FUNCTIONS` and `CR091_ROADMAP_VERBS` (five names each) —
+checked by the same `_defined_in_every_client` / duplicate-definition machinery
+and asserted **disjoint** from `THE_42`, so neither fixture can absorb the other.
+This CR collapses all three sets into the one re-frozen `THE_49`; the disjointness
+assertion is what proves the collapse loses nothing.
 
 **Why this CR waits for both.** A census frozen before `next` exists would either
 break the moment CR-092 lands or force 092 to edit the same frozen count — two

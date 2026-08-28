@@ -339,6 +339,33 @@ assert against this list, so nothing here may be re-decided in a client:
   block. Not refused, documented at the constant. Declaring a release on a CR that stays in its
   wave therefore moves no `seq`.
 
+**Settled during C3 (the client half is built; these bind the fleet).**
+
+- **Request bodies are the named fields plus `agentId`, and NOTHING else** — no `context` block.
+  The body column above is the contract and lists none; the server's `eventContext()` treats it as
+  optional. Asserted strictly (exact-dict), so adding one later must be a decision rather than a
+  drift.
+- **`--target` input format.** §S1 fixes the WIRE unit (epoch SECONDS) but named no CLI format.
+  `--target` accepts an ISO-8601 **date** (read as midnight **UTC**, so the stored value is
+  machine-independent), an ISO-8601 **datetime**, or a bare **epoch-seconds integer**. Anything
+  else is refused BY NAME with exit `2` and no POST. A local-timezone reading is specifically
+  rejected: the same command on two machines must not record two different targets.
+- **`--fields` NARROWS on these five verbs**, deliberately diverging from `status`, where the flag
+  is ADDITIVE (a base column set plus requested extras). A roadmap row is already the minimal
+  record the write produced, so an additive flag would have nothing to add and P2 would be
+  unsatisfiable. The divergence is intentional and documented at the selector.
+- **`totalCount` rides EVERY roadmap envelope**, not only obviously list-bearing ones: the list
+  length for a list answer, `1` for a single-record answer, `0` for a failure. Uniform and never
+  meaningless — and it settles the "is `unknownDependencies` a list answer?" argument by not
+  having it.
+- **`requiredRole: ORCHESTRATOR` rides every FAILURE envelope.** AC16 requires BOTH refusals to
+  name the required role, but the shared caller-auth seam's unregistered-caller 409 does not carry
+  one, so the client discloses it. It is disclosure of a fixed fact, not a client-side decision.
+- **A refusal LIFTS the server's own `help[]`; it never re-derives it.** The client parses the
+  server's structured error and surfaces that `help[]` verbatim. This is what keeps §S9 honest —
+  AC6's help entry is `roadmapHints.unproposedRelease`'s, not a second copy of the same rule living
+  in a client — and it means changing a server hint reaches all five clients for free.
+
 ### §S9 Division of labour — which half owns which file
 
 Two halves, one wire (§S8). Neither half may change that table unilaterally.
