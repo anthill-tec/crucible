@@ -134,10 +134,14 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 - 2026-08-27 — deferred: the `[fleet]` uninstall inverse (CR-CRU-090 Non-goals); `STAGE_ORDER` has
   four stages, `UNINSTALL_STAGE_ORDER` three.
 - 2026-08-28 — roadmap design **approved** (`.lavish/crucible-workflow-flowchart.html` §1–§14): release-paged
-  flowchart, no dependency edges drawn, whole containers only. Roadmap rows **cleared from the DB** on request
-  (backup `data/crucible.db.pre-roadmap-clear-1787893879`); the board stays empty until CR-091 registers it under
-  the declared model. CR-078 re-based, 079/085/075 re-scoped, 091/092/093 filed. CR-082's VOID stands — release
-  targeting returns on the CR, not the wave.
+  flowchart, no dependency edges drawn, whole containers only. CR-078 re-based, 079/085/075/022/018 re-scoped,
+  091/092/093 filed. CR-082's VOID stands — release targeting returns on the CR, not the wave.
+- 2026-08-28 — the development board is **empty by intent**: queue rows AND the four 0.1.x release records were
+  cleared so the user can dogfood the CR-091 API to populate it properly, as the last step before the 0.2.0
+  release. Provenance is exported to `docs/release-provenance-0.1.x.json` (tracked) with its replay command —
+  `commit`/`releasedAt` are re-derivable from tags but 0.1.0's 60-id `crs` is **not** (nine ids landed with no
+  naming merge commit). DB snapshots: `data/crucible.db.pre-roadmap-clear-1787893879`,
+  `…pre-release-clear-1787897137` (`data/` is gitignored — the JSON is the durable copy).
 - CI runs an unpinned bun deliberately. Pinning was tried in CR-087 and **reverted** (`93f42f7`): `packageManager` makes npm provision through corepack (958 ms → 13082 ms on the npm-pack test). The both-orderings fixtures catch a console-format flip instead. [CR-CRU-089](CR-CRU-089-pin-bun-without-telling-npm.md) is VOID; revisit only if a flip recurs.
 - The bun failure-detail mis-attribution (a leaked async throw landing on the next leaf) is
   **fixed** by [CR-CRU-088](CR-CRU-088-failure-detail-marries-the-wrong-leaf.md) §S1: a detail block

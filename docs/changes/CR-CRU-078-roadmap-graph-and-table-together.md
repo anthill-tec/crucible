@@ -147,8 +147,12 @@ Workflow — the jump itself is **CR-079**. Selecting on either side highlights 
 - **AC17** — selecting a row highlights its node and vice versa.
 - **AC18** — an `IN_PROGRESS` row is clickable and marked as the drill-through source; the jump is
   CR-079's AC.
-- **AC19** — with **no** queue registered the surface renders a definitive empty state naming the
-  registration verb, and no error. (The board is legitimately empty until re-registered.)
+- **AC19** — with **no** queue and **no** releases registered, every zone renders one definitive
+  empty state naming the registration verb, and no error. **Observed 2026-08-28 on the cleared
+  board, and this is the failure to fix:** the table shows "No execution queue registered yet …"
+  while the graph renders two orphan terminals — a `Start` and an `End` bubble, 2 nodes and 0
+  edges, with no message at all. Drawing skeleton chrome for an empty project fails this AC: an
+  empty board renders **no** terminals, no strip and no wave box, only the empty state.
 - **AC20** — **zero dependency edges are drawn.** A rendered edge whose meaning is `dependsOn`
   fails this AC; dependency is stated only as the table's column.
 
