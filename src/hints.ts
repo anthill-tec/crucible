@@ -327,3 +327,54 @@ export const authHints = {
     "then retry this call with that same agentId in the body",
   ],
 };
+
+/**
+ * CR-CRU-091 §S3/§S8 — the roadmap-registration refusals. Every entry is
+ * STATE-DERIVED (AXI P9): it names the state actually found — the role the
+ * caller holds, the release nobody proposed, the container the cr really sits
+ * in — and offers the concrete next CALL that fixes it, never an explanation
+ * of the rule. The server emits no templates of its own beyond these next
+ * steps (§S6's division of labour); the asking stays the client's.
+ */
+export const roadmapHints = {
+  /**
+   * §S3 — a registered caller whose role is not ORCHESTRATOR. `role` is the
+   * one it declared, or undefined for a pre-CR-044 row that declared none —
+   * which is refused rather than assumed, so the help says so out loud.
+   */
+  notOrchestrator: (agentId: string, role: string | undefined, required: string): string[] => [
+    role === undefined
+      ? `POST /api/v2/agents/unregister {projectKey, agentId} then re-register ${agentId} with role ${required} — its row predates declared roles and carries none, and a role is never fabricated`
+      : `re-register ${agentId} with role ${required}: POST /api/v2/agents/register {projectKey, agentId, role: "${required}"} — it currently holds ${role}`,
+    "roadmap registration is orchestrator work: release-propose, cr-plan, wave-sequence, cr-supersede and cr-void all require it",
+    "an agent already exercising a TDD role should hand the call to its orchestrator rather than re-declaring its own role",
+  ],
+  /** §S8/AC6 — a cr-plan or wave-sequence naming a release nobody proposed. */
+  unproposedRelease: (label: string): string[] => [
+    `release-propose --label ${label} — the super container must exist before a CR can target it`,
+    `GET /api/v2/projects/<key>/release-proposals — the live proposals a CR can be planned into`,
+    `a release that has already SHIPPED is settled history and is no longer a plannable target for ${label}`,
+  ],
+  /** §S4/AC7 — wave-sequence naming a cr the container does not hold. */
+  unsequenceableCr: (cr: string, planned: string | undefined, container: string): string[] => [
+    planned === undefined
+      ? `cr-plan --cr ${cr} --release <v> --wave <n> --title <brief> — sequencing never plans, so ${cr} needs a row before it can hold a position`
+      : `cr-plan --cr ${cr} --release <v> --wave <n> --title <brief> to move it into ${container}, or re-send --crs without it — it is planned into ${planned}`,
+    `GET /api/v2/projects/<key>/queue — the crs actually registered in ${container}`,
+  ],
+  /** §S5 — the ONE finding that refuses: a dependency cycle. */
+  dependencyCycle: (members: string[]): string[] => [
+    `POST /api/v2/projects/<key>/queue — re-post the queue with ${members[0] ?? "the cycle"}'s dependsOn corrected; the cycle is ${members.join(" → ")}`,
+    "every other dependency finding is accepted and reported — a cycle is the only one that refuses, because no order can satisfy it",
+  ],
+  /** §S3/AC14 — a lifecycle verb aimed at a cr a cut release already shipped. */
+  shippedCr: (cr: string, label: string): string[] => [
+    `GET /api/v2/projects/<key>/releases — ${label} named ${cr} in its crs, and a cut release is settled fact`,
+    `record the successor's own intent instead: cr-plan --cr <new> --release <v> --wave <n> --title <brief>`,
+  ],
+  /** §S3 — supersede/void aimed at a cr that was never registered. */
+  unregisteredCr: (cr: string): string[] => [
+    `cr-plan --cr ${cr} --release <v> --wave <n> --title <brief> — a lifecycle disposition belongs to a registered cr, and neither verb creates one`,
+    "GET /api/v2/projects/<key>/queue — the crs this project actually holds",
+  ],
+};
