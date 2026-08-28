@@ -702,13 +702,24 @@ describe("CR-CRU-091 §S1 — a proposed release is its own record kind", () => 
   test("a non-semver label orders DETERMINISTICALLY rather than throwing", () => {
     const store = new Store(":memory:");
     const key = seedProject(store);
-    for (const label of ["nightly", "0.2.0", "v1.0.0-rc.1", "0.2.0"]) {
+    // Four DISTINCT labels by design: AC21 allows a label at most ONE live
+    // proposal, so a repeated label here would document a state the sanctioned
+    // route forbids. Distinctness costs no coverage — the four hard ordering
+    // cases are each still present: a bare word with no digits at all
+    // (`nightly`), a `v`-prefix, a pre-release suffix, and a MULTI-DIGIT
+    // component (`0.10.0`, which a lexical compare would wrongly put before
+    // `0.3.0`).
+    for (const label of ["nightly", "0.10.0", "v1.0.0-rc.1", "0.3.0"]) {
       store.recordMilestoneEvent(key, AGENT, "release-proposal", { label });
     }
 
     const first = listReleaseProposals(store, key).map((p) => p.label);
     const second = listReleaseProposals(store, key).map((p) => p.label);
     expect(first.length).toBe(4);
+    // Deterministic AND correct: the componentless label sorts first, and
+    // 0.10.0 sorts AFTER 0.3.0 on numeric components.
+    expect(first).toEqual(["nightly", "0.3.0", "0.10.0", "v1.0.0-rc.1"]);
+    // The read is idempotent — a second call orders identically.
     expect(second).toEqual(first);
   });
 

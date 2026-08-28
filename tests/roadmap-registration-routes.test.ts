@@ -1236,6 +1236,81 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         "0.10.0",
       ]);
     });
+
+    // ── the tripwire that keeps AC21's enforcement the ONLY write path ─────
+    //
+    // AC21 (one LIVE proposal per label, revision retiring its predecessor in
+    // one transaction) is enforced in `store.recordReleaseProposal`, reached
+    // only through POST …/projects/<key>/release-proposals. The generic
+    // `store.recordMilestoneEvent` deliberately does NOT enforce it — called
+    // directly it will happily write two live `release-proposal` rows for one
+    // label. That is safe today for exactly ONE reason: `release-proposal` is
+    // absent from MILESTONE_TYPES (src/v2.ts), so POST /api/v2/milestones
+    // refuses the type with a 400 and the unguarded writer is unreachable from
+    // any HTTP surface.
+    //
+    // Adding "release-proposal" to MILESTONE_TYPES would open a SECOND write
+    // path straight into the unguarded writer, and the invariant would regress
+    // silently — every AC21 assertion above would still pass, because they all
+    // go through the sanctioned route. This test is the tripwire: such a change
+    // makes it FAIL (the refusal becomes a 201, and the unguarded row appears)
+    // instead of quietly licensing two live proposals for one label.
+    //
+    // The accepted types are asserted as individual LITERALS rather than by
+    // importing MILESTONE_TYPES — an imported set would make the assertion
+    // vacuous the instant the set changes (the tests/releases.test.ts rule).
+    test(
+      "a `release-proposal` CANNOT be created through the generic milestone surface: " +
+        "POST /api/v2/milestones 400s naming the accepted types and writes no row, " +
+        "while the sanctioned route enforces one live proposal per label",
+      async () => {
+        boot();
+        const key = await seed("ac21-tripwire");
+
+        // Otherwise-valid body, registered ORCHESTRATOR caller, real label and
+        // target — so the refusal can only be about the TYPE.
+        const bypass = await post("/api/v2/milestones", {
+          projectKey: key,
+          agentId: ORCH,
+          type: "release-proposal",
+          label: "0.5.0",
+          targetAt: 1_790_000_000,
+        });
+        expect(bypass.status).toBe(400);
+        expect(bypass.body.ok).toBe(false);
+        // The error names the accepted set, which does NOT include this type.
+        expect(bypass.body.error).toContain("type must be one of");
+        for (const accepted of [
+          "gap-analysis",
+          "design-review",
+          "stage-flip",
+          "custom",
+          "cr-merged",
+          "release",
+        ]) {
+          expect(bypass.body.error).toContain(accepted);
+        }
+        expect(bypass.body.error).not.toContain("release-proposal");
+        expect(Array.isArray(bypass.body.help)).toBe(true);
+
+        // Refused BEFORE any write: the unguarded writer never ran.
+        expect(
+          handle!.store.listEvents(key, 200).some((e) => e.type === "release-proposal"),
+        ).toBe(false);
+        expect((await get(proposalsPath(key))).body.proposals).toHaveLength(0);
+
+        // The positive half of the same rule: the SANCTIONED route does
+        // enforce it — the same label proposed twice with a DIFFERENT target
+        // leaves exactly ONE live proposal, carrying the newer target. (The
+        // retirement/audit half of that contract is the first test above.)
+        expect((await propose(key, "0.5.0", 1_790_000_000)).status).toBe(200);
+        expect((await propose(key, "0.5.0", 1_795_000_000)).status).toBe(200);
+        const live = (await get(proposalsPath(key))).body.proposals!;
+        expect(live).toHaveLength(1);
+        expect(live[0]!.label).toBe("0.5.0");
+        expect(live[0]!.targetAt).toBe(1_795_000_000);
+      },
+    );
   });
 
   // ── AC22 — a live proposal outlives the retention cap ─────────────────────
