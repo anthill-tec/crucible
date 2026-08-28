@@ -50,6 +50,43 @@ export function formatReleaseDate(epochSeconds) {
   return new Date(epochSeconds * 1000).toISOString().slice(0, 10);
 }
 
+/**
+ * CR-CRU-078 §S3/AC6/AC7 — what date ONE release gate carries, resolved once
+ * so the render draws an answer instead of re-deciding per call site.
+ *
+ * `kind` is DECLARED by the caller, never sniffed from the record: the strip
+ * iterated either `releases` (shipped) or `releaseProposals` (proposed) and
+ * already knows which. A shape sniff could not tell an undated pre-CR-080
+ * ledger row from a proposal with no declared target, and those are different
+ * facts about different things.
+ *
+ * The answer is a STATE, not a bare string, because "" alone cannot say why it
+ * is empty. Three separable outcomes:
+ *   - `dated`    — the field carries a usable epoch; `date` is its UTC day.
+ *   - `absent`   — the field is not there. For a proposal that is AC6's
+ *                  explicit "no target declared"; for a shipped row it is an
+ *                  undated legacy tag. `field` says which.
+ *   - `unusable` — the field IS there but is not a usable epoch: a data
+ *                  defect, which must not be read as a plan nobody authored.
+ *
+ * `date` is always `formatReleaseDate`'s own answer for the one field, so the
+ * two cannot drift and a second formatter cannot creep in (AC30).
+ *
+ * AC7 — no forecast: the ONLY input is the gate's own authored field. Nothing
+ * else in the payload can become a date, least of all a proposal's
+ * `timestamp`, which is when the RECORD was created and not when anything is
+ * meant to ship. The confidence-gated P50/P80 band is CR-CRU-022, unshipped.
+ */
+export function resolveGateDate(record, kind) {
+  const field = kind === "shipped" ? "releasedAt" : kind === "proposed" ? "targetAt" : null;
+  const raw = field !== null && record !== null && record !== undefined ? record[field] : undefined;
+  const date = formatReleaseDate(raw);
+  let resolution;
+  if (raw === undefined || raw === null) resolution = "absent";
+  else resolution = date === "" ? "unusable" : "dated";
+  return { kind, field, state: resolution, date };
+}
+
 /** Agent rail dot + tombstone marker. tombstoned carries diedAgo from lastSeen. */
 export function livenessGlyph(agent) {
   if (agent.liveness === "tombstoned") {
@@ -1031,6 +1068,7 @@ if (typeof window !== "undefined") {
     filterEvents,
     relativeTime,
     formatReleaseDate,
+    resolveGateDate,
     livenessGlyph,
     routeParse,
     workspaceTabs,

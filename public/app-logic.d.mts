@@ -138,6 +138,27 @@ export declare function relativeTime(ts: number, now: number): string;
  * `YYYY-MM-DD` out, empty string for an absent or unusable value. */
 export declare function formatReleaseDate(epochSeconds: number | null | undefined): string;
 
+/** CR-CRU-078 §S3 — the kind of gate the strip is resolving a date for. The
+ *  caller declares it from the slice it iterated; it is never sniffed. */
+export type ReleaseGateKind = "shipped" | "proposed";
+
+export interface GateDateResult {
+  kind: ReleaseGateKind;
+  /** The one field consulted, or `null` for an unrecognised kind. */
+  field: "releasedAt" | "targetAt" | null;
+  /** `absent` is AC6's declared empty state; `unusable` is a data defect. */
+  state: "dated" | "absent" | "unusable";
+  /** `formatReleaseDate`'s answer for that field — `""` unless `dated`. */
+  date: string;
+}
+
+/** CR-CRU-078 §S3/AC6/AC7 — the date ONE release gate carries, or its declared
+ * absence. Pure; never forecasts, and never reads a proposal's `timestamp`. */
+export declare function resolveGateDate(
+  record: { releasedAt?: unknown; targetAt?: unknown } | null | undefined,
+  kind: ReleaseGateKind,
+): GateDateResult;
+
 export declare function livenessGlyph(agent: CrucibleAgentLike): LivenessGlyphResult;
 
 export declare function routeParse(pathname: string): RouteState;
