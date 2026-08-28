@@ -105,3 +105,47 @@ RELEASE   bundles the features defined by the CRs of ONE OR MORE waves,
   lanes; one track → no lane chrome; no track data → no lanes, and that is not an error).
 - **No release boundary may be derived from wave structure**, and nothing may render a wave as
   though it terminated in a release.
+
+## Reading the lane during execution — the `next` decision vocabulary
+
+Added 2026-08-28. This model was approved on the workflow flowchart
+(`.lavish/crucible-workflow-flowchart.html` §13), but `.lavish/` is **gitignored**, so the design
+lived nowhere a clean checkout could reach and CR-CRU-092 pointed its implementer at a file they
+may not have. The visual stays the visual; the model of record is here.
+
+A lane is a `(release, wave, track)` slice of the declared roadmap. Asking what to do next in that
+lane has exactly **three** answers, and all three are ANSWERS — never a blank, never an error:
+
+| Decision | Meaning |
+|---|---|
+| `NEXT` | one actionable CR, named, with the call that starts it |
+| `HOLD` | the lane's front CR exists but cannot start; the CAUSE is named |
+| `DRAINED` | the lane holds no actionable CR; the REASON is named |
+
+**A CR is actionable iff it is `PENDING` on the status axis AND carries no `lifecycle`
+disposition.** The two axes are independent by design (CR-CRU-091 §S2): `status` says what
+happened to the work, `lifecycle` says whether the work is still wanted, and neither overrides the
+other. A `VOID` or `SUPERSEDED` CR keeps its derived status, so **any consumer keyed on `status`
+alone will offer abandoned work as live** — the trap CR-CRU-092's gap analysis caught before RED.
+
+**`HOLD` always names a cause**, one of: `in-flight` (the lane already holds an `IN_PROGRESS`
+entry — evaluated first, since an occupied lane holds everything behind it) · `dependency` (a
+`dependsOn` CR is unmerged and still alive — waiting resolves it) · `dead-dependency` (a
+`dependsOn` CR is `VOID`/`SUPERSEDED` — waiting NEVER resolves it; the roadmap must be re-pointed)
+· `unknown-dependency` (a `dependsOn` CR the queue does not hold — reported, never rejected).
+The `dependency` / `dead-dependency` split is the point of the vocabulary: they demand opposite
+responses from the orchestrator.
+
+**`DRAINED` always names a reason**: `wave-complete` (everything in the lane landed or was declared
+dead) · `awaiting-assignment` (no entries, or no track declared yet) · `no-roadmap` (the queue is
+empty).
+
+**The reader is an oracle, not a scheduler.** It validates the declared sequence; it never
+corrects one. If the front CR is blocked the answer is `HOLD` on THAT CR — never a scan past it to
+something startable, which would be Crucible substituting an order of its own. That is the same
+commitment CR-CRU-077 AC2 makes at the render layer and CR-CRU-091 §S5 makes on the write path.
+
+**Track scoping is conditional, exactly as the swimlanes are** (see Consumers above): with one
+track or none, the reader takes no `--track` and never prompts for one; with more than one it
+refuses to guess and names the live tracks. Deriving the lane from a single-track project is not
+an inference, it is the only lane there is.

@@ -4,7 +4,7 @@
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 091
 - **Status**: PENDING (0.2.0) — moved into 0.2.0 by user direction 2026-08-28
-- **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §13 (approved 2026-08-28). Absolute path so it resolves from a worktree; it carries the NEXT / HOLD / DRAINED vocabulary and the track rule.
+- **Design documents — READ THESE FIRST**: `docs/research/DN-crucible-wave-track-release.md` §"Reading the lane during execution" — the TRACKED model of record for the NEXT / HOLD / DRAINED vocabulary, the trigger kinds, the drained reasons, the oracle-not-scheduler rule and the conditional track rule. The visual it was approved on is `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §13 (2026-08-28) — absolute path, but `.lavish/` is **gitignored**, so where the two disagree or the flowchart is absent, the DN governs.
 
 > The design document is the contract for this CR. Implement what it specifies — do not
 > re-derive the model, the vocabulary or the look from scratch.
@@ -29,7 +29,7 @@ gain it at once.
 ### §S1 The verb does not exist today; the vocabulary does
 
 **Surfaces (verified 2026-08-28):** every subcommand of the fleet is registered per-client with
-`sub.add_parser(...)`. `clients/python-crucible.py:1190-1492` is the full list — `register`,
+`sub.add_parser(...)`. `clients/python-crucible.py:1190-1546` is the full list — `register`,
 `unregister`, `test`, `regression`, `auto-ingest`, `check`, `pre-merge-gate`, `plan-file`,
 `plan-backfill`, `cycle-activate`, `cycle-done`, `cr-close`, `cycle-add`, `checkpoint`, `stop`,
 `abort`, `status`/`plans`, `queue`, `gate-run`, `gate-report`, `milestone`, `queue-file`. No
@@ -51,36 +51,67 @@ fleet's terminal-state rule (`clients/STATUS-CONTRACT.md:65-68`).
 
 ### §S2 The three decisions
 
-Input is one read: `GET /api/v2/projects/<key>/queue` (route `src/v2.ts:1745-1752`), which under
+Input is one read: `GET /api/v2/projects/<key>/queue` (handler `src/v2.ts:1791`, dispatched at `src/v2.ts:2837`), which under
 CR-091 publishes `seq` always and `release`/`track` when non-null. Fields are CONSUMED, never
-re-derived — `next` must not copy the array-index derivation at `public/app-logic.mjs:847-863`
-(`seq: index`), and must handle an ABSENT `release`/`track` key rather than defaulting it.
+re-derived. The array-index derivation this originally warned against (`seq: index` in
+`buildRoadmapGraph`) **no longer exists** — CR-CRU-091 C4 deleted it under that CR's AC18, and the
+renderer now consumes the published value (`public/app-logic.mjs:893`). So the rule here is not
+"don't copy it" but "don't reintroduce it": `next` orders by the `seq` the read published, and
+must handle an ABSENT `release`/`track` key rather than defaulting it. 091 publishes `seq` on every
+entry, so an entry without one is a defect to surface, not a hole to fill with a position.
 
-Liveness comes from the same read: `status` is server-derived
-(`src/store.ts:3122-3145`) as `PENDING` · `IN_PROGRESS` (open plan) · `COMPLETED` (plan closed
-WITH a merge) · `COMPLETED_UNTRACKED` (named by a release's `crs`). A CR is **landed** iff its
-status is `COMPLETED` or `COMPLETED_UNTRACKED`; anything else is unmerged.
+Liveness comes from the same read, and it has **two axes, not one** — the gap-analysis finding
+that reshaped this section (2026-08-28, after CR-091 landed).
+
+**Axis 1 — `status`**, server-derived (`src/store.ts:3439-3445` precedence, `deriveQueueStatus` at
+`src/store.ts:3730`) as `PENDING` · `IN_PROGRESS` (open plan) · `COMPLETED` (plan closed WITH a
+merge) · `COMPLETED_UNTRACKED` (named by a release's `crs`). A CR is **landed** iff its status is
+`COMPLETED` or `COMPLETED_UNTRACKED`; anything else is unmerged.
+
+**Axis 2 — `lifecycle`**, present only when declared: `{state: "SUPERSEDED", by}` or
+`{state: "VOID", reason}` (CR-091 §S2). It is deliberately **not** a `QueueStatus` member and
+**never overrides** the derived status — 091 locked that, and `deriveQueueStatus(projectKey, cr,
+shipped)` cannot even see it, by signature. The consequence lands squarely on this verb, which is
+the roadmap's first consumer: **a VOID CR with no plan reads `status: "PENDING"`.** A resolution
+keyed on `status` alone would therefore return, as the next thing to build, a CR whose author
+explicitly recorded that the work is not happening. `status` answers *what happened to the work*;
+`lifecycle` answers *whether the work is still wanted*, and `next` must consult both.
+
+A CR is **actionable** iff it is `PENDING` **and** carries no `lifecycle` key. `SUPERSEDED` and
+`VOID` entries are excluded from the candidate set exactly as landed ones are — this is not `next`
+scanning past a blocked entry (§S4 forbids that), because a dead entry is not blocked work, it is
+not work. The distinction is load-bearing: skipping a BLOCKED entry would hide a problem, while
+skipping a DEAD one reports the roadmap as authored.
 
 Resolution, over the lane's entries in declared `(release, wave, seq)` order:
 
 | Decision | Condition | Carries |
 |---|---|---|
-| `NEXT` | the lowest-`seq` `PENDING` entry in the lane, every `dependsOn` landed, lane not occupied | `cr`, `seq`, `release`, `wave`, `track`, and a `help[]` template for the call that starts it |
+| `NEXT` | the lowest-`seq` ACTIONABLE entry in the lane, every `dependsOn` landed, lane not occupied | `cr`, `seq`, `release`, `wave`, `track`, and a `help[]` template for the call that starts it |
 | `HOLD` | that same entry, but blocked | `cr`, `seq`, and `trigger` — the named cause |
-| `DRAINED` | no `PENDING` entry remains in the lane | `reason`, and the `help[]` for the move that would refill it |
+| `DRAINED` | no ACTIONABLE entry remains in the lane | `reason`, and the `help[]` for the move that would refill it |
 
 `trigger` is a required object on every `HOLD`, never a prose blob. Exactly one `kind`:
 
 - `in-flight` — the lane already holds an `IN_PROGRESS` entry. Carries that CR id. Evaluated
   FIRST: an occupied lane holds everything behind it.
-- `dependency` — one or more `dependsOn` CRs are unmerged. Carries each blocking CR id with its
-  live status.
+- `dependency` — one or more `dependsOn` CRs are unmerged and still alive. Carries each blocking
+  CR id with its live status.
+- `dead-dependency` — a `dependsOn` CR that is `VOID` or `SUPERSEDED`. Carries the dep id, its
+  `lifecycle.state`, and its `by` when superseded. **Distinct from `dependency` because it never
+  clears by waiting**: a dependency on a dead CR is a roadmap defect the orchestrator must fix by
+  re-pointing `dependsOn` (at the successor, for `SUPERSEDED`) or dropping it. CR-091 emits exactly
+  this fact at WRITE time as `brokenDependants` (its AC15); this is the READ counterpart, and
+  without it a permanently-blocked lane would report `dependency` forever with no hint that waiting
+  is futile.
 - `unknown-dependency` — a `dependsOn` CR the queue does not hold. Carries the dep id. It cannot
   be shown landed, so it holds; per §12 it is reported, never rejected, and rides a
   structured warning alongside.
 
 `reason` is a required enum on every `DRAINED`: `wave-complete` (the lane held work and all of it
-landed) · `awaiting-assignment` (the lane holds no entries, or no `track` is declared yet) ·
+landed **or was declared dead** — a lane whose remaining entries are all `VOID`/`SUPERSEDED` is
+complete, and the `help[]` names them so the state is legible rather than mysterious) ·
+`awaiting-assignment` (the lane holds no entries, or no `track` is declared yet) ·
 `no-roadmap` (the queue read returned zero entries). `next` never emits an empty array or a null
 decision as its answer (AXI P5).
 
@@ -96,6 +127,28 @@ returned. The project is **multi-track** iff `len(tracks) > 1`.
   list), no `decision` key, **exit 2**. It never picks a lane.
 - `--track` naming a value not in `tracks`: `ok=false`, `needs=["track"]`, `tracks=[…]`, exit 2.
 
+**Matching is on the CANONICAL form, so the flag accepts what CR-091's flag accepts.**
+Gap-analysis finding, 2026-08-28: 091 stores `track` in the PRD's locked wire format `track-<n>`
+and accepts `2`, `track-2` or `Track 2` at the CLI, normalising **server-side** — its clients pass
+the spelling verbatim precisely so no client becomes a second decision-maker (091 §S9). `next`
+performs **no write**, so no server round-trip exists to normalise its argument, and a naive
+by-value match against the stored canonical list would refuse `next --track 2` while
+`wave-sequence --track 2` succeeds. One flag, one project, two answers — the exact inconsistency
+the fleet standard exists to prevent.
+
+So `next` canonicalises `--track` before comparing, via a **single shared helper in
+`clients/_crucible_axi.py`** used by the whole fleet. This does not breach §S9: canonicalising an
+input spelling is ARGUMENT PARSING, which §S9 assigns to the client half, whereas 091's rule
+governs the WRITE — what gets stored is still decided once, server-side, and `next` stores
+nothing. Values in `tracks[]` are echoed as stored (canonical), never re-spelled.
+
+The duplication risk is real and is closed by assertion, not by comment: the two implementations
+(TypeScript `normalizeTrack` on the write path, the Python helper on this read path) must agree,
+so a test drives each accepted spelling through `wave-sequence`, reads the stored value back, and
+asserts the Python helper maps the same input to the same string. A drift between them fails that
+test rather than silently splitting one track into two lanes — the failure mode 091 §S2's
+normalisation exists to prevent.
+
 Track assignment is CR-091's registered metadata. This CR declares nothing new and writes no
 track anywhere.
 
@@ -109,7 +162,7 @@ advance anything.
 It validates; it does not correct. If the lowest-`seq` `PENDING` entry is blocked, the answer is
 `HOLD` on THAT entry with the trigger named. `next` never scans past it to return a later
 actionable CR, and never re-orders the lane — that would be Crucible substituting a sequence of its
-own, which the write path already refuses (`src/v2.ts:1755-1759`: unknown deps are "flagged in
+own, which the write path already refuses (`src/v2.ts:1805`, `src/v2.ts:2017`: unknown deps are "flagged in
 `unknownDependencies`, never rejected") and which §12 forbids on both paths.
 
 ### §S5 Two `next`s, never reconciled
@@ -127,12 +180,12 @@ No code path in `clients/` may open, read, import or shell out to that DB, `sche
 Reuse the fleet emitter — `emit_axi` (`clients/_crucible_axi.py:220-229`: TOON envelope on stdout,
 human line on stderr), dispatched through `run_verb` (`:955-973`). No hand-rolled output.
 
-`help[]` is STATE-DERIVED, per CR-CRU-048's rule as stated at `clients/_crucible_axi.py:709-713`
+`help[]` is STATE-DERIVED, per CR-CRU-048's rule as stated at `clients/_crucible_axi.py:710-714`
 ("Never a canned per-verb string"). `next` gets **no** entry in `HELP_STEPS`
 (`clients/_crucible_axi.py:616-629`); each decision derives its own:
 
 - `NEXT` → the concrete start call, e.g. `plan-file --cr <cr> --title "…" --cycles "…" --wave <wave>`
-  (flags verified at `clients/python-crucible.py:1301-1314`).
+  (flags verified at `clients/python-crucible.py:1339-1352`).
 - `HOLD` → the move that clears the named trigger (the blocking CR's `cr-merged`/`cr-close`, or
   `cr-plan` for an unknown dep), then `next` again.
 - `DRAINED` → `wave-sequence` for `awaiting-assignment`, `release-propose` → `cr-plan` →
@@ -143,9 +196,9 @@ Exit codes: `0` any decision returned · `2` usage (§S3), the same class as
 A failed read is NEVER reported as `DRAINED` — an unreadable roadmap and an empty one are
 different facts.
 
-Registered in ALL FIVE clients, like `queue` (`clients/python-crucible.py:1399-1403`, and one
+Registered in ALL FIVE clients, like `queue` (`clients/python-crucible.py:1437-1440`, and one
 registration in each of bun/rust/mvn/arduino — verified). `queue-file` is in 1 of 5
-(`clients/python-crucible.py:1485-1492`); this verb must not repeat that gap. CR-CRU-075 owns
+(`clients/python-crucible.py:1533-1540`); this verb must not repeat that gap. CR-CRU-075 owns
 `queue-file`'s parity and the census-enforcement mechanism; `next` lands at parity on arrival and
 is subject to that census, not an exception to it.
 
@@ -237,6 +290,27 @@ A faked `--full` on a one-record answer is as wrong as a missing one.
   (P8); `--help` exits 0 (P10); and **no `--full` flag exists** — P3 is declared N/A because the
   answer is one decision, so a `--full` that reveals nothing is a conformance failure, not a
   courtesy. Every error path writes its structured envelope to stdout, never prose to stderr (P6).
+- **AC16** — **a dead CR is never offered as work.** Fixture: a lane whose lowest-`seq` entry is
+  `PENDING` and carries `lifecycle.state = "VOID"`, with an actionable `PENDING` entry behind it.
+  `next` returns `NEXT` naming the SECOND entry, never the voided one. Same fixture with
+  `SUPERSEDED` (carrying `by`) behaves identically. A resolution keyed on `status` alone returns
+  the dead CR and fails this AC — and that is the pre-fix behaviour, so the test must be shown
+  failing against a `status`-only resolver. With EVERY remaining entry in the lane dead, the answer
+  is `DRAINED` with `reason="wave-complete"` and a `help[]` naming the dead CRs — never `NEXT` on a
+  corpse and never a blank.
+- **AC17** — **a dependency on a dead CR reports `dead-dependency`, not `dependency`.** Fixture:
+  `CR-B` depends on `CR-A`; `CR-A` is `PENDING` and `VOID`. `next` returns `HOLD` on `CR-B` with
+  `trigger.kind === "dead-dependency"`, carrying `CR-A` and its `lifecycle.state`. With `CR-A`
+  `SUPERSEDED` the trigger also carries its `by`. A `HOLD` reporting `kind: "dependency"` for a
+  dead blocker fails this AC: `dependency` promises that waiting resolves it, and waiting on a
+  voided CR never does.
+- **AC18** — **`next --track` accepts every spelling `wave-sequence --track` accepts, and the two
+  normalisers agree.** With one track stored, `next --track 2`, `--track track-2` and
+  `--track "Track 2"` all resolve to the same lane and return the same decision; a value carrying
+  no integer is refused by name. `tracks[]` echoes the STORED canonical value, never the caller's
+  spelling. Cross-implementation: for each accepted spelling, the value `wave-sequence` causes the
+  server to store equals the value the shared Python helper produces — a divergence between
+  `normalizeTrack` (TypeScript, write path) and the client helper (read path) fails this AC.
 
 ## Estimated size
 
