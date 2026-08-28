@@ -183,6 +183,19 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   and the carry-forward path those fields feed IS reachable and load-bearing — but the write side
   of them is dead until something wires it.
 
+- **`plan-file --cycles` splits silently on a comma inside a label** (candidate patch CR, hit
+  2026-08-28 filing CR-CRU-078). `--cycles` is comma-delimited, so a label containing a comma —
+  `"C1 data + authored order - proposals read, formatter wiring, seq verbatim"` — became THREE
+  cycles (296/297/298) instead of one, with `ok: true` and no warning. The board silently gained
+  two cycles nobody planned. `--help` does say "Comma-separated cycle labels", so the input was
+  mine; the defect is that a delimiter collision inside a value is unreportable on this surface,
+  and the only repair verb (`abort`) is gated on `--user-approved` — so a filing typo costs a user
+  approval to undo. Candidate fixes: accept a repeatable `--cycle` flag so labels may hold commas,
+  or warn when a resulting label is suspiciously short or the count exceeds a plausible bound.
+  Not folded into 078 — unrelated to the roadmap surface, and the repo rule is a patch CR over an
+  inline scope edit. Worked around by adopting the finer granularity rather than aborting the plan:
+  destroying a board record to fix a label is the worse trade.
+
 - 2026-08-27 — **0.1.3 shipped**: CR-CRU-090, PyPI + npm both at 0.1.3. Pre-flight every tag via a
   PR — push-triggered CI only runs on `develop`/`master`, and a red suite silently skips the publish.
 - 2026-08-27 — `develop` RED narrowed to ONE test: `CR-CRU-088 AC4 (E2E)` in
