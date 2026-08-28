@@ -1227,6 +1227,371 @@ def cmd_queue(args, project_dir, ops):
     return 0
 
 
+# ── CR-CRU-092 §S2–§S6 — `next`: the roadmap's decision oracle ─────────────
+#
+# ONE read (`GET …/queue`) in, ONE decision out: `NEXT`, `HOLD` or `DRAINED`.
+# All three are ANSWERS (§S1), so all three exit 0 — the harness's 0/2/3 split
+# is deliberately NOT adopted (the fleet's terminal-state rule,
+# `clients/STATUS-CONTRACT.md:65-68`). The only non-answer is §S3's usage
+# refusal, which exits 2.
+#
+# An ORACLE, not a scheduler (§S4): read-only, no `--agent`, no POST/PATCH,
+# and it never scans past a blocked entry to something startable — that would
+# be Crucible substituting a sequence of its own.
+#
+# §S5 is absolute, and AC11 enforces it by grep: nothing on this path opens,
+# reads, imports or shells out to the HARNESS lane-plan database or its CLI.
+# The two answers come from different datasets over different questions, and a
+# disagreement between them is a real signal, left visible. No fallback, no
+# cross-check, no merge — which is why this comment does not even name the
+# harness's files.
+
+# §S2 axis 1 — a CR has LANDED iff its SERVER-DERIVED status is one of these
+# (`deriveQueueStatus`, src/store.ts:3730). Anything else — PENDING,
+# IN_PROGRESS — is unmerged.
+LANDED_STATUSES = ("COMPLETED", "COMPLETED_UNTRACKED")
+
+# §S2 — the three DRAINED reasons and the four HOLD trigger kinds, as the
+# vocabulary the DN fixes ("Reading the lane during execution"). Named here so
+# the enum is one list rather than four string literals scattered downstream.
+DRAINED_REASONS = ("wave-complete", "awaiting-assignment", "no-roadmap")
+HOLD_TRIGGER_KINDS = ("in-flight", "dead-dependency", "dependency",
+                      "unknown-dependency")
+
+_TRACK_LANE_RE = re.compile(r"\d+")
+
+
+def canonical_track(value):
+    """§S3/AC18 (PURE) — the fleet's READ-side track canonicaliser: the exact
+    mirror of `normalizeTrack` (src/store.ts:338-341). The first run of digits
+    anywhere in the value, rendered as the PRD's locked wire format
+    `track-<n>`; `None` when the value names no lane.
+
+    Why a client-side copy of a server-side rule is NOT a second
+    decision-maker: CR-CRU-091 §S9 puts ARGUMENT PARSING in the client half and
+    the WRITE rule on the server. `next` writes nothing, so no round-trip
+    exists to normalise its `--track`, and a naive by-value match would refuse
+    `next --track 2` while `wave-sequence --track 2` succeeds — one flag, one
+    project, two answers. The two implementations are held to one rule by
+    assertion (AC18), not by comment."""
+    if not value:
+        return None
+    lane = _TRACK_LANE_RE.search(value)
+    return None if lane is None else f"track-{int(lane.group(0))}"
+
+
+def queue_tracks(entries):
+    """§S3 (PURE) — the sorted distinct non-null `track` values the queue read
+    published, AS STORED. `len() > 1` is the whole definition of multi-track,
+    and the values are echoed to the caller unchanged: a legacy un-normalised
+    row is a fact about the roadmap, not something the read path may rewrite."""
+    return sorted({e.get("track") for e in entries or [] if e.get("track")})
+
+
+def _entry_seq(entry):
+    """The DECLARED position, or None. `bool` is an `int` subclass — excluded
+    so a stray `True` can never pose as a position (the same guard
+    `echoed_cycle_id` applies)."""
+    seq = entry.get("seq")
+    if isinstance(seq, int) and not isinstance(seq, bool):
+        return seq
+    return None
+
+
+def _lane_order(entry):
+    """§S2/§S4 — order by the seq the read PUBLISHED. An entry with no declared
+    seq sorts last rather than taking its array position: CR-CRU-091 C4 deleted
+    that derivation under its AC18 and §S2's rule here is "don't reintroduce
+    it". Python's sort is stable, so equal keys keep the server's own order."""
+    seq = _entry_seq(entry)
+    return (1, 0) if seq is None else (0, seq)
+
+
+def _is_actionable(entry):
+    """§S2 — the TWO axes. A CR is actionable iff it is `PENDING` on the
+    server-derived status axis AND carries no `lifecycle` disposition.
+
+    The second half is load-bearing: `deriveQueueStatus(projectKey, cr,
+    shipped)` cannot see `lifecycle`, by signature, so a VOID cr with no plan
+    reads `status: "PENDING"`. Keyed on `status` alone this verb would offer,
+    as the next thing to build, work whose author explicitly recorded that it
+    is not happening."""
+    return entry.get("status") == "PENDING" and "lifecycle" not in entry
+
+
+def _dead_entries(entries):
+    """The lane's declared-dead rows, as `(cr, lifecycle)`. A dead entry is not
+    blocked work — it is not work — which is why it leaves the candidate set
+    exactly as a landed one does, and why §S4's no-scanning-past rule is not
+    engaged by it."""
+    return [(e.get("cr"), e["lifecycle"]) for e in entries
+            if isinstance(e.get("lifecycle"), dict)]
+
+
+def _dead_phrase(cr, lifecycle):
+    state = lifecycle.get("state")
+    by = lifecycle.get("by")
+    return f"{cr} ({state} by {by})" if by else f"{cr} ({state})"
+
+
+def _next_start_help(entry):
+    """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1339-1352`).
+    `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
+    step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
+            f'--cycles "<c1,c2>" --agent <agentId>')
+    wave = entry.get("wave")
+    if wave:
+        step += f" --wave {wave}"
+    return [step, "status"]
+
+
+def _hold_help(trigger):
+    """§S6 — the move that clears the NAMED trigger, then `next` again. Each
+    kind demands a different response, which is the whole point of splitting
+    the vocabulary rather than emitting one "blocked" state."""
+    kind = trigger["kind"]
+    if kind == "in-flight":
+        cr = trigger["cr"]
+        steps = [f"cr-close --cr {cr} --commit <sha> --agent <agentId> — "
+                 f"{cr} occupies the lane and holds everything behind it"]
+    elif kind == "dead-dependency":
+        cr, state, by = trigger["cr"], trigger["state"], trigger.get("by")
+        target = f"at {by}" if by else "off it"
+        steps = [f"re-point the dependsOn {target} in docs/changes/README.md "
+                 f"and re-run queue-file — {cr} is {state}, so waiting will "
+                 f"never clear this"]
+    elif kind == "unknown-dependency":
+        cr = trigger["cr"]
+        steps = [f"cr-plan --cr {cr} --release <v> --wave <n> "
+                 f"--title <brief> --agent <agentId> — the queue does not "
+                 f"hold {cr}"]
+    else:
+        steps = [f"cr-close --cr {row['cr']} --commit <sha> --agent <agentId>"
+                 for row in trigger["blockedBy"]]
+    steps.append("next")
+    return steps
+
+
+def _drained_help(reason, lane):
+    """§S6 — `DRAINED`'s state-derived `help[]`: the move that would REFILL the
+    lane. `wave-complete` additionally names the lane's corpses, so a lane that
+    drained because its remaining work was declared dead reads as legible
+    rather than mysterious (AC16)."""
+    sequence = ("wave-sequence --release <v> --wave <n> --crs <a,b,c> "
+                "--agent <agentId>")
+    if reason == "no-roadmap":
+        return ["release-propose --label <v> --agent <agentId>",
+                "cr-plan --cr <id> --release <v> --wave <n> --title <brief> "
+                "--agent <agentId>",
+                sequence]
+    if reason == "awaiting-assignment":
+        return [f"{sequence} --track <n>"]
+    steps = []
+    dead = _dead_entries(lane)
+    if dead:
+        steps.append("the lane's remaining entries are declared dead: "
+                     + ", ".join(_dead_phrase(cr, lc) for cr, lc in dead))
+    steps.append("cr-plan --cr <id> --release <v> --wave <n> --title <brief> "
+                 "--agent <agentId>")
+    steps.append(sequence)
+    return steps
+
+
+def _next_trigger(target, lane, entries):
+    """§S2 (PURE) — the ONE cause holding `target`, or `(None, warnings)` when
+    nothing does. Returns `(trigger, warnings)`.
+
+    Evaluated in the order the DN fixes: `in-flight` first (an occupied lane
+    holds everything behind it), then `dead-dependency` (waiting NEVER clears
+    it, so it outranks a blocker that waiting does clear), then `dependency`,
+    then `unknown-dependency`.
+
+    Occupancy is scoped to the LANE; dependency resolution is scoped to the
+    WHOLE queue, because a `dependsOn` legitimately crosses tracks."""
+    for entry in lane:
+        if entry.get("status") == "IN_PROGRESS":
+            return {"kind": "in-flight", "cr": entry.get("cr")}, []
+
+    by_cr = {e.get("cr"): e for e in entries if e.get("cr")}
+    dead, blocked_by, unknown = [], [], []
+    for dep in target.get("dependsOn") or []:
+        entry = by_cr.get(dep)
+        if entry is None:
+            unknown.append(dep)
+            continue
+        # The status axis decides LANDED first: a dep that COMPLETED did the
+        # work, whatever lifecycle note was filed over it afterwards.
+        if entry.get("status") in LANDED_STATUSES:
+            continue
+        lifecycle = entry.get("lifecycle")
+        if isinstance(lifecycle, dict):
+            dead.append((dep, lifecycle))
+        else:
+            blocked_by.append({"cr": dep, "status": entry.get("status")})
+
+    warnings = []
+    if unknown:
+        # §12 — reported, never rejected, and it rides a STRUCTURED warning
+        # alongside whichever trigger wins.
+        warnings.append({
+            "code": "unknown-dependency",
+            "detail": (f"{target.get('cr')} declares a dependsOn the queue "
+                       f"does not hold: {', '.join(unknown)} — a roadmap "
+                       f"authored forwards reads back this way until the dep "
+                       f"is filed with cr-plan"),
+        })
+
+    if dead:
+        dep, lifecycle = dead[0]
+        trigger = {"kind": "dead-dependency", "cr": dep,
+                   "state": lifecycle.get("state")}
+        if lifecycle.get("by"):
+            trigger["by"] = lifecycle["by"]
+        return trigger, warnings
+    if blocked_by:
+        return {"kind": "dependency", "blockedBy": blocked_by}, warnings
+    if unknown:
+        return {"kind": "unknown-dependency", "cr": unknown[0]}, warnings
+    return None, warnings
+
+
+def _next_answer(entry):
+    """§S2/AC14 — `NEXT`'s result fields. Every declared value is CONSUMED
+    verbatim and an undeclared `release`/`track` is OMITTED, never defaulted,
+    never index-derived."""
+    fields = {"decision": "NEXT", "cr": entry.get("cr")}
+    seq = _entry_seq(entry)
+    if seq is not None:
+        fields["seq"] = seq
+    if entry.get("release"):
+        fields["release"] = entry["release"]
+    if entry.get("wave"):
+        fields["wave"] = entry["wave"]
+    if entry.get("track"):
+        fields["track"] = entry["track"]
+    fields["help"] = _next_start_help(entry)
+    return fields
+
+
+def _drained_answer(reason, lane):
+    return {"decision": "DRAINED", "reason": reason,
+            "help": _drained_help(reason, lane)}
+
+
+def resolve_next(entries, track=None):
+    """§S2/§S3 (PURE) — the decision resolver: the lane's declared sequence
+    plus live state in, exactly one decision out.
+
+    Returns `(ok, code, fields, warnings)` — a tuple, like the module's
+    existing `resolve_single_plan`. `code` is the process exit code, so the
+    three DECISIONS (all answers, all `0`) and §S3's usage refusal (`2`) come
+    out of one function rather than being re-derived by the caller."""
+    entries = list(entries or [])
+    tracks = queue_tracks(entries)
+    wanted = canonical_track(track)
+
+    # §S3 — track scoping is required only when the DATA justifies it. With one
+    # track or none the flag is never prompted for and `tracks` never rides the
+    # envelope; with more than one the verb refuses to guess and names the live
+    # lanes. It never picks a lane.
+    if len(tracks) > 1 and (
+            wanted is None
+            or wanted not in {canonical_track(t) for t in tracks}):
+        return (False, EXIT_USAGE,
+                {"needs": ["track"], "tracks": tracks,
+                 "totalCount": len(tracks),
+                 "help": [f"next --track <n> — the live lanes are "
+                          f"{', '.join(tracks)}"]},
+                [])
+
+    lane = entries if wanted is None else [
+        e for e in entries if canonical_track(e.get("track")) == wanted]
+    lane = sorted(lane, key=_lane_order)
+
+    warnings = []
+    unpositioned = [e.get("cr") for e in lane if _entry_seq(e) is None]
+    if unpositioned:
+        # §S2 — 091 publishes `seq` on EVERY entry, so an entry without one is
+        # a defect to surface, not a hole to fill with a position.
+        warnings.append({
+            "code": "missing-seq",
+            "detail": (f"the queue published no seq for "
+                       f"{', '.join(unpositioned)} — CR-CRU-091 declares one "
+                       f"on every entry, so this is a roadmap defect; re-run "
+                       f"wave-sequence for its wave"),
+        })
+
+    if not entries:
+        return (True, 0, _drained_answer("no-roadmap", lane), warnings)
+    if not lane:
+        return (True, 0, _drained_answer("awaiting-assignment", lane), warnings)
+
+    actionable = [e for e in lane if _is_actionable(e)]
+    if not actionable:
+        return (True, 0, _drained_answer("wave-complete", lane), warnings)
+
+    target = actionable[0]
+    trigger, trigger_warnings = _next_trigger(target, lane, entries)
+    warnings.extend(trigger_warnings)
+    if trigger is None:
+        return (True, 0, _next_answer(target), warnings)
+
+    fields = {"decision": "HOLD", "cr": target.get("cr")}
+    seq = _entry_seq(target)
+    if seq is not None:
+        fields["seq"] = seq
+    fields["trigger"] = trigger
+    fields["help"] = _hold_help(trigger)
+    return (True, 0, fields, warnings)
+
+
+def _next_legacy_line(ok, fields):
+    """The human line (stderr only) — one sentence per outcome, never the
+    envelope in prose."""
+    if not ok:
+        return (f"next: ok=False needs=track — {len(fields['tracks'])} live "
+                f"track(s): {', '.join(fields['tracks'])}")
+    decision = fields["decision"]
+    if decision == "NEXT":
+        return (f"next: decision=NEXT cr={fields['cr']} "
+                f"seq={fields.get('seq')}")
+    if decision == "HOLD":
+        return (f"next: decision=HOLD cr={fields['cr']} "
+                f"trigger={fields['trigger']['kind']}")
+    return f"next: decision=DRAINED reason={fields['reason']}"
+
+
+def cmd_next(args, project_dir, ops):
+    """§S2/§S6 — the `next` READ verb (no `--agent`, §S4): one
+    `GET …/queue`, one decision, one envelope.
+
+    The read failure is NOT tolerantly degraded the way `cmd_status`/`cmd_queue`
+    degrade theirs: an unreadable roadmap and an empty one are DIFFERENT FACTS
+    (AC13), so a failed read exits 1 with no `decision` key rather than
+    reporting `DRAINED` and walking the orchestrator past a lane it never
+    actually read."""
+    key = ops.project_key(project_dir)
+    resp = ops.get(f"/api/v2/projects/{key}/queue")
+    if not resp.get("ok"):
+        error = resp.get("error")
+        ops.emit("next", False,
+                 {"help": [f"check the Crucible server is running / reachable "
+                           f"at {ops.base_url}, then re-run next"]},
+                 ops.context(project_dir),
+                 [{"code": "queue-unavailable",
+                   "detail": (f"could not read the registered CR queue: "
+                              f"{error}")}],
+                 f"next: ok=False — the roadmap could not be read: {error}")
+        return 1
+
+    ok, code, fields, warnings = resolve_next(
+        resp.get("entries"), track=getattr(args, "track", None))
+    ops.emit("next", ok, fields, ops.context(project_dir), warnings,
+             _next_legacy_line(ok, fields))
+    return code
+
+
 def status_namespace(**extra_fields):
     """§S14 (PARAMETERISED, DN §2) — the `cmd_status` args Namespace the no-arg
     dashboard forwards.
