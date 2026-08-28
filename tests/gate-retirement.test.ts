@@ -24,9 +24,10 @@
 //   enforceRetention — a gate with retired_at IS NULL is EXEMPT from the
 //     per-project count cap (a live gate is never pruned); once retired it is
 //     retention-eligible like any other event.
-//   SCHEMA_VERSION derives to 7 — the retired_at column is CR-CRU-071 chain
-//     step 6 → 7, and that same migration stamps retired_at on every gate that
-//     predates the column (the three versionless strays).
+//   SCHEMA_VERSION — the retired_at column is CR-CRU-071 chain step 6 → 7, and
+//     that same migration stamps retired_at on every gate that predates the
+//     column (the three versionless strays). The value the chain now ends at is
+//     8: CR-CRU-091 §S2 appended the queue_entries declaration step.
 //
 // ── Safety ──────────────────────────────────────────────────────────────────
 // Every store here is an mkdtempSync scratch file or ":memory:"; the live
@@ -260,8 +261,12 @@ describe("CR-CRU-073 AC4 — retired is a stored marker: excluded from the pane,
 });
 
 describe("CR-CRU-073 AC5 — the migration adds retired_at and retires pre-column gates", () => {
-  test("SCHEMA_VERSION derives to 7", () => {
-    expect(schemaVersion()).toBe(7);
+  test("SCHEMA_VERSION derives to 8", () => {
+    // A LITERAL on purpose (a tripwire, not a tautology): a chain step must
+    // make a human look. It fired for CR-CRU-091 §S2's queue_entries step,
+    // which is legitimate, so it is consciously RE-ARMED at 8 — the retired_at
+    // step this file owns is still 6 → 7 and is asserted by effect below.
+    expect(schemaVersion()).toBe(8);
   });
 
   test("a v6 store with versionless gate rows migrates: retired_at added and stamped on every pre-column gate, losslessly and idempotently", () => {

@@ -222,6 +222,15 @@ export interface RunEvent {
    */
   releasedAt?: number;
   /**
+   * CR-CRU-091 §S1 — a `release-proposal` milestone's DECLARED target date, in
+   * epoch SECONDS — deliberately the SAME unit as `releasedAt` above, so one
+   * formatter serves both and neither surface renders 1970. Optional and
+   * revisable: a proposal with no declared target is a legitimate declared
+   * intent. ABSENT on every other event type (a `release` carries
+   * `releasedAt`, which is when it SHIPPED, not when it was aimed for).
+   */
+  targetAt?: number;
+  /**
    * CR-CRU-080 §S4 — the CR ids a `release` shipped: the ceremony's tag-range
    * scan INTERSECTED with the project's registered queue at record time.
    * ABSENT on a pre-§S4 release; EMPTY when the queue knew none of the scanned
@@ -342,6 +351,27 @@ export type QueueStatus =
   | "COMPLETED_UNTRACKED";
 
 /**
+ * CR-CRU-091 §S2 — the SECOND AXIS: whether the declared work is still wanted.
+ * `QueueStatus` above answers *what happened to the work* and stays derived
+ * from plans and release membership; this one is AUTHORED and stored, and the
+ * two are never collapsed — a `SUPERSEDED` cr whose plan is open still reads
+ * `IN_PROGRESS`, because that is true. `SUPERSEDED` carries `by` (the
+ * successor cr — the work still happens, elsewhere); `VOID` carries `reason`
+ * (the work is not happening). `at` is epoch MILLISECONDS, the unit every
+ * other stored server-side instant uses (`filed_at`, `retired_at`) —
+ * `RunEvent.releasedAt`/`targetAt` are seconds because they are git's, not
+ * ours. Neither axis is defaulted when absent.
+ */
+export interface QueueLifecycle {
+  state: "SUPERSEDED" | "VOID";
+  /** The successor cr. Present for SUPERSEDED. */
+  by?: string;
+  /** Why the work is not happening. Present for VOID. */
+  reason?: string;
+  at: number;
+}
+
+/**
  * CR-CRU-014 §S1 — one registered queue entry as served by GET …/queue. The
  * caller supplies {cr, title?, wave, dependsOn, size?}; `status` and `planId`
  * are DERIVED on read from the cr's plan (never stored), in this PRECEDENCE
@@ -351,6 +381,10 @@ export type QueueStatus =
  * when a plan exists, so a COMPLETED_UNTRACKED entry never carries one — the
  * key is omitted, and §S3/AC5 forbid inventing a plan to fill it.
  * `dependsOn` is a string[] of CR ids, stored and returned verbatim.
+ *
+ * CR-CRU-091 §S2 — the caller may also DECLARE `release`, `track`, `seq` and
+ * `lifecycle` (see `QueueEntryInput`); those are stored, never derived, and
+ * published back here — `seq` always, the other three only where declared.
  */
 export interface QueueEntry {
   cr: string;
@@ -360,4 +394,21 @@ export interface QueueEntry {
   size?: string;
   status: QueueStatus;
   planId?: number;
+  /**
+   * CR-CRU-091 §S2 — the STORED sequence within its container, published on
+   * EVERY entry and read verbatim from the column. Never re-derived from a
+   * response index: `listQueue` is `ORDER BY seq`, so an index derivation
+   * preserves authored ORDER while making `seq` mean two different numbers on
+   * one surface (AC18) — the same failure class AC3 prevents for dates.
+   */
+  seq: number;
+  /** §S2 — the declared target release label. Absent when undeclared. */
+  release?: string;
+  /**
+   * §S2 — the declared track in the PRD's locked wire format `track-<n>`
+   * (`normalizeTrack`). Absent when undeclared.
+   */
+  track?: string;
+  /** §S2 — the second axis, parsed from `lifecycle_json`. Absent when none. */
+  lifecycle?: QueueLifecycle;
 }

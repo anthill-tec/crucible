@@ -3513,7 +3513,7 @@ describe("a release records the PACKAGES it delivered, on the wire (CR-CRU-084 �
 
   test(
     "AC6 no migration: a full packages round trip (record → read → repair → read) succeeds " +
-      "against a FRESHLY booted store while that store still reports schemaVersion === 7 — " +
+      "against a FRESHLY booted store while that store still reports schemaVersion === 8 — " +
       "`packages` rides the generic payload blob, exactly as CR-CRU-080's provenance does",
     async () => {
       boot();
@@ -3542,10 +3542,15 @@ describe("a release records the PACKAGES it delivered, on the wire (CR-CRU-084 �
       expect((await onlyRelease(key)).packages).toEqual(corrected);
 
       // The design guard, a LITERAL on purpose (the queue-registration.test.ts
-      // precedent): a 7→8 chain step would be the signal GREEN diverged from
-      // the payload-carried design AC6 pins.
+      // precedent): a chain step must make a human look. It FIRED for
+      // CR-CRU-091 §S2, whose 7→8 step retrofits `queue_entries` with the
+      // declaration columns — a legitimate, specified step that says nothing
+      // about `packages`, which still rides the payload blob (asserted
+      // non-vacuously above). So the tripwire's premise is superseded and it is
+      // consciously RE-ARMED at 8, not disabled and not turned into a
+      // tautological read of SCHEMA_VERSION.
       expect(handle!.store.schemaVersion).toBe(atBoot);
-      expect(handle!.store.schemaVersion).toBe(7);
+      expect(handle!.store.schemaVersion).toBe(8);
     },
   );
 });

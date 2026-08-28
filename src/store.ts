@@ -17,6 +17,7 @@ import type {
   PlanCycle,
   Project,
   QueueEntry,
+  QueueLifecycle,
   QueueStatus,
   RunContext,
   RunEvent,
@@ -258,6 +259,11 @@ interface QueueEntryRow {
   size: string | null;
   filed_at: number;
   seq: number;
+  // CR-CRU-091 §S2 — the three declaration columns; NULL when undeclared
+  // (never a fabricated default: an absent declaration is a fact).
+  release: string | null;
+  track: string | null;
+  lifecycle_json: string | null;
 }
 
 /** CR-CRU-014 §S1 — a validated queue entry as accepted by replaceQueue. */
@@ -267,6 +273,57 @@ export interface QueueEntryInput {
   wave: string;
   dependsOn: string[];
   size?: string;
+  /**
+   * CR-CRU-091 §S2 — the DECLARED half. Each field is optional and each is
+   * independently authoritative: a value present here OVERRIDES what the store
+   * already holds for this cr, and a value ABSENT here leaves the stored one
+   * alone (`replaceQueue`'s carry-forward), because a bulk `queue-file` post
+   * that never carried a declaration must not erase one.
+   */
+  release?: string;
+  /** Any accepted spelling — `2`, `track-2`, `Track 2`; normalised on write. */
+  track?: string;
+  seq?: number;
+  lifecycle?: QueueLifecycle;
+}
+
+/**
+ * CR-CRU-091 §S2 — normalise a declared track to the PRD's locked wire format
+ * `track-<n>` (PRD round 19: "tracks are numbered lanes — Track 1, 2, 3…").
+ * Returns `null` when the value carries NO integer, so a route can refuse it
+ * naming the field rather than storing a lane that is not a lane.
+ *
+ * Load-bearing rather than cosmetic: CR-CRU-092 matches `--track` against the
+ * live tracks list BY VALUE and CR-CRU-085 draws one lane per distinct
+ * reported track, so two clients writing `2` and `track-2` would otherwise
+ * produce two lanes for one track. Normalising at the single write path is
+ * what makes that impossible — no client can decide differently.
+ */
+export function normalizeTrack(value: string): string | null {
+  const lane = /\d+/.exec(value);
+  return lane === null ? null : `track-${Number(lane[0])}`;
+}
+
+/**
+ * CR-CRU-091 §S1 — order two release labels by VERSION: numeric-component
+ * compare, so `0.10.0` sorts AFTER `0.3.0` (a plain string compare puts it
+ * before, which is the bug this exists to avoid).
+ *
+ * A non-semver label must order DETERMINISTICALLY rather than throw (spec
+ * Risk), so: every run of digits in the label is a component; with equal
+ * leading components the shorter list sorts first (`0.2` before `0.2.1`); and
+ * labels that are numerically indistinguishable — `nightly` vs `main`, both
+ * componentless — fall back to a plain codepoint compare. Nothing here can
+ * throw and nothing depends on the labels being versions at all.
+ */
+function compareVersionLabels(a: string, b: string): number {
+  const left = (a.match(/\d+/g) ?? []).map(Number);
+  const right = (b.match(/\d+/g) ?? []).map(Number);
+  for (let index = 0; index < Math.min(left.length, right.length); index += 1) {
+    if (left[index] !== right[index]) return left[index]! - right[index]!;
+  }
+  if (left.length !== right.length) return left.length - right.length;
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /**
@@ -788,6 +845,33 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       return pending === 0;
     },
   },
+  {
+    description:
+      "queue_entries: CR-091 §S2 declared roadmap registration — release / track / lifecycle_json",
+    apply(db) {
+      if (!tableExists(db, "queue_entries")) return;
+      // CR-CRU-091 §S2 — three additive NULLABLE columns; a db written by a
+      // pre-091 build lacks them (same PRAGMA-checked retrofit pattern as
+      // every additive step above). Purely structural: an existing row keeps
+      // every value it had and declares NOTHING, which is the truth — nothing
+      // is back-filled or guessed from the wave it happens to sit in.
+      const queueCols = columnsOf(db, "queue_entries");
+      if (!queueCols.has("release")) {
+        db.exec(`ALTER TABLE queue_entries ADD COLUMN release TEXT`);
+      }
+      if (!queueCols.has("track")) {
+        db.exec(`ALTER TABLE queue_entries ADD COLUMN track TEXT`);
+      }
+      if (!queueCols.has("lifecycle_json")) {
+        db.exec(`ALTER TABLE queue_entries ADD COLUMN lifecycle_json TEXT`);
+      }
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "queue_entries")) return true;
+      const cols = columnsOf(db, "queue_entries");
+      return cols.has("release") && cols.has("track") && cols.has("lifecycle_json");
+    },
+  },
 ];
 
 /** CR-CRU-071 §S1 — the ordered chain; positions ARE the version numbers. */
@@ -1138,11 +1222,15 @@ export class Store {
         PRIMARY KEY (project_key, cycle_id)
       );
 
-      -- CR-CRU-014 §S1 — the CR execution queue (project roadmap). ADDITIVE
-      -- (CREATE TABLE IF NOT EXISTS, no migration chain step): SCHEMA_VERSION
-      -- stays 7. A full-replace POST rewrites a project's rows wholesale, so
+      -- CR-CRU-014 §S1 — the CR execution queue (project roadmap). The table
+      -- itself arrived ADDITIVELY (CREATE TABLE IF NOT EXISTS, no chain step):
+      -- a full-replace POST rewrites a project's rows wholesale, so
       -- (project_key, cr) is the natural key; seq preserves post order for a
       -- stable read; depends_on_json holds the verbatim CR-id string list.
+      --
+      -- CR-CRU-091 §S2 — the three DECLARATION columns are here in their
+      -- current shape so a brand-new store never runs the retrofit, and the
+      -- appended chain step exists only for tables an older binary created.
       CREATE TABLE IF NOT EXISTS queue_entries (
         project_key TEXT NOT NULL,
         cr TEXT NOT NULL,
@@ -1152,6 +1240,9 @@ export class Store {
         size TEXT,
         filed_at INTEGER NOT NULL,
         seq INTEGER NOT NULL,
+        release TEXT,
+        track TEXT,
+        lifecycle_json TEXT,
         PRIMARY KEY (project_key, cr)
       );
     `);
@@ -1705,6 +1796,13 @@ export class Store {
    * id, ingest timestamp, `label` and `commit` — and only the provenance
    * fields the caller actually re-derived are written over. Without it the
    * dedup replay is untouched, so no ordinary re-post can rewrite a release.
+   *
+   * CR-CRU-091 §S1 — a PROPOSED release (`type === "release-proposal"`) is its
+   * own record kind on this same path, carrying an optional `targetAt`. It is
+   * NOT a `release` with `releasedAt` omitted, and the two fields are strictly
+   * type-scoped in both directions: `targetAt` is stripped from anything that
+   * is not a proposal, `releasedAt`/`crs`/`packages` from anything that is not
+   * a release. A shipped release then CONSUMES the proposal it fulfils.
    */
   recordMilestoneEvent(
     projectKey: string,
@@ -1717,6 +1815,11 @@ export class Store {
       releasedAt?: number;
       crs?: string[];
       packages?: PackageRef[];
+      /**
+       * CR-CRU-091 §S1 — a `release-proposal`'s declared target, epoch SECONDS.
+       * Ignored (stripped) for every other type.
+       */
+      targetAt?: number;
       repairProvenance?: boolean;
     },
   ): { event: RunEvent; changed: boolean; shrink?: ProvenanceShrink } {
@@ -1750,6 +1853,10 @@ export class Store {
     const releasedAt = type === "release" ? meta?.releasedAt : undefined;
     const crs = type === "release" ? meta?.crs : undefined;
     const packages = type === "release" ? meta?.packages : undefined;
+    // CR-CRU-091 §S1 — the mirror of the three lines above: a declared target
+    // belongs to a PROPOSAL and nothing else. A `release` carries `releasedAt`
+    // (when it shipped); a target it was once aimed at is not a fact about it.
+    const targetAt = type === "release-proposal" ? meta?.targetAt : undefined;
     const event: RunEvent = {
       id: this.nextEventId(),
       projectKey,
@@ -1763,13 +1870,20 @@ export class Store {
       ...(releasedAt !== undefined ? { releasedAt } : {}),
       ...(crs !== undefined ? { crs } : {}),
       ...(packages !== undefined ? { packages } : {}),
+      ...(targetAt !== undefined ? { targetAt } : {}),
       ...(meta?.context !== undefined ? { context: meta.context } : {}),
     };
     const version = type === "release" ? meta?.label : undefined;
     if (version !== undefined) {
+      const at = Date.now();
       this.db.transaction(() => {
         this.insertEvent(event);
-        this.stampGatesRetired(projectKey, version, Date.now());
+        this.stampGatesRetired(projectKey, version, at);
+        // CR-CRU-091 §S1 — the SAME transaction consumes the proposal this
+        // release fulfils: either the shipped release and the retirement of
+        // its proposal are both true, or neither is. One gate renders, and
+        // one release record renders, never a pair.
+        this.stampProposalRetired(projectKey, version, at);
       })();
     } else {
       this.insertEvent(event);
@@ -1874,6 +1988,36 @@ export class Store {
       if (row.payload === null) continue;
       const parsed = JSON.parse(row.payload) as { version?: unknown };
       if (parsed.version === version) update.run(at, row.id);
+    }
+  }
+
+  /**
+   * CR-CRU-091 §S1 — stamp `retired_at` on the LIVE `release-proposal` whose
+   * `label` equals the shipped release's, i.e. consume the proposal the
+   * release fulfils. Called inside the release insert's own transaction.
+   *
+   * No new column: `retired_at` (CR-CRU-073) already means *no longer live,
+   * still auditable*, and `listEvents`' filter on it is UNSCOPED, so a
+   * consumed proposal leaves the live feed while `getEvent` still serves it.
+   * That reuse is only safe because the gate-specific query is itself scoped
+   * to `kind = 'gate'` — reading `retired_at` as gate-only would break this.
+   *
+   * `type` and `label` ride the generic payload blob, so the match is done on
+   * the parsed value (the same JS-parse pattern `stampGatesRetired` uses); a
+   * proposal for any other label is untouched.
+   */
+  private stampProposalRetired(projectKey: string, label: string, at: number): void {
+    const rows = this.db
+      .query<{ id: string; payload: string | null }, [string]>(
+        `SELECT id, payload FROM events
+         WHERE project_key = ? AND kind = 'milestone' AND retired_at IS NULL`,
+      )
+      .all(projectKey);
+    const update = this.db.query(`UPDATE events SET retired_at = ? WHERE id = ?`);
+    for (const row of rows) {
+      if (row.payload === null) continue;
+      const parsed = JSON.parse(row.payload) as { type?: unknown; label?: unknown };
+      if (parsed.type === "release-proposal" && parsed.label === label) update.run(at, row.id);
     }
   }
 
@@ -2159,6 +2303,40 @@ export class Store {
       });
   }
 
+  /**
+   * CR-CRU-091 §S1 — the LIVE release proposals, ordered by VERSION.
+   *
+   * Beside `listReleases`, never inside it: that read filters on
+   * `event.type === "release"`, so a proposal cannot leak into settled history
+   * — and this one filters on `release-proposal`, so a shipped release cannot
+   * leak into the plan. Same archived-project exclusion.
+   *
+   * LIVE means `retired_at IS NULL`: a proposal a real release has consumed is
+   * no longer a plan, and returning it here would render the pair §S1 forbids.
+   * It stays auditable through `getEvent`.
+   *
+   * ORDER IS VERSION, ASCENDING (AC1: proposing `0.3.0` then `0.2.1` yields
+   * `0.2.1`, `0.3.0`) — deliberately NOT the declared target and NOT arrival
+   * order. Version orders the strip; a target is a plan and can slip, so a
+   * target contradicting version order is a planning conflict to surface, not
+   * a reason to re-sort. Equal versions keep the SQL order (`Array#sort` is
+   * stable), which is what makes a repeated label deterministic rather than
+   * arbitrary.
+   */
+  listReleaseProposals(projectKey: string): RunEvent[] {
+    const rows = this.db
+      .query<EventRow, [string]>(
+        `SELECT * FROM events WHERE project_key = ? AND kind = 'milestone'
+         AND retired_at IS NULL AND ${Store.NOT_ARCHIVED_SUBQUERY}
+         ORDER BY timestamp DESC, rowid DESC`,
+      )
+      .all(projectKey);
+    return rows
+      .map(Store.toEvent)
+      .filter((event) => event.type === "release-proposal")
+      .sort((a, b) => compareVersionLabels(a.label ?? "", b.label ?? ""));
+  }
+
   /** Cheap SQL count of raw (non-rolled-up) events, optionally scoped to a project. */
   countEvents(projectKey?: string): number {
     if (projectKey === undefined) {
@@ -2237,6 +2415,9 @@ export class Store {
       // CR-CRU-084 §S1/AC6 — and the packages the release delivered, in the
       // SAME blob for the SAME reason: no column, no migration.
       ...(event.packages !== undefined ? { packages: event.packages } : {}),
+      // CR-CRU-091 §S1 — a PROPOSAL's declared target rides the same blob, so
+      // the new record kind needs no column of its own either.
+      ...(event.targetAt !== undefined ? { targetAt: event.targetAt } : {}),
     };
     return Object.keys(payloadObj).length > 0 ? JSON.stringify(payloadObj) : null;
   }
@@ -2319,6 +2500,8 @@ export class Store {
       // was stored in; a pre-§S4 release row simply has neither key.
       ...(typeof payload.releasedAt === "number" ? { releasedAt: payload.releasedAt } : {}),
       ...(Array.isArray(payload.crs) ? { crs: payload.crs as string[] } : {}),
+      // CR-CRU-091 §S1 — a proposal's declared target, from the same blob.
+      ...(typeof payload.targetAt === "number" ? { targetAt: payload.targetAt } : {}),
       // CR-CRU-084 §S1 — the delivered packages, read back from the same blob;
       // a release recorded before this CR simply has no key (AC4).
       ...(Array.isArray(payload.packages) ? { packages: payload.packages as PackageRef[] } : {}),
@@ -3028,17 +3211,54 @@ export class Store {
    * entries vanish, re-posted entries carry no duplicates, and an edited wave
    * takes effect. Notifies through the SAME onChange path SSE consumes (the
    * existing "events" kind — the roadmap renders on that surface).
+   *
+   * CR-CRU-091 §S2 — and it must not destroy a declaration it was never
+   * handed. The markdown-table bulk bootstrap (`queue-file`) carries no
+   * `release`, no `track` and no `lifecycle`, and the per-CR verbs carry no
+   * dependency table — so a DELETE-then-INSERT that only knew the post would
+   * erase the whole roadmap on the next bootstrap. Inside the SAME
+   * transaction, BEFORE the DELETE, each existing row's four declared values
+   * are snapshotted and carried forward for any cr present in BOTH sets; a
+   * posted entry that DECLARES a value overrides its snapshot, field by
+   * field. A cr absent from the posted set is still dropped — with its
+   * declaration, because the row itself is gone.
    */
   replaceQueue(projectKey: string, entries: QueueEntryInput[]): void {
     const now = Date.now();
+    // §S2 — normalise (and REFUSE) before the transaction opens, so a bad
+    // track can never leave a half-replaced queue behind.
+    const tracks = new Map<string, string>();
+    for (const entry of entries) {
+      if (entry.track === undefined) continue;
+      const normalized = normalizeTrack(entry.track);
+      if (normalized === null) {
+        throw new Error(
+          `queue entry ${entry.cr}: track "${entry.track}" carries no lane number — tracks are ` +
+            `numbered lanes (wire format track-<n>), so declare e.g. 2, track-2 or "Track 2"`,
+        );
+      }
+      tracks.set(entry.cr, normalized);
+    }
     const replace = this.db.transaction(() => {
+      const held = new Map<string, QueueEntryRow>();
+      for (const row of this.db
+        .query<QueueEntryRow, [string]>(`SELECT * FROM queue_entries WHERE project_key = ?`)
+        .all(projectKey)) {
+        held.set(row.cr, row);
+      }
       this.db.query(`DELETE FROM queue_entries WHERE project_key = ?`).run(projectKey);
       entries.forEach((entry, index) => {
+        const snapshot = held.get(entry.cr);
+        const lifecycle =
+          entry.lifecycle !== undefined
+            ? JSON.stringify(entry.lifecycle)
+            : snapshot?.lifecycle_json ?? null;
         this.db
           .query(
             `INSERT INTO queue_entries
-               (project_key, cr, title, wave, depends_on_json, size, filed_at, seq)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+               (project_key, cr, title, wave, depends_on_json, size, filed_at, seq,
+                release, track, lifecycle_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             projectKey,
@@ -3048,7 +3268,13 @@ export class Store {
             JSON.stringify(entry.dependsOn),
             entry.size ?? null,
             now,
-            index,
+            // The post's own order stands only where nothing better is known:
+            // a declared seq wins, and a held one survives a bootstrap that
+            // never knew the wave's authored sequence.
+            entry.seq ?? snapshot?.seq ?? index,
+            entry.release ?? snapshot?.release ?? null,
+            tracks.get(entry.cr) ?? snapshot?.track ?? null,
+            lifecycle,
           );
       });
     });
@@ -3075,6 +3301,14 @@ export class Store {
    *
    * Archived projects are excluded via the shared NOT_ARCHIVED subquery
    * (rows survive; unarchive restores them) — the listReleases precedent.
+   *
+   * CR-CRU-091 §S2 — the DECLARED half is published beside the derived one:
+   * `seq` on EVERY entry (the stored integer, verbatim — never re-derived from
+   * a response index, AC18) and `release`/`track`/`lifecycle` only where
+   * declared, through the same null-omits-the-key idiom the fields above use.
+   * `lifecycle` is a SECOND AXIS and is never folded into `status`: a
+   * SUPERSEDED cr whose plan is open still reads IN_PROGRESS, because that is
+   * what happened to the work.
    */
   listQueue(projectKey: string): QueueEntry[] {
     const rows = this.db
@@ -3101,6 +3335,12 @@ export class Store {
         ...(row.size !== null ? { size: row.size } : {}),
         status: derived.status,
         ...(derived.planId !== undefined ? { planId: derived.planId } : {}),
+        seq: row.seq,
+        ...(row.release !== null ? { release: row.release } : {}),
+        ...(row.track !== null ? { track: row.track } : {}),
+        ...(row.lifecycle_json !== null
+          ? { lifecycle: JSON.parse(row.lifecycle_json) as QueueLifecycle }
+          : {}),
       };
     });
   }

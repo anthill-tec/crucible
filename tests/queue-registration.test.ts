@@ -35,16 +35,20 @@
 //                         COMPLETED_UNTRACKED entry never carries one.
 //
 // ── Schema design this file ASSUMES (stated per dispatch) ──────────────────
-// The queue_entries table is created ADDITIVELY via CREATE TABLE IF NOT
+// The queue_entries TABLE is created ADDITIVELY via CREATE TABLE IF NOT
 // EXISTS inside createBaseTables (the same way CR-017's runs surface is
-// seeded) — NO migration chain step. Therefore SCHEMA_VERSION stays 7 and a
-// freshly booted store still reports schemaVersion === 7. (The alternative —
-// a 7→8 chain step — is NOT what these tests expect; if GREEN adds one, the
-// schema-unchanged assertion below is the signal it diverged from the
-// forward-compat "no 0.1.0 table changes required" contract.)
+// seeded), so CR-CRU-014 itself needed no migration chain step and
+// SCHEMA_VERSION stayed 7 for this CR.
+//
+// The literal below is a TRIPWIRE, not a tautology: a chain step must make a
+// human look. It fired for CR-CRU-091 §S2, which appends a step retrofitting
+// this very table with release/track/lifecycle_json — legitimate and specified
+// — so it is consciously RE-ARMED at 8 rather than derived from
+// SCHEMA_VERSION, which would defend nothing. What this guard still asserts is
+// unchanged: a freshly booted store round-trips the queue without any
+// per-boot retrofit, and the version it reports is a value someone chose.
 // tests/store-migration.test.ts derives every version from schemaVersion()
-// (reads SCHEMA_VERSION) — it pins NO literal — so either design keeps it
-// green; this file's literal 7 is the design guard.
+// (reads SCHEMA_VERSION) — it pins NO literal — so the two do different jobs.
 //
 // Drives the REAL production server (startServer) — POST/GET
 // /api/v2/projects/<key>/queue do not exist in the route table yet, so every
@@ -584,11 +588,11 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
     );
   });
 
-  // ── Design guard — the queue table is additive, SCHEMA_VERSION unchanged ─
-  describe("design guard — queue_entries is created additively (no migration bump)", () => {
+  // ── Design guard — the queue round-trip works at a KNOWN schema version ──
+  describe("design guard — queue_entries needs no per-boot retrofit", () => {
     test(
       "a queue round-trip succeeds against a freshly booted store WHILE that store still reports " +
-        "schemaVersion === 7 (CREATE TABLE IF NOT EXISTS, no 7→8 chain step)",
+        "schemaVersion === 8 (the base CREATE TABLE writes the current shape whole)",
       async () => {
         handle = boot();
         const key = await createProject("queue-schema-additive");
@@ -600,7 +604,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         ).toBe(true);
         expect((await getQueue(key)).entries.length).toBe(1);
 
-        expect(handle.store.schemaVersion).toBe(7);
+        expect(handle.store.schemaVersion).toBe(8);
       },
     );
   });
