@@ -2632,7 +2632,15 @@
           }),
         );
       });
-      return div({ "data-testid": "roadmap-table", class: "app-roadmap-table" }, children);
+      // AC25 — the ZONE's own identity, stated as its ordinal. `data-testid`
+      // names what a zone IS; `data-zone` says WHERE it stands in the
+      // sequence the DN declares (strip, flowchart, table), which is what
+      // makes "exactly three zones, in this order" checkable on the surface
+      // rather than inferred from the render function's argument order.
+      return div(
+        { "data-testid": "roadmap-table", "data-zone": "3", class: "app-roadmap-table" },
+        children,
+      );
     };
 
     // ── CR-CRU-078 §S4 — ZONE 2: the FOCUSED release's flowchart ───────────
@@ -2779,6 +2787,14 @@
               "data-testid": "roadmap-wave",
               "data-wave": box.wave,
               "data-cr-count": String(box.entries.length),
+              // AC22/C5 — the container of live work reads as live too (the
+              // design artifact's `.wave.active`). Derived from the entries
+              // already rendered, so it states nothing new; and it is a
+              // BORDER colour, never motion, because AC24 reserves movement
+              // for the CR that is actually running.
+              "data-active": box.entries.some((entry) => entry.status === "IN_PROGRESS")
+                ? "true"
+                : "false",
               class: "app-flow-wave",
             },
             span({ class: "app-flow-wave-label" }, `Wave ${box.wave}`),
@@ -2843,7 +2859,14 @@
           "data-date-state": view.dateState,
           class: `app-flow-gate ${view.kind}`,
         },
-        span({ class: "app-flow-gate-version" }, view.version),
+        // AC21 — a release gate is a DIAMOND: a square rotated 45°, so its
+        // label rides in a counter-rotated child or the version would read on
+        // the diagonal. The design artifact's own construction
+        // (`.gate > span { transform: rotate(-45deg) }`).
+        span(
+          { class: "app-flow-gate-version" },
+          span({ class: "app-flow-gate-label" }, view.version),
+        ),
         span(
           { class: `app-flow-gate-date ${view.dateState}` },
           view.dateState === "dated"
@@ -2861,6 +2884,7 @@
       return div(
         {
           "data-testid": "roadmap-flow",
+          "data-zone": "2",
           "data-version": view.version,
           "data-kind": view.kind,
           "data-cr-count": String(view.crCount),
@@ -2987,7 +3011,11 @@
           class: `app-strip-gate ${gate.kind}${focused === true ? " on" : ""}`,
           onclick: () => roadmapFocusOn(gate.version),
         },
-        span({ class: "app-strip-gate-version" }, gate.version),
+        // AC21 — the diamond's label, counter-rotated. See RoadmapFlowGate.
+        span(
+          { class: "app-strip-gate-version" },
+          span({ class: "app-strip-gate-label" }, gate.version),
+        ),
         span(
           { "data-testid": "roadmap-gate-date", class: `app-strip-gate-date ${gate.dateState}` },
           // AC30 — the date is `resolveGateDate`'s own answer, carried
@@ -3060,6 +3088,7 @@
       const strip = div(
         {
           "data-testid": "roadmap-strip",
+          "data-zone": "1",
           class: "app-roadmap-strip",
           "data-gate-count": String(gates.length),
           // What the strip MEASURED and what it derived from it — the paging
