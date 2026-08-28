@@ -1274,3 +1274,20 @@ body {
 .app-roadmap-wave,
 .app-roadmap-track,
 .app-roadmap-lifecycle { flex: 0 0 auto; }
+
+/* CR-CRU-078 §S7 — SELECTION and the drill-through source. Structure only:
+   the highlight has to be visible on BOTH renderings of one entry (AC17) and
+   the source has to be identifiable before it is clicked (AC18). The palette,
+   weight and motion of both are the design document's, and AC21–AC26 (C5) is
+   where they are asserted against it — nothing here claims to be that. */
+.app-roadmap-row.selected,
+.app-flow-node.selected {
+  outline: 1px solid var(--ink-dim);
+  outline-offset: 1px;
+}
+.app-roadmap-row[data-drill-source="true"] { cursor: pointer; }
+.app-roadmap-drill {
+  flex: 0 0 auto;
+  font: 400 10px/1.4 var(--mono);
+  color: var(--ink-dim);
+}

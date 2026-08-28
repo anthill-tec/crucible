@@ -2462,22 +2462,36 @@
               },
               "⚠ before its dependency",
             );
+      // AC18 — a row that HAS somewhere to go says so before it is clicked.
+      const drillSource = roadmapDrillable(entry.status);
+      // AC17 — the ROW's own binding, for the reason the node's carries one.
+      const selected = () => roadmapSelectedCr() === entry.cr;
       const props = {
         "data-testid": "roadmap-row",
         "data-cr": entry.cr,
         "data-active": active ? "true" : "false",
-        class: `app-roadmap-row${active ? " on" : ""}`,
-        // One-rule tab swap (no overlay), the SAME gate the flowchart node
-        // uses: an open (IN_PROGRESS) row lands on the Workflow tab at that
+        "data-selected": () => (selected() ? "true" : "false"),
+        class: () =>
+          `app-roadmap-row${active ? " on" : ""}${selected() ? " selected" : ""}`,
+        // §S7 — one click, two effects. It SELECTS, which is what highlights
+        // the flowchart node for the same entry (AC17), and it drills: the
+        // one-rule tab swap (no overlay), the SAME gate the flowchart node
+        // uses — an open (IN_PROGRESS) row lands on the Workflow tab at that
         // CR's active section; a COMPLETED row lands on its Workflow history
-        // group; a PENDING or COMPLETED_UNTRACKED row is inert — there is no
-        // plan to land on.
-        onclick: () => roadmapDrillIn(entry.status),
+        // group; a PENDING or COMPLETED_UNTRACKED row is inert, there is no
+        // plan to land on. The selection outlives the swap because it is held
+        // outside the render tree, which is what makes the highlight readable
+        // for the rows a user clicks most.
+        onclick: () => {
+          roadmapSelectOn(entry.cr);
+          roadmapDrillIn(entry.status);
+        },
       };
       // CR-CRU-091/AC18 — the STORED position, verbatim, omitted when absent.
       if (typeof entry.seq === "number" && Number.isFinite(entry.seq)) {
         props["data-seq"] = String(entry.seq);
       }
+      if (drillSource) props["data-drill-source"] = "true";
       if (lifecycle !== null) props["data-lifecycle"] = lifecycle.state;
       const cell = (column, ...children) =>
         columns.includes(column)
@@ -2525,6 +2539,17 @@
             ),
         orderWarning,
         laneBadge,
+        // AC18 — the drill-through source, stated in WORDS beside the row's
+        // data: the mark has to be readable without clicking, and it names
+        // where the click goes. Whether the destination is that CR's own
+        // cycles or the tab's active section is CR-CRU-079's to settle; this
+        // is the source marker its AC5 will come back to.
+        drillSource
+          ? span(
+              { "data-testid": "roadmap-drill-source", class: "app-roadmap-drill" },
+              "↗ cycles",
+            )
+          : null,
       );
     };
 
@@ -2535,7 +2560,15 @@
     const RoadmapTableZone = (view, entries) => {
       if (entries.length === 0) {
         return div(
-          { "data-testid": "roadmap-empty", class: "app-empty" },
+          {
+            "data-testid": "roadmap-empty",
+            // AC19 — SCOPED, because "the queue is empty while a release
+            // exists" and "nothing is registered at all" are different facts
+            // that used to render as the same indistinguishable node. This is
+            // the queue's own state; the board's is RoadmapPanel's.
+            "data-scope": "queue",
+            class: "app-empty",
+          },
           // The imperative names the tool exactly as §S3 pins it — a
           // LITERAL `<key>` placeholder, the orchestrator's own copy.
           "No execution queue registered yet — register one via " +
@@ -2547,7 +2580,8 @@
       // queue stands: hiding a registered queue behind a release nobody has
       // declared would lose the board entirely, and §S5 is silent on that
       // state — it describes what the table does once a release is focused.
-      // (AC19's empty state — no queue AND no releases — is C4's.)
+      // (AC19's empty state — no queue AND no releases — is the BOARD's, and
+      // RoadmapPanel renders it instead of these three zones.)
       const rows = view === null ? entries : view.members;
       // AC12 — one decision, made from the rows, for the head and the cells.
       const columns = L.roadmapTableColumns(rows);
@@ -2626,8 +2660,41 @@
     // with a plan to land on is landable, so a PENDING or COMPLETED_UNTRACKED
     // node is inert. Node and row share the predicate because they are two
     // renderings of one entry, and they must not disagree about it.
+    //
+    // §S7/AC18 — and the MARK is read off the SAME predicate, so a row can
+    // never advertise a drill-through it will not perform. Where the jump
+    // LANDS (that CR's own cycles, and the `← roadmap` way back) is
+    // CR-CRU-079's AC; what this CR owes is a source that is identifiable
+    // before it is clicked.
+    const roadmapDrillable = (status) => status === "IN_PROGRESS" || status === "COMPLETED";
+
     const roadmapDrillIn = (status) => {
-      if (status === "IN_PROGRESS" || status === "COMPLETED") state.workspaceTab = "Workflow";
+      if (roadmapDrillable(status)) state.workspaceTab = "Workflow";
+    };
+
+    // §S7/AC17 — the SELECTED CR: ONE value, two renderings. Zone 2's node and
+    // zone 3's row are the same entry drawn twice, so selecting on either side
+    // highlights the other by reading the same holder — never by one zone
+    // notifying the other, which is the desynchronised highlight the CR's Risk
+    // section names.
+    //
+    // Held OUTSIDE the render tree, keyed by project, exactly like
+    // `roadmapFocusVersions` and `roadmapStripOffsets` below — for §S8's
+    // reason and one more that is specific to this click: the same click also
+    // performs CR-CRU-083's tab swap for a drillable row, which UNMOUNTS this
+    // pane, so a mount-local selection would be gone before the user could see
+    // what they picked. §S8 names the focused release and the page window and
+    // is silent on selection; this is the same scope for a strictly stronger
+    // reason.
+    const roadmapSelectedCrs = new Map();
+    const roadmapSelectRev = van.state(0);
+    // Reading `rev` is what subscribes a binding to the out-of-tree Map; the
+    // comparison keeps that read honest rather than discarded.
+    const roadmapSelectedCr = () =>
+      roadmapSelectRev.val >= 0 ? roadmapSelectedCrs.get(state.route.projectKey) : undefined;
+    const roadmapSelectOn = (cr) => {
+      roadmapSelectedCrs.set(state.route.projectKey, cr);
+      roadmapSelectRev.val += 1;
     };
 
     const RoadmapFlowTerminal = (which) =>
@@ -2649,12 +2716,23 @@
     // never defaulted.
     const RoadmapFlowNode = (entry) => {
       const lifecycle = L.lifecycleBadge(entry.lifecycle);
+      // AC17 — read on the NODE's own binding rather than the panel's: a
+      // selection paints one outline, and must not rebuild the strip above it
+      // (nor re-run its measurement) to do so.
+      const selected = () => roadmapSelectedCr() === entry.cr;
       const props = {
         "data-testid": "roadmap-node",
         "data-cr": entry.cr,
         "data-status": entry.status,
-        class: `app-flow-node ${String(entry.status).toLowerCase()}`,
-        onclick: () => roadmapDrillIn(entry.status),
+        "data-selected": () => (selected() ? "true" : "false"),
+        class: () =>
+          `app-flow-node ${String(entry.status).toLowerCase()}${selected() ? " selected" : ""}`,
+        // §S7 — one click does both: it SELECTS (which is what highlights the
+        // row beside it) and it drills, for an entry that has somewhere to go.
+        onclick: () => {
+          roadmapSelectOn(entry.cr);
+          roadmapDrillIn(entry.status);
+        },
       };
       // CR-CRU-091/AC18 — the STORED position, published verbatim and OMITTED
       // when the payload carries none. Nothing here SORTS on it: the payload
@@ -2663,6 +2741,11 @@
       if (typeof entry.seq === "number" && Number.isFinite(entry.seq)) {
         props["data-seq"] = String(entry.seq);
       }
+      // AC18 — the drill-through source, marked on the node too: node and row
+      // are one entry drawn twice and must not disagree about it. The node's
+      // LABEL stays id + status (AC11), so the mark is the attribute C5 styles
+      // and the row is where the affordance is stated in words.
+      if (roadmapDrillable(entry.status)) props["data-drill-source"] = "true";
       if (lifecycle !== null) props["data-lifecycle"] = lifecycle.state;
       return div(
         props,
@@ -3043,6 +3126,32 @@
     // release" is precisely the desynchronised surface the CR's Risk section
     // names — and a second `releaseStripGates` call would be a second
     // sequence, one SSE frame away from disagreeing with the first.
+    // AC19 — nothing registered AT ALL is ONE definitive state for the whole
+    // board, and the board draws no chrome behind it.
+    //
+    // Observed 2026-08-28 on the cleared board, and it is the failure this
+    // replaces: the table said "No execution queue registered yet …" while the
+    // graph drew two orphan terminals — a `Start` and an `End` bubble, 2 nodes
+    // and 0 edges — with no message at all. The terminals went with the
+    // composed whole-project DAG this CR replaced (AC20's negative source scan
+    // is why its builder is not named here); what was left was still the
+    // TABLE's queue-scoped message standing in for a board-wide fact, naming
+    // one of the two things that are missing.
+    //
+    // Both verbs, because both reads are empty: §S3's queue registration and
+    // CR-CRU-091 §S3's `release-propose`, each with the LITERAL `<key>`
+    // placeholder the orchestrator sees in the tool. And no error — an empty
+    // board is a registration state, which is also why AC33's degraded strip
+    // can never reach this branch: a failed proposals read beside shipped
+    // releases still yields gates.
+    const RoadmapBoardEmpty = () =>
+      div(
+        { "data-testid": "roadmap-empty", "data-scope": "board", class: "app-empty" },
+        "Nothing registered on this roadmap yet — register the execution queue via " +
+          "POST /projects/<key>/queue, and declare a release via release-propose " +
+          "(POST /projects/<key>/release-proposals).",
+      );
+
     const RoadmapPanel = () =>
       div({ class: greyed("app-center") }, () => {
         const releases = Array.from(state.releases);
@@ -3061,9 +3170,17 @@
           paneRunway(
             div(
               { "data-testid": "roadmap-zones", class: "app-roadmap-zones" },
-              RoadmapStripZone(gates, focusIndex),
-              RoadmapFlowZone(view),
-              RoadmapTableZone(view, entries),
+              // AC19 — with nothing registered the three zones are not called
+              // at all: skeleton chrome over an empty project is exactly what
+              // the AC fails, so there is no strip, no terminal and no wave
+              // box to render empty.
+              gates.length === 0 && entries.length === 0
+                ? RoadmapBoardEmpty()
+                : [
+                    RoadmapStripZone(gates, focusIndex),
+                    RoadmapFlowZone(view),
+                    RoadmapTableZone(view, entries),
+                  ],
             ),
           ),
         );
