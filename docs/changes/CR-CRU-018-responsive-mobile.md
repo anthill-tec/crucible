@@ -4,7 +4,7 @@
 considered media like a mobile phone")
 **Type:** feature
 **Priority:** P3
-**Depends on:** CR-CRU-016 (final pane/drill-in geometry must exist first)
+**Depends on:** CR-CRU-016 (final pane/drill-in geometry must exist first), CR-CRU-093 (the pane-collapse mechanism this reuses)
 **Labels:** ui, responsive, mobile
 **Phase:** Wave 5/6 (0.2.0) — lane allocated by mainline at 0.2.0 planning
 
@@ -24,9 +24,14 @@ already global; this CR makes the LAYOUT adapt to the medium.
 Forge-token breakpoints (e.g. ≤640px phone, ≤1024px tablet) applied
 throughout: the projects row wraps/scrolls gracefully; home timeline goes
 single-column full-width; the workspace's [content | Project pane] stacks
-(pane collapses to an expandable summary strip under the tabs); the in-pane
-drill-in (CR-016) fills the viewport with the ← back chip prominent; /manage
-and /roadmap slide-overs become full-screen sheets on phones.
+(pane collapses to an expandable summary strip under the tabs — this **reuses
+CR-CRU-093's collapse mechanism and its persisted state**, viewport-driven here
+rather than user-driven; two independent collapse implementations on one region
+is a defect); the in-pane drill-in (CR-016) fills the viewport with the ← back
+chip prominent; /manage and /roadmap slide-overs become full-screen sheets on
+phones. The roadmap release strip pages by whole containers at every breakpoint
+(CR-CRU-078): a narrower viewport shows **fewer** gates and a higher hidden
+count, never a partial one.
 
 ### §S2 Touch affordances
 Hover-only affordances get touch equivalents: tap targets ≥44px on

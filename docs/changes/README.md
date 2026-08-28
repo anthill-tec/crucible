@@ -73,8 +73,8 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-014](CR-CRU-014-execution-roadmap.md) | Execution roadmap: queue registration + Wave/CR sequence table | feature | COMPLETED (0.2.0) | 011, 013 | 5 (0.2.0) |
 | [CR-CRU-015](CR-CRU-015-bdd-harness.md) | BDD harness: Crucible executes Playwright for frontend projects | feature | PENDING | 004, 007 | 6 (post-0.2.0) |
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end events + the Aborted state | feature | COMPLETED (0.2.0) | 008, 011 | 5 (0.2.0) |
-| [CR-CRU-018](CR-CRU-018-responsive-mobile.md) | Responsive Crucible: mobile + tablet media support | feature | PENDING | 016 | 6 (post-0.2.0) |
-| [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: velocity + burndown + forecast | feature | PENDING | 011, 014 | 6 (post-0.2.0) |
+| [CR-CRU-018](CR-CRU-018-responsive-mobile.md) | Responsive Crucible: mobile + tablet media support | feature | PENDING | 016, 093 | 6 (post-0.2.0) |
+| [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: velocity + burndown + forecast | feature | PENDING | 011, 014, 091 | 6 (post-0.2.0) |
 | [CR-CRU-068](CR-CRU-068-server-discloses-its-store.md) | The server never says which store it opened | bugfix | COMPLETED (0.2.0) | 043, 066 | 5 (0.2.0) |
 | [CR-CRU-069](CR-CRU-069-uninstall-inverts-install.md) | Install has no inverse: `crucible-axi uninstall` + `install.sh` teardown | feature | COMPLETED (0.2.0) | 009, 066 | 5 (0.2.0) |
 | [CR-CRU-070](CR-CRU-070-systemd-user-unit.md) | systemd `--user` unit: install script provisions and reverses it | feature | COMPLETED (0.2.0) | 066, 069 | 5 (0.2.0) |

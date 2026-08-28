@@ -3,7 +3,7 @@
 **Status:** PENDING
 **Type:** feature
 **Priority:** P3
-**Depends on:** CR-CRU-011, CR-CRU-014
+**Depends on:** CR-CRU-011, CR-CRU-014, CR-CRU-091 (the declared release target this CR reads)
 **Labels:** api, analytics, roadmap, ui
 **Phase:** Wave 5/6 (0.2.0 — after CR-014)
 **Design reference:** [DN-crucible-analytics.md](../research/DN-crucible-analytics.md)
@@ -51,16 +51,23 @@ durations and cycles-per-CR-by-size from this project's closed history →
 `{perWave:[{wave, p50Ts, p80Ts}], release:{p50Ts, p80Ts}, sampleCycles,
 status:"ok"|"insufficient_history"}`. Gate: `sampleCycles < 15` →
 `insufficient_history` with NO band values (never fabricate estimates).
-Additive queue field `targetDate?` per wave (ISO date, optional) → response
-gains `scheduleHealth: "ahead"|"at-risk"|"behind"` per wave (DN §7 rule,
-verbatim: `P80 ≤ target` → `ahead`; `P50 ≤ target < P80` → `at-risk`;
-`P50 > target` → `behind`).
+**Target date — re-based 2026-08-28.** This CR does **not** define its own target
+field. The declared target is a property of the **release** and is registered by
+the orchestrator via `release-propose --target` (**CR-CRU-091**); the earlier plan
+here — an additive per-wave `targetDate?` on the queue entry, owned by
+`queue-file` — is **retired** before it was built, because two target-date
+mechanisms on one board would have to be reconciled and one of them would be
+wrong. This CR **consumes** the release target and compares its bands against it:
+`scheduleHealth: "ahead"|"at-risk"|"behind"` (DN §7 rule, verbatim:
+`P80 ≤ target` → `ahead`; `P50 ≤ target < P80` → `at-risk`; `P50 > target` →
+`behind`). Where no target is declared, `scheduleHealth` is **absent**, never
+defaulted — the same rule as the missing-band case.
 
 ### §S5 Roadmap progress band (UI)
 The Roadmap tab renders a compact progress band ABOVE the table (testid
 `roadmap-progress`): burndown sparkline · velocity (`N.N cyc/day` with the
-exec/gate split) · release P50/P80 band · schedule-health chip when a
-`targetDate` exists. Clicking the band swaps the Roadmap pane to the
+exec/gate split) · release P50/P80 band · schedule-health chip when the focused
+release carries a **declared target** (CR-091). Clicking the band swaps the Roadmap pane to the
 **analytics pane** (testid `analytics-pane`, one-rule pane state, `← roadmap`
 back chip) containing the full burndown chart (testid `burndown-chart`),
 velocity detail and the per-wave forecast table (DN §9). With
@@ -75,7 +82,7 @@ uPlot leading candidate).
 - [ ] `GET /analytics/velocity` on a fixture with 6 closed cycles (known timestamps, 2 linked runs each, queue sizes XS/S/M) returns the hand-computed `cyclesPerDay`, `weightedCrsPerWeek`, `execMsPerCycle`, `gateMsPerCycle`, `sampleCycles: 6` (exact values asserted).
 - [ ] `POST /queue` twice → `queue_snapshots` holds the first entry set with a `snapped_at`; `GET /analytics/burndown` renders the scope change as a step (`event: "scope-change"`) and each plan close as a burn (`event: "plan-closed"`, remainingWeighted drops by that CR's weight).
 - [ ] `GET /analytics/forecast` with ≥15 closed cycles returns `status: "ok"` with `p50Ts ≤ p80Ts` for every wave, waves ordered by dependency (a wave's p50 never precedes its dependency wave's); with <15 closed cycles returns `status: "insufficient_history"` and NO `perWave`/`release` band values.
-- [ ] Queue entries accept optional `targetDate` (ISO `YYYY-MM-DD`, 400 on malformed); forecast response carries `scheduleHealth` per the DN §7 rule — `P80 ≤ target` → `ahead`, `P50 ≤ target < P80` → `at-risk`, `P50 > target` → `behind` (three fixtures, one per verdict, exact values via the seeded forecast).
+- [ ] `scheduleHealth` is computed against the **release's declared target** (CR-091) per the DN §7 rule — `P80 ≤ target` → `ahead`, `P50 ≤ target < P80` → `at-risk`, `P50 > target` → `behind` (three fixtures, one per verdict, exact values via the seeded forecast). With **no** declared target the field is **absent** from the response, never defaulted. This CR adds **no** target field of its own — an implementation that introduces a per-wave `targetDate` on the queue entry fails this AC.
 - [ ] Roadmap pane renders `roadmap-progress` with the sparkline, velocity text containing the exec/gate split, and the P50/P80 band; clicking the band swaps the pane to `analytics-pane` (tabs hidden, back chip `← roadmap`) containing `burndown-chart`, the velocity detail and the per-wave forecast rows; closing restores the Roadmap view (CR-016 one-rule assertions); the `insufficient_history` fixture renders the sample count and NO date text.
 
 ## Estimated size
@@ -87,5 +94,6 @@ confidence gate (no bands below 15 closed cycles) and bands-not-points
 everywhere.
 
 ## Non-goals
-Cross-project analytics; person/agent-level productivity scoring; editing
-targets from the UI (queue-file owns `targetDate`); Gantt scheduling.
+Cross-project analytics; person/agent-level productivity scoring; declaring or
+editing targets in any form (**CR-CRU-091** owns the declared release target, and
+this CR only reads it); Gantt scheduling.
