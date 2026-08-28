@@ -26,6 +26,30 @@ export function relativeTime(ts, now) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+/**
+ * CR-CRU-091 §S1/AC3 — the ONE way a git-sourced release date is rendered.
+ *
+ * Takes epoch SECONDS, the unit BOTH `releasedAt` (a tag's own commit date)
+ * and `targetAt` (a proposal's declared target) are stored in, and answers the
+ * UTC day as ISO `YYYY-MM-DD` — the same day form `coverageHeatSlices` already
+ * uses below and the storyboard's gate dates use. A day, because that is what
+ * a release date is: no clock component, and no locale, which would render one
+ * ledger differently per viewer.
+ *
+ * Two conventions on one surface renders 1970: `releasedAt = 1787149125` is
+ * 2026-08-19 in seconds and 1970-01-21 read as milliseconds. So no call site
+ * constructs a date from either field itself — it calls this.
+ *
+ * An ABSENT or unusable value renders the EMPTY STRING, never a date: an
+ * undeclared `targetAt` has no day to show, and conjuring 1970-01-01 out of it
+ * would be the very lie this formatter exists to prevent. A real 0 is still a
+ * real date.
+ */
+export function formatReleaseDate(epochSeconds) {
+  if (typeof epochSeconds !== "number" || !Number.isFinite(epochSeconds)) return "";
+  return new Date(epochSeconds * 1000).toISOString().slice(0, 10);
+}
+
 /** Agent rail dot + tombstone marker. tombstoned carries diedAgo from lastSeen. */
 export function livenessGlyph(agent) {
   if (agent.liveness === "tombstoned") {
@@ -844,7 +868,7 @@ export function buildRoadmapGraph(entries, releases) {
   const queue = entries ?? [];
   const crIds = new Set(queue.map((e) => e.cr));
 
-  queue.forEach((e, index) => {
+  for (const e of queue) {
     const data = {
       id: e.cr,
       type: "cr",
@@ -852,15 +876,24 @@ export function buildRoadmapGraph(entries, releases) {
       cr: e.cr,
       wave: e.wave,
       status: e.status,
-      // The AUTHORED position, and nothing else: never the CR id, never the
-      // wave (AC8), never the status. Re-author the queue and this follows.
-      // Absent on milestone and terminal nodes — a release boundary and a
-      // bracket hold no queue position — and never rendered into `label`.
-      seq: index,
     };
+    // The AUTHORED position, and nothing else: never the CR id, never the
+    // wave (AC8), never the status. Re-author the queue and this follows.
+    // Absent on milestone and terminal nodes — a release boundary and a
+    // bracket hold no queue position — and never rendered into `label`.
+    //
+    // CR-CRU-091/AC18 — the STORED `seq` the read publishes on every entry
+    // (`src/types.ts:397-404`), carried VERBATIM. Never the response index:
+    // `listQueue` is `ORDER BY seq`, so an index derivation preserves the
+    // authored ORDER and therefore survives every other assertion while making
+    // `seq` mean two different numbers on one surface. A payload arriving
+    // without a usable `seq` is a defect, so the position is OMITTED — the
+    // "no carried position" state milestone nodes already occupy — rather than
+    // defaulted to the index, which is that same ambiguity by another name.
+    if (typeof e.seq === "number" && Number.isFinite(e.seq)) data.seq = e.seq;
     if (e.track !== undefined && e.track !== null) data.track = e.track;
     nodes.push({ data });
-  });
+  }
 
   // Dependency edges: the prerequisite is the SOURCE (execution flows
   // deps-first). Guard against dangling deps (a dep not in the queue).
@@ -997,6 +1030,7 @@ if (typeof window !== "undefined") {
   window.CrucibleLogic = {
     filterEvents,
     relativeTime,
+    formatReleaseDate,
     livenessGlyph,
     routeParse,
     workspaceTabs,

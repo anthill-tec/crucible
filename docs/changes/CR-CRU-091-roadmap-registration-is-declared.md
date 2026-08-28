@@ -52,7 +52,27 @@ newest would hand it the gating of every unshipped CR on a date nobody recorded"
 - **Isolation from settled history.** `listReleases` is untouched — its filter is
   `event.type === "release"` (`src/store.ts:2152`), so a proposal cannot leak in. Proposals are
   read through a new `listReleaseProposals(projectKey)` beside it, with the same archived-project
-  exclusion.
+  exclusion. **It returns LIVE proposals only** (`retired_at IS NULL`) — a consumed proposal has
+  been superseded by the release that shipped it, and returning it would render the pair this
+  section forbids. **It sorts ASCENDING by version** — AC1's literal order (`0.2.1`, then `0.3.0`)
+  — deliberately the opposite direction from `listReleases`' newest-first, so a consumer
+  concatenating "shipped, then proposed" needs no reversal. Both facts are settled here because
+  §S8's routes and the strip render depend on them.
+- **A revision retires its predecessor; it never edits one in place.** `release-propose` for a
+  label that already holds a LIVE proposal with a DIFFERENT `targetAt` stamps that proposal's
+  `retired_at` and inserts the new one, in ONE transaction — the same idiom as consumption above,
+  and the reason no new column is needed. Exactly one live proposal per label ever exists, and the
+  revision history stays auditable through `getEvent`. Editing the held event's payload in place
+  would destroy the fact that the target moved, which is precisely the signal a slipping plan
+  needs to leave behind. An identical re-post (same label, same `targetAt`) writes NOTHING and
+  reports `converged: true` (§S7).
+- **A live proposal is authored data and survives the retention cap.** `enforceRetention`'s
+  count-cap exemption is scoped to `kind === "gate"` carrying a stored version, so without a
+  change a live `release-proposal` is prunable exactly like a `release` milestone. The two are not
+  alike: a pruned `release` is rebuildable from its git tag (`repair-provenance`), whereas a
+  pruned proposal is authored intent with no external source and is gone for good. The exemption
+  extends to `release-proposal` rows with `retired_at IS NULL`. A CONSUMED proposal is prunable
+  again — the release it became now carries the fact.
 - **A proposal retires no gate.** `recordMilestoneEvent` stamps gates only for
   `type === "release"` (`src/store.ts:1768-1773`); CR-CRU-073's rule stays scoped to real releases.
 - **`--target` is optional and revisable**, stored as `targetAt` in **epoch SECONDS** — the same
@@ -93,7 +113,21 @@ Three additive nullable columns on `queue_entries` (`src/store.ts:1146-1156`):
   (`public/app-logic.mjs:861`); nothing has ever supplied it.
 - **`lifecycle_json TEXT`** — `{"state":"SUPERSEDED","by":"CR-CRU-088","at":<epoch ms>}` or
   `{"state":"VOID","reason":"…","at":<epoch ms>}`. One JSON column rather than three flat ones, the
-  in-table precedent being `depends_on_json` (`src/store.ts:1151`).
+  in-table precedent being `depends_on_json` (`src/store.ts:1151`). Projected as the exported
+  `QueueLifecycle { state: "SUPERSEDED" | "VOID"; by?: string; reason?: string; at: number }`, with
+  `at` in epoch **MILLISECONDS** — matching `filed_at` / `retired_at`, the two in-table neighbours
+  it will be compared against. The seconds unit belongs to the git-sourced dates alone
+  (`releasedAt` / `targetAt`), which is why the formatter in §S1 takes seconds and this does not.
+
+**A defaulted `seq` beside declared ones is reported, never silently invented.** Carry-forward
+preserves an explicit `seq`, and the posted array index remains the fallback for an entry that has
+neither a posted nor a held value. A `queue-file` that ADDS a CR to a backlog already sequenced by
+`wave-sequence` therefore mixes scales: carried values `10, 20, 30` beside a new row's index `1`,
+which sorts it between `0` and `10` — deterministic, but not authored. The write emits a warning
+naming every CR whose `seq` was defaulted while a sibling in the same wave carries an explicit one,
+with `wave-sequence` as the remedy. This is the §S3 severity ladder's *warn-and-write* rung: the
+post is not refused, because a backlog edit must not require re-authoring the order, but silence
+would let an arbitrary position read as an authored one.
 
 **Migration.** ONE new step appended to `MIGRATION_BODIES` (`src/store.ts:549`): `tableExists`
 guard, then a PRAGMA-checked `ALTER TABLE queue_entries ADD COLUMN` per column — the pattern every
@@ -266,6 +300,110 @@ so all five land in the same `startsWith` block as `queue`, `releases`, `archive
 - **No PATCH, no PUT, no DELETE.** Re-planning and re-sequencing are re-POSTs (§S4), and neither
   lifecycle verb deletes a row (§S3).
 
+**Settled during C2 (the server half is built; these are now contract, not choices).** C3's clients
+assert against this list, so nothing here may be re-decided in a client:
+
+- **Status is `200` on EVERY success, converged or not** — `handleQueuePost`'s shape, not
+  `handleMilestones`' `201`/`200` split. A client keys on `ok` + `converged`, never on the code. A
+  client asserting `201` for `release-propose` is wrong.
+- **`warnings[]` members are STRUCTURED objects**, never prose: `{code, message, crs?, containers?}`.
+  Codes in use: `out-of-order`, `cross-wave-backwards`, `defaulted-seq`, `unsequenced-members`.
+  Five clients must render a warning without parsing English, and AC10's "names the pair" is a
+  structural requirement.
+- **`unknownDependencies` rides `cr-plan` and `wave-sequence`** under the key `handleQueuePost`
+  already uses. AC9 requires it; it is additive to the table above.
+- **`GET …/release-proposals`** answers `{ok, proposals:[{label, targetAt?, timestamp, waves[]}],
+  totalCount}`. `waves` is joined SERVER-side so five clients cannot join it differently. No
+  `status` field is emitted — every returned proposal is live by construction, so a status would be
+  fabricated; the client labels them.
+- **The bulk queue POST accepts a per-entry integer `seq`**, refused by name AND index when
+  non-integer. `QueueEntryInput.seq` existed after C1 but no route fed it, and `wave-sequence`
+  only ever produces dense values — so an explicitly sparse order (AC23's `10, 20, 30`) is
+  expressible only here. This is the one wire addition beyond the five-route table.
+- **`cr-plan` against a SHIPPED release label is refused `404`**, identically to an unproposed one:
+  §S1 consumes a proposal when its release ships, so a shipped label is settled history and no
+  longer a plannable target.
+- **AC7's two refusals are both `404`** — a `cr` the container does not hold, and a `cr` that sits
+  in a different container (the latter naming BOTH containers).
+- **A cycle refusal outranks convergence.** A `cr-plan` that would be converged is still refused
+  `409` when its `cr` sits in a dependency cycle, because §S5's check precedes the write. Both
+  outcomes write nothing.
+- **Warn-and-write, not refusal, in three places**: `wave-sequence` when the wave holds members the
+  posted list omits (they keep their relative order and are appended after the authored block);
+  `cr-void` when dependants exist (AC15 requires the CR to END UP void with its dependants named,
+  so the list is a report); and AC23's defaulted `seq`.
+- **The `seq` container is the WAVE, not `(release, wave)`** — a strided block per wave
+  (`WAVE_SEQ_STRIDE`), which is what makes "dense within a wave", "wave blocks ordered" and
+  "touches no other wave" simultaneously satisfiable. Sound because a wave has belonged to exactly
+  one release since CR-CRU-014 (`Wave 5 (0.2.0)`); two releases sharing a wave number would share a
+  block. Not refused, documented at the constant. Declaring a release on a CR that stays in its
+  wave therefore moves no `seq`.
+
+**Settled during C3 (the client half is built; these bind the fleet).**
+
+- **Request bodies are the named fields plus `agentId`, and NOTHING else** — no `context` block.
+  The body column above is the contract and lists none; the server's `eventContext()` treats it as
+  optional. Asserted strictly (exact-dict), so adding one later must be a decision rather than a
+  drift.
+- **`--target` input format.** §S1 fixes the WIRE unit (epoch SECONDS) but named no CLI format.
+  `--target` accepts an ISO-8601 **date** (read as midnight **UTC**, so the stored value is
+  machine-independent), an ISO-8601 **datetime**, or a bare **epoch-seconds integer**. Anything
+  else is refused BY NAME with exit `2` and no POST. A local-timezone reading is specifically
+  rejected: the same command on two machines must not record two different targets.
+- **`--fields` NARROWS on these five verbs**, deliberately diverging from `status`, where the flag
+  is ADDITIVE (a base column set plus requested extras). A roadmap row is already the minimal
+  record the write produced, so an additive flag would have nothing to add and P2 would be
+  unsatisfiable. The divergence is intentional and documented at the selector.
+- **`totalCount` rides EVERY roadmap envelope**, not only obviously list-bearing ones: the list
+  length for a list answer, `1` for a single-record answer, `0` for a failure. Uniform and never
+  meaningless — and it settles the "is `unknownDependencies` a list answer?" argument by not
+  having it.
+- **`requiredRole: ORCHESTRATOR` rides every FAILURE envelope.** AC16 requires BOTH refusals to
+  name the required role, but the shared caller-auth seam's unregistered-caller 409 does not carry
+  one, so the client discloses it. It is disclosure of a fixed fact, not a client-side decision.
+- **A refusal LIFTS the server's own `help[]`; it never re-derives it.** The client parses the
+  server's structured error and surfaces that `help[]` verbatim. This is what keeps §S9 honest —
+  AC6's help entry is `roadmapHints.unproposedRelease`'s, not a second copy of the same rule living
+  in a client — and it means changing a server hint reaches all five clients for free.
+
+**Settled during C5 (VERIFY found `wave-sequence` writing outside its own scope; these correct the
+contract, and two are externally visible).**
+
+- **`wave-sequence` touches only `(release, wave)` and only the CRs it names.** As first built its
+  member query was `WHERE project_key = ? AND wave = ?` — **wave alone** — so a CR of a DIFFERENT
+  release sharing the wave number was renumbered AND stamped with the posted `track`; and `--track`
+  was applied to omitted members too, so it landed on CRs the caller never listed. Both were
+  reproduced live. The query is now scoped to `(release, wave)`, and `track` is written only for
+  `input.crs` while omitted members keep theirs. §S4's "touches no other container" and AC8's "no
+  row in any other wave or release changes any field" are about MUTATION, and that is what is now
+  enforced. This mattered beyond tidiness: `track` is the field CR-CRU-085 draws one lane per
+  distinct value from and CR-CRU-092 matches by value, so a silently re-tracked CR is the same
+  one-track-two-lanes failure §S2's normalisation exists to prevent, arriving through another door.
+- **The tolerated consequence, now pinned.** With the query scoped, two releases sharing a wave
+  number densify from the SAME base and can therefore hold the same `seq` VALUE. That is §S8's
+  existing concession ("would share a block. Not refused, documented at the constant"), and it is
+  strictly better than what it replaces — before the fix the collision was avoided only by one
+  release's call rewriting the other's rows. No read compares `seq` across releases. A test pins
+  the equal values so changing it must be a decision, not a drift.
+- **A wave overflowing its `seq` block is REFUSED (new 400).** `WAVE_SEQ_STRIDE` is 1000, so a wave
+  carries at most 999 CRs before colliding with the next wave's block. `wave-sequence` now refuses
+  a call whose resulting membership would reach the stride, naming the wave, the count and the
+  limit, with a `roadmapHints.waveOverflow` next step. Silent corruption became a named refusal.
+  *Known residual:* `cr-plan` appends with no ceiling, so a wave can still be walked to 1000 one
+  CR at a time; `wave-sequence` then correctly refuses to re-author it and the hint names the way
+  out. Closing that fully is a refusal on a second verb that no AC covers, and is deliberately not
+  smuggled in here.
+- **The `defaulted-seq` warning now fires on an observable SCALE MISMATCH, not on any second CR.**
+  Its first form warned whenever a `cr-plan` moved a CR into a non-empty wave, and its message
+  claimed a sibling carried an "authored" `seq` — false whenever that sibling's value was itself
+  `cr-plan`-assigned, which is the common case. It fired on nearly every plan and five clients
+  rendered the false claim verbatim. It is now gated on a sibling sitting OUTSIDE the wave's block
+  (`seq <= base || seq >= base + WAVE_SEQ_STRIDE`), which is exactly the interleave AC23 exists to
+  surface — reachable via a bulk post declaring an explicit out-of-block `seq`. Dropping the
+  warning outright, the obvious fix, would have traded a false positive for real silence on that
+  case. Gating it on "this wave was authored by `wave-sequence`" would have been INVERTED: an
+  authored wave is the harmless in-block case.
+
 ### §S9 Division of labour — which half owns which file
 
 Two halves, one wire (§S8). Neither half may change that table unilaterally.
@@ -319,25 +457,41 @@ non-conformant regardless of whether its writes are correct.
 
 ## Acceptance criteria
 
+> **A note on AC1–AC3's render clauses, corrected 2026-08-28 after VERIFY.** As first written these
+> three ACs asserted properties of the roadmap SURFACE — strip order, a rendered gate, a rendered
+> date. That surface is explicitly **CR-CRU-078's** (§S9, Non-goals), so this CR is forbidden to
+> build the thing those clauses measure, and each passed only because nothing renders proposals or
+> either date at all — satisfied vacuously rather than exercised. The render halves are re-scoped
+> to CR-CRU-078 (its AC28/AC29/AC30); what remains here is the DATA contract, which is what this CR
+> actually owns and what a consumer needs to get the render right.
+
 - **AC1** — **a proposal never sorts before a shipped release, and proposals order by version.**
-  With `0.1.0` shipped (`releasedAt` set) and `0.2.0` proposed, `0.2.0` is last in the strip order
-  — both with no `--target` and with a `--target` predating `0.1.0`'s `releasedAt`. Proposing
-  `0.3.0` and then `0.2.1` yields the order `0.2.1`, `0.3.0`, unaffected by either target. A
-  proposal modelled as a dateless `release` fails this AC (`public/app-logic.mjs:887-892` sorts it
-  first).
+  `listReleaseProposals` returns proposals ASCENDING by version — proposing `0.3.0` then `0.2.1`
+  reads back `0.2.1`, `0.3.0` — and the order is unaffected by any `--target`, including a
+  `--target` **predating** the shipped release's `releasedAt`, which is the direction that could
+  break it and must be the fixture's value. `listReleases` returns zero proposals, so the two
+  sequences cannot interleave, and §S1's ASCENDING contract is what lets a consumer concatenate
+  "shipped, then proposed" with no reversal. A proposal modelled as a dateless `release` fails this
+  AC (`public/app-logic.mjs:887-892` sorts it first). *The strip ORDER itself is CR-CRU-078 AC28.*
 - **AC2** — **a proposal is invisible to the release machinery, and a shipped release consumes it.**
   `store.listReleases(key)` returns zero events of type `release-proposal` after any number of
   `release-propose` calls, while `listReleaseProposals(key)` returns them all. A live gate at
   `version 0.2.0` still has `retired_at IS NULL` after `release-propose --label 0.2.0`. After the
   real `milestone --type release --label 0.2.0 --commit <sha>`: that gate is retired, the
   proposal's `retired_at` is non-null, it is absent from `listEvents` yet still returned by
-  `getEvent`, the roadmap renders exactly **one** `0.2.0` gate (a rendered pair fails this AC), and
-  a proposal for any other label is untouched.
-- **AC3** — **both dates render through one formatter and neither renders 1970.**
-  `formatReleaseDate` is exported from `public/app-logic.mjs`; `releasedAt` and `targetAt` both
-  render through it; a grep finds no date construction applied to either field anywhere else. For
-  the fixture value `releasedAt = 1787149125` the rendered date is 2026-08-19; an implementation
-  treating it as milliseconds renders 1970 and fails this AC.
+  `getEvent`, **exactly one live `0.2.0` record exists at the data layer** (a live pair fails this
+  AC), and a proposal for any other label is untouched. *That exactly-one record RENDERING as one
+  gate is CR-CRU-078 AC29.*
+- **AC3** — **one formatter exists for both dates, and nothing else may construct them.**
+  `formatReleaseDate(epochSeconds)` is exported from `public/app-logic.mjs` and reachable through
+  the `window` bridge; for `releasedAt = 1787149125` it yields 2026-08-19, and a milliseconds
+  reading yields 1970 and fails this AC; absent input yields `""` while a real `0` still yields
+  1970-01-01, so absence and the epoch stay distinguishable. An executable scan proves **no other
+  date construction is applied to `releasedAt` or `targetAt` anywhere** in `public/`, with a
+  positive control proving the scan is non-vacuous. **The formatter ships with zero production call
+  sites — deliberately, as the seam CR-CRU-078 renders through.** It is covered by tests but
+  unexercised by any surface, and that is the honest state of it on this branch, not an oversight.
+  *Routing both fields through it at a call site is CR-CRU-078 AC30.*
 - **AC4** — **schema, migration and published fields.** `PRAGMA table_info(queue_entries)` lists
   `release`, `track` and `lifecycle_json`; `SCHEMA_VERSION === MIGRATIONS.length` and has advanced
   by exactly one; a store written by the previous build opens, migrates, loses no queue row, and
@@ -429,6 +583,31 @@ non-conformant regardless of whether its writes are correct.
   fails without needing a live server — and the server answers those five paths while returning 404
   for the neighbouring shapes a guess would produce (`…/queue/cr-plan`, `…/proposals`,
   `PATCH …/queue/<cr>`). No PATCH/PUT/DELETE route is added (§S8).
+- **AC21** — **a revision retires its predecessor, in one transaction, and there is exactly ONE
+  write path that can create a proposal.** Proposing `0.4.0` with a target, then re-proposing
+  `0.4.0` with a DIFFERENT target, leaves exactly ONE live proposal for `0.4.0` carrying the new
+  target; the previous one is retired, absent from `listReleaseProposals` and from the live feed,
+  and still returned by `getEvent`. Re-proposing with the SAME target writes nothing and reports
+  `converged: true`. `listReleaseProposals` returns live rows only, ascending by version — a
+  fixture proposing `0.3.0` then `0.2.1` reads back `0.2.1, 0.3.0`, and a consumed proposal never
+  appears. **The invariant is enforced by the dedicated writer, and the generic milestone writer
+  is kept out of reach rather than duplicated:** `recordMilestoneEvent` does NOT enforce
+  one-live-proposal-per-label, and the only reason that is safe is that `release-proposal` is
+  absent from `MILESTONE_TYPES` (`src/v2.ts:1111-1118`), so `POST /api/v2/milestones` refuses the
+  type with a `400`. That refusal is asserted as a TRIPWIRE: adding the type to that set would open
+  a second, unguarded write path, and the test must fail rather than let the invariant regress
+  silently. A fixture may not post one label twice through the store's generic path and call the
+  result two live proposals — that is the shape this AC forbids.
+- **AC22** — **a live proposal outlives the retention cap; a consumed one does not.** With the
+  count cap driven below the event total, a live `release-proposal` survives pruning exactly as a
+  versioned `gate` does, while a CONSUMED proposal is pruned like any other retired record. The
+  test asserts the surviving row is still readable through `listReleaseProposals`, because a
+  proposal has no git tag to rebuild it from.
+- **AC23** — **a defaulted `seq` is named in a warning, and the write still lands.** Posting a
+  queue whose entries carry `seq` `10, 20, 30`, then re-posting with a NEW CR declaring no `seq`:
+  the post succeeds, the three carried values are unchanged, and the envelope carries a warning
+  naming the new CR and offering `wave-sequence`. A post where NO entry carries an explicit `seq`
+  emits NO such warning — index-only is the ordinary case, not a defect.
 
 ## Estimated size
 

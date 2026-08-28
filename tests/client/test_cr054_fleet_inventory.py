@@ -599,5 +599,187 @@ class IdentitySourceEnumGuardTest(unittest.TestCase):
             f"guard exists to catch: {offenders!r}")
 
 
+# ---------------------------------------------------------------------------
+# CR-CRU-091 SS3/SS10 (AC13/AC19) -- the five roadmap-registration verbs join
+# the fleet inventory.
+#
+# THE_42 above is CR-CRU-054's OWN measurement, re-measured 2026-08-02, and
+# its count is load-bearing for that CR's partition arithmetic (four category
+# counts that must sum to it). CR-CRU-075 is the cycle that re-freezes ONE
+# combined fleet count on the FINAL verb surface -- it is sequenced AFTER this
+# CR precisely so the number moves once. So the five names CR-CRU-091 adds are
+# frozen HERE as their own named set, checked by the SAME
+# `_defined_in_every_client` / duplicate-definition machinery the historical
+# set uses, and asserted DISJOINT from THE_42 so neither fixture can quietly
+# absorb the other. Nothing in this section touches THE_42's count.
+# ---------------------------------------------------------------------------
+
+# The five shared-implementation delegators, one per verb, in every client.
+CR091_ROADMAP_VERB_FUNCTIONS = frozenset({
+    "cmd_release_propose", "cmd_cr_plan", "cmd_wave_sequence",
+    "cmd_cr_supersede", "cmd_cr_void",
+})
+
+# The CLI verb names those functions are registered under (AC13 counts 5
+# clients x 5 verbs = the 25 pairs AC19 conforms).
+CR091_ROADMAP_VERBS = (
+    "release-propose", "cr-plan", "wave-sequence", "cr-supersede", "cr-void",
+)
+
+
+def _add_parser_verb_names(path):
+    """Every string literal a file passes as the FIRST positional argument of
+    an `add_parser(...)` call -- the verb names that file registers. Read from
+    the AST rather than by grep, so a name inside a docstring or a help string
+    can never be mistaken for a registration."""
+    names = set()
+    for node in ast.walk(ast.parse(path.read_text())):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "add_parser"):
+            continue
+        if node.args and isinstance(node.args[0], ast.Constant) \
+                and isinstance(node.args[0].value, str):
+            names.add(node.args[0].value)
+    return names
+
+
+def _roadmap_registrar_verbs(path):
+    """The verb-name -> delegator mapping a file hands the SHARED registrar,
+    read from the `add_roadmap_verbs(...)` call's dict literal. This is where
+    a client's registration actually lives: SS9 puts the subparser bodies in
+    `_crucible_axi.add_roadmap_verbs` so five clients cannot drift into five
+    flag surfaces for one verb, and what stays per-client is exactly this
+    mapping onto its own delegators."""
+    mapping = {}
+    for node in ast.walk(ast.parse(path.read_text())):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute)
+                and func.attr == "add_roadmap_verbs"):
+            continue
+        for arg in node.args:
+            if not isinstance(arg, ast.Dict):
+                continue
+            for key, value in zip(arg.keys, arg.values):
+                if isinstance(key, ast.Constant) and isinstance(value, ast.Name):
+                    mapping[key.value] = value.id
+    return mapping
+
+
+_ALL_CLIENT_VERB_NAMES = {
+    client: _add_parser_verb_names(path) for client, path in CLIENT_FILES.items()
+}
+
+_ALL_CLIENT_ROADMAP_REGISTRATIONS = {
+    client: _roadmap_registrar_verbs(path)
+    for client, path in CLIENT_FILES.items()
+}
+
+
+class Cr091RoadmapVerbInventoryTest(unittest.TestCase):
+    """AC13 -- "the count of clients exposing each verb is 5, not the 1 that
+    `queue-file` reaches today"."""
+
+    def test_the_roadmap_set_holds_exactly_the_five_verbs(self):
+        self.assertEqual(
+            len(CR091_ROADMAP_VERB_FUNCTIONS), 5,
+            f"CR-CRU-091 introduces exactly five verbs (SS3's table); got "
+            f"{len(CR091_ROADMAP_VERB_FUNCTIONS)}")
+        self.assertEqual(len(CR091_ROADMAP_VERBS), 5)
+
+    def test_the_roadmap_set_is_disjoint_from_the_historical_42(self):
+        overlap = CR091_ROADMAP_VERB_FUNCTIONS & THE_42
+        self.assertEqual(
+            overlap, frozenset(),
+            f"the CR-CRU-091 set must not touch CR-CRU-054's frozen "
+            f"measurement -- re-freezing ONE combined count is CR-CRU-075's, "
+            f"sequenced after this CR so the number moves once; "
+            f"overlap: {overlap!r}")
+
+    def test_every_roadmap_verb_function_is_defined_in_all_five_clients(self):
+        missing = {
+            name: [c for c in CLIENT_FILES
+                   if name not in _ALL_CLIENT_FUNCTION_NAMES[c]]
+            for name in CR091_ROADMAP_VERB_FUNCTIONS
+        }
+        missing = {k: v for k, v in missing.items() if v}
+        self.assertEqual(
+            missing, {},
+            f"SS3's 'gap not to repeat' -- `queue-file` reaches python "
+            f"only, so all five roadmap verbs reach all five clients; "
+            f"missing from: {missing!r}")
+
+    def test_no_client_defines_a_roadmap_verb_function_twice(self):
+        offenders = []
+        for client, counts in _ALL_CLIENT_FUNCTION_NAMES.items():
+            for name in CR091_ROADMAP_VERB_FUNCTIONS:
+                if counts.get(name, 0) > 1:
+                    offenders.append(f"{client}:{name} ({counts[name]}x)")
+        self.assertEqual(
+            offenders, [],
+            f"a duplicate top-level def would silently make the SECOND "
+            f"definition win at import time: {offenders!r}")
+
+    def test_the_shared_registrar_registers_all_five_verb_names(self):
+        """The subparser bodies live ONCE, so the verb NAMES are asserted
+        where they are actually spelled -- the shared registrar."""
+        registered = _add_parser_verb_names(AXI_MODULE_PATH)
+        missing = [v for v in CR091_ROADMAP_VERBS if v not in registered]
+        self.assertEqual(
+            missing, [],
+            f"`_crucible_axi.add_roadmap_verbs` must register every roadmap "
+            f"verb name; missing: {missing!r}")
+
+    def test_every_client_wires_all_five_verbs_to_its_own_delegators(self):
+        """The 25 (verb x client) pairs AC13 counts, at the registration
+        level: each client hands the shared registrar all five verb names,
+        each mapped onto its OWN delegator. The LIVE argparse enumeration and
+        envelope conformance for the same 25 pairs lives in the sibling
+        `test_client_fleet_envelope_census.py` (AC19 names both harnesses)."""
+        offenders = {}
+        for client, mapping in _ALL_CLIENT_ROADMAP_REGISTRATIONS.items():
+            absent = [v for v in CR091_ROADMAP_VERBS if v not in mapping]
+            if absent:
+                offenders[client] = f"unwired: {absent!r}"
+                continue
+            wrong = {v: mapping[v] for v in CR091_ROADMAP_VERBS
+                     if mapping[v] not in CR091_ROADMAP_VERB_FUNCTIONS}
+            if wrong:
+                offenders[client] = f"wired to non-delegators: {wrong!r}"
+        self.assertEqual(
+            offenders, {},
+            f"each client must wire every roadmap verb to its own delegator "
+            f"(AC13 counts 5 clients x 5 verbs): {offenders!r}")
+
+    def test_no_client_hand_rolls_a_roadmap_subparser(self):
+        """SS9/CR-CRU-054 -- a client spelling its own `add_parser` for a
+        roadmap verb has forked the flag surface the shared registrar exists
+        to keep identical, even if the delegator behind it is still thin."""
+        offenders = {}
+        for client, registered in _ALL_CLIENT_VERB_NAMES.items():
+            forked = [v for v in CR091_ROADMAP_VERBS if v in registered]
+            if forked:
+                offenders[client] = forked
+        self.assertEqual(
+            offenders, {},
+            f"the roadmap subparsers are built ONCE, by "
+            f"`_crucible_axi.add_roadmap_verbs`: {offenders!r}")
+
+    def test_the_shared_module_holds_the_implementation_the_clients_delegate_to(self):
+        """SS9 -- the five verbs land ONCE in `_crucible_axi.py`; a client
+        holding its own copy is the CR-CRU-054 defect this CR must not
+        reintroduce."""
+        shared = _defined_function_names(AXI_MODULE_PATH)
+        missing = sorted(n for n in CR091_ROADMAP_VERB_FUNCTIONS
+                         if n not in shared)
+        self.assertEqual(
+            missing, [],
+            f"the shared module must define every roadmap verb the clients "
+            f"delegate to (SS3/SS9); missing: {missing!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -134,6 +134,10 @@ export declare function filterEvents(
 
 export declare function relativeTime(ts: number, now: number): string;
 
+/** CR-CRU-091 §S1/AC3 — the one release-date formatter; epoch SECONDS in, ISO
+ * `YYYY-MM-DD` out, empty string for an absent or unusable value. */
+export declare function formatReleaseDate(epochSeconds: number | null | undefined): string;
+
 export declare function livenessGlyph(agent: CrucibleAgentLike): LivenessGlyphResult;
 
 export declare function routeParse(pathname: string): RouteState;
