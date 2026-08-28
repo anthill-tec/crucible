@@ -300,6 +300,45 @@ so all five land in the same `startsWith` block as `queue`, `releases`, `archive
 - **No PATCH, no PUT, no DELETE.** Re-planning and re-sequencing are re-POSTs (§S4), and neither
   lifecycle verb deletes a row (§S3).
 
+**Settled during C2 (the server half is built; these are now contract, not choices).** C3's clients
+assert against this list, so nothing here may be re-decided in a client:
+
+- **Status is `200` on EVERY success, converged or not** — `handleQueuePost`'s shape, not
+  `handleMilestones`' `201`/`200` split. A client keys on `ok` + `converged`, never on the code. A
+  client asserting `201` for `release-propose` is wrong.
+- **`warnings[]` members are STRUCTURED objects**, never prose: `{code, message, crs?, containers?}`.
+  Codes in use: `out-of-order`, `cross-wave-backwards`, `defaulted-seq`, `unsequenced-members`.
+  Five clients must render a warning without parsing English, and AC10's "names the pair" is a
+  structural requirement.
+- **`unknownDependencies` rides `cr-plan` and `wave-sequence`** under the key `handleQueuePost`
+  already uses. AC9 requires it; it is additive to the table above.
+- **`GET …/release-proposals`** answers `{ok, proposals:[{label, targetAt?, timestamp, waves[]}],
+  totalCount}`. `waves` is joined SERVER-side so five clients cannot join it differently. No
+  `status` field is emitted — every returned proposal is live by construction, so a status would be
+  fabricated; the client labels them.
+- **The bulk queue POST accepts a per-entry integer `seq`**, refused by name AND index when
+  non-integer. `QueueEntryInput.seq` existed after C1 but no route fed it, and `wave-sequence`
+  only ever produces dense values — so an explicitly sparse order (AC23's `10, 20, 30`) is
+  expressible only here. This is the one wire addition beyond the five-route table.
+- **`cr-plan` against a SHIPPED release label is refused `404`**, identically to an unproposed one:
+  §S1 consumes a proposal when its release ships, so a shipped label is settled history and no
+  longer a plannable target.
+- **AC7's two refusals are both `404`** — a `cr` the container does not hold, and a `cr` that sits
+  in a different container (the latter naming BOTH containers).
+- **A cycle refusal outranks convergence.** A `cr-plan` that would be converged is still refused
+  `409` when its `cr` sits in a dependency cycle, because §S5's check precedes the write. Both
+  outcomes write nothing.
+- **Warn-and-write, not refusal, in three places**: `wave-sequence` when the wave holds members the
+  posted list omits (they keep their relative order and are appended after the authored block);
+  `cr-void` when dependants exist (AC15 requires the CR to END UP void with its dependants named,
+  so the list is a report); and AC23's defaulted `seq`.
+- **The `seq` container is the WAVE, not `(release, wave)`** — a strided block per wave
+  (`WAVE_SEQ_STRIDE`), which is what makes "dense within a wave", "wave blocks ordered" and
+  "touches no other wave" simultaneously satisfiable. Sound because a wave has belonged to exactly
+  one release since CR-CRU-014 (`Wave 5 (0.2.0)`); two releases sharing a wave number would share a
+  block. Not refused, documented at the constant. Declaring a release on a CR that stays in its
+  wave therefore moves no `seq`.
+
 ### §S9 Division of labour — which half owns which file
 
 Two halves, one wire (§S8). Neither half may change that table unilaterally.
@@ -463,13 +502,21 @@ non-conformant regardless of whether its writes are correct.
   fails without needing a live server — and the server answers those five paths while returning 404
   for the neighbouring shapes a guess would produce (`…/queue/cr-plan`, `…/proposals`,
   `PATCH …/queue/<cr>`). No PATCH/PUT/DELETE route is added (§S8).
-- **AC21** — **a revision retires its predecessor, in one transaction.** Proposing `0.4.0` with a
-  target, then re-proposing `0.4.0` with a DIFFERENT target, leaves exactly ONE live proposal for
-  `0.4.0` carrying the new target; the previous one is retired, absent from
-  `listReleaseProposals` and from the live feed, and still returned by `getEvent`. Re-proposing
-  with the SAME target writes nothing and reports `converged: true`. `listReleaseProposals`
-  returns live rows only, ascending by version — a fixture proposing `0.3.0` then `0.2.1` reads
-  back `0.2.1, 0.3.0`, and a consumed proposal never appears.
+- **AC21** — **a revision retires its predecessor, in one transaction, and there is exactly ONE
+  write path that can create a proposal.** Proposing `0.4.0` with a target, then re-proposing
+  `0.4.0` with a DIFFERENT target, leaves exactly ONE live proposal for `0.4.0` carrying the new
+  target; the previous one is retired, absent from `listReleaseProposals` and from the live feed,
+  and still returned by `getEvent`. Re-proposing with the SAME target writes nothing and reports
+  `converged: true`. `listReleaseProposals` returns live rows only, ascending by version — a
+  fixture proposing `0.3.0` then `0.2.1` reads back `0.2.1, 0.3.0`, and a consumed proposal never
+  appears. **The invariant is enforced by the dedicated writer, and the generic milestone writer
+  is kept out of reach rather than duplicated:** `recordMilestoneEvent` does NOT enforce
+  one-live-proposal-per-label, and the only reason that is safe is that `release-proposal` is
+  absent from `MILESTONE_TYPES` (`src/v2.ts:1111-1118`), so `POST /api/v2/milestones` refuses the
+  type with a `400`. That refusal is asserted as a TRIPWIRE: adding the type to that set would open
+  a second, unguarded write path, and the test must fail rather than let the invariant regress
+  silently. A fixture may not post one label twice through the store's generic path and call the
+  result two live proposals — that is the shape this AC forbids.
 - **AC22** — **a live proposal outlives the retention cap; a consumed one does not.** With the
   count cap driven below the event total, a live `release-proposal` survives pruning exactly as a
   versioned `gate` does, while a CONSUMED proposal is pruned like any other retired record. The
