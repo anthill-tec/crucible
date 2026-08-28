@@ -202,6 +202,31 @@ different from `.lavish/crucible-workflow-flowchart.html` §1–§8/§14 is **no
   as it does today (absent, never defaulted). Without this AC 0.2.0 ships 091's write path with no
   surface: a voided CR would render identically to live pending work on the release's headline
   feature, which is the silent rot 091's Problem statement exists to end.
+- **AC28 — the strip renders shipped and proposed releases in one sequence, proposals last.**
+  Re-scoped here from CR-CRU-091 AC1 on 2026-08-28: 091 owns the DATA contract
+  (`listReleaseProposals` ascending by version, `listReleases` carrying no proposals) but is
+  forbidden to build this surface, so its strip clause was untestable there and passed vacuously —
+  nothing in `public/` reads proposals at all today. With `0.1.0` shipped and `0.2.0` proposed,
+  `0.2.0` renders LAST in the strip: both with no `--target` and with a `--target` **predating**
+  `0.1.0`'s `releasedAt`, because a target is a plan and version orders the strip. Because 091
+  fixed the two reads' directions deliberately opposite (`listReleases` newest-first,
+  `listReleaseProposals` ascending), the consumer concatenates without reversing — a build that
+  re-sorts either sequence fails this AC.
+- **AC29 — a consumed proposal renders no second gate.** Re-scoped here from CR-CRU-091 AC2. Once
+  `0.2.0` ships, 091 retires the `0.2.0` proposal in the release's own transaction, so exactly one
+  live record exists at the data layer; this AC asserts the SURFACE shows exactly **one** `0.2.0`
+  gate. A rendered pair fails it — the failure mode is a proposal drawn beside the release that
+  fulfilled it, which is what 091's consumption exists to prevent and what only a render test can
+  actually catch.
+- **AC30 — both release dates render through 091's single formatter.** Re-scoped here from
+  CR-CRU-091 AC3. 091 exports `formatReleaseDate(epochSeconds)` from `public/app-logic.mjs` and
+  proves by executable scan that nothing else constructs a date from `releasedAt` or `targetAt` —
+  but it ships with **zero call sites**, as the deliberate seam for this CR. Every rendered
+  `releasedAt` and every rendered `targetAt` on this surface goes through that function; none is
+  formatted inline. Both fields are epoch **SECONDS**: a millisecond reading renders 1970 and fails
+  this AC. A proposal with no declared target renders no date at all rather than an empty slot
+  claiming one — `formatReleaseDate` returns `""` for absent input, while a real `0` still renders
+  1970-01-01, so absence and the epoch stay distinguishable.
 
 ## Estimated size
 

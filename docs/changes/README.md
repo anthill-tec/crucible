@@ -160,6 +160,29 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   standing state for all of `public/` — but 091 added code there, so the gap is now load-bearing
   for a shipped feature.
 
+- **`cr-supersede` and `cr-void` are ONE computation under two key names** (candidate DN, raised by
+  CR-CRU-091's VERIFY 2026-08-28). `src/v2.ts:2328-2338` computes `dependants` once
+  (`entries.filter(e => e.dependsOn.includes(cr))`) and emits the identical array as
+  `resolvedDependants` for supersede or `brokenDependants` for void. The successor is not involved:
+  `by` is never validated to exist or to be planned (`store.setQueueLifecycle` just stringifies it,
+  `src/store.ts:3673`), and no dependant's `dependsOn` is re-pointed at it. So "resolved THROUGH the
+  successor" is a LABEL on the same list, not a modelled relationship. CR-CRU-091 AC15's literal
+  wording is met and the client mirrors the split honestly, so this is not a defect of that CR —
+  but **CR-CRU-078 AC27 is about to render the two states distinguishably**, and rendering
+  "resolved" implies a resolution that did not happen. Decide the model before that ships: either
+  validate `by` and re-point dependants, or rename the field to what it actually is (the CR's
+  dependants, listed).
+
+- **CR-CRU-091 ships a store surface no HTTP client can reach** (note, not a defect).
+  `QueueEntryInput.release` / `.track` / `.lifecycle` are unreachable from every route:
+  `handleQueuePost` forwards only `cr/title/wave/dependsOn/size/seq` (`src/v2.ts:1848-1859`), and
+  the five new routes go through `upsertQueueEntry` / `sequenceQueueWave` / `setQueueLifecycle`
+  rather than `replaceQueue`. Consequently `replaceQueue`'s own `track` normalisation and refusal
+  (`src/store.ts:3362-3373`) and its `entry.lifecycle` branch are exercised by tests alone. This is
+  consistent with §S8 (the per-entry `seq` is "the one wire addition beyond the five-route table"),
+  and the carry-forward path those fields feed IS reachable and load-bearing — but the write side
+  of them is dead until something wires it.
+
 - 2026-08-27 — **0.1.3 shipped**: CR-CRU-090, PyPI + npm both at 0.1.3. Pre-flight every tag via a
   PR — push-triggered CI only runs on `develop`/`master`, and a red suite silently skips the publish.
 - 2026-08-27 — `develop` RED narrowed to ONE test: `CR-CRU-088 AC4 (E2E)` in

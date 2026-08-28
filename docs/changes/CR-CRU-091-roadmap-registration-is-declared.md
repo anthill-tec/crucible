@@ -366,6 +366,44 @@ assert against this list, so nothing here may be re-decided in a client:
   AC6's help entry is `roadmapHints.unproposedRelease`'s, not a second copy of the same rule living
   in a client — and it means changing a server hint reaches all five clients for free.
 
+**Settled during C5 (VERIFY found `wave-sequence` writing outside its own scope; these correct the
+contract, and two are externally visible).**
+
+- **`wave-sequence` touches only `(release, wave)` and only the CRs it names.** As first built its
+  member query was `WHERE project_key = ? AND wave = ?` — **wave alone** — so a CR of a DIFFERENT
+  release sharing the wave number was renumbered AND stamped with the posted `track`; and `--track`
+  was applied to omitted members too, so it landed on CRs the caller never listed. Both were
+  reproduced live. The query is now scoped to `(release, wave)`, and `track` is written only for
+  `input.crs` while omitted members keep theirs. §S4's "touches no other container" and AC8's "no
+  row in any other wave or release changes any field" are about MUTATION, and that is what is now
+  enforced. This mattered beyond tidiness: `track` is the field CR-CRU-085 draws one lane per
+  distinct value from and CR-CRU-092 matches by value, so a silently re-tracked CR is the same
+  one-track-two-lanes failure §S2's normalisation exists to prevent, arriving through another door.
+- **The tolerated consequence, now pinned.** With the query scoped, two releases sharing a wave
+  number densify from the SAME base and can therefore hold the same `seq` VALUE. That is §S8's
+  existing concession ("would share a block. Not refused, documented at the constant"), and it is
+  strictly better than what it replaces — before the fix the collision was avoided only by one
+  release's call rewriting the other's rows. No read compares `seq` across releases. A test pins
+  the equal values so changing it must be a decision, not a drift.
+- **A wave overflowing its `seq` block is REFUSED (new 400).** `WAVE_SEQ_STRIDE` is 1000, so a wave
+  carries at most 999 CRs before colliding with the next wave's block. `wave-sequence` now refuses
+  a call whose resulting membership would reach the stride, naming the wave, the count and the
+  limit, with a `roadmapHints.waveOverflow` next step. Silent corruption became a named refusal.
+  *Known residual:* `cr-plan` appends with no ceiling, so a wave can still be walked to 1000 one
+  CR at a time; `wave-sequence` then correctly refuses to re-author it and the hint names the way
+  out. Closing that fully is a refusal on a second verb that no AC covers, and is deliberately not
+  smuggled in here.
+- **The `defaulted-seq` warning now fires on an observable SCALE MISMATCH, not on any second CR.**
+  Its first form warned whenever a `cr-plan` moved a CR into a non-empty wave, and its message
+  claimed a sibling carried an "authored" `seq` — false whenever that sibling's value was itself
+  `cr-plan`-assigned, which is the common case. It fired on nearly every plan and five clients
+  rendered the false claim verbatim. It is now gated on a sibling sitting OUTSIDE the wave's block
+  (`seq <= base || seq >= base + WAVE_SEQ_STRIDE`), which is exactly the interleave AC23 exists to
+  surface — reachable via a bulk post declaring an explicit out-of-block `seq`. Dropping the
+  warning outright, the obvious fix, would have traded a false positive for real silence on that
+  case. Gating it on "this wave was authored by `wave-sequence`" would have been INVERTED: an
+  authored wave is the harmless in-block case.
+
 ### §S9 Division of labour — which half owns which file
 
 Two halves, one wire (§S8). Neither half may change that table unilaterally.
@@ -419,25 +457,41 @@ non-conformant regardless of whether its writes are correct.
 
 ## Acceptance criteria
 
+> **A note on AC1–AC3's render clauses, corrected 2026-08-28 after VERIFY.** As first written these
+> three ACs asserted properties of the roadmap SURFACE — strip order, a rendered gate, a rendered
+> date. That surface is explicitly **CR-CRU-078's** (§S9, Non-goals), so this CR is forbidden to
+> build the thing those clauses measure, and each passed only because nothing renders proposals or
+> either date at all — satisfied vacuously rather than exercised. The render halves are re-scoped
+> to CR-CRU-078 (its AC28/AC29/AC30); what remains here is the DATA contract, which is what this CR
+> actually owns and what a consumer needs to get the render right.
+
 - **AC1** — **a proposal never sorts before a shipped release, and proposals order by version.**
-  With `0.1.0` shipped (`releasedAt` set) and `0.2.0` proposed, `0.2.0` is last in the strip order
-  — both with no `--target` and with a `--target` predating `0.1.0`'s `releasedAt`. Proposing
-  `0.3.0` and then `0.2.1` yields the order `0.2.1`, `0.3.0`, unaffected by either target. A
-  proposal modelled as a dateless `release` fails this AC (`public/app-logic.mjs:887-892` sorts it
-  first).
+  `listReleaseProposals` returns proposals ASCENDING by version — proposing `0.3.0` then `0.2.1`
+  reads back `0.2.1`, `0.3.0` — and the order is unaffected by any `--target`, including a
+  `--target` **predating** the shipped release's `releasedAt`, which is the direction that could
+  break it and must be the fixture's value. `listReleases` returns zero proposals, so the two
+  sequences cannot interleave, and §S1's ASCENDING contract is what lets a consumer concatenate
+  "shipped, then proposed" with no reversal. A proposal modelled as a dateless `release` fails this
+  AC (`public/app-logic.mjs:887-892` sorts it first). *The strip ORDER itself is CR-CRU-078 AC28.*
 - **AC2** — **a proposal is invisible to the release machinery, and a shipped release consumes it.**
   `store.listReleases(key)` returns zero events of type `release-proposal` after any number of
   `release-propose` calls, while `listReleaseProposals(key)` returns them all. A live gate at
   `version 0.2.0` still has `retired_at IS NULL` after `release-propose --label 0.2.0`. After the
   real `milestone --type release --label 0.2.0 --commit <sha>`: that gate is retired, the
   proposal's `retired_at` is non-null, it is absent from `listEvents` yet still returned by
-  `getEvent`, the roadmap renders exactly **one** `0.2.0` gate (a rendered pair fails this AC), and
-  a proposal for any other label is untouched.
-- **AC3** — **both dates render through one formatter and neither renders 1970.**
-  `formatReleaseDate` is exported from `public/app-logic.mjs`; `releasedAt` and `targetAt` both
-  render through it; a grep finds no date construction applied to either field anywhere else. For
-  the fixture value `releasedAt = 1787149125` the rendered date is 2026-08-19; an implementation
-  treating it as milliseconds renders 1970 and fails this AC.
+  `getEvent`, **exactly one live `0.2.0` record exists at the data layer** (a live pair fails this
+  AC), and a proposal for any other label is untouched. *That exactly-one record RENDERING as one
+  gate is CR-CRU-078 AC29.*
+- **AC3** — **one formatter exists for both dates, and nothing else may construct them.**
+  `formatReleaseDate(epochSeconds)` is exported from `public/app-logic.mjs` and reachable through
+  the `window` bridge; for `releasedAt = 1787149125` it yields 2026-08-19, and a milliseconds
+  reading yields 1970 and fails this AC; absent input yields `""` while a real `0` still yields
+  1970-01-01, so absence and the epoch stay distinguishable. An executable scan proves **no other
+  date construction is applied to `releasedAt` or `targetAt` anywhere** in `public/`, with a
+  positive control proving the scan is non-vacuous. **The formatter ships with zero production call
+  sites — deliberately, as the seam CR-CRU-078 renders through.** It is covered by tests but
+  unexercised by any surface, and that is the honest state of it on this branch, not an oversight.
+  *Routing both fields through it at a call site is CR-CRU-078 AC30.*
 - **AC4** — **schema, migration and published fields.** `PRAGMA table_info(queue_entries)` lists
   `release`, `track` and `lifecycle_json`; `SCHEMA_VERSION === MIGRATIONS.length` and has advanced
   by exactly one; a store written by the previous build opens, migrates, loses no queue row, and
