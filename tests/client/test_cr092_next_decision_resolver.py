@@ -40,15 +40,24 @@ THE API THIS RED PINS, and why each piece exists:
         The I/O half: one GET, `ops.emit`, the exit code. Read-only, so it
         takes no `--agent` and never touches `ops.agent_id` (AC10).
 
+AC18's cross-implementation half is BEHAVIOURAL, not a source-text guard.
+`TrackCanonicalisationAgreesWithTheServerTest` boots a scratch server (free
+port, `mkdtemp` DB — never the live instance, never the shared project), drives
+each accepted spelling through the real `wave-sequence` write path, reads the
+stored value back off `GET …/queue` and compares it with `canonical_track`. An
+earlier draft asserted on `normalizeTrack`'s SOURCE TEXT; that was replaced,
+because a source guard breaks on a harmless refactor and still passes if the
+regex is right but the logic around it changed. Requires `bun`, and says so
+rather than skipping quietly into a green tick.
+
 RED expectation (measured 2026-08-28 against the C1 pre-implementation tree):
 `clients/_crucible_axi.py` defines none of the four names — a `\bnext\b` scan
 of the fleet returns only prose and one `next()` builtin (spec §S1) — so every
 test that reaches the SUT fails with AttributeError. That is the missing
 contract, not a broken harness. The tests that DO pass in RED are the fixture
-guards (`_status_only_pick`, the `normalizeTrack` drift guard and the §S5
-grep): they assert facts about the FIXTURES and the tree, and their passing is
-what proves the AC16/AC17 fixtures genuinely discriminate rather than being
-tautologies.
+guards (`_status_only_pick`, `_status_only_dep_kind` and the §S5 grep): they
+assert facts about the FIXTURES and the tree, and their passing is what proves
+the AC16/AC17 fixtures genuinely discriminate rather than being tautologies.
 
 Invocation:
     python3 -m pytest tests/client/test_cr092_next_decision_resolver.py -q
@@ -57,9 +66,17 @@ Invocation:
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import re
+import shutil
+import socket
+import subprocess
+import tempfile
+import time
 import unittest
+import urllib.error
+import urllib.request
 from argparse import Namespace
 from pathlib import Path
 from unittest import mock
@@ -68,7 +85,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CLIENTS_DIR = REPO_ROOT / "clients"
 AXI_MODULE_PATH = CLIENTS_DIR / "_crucible_axi.py"
 TOON_PATH = CLIENTS_DIR / "toon.py"
-STORE_TS_PATH = REPO_ROOT / "src" / "store.ts"
 
 PROJECT_KEY = "cr092-next-key"
 QUEUE_PATH = f"/api/v2/projects/{PROJECT_KEY}/queue"
@@ -92,6 +108,46 @@ def _load(path, name):
 
 AXI = _load(AXI_MODULE_PATH, "cr092_axi_under_test")
 TOON = _load(TOON_PATH, "cr092_toon")
+
+
+def _free_port():
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def _http(base, path, payload=None):
+    """One JSON call against the scratch server. A non-2xx still carries the
+    server's structured body, which IS the assertion subject for a refusal."""
+    data = None if payload is None else json.dumps(payload).encode()
+    request = urllib.request.Request(
+        base + path, data=data, method="POST" if data else "GET",
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as exc:
+        return json.loads(exc.read().decode())
+
+
+def _await_server(base, proc, timeout=30.0):
+    """Block until the scratch server answers its orientation route, or fail
+    naming the boot that never happened — never silently proceed against a
+    port nothing is listening on."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise AssertionError(
+                f"the scratch server exited during boot with code "
+                f"{proc.returncode}")
+        try:
+            _http(base, "/api/v2")
+            return
+        except OSError:
+            time.sleep(0.05)
+    raise AssertionError(f"the scratch server never came up at {base}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -296,28 +352,181 @@ class CanonicalTrackTest(_NextTestBase):
     def test_no_value_at_all_is_refused_rather_than_defaulted(self):
         self.assertIsNone(AXI.canonical_track(None))
 
-    def test_the_helper_mirrors_normalizeTrack_and_drift_fails_here(self):
-        """AC18's cross-implementation half, without a server: the TypeScript
-        write-path normaliser is READ and its rule pinned. A change to
-        `normalizeTrack` that the Python helper does not follow fails HERE,
-        which is the assertion §S3 asks for in place of a comment."""
-        source = STORE_TS_PATH.read_text(encoding="utf-8")
-        body = re.search(
-            r"export function normalizeTrack\(value: string\)"
-            r": string \| null \{(.*?)\n\}", source, re.S)
-        self.assertIsNotNone(
-            body, "normalizeTrack must still exist at src/store.ts — AC18 pins "
-                  "the two implementations to ONE rule, so its disappearance "
-                  "is a contract change, not a refactor")
-        text = body.group(1)
-        self.assertIn(
-            r"/\d+/", text,
-            "the TS rule is 'the first run of digits anywhere in the value'; "
-            "the Python helper mirrors exactly that")
-        self.assertIn(
-            "`track-${Number(", text,
-            "the TS rule renders `track-<Number(digits)>`, which is why "
-            "'track-02' canonicalises to 'track-2'")
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AC18's CROSS-IMPLEMENTATION half — behavioural, against a real server
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
+    """AC18 — "for each accepted spelling, the value `wave-sequence` causes the
+    server to store equals the value the shared Python helper produces".
+
+    Asserted BEHAVIOURALLY, not by reading `normalizeTrack`'s source: a
+    source-text guard breaks on a harmless refactor and still passes if the
+    regex is right but the logic around it changed. So this class boots a
+    SCRATCH server (free port, `mkdtemp` DB — never the live instance, never
+    the shared project), drives each accepted spelling through the REAL write
+    path `wave-sequence` posts to, reads the stored value back off
+    `GET …/queue`, and compares it with `canonical_track`.
+
+    The failure mode it exists to prevent is concrete: two callers writing `2`
+    and `track-2` producing TWO lanes for one track. The last test closes the
+    loop by feeding the server's own stored entries back into `resolve_next`.
+    """
+
+    RELEASE = "9.9.9"
+    AGENT = "cr092-c1-track-probe"
+    # Every spelling CR-CRU-091's `--track` documents, plus the two the shared
+    # rule implies (a leading zero, and surrounding whitespace).
+    SPELLINGS = ("2", "track-2", "Track 2", "track-02", "  2  ")
+    # A SECOND lane, so the multi-track path is exercised against values the
+    # server actually stored rather than against hand-written fixtures.
+    OTHER_TRACK = "3"
+    REFUSED = ("", "lane", "track", "Track N")
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmpdir = tempfile.mkdtemp(prefix="cr092-scratch-")
+        cls._proc = None
+        bun = shutil.which("bun")
+        if bun is None:
+            raise unittest.SkipTest(
+                "AC18's cross-implementation half is NOT proven without `bun`: "
+                "it needs the real server's normalizeTrack on the write path. "
+                "This is a missing toolchain, not a passing assertion.")
+        port = _free_port()
+        cls.base = f"http://127.0.0.1:{port}"
+        cls._proc = subprocess.Popen(
+            [bun, "run", "src/server.ts"], cwd=str(REPO_ROOT),
+            env={**os.environ, "CRUCIBLE_PORT": str(port),
+                 "CRUCIBLE_HOST": "127.0.0.1",
+                 "CRUCIBLE_DB": os.path.join(cls._tmpdir, "crucible.db")},
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _await_server(cls.base, cls._proc)
+
+        project = _http(cls.base, "/api/v2/projects", {"name": "cr092-scratch"})
+        cls.key = project["project"]["key"]
+        _http(cls.base, "/api/v2/agents/register",
+              {"agentId": cls.AGENT, "projectKey": cls.key, "status": "online",
+               "role": "ORCHESTRATOR",
+               "identity": {"displayName": cls.AGENT, "source": "manual"}})
+        _http(cls.base, f"/api/v2/projects/{cls.key}/release-proposals",
+              {"label": cls.RELEASE, "agentId": cls.AGENT})
+
+        # One cr per spelling, each in its OWN wave, so every declaration is a
+        # complete `wave-sequence` call over the whole wave (§S4) rather than a
+        # partial re-send.
+        cls.stored = {}
+        cls.declared = []
+        for index, spelling in enumerate(cls.SPELLINGS, start=1):
+            cls.declared.append((f"CR-TRK-{index:03d}", str(index), spelling))
+        cls.declared.append(("CR-TRK-OTHER", "9", cls.OTHER_TRACK))
+        for cr, wave, spelling in cls.declared:
+            cls._declare(cr, wave, spelling)
+
+        entries = _http(cls.base, f"/api/v2/projects/{cls.key}/queue")["entries"]
+        cls.entries = entries
+        by_cr = {e["cr"]: e for e in entries}
+        for cr, _wave, spelling in cls.declared[:len(cls.SPELLINGS)]:
+            cls.stored[spelling] = by_cr[cr].get("track")
+        cls.other_stored = by_cr["CR-TRK-OTHER"].get("track")
+
+    @classmethod
+    def _declare(cls, cr, wave, track):
+        planned = _http(cls.base, f"/api/v2/projects/{cls.key}/queue/plan",
+                        {"cr": cr, "title": "track probe",
+                         "release": cls.RELEASE, "wave": wave,
+                         "agentId": cls.AGENT})
+        assert planned.get("ok"), f"cr-plan failed for {cr}: {planned!r}"
+        sequenced = _http(
+            cls.base, f"/api/v2/projects/{cls.key}/queue/sequence",
+            {"release": cls.RELEASE, "wave": wave, "crs": [cr],
+             "track": track, "agentId": cls.AGENT})
+        assert sequenced.get("ok"), f"wave-sequence failed for {cr}: {sequenced!r}"
+
+    @classmethod
+    def tearDownClass(cls):
+        if getattr(cls, "_proc", None) is not None:
+            cls._proc.terminate()
+            try:
+                cls._proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                cls._proc.kill()
+        shutil.rmtree(cls._tmpdir, ignore_errors=True)
+
+    def test_the_server_stores_exactly_what_the_helper_produces(self):
+        """AC18's core: write path and read path, one rule. A divergence
+        between `normalizeTrack` (TypeScript) and `canonical_track` (Python)
+        fails HERE."""
+        for spelling in self.SPELLINGS:
+            with self.subTest(spelling=spelling):
+                self.assertEqual(
+                    self.stored[spelling], AXI.canonical_track(spelling),
+                    f"the server stored {self.stored[spelling]!r} for "
+                    f"--track {spelling!r} while the client helper produces "
+                    f"{AXI.canonical_track(spelling)!r} — one flag, one "
+                    f"project, two answers")
+
+    def test_every_spelling_lands_in_ONE_lane_not_five(self):
+        """The failure §S2's normalisation exists to prevent, asserted on real
+        stored data: five spellings of one track must not become five lanes."""
+        self.assertEqual(
+            len(set(self.stored.values())), 1,
+            f"the five spellings stored {sorted(set(self.stored.values()))!r}")
+        self.assertEqual(set(self.stored.values()), {"track-2"})
+
+    def test_the_live_track_list_is_what_the_server_holds(self):
+        """`queue_tracks` reads the SERVER's canonical values, so the refusal
+        list §S3 emits is the roadmap's own vocabulary."""
+        self.assertEqual(self.other_stored, AXI.canonical_track(self.OTHER_TRACK))
+        self.assertEqual(AXI.queue_tracks(self.entries), ["track-2", "track-3"])
+
+    def test_the_server_refuses_exactly_what_the_helper_refuses(self):
+        """The other half of one rule: a value naming no lane is refused by
+        BOTH sides. A helper that quietly invented a track here would send
+        `next` hunting a lane `wave-sequence` would never create."""
+        for spelling in self.REFUSED:
+            with self.subTest(spelling=spelling):
+                refused = _http(
+                    self.base, f"/api/v2/projects/{self.key}/queue/sequence",
+                    {"release": self.RELEASE, "wave": "1",
+                     "crs": ["CR-TRK-001"], "track": spelling,
+                     "agentId": self.AGENT})
+                self.assertIs(refused.get("ok"), False,
+                              f"the server accepted --track {spelling!r}")
+                self.assertIsNone(
+                    AXI.canonical_track(spelling),
+                    f"the server refuses {spelling!r} but the helper "
+                    f"canonicalised it to "
+                    f"{AXI.canonical_track(spelling)!r}")
+
+    def test_next_resolves_every_spelling_against_the_stored_lane(self):
+        """The loop closed end to end: the entries the SERVER published, fed to
+        the resolver, reached by every spelling `wave-sequence` accepts — and
+        `tracks[]` never echoes the caller's spelling back."""
+        answers = []
+        for spelling in self.SPELLINGS:
+            ok, code, fields, _warnings = AXI.resolve_next(
+                self.entries, track=spelling)
+            with self.subTest(spelling=spelling):
+                self.assertIs(ok, True)
+                self.assertEqual(code, 0)
+                self.assertEqual(fields.get("decision"), "NEXT")
+                self.assertEqual(fields.get("track"), "track-2")
+                self.assertNotIn("tracks", fields)
+            answers.append(fields)
+        self.assertEqual(
+            [a["cr"] for a in answers], [answers[0]["cr"]] * len(answers),
+            f"every spelling must reach the same lane; got {answers!r}")
+
+    def test_the_other_lane_is_reachable_by_its_own_spelling(self):
+        """Multi-track, against real stored values: `--track 3` answers about
+        track-3, never track-2."""
+        fields = AXI.resolve_next(self.entries, track="Track 3")[2]
+        self.assertEqual(fields.get("decision"), "NEXT")
+        self.assertEqual(fields.get("cr"), "CR-TRK-OTHER")
+        self.assertEqual(fields.get("track"), "track-3")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
