@@ -1,9 +1,9 @@
 # CR-CRU-092 — `next`: the orchestrator validates its sequence during execution
 
 - **Type**: feature
-- **Wave**: 6 (post-0.2.0)
+- **Wave**: 5 (0.2.0)
 - **Depends on**: 091
-- **Status**: PENDING (post-0.2.0)
+- **Status**: PENDING (0.2.0) — moved into 0.2.0 by user direction 2026-08-28
 - **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §13 (approved 2026-08-28). Absolute path so it resolves from a worktree; it carries the NEXT / HOLD / DRAINED vocabulary and the track rule.
 
 > The design document is the contract for this CR. Implement what it specifies — do not

@@ -1,9 +1,9 @@
 # CR-CRU-085 — multi-track swimlanes inside a wave
 
 - **Type**: feature
-- **Wave**: 6 (post-0.2.0)
+- **Wave**: 5 (0.2.0)
 - **Depends on**: 078
-- **Status**: PENDING (post-0.2.0) — re-scoped 2026-08-28: the wave container ships in CR-078; this CR owns lanes only
+- **Status**: PENDING (0.2.0) — moved into 0.2.0 by user direction 2026-08-28 — re-scoped 2026-08-28: the wave container ships in CR-078; this CR owns lanes only
 - **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §4, §5, §7 (approved 2026-08-28). Absolute path so it resolves from a worktree; it carries the lane grammar, the shape/colour vocabulary it must reuse, and the conditional-chrome rule.
 
 > The design document is the contract for this CR. Implement what it specifies — do not

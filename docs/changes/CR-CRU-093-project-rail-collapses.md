@@ -1,9 +1,9 @@
 # CR-CRU-093 — the project rail collapses, giving every workspace view its width back
 
 - **Type**: feature
-- **Wave**: 6 (post-0.2.0)
+- **Wave**: 5 (0.2.0)
 - **Depends on**: 006
-- **Status**: PENDING (post-0.2.0)
+- **Status**: PENDING (0.2.0) — moved into 0.2.0 by user direction 2026-08-28
 - **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §14 (approved 2026-08-28). Absolute path so it resolves from a worktree; it carries the measured widths and the collapse rules.
 
 > The design document is the contract for this CR. Implement what it specifies — do not
