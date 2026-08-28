@@ -25,6 +25,7 @@ same way the clients do.
 """
 
 import argparse
+import datetime
 import importlib.util
 import json
 import os
@@ -2014,6 +2015,565 @@ def cmd_queue_file(args, project_dir, ops):
               "help": ["status"]},
              ops.context(project_dir), [], None)
     return 0 if ok else 1
+
+
+# ── CR-CRU-091 §S3/§S6/§S7/§S8/§S10 — roadmap registration: the five verbs ──
+#
+# `release-propose`, `cr-plan`, `wave-sequence`, `cr-supersede` and `cr-void`
+# land HERE, once (the CR-CRU-054 DRY rule); each of the five clients wires a
+# subparser and delegates, exactly as `queue-file` does. §S9 fixes the split:
+# this half owns argument parsing, §S6's asking, exit codes and the envelope,
+# and holds NO business rule — it never decides an order, never infers a
+# release, never validates a dependency, and never normalises `--track` (§S2
+# puts that on the server so five clients cannot produce two lanes for one
+# track). It POSTs and renders what came back.
+
+# §S3 — the role every roadmap route requires. Carried in the refusal envelope
+# as DISCLOSURE, never as enforcement: the client checks no role and refuses
+# no caller. It is named because the shared caller-auth seam's own 409 (an
+# UNREGISTERED caller) does not mention a role at all, and AC16 requires both
+# refusals to tell the caller what the verb needs.
+ROADMAP_ROLE = "ORCHESTRATOR"
+
+# §S6/P6 — the fleet's USAGE exit: a call the CLIENT resolved as incomplete
+# before anything reached the wire. A refusal that came back FROM the server
+# is a transport-class outcome and keeps the fleet's `0 if ok else 1`.
+EXIT_USAGE = 2
+
+# §S10 P3 — a roadmap list truncates by default; `--full` emits it whole.
+# `totalCount` (P4) always carries the true total, so a truncated list can
+# never be mistaken for the whole one.
+ROADMAP_LIST_LIMIT = 20
+
+# §S6/P6 — the two fields `cr-plan` will not guess, in the order `needs`
+# reports them.
+CR_PLAN_DECLARED_FIELDS = ("release", "wave")
+
+
+def release_proposals_path(project_key):
+    """§S8 — `…/projects/<key>/release-proposals`: the POST that records or
+    revises a proposal, and the GET §S6's candidate list is read from."""
+    return f"/api/v2/projects/{project_key}/release-proposals"
+
+
+def queue_plan_path(project_key):
+    """§S8 — `…/projects/<key>/queue/plan`. The verb NAME is never a path
+    segment (`queue/plan`, not `queue/cr-plan`), so a guessed shape 404s."""
+    return f"/api/v2/projects/{project_key}/queue/plan"
+
+
+def queue_sequence_path(project_key):
+    """§S8 — `…/projects/<key>/queue/sequence`."""
+    return f"/api/v2/projects/{project_key}/queue/sequence"
+
+
+def queue_lifecycle_path(project_key, cr, verb):
+    """§S8 — `…/projects/<key>/queue/<cr>/supersede` | `/void`."""
+    return f"/api/v2/projects/{project_key}/queue/{cr}/{verb}"
+
+
+def server_failure_help(resp):
+    """The `help[]` the SERVER derived for a refusal, lifted out of the
+    `http_request` error string (PURE).
+
+    `http_request` flattens an HTTP error to `"HTTP <code>: <body>"`, so the
+    structured refusal — including the state-derived `help[]` `roadmapHints`
+    builds (`src/hints.ts:339`) — survives only as text. Lifting it is what
+    keeps §S9's division honest: AC6's "a `help[]` entry
+    `release-propose --label 9.9.9`" is the SERVER's own derivation, and a
+    client re-deriving it would be a second decision-maker for the same rule.
+
+    Returns the parsed list, or None when the failure carried none (a
+    transport failure, or a body that is not the fleet's JSON refusal)."""
+    error = (resp or {}).get("error")
+    if not isinstance(error, str):
+        return None
+    _, _, detail = error.partition(": ")
+    try:
+        parsed = json.loads(detail)
+    except (ValueError, TypeError):
+        return None
+    steps = parsed.get("help") if isinstance(parsed, dict) else None
+    return [str(s) for s in steps] if isinstance(steps, list) and steps else None
+
+
+def roadmap_failure_fields(verb, resp, ops, full=False):
+    """§S10 P6/P9 — the result fields of a roadmap FAILURE envelope: the error
+    verbatim, the required role (AC16), the server's own state-derived
+    `help[]` when it sent one, and the fleet's reachability next-step when the
+    call never landed. `converged` is false because a call that wrote nothing
+    converged on nothing, and `totalCount` is 0 because it answered with no
+    record — both ride EVERY envelope (§S7, P4)."""
+    error = (resp or {}).get("error")
+    return {
+        "converged": False,
+        "error": truncate_field(str(error), full=full) if error else None,
+        "requiredRole": ROADMAP_ROLE,
+        "totalCount": 0,
+        "help": (server_failure_help(resp)
+                 or server_unreachable_help(verb, ops.base_url)),
+    }
+
+
+def parse_target_at(raw):
+    """§S1/§S3 — `--target <date>` → `targetAt` in epoch SECONDS, the unit
+    `releasedAt` uses (PURE).
+
+    Accepts an ISO-8601 date (`2026-09-01`, read as midnight UTC so the value
+    is deterministic wherever the orchestrator runs) or datetime, and a bare
+    epoch-seconds integer for a caller that already holds one. Anything else
+    raises ValueError NAMING the value — a target that silently vanished
+    would read back as "no target was ever declared", which is the same
+    failure the server refuses a malformed `targetAt` for.
+
+    NOTE: the CR fixes the WIRE unit (§S1) but names no client-side input
+    format for `--target`; these two are this client half's reading of
+    `<date>`, reported as a spec silence rather than smuggled in.
+    """
+    text = str(raw).strip()
+    if re.fullmatch(r"\d+", text):
+        return int(text)
+    try:
+        parsed = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        raise ValueError(
+            f"--target {raw!r} is not a date: declare an ISO-8601 date "
+            f"(2026-09-01), an ISO-8601 datetime, or epoch SECONDS") from None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return int(parsed.timestamp())
+
+
+def parse_crs(raw):
+    """§S4 — `--crs A,B,C` → the ORDERED list; array position becomes `seq`
+    server-side, so the order is preserved exactly as typed and no entry is
+    de-duplicated here (a repeat is the server's refusal to make, by name and
+    index)."""
+    return [tok.strip() for tok in str(raw or "").split(",") if tok.strip()]
+
+
+def select_row_fields(rows, fields):
+    """§S10 P2 (PURE) — narrow each row to the requested columns.
+
+    Deliberately NARROWING rather than `select_status_fields`' ADDITIVE shape:
+    `status`' rows carry a wide set behind a 4-column base, so its flag adds;
+    a roadmap row is already the minimal record the write produced, so the
+    only useful control is asking for less. AC19 words it exactly that way —
+    "`--fields` narrows the envelope". A key the row does not hold is dropped
+    rather than emitted as null, so the list stays uniform-table safe."""
+    if not fields:
+        return rows
+    keys = [f.strip() for f in str(fields).split(",") if f.strip()]
+    return [{k: row[k] for k in keys if k in row} for row in rows]
+
+
+def truncate_rows(rows, full=False, limit=ROADMAP_LIST_LIMIT):
+    """§S10 P3 (PURE) — the visible head of a roadmap list; `--full` defeats
+    it. The caller emits `totalCount` from the UNtruncated list."""
+    rows = list(rows or [])
+    return rows if full or len(rows) <= limit else rows[:limit]
+
+
+def roadmap_rows(resp, key, args):
+    """The list answer of a roadmap response, projected (P2) and truncated
+    (P3) for the envelope. Returns `(visible_rows, total)` so the caller can
+    emit the TRUE total beside a possibly-shortened list (P4)."""
+    rows = [r for r in (resp or {}).get(key) or [] if isinstance(r, dict)]
+    total = len(rows)
+    return (truncate_rows(select_row_fields(rows, getattr(args, "fields", None)),
+                          full=bool(getattr(args, "full", False))), total)
+
+
+def roadmap_scalar_list(resp, key):
+    """A roadmap response's list of bare CR ids (`resolvedDependants` /
+    `brokenDependants` / `unknownDependencies`) — never projected, because a
+    scalar has no columns to narrow."""
+    return [str(v) for v in (resp or {}).get(key) or []]
+
+
+def roadmap_entry(resp, args):
+    """The single-record answer (`entry`), projected by `--fields` exactly as
+    a row of a list answer is, so one flag means one thing across the five
+    verbs."""
+    entry = (resp or {}).get("entry")
+    if not isinstance(entry, dict):
+        return None
+    return select_row_fields([entry], getattr(args, "fields", None))[0]
+
+
+# ── §S6 — the client ASKS (AXI P5/P6/P7/P9) ────────────────────────────────
+#
+# The whole of the asking lives here, in the shared module, for the reason
+# §S6 gives out loud: "no business rule lives in a client and no two clients
+# can decide differently". It NEVER guesses — not even when exactly one
+# release and exactly one wave are open, because silent inference is the
+# failure class this design removes.
+
+
+def undeclared_cr_plan_fields(args):
+    """P6 — EXACTLY the fields the caller left undeclared, in §S6's order."""
+    return [field for field in CR_PLAN_DECLARED_FIELDS
+            if not getattr(args, field, None)]
+
+
+def proposal_candidates(resp):
+    """P7 (PURE) — the live candidate proposals and the waves already planned
+    against each, from `GET …/release-proposals`.
+
+    §S8 settles that the server emits NO `status` field: every proposal it
+    returns is live by construction, so reading one off the wire would be
+    reading a field that is not there. The CLIENT labels them, which is
+    presentation rather than a rule — the fact ("this proposal is live") is
+    the server's, carried by the route's own contract."""
+    return [{"label": str(p.get("label")),
+             "status": "live",
+             "waves": [str(w) for w in p.get("waves") or []]}
+            for p in (resp or {}).get("proposals") or []
+            if isinstance(p, dict)]
+
+
+def cr_plan_ask_help(candidates, cr, title):
+    """P9 (PURE) — the pre-filled next-step templates: one `cr-plan` line per
+    candidate release/wave with the caller's OWN `--cr` and `--title` already
+    substituted, plus the `release-propose` line for the case where the
+    intended release does not exist yet. With NO proposal recorded at all that
+    last line is the ONLY entry — the definitive empty state (P5/AC11)."""
+    steps = []
+    for candidate in candidates:
+        waves = candidate.get("waves") or ["<n>"]
+        for wave in waves:
+            steps.append(f'cr-plan --cr {cr} --release {candidate["label"]} '
+                         f'--wave {wave} --title "{title}"')
+    steps.append("release-propose --label <v>")
+    return steps
+
+
+def emit_cr_plan_ask(args, project_dir, ops, needs, agent_id):
+    """§S6 — resolve the undeclared `cr-plan` BEFORE posting: read the live
+    candidates, emit the `ok:false` envelope on stdout, exit 2, POST nothing.
+
+    A candidate read that FAILS is not "zero proposals": reporting an
+    unreachable roadmap as an empty one would turn a transport fault into a
+    fact. It degrades the fleet's way (`cmd_status`/`cmd_queue`) — an empty
+    candidate list plus a STRUCTURED warning naming the condition — and still
+    refuses to guess, because the caller's own declaration is what is
+    missing either way."""
+    resp = ops.get(release_proposals_path(ops.project_key(project_dir)))
+    warnings = []
+    if resp.get("ok"):
+        candidates = proposal_candidates(resp)
+    else:
+        candidates = []
+        warnings.append({
+            "code": "release-proposals-unavailable",
+            "detail": (f"could not read the live release proposals: "
+                       f"{resp.get('error')}"),
+        })
+    full = bool(getattr(args, "full", False))
+    visible = truncate_rows(
+        select_row_fields(candidates, getattr(args, "fields", None)), full=full)
+    ops.emit("cr-plan", False,
+             {"converged": False,
+              "needs": needs,
+              "releases": visible,
+              "totalCount": len(candidates),
+              "requiredRole": ROADMAP_ROLE,
+              "help": cr_plan_ask_help(candidates, args.cr, args.title)},
+             ops.context(project_dir, agent_id=agent_id, cr=args.cr),
+             warnings,
+             f"cr-plan: ok=False needs={','.join(needs)} — nothing was posted; "
+             f"{len(candidates)} live release proposal(s) to choose from")
+    return EXIT_USAGE
+
+
+# ── §S3 — the five verbs ───────────────────────────────────────────────────
+
+
+def cmd_release_propose(args, project_dir, ops):
+    """§S3 — record or REVISE the `release-proposal` milestone for one label.
+    The super container must exist before a CR can target it."""
+    agent_id = ops.agent_id(args)
+    full = bool(getattr(args, "full", False))
+    body = {"label": args.label, "agentId": agent_id}
+    if getattr(args, "target", None):
+        try:
+            body["targetAt"] = parse_target_at(args.target)
+        except ValueError as exc:
+            ops.emit("release-propose", False,
+                     {"converged": False, "error": str(exc),
+                      "requiredRole": ROADMAP_ROLE, "totalCount": 0,
+                      "help": [f"release-propose --label {args.label} "
+                               f"--target <YYYY-MM-DD>"]},
+                     ops.context(project_dir, agent_id=agent_id), [],
+                     f"release-propose: ok=False error={exc}")
+            return EXIT_USAGE
+    resp = ops.post(release_proposals_path(ops.project_key(project_dir)), body)
+    resp = resp or {}
+    ok = bool(resp.get("ok", False))
+    if not ok:
+        ops.emit("release-propose", False,
+                 roadmap_failure_fields("release-propose", resp, ops, full),
+                 ops.context(project_dir, agent_id=agent_id), [],
+                 f"release-propose: ok=False error={resp.get('error')}")
+        return 1
+    proposal = resp.get("proposal") if isinstance(resp.get("proposal"), dict) else {}
+    converged = bool(resp.get("converged", False))
+    ops.emit("release-propose", True,
+             {"converged": converged,
+              "proposal": select_row_fields(
+                  [proposal], getattr(args, "fields", None))[0],
+              "totalCount": 1,
+              "help": [f"cr-plan --cr <id> --release {args.label} --wave <n> "
+                       f"--title <brief>", "queue"]},
+             ops.context(project_dir, agent_id=agent_id),
+             resp.get("warnings") or [],
+             f"release-propose: ok=True label={args.label} "
+             f"converged={converged}")
+    return 0
+
+
+def cmd_cr_plan(args, project_dir, ops):
+    """§S3 — the per-CR upsert of `release`, `wave` and `title`. Re-running
+    with different values is a legitimate re-plan, not an error (§S3), and
+    re-running with the same values writes nothing (§S7).
+
+    §S6 — a call missing `--release` or `--wave` is resolved HERE and never
+    reaches the server."""
+    agent_id = ops.agent_id(args)
+    needs = undeclared_cr_plan_fields(args)
+    if needs:
+        return emit_cr_plan_ask(args, project_dir, ops, needs, agent_id)
+    full = bool(getattr(args, "full", False))
+    resp = ops.post(queue_plan_path(ops.project_key(project_dir)),
+                    {"cr": args.cr, "release": args.release,
+                     "wave": str(args.wave), "title": args.title,
+                     "agentId": agent_id}) or {}
+    ok = bool(resp.get("ok", False))
+    context = ops.context(project_dir, agent_id=agent_id, cr=args.cr)
+    if not ok:
+        ops.emit("cr-plan", False,
+                 roadmap_failure_fields("cr-plan", resp, ops, full),
+                 context, [], f"cr-plan: ok=False error={resp.get('error')}")
+        return 1
+    converged = bool(resp.get("converged", False))
+    ops.emit("cr-plan", True,
+             {"converged": converged,
+              "entry": roadmap_entry(resp, args),
+              "unknownDependencies": roadmap_scalar_list(
+                  resp, "unknownDependencies"),
+              "totalCount": 1,
+              "help": [f"wave-sequence --release {args.release} "
+                       f"--wave {args.wave} --crs <a,b,c>", "queue"]},
+             context, resp.get("warnings") or [],
+             f"cr-plan: ok=True cr={args.cr} release={args.release} "
+             f"wave={args.wave} converged={converged}")
+    return 0
+
+
+def cmd_wave_sequence(args, project_dir, ops):
+    """§S4 — ONE call carrying the WHOLE ordered list: the array position of
+    `--crs` becomes `seq`, because the order IS the payload. Insert and
+    reorder are the same call — re-send the list.
+
+    `--track` is forwarded VERBATIM: §S2 normalises to `track-<n>` on the
+    server so two clients cannot write `2` and `track-2` and draw two lanes
+    for one track."""
+    agent_id = ops.agent_id(args)
+    full = bool(getattr(args, "full", False))
+    body = {"release": args.release, "wave": str(args.wave),
+            "crs": parse_crs(args.crs), "agentId": agent_id}
+    if getattr(args, "track", None):
+        body["track"] = args.track
+    resp = ops.post(queue_sequence_path(ops.project_key(project_dir)), body) or {}
+    ok = bool(resp.get("ok", False))
+    context = ops.context(project_dir, agent_id=agent_id)
+    if not ok:
+        ops.emit("wave-sequence", False,
+                 roadmap_failure_fields("wave-sequence", resp, ops, full),
+                 context, [],
+                 f"wave-sequence: ok=False error={resp.get('error')}")
+        return 1
+    entries, total = roadmap_rows(resp, "entries", args)
+    converged = bool(resp.get("converged", False))
+    ops.emit("wave-sequence", True,
+             {"converged": converged, "entries": entries,
+              "unknownDependencies": roadmap_scalar_list(
+                  resp, "unknownDependencies"),
+              "totalCount": total, "help": ["queue", "status"]},
+             context, resp.get("warnings") or [],
+             f"wave-sequence: ok=True release={args.release} "
+             f"wave={args.wave} entries={total} converged={converged}")
+    return 0
+
+
+def cmd_cr_supersede(args, project_dir, ops):
+    """§S3 — lifecycle `SUPERSEDED` with `by`. The work still happens,
+    elsewhere: AC15 requires the dependants to be reported RESOLVING through
+    the successor, never collapsed into one "removed" answer with `cr-void`'s.
+    The row is not deleted; the CR stays visible carrying its declaration."""
+    return _cr_lifecycle(args, project_dir, ops, "supersede",
+                         {"by": args.by}, "resolvedDependants")
+
+
+def cmd_cr_void(args, project_dir, ops):
+    """§S3 — lifecycle `VOID` with `reason`. The work is not happening, so
+    AC15 requires the dependants to be reported BROKEN — the report is why
+    the write still lands (§S8's warn-and-write rung), not a refusal."""
+    return _cr_lifecycle(args, project_dir, ops, "void",
+                         {"reason": args.reason}, "brokenDependants")
+
+
+def _cr_lifecycle(args, project_dir, ops, verb, body, dependants_key):
+    """The shared body of the two lifecycle verbs. They differ ONLY in the
+    path segment, the one declared field and the name their dependant list
+    answers to — which is exactly AC15's point, so the difference is a
+    parameter and the identical half is written once."""
+    agent_id = ops.agent_id(args)
+    full = bool(getattr(args, "full", False))
+    cli_verb = f"cr-{verb}"
+    resp = ops.post(
+        queue_lifecycle_path(ops.project_key(project_dir), args.cr, verb),
+        {**body, "agentId": agent_id}) or {}
+    ok = bool(resp.get("ok", False))
+    context = ops.context(project_dir, agent_id=agent_id, cr=args.cr)
+    if not ok:
+        ops.emit(cli_verb, False,
+                 roadmap_failure_fields(cli_verb, resp, ops, full),
+                 context, [], f"{cli_verb}: ok=False error={resp.get('error')}")
+        return 1
+    dependants = roadmap_scalar_list(resp, dependants_key)
+    converged = bool(resp.get("converged", False))
+    ops.emit(cli_verb, True,
+             {"converged": converged,
+              "entry": roadmap_entry(resp, args),
+              dependants_key: truncate_rows(dependants, full=full),
+              "totalCount": len(dependants),
+              "help": lifecycle_help(verb, args, dependants)},
+             context, resp.get("warnings") or [],
+             f"{cli_verb}: ok=True cr={args.cr} "
+             f"{dependants_key}={len(dependants)} converged={converged}")
+    return 0
+
+
+def lifecycle_help(verb, args, dependants):
+    """§S10 P9 (PURE) — the STATE-DERIVED next step after a lifecycle write:
+    supersede points at planning the successor the caller just named, void
+    names the dependants that now point at a VOID cr — which is the fact
+    AC15 exists to surface and the only actionable thing left to do."""
+    if verb == "supersede":
+        return [f"cr-plan --cr {args.by} --release <v> --wave <n> "
+                f"--title <brief> — the work moves to {args.by}", "queue"]
+    if dependants:
+        return [f"cr-plan --cr <dependant> --release <v> --wave <n> "
+                f"--title <brief> — {', '.join(dependants)} still depend on "
+                f"the now-VOID {args.cr}", "queue"]
+    return ["queue"]
+
+
+def add_roadmap_projection_args(p):
+    """§S10 P2/P3 — the two envelope-shaping flags every roadmap verb carries,
+    added identically in all five clients so the surface cannot drift."""
+    p.add_argument("--fields",
+                   help="Comma-separated columns to NARROW the envelope's "
+                        "records to (§S10 P2).")
+    p.add_argument("--full", action="store_true",
+                   help="Emit the whole list and untruncated text fields "
+                        "(§S10 P3).")
+
+
+def add_roadmap_verbs(sub, funcs, *, parents=(), add_args=()):
+    """§S3/§S9 — register the five roadmap subparsers on `sub`.
+
+    The registration itself is shared, so "a reviewer diffing two client files
+    sees near-identical thin registrations" is guaranteed rather than hoped
+    for. Only the three genuinely per-client pieces are injected — and they
+    are injected rather than flattened into one shared constant, which is the
+    silent fleet-wide regression CR-CRU-054 §S1's classification exists to
+    prevent:
+
+      * `funcs` — verb name → that client's own delegator;
+      * `parents` — a client that already carries `--agent`/`--project-dir` on
+        a shared parent parser (arduino's `common`) passes it here;
+      * `add_args` — the per-verb arg adders for the other four, each client's
+        OWN `_add_workflow_agent_arg` / `_add_project_dir_arg` (mvn's
+        `_add_project_args` also carries its `--maven-dir` convention).
+    """
+    def _common(p):
+        for adder in add_args:
+            adder(p)
+
+    rp = sub.add_parser(
+        "release-propose", parents=list(parents),
+        help="Record or REVISE a proposed release → POST …/release-proposals "
+             "(§S1/§S3). ORCHESTRATOR only.")
+    rp.add_argument("--label", required=True,
+                    help="The version this release proposes to ship, e.g. 0.4.0.")
+    rp.add_argument("--target",
+                    help="Declared target date (ISO-8601 date/datetime, or "
+                         "epoch SECONDS). Optional and revisable; a revision "
+                         "retires its predecessor rather than editing it.")
+    add_roadmap_projection_args(rp)
+    _common(rp)
+    rp.set_defaults(func=funcs["release-propose"])
+
+    cp = sub.add_parser(
+        "cr-plan", parents=list(parents),
+        help="Declare one CR's release, wave and title → POST …/queue/plan "
+             "(§S3). Omit --release/--wave and the client ASKS (§S6) instead "
+             "of guessing. ORCHESTRATOR only.")
+    cp.add_argument("--cr", required=True, help="The CR this plan declares.")
+    cp.add_argument("--title", required=True, help="The CR's brief.")
+    cp.add_argument("--release",
+                    help="The release this CR targets. Undeclared → the client "
+                         "lists the live proposals and exits 2 (§S6).")
+    cp.add_argument("--wave",
+                    help="The wave within the release. Undeclared → the client "
+                         "lists the waves already planned and exits 2 (§S6).")
+    add_roadmap_projection_args(cp)
+    _common(cp)
+    cp.set_defaults(func=funcs["cr-plan"])
+
+    ws = sub.add_parser(
+        "wave-sequence", parents=list(parents),
+        help="Author a whole wave's order in ONE call → POST …/queue/sequence "
+             "(§S4): the position of each cr in --crs becomes its seq. "
+             "ORCHESTRATOR only.")
+    ws.add_argument("--release", required=True,
+                    help="The release whose wave is being sequenced.")
+    ws.add_argument("--wave", required=True,
+                    help="The wave whose order this call authors.")
+    ws.add_argument("--crs", required=True,
+                    help="The WHOLE ordered list, comma-separated. Insert and "
+                         "reorder are the same call: re-send the list.")
+    ws.add_argument("--track",
+                    help="The track this wave's crs run in — 2, track-2 or "
+                         '"Track 2". The SERVER normalises to track-<n>.')
+    add_roadmap_projection_args(ws)
+    _common(ws)
+    ws.set_defaults(func=funcs["wave-sequence"])
+
+    cs = sub.add_parser(
+        "cr-supersede", parents=list(parents),
+        help="Record that a CR's work moves to a successor → POST "
+             "…/queue/<cr>/supersede (§S3). The row is kept. ORCHESTRATOR only.")
+    cs.add_argument("--cr", required=True, help="The superseded CR.")
+    cs.add_argument("--by", required=True,
+                    help="The successor CR the work moves to.")
+    add_roadmap_projection_args(cs)
+    _common(cs)
+    cs.set_defaults(func=funcs["cr-supersede"])
+
+    cv = sub.add_parser(
+        "cr-void", parents=list(parents),
+        help="Record that a CR's work is not happening → POST "
+             "…/queue/<cr>/void (§S3). The row is kept, and the dependants it "
+             "breaks are named. ORCHESTRATOR only.")
+    cv.add_argument("--cr", required=True, help="The voided CR.")
+    cv.add_argument("--reason", required=True,
+                    help="Why the work is not happening.")
+    add_roadmap_projection_args(cv)
+    _common(cv)
+    cv.set_defaults(func=funcs["cr-void"])
 
 
 def remove_agent_silent(project_dir, agent_id, ops):

@@ -1387,5 +1387,308 @@ class SevenNoReportSitesStarvedCensusTest(unittest.TestCase):
             f"specific warning code must still fail HERE: {offenders!r}")
 
 
+# ── CR-CRU-091 §S10 / AC19 -- the 25 (verb x client) roadmap pairs ─────────
+#
+# AC19 is explicit that conformance is asserted by EXTENDING the two existing
+# harnesses, never by a parallel checker: verb PRESENCE in the sibling
+# `test_cr054_fleet_inventory.py`, and ENVELOPE CONFORMANCE here, through
+# THIS file's own `enumerate_verbs`/`build_argv`/`drive_verb`/
+# `classify_envelope` machinery -- the same four functions `_get_census()`
+# drives, so a roadmap verb cannot be conformant by a different standard than
+# the rest of the fleet.
+#
+# The drives below run under the census's own unreachable CRUCIBLE_URL, which
+# is the point: four of the five verbs therefore exercise a real TRANSPORT
+# failure (exit 1) and `cr-plan` -- whose `--release`/`--wave` are deliberately
+# NOT argparse-required, because §S6 makes the client ASK for them -- exercises
+# the USAGE refusal (exit 2) with nothing POSTed. Both are envelope-bearing
+# states, so "no server" is a fair census rather than a skipped one.
+
+CR091_ROADMAP_VERBS = (
+    "release-propose", "cr-plan", "wave-sequence", "cr-supersede", "cr-void",
+)
+
+# §S6/P6 -- the exit each verb owes under an unreachable server: `cr-plan`
+# never reaches the wire (the client resolves the undeclared fields itself and
+# refuses with the fleet's USAGE code), the other four do and fail transport.
+CR091_EXPECTED_EXIT = {
+    "release-propose": 1,
+    "cr-plan": 2,
+    "wave-sequence": 1,
+    "cr-supersede": 1,
+    "cr-void": 1,
+}
+
+CR091_ROADMAP_ROLE = "ORCHESTRATOR"
+
+_ROADMAP_DRIVE_CACHE = None
+
+
+def _get_roadmap_drives():
+    """Drive all 25 (verb x client) roadmap pairs once, keeping the RAW
+    `CompletedProcess` -- the census cache above keeps only the decoded `axi`,
+    and AC19 asserts on the exit code and on stdout PURITY as well as on the
+    envelope. Cached at module scope exactly like `_get_census()`."""
+    global _ROADMAP_DRIVE_CACHE
+    if _ROADMAP_DRIVE_CACHE is not None:
+        return _ROADMAP_DRIVE_CACHE
+    fake_bin_dir = _build_fake_bin_dir()
+    toon_module = _load_toon_module()
+    drives = {}
+    try:
+        for client_key, script_path in CLIENT_FILES.items():
+            project_dir = _make_project_dir(client_key)
+            try:
+                verbs = enumerate_verbs(client_key, script_path)
+                for verb in CR091_ROADMAP_VERBS:
+                    subparser = verbs.get(verb)
+                    if subparser is None:
+                        drives[(client_key, verb)] = None
+                        continue
+                    argv = build_argv(verb, subparser, project_dir)
+                    result = drive_verb(script_path, argv, project_dir,
+                                        fake_bin_dir)
+                    _emits, axi = classify_envelope(result.stdout, toon_module)
+                    options = {opt for action in subparser._actions
+                               for opt in action.option_strings}
+                    drives[(client_key, verb)] = {
+                        "result": result, "axi": axi, "options": options,
+                        "argv": argv,
+                    }
+            finally:
+                shutil.rmtree(project_dir, ignore_errors=True)
+    finally:
+        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+    _ROADMAP_DRIVE_CACHE = drives
+    return drives
+
+
+_ROADMAP_HELP_CACHE = None
+
+
+def _get_roadmap_help_drives():
+    """P10 -- `<client> <verb> --help` for all 25 pairs, as real subprocesses.
+    A `--help` that exits non-zero or omits its own verb name is a broken
+    agent-facing surface however correct the write path is."""
+    global _ROADMAP_HELP_CACHE
+    if _ROADMAP_HELP_CACHE is not None:
+        return _ROADMAP_HELP_CACHE
+    fake_bin_dir = _build_fake_bin_dir()
+    helps = {}
+    try:
+        for client_key, script_path in CLIENT_FILES.items():
+            project_dir = _make_project_dir(client_key)
+            try:
+                for verb in CR091_ROADMAP_VERBS:
+                    helps[(client_key, verb)] = drive_verb(
+                        script_path, [verb, "--help"], project_dir,
+                        fake_bin_dir)
+            finally:
+                shutil.rmtree(project_dir, ignore_errors=True)
+    finally:
+        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+    _ROADMAP_HELP_CACHE = helps
+    return helps
+
+
+class Cr091RoadmapVerbAxiConformanceTest(unittest.TestCase):
+    """CR-CRU-091 AC19 -- all five verbs, AXI-conformant, in all five clients.
+
+    "A verb emitting JSON, or printing prose, or routing its error to stderr
+    fails this AC even when its write is correct"."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.drives = _get_roadmap_drives()
+        cls.helps = _get_roadmap_help_drives()
+        cls.census = _get_census()
+
+    def _pairs(self):
+        for client_key in CLIENT_FILES:
+            for verb in CR091_ROADMAP_VERBS:
+                yield client_key, verb
+
+    def test_all_25_pairs_are_registered_and_enumerable(self):
+        missing = [f"{c}:{v}" for c, v in self._pairs()
+                   if self.drives.get((c, v)) is None]
+        self.assertEqual(
+            missing, [],
+            f"AC13 -- every roadmap verb must be a real argparse subcommand in "
+            f"every client (5 x 5 = 25 pairs), never the 1 client `queue-file` "
+            f"reaches: {missing!r}")
+
+    def test_every_pair_emits_a_toon_envelope_carrying_verb_ok_context_warnings(self):
+        """P1/P7 -- the fleet's own envelope shape, decoded by the SAME
+        `classify_envelope` the rest of the census uses."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            drive = self.drives.get((client_key, verb))
+            axi = (drive or {}).get("axi")
+            if not axi:
+                offenders[f"{client_key}:{verb}"] = "no envelope"
+                continue
+            for field in ("verb", "ok", "context", "warnings"):
+                if field not in axi:
+                    offenders[f"{client_key}:{verb}"] = f"missing {field!r}"
+            if axi.get("verb") != verb:
+                offenders[f"{client_key}:{verb}"] = (
+                    f"envelope names verb={axi.get('verb')!r}")
+        self.assertEqual(
+            offenders, {},
+            f"every roadmap verb must write a TOON-AXI envelope on STDOUT "
+            f"carrying verb/ok/context/warnings (P1/P7): {offenders!r}")
+
+    def test_the_fleet_census_also_reads_every_roadmap_verb_as_enveloped(self):
+        """Belt and braces: the roadmap verbs must also pass the file's
+        PRIMARY census (the one whose per-client bare counts the rust/mvn
+        guards above assert are zero), not only this section's own drives."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            per_verb = self.census.get(client_key, {})
+            if verb not in per_verb:
+                offenders[f"{client_key}:{verb}"] = "not enumerated"
+            elif not per_verb[verb]:
+                offenders[f"{client_key}:{verb}"] = "BARE"
+        self.assertEqual(
+            offenders, {},
+            f"the roadmap verbs must be enveloped in the fleet-wide census "
+            f"too: {offenders!r}")
+
+    def test_every_envelope_carries_the_convergence_verdict(self):
+        """§S7 -- "every verb's envelope carries `converged: true|false`"."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            axi = (self.drives.get((client_key, verb)) or {}).get("axi") or {}
+            if not isinstance(axi.get("converged"), bool):
+                offenders[f"{client_key}:{verb}"] = axi.get("converged")
+        self.assertEqual(
+            offenders, {},
+            f"§S7 -- `converged` rides EVERY roadmap envelope, including a "
+            f"call that never landed: {offenders!r}")
+
+    def test_every_list_bearing_envelope_carries_total_count(self):
+        """P4 -- the pre-computed aggregate. Every roadmap envelope reports
+        how many records it is answering with, so a caller never counts rows
+        to learn the size of the answer."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            axi = (self.drives.get((client_key, verb)) or {}).get("axi") or {}
+            if not isinstance(axi.get("totalCount"), int):
+                offenders[f"{client_key}:{verb}"] = axi.get("totalCount")
+        self.assertEqual(
+            offenders, {},
+            f"P4 -- `totalCount` rides every roadmap envelope: {offenders!r}")
+
+    def test_every_failure_envelope_carries_a_state_derived_help_and_the_role(self):
+        """P9 + AC16 -- a refusal names a concrete next call, and names the
+        role roadmap registration requires. Under an unreachable server every
+        one of the 25 drives is a failure, so this is measured, not asserted
+        into a vacuum."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            axi = (self.drives.get((client_key, verb)) or {}).get("axi") or {}
+            if axi.get("ok") is not False:
+                offenders[f"{client_key}:{verb}"] = f"ok={axi.get('ok')!r}"
+                continue
+            if not axi.get("help"):
+                offenders[f"{client_key}:{verb}"] = "no help[]"
+            elif axi.get("requiredRole") != CR091_ROADMAP_ROLE:
+                offenders[f"{client_key}:{verb}"] = (
+                    f"requiredRole={axi.get('requiredRole')!r}")
+        self.assertEqual(
+            offenders, {},
+            f"P9/AC16 -- a roadmap refusal carries a state-derived help[] and "
+            f"names {CR091_ROADMAP_ROLE} as the required role: {offenders!r}")
+
+    def test_a_usage_refusal_exits_two_and_a_transport_failure_exits_one(self):
+        """P6 -- "exit `2` for a usage failure or `1` for a transport
+        failure". `cr-plan` is the usage case here: §S6 makes the client
+        resolve the undeclared `--release`/`--wave` BEFORE posting."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            drive = self.drives.get((client_key, verb)) or {}
+            result = drive.get("result")
+            expected = CR091_EXPECTED_EXIT[verb]
+            if result is None or result.returncode != expected:
+                offenders[f"{client_key}:{verb}"] = (
+                    f"exit {getattr(result, 'returncode', None)}, "
+                    f"expected {expected}")
+        self.assertEqual(
+            offenders, {},
+            f"P6 -- the roadmap verbs' exit codes: {offenders!r}")
+
+    def test_no_roadmap_verb_routes_its_error_to_stderr_as_bare_prose(self):
+        """P6/P1 -- "a refusal writes its structured error to STDOUT ... never
+        bare prose on stderr". stdout must decode as exactly ONE envelope
+        document, with nothing printed before it."""
+        toon_module = _load_toon_module()
+        offenders = {}
+        for client_key, verb in self._pairs():
+            result = (self.drives.get((client_key, verb)) or {}).get("result")
+            if result is None:
+                offenders[f"{client_key}:{verb}"] = "not driven"
+                continue
+            emits, _axi = classify_envelope(result.stdout, toon_module)
+            if not emits:
+                offenders[f"{client_key}:{verb}"] = f"stdout={result.stdout!r}"
+            elif not result.stdout.lstrip().startswith("axi:"):
+                offenders[f"{client_key}:{verb}"] = (
+                    f"prose precedes the envelope: {result.stdout!r}")
+        self.assertEqual(
+            offenders, {},
+            f"stdout is the machine channel and carries the envelope ALONE: "
+            f"{offenders!r}")
+
+    def test_every_pair_offers_fields_and_full(self):
+        """P2/P3 -- the minimal-schema selector and the truncation defeat are
+        part of the verb surface in every client, never a python-only
+        courtesy."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            options = (self.drives.get((client_key, verb)) or {}).get("options") or set()
+            absent = [flag for flag in ("--fields", "--full")
+                      if flag not in options]
+            if absent:
+                offenders[f"{client_key}:{verb}"] = absent
+        self.assertEqual(
+            offenders, {},
+            f"P2/P3 -- every roadmap verb offers `--fields` and `--full` in "
+            f"every client: {offenders!r}")
+
+    def test_help_exits_zero_and_names_its_verb_for_all_25_pairs(self):
+        """P10 -- consistent `--help`, driven as a real subprocess."""
+        offenders = {}
+        for client_key, verb in self._pairs():
+            result = self.helps.get((client_key, verb))
+            if result is None or result.returncode != 0:
+                offenders[f"{client_key}:{verb}"] = (
+                    f"exit {getattr(result, 'returncode', None)}")
+            elif verb not in result.stdout:
+                offenders[f"{client_key}:{verb}"] = "help omits its own verb"
+        self.assertEqual(
+            offenders, {},
+            f"P10 -- `<client> {'{verb}'} --help` must exit 0 and list the "
+            f"verb for all 25 pairs: {offenders!r}")
+
+    def test_cr_plan_asks_rather_than_guessing_and_posts_nothing(self):
+        """§S6/AC11 through the census's own machinery: with `--release` and
+        `--wave` undeclared the envelope is the ASK -- `needs`, a candidate
+        `releases[]` and pre-filled `help[]` -- in every client alike."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            axi = (self.drives.get((client_key, "cr-plan")) or {}).get("axi") or {}
+            if axi.get("needs") != ["release", "wave"]:
+                offenders[client_key] = f"needs={axi.get('needs')!r}"
+            elif "releases" not in axi:
+                offenders[client_key] = "no releases[] candidate list"
+            elif not any(step.startswith("release-propose --label")
+                         for step in axi.get("help") or []):
+                offenders[client_key] = f"help={axi.get('help')!r}"
+        self.assertEqual(
+            offenders, {},
+            f"§S6 -- the asking is the SHARED module's, so all five clients "
+            f"must ask identically: {offenders!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

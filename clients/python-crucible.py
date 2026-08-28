@@ -1035,6 +1035,44 @@ def cmd_queue(args):
     to the shared implementation."""
     return _axi().cmd_queue(args, _resolve_project_dir(args.project_dir), _ops())
 
+# ── CR-CRU-091 §S3/§S9 — roadmap registration: five thin delegators ────────
+#
+# The verbs land ONCE in `clients/_crucible_axi.py` (the CR-CRU-054 DRY rule);
+# what lives here is the `queue-file` shape and nothing more. §S9: the client
+# half owns argument parsing, the asking, exit codes and the envelope — never
+# a business rule, so every one of these bodies is a single delegating call.
+
+
+def cmd_release_propose(args):
+    """§S3 — record or REVISE a proposed release → POST …/release-proposals.
+    Delegates to the shared implementation."""
+    return _axi().cmd_release_propose(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_cr_plan(args):
+    """§S3/§S6 — declare one CR's release, wave and title → POST …/queue/plan;
+    with either undeclared the client ASKS instead of guessing. Delegates to
+    the shared implementation."""
+    return _axi().cmd_cr_plan(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_wave_sequence(args):
+    """§S4 — author a whole wave's order in ONE call → POST …/queue/sequence.
+    Delegates to the shared implementation."""
+    return _axi().cmd_wave_sequence(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_cr_supersede(args):
+    """§S3 — record that a CR's work moves to a successor → POST
+    …/queue/<cr>/supersede. Delegates to the shared implementation."""
+    return _axi().cmd_cr_supersede(args, _resolve_project_dir(args.project_dir), _ops())
+
+
+def cmd_cr_void(args):
+    """§S3 — record that a CR's work is not happening → POST
+    …/queue/<cr>/void. Delegates to the shared implementation."""
+    return _axi().cmd_cr_void(args, _resolve_project_dir(args.project_dir), _ops())
+
 
 # ── CR-CRU-013 §S5 — fleet gate / milestone verbs ───────────────────────────
 
@@ -1401,6 +1439,16 @@ def main():
                              "cr-merged milestone ids as a TOON-AXI table. Read-only.")
     _add_project_dir_arg(qv)
     qv.set_defaults(func=cmd_queue)
+
+    # ── CR-CRU-091 §S3 — roadmap registration (ORCHESTRATOR only). The five
+    # subparsers are built by the SHARED registrar so the five clients cannot
+    # drift into five different flag surfaces for one verb.
+    _axi().add_roadmap_verbs(
+        sub,
+        {"release-propose": cmd_release_propose, "cr-plan": cmd_cr_plan,
+          "wave-sequence": cmd_wave_sequence, "cr-supersede": cmd_cr_supersede,
+          "cr-void": cmd_cr_void},
+        add_args=(_add_workflow_agent_arg, _add_project_dir_arg))
 
     gr = sub.add_parser("gate-run",
                         help="axi PROXY: run `no-mistakes axi run`, post throttled interim "
