@@ -63,6 +63,7 @@ Invocation:
     python3 -m pytest tests/client/test_cr092_next_decision_resolver.py -q
 """
 
+import ast
 import contextlib
 import importlib.util
 import io
@@ -1275,12 +1276,25 @@ class HarnessIsolationTest(unittest.TestCase):
 
 class ResolverLandsOnceTest(unittest.TestCase):
     """CR-CRU-054's DRY rule, applied to this CR's own surface: the resolver
-    lives in the shared module and NO client re-implements it. C2 wires five
-    thin subparsers that delegate; a `def cmd_next` in a client would be the
-    five-copy drift the lift exists to prevent."""
+    lives in the shared module and NO client re-implements it.
+
+    C2 correction (2026-08-28): C1 wrote this class expecting `def cmd_next`
+    to be absent from every client too. That was wrong about the fleet's
+    established shape, not about the rule. CR-CRU-091 C3 (`8908cc0`) settled
+    the registration pattern: the ENTRY POINT is a per-client `def cmd_<verb>`
+    that supplies that client's own `_resolve_project_dir`/`_project_dir` and
+    `_ops()` and does nothing else, because a shared registrar's
+    `set_defaults(func=...)` needs a client-bound callable. So `cmd_next`
+    moves out of the forbidden list and into a STRONGER assertion below: it
+    must exist in all five clients AND be a single delegating call. The three
+    PURE resolver symbols stay forbidden outright — those a client has no
+    reason to spell at all."""
 
     SHARED_SYMBOLS = ("canonical_track", "queue_tracks", "resolve_next",
                       "cmd_next")
+
+    # The pure resolver: a client that spells any of these has copied logic.
+    FORBIDDEN_IN_CLIENTS = ("canonical_track", "queue_tracks", "resolve_next")
 
     def test_the_shared_module_owns_every_resolver_symbol(self):
         for name in self.SHARED_SYMBOLS:
@@ -1290,15 +1304,43 @@ class ResolverLandsOnceTest(unittest.TestCase):
                     f"`{name}` must live in clients/_crucible_axi.py")
 
     def test_no_client_defines_its_own_resolver(self):
-        pattern = re.compile(
-            r"^def (canonical_track|queue_tracks|resolve_next|cmd_next)\b",
-            re.M)
+        """The pure resolver is forbidden in a client, and the ONE entry point
+        a client does own must be THIN: exactly one statement, delegating to
+        `_axi().cmd_next(...)`. That is a tighter guard than C1's blanket ban,
+        which a client could satisfy while carrying a second copy of the
+        decision logic under any other name."""
+        forbidden = re.compile(
+            r"^def (" + "|".join(self.FORBIDDEN_IN_CLIENTS) + r")\b", re.M)
         offenders = {}
         for path in sorted(CLIENTS_DIR.glob("*-crucible.py")):
-            found = pattern.findall(path.read_text(encoding="utf-8"))
-            if found:
-                offenders[path.name] = found
-        self.assertEqual(offenders, {}, f"resolver duplicated: {offenders!r}")
+            source = path.read_text(encoding="utf-8")
+            copied = forbidden.findall(source)
+            if copied:
+                offenders[path.name] = f"resolver copied: {copied!r}"
+                continue
+            body = [node for node in ast.parse(source).body
+                    if isinstance(node, ast.FunctionDef)
+                    and node.name == "cmd_next"]
+            if len(body) != 1:
+                offenders[path.name] = f"{len(body)} `cmd_next` definitions"
+                continue
+            statements = [s for s in body[0].body
+                          if not (isinstance(s, ast.Expr)
+                                  and isinstance(s.value, ast.Constant))]
+            delegates = (
+                len(statements) == 1
+                and isinstance(statements[0], ast.Return)
+                and isinstance(statements[0].value, ast.Call)
+                and isinstance(statements[0].value.func, ast.Attribute)
+                and statements[0].value.func.attr == "cmd_next")
+            if not delegates:
+                offenders[path.name] = (
+                    f"`cmd_next` is not a single delegating call: "
+                    f"{ast.dump(body[0])[:160]}")
+        self.assertEqual(
+            offenders, {},
+            f"the decision resolver lands ONCE and each client contributes a "
+            f"thin delegator only: {offenders!r}")
 
 
 if __name__ == "__main__":

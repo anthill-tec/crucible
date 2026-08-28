@@ -1608,6 +1608,16 @@ def cmd_cr_void(args):
     return _axi().cmd_cr_void(args, _resolve_project_dir(args.project_dir), _ops())
 
 
+# ── CR-CRU-092 §S6/§S9 — `next`: one thin delegator ────────────────────────
+
+
+def cmd_next(args):
+    """§S2 — ask the DECLARED roadmap what is actionable now → GET …/queue,
+    answering NEXT | HOLD | DRAINED. Read-only (§S4): no --agent, no write.
+    Delegates to the shared implementation."""
+    return _axi().cmd_next(args, _resolve_project_dir(args.project_dir), _ops())
+
+
 # ── CR-CRU-013 §S5 / §S8 — fleet gate / milestone verbs ─────────────────────
 
 
@@ -1978,6 +1988,11 @@ def main():
           "wave-sequence": cmd_wave_sequence, "cr-supersede": cmd_cr_supersede,
           "cr-void": cmd_cr_void},
         add_args=(_add_workflow_agent_arg, _add_project_args))
+
+    # ── CR-CRU-092 §S6 — the roadmap READ verb. Its subparser is built by the
+    # SHARED registrar for the same reason; only this client's project-dir
+    # convention is its own. No --agent: `next` is read-only (§S4).
+    _axi().add_next_verb(sub, cmd_next, add_args=(_add_project_args,))
 
     gr = sub.add_parser("gate-run", help="axi PROXY: run `no-mistakes axi run`, post throttled interim + final gates.")
     gr.add_argument("--intent", required=True, help="The intent/goal passed down to `axi run`.")

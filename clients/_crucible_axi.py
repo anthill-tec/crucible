@@ -1562,6 +1562,20 @@ def _next_legacy_line(ok, fields):
     return f"next: decision=DRAINED reason={fields['reason']}"
 
 
+def next_projection(fields, args):
+    """§S6 P2 (C2) — `--fields` NARROWS the one decision, through the SAME
+    `select_row_fields` a roadmap row is narrowed by, so one flag means one
+    thing across the fleet.
+
+    The default (no flag) is the WHOLE decision: there is no truncation to
+    defeat on a single-record answer, which is exactly why P3's `--full` is
+    absent by shape rather than added as a no-op. The transport-failure
+    envelope above is deliberately NOT projected — it carries no record to
+    narrow, only the structured warning and the help that names the fix,
+    matching `roadmap_failure_fields`, which `--fields` also leaves alone."""
+    return select_row_fields([fields], getattr(args, "fields", None))[0]
+
+
 def cmd_next(args, project_dir, ops):
     """§S2/§S6 — the `next` READ verb (no `--agent`, §S4): one
     `GET …/queue`, one decision, one envelope.
@@ -1587,7 +1601,10 @@ def cmd_next(args, project_dir, ops):
 
     ok, code, fields, warnings = resolve_next(
         resp.get("entries"), track=getattr(args, "track", None))
-    ops.emit("next", ok, fields, ops.context(project_dir), warnings,
+    # The legacy line reads the UNprojected decision: the human channel is not
+    # narrowed by a machine-channel projection flag.
+    ops.emit("next", ok, next_projection(fields, args),
+             ops.context(project_dir), warnings,
              _next_legacy_line(ok, fields))
     return code
 
@@ -2939,6 +2956,50 @@ def add_roadmap_verbs(sub, funcs, *, parents=(), add_args=()):
     add_roadmap_projection_args(cv)
     _common(cv)
     cv.set_defaults(func=funcs["cr-void"])
+
+
+def add_next_verb(sub, func, *, parents=(), add_args=()):
+    """CR-CRU-092 §S6 — register the ONE `next` subparser on `sub`.
+
+    The subparser BODY lives here, once, so the flag surface cannot fork into
+    five for one verb — the same rule (and the same `parents`/`add_args` seam)
+    `add_roadmap_verbs` above follows. What stays per-client is exactly the
+    delegator plus that client's own project-dir convention, which is why the
+    five call sites read alike.
+
+    Three deliberate ABSENCES, each of which a census asserts rather than
+    assumes:
+
+      * no `--full` (§S6 P3, N/A BY SHAPE) — the answer is ONE decision, never
+        a truncated list, so a `--full` here could reveal nothing. "A faked
+        `--full` on a one-record answer is as wrong as a missing one."
+      * no `--agent` (§S4/AC10) — `next` is READ-ONLY: it performs no write,
+        claims nothing, and must never route through
+        `emit_agent_identity_hard_stop`.
+      * no `--user-approved` — there is no mutation to approve.
+
+    `func` is a single callable rather than the verb-name→delegator dict
+    `add_roadmap_verbs` takes: one verb needs one delegator, and a one-entry
+    dict would be ceremony that hides that.
+    """
+    nx = sub.add_parser(
+        "next", parents=list(parents),
+        help="Ask the DECLARED roadmap what is actionable now → GET …/queue "
+             "(§S2). Answers NEXT | HOLD | DRAINED, all exit 0. Read-only: "
+             "asking claims nothing.")
+    nx.add_argument("--track",
+                    help="The lane to resolve — 2, track-2 or \"Track 2\" "
+                         "(canonicalised client-side, §S3, because this verb "
+                         "writes nothing and so has no server round-trip to "
+                         "normalise it). Required ONLY when the project "
+                         "declares more than one track.")
+    nx.add_argument("--fields",
+                    help="Comma-separated keys to NARROW the decision to "
+                         "(§S6 P2). There is no --full: the answer is one "
+                         "decision, never a truncated list (P3).")
+    for adder in add_args:
+        adder(nx)
+    nx.set_defaults(func=func)
 
 
 def remove_agent_silent(project_dir, agent_id, ops):
