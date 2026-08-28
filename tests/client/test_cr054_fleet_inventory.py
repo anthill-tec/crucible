@@ -780,6 +780,160 @@ class Cr091RoadmapVerbInventoryTest(unittest.TestCase):
             f"the shared module must define every roadmap verb the clients "
             f"delegate to (SS3/SS9); missing: {missing!r}")
 
+# ---------------------------------------------------------------------------
+# CR-CRU-092 SS6 (AC12/AC15) -- `next` joins the fleet inventory.
+#
+# Same discipline as the CR-CRU-091 section above, for ONE verb: `next` is
+# frozen as its OWN named set, asserted DISJOINT from both THE_42 and
+# CR-CRU-091's set, and checked by the SAME `_defined_in_every_client` /
+# duplicate-definition / hand-rolled-subparser machinery. CR-CRU-075 is still
+# the cycle that collapses all three into one re-measured count (42 + 5 + 1 +
+# `queue-file`'s parity), so nothing here touches THE_42's arithmetic.
+#
+# The frozen-set pattern held for a single verb without modification: the sets
+# are containers, not counters, so a one-element set costs the same two
+# assertions (size, disjointness) a five-element one does.
+# ---------------------------------------------------------------------------
+
+# The one shared-implementation delegator, in every client.
+CR092_NEXT_VERB_FUNCTIONS = frozenset({"cmd_next"})
+
+# The CLI verb name that function is registered under (AC12 counts 5 clients
+# x 1 verb = the 5 pairs AC15 conforms).
+CR092_NEXT_VERBS = ("next",)
+
+
+def _next_registrar_delegator(path):
+    """The delegator a file hands the SHARED `add_next_verb(...)` registrar,
+    read from the call's second positional argument. `next` is ONE verb, so
+    the registrar takes a plain callable where `add_roadmap_verbs` takes a
+    verb-name -> delegator dict -- the registration a client owns is still
+    exactly this one name, read from the AST rather than by grep."""
+    for node in ast.walk(ast.parse(path.read_text())):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "add_next_verb"):
+            continue
+        if len(node.args) >= 2 and isinstance(node.args[1], ast.Name):
+            return node.args[1].id
+    return None
+
+
+_ALL_CLIENT_NEXT_REGISTRATIONS = {
+    client: _next_registrar_delegator(path)
+    for client, path in CLIENT_FILES.items()
+}
+
+
+class Cr092NextVerbInventoryTest(unittest.TestCase):
+    """AC12 -- "the verb exists in all five clients ... and each is registered
+    exactly once"; SS6 -- "`queue-file` is in 1 of 5; this verb must not repeat
+    that gap"."""
+
+    def test_the_next_set_holds_exactly_the_one_verb(self):
+        self.assertEqual(
+            len(CR092_NEXT_VERB_FUNCTIONS), 1,
+            f"CR-CRU-092 introduces exactly one verb (SS2's three decisions "
+            f"are one verb's answers, not three verbs); got "
+            f"{len(CR092_NEXT_VERB_FUNCTIONS)}")
+        self.assertEqual(len(CR092_NEXT_VERBS), 1)
+
+    def test_the_next_set_is_disjoint_from_the_earlier_frozen_sets(self):
+        """The renumbering happens ONCE, in CR-CRU-075. Until then each CR's
+        additions are their own set and no fixture may quietly absorb
+        another's."""
+        for label, other in (("CR-CRU-054's THE_42", THE_42),
+                             ("CR-CRU-091's roadmap set",
+                              CR091_ROADMAP_VERB_FUNCTIONS)):
+            with self.subTest(other=label):
+                overlap = CR092_NEXT_VERB_FUNCTIONS & other
+                self.assertEqual(
+                    overlap, frozenset(),
+                    f"the CR-CRU-092 set must not touch {label}; "
+                    f"overlap: {overlap!r}")
+        verb_overlap = set(CR092_NEXT_VERBS) & set(CR091_ROADMAP_VERBS)
+        self.assertEqual(
+            verb_overlap, set(),
+            f"`next` is a new CLI verb name, not a rename of a roadmap one; "
+            f"overlap: {verb_overlap!r}")
+
+    def test_cmd_next_is_defined_in_all_five_clients(self):
+        missing = {
+            name: [c for c in CLIENT_FILES
+                   if name not in _ALL_CLIENT_FUNCTION_NAMES[c]]
+            for name in CR092_NEXT_VERB_FUNCTIONS
+        }
+        missing = {k: v for k, v in missing.items() if v}
+        self.assertEqual(
+            missing, {},
+            f"SS6's 'gap not to repeat' -- `queue-file` reaches python only, "
+            f"so `next` lands at parity ON ARRIVAL; missing from: {missing!r}")
+
+    def test_no_client_defines_cmd_next_twice(self):
+        offenders = []
+        for client, counts in _ALL_CLIENT_FUNCTION_NAMES.items():
+            for name in CR092_NEXT_VERB_FUNCTIONS:
+                if counts.get(name, 0) > 1:
+                    offenders.append(f"{client}:{name} ({counts[name]}x)")
+        self.assertEqual(
+            offenders, [],
+            f"a duplicate top-level def would silently make the SECOND "
+            f"definition win at import time: {offenders!r}")
+
+    def test_the_shared_registrar_registers_the_next_verb_name(self):
+        """The subparser body lives ONCE, so the verb NAME is asserted where
+        it is actually spelled -- the shared registrar."""
+        registered = _add_parser_verb_names(AXI_MODULE_PATH)
+        missing = [v for v in CR092_NEXT_VERBS if v not in registered]
+        self.assertEqual(
+            missing, [],
+            f"`_crucible_axi.add_next_verb` must register the verb name; "
+            f"missing: {missing!r}")
+
+    def test_every_client_wires_next_to_its_own_delegator(self):
+        """The 5 (verb x client) pairs AC12 counts, at the registration level.
+        The LIVE argparse enumeration and envelope conformance for the same 5
+        pairs lives in the sibling `test_client_fleet_envelope_census.py`
+        (AC15 names both harnesses)."""
+        offenders = {}
+        for client, delegator in _ALL_CLIENT_NEXT_REGISTRATIONS.items():
+            if delegator is None:
+                offenders[client] = "unwired: no add_next_verb(...) call"
+            elif delegator not in CR092_NEXT_VERB_FUNCTIONS:
+                offenders[client] = f"wired to a non-delegator: {delegator!r}"
+        self.assertEqual(
+            offenders, {},
+            f"each client must wire `next` to its own delegator (AC12 counts "
+            f"5 clients x 1 verb): {offenders!r}")
+
+    def test_no_client_hand_rolls_the_next_subparser(self):
+        """SS6/CR-CRU-054 -- a client spelling its own `add_parser("next")`
+        has forked the flag surface the shared registrar exists to keep
+        identical, even if the delegator behind it is still thin."""
+        offenders = {}
+        for client, registered in _ALL_CLIENT_VERB_NAMES.items():
+            forked = [v for v in CR092_NEXT_VERBS if v in registered]
+            if forked:
+                offenders[client] = forked
+        self.assertEqual(
+            offenders, {},
+            f"the `next` subparser is built ONCE, by "
+            f"`_crucible_axi.add_next_verb`: {offenders!r}")
+
+    def test_the_shared_module_holds_the_implementation_the_clients_delegate_to(self):
+        """SS4/SS6 -- the decision resolver landed ONCE in `_crucible_axi.py`
+        (CR-CRU-092 C1); a client holding its own copy is the CR-CRU-054
+        defect this CR must not reintroduce."""
+        shared = _defined_function_names(AXI_MODULE_PATH)
+        missing = sorted(n for n in CR092_NEXT_VERB_FUNCTIONS
+                         if n not in shared)
+        self.assertEqual(
+            missing, [],
+            f"the shared module must define the verb the clients delegate "
+            f"to (SS4/SS6); missing: {missing!r}")
+
+
 
 if __name__ == "__main__":
     unittest.main()

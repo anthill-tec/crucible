@@ -29,7 +29,7 @@ gain it at once.
 ### §S1 The verb does not exist today; the vocabulary does
 
 **Surfaces (verified 2026-08-28):** every subcommand of the fleet is registered per-client with
-`sub.add_parser(...)`. `clients/python-crucible.py:1190-1546` is the full list — `register`,
+`sub.add_parser(...)`. `clients/python-crucible.py:1190-1570` is the full list — `register`,
 `unregister`, `test`, `regression`, `auto-ingest`, `check`, `pre-merge-gate`, `plan-file`,
 `plan-backfill`, `cycle-activate`, `cycle-done`, `cr-close`, `cycle-add`, `checkpoint`, `stop`,
 `abort`, `status`/`plans`, `queue`, `gate-run`, `gate-report`, `milestone`, `queue-file`. No
@@ -96,7 +96,13 @@ Resolution, over the lane's entries in declared `(release, wave, seq)` order:
 - `in-flight` — the lane already holds an `IN_PROGRESS` entry. Carries that CR id. Evaluated
   FIRST: an occupied lane holds everything behind it.
 - `dependency` — one or more `dependsOn` CRs are unmerged and still alive. Carries each blocking
-  CR id with its live status.
+  CR id with its live status. **Reachability, found while building C1's fixtures:** a blocker
+  sitting in the SAME lane at a lower `seq` cannot produce this trigger, because that blocker is
+  itself the lowest-`seq` actionable entry and the answer there is `NEXT` **on the blocker**. So an
+  ordinary `dependency` HOLD is only expressible when the blocker lies OUTSIDE the lane — another
+  track, or a wave the lane does not cover. A fixture that puts the blocker behind its dependant in
+  one lane is testing nothing, and a resolver that returns `dependency` for it is scanning past the
+  front entry, which §S4 forbids.
 - `dead-dependency` — a `dependsOn` CR that is `VOID` or `SUPERSEDED`. Carries the dep id, its
   `lifecycle.state`, and its `by` when superseded. **Distinct from `dependency` because it never
   clears by waiting**: a dependency on a dead CR is a roadmap defect the orchestrator must fix by
@@ -185,7 +191,7 @@ human line on stderr), dispatched through `run_verb` (`:955-973`). No hand-rolle
 (`clients/_crucible_axi.py:616-629`); each decision derives its own:
 
 - `NEXT` → the concrete start call, e.g. `plan-file --cr <cr> --title "…" --cycles "…" --wave <wave>`
-  (flags verified at `clients/python-crucible.py:1339-1352`).
+  (flags verified at `clients/python-crucible.py:1349-1362`).
 - `HOLD` → the move that clears the named trigger (the blocking CR's `cr-merged`/`cr-close`, or
   `cr-plan` for an unknown dep), then `next` again.
 - `DRAINED` → `wave-sequence` for `awaiting-assignment`, `release-propose` → `cr-plan` →
@@ -198,7 +204,7 @@ different facts.
 
 Registered in ALL FIVE clients, like `queue` (`clients/python-crucible.py:1437-1440`, and one
 registration in each of bun/rust/mvn/arduino — verified). `queue-file` is in 1 of 5
-(`clients/python-crucible.py:1533-1540`); this verb must not repeat that gap. CR-CRU-075 owns
+(`clients/python-crucible.py:1548-1556`); this verb must not repeat that gap. CR-CRU-075 owns
 `queue-file`'s parity and the census-enforcement mechanism; `next` lands at parity on arrival and
 is subject to that census, not an exception to it.
 
@@ -229,7 +235,7 @@ A faked `--full` on a one-record answer is as wrong as a missing one.
 - **AC2** — **`NEXT` carries a start template.** `help[0]` contains `plan-file --cr <that cr>` with
   the entry's own `wave`. An empty `help[]`, or the `HELP_STEPS` canned string, fails.
 - **AC3** — **`HOLD` without a named trigger FAILS.** Every `decision="HOLD"` envelope carries
-  `trigger` with a `kind` in `{in-flight, dependency, unknown-dependency}` AND at least one named
+  `trigger` with a `kind` in `{in-flight, dependency, dead-dependency, unknown-dependency}` AND at least one named
   CR id. A `HOLD` with `trigger` absent, null, empty, or containing no CR id fails this AC.
 - **AC4** — **the three trigger kinds are distinguished.** Three fixtures: (a) the lane holds an
   `IN_PROGRESS` entry → `kind="in-flight"` naming it; (b) the target's `dependsOn` names a
@@ -312,6 +318,18 @@ A faked `--full` on a one-record answer is as wrong as a missing one.
   server to store equals the value the shared Python helper produces — a divergence between
   `normalizeTrack` (TypeScript, write path) and the client helper (read path) fails this AC.
 
+  **Toolchain dependency, decided 2026-08-28.** The cross-implementation half needs a real server,
+  so it boots a scratch one (free port, `mkdtemp` DB) and drives the actual write path. Where `bun`
+  is absent the class raises `SkipTest` with a message stating that AC18's cross-implementation
+  half is NOT proven, rather than passing silently. That is the right trade: CR-CRU-066 §S2 makes
+  Bun a GUARANTEED install dependency — the `server` stage detects it, bootstraps it when absent
+  and fails the install with a named remedy otherwise — so its absence means a broken install, not
+  a legitimate lean environment, and a loud skip names that. A hard failure would punish a
+  deliberately minimal checkout for a condition the installer already guarantees. Every other test
+  in the file is pure and needs no toolchain. A source-text guard on `store.ts` was the first
+  attempt and was DELETED when this landed: it would break on a harmless refactor and pass while
+  the surrounding logic changed.
+
 ## Estimated size
 
 M — one read verb in the shared parser plus five thin registrations; the substance is the decision
@@ -325,7 +343,7 @@ declared and a lane with one track are the same shape on the wire. AC8 pins both
 answer so the ambiguity cannot become a silent `needs=[track]` on a single-track project.
 
 `unknown-dependency` holds the lane. A roadmap authored forwards — legal and expected during
-design (`src/v2.ts:1755-1759`) — therefore reads back as `HOLD` until the dep is authored. That is
+design (`src/v2.ts:1805`, `src/v2.ts:2017`) — therefore reads back as `HOLD` until the dep is authored. That is
 the honest answer, but it means a forward-referencing roadmap looks stalled; the trigger names the
 missing id and `help[]` names `cr-plan`, which is the whole remedy.
 

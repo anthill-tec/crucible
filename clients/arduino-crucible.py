@@ -873,6 +873,28 @@ def cmd_cr_void(args):
     return _axi().cmd_cr_void(args, _project_dir(args), _ops())
 
 
+# ── CR-CRU-092 §S6/§S9 — `next`: one thin delegator ────────────────────────
+
+
+def cmd_next(args):
+    """§S2 — ask the DECLARED roadmap what is actionable now → GET …/queue,
+    answering NEXT | HOLD | DRAINED. Read-only (§S4): no --agent, no write.
+    Delegates to the shared implementation."""
+    return _axi().cmd_next(args, _project_dir(args), _ops())
+
+
+def _add_project_dir_arg(p):
+    """§S4/AC10 — the project-dir flag ALONE, named exactly as the other four
+    clients name theirs. This client's `common` parent bundles `--agent` with
+    `--project-dir`, and `next` must declare no identity flag at all, so the
+    read-only verbs get the one flag they do need without the one they must
+    not have."""
+    p.add_argument("--project-dir",
+                   help="Override project root (default: "
+                        "$ARDUINO_CRUCIBLE_PROJECT_DIR, else CWD). The .env "
+                        "there must hold CRUCIBLE_PROJECT_KEY.")
+
+
 # ── CR-CRU-013 §S5 / §S8 — fleet gate / milestone verbs ─────────────────────
 
 
@@ -1128,6 +1150,12 @@ def main():
           "wave-sequence": cmd_wave_sequence, "cr-supersede": cmd_cr_supersede,
           "cr-void": cmd_cr_void},
         parents=[common])
+
+    # ── CR-CRU-092 §S6 — the roadmap READ verb. Its subparser is built by the
+    # SHARED registrar for the same reason; only `--project-dir` is this
+    # client's own. No --agent: `next` is read-only (§S4), so `common` (which
+    # bundles --agent) is deliberately NOT the parent here.
+    _axi().add_next_verb(sub, cmd_next, add_args=(_add_project_dir_arg,))
 
     gr = sub.add_parser("gate-run", parents=[common],
                         help="axi PROXY: run `no-mistakes axi run`, post throttled interim + final gates.")
