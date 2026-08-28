@@ -149,6 +149,24 @@ registration in each of bun/rust/mvn/arduino — verified). `queue-file` is in 1
 `queue-file`'s parity and the census-enforcement mechanism; `next` lands at parity on arrival and
 is subject to that census, not an exception to it.
 
+**Full AXI conformance (P1–P10), stated per principle.** The fleet standard is a standing user
+requirement (2026-07-21), so `next` is measured against the whole of it — and where a principle
+does not apply to a single-decision verb, that is **declared here** rather than silently skipped.
+A faked `--full` on a one-record answer is as wrong as a missing one.
+
+| P | How `next` satisfies it |
+|---|---|
+| P1 | TOON envelope on stdout via `emit_axi`; human line to stderr only. |
+| P2 | `--fields` narrows the envelope, the fleet's existing selection. |
+| P3 | **N/A by shape** — the answer is ONE decision, never a truncated list. `--full` is not added, because there is nothing it could reveal. |
+| P4 | `totalCount` on `tracks[]` in the multi-track refusal (§S3) — the verb's only list. |
+| P5 | `DRAINED` is the definitive empty state: a decision, never a blank (§S5). |
+| P6 | Structured error on **stdout**, exit `0`/`1`/`2` per AC13; read-only, so idempotency is free (§S4). |
+| P7 | The `context` block `emit_axi` always writes, carrying the resolved lane. |
+| P8 | Bare `next` in a single-track project answers with live data, no flags required (§S3). |
+| P9 | `help[]` is state-derived per decision, never canned (above). |
+| P10 | `--help` exits 0 and lists the verb in all five clients (AC12). |
+
 ## Acceptance criteria
 
 - **AC1** — **`NEXT` names the CR and its `seq`.** For a lane whose lowest-`seq` `PENDING` entry
@@ -209,6 +227,16 @@ is subject to that census, not an exception to it.
   envelope echoes `seq`/`release`/`wave`/`track` verbatim for the CR it names, OMITS `release` and
   `track` for an entry that declares neither, and never substitutes an index, the wave, or the CR
   id for `seq`.
+- **AC15** — **AXI conformance is asserted, per principle (§S6).** Extends the two EXISTING
+  harnesses rather than adding a parallel checker: `tests/client/test_client_fleet_envelope_census.py`
+  for envelope conformance, and `tests/client/test_cr054_fleet_inventory.py` for `next`'s presence
+  in the frozen fleet set (whose count CR-CRU-075 moves to 49).
+  For each of the five clients: `--fields` narrows the envelope (P2); the multi-track refusal
+  carries `totalCount` on `tracks[]` matching its length (P4); the envelope always carries a
+  `context` block (P7); a bare `next` in a single-track project answers with live data and no flags
+  (P8); `--help` exits 0 (P10); and **no `--full` flag exists** — P3 is declared N/A because the
+  answer is one decision, so a `--full` that reveals nothing is a conformance failure, not a
+  courtesy. Every error path writes its structured envelope to stdout, never prose to stderr (P6).
 
 ## Estimated size
 

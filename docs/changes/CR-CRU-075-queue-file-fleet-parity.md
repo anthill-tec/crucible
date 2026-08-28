@@ -2,8 +2,8 @@
 
 - **Type**: patch
 - **Wave**: 5 (0.2.0)
-- **Depends on**: 014, 091
-- **Status**: PENDING (0.2.0) — moved into 0.2.0 by user direction 2026-08-28 — re-sequenced 2026-08-28 behind CR-091: parity is done once, on the final verb surface
+- **Depends on**: 014, 091, 092
+- **Status**: PENDING (0.2.0) — moved into 0.2.0 by user direction 2026-08-28 — re-sequenced 2026-08-28 behind CR-091 **and CR-092**: parity and the census are done once, on the final verb surface, and 092's `next` is part of that surface
 
 ## Problem
 
@@ -52,11 +52,33 @@ the shared parser or to the endpoint. Every client's `queue-file` returns a
 TOON-AXI envelope on success AND on every failure path (malformed row,
 unreadable file), exactly as python-crucible.py already does.
 
-### §S2 Census enforcement
-Extend the fleet inventory so verb parity is enforced going forward, not frozen
-at the CR-054 snapshot: add `cmd_queue_file` to the fleet function set
-(`THE_42` → the new count) in `tests/client/test_cr054_fleet_inventory.py`, and
-to any verb-surface/census assertion that enumerates the shared workflow verbs.
+### §S2 Census enforcement — on the FINAL verb surface, all six new verbs
+
+Two harnesses enforce two different things, and this CR is where both stop being
+frozen at the CR-054 snapshot:
+
+| Harness | Enforces |
+|---|---|
+| `tests/client/test_cr054_fleet_inventory.py` | verb/function **presence** — the frozen `THE_42` set, hard-asserted to contain exactly 42 names (`:128-130`) |
+| `tests/client/test_client_fleet_envelope_census.py` | **envelope** conformance — CR-058's detector, that every verb in every client emits a real TOON-AXI envelope |
+
+This release adds **six** fleet verbs, not one, so the frozen count moves once,
+here, with all six named:
+
+- `queue_file` — this CR's §S1 parity fix.
+- `release_propose`, `cr_plan`, `wave_sequence`, `cr_supersede`, `cr_void` — CR-CRU-091 §S3.
+- `next` — CR-CRU-092.
+
+`THE_42` becomes **`THE_49`** (42 + 6 + `queue_file`), renamed rather than
+silently re-pointed so the name never lies about its own count again, with a
+comment naming each new member and its CR. The classification partition
+(`:123-163`) is extended so every new name lands in a category — an unclassified
+name fails the partition assertion, which is the guardrail working.
+
+**Why this CR waits for both.** A census frozen before `next` exists would either
+break the moment CR-092 lands or force 092 to edit the same frozen count — two
+CRs writing one number is a merge conflict and defeats "enforced going forward".
+Sequencing behind 091 and 092 is what makes the count correct once.
 A future fleet verb missing from a client must fail this census.
 
 ### §S3 Intimate Model B
@@ -76,10 +98,16 @@ source through any client's `queue-file` exits non-zero with a TOON-AXI
 `{ok:false, error}` envelope and a `help[]`, never a raw argparse/stacktrace
 crash (axi.md principle 6).
 
-**AC3 — the census enforces parity.** `test_cr054_fleet_inventory` (and the
-verb-surface census) include `cmd_queue_file`; removing `queue-file` from any one
-client fails the census. The frozen count is updated with a comment explaining
-the new member.
+**AC3 — the census enforces parity on all six new verbs.** `THE_49` in
+`tests/client/test_cr054_fleet_inventory.py` contains `cmd_queue_file` plus
+CR-091's five (`release_propose`, `cr_plan`, `wave_sequence`, `cr_supersede`,
+`cr_void`) and CR-092's `next`; the count assertion reads 49 and the
+classification partition still covers every name. Removing **any** of the six
+from **any** one client fails the inventory census, and a verb whose envelope is
+absent or malformed fails `tests/client/test_client_fleet_envelope_census.py` —
+presence and conformance are separately asserted, because a wired subparser that
+emits prose is still a conformance failure. The count carries a comment naming
+each new member and its CR.
 
 **AC4 — behaviour unchanged.** The shared `cmd_queue_file` / `parse_queue_table`
 and the `/queue` endpoint are untouched; CR-014's `queue-file` tests still pass

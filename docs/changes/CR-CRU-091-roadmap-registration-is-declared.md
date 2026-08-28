@@ -241,6 +241,82 @@ produce — `manifest.run_manifest_stage` (`crucible_axi/manifest.py:105-118`), 
 
 A converged call writes nothing and emits no warning it did not earn.
 
+### §S8 The wire — the five routes, named
+
+This table is the contract between the two halves, and the only thing either half may assume about
+the other. Paths follow the established project-scoped dispatch (`src/v2.ts:2268-2301`:
+`/api/v2/projects/` sliced into `segments`, matched on `segments.length` + `segments[1]` + method),
+so all five land in the same `startsWith` block as `queue`, `releases`, `archive` and `stop`.
+
+| Verb | Method + path | Request body | Response |
+|---|---|---|---|
+| `release-propose` | `POST …/projects/<key>/release-proposals` | `{label, targetAt?}` | `{ok, converged, proposal:{label,targetAt?}}` |
+| `cr-plan` | `POST …/projects/<key>/queue/plan` | `{cr, release, wave, title}` | `{ok, converged, entry, warnings[]}` |
+| `wave-sequence` | `POST …/projects/<key>/queue/sequence` | `{release, wave, crs[], track?}` | `{ok, converged, entries[], warnings[]}` |
+| `cr-supersede` | `POST …/projects/<key>/queue/<cr>/supersede` | `{by}` | `{ok, converged, entry, resolvedDependants[]}` |
+| `cr-void` | `POST …/projects/<key>/queue/<cr>/void` | `{reason}` | `{ok, converged, entry, brokenDependants[]}` |
+
+- **`GET …/projects/<key>/release-proposals`** is the read §S6's `releases[]` candidate list is
+  built from — the client cannot ask without it, and `listReleases` must not be repurposed (§S1).
+- Every body also carries the caller identity fields `requireRegisteredCaller` already reads
+  (`src/v2.ts:221-236`); the role gate is applied on top (§S3).
+- Failure envelopes reuse the existing `fail(status, message, {help})` + `hints` convention — 409
+  for a cycle (§S5) and for an unregistered/wrong-role caller, 404 naming the unproposed release
+  (AC6), 400 naming the offending field and index as `handleQueuePost` does (`src/v2.ts:1756-1758`).
+- **No PATCH, no PUT, no DELETE.** Re-planning and re-sequencing are re-POSTs (§S4), and neither
+  lifecycle verb deletes a row (§S3).
+
+### §S9 Division of labour — which half owns which file
+
+Two halves, one wire (§S8). Neither half may change that table unilaterally.
+
+**Client half — the Python fleet implements the new AXI verb surface.** It owns argument parsing,
+the asking behaviour (§S6), `track-<n>` normalisation (§S2), exit codes, and the envelope on stdout.
+It holds **no business rule**: it never decides an order, never infers a release, never validates a
+dependency — it POSTs and renders what came back.
+
+- `clients/_crucible_axi.py` — the five verbs land **once** here (CR-CRU-054 DRY rule).
+- `clients/{bun,python,rust,mvn,arduino}-crucible.py` — subparser + delegation each, the shape
+  `queue-file` uses (`clients/python-crucible.py:1485-1492` → `:1100-1104`). AC13 counts 5.
+
+**Server half — the Crucible server owns the REST routes AND the UI.** Every rule lives here:
+validation severities (§S5), convergence (§S7), the role gate (§S3), ordering (§S1), carry-forward
+(§S2).
+
+- `src/store.ts` — three columns + migration step, `listReleaseProposals`, proposal consumption,
+  `replaceQueue` carry-forward, `listQueue` publishing `seq`/`release`/`track`/`lifecycle`.
+- `src/types.ts` — `QueueEntry`, `QueueEntryInput`, `RunEvent.targetAt`. `QueueStatus` is
+  **unchanged** (§S2's second-axis rule).
+- `src/v2.ts` — the five routes + the role-gate sibling.
+- `public/app-logic.mjs` — `formatReleaseDate` (§S1) and consuming the published `seq` (AC18).
+  This is UI, and **UI is the server's half**.
+
+The roadmap surface itself — graph, table, lifecycle rendering, paging — is **CR-CRU-078**.
+
+### §S10 AXI conformance is a requirement, not a style note
+
+The clients ARE the agent-facing interface, so the five verbs conform to the **full AXI standard
+(P1–P10, https://axi.md)** — the user's standing fleet requirement (2026-07-21), not a per-CR
+choice. Conformance is achieved by **reusing the fleet's existing machinery**, never by
+re-implementing it per verb:
+
+| P | Requirement | Reused mechanism |
+|---|---|---|
+| P1 | token-efficient TOON envelope on **stdout** | `emit_axi` (`clients/_crucible_axi.py:220-229`) |
+| P2 | minimal schema + `--fields` | the fleet's existing `--fields` selection |
+| P3 | truncation + `--full` | `wave-sequence` / proposal lists truncate by default |
+| P4 | pre-computed aggregates | `totalCount` on every list-bearing envelope |
+| P5 | definitive empty state | §S6: zero proposals is an ANSWER, never a blank |
+| P6 | structured errors on stdout, exit `0/1/2`, idempotent | §S6 exit 2 + §S7 `converged` |
+| P7 | ambient context | the existing `context` block `emit_axi` always writes |
+| P8 | content-first | no-arg invocation shows live data, per CR-CRU-030 |
+| P9 | contextual disclosure — `help[]` next-step templates | §S6, **state-derived** per `clients/_crucible_axi.py:709-713` |
+| P10 | consistent `--help` | the subparser shape every fleet verb uses |
+
+`warnings[]` (§S5) and `converged` (§S7) ride this envelope rather than a bespoke one. A verb that
+prints prose, returns JSON, writes its errors to stderr, or invents its own envelope is
+non-conformant regardless of whether its writes are correct.
+
 ## Acceptance criteria
 
 - **AC1** — **a proposal never sorts before a shipped release, and proposals order by version.**
@@ -337,6 +413,22 @@ A converged call writes nothing and emits no warning it did not earn.
   preserves authored ORDER and so survives every other AC in this release while making `seq` mean
   two different numbers on one surface. That is the same failure class AC3 exists to prevent for
   dates.
+- **AC19** — **all five verbs are AXI-conformant in all five clients (§S10).** Asserted by extending
+  the two EXISTING harnesses, never a parallel checker: verb **presence** in
+  `tests/client/test_cr054_fleet_inventory.py` (the frozen fleet set, whose count CR-CRU-075 moves
+  to 49) and **envelope conformance** in `tests/client/test_client_fleet_envelope_census.py`
+  (CR-CRU-058's detector). For each of the 25 (verb × client) pairs: stdout parses as a TOON
+  envelope carrying `verb`, `ok`, `context` and `warnings` (P1/P7); `--help` exits 0 and lists the
+  verb (P10); a refusal writes its structured error to **stdout** and exits `2` for a usage failure
+  or `1` for a transport failure, never bare prose on stderr (P6); `--fields` narrows the envelope
+  and `--full` defeats truncation (P2/P3); every list-bearing envelope carries `totalCount` (P4);
+  and every failure envelope carries a **state-derived** `help[]` (P9). A verb emitting JSON, or
+  printing prose, or routing its error to stderr fails this AC even when its write is correct.
+- **AC20** — **the two halves meet exactly at §S8.** Each of the five client verbs POSTs the method,
+  path and body named in §S8 — asserted against a recording stub, so a client that invents a path
+  fails without needing a live server — and the server answers those five paths while returning 404
+  for the neighbouring shapes a guess would produce (`…/queue/cr-plan`, `…/proposals`,
+  `PATCH …/queue/<cr>`). No PATCH/PUT/DELETE route is added (§S8).
 
 ## Estimated size
 
