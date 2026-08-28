@@ -42,9 +42,23 @@ no layout engine, no crossing heuristic, no dependency edges drawn.
 
 ### §S1 Remove the toggle
 
-Delete the `roadmap-view-table` / `roadmap-view-graph` buttons and the exclusive view state. All
-zones render unconditionally. Any test asserting toggle behaviour is retired with its reason
-stated — the contract it defended no longer exists.
+Delete the `roadmap-view-table` / `roadmap-view-graph` buttons and the exclusive view state
+(`roadmapViewMode`, `public/app.js:2479`; buttons at `:3060`/`:3068`; the branch that picks one body
+at `:3080`). All zones render unconditionally.
+
+**Retire versus rewrite — the distinction matters, and the blast radius is enumerated.** The
+original wording said only "any test asserting toggle behaviour is retired", which read literally
+would delete most of the graph's coverage. Gap analysis 2026-08-28 counted the consumers: **13
+sites across 3 files**, and only two of them are about the toggle.
+
+| Site | Kind | Disposition |
+|---|---|---|
+| `tests/roadmap-graph.test.ts:1612-1613` | asserts both toggle buttons EXIST | **RETIRE**, stating the reason — the contract it defended no longer exists |
+| `tests/roadmap-graph.test.ts` — 9 further sites (`:1621`, `:1632`, `:1634`, `:1656`, `:1726`, `:1894`, `:2312`, `:2729`, `:2926`) | uses the toggle as NAVIGATION to reach the graph, then tests the graph | **REWRITE**: drop the click, since the graph now renders unconditionally. These test the graph, not the toggle — retiring them would be a large, silent coverage loss dressed as spec compliance |
+| `tests/e2e/steps/roadmap-graph.steps.ts:27` | Playwright BDD step clicking `roadmap-view-graph` | **REWRITE** — the step must stop clicking a button that no longer exists, or the e2e harness breaks. Easy to miss because it lives outside `tests/*.test.ts` |
+
+A test that merely *reached* the graph through the toggle keeps its assertions unchanged; only its
+navigation preamble goes.
 
 ### §S2 Zone 1 — the release strip, paged, whole containers only
 
@@ -62,10 +76,19 @@ gates dashed. It is the only zone that grows without bound, and it does **not** 
 
 ### §S3 Zone 1 — gates carry their dates
 
-A shipped gate carries its ship date (`releases[].releasedAt`, epoch **seconds** —
-`public/app-logic.mjs:874`). A proposed gate carries its declared `--target` (CR-091), or an
-explicit "no target declared" empty state. Both render through **one shared formatter**; a naive
-`new Date(seconds)` yields 1970 and must fail review.
+A shipped gate carries its ship date (`releases[].releasedAt`, epoch **seconds** — the ship-order
+read at `public/app-logic.mjs:907-918`). A proposed gate carries its declared `--target` (CR-091,
+`targetAt`, also epoch **seconds**), or an explicit "no target declared" empty state.
+
+**The shared formatter ALREADY EXISTS — do not write a second one.** *Corrected 2026-08-28 by gap
+analysis: this section previously demanded "one shared formatter" without naming it, and cited
+`public/app-logic.mjs:874`, which today is `type: "cr"` — the citation went stale when CR-091 C4
+landed.* That CR exported `formatReleaseDate(epochSeconds)` (`public/app-logic.mjs:48`), added it
+to the `window.CrucibleLogic` bridge (`:1033`) and declared it (`public/app-logic.d.mts:139`) — and
+shipped it with **zero call sites on purpose, as this CR's seam**. CR-091 AC3 proves by executable
+scan that nothing else constructs a date from `releasedAt` or `targetAt`; AC30 below is where that
+scan starts passing for a real reason. Introducing a parallel formatter here would defeat both.
+A naive `new Date(seconds)` yields 1970 and must fail review.
 
 Ordering stays **by version** for proposals and ship date for shipped releases. A declared target
 that contradicts version order is surfaced as a planning conflict, never a reason to re-sort.
@@ -93,7 +116,24 @@ labels**. The table gains a `wave` column only when the release spans more than 
 ### §S6 Authored order is carried, never re-derived
 
 A CR's position comes from the orchestrator-assigned order and nothing else. The store keeps it
-(`queue_entries.seq`) and CR-077 shipped its consumption as `data.seq`.
+(`queue_entries.seq`).
+
+**Who actually shipped its consumption — corrected 2026-08-28 by gap analysis.** This section
+credited CR-077 with shipping the consumption "as `data.seq`". CR-077 (`30bf10d`) shipped the
+FIELD but populated it with the array INDEX — literally `seq: index` — so the node carried a
+positional number dressed as the authored one. **CR-091 C4 (`d9d39a4`) shipped the real
+consumption** under its AC18, and the distinction matters to AC13 below: the index derivation
+preserved authored ORDER, so it survived every ordering assertion while making `seq` mean two
+different numbers on one surface.
+
+Two consequences this CR must respect:
+
+- `data.seq` is now the **stored integer, verbatim** (`public/app-logic.mjs:893`).
+- It is **OMITTED when unusable**, never defaulted — a non-numeric or absent `seq` yields a node
+  with no `seq` key at all, the same "no carried position" state milestone and terminal nodes
+  occupy. A renderer that reads `entry.seq ?? 0` re-introduces exactly the ambiguity 091 removed,
+  and note `public/app.js:2765` already sorts on `(a.data("seq") ?? 0)` — that defaulting sort is
+  on this CR's surface and is the one place the omission can still be quietly undone.
 
 Today `roadmapTopoOrder` (`public/app.js:2334`) walks `dependsOn` depth-first, pulling any CR
 whose dependencies sit later in `seq` forward — discarding the assigned order despite a comment
@@ -139,6 +179,36 @@ Persistence across a full page RELOAD is **not** required here and is deliberate
 route the shared destination for both entry points — so carrying focus in the URL is the natural
 home for reload-durability and belongs in that conversation, not this one. What this CR owes is
 in-session durability.
+
+### §S9 The strip's data — proposals are a SECOND read, and nothing fetches them yet
+
+**Added 2026-08-28 by this CR's own gap analysis.** AC28/AC29/AC30 were re-scoped into this CR
+from CR-CRU-091's VERIFY, and the ACs arrived without a scope section to stand on — so §S1–§S8
+described a strip built from shipped releases alone while three ACs demanded proposed ones. An
+implementer following the scope would have failed them. Recorded rather than quietly patched,
+because it is exactly the omission a gap analysis exists to surface.
+
+The frontend holds **one** release read today: `state.releases`, filled from `body.releases` at
+`public/app.js:293` — that is `GET …/releases`, which CR-091 §S1 deliberately keeps free of
+proposals (`listReleases` filters `event.type === "release"`). A repo-wide search of `public/` for
+`release-proposals` / `listReleaseProposals` / `proposals` returns **zero hits**: nothing in the UI
+reads a proposal, and no state slice holds one.
+
+So this CR adds the second read:
+
+- Fetch `GET /api/v2/projects/<key>/release-proposals` — the route CR-091 §S8 shipped, answering
+  `{ok, proposals:[{label, targetAt?, timestamp, waves[]}], totalCount}`.
+- Hold it in its own state slice beside `state.releases`, refreshed on the SAME cadence and through
+  the same path (`public/app.js:293`'s neighbourhood), so the strip can never render a stale half
+  of its own sequence.
+- Keep the two lists SEPARATE in state and concatenate only at render. CR-091 fixed their sort
+  directions deliberately opposite — `listReleases` newest-first, `listReleaseProposals` ascending
+  by version — precisely so a consumer appends "shipped, then proposed" with **no reversal**.
+  Merging them into one array in state would throw that away and re-introduce the sorting question
+  AC28 exists to settle.
+- A failed proposals read must not blank the shipped strip: the two reads fail independently, and
+  a strip showing shipped gates with proposals unavailable is a legitimate degraded state, not an
+  error. It is NOT the AC19 empty state, which means "nothing registered at all".
 
 ## Acceptance criteria
 
@@ -264,6 +334,14 @@ different from `.lavish/crucible-workflow-flowchart.html` §1–§8/§14 is **no
 - **AC32 — focus and the page window survive a tab swap.** Focus a non-default release, page the
   strip, switch to Workflow, switch back: the same release is focused and the same window is shown.
   Resetting to the in-flight default fails this AC and would make CR-CRU-079 AC5 unimplementable.
+- **AC33 — the strip's two reads are independent, and the second one exists (§S9).** The UI issues
+  `GET …/release-proposals` and holds the result in its own state slice: with `0.2.0` proposed but
+  no code fetching proposals, the strip cannot render it, which is the state the board is in today
+  (a `public/` search for `release-proposals` returns zero hits). Asserted three ways: the fetch
+  happens on the same refresh path as `state.releases`; the two lists are held SEPARATELY and
+  concatenated only at render, so neither is re-sorted (AC28); and a proposals read that FAILS
+  leaves the shipped gates rendered — a degraded strip, never the AC19 empty state and never an
+  error banner over working data.
 
 ## Estimated size
 
