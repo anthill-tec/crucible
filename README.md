@@ -194,4 +194,9 @@ recording nothing, three times. Fail early, warn late.
 
 ## Version
 
-`0.1.2` (set on the release branch per the git-flow release ceremony).
+`0.1.3` — published on [PyPI](https://pypi.org/project/crucible-axi/) (`crucible-axi`) and
+[npm](https://www.npmjs.com/package/@anthill-tec/crucible-server) (`@anthill-tec/crucible-server`).
+
+The authoritative value is the **git tag** and what those two registries serve; `package.json`
+is aligned to it by the release ceremony. Read it from there rather than trusting this line —
+it went stale at 0.1.3 because a hotfix merge-back bumped the manifest and not this file.
