@@ -968,6 +968,19 @@ class HoldDecisionTest(_NextTestBase):
 # §S2 / AC6 / AC16 — DRAINED, and the dead-CR axis
 # ═══════════════════════════════════════════════════════════════════════════
 
+# §S2 — one fixture per DRAINED reason, keyed BY the reason, so
+# `DRAINED_REASONS` is asserted in both directions rather than restated as an
+# inline tuple. The mirror of `HOLD_FIXTURES` and its
+# `test_the_four_kinds_are_the_declared_vocabulary`.
+DRAINED_FIXTURES = {
+    # The queue read returned zero entries.
+    "no-roadmap": ((), None),
+    # Entries exist; none carries the lane asked for, so the lane is empty.
+    "awaiting-assignment": ((_entry("CR-A", 10, track="track-1"),), "2"),
+    # The lane held work and all of it landed.
+    "wave-complete": ((_entry("CR-A", 10, status="COMPLETED"),), None),
+}
+
 
 class DrainedDecisionTest(_NextTestBase):
 
@@ -1010,11 +1023,30 @@ class DrainedDecisionTest(_NextTestBase):
         for entries in ([], [_entry("CR-A", 10, status="COMPLETED")]):
             with self.subTest(entries=len(entries)):
                 fields = self.fields(entries)
-                self.assertIn(
-                    fields.get("reason"),
-                    ("wave-complete", "awaiting-assignment", "no-roadmap"))
+                self.assertIn(fields.get("reason"), AXI.DRAINED_REASONS)
                 self.assertIsNone(fields.get("cr"))
                 self.assertNotIn("cr", fields)
+
+    def test_the_three_reasons_are_the_declared_vocabulary(self):
+        """§S2 — `DRAINED_REASONS` is the enum, not a comment. Asserted BOTH
+        ways, so a fourth reason can never be added in one place only: every
+        reason a fixture actually produces is IN the constant, and every reason
+        the constant declares is REACHABLE by a fixture. Exactly the guard
+        `HOLD_TRIGGER_KINDS` gets from
+        `test_the_four_kinds_are_the_declared_vocabulary`, and what makes the
+        constant's own docstring ("the enum is one list rather than string
+        literals scattered downstream") true rather than aspirational."""
+        produced = {}
+        for reason, (entries, track) in sorted(DRAINED_FIXTURES.items()):
+            with self.subTest(reason=reason):
+                fields = self.fields(list(entries), track=track)
+                self.assertEqual(fields.get("decision"), "DRAINED")
+                produced[reason] = fields.get("reason")
+        self.assertEqual(
+            produced, {reason: reason for reason in DRAINED_FIXTURES},
+            "each fixture must produce the reason it is keyed by")
+        self.assertEqual(sorted(DRAINED_FIXTURES),
+                         sorted(AXI.DRAINED_REASONS))
 
     # ── AC16: the second axis ────────────────────────────────────────────
 
@@ -1138,6 +1170,77 @@ class NextVerbEnvelopeTest(_NextTestBase):
         self.assertEqual(axi.get("totalCount"), 2)
         self.assertNotIn("decision", axi)
         self.assertTrue(stdout.startswith("axi:"))
+
+    def test_the_refusal_is_structurally_exempt_from_the_fields_projection(self):
+        """§S3 + §S6 P2 — a projection narrows a RECORD, and §S3's refusal
+        carries none, so `--fields` must leave it WHOLE: `needs`, the live
+        `tracks[]`, its `totalCount` and the state-derived `help[]` all
+        survive and the exit stays 2.
+
+        Not cosmetic: an agent that habitually passes `--fields` would
+        otherwise receive an EMPTY refusal body — no reason, no candidate
+        lanes, no next step — defeating P4 (`totalCount` on the verb's only
+        list), P9 (state-derived `help[]`) and §S3's whole point, which is
+        that the verb refuses INFORMATIVELY rather than guessing a lane.
+
+        Measured over several flag values AND against the unflagged run, so
+        the exemption is STRUCTURAL — keyed on there being no record — rather
+        than a special case for one spelling."""
+        plain = self.drive(_queue(*TWO_TRACK_LANE))[1]
+        for spelling in ("decision", "cr,seq", "tracks", "needs", "help"):
+            with self.subTest(fields=spelling):
+                code, stdout, _err, axi, _ops = self.drive(
+                    _queue(*TWO_TRACK_LANE), fields=spelling)
+                self.assertEqual(code, 2)
+                self.assertIs(axi.get("ok"), False)
+                self.assertEqual(axi.get("needs"), ["track"])
+                self.assertEqual(axi.get("tracks"), ["track-1", "track-2"])
+                self.assertEqual(axi.get("totalCount"), 2)
+                self.assertTrue(axi.get("help"))
+                self.assertNotIn("decision", axi)
+                self.assertEqual(
+                    stdout, plain,
+                    "the refusal must be byte-identical with and without "
+                    "--fields; anything else is the projection reaching the "
+                    "refusal scaffolding")
+
+    def test_fields_still_narrows_a_real_decision(self):
+        """P2's other half — the exemption is the REFUSAL's alone. A decision
+        is still narrowed, so "stop projecting" is not a passing fix."""
+        _code, _out, _err, axi, _ops = self.drive(
+            _queue(*self.LANE), fields="decision,cr")
+        self.assertEqual(axi.get("decision"), "NEXT")
+        self.assertEqual(axi.get("cr"), "CR-CRU-100")
+        for dropped in ("seq", "wave", "help"):
+            self.assertNotIn(dropped, axi)
+
+    def test_the_context_carries_the_lane_the_answer_resolved(self):
+        """§S6 P7 — "the `context` block carries the resolved lane". The block
+        `axi_context` builds reads `$WORKFLOW_ROLE`, which is the DECLARED
+        lane, so a session declaring track-1 while asking `--track 2` would
+        otherwise emit an answer ABOUT track-2 stamped track-1: an agent
+        reading `context.track` is then misled by its own envelope."""
+        os.environ["WORKFLOW_ROLE"] = "track-1"
+        _code, _out, _err, axi, _ops = self.drive(
+            _queue(*TWO_TRACK_LANE), track="2")
+        self.assertEqual(axi.get("cr"), "CR-CRU-200")
+        self.assertEqual(
+            (axi.get("context") or {}).get("track"), "track-2",
+            "context.track must name the lane RESOLVED, never the lane the "
+            "session merely declared")
+
+    def test_nothing_resolved_leaves_the_declared_lane_standing(self):
+        """P7's other half. A bare invocation scoped no lane — the answer
+        covers the queue as published — and §S3's refusal scoped none BY
+        DEFINITION, because refusing is precisely not picking a lane. With no
+        resolved lane to carry, the declaration is the only track fact
+        available and must not be dropped."""
+        os.environ["WORKFLOW_ROLE"] = "track-1"
+        bare = self.drive(_queue(*self.LANE))[3]
+        self.assertEqual((bare.get("context") or {}).get("track"), "track-1")
+        refusal = self.drive(_queue(*TWO_TRACK_LANE))[3]
+        self.assertEqual((refusal.get("context") or {}).get("track"),
+                         "track-1")
 
     def test_a_failed_queue_read_exits_one_and_is_never_drained(self):
         """AC13 — a queue GET that returns non-ok exits **1** with `ok=false`, a
@@ -1341,6 +1444,88 @@ class ResolverLandsOnceTest(unittest.TestCase):
             offenders, {},
             f"the decision resolver lands ONCE and each client contributes a "
             f"thin delegator only: {offenders!r}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# §S6 — the `path:line` citations the block's docstrings carry
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _next_block_source():
+    """The `next` code block, LOCATED rather than hardcoded: from its own
+    CR-CRU-092 banner to the last line of `cmd_next`. Hardcoding the bounds
+    here would go stale exactly the way the citation this guard caught did."""
+    text = AXI_MODULE_PATH.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    banners = [n for n, line in enumerate(lines, 1)
+               if line.startswith("# ── CR-CRU-092")]
+    assert len(banners) == 1, f"expected ONE CR-CRU-092 banner: {banners!r}"
+    end = next(node.end_lineno for node in ast.parse(text).body
+               if isinstance(node, ast.FunctionDef)
+               and node.name == "cmd_next")
+    return "\n".join(lines[banners[0] - 1:end])
+
+
+_CITATION_RE = re.compile(r"[\w./-]+\.(?:ts|py|md):\d+(?:-\d+)?")
+
+
+class NextBlockCitationsTest(unittest.TestCase):
+    """Every `path:line` citation the `next` block's docstrings carry, checked
+    against the TARGET FILE instead of trusted.
+
+    C2's own subparser registrations shifted `clients/python-crucible.py`
+    downwards, so `_next_start_help`'s citation for plan-file's flags came to
+    point at the `pre-merge-gate` block's `--cov-source` line. A drifted
+    citation is worse than no citation: it sends the next reader to the wrong
+    construct with full confidence.
+
+    A source-text guard is the right shape HERE (unlike AC18's, which this
+    file deliberately made behavioural): a citation IS a claim about source
+    coordinates, so there is nothing else to measure. Each entry brackets the
+    construct — a token that must sit on the FIRST cited line and one that
+    must sit on the LAST — because a range that merely CONTAINS the construct
+    somewhere is exactly the drift that shipped."""
+
+    # (citing site, cited path, first, last, head token, tail token)
+    CITATIONS = (
+        ("the §S1 exit-code rule", "clients/STATUS-CONTRACT.md", 65, 68,
+         "## Terminal states (all exit 0)", "all exit 0:"),
+        ("LANDED_STATUSES", "src/store.ts", 3730, 3730,
+         "private deriveQueueStatus(", "private deriveQueueStatus("),
+        ("canonical_track", "src/store.ts", 338, 341,
+         "export function normalizeTrack(", "}"),
+        ("_next_start_help", "clients/python-crucible.py", 1349, 1362,
+         'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
+    )
+
+    def test_every_citation_still_brackets_the_construct_it_claims(self):
+        offenders = {}
+        for who, rel, first, last, head, tail in self.CITATIONS:
+            lines = (REPO_ROOT / rel).read_text(
+                encoding="utf-8").splitlines()
+            cited = f"{rel}:{first}" + ("" if last == first else f"-{last}")
+            if head not in lines[first - 1]:
+                offenders[who] = (f"{cited} opens on {lines[first - 1]!r}, "
+                                  f"not {head!r}")
+            elif tail not in lines[last - 1]:
+                offenders[who] = (f"{cited} closes on {lines[last - 1]!r}, "
+                                  f"not {tail!r}")
+        self.assertEqual(
+            offenders, {},
+            f"a docstring citation must name the construct it points at: "
+            f"{offenders!r}")
+
+    def test_the_table_covers_every_citation_the_block_carries(self):
+        """The other half: this table cannot silently stop covering one. Every
+        `path:line` the block spells must be declared above, so a citation
+        added without verification fails here rather than rotting quietly."""
+        declared = {
+            f"{rel}:{first}" + ("" if last == first else f"-{last}")
+            for _who, rel, first, last, _head, _tail in self.CITATIONS}
+        self.assertEqual(
+            set(_CITATION_RE.findall(_next_block_source())), declared,
+            "every citation in the `next` block is verified, and the table "
+            "declares no citation the block does not carry")
 
 
 if __name__ == "__main__":

@@ -72,6 +72,7 @@ import importlib.util
 import json
 import os
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -1880,10 +1881,11 @@ class _QueueStubServer:
 
 
 # (case, fixture, extra argv, extra env) -- every stub-served drive the ten
-# principles need. `lane-context` is the one drive that DECLARES an
-# orchestrator lane, because P7's "carrying the resolved lane" is a statement
-# about the `context` block's `track` key, which `axi_context` reads from
-# `$WORKFLOW_ROLE`.
+# principles need. The last two are P7's: "carrying the resolved lane" is a
+# statement about the `context` block's `track` key, so `lane-context`
+# DECLARES an orchestrator lane and agrees with it, while `lane-mismatch`
+# declares one lane and asks about ANOTHER -- the only shape in which a
+# declared-vs-resolved confusion is observable at all.
 _NEXT_CASES = (
     ("no-track", "no-track", (), {}),
     ("fields", "no-track", ("--fields", "decision,cr"), {}),
@@ -1894,6 +1896,8 @@ _NEXT_CASES = (
     ("wave-complete", "wave-complete", (), {}),
     ("in-flight", "in-flight", (), {}),
     ("lane-context", "one-track", (), {"WORKFLOW_ROLE": "track-2"}),
+    ("lane-mismatch", "two-track", ("--track", "2"),
+     {"WORKFLOW_ROLE": "track-1"}),
 )
 
 # §S6/AC13 -- the exit each drive owes. All three DECISIONS are answers, so
@@ -1903,7 +1907,7 @@ _NEXT_CASES = (
 CR092_EXPECTED_EXIT = {
     "no-track": 0, "fields": 0, "one-track": 0, "two-track": 2,
     "two-track-flagged": 0, "no-roadmap": 0, "wave-complete": 0,
-    "in-flight": 0, "lane-context": 0, "unreachable": 1,
+    "in-flight": 0, "lane-context": 0, "lane-mismatch": 0, "unreachable": 1,
 }
 
 _NEXT_DRIVE_CACHE = None
@@ -2251,10 +2255,17 @@ class Cr092NextVerbAxiConformanceTest(unittest.TestCase):
             f"envelope and is never DRAINED: {offenders!r}")
 
     def test_every_envelope_carries_the_context_block_with_the_resolved_lane(self):
-        """P7 -- the `context` block `emit_axi` always writes. The lane it
-        carries is asserted with a DECLARED orchestrator lane in the
-        environment (`axi_context` reads `$WORKFLOW_ROLE` into `context.track`),
-        so "carrying the resolved lane" is measured rather than assumed."""
+        """P7 -- the `context` block `emit_axi` always writes, and the LANE it
+        carries. Measured twice against a DECLARED orchestrator lane
+        (`axi_context` reads `$WORKFLOW_ROLE` into `context.track`):
+
+          * `lane-context` declares track-2 and asks about it -- the
+            declaration and the answer agree, so the key is simply present;
+          * `lane-mismatch` declares track-1 and asks `--track 2` in a
+            two-track project -- the ONE shape where "the resolved lane" and
+            "the declared lane" are different strings. `context.track` owes
+            the lane the answer is ABOUT, or an agent reading it is misled by
+            its own envelope."""
         offenders = {}
         cases = [case for case, *_ in _NEXT_CASES] + ["unreachable"]
         for client_key in CLIENT_FILES:
@@ -2266,10 +2277,20 @@ class Cr092NextVerbAxiConformanceTest(unittest.TestCase):
             if lane.get("track") != "track-2":
                 offenders[f"{client_key}:lane"] = (
                     f"context.track={lane.get('track')!r}")
+            mismatch = self._axi(client_key, "lane-mismatch")
+            resolved = (mismatch.get("context") or {}).get("track")
+            if mismatch.get("cr") != "CR-CRU-521":
+                offenders[f"{client_key}:mismatch-answer"] = (
+                    f"cr={mismatch.get('cr')!r} -- the fixture must answer "
+                    f"about track-2 for the lane assertion to mean anything")
+            elif resolved != "track-2":
+                offenders[f"{client_key}:mismatch-lane"] = (
+                    f"context.track={resolved!r} -- the session declared "
+                    f"track-1 and the answer is about track-2")
         self.assertEqual(
             offenders, {},
             f"P7 -- every `next` envelope carries a `context` block naming the "
-            f"project and the resolved lane: {offenders!r}")
+            f"project and the RESOLVED lane: {offenders!r}")
 
     def test_bare_next_answers_with_live_data_in_a_single_track_project(self):
         """P8/AC8 -- a bare `next` (no flag but each client's own
@@ -2384,6 +2405,259 @@ class Cr092NextVerbAxiConformanceTest(unittest.TestCase):
             offenders, {},
             f"`next` must be enveloped in the fleet-wide census too: "
             f"{offenders!r}")
+
+
+# ── CR-CRU-092 §S5/AC11 -- the harness lane plan, BEHAVIOURALLY ────────────
+
+_HARNESS_DB_NAMES = (".wf-schedule.db", ".nai-schedule.db")
+
+# The harness's own lane-plan table (`changeset`), cut to the columns a lane
+# read would use. Real sqlite, so "populated" is a fact rather than a claim.
+_HARNESS_DB_SCHEMA = """
+CREATE TABLE IF NOT EXISTS changeset (
+    cr          TEXT PRIMARY KEY,
+    track       TEXT,
+    seq         INTEGER,
+    state       TEXT NOT NULL DEFAULT 'PENDING',
+    trigger     TEXT,
+    wave        TEXT,
+    depends_on  TEXT
+);
+"""
+
+# DISAGREEING on purpose: a different CR, at the seq the roadmap's own answer
+# occupies. A reconciling `next` would have to name one of these.
+_HARNESS_DB_ROWS = (
+    ("CR-HARNESS-999", "Track 1 - Crucible", 10, "PENDING", None, "5", None),
+    ("CR-HARNESS-998", "Track 1 - Crucible", 20, "PENDING", None, "5", None),
+)
+
+_HARNESS_DB_CRS = frozenset(row[0] for row in _HARNESS_DB_ROWS)
+
+# The tokens §S5 forbids on this path, as the sibling resolver harness's
+# static scan spells them -- reused here as the OUTPUT check, so a client that
+# somehow learned of the harness plan could not report it either.
+_HARNESS_TOKENS = ("schedule_db", ".wf-schedule.db", ".nai-schedule.db",
+                   "next_for_track", "worktree-flow")
+
+_HARNESS_CLI_MARKER_ENV = "CR092_HARNESS_CLI_MARKER"
+
+_HARNESS_CLI_SHIM = r'''#!/usr/bin/env python3
+"""A `worktree-flow` on PATH whose only job is to RECORD being called.
+
+The census's other fake tools stand in for toolchains the fleet legitimately
+shells out to. This one stands in for a CLI no code path may reach, so it
+leaves evidence and then answers plausibly -- a client that did shell out
+sails on and is caught by the marker, rather than by a crash that could be
+mistaken for an unrelated fixture gap.
+"""
+import os
+import sys
+
+marker = os.environ.get("CR092_HARNESS_CLI_MARKER")
+if marker:
+    with open(marker, "a") as handle:
+        handle.write(" ".join(sys.argv[1:]) + "\n")
+print("CR-HARNESS-999")
+'''
+
+
+def _build_bin_dir_with_harness_cli_tripwire():
+    """The census's own proven bin dir plus a `worktree-flow` tripwire (and the
+    `.py` spelling), so §S5's "shells out to" half is MEASURED rather than only
+    scanned for."""
+    bin_dir = _build_fake_bin_dir()
+    for name in ("worktree-flow", "worktree-flow.py"):
+        path = bin_dir / name
+        path.write_text(_HARNESS_CLI_SHIM)
+        st = os.stat(path)
+        os.chmod(path, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return bin_dir
+
+
+def _plant_harness_lane_plan(project_dir):
+    """Plant a POPULATED harness lane plan under BOTH the current and the
+    legacy filename, and read the CR ids back out -- so the fixture's own
+    "populated and disagreeing" claim is measured, not asserted."""
+    planted = {}
+    for name in _HARNESS_DB_NAMES:
+        path = Path(project_dir) / name
+        connection = sqlite3.connect(path)
+        try:
+            connection.executescript(_HARNESS_DB_SCHEMA)
+            connection.executemany(
+                "INSERT INTO changeset (cr, track, seq, state, trigger, wave, "
+                "depends_on) VALUES (?, ?, ?, ?, ?, ?, ?)", _HARNESS_DB_ROWS)
+            connection.commit()
+            planted[name] = [
+                row[0] for row in connection.execute(
+                    "SELECT cr FROM changeset ORDER BY seq")]
+        finally:
+            connection.close()
+    return planted
+
+
+_HARNESS_ISOLATION_CACHE = None
+
+
+def _get_harness_isolation_drives():
+    """Drive `next` twice per client against the SAME stub fixture and project
+    dir -- once clean, once with the harness lane plan planted -- keeping both
+    raw results plus what the plant actually contained."""
+    global _HARNESS_ISOLATION_CACHE
+    if _HARNESS_ISOLATION_CACHE is not None:
+        return _HARNESS_ISOLATION_CACHE
+    toon_module = _load_toon_module()
+    bin_dir = _build_bin_dir_with_harness_cli_tripwire()
+    scratch = Path(tempfile.mkdtemp(prefix="cr092-harness-isolation-"))
+    marker = scratch / "worktree-flow-invocations.log"
+    stub = _QueueStubServer()
+    stub.payload = CR092_FIXTURES["no-track"]
+    env = {**stub.env(), _HARNESS_CLI_MARKER_ENV: str(marker)}
+    drives = {}
+    try:
+        for client_key, script_path in CLIENT_FILES.items():
+            project_dir = _make_project_dir(client_key)
+            try:
+                clean = drive_verb(script_path, _next_argv(project_dir),
+                                   project_dir, bin_dir, extra_env=env)
+                planted = _plant_harness_lane_plan(project_dir)
+                sizes = {name: (Path(project_dir) / name).stat().st_size
+                         for name in _HARNESS_DB_NAMES}
+                with_plan = drive_verb(script_path, _next_argv(project_dir),
+                                       project_dir, bin_dir, extra_env=env)
+            finally:
+                shutil.rmtree(project_dir, ignore_errors=True)
+            drives[client_key] = {
+                "clean": clean,
+                "with_plan": with_plan,
+                "clean_axi": classify_envelope(clean.stdout, toon_module)[1],
+                "with_plan_axi": classify_envelope(
+                    with_plan.stdout, toon_module)[1],
+                "planted": planted,
+                "sizes": sizes,
+            }
+        drives["cli_invocations"] = (
+            marker.read_text(encoding="utf-8") if marker.exists() else "")
+    finally:
+        stub.close()
+        shutil.rmtree(bin_dir, ignore_errors=True)
+        shutil.rmtree(scratch, ignore_errors=True)
+    _HARNESS_ISOLATION_CACHE = drives
+    return drives
+
+
+class Cr092HarnessLanePlanIsolationTest(unittest.TestCase):
+    """CR-CRU-092 §S5/AC11, BEHAVIOURALLY -- the companion to the STATIC scans
+    (byte scan, AST, import surface) in the sibling
+    `test_cr092_next_decision_resolver.py`.
+
+    A scan proves no client SPELLS the harness lane-plan database. It cannot
+    prove the ANSWER is unaffected by one that EXISTS. So: plant a populated
+    lane plan -- real sqlite, the harness's own `changeset` shape, under both
+    the current `.wf-schedule.db` and the legacy `.nai-schedule.db` -- in the
+    project dir, naming a DIFFERENT CR than the roadmap's answer, put a
+    recording `worktree-flow` on PATH, and require `next`'s envelope to be
+    BYTE-IDENTICAL to the run without any of it.
+
+    §S5 is absolute: the two `next`s are never reconciled. A disagreement
+    between them is a real signal, left VISIBLE to the orchestrator -- which
+    means invisible to this verb. No merge, no fallback, no cross-check, and
+    specifically no warning naming the harness plan, because emitting one
+    would itself be a read of it.
+
+    RECORDING A GREEN, not chasing a bug: nothing on the path opens the file
+    today. This is the assertion that keeps it so, and the one the static scan
+    structurally cannot make.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.drives = _get_harness_isolation_drives()
+
+    def test_the_planted_lane_plan_is_populated_and_disagrees(self):
+        """The fixture guard, in the `_status_only_pick` idiom: if the plant
+        were empty, absent, or naming the roadmap's own answer, every
+        assertion below would be measuring nothing."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            run = self.drives[client_key]
+            for name in _HARNESS_DB_NAMES:
+                if run["sizes"].get(name, 0) <= 0:
+                    offenders[f"{client_key}:{name}"] = "not a populated file"
+                elif set(run["planted"].get(name) or ()) != _HARNESS_DB_CRS:
+                    offenders[f"{client_key}:{name}:rows"] = (
+                        run["planted"].get(name))
+            answer = run["clean_axi"].get("cr")
+            if answer in _HARNESS_DB_CRS:
+                offenders[f"{client_key}:overlap"] = (
+                    f"the plant names the roadmap's own answer {answer!r}, so "
+                    f"a reconciling verb would pass unnoticed")
+        self.assertEqual(
+            offenders, {},
+            f"the harness lane plan must be real, populated and DISAGREEING: "
+            f"{offenders!r}")
+
+    def test_the_envelope_is_byte_identical_with_the_lane_plan_present(self):
+        """AC11's behavioural core -- same stdout, byte for byte, and the same
+        exit code. Nothing on this path read the file, so nothing about the
+        answer can have moved."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            run = self.drives[client_key]
+            if run["clean"].stdout != run["with_plan"].stdout:
+                offenders[client_key] = (
+                    f"stdout moved:\n  clean={run['clean'].stdout!r}\n  "
+                    f"planted={run['with_plan'].stdout!r}")
+            elif run["clean"].returncode != run["with_plan"].returncode:
+                offenders[client_key] = (
+                    f"exit moved {run['clean'].returncode} -> "
+                    f"{run['with_plan'].returncode}")
+        self.assertEqual(
+            offenders, {},
+            f"§S5 -- a harness lane plan in the project dir cannot change one "
+            f"byte of this verb's answer: {offenders!r}")
+
+    def test_the_decision_stays_the_roadmap_s_own(self):
+        """Byte-identity would also hold if BOTH runs were wrong, so the answer
+        is named: the roadmap's `NEXT`/`CR-CRU-500`, never a lane-plan CR."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            axi = self.drives[client_key]["with_plan_axi"]
+            if axi.get("decision") != "NEXT" or axi.get("cr") != "CR-CRU-500":
+                offenders[client_key] = (
+                    f"decision={axi.get('decision')!r} cr={axi.get('cr')!r}")
+        self.assertEqual(
+            offenders, {},
+            f"§S5 -- the answer comes from the REGISTERED roadmap alone: "
+            f"{offenders!r}")
+
+    def test_the_disagreement_is_never_reported_and_the_cli_never_runs(self):
+        """The disagreement stays INVISIBLE to this verb: no warning, no help
+        line, no stderr sentence naming the harness plan -- reporting it would
+        itself be a read of it. And the `worktree-flow` tripwire on PATH was
+        never invoked, which is the "shells out to" half a byte scan cannot
+        measure."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            run = self.drives[client_key]
+            for channel in ("stdout", "stderr"):
+                text = getattr(run["with_plan"], channel) or ""
+                hits = [token for token in _HARNESS_TOKENS if token in text]
+                if hits:
+                    offenders[f"{client_key}:{channel}"] = hits
+            named = [cr for cr in _HARNESS_DB_CRS
+                     if cr in (run["with_plan"].stdout or "")]
+            if named:
+                offenders[f"{client_key}:crs"] = named
+        self.assertEqual(
+            offenders, {},
+            f"§S5 -- a disagreement between the two `next`s is left visible to "
+            f"the ORCHESTRATOR, never surfaced by this verb: {offenders!r}")
+        self.assertEqual(
+            self.drives["cli_invocations"], "",
+            "§S5 -- no code path may shell out to the harness lane-plan CLI; "
+            "the recording `worktree-flow` on PATH was called")
 
 
 if __name__ == "__main__":

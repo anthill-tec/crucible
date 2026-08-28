@@ -1336,7 +1336,7 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1339-1352`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1349-1362`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
             f'--cycles "<c1,c2>" --agent <agentId>')
@@ -1562,17 +1562,55 @@ def _next_legacy_line(ok, fields):
     return f"next: decision=DRAINED reason={fields['reason']}"
 
 
-def next_projection(fields, args):
+def next_context(context, ok, track):
+    """§S6 P7 — this verb's `context` block: the lane the answer is ABOUT.
+
+    `axi_context` fills `track` from `$WORKFLOW_ROLE`, which is the lane the
+    session DECLARED. When `--track` scoped the answer, that flag —
+    canonicalised, so one rule spells the lane on the read side too (AC18) —
+    IS the resolved lane, and it overrides the declaration: an answer about
+    track-2 emitted from a session that declared track-1 must not stamp itself
+    track-1, or an agent reading `context.track` is misled by its own
+    envelope.
+
+    Nothing is overridden when nothing was resolved. A bare invocation scoped
+    no lane — the answer covers the queue as published — and §S3's refusal
+    scoped none BY DEFINITION, because refusing is precisely not picking a
+    lane. In both the declaration stands as the only track fact available.
+
+    Adjusts the block `ops.context` built FRESH for this call and hands it
+    back, so the change is scoped to `next`: `emit_axi` is untouched and no
+    other verb's context moves."""
+    resolved = canonical_track(track) if ok else None
+    if resolved:
+        context["track"] = resolved
+    return context
+
+
+def next_projection(ok, fields, args):
     """§S6 P2 (C2) — `--fields` NARROWS the one decision, through the SAME
     `select_row_fields` a roadmap row is narrowed by, so one flag means one
     thing across the fleet.
 
+    A projection narrows a RECORD, and `ok=False` carries none: §S3's refusal
+    is scaffolding — `needs`, the live `tracks[]`, its `totalCount` and the
+    state-derived `help[]` — so narrowing THAT to a decision key empties the
+    body outright and hands an agent that habitually passes `--fields` a
+    refusal naming no reason, no candidate lane and no next step, defeating
+    P4, P9 and §S3's whole point. The exemption is therefore STRUCTURAL — it
+    keys on the ABSENCE of a record, never on the flag's value — exactly as
+    `emit_cr_plan_ask` narrows only its `releases` rows and leaves
+    `needs`/`totalCount`/`help` whole, and as `roadmap_scalar_list` leaves a
+    list of bare ids alone because a scalar has no columns to narrow.
+
     The default (no flag) is the WHOLE decision: there is no truncation to
     defeat on a single-record answer, which is exactly why P3's `--full` is
     absent by shape rather than added as a no-op. The transport-failure
-    envelope above is deliberately NOT projected — it carries no record to
-    narrow, only the structured warning and the help that names the fix,
-    matching `roadmap_failure_fields`, which `--fields` also leaves alone."""
+    envelope never arrives here at all — `cmd_next` emits and returns before
+    the resolver runs — matching `roadmap_failure_fields`, which `--fields`
+    also leaves alone."""
+    if not ok:
+        return fields
     return select_row_fields([fields], getattr(args, "fields", None))[0]
 
 
@@ -1599,13 +1637,13 @@ def cmd_next(args, project_dir, ops):
                  f"next: ok=False — the roadmap could not be read: {error}")
         return 1
 
-    ok, code, fields, warnings = resolve_next(
-        resp.get("entries"), track=getattr(args, "track", None))
+    track = getattr(args, "track", None)
+    ok, code, fields, warnings = resolve_next(resp.get("entries"), track=track)
     # The legacy line reads the UNprojected decision: the human channel is not
     # narrowed by a machine-channel projection flag.
-    ops.emit("next", ok, next_projection(fields, args),
-             ops.context(project_dir), warnings,
-             _next_legacy_line(ok, fields))
+    ops.emit("next", ok, next_projection(ok, fields, args),
+             next_context(ops.context(project_dir), ok, track),
+             warnings, _next_legacy_line(ok, fields))
     return code
 
 
