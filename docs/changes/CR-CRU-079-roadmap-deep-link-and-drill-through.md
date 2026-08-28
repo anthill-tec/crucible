@@ -3,8 +3,8 @@
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 078
-- **Status**: PENDING (0.2.0)
-- **Design**: `docs/research/DN-crucible-roadmap-view.md` (decisions) · `docs/research/DN-crucible-wave-track-release.md` (model) · `docs/research/PRD-crucible-v2.md`
+- **Status**: PENDING (0.2.0) — AC3/AC5 re-based 2026-08-28 on the paged release model
+- **Design**: `.lavish/crucible-workflow-flowchart.html` §6 §14 (approved 2026-08-28) · `docs/research/DN-crucible-roadmap-view.md` (decisions) · `docs/research/DN-crucible-wave-track-release.md` (model)
 
 ## Problem
 
@@ -70,13 +70,15 @@ never silently drops the user into unrelated history — the current failure mod
   passes today while the contract fails.
 - **AC2** — both entry points (tab and chip) reach an identical, shareable URL; neither is
   privileged.
-- **AC3** — clicking a CR row lands on **that CR**: its group is expanded and scrolled into
-  view, and it is distinguishable as the target. Asserted for a specific CR id, with the
-  further assertion that **other** groups remain collapsed — the current bug is "all collapsed",
-  so "none expanded" must fail this AC.
+- **AC3** — clicking a CR row lands on **that CR**: the roadmap focuses the release that CR
+  belongs to, pages the strip so that release's gate is shown **whole**, and the CR is
+  distinguishable as the target in the table. Asserted for a specific CR id, with the further
+  assertion that the focused release is **that CR's** release — landing on the default in-flight
+  release when the target sits in another release must fail this AC.
 - **AC4** — for an `IN_PROGRESS` CR the landing shows its **active cycles**, not merely its
   group header.
-- **AC5** — the back affordance returns to the roadmap with prior expansion and scroll intact.
+- **AC5** — the back affordance returns to the roadmap with the **prior focused release and page
+  window** intact — not reset to the default focus.
 - **AC6** — a `PENDING` CR with no workflow history produces an explicit empty state naming the
   CR, or no navigation at all — never an untargeted landing in unrelated history.
 - **AC7** — F14½'s frame status is corrected in the storyboard to match reality once shipped.

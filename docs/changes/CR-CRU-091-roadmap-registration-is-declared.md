@@ -1,0 +1,326 @@
+# CR-CRU-091 — roadmap registration is declared: release, wave and sequence
+
+- **Type**: feature
+- **Wave**: 5 (0.2.0)
+- **Depends on**: 014, 084
+- **Status**: PENDING (0.2.0) — the declared-data prerequisite for CR-078, so it ships in the same release
+- **Design**: `.lavish/crucible-workflow-flowchart.html` §9 §10 §11 §12 (approved 2026-08-28) · `docs/research/DN-crucible-roadmap-view.md`
+
+## Problem
+
+The roadmap is a containment model — release ⊃ wave ⊃ CR — and not one of the three levels is
+declared data on the write path.
+
+- **The release target never reaches the server.** `parse_queue_table` reads the Wave cell with
+  `re.match(r"\s*(\d+)", wave_cell)` and keeps only the leading integer
+  (`clients/_crucible_axi.py:1959`), so the `(0.2.0)` / `(post-0.2.0)` qualifier the queue has
+  carried for months is discarded at parse time. `queue_entries` has no release column to receive
+  it either (`src/store.ts:1146-1156`).
+- **An uncut release has no record at all**, so there is nothing for a CR to target.
+- **The only write path is a whole-queue full replace** driven off a markdown table:
+  `handleQueuePost` (`src/v2.ts:1761`) → `replaceQueue`, which DELETEs the project's rows and
+  re-INSERTs the posted set (`src/store.ts:3032-3057`). There is no verb to plan one CR, order one
+  wave, or kill one CR. The verb that exists, `queue-file`, is wired into **1 of 5** clients
+  (`clients/python-crucible.py:1485-1492`).
+- **`seq` is stored but not published.** The column exists (`src/store.ts:1154`) and is the read
+  order (`src/store.ts:3083`), but `listQueue`'s projection omits it
+  (`src/store.ts:3094-3104`), so the renderer re-derives `data.seq` from the array index
+  (`public/app-logic.mjs:859`, consumed at `public/app.js:2739`).
+- **Removal is deletion.** A CR absent from the posted set vanishes, and supersede cannot be
+  distinguished from void — so a dependant of a dead CR rots silently.
+
+## Scope
+
+### §S1 A proposed release is its own record kind
+
+A proposal is a milestone of type `release-proposal`, recorded through the existing
+`recordMilestoneEvent` (`src/store.ts:1709`). `type` rides the generic payload column, so there is
+no column and no migration for the record itself (`src/store.ts:1699-1700`).
+
+**It is not a `release` with `releasedAt` omitted.** `public/app-logic.mjs:877-878` sorts an
+undated release **OLDEST** on purpose — *"an undated tag is legacy history, and calling it the
+newest would hand it the gating of every unshipped CR on a date nobody recorded"* — so an omitted
+`releasedAt` parks the proposal at the **head** of the strip.
+
+- **Ordering.** Proposals order among themselves by **version** (numeric-component compare of
+  `label`), and every proposal sorts **after every shipped release**, whatever its declared target.
+  Version orders the strip; a target is a plan and can slip. A target that contradicts version
+  order is a planning conflict to surface, never a reason to re-sort.
+- **Isolation from settled history.** `listReleases` is untouched — its filter is
+  `event.type === "release"` (`src/store.ts:2152`), so a proposal cannot leak in. Proposals are
+  read through a new `listReleaseProposals(projectKey)` beside it, with the same archived-project
+  exclusion.
+- **A proposal retires no gate.** `recordMilestoneEvent` stamps gates only for
+  `type === "release"` (`src/store.ts:1768-1773`); CR-CRU-073's rule stays scoped to real releases.
+- **`--target` is optional and revisable**, stored as `targetAt` in **epoch SECONDS** — the same
+  unit as `releasedAt` (`public/app-logic.mjs:874`; `src/store.ts:2154`; `src/types.ts:218-223`).
+  `recordMilestoneEvent`'s `meta` gains `targetAt?: number`, accepted only for `release-proposal`,
+  mirroring the `type === "release"` field stripping at `src/store.ts:1750-1752`; `RunEvent` gains
+  `targetAt?: number` beside `releasedAt` (`src/types.ts:223`).
+- **One formatter for both dates.** `formatReleaseDate(epochSeconds)` is exported from
+  `public/app-logic.mjs` beside `relativeTime` (`public/app-logic.mjs:20`) and takes epoch
+  SECONDS. No call site constructs a date from `releasedAt` or `targetAt` itself — two conventions
+  on one surface renders 1970.
+- **A shipped release supersedes and consumes its proposal.** Recording a `release` whose `label`
+  equals a live proposal's `label` stamps that proposal's `retired_at` in the **same transaction**
+  as the release insert — the shape `recordMilestoneEvent` already uses for gate retirement
+  (`src/store.ts:1770-1773`, helper `src/store.ts:1860-1873`). No new column: `retired_at`
+  (`src/store.ts:1068`) already means *no longer live, still auditable*, and `listEvents` filters
+  on it **unscoped** (`src/store.ts:2086`), so a consumed proposal leaves the live feed and stays
+  retrievable through `getEvent`. One gate renders, never a pair.
+- A proposal with zero CRs is legal — a declared intent, not an error.
+- **A declared target is not the deferred forecast.** The confidence-gated P50/P80 band remains
+  CR-CRU-022's, deferred past 0.2.0 (`docs/research/DN-crucible-roadmap-view.md:31`). A declared
+  target is authored data and does not reopen that decision.
+
+### §S2 `queue_entries` carries the declaration, and the read publishes it
+
+Three additive nullable columns on `queue_entries` (`src/store.ts:1146-1156`):
+
+- **`release TEXT`** — the declared target release label.
+- **`track TEXT`** — the declared track. `buildRoadmapGraph` already reads `e.track` and tolerates
+  its absence (`public/app-logic.mjs:861`); nothing has ever supplied it.
+- **`lifecycle_json TEXT`** — `{"state":"SUPERSEDED","by":"CR-CRU-088","at":<epoch ms>}` or
+  `{"state":"VOID","reason":"…","at":<epoch ms>}`. One JSON column rather than three flat ones, the
+  in-table precedent being `depends_on_json` (`src/store.ts:1151`).
+
+**Migration.** ONE new step appended to `MIGRATION_BODIES` (`src/store.ts:549`): `tableExists`
+guard, then a PRAGMA-checked `ALTER TABLE queue_entries ADD COLUMN` per column — the pattern every
+additive step uses (precedent `src/store.ts:761-768`) — plus a `satisfiedBy` probe asserting all
+three columns are present. `SCHEMA_VERSION` is `MIGRATIONS.length` by construction
+(`src/store.ts:794-801`), so it advances by **appending a step**, never by editing a number. The
+base `CREATE TABLE IF NOT EXISTS` gains the three columns in their current shape, so a fresh store
+never runs the retrofit.
+
+**Read.** `QueueEntry` (`src/types.ts:355-363`) and `listQueue`'s projection
+(`src/store.ts:3094-3104`) gain `seq` **always** — the stored integer, verbatim, never re-derived —
+and `release` / `track` conditionally, through the projection's existing null-omits-the-key idiom.
+`lifecycle` is projected as the parsed object when `lifecycle_json` is present.
+
+**Coexistence with the full replace.** `replaceQueue` (`src/store.ts:3032`) keeps DELETE-then-INSERT
+and keeps dropping a CR absent from the posted set, but it must not destroy a declaration it was
+never handed. Inside the same transaction, **before** the DELETE, it snapshots each existing row's
+`release`, `track`, `seq` and `lifecycle_json` and carries them forward for any `cr` present in both
+the stored and the posted set; a posted entry that declares a value overrides the snapshot. Without
+this, one `queue-file` erases the whole roadmap.
+
+### §S3 The verbs
+
+Five new verbs. The implementation lands **once** in `clients/_crucible_axi.py` (the CR-CRU-054 DRY
+rule); each of the five clients wires the subparser and delegates, exactly as `queue-file` does
+(`clients/python-crucible.py:1485-1492` → `clients/python-crucible.py:1100-1104`).
+
+| Verb | Effect |
+|---|---|
+| `release-propose --label <v> [--target <date>]` | Records or revises the `release-proposal` milestone (§S1). The super container must exist before a CR can target it. |
+| `cr-plan --cr <id> --release <v> --wave <n> --title <brief>` | Per-CR **upsert** of one `queue_entries` row: `release`, `wave`, `title`. Re-running with different values is a legitimate re-plan, not an error. Moving a CR out of a wave leaves that wave's remaining `seq` dense — the gap closes and only that CR moves. |
+| `wave-sequence --release <v> --wave <n> --crs A,B,C [--track <t>]` | §S4. |
+| `cr-supersede --cr X --by Y` | Writes `lifecycle_json` state `SUPERSEDED` with `by`. The work still happens, elsewhere. |
+| `cr-void --cr X --reason …` | Writes `lifecycle_json` state `VOID` with `reason`. The work is not happening. |
+
+Neither `cr-supersede` nor `cr-void` deletes a row; the CR stays visible carrying its declaration.
+Both are **refused, naming the release**, when the CR is a member of any cut release's `crs` —
+settled fact is immutable.
+
+**ORCHESTRATOR only.** Each route passes the existing caller-auth seam `requireRegisteredCaller`
+(`src/v2.ts:221-236` — 409 + state-derived `help[]`), then a new sibling that refuses a caller whose
+stored role is not `ORCHESTRATOR` (`Agent.role`, `src/types.ts:69`; `AGENT_ROLES`,
+`src/types.ts:53`; read via `store.getAgent`, `src/store.ts:1483`). An agent row carrying **no**
+role — pre-CR-044 rows carry none, and it is never fabricated (`src/types.ts:65-69`) — is refused,
+not assumed. A track executes; it never re-plans the roadmap.
+
+**The gap not to repeat:** `queue-file` reaches python only (`clients/python-crucible.py:1486`; the
+name is absent from `bun-`, `rust-`, `mvn-` and `arduino-crucible.py`). Roadmap registration is
+stack-agnostic orchestrator work, so all five verbs reach all five clients.
+
+### §S4 `wave-sequence` is ONE call carrying the whole ordered list
+
+The array position of `--crs` becomes `seq`, because **the order is the payload** — sending CRs one
+at a time makes their sequence an accident of arrival.
+
+- `seq` already exists (`src/store.ts:1154`), is already the read order (`src/store.ts:3083`), and
+  is already consumed as `data.seq` by the renderer (`public/app.js:2739`, emitted at
+  `public/app-logic.mjs:859`); CR-CRU-077 AC2 committed the graph to authored order over its own.
+- The call **replaces** the `seq` assignment of exactly the named `(release, wave)` and touches no
+  other container. The resulting `seq` is dense and strictly increasing across that wave, and
+  globally ordered so a wave's block sits after every earlier wave of the same release.
+- **Insert and reorder are the same call**: re-send the list. There is no `--after X` and no
+  `--move-to N` — a positional API is stateful and cannot express "the order I did not intend".
+- A CR in `--crs` with no `cr-plan` row, or whose planned `(release, wave)` differs from the call's,
+  is **refused by name**. Sequencing never plans.
+- `--track` applies to every CR in the list.
+
+### §S5 Dependency validation severities
+
+This **extends existing law** rather than competing with it: `handleQueuePost` already accepts an
+unresolvable dependency and flags it, never rejects it (`src/v2.ts:1755-1759`, computed at
+`src/v2.ts:1807-1812`).
+
+| Finding | Response |
+|---|---|
+| **Cycle** — A depends on B depends on A | **hard refusal** (409), the cycle's members named in order, nothing written |
+| **Unknown dependency** — a dep naming no known CR | flagged in `unknownDependencies`, **never rejected** |
+| **Out-of-order** — B precedes its own dependency A | `warnings[]` naming every offending `[dependant, dependency]` pair; the sequence **stands, stored as authored** |
+| **Cross-wave backwards** — a CR depends on one in a *later* wave | `warnings[]` naming **both containers** (`release/wave` → `release/wave`), not the two CRs |
+
+Validation runs on `cr-plan` and `wave-sequence`. The cycle is the only finding that refuses.
+**Crucible never substitutes an order of its own** — the same commitment CR-CRU-077 AC2 makes about
+the render layer, applied to the write path.
+
+### §S6 The client asks (AXI P5 / P6 / P7 / P9)
+
+A `cr-plan` missing `--release` or `--wave` is neither accepted nor failed blankly. The client
+resolves it **before** posting — nothing reaches the server — and emits an `ok:false` envelope on
+stdout with exit **2**, the fleet's usage code
+(`docs/changes/CR-CRU-030-fleet-toon-axi-compliance.md:236-238`), carrying:
+
+- `needs=[release, wave]` — exactly the undeclared fields (P6).
+- `releases[n]{label,status,waves}` — the live candidate proposals and the waves already planned
+  against each, read from the server (P7).
+- `help[n]` — pre-filled next-step templates (P9): one `cr-plan` line per candidate
+  release/wave with the caller's own `--cr` and `--title` already substituted, plus a
+  `release-propose --label <v>` line for the case where the intended release does not exist yet.
+
+It **never guesses**, including when exactly one release or exactly one wave is open — silent
+inference is the failure class this design removes. With **no** proposal recorded at all the
+envelope is a definitive empty state (P5) whose only `help[]` entry is `release-propose --label <v>`.
+
+**Division of labour** holds: the server stays plain functional REST — idempotent writes, structured
+records, referential refusals that name the state found, using the existing `hints` `help[]`
+convention on failures. It emits no templates and no prompting. The asking is entirely the
+client's, so no business rule lives in a client and no two clients can decide differently.
+
+### §S7 Idempotency
+
+Every verb's envelope carries **`converged: true|false`**, reusing the fleet's existing convergence
+contract: `converged` is true only when the stored state already equals what a fresh write would
+produce — `manifest.run_manifest_stage` (`crucible_axi/manifest.py:105-118`), the shape
+`install.run_fleet_stage` mirrors (`crucible_axi/install.py:941-991`).
+
+- `release-propose` — converged when a live proposal with the same `label` **and** the same
+  `targetAt` is already held.
+- `cr-plan` — converged when the row's `release`, `wave` and `title` already match. A converged
+  upsert writes nothing, including `filed_at`.
+- `wave-sequence` — converged when the stored `seq` order and `track` for that `(release, wave)`
+  already equal the posted list.
+- `cr-supersede` / `cr-void` — converged when the same `lifecycle` state and reference are stored.
+
+A converged call writes nothing and emits no warning it did not earn.
+
+## Acceptance criteria
+
+- **AC1** — **a proposal never sorts before a shipped release, and proposals order by version.**
+  With `0.1.0` shipped (`releasedAt` set) and `0.2.0` proposed, `0.2.0` is last in the strip order
+  — both with no `--target` and with a `--target` predating `0.1.0`'s `releasedAt`. Proposing
+  `0.3.0` and then `0.2.1` yields the order `0.2.1`, `0.3.0`, unaffected by either target. A
+  proposal modelled as a dateless `release` fails this AC (`public/app-logic.mjs:887-892` sorts it
+  first).
+- **AC2** — **a proposal is invisible to the release machinery, and a shipped release consumes it.**
+  `store.listReleases(key)` returns zero events of type `release-proposal` after any number of
+  `release-propose` calls, while `listReleaseProposals(key)` returns them all. A live gate at
+  `version 0.2.0` still has `retired_at IS NULL` after `release-propose --label 0.2.0`. After the
+  real `milestone --type release --label 0.2.0 --commit <sha>`: that gate is retired, the
+  proposal's `retired_at` is non-null, it is absent from `listEvents` yet still returned by
+  `getEvent`, the roadmap renders exactly **one** `0.2.0` gate (a rendered pair fails this AC), and
+  a proposal for any other label is untouched.
+- **AC3** — **both dates render through one formatter and neither renders 1970.**
+  `formatReleaseDate` is exported from `public/app-logic.mjs`; `releasedAt` and `targetAt` both
+  render through it; a grep finds no date construction applied to either field anywhere else. For
+  the fixture value `releasedAt = 1787149125` the rendered date is 2026-08-19; an implementation
+  treating it as milliseconds renders 1970 and fails this AC.
+- **AC4** — **schema, migration and published fields.** `PRAGMA table_info(queue_entries)` lists
+  `release`, `track` and `lifecycle_json`; `SCHEMA_VERSION === MIGRATIONS.length` and has advanced
+  by exactly one; a store written by the previous build opens, migrates, loses no queue row, and
+  the new step's `satisfiedBy` returns true afterwards. `GET /api/v2/projects/<key>/queue` publishes
+  `seq` on **every** entry and `release`/`track` only where declared. `seq` is read from the column,
+  not the response index: with a fixture row's `queue_entries.seq` set to a value that differs from
+  its position, the response carries the stored value.
+- **AC5** — **a full replace does not erase a declaration.** After `cr-plan` and `wave-sequence`
+  have declared `release`, `wave`, `seq` and `track`, a `queue-file` POST re-posting the same CR ids
+  and carrying neither `release` nor `track` leaves all four values intact for every re-posted CR; a
+  CR absent from the posted set is still dropped.
+- **AC6** — **`cr-plan` against an unknown release fails by name.** `cr-plan --release 9.9.9 …`
+  returns `ok:false` with a non-zero exit, an error naming `9.9.9` as unproposed, a `help[]`
+  entry `release-propose --label 9.9.9`, and no `queue_entries` row created or modified.
+- **AC7** — **`wave-sequence` naming an unplanned CR fails by name.** With `CR-CRU-100` never
+  planned, `wave-sequence --crs CR-CRU-092,CR-CRU-100` refuses, names `CR-CRU-100`, and leaves
+  `CR-CRU-092`'s `seq` unchanged — nothing is partially applied. A CR planned into a *different*
+  `(release, wave)` refuses the same way, naming both containers.
+- **AC8** — **re-sending with two CRs swapped changes only their `seq`.** Sequence `A,B,C,D` then
+  `A,C,B,D`: `B` and `C` exchange `seq`; `A` and `D` keep theirs; no row in any other wave or
+  release changes any field. Re-sending as `A,B,X,C,D` shifts `C` and `D` by one and touches no
+  other wave.
+- **AC9** — **a cycle is refused while an unknown dep is only flagged.** A declaration where A
+  depends on B and B on A is refused with 409, the cycle's members named in order, and no row
+  written. In the same test, a CR depending on the nonexistent `CR-CRU-999` is **accepted** and that
+  id appears in `unknownDependencies`. One severity serving both fails this AC.
+- **AC10** — **an out-of-order sequence is stored as authored, with a warning.** Sequencing `B,A`
+  where B depends on A succeeds, `warnings[]` names the pair `[B, A]`, and `B` holds the lower
+  `seq`; a response that reordered to `A,B` fails this AC. A wave-4 CR depending on a wave-5 CR is
+  stored and warns naming **both containers**, not the two CRs.
+- **AC11** — **the client asks instead of guessing.** `cr-plan --cr <id> --title "…"` with no
+  `--release`/`--wave` exits **2**, emits `ok:false` with `needs` exactly `[release, wave]`, lists
+  every live proposal with its already-planned waves, and carries a `help[]` template with `--cr`
+  and `--title` substituted. With exactly one proposal **and** exactly one planned wave it still
+  exits 2 and still writes nothing — an implementation that infers the single candidate fails this
+  AC. With zero proposals the only `help[]` entry is `release-propose --label <v>`. Nothing is
+  POSTed in any of these cases.
+- **AC12** — **running the whole generation twice converges and mutates nothing.** A script issuing
+  `release-propose`, N × `cr-plan` and M × `wave-sequence`, run end to end twice: every verb in the
+  second run reports `converged: true`, and every `queue_entries` row (`filed_at` included) plus
+  every milestone event is byte-identical before and after that second run. Any verb reporting
+  `converged: false` on the second run fails this AC.
+- **AC13** — **the verbs exist in all five clients.** For each of `bun-`, `python-`, `rust-`,
+  `mvn-` and `arduino-crucible.py`: `--help` lists `release-propose`, `cr-plan`, `wave-sequence`,
+  `cr-supersede` and `cr-void`, and `<client> cr-plan --help` exits 0. The count of clients exposing
+  each verb is **5** — not the 1 that `queue-file` reaches today.
+- **AC14** — **supersede and void are refused on a CR inside a cut release.** With `CR-CRU-080`
+  named in a recorded release's `crs`, both `cr-supersede --cr CR-CRU-080 --by …` and
+  `cr-void --cr CR-CRU-080 --reason …` return `ok:false` naming that release's label, and the row's
+  `lifecycle_json` stays NULL.
+- **AC15** — **void names the broken dependants; supersede resolves through the successor.** With C
+  and D both depending on X: `cr-void --cr X --reason "…"` responds with the broken dependants
+  `[C, D]` **named in the response**, and X remains present with `lifecycle.state === "VOID"`.
+  `cr-supersede --cr X --by Y` responds with C and D resolving through `Y` and **no** broken-dependant
+  list, and X remains present with `lifecycle.state === "SUPERSEDED"` and `by === "Y"`. An
+  implementation collapsing both into one "removed" response fails this AC.
+- **AC16** — **ORCHESTRATOR only.** For each of the five routes: an unregistered caller gets 409
+  (existing seam); a caller registered as `RED` is refused with an error naming the required role;
+  an agent row with no stored role is refused rather than assumed to be an orchestrator; a caller
+  registered `ORCHESTRATOR` succeeds. Nothing is written on any refusal.
+
+## Estimated size
+
+L — three additive columns and a migration step, five server routes plus a role gate, five verbs
+wired across five clients, four validation severities, and a new milestone record kind with its own
+ordering and consumption rules.
+
+## Risk
+
+The full-replace carry-forward (§S2) is the sharpest edge. `replaceQueue` owns the entire queue
+today, so a carry-forward that misses one field means a single `queue-file` silently erases part of
+the roadmap — the exact class of silent membership loss CR-CRU-086 exists because of. AC5 asserts
+it field by field.
+
+Reusing `retired_at` for a consumed proposal borrows a column CR-CRU-073 introduced for gates. It is
+correct because the live-feed filter is unscoped (`src/store.ts:2086`) while the gate-specific query
+is already scoped to `kind = 'gate'` (`src/store.ts:2409`); a future query reading `retired_at` as
+gate-only would break proposals, so that scoping is load-bearing rather than incidental.
+
+Version comparison for proposal ordering is new code on a surface that has only ever sorted numbers.
+A non-semver `--label` must order deterministically rather than throw.
+
+## Non-goals
+
+- The `next` verb and execution-time sequence validation — **CR-CRU-092** (design §13).
+- Paging and the collapsible release rail — **CR-CRU-093** (design §14).
+- Rendering the roadmap surface — graph, table, selection, row grammar — **CR-CRU-078**.
+- The P50/P80 forecast band — **CR-CRU-022**, deferred past 0.2.0.
+- Retiring `queue-file` or the markdown queue table; it stays as the bulk bootstrap and coexists
+  under §S2's carry-forward rule. `queue-file`'s own fleet parity and the standing verb-surface
+  census are **CR-CRU-075**, sequenced behind this CR so parity is done once on the final verb
+  surface — AC13 covers only the five verbs this CR introduces.
+- Any change to `listReleases`, to release dedup identity `(type, label, commit)`, or to
+  `repairProvenance`.
+- Validating a declared `--target` against reality, or warning when a target contradicts version
+  order — surfacing that conflict is a render concern, not this write path's.

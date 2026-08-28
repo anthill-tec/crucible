@@ -1,10 +1,10 @@
-# CR-CRU-078 — graph and table are complementary, shown together
+# CR-CRU-078 — the roadmap is a release-paged flowchart with its scoped table
 
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
-- **Depends on**: 077, 084
-- **Status**: PENDING (0.2.0)
-- **Design**: `docs/research/DN-crucible-roadmap-view.md` (decisions) · `docs/research/DN-crucible-wave-track-release.md` (model) · `docs/research/PRD-crucible-v2.md`
+- **Depends on**: 077, 084, 091
+- **Status**: PENDING (0.2.0) — re-based 2026-08-28 on the approved flowchart design
+- **Design**: `.lavish/crucible-workflow-flowchart.html` §1–§8 §14 (approved 2026-08-28) · `docs/research/DN-crucible-roadmap-view.md` (decisions) · `docs/research/DN-crucible-wave-track-release.md` (model)
 
 ## Problem
 
@@ -12,158 +12,169 @@ The roadmap forces a choice between two readings of the same dataset. CR-014 shi
 **exclusive toggle** — `roadmap-view-table` / `roadmap-view-graph` buttons plus an exclusive
 view state — so exactly one of table or graph renders at a time.
 
-That is the wrong model. The graph carries **structure** (execution order, release gates,
-lanes); the table carries **detail** (deps, status, cycle position). They are complementary
-views of one dataset, so switching means losing one to see the other: you give up the DAG's
-shape to read a status, or give up detail to keep the shape.
+CR-077 then built the graph half as a dependency-composed DAG. On the live board that rendered
+**94 nodes and 208 edges, 160 of them `dependsOn`** — the relationship web the surface exists to
+eliminate. The composition was rejected and is superseded by the approved design; the reusable
+half (release membership from `crs`, ship-order sorting, authored `seq`, id+status labels, the
+four derived statuses, `packages`) carries forward.
 
 Two secondary defects on the same surface:
 
 - **Row text bloat.** The table row renders the full CR title (`span.app-roadmap-title`) on top
-  of id, wave, deps and status, so the identifier competes with a sentence. F14's row grammar is
-  CR-id + bare deps + status + a terse track/cycle overlay — no titles.
+  of id, wave, deps and status, so the identifier competes with a sentence.
 - **Graph labels** read `title ?? cr`, burying the id (fixed in CR-077 §S4; this CR must not
-  reintroduce titles into rows).
+  reintroduce full titles into node labels).
 
-Storyboard **F14a** decisions 7, 7b and 7c are the approved design.
+## Design
 
-## Design (F14a decisions 7 / 7b / 7c)
-
-**One surface, no buttons.** The Roadmap renders both readings simultaneously. There is no
-toggle, no mode, and no view state to choose.
-
-**Two zones.** The **graph occupies the top** and is the *360° perspective* of the whole
-roadmap, with openable containers. The **table sits below** and reads whatever the graph has
-selected.
-
-**The table is selection-driven**, with exactly two readings:
-
-| graph selection | table shows |
-|---|---|
-| an **executable container** (a wave) is opened | that wave's **CRs** — id, deps, status, terse track/cycle overlay |
-| a **release diamond** is clicked | that release's **milestone**: version, the **package(s) delivered** (registry + name + version), commit, date, and the CRs it bundled |
-
-**Gate detail is deliberately excluded.** Nothing today can answer "which gates belong to
-release X", so the table does not pretend to. Recorded as a decision, not an omission.
-
-**The possible release date is out of scope for 0.2.0.** The confidence-gated P50/P80 band
-belongs to **CR-022, which is deferred past 0.2.0**. For a release not yet cut, the table shows
-tag/CR counts and simply **omits** the date row — it is never estimated by other means.
-
-**Coupling both ways.** Expanding a container in the graph expands its rows in the table;
-selecting on either side highlights the other. The graph never leaves the screen, so the 360°
-view is retained while drilling.
-
-**Active CR → Workflow (decision 7c).** Clicking an `IN_PROGRESS` CR row jumps to the Workflow
-view, landing on **that CR's active cycles** as they are displayed and tracked. Implemented in
-**CR-079**, which owns the drill-through; this CR only guarantees the row is the defined source
-and is clickable for active CRs.
+Three zones on one surface, no toggle: a **release strip**, the **active release's flowchart**,
+and a **table scoped to the focused release**. Positions are derived from declared data only —
+no layout engine, no crossing heuristic, no dependency edges drawn.
 
 ## Scope
 
 ### §S1 Remove the toggle
 
-Delete the `roadmap-view-table` / `roadmap-view-graph` buttons and the exclusive view state.
-Both zones render unconditionally. Any test asserting toggle behaviour is retired with its
-reason stated — the contract it defended no longer exists.
+Delete the `roadmap-view-table` / `roadmap-view-graph` buttons and the exclusive view state. All
+zones render unconditionally. Any test asserting toggle behaviour is retired with its reason
+stated — the contract it defended no longer exists.
 
-### §S2 Selection-driven table
+### §S2 Zone 1 — the release strip, paged, whole containers only
 
-The table renders from the graph's current selection: wave container → its CRs; release diamond
-→ release metadata (tag, commit, date, CR count, waves), with the possible-date row **absent**
-until CR-022 lands. Default with nothing selected: the active wave's CRs.
+The strip is the release sequence: `Start → ◇release … → End`, shipped gates solid, proposed
+gates dashed. It is the only zone that grows without bound, and it does **not** scroll.
 
-### §S3 Row grammar
+- The window holds `floor(available width / gate pitch)` gates and **never a fraction of one**.
+  A partially drawn container is a defect, not a labelled edge case.
+- The remainder becomes a **clickable tag** on each side — `◀ N earlier` / `N later ▶` — which is
+  both the hidden count and the affordance. A click pages a whole window.
+- A tag with nothing behind it is **not rendered** rather than rendered disabled.
+- The landing window **contains the focused release**, never offset 0.
+- Window size is **measured, not hardcoded**: it changes when the project rail collapses
+  (CR-093), so collapsing the rail reduces the hidden counts.
 
-Rows carry **CR-id + bare deps + status + terse track/cycle overlay**. The full title is
-removed as a row field; it may remain a hover affordance but never occupies row width.
+### §S3 Zone 1 — gates carry their dates
 
-### §S4 Row order is the AUTHORED order, and it is editable
+A shipped gate carries its ship date (`releases[].releasedAt`, epoch **seconds** —
+`public/app-logic.mjs:874`). A proposed gate carries its declared `--target` (CR-091), or an
+explicit "no target declared" empty state. Both render through **one shared formatter**; a naive
+`new Date(seconds)` yields 1970 and must fail review.
 
-Ordering follows the model in `docs/research/DN-crucible-wave-track-release.md`: a CR's position
-comes from **`depends-on` plus the orchestrator-assigned order**, and nothing else. The queue is a
-full replace of an ordered list and the store already keeps that authored position
-(`queue_entries.seq`); `GET …/queue` returns it (verified). So **re-sequencing is done by reordering
-the queue file and re-registering** — that is the supported way to re-plan after refactoring or
-reprioritisation, and the renderer must not override it.
+Ordering stays **by version** for proposals and ship date for shipped releases. A declared target
+that contradicts version order is surfaced as a planning conflict, never a reason to re-sort.
 
-Today it does. `roadmapTopoOrder` (`public/app.js:2334`) walks `dependsOn` depth-first, emitting
-each dependency before its dependent, so any CR whose dependencies sit later in `seq` is pulled
-forward — discarding the orchestrator's assigned order despite a comment claiming to preserve it.
-It also emits a wave divider on every wave change, so the live board repeats waves
-(`Wave 1,2,3,4,3,4,5,6,5,6,5`).
+### §S4 Zone 2 — only the focused release gets wave detail
 
-New rule:
+If the focused release is **in flight**, its flowchart draws `Start → wave container(s) → ◇gate →
+End`, the wave being the container of its CRs in authored `seq` order. If the focused release has
+**shipped**, zone 2 states what it delivered — CR count, waves spanned, ship date, packages — and
+does **not** reconstruct its waves: the Workflow history view owns historical waves.
 
-1. **Group by release** — the primary grouping (a release bundles the CRs of one or more waves and
-   ships a package to users). Work not yet in any release forms the trailing current region.
-2. **Within a release, group by wave only where it is informative** — a wave is an abstract
-   temporal container of tracks and largely an orchestrator synchronization indicator, so single
-   track and single wave means no wave chrome at all. It is never rendered as a boundary that ends
-   a release.
-3. **Within a group, preserve the authored `seq` verbatim.**
-4. **Topology validates, it does not re-sequence.** An authored order placing a CR before its own
-   dependency raises a **warning on that row** rather than being silently reshuffled — quiet
-   reshuffling hides an authoring error and overrides the orchestrator's intent.
+Multi-track swimlanes inside a wave are **CR-085**, not this CR.
 
-### §S5 Bidirectional highlight
+### §S5 Zone 3 — the table follows the focused release
 
-Expanding a graph container expands its rows; selecting a row highlights its graph node, and
-selecting a node highlights its rows.
+The table renders the focused release's CRs and nothing else — never the whole project. Landing
+focuses the release in progress, so the table lands on that release's rows.
+
+Row grammar: **CR id + brief title + bare depends-on + status + cycle overlay**. The brief title
+is a **new required column** (user directive 2026-08-28) sourced from the CR's own H1; this
+amends the DN's flat "no titles" row grammar, which continues to hold for **flowchart node
+labels**. The table gains a `wave` column only when the release spans more than one wave, and a
+`track` column only when more than one track is reported.
+
+### §S6 Authored order is carried, never re-derived
+
+A CR's position comes from the orchestrator-assigned order and nothing else. The store keeps it
+(`queue_entries.seq`) and CR-077 shipped its consumption as `data.seq`.
+
+Today `roadmapTopoOrder` (`public/app.js:2334`) walks `dependsOn` depth-first, pulling any CR
+whose dependencies sit later in `seq` forward — discarding the assigned order despite a comment
+claiming to preserve it. It also emits a wave divider on every wave change, so the live board
+repeats waves (`Wave 1,2,3,4,3,4,5,6,5,6,5`).
+
+New rule: **topology validates, it does not re-sequence.** An authored order placing a CR before
+its own dependency raises a **warning on that row** and is not reshuffled — quiet reshuffling
+hides an authoring error and overrides the orchestrator's intent (CR-091 §S5).
+
+### §S7 Selection and highlight
+
+Clicking a gate refocuses zones 2 and 3. Clicking the active wave opens/closes it in place and
+narrows the table to that wave. Clicking a CR node or its row drills to that CR's cycles in
+Workflow — the jump itself is **CR-079**. Selecting on either side highlights the other.
 
 ## Acceptance criteria
 
 - **AC1** — no toggle exists: `roadmap-view-table` and `roadmap-view-graph` are absent from the
-  DOM and from the source, and **both** graph and table are present simultaneously on the
-  roadmap surface.
-- **AC2** — the graph renders **above** the table (asserted geometrically, not by source order).
-- **AC3** — opening a wave container makes the table list exactly that wave's CRs.
-- **AC4** — clicking a release diamond makes the table show that release's milestone: version,
-  its **delivered package(s)** (registry, name, version — CR-084), commit, date and bundled CR
-  count. It shows **no gate rows**. Where `packages` is empty it renders an explicit "no package
-  recorded" state, never an apparently complete release — a release that delivered nothing to users
-  is not a complete release (see the DN).
-- **AC5** — for a release **not yet cut**, the table shows its CR counts and **omits** the
-  possible-date row entirely. No estimated, interpolated or placeholder date may render while
-  CR-022 is unshipped.
-- **AC6** — a table row renders **no CR title** as a row field; row text starts with the CR id.
-- **AC7** — expanding a container in the graph expands the matching rows; selecting a row
-  highlights its node and vice versa.
-- **AC8** — an `IN_PROGRESS` row is clickable and marked as the drill-through source; the jump
-  itself is CR-079's AC.
-- **AC9** — the surface renders the live 78-CR roadmap with both zones and no error.
-- **AC10** — no wave is rendered twice inside one region, and the live repeated sequence
-  (`Wave 1,2,3,4,3,4,5,6,5,6,5`) must fail this AC. Where a single track and a single wave carry no
-  information, no wave chrome renders at all.
-- **AC11** — rows group by **release** first, preserve authored `seq` within a group, and place
-  work not yet released in a trailing current region. Asserted against a fixture whose authored
-  order differs from a dependency-only walk, so a renderer that re-derives order fails.
-- **AC11b** — **order is editable**: re-registering the queue with two CRs swapped (same waves,
-  same deps) changes their rendered order accordingly. This is the mid-flight re-sequencing
-  contract; a renderer that re-derives order would fail this AC.
-- **AC11c** — an authored order that places a CR **before its own dependency** renders a warning
-  on that row and is **not silently reordered**.
-- **AC12** — with releases recorded, release dividers render in order and each CR row sits under
-  the release it belongs to; deferred work sits after the last release boundary, visibly outside
-  the release.
+  DOM and from the source, and all three zones render simultaneously.
+- **AC2** — the strip renders above the flowchart, which renders above the table (asserted
+  geometrically, not by source order).
+- **AC3** — **no gate is ever drawn partially**: for every rendered gate, its bounding box lies
+  wholly inside the strip's box. Asserted on landing and after paging both directions. A gate
+  clipped by one pixel fails.
+- **AC4** — with more releases than fit, the hidden count on each side is rendered as a clickable
+  tag; a click pages by a whole window and the counts update. With nothing hidden on a side, that
+  tag is **absent from the DOM**, not merely disabled.
+- **AC5** — the landing window **contains the release in progress**; a fixture with 20 releases
+  whose in-flight release is last must not land on offset 0.
+- **AC6** — a shipped gate renders its ship date; a proposed gate renders its declared target or
+  an explicit "no target declared". A date rendered as `1970-…` fails this AC (seconds-vs-ms).
+- **AC7** — **no forecast date renders.** A release with no declared target shows the empty state;
+  no estimated, interpolated or placeholder date may appear while CR-022 is unshipped. A
+  *declared* target is authored data and is not a forecast.
+- **AC8** — focusing a **shipped** release shows its delivered summary (CR count, waves, date,
+  packages per CR-084) and draws **no wave containers**. Where `packages` is empty it renders an
+  explicit "no package recorded" state, never an apparently complete release.
+- **AC9** — focusing the **in-flight** release draws its wave container with that wave's CRs in
+  authored `seq` order.
+- **AC10** — the table shows **only** the focused release's CRs; clicking another gate replaces
+  the rows. The row count equals that release's membership, never the project total.
+- **AC11** — a table row renders the CR id **and its brief title**; a row missing the title column
+  fails. Flowchart **node** labels carry no title — a node label containing its entry's `title`
+  string fails.
+- **AC12** — the `wave` column appears only when the focused release spans more than one wave;
+  the `track` column only when more than one track is reported.
+- **AC13** — rows preserve authored `seq` verbatim within the release. Asserted against a fixture
+  whose authored order differs from a dependency-only walk, so a renderer that re-derives order
+  fails.
+- **AC14** — **order is editable**: re-registering with two CRs swapped (same wave, same deps)
+  changes their rendered order accordingly.
+- **AC15** — an authored order placing a CR before its own dependency renders a warning on that
+  row and is **not** reordered.
+- **AC16** — no wave is rendered twice inside one region; the live repeated sequence
+  (`Wave 1,2,3,4,3,4,5,6,5,6,5`) must fail this AC. A single wave carrying no information renders
+  no wave chrome.
+- **AC17** — selecting a row highlights its node and vice versa.
+- **AC18** — an `IN_PROGRESS` row is clickable and marked as the drill-through source; the jump is
+  CR-079's AC.
+- **AC19** — with **no** queue registered the surface renders a definitive empty state naming the
+  registration verb, and no error. (The board is legitimately empty until re-registered.)
+- **AC20** — **zero dependency edges are drawn.** A rendered edge whose meaning is `dependsOn`
+  fails this AC; dependency is stated only as the table's column.
 
 ## Estimated size
 
-M — toggle removal, selection plumbing between the two zones, row grammar, highlight wiring.
+L — three zones, paging with measured window, date formatting, selection plumbing, and the
+removal of `roadmapTopoOrder`'s re-derivation.
 
 ## Risk
 
-Selection state is new shared state between two zones; the failure mode is a desynchronised
-highlight (a row highlighted whose node is not, or vice versa). AC7 asserts both directions
-explicitly for that reason.
+Selection state is new shared state across three zones; the failure mode is a desynchronised
+highlight. AC17 asserts both directions.
 
-Removing the toggle deletes a shipped affordance. Anyone with a bookmarked expectation of "graph
-mode" loses it — acceptable and intended, since both views now render at once, but the retired
-tests must say so rather than vanishing silently.
+The paging window is measured from layout, so it interacts with CR-093 (rail collapse) and with
+any container that changes width. AC3 is the invariant that catches a bad measurement: it fails
+on any partial gate rather than tolerating a near-miss.
+
+Removing the toggle deletes a shipped affordance; the retired tests must state that rather than
+vanishing silently.
 
 ## Non-goals
 
-- Graph topology, waves, gates, lanes, motion — **CR-077**.
+- Multi-track swimlanes inside a wave — **CR-085**.
+- The registration verbs, proposed-release records and the `release` column — **CR-091**.
 - The chip URL fix and the active-CR jump implementation — **CR-079**.
 - Velocity, burndown, P50/P80 forecast — **CR-022, post-0.2.0**.
-- Release→gate association — explicitly excluded above; needs a data model that does not exist.
+- The collapsible project rail — **CR-093**.
+- Release→gate association — needs a data model that does not exist.
+- Historical wave reconstruction for shipped releases — the Workflow history view owns it.

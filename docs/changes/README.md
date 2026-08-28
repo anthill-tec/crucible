@@ -93,10 +93,13 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-090](CR-CRU-090-install-lays-the-fleet-down.md) | `install` never lays the client fleet down, so every manifest path is dead | hotfix | COMPLETED (0.1.3 · shipped) | — | 5 |
 | [CR-CRU-084](CR-CRU-084-release-records-its-packages.md) | a release records the package(s) it delivered | feature | COMPLETED | 080, 081 | 5 |
 | [CR-CRU-077](CR-CRU-077-roadmap-graph-is-the-execution-dag.md) | the roadmap graph is the execution DAG, not a relationship web | feature | COMPLETED (0.2.0) | 014, 076, 080, 083, 084 | 5 (0.2.0) |
-| [CR-CRU-078](CR-CRU-078-roadmap-graph-and-table-together.md) | graph and table are complementary, shown together | feature | PENDING (0.2.0) | 077, 084 | 5 (0.2.0) |
+| [CR-CRU-091](CR-CRU-091-roadmap-registration-is-declared.md) | roadmap registration is declared: release, wave and sequence | feature | PENDING (0.2.0) | 014, 084 | 5 (0.2.0) |
+| [CR-CRU-078](CR-CRU-078-roadmap-graph-and-table-together.md) | the roadmap is a release-paged flowchart with its scoped table | feature | PENDING (0.2.0) | 077, 084, 091 | 5 (0.2.0) |
 | [CR-CRU-079](CR-CRU-079-roadmap-deep-link-and-drill-through.md) | roadmap deep-link parity and active-CR drill-through | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
-| [CR-CRU-075](CR-CRU-075-queue-file-fleet-parity.md) | queue-file fleet parity + AXI verb-surface census enforcement | patch | PENDING (post-0.2.0) | 014 | 6 (post-0.2.0) |
-| [CR-CRU-085](CR-CRU-085-roadmap-multi-track-lanes.md) | roadmap wave containers and multi-track swimlanes | feature | PENDING (post-0.2.0) | 077 | 6 (post-0.2.0) |
+| [CR-CRU-092](CR-CRU-092-next-validates-the-sequence.md) | `next`: the orchestrator validates its sequence during execution | feature | PENDING (post-0.2.0) | 091 | 6 (post-0.2.0) |
+| [CR-CRU-093](CR-CRU-093-project-rail-collapses.md) | the project rail collapses, giving every workspace view its width back | feature | PENDING (post-0.2.0) | 006 | 6 (post-0.2.0) |
+| [CR-CRU-075](CR-CRU-075-queue-file-fleet-parity.md) | queue-file fleet parity + AXI verb-surface census enforcement | patch | PENDING (post-0.2.0) | 014, 091 | 6 (post-0.2.0) |
+| [CR-CRU-085](CR-CRU-085-roadmap-multi-track-lanes.md) | multi-track swimlanes inside a wave | feature | PENDING (post-0.2.0) | 078 | 6 (post-0.2.0) |
 
 ## Deferred — post-0.2.0
 
@@ -130,6 +133,11 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   remedy is frozen bytes, as already done for §S2c. The `npm pack` half no longer reproduces.
 - 2026-08-27 — deferred: the `[fleet]` uninstall inverse (CR-CRU-090 Non-goals); `STAGE_ORDER` has
   four stages, `UNINSTALL_STAGE_ORDER` three.
+- 2026-08-28 — roadmap design **approved** (`.lavish/crucible-workflow-flowchart.html` §1–§14): release-paged
+  flowchart, no dependency edges drawn, whole containers only. Roadmap rows **cleared from the DB** on request
+  (backup `data/crucible.db.pre-roadmap-clear-1787893879`); the board stays empty until CR-091 registers it under
+  the declared model. CR-078 re-based, 079/085/075 re-scoped, 091/092/093 filed. CR-082's VOID stands — release
+  targeting returns on the CR, not the wave.
 - CI runs an unpinned bun deliberately. Pinning was tried in CR-087 and **reverted** (`93f42f7`): `packageManager` makes npm provision through corepack (958 ms → 13082 ms on the npm-pack test). The both-orderings fixtures catch a console-format flip instead. [CR-CRU-089](CR-CRU-089-pin-bun-without-telling-npm.md) is VOID; revisit only if a flip recurs.
 - The bun failure-detail mis-attribution (a leaked async throw landing on the next leaf) is
   **fixed** by [CR-CRU-088](CR-CRU-088-failure-detail-marries-the-wrong-leaf.md) §S1: a detail block

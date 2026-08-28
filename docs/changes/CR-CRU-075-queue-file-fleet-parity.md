@@ -1,9 +1,9 @@
 # CR-CRU-075 — queue-file fleet parity + AXI verb-surface census enforcement
 
 - **Type**: patch
-- **Wave**: 5 (0.2.0)
-- **Depends on**: 014
-- **Status**: PENDING (0.2.0)
+- **Wave**: 6 (post-0.2.0)
+- **Depends on**: 014, 091
+- **Status**: PENDING (post-0.2.0) — re-sequenced 2026-08-28 behind CR-091: parity is done once, on the final verb surface
 
 ## Problem
 

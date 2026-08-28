@@ -1,10 +1,10 @@
-# CR-CRU-085 — roadmap wave containers and multi-track swimlanes
+# CR-CRU-085 — multi-track swimlanes inside a wave
 
 - **Type**: feature
 - **Wave**: 6 (post-0.2.0)
-- **Depends on**: 077
-- **Design**: `docs/research/DN-crucible-roadmap-view.md` (decisions 2 and 4) · `docs/research/DN-crucible-wave-track-release.md`
-- **Status**: PENDING (post-0.2.0)
+- **Depends on**: 078
+- **Design**: `.lavish/crucible-workflow-flowchart.html` §4 §7 (approved 2026-08-28) · `docs/research/DN-crucible-roadmap-view.md` (decisions 2 and 4) · `docs/research/DN-crucible-wave-track-release.md`
+- **Status**: PENDING (post-0.2.0) — re-scoped 2026-08-28: the wave container ships in CR-078; this CR owns lanes only
 
 ## Problem
 
@@ -60,13 +60,15 @@ container. None of these are error states, and none produce a warning or an empt
   lanes render and **no error or warning** is produced.
 - **AC3** — no test asserts a hard-coded track count; lane count is always derived from fixture
   data, so the "Crucible is single-track" case and a multi-track case are both expressible.
-- **AC4** — a wave container renders only when informative (more than one track, or more than one
-  wave in a release), and never as an edge, gate or release boundary.
-- **AC5** — the graph still lays out without overlap or clipping with lanes present; asserted on
-  rendered output, not on the builder's data, since nested-container layout is the risk this CR
+- **AC4** — lanes render **only** when more than one track is reported; the wave container itself
+  is CR-078's and must be unchanged by this CR.
+- **AC5** — the flowchart still lays out without overlap or clipping with lanes present; asserted
+  on rendered output, not on the builder's data, since nested-container layout is the risk this CR
   carries.
-- **AC6** — CR-077's behaviour is unchanged when this chrome is absent: removing lanes and wave
-  containers from the fixture reproduces exactly the 077 graph.
+- **AC6** — CR-078's behaviour is unchanged when this chrome is absent: removing track data from
+  the fixture reproduces exactly the CR-078 render.
+- **AC7** — the table gains its `track` column under the same condition as the lanes, and loses it
+  when only one track is reported.
 
 ## Estimated size
 
