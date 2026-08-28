@@ -138,6 +138,138 @@ export declare function relativeTime(ts: number, now: number): string;
  * `YYYY-MM-DD` out, empty string for an absent or unusable value. */
 export declare function formatReleaseDate(epochSeconds: number | null | undefined): string;
 
+/** CR-CRU-078 §S3 — the kind of gate the strip is resolving a date for. The
+ *  caller declares it from the slice it iterated; it is never sniffed. */
+export type ReleaseGateKind = "shipped" | "proposed";
+
+export interface GateDateResult {
+  kind: ReleaseGateKind;
+  /** The one field consulted, or `null` for an unrecognised kind. */
+  field: "releasedAt" | "targetAt" | null;
+  /** `absent` is AC6's declared empty state; `unusable` is a data defect. */
+  state: "dated" | "absent" | "unusable";
+  /** `formatReleaseDate`'s answer for that field — `""` unless `dated`. */
+  date: string;
+}
+
+/** CR-CRU-078 §S3/AC6/AC7 — the date ONE release gate carries, or its declared
+ * absence. Pure; never forecasts, and never reads a proposal's `timestamp`. */
+export declare function resolveGateDate(
+  record: { releasedAt?: unknown; targetAt?: unknown } | null | undefined,
+  kind: ReleaseGateKind,
+): GateDateResult;
+
+/** CR-CRU-078 §S2 — ONE gate of the release strip: which release, and the date
+ *  it carries (or the state that says it has none). */
+export interface ReleaseStripGate {
+  /** A shipped row's `version`, a proposal's `label`; `""` when unlabelled. */
+  version: string;
+  kind: ReleaseGateKind;
+  /** `resolveGateDate`'s answer — `""` unless `dateState` is `dated`. */
+  date: string;
+  dateState: GateDateResult["state"];
+}
+
+/** CR-CRU-078 §S2/AC4 — the strip's page window. `size` is the VISIBLE gate
+ *  count (the last page of a non-multiple sequence is short); `earlier`/`later`
+ *  are the hidden counts, and a zero is why a tag is absent, not disabled. */
+export interface ReleaseStripPage {
+  size: number;
+  offset: number;
+  earlier: number;
+  later: number;
+}
+
+/** CR-CRU-078 §S9/AC28 — shipped as published, then proposals as published.
+ *  Concatenation only: re-sorting either half fails AC28. */
+export declare function releaseStripGates(
+  releases: readonly unknown[] | null | undefined,
+  proposals: readonly unknown[] | null | undefined,
+): ReleaseStripGate[];
+
+/** CR-CRU-078 §S2/AC5 + §S4/AC10 — the index of the FOCUSED gate: the version
+ *  the user chose when it is still in the sequence, else the release in
+ *  progress (the first live proposal, else the newest shipped tag); -1 for an
+ *  empty sequence. The ONE notion of focus on this surface. */
+export declare function releaseStripFocusIndex(
+  gates: readonly ReleaseStripGate[],
+  focusedVersion?: string,
+): number;
+
+/** CR-CRU-078 §S2/AC3 — how many WHOLE gates a MEASURED track holds. 0 when
+ *  either measurement is unusable — never a fallback constant. */
+export declare function stripWindowSize(
+  availableWidth: number | null | undefined,
+  gatePitch: number | null | undefined,
+): number;
+
+/** CR-CRU-078 §S2/AC4/AC5 — the page window: snapped to the page grid, clamped
+ *  to the ends, landing on the page that CONTAINS `focusIndex`. */
+export declare function releaseStripPage(input: {
+  count: number;
+  size: number;
+  focusIndex?: number;
+  offset?: number;
+}): ReleaseStripPage;
+
+/** CR-CRU-084 §S1 — one artifact a release delivered. */
+export interface ReleasePackage {
+  registry: string;
+  name: string;
+  version: string;
+}
+
+/** CR-CRU-078 §S4 — one wave CONTAINER of the focused release. `wave` is
+ *  `null` for members declaring none: a real group, drawn without chrome. */
+export interface FocusedReleaseWave<Entry = unknown> {
+  wave: string | null;
+  entries: Entry[];
+}
+
+/** CR-CRU-078 §S4/§S5 — everything zones 2 and 3 draw for ONE focused
+ *  release: its membership in authored order, that membership grouped into
+ *  waves, what it delivered, and the tracks it reports. */
+export interface FocusedReleaseView<Entry = unknown> {
+  version: string;
+  kind: ReleaseGateKind;
+  date: string;
+  dateState: GateDateResult["state"];
+  members: Entry[];
+  waves: FocusedReleaseWave<Entry>[];
+  crCount: number;
+  packages: ReleasePackage[] | undefined;
+  /** `empty` (delivered none) and `absent` (pre-CR-CRU-084) stay distinct. */
+  packagesState: "listed" | "empty" | "absent";
+  tracks: string[];
+}
+
+export declare function focusedReleaseView<Entry = unknown>(
+  gate: ReleaseStripGate | null | undefined,
+  releases: readonly unknown[] | null | undefined,
+  entries: readonly Entry[] | null | undefined,
+): FocusedReleaseView<Entry>;
+
+/** CR-CRU-078 §S5/AC12 — the columns zone 3 shows for the rows it was given:
+ *  `wave` only across waves, `track` only across reported tracks. */
+export declare function roadmapTableColumns(entries: readonly unknown[] | null | undefined): string[];
+
+/** CR-CRU-078 §S5/AC11 — the CR's own H1 without the leading id the row
+ *  already carries; `""` for an absent title, and never truncated. */
+export declare function briefCrTitle(
+  title: string | null | undefined,
+  cr: string | null | undefined,
+): string;
+
+/** CR-CRU-078 AC27 — CR-CRU-091's SECOND axis as one badge, or `null` when the
+ *  entry declares none. Never replaces the derived `status`. */
+export declare function lifecycleBadge(
+  lifecycle: { state?: unknown; by?: unknown; reason?: unknown } | null | undefined,
+): { state: "SUPERSEDED" | "VOID"; text: string } | null;
+
+/** CR-CRU-078 §S4 — the terse status a flowchart node states as TEXT; `""` for
+ *  an unrecognised value, which supports no claim. */
+export declare function crStatusMark(status: string | null | undefined): string;
+
 export declare function livenessGlyph(agent: CrucibleAgentLike): LivenessGlyphResult;
 
 export declare function routeParse(pathname: string): RouteState;

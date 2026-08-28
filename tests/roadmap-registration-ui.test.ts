@@ -23,14 +23,24 @@
 // published `seq`. Fixture: entries whose stored `seq` values are `10, 20, 30`
 // yield `data.seq` `10, 20, 30` — the surviving `seq: index` derivation yields
 // `0, 1, 2`."
-//
 // `QueueEntry.seq` is published on EVERY entry, read verbatim from the column
 // (`src/types.ts:397-404`), so a payload without one is a DEFECT, not a shape
-// to paper over. Contract this file pins for that case: the node OMITS `seq`
-// entirely — the state `bySeq`/`missingSeq` in tests/roadmap-graph.test.ts
-// already report as `<id>:no-seq`, and the state milestone and terminal nodes
-// already occupy. An index fallback would reintroduce exactly the two-meanings
+// to paper over. Contract this file pins for that case: the position is
+// OMITTED entirely — the same "no carried position" state a container node
+// occupies. An index fallback would reintroduce exactly the two-meanings
 // ambiguity AC18 removes.
+//
+// ── THE CONSUMER MOVED, and AC18 moved with it ─────────────────────────────
+// AC18 names `buildRoadmapGraph` because that was `seq`'s only in-tree
+// consumer when CR-CRU-091 shipped. CR-CRU-078 C3 replaced that composition
+// wholesale (its 160 `dependsOn` edges are what AC20 forbids), so the builder
+// no longer exists and the quote above is history rather than a live citation.
+// The CONTRACT is unchanged and is asserted here against what replaced it:
+// `focusedReleaseView` hands the renderer each member with its own stored
+// `seq`, and the renderer publishes it as `data-seq`, omitted when unusable.
+// The rendered half is proven on the real DOM in
+// tests/roadmap-release-focus.test.ts; what is proven HERE is the pure
+// boundary and the executable scan that no defaulting survives in the render.
 
 import { describe, test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -42,10 +52,8 @@ const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const APP_LOGIC_SRC = readFileSync(path.join(REPO_ROOT, "public/app-logic.mjs"), "utf8");
 const APP_JS_SRC = readFileSync(path.join(REPO_ROOT, "public/app.js"), "utf8");
 
-// The ambient tests/app-logic.d.ts predates both exports, so cast the module to
-// the boundary under test ONCE (GREEN adds the runtime export and its
-// declaration). Until then `formatReleaseDate` is `undefined` and every call
-// below throws "is not a function" — the intended missing-export RED signal.
+// The ambient tests/app-logic.d.ts predates both exports, so the module is
+// cast to the boundary under test ONCE.
 interface QueueEntryLike {
   cr: string;
   title?: string;
@@ -54,22 +62,36 @@ interface QueueEntryLike {
   status: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "COMPLETED_UNTRACKED";
   track?: string;
   seq?: number;
+  release?: string;
 }
-interface GraphNodeLike {
-  data: { id: string; type: string; seq?: number };
+interface StripGateLike {
+  version: string;
+  kind: "shipped" | "proposed";
+  date: string;
+  dateState: "dated" | "absent" | "unusable";
 }
 const Logic = AppLogic as unknown as {
   formatReleaseDate: (epochSeconds: unknown) => string;
-  buildRoadmapGraph: (
-    entries: QueueEntryLike[],
+  focusedReleaseView: (
+    gate: StripGateLike,
     releases: unknown[],
-  ) => { nodes: GraphNodeLike[]; edges: unknown[] };
+    entries: QueueEntryLike[],
+  ) => { members: QueueEntryLike[] };
 };
 
-const crNodes = (g: { nodes: GraphNodeLike[] }): GraphNodeLike[] =>
-  g.nodes.filter((n) => n.data.type === "cr");
-const seqOf = (g: { nodes: GraphNodeLike[] }, id: string): number | undefined =>
-  g.nodes.find((n) => n.data.id === id)!.data.seq;
+/** The in-flight release every AC18 fixture below is declared into. */
+const PROPOSED: StripGateLike = {
+  version: "0.2.0",
+  kind: "proposed",
+  date: "",
+  dateState: "absent",
+};
+
+const membersOf = (entries: QueueEntryLike[]): QueueEntryLike[] =>
+  Logic.focusedReleaseView(PROPOSED, [], entries).members;
+
+const seqOf = (entries: QueueEntryLike[], cr: string): number | undefined =>
+  membersOf(entries).find((entry) => entry.cr === cr)?.seq;
 
 // ── AC3 ────────────────────────────────────────────────────────────────────
 
@@ -168,91 +190,79 @@ describe("CR-CRU-091 §S1/AC3 — ONE formatter, taking epoch SECONDS, for both 
 
 // ── AC18 ───────────────────────────────────────────────────────────────────
 
-/** Three CRs whose STORED `seq` values are decidedly not their array indices. */
+/** Three CRs whose STORED `seq` values are decidedly not their array indices,
+ *  all declared into the in-flight release so they are its membership. */
 const STORED_SEQ_ENTRIES: QueueEntryLike[] = [
-  { cr: "CR-A", title: "Alpha", wave: "5", dependsOn: [], status: "COMPLETED", seq: 10 },
-  { cr: "CR-B", title: "Beta", wave: "5", dependsOn: ["CR-A"], status: "IN_PROGRESS", seq: 20 },
-  { cr: "CR-C", title: "Gamma", wave: "6", dependsOn: ["CR-B"], status: "PENDING", seq: 30 },
+  { cr: "CR-A", title: "Alpha", wave: "5", dependsOn: [], status: "COMPLETED", seq: 10, release: "0.2.0" },
+  { cr: "CR-B", title: "Beta", wave: "5", dependsOn: ["CR-A"], status: "IN_PROGRESS", seq: 20, release: "0.2.0" },
+  { cr: "CR-C", title: "Gamma", wave: "6", dependsOn: ["CR-B"], status: "PENDING", seq: 30, release: "0.2.0" },
 ];
 
 describe("CR-CRU-091/AC18 — the published `seq` is CONSUMED, never re-derived from the response index", () => {
-  test("stored `seq` 10, 20, 30 yields `data.seq` 10, 20, 30 — not the index's 0, 1, 2", () => {
-    const g = Logic.buildRoadmapGraph(STORED_SEQ_ENTRIES, []);
-    expect(crNodes(g).map((n) => n.data.seq)).toEqual([10, 20, 30]);
+  test("stored `seq` 10, 20, 30 reaches the renderer as 10, 20, 30 — not the index's 0, 1, 2", () => {
+    const members = membersOf(STORED_SEQ_ENTRIES);
+    expect(members.map((entry) => entry.seq)).toEqual([10, 20, 30]);
     // Named explicitly: the derivation this AC retires, and the fixture that
     // makes the two answers distinguishable at all.
-    expect(crNodes(g).map((n) => n.data.seq)).not.toEqual([0, 1, 2]);
+    expect(members.map((entry) => entry.seq)).not.toEqual([0, 1, 2]);
     expect(STORED_SEQ_ENTRIES.map((e) => e.seq)).not.toEqual([0, 1, 2]);
-    // Nothing else about the node moved: `seq` is the only field under test.
-    expect(crNodes(g).map((n) => n.data.id)).toEqual(["CR-A", "CR-B", "CR-C"]);
+    // Nothing else about the membership moved: `seq` is the only field here.
+    expect(members.map((entry) => entry.cr)).toEqual(["CR-A", "CR-B", "CR-C"]);
   });
 
   test("VERBATIM per entry: a payload whose order and `seq` disagree carries each entry's OWN stored value", () => {
     // `listQueue` is `ORDER BY seq`, so array order and `seq` order normally
     // agree — which is exactly why an index derivation survives every other
-    // AC. Break the agreement and the two answers separate per node.
+    // AC. Break the agreement and the two answers separate per entry.
     const shuffled: QueueEntryLike[] = [
-      STORED_SEQ_ENTRIES[2],
-      STORED_SEQ_ENTRIES[0],
-      STORED_SEQ_ENTRIES[1],
+      STORED_SEQ_ENTRIES[2]!,
+      STORED_SEQ_ENTRIES[0]!,
+      STORED_SEQ_ENTRIES[1]!,
     ];
-    const g = Logic.buildRoadmapGraph(shuffled, []);
     expect({
-      "CR-A": seqOf(g, "CR-A"),
-      "CR-B": seqOf(g, "CR-B"),
-      "CR-C": seqOf(g, "CR-C"),
+      "CR-A": seqOf(shuffled, "CR-A"),
+      "CR-B": seqOf(shuffled, "CR-B"),
+      "CR-C": seqOf(shuffled, "CR-C"),
     }).toEqual({ "CR-A": 10, "CR-B": 20, "CR-C": 30 });
-    // Emission order still follows the payload — consuming `seq` changed the
-    // carried VALUE, not which node the builder pushes first.
-    expect(crNodes(g).map((n) => n.data.id)).toEqual(["CR-C", "CR-A", "CR-B"]);
+    // Membership order still follows the PAYLOAD — CR-CRU-078 §S6 carries the
+    // authored order and re-derives nothing, so consuming `seq` changed the
+    // carried VALUE, never which entry comes first.
+    expect(membersOf(shuffled).map((entry) => entry.cr)).toEqual(["CR-C", "CR-A", "CR-B"]);
   });
 
   test("a stored `seq` is carried whatever its shape — sparse, wide, zero-based, fractional", () => {
     const entries: QueueEntryLike[] = [
-      { cr: "CR-P", wave: "1", dependsOn: [], status: "PENDING", seq: 0 },
-      { cr: "CR-Q", wave: "1", dependsOn: [], status: "PENDING", seq: 1.5 },
-      { cr: "CR-R", wave: "1", dependsOn: [], status: "PENDING", seq: 4096 },
+      { cr: "CR-P", wave: "1", dependsOn: [], status: "PENDING", seq: 0, release: "0.2.0" },
+      { cr: "CR-Q", wave: "1", dependsOn: [], status: "PENDING", seq: 1.5, release: "0.2.0" },
+      { cr: "CR-R", wave: "1", dependsOn: [], status: "PENDING", seq: 4096, release: "0.2.0" },
     ];
-    const g = Logic.buildRoadmapGraph(entries, []);
-    expect(crNodes(g).map((n) => n.data.seq)).toEqual([0, 1.5, 4096]);
+    expect(membersOf(entries).map((entry) => entry.seq)).toEqual([0, 1.5, 4096]);
   });
 
-  test("a MISSING `seq` is OMITTED, never defaulted to the index — the ambiguity stays closed", () => {
-    const entries: QueueEntryLike[] = [
-      { cr: "CR-A", wave: "5", dependsOn: [], status: "COMPLETED", seq: 10 },
-      { cr: "CR-NO-SEQ", wave: "5", dependsOn: [], status: "PENDING" },
-      { cr: "CR-C", wave: "6", dependsOn: [], status: "PENDING", seq: 30 },
+  test("a MISSING `seq` is OMITTED by the render, never defaulted — the ambiguity stays closed", () => {
+    // AC18's absence half is a RENDER contract now (the entry itself simply
+    // has no key), so it is pinned where the render can be seen: the two
+    // places `public/app.js` publishes a position both guard on
+    // `Number.isFinite`, and NO defaulting expression survives anywhere on the
+    // surface. The rendered proof — `data-seq` absent on the node and on the
+    // row — is in tests/roadmap-release-focus.test.ts.
+    const code = APP_JS_SRC.split("\n")
+      .filter((line) => !/^\s*(?:\/\/|\*|\/\*)/.test(line))
+      .join("\n");
+    const guarded = code.match(/Number\.isFinite\(entry\.seq\)/g) ?? [];
+    expect(guarded.length).toBe(2);
+    const published = code.match(/"data-seq"/g) ?? [];
+    expect(published.length).toBe(2);
+    // The defaulting this AC exists to prevent, in every shape it took.
+    const DEFAULTS = [
+      /\bseq\b[^;\n]*\?\?\s*0\b/,
+      /\bseq\s*:\s*index\b/,
+      /\bseq\s*:\s*at\b/,
+      /\bseq\b[^;\n]*\|\|\s*0\b/,
     ];
-    const g = Logic.buildRoadmapGraph(entries, []);
-    const undated = g.nodes.find((n) => n.data.id === "CR-NO-SEQ")!;
-    // The key is ABSENT, so the node reads as "no carried position" rather
-    // than claiming position 1 (the index) or 0 (a falsy default).
-    expect(Object.prototype.hasOwnProperty.call(undated.data, "seq")).toBe(false);
-    expect(undated.data.seq).toBeUndefined();
-    // The entry is still a node — a defective `seq` drops the position, never
-    // the CR — and its declared neighbours keep their stored values.
-    expect(crNodes(g).map((n) => n.data.id)).toEqual(["CR-A", "CR-NO-SEQ", "CR-C"]);
-    expect([seqOf(g, "CR-A"), seqOf(g, "CR-C")]).toEqual([10, 30]);
-    // A non-numeric `seq` is no `seq` either: it cannot rank anything.
-    for (const junk of [null, "20", Number.NaN, Infinity]) {
-      const junked = Logic.buildRoadmapGraph(
-        [{ cr: "CR-J", wave: "1", dependsOn: [], status: "PENDING", seq: junk as number }],
-        [],
-      );
-      expect({ junk, has: Object.prototype.hasOwnProperty.call(junked.nodes[0].data, "seq") }).toEqual(
-        { junk, has: false },
-      );
-    }
-  });
-
-  test("`seq` stays a CR-node field: milestone and terminal nodes carry none", () => {
-    const g = Logic.buildRoadmapGraph(STORED_SEQ_ENTRIES, [
-      { version: "0.1.0", commit: "c07274c", releasedAt: 1787149125, crs: ["CR-A"], timestamp: 1 },
-    ]);
-    expect(
-      g.nodes.filter((n) => n.data.type !== "cr" && n.data.seq !== undefined).map((n) => n.data.id),
-    ).toEqual([]);
-    // Non-vacuous: the release really did produce a non-CR node.
-    expect(g.nodes.filter((n) => n.data.type !== "cr").length).toBeGreaterThan(0);
+    expect(DEFAULTS.filter((pattern) => pattern.test(code))).toEqual([]);
+    // Non-vacuity: the scan really does catch the derivation it guards against.
+    expect(DEFAULTS.some((p) => p.test("const at = (a.data(\"seq\") ?? 0);"))).toBe(true);
+    expect(DEFAULTS.some((p) => p.test("nodes.push({ seq: index });"))).toBe(true);
   });
 });

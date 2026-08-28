@@ -26,6 +26,20 @@
       // is open, so the roadmap table + live overlay stay current.
       queue: [],
       releases: [],
+      // CR-CRU-078 §S9 — the release strip's SECOND read: the LIVE release
+      // proposals (GET /api/v2/projects/<key>/release-proposals, CR-CRU-091
+      // §S8, answering `{ok, proposals:[{label, targetAt?, timestamp,
+      // waves[]}], totalCount}`). Held SEPARATELY from `releases` and
+      // concatenated only at render: CR-091 §S1 fixed the two reads' sort
+      // directions deliberately opposite — `listReleases` newest-first,
+      // `listReleaseProposals` ascending by version — so a consumer appends
+      // "shipped, then proposed" with NO reversal, and merging them here
+      // would throw that away. Records are held VERBATIM: `targetAt` is
+      // optional (an absent target must stay absent, never 0/1970) and in
+      // epoch SECONDS like `releasedAt`, `waves` is joined server-side so
+      // five clients cannot join it differently, and there is no `status` —
+      // every returned proposal is live by construction.
+      releaseProposals: [],
       // CR-CRU-017 §S3 — the runs opened through /runs/start that have NOT
       // settled yet, as served by the additive `openRuns` field on
       // GET /api/v2/events. Each one is painted as a live "running…" card and
@@ -132,6 +146,11 @@
       vanX.replace(state.plans, () => []);
       vanX.replace(state.queue, () => []);
       vanX.replace(state.releases, () => []);
+      // CR-CRU-078 §S9 — the proposals slice is cleared with `releases`, in
+      // the same synchronous scope-change step: a project switch whose
+      // proposals read then fails or lags must not leave the previous
+      // project's plan painted under this one's shipped gates.
+      vanX.replace(state.releaseProposals, () => []);
       // CR-CRU-028 §S2 — bucket keys (YYYY-MM-DD / week-N / month-YYYY-MM) are
       // deterministic and collide across projects, so a leftover open drill
       // path would render a row pre-unfolded on the newly-navigated project.
@@ -271,14 +290,16 @@
       }
     }
 
-    // CR-CRU-014 §S3 — the Roadmap tab's queue + releases slices. Only a
-    // workspace has a scoped queue/release ledger; on home both stay empty.
+    // CR-CRU-014 §S3 — the Roadmap tab's queue + releases slices, plus
+    // CR-CRU-078 §S9's release-proposals slice. Only a workspace has a scoped
+    // queue/release ledger; on home all three stay empty.
     // Guarded independently of core/plans so a queue hiccup never poisons
     // the rest of the surface, and the last-known table survives a blip.
     async function refetchRoadmap() {
       if (state.route.page !== "workspace") {
         vanX.replace(state.queue, () => []);
         vanX.replace(state.releases, () => []);
+        vanX.replace(state.releaseProposals, () => []);
         return;
       }
       const key = encodeURIComponent(state.route.projectKey);
@@ -293,6 +314,21 @@
         vanX.replace(state.releases, () => body.releases ?? []);
       } catch {
         // Keep the last-known releases visible while the route is unreachable.
+      }
+      try {
+        // CR-CRU-078 §S9 / CR-CRU-091 §S8 — the strip's second read, on the
+        // SAME path and cadence as the ledger above so the two halves of one
+        // sequence can never be a tick apart. Its own try/catch: the reads
+        // fail INDEPENDENTLY, and shipped gates with proposals unavailable is
+        // a legitimate degraded strip (never the AC19 empty state, which
+        // means nothing is registered at all).
+        const body = await getJson(`/api/v2/projects/${key}/release-proposals`);
+        vanX.replace(state.releaseProposals, () => body.proposals ?? []);
+      } catch {
+        // Degraded, not broken: keep the last-known proposals and leave
+        // state.releases entirely alone. No sentinel, no error state — this
+        // cycle renders nothing, and a banner over working data is precisely
+        // what §S9 forbids.
       }
     }
 
@@ -2323,30 +2359,21 @@
     const BddPlaceholder = () =>
       div({ class: greyed("app-center") }, BddFeed());
 
-    // ── CR-CRU-014 §S3 — Roadmap tab: TABLE view over the execution queue ──
-    // TABLE side only; the exclusive table|graph toggle's graph (Cytoscape)
-    // lands next cycle. The seam: RoadmapPanelBody owns the "table" render;
-    // a future graph render slots beside it behind the same toggle.
+    // ── CR-CRU-014 §S3, re-scoped by CR-CRU-078 §S1 — the Roadmap tab's ZONE 3:
+    // the table over the execution queue. It is one of three zones that render
+    // together (RoadmapPanel below); the exclusive table|graph toggle it once
+    // shared the surface with is retired (AC1).
 
-    // Topological (depends-on) order — deps render before their dependants.
-    // DFS post-order; unknown deps and cycles are tolerated (skipped/guarded)
-    // so a malformed queue still paints in a stable, seq-preserving order.
-    const roadmapTopoOrder = (entries) => {
-      const byCr = new Map(entries.map((e) => [e.cr, e]));
-      const visited = new Set();
-      const out = [];
-      const visit = (cr, stack) => {
-        const entry = byCr.get(cr);
-        if (entry === undefined || visited.has(cr) || stack.has(cr)) return;
-        stack.add(cr);
-        for (const dep of entry.dependsOn ?? []) visit(dep, stack);
-        stack.delete(cr);
-        visited.add(cr);
-        out.push(entry);
-      };
-      for (const entry of entries) visit(entry.cr, new Set());
-      return out;
-    };
+    // CR-CRU-078 §S6 — the authored order is CARRIED, never re-derived. There
+    // is deliberately no ordering helper here: `listQueue` is `ORDER BY seq`,
+    // so the payload arrives in the orchestrator's own order and the render's
+    // whole duty is to leave it alone. What stood here was `roadmapTopoOrder`,
+    // a depends-on DFS that pulled any CR whose dependency sat later in `seq`
+    // forward — discarding the assigned order under a comment claiming to
+    // preserve it, and shredding the wave-contiguous authoring into the live
+    // board's repeated `Wave 1,2,3,4,3,4,5,6,5,6,5`. Topology VALIDATES now:
+    // an inversion is flagged where it stands (`roadmapLateDeps`) and never
+    // reshuffled, the same commitment CR-CRU-091 §S5 makes on the write path.
 
     // The plan's live cycle position — `cycle a/b` where a is the 1-based
     // index of the single active cycle and b the cycle count. null when no
@@ -2368,9 +2395,53 @@
     const ROADMAP_STATUS_LABELS = { COMPLETED_UNTRACKED: "completed · tracking absent" };
     const roadmapStatusLabel = (status) => ROADMAP_STATUS_LABELS[status] ?? status;
 
+    // CR-CRU-078 §S6/AC15 — the dependencies of `entry` the AUTHORING places
+    // after it. A dependency outside the rendered region is not an inversion:
+    // it is either unqueued (already named in the write path's
+    // `unknownDependencies`, CR-CRU-091 §S5) or simply not in view.
+    const roadmapLateDeps = (entry, positionOf, at) =>
+      (entry.dependsOn ?? []).filter((dep) => {
+        const depAt = positionOf.get(dep);
+        return depAt !== undefined && depAt > at;
+      });
+
+    // §S5 — the row's COLUMN HEADS. `wave` and `track` appear only when
+    // `roadmapTableColumns` says the region spans more than one (AC12), so the
+    // head and every cell are driven by ONE list and cannot disagree.
+    const ROADMAP_COLUMN_LABELS = {
+      cr: "CR",
+      title: "title",
+      deps: "depends on",
+      status: "status",
+      wave: "wave",
+      track: "track",
+    };
+
+    const RoadmapTableHead = (columns) =>
+      div(
+        { "data-testid": "roadmap-table-head", class: "app-roadmap-row app-roadmap-head" },
+        columns.map((column) =>
+          span(
+            { "data-column": column, class: `app-roadmap-cell app-roadmap-${column}` },
+            ROADMAP_COLUMN_LABELS[column] ?? column,
+          ),
+        ),
+      );
+
+    // §S5 — the row grammar: CR id + BRIEF title + bare depends-on + status +
+    // cycle overlay, plus AC12's two conditional columns and AC27's lifecycle.
+    // The full title used to ride every row, which §S5 calls out as bloat —
+    // the identifier competed with a sentence, and the id was already in the
+    // column beside it.
     const RoadmapRow = (entry, opts) => {
       const active = entry.status === "IN_PROGRESS";
       const deps = entry.dependsOn ?? [];
+      const lateDeps = opts.lateDeps ?? [];
+      const columns = opts.columns;
+      // AC27 — the SECOND axis. Additive: the derived `status` badge below is
+      // rendered whatever this says, because "what happened to the work" and
+      // "is the work still wanted" are different questions (CR-CRU-091 §S2).
+      const lifecycle = L.lifecycleBadge(entry.lifecycle);
       const laneBadge =
         active && opts.multiTrack && opts.plan
           ? span(
@@ -2378,27 +2449,65 @@
               roadmapLaneText(opts.plan),
             )
           : null;
-      return div(
-        {
-          "data-testid": "roadmap-row",
-          "data-cr": entry.cr,
-          "data-active": active ? "true" : "false",
-          class: `app-roadmap-row${active ? " on" : ""}`,
-          // One-rule tab swap (no overlay): an open (IN_PROGRESS) row lands on
-          // the Workflow tab at that CR's active section; a COMPLETED row
-          // lands on its Workflow history group; a PENDING or
-          // COMPLETED_UNTRACKED row is inert — there is no plan to land on.
-          onclick: () => {
-            if (entry.status === "IN_PROGRESS" || entry.status === "COMPLETED") {
-              state.workspaceTab = "Workflow";
-            }
-          },
+      // AC15 — an authoring error is REPORTED, never silently repaired: the row
+      // stays exactly where the orchestrator put it and says what is wrong.
+      const orderWarning =
+        lateDeps.length === 0
+          ? null
+          : span(
+              {
+                "data-testid": "roadmap-order-warning",
+                class: "app-roadmap-order-warning",
+                title: `authored before its dependency ${lateDeps.join(", ")}`,
+              },
+              "⚠ before its dependency",
+            );
+      // AC18 — a row that HAS somewhere to go says so before it is clicked.
+      const drillSource = roadmapDrillable(entry.status);
+      // AC17 — the ROW's own binding, for the reason the node's carries one.
+      const selected = () => roadmapSelectedCr() === entry.cr;
+      const props = {
+        "data-testid": "roadmap-row",
+        "data-cr": entry.cr,
+        "data-active": active ? "true" : "false",
+        "data-selected": () => (selected() ? "true" : "false"),
+        class: () =>
+          `app-roadmap-row${active ? " on" : ""}${selected() ? " selected" : ""}`,
+        // §S7 — one click, two effects. It SELECTS, which is what highlights
+        // the flowchart node for the same entry (AC17), and it drills: the
+        // one-rule tab swap (no overlay), the SAME gate the flowchart node
+        // uses — an open (IN_PROGRESS) row lands on the Workflow tab at that
+        // CR's active section; a COMPLETED row lands on its Workflow history
+        // group; a PENDING or COMPLETED_UNTRACKED row is inert, there is no
+        // plan to land on. The selection outlives the swap because it is held
+        // outside the render tree, which is what makes the highlight readable
+        // for the rows a user clicks most.
+        onclick: () => {
+          roadmapSelectOn(entry.cr);
+          roadmapDrillIn(entry.status);
         },
-        span({ class: "app-roadmap-cr" }, entry.cr),
-        span({ class: "app-roadmap-title" }, entry.title ?? ""),
-        span({ class: "app-roadmap-wave" }, entry.wave),
-        div(
-          { class: "app-roadmap-deps" },
+      };
+      // CR-CRU-091/AC18 — the STORED position, verbatim, omitted when absent.
+      if (typeof entry.seq === "number" && Number.isFinite(entry.seq)) {
+        props["data-seq"] = String(entry.seq);
+      }
+      if (drillSource) props["data-drill-source"] = "true";
+      if (lifecycle !== null) props["data-lifecycle"] = lifecycle.state;
+      const cell = (column, ...children) =>
+        columns.includes(column)
+          ? span(
+              { "data-column": column, class: `app-roadmap-cell app-roadmap-${column}` },
+              ...children,
+            )
+          : null;
+      return div(
+        props,
+        cell("cr", entry.cr),
+        // AC11 — the brief title, the row's one required new column.
+        cell("title", L.briefCrTitle(entry.title, entry.cr)),
+        cell(
+          "deps",
+          // AC20 — dependency is stated HERE and nowhere else on this surface.
           deps.map((d) =>
             span(
               { "data-testid": "roadmap-depends-chip", class: "app-chip app-roadmap-dep" },
@@ -2406,34 +2515,77 @@
             ),
           ),
         ),
-        span(
-          {
-            "data-testid": "roadmap-status-badge",
-            class: `app-badge app-roadmap-status ${entry.status.toLowerCase()}`,
-          },
-          roadmapStatusLabel(entry.status),
+        cell(
+          "status",
+          span(
+            {
+              "data-testid": "roadmap-status-badge",
+              class: `app-badge app-roadmap-status ${entry.status.toLowerCase()}`,
+            },
+            roadmapStatusLabel(entry.status),
+          ),
         ),
+        cell("wave", entry.wave),
+        cell("track", entry.track ?? ""),
+        lifecycle === null
+          ? null
+          : span(
+              {
+                "data-testid": "roadmap-lifecycle-badge",
+                "data-lifecycle": lifecycle.state,
+                class: `app-badge app-roadmap-lifecycle ${lifecycle.state.toLowerCase()}`,
+              },
+              lifecycle.text,
+            ),
+        orderWarning,
         laneBadge,
+        // AC18 — the drill-through source, stated in WORDS beside the row's
+        // data: the mark has to be readable without clicking, and it names
+        // where the click goes. Whether the destination is that CR's own
+        // cycles or the tab's active section is CR-CRU-079's to settle; this
+        // is the source marker its AC5 will come back to.
+        drillSource
+          ? span(
+              { "data-testid": "roadmap-drill-source", class: "app-roadmap-drill" },
+              "↗ cycles",
+            )
+          : null,
       );
     };
 
-    const RoadmapPanelBody = () => {
-      const entries = Array.from(state.queue);
+    // CR-CRU-078 §S5/AC10 — ZONE 3's body: the FOCUSED release's CRs and
+    // nothing else, never the whole project. The pane wrapper belongs to
+    // RoadmapPanel: all three zones share ONE scrolling pane, so this returns
+    // its own content and nothing around it.
+    const RoadmapTableZone = (view, entries) => {
       if (entries.length === 0) {
         return div(
-          { "data-testid": "pane-scroll", class: "app-pane-content" },
-          paneRunway(
-            div(
-              { "data-testid": "roadmap-empty", class: "app-empty" },
-              // The imperative names the tool exactly as §S3 pins it — a
-              // LITERAL `<key>` placeholder, the orchestrator's own copy.
-              "No execution queue registered yet — register one via " +
-                "POST /projects/<key>/queue",
-            ),
-          ),
+          {
+            "data-testid": "roadmap-empty",
+            // AC19 — SCOPED, because "the queue is empty while a release
+            // exists" and "nothing is registered at all" are different facts
+            // that used to render as the same indistinguishable node. This is
+            // the queue's own state; the board's is RoadmapPanel's.
+            "data-scope": "queue",
+            class: "app-empty",
+          },
+          // The imperative names the tool exactly as §S3 pins it — a
+          // LITERAL `<key>` placeholder, the orchestrator's own copy.
+          "No execution queue registered yet — register one via " +
+            "POST /projects/<key>/queue",
         );
       }
-      const ordered = roadmapTopoOrder(entries);
+      // The rows are the focused release's MEMBERSHIP. With no release
+      // registered at all there is no container to scope by, so the whole
+      // queue stands: hiding a registered queue behind a release nobody has
+      // declared would lose the board entirely, and §S5 is silent on that
+      // state — it describes what the table does once a release is focused.
+      // (AC19's empty state — no queue AND no releases — is the BOARD's, and
+      // RoadmapPanel renders it instead of these three zones.)
+      const rows = view === null ? entries : view.members;
+      // AC12 — one decision, made from the rows, for the head and the cells.
+      const columns = L.roadmapTableColumns(rows);
+      // AC13 — the rendered order IS the published order. No sort, no walk.
       const plans = Array.from(state.plans);
       const openPlans = plans.filter((p) => p.status === "open");
       const multiTrack = openPlans.length > 1;
@@ -2441,644 +2593,629 @@
         entry.planId === undefined
           ? undefined
           : plans.find((p) => String(p.planId) === String(entry.planId));
-      const children = [];
-      // Release-boundary dividers come from GET /releases (never wave numbers).
-      for (const rel of Array.from(state.releases)) {
-        children.push(
-          div(
-            {
-              "data-testid": "roadmap-release-divider",
-              class: "app-roadmap-divider app-roadmap-release",
-            },
-            `released ${rel.version}`,
-          ),
-        );
-      }
-      let prevWave;
-      for (const entry of ordered) {
-        if (entry.wave !== prevWave) {
+      const children = [RoadmapTableHead(columns)];
+      // AC16 — each wave heads its rows AT MOST ONCE inside this region. The
+      // divider used to fire on every wave CHANGE, which repeated a wave the
+      // moment the authoring was not wave-contiguous; a re-appearance now adds
+      // no second heading, and the rows stay where they were authored either
+      // way. A wave with no name is no heading, and a region carrying a single
+      // wave carries no information — the SAME condition that withholds the
+      // wave column, read off the one column list so the two cannot drift.
+      const waveOf = (entry) =>
+        entry.wave === undefined || entry.wave === null || String(entry.wave).trim() === ""
+          ? undefined
+          : String(entry.wave);
+      const waveChrome = columns.includes("wave");
+      const headed = new Set();
+      // AC15 — the authored POSITION of every CR in view, for the inversion
+      // check. A dependency outside the focused release is not an inversion:
+      // it is not in this region. Last row wins on a duplicated id: a repeated
+      // CR is a queue defect this render neither hides nor adjudicates.
+      const positionOf = new Map(rows.map((entry, at) => [entry.cr, at]));
+      rows.forEach((entry, at) => {
+        const wave = waveOf(entry);
+        if (waveChrome && wave !== undefined && !headed.has(wave)) {
+          headed.add(wave);
           children.push(
             div(
               { "data-testid": "roadmap-wave-divider", class: "app-roadmap-divider" },
-              `Wave ${entry.wave}`,
+              `Wave ${wave}`,
             ),
           );
-          prevWave = entry.wave;
         }
-        children.push(RoadmapRow(entry, { multiTrack, plan: planFor(entry) }));
-      }
-      return div(
-        { "data-testid": "pane-scroll", class: "app-pane-content" },
-        paneRunway(div({ class: "app-roadmap-table" }, children)),
-      );
-    };
-
-    // CR-CRU-014 §S3 — the exclusive table|graph view toggle. `viewMode`
-    // ("table" default) selects exactly one view; both segmented buttons stay
-    // mounted in either state so either view is one click away.
-    const roadmapViewMode = van.state("table");
-
-    // CR-CRU-077 §S4/AC7 — the MOUNTED graph's live-state teardown, or null
-    // when no graph is mounted. The roadmap body re-renders on every poll tick
-    // and on every view toggle, so each mount retires the previous mount's
-    // animations before building its own: without that handoff every render
-    // would stack another self-restarting chain onto an instance nobody can
-    // see any more.
-    let roadmapLiveTeardown = null;
-
-    // CR-CRU-077 §S2/AC4 — the release versions the user has EXPANDED, keyed
-    // OUTSIDE the render tree exactly like lensOpenKeys and state.collapsedCycles
-    // (see the comment on `collapsedCycles` above: "so poll-tick re-renders …
-    // never reset an expansion"). RoadmapGraphBody re-runs on every
-    // state.queue/plans/releases change, so a mount-local Set silently
-    // re-collapsed whatever the user had opened on the very next SSE frame.
-    // Keyed by PROJECT so one workspace's expansion cannot surface in another's
-    // graph. Still written NOWHERE else — no request, no storage, no history, no
-    // URL — so a page load re-creates it empty and every release comes up
-    // collapsed (§S2: expansion is UI state, not persisted).
-    const roadmapExpandedKeys = new Set();
-    const roadmapExpandKey = (version) => `${state.route.projectKey}\u0000${version}`;
-    const roadmapExpanded = {
-      has: (version) => roadmapExpandedKeys.has(roadmapExpandKey(version)),
-      toggle: (version) => {
-        const key = roadmapExpandKey(version);
-        if (!roadmapExpandedKeys.delete(key)) roadmapExpandedKeys.add(key);
-      },
-    };
-
-    // CR-CRU-077 §S4 — the MOUNTED cytoscape instance, or null. A cytoscape
-    // instance owns canvas layers, a renderer and window-level listeners, and
-    // none of that is reclaimed by dropping the reference: every remount used to
-    // abandon one. Retiring the live animations (roadmapLiveTeardown) is a
-    // SEPARATE concern from disposing the instance, so both handoffs run.
-    let roadmapCyInstance = null;
-
-    // The two ends of the live ring's pulse and the inflow's dash march.
-    // Canvas-side properties only — see mountRoadmapCy for why a keyframe
-    // cannot reach a cytoscape node.
-    const ROADMAP_LIVE_RING_REST = { "overlay-padding": 3, "overlay-opacity": 0.05 };
-    const ROADMAP_LIVE_RING_PEAK = { "overlay-padding": 11, "overlay-opacity": 0.32 };
-    const ROADMAP_LIVE_DASH_MARCH = { "line-dash-offset": 20 };
-    const ROADMAP_LIVE_PULSE_MS = 900;
-    const ROADMAP_LIVE_MARCH_MS = 700;
-
-    // Mount a Cytoscape (dagre) graph into an already-created container once
-    // it is attached to the DOM. Guarded on the plain-HTML global
-    // `window.cytoscape` (the vendored UMD): absent in the unit DOM, so the
-    // container still renders with its data-cr-node-count attribute.
-    //
-    // `releases` is the ledger the builder was handed: the render layer reads
-    // `crs` off it for MEMBERSHIP (which CRs a release folds away) and reads
-    // the COUNT off the builder's own `data.crCount` — it re-derives neither.
-    // `plans` is the SAME wire RoadmapPanelBody's lane badge reads: the cycle
-    // position lives on `plan.cycles`, so the builder (handed queue entries
-    // and releases only) cannot supply it and the renderer must (§S4/AC7).
-    // The dagre layout is not a CONSTRUCTOR option: applyReleaseCollapse runs
-    // it over the drawn subgraph, so a mount lays out once (the constructor's
-    // own layout is the no-op `null` one — cytoscape's default is `grid`, which
-    // would both waste a pass and place folded-away nodes).
-    const mountRoadmapCy = (container, graph, releases, plans) => {
-      const cyto = typeof window !== "undefined" ? window.cytoscape : undefined;
-      if (typeof cyto !== "function") return;
-      const layout = { name: "dagre", rankDir: "LR", nodeSep: 28, rankSep: 48 };
-      setTimeout(() => {
-        if (!container.isConnected) return;
-        // The previous mount's live animations die before this one is built…
-        if (roadmapLiveTeardown !== null) roadmapLiveTeardown();
-        roadmapLiveTeardown = null;
-        // …and then the instance those animations ran on is DISPOSED. Stopping
-        // the chains leaves the canvas layers, the renderer and its window
-        // listeners alive; only destroy() reclaims them.
-        if (roadmapCyInstance !== null && !roadmapCyInstance.destroyed()) {
-          roadmapCyInstance.destroy();
-        }
-        roadmapCyInstance = null;
-        const cy = cyto({
-          container,
-          elements: graph,
-          layout: { name: "null" },
-          style: [
-            {
-              selector: "node",
-              style: {
-                label: "data(label)",
-                "text-valign": "center",
-                "text-halign": "center",
-                "font-size": 10,
-                color: "#e5e7eb",
-                "text-wrap": "wrap",
-                "text-max-width": "88px",
-              },
-            },
-            {
-              selector: 'node[type="cr"]',
-              style: {
-                shape: "round-rectangle",
-                "background-color": "#1f2937",
-                "border-width": 2,
-                "border-color": "#4b5563",
-                width: "104px",
-                height: "36px",
-              },
-            },
-            {
-              selector: 'node[type="terminal"]',
-              style: {
-                shape: "ellipse",
-                "background-color": "#374151",
-                "border-color": "#6b7280",
-                "border-width": 2,
-                width: "46px",
-                height: "46px",
-              },
-            },
-            {
-              // Two label lines (version, then the CR count §S2/AC4 puts on
-              // it), so the diamond is sized for both.
-              selector: 'node[type="milestone"]',
-              style: {
-                shape: "diamond",
-                "background-color": "#78350f",
-                "border-color": "#f59e0b",
-                "border-width": 2,
-                width: "84px",
-                height: "84px",
-              },
-            },
-            {
-              selector: 'node[status="COMPLETED"]',
-              style: { "border-color": "#22c55e", "background-color": "#14532d" },
-            },
-            {
-              // Shipped, but with no execution history to vouch for it — a
-              // dashed slate-green border on the neutral CR fill reads as
-              // "done, unproven" rather than COMPLETED's solid green-on-green.
-              selector: 'node[status="COMPLETED_UNTRACKED"]',
-              style: {
-                "border-color": "#6b9080",
-                "background-color": "#1f2937",
-                "border-style": "dashed",
-              },
-            },
-            {
-              selector: 'node[status="IN_PROGRESS"]',
-              style: { "border-color": "#eab308", "background-color": "#3f2d0a" },
-            },
-            {
-              selector: 'node[status="PENDING"]',
-              style: { "border-color": "#6b7280", "background-color": "#1f2937" },
-            },
-            {
-              selector: "node[track]",
-              style: { "border-style": "double", "border-width": 3 },
-            },
-            {
-              selector: "edge",
-              style: {
-                width: 2,
-                "line-color": "#4b5563",
-                "target-arrow-color": "#4b5563",
-                "target-arrow-shape": "triangle",
-                "curve-style": "bezier",
-              },
-            },
-            {
-              // CR-CRU-077 §S2 — a `fold:` edge is never a declared dependency:
-              // it is either a REROUTE (a real edge whose folded endpoint moved
-              // onto a diamond) or a Start/End re-bracket the fold left needed.
-              // Drawing it like a `dependsOn` arrow reads as a dependency the
-              // queue never declared, so it is dimmer, thinner and dotted.
-              // Placed BEFORE the live rules so a rerouted inflow into an
-              // IN_PROGRESS CR still wins its marching-ant colour.
-              selector: "edge.roadmap-fold",
-              style: {
-                width: 1,
-                "line-style": "dotted",
-                "line-color": "#374151",
-                "target-arrow-color": "#374151",
-              },
-            },
-            {
-              // CR-CRU-077 §S4/AC7 — the live ring, AT REST. DN decision 6:
-              // motion means live, so only an IN_PROGRESS CR is ever given
-              // this class, and the PULSE that makes it read as "running right
-              // now" is driven by cytoscape's own element animation (see
-              // refreshLiveState) rather than by CSS: a node here is painted
-              // into a <canvas> and has no DOM element for the app's
-              // `app-run-pulse` keyframes to land on.
-              selector: "node.roadmap-live",
-              style: { "overlay-color": "#eab308", ...ROADMAP_LIVE_RING_REST },
-            },
-            {
-              // …and its INFLOW: marching ants, the edge half of decision 6's
-              // "animated inflow". Placed after the base `edge` rule so it
-              // wins on the properties it restates.
-              selector: "edge.roadmap-live-inflow",
-              style: {
-                "line-style": "dashed",
-                "line-dash-pattern": [6, 4],
-                "line-color": "#eab308",
-                "target-arrow-color": "#eab308",
-              },
-            },
-          ],
-        });
-
-        // ── CR-CRU-077 §S2/AC4 — collapse is by RELEASE ─────────────────
-        // A shipped release's diamond IS the one node that stands for it: it
-        // carries the count the BUILDER measured (`data.crCount`) and, while
-        // collapsed, the CRs it shipped are not drawn. Which releases are open
-        // is `roadmapExpanded` — hoisted OUT of this mount, because the body
-        // re-renders on every live payload change and a mount-local Set made
-        // every expansion last exactly until the next SSE frame.
-        //
-        // Membership is read straight off the ledger's `crs` — the same input
-        // the builder counted, never re-derived here.
-        //
-        // A doubly-claimed CR is resolved in SHIP ORDER, oldest claim first,
-        // because that is the tie-break the BUILDER applies ("if two tags claim
-        // one CR the older claim wins, since that is when it shipped" —
-        // app-logic.mjs) and the two sides must not disagree: the live ledger
-        // arrives NEWEST-first, so iterating it as given would fold the CR under
-        // the newer diamond while its `rel:ship:` edge still points at the older
-        // one, and the reroute would draw a fold edge running backwards along
-        // the release chain. Same comparator as the builder's `ordered`:
-        // `releasedAt` ascending, undated first, ties by reversed payload order.
-        const shipOrdered = (releases ?? [])
-          .map((rel, index) => ({
-            rel,
-            index,
-            at: Number.isFinite(rel.releasedAt) ? rel.releasedAt : null,
-          }))
-          .sort((a, b) => {
-            if (a.at === b.at) return b.index - a.index;
-            if (a.at === null) return -1;
-            if (b.at === null) return 1;
-            return a.at - b.at;
-          })
-          .map((o) => o.rel);
-        const releaseOf = new Map();
-        for (const rel of shipOrdered) {
-          for (const cr of rel.crs ?? []) {
-            if (!releaseOf.has(cr) && cy.$id(cr).nonempty()) releaseOf.set(cr, rel.version);
-          }
-        }
-        const diamondOf = new Map();
-        cy.nodes('[type="milestone"]').forEach((m) => diamondOf.set(m.data("version"), m.id()));
-        const startId = cy.nodes('[terminal="start"]').first().id();
-        const endId = cy.nodes('[terminal="end"]').first().id();
-        // A CR of a COLLAPSED release stands for that release's diamond;
-        // everything else stands for itself.
-        const foldTarget = (id) => {
-          const version = releaseOf.get(id);
-          if (version === undefined || roadmapExpanded.has(version)) return id;
-          return diamondOf.get(version) ?? id;
-        };
-
-        // ── CR-CRU-077 §S1/AC2 — the authored order, made VISIBLE ────────
-        // `data.seq` is the orchestrator's queue position, and DN decision 5
-        // forbids expressing it as an edge, so the drawing is the only place it
-        // can land. cytoscape-dagre's documented `sort` hook is NOT enough: it
-        // only seeds dagre's insertion order, and dagre then runs its own
-        // crossing-minimisation over each rank and re-permutes it — measured on
-        // the live shape, passing `sort` left all 44 out-of-order same-rank pairs
-        // byte-identical. So the order is applied to dagre's OUTPUT: within one
-        // rank the y SLOTS dagre chose are kept exactly, and the CR nodes are
-        // re-seated into them in `seq` order. Ranks, spacing, and every non-CR
-        // node's place stay dagre's; only which CR sits in which of its own
-        // rank's slots is the queue's. Under `rankDir: "LR"` a rank is a column,
-        // so one rank is one x.
-        const seatCrsInAuthoredOrder = (laidOut) => {
-          const byRank = new Map();
-          laidOut.nodes('[type="cr"]').forEach((n) => {
-            const key = String(n.position("x"));
-            const rank = byRank.get(key);
-            if (rank === undefined) byRank.set(key, [n]);
-            else rank.push(n);
-          });
-          cy.batch(() => {
-            for (const rank of byRank.values()) {
-              if (rank.length < 2) continue;
-              const slots = rank.map((n) => n.position("y")).sort((a, b) => a - b);
-              rank
-                .slice()
-                .sort((a, b) => (a.data("seq") ?? 0) - (b.data("seq") ?? 0))
-                .forEach((n, i) => n.position("y", slots[i]));
-            }
-          });
-        };
-
-        // Fold every release the user has not expanded, then lay out exactly
-        // what is drawn.
-        //
-        // EDGES ACROSS THE FOLD: hiding a node already makes cytoscape treat
-        // its edges as undrawn, so nothing dangles into a hidden CR — but
-        // dropping them is not enough either, because a release's whole inflow
-        // is `rel:ship:` from the very CRs being folded, and AC1 forbids an
-        // edgeless diamond. So each edge with a folded endpoint is REPLAYED
-        // with that endpoint moved onto the diamond; an edge internal to one
-        // collapsed release (both ends land on the same diamond) is a
-        // fold-away, not a reroute, and is not drawn at all. Whatever the fold
-        // leaves unfed or undrained is re-bracketed onto the SAME Start/End
-        // terminals the builder brackets the full DAG with. Dagre sees the
-        // drawn subgraph ONLY — the layout runs over `:visible`, so a folded
-        // region contributes no rank and leaves no hole where it used to be.
-        const applyReleaseCollapse = () => {
-          const hidden = new Set();
-          for (const [cr, version] of releaseOf) {
-            if (!roadmapExpanded.has(version)) hidden.add(cr);
-          }
-          const endsKey = (source, target) => `${source}\u0000${target}`;
-          const drawn = new Set();
-          const reroute = new Map();
-          for (const e of graph.edges) {
-            const source = foldTarget(e.data.source);
-            const target = foldTarget(e.data.target);
-            if (source === target) continue;
-            const key = endsKey(source, target);
-            if (source === e.data.source && target === e.data.target) drawn.add(key);
-            else if (!reroute.has(key)) reroute.set(key, { source, target });
-          }
-          const added = [];
-          const addFold = (source, target) => {
-            const key = endsKey(source, target);
-            if (drawn.has(key)) return;
-            drawn.add(key);
-            added.push({
-              group: "edges",
-              data: { id: `fold:${source}->${target}`, source, target },
-              classes: "roadmap-fold",
-            });
-          };
-          for (const ends of reroute.values()) addFold(ends.source, ends.target);
-          const fed = new Set();
-          const feeds = new Set();
-          for (const key of drawn) {
-            const [source, target] = key.split("\u0000");
-            feeds.add(source);
-            fed.add(target);
-          }
-          const bracket = [];
-          cy.nodes().forEach((n) => {
-            const id = n.id();
-            if (hidden.has(id) || n.data("type") === "terminal") return;
-            if (startId !== undefined && !fed.has(id)) bracket.push([startId, id]);
-            if (endId !== undefined && !feeds.has(id)) bracket.push([id, endId]);
-          });
-          cy.batch(() => {
-            cy.edges(".roadmap-fold").remove();
-            cy.nodes().forEach((n) => n.style("display", hidden.has(n.id()) ? "none" : "element"));
-            cy.nodes('[type="milestone"]').forEach((m) => {
-              const version = m.data("version");
-              const collapsed = !roadmapExpanded.has(version);
-              m.data("collapsed", collapsed);
-              // DN decision 1 makes a release node "expandable on click", so its
-              // collapse state has to be READABLE on it — otherwise collapsed
-              // and expanded are pixel-identical and the affordance is
-              // undiscoverable. It rides the LABEL as the app's own drill-in
-              // glyph (ToggleGlyph's ▸/▾), not as a style rule: the canvas
-              // already spends border colour on four statuses and shape on three
-              // node types, and a fifth visual vocabulary for "openable" would
-              // compete with those, while ▸/▾ is the affordance this app already
-              // uses everywhere else for expand/collapse — and it is text, so a
-              // user (and an assertion) can read it. The count AC4 puts on the
-              // node keeps its own second line.
-              const head = `${collapsed ? "▸" : "▾"} ${version}`;
-              const count = m.data("crCount");
-              m.data(
-                "label",
-                typeof count === "number"
-                  ? `${head}\n${count} ${count === 1 ? "CR" : "CRs"}`
-                  : head,
-              );
-            });
-            for (const ends of bracket) addFold(ends[0], ends[1]);
-            cy.add(added);
-          });
-          const visible = cy.elements(":visible");
-          visible.layout(layout).run();
-          seatCrsInAuthoredOrder(visible);
-          cy.fit(visible, 24);
-          // The fold changed what is DRAWN and replaced the `fold:` edges, so
-          // the live set is re-derived against the new drawing: a chain left
-          // running on a `removed()` edge animates nothing and, without the
-          // generation bump this does, would never end on its own.
-          refreshLiveState();
-        };
-
-        // ── CR-CRU-077 §S4/AC7 — motion means live ──────────────────────
-        // DN decision 6: a currently-active CR carries a pulsing ring, an
-        // animated inflow and its cycle position, while merged, untracked and
-        // pending CRs are COMPLETELY static — so motion on this canvas always
-        // means work is happening right now. Only edges flowing INTO a live CR
-        // march: an edge OUT of one is a PENDING CR's inflow, and motion there
-        // would read as work happening on a CR nobody has started.
-        //
-        // LIFECYCLE. A self-restarting animation is a leak unless something can
-        // end it, and three things must:
-        //   • a status change — the SSE derive below, so a CR that just merged
-        //     goes static and one that just started begins moving;
-        //   • a collapse toggle — applyReleaseCollapse removes and re-adds the
-        //     `fold:` edges, so a live CR's inflow can be a DIFFERENT edge
-        //     object afterwards and the old one is `removed()`;
-        //   • teardown/remount — the body re-renders on every poll tick and on
-        //     the view toggle (roadmapLiveTeardown).
-        // All three route through ONE generation token: retiring bumps it,
-        // which orphans every in-flight `complete` callback (each restart is
-        // gated on the generation it was started in), stops the elements that
-        // generation animated and drops the bypasses it wrote, returning them
-        // to the stylesheet. `container.isConnected` is checked on the same
-        // gate, so a chain whose container was swapped out also ends at its
-        // next step even if nothing called the teardown.
-        let liveGeneration = 0;
-        let liveNodes = cy.collection();
-        let liveEdges = cy.collection();
-
-        const liveRunning = (generation) =>
-          generation === liveGeneration && container.isConnected;
-
-        const pulseLiveRing = (node, generation, to) => {
-          if (!liveRunning(generation) || node.removed()) return;
-          node.animate({
-            style: to,
-            duration: ROADMAP_LIVE_PULSE_MS,
-            complete: () =>
-              pulseLiveRing(
-                node,
-                generation,
-                to === ROADMAP_LIVE_RING_PEAK ? ROADMAP_LIVE_RING_REST : ROADMAP_LIVE_RING_PEAK,
-              ),
-          });
-        };
-
-        // A sawtooth rather than a ping-pong: the ants march one way, reset,
-        // and march again, which is what a directed inflow reads as.
-        const marchLiveInflow = (edge, generation) => {
-          if (!liveRunning(generation) || edge.removed()) return;
-          edge.style("line-dash-offset", 0);
-          edge.animate({
-            style: ROADMAP_LIVE_DASH_MARCH,
-            duration: ROADMAP_LIVE_MARCH_MS,
-            complete: () => marchLiveInflow(edge, generation),
-          });
-        };
-
-        // Retire the current generation: stop it, un-class it, and drop the
-        // bypasses it wrote so its elements go back to being drawn by the
-        // stylesheet alone. NAMED properties only — `display` is a bypass
-        // applyReleaseCollapse owns, and a bare removeStyle() would wipe it.
-        const retireLiveState = () => {
-          liveGeneration += 1;
-          liveNodes
-            .stop(true, false)
-            .removeClass("roadmap-live")
-            .removeStyle("overlay-padding overlay-opacity");
-          liveEdges
-            .stop(true, false)
-            .removeClass("roadmap-live-inflow")
-            .removeStyle("line-dash-offset");
-          liveNodes = cy.collection();
-          liveEdges = cy.collection();
-        };
-
-        // The position the TABLE's lane badge shows, from the SAME helper over
-        // the same `plans` wire (roadmapCyclePosition). Only an OPEN plan's
-        // ACTIVE cycle yields one; with no active cycle the helper returns null
-        // and the marker stands alone, exactly as the lane badge degrades to a
-        // bare `▶`. Nothing is fabricated.
-        const livePositionOf = new Map();
-        for (const plan of plans ?? []) {
-          if (plan.status !== "open") continue;
-          const position = roadmapCyclePosition(plan);
-          if (position !== null && !livePositionOf.has(plan.cr)) {
-            livePositionOf.set(plan.cr, position);
-          }
-        }
-        // The builder's own label, kept so a position is appended to THAT and
-        // never to an already-suffixed one.
-        const baseLabelOf = new Map();
-        cy.nodes('[type="cr"]').forEach((n) => baseLabelOf.set(n.id(), n.data("label")));
-
-        const refreshLiveState = () => {
-          retireLiveState();
-          const generation = liveGeneration;
-          // The position rides the label of every IN_PROGRESS CR, drawn or
-          // folded away: it is data, not motion, so it does not depend on the
-          // node being visible.
-          cy.nodes('[type="cr"]').forEach((n) => {
-            const base = baseLabelOf.get(n.id());
-            if (base === undefined) return;
-            const position =
-              n.data("status") === "IN_PROGRESS" ? livePositionOf.get(n.id()) : undefined;
-            const label = position === undefined ? base : `${base} ${position}`;
-            if (n.data("label") !== label) n.data("label", label);
-          });
-          if (!container.isConnected) return;
-          // Motion, by contrast, is only ever started on what is DRAWN.
-          liveNodes = cy.nodes('[type="cr"][status="IN_PROGRESS"]').filter((n) => n.visible());
-          liveEdges = liveNodes.incomers("edge").filter((e) => e.visible());
-          liveNodes.addClass("roadmap-live");
-          liveEdges.addClass("roadmap-live-inflow");
-          liveNodes.forEach((n) => pulseLiveRing(n, generation, ROADMAP_LIVE_RING_PEAK));
-          liveEdges.forEach((e) => marchLiveInflow(e, generation));
-        };
-
-        // Per-node tap → the same one-rule Workflow swap the table row uses,
-        // status-gated by the SAME predicate: only a node whose own status is
-        // IN_PROGRESS or COMPLETED has a plan to land on. A PENDING or
-        // COMPLETED_UNTRACKED node is inert, exactly like its row. A release
-        // diamond is not a CR and has no plan: its tap is the collapse
-        // affordance, handled on the SAME delegated listener.
-        cy.on("tap", "node", (evt) => {
-          const node = evt.target;
-          if (node.data("type") === "milestone") {
-            const version = node.data("version");
-            roadmapExpanded.toggle(version);
-            applyReleaseCollapse();
-            return;
-          }
-          const status = node.data("status");
-          if (status === "IN_PROGRESS" || status === "COMPLETED") {
-            state.workspaceTab = "Workflow";
-          }
-        });
-        applyReleaseCollapse();
-        roadmapLiveTeardown = retireLiveState;
-        roadmapCyInstance = cy;
-        window.crucibleRoadmapCy = cy;
-        // Live status restyle: patch node data and re-run the stylesheet in ONE
-        // batch, and re-derive the live set on that SAME cadence (DN decision 6),
-        // which is what makes the motion mean "right now".
-        //
-        // This is NOT the whole live path, and it does not spare a remount: the
-        // same `state.queue` change also re-runs RoadmapGraphBody, which builds a
-        // new container and a new instance, so pan/zoom is NOT preserved across a
-        // live frame. It stays because it is the only thing that repaints an
-        // already-mounted instance in place — a status change arriving between
-        // this mount and its replacement, and the folded-away nodes whose labels
-        // refreshLiveState still has to carry.
-        van.derive(() => {
-          const live = Array.from(state.queue);
-          if (!container.isConnected) return;
-          cy.batch(() => {
-            for (const e of live) {
-              const node = cy.$id(e.cr);
-              if (node.nonempty()) node.data("status", e.status);
-            }
-          });
-          cy.style().update();
-          refreshLiveState();
-        });
-      }, 0);
-    };
-
-    const RoadmapGraphBody = () => {
-      const entries = Array.from(state.queue);
-      const releases = Array.from(state.releases);
-      // §S4/AC7 — the same `plans` wire the table's lane badge reads (the
-      // cycle position lives on `plan.cycles`, which the builder never sees).
-      const plans = Array.from(state.plans);
-      const graph = L.buildRoadmapGraph(entries, releases);
-      const crCount = graph.nodes.filter((n) => n.data.type === "cr").length;
-      const container = div({
-        "data-testid": "roadmap-graph",
-        "data-cr-node-count": String(crCount),
-        class: "app-roadmap-graph",
+        children.push(
+          RoadmapRow(entry, {
+            columns,
+            multiTrack,
+            plan: planFor(entry),
+            lateDeps: roadmapLateDeps(entry, positionOf, at),
+          }),
+        );
       });
-      mountRoadmapCy(container, graph, releases, plans);
+      // AC25 — the ZONE's own identity, stated as its ordinal. `data-testid`
+      // names what a zone IS; `data-zone` says WHERE it stands in the
+      // sequence the DN declares (strip, flowchart, table), which is what
+      // makes "exactly three zones, in this order" checkable on the surface
+      // rather than inferred from the render function's argument order.
       return div(
-        { "data-testid": "pane-scroll", class: "app-pane-content" },
-        paneRunway(container),
+        { "data-testid": "roadmap-table", "data-zone": "3", class: "app-roadmap-table" },
+        children,
       );
     };
 
-    const RoadmapViewToggle = () =>
+    // ── CR-CRU-078 §S4 — ZONE 2: the FOCUSED release's flowchart ───────────
+    //
+    // What stood here was CR-CRU-077's composition: a dependency-composed
+    // whole-project DAG mounted into a Cytoscape canvas and laid out by
+    // cytoscape-dagre — 94 nodes and 208 edges on the live board, 160 of them
+    // `dependsOn`, which is the relationship web this surface exists to
+    // eliminate. It is REPLACED, not adjusted (spec Problem + AC20):
+    //
+    //   • AC20 — zero dependency edges are drawn. Nothing below draws an edge
+    //     of any kind; dependency is stated once, as the table's column.
+    //   • AC26 — no layout engine decides position. Position IS the declared
+    //     containment (release ⊃ wave ⊃ CR, DN §9) and the authored `seq`, so
+    //     dagre's crossing minimisation has nothing left to decide.
+    //   • AC23 — every state is legible as TEXT, which a <canvas> cannot be:
+    //     nodes are DOM, so a greyscale reading still resolves them.
+    //
+    // Only the FOCUSED release is drawn. In flight it is
+    // `Start → wave container(s) → ◇gate → End`; shipped, it states what it
+    // DELIVERED and reconstructs no waves at all — the Workflow history view
+    // owns those, and duplicating them here is an explicit non-goal (§S4/AC8).
+
+    // CR-CRU-083 AC7 — the one-rule Workflow swap, status-gated: only a CR
+    // with a plan to land on is landable, so a PENDING or COMPLETED_UNTRACKED
+    // node is inert. Node and row share the predicate because they are two
+    // renderings of one entry, and they must not disagree about it.
+    //
+    // §S7/AC18 — and the MARK is read off the SAME predicate, so a row can
+    // never advertise a drill-through it will not perform. Where the jump
+    // LANDS (that CR's own cycles, and the `← roadmap` way back) is
+    // CR-CRU-079's AC; what this CR owes is a source that is identifiable
+    // before it is clicked.
+    const roadmapDrillable = (status) => status === "IN_PROGRESS" || status === "COMPLETED";
+
+    const roadmapDrillIn = (status) => {
+      if (roadmapDrillable(status)) state.workspaceTab = "Workflow";
+    };
+
+    // §S7/AC17 — the SELECTED CR: ONE value, two renderings. Zone 2's node and
+    // zone 3's row are the same entry drawn twice, so selecting on either side
+    // highlights the other by reading the same holder — never by one zone
+    // notifying the other, which is the desynchronised highlight the CR's Risk
+    // section names.
+    //
+    // Held OUTSIDE the render tree, keyed by project, exactly like
+    // `roadmapFocusVersions` and `roadmapStripOffsets` below — for §S8's
+    // reason and one more that is specific to this click: the same click also
+    // performs CR-CRU-083's tab swap for a drillable row, which UNMOUNTS this
+    // pane, so a mount-local selection would be gone before the user could see
+    // what they picked. §S8 names the focused release and the page window and
+    // is silent on selection; this is the same scope for a strictly stronger
+    // reason.
+    const roadmapSelectedCrs = new Map();
+    const roadmapSelectRev = van.state(0);
+    // Reading `rev` is what subscribes a binding to the out-of-tree Map; the
+    // comparison keeps that read honest rather than discarded.
+    const roadmapSelectedCr = () =>
+      roadmapSelectRev.val >= 0 ? roadmapSelectedCrs.get(state.route.projectKey) : undefined;
+    const roadmapSelectOn = (cr) => {
+      roadmapSelectedCrs.set(state.route.projectKey, cr);
+      roadmapSelectRev.val += 1;
+    };
+
+    const RoadmapFlowTerminal = (which) =>
+      span(
+        {
+          "data-testid": "roadmap-flow-terminal",
+          "data-terminal": which,
+          class: `app-flow-terminal ${which}`,
+        },
+        which === "start" ? "Start" : "End",
+      );
+
+    // AC11 — the node states its id and its terse status and NEVER its title:
+    // a node box carrying a sentence buries the identifier, and the title has
+    // exactly one home, the table's column.
+    //
+    // AC27 — the lifecycle axis rides BESIDE the status, never instead of it.
+    // An entry with no `lifecycle` key gets no attribute and no span: absent,
+    // never defaulted.
+    const RoadmapFlowNode = (entry) => {
+      const lifecycle = L.lifecycleBadge(entry.lifecycle);
+      // AC17 — read on the NODE's own binding rather than the panel's: a
+      // selection paints one outline, and must not rebuild the strip above it
+      // (nor re-run its measurement) to do so.
+      const selected = () => roadmapSelectedCr() === entry.cr;
+      const props = {
+        "data-testid": "roadmap-node",
+        "data-cr": entry.cr,
+        "data-status": entry.status,
+        "data-selected": () => (selected() ? "true" : "false"),
+        class: () =>
+          `app-flow-node ${String(entry.status).toLowerCase()}${selected() ? " selected" : ""}`,
+        // §S7 — one click does both: it SELECTS (which is what highlights the
+        // row beside it) and it drills, for an entry that has somewhere to go.
+        onclick: () => {
+          roadmapSelectOn(entry.cr);
+          roadmapDrillIn(entry.status);
+        },
+      };
+      // CR-CRU-091/AC18 — the STORED position, published verbatim and OMITTED
+      // when the payload carries none. Nothing here SORTS on it: the payload
+      // is already `ORDER BY seq`, so the position is observable rather than
+      // load-bearing, and `?? 0` would invent one the queue never authored.
+      if (typeof entry.seq === "number" && Number.isFinite(entry.seq)) {
+        props["data-seq"] = String(entry.seq);
+      }
+      // AC18 — the drill-through source, marked on the node too: node and row
+      // are one entry drawn twice and must not disagree about it. The node's
+      // LABEL stays id + status (AC11), so the mark is the attribute C5 styles
+      // and the row is where the affordance is stated in words.
+      if (roadmapDrillable(entry.status)) props["data-drill-source"] = "true";
+      if (lifecycle !== null) props["data-lifecycle"] = lifecycle.state;
+      return div(
+        props,
+        span({ class: "app-flow-node-cr" }, entry.cr),
+        span(
+          { "data-testid": "roadmap-node-status", class: "app-flow-node-status" },
+          L.crStatusMark(entry.status),
+        ),
+        lifecycle === null
+          ? null
+          : span(
+              {
+                "data-testid": "roadmap-node-lifecycle",
+                class: `app-flow-node-lifecycle ${lifecycle.state.toLowerCase()}`,
+              },
+              lifecycle.text,
+            ),
+      );
+    };
+
+    // AC9/AC16 — one container per wave, in first-appearance order, holding
+    // that wave's CRs in the order they were AUTHORED. A wave interleaved by
+    // the authoring opens exactly one container, and a member declaring no
+    // wave has no container to head: its nodes are drawn bare rather than
+    // under a heading reading `Wave `.
+    const RoadmapFlowWave = (box) =>
+      box.wave === null
+        ? div({ class: "app-flow-loose" }, box.entries.map(RoadmapFlowNode))
+        : div(
+            {
+              "data-testid": "roadmap-wave",
+              "data-wave": box.wave,
+              "data-cr-count": String(box.entries.length),
+              // AC22/C5 — the container of live work reads as live too (the
+              // design artifact's `.wave.active`). Derived from the entries
+              // already rendered, so it states nothing new; and it is a
+              // BORDER colour, never motion, because AC24 reserves movement
+              // for the CR that is actually running.
+              "data-active": box.entries.some((entry) => entry.status === "IN_PROGRESS")
+                ? "true"
+                : "false",
+              class: "app-flow-wave",
+            },
+            span({ class: "app-flow-wave-label" }, `Wave ${box.wave}`),
+            div({ class: "app-flow-wave-body" }, box.entries.map(RoadmapFlowNode)),
+          );
+
+    const RoadmapPackage = (pkg) =>
+      span(
+        { "data-testid": "roadmap-package", class: "app-flow-package" },
+        `${pkg.registry} · ${pkg.name} ${pkg.version}`,
+      );
+
+    // AC8 — what a SHIPPED release delivered: its CR count, the waves it
+    // spanned, its ship date and its packages. CR-CRU-084 kept `packages`
+    // EMPTY and `packages` ABSENT distinguishable on the wire because they are
+    // different facts, so they stay distinguishable here on
+    // `data-packages-state` — but NEITHER may read as an apparently complete
+    // release, so both say in words that no package was recorded.
+    const RoadmapDelivered = (view) => {
+      const waves = view.waves.map((box) => box.wave).filter((wave) => wave !== null);
+      return div(
+        { "data-testid": "roadmap-delivered", class: "app-flow-delivered" },
+        span(
+          { "data-testid": "roadmap-delivered-crs", class: "app-flow-delivered-crs" },
+          `${view.crCount} ${view.crCount === 1 ? "CR" : "CRs"}`,
+        ),
+        span(
+          { "data-testid": "roadmap-delivered-waves", class: "app-flow-delivered-waves" },
+          waves.length === 0
+            ? "no wave recorded"
+            : `${waves.length === 1 ? "wave" : "waves"} ${waves.join(", ")}`,
+        ),
+        span(
+          { "data-testid": "roadmap-delivered-date", class: "app-flow-delivered-date" },
+          // AC30 — `resolveGateDate`'s own answer, carried through the gate.
+          view.dateState === "dated"
+            ? `shipped ${view.date}`
+            : (ROADMAP_GATE_NO_DATE[`shipped:${view.dateState}`] ?? ""),
+        ),
+        div(
+          {
+            "data-testid": "roadmap-delivered-packages",
+            "data-packages-state": view.packagesState,
+            class: `app-flow-packages ${view.packagesState}`,
+          },
+          view.packagesState === "listed"
+            ? view.packages.map(RoadmapPackage)
+            : span({ class: "app-flow-no-package" }, "no package recorded"),
+        ),
+      );
+    };
+
+    // The focused release's own gate, drawn INSIDE its flowchart: the same
+    // release zone 1 shows, stated once more where the flow ends, with the
+    // same date and the same dashed-when-proposed grammar.
+    const RoadmapFlowGate = (view) =>
       div(
-        { "data-testid": "roadmap-view-toggle", class: "app-roadmap-viewtoggle" },
-        button(
-          {
-            "data-testid": "roadmap-view-table",
-            class: () => `app-seg${roadmapViewMode.val === "table" ? " on" : ""}`,
-            onclick: () => (roadmapViewMode.val = "table"),
-          },
-          "table",
+        {
+          "data-testid": "roadmap-flow-gate",
+          "data-version": view.version,
+          "data-kind": view.kind,
+          "data-date-state": view.dateState,
+          class: `app-flow-gate ${view.kind}`,
+        },
+        // AC21 — a release gate is a DIAMOND: a square rotated 45°, so its
+        // label rides in a counter-rotated child or the version would read on
+        // the diagonal. The design artifact's own construction
+        // (`.gate > span { transform: rotate(-45deg) }`).
+        span(
+          { class: "app-flow-gate-version" },
+          span({ class: "app-flow-gate-label" }, view.version),
         ),
-        button(
-          {
-            "data-testid": "roadmap-view-graph",
-            class: () => `app-seg${roadmapViewMode.val === "graph" ? " on" : ""}`,
-            onclick: () => (roadmapViewMode.val = "graph"),
-          },
-          "graph",
+        span(
+          { class: `app-flow-gate-date ${view.dateState}` },
+          view.dateState === "dated"
+            ? view.date
+            : (ROADMAP_GATE_NO_DATE[`${view.kind}:${view.dateState}`] ?? ""),
         ),
+      );
+
+    const RoadmapFlowZone = (view) => {
+      // No release registered at all draws NO chrome — no terminals, no gate,
+      // no wave box. AC19's one definitive empty state is C4's, and the two
+      // orphan terminals the old graph drew over an empty board are exactly
+      // what it fails.
+      if (view === null) return null;
+      return div(
+        {
+          "data-testid": "roadmap-flow",
+          "data-zone": "2",
+          "data-version": view.version,
+          "data-kind": view.kind,
+          "data-cr-count": String(view.crCount),
+          class: `app-roadmap-flow ${view.kind}`,
+        },
+        RoadmapFlowTerminal("start"),
+        view.kind === "shipped"
+          ? RoadmapDelivered(view)
+          : div({ class: "app-flow-waves" }, view.waves.map(RoadmapFlowWave)),
+        RoadmapFlowGate(view),
+        RoadmapFlowTerminal("end"),
+      );
+    };
+
+    // ── CR-CRU-078 §S2 — ZONE 1: the paged release strip ───────────────────
+    //
+    // The strip is the release SEQUENCE, `Start → ◇release … → End`. It is the
+    // only zone that grows without bound and it does NOT scroll: the window
+    // holds floor(track width / gate pitch) gates and NEVER a fraction of one
+    // (AC3), and the remainder becomes the clickable tag on each side that is
+    // both the hidden count and the affordance (AC4).
+    //
+    // Both inputs are MEASURED — the gate track's own box, and the pitch of the
+    // CSS-owned ruler the strip renders inside that track. A constant would
+    // satisfy every fixture and still be wrong the moment the project rail
+    // collapses (CR-093), so nothing here carries a width: the stylesheet owns
+    // the pitch (`--app-strip-gate-pitch`) and the strip publishes what it
+    // measured (`data-track-width`, `data-gate-pitch`, `data-window-size`).
+    const roadmapStripMetrics = van.state({ width: 0, pitch: 0 });
+
+    // §S8 — the page window lives OUTSIDE the render tree, keyed by project
+    // exactly like `state.collapsedCycles` and `lensOpenKeys`: the roadmap
+    // body re-runs on every queue/plans/releases frame, so a mount-local
+    // offset would page itself back to the landing window on the next SSE
+    // tick. `rev` is the reactive handle a paging click flips, since a Map
+    // cannot notify a binding.
+    const roadmapStripOffsets = new Map();
+    const roadmapStripRev = van.state(0);
+
+    // §S8 — and so does the FOCUSED release, for exactly the same reason and
+    // in exactly the same shape. CR-CRU-077's release expansion had to be
+    // hoisted for this precise bug, and CR-CRU-093 then had to add its own
+    // §S3/§S4 after it bit the project rail too: a mount-local holder
+    // re-defaults the user's choice on the very next SSE tick. Keyed by
+    // PROJECT so one workspace's focus cannot surface in another's strip.
+    // Undefined until the user clicks a gate — landing still focuses the
+    // release in progress (§S5), because the DEFAULT is a fallback rather
+    // than a stored value.
+    const roadmapFocusVersions = new Map();
+    const roadmapFocusRev = van.state(0);
+    // Reading `rev` is what subscribes a binding to the out-of-tree Map; the
+    // comparison keeps that read honest rather than discarded.
+    const roadmapFocusedVersion = () =>
+      roadmapFocusRev.val >= 0 ? roadmapFocusVersions.get(state.route.projectKey) : undefined;
+    const roadmapFocusOn = (version) => {
+      roadmapFocusVersions.set(state.route.projectKey, version);
+      roadmapFocusRev.val += 1;
+    };
+
+    // The mounted strip's measurement listeners, or null — each mount retires
+    // the previous mount's listeners instead of stacking another one onto a
+    // dead element.
+    let roadmapStripTeardown = null;
+
+    const roadmapBoxWidth = (el) => {
+      if (el === null || el === undefined) return 0;
+      const width = el.getBoundingClientRect().width;
+      return typeof width === "number" && Number.isFinite(width) && width > 0 ? width : 0;
+    };
+
+    const measureRoadmapStrip = (strip) => {
+      const width = roadmapBoxWidth(strip.querySelector('[data-testid="roadmap-strip-track"]'));
+      const pitch = roadmapBoxWidth(strip.querySelector('[data-testid="roadmap-strip-ruler"]'));
+      const now = roadmapStripMetrics.val;
+      // Guarded: an unchanged measurement must not notify, or every re-render
+      // would re-render itself.
+      if (now.width !== width || now.pitch !== pitch) roadmapStripMetrics.val = { width, pitch };
+    };
+
+    const observeRoadmapStrip = (strip) => {
+      if (roadmapStripTeardown !== null) roadmapStripTeardown();
+      roadmapStripTeardown = null;
+      const remeasure = () => {
+        if (strip.isConnected) measureRoadmapStrip(strip);
+      };
+      // The first pass waits for ATTACHMENT: a detached box measures 0, which
+      // is a strip with no window at all.
+      setTimeout(remeasure, 0);
+      // A rail collapse (CR-093) changes the TRACK's box while the window's
+      // stays put, so the observer is the honest trigger; the resize listener
+      // is the portable half.
+      const observer = typeof ResizeObserver === "function" ? new ResizeObserver(remeasure) : null;
+      if (observer !== null) observer.observe(strip);
+      window.addEventListener("resize", remeasure);
+      roadmapStripTeardown = () => {
+        window.removeEventListener("resize", remeasure);
+        if (observer !== null) observer.disconnect();
+      };
+    };
+
+    // §S3/AC6/AC7 — what a gate says when it has no usable date. `absent` is
+    // AC6's declared empty state (an undeclared target, an undated legacy tag);
+    // `unusable` is a data defect and must not read as a plan nobody authored.
+    // No entry here is a forecast: AC7 forbids one while CR-022 is unshipped.
+    // Shared by zone 1's gate and zone 2's: one release, one wording.
+    const ROADMAP_GATE_NO_DATE = {
+      "shipped:absent": "no ship date recorded",
+      "shipped:unusable": "ship date unreadable",
+      "proposed:absent": "no target declared",
+      "proposed:unusable": "target unreadable",
+    };
+
+    // AC10 — the gate is the FOCUS affordance: a click refocuses zones 2 and 3
+    // on that release, and the strip says which one they are following. Focus
+    // is the strip's, so nothing below it decides again.
+    const RoadmapGate = (gate, focused) =>
+      div(
+        {
+          "data-testid": "roadmap-gate",
+          "data-version": gate.version,
+          "data-kind": gate.kind,
+          "data-date-state": gate.dateState,
+          ...(focused === true ? { "data-focused": "true" } : {}),
+          class: `app-strip-gate ${gate.kind}${focused === true ? " on" : ""}`,
+          onclick: () => roadmapFocusOn(gate.version),
+        },
+        // AC21 — the diamond's label, counter-rotated. See RoadmapFlowGate.
+        span(
+          { class: "app-strip-gate-version" },
+          span({ class: "app-strip-gate-label" }, gate.version),
+        ),
+        span(
+          { "data-testid": "roadmap-gate-date", class: `app-strip-gate-date ${gate.dateState}` },
+          // AC30 — the date is `resolveGateDate`'s own answer, carried
+          // verbatim. Nothing on this surface constructs one.
+          gate.dateState === "dated"
+            ? gate.date
+            : (ROADMAP_GATE_NO_DATE[`${gate.kind}:${gate.dateState}`] ?? ""),
+        ),
+      );
+
+    const RoadmapStripTag = (side, count, onclick) =>
+      button(
+        {
+          "data-testid": `roadmap-strip-${side}`,
+          "data-hidden-count": String(count),
+          class: `app-strip-tag ${side}`,
+          onclick,
+        },
+        side === "earlier" ? `◀ ${count} earlier` : `${count} later ▶`,
+      );
+
+    const RoadmapStripTerminal = (which) =>
+      span(
+        {
+          "data-testid": "roadmap-strip-terminal",
+          "data-terminal": which,
+          class: `app-strip-terminal ${which}`,
+        },
+        which === "start" ? "Start" : "End",
+      );
+
+    // The gate SEQUENCE and the focused index are RoadmapPanel's — this zone
+    // owns the window, not the data (AC28's concatenation happens once, there).
+    const RoadmapStripZone = (gates, focusIndex) => {
+      // Nothing registered draws NO chrome — no strip, no terminals. AC19's
+      // one definitive empty state is C4's, and skeleton chrome would be
+      // exactly what it fails.
+      if (gates.length === 0) return null;
+      // `focusIndex` is the panel's answer; the landing window is the page
+      // that CONTAINS it (AC5), so a click on a visible gate never pages.
+      const projectKey = state.route.projectKey;
+      const windowSize = () => {
+        const metrics = roadmapStripMetrics.val;
+        return L.stripWindowSize(metrics.width, metrics.pitch);
+      };
+      // Reading `rev` is what subscribes a binding to the out-of-tree offset;
+      // the comparison keeps that read honest rather than discarded.
+      const pageNow = () =>
+        L.releaseStripPage({
+          count: gates.length,
+          size: windowSize(),
+          focusIndex,
+          offset: roadmapStripRev.val >= 0 ? roadmapStripOffsets.get(projectKey) : undefined,
+        });
+      // AC4 — one click moves a WHOLE window. The resolved (snapped, clamped)
+      // offset is what gets stored, so a click at either end is idempotent
+      // instead of drifting into offsets no window occupies.
+      const pageBy = (windows) => {
+        const size = windowSize();
+        if (size === 0) return;
+        const next = L.releaseStripPage({
+          count: gates.length,
+          size,
+          focusIndex,
+          offset: pageNow().offset + windows * size,
+        });
+        roadmapStripOffsets.set(projectKey, next.offset);
+        roadmapStripRev.val += 1;
+      };
+      const strip = div(
+        {
+          "data-testid": "roadmap-strip",
+          "data-zone": "1",
+          class: "app-roadmap-strip",
+          "data-gate-count": String(gates.length),
+          // What the strip MEASURED and what it derived from it — the paging
+          // arithmetic is observable rather than asserted.
+          "data-track-width": () => String(roadmapStripMetrics.val.width),
+          "data-gate-pitch": () => String(roadmapStripMetrics.val.pitch),
+          "data-window-size": () => String(windowSize()),
+          "data-window-offset": () => String(pageNow().offset),
+          "data-hidden-earlier": () => String(pageNow().earlier),
+          "data-hidden-later": () => String(pageNow().later),
+        },
+        RoadmapStripTerminal("start"),
+        // The tag SLOT is always laid out; the tag itself exists only when
+        // something is hidden behind it (AC4 — absent, never disabled).
+        // Reserving the space is what stops the window size oscillating: the
+        // window is measured from the track, and a tag that changed the track's
+        // width would change the count that decides whether the tag exists.
+        //
+        // The RAIL is what the binding produces, never the tag: a binding that
+        // returns null yields no node for van to reconnect, so the next
+        // measurement would never reach it and the tag would stay missing.
+        () => {
+          const page = pageNow();
+          return div(
+            { class: "app-strip-rail earlier" },
+            page.earlier === 0 ? null : RoadmapStripTag("earlier", page.earlier, () => pageBy(-1)),
+          );
+        },
+        div(
+          { "data-testid": "roadmap-strip-track", class: "app-strip-track" },
+          // The pitch PROBE — out of flow, so it takes no width from the track
+          // it is measured inside.
+          span({ "data-testid": "roadmap-strip-ruler", class: "app-strip-ruler" }),
+          () => {
+            const page = pageNow();
+            return div(
+              { class: "app-strip-gates" },
+              gates
+                .slice(page.offset, page.offset + page.size)
+                .map((gate, at) => RoadmapGate(gate, page.offset + at === focusIndex)),
+            );
+          },
+        ),
+        () => {
+          const page = pageNow();
+          return div(
+            { class: "app-strip-rail later" },
+            page.later === 0 ? null : RoadmapStripTag("later", page.later, () => pageBy(1)),
+          );
+        },
+        RoadmapStripTerminal("end"),
+      );
+      observeRoadmapStrip(strip);
+      return strip;
+    };
+
+    // AC1/AC2 — every zone renders, in order, inside ONE scrolling pane: the
+    // strip, then the focused release's flowchart, then its table. There is no
+    // view state left to select one of them.
+    //
+    // The three zones share ONE notion of focus, resolved HERE and handed
+    // down. The strip owns which release is focused (§S2/§S4/§S5); zones 2 and
+    // 3 are told and never re-decide, because two derivations of "the focused
+    // release" is precisely the desynchronised surface the CR's Risk section
+    // names — and a second `releaseStripGates` call would be a second
+    // sequence, one SSE frame away from disagreeing with the first.
+    // AC19 — nothing registered AT ALL is ONE definitive state for the whole
+    // board, and the board draws no chrome behind it.
+    //
+    // Observed 2026-08-28 on the cleared board, and it is the failure this
+    // replaces: the table said "No execution queue registered yet …" while the
+    // graph drew two orphan terminals — a `Start` and an `End` bubble, 2 nodes
+    // and 0 edges — with no message at all. The terminals went with the
+    // composed whole-project DAG this CR replaced (AC20's negative source scan
+    // is why its builder is not named here); what was left was still the
+    // TABLE's queue-scoped message standing in for a board-wide fact, naming
+    // one of the two things that are missing.
+    //
+    // Both verbs, because both reads are empty: §S3's queue registration and
+    // CR-CRU-091 §S3's `release-propose`, each with the LITERAL `<key>`
+    // placeholder the orchestrator sees in the tool. And no error — an empty
+    // board is a registration state, which is also why AC33's degraded strip
+    // can never reach this branch: a failed proposals read beside shipped
+    // releases still yields gates.
+    const RoadmapBoardEmpty = () =>
+      div(
+        { "data-testid": "roadmap-empty", "data-scope": "board", class: "app-empty" },
+        "Nothing registered on this roadmap yet — register the execution queue via " +
+          "POST /projects/<key>/queue, and declare a release via release-propose " +
+          "(POST /projects/<key>/release-proposals).",
       );
 
     const RoadmapPanel = () =>
-      div(
-        { class: greyed("app-center") },
-        RoadmapViewToggle(),
-        () => (roadmapViewMode.val === "graph" ? RoadmapGraphBody() : RoadmapPanelBody()),
-      );
+      div({ class: greyed("app-center") }, () => {
+        const releases = Array.from(state.releases);
+        const proposals = Array.from(state.releaseProposals);
+        const entries = Array.from(state.queue);
+        // AC28 — ONE monotonic sequence: the ledger's shipped rows in ascending
+        // ship order, then the proposals read's live proposals ascending by
+        // version. The two state slices stay separate and are joined by
+        // `releaseStripGates` and nowhere else; the shipped leg's reversal lives
+        // there too, so this surface has exactly one notion of the order.
+        const gates = L.releaseStripGates(releases, proposals);
+        const focusIndex = L.releaseStripFocusIndex(gates, roadmapFocusedVersion());
+        const focused = focusIndex >= 0 ? gates[focusIndex] : undefined;
+        const view =
+          focused === undefined ? null : L.focusedReleaseView(focused, releases, entries);
+        return div(
+          { "data-testid": "pane-scroll", class: "app-pane-content" },
+          paneRunway(
+            div(
+              { "data-testid": "roadmap-zones", class: "app-roadmap-zones" },
+              // AC19 — with nothing registered the three zones are not called
+              // at all: skeleton chrome over an empty project is exactly what
+              // the AC fails, so there is no strip, no terminal and no wave
+              // box to render empty.
+              gates.length === 0 && entries.length === 0
+                ? RoadmapBoardEmpty()
+                : [
+                    RoadmapStripZone(gates, focusIndex),
+                    RoadmapFlowZone(view),
+                    RoadmapTableZone(view, entries),
+                  ],
+            ),
+          ),
+        );
+      });
 
     // ── CR-CRU-011 §S3 — Workflow tab: ACTIVE view (per-CR todo over the
     // open plan) + gate-pane placeholder. The HISTORY lens lands in C4.

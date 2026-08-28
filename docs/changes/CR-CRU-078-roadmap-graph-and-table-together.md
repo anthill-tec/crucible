@@ -25,6 +25,12 @@ eliminate. The composition was rejected and is superseded by the approved design
 half (release membership from `crs`, ship-order sorting, authored `seq`, id+status labels, the
 four derived statuses, `packages`) carries forward.
 
+**2026-08-28, after VERIFY: that claim was not self-executing.** Of the six, **ship-order
+sorting did NOT carry forward** — CR-077's ascending-by-`releasedAt` sorter and its dedicated
+test both lived in code this CR removed, so the strip inherited the ledger's newest-first array
+order verbatim (see §S9's correction). "Carries forward" is a requirement on THIS CR, not a
+property the deletion preserved by itself; each of the six needs its own live assertion here.
+
 Two secondary defects on the same surface:
 
 - **Row text bloat.** The table row renders the full CR title (`span.app-roadmap-title`) on top
@@ -45,6 +51,10 @@ no layout engine, no crossing heuristic, no dependency edges drawn.
 Delete the `roadmap-view-table` / `roadmap-view-graph` buttons and the exclusive view state
 (`roadmapViewMode`, `public/app.js:2479`; buttons at `:3060`/`:3068`; the branch that picks one body
 at `:3080`). All zones render unconditionally.
+
+*Those four line numbers are HISTORY, verified 2026-08-29: none of the three symbols exists any
+more — AC1 asserts their absence from the source by executable scan — and the lines now hold
+unrelated code. They record the shape being deleted, not anything to look up.*
 
 **Retire versus rewrite — the distinction matters, and the blast radius is enumerated.** The
 original wording said only "any test asserting toggle behaviour is retired", which read literally
@@ -76,22 +86,39 @@ gates dashed. It is the only zone that grows without bound, and it does **not** 
 
 ### §S3 Zone 1 — gates carry their dates
 
-A shipped gate carries its ship date (`releases[].releasedAt`, epoch **seconds** — the ship-order
-read at `public/app-logic.mjs:907-918`). A proposed gate carries its declared `--target` (CR-091,
-`targetAt`, also epoch **seconds**), or an explicit "no target declared" empty state.
+A shipped gate carries its ship date (`releases[].releasedAt`, epoch **seconds**). A proposed gate
+carries its declared `--target` (CR-091, `targetAt`, also epoch **seconds**), or an explicit "no
+target declared" empty state.
+
+*Citations repaired 2026-08-29, each by reading the target.* This paragraph pointed at "the
+ship-order read at `public/app-logic.mjs:907-918`" — there is no ship-order read any more, that
+span is a cycle-count block, and §S9's correction below records why: CR-077's
+ascending-by-`releasedAt` sorter went with the code this CR removed. The one place that reads
+either field today is `resolveGateDate` (`public/app-logic.mjs:80`), which is where AC30's single
+seam actually lives.
 
 **The shared formatter ALREADY EXISTS — do not write a second one.** *Corrected 2026-08-28 by gap
 analysis: this section previously demanded "one shared formatter" without naming it, and cited
-`public/app-logic.mjs:874`, which today is `type: "cr"` — the citation went stale when CR-091 C4
-landed.* That CR exported `formatReleaseDate(epochSeconds)` (`public/app-logic.mjs:48`), added it
-to the `window.CrucibleLogic` bridge (`:1033`) and declared it (`public/app-logic.d.mts:139`) — and
+`public/app-logic.mjs:874` — a citation that was already stale then and has drifted again since
+(that line is now an inferred-node map inside `workflowLens`, not the `type: "cr"` it was reported
+as on 2026-08-28). Naming the SYMBOL is what makes the reference survive the next 1200-line
+move.* That
+CR exported `formatReleaseDate(epochSeconds)` (`public/app-logic.mjs:48` — verified), added it to
+the `window.CrucibleLogic` bridge and declared it (`public/app-logic.d.mts:139` — verified) — and
 shipped it with **zero call sites on purpose, as this CR's seam**. CR-091 AC3 proves by executable
 scan that nothing else constructs a date from `releasedAt` or `targetAt`; AC30 below is where that
 scan starts passing for a real reason. Introducing a parallel formatter here would defeat both.
 A naive `new Date(seconds)` yields 1970 and must fail review.
 
 Ordering stays **by version** for proposals and ship date for shipped releases. A declared target
-that contradicts version order is surfaced as a planning conflict, never a reason to re-sort.
+that contradicts version order is **never a reason to re-sort** — that half is binding and is
+asserted.
+
+**Removed 2026-08-28 after VERIFY:** the clause also said such a target *"is surfaced as a
+planning conflict"*. Surfacing it is a new affordance with no AC and no code (it survived only as
+a comment in `public/app-logic.mjs`), so it moves to Non-goals. The not-re-sorting half stays
+here because it IS implemented and asserted — the two halves were one sentence and only one of
+them was ever built.
 
 ### §S4 Zone 2 — only the focused release gets wave detail
 
@@ -128,17 +155,27 @@ different numbers on one surface.
 
 Two consequences this CR must respect:
 
-- `data.seq` is now the **stored integer, verbatim** (`public/app-logic.mjs:893`).
+- The rendered position is the **stored integer, verbatim** — `RoadmapFlowNode` writes
+  `data-seq` from `entry.seq` and nothing else (`public/app.js:2749-2751`).
 - It is **OMITTED when unusable**, never defaulted — a non-numeric or absent `seq` yields a node
-  with no `seq` key at all, the same "no carried position" state milestone and terminal nodes
-  occupy. A renderer that reads `entry.seq ?? 0` re-introduces exactly the ambiguity 091 removed,
-  and note `public/app.js:2765` already sorts on `(a.data("seq") ?? 0)` — that defaulting sort is
-  on this CR's surface and is the one place the omission can still be quietly undone.
+  with no `seq` attribute at all. A renderer that reads `entry.seq ?? 0` re-introduces exactly
+  the ambiguity 091 removed.
 
-Today `roadmapTopoOrder` (`public/app.js:2334`) walks `dependsOn` depth-first, pulling any CR
-whose dependencies sit later in `seq` forward — discarding the assigned order despite a comment
-claiming to preserve it. It also emits a wave divider on every wave change, so the live board
-repeats waves (`Wave 1,2,3,4,3,4,5,6,5,6,5`).
+*Citations repaired 2026-08-29, each by reading the target.* Three of them had drifted with the
+~1200 lines this CR moved through `public/app.js`, and two pointed at code this CR DELETED, which
+is a different repair from a moved line:
+
+- `data.seq` at `public/app-logic.mjs:893` — that span is now inside `workflowLens`. The `seq`
+  consumption moved to the render site above when the cytoscape builder went; `public/app-logic.mjs`
+  no longer mentions `seq` outside one comment about `listQueue`'s `ORDER BY`.
+- "note `public/app.js:2765` already sorts on `(a.data("seq") ?? 0)`" — **that sort no longer
+  exists.** It was cytoscape layout code, removed with the builder, so the risk it warned about is
+  discharged rather than relocated. Kept as history because the warning is why the omission above
+  is stated as a contract.
+- "Today `roadmapTopoOrder` (`public/app.js:2334`) walks `dependsOn` depth-first … so the live
+  board repeats waves (`Wave 1,2,3,4,3,4,5,6,5,6,5`)" — **`roadmapTopoOrder` no longer exists
+  either**; this CR's §S6 is what removed it, and AC13/AC15 are what replaced it. Read as the
+  problem statement it was, not as a description of current code.
 
 New rule: **topology validates, it does not re-sequence.** An authored order placing a CR before
 its own dependency raises a **warning on that row** and is not reshuffled — quiet reshuffling
@@ -146,9 +183,14 @@ hides an authoring error and overrides the orchestrator's intent (CR-091 §S5).
 
 ### §S7 Selection and highlight
 
-Clicking a gate refocuses zones 2 and 3. Clicking the active wave opens/closes it in place and
-narrows the table to that wave. Clicking a CR node or its row drills to that CR's cycles in
-Workflow — the jump itself is **CR-079**. Selecting on either side highlights the other.
+Clicking a gate refocuses zones 2 and 3. Clicking a CR node or its row drills to that CR's cycles
+in Workflow — the jump itself is **CR-079**. Selecting on either side highlights the other.
+
+**Removed 2026-08-28 after VERIFY:** this section also carried *"Clicking the active wave
+opens/closes it in place and narrows the table to that wave."* It shipped with zero code, zero
+tests and — the reason nothing caught it — **zero acceptance criteria**. Rather than smuggle a new
+interaction into a CR already at 33 ACs, it moves to Non-goals below. The lesson is recorded
+there: a clause in §S with no AC is a clause nobody is obliged to build.
 
 ### §S8 The focused release and the page window live OUTSIDE the render tree
 
@@ -159,16 +201,20 @@ strip's **page window** (§S2) — and says nothing about where either lives. On
 that omission has already produced a bug twice, so it is specified here rather than left to the
 implementer:
 
-- `roadmapExpandedKeys` (`public/app.js:2490-2500`) had to be hoisted out of the render tree
-  because "RoadmapGraphBody re-runs on every `state.queue`/`plans`/`releases` change, so a
-  mount-local Set silently re-collapsed whatever the user had opened on the very next SSE frame."
+- `roadmapExpandedKeys` (`public/app.js:2490-2500` — *history, verified 2026-08-29: the symbol
+  went with `RoadmapGraphBody`, so this is the shape of the bug, not a live reference*) had to be
+  hoisted out of the render tree because "RoadmapGraphBody re-runs on every
+  `state.queue`/`plans`/`releases` change, so a mount-local Set silently re-collapsed whatever the
+  user had opened on the very next SSE frame."
 - CR-CRU-077 §S2 declared expansion "UI state, not persisted", and CR-CRU-093 then had to add its
   own §S3/§S4 to give the rail durable state after the same gap bit there.
 
 So: both values are held **outside** the render tree, keyed by project exactly as
-`roadmapExpandKey` is, and a poll-tick or SSE frame **never** resets either. Landing still focuses
-the release in progress (§S5) — the requirement is that a focus the USER moved survives a
-re-render, not that the default changes.
+`state.collapsedCycles` and `lensOpenKeys` are — *`roadmapExpandKey`, which this sentence named
+until 2026-08-29, went the same way as `roadmapExpandedKeys`; the two surviving precedents are the
+ones the implementation actually followed* — and a poll-tick or SSE frame **never** resets either.
+Landing still focuses the release in progress (§S5) — the requirement is that a focus the USER
+moved survives a re-render, not that the default changes.
 
 They must also survive a **tab swap and return**, because CR-CRU-079 AC5 requires the `← roadmap`
 affordance to come back to the prior focused release and page window rather than the default. That
@@ -188,9 +234,10 @@ described a strip built from shipped releases alone while three ACs demanded pro
 implementer following the scope would have failed them. Recorded rather than quietly patched,
 because it is exactly the omission a gap analysis exists to surface.
 
-The frontend holds **one** release read today: `state.releases`, filled from `body.releases` at
-`public/app.js:293` — that is `GET …/releases`, which CR-091 §S1 deliberately keeps free of
-proposals (`listReleases` filters `event.type === "release"`). A repo-wide search of `public/` for
+The frontend holds **one** release read today: `state.releases`, filled from `body.releases` in
+`refetchRoadmap` (`public/app.js:293` — *verified 2026-08-29, still the right neighbourhood*) —
+that is `GET …/releases`, which CR-091 §S1 deliberately keeps free of proposals (`listReleases`
+filters `event.type === "release"`). A repo-wide search of `public/` for
 `release-proposals` / `listReleaseProposals` / `proposals` returns **zero hits**: nothing in the UI
 reads a proposal, and no state slice holds one.
 
@@ -201,11 +248,23 @@ So this CR adds the second read:
 - Hold it in its own state slice beside `state.releases`, refreshed on the SAME cadence and through
   the same path (`public/app.js:293`'s neighbourhood), so the strip can never render a stale half
   of its own sequence.
-- Keep the two lists SEPARATE in state and concatenate only at render. CR-091 fixed their sort
-  directions deliberately opposite — `listReleases` newest-first, `listReleaseProposals` ascending
-  by version — precisely so a consumer appends "shipped, then proposed" with **no reversal**.
-  Merging them into one array in state would throw that away and re-introduce the sorting question
-  AC28 exists to settle.
+- Keep the two lists SEPARATE in state and concatenate only at render.
+
+  **CORRECTION 2026-08-28, after VERIFY — the original text here was arithmetically WRONG and it
+  caused a blocker.** It read: *"CR-091 fixed their sort directions deliberately opposite —
+  `listReleases` newest-first, `listReleaseProposals` ascending by version — precisely so a
+  consumer appends 'shipped, then proposed' with no reversal."* Appending an ASCENDING list to a
+  DESCENDING one does not produce a sorted sequence — opposite directions are exactly what makes a
+  bare concatenation wrong. C2 implemented that sentence faithfully and the strip rendered its
+  shipped half backwards: `Start → 0.1.3 → 0.1.2 → 0.1.1 → 0.1.0 → 0.2.0 → End`, dates decreasing
+  left to right and then jumping to the future.
+
+  The rule is: **the shipped leg is reversed into ASCENDING ship order at render**, the proposed
+  leg is already ascending by version, and the two are then continuous. `listReleases` stays
+  newest-first — that is its contract and CR-091 owns it — so the reversal is the CONSUMER's job
+  and belongs here, in the one place that renders a single sequence. Keeping the lists separate in
+  state is still right, and still stops a merged array from re-opening the question; what was wrong
+  was believing separateness removed the need to order.
 - A failed proposals read must not blank the shipped strip: the two reads fail independently, and
   a strip showing shipped gates with proposals unavailable is a legitimate degraded state, not an
   error. It is NOT the AC19 empty state, which means "nothing registered at all".
@@ -244,7 +303,9 @@ So this CR adds the second read:
 - **AC13** — rows preserve authored `seq` verbatim within the release. Asserted against a fixture
   whose authored order differs from a dependency-only walk, so a renderer that re-derives order
   fails.
-- **AC14** — **order is editable**: re-registering with two CRs swapped (same wave, same deps)
+- **AC14** — **order is editable**: a re-authored queue payload with two CRs swapped (same wave,
+  same deps) — *reworded 2026-08-28: "re-registering" read as a POST round-trip, which is
+  CR-091's surface, not this one's; the render contract is what this CR owns* —
   changes their rendered order accordingly.
 - **AC15** — an authored order placing a CR before its own dependency renders a warning on that
   row and is **not** reordered.
@@ -254,8 +315,12 @@ So this CR adds the second read:
 - **AC17** — selecting a row highlights its node and vice versa.
 - **AC18** — an `IN_PROGRESS` row is clickable and marked as the drill-through source; the jump is
   CR-079's AC.
-- **AC19** — with **no** queue and **no** releases registered, every zone renders one definitive
-  empty state naming the registration verb, and no error. **Observed 2026-08-28 on the cleared
+- **AC19** — with **no** queue and **no** releases registered, the board renders **one** definitive
+  empty state naming the registration verb, and no error. *Wording corrected 2026-08-28 after
+  VERIFY: the original opened with "every zone renders one definitive empty state" and closed
+  with "an empty board renders no terminals, no strip and no wave box, only the empty state" —
+  self-contradictory, since there are no zones to each carry a message. The closing sentence is
+  the contract and is what the implementation and tests follow.* **Observed 2026-08-28 on the cleared
   board, and this is the failure to fix:** the table shows "No execution queue registered yet …"
   while the graph renders two orphan terminals — a `Start` and an `End` bubble, 2 nodes and 0
   edges, with no message at all. Drawing skeleton chrome for an empty project fails this AC: an
@@ -302,7 +367,14 @@ different from `.lavish/crucible-workflow-flowchart.html` §1–§8/§14 is **no
   as it does today (absent, never defaulted). Without this AC 0.2.0 ships 091's write path with no
   surface: a voided CR would render identically to live pending work on the release's headline
   feature, which is the silent rot 091's Problem statement exists to end.
-- **AC28 — the strip renders shipped and proposed releases in one sequence, proposals last.**
+- **AC28 — the strip renders one MONOTONIC sequence, shipped ascending by ship date, proposals
+  last and ascending by version.** *Monotonicity clause added 2026-08-28 after VERIFY: the
+  original AC required only "proposals last" and "no re-sort", and a strip whose shipped half
+  runs BACKWARDS satisfies both — which is exactly how the blocker passed review. The assertion is
+  now on the ORDER ITSELF: across the shipped leg every gate's ship date is >= its left
+  neighbour's; across the proposed leg every version is > its left neighbour's; and the last
+  shipped gate precedes the first proposed one. A fixture must include at least three shipped
+  releases, because two cannot distinguish ascending from descending under a stable sort.*
   Re-scoped here from CR-CRU-091 AC1 on 2026-08-28: 091 owns the DATA contract
   (`listReleaseProposals` ascending by version, `listReleases` carrying no proposals) but is
   forbidden to build this surface, so its strip clause was untestable there and passed vacuously —
@@ -369,3 +441,12 @@ vanishing silently.
 - The collapsible project rail — **CR-093**.
 - Release→gate association — needs a data model that does not exist.
 - Historical wave reconstruction for shipped releases — the Workflow history view owns it.
+- **Opening/closing a wave in place and narrowing the table to it** (moved out of §S7
+  2026-08-28 after VERIFY). A real interaction, but it had no AC, so nothing obliged anyone to
+  build it and nothing failed when no one did. Registered as a candidate rather than filed as a
+  CR mid-flight.
+- **Surfacing a declared target that contradicts version order as a planning conflict** (moved
+  out of §S3, same date, same reason). The prohibition on re-sorting stays in §S3 and is
+  asserted; only the new affordance is deferred.
+- **A general lesson from both:** a clause in a §S section with no acceptance criterion is not a
+  requirement, it is a wish. Every §S clause worth keeping needs an AC or an explicit non-goal.

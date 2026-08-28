@@ -94,7 +94,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-084](CR-CRU-084-release-records-its-packages.md) | a release records the package(s) it delivered | feature | COMPLETED | 080, 081 | 5 |
 | [CR-CRU-077](CR-CRU-077-roadmap-graph-is-the-execution-dag.md) | the roadmap graph is the execution DAG, not a relationship web | feature | COMPLETED (0.2.0) | 014, 076, 080, 083, 084 | 5 (0.2.0) |
 | [CR-CRU-091](CR-CRU-091-roadmap-registration-is-declared.md) | roadmap registration is declared: release, wave and sequence | feature | COMPLETED (0.2.0) | 014, 084 | 5 (0.2.0) |
-| [CR-CRU-078](CR-CRU-078-roadmap-graph-and-table-together.md) | the roadmap is a release-paged flowchart with its scoped table | feature | PENDING (0.2.0) | 077, 084, 091 | 5 (0.2.0) |
+| [CR-CRU-078](CR-CRU-078-roadmap-graph-and-table-together.md) | the roadmap is a release-paged flowchart with its scoped table | feature | COMPLETED (0.2.0) | 077, 084, 091 | 5 (0.2.0) |
 | [CR-CRU-079](CR-CRU-079-roadmap-deep-link-and-drill-through.md) | roadmap deep-link parity and active-CR drill-through | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-092](CR-CRU-092-next-validates-the-sequence.md) | `next`: the orchestrator validates its sequence during execution | feature | COMPLETED (0.2.0) | 091 | 5 (0.2.0) |
 | [CR-CRU-085](CR-CRU-085-roadmap-multi-track-lanes.md) | multi-track swimlanes inside a wave | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
@@ -183,6 +183,19 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   consistent with §S8 (the per-entry `seq` is "the one wire addition beyond the five-route table"),
   and the carry-forward path those fields feed IS reachable and load-bearing — but the write side
   of them is dead until something wires it.
+
+- **`plan-file --cycles` splits silently on a comma inside a label** (candidate patch CR, hit
+  2026-08-28 filing CR-CRU-078). `--cycles` is comma-delimited, so a label containing a comma —
+  `"C1 data + authored order - proposals read, formatter wiring, seq verbatim"` — became THREE
+  cycles (296/297/298) instead of one, with `ok: true` and no warning. The board silently gained
+  two cycles nobody planned. `--help` does say "Comma-separated cycle labels", so the input was
+  mine; the defect is that a delimiter collision inside a value is unreportable on this surface,
+  and the only repair verb (`abort`) is gated on `--user-approved` — so a filing typo costs a user
+  approval to undo. Candidate fixes: accept a repeatable `--cycle` flag so labels may hold commas,
+  or warn when a resulting label is suspiciously short or the count exceeds a plausible bound.
+  Not folded into 078 — unrelated to the roadmap surface, and the repo rule is a patch CR over an
+  inline scope edit. Worked around by adopting the finer granularity rather than aborting the plan:
+  destroying a board record to fix a label is the worse trade.
 
 - 2026-08-27 — **0.1.3 shipped**: CR-CRU-090, PyPI + npm both at 0.1.3. Pre-flight every tag via a
   PR — push-triggered CI only runs on `develop`/`master`, and a red suite silently skips the publish.
