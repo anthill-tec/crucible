@@ -4,7 +4,7 @@
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 078
 - **Status**: PENDING (0.2.0) — AC3/AC5 re-based 2026-08-28 on the paged release model
-- **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §6, §14 (approved 2026-08-28). Absolute path so it resolves from a worktree; it carries selection/navigation and the paging model the landing must respect.
+- **Design documents — READ THESE FIRST**: `docs/research/DN-crucible-roadmap-view.md` — the TRACKED decision record, and the governing one; **decision 7c** (`:28`, approved) is the drill-through contract this CR implements. The visual it was approved on is `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §6, §14 (2026-08-28) — absolute path, but `.lavish/` is **gitignored**, so where the two disagree or the flowchart is absent, the DN governs. Storyboard frames F14/F14½/F14a are illustrations, not the record: F14a was superseded and trimmed to a pointer on 2026-08-28 while its decision 7c survives in the DN.
 
 > The design document is the contract for this CR. Implement what it specifies — do not
 > re-derive the model, the vocabulary or the look from scratch.
@@ -82,8 +82,14 @@ never silently drops the user into unrelated history — the current failure mod
   group header.
 - **AC5** — the back affordance returns to the roadmap with the **prior focused release and page
   window** intact — not reset to the default focus.
-- **AC6** — a `PENDING` CR with no workflow history produces an explicit empty state naming the
-  CR, or no navigation at all — never an untargeted landing in unrelated history.
+- **AC6** — a CR with no workflow history never produces an untargeted landing. **Note the
+  starting point, established by gap analysis 2026-08-28: `PENDING` and `COMPLETED_UNTRACKED` rows
+  are ALREADY inert** — `public/app.js:2392` navigates only for `IN_PROGRESS` and `COMPLETED`, so
+  the "or no navigation at all" limb of this AC passes today with zero work. To earn its keep the
+  AC asserts the inertness is DELIBERATE and covered: a `PENDING` row click changes neither the tab
+  nor the pathname, a `COMPLETED_UNTRACKED` row behaves identically, and if either is later made
+  navigable it must land with an explicit empty state naming the CR. The untargeted-landing failure
+  this CR exists to remove belongs to `COMPLETED`/`IN_PROGRESS` rows (AC3/AC4), not to this one.
 - **AC7** — F14½'s frame status is corrected in the storyboard to match reality once shipped.
 
 ## Estimated size
@@ -94,9 +100,16 @@ empty-state path.
 ## Risk
 
 The drill-through mutates Workflow-pane expansion state from outside, so the risk is fighting
-the pane's own collapse-by-default rule (CR-020 §S1.3: history groups collapse by default). The
-target expansion must be an explicit, addressed state rather than a global "expand all", or
-history becomes unusable at 63 groups.
+the pane's own default-collapsed behaviour. **Cited correctly after gap analysis 2026-08-28:**
+this rule is NOT CR-020 §S1.3 — that CR has only §S1 and §S2, and its `§S1.3` acceptance
+checkbox concerns which CR groups appear for open vs closed plans, not collapse. The
+behaviour is real but emergent: expansion is an OPT-IN open set, empty on load, so everything
+reads as collapsed by default. The governing precedent is `roadmapExpandedKeys`
+(`public/app.js:2490-2500`), which had to be hoisted OUTSIDE the render tree because the body
+re-runs on every queue/plans/releases change and a mount-local Set "silently re-collapsed
+whatever the user had opened on the very next SSE frame". The target expansion must be an
+explicit, addressed state on that same pattern rather than a global "expand all", or history
+becomes unusable at 63 groups.
 
 Second risk: making the chip navigate changes an existing shipped affordance's mechanism from
 state-mutation to routing. AC2 exists to ensure both doors converge instead of diverging into
@@ -107,5 +120,7 @@ two behaviours.
 - Graph topology, waves, gates, lanes, motion — **CR-077**.
 - Removing the toggle, selection-driven table, row grammar — **CR-078**.
 - Tab ordering — **CR-076**.
-- Changing the workspace **landing** pane — still CR-021 §S1 AC2, untouched.
+- Changing the workspace **landing** pane — still **CR-021 §S1** ("Tab order + default":
+  the default active tab on entry is `Workflow`), untouched. *Corrected 2026-08-28: that
+  section carries no `AC2`; the earlier citation named a criterion that does not exist.*
 - Release→gate association and the P50/P80 forecast — out of 0.2.0 (CR-022, deferred).

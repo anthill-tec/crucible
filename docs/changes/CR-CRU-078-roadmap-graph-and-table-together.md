@@ -110,6 +110,36 @@ Clicking a gate refocuses zones 2 and 3. Clicking the active wave opens/closes i
 narrows the table to that wave. Clicking a CR node or its row drills to that CR's cycles in
 Workflow — the jump itself is **CR-079**. Selecting on either side highlights the other.
 
+### §S8 The focused release and the page window live OUTSIDE the render tree
+
+**Added 2026-08-28 by CR-CRU-079's gap analysis, which depends on this and found it unstated.**
+
+This CR introduces two new pieces of view state — the **focused release** (§S4, §S5) and the
+strip's **page window** (§S2) — and says nothing about where either lives. On this exact surface
+that omission has already produced a bug twice, so it is specified here rather than left to the
+implementer:
+
+- `roadmapExpandedKeys` (`public/app.js:2490-2500`) had to be hoisted out of the render tree
+  because "RoadmapGraphBody re-runs on every `state.queue`/`plans`/`releases` change, so a
+  mount-local Set silently re-collapsed whatever the user had opened on the very next SSE frame."
+- CR-CRU-077 §S2 declared expansion "UI state, not persisted", and CR-CRU-093 then had to add its
+  own §S3/§S4 to give the rail durable state after the same gap bit there.
+
+So: both values are held **outside** the render tree, keyed by project exactly as
+`roadmapExpandKey` is, and a poll-tick or SSE frame **never** resets either. Landing still focuses
+the release in progress (§S5) — the requirement is that a focus the USER moved survives a
+re-render, not that the default changes.
+
+They must also survive a **tab swap and return**, because CR-CRU-079 AC5 requires the `← roadmap`
+affordance to come back to the prior focused release and page window rather than the default. That
+makes the scope a workspace-level holder, not one local to the roadmap body's mount.
+
+Persistence across a full page RELOAD is **not** required here and is deliberately out of scope:
+`/p/<key>/roadmap` is the only routed tab (CR-CRU-014 §S3), and CR-CRU-079 is about to make that
+route the shared destination for both entry points — so carrying focus in the URL is the natural
+home for reload-durability and belongs in that conversation, not this one. What this CR owes is
+in-session durability.
+
 ## Acceptance criteria
 
 - **AC1** — no toggle exists: `roadmap-view-table` and `roadmap-view-graph` are absent from the
@@ -227,6 +257,13 @@ different from `.lavish/crucible-workflow-flowchart.html` §1–§8/§14 is **no
   this AC. A proposal with no declared target renders no date at all rather than an empty slot
   claiming one — `formatReleaseDate` returns `""` for absent input, while a real `0` still renders
   1970-01-01, so absence and the epoch stay distinguishable.
+- **AC31 — focus and the page window survive a re-render.** With a non-default release focused and
+  the strip paged away from the landing window, a poll tick / SSE frame that replaces
+  `state.queue`, `state.plans` or `state.releases` leaves both intact. A mount-local holder fails
+  this AC, and it is the specific failure `roadmapExpandedKeys` was hoisted to prevent.
+- **AC32 — focus and the page window survive a tab swap.** Focus a non-default release, page the
+  strip, switch to Workflow, switch back: the same release is focused and the same window is shown.
+  Resetting to the in-flight default fails this AC and would make CR-CRU-079 AC5 unimplementable.
 
 ## Estimated size
 
