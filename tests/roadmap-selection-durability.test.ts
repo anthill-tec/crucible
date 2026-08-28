@@ -51,11 +51,15 @@
 //     release ledger the strip above it also has nothing to draw from.
 //   • AC31, AC32 — REGRESSION LOCKS, expected to pass on arrival. C2 hoisted
 //     the page window and C3 the focused release out of the render tree
-//     (public/app.js:2811-2838) for exactly this reason, and §S8 was written
-//     to make that a stated contract rather than an implementation habit
-//     CR-CRU-079 AC5 would inherit by luck. Nothing here re-implements them;
-//     these tests are what makes a later mount-local regression fail loudly,
-//     and they are the ACs CR-CRU-079 will build on.
+//     (`roadmapStripOffsets`/`roadmapStripRev` at public/app.js:2924-2925,
+//     `roadmapFocusVersions`/`roadmapFocusRev` at :2936-2937 — *citation
+//     repaired 2026-08-29 by reading the target: this said :2811-2838, which
+//     the ~1200 lines this CR moved through public/app.js left pointing at
+//     zone 2's delivered-summary prose*) for exactly this reason, and §S8 was
+//     written to make that a stated contract rather than an implementation
+//     habit CR-CRU-079 AC5 would inherit by luck. Nothing here re-implements
+//     them; these tests are what makes a later mount-local regression fail
+//     loudly, and they are the ACs CR-CRU-079 will build on.
 import { describe, test, expect, afterEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
@@ -172,14 +176,19 @@ const SELECT_PLANS: PlanFixture[] = [
 // 0.2.0, which is precisely the failure §S8 names.
 const DURABLE_COUNT = 20;
 /** A SHIPPED gate, deliberately neither the default focus nor in the landing
- *  window: `0.1.9` is index 10 of the sequence, visible only after paging. */
+ *  window: with the shipped leg in ascending ship order (§S9), `0.1.9` is index
+ *  9 of the sequence — one window back from the landing page, so it is visible
+ *  only after paging. *Was documented as index 10, which was the index it had
+ *  while the leg rendered backwards.* */
 const DURABLE_FOCUS = "0.1.9";
 const DURABLE_MEMBER_A = "CR-DUR-1";
 const DURABLE_MEMBER_B = "CR-DUR-2";
 
-/** `listReleases` publishes NEWEST FIRST (CR-CRU-091 §S1): index 0 is
- *  `0.1.19`, index 19 `0.1.0`. Only the focused tag claims CRs, so the table's
- *  row count is a direct read of the queue slice AC31 replaces. */
+/** `listReleases` publishes NEWEST FIRST (CR-CRU-091 §S1), so ledger index 0 is
+ *  `0.1.19` and index 19 is `0.1.0` — and `releaseStripGates` reads that leg
+ *  BACKWARDS, so gate index 0 is `0.1.0` and gate index 19 is `0.1.19`. Only
+ *  the focused tag claims CRs, so the table's row count is a direct read of the
+ *  queue slice AC31 replaces. */
 function durableLedger(): ReleaseFixture[] {
   return Array.from({ length: DURABLE_COUNT }, (_unused, i) => {
     const age = DURABLE_COUNT - 1 - i;
@@ -694,15 +703,21 @@ describe("CR-CRU-078 §S8/AC31 — the focused release and the page window survi
       expect(gatesBefore).toBe(DURABLE_COUNT + 1);
 
       // A frame the user did not cause, on all three slices at once — the
-      // ledger gains its OLDEST tag (so the paged window's own gates are
-      // untouched and the assertion is about the HOLDER, not about indices
-      // shifting), the queue gains the focused release's second member, and a
-      // plan appears.
-      opts.releases!.push({
-        version: "0.0.9",
-        releasedAt: SHIP_010 - 86_400 * 5,
+      // ledger gains its NEWEST tag, the queue gains the focused release's
+      // second member, and a plan appears.
+      //
+      // NEWEST, deliberately: the shipped leg renders in ascending ship order
+      // (§S9), so a newer tag lands PAST the paged window and the window's own
+      // gates are untouched — which keeps this assertion about the HOLDER
+      // rather than about indices shifting. `listReleases` publishes
+      // newest-first, so a new newest tag arrives at the FRONT of the ledger
+      // array. *Was the oldest tag, which was what landed past the end while
+      // the leg rendered backwards.*
+      opts.releases!.unshift({
+        version: `0.1.${DURABLE_COUNT}`,
+        releasedAt: SHIP_010 + 86_400 * DURABLE_COUNT,
         crs: [],
-        timestamp: (SHIP_010 - 86_400 * 5) * 1000,
+        timestamp: (SHIP_010 + 86_400 * DURABLE_COUNT) * 1000,
       });
       opts.queue!.push({
         cr: DURABLE_MEMBER_B,

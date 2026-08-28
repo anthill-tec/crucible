@@ -169,12 +169,18 @@ describe("CR-CRU-078 §S3/AC6 — a gate resolves to ITS OWN date, or to a decla
 
   test("a SHIPPED row with no `releasedAt` is an undated TAG, not an undeclared target", () => {
     // A pre-CR-080 ledger row carries no `releasedAt` at all
-    // (`src/v2.ts:1759` spreads it only when defined; the ship-order read at
-    // public/app-logic.mjs:907-918 already treats such a row as legacy
-    // history). It resolves to the empty state — but tagged `shipped` /
-    // `releasedAt`, so the surface can say "no ship date recorded" rather than
-    // "no target declared", which would be a claim about a plan the row does
-    // not have.
+    // (`src/v2.ts:1759` spreads it only when defined — verified). It resolves
+    // to the empty state — but tagged `shipped` / `releasedAt`, so the surface
+    // can say "no ship date recorded" rather than "no target declared", which
+    // would be a claim about a plan the row does not have.
+    //
+    // *Citation repaired 2026-08-29 by reading the target: this also cited
+    // "the ship-order read at public/app-logic.mjs:907-918" as already
+    // treating such a row as legacy history. There is no ship-order read any
+    // more — CR-CRU-077's ascending-by-`releasedAt` sorter went with the code
+    // CR-CRU-078 removed (§S9's own correction), and that line span is now a
+    // cycle-count block. `resolveGateDate` (public/app-logic.mjs:80) is the
+    // ONLY place that reads the field today, and it is what this test calls.*
     const got = Logic.resolveGateDate({ version: "0.0.9", crs: [], timestamp: 7 }, "shipped");
     expect(got).toEqual({ kind: "shipped", field: "releasedAt", state: "absent", date: "" });
   });

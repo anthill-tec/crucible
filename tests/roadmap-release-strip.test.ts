@@ -218,6 +218,13 @@ interface MountOpts {
   proposalsThrows?: boolean;
   /** The harness box model for this mount (see the header note). */
   layout?: Partial<StripLayout>;
+  /**
+   * Run against the fresh happy-dom globals AFTER they are registered and
+   * BEFORE `public/app.js` is evaluated — the only window in which a test can
+   * instrument a global the app captures at mount (`window.addEventListener`,
+   * `ResizeObserver`).
+   */
+  beforeApp?: () => void;
 }
 
 /** The two independently measured quantities the window size is derived from. */
@@ -352,6 +359,8 @@ async function mountApp(opts: MountOpts): Promise<void> {
   // fresh happy-dom global (house harness pattern).
   cacheBust += 1;
   await import(`${APP_LOGIC_PATH}?roadmapReleaseStrip=${cacheBust}`);
+
+  opts.beforeApp?.();
 
   (0, eval)(APP_JS_SRC);
 
@@ -544,15 +553,87 @@ describe("CR-CRU-078 §S2 — the window holds WHOLE gates, measured, never a fr
 
 // ── §S3/§S9 — the sequence the strip is made of ────────────────────────────
 
-describe("CR-CRU-078 §S9/AC28 — one sequence: shipped as published, then proposals, with NO reversal", () => {
-  test("the two reads are concatenated VERBATIM — proposals last, and neither published order is re-sorted", () => {
+describe("CR-CRU-078 §S9/AC28 — one MONOTONIC sequence: shipped in ship order, then proposals by version", () => {
+  /**
+   * AC28's MONOTONICITY clause — added to the spec 2026-08-28 after VERIFY.
+   *
+   * FOUR shipped releases, not two: under a stable sort two gates are
+   * indistinguishable ascending from descending, which is exactly why the
+   * original AC — "proposals last, neither half re-sorted" — passed while the
+   * strip rendered `Start → 0.1.3 → 0.1.2 → 0.1.1 → 0.1.0 → 0.2.0 → End`,
+   * ship dates DECREASING left to right and then jumping to the future.
+   *
+   * `listReleases` keeps its newest-first contract (CR-CRU-091 §S1 owns it);
+   * the reversal into ascending ship order is the CONSUMER's job, and this is
+   * the assertion that obliges it.
+   */
+  test("AC28 — the sequence is MONOTONIC: shipped ascending by ship date, then proposals ascending by version, continuous across the seam", () => {
+    const shipped = shippedLedger(4);
+    const proposals: ProposalFixture[] = [
+      { label: "0.4.0", targetAt: SHIP_010 + 86_400 * 90, timestamp: 1, waves: [] },
+      { label: "0.5.0", targetAt: SHIP_010 + 86_400 * 120, timestamp: 2, waves: [] },
+    ];
+    // Fixture guard: the ledger really is published newest-first, so a bare
+    // concatenation would be visibly descending.
+    expect(shipped.map((r) => r.version)).toEqual(["0.1.3", "0.1.2", "0.1.1", "0.1.0"]);
+
+    const gates = Logic.releaseStripGates(shipped, proposals);
+    const shippedLeg = gates.filter((g) => g.kind === "shipped");
+    const proposedLeg = gates.filter((g) => g.kind === "proposed");
+    expect(shippedLeg.length).toBe(4);
+    expect(proposedLeg.length).toBe(2);
+
+    // Proposals last — the whole shipped leg precedes the whole proposed one.
+    expect(gates.map((g) => g.kind)).toEqual([
+      "shipped",
+      "shipped",
+      "shipped",
+      "shipped",
+      "proposed",
+      "proposed",
+    ]);
+
+    // Across the shipped leg every gate's ship date is >= its left
+    // neighbour's. ISO days sort lexicographically, so the gate's own rendered
+    // date string IS the comparable value.
+    for (let i = 1; i < shippedLeg.length; i++) {
+      expect(shippedLeg[i]!.date >= shippedLeg[i - 1]!.date).toBe(true);
+    }
+    // Across the proposed leg every version is > its left neighbour's.
+    for (let i = 1; i < proposedLeg.length; i++) {
+      expect(proposedLeg[i]!.version > proposedLeg[i - 1]!.version).toBe(true);
+    }
+    // The seam is continuous: the LAST shipped precedes the FIRST proposed.
+    expect(shippedLeg[3]!.date < proposedLeg[0]!.date).toBe(true);
+
+    expect(gates.map((g) => g.version)).toEqual([
+      "0.1.0",
+      "0.1.1",
+      "0.1.2",
+      "0.1.3",
+      "0.4.0",
+      "0.5.0",
+    ]);
+  });
+
+  test("AC28 — the RENDERED strip is that same monotonic sequence, left to right", async () => {
+    await mountApp({ releases: shippedLedger(3), proposals: [PROPOSED_020] });
+    expect(gateVersions()).toEqual(["0.1.0", "0.1.1", "0.1.2", "0.2.0"]);
+    const dates = ["0.1.0", "0.1.1", "0.1.2"].map((version) => gateDateText(version));
+    for (let i = 1; i < dates.length; i++) {
+      expect(dates[i]! >= dates[i - 1]!).toBe(true);
+    }
+    expect(dates[2]! < gateDateText("0.2.0")).toBe(true);
+  });
+
+  test("each published order is preserved — the shipped leg read into ship order, the proposed leg verbatim, and nothing re-sorted", () => {
     const shipped = shippedLedger(3); // 0.1.2, 0.1.1, 0.1.0 — newest-first
     const proposals: ProposalFixture[] = [
       { label: "0.4.0", timestamp: 1, waves: [] },
       { label: "0.5.0", timestamp: 2, waves: [] },
     ];
     const gates = Logic.releaseStripGates(shipped, proposals);
-    expect(gates.map((g) => g.version)).toEqual(["0.1.2", "0.1.1", "0.1.0", "0.4.0", "0.5.0"]);
+    expect(gates.map((g) => g.version)).toEqual(["0.1.0", "0.1.1", "0.1.2", "0.4.0", "0.5.0"]);
     expect(gates.map((g) => g.kind)).toEqual([
       "shipped",
       "shipped",
@@ -560,6 +641,9 @@ describe("CR-CRU-078 §S9/AC28 — one sequence: shipped as published, then prop
       "proposed",
       "proposed",
     ]);
+    // The caller's own state slice is NOT mutated — the leg is read backwards,
+    // never reversed in place.
+    expect(shipped.map((r) => r.version)).toEqual(["0.1.2", "0.1.1", "0.1.0"]);
   });
 
   test("a proposal whose declared target PREDATES a shipped release still renders last — a target is a plan, version orders the strip", () => {
@@ -583,8 +667,10 @@ describe("CR-CRU-078 §S9/AC28 — one sequence: shipped as published, then prop
     const withPlan = Logic.releaseStripGates(shippedLedger(3), [PROPOSED_020]);
     expect(Logic.releaseStripFocusIndex(withPlan)).toBe(3);
     const shippedOnly = Logic.releaseStripGates(shippedLedger(3), []);
-    // `listReleases` is newest-first, so index 0 IS the newest tag.
-    expect(Logic.releaseStripFocusIndex(shippedOnly)).toBe(0);
+    // The shipped leg is ASCENDING, so the newest tag is the LAST gate — index
+    // 0 is the oldest release ever shipped and would be the wrong landing.
+    expect(Logic.releaseStripFocusIndex(shippedOnly)).toBe(2);
+    expect(shippedOnly[2]!.version).toBe("0.1.2");
     expect(Logic.releaseStripFocusIndex([])).toBe(-1);
   });
 });
@@ -675,27 +761,43 @@ describe("CR-CRU-078 §S1/AC1 — no exclusive toggle: every zone renders uncond
 // ── §S2/AC3 — no gate is ever drawn partially ──────────────────────────────
 
 describe("CR-CRU-078 §S2/AC3 — every rendered gate lies WHOLLY inside the strip", () => {
-  test("on landing, after paging LATER and after paging back EARLIER — and the window is maximal, so it is not passing by drawing one gate", async () => {
+  test("on landing, after paging EARLIER and after paging back LATER — and the window is maximal, so it is not passing by drawing one gate", async () => {
     await mountApp({ releases: shippedLedger(20), layout: { track: 800, pitch: 100 } });
+    // Landing is the page holding the newest shipped tag, and 20 is not a
+    // multiple of 8, so that page is SHORT: four whole gates and no partial
+    // ninth. A short page is still a whole-container page.
+    expect(attrNumber("data-window-offset")).toBe(16);
+    expect(gateEls().length).toBe(4);
+    expect(gatesOutsideTheStrip()).toEqual([]);
+
+    await clickTag("earlier");
+    expect(attrNumber("data-window-offset")).toBe(8);
+    expect(gateEls().length).toBe(8);
+    expect(gatesOutsideTheStrip()).toEqual([]);
+    // A FULL window here, and one more gate would breach the track — so AC3 is
+    // not passing by drawing fewer gates than fit.
+    expect(oneMoreGateWouldBreach()).toBe(true);
+
+    await clickTag("earlier");
+    expect(attrNumber("data-window-offset")).toBe(0);
     expect(gateEls().length).toBe(8);
     expect(gatesOutsideTheStrip()).toEqual([]);
     expect(oneMoreGateWouldBreach()).toBe(true);
 
     await clickTag("later");
+    expect(attrNumber("data-window-offset")).toBe(8);
     expect(gateEls().length).toBe(8);
     expect(gatesOutsideTheStrip()).toEqual([]);
-
-    await clickTag("earlier");
-    expect(gateEls().length).toBe(8);
-    expect(gatesOutsideTheStrip()).toEqual([]);
-    expect(attrNumber("data-window-offset")).toBe(0);
   });
 
   test("a track that fits 8.5 gates renders EIGHT — the half gate is a remainder, and a ninth would breach the track", async () => {
     await mountApp({ releases: shippedLedger(20), layout: { track: 850, pitch: 100 } });
+    expect(attrNumber("data-window-size")).toBe(8);
+    // Landing is the short LAST page (4 of 20); page back onto a full window,
+    // which is where "eight, never eight and a half" is observable.
+    await clickTag("earlier");
     expect(gateEls().length).toBe(8);
     expect(gatesOutsideTheStrip()).toEqual([]);
-    expect(attrNumber("data-window-size")).toBe(8);
     // The ninth gate would run 800→900 inside an 850-wide track: over the edge.
     expect(9 * 100).toBeGreaterThan(850);
   });
@@ -721,40 +823,54 @@ describe("CR-CRU-078 §S2/AC3 — every rendered gate lies WHOLLY inside the str
 // ── §S2/AC4 — the hidden count IS the affordance ───────────────────────────
 
 describe("CR-CRU-078 §S2/AC4 — the remainder is a clickable tag on each side, absent when empty", () => {
-  test("with 20 releases and room for 8, the landing window hides 12 later and nothing earlier — so ONLY the later tag exists", async () => {
+  test("with 20 releases and room for 8, the landing window hides 16 earlier and nothing later — so ONLY the earlier tag exists", async () => {
     await mountApp({ releases: shippedLedger(20), layout: { track: 800, pitch: 100 } });
-    expect(attrNumber("data-window-offset")).toBe(0);
-    expect(tag("earlier")).toBeNull();
-    const later = tag("later");
-    expect(later).not.toBeNull();
-    expect(later!.textContent ?? "").toContain("12");
-    expect(later!.textContent ?? "").toContain("later");
-    expect(later!.tagName.toLowerCase()).toBe("button");
+    expect(attrNumber("data-window-offset")).toBe(16);
+    expect(tag("later")).toBeNull();
+    const earlier = tag("earlier");
+    expect(earlier).not.toBeNull();
+    expect(earlier!.textContent ?? "").toContain("16");
+    expect(earlier!.textContent ?? "").toContain("earlier");
+    expect(earlier!.tagName.toLowerCase()).toBe("button");
   });
 
-  test("one click pages a WHOLE window and both counts update; the second click reaches the last page, where the later tag disappears", async () => {
+  test("one click pages a WHOLE window and both counts update; the second click reaches the FIRST page, where the earlier tag disappears", async () => {
     await mountApp({ releases: shippedLedger(20), layout: { track: 800, pitch: 100 } });
-    await clickTag("later");
+    await clickTag("earlier");
     expect(attrNumber("data-window-offset")).toBe(8);
     expect(attrNumber("data-hidden-earlier")).toBe(8);
     expect(attrNumber("data-hidden-later")).toBe(4);
     expect(tag("earlier")).not.toBeNull();
     expect((tag("earlier")!.textContent ?? "").includes("8")).toBe(true);
-    expect(gateVersions()).toEqual(["0.1.11", "0.1.10", "0.1.9", "0.1.8", "0.1.7", "0.1.6", "0.1.5", "0.1.4"]);
-
-    await clickTag("later");
-    expect(attrNumber("data-window-offset")).toBe(16);
-    expect(attrNumber("data-hidden-later")).toBe(0);
-    // ABSENT from the DOM, not rendered disabled. Scoped to the strip: other
-    // surfaces legitimately carry disabled controls.
-    expect(tag("later")).toBeNull();
-    expect(strip().querySelectorAll("[disabled]").length).toBe(0);
-    expect(strip().querySelectorAll("button").length).toBe(1);
-    expect(gateEls().length).toBe(4);
+    expect(tag("later")).not.toBeNull();
+    expect((tag("later")!.textContent ?? "").includes("4")).toBe(true);
+    expect(gateVersions()).toEqual([
+      "0.1.8",
+      "0.1.9",
+      "0.1.10",
+      "0.1.11",
+      "0.1.12",
+      "0.1.13",
+      "0.1.14",
+      "0.1.15",
+    ]);
 
     await clickTag("earlier");
+    expect(attrNumber("data-window-offset")).toBe(0);
+    expect(attrNumber("data-hidden-earlier")).toBe(0);
+    expect(attrNumber("data-hidden-later")).toBe(12);
+    // ABSENT from the DOM, not rendered disabled. Scoped to the strip: other
+    // surfaces legitimately carry disabled controls.
+    expect(tag("earlier")).toBeNull();
+    expect(strip().querySelectorAll("[disabled]").length).toBe(0);
+    expect(strip().querySelectorAll("button").length).toBe(1);
+    expect(gateEls().length).toBe(8);
+    // The FIRST page really does start at the oldest tag ever shipped.
+    expect(gateVersions()[0]).toBe("0.1.0");
+
+    await clickTag("later");
     expect(attrNumber("data-window-offset")).toBe(8);
-    expect(tag("later")).not.toBeNull();
+    expect(tag("earlier")).not.toBeNull();
   });
 
   test("with everything fitting, NEITHER tag is in the DOM", async () => {
@@ -788,6 +904,30 @@ describe("CR-CRU-078 §S2/AC5 — landing shows the release in PROGRESS, never o
     expect(attrNumber("data-hidden-earlier")).toBe(16);
     expect(attrNumber("data-hidden-later")).toBe(0);
   });
+
+  /**
+   * The MIRROR defect, and it is a distinct one: with the shipped leg ascending
+   * (§S9's correction) index 0 is the OLDEST release ever shipped, so a default
+   * focus of "index 0" — which the old code documented as "the newest tag,
+   * because `listReleases` is newest-first" — now lands a 20-release board on
+   * offset 0 showing 0.1.0 through 0.1.7. That is exactly what this AC forbids,
+   * and reversing the leg does not fix it on its own.
+   */
+  test("with NOTHING proposed the landing window is the one holding the NEWEST shipped tag — never offset 0, and never the oldest release ever shipped", async () => {
+    await mountApp({ releases: shippedLedger(20), layout: { track: 800, pitch: 100 } });
+    // Fixture guard: 20 gates, window 8, so the last page is a real answer
+    // distinct from offset 0.
+    expect(attrNumber("data-gate-count")).toBe(20);
+    expect(attrNumber("data-window-size")).toBe(8);
+
+    expect(attrNumber("data-window-offset")).toBeGreaterThan(0);
+    expect(attrNumber("data-window-offset")).toBe(16);
+    expect(gateVersions()).toContain("0.1.19");
+    expect(gateVersions()).not.toContain("0.1.0");
+    expect(gatesOutsideTheStrip()).toEqual([]);
+    expect(attrNumber("data-hidden-earlier")).toBe(16);
+    expect(attrNumber("data-hidden-later")).toBe(0);
+  });
 });
 
 // ── §S2 — the window is MEASURED ───────────────────────────────────────────
@@ -804,12 +944,18 @@ describe("CR-CRU-078 §S2 — the window size is MEASURED from layout, not hardc
 
   test("the SAME fixture yields a different window at a different WIDTH — the rail-collapse case (CR-093)", async () => {
     await mountApp({ releases: shippedLedger(20), layout: { track: 400, pitch: 100 } });
+    expect(attrNumber("data-window-size")).toBe(4);
     expect(gateEls().length).toBe(4);
-    expect(attrNumber("data-hidden-later")).toBe(16);
+    // Landing holds the newest shipped tag, so the remainder is behind the
+    // window rather than ahead of it.
+    expect(attrNumber("data-hidden-earlier")).toBe(16);
 
     await mountApp({ releases: shippedLedger(20), layout: { track: 1200, pitch: 100 } });
-    expect(gateEls().length).toBe(12);
-    expect(attrNumber("data-hidden-later")).toBe(8);
+    // The window GREW from 4 to 12 and correspondingly less is hidden. Its
+    // landing page starts at 12, so it draws the 8 gates that remain.
+    expect(attrNumber("data-window-size")).toBe(12);
+    expect(gateEls().length).toBe(8);
+    expect(attrNumber("data-hidden-earlier")).toBe(12);
   });
 
   test("…and a different PITCH moves it the other way, so neither input is a constant in disguise", async () => {
@@ -822,14 +968,14 @@ describe("CR-CRU-078 §S2 — the window size is MEASURED from layout, not hardc
     await mountApp({ releases: shippedLedger(20), layout: { track: 400, pitch: 100 } });
     const before = strip();
     expect(gateEls().length).toBe(4);
-    expect(attrNumber("data-hidden-later")).toBe(16);
+    expect(attrNumber("data-hidden-earlier")).toBe(16);
 
     await resizeTrackTo(1000);
     // The SAME element, re-measured in place — not a fresh mount.
     expect(strip()).toBe(before);
     expect(attrNumber("data-track-width")).toBe(1000);
     expect(gateEls().length).toBe(10);
-    expect(attrNumber("data-hidden-later")).toBe(10);
+    expect(attrNumber("data-hidden-earlier")).toBe(10);
     expect(gatesOutsideTheStrip()).toEqual([]);
   });
 
@@ -840,6 +986,121 @@ describe("CR-CRU-078 §S2 — the window size is MEASURED from layout, not hardc
     expect(APP_JS_SRC).not.toContain("new Date(");
     expect(APP_JS_SRC).not.toContain("toISOString");
     expect(APP_JS_SRC).toContain("resolveGateDate");
+  });
+});
+
+// ── §S2 — the measurer is RETIRED, not stacked ─────────────────────────────
+//
+// Carried forward from the DELETED tests/roadmap-graph.test.ts, which was the
+// only place that asserted the strip's retirement path. That suite pinned
+// cytoscape's `destroy()` on remount; the strip has no canvas, but it still
+// installs two live measurers per mount — a `ResizeObserver` on its own box and
+// a window `resize` listener — and `observeRoadmapStrip` calls the previous
+// mount's teardown before installing its own (public/app.js:2967-2986). Nothing
+// asserted that, and an un-retired listener is a leak that also MISFIRES: it
+// still holds the dead element it measured.
+
+describe("CR-CRU-078 §S2 — a remount RETIRES the previous strip's measurers instead of stacking another pair", () => {
+  interface StubObserver {
+    disconnected: boolean;
+  }
+
+  test("every remount removes the resize listener it replaces and disconnects its ResizeObserver, so exactly ONE measurer is ever live", async () => {
+    const added: unknown[] = [];
+    const removed: unknown[] = [];
+    const observers: StubObserver[] = [];
+
+    await mountApp({
+      releases: shippedLedger(20),
+      layout: { track: 800, pitch: 100 },
+      beforeApp: () => {
+        // Unchecked casts, deliberate: happy-dom's globals are not the lib.dom
+        // ones this test program compiles against, and the point is to replace
+        // the two globals the app captures at mount.
+        const win = globalThis.window as unknown as {
+          addEventListener: (type: string, handler: unknown, opts?: unknown) => void;
+          removeEventListener: (type: string, handler: unknown, opts?: unknown) => void;
+        };
+        const realAdd = win.addEventListener.bind(win);
+        const realRemove = win.removeEventListener.bind(win);
+        win.addEventListener = (type, handler, opts) => {
+          if (type === "resize") added.push(handler);
+          realAdd(type, handler, opts);
+        };
+        win.removeEventListener = (type, handler, opts) => {
+          if (type === "resize") removed.push(handler);
+          realRemove(type, handler, opts);
+        };
+        // A counting stand-in: the app's own disposal call is the subject, so
+        // the stub records `disconnect()` rather than delivering callbacks. The
+        // window `resize` listener is the portable half and still drives every
+        // re-measurement below.
+        //
+        // Named cast, one reason: `ResizeObserver` is a well-known browser
+        // global that happy-dom really does install, and the whole point is to
+        // replace it before the app captures it.
+        const globals = globalThis as unknown as { ResizeObserver: unknown };
+        globals.ResizeObserver = class CountedResizeObserver implements StubObserver {
+          disconnected = false;
+          constructor() {
+            observers.push(this);
+          }
+          observe(): void {}
+          unobserve(): void {}
+          disconnect(): void {
+            this.disconnected = true;
+          }
+        };
+      },
+    });
+
+    const live = (): unknown[] => added.filter((handler) => !removed.includes(handler));
+    const liveObservers = (): StubObserver[] => observers.filter((o) => !o.disconnected);
+
+    // One mount, one pair — and the instrumentation really caught them, so the
+    // assertions below are not counting an empty set.
+    expect(added.length).toBe(1);
+    expect(removed.length).toBe(0);
+    expect(observers.length).toBe(1);
+    expect(live().length).toBe(1);
+
+    // Clicking a gate refocuses, which re-runs the panel body and builds a
+    // NEW strip element (unlike a resize, which re-measures in place).
+    const remount = async (at: number): Promise<void> => {
+      const before = strip();
+      gateEls()[at]!.click();
+      await settle();
+      // Non-vacuity: a remount really happened, so "the old pair is gone" is
+      // a statement about retirement rather than about nothing changing.
+      expect(strip()).not.toBe(before);
+    };
+
+    await remount(0);
+    expect(added.length).toBe(2);
+    expect(removed.length).toBe(1);
+    // The handler retired is the one the FIRST mount installed, not the new one.
+    expect(removed[0]).toBe(added[0]);
+    expect(live().length).toBe(1);
+    expect(observers.length).toBe(2);
+    expect(observers[0]!.disconnected).toBe(true);
+    expect(liveObservers().length).toBe(1);
+
+    await remount(1);
+    expect(added.length).toBe(3);
+    expect(removed.length).toBe(2);
+    expect(removed[1]).toBe(added[1]);
+    expect(live().length).toBe(1);
+    expect(observers.length).toBe(3);
+    expect(liveObservers().length).toBe(1);
+
+    // …and the ONE surviving listener is wired to the LIVE strip: a retired
+    // handler measures a detached element and no-ops, so a window that still
+    // re-measures proves the survivor is the current mount's.
+    await resizeTrackTo(400);
+    expect(attrNumber("data-track-width")).toBe(400);
+    expect(attrNumber("data-window-size")).toBe(4);
+    expect(gateEls().length).toBe(4);
+    expect(live().length).toBe(1);
   });
 });
 
@@ -901,7 +1162,9 @@ describe("CR-CRU-078/AC29 — a consumed proposal leaves exactly ONE gate for it
     expect(two.length).toBe(1);
     expect(two[0]!.getAttribute("data-kind")).toBe("shipped");
     expect(gateDateText("0.2.0")).toBe(Logic.formatReleaseDate(SHIPPED_020.releasedAt));
-    expect(gateVersions()).toEqual(["0.2.0", "0.1.0"]);
+    // Ship order, so the newly shipped 0.2.0 sits to the RIGHT of 0.1.0 —
+    // adjacent to End, where the most recent release belongs.
+    expect(gateVersions()).toEqual(["0.1.0", "0.2.0"]);
   });
 });
 
@@ -910,7 +1173,7 @@ describe("CR-CRU-078/AC29 — a consumed proposal leaves exactly ONE gate for it
 describe("CR-CRU-078 §S9/AC33 — a failed proposals read leaves the shipped gates rendered", () => {
   test("a non-2xx proposals read degrades the strip, it does not blank it — no error banner over working data", async () => {
     await mountApp({ releases: shippedLedger(3), proposalsStatus: 500 });
-    expect(gateVersions()).toEqual(["0.1.2", "0.1.1", "0.1.0"]);
+    expect(gateVersions()).toEqual(["0.1.0", "0.1.1", "0.1.2"]);
     expect(gateKinds()).toEqual(["shipped", "shipped", "shipped"]);
     expect(strip().querySelector('[data-testid="roadmap-strip-error"]')).toBeNull();
     expect(document.querySelector('[data-testid="roadmap-empty"]')).toBeNull();
@@ -918,7 +1181,7 @@ describe("CR-CRU-078 §S9/AC33 — a failed proposals read leaves the shipped ga
 
   test("a transport failure on the proposals read is the same degraded strip", async () => {
     await mountApp({ releases: shippedLedger(3), proposalsThrows: true });
-    expect(gateVersions()).toEqual(["0.1.2", "0.1.1", "0.1.0"]);
+    expect(gateVersions()).toEqual(["0.1.0", "0.1.1", "0.1.2"]);
   });
 
   test("proposals ALONE render too — the strip does not wait on the ledger to have shipped something", async () => {

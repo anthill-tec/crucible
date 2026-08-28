@@ -156,6 +156,41 @@ const SHIPPED: ReleaseFixture[] = [
   },
 ];
 
+/**
+ * AC28's ORDER fixture: THREE shipped tags, newest-first exactly as
+ * `listReleases` publishes them. Three, not the two above, because two gates
+ * cannot distinguish ascending from descending under a stable sort — which is
+ * how the blocker §S9 corrected on 2026-08-28 passed review in the first place.
+ * Kept a SEPARATE fixture so the geometry every other test measures (four
+ * gates at a fixed board width) is untouched.
+ */
+const ORDERED_SHIPPED: ReleaseFixture[] = [
+  {
+    version: "0.1.2",
+    commit: "9ef24b1",
+    releasedAt: SHIP_010 + 86_400 * 2,
+    crs: [],
+    packages: [],
+    timestamp: (SHIP_010 + 86_400 * 2) * 1000,
+  },
+  {
+    version: "0.1.1",
+    commit: "d18395d",
+    releasedAt: SHIP_011,
+    crs: [],
+    packages: [],
+    timestamp: SHIP_011 * 1000,
+  },
+  {
+    version: "0.1.0",
+    commit: "c07274c",
+    releasedAt: SHIP_010,
+    crs: [],
+    packages: [],
+    timestamp: SHIP_010 * 1000,
+  },
+];
+
 /** `0.2.0` first (it is the focus target), `0.3.0` second and DATELESS — the
  *  AC6 "no target declared" gate, kept here so a NON-FOCUSED proposed diamond
  *  exists to measure the dash and the dimming against. */
@@ -423,8 +458,10 @@ let browser: Browser | null = null;
 let page: Page | null = null;
 let populatedZones = "";
 let emptyZones = "";
+let orderedZones = "";
 let fixtureUrl = "";
 let emptyFixtureUrl = "";
+let orderedFixtureUrl = "";
 
 /** A page that is the app's own document shell (theme attribute, real
  *  stylesheet link) wrapping the captured zones — and NO script at all, so
@@ -459,6 +496,10 @@ const pageEl = (): Page => {
 beforeAll(async () => {
   populatedZones = await captureZones();
   emptyZones = await captureZones({ releases: [], proposals: [], queue: [] });
+  // Only the DATED proposal: AC28's seam clause compares the last shipped date
+  // with the first proposed one, and the shared fixture's second proposal is
+  // deliberately dateless (AC6), which is a different assertion's subject.
+  orderedZones = await captureZones({ releases: ORDERED_SHIPPED, proposals: [PROPOSALS[0]!] });
 
   server = Bun.serve({
     port: 0,
@@ -474,6 +515,11 @@ beforeAll(async () => {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
+      if (pathname === "/fixture-order") {
+        return new Response(fixtureDocument(orderedZones), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
       // Static passthrough for public/, restricted to a flat file name so the
       // throwaway server cannot be walked out of the directory it serves.
       const name = pathname.replace(/^\/+/, "");
@@ -485,6 +531,7 @@ beforeAll(async () => {
   });
   fixtureUrl = `http://127.0.0.1:${server.port}/fixture`;
   emptyFixtureUrl = `http://127.0.0.1:${server.port}/fixture-empty`;
+  orderedFixtureUrl = `http://127.0.0.1:${server.port}/fixture-order`;
 
   browser = await chromium.launch();
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -1542,5 +1589,78 @@ describe("AC26 — position comes from declared data, never a layout engine", ()
     expect(drawn.svg).toBe(0);
     expect(drawn.canvas).toBe(0);
     expect(drawn.edges).toBe(0);
+  });
+});
+
+// ── AC28 — the order the user actually SEES ────────────────────────────────
+//
+// The blocker §S9 corrected on 2026-08-28 was a VISUAL defect: the strip read
+// `Start → 0.1.3 → 0.1.2 → 0.1.1 → 0.1.0 → 0.2.0 → End`, ship dates decreasing
+// left to right and then jumping to the future. happy-dom runs no layout
+// engine, so every other AC28 assertion in this repo is about DOM order and
+// takes "document order is visual order" on the CSS's word. This is the one
+// place with real pixels, so this is where left-to-right is measured.
+
+describe("CR-CRU-078 AC28 — in a real browser, left to right, the strip ASCENDS", () => {
+  test("each shipped gate is painted to the RIGHT of the one that shipped before it, and the proposal is rightmost of all", async () => {
+    await pageEl().goto(orderedFixtureUrl, { waitUntil: "load" });
+    const raw = await pageEl().evaluate(
+      `Array.from(document.querySelectorAll('[data-testid="roadmap-gate"]')).map((g) => ({
+         version: g.getAttribute("data-version"),
+         kind: g.getAttribute("data-kind"),
+         left: g.getBoundingClientRect().left,
+         date: (g.querySelector('[data-testid="roadmap-gate-date"]') || {}).textContent || "",
+       }))`,
+    );
+    const painted = raw as { version: string; kind: string; left: number; date: string }[];
+
+    // Fixture guard: THREE shipped tags plus the in-flight proposal really did
+    // reach the page — two could not tell ascending from descending.
+    expect(painted.filter((g) => g.kind === "shipped").length).toBe(3);
+    expect(painted.filter((g) => g.kind === "proposed").length).toBe(1);
+
+    // Sorted by where they are PAINTED, not by document order: this is the
+    // sequence a reader's eye follows across the track.
+    const leftToRight = [...painted].sort((a, b) => a.left - b.left);
+    for (let i = 1; i < leftToRight.length; i++) {
+      expect(
+        leftToRight[i]!.left,
+        `gate ${leftToRight[i]!.version} is painted at the same x as its neighbour`,
+      ).toBeGreaterThan(leftToRight[i - 1]!.left);
+    }
+    expect(leftToRight.map((g) => g.version)).toEqual(["0.1.0", "0.1.1", "0.1.2", "0.2.0"]);
+
+    // The ACs' own two clauses, read off the pixels: every shipped gate's date
+    // is >= its left neighbour's (ISO days compare lexicographically), and the
+    // last shipped one precedes the first proposed one.
+    const shipped = leftToRight.filter((g) => g.kind === "shipped");
+    for (const gate of shipped) expect(gate.date.trim()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    for (let i = 1; i < shipped.length; i++) {
+      expect(
+        shipped[i]!.date.trim() >= shipped[i - 1]!.date.trim(),
+        `${shipped[i]!.version} (${shipped[i]!.date.trim()}) is painted to the right of ` +
+          `${shipped[i - 1]!.version} (${shipped[i - 1]!.date.trim()}) but shipped EARLIER`,
+      ).toBe(true);
+    }
+    const proposed = leftToRight.filter((g) => g.kind === "proposed")[0]!;
+    expect(shipped[shipped.length - 1]!.left).toBeLessThan(proposed.left);
+    expect(shipped[shipped.length - 1]!.date.trim() < proposed.date.trim()).toBe(true);
+
+    // …and the Start/End terminals really do bracket that run, so "left to
+    // right" is the direction the strip reads in and not an accident of flex.
+    const terminals = await pageEl().evaluate(
+      `(() => {
+         const strip = document.querySelector('[data-testid="roadmap-strip"]');
+         return {
+           start: strip
+             .querySelector('[data-terminal="start"]')
+             .getBoundingClientRect().right,
+           end: strip.querySelector('[data-terminal="end"]').getBoundingClientRect().left,
+         };
+       })()`,
+    );
+    const bracket = terminals as { start: number; end: number };
+    expect(bracket.start).toBeLessThanOrEqual(leftToRight[0]!.left);
+    expect(bracket.end).toBeGreaterThanOrEqual(leftToRight[leftToRight.length - 1]!.left);
   });
 });

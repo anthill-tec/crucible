@@ -88,16 +88,27 @@ export function resolveGateDate(record, kind) {
 }
 
 /**
- * CR-CRU-078 §S9/AC28 — the strip's ONE sequence: every shipped release as the
- * ledger published it, then every live proposal as the proposals read published
- * it. Concatenation only — no sort, no reverse, no merge.
+ * CR-CRU-078 §S9/AC28 — the strip's ONE sequence: every shipped release in
+ * ascending ship order, then every live proposal ascending by version, one
+ * MONOTONIC run with the proposals last. No sort and no merge — the two
+ * published orders are preserved, one of them read backwards.
  *
- * CR-CRU-091 §S1 fixed the two reads' directions deliberately opposite
- * (`listReleases` newest-first, `listReleaseProposals` ascending by version) so
- * that a consumer appends "shipped, then proposed" with NO reversal, and AC28
- * fails a build that re-sorts either half: version orders the strip, while a
- * declared target is a plan that can slip, so a target contradicting version
- * order is a planning conflict to surface — never a reason to re-order.
+ * CR-CRU-091 §S1 fixed the two reads' directions OPPOSITE — `listReleases`
+ * newest-first, `listReleaseProposals` ascending by version — and that is
+ * exactly why a bare concatenation is NOT the sequence. Appending an ascending
+ * list to a descending one yields an unsorted one: the strip rendered
+ * `Start → 0.1.3 → 0.1.2 → 0.1.1 → 0.1.0 → 0.2.0 → End`, ship dates decreasing
+ * left to right and then jumping to the future (CR-078 §S9's own correction,
+ * 2026-08-28, after VERIFY found it).
+ *
+ * So the SHIPPED leg is walked in REVERSE here, into ascending ship order; the
+ * proposed leg is already ascending by version; and the two are continuous.
+ * `listReleases` keeps its newest-first contract — CR-091 owns it — so the
+ * reversal is the CONSUMER's job and belongs in the one function that renders a
+ * single sequence. It is not a re-SORT: no key is compared and no record moves
+ * relative to another within its leg, so AC28's prohibition on re-ordering
+ * either published half still holds. A declared target contradicting version
+ * order stays where the proposals read put it.
  *
  * A gate is the pair (which release, what date) and nothing else this cycle:
  * `version` (a shipped row's `version`, a proposal's `label`) plus
@@ -113,11 +124,15 @@ export function resolveGateDate(record, kind) {
 export function releaseStripGates(releases, proposals) {
   const gates = [];
   const legs = [
-    { records: releases, kind: "shipped", label: "version" },
-    { records: proposals, kind: "proposed", label: "label" },
+    { records: releases, kind: "shipped", label: "version", reversed: true },
+    { records: proposals, kind: "proposed", label: "label", reversed: false },
   ];
   for (const leg of legs) {
-    for (const record of Array.isArray(leg.records) ? leg.records : []) {
+    const records = Array.isArray(leg.records) ? leg.records : [];
+    for (let step = 0; step < records.length; step++) {
+      // Walked by index rather than reversed into a copy: the caller's array is
+      // its own state slice, and `.reverse()` would mutate it in place.
+      const record = records[leg.reversed ? records.length - 1 - step : step];
       const resolved = resolveGateDate(record, leg.kind);
       const version = record === null || record === undefined ? undefined : record[leg.label];
       gates.push({
@@ -145,8 +160,13 @@ export function releaseStripGates(releases, proposals) {
  * The default is "the release in progress": the FIRST live proposal, since
  * proposals arrive ascending by version, so the first is the next release to
  * ship and CR-091 gives it the `waves[]` zone 2 draws. With nothing proposed
- * there is no release in flight, so the strip lands on the newest shipped tag,
- * which `listReleases`' newest-first order puts at index 0.
+ * there is no release in flight, so the strip lands on the newest shipped tag —
+ * the LAST gate, since `releaseStripGates` puts the shipped leg in ascending
+ * ship order. *Corrected with §S9 on 2026-08-28: this said "index 0, which
+ * `listReleases`' newest-first order puts there", which was true only of the
+ * unreversed leg. Landing on index 0 of the fixed sequence would focus the
+ * OLDEST release ever shipped and, on a 20-release board, land the window on
+ * offset 0 — the exact failure AC5 names.*
  *
  * -1 for an empty sequence: no gate exists to focus, and 0 would name one.
  */
@@ -157,7 +177,7 @@ export function releaseStripFocusIndex(gates, focusedVersion) {
     if (chosen >= 0) return chosen;
   }
   const proposed = gates.findIndex((gate) => gate.kind === "proposed");
-  return proposed >= 0 ? proposed : 0;
+  return proposed >= 0 ? proposed : gates.length - 1;
 }
 
 /**

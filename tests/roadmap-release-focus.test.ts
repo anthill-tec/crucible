@@ -161,6 +161,7 @@ const Logic = AppLogic as unknown as {
   ) => FocusedReleaseView;
   roadmapTableColumns: (entries: unknown) => string[];
   briefCrTitle: (title: unknown, cr: unknown) => string;
+  crStatusMark: (status: unknown) => string;
   lifecycleBadge: (lifecycle: unknown) => LifecycleBadge | null;
 };
 
@@ -1025,10 +1026,11 @@ describe("CR-CRU-078 §S4 — `focusedReleaseView` answers what ONE focused rele
 describe("CR-CRU-078 §S4/§S5 — the focused release is the STRIP's, and a click moves it", () => {
   test("`releaseStripFocusIndex` honours a user-chosen version and falls back to the release in progress", () => {
     const gates = Logic.releaseStripGates(LEDGER, [PROPOSED_020]);
-    expect(gates.map((g) => g.version)).toEqual(["0.1.1", "0.1.0", "0.2.0"]);
+    // Ship order, then the proposal: 0.1.0 shipped before 0.1.1 (§S9).
+    expect(gates.map((g) => g.version)).toEqual(["0.1.0", "0.1.1", "0.2.0"]);
     // Default: the first live proposal — the next release to ship.
     expect(Logic.releaseStripFocusIndex(gates)).toBe(2);
-    expect(Logic.releaseStripFocusIndex(gates, "0.1.0")).toBe(1);
+    expect(Logic.releaseStripFocusIndex(gates, "0.1.0")).toBe(0);
     // A version no longer in the sequence falls back rather than focusing none.
     expect(Logic.releaseStripFocusIndex(gates, "9.9.9")).toBe(2);
     expect(Logic.releaseStripFocusIndex([], "0.1.0")).toBe(-1);
@@ -1074,5 +1076,313 @@ describe("CR-CRU-083 AC7 — a node's tap is status-gated exactly like its row",
     expect(rowFor("CR-C").querySelector('[data-testid="roadmap-status-badge"]')!.className).toContain(
       "completed_untracked",
     );
+  });
+});
+
+// ── AC11 — the node's `id + status` vocabulary ──────────────────────────────
+//
+// One of the six halves CR-CRU-077 was credited with carrying forward, and the
+// DELETED tests/roadmap-graph.test.ts was the only place that pinned it. That
+// suite asserted the label on cytoscape's `node.data.label`, which no longer
+// exists; the vocabulary itself moved into `crStatusMark` and onto the
+// flowchart node's own status span, and NOTHING asserted the words.
+//
+// The words are the whole point: AC23 requires every state to stay determinable
+// with colour stripped, so if two statuses shared a mark — or a mark went
+// missing — the node would be unreadable in exactly the mode the AC tests.
+
+const nodeStatusText = (cr: string): string =>
+  (nodeFor(cr).querySelector('[data-testid="roadmap-node-status"]')?.textContent ?? "").trim();
+
+describe("CR-CRU-078 AC11 — a node is its id plus a terse status mark, and each derived status has its OWN words", () => {
+  /** One entry per derived `QueueStatus`, all declared into the focused
+   *  release, so the four marks are observable on one rendered board. */
+  const STATUS_QUEUE: QueueFixture[] = [
+    { cr: "CR-M1", title: "CR-M1 — merged through a tracked plan", wave: "5", dependsOn: [], status: "COMPLETED", seq: 10, release: "0.2.0" },
+    { cr: "CR-M2", title: "CR-M2 — shipped, never tracked", wave: "5", dependsOn: [], status: "COMPLETED_UNTRACKED", seq: 20, release: "0.2.0" },
+    { cr: "CR-M3", title: "CR-M3 — under way right now", wave: "5", dependsOn: [], status: "IN_PROGRESS", seq: 30, release: "0.2.0" },
+    { cr: "CR-M4", title: "CR-M4 — nothing to say yet", wave: "5", dependsOn: [], status: "PENDING", seq: 40, release: "0.2.0" },
+  ];
+
+  test("the four derived statuses map to four DISTINCT literal marks", () => {
+    expect(Logic.crStatusMark("COMPLETED")).toBe("✓ merged");
+    expect(Logic.crStatusMark("COMPLETED_UNTRACKED")).toBe("✓ untracked");
+    expect(Logic.crStatusMark("IN_PROGRESS")).toBe("▶ in progress");
+    expect(Logic.crStatusMark("PENDING")).toBe("pending");
+    // DISTINCT, not merely non-empty: with colour stripped the text is all
+    // that is left, so two statuses sharing a mark is an unreadable state.
+    const marks = ["COMPLETED", "COMPLETED_UNTRACKED", "IN_PROGRESS", "PENDING"].map((s) =>
+      Logic.crStatusMark(s),
+    );
+    expect(new Set(marks).size).toBe(4);
+    // The two completions must not collapse: "merged" and "shipped but never
+    // tracked" are different facts about the same ✓ family.
+    expect(Logic.crStatusMark("COMPLETED")).not.toBe(Logic.crStatusMark("COMPLETED_UNTRACKED"));
+  });
+
+  test("an unrecognised or absent status yields NO mark — a mark is a claim about execution state", () => {
+    for (const status of ["", "NOPE", "completed", undefined, null, 7, {}]) {
+      expect(Logic.crStatusMark(status)).toBe("");
+    }
+  });
+
+  test("the RENDERED node carries exactly its status's mark, its own id, and no title", async () => {
+    await mountApp({ queue: STATUS_QUEUE });
+    expect(nodeCrs()).toEqual(["CR-M1", "CR-M2", "CR-M3", "CR-M4"]);
+    for (const entry of STATUS_QUEUE) {
+      expect(nodeStatusText(entry.cr)).toBe(Logic.crStatusMark(entry.status));
+      // Byte-exact, so a one-word title could not slip past as a suffix.
+      expect((nodeFor(entry.cr).textContent ?? "").trim()).toBe(
+        `${entry.cr}${Logic.crStatusMark(entry.status)}`,
+      );
+      expect(nodeFor(entry.cr).textContent ?? "").not.toContain(entry.title!);
+    }
+    // The four literal strings, on the board, as words.
+    expect(nodeStatusText("CR-M1")).toBe("✓ merged");
+    expect(nodeStatusText("CR-M2")).toBe("✓ untracked");
+    expect(nodeStatusText("CR-M3")).toBe("▶ in progress");
+    expect(nodeStatusText("CR-M4")).toBe("pending");
+  });
+});
+
+// ── The at-scale / live-shape render smoke ─────────────────────────────────
+//
+// Carried forward from the DELETED tests/roadmap-graph.test.ts, which was the
+// only suite that rendered the REAL project shape rather than a hand-sized
+// board. Every fixture above is deliberately small so that one AC's assertion
+// cannot pass by accident; none of them would notice a renderer that only
+// works at five rows.
+//
+// FIXTURE PROVENANCE — no server, no network, no git at test time:
+//   • ENTRIES are PARSED from the checked-in `docs/changes/README.md` queue
+//     table, which is the authored queue `queue register` ingests, so it IS the
+//     real shape. The size stays UNPINNED — a guard asserts the table still
+//     parses, so a README edit that breaks the shape is loud rather than
+//     silently vacuous.
+//   • The LEDGER is the measured `GET /api/v2/projects/<key>/releases` payload
+//     (2026-08-27), kept NEWEST-FIRST exactly as the live read publishes it —
+//     which is the whole point here: §S9's blocker was the strip rendering that
+//     array order verbatim.
+//   • The PROPOSAL is the authored `release-propose --target` shape for the
+//     in-flight 0.2.0. The live board's ledger has no checked-in source and the
+//     tracked `crucible.db` is an empty placeholder, so both are pinned as data.
+
+const crIdList = (numbers: string): string[] =>
+  numbers.split(/\s+/).filter(Boolean).map((n) => `CR-CRU-${n}`);
+
+const livePackages = (version: string, ...registries: string[]): PackageFixture[] =>
+  registries.map((registry) => ({
+    registry,
+    name: registry === "pypi" ? "crucible-axi" : "@anthill-tec/crucible-server",
+    version,
+  }));
+
+/** `releasedAt` is epoch SECONDS (the tag's own commit date); `timestamp` is the
+ *  ingest instant in ms and is NOT ship order. */
+const LIVE_LEDGER: ReleaseFixture[] = [
+  {
+    version: "0.1.3",
+    commit: "7408886",
+    releasedAt: 1787819729,
+    crs: ["CR-CRU-090"],
+    packages: livePackages("0.1.3", "pypi", "npm"),
+    timestamp: 1787830734630,
+  },
+  {
+    version: "0.1.2",
+    commit: "9ef24b1",
+    releasedAt: 1787181002,
+    crs: ["CR-CRU-066"],
+    packages: livePackages("0.1.2", "pypi", "npm"),
+    timestamp: 1787325487922,
+  },
+  {
+    // The measured zero-CR release: the live payload OMITS `crs` rather than
+    // sending `[]`, and `packages` still carries two entries.
+    version: "0.1.1",
+    commit: "abc30d5",
+    releasedAt: 1787151205,
+    packages: livePackages("0.1.1", "pypi", "npm"),
+    timestamp: 1787325487410,
+  },
+  {
+    version: "0.1.0",
+    commit: "c07274c",
+    releasedAt: 1787149125,
+    crs: crIdList(`
+      001 002 003 004 005 006 007 008 009 010 011 012 013 016 019 020 021 023 024 025 026
+      027 028 029 030 031 032 033 034 035 036 037 038 039 040 041 042 043 044 045 046 047
+      048 049 050 051 052 053 054 055 056 057 058 059 060 061 062 063 064 065
+    `),
+    packages: livePackages("0.1.0", "pypi"),
+    timestamp: 1787325487188,
+  },
+];
+
+const LIVE_PROPOSAL: ProposalFixture = {
+  label: "0.2.0",
+  targetAt: 1790000000,
+  timestamp: 1787900000,
+  waves: ["5"],
+};
+
+/**
+ * The authored queue, read off the checked-in CR-queue table. One row is
+ * `| [CR-NNN](file) | title | type | status | depends-on | wave |`.
+ *
+ * `status` keeps the leading token only — the table annotates it with the target
+ * release (`COMPLETED (0.2.0)`), which is prose, not a status, and is where the
+ * declared `release` comes from. `VOID` maps to `PENDING` because that is what
+ * the live board reports for the one VOID row.
+ *
+ * `seq` is the row's authored POSITION on a 10-stride, not its array index:
+ * stored `seq` is stamped per (release, wave) block, so it is never globally the
+ * index, and a stride keeps a consumed `seq` distinguishable from a re-derived
+ * one.
+ */
+function parseQueueTable(src: string): QueueFixture[] {
+  const entries: QueueFixture[] = [];
+  for (const raw of src.split("\n")) {
+    const line = raw.trim();
+    if (!line.startsWith("| [CR-")) continue;
+    const cells = line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+    if (cells.length < 6) continue;
+    const cr = /CR-[A-Z]+-\d{3}/.exec(cells[0]!)?.[0];
+    if (cr === undefined) continue;
+    const statusToken = /^[A-Z_]+/.exec(cells[3]!)?.[0];
+    const release =
+      /\((\d+\.\d+\.\d+)\)/.exec(cells[3]!)?.[1] ?? /\((\d+\.\d+\.\d+)\)/.exec(cells[5]!)?.[1];
+    entries.push({
+      cr,
+      title: cells[1],
+      wave: /^\d+/.exec(cells[5]!)?.[0] ?? cells[5]!,
+      dependsOn: (cells[4]!.match(/\d{3}/g) ?? []).map((n) => `CR-CRU-${n}`),
+      status: statusToken === "COMPLETED" ? "COMPLETED" : "PENDING",
+      seq: entries.length * 10,
+      ...(release === undefined ? {} : { release }),
+    });
+  }
+  return entries;
+}
+
+const LIVE_ENTRIES: QueueFixture[] = parseQueueTable(
+  readFileSync(path.join(REPO_ROOT, "docs/changes/README.md"), "utf8"),
+);
+const LIVE_IN_FLIGHT = LIVE_ENTRIES.filter((entry) => entry.release === "0.2.0");
+
+describe("CR-CRU-078 AC1/AC28 — the whole board renders at the LIVE shape, not just at fixture scale", () => {
+  test("the parsed fixture IS the real shape: a full queue, every dependency resolving, and a real release declared into", () => {
+    // Guards on the FIXTURE, not a pinned size: if the README table stopped
+    // parsing, every assertion below would pass vacuously.
+    expect(LIVE_ENTRIES.length).toBeGreaterThan(80);
+    const ids = new Set(LIVE_ENTRIES.map((entry) => entry.cr));
+    const unknownDependencies = [
+      ...new Set(
+        LIVE_ENTRIES.flatMap((entry) => entry.dependsOn).filter((dep) => !ids.has(dep)),
+      ),
+    ].sort();
+    expect(unknownDependencies).toEqual([]);
+    // A real in-flight membership, and it is a strict SUBSET — so "renders the
+    // focused release" is a different answer from "renders the queue".
+    expect(LIVE_IN_FLIGHT.length).toBeGreaterThan(10);
+    expect(LIVE_IN_FLIGHT.length).toBeLessThan(LIVE_ENTRIES.length);
+    // Titles worth crowding an identifier out — the no-title assertion below
+    // is not passing against a table that yields none.
+    expect(LIVE_ENTRIES.filter((entry) => (entry.title ?? "").length > 20).length).toBeGreaterThan(
+      40,
+    );
+    // The ledger really is newest-first, so a strip that echoes the array
+    // order is visibly wrong at this shape.
+    expect(LIVE_LEDGER.map((r) => r.version)).toEqual(["0.1.3", "0.1.2", "0.1.1", "0.1.0"]);
+  });
+
+  test("the strip is ONE monotonic sequence at the live shape — the exact board §S9's blocker rendered backwards", async () => {
+    await mountApp({
+      releases: LIVE_LEDGER,
+      proposals: [LIVE_PROPOSAL],
+      queue: LIVE_ENTRIES,
+    });
+    const gates = all('[data-testid="roadmap-gate"]');
+    expect(gates.map((g) => g.getAttribute("data-version"))).toEqual([
+      "0.1.0",
+      "0.1.1",
+      "0.1.2",
+      "0.1.3",
+      "0.2.0",
+    ]);
+    expect(gates.map((g) => g.getAttribute("data-kind"))).toEqual([
+      "shipped",
+      "shipped",
+      "shipped",
+      "shipped",
+      "proposed",
+    ]);
+    // Monotonic by DATE across the whole run, not merely by array position.
+    // ISO days sort lexicographically, so the rendered text is comparable.
+    const dates = gates.map((g) =>
+      (g.querySelector('[data-testid="roadmap-gate-date"]')?.textContent ?? "").trim(),
+    );
+    for (const day of dates) expect(day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    for (let i = 1; i < dates.length; i++) {
+      expect(dates[i]! >= dates[i - 1]!).toBe(true);
+    }
+    // …and no zone opted out at this scale.
+    expect(flowEl()).not.toBeNull();
+    expect(rowEls().length).toBeGreaterThan(0);
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).toBeNull();
+    expect(document.querySelector('[data-testid="roadmap-strip-error"]')).toBeNull();
+  });
+
+  test("landing focuses the in-flight release and BOTH zones below it carry its whole membership, in authored order", async () => {
+    await mountApp({
+      releases: LIVE_LEDGER,
+      proposals: [LIVE_PROPOSAL],
+      queue: LIVE_ENTRIES,
+    });
+    const declared = LIVE_IN_FLIGHT.map((entry) => entry.cr);
+    // Zone 2: one container per wave, holding the members in AUTHORED order.
+    expect(waveNames()).toEqual([...new Set(LIVE_IN_FLIGHT.map((entry) => entry.wave))]);
+    expect(nodeCrs()).toEqual(declared);
+    // Zone 3 follows the same focus — never the whole 91-row queue.
+    expect(rowOrder()).toEqual(declared);
+    expect(rowOrder().length).toBeLessThan(LIVE_ENTRIES.length);
+  });
+
+  test("focusing a SHIPPED release at the live shape renders its FROZEN membership and draws no waves", async () => {
+    await mountApp({
+      releases: LIVE_LEDGER,
+      proposals: [LIVE_PROPOSAL],
+      queue: LIVE_ENTRIES,
+    });
+    await clickGate("0.1.0");
+    const frozen = LIVE_LEDGER.find((r) => r.version === "0.1.0")!.crs!;
+    const inQueue = new Set(LIVE_ENTRIES.map((entry) => entry.cr));
+    // Every one of 0.1.0's 60 frozen members is a row the queue still carries,
+    // so the expectation is the ledger's list and not a filtered echo of it.
+    expect(frozen.filter((cr) => !inQueue.has(cr))).toEqual([]);
+    expect(frozen.length).toBeGreaterThan(50);
+    expect(rowOrder().sort()).toEqual([...frozen].sort());
+    // §S4 — a shipped release states what it delivered; the Workflow history
+    // view owns historical waves.
+    expect(waveEls().length).toBe(0);
+  });
+
+  test("every node at the live shape is its id plus its status mark, with no title anywhere in the text", async () => {
+    await mountApp({
+      releases: LIVE_LEDGER,
+      proposals: [LIVE_PROPOSAL],
+      queue: LIVE_ENTRIES,
+    });
+    const wrong = LIVE_IN_FLIGHT.map((entry) => ({
+      cr: entry.cr,
+      got: (nodeFor(entry.cr).textContent ?? "").trim(),
+      want: `${entry.cr}${Logic.crStatusMark(entry.status)}`,
+    })).filter((row) => row.got !== row.want);
+    expect(wrong).toEqual([]);
+    // Per-entry, so a long prose title is never mistaken for a status suffix.
+    const leaking = LIVE_IN_FLIGHT.filter((entry) =>
+      (nodeFor(entry.cr).textContent ?? "").includes(entry.title ?? "\u0000"),
+    ).map((entry) => entry.cr);
+    expect(leaking).toEqual([]);
   });
 });

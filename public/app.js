@@ -3186,9 +3186,11 @@
         const releases = Array.from(state.releases);
         const proposals = Array.from(state.releaseProposals);
         const entries = Array.from(state.queue);
-        // AC28 — shipped as the ledger published it, then proposals as the
-        // proposals read published it. Concatenated here and nowhere else,
-        // and neither half re-sorted.
+        // AC28 — ONE monotonic sequence: the ledger's shipped rows in ascending
+        // ship order, then the proposals read's live proposals ascending by
+        // version. The two state slices stay separate and are joined by
+        // `releaseStripGates` and nowhere else; the shipped leg's reversal lives
+        // there too, so this surface has exactly one notion of the order.
         const gates = L.releaseStripGates(releases, proposals);
         const focusIndex = L.releaseStripFocusIndex(gates, roadmapFocusedVersion());
         const focused = focusIndex >= 0 ? gates[focusIndex] : undefined;

@@ -52,6 +52,10 @@ Delete the `roadmap-view-table` / `roadmap-view-graph` buttons and the exclusive
 (`roadmapViewMode`, `public/app.js:2479`; buttons at `:3060`/`:3068`; the branch that picks one body
 at `:3080`). All zones render unconditionally.
 
+*Those four line numbers are HISTORY, verified 2026-08-29: none of the three symbols exists any
+more — AC1 asserts their absence from the source by executable scan — and the lines now hold
+unrelated code. They record the shape being deleted, not anything to look up.*
+
 **Retire versus rewrite — the distinction matters, and the blast radius is enumerated.** The
 original wording said only "any test asserting toggle behaviour is retired", which read literally
 would delete most of the graph's coverage. Gap analysis 2026-08-28 counted the consumers: **13
@@ -82,15 +86,25 @@ gates dashed. It is the only zone that grows without bound, and it does **not** 
 
 ### §S3 Zone 1 — gates carry their dates
 
-A shipped gate carries its ship date (`releases[].releasedAt`, epoch **seconds** — the ship-order
-read at `public/app-logic.mjs:907-918`). A proposed gate carries its declared `--target` (CR-091,
-`targetAt`, also epoch **seconds**), or an explicit "no target declared" empty state.
+A shipped gate carries its ship date (`releases[].releasedAt`, epoch **seconds**). A proposed gate
+carries its declared `--target` (CR-091, `targetAt`, also epoch **seconds**), or an explicit "no
+target declared" empty state.
+
+*Citations repaired 2026-08-29, each by reading the target.* This paragraph pointed at "the
+ship-order read at `public/app-logic.mjs:907-918`" — there is no ship-order read any more, that
+span is a cycle-count block, and §S9's correction below records why: CR-077's
+ascending-by-`releasedAt` sorter went with the code this CR removed. The one place that reads
+either field today is `resolveGateDate` (`public/app-logic.mjs:80`), which is where AC30's single
+seam actually lives.
 
 **The shared formatter ALREADY EXISTS — do not write a second one.** *Corrected 2026-08-28 by gap
 analysis: this section previously demanded "one shared formatter" without naming it, and cited
-`public/app-logic.mjs:874`, which today is `type: "cr"` — the citation went stale when CR-091 C4
-landed.* That CR exported `formatReleaseDate(epochSeconds)` (`public/app-logic.mjs:48`), added it
-to the `window.CrucibleLogic` bridge (`:1033`) and declared it (`public/app-logic.d.mts:139`) — and
+`public/app-logic.mjs:874` — a citation that was already stale then and has drifted again since
+(that line is now an inferred-node map inside `workflowLens`, not the `type: "cr"` it was reported
+as on 2026-08-28). Naming the SYMBOL is what makes the reference survive the next 1200-line
+move.* That
+CR exported `formatReleaseDate(epochSeconds)` (`public/app-logic.mjs:48` — verified), added it to
+the `window.CrucibleLogic` bridge and declared it (`public/app-logic.d.mts:139` — verified) — and
 shipped it with **zero call sites on purpose, as this CR's seam**. CR-091 AC3 proves by executable
 scan that nothing else constructs a date from `releasedAt` or `targetAt`; AC30 below is where that
 scan starts passing for a real reason. Introducing a parallel formatter here would defeat both.
@@ -141,17 +155,27 @@ different numbers on one surface.
 
 Two consequences this CR must respect:
 
-- `data.seq` is now the **stored integer, verbatim** (`public/app-logic.mjs:893`).
+- The rendered position is the **stored integer, verbatim** — `RoadmapFlowNode` writes
+  `data-seq` from `entry.seq` and nothing else (`public/app.js:2749-2751`).
 - It is **OMITTED when unusable**, never defaulted — a non-numeric or absent `seq` yields a node
-  with no `seq` key at all, the same "no carried position" state milestone and terminal nodes
-  occupy. A renderer that reads `entry.seq ?? 0` re-introduces exactly the ambiguity 091 removed,
-  and note `public/app.js:2765` already sorts on `(a.data("seq") ?? 0)` — that defaulting sort is
-  on this CR's surface and is the one place the omission can still be quietly undone.
+  with no `seq` attribute at all. A renderer that reads `entry.seq ?? 0` re-introduces exactly
+  the ambiguity 091 removed.
 
-Today `roadmapTopoOrder` (`public/app.js:2334`) walks `dependsOn` depth-first, pulling any CR
-whose dependencies sit later in `seq` forward — discarding the assigned order despite a comment
-claiming to preserve it. It also emits a wave divider on every wave change, so the live board
-repeats waves (`Wave 1,2,3,4,3,4,5,6,5,6,5`).
+*Citations repaired 2026-08-29, each by reading the target.* Three of them had drifted with the
+~1200 lines this CR moved through `public/app.js`, and two pointed at code this CR DELETED, which
+is a different repair from a moved line:
+
+- `data.seq` at `public/app-logic.mjs:893` — that span is now inside `workflowLens`. The `seq`
+  consumption moved to the render site above when the cytoscape builder went; `public/app-logic.mjs`
+  no longer mentions `seq` outside one comment about `listQueue`'s `ORDER BY`.
+- "note `public/app.js:2765` already sorts on `(a.data("seq") ?? 0)`" — **that sort no longer
+  exists.** It was cytoscape layout code, removed with the builder, so the risk it warned about is
+  discharged rather than relocated. Kept as history because the warning is why the omission above
+  is stated as a contract.
+- "Today `roadmapTopoOrder` (`public/app.js:2334`) walks `dependsOn` depth-first … so the live
+  board repeats waves (`Wave 1,2,3,4,3,4,5,6,5,6,5`)" — **`roadmapTopoOrder` no longer exists
+  either**; this CR's §S6 is what removed it, and AC13/AC15 are what replaced it. Read as the
+  problem statement it was, not as a description of current code.
 
 New rule: **topology validates, it does not re-sequence.** An authored order placing a CR before
 its own dependency raises a **warning on that row** and is not reshuffled — quiet reshuffling
@@ -177,16 +201,20 @@ strip's **page window** (§S2) — and says nothing about where either lives. On
 that omission has already produced a bug twice, so it is specified here rather than left to the
 implementer:
 
-- `roadmapExpandedKeys` (`public/app.js:2490-2500`) had to be hoisted out of the render tree
-  because "RoadmapGraphBody re-runs on every `state.queue`/`plans`/`releases` change, so a
-  mount-local Set silently re-collapsed whatever the user had opened on the very next SSE frame."
+- `roadmapExpandedKeys` (`public/app.js:2490-2500` — *history, verified 2026-08-29: the symbol
+  went with `RoadmapGraphBody`, so this is the shape of the bug, not a live reference*) had to be
+  hoisted out of the render tree because "RoadmapGraphBody re-runs on every
+  `state.queue`/`plans`/`releases` change, so a mount-local Set silently re-collapsed whatever the
+  user had opened on the very next SSE frame."
 - CR-CRU-077 §S2 declared expansion "UI state, not persisted", and CR-CRU-093 then had to add its
   own §S3/§S4 to give the rail durable state after the same gap bit there.
 
 So: both values are held **outside** the render tree, keyed by project exactly as
-`roadmapExpandKey` is, and a poll-tick or SSE frame **never** resets either. Landing still focuses
-the release in progress (§S5) — the requirement is that a focus the USER moved survives a
-re-render, not that the default changes.
+`state.collapsedCycles` and `lensOpenKeys` are — *`roadmapExpandKey`, which this sentence named
+until 2026-08-29, went the same way as `roadmapExpandedKeys`; the two surviving precedents are the
+ones the implementation actually followed* — and a poll-tick or SSE frame **never** resets either.
+Landing still focuses the release in progress (§S5) — the requirement is that a focus the USER
+moved survives a re-render, not that the default changes.
 
 They must also survive a **tab swap and return**, because CR-CRU-079 AC5 requires the `← roadmap`
 affordance to come back to the prior focused release and page window rather than the default. That
@@ -206,9 +234,10 @@ described a strip built from shipped releases alone while three ACs demanded pro
 implementer following the scope would have failed them. Recorded rather than quietly patched,
 because it is exactly the omission a gap analysis exists to surface.
 
-The frontend holds **one** release read today: `state.releases`, filled from `body.releases` at
-`public/app.js:293` — that is `GET …/releases`, which CR-091 §S1 deliberately keeps free of
-proposals (`listReleases` filters `event.type === "release"`). A repo-wide search of `public/` for
+The frontend holds **one** release read today: `state.releases`, filled from `body.releases` in
+`refetchRoadmap` (`public/app.js:293` — *verified 2026-08-29, still the right neighbourhood*) —
+that is `GET …/releases`, which CR-091 §S1 deliberately keeps free of proposals (`listReleases`
+filters `event.type === "release"`). A repo-wide search of `public/` for
 `release-proposals` / `listReleaseProposals` / `proposals` returns **zero hits**: nothing in the UI
 reads a proposal, and no state slice holds one.
 
