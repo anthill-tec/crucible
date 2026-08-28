@@ -191,6 +191,17 @@ different from `.lavish/crucible-workflow-flowchart.html` §1–§8/§14 is **no
   (ship order, version order, wave membership, authored `seq`). A force-directed, crossing-minimising
   or otherwise heuristic layout fails this AC — CR-CRU-077 was reverted for exactly that, and the
   price was measured (+41% adjacent-rank crossings, 94 nodes / 208 edges on the live board).
+- **AC27 — a dead CR does not read as live work.** CR-CRU-091 stores a second axis,
+  `lifecycle.state` = `SUPERSEDED` (with `by`) or `VOID` (with `reason`), which is deliberately
+  **not** a `QueueStatus` member (091 §S2) — so nothing renders it unless this CR does. Both states
+  are shown on the CR's row and on its flowchart node, distinguishably from each other and from
+  every `status` value: a `SUPERSEDED` row names its successor, a `VOID` row is legible as
+  abandoned, and neither is mistakable for `PENDING`. The row keeps its derived `status` as well —
+  the two axes are additive, and a build that replaces `status` with the lifecycle state fails this
+  AC as surely as one that ignores the lifecycle. An entry with no `lifecycle` key renders exactly
+  as it does today (absent, never defaulted). Without this AC 0.2.0 ships 091's write path with no
+  surface: a voided CR would render identically to live pending work on the release's headline
+  feature, which is the silent rot 091's Problem statement exists to end.
 
 ## Estimated size
 

@@ -81,8 +81,16 @@ newest would hand it the gating of every unshipped CR on a date nobody recorded"
 Three additive nullable columns on `queue_entries` (`src/store.ts:1146-1156`):
 
 - **`release TEXT`** — the declared target release label.
-- **`track TEXT`** — the declared track. `buildRoadmapGraph` already reads `e.track` and tolerates
-  its absence (`public/app-logic.mjs:861`); nothing has ever supplied it.
+- **`track TEXT`** — the declared track, stored in the PRD's locked wire format **`track-<n>`**
+  (PRD round 19, `docs/research/PRD-crucible-v2.md:323-324`: "tracks are numbered lanes — Track 1,
+  2, 3… (wire format `track-<n>`)"). `--track` accepts `2`, `track-2` or `Track 2` and **normalises
+  to `track-<n>` before storing**; a value carrying no integer is refused by name. The format is
+  load-bearing rather than cosmetic: `public/app-logic.mjs:479` extracts the first integer so it
+  sorts either shape, but CR-CRU-092 matches `--track` against the live `tracks` list **by value**
+  (092 AC7) and CR-CRU-085 draws one lane per distinct reported track — so two clients writing `2`
+  and `track-2` would produce two lanes for one track. Normalising here is what makes that
+  impossible. `buildRoadmapGraph` already reads `e.track` and tolerates its absence
+  (`public/app-logic.mjs:861`); nothing has ever supplied it.
 - **`lifecycle_json TEXT`** — `{"state":"SUPERSEDED","by":"CR-CRU-088","at":<epoch ms>}` or
   `{"state":"VOID","reason":"…","at":<epoch ms>}`. One JSON column rather than three flat ones, the
   in-table precedent being `depends_on_json` (`src/store.ts:1151`).
@@ -99,6 +107,18 @@ never runs the retrofit.
 (`src/store.ts:3094-3104`) gain `seq` **always** — the stored integer, verbatim, never re-derived —
 and `release` / `track` conditionally, through the projection's existing null-omits-the-key idiom.
 `lifecycle` is projected as the parsed object when `lifecycle_json` is present.
+
+**`lifecycle` is a SECOND AXIS, never folded into `status`.** `QueueStatus`
+(`src/types.ts:338-341`) is `PENDING · IN_PROGRESS · COMPLETED · COMPLETED_UNTRACKED`, **derived and
+never stored**, with the precedence documented at `src/store.ts:3059-3078`. The PRD locks that
+derivation — "the Wave → CR sequence table with depends-on and DERIVED statuses (PENDING = no plan,
+IN_PROGRESS = open plan, COMPLETED = closed + merge)" (`docs/research/PRD-crucible-v2.md:350-352`) —
+so `SUPERSEDED` / `VOID` **must not** become `QueueStatus` members and must not override the derived
+value: a superseded CR whose plan is open still reads `IN_PROGRESS`, because that is true. The two
+axes answer different questions — `status` is *what happened to the work*, `lifecycle` is *whether
+the work is still wanted*. No consumer collapses them, and neither one is defaulted when absent.
+Rendering the second axis on the roadmap surface is **CR-CRU-078's** (see its AC27), and this CR
+ships the data plus the write-time signal (AC15) that the CR's dependants are broken.
 
 **Coexistence with the full replace.** `replaceQueue` (`src/store.ts:3032`) keeps DELETE-then-INSERT
 and keeps dropping a CR absent from the posted set, but it must not destroy a declaration it was
@@ -130,7 +150,18 @@ settled fact is immutable.
 stored role is not `ORCHESTRATOR` (`Agent.role`, `src/types.ts:69`; `AGENT_ROLES`,
 `src/types.ts:53`; read via `store.getAgent`, `src/store.ts:1483`). An agent row carrying **no**
 role — pre-CR-044 rows carry none, and it is never fabricated (`src/types.ts:65-69`) — is refused,
-not assumed. A track executes; it never re-plans the roadmap.
+not assumed.
+
+**What the gate can and cannot enforce — do not invent a role.** `AGENT_ROLES` (`src/types.ts:53`)
+is `RED · GREEN · FIX · VERIFY · ORCHESTRATOR · report`: there is **no MAINLINE role**, and a track
+orchestrator registers as `ORCHESTRATOR` exactly as the mainline one does. The PRD's hierarchy —
+"MAINLINE ORCHESTRATOR (widest: allocates lanes, launches waves, gates boundaries) → ORCHESTRATOR
+(track scope: one lane's CR queue)" (`docs/research/PRD-crucible-v2.md:310-316`) — is a **scope
+convention Crucible does not model as data**, and the design document asks only for
+`register --role ORCHESTRATOR` (§10). So this gate stops RED/GREEN/FIX/VERIFY/report and
+unregistered callers, and that is the whole of its reach. "Only mainline re-plans the roadmap"
+stays a workflow convention; enforcing it needs a new stored role or an identity check and is a
+**separate CR**, not a smuggled schema change here.
 
 **The gap not to repeat:** `queue-file` reaches python only (`clients/python-crucible.py:1486`; the
 name is absent from `bun-`, `rust-`, `mvn-` and `arduino-crucible.py`). Roadmap registration is
@@ -291,6 +322,21 @@ A converged call writes nothing and emits no warning it did not earn.
   (existing seam); a caller registered as `RED` is refused with an error naming the required role;
   an agent row with no stored role is refused rather than assumed to be an orchestrator; a caller
   registered `ORCHESTRATOR` succeeds. Nothing is written on any refusal.
+- **AC17** — **`track` is stored in one format, `track-<n>`.** `wave-sequence --track 2`,
+  `--track track-2` and `--track "Track 2"` all store the identical value `track-2`, and the queue
+  read publishes that value; `--track main` (no integer) is refused naming the value. A build
+  storing the caller's spelling verbatim fails this AC — the fixture asserts one distinct `track`
+  value across the three calls, which is what stops CR-CRU-085 drawing two lanes for one track.
+- **AC18** — **the published `seq` is consumed, not re-derived, by its only in-tree consumer.**
+  `buildRoadmapGraph` (`public/app-logic.mjs:847-863`) emits `data.seq` equal to the entry's
+  published `seq`. Fixture: entries whose stored `seq` values are `10, 20, 30` yield `data.seq`
+  `10, 20, 30` — the surviving `seq: index` derivation (`public/app-logic.mjs:859`) yields
+  `0, 1, 2` and fails this AC. This closes the loop the CR opens: CR-CRU-092 forbids `next` from
+  copying that derivation (092 §Input) but repairs nothing, and CR-CRU-078 AC13 only defeats a
+  *dependency-walk* re-ordering — because `listQueue` is `ORDER BY seq`, the index derivation
+  preserves authored ORDER and so survives every other AC in this release while making `seq` mean
+  two different numbers on one surface. That is the same failure class AC3 exists to prevent for
+  dates.
 
 ## Estimated size
 
