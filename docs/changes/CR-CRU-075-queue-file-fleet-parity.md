@@ -81,6 +81,14 @@ CRs writing one number is a merge conflict and defeats "enforced going forward".
 Sequencing behind 091 and 092 is what makes the count correct once.
 A future fleet verb missing from a client must fail this census.
 
+**The census enforces the whole standard, not just presence.** The AXI surface each
+verb must satisfy is defined ONCE, in CR-CRU-091 §S10 (the P1–P10 table mapping every
+principle to the fleet mechanism that satisfies it) — this CR does not restate it, so the
+two documents cannot drift. A verb present in the inventory but emitting prose, JSON, or
+errors on stderr fails the envelope census; a verb whose `--help` omits it fails P10.
+Conformance is the standing fleet requirement (2026-07-21), which is why enforcement lives
+in a census rather than in each verb's own tests.
+
 ### §S3 Intimate Model B
 Post a Sandesh note to Model B that `queue-file` is now a fleet-wide client verb
 (the standing client-change contract: any verb/flag/envelope/endpoint that ships

@@ -115,7 +115,7 @@ own, which the write path already refuses (`src/v2.ts:1755-1759`: unknown deps a
 ### §S5 Two `next`s, never reconciled
 
 `worktree-flow next` reads the harness ChangeSet DB (`~/.claude/scripts/schedule_db.py:26-27` —
-`.wf-schedule.db`, legacy `.nai-schedule.db`; opened via `worktree-flow.py:100-111`). This verb
+`.wf-schedule.db`, legacy `.nai-schedule.db`; opened via `~/.claude/scripts/worktree-flow.py:100-111`). This verb
 reads the declared roadmap over HTTP. They answer different questions; a disagreement is a real
 signal that the lane plan has drifted, and is left visible.
 
