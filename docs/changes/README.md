@@ -101,6 +101,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-093](CR-CRU-093-project-rail-collapses.md) | the project rail collapses, giving every workspace view its width back | feature | PENDING (0.2.0) | 006 | 5 (0.2.0) |
 | [CR-CRU-075](CR-CRU-075-queue-file-fleet-parity.md) | queue-file fleet parity + AXI verb-surface census enforcement | patch | PENDING (0.2.0) | 014, 091, 092 | 5 (0.2.0) |
 | [CR-CRU-094](CR-CRU-094-agent-participation-is-recorded.md) | agent participation is recorded, not inferred | feature | PENDING (0.2.0) | 056 | 5 (0.2.0) |
+| [CR-CRU-095](CR-CRU-095-seq-scales-collide.md) | two seq scales collide, so `next` recommends deferred work | patch | PENDING (0.2.0) | 091, 092 | 5 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
