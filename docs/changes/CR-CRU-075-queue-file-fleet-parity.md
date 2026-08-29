@@ -2,8 +2,8 @@
 
 - **Type**: patch
 - **Wave**: 5 (0.2.0)
-- **Depends on**: 014, 091, 092
-- **Status**: PENDING (0.2.0) — moved into 0.2.0 by user direction 2026-08-28 — re-sequenced 2026-08-28 behind CR-091 **and CR-092**: parity and the census are done once, on the final verb surface, and 092's `next` is part of that surface
+- **Depends on**: 014, 091, 092, 095
+- **Status**: PENDING (0.2.0) — moved into 0.2.0 by user direction 2026-08-28 — re-sequenced 2026-08-28 behind CR-091 **and CR-092**: parity and the census are done once, on the final verb surface, and 092's `next` is part of that surface — extended 2026-08-29 to CR-095 for the SAME reason: 095 changes that surface again (it widens the `defaulted-seq` warning `queue-file` itself emits, and changes what `next` answers), so porting to four clients ahead of it would mean reworking all five
 
 ## Problem
 
