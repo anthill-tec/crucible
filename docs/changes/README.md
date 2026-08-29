@@ -100,7 +100,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-085](CR-CRU-085-roadmap-multi-track-lanes.md) | multi-track swimlanes inside a wave | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-093](CR-CRU-093-project-rail-collapses.md) | the project rail collapses, giving every workspace view its width back | feature | PENDING (0.2.0) | 006 | 5 (0.2.0) |
 | [CR-CRU-075](CR-CRU-075-queue-file-fleet-parity.md) | queue-file fleet parity + AXI verb-surface census enforcement | patch | PENDING (0.2.0) | 014, 091, 092 | 5 (0.2.0) |
-| [CR-CRU-094](CR-CRU-094-agent-participation-is-recorded.md) | agent participation is recorded, not inferred | feature | PENDING (post-0.2.0) | 056 | 6 (post-0.2.0) |
+| [CR-CRU-094](CR-CRU-094-agent-participation-is-recorded.md) | agent participation is recorded, not inferred | feature | PENDING (0.2.0) | 056 | 5 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
@@ -196,6 +196,18 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   Not folded into 078 — unrelated to the roadmap surface, and the repo rule is a patch CR over an
   inline scope edit. Worked around by adopting the finer granularity rather than aborting the plan:
   destroying a board record to fix a label is the worse trade.
+
+- **CHECKED AND FOUND CORRECT — the unregistered-caller 409 is not misleading. Do not re-file it.**
+  2026-08-28: the orchestrator was refused three times in one session
+  (`agent vidushi is not registered with this project`) after long dispatches pruned its
+  registration for silence, and a draft of CR-CRU-094 asserted the refusal's `help[]` "gives the
+  wrong first instruction". **That was false.** `src/hints.ts:325` already reads *"has no live
+  registration in this project (never registered, unregistered, or pruned) — nothing was stored or
+  changed"* — it declines to guess which of the three applies and offers the recovery that is
+  correct for all three. The drafted AC was deleted rather than filed, and CR-CRU-094 §S2 records
+  the same conclusion in the spec itself. The three 409s were operational friction — re-register and
+  continue — not a diagnostic defect. What IS real is the participation record being destroyed by
+  pruning as well as by `unregister`, and that is CR-CRU-094 §S2's scope.
 
 - 2026-08-27 — **0.1.3 shipped**: CR-CRU-090, PyPI + npm both at 0.1.3. Pre-flight every tag via a
   PR — push-triggered CI only runs on `develop`/`master`, and a red suite silently skips the publish.

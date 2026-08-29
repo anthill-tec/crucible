@@ -1,11 +1,22 @@
 # CR-CRU-094 — agent participation is recorded, not inferred
 
 - **Type**: feature
-- **Wave**: 6 (post-0.2.0) — **release membership is the user's call**; filed at the conservative
-  default because 0.2.0 is mid-flight with CR-078 executing. Raised as critical by the user
-  2026-08-28; move it into 0.2.0 on their word.
-- **Depends on**: 056
-- **Status**: PENDING (post-0.2.0) — filed 2026-08-28 on user direction
+- **Wave**: 5 (0.2.0) — **moved into the 0.2.0 horizon by user direction 2026-08-28.** Filed the
+  same day at the conservative post-0.2.0 default because 0.2.0 was mid-flight with CR-078
+  executing; the user raised it as critical and, once CR-078 landed, moved it in. Release
+  membership is the user's call and this records theirs.
+- **Depends on**: 056 — **COMPLETED** (wave 4, plan closed, merged at `5844a91`), so this CR is
+  dependency-clear and schedulable immediately.
+- **Status**: PENDING (0.2.0) — filed 2026-08-28 on user direction, moved into 0.2.0 the same day
+
+> **Lineage: this completes CR-056, it does not correct it.** CR-CRU-056 is
+> *"Agent registration binds its cycle EXPLICITLY; server-side auto-attach guessing is DELETED"* —
+> it made the binding explicit and stored it on `agents.bound_cycle_id`, replacing a server-side
+> guess that was worse. Every `register --agent X --role RED --cycle N` in every dispatch brief is
+> its contract. What it did not do was make that binding DURABLE past the agent's lifetime, because
+> the mandated `unregister` had not yet been recognised as destroying the row that carried it. So
+> "depends on 056" here is a lineage, not plumbing: 056 created the explicit binding, and this CR
+> makes it survive.
 
 ## Problem
 
@@ -82,6 +93,26 @@ and recoverable for an agent that produced no runs at all.
 
 This is the half that makes the mandated unregister safe: the procedure is correct and stays
 unchanged; what changes is that following it no longer destroys the evidence.
+
+**Two routes destroy the record, not one — added 2026-08-28.** Item 1 above is `unregister`
+deleting the row. The second is **pruning by silence**, and it was observed three times in one
+session: `vidushi` registered as `ORCHESTRATOR`, dispatched a cycle that ran 30m41s, and on return
+`cycle-done` and `cycle-activate` both refused with 409. Liveness is derived from silence
+(`src/store.ts:3970-3980`): `online → stale → tombstoned → pruned` as `now - lastSeen` crosses each
+threshold. Sub-agents heartbeat ~every 2 min and comply; **an orchestrator waiting on a dispatch
+emits nothing**, because it has no work to report, so a single long cycle prunes it.
+
+This section already covers both, and that is the point of stating it: a `lifecycle` event carrying
+the cycle is recoverable after the row is gone **however** it went — deleted deliberately or pruned
+for silence. No extra scope; the second route is why the first is not a special case.
+
+**What this is NOT — checked, and the code is already right.** It is tempting to also demand that
+the 409 distinguish "pruned after silence" from "never registered". It already declines to guess and
+names all three causes: `src/hints.ts:325` reads *"has no live registration in this project (never
+registered, unregistered, or pruned) — nothing was stored or changed"*, and the recovery it offers
+is the correct one for each. A draft of this CR asserted the refusal "gives the wrong first
+instruction"; that was false and is recorded here so it is not re-filed. The three 409s were
+operational friction — re-register and continue — not a diagnostic failure.
 
 ### §S3 An unbound ingest is reported, never silent
 
