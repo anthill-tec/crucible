@@ -98,7 +98,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-092](CR-CRU-092-next-validates-the-sequence.md) | `next`: the orchestrator validates its sequence during execution | feature | COMPLETED (0.2.0) | 091 | 5 (0.2.0) |
 | [CR-CRU-078](CR-CRU-078-roadmap-graph-and-table-together.md) | the roadmap is a release-paged flowchart with its scoped table | feature | COMPLETED (0.2.0) | 077, 084, 091 | 5 (0.2.0) |
 | [CR-CRU-095](CR-CRU-095-seq-scales-collide.md) | two seq scales collide, so `next` recommends deferred work | patch | COMPLETED (0.2.0) | 091, 092 | 5 (0.2.0) |
-| [CR-CRU-096](CR-CRU-096-zone-2-drifts-from-the-approved-design.md) | zone 2 drifts from the approved flowchart design | patch | PENDING (0.2.0) | 078, 095 | 5 (0.2.0) |
+| [CR-CRU-096](CR-CRU-096-zone-2-drifts-from-the-approved-design.md) | zone 2 drifts from the approved flowchart design | patch | COMPLETED (0.2.0) | 078, 095 | 5 (0.2.0) |
 | [CR-CRU-097](CR-CRU-097-project-independence-is-not-asserted.md) | project independence is claimed but never asserted | patch | PENDING (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-079](CR-CRU-079-roadmap-deep-link-and-drill-through.md) | roadmap deep-link parity and active-CR drill-through | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-085](CR-CRU-085-roadmap-multi-track-lanes.md) | multi-track swimlanes inside a wave | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |

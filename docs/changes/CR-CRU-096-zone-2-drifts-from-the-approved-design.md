@@ -5,7 +5,7 @@
   inside the release that introduced it, not carried past the tag. Release membership is the
   user's call.
 - **Depends on**: 078, 095 — 095 makes the published queue order canonical across containers (`listQueue` gains release→wave→seq). Zone 2 renders one box per wave of the focused release and its rows come from that published order, so the ordering contract is settled BEFORE the renderer is specified against it. Within-wave order is unchanged by 095 (its AC3), so AC10's wave-5 fixture is unaffected; the edge exists for the multi-wave and cross-container assertions.
-- **Status**: PENDING (0.2.0) — filed 2026-08-29
+- **Status**: COMPLETED (0.2.0) — filed 2026-08-29, shipped 2026-09-03
 - **Found by**: the user, comparing the running board against the approved design artifact. Found
   by RENDERING both, which is the only way it was ever going to be found — see Notes.
 
