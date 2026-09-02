@@ -253,6 +253,10 @@ export interface FocusedReleaseView<Entry = unknown> {
   dateState: GateDateResult["state"];
   members: Entry[];
   waves: FocusedReleaseWave<Entry>[];
+  /** CR-CRU-096 §S7/AC22 — the wave labels this release spans, compressed into
+   *  runs by `compressWaveRuns`. The delivered summary joins them with `", "`;
+   *  the label COUNT it states the noun from is `waves.length`, not this. */
+  waveRuns: string[];
   /** CR-CRU-096 §S4/AC12b — the ONE row in the whole zone marked `next`: the
    *  first actionable member among the rows the zone draws, in the published
    *  order across every wave (the loose group included, AC12c). `null` when
@@ -270,6 +274,15 @@ export declare function focusedReleaseView<Entry = unknown>(
   releases: readonly unknown[] | null | undefined,
   entries: readonly Entry[] | null | undefined,
 ): FocusedReleaseView<Entry>;
+
+/** CR-CRU-096 §S7/AC22/AC22a/AC22b — a set of wave labels as the delivered
+ *  summary states it: ascending by leading-integer reading, maximal
+ *  consecutive runs compressed to `first–last` (U+2013), a label with no
+ *  numeric reading joining no run and following in first-appearance order.
+ *  Non-string and empty labels are dropped; the caller joins with `", "`. */
+export declare function compressWaveRuns(
+  labels: readonly (string | null | undefined)[] | null | undefined,
+): string[];
 
 /** CR-CRU-078 §S5/AC12 — the columns zone 3 shows for the rows it was given:
  *  `wave` only across waves, `track` only across reported tracks. */

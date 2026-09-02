@@ -1154,6 +1154,81 @@ const roadmapMerged = (entry) =>
   entry?.status === "COMPLETED" || entry?.status === "COMPLETED_UNTRACKED";
 
 /**
+ * CR-CRU-096 §S7/AC22 — the leading-integer READING of a wave label, or `null`
+ * when the label carries no digit at all. `wave` is free TEXT on the wire, so
+ * this is the same digit `waveNumber` (`src/store.ts:411`) reads server-side —
+ * except that "no integer" answers `null` here rather than lane `0`: the
+ * server needs a lane to compute a seq block in, and this needs to know the
+ * label has no numeric reading so it can join no run (AC22b). `/\d+/` is the
+ * SAME digit this module's `numericLabelCompare` (`:690`) already reads out of
+ * a wave or track label — one reading of a wave's number, three questions
+ * asked of it, never three spellings.
+ */
+const waveLabelNumber = (label) => {
+  const digits = /\d+/.exec(label);
+  return digits === null ? null : Number(digits[0]);
+};
+
+/**
+ * CR-CRU-096 §S7/AC22/AC22a/AC22b — the delivered summary's wave labels,
+ * compressed into RUNS. The approved artifact's `waves 1–4`
+ * (`.lavish/crucible-workflow-flowchart.html` §2) for a release that spanned
+ * four consecutive waves, and the plain list for a set with a gap in it.
+ *
+ * The rule, in one pass:
+ *   1. the labels are a SET — a release spanned a wave or it did not, and it
+ *      cannot have spanned it twice;
+ *   2. every label with a numeric reading sorts ASCENDING by that reading,
+ *      ties keeping first-appearance order (`sort` is stable);
+ *   3. a label whose reading is exactly the previous one plus one CONTINUES
+ *      the open run; anything else opens a new one;
+ *   4. a run of two or more renders `first–last` with an EN DASH (U+2013), the
+ *      artifact's own glyph; a run of one renders as itself. The endpoints are
+ *      the LABELS, not their readings, so nothing invents a spelling the
+ *      release never declared;
+ *   5. a label with NO numeric reading joins no run and follows the numbered
+ *      ones in first-appearance order.
+ *
+ * AC22b is explicit that this is not the client re-sort CR-CRU-091 AC18
+ * outlaws: that rule governs the QUEUE's order of CRs, which is authored data
+ * consumed verbatim (and still is — nothing here touches an entry). A
+ * delivered release's SET of wave labels has no authored order to preserve.
+ *
+ * The caller joins the answer; `", "` is the separator live already renders.
+ */
+export function compressWaveRuns(labels) {
+  const distinct = new Set();
+  for (const label of Array.isArray(labels) ? labels : []) {
+    if (typeof label === "string" && label !== "") distinct.add(label);
+  }
+  const numbered = [];
+  const unnumbered = [];
+  for (const label of distinct) {
+    const number = waveLabelNumber(label);
+    if (number === null) unnumbered.push(label);
+    else numbered.push({ label, number });
+  }
+  numbered.sort((one, two) => one.number - two.number);
+  const runs = [];
+  let open = null;
+  for (const { label, number } of numbered) {
+    if (open !== null && number === open.last + 1) {
+      open.lastLabel = label;
+      open.last = number;
+      continue;
+    }
+    open = { firstLabel: label, lastLabel: label, last: number };
+    runs.push(open);
+  }
+  return [
+    ...runs.map((run) =>
+      run.firstLabel === run.lastLabel ? run.firstLabel : `${run.firstLabel}\u2013${run.lastLabel}`,
+    ),
+    ...unnumbered,
+  ];
+}
+
+/**
  * CR-CRU-078 §S4/§S5 — everything zones 2 and 3 draw for ONE focused release.
  * Pure: the gate the strip focused, the release ledger, and the queue as
  * `listQueue` published it — the one canonical order (`compareQueueOrder`,
@@ -1287,6 +1362,12 @@ export function focusedReleaseView(gate, releases, entries) {
     dateState: gate?.dateState ?? "absent",
     members,
     waves,
+    // CR-CRU-096 §S7/AC22 — the wave labels the focused release spans, already
+    // COMPRESSED. Stamped here rather than derived by the renderer, exactly
+    // like `rows`, `hiddenCount`, `mergedCount` and `nextCr` above: the view
+    // answers, the renderer draws. The loose group (`wave: null`) spans no
+    // wave, so it contributes no label.
+    waveRuns: compressWaveRuns(waves.map((box) => box.wave)),
     nextCr,
     crCount: kind === "shipped" ? (record?.crs ?? []).length : members.length,
     packages,
@@ -1311,6 +1392,7 @@ if (typeof window !== "undefined") {
     routeParse,
     workspaceTabs,
     focusedReleaseView,
+    compressWaveRuns,
     roadmapTableColumns,
     briefCrTitle,
     lifecycleBadge,
