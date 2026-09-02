@@ -80,7 +80,26 @@ the need for all three, and the information is visible rather than hidden behind
 
 Slot contents:
 
-- `next` on the CR that is next to be worked.
+- `next` on the **first actionable row in the published order** — where actionable is
+  `status === "PENDING"` with no `lifecycle` disposition, the same predicate the fleet clients
+  already apply (`clients/_crucible_axi.py:1301`). It is a **projection of published fields**, not
+  a scheduling verdict.
+
+  **It is deliberately NOT the oracle's answer, and this is a narrowing decided 2026-09-02.** The
+  scheduling oracle (`resolve_next`, `clients/_crucible_axi.py:1473`, with `_next_trigger:1392`
+  and `_next_answer:1450`) is **client-side Python and has no server publisher** — `decision`
+  appears zero times in `src/v2.ts` and `src/store.ts`, and `refetchRoadmap` fetches only
+  queue/releases/release-proposals. Rendering the oracle's reading here would mean reimplementing
+  NEXT/HOLD/DRAINED in JS: a second oracle in a second language, which is exactly what CR-091
+  AC18 outlawed for `seq` and what CR-095 §S1 spent five cycles deleting from the client.
+
+  The two answers demonstrably differ: on 2026-09-02 the CLI answered
+  `HOLD CR-CRU-096, trigger: in-flight CR-CRU-095` while the first actionable row was 096 — the
+  CLI said wait, this marker says next-in-line. So the marker means **"first in line"**, never
+  "start this now", and **zone 2 does not represent HOLD or DRAINED at all**. Publishing the board's
+  READING server-side so both surfaces consume one answer is CR-CRU-098 — which also renames the
+  published `decision` field, because scheduling is the orchestrator's act in consultation with
+  the user and the tool only ever recommends.
 - `deps <ids>` on a pending CR with dependencies — the row fits the real list (`CR-CRU-075`
   declares three).
 
@@ -192,6 +211,10 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
 - **Zone 1 and zone 3.** Both match the design; this CR is zone 2 only.
 - **A tooltip, a pager, or a scroll container.** All three rejected above.
 - **Making a shipped release plannable, or auto-proposing one.** Out of scope.
+- **Rendering the board's readiness reading.** `next`/HOLD/DRAINED as the oracle READS them need
+  a server publisher; that is CR-CRU-098. Zone 2 shows position in the published order only, and
+  nothing in zone 2 is a scheduling instruction — scheduling is the orchestrator's act with the
+  user.
 
 ## Acceptance criteria
 
@@ -223,8 +246,15 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   `CR-Q-3, CR-Q-4, CR-Q-5, CR-Q-6, CR-Q-7`.
 - **AC11** — An IN_PROGRESS CR is present even when outside the top five. Fixture: activate the
   last scheduled CR — it still renders, with ember and motion.
-- **AC12** — The next actionable CR renders a `next` annotation as **text**, on a row that keeps
-  PENDING styling. It uses neither `▸` nor ember (§S8), and exactly one row is marked.
+- **AC12** — The **first actionable row in the published order** renders a `next` annotation as
+  **text**, on a row that keeps PENDING styling. It uses neither `▸` nor ember (§S8), and exactly
+  one row is marked. Actionable is `PENDING` with no `lifecycle`; the marker is derived from the
+  published payload ALONE.
+- **AC12a** — The marker is **not** the oracle's reading and no NEXT/HOLD/DRAINED logic is
+  introduced in `public/`: no dependency walk, no in-flight trigger, no release gating. Fixture: a
+  wave whose first actionable row has an unsatisfied dependency still marks that row `next`,
+  because the marker states position in the published order and nothing else. Zone 2 renders no
+  HOLD and no DRAINED state (CR-CRU-098 owns the published reading).
 - **AC13** — A pending row with dependencies renders `deps <ids>` naming **all** of them; fixture:
   a row declaring **four** deps names four, and the row's annotation slot holds them at the §S6
   width budget (four is the widest real case observed, so the budget is measured against four, not
