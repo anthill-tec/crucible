@@ -295,6 +295,26 @@ const QUEUE: QueueFixture[] = [
   },
 ];
 
+/** CR-CRU-096 §S5/AC9/AC9a — what a WAVE box draws once the trim lands: the
+ *  top of the scheduled queue plus what is running. `CR-V-DONE` and
+ *  `CR-V-UNTRACKED` are merged and roll up; `CR-V-SUP` and `CR-V-VOID` carry a
+ *  disposition and are not work. So the two boxes above draw one row each. */
+const DRAWN_CRS = ["CR-V-LIVE", "CR-V-PEND"];
+
+/** The SAME six CRs, declaring NO wave (`wave: ""` — the wire's own way of
+ *  declaring none, `src/types.ts:392`).
+ *
+ *  CR-CRU-096 AC18a rules that the `wave: null` group takes the row
+ *  ARRANGEMENT but NOT the trim: with no header it has nowhere to state whole
+ *  membership and no anchor for a `+N more` pointer, so it draws every member.
+ *  That makes it the surface on which the merged and dimmed FACES this suite
+ *  measures are still rendered — the stylesheet still declares them
+ *  (`public/styles.css` `.app-flow-node.completed`, `.completed_untracked`),
+ *  and a face is measured where it is drawn. */
+const LOOSE_QUEUE: QueueFixture[] = QUEUE.map((entry) =>
+  entry.release === "0.2.0" ? { ...entry, wave: "" } : entry,
+);
+
 // ── happy-dom capture: the REAL production DOM, serialised ───────────────────
 //
 // The subject under measurement must be what public/app.js actually renders, so
@@ -459,9 +479,11 @@ let page: Page | null = null;
 let populatedZones = "";
 let emptyZones = "";
 let orderedZones = "";
+let looseZones = "";
 let fixtureUrl = "";
 let emptyFixtureUrl = "";
 let orderedFixtureUrl = "";
+let looseFixtureUrl = "";
 
 /** A page that is the app's own document shell (theme attribute, real
  *  stylesheet link) wrapping the captured zones — and NO script at all, so
@@ -500,6 +522,7 @@ beforeAll(async () => {
   // with the first proposed one, and the shared fixture's second proposal is
   // deliberately dateless (AC6), which is a different assertion's subject.
   orderedZones = await captureZones({ releases: ORDERED_SHIPPED, proposals: [PROPOSALS[0]!] });
+  looseZones = await captureZones({ queue: LOOSE_QUEUE });
 
   server = Bun.serve({
     port: 0,
@@ -520,6 +543,11 @@ beforeAll(async () => {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
+      if (pathname === "/fixture-loose") {
+        return new Response(fixtureDocument(looseZones), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
       // Static passthrough for public/, restricted to a flat file name so the
       // throwaway server cannot be walked out of the directory it serves.
       const name = pathname.replace(/^\/+/, "");
@@ -532,6 +560,7 @@ beforeAll(async () => {
   fixtureUrl = `http://127.0.0.1:${server.port}/fixture`;
   emptyFixtureUrl = `http://127.0.0.1:${server.port}/fixture-empty`;
   orderedFixtureUrl = `http://127.0.0.1:${server.port}/fixture-order`;
+  looseFixtureUrl = `http://127.0.0.1:${server.port}/fixture-loose`;
 
   browser = await chromium.launch();
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -551,6 +580,13 @@ afterAll(async () => {
 beforeEach(async () => {
   await pageEl().goto(fixtureUrl, { waitUntil: "load" });
 });
+
+/** The AC18a board: every one of the six focused CRs drawn, because the
+ *  wave-less group takes no trim. Used by the assertions whose subject is a
+ *  FACE a wave box no longer draws (merged, dimmed-merged). */
+const looseBoard = async (): Promise<void> => {
+  await pageEl().goto(looseFixtureUrl, { waitUntil: "load" });
+};
 
 // ── In-browser measurement primitives ──────────────────────────────────────
 //
@@ -857,7 +893,10 @@ describe("AC21 — every element renders as its DECLARED shape (measured)", () =
        })()`,
     );
     const contained = raw as { wave: string; cr: string; inside: boolean }[];
-    expect(contained.length).toBe(FOCUSED_CRS.length);
+    // CR-CRU-096 §S5 — the rows a wave box DRAWS, not its whole membership:
+    // containment is a claim about what is painted, and the merged and
+    // dispositioned members are no longer painted here.
+    expect(contained.map((entry) => entry.cr)).toEqual(DRAWN_CRS);
     for (const entry of contained) {
       expect(entry.inside, `${entry.cr} is painted outside wave ${entry.wave}'s box`).toBe(true);
     }
@@ -865,8 +904,15 @@ describe("AC21 — every element renders as its DECLARED shape (measured)", () =
 
   test("a CR is a LEAF rectangle — a box with no node inside it", async () => {
     const nodes = await measureAll('[data-testid="roadmap-node"]');
-    expect(nodes.length).toBe(FOCUSED_CRS.length);
+    expect(nodes.map((n) => n.cr)).toEqual(DRAWN_CRS);
     for (const node of nodes) expectRectangle(node, `CR node ${node.cr}`);
+    // …and on the AC18a board, where every FACE is drawn: a merged leaf and a
+    // dimmed-merged one are rectangles too, which is the half a trimmed wave
+    // box can no longer show.
+    await looseBoard();
+    const everyFace = await measureAll('[data-testid="roadmap-node"]');
+    expect(everyFace.map((n) => n.cr)).toEqual(FOCUSED_CRS);
+    for (const node of everyFace) expectRectangle(node, `CR node ${node.cr}`);
     const raw = await pageEl().evaluate(
       `Array.from(document.querySelectorAll('[data-testid="roadmap-node"]'))
          .map((n) => n.querySelectorAll('[data-testid="roadmap-node"]').length)`,
@@ -898,6 +944,9 @@ describe("AC21 — every element renders as its DECLARED shape (measured)", () =
 
 describe("AC22 — each state renders its declared colour", () => {
   test("COMPLETED is green, drawn from the app's own token", async () => {
+    // The merged FACE is drawn on the wave-less board (AC18a): a wave box
+    // rolls its merged members up and draws none of them (§S5/AC9).
+    await looseBoard();
     const green = await tokenColor("--pass");
     expect(green).not.toBe("");
     const node = nodeFor(await measureAll('[data-testid="roadmap-node"]'), "CR-V-DONE");
@@ -909,6 +958,7 @@ describe("AC22 — each state renders its declared colour", () => {
   });
 
   test("COMPLETED_UNTRACKED is the SAME green, DIMMED", async () => {
+    await looseBoard();
     const green = await tokenColor("--pass");
     const nodes = await measureAll('[data-testid="roadmap-node"]');
     const tracked = nodeFor(nodes, "CR-V-DONE");
@@ -961,6 +1011,7 @@ describe("AC22 — each state renders its declared colour", () => {
   });
 
   test("the four states are four DISTINGUISHABLE rendered faces", async () => {
+    await looseBoard();
     const nodes = await measureAll('[data-testid="roadmap-node"]');
     const faces = new Map<string, string>();
     for (const cr of ["CR-V-DONE", "CR-V-UNTRACKED", "CR-V-LIVE", "CR-V-PEND"]) {
@@ -1011,11 +1062,29 @@ describe("AC22 — each state renders its declared colour", () => {
     }
   });
 
-  test("SUPERSEDED and VOID render distinguishably from each other", async () => {
-    const badges = await measureAll('[data-testid="roadmap-node-lifecycle"]');
-    expect(badges.length).toBe(2);
-    const faces = badges.map((b) => `${b.color}|${b.text}`);
-    expect(new Set(faces).size, "the two lifecycle states render identically").toBe(2);
+  test("SUPERSEDED and VOID render distinguishably from each other — on the NODE's own badge and on zone 3's row", async () => {
+    // CR-CRU-096 AC9b — AC9a trims the dispositioned PENDING ROW out of a
+    // TRIMMED wave box and nothing more: the node's badge STAYS and renders
+    // wherever a node renders. So the axis is measured on BOTH surfaces that
+    // draw it — zone 3's row here, and the node badge on the AC18a loose
+    // board, the untrimmed group where a dispositioned member is drawn.
+    const rows = await measureAll('[data-testid="roadmap-lifecycle-badge"]');
+    expect(rows.length).toBe(2);
+    expect(
+      new Set(rows.map((b) => `${b.color}|${b.text}`)).size,
+      "the two lifecycle states render identically on zone 3's row",
+    ).toBe(2);
+    // This board's waves are all declared, so every box is TRIMMED and draws
+    // no dispositioned row — hence no node badge on THIS board (AC9a).
+    expect((await measureAll('[data-testid="roadmap-node-lifecycle"]')).length).toBe(0);
+
+    await looseBoard();
+    const nodes = await measureAll('[data-testid="roadmap-node-lifecycle"]');
+    expect(nodes.length, "the untrimmed loose group draws no node badge").toBe(2);
+    expect(
+      new Set(nodes.map((b) => `${b.color}|${b.text}`)).size,
+      "the two lifecycle states render identically on the node badge",
+    ).toBe(2);
   });
 });
 
@@ -1046,7 +1115,16 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
     await pageEl().addStyleTag({ content: STRIP_COLOUR });
   });
 
+  /** The AC18a board, colour-stripped. Navigating drops an injected style tag,
+   *  so the strip is re-applied after the load. Used where the subject is
+   *  every FACE, including the merged ones a trimmed wave box no longer draws. */
+  const looseBoardStripped = async (): Promise<void> => {
+    await looseBoard();
+    await pageEl().addStyleTag({ content: STRIP_COLOUR });
+  };
+
   test("colour stripping really does flatten the rendered colours", async () => {
+    await looseBoardStripped();
     // The premise, asserted rather than assumed: after the strip there is ONE
     // ink, ONE border colour and ONE opacity across every node, so anything
     // that still separates them is provably not colour.
@@ -1058,6 +1136,7 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
   });
 
   test("each flowchart node states its status in WORDS", async () => {
+    await looseBoardStripped();
     const raw = await pageEl().evaluate(
       `Array.from(document.querySelectorAll('[data-testid="roadmap-node"]')).map((n) => ({
          cr: n.getAttribute("data-cr"),
@@ -1110,7 +1189,13 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
     }
   });
 
-  test("the LIFECYCLE axis survives the strip on BOTH surfaces", async () => {
+  test("the LIFECYCLE axis survives the strip on BOTH surfaces — the node badge and zone 3's row", async () => {
+    // CR-CRU-096 AC9b — measured on the AC18a loose board, the untrimmed
+    // group where a dispositioned member still draws a NODE. AC9a's trim only
+    // removes such a row from a wave BOX; it never removed the badge, and
+    // §S8 forbids `data-lifecycle` being the disposition's only channel — an
+    // attribute is not text and does not survive a greyscale screenshot.
+    await looseBoardStripped();
     const raw = await pageEl().evaluate(
       `(() => {
          const grab = (sel) => Array.from(document.querySelectorAll(sel)).map((e) => ({
@@ -1258,6 +1343,11 @@ describe("AC24 — only an IN_PROGRESS CR moves (sampled across frames)", () => 
   test(
     "COMPLETED, COMPLETED_UNTRACKED and PENDING nodes are completely static",
     async () => {
+      // Every static FACE, which after CR-CRU-096 §S5 means the wave-less
+      // board (AC18a): a trimmed wave box draws neither merged member, so
+      // "COMPLETED and COMPLETED_UNTRACKED do not move" is only observable
+      // where they are drawn.
+      await looseBoard();
       const sampled = await sampleFrames();
       const statics = sampled.filter((s) => s.cr !== "CR-V-LIVE");
       expect(statics.length).toBe(FOCUSED_CRS.length - 1);
@@ -1519,6 +1609,9 @@ describe("AC26 — position comes from declared data, never a layout engine", ()
   });
 
   test("node order in the flowchart IS the authored seq order", async () => {
+    // The wave-less board (AC18a), where all six are drawn: order is the
+    // subject here, and a trimmed box would leave only two to order.
+    await looseBoard();
     const raw = await pageEl().evaluate(
       `Array.from(document.querySelectorAll('[data-testid="roadmap-node"]'))
          .map((n) => ({ cr: n.getAttribute("data-cr"), seq: n.getAttribute("data-seq") }))`,
@@ -1529,6 +1622,7 @@ describe("AC26 — position comes from declared data, never a layout engine", ()
   });
 
   test("every node is PAINTED in that declared order — no reordering by layout", async () => {
+    await looseBoard();
     const raw = await pageEl().evaluate(
       `Array.from(document.querySelectorAll('[data-testid="roadmap-node"]')).map((n) => {
          const r = n.getBoundingClientRect();

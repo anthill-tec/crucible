@@ -2720,9 +2720,17 @@
     // a node box carrying a sentence buries the identifier, and the title has
     // exactly one home, the table's column.
     //
-    // AC27 — the lifecycle axis rides BESIDE the status, never instead of it.
-    // An entry with no `lifecycle` key gets no attribute and no span: absent,
-    // never defaulted.
+    // CR-CRU-096 AC9b — the node's lifecycle badge STAYS, and renders
+    // wherever a node renders. AC9a trims the dispositioned PENDING ROW out
+    // of a wave box, but it does NOT make this badge unreachable: the loose
+    // group draws `box.entries` UNTRIMMED (AC18a, `:2785`) and AC9's union is
+    // on STATUS, so a running CR is drawn whatever its `lifecycle` (AC9c).
+    // On both paths dropping the span would leave the disposition published
+    // as the `data-lifecycle` ATTRIBUTE alone — colour and CSS with no TEXT,
+    // which is exactly what §S8 forbids. Zone 3's `roadmap-lifecycle-badge`
+    // (`:2536`) is the DETAIL surface, not a substitute for the node's word.
+    // An entry with no `lifecycle` key still gets no attribute and no span:
+    // absent, never defaulted.
     const RoadmapFlowNode = (entry) => {
       const lifecycle = L.lifecycleBadge(entry.lifecycle);
       // AC17 — read on the NODE's own binding rather than the panel's: a
@@ -2783,7 +2791,12 @@
     // under a heading reading `Wave `.
     const RoadmapFlowWave = (box) =>
       box.wave === null
-        ? div({ class: "app-flow-loose" }, box.entries.map(RoadmapFlowNode))
+        ? // AC18a — the loose group takes AC8's ROW ARRANGEMENT (a column, by
+          // stylesheet) but NOT the trim: it renders no header, so it has
+          // nowhere to state whole membership and no anchor for a `+N more`
+          // pointer. Trimming it would hide rows with nothing declaring how
+          // many of them there are.
+          div({ class: "app-flow-loose" }, box.entries.map(RoadmapFlowNode))
         : div(
             {
               "data-testid": "roadmap-wave",
@@ -2816,7 +2829,27 @@
                 String(box.entries.length),
               ),
             ),
-            div({ class: "app-flow-wave-body" }, box.entries.map(RoadmapFlowNode)),
+            // §S5 — the body draws what the box SHOWS: the top of the
+            // scheduled queue union every running member
+            // (`focusedReleaseView`'s `rows`), never the whole inventory —
+            // zone 3's table is the detail surface. The header above still
+            // states whole membership, so the two facts stay distinct.
+            div(
+              { class: "app-flow-wave-body" },
+              box.rows.map(RoadmapFlowNode),
+              // §S5.4/AC16 — a static POINTER at that detail surface, and by
+              // §S8 deliberately NOT a node: no `roadmap-node` test id, no
+              // `data-cr`, no `data-status`, no `data-drill-source` and no
+              // click handler, so nothing selects it, drills it, or counts it
+              // as a CR. It states the SCHEDULED remainder and renders only
+              // when one exists — `+0 more` is the defect AC16 forbids.
+              box.hiddenCount > 0
+                ? div(
+                    { "data-testid": "roadmap-wave-more", class: "app-flow-wave-more" },
+                    `+${box.hiddenCount} more — see the table below`,
+                  )
+                : null,
+            ),
           );
 
     const RoadmapPackage = (pkg) =>

@@ -1119,6 +1119,28 @@ export function roadmapTableColumns(entries) {
   return columns;
 }
 
+/** CR-CRU-096 §S5.2 — how many SCHEDULED rows a wave box draws by default.
+ *  The approved artifact's `div.crs` holds exactly five (`.lavish/
+ *  crucible-workflow-flowchart.html` §1) out of its wave's seven scheduled. */
+const ROADMAP_WAVE_ROWS = 5;
+
+/**
+ * CR-CRU-096 §S5/AC9/AC9a — ACTIONABLE, the same predicate the queue verbs
+ * already use (`clients/_crucible_axi.py:1301`): `PENDING` on the
+ * server-derived status axis AND carrying no `lifecycle` disposition.
+ *
+ * The second half is load-bearing here for the same reason it is there:
+ * `deriveQueueStatus` cannot see `lifecycle` by signature, so a VOID or
+ * SUPERSEDED CR with no plan reads `status: "PENDING"`. It is not work, so it
+ * gets no row — and no information is lost, because zone 3's table carries the
+ * disposition (`roadmap-lifecycle-badge`, CR-CRU-078 AC27's column).
+ *
+ * `entry` is guarded by the status read: a null member short-circuits before
+ * the `in`, which is why the key test is the mirror of the Python one rather
+ * than an `undefined` comparison that would treat `lifecycle: null` as work.
+ */
+const roadmapActionable = (entry) => entry?.status === "PENDING" && !("lifecycle" in entry);
+
 /**
  * CR-CRU-078 §S4/§S5 — everything zones 2 and 3 draw for ONE focused release.
  * Pure: the gate the strip focused, the release ledger, and the queue as
@@ -1178,11 +1200,41 @@ export function focusedReleaseView(gate, releases, entries) {
     const wave = declaredLabel(entry, "wave") ?? null;
     let box = boxOf.get(wave);
     if (box === undefined) {
-      box = { wave, active, entries: [] };
+      box = { wave, active, entries: [], rows: [], hiddenCount: 0 };
       boxOf.set(wave, box);
       waves.push(box);
     }
     box.entries.push(entry);
+  }
+
+  // CR-CRU-096 §S5.2/§S5.3 + AC11a — what each box DRAWS, decided beside the
+  // membership it is a window on so the two cannot drift. `entries` stays the
+  // WHOLE membership, which is the one fact the header states (AC3); `rows` is
+  // the top of the scheduled queue UNION every running member, and
+  // `hiddenCount` is the SCHEDULED remainder the `+N more` pointer states.
+  //
+  // Merged members (AC6a — `COMPLETED` and `COMPLETED_UNTRACKED` alike) are
+  // excluded by construction: neither predicate below admits them, so they
+  // roll up (§S3) and are never rows.
+  //
+  // AC11a — a running CR outside the top five EXTENDS the list; it never
+  // displaces a scheduled row. So the rows are re-projected by ONE filter over
+  // `entries`, which is the server's published order (`compareQueueOrder`,
+  // CR-CRU-095 §S1) consumed verbatim: no sort, no `seq` read, nothing that
+  // could answer a different order than the payload's own (CR-CRU-091 AC18).
+  //
+  // `hiddenCount` is `actionable total − actionable rows shown`, never
+  // membership − shown: the latter would count the merged members twice, once
+  // in the roll-up and once in the remainder.
+  for (const box of waves) {
+    const actionable = box.entries.filter(roadmapActionable);
+    const scheduled = actionable.slice(0, ROADMAP_WAVE_ROWS);
+    const drawn = new Set(scheduled);
+    for (const entry of box.entries) {
+      if (entry?.status === "IN_PROGRESS") drawn.add(entry);
+    }
+    box.rows = box.entries.filter((entry) => drawn.has(entry));
+    box.hiddenCount = actionable.length - scheduled.length;
   }
 
   const packages =

@@ -231,6 +231,19 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   continue — not a diagnostic defect. What IS real is the participation record being destroyed by
   pruning as well as by `unregister`, and that is CR-CRU-094 §S2's scope.
 
+- 2026-09-02 — **a run that STARTS and never ingests cannot be reaped.** Found dogfooding
+  CR-CRU-096 C2: the RED agent's first client invocation hung (see the `toEqual` trap below) and was
+  killed at 600 s after the server had already created the run row, leaving
+  `run-06c470a7-6d5b-405a-af2a-1fc0392c6bb3` started-but-never-finished. There is no verb for it:
+  `stop` is project-level checkpointing (`clients/_crucible_axi.py:1656`, POST
+  `…/projects/<key>/stop`, "no plan targeting"), and `abort` targets PLANS. So an orphaned run
+  stays open forever and every "runs on this cycle" count is quietly wrong. Adjacent to
+  CR-CRU-094's scope (participation recorded, not inferred) but NOT the same defect — that CR is
+  about the agent/cycle binding, this is about run lifecycle. Needs its own CR if it recurs.
+- 2026-09-02 — **`expect(<array of live DOM elements>).toEqual([])` never returns.** bun's deep-equal
+  walks the node's circular parent/child graph; it hung a suite past 600 s and burned the orphaned
+  run above. Assert on `.length` or on an array of extracted attributes, never on element arrays.
+  Comment left at the site in `tests/roadmap-wave-rows.test.ts`.
 - 2026-08-27 — **0.1.3 shipped**: CR-CRU-090, PyPI + npm both at 0.1.3. Pre-flight every tag via a
   PR — push-triggered CI only runs on `develop`/`master`, and a red suite silently skips the publish.
 - 2026-08-27 — `develop` RED narrowed to ONE test: `CR-CRU-088 AC4 (E2E)` in

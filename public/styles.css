@@ -1267,12 +1267,22 @@ body {
   padding: 3px 12px;
 }
 .app-flow-waves,
-.app-flow-wave-body,
-.app-flow-loose,
 .app-flow-packages {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+/* CR-CRU-096 §S5/AC8 — ONE CR PER FULL-WIDTH ROW, which is the approved
+   artifact's own `.crs { display:flex; flex-direction:column; gap:4px }`. The
+   wrapped chip grid this body used to be was the drift: a wrapping ROW flex
+   packs as many CRs per line as fit, which is an inventory, not a queue.
+   AC18a — the loose group (members declaring no wave) takes the same
+   arrangement: grammar applies everywhere, only the trim needs a header. */
+.app-flow-wave-body,
+.app-flow-loose {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 .app-flow-waves { flex-direction: column; }
 /* AC21 — a wave is a BOX containing its CRs: an axis-aligned, bordered
@@ -1312,7 +1322,8 @@ body {
    the right, and never a title (AC11 — the title's one home is the table). */
 .app-flow-node {
   display: flex;
-  flex-wrap: wrap;
+  /* No `flex-wrap`: a row states id then status on ONE line. Wrapping would
+     fold the status under the identifier and re-create the chip. */
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
@@ -1324,6 +1335,16 @@ body {
 }
 .app-flow-node-cr { font: 600 11px/1.4 var(--mono); color: inherit; }
 .app-flow-node-status { font: 400 10px/1.4 var(--mono); color: inherit; opacity: 0.72; }
+/* CR-CRU-096 §S5.4/§S8 — the `+N more` POINTER, the artifact's own `.more`:
+   dim, centred, mono, and NO border and NO background, because a rectangle is
+   what a CR is and this must not read as one. It is not a control either, so
+   it takes no `cursor: pointer`. */
+.app-flow-wave-more {
+  font: 400 9.5px/1.4 var(--mono);
+  color: var(--ink-dim);
+  text-align: center;
+  padding: 2px 0;
+}
 
 /* ── AC22: colour says WHERE IT STANDS ─────────────────────────────────────
    One hue per state, every one of them a declared token, and the same status
@@ -1356,7 +1377,11 @@ body {
 }
 /* AC27's SECOND AXIS, distinguishable from each other and from any status
    without reading a colour: superseded LEANS (the work moved elsewhere),
-   void is STRUCK (it does not count) — the `.app-evt-aborted` convention. */
+   void is STRUCK (it does not count) — the `.app-evt-aborted` convention.
+   CR-CRU-096 AC9b keeps the NODE badge on these rules: AC9a's row-trim only
+   removed the dispositioned PENDING row, and a node still renders for the
+   loose group (AC18a, untrimmed) and for a running dispositioned CR (AC9c),
+   where §S8 forbids `data-lifecycle` being the only channel. */
 .app-flow-node-lifecycle,
 .app-roadmap-lifecycle {
   font: 400 10px/1.4 var(--mono);

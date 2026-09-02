@@ -228,6 +228,14 @@ export interface FocusedReleaseWave<Entry = unknown> {
   wave: string | null;
   active: boolean;
   entries: Entry[];
+  /** CR-CRU-096 §S5 — the members this box DRAWS: the top of the scheduled
+   *  queue (five by default) union every running member, in the server's
+   *  published order. A window on `entries`, never a re-ordering of it. */
+  rows: Entry[];
+  /** CR-CRU-096 §S5.4 — the SCHEDULED remainder `+N more` states: actionable
+   *  members minus actionable rows shown, so merged members (rolled up) are
+   *  never counted here as well. */
+  hiddenCount: number;
 }
 
 /** CR-CRU-078 §S4/§S5 — everything zones 2 and 3 draw for ONE focused

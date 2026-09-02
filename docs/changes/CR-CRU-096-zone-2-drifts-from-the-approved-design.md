@@ -207,6 +207,14 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
 ### Non-goals
 
 - **New shapes or colours.** §S8 constrains; it does not extend.
+- **The zone-2 badge's level of DETAIL, and the node rectangle's own treatment.** C2 FIX reported
+  both as silences: the node badge repeats `lifecycleBadge`'s full text (*"superseded by CR-X"*,
+  *"void · abandoned — <reason>"*) which sits between §S5's "zone 3 is the detail surface" and §5's
+  "nodes are id + terse status with no title"; and `.app-flow-node[data-lifecycle]` has no rule, so
+  a VOID member draws a normal PENDING rectangle with a struck badge inside it. **Both are
+  PRE-EXISTING behaviour, unchanged by this CR** — §S8's audit read the live surface and judged it
+  compliant, so neither is drift against the approved design and neither is 096's to change. AC9b
+  restores exactly what was there. If the detail level is wrong it needs its own CR arguing it.
 - **Re-litigating AC24.** Motion stays reserved for IN_PROGRESS.
 - **Zone 1 and zone 3.** Both match the design; this CR is zone 2 only.
 - **A tooltip, a pager, or a scroll container.** All three rejected above.
@@ -251,15 +259,36 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   hold. Rows are the union; "actionable only" was never meant to exclude running work, since zone 2
   exists to show what is being worked.
 - **AC9a** — A `PENDING` row carrying a `lifecycle` disposition (VOID/SUPERSEDED) is not work and
-  renders **no row**. *Ruled 2026-09-02.* No information is lost: zone 3's table carries the
-  disposition (`public/app.js:2496` `data-lifecycle`, `:2535` `roadmap-lifecycle-badge`, and
-  CR-078 AC27's lifecycle column), which is exactly §S5's argument that zone 3 is the detail
-  surface. Consequence, which is part of this AC and not a side effect: zone 2's own node badge
-  (`public/app.js:2771` `roadmap-node-lifecycle`) becomes unreachable and is REMOVED, with its
-  five existing consumers re-pointed at zone 3 rather than deleted —
-  `tests/roadmap-release-focus.test.ts:923,938,952` and
-  `tests/roadmap-visual-grammar.test.ts:1015,1122`. A surface is not allowed to disappear as a
-  by-product of a trim.
+  renders **no row in a TRIMMED wave**. *Ruled 2026-09-02.* No information is lost: zone 3's table
+  carries the disposition (`public/app.js:2496` `data-lifecycle`, `:2535`
+  `roadmap-lifecycle-badge`, and CR-078 AC27's lifecycle column), which is §S5's argument that
+  zone 3 is the detail surface.
+- **AC9b** — The zone-2 node's own lifecycle badge **STAYS**, and renders wherever a node renders.
+  *This CORRECTS AC9a as first written, 2026-09-02.* AC9a claimed the badge "becomes unreachable
+  and is REMOVED"; that premise was **false**, and C2 GREEN proved it with two live paths:
+  1. the `wave: null` `app-flow-loose` group renders `box.entries` UNTRIMMED — which AC18a
+     explicitly requires (`public/app.js:2785`);
+  2. AC9's union is on STATUS, so an `IN_PROGRESS` member is drawn regardless of its `lifecycle`
+     (`public/app-logic.mjs:1210-1238`).
+  On both paths the removal left the disposition published as the `data-lifecycle` ATTRIBUTE with
+  no rendered TEXT — which violates §S8's own invariant that *no element relies on colour alone;
+  status is also written as text, so the view survives a colour-blind reader and a greyscale
+  screenshot*. So the badge is restored. AC9a's row-exclusion stands; only its removal clause is
+  withdrawn.
+- **AC9c** — A CR that is `IN_PROGRESS` **and** carries a disposition renders as a row and keeps
+  its badge. *Ruled 2026-09-02 (C2 GREEN reported the silence).* Running work is what zone 2
+  exists to show, and its disposition is exactly the thing a reader needs to see beside it. It is
+  not counted in `+N more`, which counts actionable only.
+- **AC9e** — A dispositioned member the wave draws no row for is still counted in the header's
+  whole membership. *Confirmed 2026-09-02:* AC3 says whole membership and means it — the count is
+  `box.entries.length` and the trim never touches it. Only `+N more` excludes them, because that
+  counts actionable work.
+- **AC9d** — The consumer list in AC9a is **not** exhaustive and must not be read as a budget.
+  *Recorded 2026-09-02:* the trim itself (AC9/AC9a/AC10 — a wave box no longer draws merged or
+  dispositioned members) invalidated **28** assertions across `roadmap-release-focus`,
+  `roadmap-visual-grammar` and `roadmap-selection-durability`, not the five AC9a named. Every one
+  must be RE-POINTED at the surface that now carries the fact, never deleted or skipped; a trim
+  may not retire an assertion as a side effect.
 - **AC10** — The rows are the top of the scheduled queue in the order the server PUBLISHED
   (CR-095 §S1, consumed verbatim — no client re-sort), five by default. Fixture: a synthetic wave
   authored `CR-Q-1 … CR-Q-9` with `CR-Q-1` and `CR-Q-2` COMPLETED yields rows
