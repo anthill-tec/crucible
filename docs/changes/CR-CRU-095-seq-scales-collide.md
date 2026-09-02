@@ -131,11 +131,35 @@ which stays. This is a client change and lands in **cycle 305** beside the serve
 
 ### §S2 — EXTEND CR-091's existing warning from same-wave to same-RELEASE
 
-`defaultedSeqWarnings` keeps its wording and its `defaulted-seq` code, and its scope widens from
-"a sibling in the same wave" to "a sibling in the same **release**". A release in which some waves
-are authored and others defaulted says so, once, naming the crs and `wave-sequence` as the remedy —
-CR-091 §S3's warn-and-write rung, unchanged: the write is never refused, because a backlog edit
-must not require re-authoring an order.
+`defaultedSeqWarnings` keeps its `defaulted-seq` code, and its scope widens from "a sibling in the
+same wave" to "a sibling in the same wave **or the same release**" — the two axes are a union, and
+the message says so (*"…while a sibling in the same wave or release carries one on a DIFFERENT
+SCALE…"*). A release in which some waves are authored and others carry positional seq says so, once,
+naming the crs and `wave-sequence` as the remedy — CR-091 §S3's warn-and-write rung, unchanged: the
+write is never refused, because a backlog edit must not require re-authoring an order.
+
+**What "mixture" means — ruled 2026-09-02 after C2 RED surfaced seven silences.** A mixture is a
+**difference of scale**, exactly as CR-091's `QueueSeqReport` contract already states: a positional
+seq beside a wave-block seq. It is *not* "this write chose the value": a `cr-plan` into a
+not-yet-sequenced wave of a partly-authored release takes a wave-block offset by construction and
+is in scale with its authored siblings, so it is silent — the preserved *"DIFFERENT SCALE"* wording
+stays true. A release with no authored wave at all is one scale and silent. "Same release" is
+string equality on the `release` column; the route cannot reach a release without a live proposal
+(`requireLiveProposal`), and the store does not need to care.
+
+**The cross-wave producer is `cr-plan`, not the bulk post.** The bulk route never forwards
+`release` (`handleQueuePost`, `src/v2.ts:1848-1859`), a held row always carries a `seq` (`NOT
+NULL`, `src/store.ts:1375`), so a row the bulk post defaults is always new and release-less — and
+release-less rows are never compared on the release axis. After §S3 the bulk default lands in the
+row's own block, in scale with everything authored, so bulk cross-wave `defaulted-seq` is
+unreachable by construction. The one reachable shape is `cr-plan` declaring a row that HOLDS a
+positional seq into a release whose other wave is authored: the seq is preserved (CR-091
+carry-forward), it is on a different scale, and the warning is true. That is the contract; a bulk
+cross-wave case is not specified because it cannot occur.
+
+**The wave axis is unchanged.** A release-less row defaulted beside authored same-wave siblings
+still warns exactly as CR-091 AC23 shipped it. "Never compared" applies to the **release** axis
+only.
 
 **Not "any container", as first drafted — re-scoped after C1 landed, 2026-09-02.** With §S1 in
 place a cross-container mixture no longer misorders anything, so the only mixture still worth a
@@ -217,15 +241,21 @@ later. Existing positional values are corrected by authoring the wave, or made h
   below `100`, both PENDING with deps satisfied — `next` answers a **0.2.0** CR, not `CR-CRU-015`.
 - **AC8** — The roadmap and the scoped table consume the same published order and require no
   ordering change of their own (CR-091 AC18 regression).
-- **AC9** — `defaulted-seq` fires when a defaulted row sits beside an authored one in the **same
-  release**, across waves, naming the crs and `wave-sequence`; `ok: true`, exit `0`, write not
-  refused. Fixture: release `0.2.0` with wave 5 authored (`5001+`) and wave 6 defaulted.
-- **AC9a** — Rows with **no** release are never compared and never named, however many authored
-  rows exist elsewhere. Fixture: the live board's 66 release-less rows beside 28 authored 0.2.0
-  rows produce **zero** `defaulted-seq` warnings.
-- **AC10** — It stays silent when every compared row in a release shares a scale.
-- **AC11** — The existing same-wave behaviour of `defaulted-seq` is preserved; its `code` and
-  message wording are reused, not replaced.
+- **AC9** — `defaulted-seq` fires when `cr-plan` declares a row that HOLDS a positional seq into a
+  release whose other wave is authored: the seq is preserved, it is on a different scale, and the
+  warning names the cr and `wave-sequence`; `ok: true`, exit `0`, write not refused. Fixture:
+  release `0.2.0` with wave 5 authored (`5001+`), a wave-6 row holding positional seq `2`, declared
+  into `0.2.0` by `cr-plan`. Asserted through the route and the store.
+- **AC9a** — On the RELEASE axis, rows with **no** release are never compared and never named,
+  however many authored rows exist. Fixture: the live board's 66 release-less rows beside 28 authored
+  0.2.0 rows produce **zero** `defaulted-seq` warnings, on a fresh import and on a re-post.
+- **AC9b** — A `cr-plan` into a not-yet-sequenced wave of a partly-authored release takes a
+  wave-block seq (in scale) and is **silent**.
+- **AC10** — Silent when every compared row in a release shares a scale: two authored waves, or a
+  release with **no** authored wave at all (all positional, one scale).
+- **AC11** — The wave axis is preserved: a defaulted row beside an authored one in the same wave —
+  including a release-less row — still warns with the same `defaulted-seq` code; the message gains
+  the words "or release" and is otherwise unchanged.
 - **AC12** — A bulk post assigns a seq-less, snapshot-less row `waveSeqBase(wave) + position within
   its wave`; importing a fresh 94-row queue leaves every row inside its own wave's block.
 - **AC13** — Carry-forward is preserved: a row with a held `seq` keeps it across a re-import, and
