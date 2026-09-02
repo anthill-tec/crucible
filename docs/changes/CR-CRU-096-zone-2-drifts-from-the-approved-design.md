@@ -206,7 +206,17 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
 
 ### Non-goals
 
-- **New shapes or colours.** §S8 constrains; it does not extend.
+- **New shapes or colours.** §S8 constrains; it does not extend. The connector is the artifact's
+  own `.arrow`, so it adds neither.
+- **The shipped summary's TYPOGRAPHY and internal structure.** C4 RED found a fourth delta §S7 does
+  not name: the artifact puts the CR count in a `.big` with the rest as `.cue` lines, a hierarchy
+  live's four flat spans lack. §S7 says the shipped path "is largely right already" and enumerates
+  three deltas, so the typography is **out of scope** — and AC27's panel match compares axis,
+  header, roll-up, row arrangement and markers, not type scale, so it must not fail on this
+  unannounced.
+- **Collapsing the no-package cases.** CR-084 AC4's `empty` (a ceremony that delivered none) versus
+  `absent` (a ledger row from before packages existed) stays intact under CR-078 AC8; AC21's "every
+  package with its version" governs the `listed` case only.
 - **The zone-2 badge's level of DETAIL, and the node rectangle's own treatment.** C2 FIX reported
   both as silences: the node badge repeats `lifecycleBadge`'s full text (*"superseded by CR-X"*,
   *"void · abandoned — <reason>"*) which sits between §S5's "zone 3 is the detail surface" and §5's
@@ -375,6 +385,29 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   and applies everywhere; the trim needs a count to stay honest.
 - **AC19** — Zone 2 renders one box **per wave** of the focused release; a two-wave release renders
   two.
+- **AC19a** — The oracle for "the waves of the focused release" is its **queue MEMBERS' declared
+  waves**, not the proposal's own `waves[]`. *Ruled 2026-09-02 (C4 RED found two published answers
+  that can disagree — `src/v2.ts:2053` vs what `focusedReleaseView` groups).* A declared wave with
+  zero members draws **NO box**: its header count would be 0, and by AC5a/AC16's own logic that is
+  chrome reporting the absence of content.
+- **AC19b** — A multi-wave release's boxes are wrapped in **ONE `wave` stage**, not N stages on the
+  axis. *Ruled 2026-09-02 (C4 RED left the granularity open).* The design's axis is exactly
+  `Start → wave → gate → End`; making each box a stage would give a three-wave release five stages
+  and four connectors, so the spine's shape would depend on the board's contents.
+- **AC19c** — The container holding the wave boxes lays them out **along** the axis, not across it.
+  *Ruled 2026-09-02:* §S5 says a multi-wave release is "the case that WIDENS this zone" and §S6's
+  budget is "per wave box" — both are horizontal claims, and a per-box budget is only a budget if
+  the boxes share the axis.
+- **AC20a** — The connectors this AC requires are **AXIS** connectors, and CR-078 AC20's
+  prohibition on "an edge element of any kind" meant **DEPENDENCY** edges — the deleted dagre web.
+  *Recorded 2026-09-02 (C4 RED found the live contradiction).* The two ACs share a number across
+  two CRs by accident. `public/styles.css:1252` and `public/app.js:2658` both still assert the
+  prohibition in the absolute; **both comments MUST be amended in the same commit that adds the
+  connectors**, or the next reader takes them as authority and reverts. Dependencies still validate
+  and never order, and still draw nothing.
+- **AC20b** — "Matching zone 1's spine" means matching its horizontal **READING**, never reusing an
+  element: zone 1 has **no connector** — its spine is `align-items: center` plus the gate pitch.
+  *Recorded 2026-09-02.* AC26 keeps zone 1 byte-identical, so nothing is added there.
 - **AC20** — With §S5 landed, zone 2 lays out horizontally — `Start`, wave, gate, `End` with
   connectors — and the rendered width does not exceed the measured surface (1130px at 1600px
   viewport).
@@ -382,7 +415,26 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   the CR count, the ship date, and every package with its version.
 - **AC22** — The shipped path compresses a contiguous wave run: waves 1,2,3,4 render `waves 1–4`;
   a non-contiguous set renders the list.
+- **AC22a** — A run of **two** compresses: `waves 1–2`, not `waves 1, 2`. *Ruled 2026-09-02 (C4
+  RED asked; the artifact only ever draws a run of four).* AC22 states the rule on contiguity
+  alone, and a minimum-length threshold would be a second rule the spec does not have.
+- **AC22b** — The shipped summary's wave labels are a **SET**, rendered in ascending numeric order
+  by the leading-integer reading (`waveNumber`, `src/store.ts:411`), with maximal consecutive runs
+  compressed; a label with no numeric reading joins no run and follows in its published
+  first-appearance order. *Ruled 2026-09-02 (C4 RED found both non-numeric and non-ascending labels
+  reachable, since `wave` is a free string and box order is first-appearance).* This is NOT the
+  client re-sort CR-091 AC18 outlaws: that rule governs the QUEUE's order of CRs, which is authored
+  data consumed verbatim. A delivered release's set of wave labels has no authored order to
+  preserve — presenting a set in a readable order is not re-ordering a sequence.
+
 - **AC23** — The shipped gate renders the `shipped` label inside the diamond.
+- **AC23a** — The **IN-FLIGHT** diamond carries its state word too — the approved artifact draws
+  `<span>0.2.0<br><b>planned</b></span>` and live draws neither word. *AC23 WIDENED 2026-09-02
+  after C4 RED reported the artifact showing a two-case rule where the ACs stated one.* The agent's
+  argument is accepted: the dashed border already says "proposed", so the word is exactly the
+  second, greyscale-safe channel §S8 requires rather than a redundant one. Both diamonds state
+  their own state in words.
+
 - **AC24** — The shipped path uses the same horizontal axis as AC20.
 - **AC25** — Greyscale invariant: every row and summary states its status in **text**; the zone
   renders meaningfully with colour removed.
