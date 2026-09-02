@@ -236,6 +236,11 @@ export interface FocusedReleaseWave<Entry = unknown> {
    *  members minus actionable rows shown, so merged members (rolled up) are
    *  never counted here as well. */
   hiddenCount: number;
+  /** CR-CRU-096 §S3/AC6 — merged members (`COMPLETED` or
+   *  `COMPLETED_UNTRACKED`, AC6a) over the WHOLE wave, the count the roll-up
+   *  states. Independent of the trim: `0` means the wave has none, and AC5a
+   *  renders no roll-up then. */
+  mergedCount: number;
 }
 
 /** CR-CRU-078 §S4/§S5 — everything zones 2 and 3 draw for ONE focused
@@ -248,6 +253,11 @@ export interface FocusedReleaseView<Entry = unknown> {
   dateState: GateDateResult["state"];
   members: Entry[];
   waves: FocusedReleaseWave<Entry>[];
+  /** CR-CRU-096 §S4/AC12b — the ONE row in the whole zone marked `next`: the
+   *  first actionable member among the rows the zone draws, in the published
+   *  order across every wave (the loose group included, AC12c). `null` when
+   *  the focused release draws no actionable row. */
+  nextCr: string | null;
   crCount: number;
   packages: ReleasePackage[] | undefined;
   /** `empty` (delivered none) and `absent` (pre-CR-CRU-084) stay distinct. */

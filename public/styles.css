@@ -1345,6 +1345,27 @@ body {
   text-align: center;
   padding: 2px 0;
 }
+/* CR-CRU-096 §S3/§S8 — the merged ROLL-UP, the artifact's own `.wsum`: a LINE
+   between the header and the rows. Dim mono like the `+N more` pointer above,
+   and for the same reason (AC7) — NO border and NO background, because a
+   rectangle is what a CR is and an aggregate must not read as one. It is not a
+   control either, so it takes no `cursor: pointer`. */
+.app-flow-wave-rollup {
+  font: 400 9.5px/1.4 var(--mono);
+  color: var(--ink-dim);
+  padding: 0 0 6px;
+}
+/* CR-CRU-096 §S4/§S8 — the row's ANNOTATION slot. The row is already
+   `justify-content: space-between`, so this rides in its right-hand side; all
+   this rule owns is the face. Dim and quiet: the marker's emphasis is WEIGHT
+   (`.app-flow-node-next`), never the ember and never motion, which AC24
+   reserves for the CR that is actually running. */
+.app-flow-node-annotation {
+  font: 400 9.5px/1.4 var(--mono);
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.app-flow-node-next { font-weight: 700; }
 
 /* ── AC22: colour says WHERE IT STANDS ─────────────────────────────────────
    One hue per state, every one of them a declared token, and the same status

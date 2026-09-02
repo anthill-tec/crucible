@@ -345,6 +345,11 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   a row declaring **four** deps names four, and the row's annotation slot holds them at the §S6
   width budget (four is the widest real case observed, so the budget is measured against four, not
   three). No deps → no annotation.
+- **AC13b** — `deps` renders on a **`PENDING`** row only. *Confirmed 2026-09-02 (C3 GREEN took
+  AC13's literal wording and asked).* A running row's dependencies are not decision-relevant — the
+  work has already started — and a merged row's are history; zone 3's table carries the full
+  dependency data for every row either way. AC13's "a pending row with dependencies" is therefore
+  the rule and not an accident of phrasing.
 - **AC13a** — `deps` names the **full published CR id**, never an abbreviated tail. *Ruled
   2026-09-02 (C3 RED raised it against AC29).* The approved artifact draws `deps 091, 092` with
   this project's `CR-CRU-` prefix stripped — an abbreviation that only works for a project whose

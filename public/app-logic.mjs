@@ -1142,6 +1142,18 @@ const ROADMAP_WAVE_ROWS = 5;
 const roadmapActionable = (entry) => entry?.status === "PENDING" && !("lifecycle" in entry);
 
 /**
+ * CR-CRU-096 §S3/AC6a — MERGED is `COMPLETED` **or** `COMPLETED_UNTRACKED`:
+ * one fact at two luminances (`public/styles.css:1361` — "the SAME green,
+ * DIMMED"), the second being the same merge recorded before plan tracking
+ * existed. The roll-up counts this set and neither row predicate admits it, so
+ * the two readings cannot disagree — an earlier draft of AC6 that counted only
+ * `COMPLETED` would have left an untracked-merged member counted nowhere and
+ * drawn nowhere.
+ */
+const roadmapMerged = (entry) =>
+  entry?.status === "COMPLETED" || entry?.status === "COMPLETED_UNTRACKED";
+
+/**
  * CR-CRU-078 §S4/§S5 — everything zones 2 and 3 draw for ONE focused release.
  * Pure: the gate the strip focused, the release ledger, and the queue as
  * `listQueue` published it — the one canonical order (`compareQueueOrder`,
@@ -1200,7 +1212,7 @@ export function focusedReleaseView(gate, releases, entries) {
     const wave = declaredLabel(entry, "wave") ?? null;
     let box = boxOf.get(wave);
     if (box === undefined) {
-      box = { wave, active, entries: [], rows: [], hiddenCount: 0 };
+      box = { wave, active, entries: [], rows: [], hiddenCount: 0, mergedCount: 0 };
       boxOf.set(wave, box);
       waves.push(box);
     }
@@ -1235,6 +1247,34 @@ export function focusedReleaseView(gate, releases, entries) {
     }
     box.rows = box.entries.filter((entry) => drawn.has(entry));
     box.hiddenCount = actionable.length - scheduled.length;
+    // §S3/AC6 — the merged work the roll-up states: counted over the WHOLE
+    // membership, independently of the trim, so it is never the merged rows
+    // shown (zero, by AC9) and never the project total.
+    box.mergedCount = box.entries.filter(roadmapMerged).length;
+  }
+
+  // CR-CRU-096 §S4/AC12b — `nextCr` is a VIEW-level fact, not a per-box one:
+  // "what to take up next" is a single statement about the focused release, so
+  // exactly ONE row in the whole zone is marked and a wave box may carry no
+  // marker at all. It is the first actionable member among the rows the zone
+  // actually DRAWS — the boxes in their first-appearance order, each box's
+  // drawn rows in the server's published order, the `wave: null` loose group
+  // included (AC12c), which draws its membership untrimmed.
+  //
+  // AC12a — a `find` over arrays that are ALREADY in the published order
+  // (`compareQueueOrder`, CR-CRU-095 §S1) is the whole derivation: no sort, no
+  // `seq` read, no dependency walk, no in-flight trigger and no gating. The
+  // marker states position in that order and nothing else; the plan pointer's
+  // NEXT/HOLD/DRAINED reading is CR-CRU-098's, and re-deriving it here is what
+  // CR-CRU-091 AC18 outlawed.
+  let nextCr = null;
+  for (const box of waves) {
+    const drawn = box.wave === null ? box.entries : box.rows;
+    const first = drawn.find(roadmapActionable);
+    if (first !== undefined) {
+      nextCr = typeof first.cr === "string" ? first.cr : null;
+      break;
+    }
   }
 
   const packages =
@@ -1247,6 +1287,7 @@ export function focusedReleaseView(gate, releases, entries) {
     dateState: gate?.dateState ?? "absent",
     members,
     waves,
+    nextCr,
     crCount: kind === "shipped" ? (record?.crs ?? []).length : members.length,
     packages,
     packagesState:

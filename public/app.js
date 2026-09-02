@@ -2731,7 +2731,7 @@
     // (`:2536`) is the DETAIL surface, not a substitute for the node's word.
     // An entry with no `lifecycle` key still gets no attribute and no span:
     // absent, never defaulted.
-    const RoadmapFlowNode = (entry) => {
+    const RoadmapFlowNode = (entry, marked) => {
       const lifecycle = L.lifecycleBadge(entry.lifecycle);
       // AC17 — read on the NODE's own binding rather than the panel's: a
       // selection paints one outline, and must not rebuild the strip above it
@@ -2765,6 +2765,36 @@
       // and the row is where the affordance is stated in words.
       if (roadmapDrillable(entry.status)) props["data-drill-source"] = "true";
       if (lifecycle !== null) props["data-lifecycle"] = lifecycle.state;
+      // CR-CRU-096 §S4 — the row's ANNOTATION SLOT, the approved artifact's
+      // own `<span class="t"><b>next</b> · deps 091, 092</span>`: the
+      // scheduling fact first, the declared dependencies after it, both as
+      // visible text on the row's right-hand side.
+      //
+      // AC12/AC12b — `next` marks the ONE row the VIEW named (`nextCr`, a fact
+      // about the whole zone and not about this box), emphasised by WEIGHT
+      // alone: never `▸` (§5 reserves it), never the ember and never motion,
+      // which stay with the CR that is actually running (CR-078 AC24). The row
+      // keeps its PENDING styling — being next adds a word, not a state.
+      //
+      // AC13/AC13a — every declared dependency is named, by its FULL published
+      // id: the artifact's `deps 091, 092` strips a prefix only this project's
+      // ids happen to share, and reproducing that is the project-dependence
+      // AC29 forbids. No truncation and no `and N more` fold. AC13 states the
+      // slot for a PENDING row, which is the row whose declared dependencies
+      // are still a constraint; a merged or running member's are settled or
+      // moot, so the slot stays empty for it.
+      //
+      // AC14 — it is VISIBLE TEXT: no `title`, no `aria-describedby`, no
+      // tooltip machinery. AC15 — and it takes no handler of its own, so a
+      // click that lands ON it bubbles to the row and still selects (and still
+      // drills, for a row that has somewhere to go).
+      const deps =
+        entry.status === "PENDING" && Array.isArray(entry.dependsOn)
+          ? entry.dependsOn.filter((dep) => typeof dep === "string" && dep !== "")
+          : [];
+      const annotation = [];
+      if (marked === true) annotation.push(span({ class: "app-flow-node-next" }, "next"));
+      if (deps.length > 0) annotation.push(`deps ${deps.join(", ")}`);
       return div(
         props,
         span({ class: "app-flow-node-cr" }, entry.cr),
@@ -2781,6 +2811,14 @@
               },
               lifecycle.text,
             ),
+        // AC13's second half is an ABSENCE: a row that is neither marked nor
+        // declares a dependency renders NO slot at all, never an empty one.
+        annotation.length === 0
+          ? null
+          : span(
+              { "data-testid": "roadmap-node-annotation", class: "app-flow-node-annotation" },
+              annotation.flatMap((part, at) => (at === 0 ? [part] : [" · ", part])),
+            ),
       );
     };
 
@@ -2789,14 +2827,25 @@
     // the authoring opens exactly one container, and a member declaring no
     // wave has no container to head: its nodes are drawn bare rather than
     // under a heading reading `Wave `.
-    const RoadmapFlowWave = (box) =>
+    // CR-CRU-096 §S4/AC12b — `nextCr` is passed IN, not derived here: the
+    // marker is one fact about the whole zone (`focusedReleaseView`'s
+    // view-level answer), so a box states it only when the row it names is one
+    // of the box's own, and every other box states none.
+    const RoadmapFlowWave = (box, nextCr) =>
       box.wave === null
         ? // AC18a — the loose group takes AC8's ROW ARRANGEMENT (a column, by
           // stylesheet) but NOT the trim: it renders no header, so it has
           // nowhere to state whole membership and no anchor for a `+N more`
           // pointer. Trimming it would hide rows with nothing declaring how
           // many of them there are.
-          div({ class: "app-flow-loose" }, box.entries.map(RoadmapFlowNode))
+          //
+          // AC12c — and it is ELIGIBLE for the marker like any other group: a
+          // release whose only actionable work is unwaved is exactly the case
+          // the marker exists for.
+          div(
+            { class: "app-flow-loose" },
+            box.entries.map((entry) => RoadmapFlowNode(entry, nextCr === entry.cr)),
+          )
         : div(
             {
               "data-testid": "roadmap-wave",
@@ -2829,6 +2878,40 @@
                 String(box.entries.length),
               ),
             ),
+            // §S3/AC5 — the wave states its merged work as ONE LINE: a count
+            // plus the phrase saying that work is not yet tagged, the approved
+            // artifact's `<div class="wsum">21 merged ✓ · awaiting the tag</div>`.
+            //
+            // AC5c — a SIBLING of the header, inside the box, after the header
+            // and before every row: §S3 says "inside the wave header block",
+            // and a `div` inside an `h4` is invalid HTML, so the artifact's
+            // placement is that phrase's only valid reading.
+            //
+            // AC5a — ABSENT when the wave has nothing merged, exactly as
+            // `+N more` is absent with no remainder: `0 merged` would be
+            // chrome reporting the absence of content.
+            //
+            // AC5b — the phrase is the SAME for every proposed gate state.
+            // Within zone 2 the focused release is always in flight (a shipped
+            // focus draws no wave box at all, AC21), so merged work in a wave
+            // is in every case merged but not yet tagged, and that is the
+            // whole fact stated. The roll-up renders NO DATE: the gate's own
+            // resolved date and state are rendered once, on the gate
+            // (`RoadmapFlowGate`), and a second date renderer is what
+            // CR-078 AC30 forbids.
+            //
+            // AC5d — the artifact's `✓` is drawn as decoration only; §S8's
+            // greyscale invariant is carried by the WORD `merged`.
+            //
+            // AC7 — and it is NOT a CR rectangle: no `roadmap-node` test id,
+            // no `data-cr`, no `data-status`, no click handler and no
+            // CR-node class, so nothing selects it, drills it or counts it.
+            box.mergedCount > 0
+              ? div(
+                  { "data-testid": "roadmap-wave-rollup", class: "app-flow-wave-rollup" },
+                  `${box.mergedCount} merged ✓ · awaiting the tag`,
+                )
+              : null,
             // §S5 — the body draws what the box SHOWS: the top of the
             // scheduled queue union every running member
             // (`focusedReleaseView`'s `rows`), never the whole inventory —
@@ -2836,7 +2919,7 @@
             // states whole membership, so the two facts stay distinct.
             div(
               { class: "app-flow-wave-body" },
-              box.rows.map(RoadmapFlowNode),
+              box.rows.map((entry) => RoadmapFlowNode(entry, nextCr === entry.cr)),
               // §S5.4/AC16 — a static POINTER at that detail surface, and by
               // §S8 deliberately NOT a node: no `roadmap-node` test id, no
               // `data-cr`, no `data-status`, no `data-drill-source` and no
@@ -2944,7 +3027,12 @@
         RoadmapFlowTerminal("start"),
         view.kind === "shipped"
           ? RoadmapDelivered(view)
-          : div({ class: "app-flow-waves" }, view.waves.map(RoadmapFlowWave)),
+          : div(
+              { class: "app-flow-waves" },
+              // AC12b — the view's ONE `nextCr` is handed to every box, so the
+              // marker lands on exactly one drawn row in the whole zone.
+              view.waves.map((box) => RoadmapFlowWave(box, view.nextCr)),
+            ),
         RoadmapFlowGate(view),
         RoadmapFlowTerminal("end"),
       );

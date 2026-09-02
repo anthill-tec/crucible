@@ -1121,6 +1121,28 @@ describe("CR-CRU-083 AC7 — a node's tap is status-gated exactly like its row",
 const nodeStatusText = (cr: string): string =>
   (nodeFor(cr).querySelector('[data-testid="roadmap-node-status"]')?.textContent ?? "").trim();
 
+/** CR-CRU-096 §S4/AC12/AC12b — AC12's rule applied to the FIXTURE: the first
+ *  actionable entry (`PENDING` carrying no `lifecycle`) in the published order
+ *  among the rows given. The marker is one fact about the whole zone, so this
+ *  is asked once over the drawn rows in document order and never per box. */
+const firstActionableCr = (entries: readonly QueueFixture[]): string | undefined =>
+  entries.find((entry) => entry.status === "PENDING" && !("lifecycle" in entry))?.cr;
+
+/** CR-CRU-096 §S4/AC12/AC13 — the annotation slot an entry EARNS, derived from
+ *  the FIXTURE's own facts (its declared `dependsOn`, and whether the published
+ *  order names it `next`) and never read back out of the render: an expectation
+ *  taken from the DOM would assert nothing, and a spurious or misplaced
+ *  annotation must still fail. `next` first, then `deps` naming every declared
+ *  id in FULL (AC13a), joined by the design's `·`. A row that earns neither
+ *  renders no slot at all, so its contribution is `""`. */
+const expectedAnnotation = (entry: QueueFixture, nextCr: string | undefined): string => {
+  const parts: string[] = [];
+  if (entry.cr === nextCr) parts.push("next");
+  const deps = entry.status === "PENDING" ? entry.dependsOn : [];
+  if (deps.length > 0) parts.push(`deps ${deps.join(", ")}`);
+  return parts.join(" · ");
+};
+
 describe("CR-CRU-078 AC11 — a node is its id plus a terse status mark, and each derived status has its OWN words", () => {
   /** One entry per derived `QueueStatus`, all declared into the focused
    *  release, so the four marks are observable on one rendered board.
@@ -1163,13 +1185,24 @@ describe("CR-CRU-078 AC11 — a node is its id plus a terse status mark, and eac
   test("the RENDERED node carries exactly its status's mark, its own id, and no title", async () => {
     await mountApp({ queue: STATUS_QUEUE });
     expect(nodeCrs()).toEqual(["CR-M1", "CR-M2", "CR-M3", "CR-M4"]);
+    // STATUS_QUEUE declares no wave, so all four rows are drawn (the loose
+    // group takes no trim) in the fixture's own published order — which makes
+    // the fixture itself the drawn-row list AC12's rule is applied to.
+    const nextCr = firstActionableCr(STATUS_QUEUE);
     for (const entry of STATUS_QUEUE) {
       expect(nodeStatusText(entry.cr)).toBe(Logic.crStatusMark(entry.status));
-      // Byte-exact, so a one-word title could not slip past as a suffix.
-      expect((nodeFor(entry.cr).textContent ?? "").trim()).toBe(
-        `${entry.cr}${Logic.crStatusMark(entry.status)}`,
+      // BYTE-EXACT, so a one-word title cannot slip past as a suffix — and
+      // RE-POINTED for CR-CRU-096 §S4/AC8, which put the row's ANNOTATION SLOT
+      // (`next`, `deps <ids>`) after the mark. The expectation is still the
+      // WHOLE rendered string, now `id + mark + the slot the FIXTURE earns`
+      // and nothing else: it is built from the fixture's declared facts, never
+      // read back out of the render, so a spurious annotation, a misplaced
+      // `next` and a leaked title all still fail here.
+      const node = nodeFor(entry.cr);
+      expect((node.textContent ?? "").trim()).toBe(
+        `${entry.cr}${Logic.crStatusMark(entry.status)}${expectedAnnotation(entry, nextCr)}`,
       );
-      expect(nodeFor(entry.cr).textContent ?? "").not.toContain(entry.title!);
+      expect(node.textContent ?? "").not.toContain(entry.title!);
     }
     // The four literal strings, on the board, as words.
     expect(nodeStatusText("CR-M1")).toBe("✓ merged");
@@ -1430,8 +1463,21 @@ describe("CR-CRU-078 AC1/AC28 — the whole board renders at the LIVE shape, not
     });
     expect(rendered.length).toBeGreaterThan(0);
     expect(rendered.filter((row) => row.entry === undefined).map((row) => row.cr)).toEqual([]);
+    // CR-CRU-096 §S4/AC12b — ONE marker for the whole zone, so the row it
+    // belongs on is AC12's rule applied ONCE across every drawn row in
+    // document order (the boxes in first-appearance order, each box's rows in
+    // the published order). Which rows are drawn is read off the render — that
+    // is AC9/AC10's window and is asserted elsewhere — but WHAT each row must
+    // then say is built from the FIXTURE's own facts, never from the rendered
+    // annotation: a marker on a second box's first actionable row (the per-box
+    // reading AC12b rules out) fails here, and so does any other stray text.
+    const nextCr = firstActionableCr(rendered.map((row) => row.entry!));
     const wrong = rendered
-      .filter((row) => row.got !== `${row.cr}${Logic.crStatusMark(row.entry!.status)}`)
+      .filter(
+        (row) =>
+          row.got !==
+          `${row.cr}${Logic.crStatusMark(row.entry!.status)}${expectedAnnotation(row.entry!, nextCr)}`,
+      )
       .map((row) => ({ cr: row.cr, got: row.got }));
     expect(wrong).toEqual([]);
     // Per-entry, so a long prose title is never mistaken for a status suffix.
