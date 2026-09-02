@@ -127,7 +127,7 @@ So `resolve_next` becomes a pure consumer: the seq re-sort is **deleted** and th
 the order the server published — CR-091 AC18's principle applied to the client too, with **zero**
 comparators in the client. `_lane_order`'s other job — sorting a seq-less row last — is vestigial:
 CR-091 publishes `seq` on every row, and a missing one already raises the `missing-seq` warning,
-which stays. This is a client change and gets its own cycle.
+which stays. This is a client change and lands in **cycle 305** beside the server change, as a second RED/GREEN pair on the Python stack: `cycle-add` cannot add a fifth cycle to plan 98 — the aborted plan 97 makes `--cr CR-CRU-095` ambiguous (a client defect now in the deferred register), and hand-rolling the POST would be worse. AC7 needs both halves anyway, so the cycle's contract is "the canonical order is published AND consumed".
 
 ### §S2 — EXTEND CR-091's existing warning across containers
 
