@@ -33,7 +33,7 @@ Reproduce both:
 
 ### §S1 — "active" means the wrong thing
 
-`public/app.js:2795`:
+`public/app.js:2797`:
 
 ```js
 "data-active": box.entries.some((entry) => entry.status === "IN_PROGRESS") ? "true" : "false",
@@ -55,14 +55,14 @@ of motion for IN_PROGRESS is correct and stays.**
 
 ### §S2 — the count is computed, published, and never drawn
 
-`data-cr-count` is on the element (`public/app.js:2789`) and correct. Nothing renders it; the label
-is `Wave ${box.wave}` and nothing else (`:2800`). Under §S5 the header becomes the **only** place
+`data-cr-count` is on the element (`public/app.js:2791`) and correct. Nothing renders it; the label
+is `Wave ${box.wave}` and nothing else (`:2802`). Under §S5 the header becomes the **only** place
 the wave's true size is stated, so this stops being cosmetic.
 
 ### §S3 — the merged roll-up is absent
 
 The design states the merged CRs as one line — `21 merged ✓ awaiting the tag` — a count plus the
-release's gate state. Neither part exists. `resolveGateDate` (`public/app-logic.mjs:82-88`, CR-078
+release's gate state. Neither part exists. `resolveGateDate` (`public/app-logic.mjs:80-88`, CR-078
 C1b) already computes the gate `kind`/`state` the phrase needs, so only the count is new.
 
 **The roll-up is wave chrome, not a CR row.** Shape encodes KIND and a rectangle means exactly one
@@ -114,6 +114,16 @@ guarantee."* Three reasons carry over to the wave: one overflow idiom per surfac
 nested inside the pane scroller whose `scrollTop` CR-078 C4 already captures and restores
 (`public/app.js:100-120`, `:1311-1333`); and every state stays screenshot-reachable for the visual
 suite.
+
+**The DN's "only where informative" rule is superseded here, explicitly.**
+`docs/research/DN-crucible-roadmap-view.md:21` draws a wave "only where informative (more than one
+track, or more than one wave in a release)" — which would draw NO box for a one-wave, one-track
+release, the exact shape of 0.2.0. The approved artifact (2026-08-28, later authority) draws
+`WAVE 5 · ACTIVE` with a count, a roll-up and rows for precisely that case, because in an
+in-flight release the box carries the work, not the wave arithmetic. CR-078 applied the DN's rule
+to zone 3 (its AC12: a `wave` column only when the release spans more than one wave) and left zone
+2 unconditional; that split is now deliberate and recorded, not an oversight. Zone 3 keeps the DN
+rule; zone 2 always draws the focused release's waves.
 
 **Scope of the zone.** Zone 2 draws **every wave of the focused release** — one box per wave, not
 one box. Crucible shows a single Wave 5 box only because 0.2.0 spans exactly one wave; 0.1.0
@@ -189,27 +199,36 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   IN_PROGRESS; a wave in a shipped or unfocused release publishes `false`.
 - **AC2** — The wave header renders the `· active` marker exactly when `data-active="true"`, as a
   word and a border, never motion.
-- **AC3** — The header renders the **whole-membership** count, equal to `data-cr-count` and
-  unaffected by the trim. Fixture: a 28-entry wave showing 5 rows renders `28`.
+- **AC3** — The header renders the **whole-membership** count of ITS OWN wave, equal to the
+  wave element's `data-cr-count` (`public/app.js:2791`, `box.entries.length`) and unaffected by
+  the trim. Fixture: a **two-wave** release, waves holding 28 and 3, showing 5 rows each, renders
+  `28` and `3` — never the release view's `crCount` (`:2892`), which for a shipped tag is the
+  ledger's `crs.length` and a different fact (AC21). A single-wave fixture cannot tell the two
+  apart and does not satisfy this AC.
 - **AC4** — Motion stays reserved for IN_PROGRESS: an active wave with no running CR renders no
   animation (AC24 regression).
 - **AC5** — The wave renders the roll-up: `N merged` plus the gate state phrase from
   `resolveGateDate`'s `state`.
-- **AC6** — The roll-up counts only `COMPLETED` entries in that wave, over the **whole** wave:
-  21 of 28 renders `21 merged`, never `1 merged` and never the project total.
+- **AC6** — The roll-up counts only `COMPLETED` entries in that wave, over the **whole** wave,
+  independently of the trim: a synthetic wave of 28 with 22 COMPLETED renders `22 merged`, never
+  `1 merged` (the shown rows) and never the project total.
 - **AC7** — The roll-up is **not** a CR rectangle: it carries no CR-node class and no
   `data-cr`, so it cannot be selected or drilled.
 - **AC8** — Each shown CR renders as one full-width row: id left, status and annotation right. No
   wrapped chip grid remains.
 - **AC9** — Merged CRs render **no rows**; the wave's rows are actionable CRs only.
-- **AC10** — The rows are the top of the scheduled queue in authored `seq` order, five by default.
-  Fixture: the live wave-5 order yields `095, 096, 079, 085, 093`.
+- **AC10** — The rows are the top of the scheduled queue in the order the server PUBLISHED
+  (CR-095 §S1, consumed verbatim — no client re-sort), five by default. Fixture: a synthetic wave
+  authored `CR-Q-1 … CR-Q-9` with `CR-Q-1` and `CR-Q-2` COMPLETED yields rows
+  `CR-Q-3, CR-Q-4, CR-Q-5, CR-Q-6, CR-Q-7`.
 - **AC11** — An IN_PROGRESS CR is present even when outside the top five. Fixture: activate the
   last scheduled CR — it still renders, with ember and motion.
 - **AC12** — The next actionable CR renders a `next` annotation as **text**, on a row that keeps
   PENDING styling. It uses neither `▸` nor ember (§S8), and exactly one row is marked.
 - **AC13** — A pending row with dependencies renders `deps <ids>` naming **all** of them; fixture:
-  `CR-CRU-075` names three. No deps → no annotation.
+  a row declaring **four** deps names four, and the row's annotation slot holds them at the §S6
+  width budget (four is the widest real case observed, so the budget is measured against four, not
+  three). No deps → no annotation.
 - **AC14** — No tooltip and no `title` attribute is introduced on a wave row.
 - **AC15** — A row's click still drills through (CR-078 C4 `data-drill-source` regression).
 - **AC16** — `+N more` renders when scheduled CRs remain unshown, states the true remainder, and is
@@ -231,6 +250,20 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
 - **AC25** — Greyscale invariant: every row and summary states its status in **text**; the zone
   renders meaningfully with colour removed.
 - **AC26** — Zone 1 and zone 3 markup is byte-identical before and after this CR.
+- **AC28** — The row keeps the node's IDENTITY attributes through the chip→row rewrite:
+  `data-testid="roadmap-node"`, `data-cr` and `data-status` survive on every rendered row. Six
+  consumers depend on them — `tests/roadmap-visual-grammar.test.ts`,
+  `tests/roadmap-release-focus.test.ts`, `tests/roadmap-selection-durability.test.ts`,
+  `public/styles.css`, and the e2e pair `tests/e2e/steps/roadmap-graph.steps.ts:84,96,102` driving
+  `tests/e2e/features/roadmap-graph.feature:41-46` (wave 5 holds 1 node, PENDING → IN_PROGRESS,
+  click drills). AC15 covers the drill only; this covers the selectors.
+- **AC29** — **No AC fixture names a real CR of the project running Crucible.** Every fixture in
+  this CR is synthetic (`CR-Q-n`, `CR-A`, `CR-W1-A`, the convention already used by
+  `tests/queue-canonical-order.test.ts`'s siblings and `roadmap-graph.feature`'s `CR-RG-200`).
+  Crucible is project-INDEPENDENT: its acceptance criteria state what the product guarantees for
+  ANY board, so a criterion that only holds while our own backlog has a given shape is not a
+  criterion. The live board may CORROBORATE a fixture (AC27 renders against it); it may never BE
+  one.
 - **AC27** — Visual: zone 2 rendered in real Chromium against the live board matches the artifact's
   zone-2 panels — active and shipped — on axis, header, roll-up, row arrangement and markers.
 
