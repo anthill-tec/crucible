@@ -150,11 +150,18 @@ const PROPOSED_020: ProposalFixture = {
  *     status from PENDING so "inert" is not read off one status.
  * The two inert rows are what let AC17 assert selection in both directions
  * without the CR-CRU-083 tab swap unmounting the pane mid-assertion.
+ *
+ * CR-CRU-096 §S5/AC9 — a WAVE box rolls its merged members up and draws no row
+ * for them, so CR-SEL-U declares no wave (`wave: ""`, the wire's own way of
+ * declaring none, `src/types.ts:392`) and is drawn by the `wave: null` group,
+ * which AC18a leaves untrimmed. AC17's subject is one selection rendered
+ * twice, so what matters is that the entry HAS both renderings — not which
+ * container draws the node.
  */
 const SELECT_QUEUE: QueueFixture[] = [
   { cr: "CR-SEL-P", title: "CR-SEL-P — planned, not started", wave: "5", dependsOn: [], status: "PENDING", seq: 10, release: "0.2.0" },
   { cr: "CR-SEL-D", title: "CR-SEL-D — in flight, has a plan", wave: "5", dependsOn: [], status: "IN_PROGRESS", planId: 14, seq: 20, release: "0.2.0" },
-  { cr: "CR-SEL-U", title: "CR-SEL-U — completed, tracking absent", wave: "5", dependsOn: [], status: "COMPLETED_UNTRACKED", seq: 30, release: "0.2.0" },
+  { cr: "CR-SEL-U", title: "CR-SEL-U — completed, tracking absent", wave: "", dependsOn: [], status: "COMPLETED_UNTRACKED", seq: 30, release: "0.2.0" },
 ];
 
 const SELECT_PLANS: PlanFixture[] = [

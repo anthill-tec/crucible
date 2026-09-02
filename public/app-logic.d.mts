@@ -220,10 +220,31 @@ export interface ReleasePackage {
 }
 
 /** CR-CRU-078 §S4 — one wave CONTAINER of the focused release. `wave` is
- *  `null` for members declaring none: a real group, drawn without chrome. */
+ *  `null` for members declaring none: a real group, drawn without chrome.
+ *  CR-CRU-096 §S1 — `active` is whether the wave belongs to the focused,
+ *  IN-FLIGHT release (the view's `kind === "proposed"`), never whether some
+ *  member is mid-run. */
 export interface FocusedReleaseWave<Entry = unknown> {
   wave: string | null;
+  active: boolean;
   entries: Entry[];
+  /** CR-CRU-096 §S5 — the members this box DRAWS, in the server's published
+   *  order. A window on `entries`, never a re-ordering of it. For a wave box
+   *  that is the top of the scheduled queue (five by default) union every
+   *  running member; for the `wave: null` LOOSE group it is ALL of `entries`,
+   *  because AC18a leaves that group untrimmed. */
+  rows: Entry[];
+  /** CR-CRU-096 §S5.4 — the SCHEDULED remainder the `+N more` pointer states:
+   *  actionable members minus actionable rows shown, so merged members
+   *  (rolled up) are never counted here as well. `0` for the `wave: null`
+   *  loose group, which hides nothing and has no header to anchor a pointer
+   *  on (AC18a). */
+  hiddenCount: number;
+  /** CR-CRU-096 §S3/AC6 — merged members (`COMPLETED` or
+   *  `COMPLETED_UNTRACKED`, AC6a) over the WHOLE wave, the count the roll-up
+   *  states. Independent of the trim: `0` means the wave has none, and AC5a
+   *  renders no roll-up then. */
+  mergedCount: number;
 }
 
 /** CR-CRU-078 §S4/§S5 — everything zones 2 and 3 draw for ONE focused
@@ -236,6 +257,15 @@ export interface FocusedReleaseView<Entry = unknown> {
   dateState: GateDateResult["state"];
   members: Entry[];
   waves: FocusedReleaseWave<Entry>[];
+  /** CR-CRU-096 §S7/AC22 — the wave labels this release spans, compressed into
+   *  runs by `compressWaveRuns`. The delivered summary joins them with `", "`;
+   *  the label COUNT it states the noun from is `waves.length`, not this. */
+  waveRuns: string[];
+  /** CR-CRU-096 §S4/AC12b — the ONE row in the whole zone marked `next`: the
+   *  first actionable member among the rows the zone draws, in the published
+   *  order across every wave (the loose group included, AC12c). `null` when
+   *  the focused release draws no actionable row. */
+  nextCr: string | null;
   crCount: number;
   packages: ReleasePackage[] | undefined;
   /** `empty` (delivered none) and `absent` (pre-CR-CRU-084) stay distinct. */
@@ -248,6 +278,15 @@ export declare function focusedReleaseView<Entry = unknown>(
   releases: readonly unknown[] | null | undefined,
   entries: readonly Entry[] | null | undefined,
 ): FocusedReleaseView<Entry>;
+
+/** CR-CRU-096 §S7/AC22/AC22a/AC22b — a set of wave labels as the delivered
+ *  summary states it: ascending by leading-integer reading, maximal
+ *  consecutive runs compressed to `first–last` (U+2013), a label with no
+ *  numeric reading joining no run and following in first-appearance order.
+ *  Non-string and empty labels are dropped; the caller joins with `", "`. */
+export declare function compressWaveRuns(
+  labels: readonly (string | null | undefined)[] | null | undefined,
+): string[];
 
 /** CR-CRU-078 §S5/AC12 — the columns zone 3 shows for the rows it was given:
  *  `wave` only across waves, `track` only across reported tracks. */

@@ -1248,17 +1248,48 @@ body {
 /* CR-CRU-078 §S4 — ZONE 2: the focused release's flowchart. Plain DOM, laid
    out by containment (release ⊃ wave ⊃ CR) and the authored order alone — no
    layout engine, no crossing heuristic, no compound-graph library (AC26), and
-   no edge element of any kind (AC20). C5 added the shape grammar, the colour
-   semantics and the one motion rule to that structure without touching it. */
+   no DEPENDENCY edge: CR-CRU-078 AC20 forbade the dagre relationship web,
+   never a line as such. CR-CRU-096 AC20a records the distinction, because
+   CR-CRU-096's own AC20 REQUIRES the axis connectors below
+   (`.app-flow-connector`) — dependencies still draw nothing. C5 added the
+   shape grammar, the colour semantics and the one motion rule to that
+   structure without touching it.
+
+   CR-CRU-096 §S6/AC20 — and the four stages lie on ONE HORIZONTAL AXIS,
+   matching zone 1's spine (`.app-roadmap-strip` above: `display: flex` with
+   no `flex-direction`, so the default `row`, plus `align-items: center`).
+   The `column` that stood here was a CONSEQUENCE of the uncapped chip grid
+   §S5 removed, not a choice: a 1082px wave box could not sit beside the
+   terminals and the gate, and a 300px trimmed one can. */
 .app-roadmap-flow {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
+  flex-direction: row;
+  align-items: center;
   gap: 8px;
   padding: 10px;
 }
+/* CR-CRU-096 §S6/§S8 — the connector, the approved artifact's own `.arrow`:
+   a 2px LINE in the existing `--line` token with a CSS-triangle head in
+   `::after`. No new shape and no new colour — it is not a rectangle, so it
+   cannot read as a CR, and it takes no `cursor` because it is not a control.
+   `flex: 0 0 24px` is the artifact's own width, and the three of them are
+   what §S6's 596px horizontal budget already counts. */
+.app-flow-connector {
+  flex: 0 0 24px;
+  height: 2px;
+  background: var(--line);
+  position: relative;
+}
+.app-flow-connector::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: -4px;
+  border: 5px solid transparent;
+  border-left-color: var(--line);
+}
 .app-flow-terminal {
-  align-self: center;
+  flex: 0 0 auto;
   font: 600 10px/1.4 var(--mono);
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -1266,15 +1297,31 @@ body {
   border-radius: 999px;
   padding: 3px 12px;
 }
+/* CR-CRU-096 §S6/AC19c — the wave boxes lie ALONG the axis, not across it: a
+   `.app-flow-waves { flex-direction: column }` stood below this rule and
+   stacked a multi-wave release vertically INSIDE a horizontal spine. §S5
+   calls a multi-wave release "the case that WIDENS this zone" and §S6 states
+   its budget per wave box — a per-box budget is only a budget if the boxes
+   share the axis. So the default `row` stands for both containers, and
+   `flex-wrap` is what a release too wide for one line does. */
 .app-flow-waves,
-.app-flow-wave-body,
-.app-flow-loose,
 .app-flow-packages {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
-.app-flow-waves { flex-direction: column; }
+/* CR-CRU-096 §S5/AC8 — ONE CR PER FULL-WIDTH ROW, which is the approved
+   artifact's own `.crs { display:flex; flex-direction:column; gap:4px }`. The
+   wrapped chip grid this body used to be was the drift: a wrapping ROW flex
+   packs as many CRs per line as fit, which is an inventory, not a queue.
+   AC18a — the loose group (members declaring no wave) takes the same
+   arrangement: grammar applies everywhere, only the trim needs a header. */
+.app-flow-wave-body,
+.app-flow-loose {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 /* AC21 — a wave is a BOX containing its CRs: an axis-aligned, bordered
    container whose members are laid out INSIDE it, which is what a compound
    node in the deleted graph library used to claim and what plain containment
@@ -1290,18 +1337,30 @@ body {
    motion: AC24 reserves movement for the CR that is actually running. */
 .app-flow-wave[data-active="true"] { border-color: var(--ember); }
 .app-flow-wave[data-active="true"] .app-flow-wave-label { color: var(--ember); }
-.app-flow-wave-label {
+/* CR-CRU-096 §S2 — the header is the design's `<h4>`: the wave's identity on
+   the left, its whole membership on the right. Layout only — the h4's UA
+   margin is reset and the label keeps the colour grammar it already had. */
+.app-flow-wave-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding-bottom: 6px;
+}
+.app-flow-wave-label,
+.app-flow-wave-count {
   display: block;
   font: 600 10px/1.4 var(--mono);
   text-transform: uppercase;
   color: var(--ink-dim);
-  padding-bottom: 6px;
 }
 /* AC21 — a CR is a LEAF RECTANGLE: its id on the left, its terse status on
    the right, and never a title (AC11 — the title's one home is the table). */
 .app-flow-node {
   display: flex;
-  flex-wrap: wrap;
+  /* No `flex-wrap`: a row states id then status on ONE line. Wrapping would
+     fold the status under the identifier and re-create the chip. */
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
@@ -1313,6 +1372,37 @@ body {
 }
 .app-flow-node-cr { font: 600 11px/1.4 var(--mono); color: inherit; }
 .app-flow-node-status { font: 400 10px/1.4 var(--mono); color: inherit; opacity: 0.72; }
+/* CR-CRU-096 §S5.4/§S8 — the `+N more` POINTER, the artifact's own `.more`:
+   dim, centred, mono, and NO border and NO background, because a rectangle is
+   what a CR is and this must not read as one. It is not a control either, so
+   it takes no `cursor: pointer`. */
+.app-flow-wave-more {
+  font: 400 9.5px/1.4 var(--mono);
+  color: var(--ink-dim);
+  text-align: center;
+  padding: 2px 0;
+}
+/* CR-CRU-096 §S3/§S8 — the merged ROLL-UP, the artifact's own `.wsum`: a LINE
+   between the header and the rows. Dim mono like the `+N more` pointer above,
+   and for the same reason (AC7) — NO border and NO background, because a
+   rectangle is what a CR is and an aggregate must not read as one. It is not a
+   control either, so it takes no `cursor: pointer`. */
+.app-flow-wave-rollup {
+  font: 400 9.5px/1.4 var(--mono);
+  color: var(--ink-dim);
+  padding: 0 0 6px;
+}
+/* CR-CRU-096 §S4/§S8 — the row's ANNOTATION slot. The row is already
+   `justify-content: space-between`, so this rides in its right-hand side; all
+   this rule owns is the face. Dim and quiet: the marker's emphasis is WEIGHT
+   (`.app-flow-node-next`), never the ember and never motion, which AC24
+   reserves for the CR that is actually running. */
+.app-flow-node-annotation {
+  font: 400 9.5px/1.4 var(--mono);
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+.app-flow-node-next { font-weight: 700; }
 
 /* ── AC22: colour says WHERE IT STANDS ─────────────────────────────────────
    One hue per state, every one of them a declared token, and the same status
@@ -1334,7 +1424,9 @@ body {
 .app-flow-node.pending { color: var(--ink-dim); }
 /* AC24 — MOTION MEANS LIVE. The one animated element on the whole board, and
    it reuses `app-run-pulse`, the pulse the running run-card already uses
-   (CR-CRU-017 §S3), rather than inventing a third motion vocabulary. */
+   (CR-CRU-017 §S3), rather than inventing a third motion vocabulary.
+   CR-CRU-096 §S1 separated this from the ACTIVE WAVE, which is a release fact
+   and gets a border and a word. */
 .app-flow-node.in_progress {
   border-color: var(--ember);
   color: var(--ember);
@@ -1343,7 +1435,11 @@ body {
 }
 /* AC27's SECOND AXIS, distinguishable from each other and from any status
    without reading a colour: superseded LEANS (the work moved elsewhere),
-   void is STRUCK (it does not count) — the `.app-evt-aborted` convention. */
+   void is STRUCK (it does not count) — the `.app-evt-aborted` convention.
+   CR-CRU-096 AC9b keeps the NODE badge on these rules: AC9a's row-trim only
+   removed the dispositioned PENDING row, and a node still renders for the
+   loose group (AC18a, untrimmed) and for a running dispositioned CR (AC9c),
+   where §S8 forbids `data-lifecycle` being the only channel. */
 .app-flow-node-lifecycle,
 .app-roadmap-lifecycle {
   font: 400 10px/1.4 var(--mono);
@@ -1366,7 +1462,7 @@ body {
    over its date with the same overhang. It is always the FOCUSED release, so
    it carries the focus ring and never the dimming. */
 .app-flow-gate {
-  align-self: center;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1375,6 +1471,18 @@ body {
   text-align: center;
 }
 .app-flow-gate-date { display: block; font: 400 10px/1.4 var(--mono); color: var(--ink-dim); }
+/* CR-CRU-096 §S7/AC23/AC23a — the state word INSIDE the diamond, the
+   artifact's own `<br><b>shipped</b>` / `<br><b>planned</b>`. `display:
+   block` is that line break; the size steps down so the version stays the
+   diamond's headline, and the colour is inherited from the counter-rotated
+   label so the word takes no colour of its own (§S8 — no new colour, and the
+   word IS the greyscale channel the dashed border needs beside it). */
+.app-flow-gate-state {
+  display: block;
+  font-size: 9px;
+  font-weight: 700;
+  color: inherit;
+}
 
 /* CR-CRU-078 §S5 — ZONE 3: the scoped table. The head and the rows share one
    row box so the declared columns line up; which columns exist is AC12's

@@ -1119,6 +1119,115 @@ export function roadmapTableColumns(entries) {
   return columns;
 }
 
+/** CR-CRU-096 §S5.2 — how many SCHEDULED rows a wave box draws by default.
+ *  The approved artifact's `div.crs` holds exactly five (`.lavish/
+ *  crucible-workflow-flowchart.html` §1) out of its wave's seven scheduled. */
+const ROADMAP_WAVE_ROWS = 5;
+
+/**
+ * CR-CRU-096 §S5/AC9/AC9a — ACTIONABLE, the same predicate the queue verbs
+ * already use (`clients/_crucible_axi.py:1301`): `PENDING` on the
+ * server-derived status axis AND carrying no `lifecycle` disposition.
+ *
+ * The second half is load-bearing here for the same reason it is there:
+ * `deriveQueueStatus` cannot see `lifecycle` by signature, so a VOID or
+ * SUPERSEDED CR with no plan reads `status: "PENDING"`. It is not work, so it
+ * gets no row — and no information is lost, because zone 3's table carries the
+ * disposition (`roadmap-lifecycle-badge`, CR-CRU-078 AC27's column).
+ *
+ * `entry` is guarded by the status read: a null member short-circuits before
+ * the `in`, which is why the key test is the mirror of the Python one rather
+ * than an `undefined` comparison that would treat `lifecycle: null` as work.
+ */
+const roadmapActionable = (entry) => entry?.status === "PENDING" && !("lifecycle" in entry);
+
+/**
+ * CR-CRU-096 §S3/AC6a — MERGED is `COMPLETED` **or** `COMPLETED_UNTRACKED`:
+ * one fact at two luminances (`public/styles.css:1416` — "the SAME green,
+ * DIMMED"), the second being the same merge recorded before plan tracking
+ * existed. The roll-up counts this set and neither row predicate admits it, so
+ * the two readings cannot disagree — an earlier draft of AC6 that counted only
+ * `COMPLETED` would have left an untracked-merged member counted nowhere and
+ * drawn nowhere.
+ */
+const roadmapMerged = (entry) =>
+  entry?.status === "COMPLETED" || entry?.status === "COMPLETED_UNTRACKED";
+
+/**
+ * CR-CRU-096 §S7/AC22 — the leading-integer READING of a wave label, or `null`
+ * when the label carries no digit at all. `wave` is free TEXT on the wire, so
+ * this is the same digit `waveNumber` (`src/store.ts:411`) reads server-side —
+ * except that "no integer" answers `null` here rather than lane `0`: the
+ * server needs a lane to compute a seq block in, and this needs to know the
+ * label has no numeric reading so it can join no run (AC22b). `/\d+/` is the
+ * SAME digit this module's `numericLabelCompare` (`:690`) already reads out of
+ * a wave or track label — one reading of a wave's number, three questions
+ * asked of it, never three spellings.
+ */
+const waveLabelNumber = (label) => {
+  const digits = /\d+/.exec(label);
+  return digits === null ? null : Number(digits[0]);
+};
+
+/**
+ * CR-CRU-096 §S7/AC22/AC22a/AC22b — the delivered summary's wave labels,
+ * compressed into RUNS. The approved artifact's `waves 1–4`
+ * (`.lavish/crucible-workflow-flowchart.html` §2) for a release that spanned
+ * four consecutive waves, and the plain list for a set with a gap in it.
+ *
+ * The rule, in one pass:
+ *   1. the labels are a SET — a release spanned a wave or it did not, and it
+ *      cannot have spanned it twice;
+ *   2. every label with a numeric reading sorts ASCENDING by that reading,
+ *      ties keeping first-appearance order (`sort` is stable);
+ *   3. a label whose reading is exactly the previous one plus one CONTINUES
+ *      the open run; anything else opens a new one;
+ *   4. a run of two or more renders `first–last` with an EN DASH (U+2013), the
+ *      artifact's own glyph; a run of one renders as itself. The endpoints are
+ *      the LABELS, not their readings, so nothing invents a spelling the
+ *      release never declared;
+ *   5. a label with NO numeric reading joins no run and follows the numbered
+ *      ones in first-appearance order.
+ *
+ * AC22b is explicit that this is not the client re-sort CR-CRU-091 AC18
+ * outlaws: that rule governs the QUEUE's order of CRs, which is authored data
+ * consumed verbatim (and still is — nothing here touches an entry). A
+ * delivered release's SET of wave labels has no authored order to preserve.
+ *
+ * The caller joins the answer; `", "` is the separator live already renders.
+ */
+export function compressWaveRuns(labels) {
+  const distinct = new Set();
+  for (const label of Array.isArray(labels) ? labels : []) {
+    if (typeof label === "string" && label !== "") distinct.add(label);
+  }
+  const numbered = [];
+  const unnumbered = [];
+  for (const label of distinct) {
+    const number = waveLabelNumber(label);
+    if (number === null) unnumbered.push(label);
+    else numbered.push({ label, number });
+  }
+  numbered.sort((one, two) => one.number - two.number);
+  const runs = [];
+  let open = null;
+  for (const { label, number } of numbered) {
+    if (open !== null && number === open.last + 1) {
+      open.lastLabel = label;
+      open.last = number;
+      continue;
+    }
+    open = { firstLabel: label, lastLabel: label, last: number };
+    runs.push(open);
+  }
+  return [
+    ...runs.map((run) =>
+      run.firstLabel === run.lastLabel ? run.firstLabel : `${run.firstLabel}\u2013${run.lastLabel}`,
+    ),
+    ...unnumbered,
+  ];
+}
+
 /**
  * CR-CRU-078 §S4/§S5 — everything zones 2 and 3 draw for ONE focused release.
  * Pure: the gate the strip focused, the release ledger, and the queue as
@@ -1166,17 +1275,103 @@ export function focusedReleaseView(gate, releases, entries) {
     members = rows.filter((entry) => entry?.release === version);
   }
 
+  // CR-CRU-096 §S1/AC1 — each box carries whether its wave belongs to the
+  // focused, IN-FLIGHT release. That is this view's existing `kind` and
+  // nothing new: a proposal is in flight, a shipped tag is settled. It is a
+  // release fact, so it is decided here rather than re-derived from the
+  // entries' run state by the renderer.
+  // AC1a — the `false` branch of `active` is UNREACHABLE by construction, and
+  // stays only because the attribute is C1's published fact. `active` is
+  // `kind === "proposed"`, and the zone renders wave boxes at all only on the
+  // not-shipped branch (`public/app.js:3076-3082`), so every box that ever
+  // renders publishes `"true"`. A shipped or unfocused release publishes
+  // `false` by rendering NO WAVE BOX AT ALL: the ABSENCE of boxes is the
+  // observable, and no test can falsify the branch itself.
+  const active = kind === "proposed";
   const waves = [];
   const boxOf = new Map();
   for (const entry of members) {
     const wave = declaredLabel(entry, "wave") ?? null;
     let box = boxOf.get(wave);
     if (box === undefined) {
-      box = { wave, entries: [] };
+      box = { wave, active, entries: [], rows: [], hiddenCount: 0, mergedCount: 0 };
       boxOf.set(wave, box);
       waves.push(box);
     }
     box.entries.push(entry);
+  }
+
+  // CR-CRU-096 §S5.2/§S5.3 + AC11a — what each box DRAWS, decided beside the
+  // membership it is a window on so the two cannot drift. `entries` stays the
+  // WHOLE membership, which is the one fact the header states (AC3); `rows` is
+  // the members the box draws, and `hiddenCount` the SCHEDULED remainder the
+  // `+N more` pointer states.
+  //
+  // AC18a — the `wave: null` LOOSE group takes AC8's row ARRANGEMENT but NOT
+  // the trim: it renders no header, so it has nowhere to state whole
+  // membership and no anchor for the pointer. It therefore DRAWS its
+  // membership entire, and publishes exactly that — all of `entries` as
+  // `rows`, and a `hiddenCount` of `0`. Publishing the trimmed five there
+  // would describe a render that never happens and claim rows are hidden that
+  // are on screen anyway.
+  //
+  // Merged members (AC6a — `COMPLETED` and `COMPLETED_UNTRACKED` alike) are
+  // excluded from a TRIMMED box by construction: neither predicate below
+  // admits them, so they roll up (§S3) and are never rows. The loose group
+  // draws them like everything else, which is what keeps AC9b's lifecycle
+  // badge reachable there.
+  //
+  // AC11a — a running CR outside the top five EXTENDS the list; it never
+  // displaces a scheduled row. So the rows are re-projected by ONE filter over
+  // `entries`, which is the server's published order (`compareQueueOrder`,
+  // CR-CRU-095 §S1) consumed verbatim: no sort, no `seq` read, nothing that
+  // could answer a different order than the payload's own (CR-CRU-091 AC18).
+  //
+  // `hiddenCount` is `actionable total − actionable rows shown`, never
+  // membership − shown: the latter would count the merged members twice, once
+  // in the roll-up and once in the remainder.
+  for (const box of waves) {
+    if (box.wave === null) {
+      box.rows = box.entries.slice();
+      box.hiddenCount = 0;
+    } else {
+      const actionable = box.entries.filter(roadmapActionable);
+      const scheduled = actionable.slice(0, ROADMAP_WAVE_ROWS);
+      const drawn = new Set(scheduled);
+      for (const entry of box.entries) {
+        if (entry?.status === "IN_PROGRESS") drawn.add(entry);
+      }
+      box.rows = box.entries.filter((entry) => drawn.has(entry));
+      box.hiddenCount = actionable.length - scheduled.length;
+    }
+    // §S3/AC6 — the merged work the roll-up states: counted over the WHOLE
+    // membership, independently of the trim, so it is never the merged rows
+    // shown (zero, by AC9) and never the project total.
+    box.mergedCount = box.entries.filter(roadmapMerged).length;
+  }
+
+  // CR-CRU-096 §S4/AC12b — `nextCr` is a VIEW-level fact, not a per-box one:
+  // "what to take up next" is a single statement about the focused release, so
+  // exactly ONE row in the whole zone is marked and a wave box may carry no
+  // marker at all. It is the first actionable member among the rows the zone
+  // actually DRAWS — the boxes in their first-appearance order, each box's
+  // `rows` in the server's published order, the `wave: null` loose group
+  // included (AC12c). `rows` is now the drawn set for EVERY box, the loose
+  // group's included, so there is no group left to special-case here.
+  //
+  // AC12a — a `find` over arrays that are ALREADY in the published order
+  // (`compareQueueOrder`, CR-CRU-095 §S1) is the whole derivation: no sort, no
+  // `seq` read, no dependency walk, no in-flight trigger and no gating. The
+  // marker states position in that order and nothing else; the plan pointer's
+  // NEXT/HOLD/DRAINED reading is CR-CRU-098's, and re-deriving it here is what
+  // CR-CRU-091 AC18 outlawed.
+  let nextCr = null;
+  for (const box of waves) {
+    const first = box.rows.find(roadmapActionable);
+    if (first !== undefined) {
+      nextCr = typeof first.cr === "string" ? first.cr : null;
+      break;
+    }
   }
 
   const packages =
@@ -1189,6 +1384,13 @@ export function focusedReleaseView(gate, releases, entries) {
     dateState: gate?.dateState ?? "absent",
     members,
     waves,
+    // CR-CRU-096 §S7/AC22 — the wave labels the focused release spans, already
+    // COMPRESSED. Stamped here rather than derived by the renderer, exactly
+    // like `rows`, `hiddenCount`, `mergedCount` and `nextCr` above: the view
+    // answers, the renderer draws. The loose group (`wave: null`) spans no
+    // wave, so it contributes no label.
+    waveRuns: compressWaveRuns(waves.map((box) => box.wave)),
+    nextCr,
     crCount: kind === "shipped" ? (record?.crs ?? []).length : members.length,
     packages,
     packagesState:
@@ -1212,6 +1414,7 @@ if (typeof window !== "undefined") {
     routeParse,
     workspaceTabs,
     focusedReleaseView,
+    compressWaveRuns,
     roadmapTableColumns,
     briefCrTitle,
     lifecycleBadge,

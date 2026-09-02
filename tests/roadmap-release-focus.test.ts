@@ -596,12 +596,29 @@ describe("CR-CRU-078 §S4/AC9 — the in-flight release draws Start → wave con
     // AC9 — authored order INSIDE the container: CR-E was authored before
     // CR-D even though CR-E depends on CR-D.
     expect(nodesInWave("5")).toEqual(["CR-E", "CR-D"]);
-    expect(nodesInWave("6")).toEqual(["CR-F", "CR-G"]);
+    // CR-CRU-096 §S5/AC9a — wave 6 holds CR-F (SUPERSEDED) and CR-G (VOID).
+    // A `PENDING` row carrying a disposition is not work, so it gets NO row
+    // here at all. Nothing is lost: the box still STATES both members (AC3)
+    // and zone 3 still carries the dispositions, which is where that axis
+    // lives now.
+    expect(nodesInWave("6")).toEqual([]);
+    const waveSix = waveEls().find((w) => w.getAttribute("data-wave") === "6");
+    expect(waveSix!.getAttribute("data-cr-count")).toBe("2");
+    expect(lifecycleEl(rowFor("CR-F"))).not.toBeNull();
+    expect(lifecycleEl(rowFor("CR-G"))).not.toBeNull();
   });
 
   test("no CR outside the focused release reaches the flowchart", async () => {
     await mountApp();
-    expect(nodeCrs().sort()).toEqual(["CR-D", "CR-E", "CR-F", "CR-G"]);
+    // CR-CRU-096 §S5 — zone 2 draws the WORK: the top of the scheduled queue
+    // plus whatever is running. CR-F and CR-G are dispositioned (AC9a) and
+    // draw no rows, so the drawn set is the focused release's actionable ∪
+    // running members.
+    expect(nodeCrs().sort()).toEqual(["CR-D", "CR-E"]);
+    // The fact this test exists for, stated independently of the trim:
+    // nothing DRAWN belongs to another release.
+    const focusedCrs = new Set(QUEUE.filter((e) => e.release === "0.2.0").map((e) => e.cr));
+    expect(nodeCrs().filter((cr) => !focusedCrs.has(cr))).toEqual([]);
     // Fixture guard: the project really does carry more than this.
     expect(QUEUE.length).toBeGreaterThan(4);
   });
@@ -620,10 +637,15 @@ describe("CR-CRU-078 §S4/AC9 — the in-flight release draws Start → wave con
     expect(inProgress.getAttribute("data-seq")).toBe("50");
     expect(nodeFor("CR-E").getAttribute("data-seq")).toBe("40");
 
-    // AC11 — a node label containing its entry's `title` string fails.
-    for (const entry of QUEUE) {
-      if (entry.release !== "0.2.0" || entry.title === undefined) continue;
-      expect(nodeFor(entry.cr).textContent ?? "").not.toContain(entry.title);
+    // AC11 — a node label containing its entry's `title` string fails. Read
+    // off the RENDERED nodes rather than the queue: after CR-CRU-096 §S5 zone
+    // 2 draws a window on the membership, so an entry it does not draw has no
+    // node to read.
+    expect(nodeEls().length).toBeGreaterThan(0);
+    for (const node of nodeEls()) {
+      const entry = QUEUE.find((e) => e.cr === node.getAttribute("data-cr"));
+      expect(entry?.title).toBeDefined();
+      expect(node.textContent ?? "").not.toContain(entry!.title!);
     }
   });
 
@@ -914,29 +936,33 @@ describe("CR-CRU-078 AC27 — a dead CR does not read as live work, on the row A
     }
   });
 
-  test("both states show on the flowchart NODE too, and there they are additive as well", async () => {
+  test("both states stay legible on zone 3's row, and a TRIMMED wave draws no row for them at all", async () => {
     await mountApp();
 
-    const superseded = nodeFor("CR-F");
+    // CR-CRU-096 AC9a — a dispositioned CR is not work, so a TRIMMED wave box
+    // renders no row for it: every member of this board declares a wave, so
+    // no node is drawn for `CR-F`/`CR-G` here and there is no node badge on
+    // THIS board either. That is the trim, NOT a removal of the badge —
+    // AC9b keeps the node's badge wherever a node renders (the untrimmed
+    // AC18a loose group, and a running dispositioned CR per AC9c). The FACT
+    // this test exists for is unchanged — a VOID/SUPERSEDED CR's disposition
+    // is visible, additively with its derived status — and is asserted here
+    // on zone 3's row (`roadmap-lifecycle-badge`).
+    expect(nodeCrs()).not.toContain("CR-F");
+    expect(nodeCrs()).not.toContain("CR-G");
+    expect(all('[data-testid="roadmap-node-lifecycle"]').length).toBe(0);
+
+    const superseded = rowFor("CR-F");
     expect(superseded.getAttribute("data-lifecycle")).toBe("SUPERSEDED");
-    const supersededText = (
-      superseded.querySelector('[data-testid="roadmap-node-lifecycle"]')?.textContent ?? ""
-    ).trim();
+    const supersededText = (lifecycleEl(superseded)?.textContent ?? "").trim();
     expect(supersededText.toLowerCase()).toContain("superseded");
     expect(supersededText).toContain("CR-CRU-085");
-    // The node keeps its derived status alongside.
-    expect(superseded.getAttribute("data-status")).toBe("PENDING");
-    expect(
-      (
-        superseded.querySelector('[data-testid="roadmap-node-status"]')?.textContent ?? ""
-      ).trim().length,
-    ).toBeGreaterThan(0);
+    // The row keeps its derived status alongside: the two axes stay additive.
+    expect(statusText("CR-F")).toBe("PENDING");
 
-    const voided = nodeFor("CR-G");
+    const voided = rowFor("CR-G");
     expect(voided.getAttribute("data-lifecycle")).toBe("VOID");
-    const voidedText = (
-      voided.querySelector('[data-testid="roadmap-node-lifecycle"]')?.textContent ?? ""
-    ).trim();
+    const voidedText = (lifecycleEl(voided)?.textContent ?? "").trim();
     expect(voidedText.toLowerCase()).toContain("abandoned");
     expect(voidedText).not.toBe(supersededText);
   });
@@ -948,9 +974,10 @@ describe("CR-CRU-078 AC27 — a dead CR does not read as live work, on the row A
     expect(lifecycleEl(rowFor("CR-D"))).toBeNull();
     expect(rowFor("CR-D").hasAttribute("data-lifecycle")).toBe(false);
     expect(nodeFor("CR-D").hasAttribute("data-lifecycle")).toBe(false);
-    expect(
-      nodeFor("CR-D").querySelector('[data-testid="roadmap-node-lifecycle"]'),
-    ).toBeNull();
+    // CR-CRU-096 AC9a — the node's own badge is gone; the absence that still
+    // matters is that no disposition is INVENTED for an entry declaring none,
+    // on either surface.
+    expect(nodeFor("CR-D").querySelectorAll("[data-lifecycle]").length).toBe(0);
   });
 
   test("`lifecycleBadge` is the one place the copy lives, and an absent axis yields nothing", () => {
@@ -1094,14 +1121,43 @@ describe("CR-CRU-083 AC7 — a node's tap is status-gated exactly like its row",
 const nodeStatusText = (cr: string): string =>
   (nodeFor(cr).querySelector('[data-testid="roadmap-node-status"]')?.textContent ?? "").trim();
 
+/** CR-CRU-096 §S4/AC12/AC12b — AC12's rule applied to the FIXTURE: the first
+ *  actionable entry (`PENDING` carrying no `lifecycle`) in the published order
+ *  among the rows given. The marker is one fact about the whole zone, so this
+ *  is asked once over the drawn rows in document order and never per box. */
+const firstActionableCr = (entries: readonly QueueFixture[]): string | undefined =>
+  entries.find((entry) => entry.status === "PENDING" && !("lifecycle" in entry))?.cr;
+
+/** CR-CRU-096 §S4/AC12/AC13 — the annotation slot an entry EARNS, derived from
+ *  the FIXTURE's own facts (its declared `dependsOn`, and whether the published
+ *  order names it `next`) and never read back out of the render: an expectation
+ *  taken from the DOM would assert nothing, and a spurious or misplaced
+ *  annotation must still fail. `next` first, then `deps` naming every declared
+ *  id in FULL (AC13a), joined by the design's `·`. A row that earns neither
+ *  renders no slot at all, so its contribution is `""`. */
+const expectedAnnotation = (entry: QueueFixture, nextCr: string | undefined): string => {
+  const parts: string[] = [];
+  if (entry.cr === nextCr) parts.push("next");
+  const deps = entry.status === "PENDING" ? entry.dependsOn : [];
+  if (deps.length > 0) parts.push(`deps ${deps.join(", ")}`);
+  return parts.join(" · ");
+};
+
 describe("CR-CRU-078 AC11 — a node is its id plus a terse status mark, and each derived status has its OWN words", () => {
   /** One entry per derived `QueueStatus`, all declared into the focused
-   *  release, so the four marks are observable on one rendered board. */
+   *  release, so the four marks are observable on one rendered board.
+   *
+   *  CR-CRU-096 §S5/AC18a — they declare NO wave (`wave: ""`, the wire's own
+   *  way of declaring none, `src/types.ts:392`), because a WAVE box draws only
+   *  the scheduled top plus what is running: a merged CR gets no row there any
+   *  more. The `wave: null` group takes the row arrangement but NOT the trim,
+   *  so it is the surface on which all four marks are still rendered — which
+   *  is what this test is about. */
   const STATUS_QUEUE: QueueFixture[] = [
-    { cr: "CR-M1", title: "CR-M1 — merged through a tracked plan", wave: "5", dependsOn: [], status: "COMPLETED", seq: 10, release: "0.2.0" },
-    { cr: "CR-M2", title: "CR-M2 — shipped, never tracked", wave: "5", dependsOn: [], status: "COMPLETED_UNTRACKED", seq: 20, release: "0.2.0" },
-    { cr: "CR-M3", title: "CR-M3 — under way right now", wave: "5", dependsOn: [], status: "IN_PROGRESS", seq: 30, release: "0.2.0" },
-    { cr: "CR-M4", title: "CR-M4 — nothing to say yet", wave: "5", dependsOn: [], status: "PENDING", seq: 40, release: "0.2.0" },
+    { cr: "CR-M1", title: "CR-M1 — merged through a tracked plan", wave: "", dependsOn: [], status: "COMPLETED", seq: 10, release: "0.2.0" },
+    { cr: "CR-M2", title: "CR-M2 — shipped, never tracked", wave: "", dependsOn: [], status: "COMPLETED_UNTRACKED", seq: 20, release: "0.2.0" },
+    { cr: "CR-M3", title: "CR-M3 — under way right now", wave: "", dependsOn: [], status: "IN_PROGRESS", seq: 30, release: "0.2.0" },
+    { cr: "CR-M4", title: "CR-M4 — nothing to say yet", wave: "", dependsOn: [], status: "PENDING", seq: 40, release: "0.2.0" },
   ];
 
   test("the four derived statuses map to four DISTINCT literal marks", () => {
@@ -1129,19 +1185,97 @@ describe("CR-CRU-078 AC11 — a node is its id plus a terse status mark, and eac
   test("the RENDERED node carries exactly its status's mark, its own id, and no title", async () => {
     await mountApp({ queue: STATUS_QUEUE });
     expect(nodeCrs()).toEqual(["CR-M1", "CR-M2", "CR-M3", "CR-M4"]);
+    // STATUS_QUEUE declares no wave, so all four rows are drawn (the loose
+    // group takes no trim) in the fixture's own published order — which makes
+    // the fixture itself the drawn-row list AC12's rule is applied to.
+    const nextCr = firstActionableCr(STATUS_QUEUE);
     for (const entry of STATUS_QUEUE) {
       expect(nodeStatusText(entry.cr)).toBe(Logic.crStatusMark(entry.status));
-      // Byte-exact, so a one-word title could not slip past as a suffix.
-      expect((nodeFor(entry.cr).textContent ?? "").trim()).toBe(
-        `${entry.cr}${Logic.crStatusMark(entry.status)}`,
+      // BYTE-EXACT, so a one-word title cannot slip past as a suffix — and
+      // RE-POINTED for CR-CRU-096 §S4/AC8, which put the row's ANNOTATION SLOT
+      // (`next`, `deps <ids>`) after the mark. The expectation is still the
+      // WHOLE rendered string, now `id + mark + the slot the FIXTURE earns`
+      // and nothing else: it is built from the fixture's declared facts, never
+      // read back out of the render, so a spurious annotation, a misplaced
+      // `next` and a leaked title all still fail here.
+      const node = nodeFor(entry.cr);
+      expect((node.textContent ?? "").trim()).toBe(
+        `${entry.cr}${Logic.crStatusMark(entry.status)}${expectedAnnotation(entry, nextCr)}`,
       );
-      expect(nodeFor(entry.cr).textContent ?? "").not.toContain(entry.title!);
+      expect(node.textContent ?? "").not.toContain(entry.title!);
     }
     // The four literal strings, on the board, as words.
     expect(nodeStatusText("CR-M1")).toBe("✓ merged");
     expect(nodeStatusText("CR-M2")).toBe("✓ untracked");
     expect(nodeStatusText("CR-M3")).toBe("▶ in progress");
     expect(nodeStatusText("CR-M4")).toBe("pending");
+  });
+});
+
+// ── AC12b/AC13/AC13a on a SYNTHETIC board ──────────────────────────────────
+//
+// CR-CRU-096 AC29 — this CR's annotation contract is stated on a fixture of
+// this CR's own making. It was briefly pinned byte-exactly against the parsed
+// LIVE board (`docs/changes/README.md`), which names the real `CR-CRU-<n>` ids
+// of the project running Crucible — and the commit that added the assertion
+// edited that README too, so fixture and backlog moved together. Crucible is
+// project-INDEPENDENT: a criterion that only holds while our own backlog has a
+// given shape is not a criterion. The live-shape suite below keeps what
+// CR-CRU-078 built it for (scale, identity, the no-title rule) and so
+// CORROBORATES this contract rather than stating it.
+
+describe("CR-CRU-096 §S4/AC12b/AC13/AC13a — ONE `next` across the whole zone, and a `deps` slot naming every declared id", () => {
+  /** Two wave boxes, arranged so the PER-BOX reading AC12b rules out would
+   *  mark TWO rows: the second box opens with an actionable row of its own.
+   *  Both boxes stay under `ROADMAP_WAVE_ROWS`, so the §S5 trim hides nothing
+   *  and the drawn set is the fixture's actionable ∪ running members — the
+   *  merged member rolls up (AC6a) and is no row. The first actionable row
+   *  also declares a dependency, so the `next`+`deps` composition and the `·`
+   *  join are exercised on the same row. */
+  const ANNOTATION_QUEUE: QueueFixture[] = [
+    { cr: "CR-W1-A", title: "CR-W1-A — the top of the scheduled queue", wave: "1", dependsOn: ["CR-W1-C"], status: "PENDING", seq: 10, release: "0.2.0" },
+    { cr: "CR-W1-B", title: "CR-W1-B — under way, so it earns no dependency slot", wave: "1", dependsOn: ["CR-W1-A"], status: "IN_PROGRESS", seq: 20, release: "0.2.0" },
+    { cr: "CR-W1-C", title: "CR-W1-C — merged, so it rolls up instead of drawing", wave: "1", dependsOn: [], status: "COMPLETED", seq: 30, release: "0.2.0" },
+    { cr: "CR-W2-A", title: "CR-W2-A — the SECOND box's own first actionable row", wave: "2", dependsOn: ["CR-W1-A", "CR-W1-B"], status: "PENDING", seq: 40, release: "0.2.0" },
+    { cr: "CR-W2-B", title: "CR-W2-B — deeper in the second box", wave: "2", dependsOn: ["CR-W2-A"], status: "PENDING", seq: 50, release: "0.2.0" },
+  ];
+
+  test("every drawn row is its id, its mark and exactly the slot the FIXTURE earns — the marker ONCE across both boxes", async () => {
+    await mountApp({ queue: ANNOTATION_QUEUE });
+    // Fixture guards: two boxes really are drawn, the merged member really is
+    // absent, and the second box really does open with an actionable row —
+    // without which the cross-box rule below would pass vacuously.
+    expect(waveNames()).toEqual(["1", "2"]);
+    expect(nodesInWave("1")).toEqual(["CR-W1-A", "CR-W1-B"]);
+    expect(nodesInWave("2")).toEqual(["CR-W2-A", "CR-W2-B"]);
+
+    const drawn = nodeCrs();
+    const entryFor = (cr: string): QueueFixture =>
+      ANNOTATION_QUEUE.find((entry) => entry.cr === cr)!;
+    // AC12's rule applied ONCE across the drawn rows in document order, never
+    // per box.
+    const nextCr = firstActionableCr(drawn.map(entryFor));
+    expect(nextCr).toBe("CR-W1-A");
+    const wrong = drawn
+      .map((cr) => ({
+        cr,
+        got: (nodeFor(cr).textContent ?? "").trim(),
+        want: `${cr}${Logic.crStatusMark(entryFor(cr).status)}${expectedAnnotation(entryFor(cr), nextCr)}`,
+      }))
+      .filter((row) => row.got !== row.want);
+    expect(wrong).toEqual([]);
+    // Stated in LITERALS as well, so the sweep above cannot pass by agreeing
+    // with a helper that is wrong in the same way: `next` first, then every
+    // declared id in FULL (AC13a), joined by the design's `·`.
+    expect((nodeFor("CR-W1-A").textContent ?? "").trim()).toBe(
+      "CR-W1-Apendingnext · deps CR-W1-C",
+    );
+    expect((nodeFor("CR-W2-A").textContent ?? "").trim()).toBe(
+      "CR-W2-Apendingdeps CR-W1-A, CR-W1-B",
+    );
+    // AC12b — ONE marker for the whole ZONE: the second box's first actionable
+    // row carries none, and no other row does either.
+    expect(nodeEls().filter((node) => (node.textContent ?? "").includes("next")).length).toBe(1);
   });
 });
 
@@ -1333,17 +1467,30 @@ describe("CR-CRU-078 AC1/AC28 — the whole board renders at the LIVE shape, not
     expect(document.querySelector('[data-testid="roadmap-strip-error"]')).toBeNull();
   });
 
-  test("landing focuses the in-flight release and BOTH zones below it carry its whole membership, in authored order", async () => {
+  test("landing focuses the in-flight release: zone 3 carries its whole membership in authored order, and zone 2 draws its window on it", async () => {
     await mountApp({
       releases: LIVE_LEDGER,
       proposals: [LIVE_PROPOSAL],
       queue: LIVE_ENTRIES,
     });
     const declared = LIVE_IN_FLIGHT.map((entry) => entry.cr);
-    // Zone 2: one container per wave, holding the members in AUTHORED order.
+    // Zone 2: one container per wave, each STATING its whole membership (AC3)
+    // while drawing only what CR-CRU-096 §S5 says it draws — the scheduled top
+    // plus what is running. So membership is asserted on the counts, and the
+    // drawn rows are asserted to be a WINDOW: a subsequence of the published
+    // order, never a re-ordering of it (CR-CRU-091 AC18).
     expect(waveNames()).toEqual([...new Set(LIVE_IN_FLIGHT.map((entry) => entry.wave))]);
-    expect(nodeCrs()).toEqual(declared);
-    // Zone 3 follows the same focus — never the whole 91-row queue.
+    const counted = waveEls().reduce(
+      (sum, box) => sum + Number(box.getAttribute("data-cr-count")),
+      0,
+    );
+    expect(counted).toBe(declared.length);
+    const drawn = nodeCrs();
+    expect(drawn.length).toBeGreaterThan(0);
+    expect(drawn.length).toBeLessThan(declared.length);
+    expect(drawn).toEqual(declared.filter((cr) => drawn.includes(cr)));
+    // Zone 3 follows the same focus and carries every member — never the whole
+    // 91-row queue.
     expect(rowOrder()).toEqual(declared);
     expect(rowOrder().length).toBeLessThan(LIVE_ENTRIES.length);
   });
@@ -1373,16 +1520,32 @@ describe("CR-CRU-078 AC1/AC28 — the whole board renders at the LIVE shape, not
       proposals: [LIVE_PROPOSAL],
       queue: LIVE_ENTRIES,
     });
-    const wrong = LIVE_IN_FLIGHT.map((entry) => ({
-      cr: entry.cr,
-      got: (nodeFor(entry.cr).textContent ?? "").trim(),
-      want: `${entry.cr}${Logic.crStatusMark(entry.status)}`,
-    })).filter((row) => row.got !== row.want);
-    expect(wrong).toEqual([]);
+    // Read off the RENDERED nodes: after CR-CRU-096 §S5 zone 2 draws a window
+    // on the membership, so an entry it does not draw has no node to read —
+    // and every node it DOES draw is still a member of the focused release.
+    const byCr = new Map(LIVE_IN_FLIGHT.map((entry) => [entry.cr, entry]));
+    const rendered = nodeEls().map((node) => {
+      const cr = node.getAttribute("data-cr") ?? "";
+      return { cr, entry: byCr.get(cr), got: (node.textContent ?? "").trim() };
+    });
+    expect(rendered.length).toBeGreaterThan(0);
+    expect(rendered.filter((row) => row.entry === undefined).map((row) => row.cr)).toEqual([]);
+    // CR-CRU-078 AC11/AC28 at SCALE — every drawn node OPENS with its own id
+    // and its status mark, so identity and the greyscale-safe mark survive at
+    // the live shape. What a row may then ADD is CR-CRU-096's annotation
+    // contract, and that contract is stated byte-exactly on that CR's own
+    // SYNTHETIC fixture above (AC29): this board is parsed from
+    // docs/changes/README.md and names the real CRs of the project running
+    // Crucible, so it may corroborate the contract and never be the fixture
+    // for it.
+    const mismatched = rendered
+      .filter((row) => !row.got.startsWith(`${row.cr}${Logic.crStatusMark(row.entry!.status)}`))
+      .map((row) => ({ cr: row.cr, got: row.got }));
+    expect(mismatched).toEqual([]);
     // Per-entry, so a long prose title is never mistaken for a status suffix.
-    const leaking = LIVE_IN_FLIGHT.filter((entry) =>
-      (nodeFor(entry.cr).textContent ?? "").includes(entry.title ?? "\u0000"),
-    ).map((entry) => entry.cr);
+    const leaking = rendered
+      .filter((row) => row.got.includes(row.entry!.title ?? "\u0000"))
+      .map((row) => row.cr);
     expect(leaking).toEqual([]);
   });
 });

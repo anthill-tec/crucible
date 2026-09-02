@@ -5,7 +5,7 @@
   inside the release that introduced it, not carried past the tag. Release membership is the
   user's call.
 - **Depends on**: 078, 095 — 095 makes the published queue order canonical across containers (`listQueue` gains release→wave→seq). Zone 2 renders one box per wave of the focused release and its rows come from that published order, so the ordering contract is settled BEFORE the renderer is specified against it. Within-wave order is unchanged by 095 (its AC3), so AC10's wave-5 fixture is unaffected; the edge exists for the multi-wave and cross-container assertions.
-- **Status**: PENDING (0.2.0) — filed 2026-08-29
+- **Status**: COMPLETED (0.2.0) — filed 2026-08-29, shipped 2026-09-03
 - **Found by**: the user, comparing the running board against the approved design artifact. Found
   by RENDERING both, which is the only way it was ever going to be found — see Notes.
 
@@ -162,6 +162,52 @@ connectors. Measured, because the arrangement decision governs whether horizonta
 | available surface | 1130px | 1130px | 1100px |
 | fits horizontally | **no**, over by 248px | **yes** | yes |
 
+**MEASURED in real Chromium at a 1600px viewport, cycle 313** — this table was the ARGUMENT; these
+are the facts, and they are recorded here rather than bent to fit:
+
+| piece | table | measured |
+| --- | --- | --- |
+| wave box | 300 × 228 | **279.9 × 211.5** |
+| terminals | 100 (as 2 × 50) | **100.0 — but 56.0 + 44.0**; `Start` and `End` are content-sized, and the total matching is a coincidence of two word widths |
+| gate | 76 | **76.0** (`--app-gate-side`) |
+| connectors | 72 | **72.0** (3 × 24) |
+| gaps | — | **48.0** (6 × 8) |
+| spine | 596px | **575.92px** |
+| overflow | — | **none**: `scrollWidth 1128 == clientWidth 1128` |
+
+**AC13's widest real case was never measured, and it is the LIVE board's actual width.** VERIFY
+measured a synthetic four-dep row at **452.7 × 211.5**; a screenshot of the running board then
+showed the real wave box at **452.7 × 238.9**, because `CR-CRU-075` genuinely declares four
+dependencies. So the 279.9px figure above is the NO-ANNOTATION case and was never representative of
+the dogfood board — the surface has been 452.7px wide the whole time. Measured live at a 1600px
+viewport the flow is 1104px with `scrollWidth 1102 == clientWidth 1102`, so a single wave still
+fits with room; it is this 173px that produces AC19d's wrap at two waves.
+
+**MEASURED ON THE USER'S OWN BROWSER, 2026-09-02** (omp browser relay, real Chrome, real board) —
+this is the authority, and it corrects three figures above:
+
+| piece | §S6 said | live in the user's Chrome |
+| --- | --- | --- |
+| available surface | 1130 | **991** — the Project rail takes the rest at a 1465px window |
+| gate | 76 (layout box) | **108** — the rotated diamond's overhang IS in the layout box |
+| wave box | 300 → 279.9 | **452.7 × 238.9** (four real deps on `CR-CRU-075`) |
+| spine | 596 | **780.7** — `56 + 24 + 452.7 + 24 + 108 + 24 + 44 + 6×8 gaps`, exact |
+| headroom | 554 | **210** |
+| overflow | — | none: `scrollWidth 989 == clientWidth 989` |
+
+**AC19d is not hypothetical on this board.** A second wave box needs `452.7 × 2 + 6 = 911.4px` of
+stage, putting the spine at ~1239px against a 991px surface — so the very next multi-wave release
+WRAPS on the user's actual screen. The wrap path is the one that will be seen, not the exception.
+
+The whole 20px difference is the content-sized wave box. §S6's argument holds with **554px of
+headroom** at the 1130px surface, and a multi-wave board measures 804.84px — still inside it.
+
+**Two columns of the original table were measuring different things**, which cycle 313 surfaced and
+is worth recording: `gate 76` is the layout BOX, but the diamond is that square rotated 45°, so it
+PAINTS ~107.5px (76·√2) and overhangs both adjacent gaps plus ~7.7px of each neighbouring
+connector. The approved artifact reserves a 120px `.gatecol` for exactly that overhang. The paint
+does not extend the flow's own extent (measured bounds 11.0–586.92 inside 0–1130), so AC20 holds.
+
 ¹ `Start + arrow + wave + arrow + gate + arrow + End`, measured from the live board and from the
 artifact's own `div.flow` children.
 
@@ -206,7 +252,25 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
 
 ### Non-goals
 
-- **New shapes or colours.** §S8 constrains; it does not extend.
+- **New shapes or colours.** §S8 constrains; it does not extend. The connector is the artifact's
+  own `.arrow`, so it adds neither.
+- **The shipped summary's TYPOGRAPHY and internal structure.** C4 RED found a fourth delta §S7 does
+  not name: the artifact puts the CR count in a `.big` with the rest as `.cue` lines, a hierarchy
+  live's four flat spans lack. §S7 says the shipped path "is largely right already" and enumerates
+  three deltas, so the typography is **out of scope** — and AC27's panel match compares axis,
+  header, roll-up, row arrangement and markers, not type scale, so it must not fail on this
+  unannounced.
+- **Collapsing the no-package cases.** CR-084 AC4's `empty` (a ceremony that delivered none) versus
+  `absent` (a ledger row from before packages existed) stays intact under CR-078 AC8; AC21's "every
+  package with its version" governs the `listed` case only.
+- **The zone-2 badge's level of DETAIL, and the node rectangle's own treatment.** C2 FIX reported
+  both as silences: the node badge repeats `lifecycleBadge`'s full text (*"superseded by CR-X"*,
+  *"void · abandoned — <reason>"*) which sits between §S5's "zone 3 is the detail surface" and §5's
+  "nodes are id + terse status with no title"; and `.app-flow-node[data-lifecycle]` has no rule, so
+  a VOID member draws a normal PENDING rectangle with a struck badge inside it. **Both are
+  PRE-EXISTING behaviour, unchanged by this CR** — §S8's audit read the live surface and judged it
+  compliant, so neither is drift against the approved design and neither is 096's to change. AC9b
+  restores exactly what was there. If the detail level is wrong it needs its own CR arguing it.
 - **Re-litigating AC24.** Motion stays reserved for IN_PROGRESS.
 - **Zone 1 and zone 3.** Both match the design; this CR is zone 2 only.
 - **A tooltip, a pager, or a scroll container.** All three rejected above.
@@ -218,6 +282,12 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
 
 - **AC1** — A wave in the focused in-flight release publishes `data-active="true"` with no CR
   IN_PROGRESS; a wave in a shipped or unfocused release publishes `false`.
+- **AC1a** — AC1's second clause is satisfied **structurally**, and `data-active` is therefore
+  constant-by-construction. *Recorded 2026-09-02 (VERIFY):* `active` is `kind === "proposed"` and
+  zone 2 renders wave boxes only when the focus is not shipped, so every box that renders publishes
+  `"true"`. A shipped or unfocused release publishes `false` by rendering **no wave box at all** —
+  the observable AC1's tests actually assert. The `false` branch is unreachable; it stays because
+  the attribute is C1's published fact, but no test can falsify it and none should pretend to.
 - **AC2** — The wave header renders the `· active` marker exactly when `data-active="true"`, as a
   word and a border, never motion.
 - **AC3** — The header renders the **whole-membership** count of ITS OWN wave, equal to the
@@ -228,22 +298,91 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   apart and does not satisfy this AC.
 - **AC4** — Motion stays reserved for IN_PROGRESS: an active wave with no running CR renders no
   animation (AC24 regression).
-- **AC5** — The wave renders the roll-up: `N merged` plus the gate state phrase from
-  `resolveGateDate`'s `state`.
-- **AC6** — The roll-up counts only `COMPLETED` entries in that wave, over the **whole** wave,
-  independently of the trim: a synthetic wave of 28 with 22 COMPLETED renders `22 merged`, never
+- **AC5** — The wave renders the roll-up: `N merged` plus the phrase stating that the merged work
+  is **not yet tagged**.
+- **AC5a** — The roll-up is **ABSENT** when the wave has zero merged members. *Ruled 2026-09-02
+  (C3 RED found AC5 had no absent clause while AC16 has one).* Symmetry with `+N more`: there is
+  nothing to roll up, and the release gate already states its own state on the diamond. A
+  `0 merged` line would be chrome reporting the absence of content.
+- **AC5b** — The phrase is `awaiting the tag` for **every** proposed gate state — `absent`,
+  `dated` and `unusable` alike. *Ruled 2026-09-02 (C3 RED found only the `absent` wording was ever
+  specified).* Within zone 2 the focused release is always in flight, because a SHIPPED focus
+  renders zero wave boxes (AC21) — so merged work in a wave is, in every case, merged but not yet
+  tagged, and that is the whole fact the phrase states. Three different strings would invent
+  distinctions that do not exist. The gate's date and state detail stays on the gate
+  (`resolveGateDate`'s answer, rendered once) — the roll-up MUST NOT render a date, which would be
+  the second date renderer CR-078 AC30 forbids.
+- **AC5c** — The roll-up renders as a **SIBLING** of the header `h4`, inside the wave box, after
+  the header and before every row. *Corrected 2026-09-02:* §S3 said "inside the wave header
+  block", but the approved artifact renders `.wsum` as a sibling of `<h4>` — and a `div` inside an
+  `h4` is invalid HTML, so the artifact's placement is the correct reading of "header block".
+- **AC5d** — The `✓` the artifact shows (`21 merged ✓ · awaiting the tag`) is rendered, to match
+  the approved design. It is decoration, not the channel: AC25's greyscale invariant is satisfied
+  by the WORD `merged`, so nothing depends on the glyph.
+- **AC6** — The roll-up counts **merged** entries in that wave, over the **whole** wave,
+  independently of the trim: a synthetic wave of 28 with 22 merged renders `22 merged`, never
   `1 merged` (the shown rows) and never the project total.
+- **AC6a** — **Merged means `COMPLETED` OR `COMPLETED_UNTRACKED`**, for both the roll-up count and
+  the row exclusion. *Ruled 2026-09-02 after C2 RED asked.* They are the same fact at two
+  luminances — `public/styles.css:1337` says so in the code: "COMPLETED_UNTRACKED is the SAME
+  green, DIMMED — one hue at two luminances". An earlier draft of AC6 said "only `COMPLETED`",
+  which would have made an untracked-merged member vanish from the count AND from the rows: counted
+  nowhere, drawn nowhere. The roll-up and the trim MUST agree on this set or a member disappears
+  from the surface entirely.
 - **AC7** — The roll-up is **not** a CR rectangle: it carries no CR-node class and no
   `data-cr`, so it cannot be selected or drilled.
 - **AC8** — Each shown CR renders as one full-width row: id left, status and annotation right. No
   wrapped chip grid remains.
-- **AC9** — Merged CRs render **no rows**; the wave's rows are actionable CRs only.
+- **AC9** — Merged CRs (AC6a) render **no rows**. The wave's rows are **actionable ∪
+  IN_PROGRESS**. *Ruled 2026-09-02 after C2 RED found the contradiction:* AC9 first read "actionable
+  CRs only" while AC12 defines actionable as PENDING-with-no-lifecycle — which EXCLUDES
+  IN_PROGRESS, the very thing AC11 requires to be shown. Read literally the two ACs could not both
+  hold. Rows are the union; "actionable only" was never meant to exclude running work, since zone 2
+  exists to show what is being worked.
+- **AC9a** — A `PENDING` row carrying a `lifecycle` disposition (VOID/SUPERSEDED) is not work and
+  renders **no row in a TRIMMED wave**. *Ruled 2026-09-02.* No information is lost: zone 3's table
+  carries the disposition (`public/app.js:2496` `data-lifecycle`, `:2535`
+  `roadmap-lifecycle-badge`, and CR-078 AC27's lifecycle column), which is §S5's argument that
+  zone 3 is the detail surface.
+- **AC9b** — The zone-2 node's own lifecycle badge **STAYS**, and renders wherever a node renders.
+  *This CORRECTS AC9a as first written, 2026-09-02.* AC9a claimed the badge "becomes unreachable
+  and is REMOVED"; that premise was **false**, and C2 GREEN proved it with two live paths:
+  1. the `wave: null` `app-flow-loose` group renders `box.entries` UNTRIMMED — which AC18a
+     explicitly requires (`public/app.js:2785`);
+  2. AC9's union is on STATUS, so an `IN_PROGRESS` member is drawn regardless of its `lifecycle`
+     (`public/app-logic.mjs:1210-1238`).
+  On both paths the removal left the disposition published as the `data-lifecycle` ATTRIBUTE with
+  no rendered TEXT — which violates §S8's own invariant that *no element relies on colour alone;
+  status is also written as text, so the view survives a colour-blind reader and a greyscale
+  screenshot*. So the badge is restored. AC9a's row-exclusion stands; only its removal clause is
+  withdrawn.
+- **AC9c** — A CR that is `IN_PROGRESS` **and** carries a disposition renders as a row and keeps
+  its badge. *Ruled 2026-09-02 (C2 GREEN reported the silence).* Running work is what zone 2
+  exists to show, and its disposition is exactly the thing a reader needs to see beside it. It is
+  not counted in `+N more`, which counts actionable only.
+- **AC9e** — A dispositioned member the wave draws no row for is still counted in the header's
+  whole membership. *Confirmed 2026-09-02:* AC3 says whole membership and means it — the count is
+  `box.entries.length` and the trim never touches it. Only `+N more` excludes them, because that
+  counts actionable work.
+- **AC9d** — The consumer list in AC9a is **not** exhaustive and must not be read as a budget.
+  *Recorded 2026-09-02:* the trim itself (AC9/AC9a/AC10 — a wave box no longer draws merged or
+  dispositioned members) invalidated **28** assertions across `roadmap-release-focus`,
+  `roadmap-visual-grammar` and `roadmap-selection-durability`, not the five AC9a named. Every one
+  must be RE-POINTED at the surface that now carries the fact, never deleted or skipped; a trim
+  may not retire an assertion as a side effect.
 - **AC10** — The rows are the top of the scheduled queue in the order the server PUBLISHED
   (CR-095 §S1, consumed verbatim — no client re-sort), five by default. Fixture: a synthetic wave
   authored `CR-Q-1 … CR-Q-9` with `CR-Q-1` and `CR-Q-2` COMPLETED yields rows
   `CR-Q-3, CR-Q-4, CR-Q-5, CR-Q-6, CR-Q-7`.
 - **AC11** — An IN_PROGRESS CR is present even when outside the top five. Fixture: activate the
   last scheduled CR — it still renders, with ember and motion.
+- **AC11a** — Such a CR **EXTENDS** the list; it never DISPLACES a scheduled row. *Ruled
+  2026-09-02 after C2 RED asked (§S5.2 "five by default" vs §S5.3 "always shown"; neither AC said
+  which).* Displacing would hide a scheduled CR to show a running one and would break the
+  pointer's arithmetic, which is `actionable total − actionable rows shown`; extending keeps the
+  published order strictly intact with no client-side re-ordering (CR-091 AC18). The list is
+  bounded in practice because a track runs one CR at a time, so the extras are at most the track
+  count — well inside §S6's measured budget.
 - **AC12** — The **first actionable row in the published order** renders a `next` annotation as
   **text**, on a row that keeps PENDING styling. It uses neither `▸` nor ember (§S8), and exactly
   one row is marked. Actionable is `PENDING` with no `lifecycle`; the marker is derived from the
@@ -253,27 +392,121 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   wave whose first actionable row has an unsatisfied dependency still marks that row `next`,
   because the marker states position in the published order and nothing else. Zone 2 renders no
   HOLD and no DRAINED state (CR-CRU-098 owns the published reading).
+- **AC12b** — **Exactly one row in the whole ZONE is marked**, not one per wave box. *Ruled
+  2026-09-02 (C3 RED found AC12's "exactly one" ambiguous against AC19's one-box-per-wave).* "What
+  to take up next" is a single fact about the focused release; two markers would ask the reader
+  which `next` is meant. So the marker goes on the first actionable row **among the rows the zone
+  actually draws**, in the published order across every wave — which means `nextCr` is a
+  VIEW-level fact, not a per-box one, and a wave box may render no marker at all.
+- **AC12c** — The `wave: null` loose group renders `deps` like any other row, and is **eligible**
+  for the single `next` marker. *Ruled 2026-09-02.* Arrangement is grammar and applies everywhere
+  (AC18a's own reasoning); and excluding the group would leave a release whose only actionable work
+  is unwaved with no marker anywhere, which is the one case the marker exists for.
+
 - **AC13** — A pending row with dependencies renders `deps <ids>` naming **all** of them; fixture:
   a row declaring **four** deps names four, and the row's annotation slot holds them at the §S6
   width budget (four is the widest real case observed, so the budget is measured against four, not
   three). No deps → no annotation.
+- **AC13b** — `deps` renders on a **`PENDING`** row only. *Confirmed 2026-09-02 (C3 GREEN took
+  AC13's literal wording and asked).* A running row's dependencies are not decision-relevant — the
+  work has already started — and a merged row's are history; zone 3's table carries the full
+  dependency data for every row either way. AC13's "a pending row with dependencies" is therefore
+  the rule and not an accident of phrasing.
+- **AC13a** — `deps` names the **full published CR id**, never an abbreviated tail. *Ruled
+  2026-09-02 (C3 RED raised it against AC29).* The approved artifact draws `deps 091, 092` with
+  this project's `CR-CRU-` prefix stripped — an abbreviation that only works for a project whose
+  ids share a prefix the product cannot know. Stripping it would be exactly the project-dependence
+  AC29 forbids, and a synthetic `CR-A` has no numeric tail to strip.
+
 - **AC14** — No tooltip and no `title` attribute is introduced on a wave row.
 - **AC15** — A row's click still drills through (CR-078 C4 `data-drill-source` regression).
 - **AC16** — `+N more` renders when scheduled CRs remain unshown, states the true remainder, and is
   absent when none remain. It carries no click handler.
 - **AC17** — No scroll container inside the wave: computed `overflow` stays visible/unset, and the
   wave's height grows with the rows shown, not with membership.
-- **AC18** — No `data-window-*` attribute and no `◀ earlier` / `later ▶` tag appears in zone 2.
+- **AC18** — No `data-window-*` attribute and no `◀ earlier` / `N later` tag appears **within
+  `[data-zone="2"]`**. The scoping is load-bearing and was confirmed by C2 RED: zone 1's strip
+  legitimately publishes `data-window-size`/`data-window-offset`/`data-hidden-earlier`
+  (`public/app.js:3116-3118`) and renders its own paging tags (`:3055`), which AC26 freezes. The
+  `▶` glyph itself cannot be forbidden — it is IN_PROGRESS's own status mark, `▶ in progress`
+  (`public/app-logic.mjs:1015`); only `◀` and the words *earlier*/*later* are.
+- **AC18a** — The `wave: null` group (members declaring no wave, `public/app.js:2786`
+  `app-flow-loose`) takes the **row arrangement** of AC8 but **not** the trim. *Ruled 2026-09-02:*
+  it renders no header, so it has nowhere to state whole membership and no anchor for a `+N more`
+  pointer — trimming it would hide rows with nothing declaring how many. Arrangement is grammar
+  and applies everywhere; the trim needs a count to stay honest.
 - **AC19** — Zone 2 renders one box **per wave** of the focused release; a two-wave release renders
   two.
+- **AC19a** — The oracle for "the waves of the focused release" is its **queue MEMBERS' declared
+  waves**, not the proposal's own `waves[]`. *Ruled 2026-09-02 (C4 RED found two published answers
+  that can disagree — `src/v2.ts:2053` vs what `focusedReleaseView` groups).* A declared wave with
+  zero members draws **NO box**: its header count would be 0, and by AC5a/AC16's own logic that is
+  chrome reporting the absence of content.
+- **AC19b** — A multi-wave release's boxes are wrapped in **ONE `wave` stage**, not N stages on the
+  axis. *Ruled 2026-09-02 (C4 RED left the granularity open).* The design's axis is exactly
+  `Start → wave → gate → End`; making each box a stage would give a three-wave release five stages
+  and four connectors, so the spine's shape would depend on the board's contents.
+- **AC19c** — The container holding the wave boxes lays them out **along** the axis, not across it.
+- **AC19d** — When the axis genuinely **cannot hold** the boxes they **WRAP** onto a further line;
+  they never overflow, never clip and never scroll. *Ruled 2026-09-02 after VERIFY measured AC19c
+  failing and the LIVE BOARD confirmed the mechanism (`flex-wrap: wrap` on the wave stage,
+  observed in Chrome on `/p/<key>/roadmap`).* A two-wave release whose rows carry AC13's four-dep
+  annotation paints its boxes at the same `x` with no `y` overlap — stacked across the axis, which
+  AC19c forbids — and the single AC19c test passed only because its fixture's widest annotation was
+  a TWO-dep row. Wrapping is kept as the correct degradation: §S5's rule is that **a partially drawn
+  container is a defect**, and a wrapped box is still wholly drawn, whereas `nowrap` would overflow
+  the surface or clip a box. AC19c states the intent, AC19d the fallback, and **both must be
+  asserted** — the wrap case measured, every box proven wholly painted, none clipped.
 - **AC20** — With §S5 landed, zone 2 lays out horizontally — `Start`, wave, gate, `End` with
   connectors — and the rendered width does not exceed the measured surface (1130px at 1600px
   viewport).
+- **AC20d** — AC20's budget MUST be asserted at the **real** surface, not only the controlled one.
+  *Ruled 2026-09-02 after measuring the user's own Chrome:* the surface there is **991px**, not
+  1130px, because the Project rail takes the remainder at a 1465px window. A criterion pinned only
+  to 1130px is green on a viewport nobody uses. AC20's 1130px case stays as the controlled
+  measurement; a second case measures the spine against the surface the app actually reports
+  (`[data-zone="2"]`'s own width), so the AC tracks the app rather than a constant.
+- **AC20c** — AC20's `1130px` is a **controlled** surface, not a discovered one: nothing in the
+  code publishes it, so the fixture pins it at a 1600px viewport and measures inside it. *Recorded
+  2026-09-02 (C5 RED, finding 6).* **Forward dependency: CR-CRU-093** (the project rail collapses)
+  moves the real surface without moving this constant, so when 093 lands this number must be
+  re-measured rather than trusted.
+- **AC27a** — The approved artifact is **TRACKED** (`.lavish/crucible-workflow-flowchart.html`,
+  `.gitignore` negation added 2026-09-02). *Ruled after C5 RED, finding 5:* `.lavish/` was ignored,
+  so AC27's binding source was absent from a clean clone and its three tests could never pass in
+  CI — an acceptance criterion whose authority is untracked is unverifiable by anyone but its
+  author, and this CR exists precisely because the design and the code diverged with nothing in the
+  repo able to notice. The 198 KB storyboard MIRROR stays ignored: it is regenerable, and it is not
+  cited by any AC.
+- **AC27b** — AC27 compares **STRUCTURE**, never the artifact's CSS. *Recorded (C5 RED, finding
+  2):* the artifact's own `.flow` is `overflow-x: auto` with `gap: 0` — a scroll container, which
+  §S5 explicitly bans ("a partially drawn container is a defect"). Live is strictly stricter
+  (`overflow: visible`, `gap: 8`). "Match the panel" means match the panel's structure and grammar;
+  it never means copy its stylesheet.
 - **AC21** — The SHIPPED path renders the delivered summary with **0 wave boxes and 0 CR nodes**,
   the CR count, the ship date, and every package with its version.
 - **AC22** — The shipped path compresses a contiguous wave run: waves 1,2,3,4 render `waves 1–4`;
   a non-contiguous set renders the list.
+- **AC22a** — A run of **two** compresses: `waves 1–2`, not `waves 1, 2`. *Ruled 2026-09-02 (C4
+  RED asked; the artifact only ever draws a run of four).* AC22 states the rule on contiguity
+  alone, and a minimum-length threshold would be a second rule the spec does not have.
+- **AC22b** — The shipped summary's wave labels are a **SET**, rendered in ascending numeric order
+  by the leading-integer reading (`waveNumber`, `src/store.ts:411`), with maximal consecutive runs
+  compressed; a label with no numeric reading joins no run and follows in its published
+  first-appearance order. *Ruled 2026-09-02 (C4 RED found both non-numeric and non-ascending labels
+  reachable, since `wave` is a free string and box order is first-appearance).* This is NOT the
+  client re-sort CR-091 AC18 outlaws: that rule governs the QUEUE's order of CRs, which is authored
+  data consumed verbatim. A delivered release's set of wave labels has no authored order to
+  preserve — presenting a set in a readable order is not re-ordering a sequence.
+
 - **AC23** — The shipped gate renders the `shipped` label inside the diamond.
+- **AC23a** — The **IN-FLIGHT** diamond carries its state word too — the approved artifact draws
+  `<span>0.2.0<br><b>planned</b></span>` and live draws neither word. *AC23 WIDENED 2026-09-02
+  after C4 RED reported the artifact showing a two-case rule where the ACs stated one.* The agent's
+  argument is accepted: the dashed border already says "proposed", so the word is exactly the
+  second, greyscale-safe channel §S8 requires rather than a redundant one. Both diamonds state
+  their own state in words.
+
 - **AC24** — The shipped path uses the same horizontal axis as AC20.
 - **AC25** — Greyscale invariant: every row and summary states its status in **text**; the zone
   renders meaningfully with colour removed.
@@ -285,6 +518,16 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   `public/styles.css`, and the e2e pair `tests/e2e/steps/roadmap-graph.steps.ts:84,96,102` driving
   `tests/e2e/features/roadmap-graph.feature:41-46` (wave 5 holds 1 node, PENDING → IN_PROGRESS,
   click drills). AC15 covers the drill only; this covers the selectors.
+- **AC28a** — AC28's **e2e half cannot corroborate anything**. *Recorded 2026-09-02 (VERIFY ran
+  it):* `tests/e2e/features/roadmap-graph.feature` fails on HEAD **and identically at the
+  merge-base** — pre-existing, not a CR-096 regression. Root cause reproduced against a live server:
+  `handleQueuePost` (`src/v2.ts:1846-1878`) never reads `fields.release`, so the scenario's POST
+  answers 200 and the row returns with no `release`; `focusedReleaseView` finds zero members and
+  zone 2 draws no wave box. `git log -S"fields.release" -- src/v2.ts` is empty — it has never
+  worked. `src/v2.ts` is untouched here, so the fix is **CR-CRU-099**. On the substance VERIFY
+  confirms the rewrite does not break the scenario: the CR is actionable so it draws as one row, the
+  AC9 union keeps it drawn once a plan makes it IN_PROGRESS, and the annotation span takes no
+  handler so the click still bubbles and drills.
 - **AC29** — **No AC fixture names a real CR of the project running Crucible.** Every fixture in
   this CR is synthetic (`CR-Q-n`, `CR-A`, `CR-W1-A`, the convention already used by
   `tests/queue-canonical-order.test.ts`'s siblings and `roadmap-graph.feature`'s `CR-RG-200`).

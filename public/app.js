@@ -11,7 +11,7 @@
   "use strict";
 
   function main(L) {
-    const { a, b, button, div, input, label, option, pre, select, span } = van.tags;
+    const { a, b, button, div, h4, input, label, option, pre, select, span } = van.tags;
 
     // ── State ───────────────────────────────────────────────────────────
     const state = vanX.reactive({
@@ -2652,8 +2652,16 @@
     // `dependsOn`, which is the relationship web this surface exists to
     // eliminate. It is REPLACED, not adjusted (spec Problem + AC20):
     //
-    //   • AC20 — zero dependency edges are drawn. Nothing below draws an edge
-    //     of any kind; dependency is stated once, as the table's column.
+    //   • CR-CRU-078 AC20 — zero DEPENDENCY edges are drawn. Dependency is
+    //     stated once, as the table's column; nothing below draws a relation
+    //     between two CRs, and the dagre web that did is gone.
+    //
+    //     CR-CRU-096 AC20a — read that as the DEPENDENCY prohibition it was,
+    //     never as "no line may exist". The two ACs share a number across two
+    //     CRs by accident: CR-CRU-096 AC20 REQUIRES the axis connectors below
+    //     (`RoadmapFlowConnector`, the approved artifact's own `div.arrow`),
+    //     which join `Start → wave → gate → End` and carry no CR identity at
+    //     all. Deleting them to satisfy this bullet would be a regression.
     //   • AC26 — no layout engine decides position. Position IS the declared
     //     containment (release ⊃ wave ⊃ CR, DN §9) and the authored `seq`, so
     //     dagre's crossing minimisation has nothing left to decide.
@@ -2720,10 +2728,18 @@
     // a node box carrying a sentence buries the identifier, and the title has
     // exactly one home, the table's column.
     //
-    // AC27 — the lifecycle axis rides BESIDE the status, never instead of it.
-    // An entry with no `lifecycle` key gets no attribute and no span: absent,
-    // never defaulted.
-    const RoadmapFlowNode = (entry) => {
+    // CR-CRU-096 AC9b — the node's lifecycle badge STAYS, and renders
+    // wherever a node renders. AC9a trims the dispositioned PENDING ROW out
+    // of a wave box, but it does NOT make this badge unreachable: the loose
+    // group draws its membership UNTRIMMED (AC18a, `:2854`) and AC9's union is
+    // on STATUS, so a running CR is drawn whatever its `lifecycle` (AC9c).
+    // On both paths dropping the span would leave the disposition published
+    // as the `data-lifecycle` ATTRIBUTE alone — colour and CSS with no TEXT,
+    // which is exactly what §S8 forbids. Zone 3's `roadmap-lifecycle-badge`
+    // (`:2535`) is the DETAIL surface, not a substitute for the node's word.
+    // An entry with no `lifecycle` key still gets no attribute and no span:
+    // absent, never defaulted.
+    const RoadmapFlowNode = (entry, marked) => {
       const lifecycle = L.lifecycleBadge(entry.lifecycle);
       // AC17 — read on the NODE's own binding rather than the panel's: a
       // selection paints one outline, and must not rebuild the strip above it
@@ -2757,6 +2773,36 @@
       // and the row is where the affordance is stated in words.
       if (roadmapDrillable(entry.status)) props["data-drill-source"] = "true";
       if (lifecycle !== null) props["data-lifecycle"] = lifecycle.state;
+      // CR-CRU-096 §S4 — the row's ANNOTATION SLOT, the approved artifact's
+      // own `<span class="t"><b>next</b> · deps 091, 092</span>`: the
+      // scheduling fact first, the declared dependencies after it, both as
+      // visible text on the row's right-hand side.
+      //
+      // AC12/AC12b — `next` marks the ONE row the VIEW named (`nextCr`, a fact
+      // about the whole zone and not about this box), emphasised by WEIGHT
+      // alone: never `▸` (§5 reserves it), never the ember and never motion,
+      // which stay with the CR that is actually running (CR-078 AC24). The row
+      // keeps its PENDING styling — being next adds a word, not a state.
+      //
+      // AC13/AC13a — every declared dependency is named, by its FULL published
+      // id: the artifact's `deps 091, 092` strips a prefix only this project's
+      // ids happen to share, and reproducing that is the project-dependence
+      // AC29 forbids. No truncation and no `and N more` fold. AC13 states the
+      // slot for a PENDING row, which is the row whose declared dependencies
+      // are still a constraint; a merged or running member's are settled or
+      // moot, so the slot stays empty for it.
+      //
+      // AC14 — it is VISIBLE TEXT: no `title`, no `aria-describedby`, no
+      // tooltip machinery. AC15 — and it takes no handler of its own, so a
+      // click that lands ON it bubbles to the row and still selects (and still
+      // drills, for a row that has somewhere to go).
+      const deps =
+        entry.status === "PENDING" && Array.isArray(entry.dependsOn)
+          ? entry.dependsOn.filter((dep) => typeof dep === "string" && dep !== "")
+          : [];
+      const annotation = [];
+      if (marked === true) annotation.push(span({ class: "app-flow-node-next" }, "next"));
+      if (deps.length > 0) annotation.push(`deps ${deps.join(", ")}`);
       return div(
         props,
         span({ class: "app-flow-node-cr" }, entry.cr),
@@ -2773,6 +2819,14 @@
               },
               lifecycle.text,
             ),
+        // AC13's second half is an ABSENCE: a row that is neither marked nor
+        // declares a dependency renders NO slot at all, never an empty one.
+        annotation.length === 0
+          ? null
+          : span(
+              { "data-testid": "roadmap-node-annotation", class: "app-flow-node-annotation" },
+              annotation.flatMap((part, at) => (at === 0 ? [part] : [" · ", part])),
+            ),
       );
     };
 
@@ -2781,26 +2835,112 @@
     // the authoring opens exactly one container, and a member declaring no
     // wave has no container to head: its nodes are drawn bare rather than
     // under a heading reading `Wave `.
-    const RoadmapFlowWave = (box) =>
+    // CR-CRU-096 §S4/AC12b — `nextCr` is passed IN, not derived here: the
+    // marker is one fact about the whole zone (`focusedReleaseView`'s
+    // view-level answer), so a box states it only when the row it names is one
+    // of the box's own, and every other box states none.
+    const RoadmapFlowWave = (box, nextCr) =>
       box.wave === null
-        ? div({ class: "app-flow-loose" }, box.entries.map(RoadmapFlowNode))
+        ? // AC18a — the loose group takes AC8's ROW ARRANGEMENT (a column, by
+          // stylesheet) but NOT the trim: it renders no header, so it has
+          // nowhere to state whole membership and no anchor for a `+N more`
+          // pointer. The view publishes that: `box.rows` here IS the whole
+          // membership and `hiddenCount` is 0, so this branch reads the same
+          // `rows` every box reads — ONE answer to "what does this box draw".
+          //
+          // AC12c — and it is ELIGIBLE for the marker like any other group: a
+          // release whose only actionable work is unwaved is the case it exists for.
+          div(
+            { class: "app-flow-loose" },
+            box.rows.map((entry) => RoadmapFlowNode(entry, nextCr === entry.cr)),
+          )
         : div(
             {
               "data-testid": "roadmap-wave",
               "data-wave": box.wave,
               "data-cr-count": String(box.entries.length),
-              // AC22/C5 — the container of live work reads as live too (the
-              // design artifact's `.wave.active`). Derived from the entries
-              // already rendered, so it states nothing new; and it is a
-              // BORDER colour, never motion, because AC24 reserves movement
-              // for the CR that is actually running.
-              "data-active": box.entries.some((entry) => entry.status === "IN_PROGRESS")
-                ? "true"
-                : "false",
+              // CR-CRU-096 §S1/AC1 — "active" is a RELEASE fact, not a run
+              // fact: this wave belongs to the focused, in-flight release
+              // (`focusedReleaseView`'s `kind === "proposed"`, stamped on the
+              // box). A wave with 22 merged and nothing running is still the
+              // active release's wave. Motion stays reserved for the CR that
+              // is actually running (CR-078 AC24), so the second channel here
+              // is the border only.
+              "data-active": box.active === true ? "true" : "false",
               class: "app-flow-wave",
             },
-            span({ class: "app-flow-wave-label" }, `Wave ${box.wave}`),
-            div({ class: "app-flow-wave-body" }, box.entries.map(RoadmapFlowNode)),
+            // §S2/AC2/AC3 — the header states both facts the design's
+            // `<h4><span>Wave 5 · active</span><span>28</span></h4>` states:
+            // the wave's identity plus its active marker as a WORD (§S8 —
+            // colour is never the only channel), and the wave's OWN whole
+            // membership, the same `box.entries.length` published above rather
+            // than a second derivation that could drift from it.
+            h4(
+              { "data-testid": "roadmap-wave-header", class: "app-flow-wave-header" },
+              span(
+                { class: "app-flow-wave-label" },
+                `Wave ${box.wave}${box.active === true ? " · active" : ""}`,
+              ),
+              span(
+                { "data-testid": "roadmap-wave-count", class: "app-flow-wave-count" },
+                String(box.entries.length),
+              ),
+            ),
+            // §S3/AC5 — the wave states its merged work as ONE LINE: a count
+            // plus the phrase saying that work is not yet tagged, the approved
+            // artifact's `<div class="wsum">21 merged ✓ · awaiting the tag</div>`.
+            //
+            // AC5c — a SIBLING of the header, inside the box, after the header
+            // and before every row: §S3 says "inside the wave header block",
+            // and a `div` inside an `h4` is invalid HTML, so the artifact's
+            // placement is that phrase's only valid reading.
+            //
+            // AC5a — ABSENT when the wave has nothing merged, exactly as
+            // `+N more` is absent with no remainder: `0 merged` would be
+            // chrome reporting the absence of content.
+            //
+            // AC5b — the phrase is the SAME for every proposed gate state.
+            // Within zone 2 the focused release is always in flight (a shipped
+            // focus draws no wave box at all, AC21), so merged work in a wave
+            // is in every case merged but not yet tagged, and that is the
+            // whole fact stated. The roll-up renders NO DATE: the gate's own
+            // resolved date and state are rendered once, on the gate
+            // (`RoadmapFlowGate`), and a second date renderer is what
+            // CR-078 AC30 forbids.
+            //
+            // AC5d — the artifact's `✓` is drawn as decoration only; §S8's
+            // greyscale invariant is carried by the WORD `merged`.
+            //
+            // AC7 — and it is NOT a CR rectangle: no `roadmap-node` test id,
+            // no `data-cr`, no `data-status`, no click handler and no
+            // CR-node class, so nothing selects it, drills it or counts it.
+            box.mergedCount > 0
+              ? div(
+                  { "data-testid": "roadmap-wave-rollup", class: "app-flow-wave-rollup" },
+                  `${box.mergedCount} merged ✓ · awaiting the tag`,
+                )
+              : null,
+            // §S5 — the body draws what the box SHOWS: the top of the
+            // scheduled queue union every running member
+            // (`focusedReleaseView`'s `rows`), never the whole inventory —
+            // zone 3's table is the detail surface. The header above still
+            // states whole membership, so the two facts stay distinct.
+            div(
+              { class: "app-flow-wave-body" },
+              box.rows.map((entry) => RoadmapFlowNode(entry, nextCr === entry.cr)),
+              // §S5.4/AC16 — a static POINTER at that detail surface, and by
+              // §S8 deliberately NOT a node: no `roadmap-node` test id, no
+              // `data-cr`, no `data-status`, no `data-drill-source` and no
+              // click handler, so nothing selects it, drills it, or counts it
+              // as a CR. It states the SCHEDULED remainder and renders only
+              // when one exists — `+0 more` is the defect AC16 forbids.
+              box.hiddenCount > 0
+                ? div(
+                    { "data-testid": "roadmap-wave-more", class: "app-flow-wave-more" },
+                    `+${box.hiddenCount} more — see the table below`,
+                  )
+                : null,
+            ),
           );
 
     const RoadmapPackage = (pkg) =>
@@ -2816,6 +2956,9 @@
     // `data-packages-state` — but NEITHER may read as an apparently complete
     // release, so both say in words that no package was recorded.
     const RoadmapDelivered = (view) => {
+      // CR-CRU-096 §S7/AC22 — the LABEL COUNT the noun is keyed on. It is not
+      // the run count: a release that spanned waves 1 and 2 spanned two waves
+      // and states `waves 1–2`, however few runs that compresses to.
       const waves = view.waves.map((box) => box.wave).filter((wave) => wave !== null);
       return div(
         { "data-testid": "roadmap-delivered", class: "app-flow-delivered" },
@@ -2827,7 +2970,7 @@
           { "data-testid": "roadmap-delivered-waves", class: "app-flow-delivered-waves" },
           waves.length === 0
             ? "no wave recorded"
-            : `${waves.length === 1 ? "wave" : "waves"} ${waves.join(", ")}`,
+            : `${waves.length === 1 ? "wave" : "waves"} ${view.waveRuns.join(", ")}`,
         ),
         span(
           { "data-testid": "roadmap-delivered-date", class: "app-flow-delivered-date" },
@@ -2865,9 +3008,26 @@
         // label rides in a counter-rotated child or the version would read on
         // the diagonal. The design artifact's own construction
         // (`.gate > span { transform: rotate(-45deg) }`).
+        // CR-CRU-096 §S7/AC23/AC23a — and it states its own STATE in words,
+        // inside the shape: `shipped` for a tag, `planned` for a release in
+        // flight, the approved artifact's own `<span>0.1.0<br><b>shipped</b>
+        // </span>` and `<span>0.2.0<br><b>planned</b></span>`. Both cases,
+        // because §S8 forbids a channel with no text beside it: the dashed
+        // border alone says "proposed" in shape only, and the caption below
+        // the diamond is a SIBLING of the shape, so a word rendered there
+        // would not be the word this states. The word rides in the
+        // COUNTER-rotated label with the version, or it would read on the
+        // diagonal.
         span(
           { class: "app-flow-gate-version" },
-          span({ class: "app-flow-gate-label" }, view.version),
+          span(
+            { class: "app-flow-gate-label" },
+            view.version,
+            span(
+              { class: "app-flow-gate-state" },
+              view.kind === "shipped" ? "shipped" : "planned",
+            ),
+          ),
         ),
         span(
           { class: `app-flow-gate-date ${view.dateState}` },
@@ -2876,6 +3036,19 @@
             : (ROADMAP_GATE_NO_DATE[`${view.kind}:${view.dateState}`] ?? ""),
         ),
       );
+
+    // CR-CRU-096 §S6/AC20/AC20a — the AXIS connector, the approved artifact's
+    // own `div.arrow`: `flex: 0 0 24px; height: 2px; background: var(--line)`
+    // with a CSS triangle in `::after`. It joins two STAGES and states
+    // nothing — CR-CRU-078 AC20's ban is on DEPENDENCY edges, a relation
+    // between two CRs, and this is not one.
+    //
+    // §S8 — so it is deliberately BARE: no `data-cr`, no `data-status`, no
+    // `data-drill-source`, no `data-wave`, no `title` and no handler. A
+    // connector that published any of those would read as a CR rectangle,
+    // and nothing may select it, drill it or count it as a node.
+    const RoadmapFlowConnector = () =>
+      div({ "data-testid": "roadmap-flow-connector", class: "app-flow-connector" });
 
     const RoadmapFlowZone = (view) => {
       // No release registered at all draws NO chrome — no terminals, no gate,
@@ -2892,11 +3065,25 @@
           "data-cr-count": String(view.crCount),
           class: `app-roadmap-flow ${view.kind}`,
         },
+        // §S6/AC19b/AC20 — ONE axis, ALWAYS four stages and three connectors:
+        // `Start → wave → gate → End`, or `Start → delivered → gate → End`
+        // when the focus has shipped (AC24 — the shipped path takes the same
+        // axis). AC19b — a multi-wave release's boxes are wrapped in the ONE
+        // wave stage rather than becoming stages themselves, so the spine's
+        // shape does not depend on how many waves the board happens to hold.
         RoadmapFlowTerminal("start"),
+        RoadmapFlowConnector(),
         view.kind === "shipped"
           ? RoadmapDelivered(view)
-          : div({ class: "app-flow-waves" }, view.waves.map(RoadmapFlowWave)),
+          : div(
+              { class: "app-flow-waves" },
+              // AC12b — the view's ONE `nextCr` is handed to every box, so the
+              // marker lands on exactly one drawn row in the whole zone.
+              view.waves.map((box) => RoadmapFlowWave(box, view.nextCr)),
+            ),
+        RoadmapFlowConnector(),
         RoadmapFlowGate(view),
+        RoadmapFlowConnector(),
         RoadmapFlowTerminal("end"),
       );
     };

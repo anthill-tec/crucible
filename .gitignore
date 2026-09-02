@@ -9,7 +9,13 @@ test-reports/
 playwright-report/
 test-results/
 blob-report/
-.lavish/
+.lavish/*
+# CR-CRU-096 AC27a — the APPROVED DESIGN is a spec artifact, not a scratch file.
+# §S1-§S8 and AC27 all cite it as the authority, and CR-CRU-096 exists because
+# the design and the code diverged with nothing in the repo able to notice. An
+# acceptance criterion whose source is untracked is unverifiable by anyone but
+# its author. The 198KB storyboard MIRROR stays ignored: it is regenerable.
+!.lavish/crucible-workflow-flowchart.html
 .features-gen/
 __pycache__/
 .venv/

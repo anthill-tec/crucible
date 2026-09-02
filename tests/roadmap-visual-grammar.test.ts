@@ -9,10 +9,13 @@
 // BINDING DESIGN SOURCE, in the order the DN itself declares:
 //   docs/research/DN-crucible-roadmap-view.md
 //     §"Visual contract (approved 2026-08-28) — BINDING on implementation"
-//   .lavish/crucible-workflow-flowchart.html §1–§8/§14 — the richer reference
-//     WHERE PRESENT (it is gitignored, so the DN section governs when it is
-//     not). Every shape, colour token and motion rule asserted below is read
-//     off one of those two and never off taste.
+//   .lavish/crucible-workflow-flowchart.html §1–§8/§14 — the richer reference,
+//     TRACKED since CR-CRU-096 AC27a (`.gitignore:12` ignores `.lavish/*`,
+//     `.gitignore:18` negates this file back in), so it is present in a clean
+//     clone and AC27 fails rather than degrades when it cannot be read. The DN
+//     section still governs wherever the artifact says nothing. Every shape,
+//     colour token and motion rule asserted below is read off one of those two
+//     and never off taste.
 //
 // WHY THIS IS A SIBLING SUITE and not an edit to the C1–C4 files.
 // The four landed roadmap suites are BEHAVIOURAL and run entirely in happy-dom,
@@ -49,7 +52,9 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { chromium } from "playwright";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Server } from "bun";
@@ -295,6 +300,176 @@ const QUEUE: QueueFixture[] = [
   },
 ];
 
+/** CR-CRU-096 §S5/AC9/AC9a — what a WAVE box draws once the trim lands: the
+ *  top of the scheduled queue plus what is running. `CR-V-DONE` and
+ *  `CR-V-UNTRACKED` are merged and roll up; `CR-V-SUP` and `CR-V-VOID` carry a
+ *  disposition and are not work. So the two boxes above draw one row each. */
+const DRAWN_CRS = ["CR-V-LIVE", "CR-V-PEND"];
+
+/** The SAME six CRs, declaring NO wave (`wave: ""` — the wire's own way of
+ *  declaring none, `src/types.ts:392`).
+ *
+ *  CR-CRU-096 AC18a rules that the `wave: null` group takes the row
+ *  ARRANGEMENT but NOT the trim: with no header it has nowhere to state whole
+ *  membership and no anchor for a `+N more` pointer, so it draws every member.
+ *  That makes it the surface on which the merged and dimmed FACES this suite
+ *  measures are still rendered — the stylesheet still declares them
+ *  (`public/styles.css` `.app-flow-node.completed`, `.completed_untracked`),
+ *  and a face is measured where it is drawn. */
+const LOOSE_QUEUE: QueueFixture[] = QUEUE.map((entry) =>
+  entry.release === "0.2.0" ? { ...entry, wave: "" } : entry,
+);
+
+// ── CR-CRU-096 C5 — the boards the MEASUREMENT cycle needs ─────────────────
+//
+// C1–C4 deferred seven readings to a real engine, and each needs a board the
+// four existing ones cannot supply:
+//   • a 29-member wave drawing 5 rows BESIDE a 10-member one drawing 5 —
+//     AC17's "height grows with the rows shown, not with membership" is only a
+//     claim if two DIFFERENT memberships drawing the SAME rows measure the
+//     same height. One box can never say that;
+//   • the same 29 members declaring NO wave, which AC18a draws UNTRIMMED, so
+//     the trimmed height is compared against a MEASURED counterfactual rather
+//     than an estimate of one;
+//   • a SHIPPED focus: zone 2 draws exactly one gate, and only a shipped one
+//     carries AC23's `shipped` word — AC25 needs both words and AC27 needs
+//     both of the artifact's panels.
+//
+// AC29 — every id below is synthetic. `CR-H-*` is this board's own prefix.
+
+/** §S6's own numbers, so the measurement has something to be measured
+ *  AGAINST: the "available surface" column and the viewport it was taken at.
+ *  AC20's second clause is stated in exactly these two figures. */
+const SURFACE_W = 1130;
+const WIDE_VIEWPORT = { width: 1600, height: 1200 };
+
+/** §S6's horizontal budget table, the third column ("§S5 rows, trimmed"):
+ *  `Start + arrow + wave + arrow + gate + arrow + End`. Recorded so a
+ *  measurement can be REPORTED against it — the table is the CR's argument,
+ *  the measurement is the fact, and where they differ the difference is the
+ *  finding. Nothing below fails on a budget line. */
+const BUDGET = { terminals: 100, wave: 300, gate: 76, connectors: 72, gaps: 48, total: 596 };
+
+const HEIGHT_RELEASE = "0.4.0";
+
+const HEIGHT_PROPOSALS: ProposalFixture[] = [
+  { label: HEIGHT_RELEASE, targetAt: TARGET_020, timestamp: RETIRED_AT, waves: ["H1", "H2"] },
+];
+
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+/** Merged members: AC6a's PAIR, because `COMPLETED` and `COMPLETED_UNTRACKED`
+ *  are one fact at two luminances and both must roll up rather than draw. */
+const mergedMembers = (prefix: string, wave: string, count: number, from: number): QueueFixture[] =>
+  Array.from({ length: count }, (_slot, at) => ({
+    cr: `${prefix}${pad2(at + 1)}`,
+    title: `${prefix}${pad2(at + 1)} — merged, and rolled up`,
+    wave,
+    dependsOn: [] as string[],
+    status: (at % 5 === 4 ? "COMPLETED_UNTRACKED" : "COMPLETED") as QueueStatus,
+    seq: from + at,
+    release: HEIGHT_RELEASE,
+    track: "1",
+  }));
+
+/** Scheduled members — `PENDING` with the `lifecycle` key ABSENT, which is
+ *  what `roadmapActionable` tests (`!("lifecycle" in entry)`), so a fixture
+ *  that declared `lifecycle: undefined` would draw no rows at all. */
+const scheduledMembers = (
+  prefix: string,
+  wave: string,
+  count: number,
+  from: number,
+  deps: readonly (readonly string[])[] = [],
+): QueueFixture[] =>
+  Array.from({ length: count }, (_slot, at) => ({
+    cr: `${prefix}${pad2(at + 1)}`,
+    title: `${prefix}${pad2(at + 1)} — scheduled, not started`,
+    wave,
+    dependsOn: [...(deps[at] ?? [])],
+    status: "PENDING" as QueueStatus,
+    seq: from + at,
+    release: HEIGHT_RELEASE,
+    track: "2",
+  }));
+
+/** Wave `H1` holds 29 and draws 5; wave `H2` holds 10 and draws 5. The two
+ *  shipped members ride along so zone 1 still has its tags to draw. */
+const HEIGHT_QUEUE: QueueFixture[] = [
+  ...QUEUE.slice(0, 2),
+  ...mergedMembers("CR-H-M", "H1", 20, 100),
+  ...scheduledMembers("CR-H-P", "H1", 9, 200, [[], ["CR-H-M01", "CR-H-M02"]]),
+  ...mergedMembers("CR-H-N", "H2", 1, 300),
+  ...scheduledMembers("CR-H-Q", "H2", 9, 400, [["CR-H-N01"]]),
+];
+
+/** AC17's counterfactual: `H1`'s 29 members declaring NO wave, which AC18a
+ *  draws untrimmed. Same members, same row markup, one trimmed and one not —
+ *  so "shorter than it would be" is a subtraction of two measurements. */
+const HEIGHT_LOOSE_QUEUE: QueueFixture[] = HEIGHT_QUEUE.filter(
+  (entry) => entry.wave === "H1",
+).map((entry) => ({ ...entry, wave: "" }));
+
+/** §S6's budget table is stated PER WAVE BOX, and its "§S5 rows, trimmed"
+ *  column is a ONE-box release: 28 members, five rows, a roll-up and a
+ *  pointer. This is that board — the same `H1` wave alone, so the measured
+ *  spine can be reported against the 596px the table claims without a second
+ *  box in the way. AC19a — `H2` draws no box because no member declares it. */
+const SINGLE_WAVE_QUEUE: QueueFixture[] = HEIGHT_QUEUE.filter(
+  (entry) => entry.release !== HEIGHT_RELEASE || entry.wave === "H1",
+);
+
+/** AC20d — the surface the app ACTUALLY reports. `SURFACE_W` is a CONTROLLED
+ *  figure (§S6's own table at a 1600px viewport); measured in the user's own
+ *  Chrome at a 1465px window the Project rail takes the remainder and zone 2
+ *  gets 991px. A budget pinned only to 1130 is green on a surface nobody
+ *  browses at, so the second AC20 case is served at this width and measured
+ *  against the width the APP reports rather than against either constant. */
+const REAL_SURFACE_W = 991;
+
+/** AC19d — the WRAP board. AC13's widest real annotation is a FOUR-dep row,
+ *  and a wave box carrying one is far wider than half the surface, so a
+ *  two-wave release at this width genuinely CANNOT lay both boxes on one
+ *  line. The landed AC19c fixture (`HEIGHT_QUEUE`) tops out at a TWO-dep row
+ *  and therefore fits — which is why it never exercised the degradation.
+ *  AC29 — `CR-W1-*` / `CR-W2-*` are synthetic ids of this board alone. */
+const WRAP_DEPS: readonly string[] = ["CR-W1-M01", "CR-W1-M02", "CR-W1-M03", "CR-W1-M04"];
+
+const WRAP_PROPOSALS: ProposalFixture[] = [
+  { label: HEIGHT_RELEASE, targetAt: TARGET_020, timestamp: RETIRED_AT, waves: ["W1", "W2"] },
+];
+
+/** Every DRAWN row carries the four-dep annotation, so the box's width is set
+ *  by the widest case §S6's budget is stated against and not by an average. */
+const WRAP_QUEUE: QueueFixture[] = [
+  ...QUEUE.slice(0, 2),
+  ...mergedMembers("CR-W1-M", "W1", 4, 500),
+  ...scheduledMembers("CR-W1-P", "W1", 5, 520, [
+    WRAP_DEPS,
+    WRAP_DEPS,
+    WRAP_DEPS,
+    WRAP_DEPS,
+    WRAP_DEPS,
+  ]),
+  ...mergedMembers("CR-W2-M", "W2", 4, 560),
+  ...scheduledMembers("CR-W2-P", "W2", 5, 580, [
+    WRAP_DEPS,
+    WRAP_DEPS,
+    WRAP_DEPS,
+    WRAP_DEPS,
+    WRAP_DEPS,
+  ]),
+];
+
+/** The artifact IS the binding design source AC27 compares against, and since
+ *  CR-CRU-096 AC27a it is TRACKED: `.gitignore:12` ignores `.lavish/*` and
+ *  `.gitignore:18` negates this one file back in. So a clean clone has it, and
+ *  the AC27 tests HARD-FAIL on an unreadable artifact (`expect(artifactFailure)
+ *  .toBe("")`) rather than stating its absence. The read stays guarded only so
+ *  the failure is reported by AC27 instead of taking the other assertions in
+ *  this file down with it. */
+const ARTIFACT_REL = ".lavish/crucible-workflow-flowchart.html";
+
 // ── happy-dom capture: the REAL production DOM, serialised ───────────────────
 //
 // The subject under measurement must be what public/app.js actually renders, so
@@ -346,6 +521,11 @@ interface CaptureOpts {
   releases?: ReleaseFixture[];
   proposals?: ProposalFixture[];
   queue?: QueueFixture[];
+  /** AC26's baseline: the shell source as of the commit BEFORE this CR, so
+   *  "byte-identical before and after" is a comparison of two renders rather
+   *  than a promise. */
+  appJs?: string;
+  logicPath?: string;
 }
 
 let cacheBust = 0;
@@ -416,15 +596,18 @@ async function captureZones(opts: CaptureOpts = {}): Promise<string> {
     (0, eval)(VAN_SRC);
     (0, eval)(VAN_X_SRC);
 
-    // Dynamic import is REQUIRED, not a style choice: the specifier carries a
-    // per-capture cache-bust query so the module re-evaluates into the FRESH
-    // happy-dom global each time. A static import would bind once, to the
-    // globals of the first capture. House harness pattern, shared with
+    // Dynamic import is REQUIRED, not a style choice, on two counts: the
+    // specifier carries a per-capture cache-bust query so the module
+    // re-evaluates into the FRESH happy-dom global each time (a static import
+    // would bind once, to the globals of the first capture), and AC26 selects
+    // the module at RUNTIME — the baseline capture imports the pre-CR
+    // `app-logic.mjs` written to a temp dir, a path no static specifier can
+    // name. House harness pattern, shared with
     // tests/roadmap-release-strip.test.ts and tests/roadmap-release-focus.test.ts.
     cacheBust += 1;
-    await import(`${APP_LOGIC_PATH}?roadmapVisualGrammar=${cacheBust}`);
+    await import(`${opts.logicPath ?? APP_LOGIC_PATH}?roadmapVisualGrammar=${cacheBust}`);
 
-    (0, eval)(APP_JS_SRC);
+    (0, eval)(opts.appJs ?? APP_JS_SRC);
 
     // REAL timers, deliberately: the subject is the production shell driving
     // its own fetch chain and van.js's real reactive scheduler inside
@@ -459,26 +642,60 @@ let page: Page | null = null;
 let populatedZones = "";
 let emptyZones = "";
 let orderedZones = "";
+let looseZones = "";
 let fixtureUrl = "";
 let emptyFixtureUrl = "";
 let orderedFixtureUrl = "";
+let looseFixtureUrl = "";
+// CR-CRU-096 C5 — the boards, pages and sources the deferred readings need.
+let heightZones = "";
+let heightLooseZones = "";
+let shippedZones = "";
+let singleZones = "";
+let baselineZones = "";
+let surfaceFixtureUrl = "";
+let heightFixtureUrl = "";
+let heightLooseFixtureUrl = "";
+let shippedFixtureUrl = "";
+let baselineFixtureUrl = "";
+let singleFixtureUrl = "";
+let artifactUrl = "";
+// CR-CRU-096 C6 — AC19d's wrap board and AC20d's real surface.
+let wrapZones = "";
+let wrapFixtureUrl = "";
+let realSurfaceFixtureUrl = "";
+/** A SECOND page, at §S6's own 1600px viewport. A second page rather than a
+ *  `setViewportSize` on the shared one: the 38 landed assertions are measured
+ *  at 1440×1000 and a viewport this suite forgot to put back would silently
+ *  re-measure them. */
+let widePage: Page | null = null;
+let artifactHtml = "";
+let artifactFailure = "";
+let baselineFailure = "";
+let baselineCommit = "";
+/** The pre-CR STYLESHEET, served beside the pre-CR markup. Swapping only the
+ *  two scripts would render the old DOM under the NEW cascade — which is how
+ *  the first attempt at the non-vacuity block measured a HORIZONTAL pre-CR
+ *  spine: `.app-roadmap-flow { flex-direction: column }` is a stylesheet fact
+ *  (`styles.css` at that commit), so the before-state needs its own CSS. */
+let baselineStyles = "";
 
 /** A page that is the app's own document shell (theme attribute, real
  *  stylesheet link) wrapping the captured zones — and NO script at all, so
  *  nothing can re-lay-out what is being measured. */
-const fixtureDocument = (zones: string): string =>
+const fixtureDocument = (zones: string, appWidth = 1360, stylesheet = "/styles.css"): string =>
   `<!doctype html>
 <html lang="en" data-theme="forge">
 <head>
 <meta charset="utf-8">
 <title>CR-CRU-078 AC21-AC26 fixture</title>
-<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="${stylesheet}">
 <style>
   /* The measured board sits at a FIXED width so every geometry assertion is
      deterministic, and wide enough that the strip's four gates are never
      clipped by the .app-strip-track overflow. */
   body { margin: 0; }
-  #app { width: 1360px; }
+  #app { width: ${appWidth}px; }
 </style>
 </head>
 <body>
@@ -500,6 +717,52 @@ beforeAll(async () => {
   // with the first proposed one, and the shared fixture's second proposal is
   // deliberately dateless (AC6), which is a different assertion's subject.
   orderedZones = await captureZones({ releases: ORDERED_SHIPPED, proposals: [PROPOSALS[0]!] });
+  looseZones = await captureZones({ queue: LOOSE_QUEUE });
+  heightZones = await captureZones({ proposals: HEIGHT_PROPOSALS, queue: HEIGHT_QUEUE });
+  heightLooseZones = await captureZones({
+    proposals: HEIGHT_PROPOSALS,
+    queue: HEIGHT_LOOSE_QUEUE,
+  });
+  singleZones = await captureZones({ proposals: HEIGHT_PROPOSALS, queue: SINGLE_WAVE_QUEUE });
+  wrapZones = await captureZones({ proposals: WRAP_PROPOSALS, queue: WRAP_QUEUE });
+  // No proposal at all, so `releaseStripFocusIndex` falls through to the last
+  // gate — the newest SHIPPED tag. That is the only way to reach §S7's
+  // delivered path, and with it AC23's `shipped` word and AC24's shipped axis.
+  shippedZones = await captureZones({ releases: [SHIPPED[0]!], proposals: [] });
+
+  // AC26's BASELINE. "Byte-identical before and after this CR" is a claim
+  // about two renders, so the before-state is rendered too: the shell as of
+  // the merge-base of this feature branch, which is the commit the CR was
+  // filed against. Captured defensively — a git failure must report itself in
+  // the AC26 test rather than take the other 38 assertions down with it.
+  try {
+    baselineCommit = execFileSync("git", ["merge-base", "develop", "HEAD"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    }).trim();
+    const showAt = (rel: string): string =>
+      execFileSync("git", ["show", `${baselineCommit}:${rel}`], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+      });
+    const baseDir = mkdtempSync(path.join(tmpdir(), "roadmap-ac26-"));
+    const basePath = path.join(baseDir, "app-logic.mjs");
+    writeFileSync(basePath, showAt("public/app-logic.mjs"));
+    baselineStyles = showAt("public/styles.css");
+    baselineZones = await captureZones({
+      appJs: showAt("public/app.js"),
+      logicPath: basePath,
+    });
+  } catch (failure) {
+    baselineFailure = failure instanceof Error ? failure.message : String(failure);
+  }
+
+  try {
+    artifactHtml = readFileSync(path.join(REPO_ROOT, ARTIFACT_REL), "utf8");
+  } catch (failure) {
+    artifactFailure = failure instanceof Error ? failure.message : String(failure);
+  }
 
   server = Bun.serve({
     port: 0,
@@ -520,6 +783,72 @@ beforeAll(async () => {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
+      if (pathname === "/fixture-loose") {
+        return new Response(fixtureDocument(looseZones), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      // The C5 boards, every one of them served at §S6's measured SURFACE
+      // width so AC20's second clause has the surface it is stated against.
+      if (pathname === "/fixture-surface") {
+        return new Response(fixtureDocument(populatedZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      if (pathname === "/fixture-height") {
+        return new Response(fixtureDocument(heightZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      if (pathname === "/fixture-single") {
+        return new Response(fixtureDocument(singleZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      // AC19d — the four-dep board, served at the SAME surface as every other
+      // C5 fixture: the wrap is forced by the boxes' own width, not by a
+      // narrowed stage.
+      if (pathname === "/fixture-wrap") {
+        return new Response(fixtureDocument(wrapZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      // AC20d — the same one-box board at the surface the user's own Chrome
+      // reports, so the budget is asserted somewhere it is actually browsed.
+      if (pathname === "/fixture-real-surface") {
+        return new Response(fixtureDocument(singleZones, REAL_SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      if (pathname === "/fixture-height-loose") {
+        return new Response(fixtureDocument(heightLooseZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      if (pathname === "/fixture-shipped") {
+        return new Response(fixtureDocument(shippedZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      if (pathname === "/fixture-baseline") {
+        return new Response(fixtureDocument(baselineZones, SURFACE_W, "/styles-baseline.css"), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      // Explicit, and BEFORE the public/ passthrough, which would otherwise
+      // try to open a file that does not exist on disk.
+      if (pathname === "/styles-baseline.css") {
+        return new Response(baselineStyles, {
+          headers: { "content-type": "text/css; charset=utf-8" },
+        });
+      }
+      // AC27's binding source, rendered by the same engine as the live board
+      // so the comparison is render-to-render and not render-to-my-reading.
+      if (pathname === "/artifact") {
+        return new Response(artifactHtml, {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
       // Static passthrough for public/, restricted to a flat file name so the
       // throwaway server cannot be walked out of the directory it serves.
       const name = pathname.replace(/^\/+/, "");
@@ -532,16 +861,29 @@ beforeAll(async () => {
   fixtureUrl = `http://127.0.0.1:${server.port}/fixture`;
   emptyFixtureUrl = `http://127.0.0.1:${server.port}/fixture-empty`;
   orderedFixtureUrl = `http://127.0.0.1:${server.port}/fixture-order`;
+  looseFixtureUrl = `http://127.0.0.1:${server.port}/fixture-loose`;
+  surfaceFixtureUrl = `http://127.0.0.1:${server.port}/fixture-surface`;
+  heightFixtureUrl = `http://127.0.0.1:${server.port}/fixture-height`;
+  heightLooseFixtureUrl = `http://127.0.0.1:${server.port}/fixture-height-loose`;
+  shippedFixtureUrl = `http://127.0.0.1:${server.port}/fixture-shipped`;
+  baselineFixtureUrl = `http://127.0.0.1:${server.port}/fixture-baseline`;
+  singleFixtureUrl = `http://127.0.0.1:${server.port}/fixture-single`;
+  artifactUrl = `http://127.0.0.1:${server.port}/artifact`;
+  wrapFixtureUrl = `http://127.0.0.1:${server.port}/fixture-wrap`;
+  realSurfaceFixtureUrl = `http://127.0.0.1:${server.port}/fixture-real-surface`;
 
   browser = await chromium.launch();
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  widePage = await browser.newPage({ viewport: WIDE_VIEWPORT });
 }, 180_000);
 
 afterAll(async () => {
   if (page !== null) await page.close();
+  if (widePage !== null) await widePage.close();
   if (browser !== null) await browser.close();
   if (server !== null) server.stop(true);
   page = null;
+  widePage = null;
   browser = null;
   server = null;
 });
@@ -551,6 +893,13 @@ afterAll(async () => {
 beforeEach(async () => {
   await pageEl().goto(fixtureUrl, { waitUntil: "load" });
 });
+
+/** The AC18a board: every one of the six focused CRs drawn, because the
+ *  wave-less group takes no trim. Used by the assertions whose subject is a
+ *  FACE a wave box no longer draws (merged, dimmed-merged). */
+const looseBoard = async (): Promise<void> => {
+  await pageEl().goto(looseFixtureUrl, { waitUntil: "load" });
+};
 
 // ── In-browser measurement primitives ──────────────────────────────────────
 //
@@ -624,8 +973,8 @@ function __measureAll(selector) {
 }
 `;
 
-async function measureAll(selector: string): Promise<Measured[]> {
-  const raw = await pageEl().evaluate(
+async function measureAll(selector: string, target: Page = pageEl()): Promise<Measured[]> {
+  const raw = await target.evaluate(
     `(() => { ${MEASURE_FN} return __measureAll(${JSON.stringify(selector)}); })()`,
   );
   // The shape is fixed by `__measure` three lines above, in this same file.
@@ -637,8 +986,8 @@ async function measureAll(selector: string): Promise<Measured[]> {
  *  the `rgb(...)` form Chromium reports for `color`. AC22 forbids inventing a
  *  hex value, so every expected colour below is read out of the shipped
  *  stylesheet at runtime instead of being written here. */
-async function tokenColor(name: string): Promise<string> {
-  const raw = await pageEl().evaluate(
+async function tokenColor(name: string, target: Page = pageEl()): Promise<string> {
+  const raw = await target.evaluate(
     `(() => {
        const declared = getComputedStyle(document.documentElement)
          .getPropertyValue(${JSON.stringify(name)}).trim();
@@ -857,7 +1206,10 @@ describe("AC21 — every element renders as its DECLARED shape (measured)", () =
        })()`,
     );
     const contained = raw as { wave: string; cr: string; inside: boolean }[];
-    expect(contained.length).toBe(FOCUSED_CRS.length);
+    // CR-CRU-096 §S5 — the rows a wave box DRAWS, not its whole membership:
+    // containment is a claim about what is painted, and the merged and
+    // dispositioned members are no longer painted here.
+    expect(contained.map((entry) => entry.cr)).toEqual(DRAWN_CRS);
     for (const entry of contained) {
       expect(entry.inside, `${entry.cr} is painted outside wave ${entry.wave}'s box`).toBe(true);
     }
@@ -865,8 +1217,15 @@ describe("AC21 — every element renders as its DECLARED shape (measured)", () =
 
   test("a CR is a LEAF rectangle — a box with no node inside it", async () => {
     const nodes = await measureAll('[data-testid="roadmap-node"]');
-    expect(nodes.length).toBe(FOCUSED_CRS.length);
+    expect(nodes.map((n) => n.cr)).toEqual(DRAWN_CRS);
     for (const node of nodes) expectRectangle(node, `CR node ${node.cr}`);
+    // …and on the AC18a board, where every FACE is drawn: a merged leaf and a
+    // dimmed-merged one are rectangles too, which is the half a trimmed wave
+    // box can no longer show.
+    await looseBoard();
+    const everyFace = await measureAll('[data-testid="roadmap-node"]');
+    expect(everyFace.map((n) => n.cr)).toEqual(FOCUSED_CRS);
+    for (const node of everyFace) expectRectangle(node, `CR node ${node.cr}`);
     const raw = await pageEl().evaluate(
       `Array.from(document.querySelectorAll('[data-testid="roadmap-node"]'))
          .map((n) => n.querySelectorAll('[data-testid="roadmap-node"]').length)`,
@@ -898,6 +1257,9 @@ describe("AC21 — every element renders as its DECLARED shape (measured)", () =
 
 describe("AC22 — each state renders its declared colour", () => {
   test("COMPLETED is green, drawn from the app's own token", async () => {
+    // The merged FACE is drawn on the wave-less board (AC18a): a wave box
+    // rolls its merged members up and draws none of them (§S5/AC9).
+    await looseBoard();
     const green = await tokenColor("--pass");
     expect(green).not.toBe("");
     const node = nodeFor(await measureAll('[data-testid="roadmap-node"]'), "CR-V-DONE");
@@ -909,6 +1271,7 @@ describe("AC22 — each state renders its declared colour", () => {
   });
 
   test("COMPLETED_UNTRACKED is the SAME green, DIMMED", async () => {
+    await looseBoard();
     const green = await tokenColor("--pass");
     const nodes = await measureAll('[data-testid="roadmap-node"]');
     const tracked = nodeFor(nodes, "CR-V-DONE");
@@ -961,6 +1324,7 @@ describe("AC22 — each state renders its declared colour", () => {
   });
 
   test("the four states are four DISTINGUISHABLE rendered faces", async () => {
+    await looseBoard();
     const nodes = await measureAll('[data-testid="roadmap-node"]');
     const faces = new Map<string, string>();
     for (const cr of ["CR-V-DONE", "CR-V-UNTRACKED", "CR-V-LIVE", "CR-V-PEND"]) {
@@ -1011,11 +1375,29 @@ describe("AC22 — each state renders its declared colour", () => {
     }
   });
 
-  test("SUPERSEDED and VOID render distinguishably from each other", async () => {
-    const badges = await measureAll('[data-testid="roadmap-node-lifecycle"]');
-    expect(badges.length).toBe(2);
-    const faces = badges.map((b) => `${b.color}|${b.text}`);
-    expect(new Set(faces).size, "the two lifecycle states render identically").toBe(2);
+  test("SUPERSEDED and VOID render distinguishably from each other — on the NODE's own badge and on zone 3's row", async () => {
+    // CR-CRU-096 AC9b — AC9a trims the dispositioned PENDING ROW out of a
+    // TRIMMED wave box and nothing more: the node's badge STAYS and renders
+    // wherever a node renders. So the axis is measured on BOTH surfaces that
+    // draw it — zone 3's row here, and the node badge on the AC18a loose
+    // board, the untrimmed group where a dispositioned member is drawn.
+    const rows = await measureAll('[data-testid="roadmap-lifecycle-badge"]');
+    expect(rows.length).toBe(2);
+    expect(
+      new Set(rows.map((b) => `${b.color}|${b.text}`)).size,
+      "the two lifecycle states render identically on zone 3's row",
+    ).toBe(2);
+    // This board's waves are all declared, so every box is TRIMMED and draws
+    // no dispositioned row — hence no node badge on THIS board (AC9a).
+    expect((await measureAll('[data-testid="roadmap-node-lifecycle"]')).length).toBe(0);
+
+    await looseBoard();
+    const nodes = await measureAll('[data-testid="roadmap-node-lifecycle"]');
+    expect(nodes.length, "the untrimmed loose group draws no node badge").toBe(2);
+    expect(
+      new Set(nodes.map((b) => `${b.color}|${b.text}`)).size,
+      "the two lifecycle states render identically on the node badge",
+    ).toBe(2);
   });
 });
 
@@ -1046,7 +1428,16 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
     await pageEl().addStyleTag({ content: STRIP_COLOUR });
   });
 
+  /** The AC18a board, colour-stripped. Navigating drops an injected style tag,
+   *  so the strip is re-applied after the load. Used where the subject is
+   *  every FACE, including the merged ones a trimmed wave box no longer draws. */
+  const looseBoardStripped = async (): Promise<void> => {
+    await looseBoard();
+    await pageEl().addStyleTag({ content: STRIP_COLOUR });
+  };
+
   test("colour stripping really does flatten the rendered colours", async () => {
+    await looseBoardStripped();
     // The premise, asserted rather than assumed: after the strip there is ONE
     // ink, ONE border colour and ONE opacity across every node, so anything
     // that still separates them is provably not colour.
@@ -1058,6 +1449,7 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
   });
 
   test("each flowchart node states its status in WORDS", async () => {
+    await looseBoardStripped();
     const raw = await pageEl().evaluate(
       `Array.from(document.querySelectorAll('[data-testid="roadmap-node"]')).map((n) => ({
          cr: n.getAttribute("data-cr"),
@@ -1110,7 +1502,13 @@ describe("AC23 — with colour stripped, every state is still determinable", () 
     }
   });
 
-  test("the LIFECYCLE axis survives the strip on BOTH surfaces", async () => {
+  test("the LIFECYCLE axis survives the strip on BOTH surfaces — the node badge and zone 3's row", async () => {
+    // CR-CRU-096 AC9b — measured on the AC18a loose board, the untrimmed
+    // group where a dispositioned member still draws a NODE. AC9a's trim only
+    // removes such a row from a wave BOX; it never removed the badge, and
+    // §S8 forbids `data-lifecycle` being the disposition's only channel — an
+    // attribute is not text and does not survive a greyscale screenshot.
+    await looseBoardStripped();
     const raw = await pageEl().evaluate(
       `(() => {
          const grab = (sel) => Array.from(document.querySelectorAll(sel)).map((e) => ({
@@ -1258,6 +1656,11 @@ describe("AC24 — only an IN_PROGRESS CR moves (sampled across frames)", () => 
   test(
     "COMPLETED, COMPLETED_UNTRACKED and PENDING nodes are completely static",
     async () => {
+      // Every static FACE, which after CR-CRU-096 §S5 means the wave-less
+      // board (AC18a): a trimmed wave box draws neither merged member, so
+      // "COMPLETED and COMPLETED_UNTRACKED do not move" is only observable
+      // where they are drawn.
+      await looseBoard();
       const sampled = await sampleFrames();
       const statics = sampled.filter((s) => s.cr !== "CR-V-LIVE");
       expect(statics.length).toBe(FOCUSED_CRS.length - 1);
@@ -1519,6 +1922,9 @@ describe("AC26 — position comes from declared data, never a layout engine", ()
   });
 
   test("node order in the flowchart IS the authored seq order", async () => {
+    // The wave-less board (AC18a), where all six are drawn: order is the
+    // subject here, and a trimmed box would leave only two to order.
+    await looseBoard();
     const raw = await pageEl().evaluate(
       `Array.from(document.querySelectorAll('[data-testid="roadmap-node"]'))
          .map((n) => ({ cr: n.getAttribute("data-cr"), seq: n.getAttribute("data-seq") }))`,
@@ -1529,6 +1935,7 @@ describe("AC26 — position comes from declared data, never a layout engine", ()
   });
 
   test("every node is PAINTED in that declared order — no reordering by layout", async () => {
+    await looseBoard();
     const raw = await pageEl().evaluate(
       `Array.from(document.querySelectorAll('[data-testid="roadmap-node"]')).map((n) => {
          const r = n.getBoundingClientRect();
@@ -1662,5 +2069,1650 @@ describe("CR-CRU-078 AC28 — in a real browser, left to right, the strip ASCEND
     const bracket = terminals as { start: number; end: number };
     expect(bracket.start).toBeLessThanOrEqual(leftToRight[0]!.left);
     expect(bracket.end).toBeGreaterThanOrEqual(leftToRight[leftToRight.length - 1]!.left);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CR-CRU-096 C5 — THE READINGS FOUR CYCLES DEFERRED TO A REAL ENGINE
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Spec: docs/changes/CR-CRU-096-zone-2-drifts-from-the-approved-design.md
+//       §S6 (the axis and its budget), §S7 (the shipped path), §S8 (the two
+//       grammar invariants), AC2/AC4, AC7/AC12, AC17, AC20, AC25, AC26, AC27.
+//
+// Every one of the deferral notes C1–C4 wrote says the same thing in different
+// words: happy-dom runs no layout engine and applies no cascade, so a resolved
+// length, a resolved colour, a painted position and a compositor-driven
+// animation do not exist there. C1 read the active marker off the STYLESHEET
+// SOURCE, C2 took `overflow` on the stylesheet's word, C3 read the roll-up's
+// face and the marker's ink off their rules, and C4 did AC20's width ON PAPER.
+// This section is the place those readings exist, and it reuses the harness
+// above rather than standing up a second one: same happy-dom capture of the
+// REAL production DOM, same throwaway server handing Chromium the REAL
+// public/styles.css over HTTP, same browser.
+//
+// Some of these assertions PASS on arrival. That is the expected shape of a
+// measurement cycle: C1–C4 landed the production code and deferred only the
+// reading. A passing assertion here is only worth its non-vacuity argument, so
+// each block states what would have failed it — a counter-subject measured on
+// the same page, or a token proved distinct before it is compared against.
+
+/** §S6's own viewport, narrowed once. */
+const wide = (): Page => {
+  if (widePage === null) throw new Error("roadmap-visual-grammar: no wide Chromium page");
+  return widePage;
+};
+
+const openWide = async (url: string): Promise<void> => {
+  await wide().goto(url, { waitUntil: "load" });
+};
+
+async function readWide<T>(expression: string): Promise<T> {
+  const raw = await wide().evaluate(expression);
+  // Every call site below fixes the shape in the expression it passes.
+  const value = raw as T;
+  return value;
+}
+
+/** One rendered box: its geometry, its resolved overflow, its resolved face.
+ *  Distinct from `Measured` above, which decomposes a transform matrix for
+ *  AC21's shape grammar and carries no overflow or cursor. */
+interface Boxed {
+  testid: string;
+  cls: string;
+  text: string;
+  x: number;
+  right: number;
+  top: number;
+  bottom: number;
+  width: number;
+  height: number;
+  overflow: string;
+  overflowX: string;
+  overflowY: string;
+  animationName: string;
+  borderTopWidth: number;
+  borderMax: number;
+  borderTopStyle: string;
+  borderTopColor: string;
+  backgroundColor: string;
+  color: string;
+  fontWeight: string;
+  cursor: string;
+}
+
+const BOX_FN = `
+function __box(el) {
+  const cs = getComputedStyle(el);
+  const r = el.getBoundingClientRect();
+  const px = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+  return {
+    testid: el.getAttribute("data-testid") || "",
+    cls: String(el.className || "").trim(),
+    text: (el.textContent || "").replace(/\\s+/g, " ").trim(),
+    x: r.left, right: r.right, top: r.top, bottom: r.bottom,
+    width: r.width, height: r.height,
+    overflow: cs.overflow, overflowX: cs.overflowX, overflowY: cs.overflowY,
+    animationName: cs.animationName,
+    borderTopWidth: px(cs.borderTopWidth),
+    borderMax: Math.max(px(cs.borderTopWidth), px(cs.borderRightWidth),
+                        px(cs.borderBottomWidth), px(cs.borderLeftWidth)),
+    borderTopStyle: cs.borderTopStyle,
+    borderTopColor: cs.borderTopColor,
+    backgroundColor: cs.backgroundColor,
+    color: cs.color,
+    fontWeight: cs.fontWeight,
+    cursor: cs.cursor,
+  };
+}
+`;
+
+async function boxesOf(selector: string): Promise<Boxed[]> {
+  return await readWide<Boxed[]>(
+    `(() => { ${BOX_FN} return Array.from(document.querySelectorAll(${JSON.stringify(
+      selector,
+    )})).map(__box); })()`,
+  );
+}
+
+/** The one element a selector must match, named so a fixture that drifted
+ *  reports WHAT it matched instead of throwing on `[0]!`. */
+const one = (found: Boxed[], what: string): Boxed => {
+  if (found.length !== 1) {
+    throw new Error(`expected exactly one ${what}, measured ${found.length}`);
+  }
+  return found[0]!;
+};
+
+/** Which piece of the spine a flow child IS, decided from what it PUBLISHES —
+ *  never from its position, which is the thing under test. */
+const spineRole = (piece: Boxed): string => {
+  if (piece.testid === "roadmap-flow-terminal") return "terminal";
+  if (piece.testid === "roadmap-flow-connector") return "connector";
+  if (piece.testid === "roadmap-flow-gate") return "gate";
+  if (piece.testid === "roadmap-delivered") return "delivered";
+  if (piece.cls.split(/\s+/).includes("app-flow-waves")) return "waves";
+  return `unknown(${piece.testid === "" ? piece.cls : piece.testid})`;
+};
+
+/** Two boxes OVERLAP vertically — the geometric statement of "these sit side
+ *  by side on one axis" and the exact negation of "these are stacked". */
+const yOverlap = (a: Boxed, b: Boxed): number =>
+  Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+
+const round1 = (n: number): number => Math.round(n * 10) / 10;
+
+// ── AC20 (C4's deferral) — the axis is HORIZONTAL by GEOMETRY ──────────────
+//
+// C4's AC20 note landed the `flex-direction: row` and checked the budget with
+// arithmetic on the stylesheet's declared lengths. Two things that cannot
+// establish: that the declared `row` SURVIVES the cascade (a later rule, a
+// `@media` block, an inherited `flex-direction: column` on an ancestor or a
+// `flex-wrap` that breaks the line all leave the declaration intact and the
+// axis vertical), and that the result fits. Both are measured here, and the
+// axis is read off the PAINTED positions: x increasing while y overlaps. A
+// stacked spine has x equal and y disjoint, which is precisely what the
+// pre-CR build drew.
+
+describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and fits the surface", () => {
+  test("the flow draws FOUR stages and THREE connectors, in the artifact's own order", async () => {
+    await openWide(singleFixtureUrl);
+    const pieces = await boxesOf('[data-zone="2"] > *');
+    expect(pieces.map(spineRole)).toEqual([
+      "terminal",
+      "connector",
+      "waves",
+      "connector",
+      "gate",
+      "connector",
+      "terminal",
+    ]);
+  });
+
+  test("the four stages lie on ONE HORIZONTAL axis — x increases while y overlaps", async () => {
+    await openWide(singleFixtureUrl);
+    const pieces = await boxesOf('[data-zone="2"] > *');
+    const stages = pieces.filter((piece) => spineRole(piece) !== "connector");
+    expect(stages.length).toBe(4);
+
+    for (let at = 1; at < stages.length; at++) {
+      const before = stages[at - 1]!;
+      const here = stages[at]!;
+      expect(
+        here.x,
+        `stage ${spineRole(here)} is painted at x=${round1(here.x)}, which is not to the ` +
+          `RIGHT of ${spineRole(before)} (right edge ${round1(before.right)}) — the axis is ` +
+          `not horizontal`,
+      ).toBeGreaterThanOrEqual(before.right - 0.5);
+      expect(
+        yOverlap(before, here),
+        `stage ${spineRole(here)} (y ${round1(here.top)}–${round1(here.bottom)}) shares no ` +
+          `vertical span with ${spineRole(before)} (y ${round1(before.top)}–` +
+          `${round1(before.bottom)}), which is what a STACKED spine looks like`,
+      ).toBeGreaterThan(0);
+    }
+
+    // Every pair, not just neighbours: a spine that wrapped after two stages
+    // would pass the pairwise walk above and still read as two lines.
+    for (const outer of stages) {
+      for (const inner of stages) {
+        expect(yOverlap(outer, inner)).toBeGreaterThan(0);
+      }
+    }
+
+    // And each connector really is BETWEEN the two stages it joins, so the
+    // three lines read as one spine rather than as decoration parked anywhere.
+    for (let at = 1; at < pieces.length; at += 2) {
+      const link = pieces[at]!;
+      expect(spineRole(link)).toBe("connector");
+      expect(link.x).toBeGreaterThanOrEqual(pieces[at - 1]!.right - 0.5);
+      expect(link.right).toBeLessThanOrEqual(pieces[at + 1]!.x + 0.5);
+    }
+  });
+
+  test("the rendered flow does not exceed the 1130px surface at a 1600px viewport", async () => {
+    await openWide(singleFixtureUrl);
+    const surface = await readWide<{
+      viewport: number;
+      offsetWidth: number;
+      clientWidth: number;
+      scrollWidth: number;
+      paintedLeft: number;
+      paintedRight: number;
+      boxLeft: number;
+      boxRight: number;
+    }>(
+      `(() => {
+         const flow = document.querySelector('[data-zone="2"]');
+         const own = flow.getBoundingClientRect();
+         const kids = Array.from(flow.querySelectorAll("*")).map((e) => e.getBoundingClientRect());
+         return {
+           viewport: window.innerWidth,
+           offsetWidth: flow.offsetWidth,
+           clientWidth: flow.clientWidth,
+           scrollWidth: flow.scrollWidth,
+           paintedLeft: Math.min.apply(null, kids.map((r) => r.left)),
+           paintedRight: Math.max.apply(null, kids.map((r) => r.right)),
+           boxLeft: own.left,
+           boxRight: own.right,
+         };
+       })()`,
+    );
+
+    // Fixture guard: the surface really IS the one §S6 measured against.
+    expect(surface.viewport).toBe(WIDE_VIEWPORT.width);
+    expect(surface.offsetWidth).toBe(SURFACE_W);
+
+    const painted = surface.paintedRight - surface.paintedLeft;
+    expect(
+      painted,
+      `zone 2 paints ${round1(painted)}px of spine into the ${SURFACE_W}px surface §S6 ` +
+        `measured at a ${WIDE_VIEWPORT.width}px viewport`,
+    ).toBeLessThanOrEqual(SURFACE_W);
+
+    // "Does not exceed the surface" the second way: nothing overflows the
+    // element. A flow wider than its box would report scrollWidth > clientWidth
+    // whatever the arithmetic said.
+    expect(
+      surface.scrollWidth - surface.clientWidth,
+      `zone 2 overflows its own box by ${surface.scrollWidth - surface.clientWidth}px`,
+    ).toBeLessThanOrEqual(0.5);
+
+    // …and nothing is painted outside it either — the 45°-rotated gate hangs
+    // ~15.8px past its 76px layout box on each side, so the layout arithmetic
+    // alone cannot answer this.
+    expect(surface.paintedLeft).toBeGreaterThanOrEqual(surface.boxLeft - 0.5);
+    expect(surface.paintedRight).toBeLessThanOrEqual(surface.boxRight + 0.5);
+  });
+
+  test("the spine's measured pieces account for its whole width — §S6's budget, read off the pixels", async () => {
+    await openWide(singleFixtureUrl);
+    const pieces = await boxesOf('[data-zone="2"] > *');
+    const gap = await readWide<number>(
+      `parseFloat(getComputedStyle(document.querySelector('[data-zone="2"]')).columnGap) || 0`,
+    );
+    expect(pieces.length).toBe(7);
+
+    const extent = pieces[6]!.right - pieces[0]!.x;
+    const summed = pieces.reduce((total, piece) => total + piece.width, 0) + gap * 6;
+    expect(
+      Math.abs(summed - extent),
+      `the seven pieces plus six ${gap}px gaps sum to ${round1(summed)}px but the spine ` +
+        `measures ${round1(extent)}px — something else is taking width`,
+    ).toBeLessThanOrEqual(1);
+
+    const connectors = pieces.filter((piece) => spineRole(piece) === "connector");
+    const terminals = pieces.filter((piece) => spineRole(piece) === "terminal");
+    const gate = one(
+      pieces.filter((piece) => spineRole(piece) === "gate"),
+      "gate stage",
+    );
+    const waves = one(
+      pieces.filter((piece) => spineRole(piece) === "waves"),
+      "wave stage",
+    );
+
+    // The pieces §S6's budget names by a fixed length, measured: three 24px
+    // connectors and a 76px gate (`--app-gate-side`, shared with zone 1 so the
+    // same release draws the same size in both).
+    expect(connectors.length).toBe(3);
+    for (const link of connectors) expect(link.width).toBeCloseTo(BUDGET.connectors / 3, 1);
+    expect(gate.width).toBeCloseTo(BUDGET.gate, 1);
+    expect(terminals.length).toBe(2);
+
+    // The two pieces the budget ESTIMATES rather than declares — the terminals
+    // at 100px for the pair and the wave box at 300px. They are content-sized,
+    // so this reports them against the table instead of pinning them: §S6 is
+    // the argument and the measurement is the fact. The AC's own clause is the
+    // surface bound asserted above.
+    const spent = terminals.reduce((total, term) => total + term.width, 0) + waves.width;
+    expect(
+      extent,
+      `measured spine ${round1(extent)}px = terminals ` +
+        `${terminals.map((t) => round1(t.width)).join(" + ")} (budget ${BUDGET.terminals}) + ` +
+        `wave ${round1(waves.width)} (budget ${BUDGET.wave}) + gate ${round1(gate.width)} ` +
+        `(budget ${BUDGET.gate}) + connectors ${round1(BUDGET.connectors)} + gaps ` +
+        `${gap * 6} (budget ${BUDGET.gaps}); §S6's total is ${BUDGET.total}px, content-sized ` +
+        `pieces measured ${round1(spent)}px`,
+    ).toBeLessThanOrEqual(SURFACE_W);
+  });
+
+  test("a MULTI-WAVE release still fits, and its boxes lie ALONG the axis (AC19c)", async () => {
+    await openWide(heightFixtureUrl);
+    const stage = one(await boxesOf('[data-zone="2"] .app-flow-waves'), "wave stage");
+    const boxes = await boxesOf('[data-testid="roadmap-wave"]');
+    expect(boxes.length).toBe(2);
+    // AC19c is the case where the boxes FIT: this board's widest annotation is
+    // a TWO-dep row, so both boxes sit on one line and "along the axis" is
+    // what the geometry below measures. AC19d takes the case where they do not
+    // fit — the two criteria are stated against two different boards, and this
+    // guard keeps them from collapsing into one.
+    expect(
+      boxes[0]!.width + boxes[1]!.width,
+      `the AC19c board's boxes cannot share one line (stage ${round1(stage.width)}px), so this ` +
+        `test is measuring AC19d's wrap and AC19c's axis is no longer asserted anywhere`,
+    ).toBeLessThanOrEqual(stage.width);
+    expect(
+      boxes[1]!.x,
+      `the second wave box is painted at x=${round1(boxes[1]!.x)}, not to the right of the ` +
+        `first (right edge ${round1(boxes[0]!.right)}) — the boxes are stacked ACROSS the axis`,
+    ).toBeGreaterThanOrEqual(boxes[0]!.right - 0.5);
+    expect(yOverlap(boxes[0]!, boxes[1]!)).toBeGreaterThan(0);
+
+    const surface = await readWide<{ scrollWidth: number; clientWidth: number; painted: number }>(
+      `(() => {
+         const flow = document.querySelector('[data-zone="2"]');
+         const kids = Array.from(flow.querySelectorAll("*")).map((e) => e.getBoundingClientRect());
+         return {
+           scrollWidth: flow.scrollWidth,
+           clientWidth: flow.clientWidth,
+           painted: Math.max.apply(null, kids.map((r) => r.right)) -
+                    Math.min.apply(null, kids.map((r) => r.left)),
+         };
+       })()`,
+    );
+    expect(
+      surface.painted,
+      `a two-wave release paints ${round1(surface.painted)}px (wave stage ` +
+        `${round1(stage.width)}px) into the ${SURFACE_W}px surface`,
+    ).toBeLessThanOrEqual(SURFACE_W);
+    expect(surface.scrollWidth - surface.clientWidth).toBeLessThanOrEqual(0.5);
+  });
+
+  // AC19d — the DEGRADATION, measured. §S5's rule is that a partially drawn
+  // container is a defect, and `flex-wrap: wrap` obeys it: a wrapped box is
+  // still WHOLLY drawn, where `nowrap` would overflow the surface or clip a
+  // box. So the wrap is not a drift to be removed — it is the correct
+  // behaviour at a width the axis cannot hold, and it is asserted as such.
+  test("when the axis genuinely CANNOT hold the boxes they WRAP, wholly painted (AC19d)", async () => {
+    await openWide(wrapFixtureUrl);
+    const stage = one(await boxesOf('[data-zone="2"] .app-flow-waves'), "wave stage");
+    const boxes = await boxesOf('[data-testid="roadmap-wave"]');
+    expect(boxes.length).toBe(2);
+
+    // Non-vacuity: the boxes' own widths REALLY exceed the line. Without this
+    // the test would pass on a board that simply chose to stack.
+    expect(
+      boxes[0]!.width + boxes[1]!.width,
+      `the four-dep boxes measure ${round1(boxes[0]!.width)}px and ` +
+        `${round1(boxes[1]!.width)}px, which still fit the ${round1(stage.width)}px stage — ` +
+        `this board no longer reaches AC19d's case`,
+    ).toBeGreaterThan(stage.width);
+
+    // WRAPPED, not overflowed: the second box starts a further LINE, back at
+    // the stage's own left edge and below the first.
+    expect(boxes[1]!.top).toBeGreaterThanOrEqual(boxes[0]!.bottom - 0.5);
+    expect(yOverlap(boxes[0]!, boxes[1]!)).toBeLessThanOrEqual(0);
+    expect(Math.abs(boxes[1]!.x - stage.x)).toBeLessThanOrEqual(0.5);
+
+    const wrapped = await readWide<{
+      scrollWidth: number;
+      clientWidth: number;
+      client: { left: number; right: number; top: number; bottom: number };
+      boxes: {
+        left: number;
+        right: number;
+        top: number;
+        bottom: number;
+        overflowX: number;
+        overflowY: number;
+        outside: number;
+      }[];
+    }>(
+      `(() => {
+         const flow = document.querySelector('[data-zone="2"]');
+         const fr = flow.getBoundingClientRect();
+         const client = {
+           left: fr.left + flow.clientLeft,
+           top: fr.top + flow.clientTop,
+           right: fr.left + flow.clientLeft + flow.clientWidth,
+           bottom: fr.top + flow.clientTop + flow.clientHeight,
+         };
+         const boxes = Array.from(
+           document.querySelectorAll('[data-testid="roadmap-wave"]'),
+         ).map((el) => {
+           const r = el.getBoundingClientRect();
+           const inner = {
+             left: r.left + el.clientLeft,
+             top: r.top + el.clientTop,
+             right: r.left + el.clientLeft + el.clientWidth,
+             bottom: r.top + el.clientTop + el.clientHeight,
+           };
+           const outside = Array.from(el.querySelectorAll("*")).filter((kid) => {
+             const k = kid.getBoundingClientRect();
+             if (k.width === 0 && k.height === 0) return false;
+             return (
+               k.left < inner.left - 0.5 ||
+               k.right > inner.right + 0.5 ||
+               k.top < inner.top - 0.5 ||
+               k.bottom > inner.bottom + 0.5
+             );
+           }).length;
+           return {
+             left: r.left,
+             right: r.right,
+             top: r.top,
+             bottom: r.bottom,
+             overflowX: el.scrollWidth - el.clientWidth,
+             overflowY: el.scrollHeight - el.clientHeight,
+             outside,
+           };
+         });
+         return { scrollWidth: flow.scrollWidth, clientWidth: flow.clientWidth, client, boxes };
+       })()`,
+    );
+
+    // WHOLLY PAINTED: every box lies inside the surface's own client box, and
+    // holds all of its own content — nothing is cut off at either boundary.
+    for (const [at, box] of wrapped.boxes.entries()) {
+      expect(
+        box.left >= wrapped.client.left - 0.5 &&
+          box.right <= wrapped.client.right + 0.5 &&
+          box.top >= wrapped.client.top - 0.5 &&
+          box.bottom <= wrapped.client.bottom + 0.5,
+        `wave box ${at} is painted at ` +
+          `${round1(box.left)}..${round1(box.right)} x ${round1(box.top)}..${round1(box.bottom)}, ` +
+          `outside the surface's ${round1(wrapped.client.left)}..${round1(wrapped.client.right)} x ` +
+          `${round1(wrapped.client.top)}..${round1(wrapped.client.bottom)} — it is CLIPPED, ` +
+          `which §S5 calls a defect`,
+      ).toBe(true);
+      expect(
+        box.outside,
+        `wave box ${at} paints ${box.outside} descendant(s) outside its own content box, so the ` +
+          `box is drawn but its contents are not`,
+      ).toBe(0);
+      expect(box.overflowX).toBeLessThanOrEqual(0.5);
+      expect(box.overflowY).toBeLessThanOrEqual(0.5);
+    }
+    // AND IT NEVER SCROLLS: the wrap is what keeps the surface intact.
+    expect(
+      wrapped.scrollWidth - wrapped.clientWidth,
+      `zone 2 scrolls ${round1(wrapped.scrollWidth - wrapped.clientWidth)}px past its ` +
+        `${round1(wrapped.clientWidth)}px surface, so the boxes overflowed rather than wrapped`,
+    ).toBeLessThanOrEqual(0.5);
+  });
+
+  // AC20d — the budget at the REAL surface. AC20's 1130px is a CONTROLLED
+  // figure and stays measured above; a criterion pinned only to it is green on
+  // a viewport nobody browses at, because the Project rail takes the remainder
+  // and the user's own Chrome reports 991px. This case asks the APP for its
+  // surface and measures the spine against THAT, so the criterion tracks the
+  // app instead of a constant this file happens to hold.
+  test("AC20d — the spine also fits the surface the APP itself reports, not just 1130px", async () => {
+    await openWide(realSurfaceFixtureUrl);
+    const pieces = await boxesOf('[data-zone="2"] > *');
+    expect(pieces.length).toBeGreaterThan(0);
+    const extent =
+      Math.max(...pieces.map((piece) => piece.right)) - Math.min(...pieces.map((piece) => piece.x));
+
+    const reported = await readWide<{ scrollWidth: number; clientWidth: number }>(
+      `(() => {
+         const flow = document.querySelector('[data-zone="2"]');
+         return { scrollWidth: flow.scrollWidth, clientWidth: flow.clientWidth };
+       })()`,
+    );
+
+    // Non-vacuity: the surface the app reports here is NARROWER than AC20's
+    // constant, so this is a second measurement and not the first one again.
+    expect(
+      reported.clientWidth,
+      `the app reports a ${round1(reported.clientWidth)}px surface, which is not narrower than ` +
+        `AC20's controlled ${SURFACE_W}px — AC20d would be re-measuring AC20`,
+    ).toBeLessThan(SURFACE_W);
+    expect(
+      extent,
+      `the spine measures ${round1(extent)}px against the ${round1(reported.clientWidth)}px ` +
+        `surface the app reports at a ${REAL_SURFACE_W}px shell (headroom ` +
+        `${round1(reported.clientWidth - extent)}px)`,
+    ).toBeLessThanOrEqual(reported.clientWidth + 0.5);
+    expect(reported.scrollWidth - reported.clientWidth).toBeLessThanOrEqual(0.5);
+  });
+
+  test("AC24 — the SHIPPED path takes the same horizontal axis", async () => {
+    await openWide(shippedFixtureUrl);
+    const pieces = await boxesOf('[data-zone="2"] > *');
+    expect(pieces.map(spineRole)).toEqual([
+      "terminal",
+      "connector",
+      "delivered",
+      "connector",
+      "gate",
+      "connector",
+      "terminal",
+    ]);
+    const stages = pieces.filter((piece) => spineRole(piece) !== "connector");
+    for (let at = 1; at < stages.length; at++) {
+      expect(stages[at]!.x).toBeGreaterThanOrEqual(stages[at - 1]!.right - 0.5);
+      expect(yOverlap(stages[at - 1]!, stages[at]!)).toBeGreaterThan(0);
+    }
+    // AC21 — and it reconstructs no waves while doing it.
+    const empties = await readWide<{ waves: number; nodes: number }>(
+      `({
+         waves: document.querySelectorAll('[data-testid="roadmap-wave"]').length,
+         nodes: document.querySelectorAll('[data-zone="2"] [data-testid="roadmap-node"]').length,
+       })`,
+    );
+    expect(empties.waves).toBe(0);
+    expect(empties.nodes).toBe(0);
+  });
+
+  test("zones 1, 2 and 3 still stack without overlap at the measured surface", async () => {
+    await openWide(singleFixtureUrl);
+    const zones = await boxesOf("[data-zone]");
+    expect(zones.length).toBe(3);
+    for (let at = 1; at < zones.length; at++) {
+      expect(
+        zones[at]!.top,
+        `zone ${at + 1} starts at y=${round1(zones[at]!.top)}, above zone ${at}'s bottom ` +
+          `edge ${round1(zones[at - 1]!.bottom)} — the horizontal spine broke the stack`,
+      ).toBeGreaterThanOrEqual(zones[at - 1]!.bottom - 0.5);
+      // Horizontally they are one column, so the spine cannot have pushed a
+      // zone sideways either.
+      expect(Math.abs(zones[at]!.x - zones[at - 1]!.x)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(zones[at]!.width - zones[at - 1]!.width)).toBeLessThanOrEqual(0.5);
+    }
+  });
+});
+
+// ── AC2 / AC4 (C1's deferral) — the marker is a BORDER, and it does not move ─
+//
+// C1's note: it asserted `.app-flow-wave[data-active="true"] { border-color:
+// var(--ember) }` off the stylesheet SOURCE. A declaration is not a rendered
+// border — the selector may not match, the token may not resolve, a later rule
+// may win. Measured here, with the neutral token proved distinct first so the
+// comparison cannot pass on two names for one colour.
+
+describe("CR-CRU-096 AC2/AC4 — the active wave's marker is a RENDERED border, and it never moves", () => {
+  test("an active wave renders the ember token as its border, not the neutral line", async () => {
+    await openWide(heightFixtureUrl);
+    const ember = await tokenColor("--ember", wide());
+    const line = await tokenColor("--line", wide());
+    expect(ember).not.toBe("");
+    expect(line).not.toBe("");
+    // Non-vacuity: the two tokens are different colours, so "renders ember"
+    // cannot be satisfied by the neutral border the pre-CR build drew.
+    expect(sameHue(ember, line), `--ember and --line resolve to the same colour`).toBe(false);
+
+    const waves = await boxesOf('[data-testid="roadmap-wave"]');
+    expect(waves.length).toBe(2);
+    const active = await readWide<string[]>(
+      `Array.from(document.querySelectorAll('[data-testid="roadmap-wave"]'))
+         .map((w) => w.getAttribute("data-active"))`,
+    );
+    expect(active).toEqual(["true", "true"]);
+    for (const box of waves) {
+      expect(
+        sameHue(box.borderTopColor, ember),
+        `an active wave renders a ${box.borderTopColor} border, not the ember ${ember}`,
+      ).toBe(true);
+      expect(box.borderTopStyle).toBe("solid");
+      // A border that RENDERS, not a declared one. Deliberately not pinned to
+      // the stylesheet's `1.5px`: Chromium resolves a border width to a whole
+      // number of device pixels, so at DPR 1 the declared 1.5px is USED as
+      // 1px. AC2 asks for "a word and a border" and names no width, so the
+      // rounding is a measurement to record, not a criterion to fail.
+      expect(
+        box.borderTopWidth,
+        `an active wave renders a ${box.borderTopWidth}px border`,
+      ).toBeGreaterThanOrEqual(1);
+      // AC2's own clause: a border and a word, NEVER motion.
+      expect(box.animationName).toBe("none");
+    }
+  });
+
+  test("…and the marker is also a WORD, in the same ember", async () => {
+    await openWide(heightFixtureUrl);
+    const ember = await tokenColor("--ember", wide());
+    const dim = await tokenColor("--ink-dim", wide());
+    expect(sameHue(ember, dim)).toBe(false);
+    const labels = await boxesOf('[data-testid="roadmap-wave"] .app-flow-wave-label');
+    expect(labels.length).toBe(2);
+    for (const label of labels) {
+      expect(label.text).toContain("· active");
+      expect(
+        sameHue(label.color, ember),
+        `the label renders ${label.color}, not the ember ${ember}`,
+      ).toBe(true);
+      expect(label.animationName).toBe("none");
+    }
+  });
+
+  test("an active wave with NO running CR renders NO animation anywhere in its subtree", async () => {
+    await openWide(heightFixtureUrl);
+    const seen = await readWide<{
+      statuses: string[];
+      elements: number;
+      animated: { what: string; animationName: string }[];
+    }>(
+      `(() => {
+         const waves = Array.from(document.querySelectorAll('[data-testid="roadmap-wave"]'));
+         const all = waves.flatMap((w) => [w, ...Array.from(w.querySelectorAll("*"))]);
+         return {
+           statuses: Array.from(
+             document.querySelectorAll('[data-zone="2"] [data-testid="roadmap-node"]'),
+           ).map((n) => n.getAttribute("data-status")),
+           elements: all.length,
+           animated: all
+             .filter((e) => getComputedStyle(e).animationName !== "none")
+             .map((e) => ({
+               what: e.getAttribute("data-testid") || String(e.className || ""),
+               animationName: getComputedStyle(e).animationName,
+             })),
+         };
+       })()`,
+    );
+    // The premise: this board's waves are ACTIVE and hold nothing running.
+    expect(seen.statuses.length).toBe(10);
+    expect(seen.statuses).not.toContain("IN_PROGRESS");
+    expect(seen.elements).toBeGreaterThan(20);
+    expect(
+      seen.animated.map((e) => `${e.what}=${e.animationName}`),
+      "an active wave with nothing running animates something",
+    ).toEqual([]);
+  });
+
+  test("…which is NOT because nothing on this board can animate — a running CR does", async () => {
+    // The counter-subject, on the board that HAS one: the same probe finds the
+    // IN_PROGRESS row's animation, so the empty list above is a fact about the
+    // wave and not about the probe.
+    await openWide(surfaceFixtureUrl);
+    const animated = await readWide<{ cr: string; animationName: string }[]>(
+      `Array.from(document.querySelectorAll('[data-testid="roadmap-wave"]'))
+         .flatMap((w) => [w, ...Array.from(w.querySelectorAll("*"))])
+         .filter((e) => getComputedStyle(e).animationName !== "none")
+         .map((e) => ({
+           cr: e.getAttribute("data-cr") || "",
+           animationName: getComputedStyle(e).animationName,
+         }))`,
+    );
+    expect(animated.length).toBeGreaterThan(0);
+    expect(animated.every((e) => e.cr === "CR-V-LIVE")).toBe(true);
+  });
+
+  test(
+    "an active wave's rendered face never CHANGES across frames",
+    async () => {
+      // The compositor's own clock, sampled: `animation-name: none` says no
+      // animation is declared, and this says nothing actually moved. A
+      // transition, a `steps()` keyframe on a pseudo-element or a JS-driven
+      // nudge would slip past the computed-style reading and not past this.
+      //
+      // REAL elapsed time, deliberately, and for the same reason the AC24
+      // section above states: a CSS animation is driven by the browser's own
+      // compositor clock in ANOTHER PROCESS, and no fake timer in the test
+      // runner can advance it. Deterministic time control cannot reach it, so
+      // this is the "integration test exercising real timer behaviour against
+      // the platform clock" case. The sleep is inside the page, not the runner.
+      await openWide(heightFixtureUrl);
+      const sampled = await readWide<{ wave: string; faces: string[] }[]>(
+        `(async () => {
+           const read = () => Array.from(document.querySelectorAll('[data-testid="roadmap-wave"]'))
+             .map((w) => {
+               const parts = [w, ...Array.from(w.querySelectorAll("*"))].map((e) => {
+                 const cs = getComputedStyle(e);
+                 const r = e.getBoundingClientRect();
+                 return [cs.borderTopColor, cs.borderRightColor, cs.borderBottomColor,
+                         cs.borderLeftColor, cs.backgroundColor, cs.color, cs.opacity,
+                         cs.boxShadow, cs.transform, cs.filter, cs.outlineColor,
+                         r.width.toFixed(2), r.height.toFixed(2),
+                         r.left.toFixed(2), r.top.toFixed(2)].join("~");
+               });
+               return { wave: w.getAttribute("data-wave"), face: parts.join("|") };
+             });
+           const frames = [];
+           for (let i = 0; i < 10; i++) {
+             frames.push(read());
+             await new Promise((done) => setTimeout(done, 200));
+           }
+           const byWave = new Map();
+           for (const frame of frames) {
+             for (const entry of frame) {
+               const seen = byWave.get(entry.wave) || [];
+               if (!seen.includes(entry.face)) seen.push(entry.face);
+               byWave.set(entry.wave, seen);
+             }
+           }
+           return Array.from(byWave).map(([wave, faces]) => ({ wave, faces }));
+         })()`,
+      );
+      expect(sampled.length).toBe(2);
+      for (const wave of sampled) {
+        expect(
+          wave.faces.length,
+          `wave ${wave.wave} rendered ${wave.faces.length} distinct faces across 10 frames ` +
+            `spanning ~2s, but nothing in it is running`,
+        ).toBe(1);
+      }
+    },
+    30_000,
+  );
+});
+
+// ── AC17 (C2's deferral) — the real `overflow`, and height by ROWS ─────────
+//
+// C2's note: happy-dom resolves no cascade, so `getComputedStyle(wave).overflow`
+// there answers the inline style or the empty string, never the stylesheet's.
+// And "the wave's height grows with the rows shown, not with membership" is a
+// statement about a rendered height, which happy-dom measures as zero.
+
+describe("CR-CRU-096 AC17 — no scroll container inside the wave, and height comes from the ROWS", () => {
+  test("nothing inside the wave is a scroll container", async () => {
+    await openWide(heightFixtureUrl);
+    const inside = await boxesOf(
+      '[data-testid="roadmap-wave"], [data-testid="roadmap-wave"] *',
+    );
+    expect(inside.length).toBeGreaterThan(20);
+    for (const el of inside) {
+      const what = el.testid === "" ? el.cls : el.testid;
+      expect(el.overflowX, `${what} resolves overflow-x: ${el.overflowX}`).toBe("visible");
+      expect(el.overflowY, `${what} resolves overflow-y: ${el.overflowY}`).toBe("visible");
+    }
+  });
+
+  test("…which the probe could have detected — zone 1's track really is a clipper", async () => {
+    // Non-vacuity. `overflow: visible` everywhere is only news if a
+    // non-visible value on this page WOULD have been read: zone 1's
+    // `.app-strip-track` declares `overflow: hidden` and the same probe finds
+    // it. AC18's scoping is the reason it may: the strip is zone 1's business.
+    await openWide(heightFixtureUrl);
+    const track = one(await boxesOf('[data-testid="roadmap-strip-track"]'), "strip track");
+    expect(track.overflowX).toBe("hidden");
+    expect(track.overflowY).toBe("hidden");
+  });
+
+  test("the wave's height is its DRAWN rows times their pitch, and nothing else", async () => {
+    await openWide(heightFixtureUrl);
+    const measured = await readWide<
+      {
+        wave: string;
+        membership: number;
+        headerCount: string;
+        rowCrs: string[];
+        rowHeights: number[];
+        rowGap: number;
+        boxH: number;
+        bodyH: number;
+        headerH: number;
+        rollupH: number;
+        moreH: number;
+        padTop: number;
+        padBottom: number;
+        borderTop: number;
+        borderBottom: number;
+      }[]
+    >(
+      `Array.from(document.querySelectorAll('[data-testid="roadmap-wave"]')).map((w) => {
+         const px = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+         const h = (el) => el === null ? 0 : el.getBoundingClientRect().height;
+         const rows = Array.from(w.querySelectorAll('[data-testid="roadmap-node"]'));
+         const body = w.querySelector(".app-flow-wave-body");
+         const cs = getComputedStyle(w);
+         return {
+           wave: w.getAttribute("data-wave"),
+           membership: Number(w.getAttribute("data-cr-count")),
+           headerCount: (w.querySelector('[data-testid="roadmap-wave-count"]') || {}).textContent
+             || "",
+           rowCrs: rows.map((r) => r.getAttribute("data-cr")),
+           rowHeights: rows.map((r) => r.getBoundingClientRect().height),
+           rowGap: px(getComputedStyle(body).rowGap),
+           boxH: w.getBoundingClientRect().height,
+           bodyH: h(body),
+           headerH: h(w.querySelector('[data-testid="roadmap-wave-header"]')),
+           rollupH: h(w.querySelector('[data-testid="roadmap-wave-rollup"]')),
+           moreH: h(w.querySelector('[data-testid="roadmap-wave-more"]')),
+           padTop: px(cs.paddingTop),
+           padBottom: px(cs.paddingBottom),
+           borderTop: px(cs.borderTopWidth),
+           borderBottom: px(cs.borderBottomWidth),
+         };
+       })`,
+    );
+
+    expect(measured.length).toBe(2);
+    expect(measured.map((box) => box.membership)).toEqual([29, 10]);
+    expect(measured.map((box) => box.rowCrs.length)).toEqual([5, 5]);
+
+    for (const box of measured) {
+      const rowH = box.rowHeights[0]!;
+      // Every drawn row is one pitch: the body is a column flex of equal rows.
+      for (const height of box.rowHeights) expect(height).toBeCloseTo(rowH, 1);
+
+      // The body is exactly its five rows, the pointer, and the gaps between
+      // the six of them. Membership appears nowhere in this arithmetic.
+      const items = box.rowCrs.length + (box.moreH > 0 ? 1 : 0);
+      const bodyFromRows =
+        box.rowCrs.length * rowH + box.moreH + (items - 1) * box.rowGap;
+      expect(
+        Math.abs(box.bodyH - bodyFromRows),
+        `wave ${box.wave} (membership ${box.membership}) draws a ${round1(box.bodyH)}px body, ` +
+          `but ${box.rowCrs.length} rows of ${round1(rowH)}px + a ${round1(box.moreH)}px ` +
+          `pointer + ${items - 1} gaps of ${box.rowGap}px is ${round1(bodyFromRows)}px`,
+      ).toBeLessThanOrEqual(1);
+
+      // And the box is its chrome plus that body — no membership-sized
+      // reservation, no scroller's phantom track.
+      const boxFromParts =
+        box.borderTop +
+        box.padTop +
+        box.headerH +
+        box.rollupH +
+        box.bodyH +
+        box.padBottom +
+        box.borderBottom;
+      expect(
+        Math.abs(box.boxH - boxFromParts),
+        `wave ${box.wave} measures ${round1(box.boxH)}px tall, but header ` +
+          `${round1(box.headerH)} + roll-up ${round1(box.rollupH)} + body ` +
+          `${round1(box.bodyH)} + padding ${box.padTop}/${box.padBottom} + borders ` +
+          `${box.borderTop}/${box.borderBottom} is ${round1(boxFromParts)}px`,
+      ).toBeLessThanOrEqual(1);
+    }
+
+    // The claim itself, stated as the comparison only two boxes can make:
+    // 29 members and 10 members, five rows each, ONE height. A box that grew
+    // with membership would differ here by 24 rows' worth of pitch.
+    const [big, small] = measured as [(typeof measured)[0], (typeof measured)[0]];
+    expect(big.headerCount.trim()).toBe("29");
+    expect(small.headerCount.trim()).toBe("10");
+    expect(
+      Math.abs(big.boxH - small.boxH),
+      `a 29-member wave measures ${round1(big.boxH)}px and a 10-member one ` +
+        `${round1(small.boxH)}px, though both draw ${big.rowCrs.length} rows — the height ` +
+        `is tracking MEMBERSHIP`,
+    ).toBeLessThanOrEqual(1);
+  });
+
+  test("the same 29 members drawn UNTRIMMED are several times taller — the trim is what shortens the box", async () => {
+    // The counterfactual, MEASURED rather than estimated: AC18a's `wave: null`
+    // group renders the identical 29 members with the identical row markup and
+    // takes no trim, so the difference between the two heights is the trim.
+    await openWide(heightFixtureUrl);
+    const trimmed = await readWide<{ boxH: number; bodyH: number; rowH: number; rows: number }>(
+      `(() => {
+         const w = document.querySelector('[data-testid="roadmap-wave"]');
+         const rows = Array.from(w.querySelectorAll('[data-testid="roadmap-node"]'));
+         return {
+           boxH: w.getBoundingClientRect().height,
+           bodyH: w.querySelector(".app-flow-wave-body").getBoundingClientRect().height,
+           rowH: rows[0].getBoundingClientRect().height,
+           rows: rows.length,
+         };
+       })()`,
+    );
+
+    await openWide(heightLooseFixtureUrl);
+    const untrimmed = await readWide<{ looseH: number; rowH: number; rows: number }>(
+      `(() => {
+         const loose = document.querySelector(".app-flow-loose");
+         const rows = Array.from(loose.querySelectorAll('[data-testid="roadmap-node"]'));
+         return {
+           looseH: loose.getBoundingClientRect().height,
+           rowH: rows[0].getBoundingClientRect().height,
+           rows: rows.length,
+         };
+       })()`,
+    );
+
+    // Premise: same members, same row height, one trimmed to five and one not.
+    expect(trimmed.rows).toBe(5);
+    expect(untrimmed.rows).toBe(29);
+    expect(untrimmed.rowH).toBeCloseTo(trimmed.rowH, 1);
+
+    expect(
+      untrimmed.looseH / trimmed.bodyH,
+      `29 rows draw ${round1(untrimmed.looseH)}px of rows and the trimmed wave draws ` +
+        `${round1(trimmed.bodyH)}px — a ratio of ` +
+        `${round1(untrimmed.looseH / trimmed.bodyH)}×`,
+    ).toBeGreaterThanOrEqual(4);
+    expect(
+      trimmed.boxH,
+      `the trimmed wave box measures ${round1(trimmed.boxH)}px against ` +
+        `${round1(untrimmed.looseH)}px of untrimmed rows`,
+    ).toBeLessThan(untrimmed.looseH * 0.4);
+  });
+});
+
+// ── AC7 / AC12 (C3's deferral) — the roll-up's face, the marker's ink ──────
+//
+// C3's note: it asserted `.app-flow-wave-rollup` carries no `border` and no
+// `background` by reading its RULE, and the `next` marker's colour by reading
+// that it declares none. Both are cascade questions — a rule elsewhere could
+// give either a border or an ember, and `color: inherit` resolves against a
+// chain happy-dom does not walk.
+
+describe("CR-CRU-096 AC7/AC12 — the roll-up cannot read as a CR, and the marker takes no state channel", () => {
+  test("the roll-up renders unbordered and unfilled, beside CR rectangles that are both", async () => {
+    await openWide(heightFixtureUrl);
+    const rollups = await boxesOf('[data-testid="roadmap-wave-rollup"]');
+    const pointers = await boxesOf('[data-testid="roadmap-wave-more"]');
+    const rows = await boxesOf('[data-zone="2"] [data-testid="roadmap-node"]');
+    expect(rollups.length).toBe(2);
+    expect(pointers.length).toBe(2);
+    expect(rows.length).toBe(10);
+
+    // Non-vacuity, on the same page: the rectangle an aggregate must not
+    // resemble DOES render a border and a fill, so "no border, no fill" is a
+    // distinction the engine can draw.
+    for (const row of rows) {
+      expect(row.borderMax).toBeGreaterThanOrEqual(1);
+      expect(row.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+      expect(row.cursor).toBe("pointer");
+    }
+
+    for (const chrome of [...rollups, ...pointers]) {
+      const what = chrome.testid;
+      expect(chrome.borderMax, `${what} renders a ${chrome.borderMax}px border`).toBe(0);
+      expect(
+        chrome.backgroundColor,
+        `${what} renders a ${chrome.backgroundColor} fill`,
+      ).toBe("rgba(0, 0, 0, 0)");
+      expect(chrome.cursor, `${what} renders as a control`).not.toBe("pointer");
+    }
+
+    // AC7's other half: it is not selectable or drillable as a CR either.
+    const identity = await readWide<{ cr: string | null; status: string | null }[]>(
+      `Array.from(document.querySelectorAll(
+         '[data-testid="roadmap-wave-rollup"], [data-testid="roadmap-wave-more"]'
+       )).map((e) => ({ cr: e.getAttribute("data-cr"), status: e.getAttribute("data-status") }))`,
+    );
+    expect(identity.length).toBe(4);
+    expect(identity.filter((e) => e.cr !== null || e.status !== null).length).toBe(0);
+    for (const rollup of rollups) expect(rollup.text).toContain("merged");
+  });
+
+  test("the `next` marker renders in the annotation's own faint ink, never the ember", async () => {
+    await openWide(surfaceFixtureUrl);
+    const ember = await tokenColor("--ember", wide());
+    const faint = await tokenColor("--ink-faint", wide());
+    expect(ember).not.toBe("");
+    expect(faint).not.toBe("");
+    // Non-vacuity: the state channel the marker must not borrow is a
+    // measurably different colour, and this board renders it — on the running
+    // row, three lines down.
+    expect(sameHue(ember, faint)).toBe(false);
+
+    const marker = one(await boxesOf(".app-flow-node-next"), "`next` marker");
+    expect(marker.text).toBe("next");
+    expect(marker.text).not.toContain("▸");
+    expect(
+      sameHue(marker.color, faint),
+      `the marker renders ${marker.color}, not the annotation's ${faint}`,
+    ).toBe(true);
+    expect(
+      sameHue(marker.color, ember),
+      `the marker renders the ember ${ember}, which §S8 reserves for IN_PROGRESS`,
+    ).toBe(false);
+    expect(marker.animationName).toBe("none");
+
+    // The emphasis is WEIGHT, and it is the marker's alone: the slot it rides
+    // in stays at the annotation's own weight.
+    const slot = one(
+      (await boxesOf('[data-testid="roadmap-node-annotation"]')).filter((s) =>
+        s.text.includes("next"),
+      ),
+      "annotation slot holding the marker",
+    );
+    expect(Number(marker.fontWeight)).toBeGreaterThan(Number(slot.fontWeight));
+    expect(Number(marker.fontWeight)).toBe(700);
+
+    // And the ROW keeps PENDING styling: the same rendered face as a pending
+    // row with no marker, and demonstrably not the running row's.
+    const faces = await readWide<
+      { cr: string; status: string; color: string; borderTopColor: string; animation: string }[]
+    >(
+      `Array.from(document.querySelectorAll('[data-zone="2"] [data-testid="roadmap-node"]'))
+         .map((n) => {
+           const cs = getComputedStyle(n);
+           return {
+             cr: n.getAttribute("data-cr"),
+             status: n.getAttribute("data-status"),
+             color: cs.color,
+             borderTopColor: cs.borderTopColor,
+             animation: cs.animationName,
+           };
+         })`,
+    );
+    const marked = faces.find((f) => f.cr === "CR-V-PEND")!;
+    const running = faces.find((f) => f.status === "IN_PROGRESS")!;
+    expect(marked.status).toBe("PENDING");
+    expect(marked.animation).toBe("none");
+    expect(sameHue(marked.color, ember)).toBe(false);
+    expect(sameHue(running.color, ember)).toBe(true);
+    expect(running.animation).not.toBe("none");
+  });
+
+  test("exactly ONE row in the whole zone renders the marker (AC12b), measured", async () => {
+    await openWide(heightFixtureUrl);
+    const markers = await readWide<{ count: number; onCr: (string | null)[] }>(
+      `(() => {
+         const marks = Array.from(document.querySelectorAll('[data-zone="2"] .app-flow-node-next'));
+         return {
+           count: marks.length,
+           onCr: marks.map((m) => m.closest('[data-testid="roadmap-node"]').getAttribute("data-cr")),
+         };
+       })()`,
+    );
+    // Two wave boxes, ten drawn rows, one marker — on the first actionable row
+    // in the published order across the whole zone.
+    expect(markers.count).toBe(1);
+    expect(markers.onCr).toEqual(["CR-H-P01"]);
+  });
+});
+
+// ── AC25 — the greyscale invariant ─────────────────────────────────────────
+//
+// §S8's two invariants are what this tests: colour never encodes anything
+// shape already says, and no element relies on colour alone — status is also
+// written as text, so the view survives a colour-blind reader and a greyscale
+// screenshot. The strip is the suite's own `STRIP_COLOUR`, total and
+// `!important`: ink, border, background AND opacity, so even the dimmed
+// luminance channel is taken away and only TEXT can be left standing.
+
+describe("CR-CRU-096 AC25 — with colour removed, every row, roll-up, marker and gate word still states its status", () => {
+  const strippedHeightBoard = async (): Promise<void> => {
+    await openWide(heightFixtureUrl);
+    await wide().addStyleTag({ content: STRIP_COLOUR });
+  };
+
+  test("the strip really does flatten this board's colours", async () => {
+    // The premise, asserted rather than assumed: after the strip there is ONE
+    // ink, ONE border colour and ONE opacity across every drawn row, so
+    // anything still telling them apart is provably not colour.
+    await strippedHeightBoard();
+    const rows = await boxesOf('[data-zone="2"] [data-testid="roadmap-node"]');
+    expect(rows.length).toBe(10);
+    expect(new Set(rows.map((row) => row.color)).size).toBe(1);
+    expect(new Set(rows.map((row) => row.borderTopColor)).size).toBe(1);
+    expect(new Set(rows.map((row) => row.backgroundColor)).size).toBe(1);
+  });
+
+  test("every drawn row still states its status in WORDS", async () => {
+    await strippedHeightBoard();
+    const rows = await readWide<{ cr: string; status: string; statusText: string }[]>(
+      `Array.from(document.querySelectorAll('[data-zone="2"] [data-testid="roadmap-node"]'))
+         .map((n) => ({
+           cr: n.getAttribute("data-cr"),
+           status: n.getAttribute("data-status"),
+           statusText: ((n.querySelector('[data-testid="roadmap-node-status"]') || {}).textContent
+             || "").replace(/\\s+/g, " ").trim(),
+         }))`,
+    );
+    expect(rows.length).toBe(10);
+    for (const row of rows) {
+      expect(
+        row.statusText,
+        `${row.cr} (${row.status}) writes no status text, so with colour gone its state ` +
+          `is unreadable`,
+      ).not.toBe("");
+    }
+    // Determinable, not merely present: one status text may never stand for
+    // two statuses.
+    const byText = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const states = byText.get(row.statusText) ?? new Set<string>();
+      states.add(row.status);
+      byText.set(row.statusText, states);
+    }
+    for (const [text, states] of byText) {
+      expect(states.size, `the words "${text}" stand for ${[...states].join(" and ")}`).toBe(1);
+    }
+  });
+
+  test("the roll-up, the `+N more` pointer, the `next` marker and the deps list all still read", async () => {
+    await strippedHeightBoard();
+    const read = await readWide<{
+      rollups: string[];
+      pointers: string[];
+      markers: string[];
+      deps: string[];
+      counts: string[];
+      labels: string[];
+    }>(
+      `(() => {
+         const texts = (sel) => Array.from(document.querySelectorAll(sel))
+           .map((e) => (e.textContent || "").replace(/\\s+/g, " ").trim());
+         return {
+           rollups: texts('[data-testid="roadmap-wave-rollup"]'),
+           pointers: texts('[data-testid="roadmap-wave-more"]'),
+           markers: texts('[data-zone="2"] .app-flow-node-next'),
+           deps: texts('[data-testid="roadmap-node-annotation"]')
+             .filter((t) => t.includes("deps")),
+           counts: texts('[data-testid="roadmap-wave-count"]'),
+           labels: texts('[data-zone="2"] .app-flow-wave-label'),
+         };
+       })()`,
+    );
+
+    // §S3/AC5/AC25 — the roll-up's greyscale CHANNEL is the WORD `merged`,
+    // never the ✓: with the glyph deleted from the string the count still
+    // reads, which is the claim, and it is asserted on the stripped text so
+    // the glyph cannot be what satisfies it.
+    //
+    // AC5d is a SECOND, independent fact: the artifact draws `21 merged ✓ ·
+    // awaiting the tag`, so the glyph is rendered too — as decoration. Both
+    // hold, and the glyph assertion is what would fail if it were dropped from
+    // the renderer, which until now nothing anywhere noticed.
+    expect(read.rollups.length).toBe(2);
+    for (const rollup of read.rollups) {
+      expect(rollup.replace(/✓/g, "").replace(/\s+/g, " ").trim()).toMatch(/\d+ merged/);
+      expect(rollup.toLowerCase()).toContain("awaiting the tag");
+      expect(
+        rollup,
+        `the roll-up reads "${rollup}" — the approved artifact's ✓ is not rendered (AC5d)`,
+      ).toContain("✓");
+    }
+    // §S5.4/AC16 — the pointer states its remainder in words and numerals.
+    expect(read.pointers.length).toBe(2);
+    for (const pointer of read.pointers) expect(pointer).toMatch(/^\+\d+ more/);
+    // §S4/AC12 — the marker is the word.
+    expect(read.markers).toEqual(["next"]);
+    // AC13/AC13a — the deps list names full published ids, in text.
+    expect(read.deps.length).toBe(2);
+    for (const dep of read.deps) expect(dep).toMatch(/deps CR-H-[A-Z]\d\d/);
+    // §S1/§S2/AC2/AC3 — the header's two facts survive as words and numerals.
+    expect(read.counts).toEqual(["29", "10"]);
+    for (const label of read.labels) expect(label).toContain("· active");
+  });
+
+  test("BOTH gate words still read — `planned` in flight, `shipped` once tagged (AC23/AC23a)", async () => {
+    await strippedHeightBoard();
+    const inFlight = await readWide<{ kind: string; word: string; version: string }>(
+      `(() => {
+         const gate = document.querySelector('[data-testid="roadmap-flow-gate"]');
+         return {
+           kind: gate.getAttribute("data-kind"),
+           version: gate.getAttribute("data-version"),
+           word: ((gate.querySelector(".app-flow-gate-state") || {}).textContent || "").trim(),
+         };
+       })()`,
+    );
+    expect(inFlight.kind).toBe("proposed");
+    expect(inFlight.word).toBe("planned");
+
+    await openWide(shippedFixtureUrl);
+    await wide().addStyleTag({ content: STRIP_COLOUR });
+    const tagged = await readWide<{ kind: string; word: string; delivered: string }>(
+      `(() => {
+         const gate = document.querySelector('[data-testid="roadmap-flow-gate"]');
+         return {
+           kind: gate.getAttribute("data-kind"),
+           word: ((gate.querySelector(".app-flow-gate-state") || {}).textContent || "").trim(),
+           delivered: ((document.querySelector('[data-testid="roadmap-delivered"]') || {})
+             .textContent || "").replace(/\\s+/g, " ").trim(),
+         };
+       })()`,
+    );
+    expect(tagged.kind).toBe("shipped");
+    expect(tagged.word).toBe("shipped");
+    // …and the delivered summary states its own facts in words too.
+    expect(tagged.delivered).toMatch(/\d+ CRs?/);
+    expect(tagged.delivered).toMatch(/waves? /);
+    expect(tagged.delivered.toLowerCase()).toContain("shipped");
+
+    // The two words are DIFFERENT, so the diamond's state is readable with
+    // both colour and the dash reduced to shape alone.
+    expect(inFlight.word).not.toBe(tagged.word);
+  });
+});
+
+// ── AC27 — the panel match against the APPROVED artifact ───────────────────
+//
+// The artifact is rendered by the SAME Chromium that renders the live board,
+// so this is a render-to-render comparison and not a comparison against my
+// reading of the file. Its own structure is read out of its own DOM: nothing
+// below hardcodes what the artifact says.
+//
+// AC27 compares AXIS, HEADER, ROLL-UP, ROW ARRANGEMENT and MARKERS. It does
+// NOT compare type scale — §S7's own non-goal records the artifact's
+// `.big`/`.cue` hierarchy in the shipped summary as out of scope — and it does
+// not compare annotation TEXT, because AC13a deliberately departs from the
+// artifact's project-dependent `deps 091, 092` abbreviation.
+
+interface PanelShape {
+  roles: string[];
+  stages: { role: string; x: number; right: number; top: number; bottom: number }[];
+  waveBoxes: number;
+  headerParts: string[];
+  headerSameLine: boolean;
+  headerLabelFirst: boolean;
+  rollup: string;
+  rowCount: number;
+  rowsFullWidth: boolean;
+  rowsStacked: boolean;
+  slotRightAligned: boolean;
+  more: string;
+  markers: number;
+  gateWord: string;
+  delivered: string | null;
+}
+
+/** The artifact's own zone-2 panels, read out of the artifact's own DOM. */
+const ARTIFACT_SHAPES = `
+function __artifactPanels() {
+  const text = (el) => el === null ? "" : (el.textContent || "").replace(/\\s+/g, " ").trim();
+  const rect = (el) => { const r = el.getBoundingClientRect();
+    return { x: r.left, right: r.right, top: r.top, bottom: r.bottom, w: r.width }; };
+  const roleOf = (el) => {
+    if (el.classList.contains("term")) return "terminal";
+    if (el.classList.contains("arrow")) return "connector";
+    if (el.classList.contains("wave")) return "waves";
+    if (el.classList.contains("gatecol")) return "gate";
+    if (el.classList.contains("delivered")) return "delivered";
+    if (el.classList.contains("empty")) return "empty";
+    return "unknown(" + el.className + ")";
+  };
+  const flows = Array.from(document.querySelectorAll(".zone"))
+    .filter((z) => text(z).toLowerCase().indexOf("zone 2") === 0)
+    .map((z) => {
+      let node = z.nextElementSibling;
+      while (node !== null && !node.classList.contains("flow")) node = node.nextElementSibling;
+      return node;
+    })
+    .filter((node) => node !== null);
+  return flows.map((flow) => {
+    const kids = Array.from(flow.children);
+    const wave = flow.querySelector(".wave");
+    const delivered = flow.querySelector(".delivered");
+    const gate = flow.querySelector(".gate");
+    const crs = wave === null ? null : wave.querySelector(".crs");
+    const rows = crs === null ? [] : Array.from(crs.querySelectorAll(":scope > .cr"));
+    const header = wave === null ? null : wave.querySelector("h4");
+    const headerKids = header === null ? [] : Array.from(header.children);
+    const slots = rows.map((r) => r.querySelector(".t")).filter((s) => s !== null);
+    return {
+      roles: kids.map(roleOf),
+      stages: kids.filter((k) => roleOf(k) !== "connector")
+        .map((k) => Object.assign({ role: roleOf(k) }, rect(k))),
+      waveBoxes: flow.querySelectorAll(".wave").length,
+      headerParts: headerKids.map(text),
+      headerSameLine: headerKids.length === 2 &&
+        Math.abs(rect(headerKids[0]).top - rect(headerKids[1]).top) <= 3,
+      headerLabelFirst: headerKids.length === 2 &&
+        rect(headerKids[0]).x < rect(headerKids[1]).x,
+      rollup: wave === null ? "" : text(wave.querySelector(".wsum")),
+      rowCount: rows.length,
+      rowsFullWidth: rows.length > 0 && crs !== null &&
+        rows.every((r) => Math.abs(rect(r).w - rect(crs).w) <= 1),
+      rowsStacked: rows.length > 1 &&
+        rows.every((r, at) => at === 0 ||
+          (Math.abs(rect(r).x - rect(rows[at - 1]).x) <= 1 &&
+           rect(r).top >= rect(rows[at - 1]).bottom - 1)),
+      slotRightAligned: slots.length > 0 &&
+        slots.every((s) => rect(s).right > rect(s.closest(".cr")).x +
+          rect(s.closest(".cr")).w / 2),
+      more: wave === null ? "" : text(wave.querySelector(".more")),
+      markers: wave === null ? 0 : wave.querySelectorAll(".crs .t b").length,
+      gateWord: gate === null ? "" : text(gate.querySelector("b")),
+      delivered: delivered === null ? null : text(delivered),
+    };
+  });
+}
+`;
+
+/** The LIVE board's zone-2 panel, read the same way off what it publishes. */
+const LIVE_SHAPE = `
+function __livePanel() {
+  const text = (el) => el === null ? "" : (el.textContent || "").replace(/\\s+/g, " ").trim();
+  const rect = (el) => { const r = el.getBoundingClientRect();
+    return { x: r.left, right: r.right, top: r.top, bottom: r.bottom, w: r.width }; };
+  const roleOf = (el) => {
+    const id = el.getAttribute("data-testid") || "";
+    if (id === "roadmap-flow-terminal") return "terminal";
+    if (id === "roadmap-flow-connector") return "connector";
+    if (id === "roadmap-flow-gate") return "gate";
+    if (id === "roadmap-delivered") return "delivered";
+    if (el.classList.contains("app-flow-waves")) return "waves";
+    return "unknown(" + (id || el.className) + ")";
+  };
+  const flow = document.querySelector('[data-zone="2"]');
+  const kids = Array.from(flow.children);
+  const wave = flow.querySelector('[data-testid="roadmap-wave"]');
+  const delivered = flow.querySelector('[data-testid="roadmap-delivered"]');
+  const gate = flow.querySelector('[data-testid="roadmap-flow-gate"]');
+  const body = wave === null ? null : wave.querySelector(".app-flow-wave-body");
+  const rows = body === null ? [] : Array.from(body.querySelectorAll('[data-testid="roadmap-node"]'));
+  const header = wave === null ? null : wave.querySelector('[data-testid="roadmap-wave-header"]');
+  const headerKids = header === null ? [] : Array.from(header.children);
+  const slots = rows.map((r) => r.querySelector('[data-testid="roadmap-node-annotation"]'))
+    .filter((s) => s !== null);
+  return {
+    roles: kids.map(roleOf),
+    stages: kids.filter((k) => roleOf(k) !== "connector")
+      .map((k) => Object.assign({ role: roleOf(k) }, rect(k))),
+    waveBoxes: flow.querySelectorAll('[data-testid="roadmap-wave"]').length,
+    headerParts: headerKids.map(text),
+    headerSameLine: headerKids.length === 2 &&
+      Math.abs(rect(headerKids[0]).top - rect(headerKids[1]).top) <= 3,
+    headerLabelFirst: headerKids.length === 2 &&
+      rect(headerKids[0]).x < rect(headerKids[1]).x,
+    rollup: wave === null ? "" : text(wave.querySelector('[data-testid="roadmap-wave-rollup"]')),
+    rowCount: rows.length,
+    rowsFullWidth: rows.length > 0 && body !== null &&
+      rows.every((r) => Math.abs(rect(r).w - rect(body).w) <= 1),
+    rowsStacked: rows.length > 1 &&
+      rows.every((r, at) => at === 0 ||
+        (Math.abs(rect(r).x - rect(rows[at - 1]).x) <= 1 &&
+         rect(r).top >= rect(rows[at - 1]).bottom - 1)),
+    slotRightAligned: slots.length > 0 &&
+      slots.every((s) => rect(s).right > rect(s.closest('[data-testid="roadmap-node"]')).x +
+        rect(s.closest('[data-testid="roadmap-node"]')).w / 2),
+    more: wave === null ? "" : text(wave.querySelector('[data-testid="roadmap-wave-more"]')),
+    markers: wave === null ? 0 : wave.querySelectorAll(".app-flow-node-next").length,
+    gateWord: gate === null ? "" : text(gate.querySelector(".app-flow-gate-state")),
+    delivered: delivered === null ? null : text(delivered),
+  };
+}
+`;
+
+const artifactPanels = async (): Promise<PanelShape[]> => {
+  await openWide(artifactUrl);
+  return await readWide<PanelShape[]>(
+    `(() => { ${ARTIFACT_SHAPES} return __artifactPanels(); })()`,
+  );
+};
+
+const livePanel = async (url: string): Promise<PanelShape> => {
+  await openWide(url);
+  return await readWide<PanelShape>(`(() => { ${LIVE_SHAPE} return __livePanel(); })()`);
+};
+
+/** Horizontal, stated once for both sides of the comparison. */
+const isHorizontal = (shape: PanelShape): boolean =>
+  shape.stages.length > 1 &&
+  shape.stages.every(
+    (stage, at) =>
+      at === 0 ||
+      (stage.x >= shape.stages[at - 1]!.right - 1 &&
+        Math.min(stage.bottom, shape.stages[at - 1]!.bottom) -
+          Math.max(stage.top, shape.stages[at - 1]!.top) >
+          0),
+  );
+
+describe("CR-CRU-096 AC27 — zone 2 rendered against the live board matches the artifact's panels", () => {
+  test("the artifact's own zone-2 panels are readable and horizontal", async () => {
+    expect(
+      artifactFailure,
+      `AC27's binding design source could not be read (${ARTIFACT_REL} is TRACKED since ` +
+        `AC27a — .gitignore:18 negates it back in, so a clean clone has it): ${artifactFailure}`,
+    ).toBe("");
+    const panels = await artifactPanels();
+    expect(panels.length).toBeGreaterThanOrEqual(2);
+    // The premise of the whole comparison: the artifact really does draw the
+    // spine horizontally, so "the same axis" is a claim about a measured axis.
+    for (const panel of panels) {
+      expect(panel.roles.filter((role) => role === "connector").length).toBe(3);
+      expect(panel.roles.length).toBe(7);
+      expect(isHorizontal(panel), `an artifact panel is not laid out horizontally`).toBe(true);
+    }
+  });
+
+  test("the ACTIVE panel: axis, header, roll-up, row arrangement and markers all match", async () => {
+    expect(artifactFailure).toBe("");
+    const panels = await artifactPanels();
+    const design = panels.find((panel) => panel.waveBoxes > 0);
+    expect(design, "the artifact draws no zone-2 panel with a wave box").toBeDefined();
+    const live = await livePanel(singleFixtureUrl);
+
+    // AXIS — the same role sequence, and horizontal in both.
+    expect(live.roles).toEqual(design!.roles);
+    expect(isHorizontal(live)).toBe(true);
+
+    // ONE BOX PER WAVE — the artifact's release spans one wave and draws one.
+    expect(live.waveBoxes).toBe(design!.waveBoxes);
+
+    // HEADER — a label carrying the `· active` marker and a bare count, on one
+    // line, label first. Compared as a SHAPE: the artifact's numbers are its
+    // own board's.
+    expect(live.headerParts.length).toBe(design!.headerParts.length);
+    expect(live.headerSameLine).toBe(design!.headerSameLine);
+    expect(live.headerLabelFirst).toBe(design!.headerLabelFirst);
+    expect(design!.headerParts[0]).toMatch(/· active$/i);
+    expect(live.headerParts[0]).toMatch(/· active$/i);
+    expect(design!.headerParts[1]).toMatch(/^\d+$/);
+    expect(live.headerParts[1]).toMatch(/^\d+$/);
+
+    // ROLL-UP — one line, a merged count and the release's gate state.
+    expect(design!.rollup).toMatch(/^\d+ merged/);
+    expect(live.rollup).toMatch(/^\d+ merged/);
+    expect(live.rollup.toLowerCase()).toContain("awaiting the tag");
+    expect(design!.rollup.toLowerCase()).toContain("awaiting the tag");
+
+    // ROW ARRANGEMENT — one CR per FULL-WIDTH row, stacked, with the
+    // annotation slot on the right. Measured on both, not read off a class.
+    expect(live.rowCount).toBe(design!.rowCount);
+    expect(design!.rowsFullWidth).toBe(true);
+    expect(live.rowsFullWidth).toBe(true);
+    expect(design!.rowsStacked).toBe(true);
+    expect(live.rowsStacked).toBe(true);
+    expect(design!.slotRightAligned).toBe(true);
+    expect(live.slotRightAligned).toBe(true);
+
+    // MARKERS — the `+N more` pointer and exactly one `next`.
+    expect(design!.more).toMatch(/^\+\d+ more/);
+    expect(live.more).toMatch(/^\+\d+ more/);
+    expect(live.markers).toBe(design!.markers);
+    expect(live.markers).toBe(1);
+
+    // The gate states its own state, in the artifact's own word.
+    expect(live.gateWord).toBe(design!.gateWord);
+  });
+
+  test("the SHIPPED panel: the delivered summary, on the same axis, with the same gate word", async () => {
+    expect(artifactFailure).toBe("");
+    const panels = await artifactPanels();
+    const design = panels.find((panel) => panel.delivered !== null);
+    expect(design, "the artifact draws no zone-2 delivered panel").toBeDefined();
+    const live = await livePanel(shippedFixtureUrl);
+
+    expect(live.roles).toEqual(design!.roles);
+    expect(isHorizontal(live)).toBe(true);
+    // §S7 — a delivered summary, not a wave reconstruction, on both sides.
+    expect(design!.waveBoxes).toBe(0);
+    expect(live.waveBoxes).toBe(0);
+    expect(live.rowCount).toBe(0);
+    expect(live.gateWord).toBe(design!.gateWord);
+    expect(live.gateWord).toBe("shipped");
+
+    // The FACTS the summary states, matched as facts. Its internal line
+    // grouping and type scale are §S7's recorded non-goal, so the comparison
+    // is on the text the panel carries and not on how many lines carry it.
+    for (const summary of [design!.delivered ?? "", live.delivered ?? ""]) {
+      expect(summary).toMatch(/\d+ CRs?/);
+      expect(summary).toMatch(/waves? /);
+      expect(summary.toLowerCase()).toContain("shipped");
+    }
+  });
+});
+
+// ── AC26 — zone 1 and zone 3, byte-identical ──────────────────────────────
+//
+// "Before and after this CR" is a claim about two RENDERS, so the before-state
+// is rendered: `beforeAll` captures the same board through the shell as of
+// `git merge-base develop HEAD` — the commit this feature branch was cut from
+// and the state the CR was filed against — and serves it beside the current
+// one. Both strings then pass through the SAME Chromium parser and serialiser,
+// so a real difference in either zone survives and a serialisation artefact
+// cannot manufacture one.
+
+describe("CR-CRU-096 AC26 — zones 1 and 3 are untouched by this CR", () => {
+  const zoneMarkup = async (url: string): Promise<{ one: string; three: string }> => {
+    await openWide(url);
+    return await readWide<{ one: string; three: string }>(
+      `({
+         one: (document.querySelector('[data-zone="1"]') || {}).outerHTML || "",
+         three: (document.querySelector('[data-zone="3"]') || {}).outerHTML || "",
+       })`,
+    );
+  };
+
+  test("the pre-CR baseline really did render", async () => {
+    expect(
+      baselineFailure,
+      `the pre-CR shell could not be captured, so AC26 has nothing to compare against: ` +
+        `${baselineFailure}`,
+    ).toBe("");
+    expect(baselineCommit).toMatch(/^[0-9a-f]{40}$/);
+    const before = await zoneMarkup(baselineFixtureUrl);
+    expect(before.one, `the baseline rendered no zone 1`).not.toBe("");
+    expect(before.three, `the baseline rendered no zone 3`).not.toBe("");
+    // Non-vacuity for the two comparisons below: zone 2 DID change, so the
+    // baseline is a different build and not the current one by accident.
+    const beforeTwo = await readWide<string>(
+      `(document.querySelector('[data-zone="2"]') || {}).outerHTML || ""`,
+    );
+    const after = await zoneMarkup(surfaceFixtureUrl);
+    const afterTwo = await readWide<string>(
+      `(document.querySelector('[data-zone="2"]') || {}).outerHTML || ""`,
+    );
+    expect(after.one).not.toBe("");
+    expect(
+      afterTwo,
+      `zone 2's markup is unchanged from ${baselineCommit.slice(0, 7)}, so either the CR ` +
+        `landed nothing or the baseline is the current build`,
+    ).not.toBe(beforeTwo);
+  });
+
+  test("zone 1's markup is byte-identical to the pre-CR baseline", async () => {
+    expect(baselineFailure).toBe("");
+    const before = await zoneMarkup(baselineFixtureUrl);
+    const after = await zoneMarkup(surfaceFixtureUrl);
+    expect(
+      after.one,
+      `zone 1's markup changed against ${baselineCommit.slice(0, 7)}, which AC26 freezes`,
+    ).toBe(before.one);
+  });
+
+  test("zone 3's markup is byte-identical to the pre-CR baseline", async () => {
+    expect(baselineFailure).toBe("");
+    const before = await zoneMarkup(baselineFixtureUrl);
+    const after = await zoneMarkup(surfaceFixtureUrl);
+    expect(
+      after.three,
+      `zone 3's markup changed against ${baselineCommit.slice(0, 7)}, which AC26 freezes`,
+    ).toBe(before.three);
+  });
+});
+
+// ── NON-VACUITY, MEASURED — the same probes on the PRE-CR render ───────────
+//
+// C1–C4 landed the production code, so most of the readings above pass on
+// arrival. A measurement that passes is only worth the argument that it COULD
+// have failed, and the strongest form of that argument is not prose: it is the
+// same probe, pointed at the render this CR was filed against, reporting the
+// drift the CR's own Problem table names.
+//
+// | | approved design | live implementation | § |
+// | flow axis | horizontal `Start → wave → gate → End`, connectors | vertical
+//   stack, no connectors | S6 |
+// | wave header | `WAVE 5 · ACTIVE` + right-aligned count | `Wave 5` — no
+//   marker, no count | S1, S2 |
+// | wave roll-up | `21 merged ✓ awaiting the tag` | absent | S3 |
+// | per-CR annotation | right-aligned `next` / `deps 078` | none | S4 |
+// | CR arrangement | full-width rows, one CR per row | chips wrapped
+//   7-per-row | S5 |
+//
+// Each row of that table is one assertion below, taken off the pre-CR pixels.
+// If a future cycle reverts any of §S1–§S6, THIS block stops passing too —
+// which is the point: it is what makes the blocks above non-vacuous.
+
+describe("CR-CRU-096 — the same probes on the PRE-CR render report the drift the CR names", () => {
+  test("the pre-CR spine was VERTICAL and drew no connectors (§S6)", async () => {
+    expect(baselineFailure).toBe("");
+    await openWide(baselineFixtureUrl);
+    const pieces = await boxesOf('[data-zone="2"] > *');
+    expect(pieces.length).toBeGreaterThan(0);
+    expect(
+      pieces.filter((piece) => spineRole(piece) === "connector").length,
+      `the pre-CR build already drew connectors, so AC20's connector assertion proves nothing`,
+    ).toBe(0);
+
+    // Stacked: each child begins BELOW the previous one and shares no vertical
+    // span with it — the exact negation of the horizontal reading measured
+    // above. Deliberately NOT "and shares an x": the pre-CR terminals were
+    // `align-self: center` inside an `align-items: stretch` column, so a
+    // centred 52px pill and a full-width wave box legitimately start at
+    // different x while still being stacked. The first draft of this
+    // assertion said otherwise and the measurement corrected it.
+    const stacked = pieces.every(
+      (piece, at) =>
+        at === 0 ||
+        (yOverlap(pieces[at - 1]!, piece) <= 0 && piece.top >= pieces[at - 1]!.bottom - 0.5),
+    );
+    expect(
+      stacked,
+      `the pre-CR zone 2 was not a vertical stack, so the horizontal measurement above is ` +
+        `not discriminating: ${JSON.stringify(
+          pieces.map((p) => [spineRole(p), round1(p.x), round1(p.top)]),
+        )}`,
+    ).toBe(true);
+  });
+
+  test("the pre-CR wave header carried NO `· active` marker and NO count (§S1/§S2)", async () => {
+    expect(baselineFailure).toBe("");
+    await openWide(baselineFixtureUrl);
+    const header = await readWide<{ labels: string[]; counts: number; markers: number }>(
+      `(() => {
+         const waves = Array.from(document.querySelectorAll('[data-testid="roadmap-wave"]'));
+         return {
+           labels: waves.map((w) => (w.textContent || "").replace(/\\s+/g, " ").trim()),
+           counts: document.querySelectorAll('[data-testid="roadmap-wave-count"]').length,
+           markers: waves.filter((w) => (w.textContent || "").includes("· active")).length,
+         };
+       })()`,
+    );
+    expect(header.labels.length).toBeGreaterThan(0);
+    expect(header.counts, `the pre-CR header already rendered a count`).toBe(0);
+    expect(header.markers, `the pre-CR header already rendered the '· active' marker`).toBe(0);
+  });
+
+  test("the pre-CR wave drew NO roll-up and NO annotation slot (§S3/§S4)", async () => {
+    expect(baselineFailure).toBe("");
+    await openWide(baselineFixtureUrl);
+    const absent = await readWide<{
+      rollups: number;
+      pointers: number;
+      slots: number;
+      markers: number;
+    }>(
+      `({
+         rollups: document.querySelectorAll('[data-testid="roadmap-wave-rollup"]').length,
+         pointers: document.querySelectorAll('[data-testid="roadmap-wave-more"]').length,
+         slots: document.querySelectorAll('[data-testid="roadmap-node-annotation"]').length,
+         markers: document.querySelectorAll('.app-flow-node-next').length,
+       })`,
+    );
+    expect(absent.rollups, `the pre-CR wave already drew a roll-up`).toBe(0);
+    expect(absent.pointers, `the pre-CR wave already drew a '+N more' pointer`).toBe(0);
+    expect(absent.slots, `the pre-CR row already had an annotation slot`).toBe(0);
+    expect(absent.markers, `the pre-CR row already carried a 'next' marker`).toBe(0);
+  });
+
+  test("the pre-CR CRs were CHIPS side by side, not full-width rows (§S5)", async () => {
+    expect(baselineFailure).toBe("");
+    await openWide(baselineFixtureUrl);
+    const chips = await readWide<{ cr: string; x: number; top: number; width: number }[]>(
+      `Array.from(document.querySelectorAll('[data-zone="2"] [data-testid="roadmap-node"]'))
+         .map((n) => {
+           const r = n.getBoundingClientRect();
+           return { cr: n.getAttribute("data-cr"), x: r.left, top: r.top, width: r.width };
+         })`,
+    );
+    expect(chips.length).toBeGreaterThan(1);
+    // Two CRs sharing a line at different x is a WRAPPED GRID, and it is what
+    // the full-width-row measurement above rules out.
+    const sideBySide = chips.some((chip, at) =>
+      chips.some(
+        (other, other_at) =>
+          other_at !== at && Math.abs(other.top - chip.top) <= 1 && other.x !== chip.x,
+      ),
+    );
+    expect(
+      sideBySide,
+      `the pre-CR build already drew one CR per row, so AC8/AC27's row arrangement ` +
+        `measurement proves nothing: ${JSON.stringify(chips)}`,
+    ).toBe(true);
+
+    // …and the pre-CR trim did not exist either: every member drew a chip.
+    expect(chips.length).toBe(FOCUSED_CRS.length);
   });
 });
