@@ -1166,13 +1166,19 @@ export function focusedReleaseView(gate, releases, entries) {
     members = rows.filter((entry) => entry?.release === version);
   }
 
+  // CR-CRU-096 §S1/AC1 — each box carries whether its wave belongs to the
+  // focused, IN-FLIGHT release. That is this view's existing `kind` and
+  // nothing new: a proposal is in flight, a shipped tag is settled. It is a
+  // release fact, so it is decided here rather than re-derived from the
+  // entries' run state by the renderer.
+  const active = kind === "proposed";
   const waves = [];
   const boxOf = new Map();
   for (const entry of members) {
     const wave = declaredLabel(entry, "wave") ?? null;
     let box = boxOf.get(wave);
     if (box === undefined) {
-      box = { wave, entries: [] };
+      box = { wave, active, entries: [] };
       boxOf.set(wave, box);
       waves.push(box);
     }

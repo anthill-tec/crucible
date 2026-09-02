@@ -1290,12 +1290,23 @@ body {
    motion: AC24 reserves movement for the CR that is actually running. */
 .app-flow-wave[data-active="true"] { border-color: var(--ember); }
 .app-flow-wave[data-active="true"] .app-flow-wave-label { color: var(--ember); }
-.app-flow-wave-label {
+/* CR-CRU-096 §S2 — the header is the design's `<h4>`: the wave's identity on
+   the left, its whole membership on the right. Layout only — the h4's UA
+   margin is reset and the label keeps the colour grammar it already had. */
+.app-flow-wave-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding-bottom: 6px;
+}
+.app-flow-wave-label,
+.app-flow-wave-count {
   display: block;
   font: 600 10px/1.4 var(--mono);
   text-transform: uppercase;
   color: var(--ink-dim);
-  padding-bottom: 6px;
 }
 /* AC21 — a CR is a LEAF RECTANGLE: its id on the left, its terse status on
    the right, and never a title (AC11 — the title's one home is the table). */
@@ -1334,7 +1345,9 @@ body {
 .app-flow-node.pending { color: var(--ink-dim); }
 /* AC24 — MOTION MEANS LIVE. The one animated element on the whole board, and
    it reuses `app-run-pulse`, the pulse the running run-card already uses
-   (CR-CRU-017 §S3), rather than inventing a third motion vocabulary. */
+   (CR-CRU-017 §S3), rather than inventing a third motion vocabulary.
+   CR-CRU-096 §S1 separated this from the ACTIVE WAVE, which is a release fact
+   and gets a border and a word. */
 .app-flow-node.in_progress {
   border-color: var(--ember);
   color: var(--ember);

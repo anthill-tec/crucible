@@ -11,7 +11,7 @@
   "use strict";
 
   function main(L) {
-    const { a, b, button, div, input, label, option, pre, select, span } = van.tags;
+    const { a, b, button, div, h4, input, label, option, pre, select, span } = van.tags;
 
     // ── State ───────────────────────────────────────────────────────────
     const state = vanX.reactive({
@@ -2789,17 +2789,33 @@
               "data-testid": "roadmap-wave",
               "data-wave": box.wave,
               "data-cr-count": String(box.entries.length),
-              // AC22/C5 — the container of live work reads as live too (the
-              // design artifact's `.wave.active`). Derived from the entries
-              // already rendered, so it states nothing new; and it is a
-              // BORDER colour, never motion, because AC24 reserves movement
-              // for the CR that is actually running.
-              "data-active": box.entries.some((entry) => entry.status === "IN_PROGRESS")
-                ? "true"
-                : "false",
+              // CR-CRU-096 §S1/AC1 — "active" is a RELEASE fact, not a run
+              // fact: this wave belongs to the focused, in-flight release
+              // (`focusedReleaseView`'s `kind === "proposed"`, stamped on the
+              // box). A wave with 22 merged and nothing running is still the
+              // active release's wave. Motion stays reserved for the CR that
+              // is actually running (CR-078 AC24), so the second channel here
+              // is the border only.
+              "data-active": box.active === true ? "true" : "false",
               class: "app-flow-wave",
             },
-            span({ class: "app-flow-wave-label" }, `Wave ${box.wave}`),
+            // §S2/AC2/AC3 — the header states both facts the design's
+            // `<h4><span>Wave 5 · active</span><span>28</span></h4>` states:
+            // the wave's identity plus its active marker as a WORD (§S8 —
+            // colour is never the only channel), and the wave's OWN whole
+            // membership, the same `box.entries.length` published above rather
+            // than a second derivation that could drift from it.
+            h4(
+              { "data-testid": "roadmap-wave-header", class: "app-flow-wave-header" },
+              span(
+                { class: "app-flow-wave-label" },
+                `Wave ${box.wave}${box.active === true ? " · active" : ""}`,
+              ),
+              span(
+                { "data-testid": "roadmap-wave-count", class: "app-flow-wave-count" },
+                String(box.entries.length),
+              ),
+            ),
             div({ class: "app-flow-wave-body" }, box.entries.map(RoadmapFlowNode)),
           );
 
