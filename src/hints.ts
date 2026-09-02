@@ -362,10 +362,14 @@ export const roadmapHints = {
       : `cr-plan --cr ${cr} --release <v> --wave <n> --title <brief> to move it into ${container}, or re-send --crs without it — it is planned into ${planned}`,
     `GET /api/v2/projects/<key>/queue — the crs actually registered in ${container}`,
   ],
-  /** §S4 — a wave-sequence whose member count would reach the seq stride. */
-  waveOverflow: (container: string, count: number): string[] => [
+  /**
+   * §S4 / CR-CRU-095 §S3 — a wave whose next seq would leave its block: the
+   * ONE `help[]` `wave-sequence`, the bulk post and `cr-plan` all carry beside
+   * `waveOverflowMessage`. `seq` is the value that would leave the block.
+   */
+  waveOverflow: (container: string, seq: number): string[] => [
     `split ${container} across two waves: cr-plan --cr <cr> --release <v> --wave <n+1> --title <brief> moves a cr out, then re-send --crs for each wave`,
-    `${count} crs in one wave is past the block a wave's seq values live in — nothing was written, so the stored order is still the last authored one`,
+    `seq ${seq} is past the block a wave's seq values live in — nothing was written, so the stored order is still the last authored one`,
   ],
   /** §S5 — the ONE finding that refuses: a dependency cycle. */
   dependencyCycle: (members: string[]): string[] => [

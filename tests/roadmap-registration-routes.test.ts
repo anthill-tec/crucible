@@ -870,7 +870,8 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
 
     test(
       "§S4 — a wave-sequence whose member count would REACH the seq stride is " +
-        "refused naming the limit and the count, and writes nothing",
+        "refused naming the seq that would leave the block and the limit, and writes nothing " +
+        "(CR-CRU-095 AC12h: the seq, not the count)",
       async () => {
         boot();
         const key = await seed("s4-stride");
@@ -882,7 +883,8 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
         const refused = await sequence(key, "0.2.0", 5, crs);
         expect(refused.status).toBe(400);
         expect(refused.body.error).toContain("wave 5");
-        expect(refused.body.error).toContain("1001");
+        // The 1001st member would take 5000 + 1001.
+        expect(refused.body.error).toContain("6001");
         expect(refused.body.error).toContain("999");
         expect(storedRows(key)).toEqual(before);
       },

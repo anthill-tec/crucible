@@ -419,25 +419,38 @@ export function waveSeqBase(wave: string): number {
 }
 
 /**
- * §S4 / CR-CRU-095 §S3 — the ONE wording for a wave that would reach the
- * stride. `wave-sequence` refuses it by name, and the bulk post refuses the
- * same condition (its defaults would leave the block) with this same message,
- * so there is one limit in one wording. `count` is what the wave would hold.
+ * §S4 / CR-CRU-095 §S3 — the ONE wording for a wave whose next seq would
+ * leave its block. `wave-sequence`, the bulk post and `cr-plan` all refuse the
+ * same condition with this same message, so there is one limit in one
+ * wording. `seq` is the value that would leave the block — never a row count,
+ * which is false the moment a declared seq near the block's end trips the
+ * refusal early (AC12h).
  */
-export function waveOverflowMessage(wave: string, count: number): string {
+export function waveOverflowMessage(wave: string, seq: number): string {
   return (
-    `wave ${wave} would hold ${count} crs — a wave's seq block is ${WAVE_SEQ_STRIDE} ` +
-    `positions wide, so it carries at most ${WAVE_SEQ_STRIDE - 1}; nothing was written`
+    `wave ${wave} would reach seq ${seq}, outside its block — a wave's seq block is ` +
+    `${WAVE_SEQ_STRIDE} positions wide, so it carries at most ${WAVE_SEQ_STRIDE - 1}; ` +
+    `nothing was written`
   );
 }
 
 /**
- * CR-CRU-095 §S3/AC12c — a bulk post whose defaults would leave a wave's
- * block. `replaceQueue` throws it BEFORE anything is written; the bulk route
- * answers it as a 400 carrying the message, never as a spill into the next
- * wave's base.
+ * CR-CRU-095 §S3/AC12c, AC12f — a write whose slot would leave a wave's
+ * block. `nextFreeSlot` throws it BEFORE anything is written; the bulk and
+ * cr-plan routes answer it as a 400 carrying the message and `wave-sequence`'s
+ * `help[]`, never as a spill into the next wave's base. `release` is the
+ * offending row's, when it holds one, so the route can name its container.
  */
-export class QueueWaveOverflowError extends Error {}
+export class QueueWaveOverflowError extends Error {
+  constructor(
+    readonly wave: string,
+    /** The seq that would leave the block. */
+    readonly seq: number,
+    readonly release?: string,
+  ) {
+    super(waveOverflowMessage(wave, seq));
+  }
+}
 
 /**
  * CR-CRU-095 §S2 — a seq's SCALE, derived, never stored: `true` when it sits
@@ -446,9 +459,27 @@ export class QueueWaveOverflowError extends Error {}
  * explicit `seq: 10`. Two rows on different scales interleave in an order
  * nobody authored — that difference IS the `defaulted-seq` mixture.
  */
-function inWaveBlock(seq: number, wave: string): boolean {
+export function inWaveBlock(seq: number, wave: string): boolean {
   const base = waveSeqBase(wave);
   return seq > base && seq < base + WAVE_SEQ_STRIDE;
+}
+
+/**
+ * CR-CRU-095 §S3 — THE next free slot in a wave's block, for both writers that
+ * choose a seq (`replaceQueue`, `upsertQueueEntry`): `max(seq held or assigned
+ * in that wave AND inside its block) + 1`, or `waveSeqBase(wave) + 1` when the
+ * block is empty. `waveSeqs` is every seq the wave holds on any scale; a value
+ * OUTSIDE the block does not count (a wave holding legacy positional `62` gets
+ * `6001`, not `63`). Throws `QueueWaveOverflowError` when the slot would leave
+ * the block — the one limit `wave-sequence` refuses with, in its wording.
+ */
+function nextFreeSlot(wave: string, waveSeqs: Iterable<number>, release?: string): number {
+  const base = waveSeqBase(wave);
+  let top = base;
+  for (const seq of waveSeqs) if (seq > top && inWaveBlock(seq, wave)) top = seq;
+  const slot = top + 1;
+  if (slot >= base + WAVE_SEQ_STRIDE) throw new QueueWaveOverflowError(wave, slot, release);
+  return slot;
 }
 
 /**
@@ -3502,38 +3533,44 @@ export class Store {
       // the whole post with nothing written. Precedence is unchanged: a
       // declared seq wins, a held one survives a bootstrap that never knew
       // the wave's authored sequence, and only a row with NEITHER is
-      // defaulted. The first pass records, per wave, the highest in-block seq
-      // the post carries (a later row's held `5002` must count for an earlier
-      // defaulted one) and which waves hold a value outside their block.
-      const seqs: Array<number | undefined> = entries.map(
-        (entry) => entry.seq ?? held.get(entry.cr)?.seq,
-      );
-      const top = new Map<string, number>();
+      // defaulted. "Held" means held IN THAT WAVE (AC12g): a row the README
+      // moved to another wave has no valid seq there and is re-slotted into
+      // the new wave's block, as `cr-plan` re-slots on a wave move. The first
+      // pass gathers every seq the post carries per wave (a later row's held
+      // `5002` must count for an earlier defaulted one) and which waves hold
+      // a value outside their block.
+      const seqs: Array<number | undefined> = entries.map((entry) => {
+        if (entry.seq !== undefined) return entry.seq;
+        const snapshot = held.get(entry.cr);
+        return snapshot?.wave === entry.wave ? snapshot.seq : undefined;
+      });
+      const byWave = new Map<string, number[]>();
+      const waveSeqsOf = (wave: string): number[] => {
+        let list = byWave.get(wave);
+        if (list === undefined) {
+          list = [];
+          byWave.set(wave, list);
+        }
+        return list;
+      };
       const positional = new Set<string>();
       entries.forEach((entry, index) => {
         const seq = seqs[index];
         if (seq === undefined) return;
-        if (inWaveBlock(seq, entry.wave)) {
-          top.set(entry.wave, Math.max(top.get(entry.wave) ?? seq, seq));
-        } else {
-          positional.add(entry.wave);
-        }
+        waveSeqsOf(entry.wave).push(seq);
+        if (!inWaveBlock(seq, entry.wave)) positional.add(entry.wave);
       });
       const defaultedSeq: string[] = [];
       entries.forEach((entry, index) => {
         if (seqs[index] !== undefined) return;
-        const base = waveSeqBase(entry.wave);
-        const seq = (top.get(entry.wave) ?? base) + 1;
-        if (seq >= base + WAVE_SEQ_STRIDE) {
-          throw new QueueWaveOverflowError(
-            waveOverflowMessage(
-              entry.wave,
-              entries.filter((member) => member.wave === entry.wave).length,
-            ),
-          );
-        }
+        const waveSeqs = waveSeqsOf(entry.wave);
+        const seq = nextFreeSlot(
+          entry.wave,
+          waveSeqs,
+          entry.release ?? held.get(entry.cr)?.release ?? undefined,
+        );
         seqs[index] = seq;
-        top.set(entry.wave, seq);
+        waveSeqs.push(seq);
         if (positional.has(entry.wave)) defaultedSeq.push(entry.cr);
       });
       this.db.query(`DELETE FROM queue_entries WHERE project_key = ?`).run(projectKey);
@@ -3655,8 +3692,10 @@ export class Store {
    * position unique. Declaring a release on a cr that stays in its wave
    * therefore moves nothing. Moving a cr to ANOTHER wave closes the gap
    * behind it — the source wave's survivors are renumbered dense from their
-   * block base — and appends it to the end of the target wave's block. Only
-   * those two waves are touched.
+   * block base — and appends it after the target wave's block, at the same
+   * `nextFreeSlot` the bulk post uses (CR-CRU-095 §S3/AC12e), refused by the
+   * same overflow when the block is full (AC12f). Only those two waves are
+   * touched.
    */
   upsertQueueEntry(
     projectKey: string,
@@ -3676,16 +3715,19 @@ export class Store {
       return { changed: false, defaultedSeq: [] };
     }
     const moved = held === null || held.wave !== input.wave;
-    const base = waveSeqBase(input.wave);
-    const siblings = moved
-      ? this.db
-          .query<QueueEntryRow, [string, string]>(
-            `SELECT * FROM queue_entries WHERE project_key = ? AND wave = ? ORDER BY seq ASC`,
-          )
-          .all(projectKey, input.wave)
-          .filter((row) => row.cr !== input.cr)
-      : [];
-    const seq = moved ? base + siblings.length + 1 : held!.seq;
+    const seq = moved
+      ? nextFreeSlot(
+          input.wave,
+          this.db
+            .query<QueueEntryRow, [string, string]>(
+              `SELECT * FROM queue_entries WHERE project_key = ? AND wave = ?`,
+            )
+            .all(projectKey, input.wave)
+            .filter((row) => row.cr !== input.cr)
+            .map((row) => row.seq),
+          input.release,
+        )
+      : held!.seq;
     const now = Date.now();
     this.db.transaction(() => {
       if (held === null) {
@@ -3709,24 +3751,30 @@ export class Store {
     })();
     this.emit("events", projectKey);
     // §S2/AC23, widened by CR-CRU-095 §S2 — a mixture is a DIFFERENCE OF
-    // SCALE, never "this write chose the value": the row's seq (a wave-block
-    // offset when it moved, the held value when it stayed) is compared with
-    // every sibling in the SAME WAVE or the SAME RELEASE, read AFTER the write
-    // so the source wave's densified survivors are seen as they now stand. An
-    // in-block position beside a positional sibling — an explicit `seq: 10`,
-    // an index that rode the bulk post — or a preserved positional seq beside
-    // a release sibling authored in its own block: either interleaves in an
-    // order nobody authored, and only that is reported. A release-less row is
-    // never matched on the release axis (`release = ?` is false for NULL), so
-    // the live board's deferred history names nobody.
+    // SCALE: the row's seq (a wave-block slot when it moved, the held value
+    // when it stayed) is compared with every sibling in the SAME WAVE or the
+    // SAME RELEASE, read AFTER the write so the source wave's densified
+    // survivors are seen as they now stand. An in-block slot beside a
+    // positional sibling — an explicit `seq: 10`, an index that rode the bulk
+    // post — or a preserved positional seq beside a release sibling authored
+    // in its own block: either interleaves in an order nobody authored. A
+    // write names ITS OWN ROW, and only when this write chose the seq (moved)
+    // or the held seq is itself the out-of-block one (AC11a, VERIFY ruling
+    // cycle 308): a retitle that preserves an authored in-block seq beside a
+    // positional sibling is silent — that mixture pre-exists, and the
+    // positional row's own write named it. A release-less row is never
+    // matched on the release axis (`release = ?` is false for NULL), so the
+    // live board's deferred history names nobody.
     const scale = inWaveBlock(seq, input.wave);
-    const mixed = this.db
-      .query<QueueEntryRow, [string, string, string, string]>(
-        `SELECT * FROM queue_entries
-         WHERE project_key = ? AND cr != ? AND (wave = ? OR release = ?)`,
-      )
-      .all(projectKey, input.cr, input.wave, input.release)
-      .some((row) => inWaveBlock(row.seq, row.wave) !== scale);
+    const mixed =
+      (moved || !scale) &&
+      this.db
+        .query<QueueEntryRow, [string, string, string, string]>(
+          `SELECT * FROM queue_entries
+           WHERE project_key = ? AND cr != ? AND (wave = ? OR release = ?)`,
+        )
+        .all(projectKey, input.cr, input.wave, input.release)
+        .some((row) => inWaveBlock(row.seq, row.wave) !== scale);
     return { changed: true, defaultedSeq: mixed ? [input.cr] : [] };
   }
 

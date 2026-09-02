@@ -15,6 +15,7 @@ import {
   WAVE_SEQ_STRIDE,
   waveNumber,
   waveOverflowMessage,
+  waveSeqBase,
 } from "./store.ts";
 import { toToon } from "./toon.ts";
 import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
@@ -1874,13 +1875,14 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
       ...(typeof fields.seq === "number" ? { seq: fields.seq } : {}),
     });
   }
-  // CR-CRU-095 §S3/AC12c — a post whose defaults would leave a wave's block
-  // is refused with `wave-sequence`'s own wording; the store wrote nothing.
+  // CR-CRU-095 §S3/AC12c, AC12i — a post whose defaults would leave a wave's
+  // block is refused in `wave-sequence`'s own envelope (message AND help[]);
+  // the store wrote nothing.
   let report: QueueSeqReport;
   try {
     report = store.replaceQueue(key, entries);
   } catch (error) {
-    if (error instanceof QueueWaveOverflowError) return fail(400, error.message);
+    if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
     throw error;
   }
   const { defaultedSeq } = report;
@@ -1933,8 +1935,20 @@ function defaultedSeqWarnings(crs: string[]): QueueWarning[] {
 }
 
 /** §S5 — a cr's container, as the warnings name it: `release/wave`. */
-function containerLabel(entry: QueueEntry): string {
+function containerLabel(entry: Pick<QueueEntry, "release" | "wave">): string {
   return `${entry.release ?? "-"}/${entry.wave}`;
+}
+
+/**
+ * CR-CRU-095 §S3/AC12f, AC12i — the ONE overflow envelope, as the bulk post
+ * and `cr-plan` answer the store's refusal: `wave-sequence`'s message (already
+ * on the error) and `wave-sequence`'s `help[]`, for the offending row's
+ * container and the seq that would leave the block.
+ */
+function waveOverflow(error: QueueWaveOverflowError): Response {
+  return fail(400, error.message, {
+    help: roadmapHints.waveOverflow(containerLabel(error), error.seq),
+  });
 }
 
 /**
@@ -2156,12 +2170,21 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   const cycle = refuseDependencyCycle(store.listQueue(pk.key), [body.cr]);
   if (cycle !== null) return cycle;
 
-  const { changed, defaultedSeq } = store.upsertQueueEntry(pk.key, {
-    cr: body.cr,
-    release: body.release,
-    wave: String(body.wave),
-    title: body.title,
-  });
+  // CR-CRU-095 §S3/AC12f — a full block refuses the plan, in `wave-sequence`'s
+  // envelope, and nothing is written.
+  let report: QueueSeqReport & { changed: boolean };
+  try {
+    report = store.upsertQueueEntry(pk.key, {
+      cr: body.cr,
+      release: body.release,
+      wave: String(body.wave),
+      title: body.title,
+    });
+  } catch (error) {
+    if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
+    throw error;
+  }
+  const { changed, defaultedSeq } = report;
   const entries = store.listQueue(pk.key);
   const touched = new Set([body.cr]);
   return json({
@@ -2243,8 +2266,10 @@ async function handleWaveSequence(store: Store, key: string, req: Request): Prom
       .map((entry) => entry.cr),
   ]);
   if (members.size >= WAVE_SEQ_STRIDE) {
-    return fail(400, waveOverflowMessage(wave, members.size), {
-      help: roadmapHints.waveOverflow(container, members.size),
+    // The seq the thousandth member would take: the next wave's base.
+    const overflowing = waveSeqBase(wave) + members.size;
+    return fail(400, waveOverflowMessage(wave, overflowing), {
+      help: roadmapHints.waveOverflow(container, overflowing),
     });
   }
   for (const cr of crs) {

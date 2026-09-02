@@ -47,7 +47,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Store, WAVE_SEQ_STRIDE, compareQueueOrder, waveSeqBase } from "../src/store.ts";
+import { Store, WAVE_SEQ_STRIDE, compareQueueOrder, inWaveBlock, waveSeqBase } from "../src/store.ts";
 import type { QueueEntryInput } from "../src/store.ts";
 import { startServer, type ServerHandle } from "../src/server.ts";
 
@@ -83,13 +83,13 @@ interface AnyBody {
 
 const ORCH = "orchestrator-1";
 
-/** `inWaveBlock`'s contract (src/store.ts:428-431): strictly inside `(base, base + stride)`. */
+/** §S2's one predicate (`inWaveBlock`, src/store.ts:462-465), imported rather than re-derived. */
 function expectInBlock(cr: string, wave: string, seq: number | undefined): void {
-  const base = waveSeqBase(wave);
   expect(seq, `${cr} (wave ${JSON.stringify(wave)}) has no seq`).toBeDefined();
   expect(
-    seq! > base && seq! < base + WAVE_SEQ_STRIDE,
-    `${cr} (wave ${JSON.stringify(wave)}) seq ${seq} is outside its block (${base}, ${base + WAVE_SEQ_STRIDE})`,
+    inWaveBlock(seq!, wave),
+    `${cr} (wave ${JSON.stringify(wave)}) seq ${seq} is outside its block ` +
+      `(${waveSeqBase(wave)}, ${waveSeqBase(wave) + WAVE_SEQ_STRIDE})`,
   ).toBe(true);
 }
 
@@ -481,6 +481,86 @@ describe("CR-CRU-095 §S3 — the STORE defaults a seq-less, snapshot-less row i
   );
 
   test(
+    "AC12g — a held row whose WAVE CHANGES in a re-post is RE-SLOTTED into the new wave's block " +
+      "(held means held IN THAT WAVE): B(0.2.0/5, 5002) re-posted as wave 6 lands after wave 6's " +
+      "held block, is published after wave 5, and names nobody — a row that keeps its wave keeps " +
+      "its seq",
+    () => {
+      const store = new Store(":memory:");
+      const key = seedProject(store);
+
+      store.replaceQueue(key, [
+        { cr: "CR-A", wave: "5", dependsOn: [], seq: 5001, release: "0.2.0" },
+        { cr: "CR-B", wave: "5", dependsOn: [], seq: 5002, release: "0.2.0" },
+        { cr: "CR-C", wave: "6", dependsOn: [], seq: 6001 },
+      ]);
+
+      // The README moved B to wave 6 and gained N there; nothing carries a seq.
+      const report = store.replaceQueue(key, [
+        { cr: "CR-A", wave: "5", dependsOn: [] },
+        { cr: "CR-C", wave: "6", dependsOn: [] },
+        { cr: "CR-B", wave: "6", dependsOn: [] },
+        { cr: "CR-N", wave: "6", dependsOn: [] },
+      ]);
+
+      const seqs = seqOf(store, key);
+      // Kept their wave, kept their seq (AC13).
+      expect([seqs.get("CR-A"), seqs.get("CR-C")]).toEqual([5001, 6001]);
+      // 5002 is not a wave-6 value: B takes the next free slot of wave 6's
+      // block, in post order with the other seq-less row.
+      expect([seqs.get("CR-B"), seqs.get("CR-N")]).toEqual([6002, 6003]);
+      expectInBlock("CR-B", "6", seqs.get("CR-B"));
+      // One scale in wave 6, so nothing is named — least of all N for B's move.
+      expect(report.defaultedSeq).toEqual([]);
+      // Published after wave 5. B carries its release forward (CR-091), so
+      // inside wave 6 it is the declared `0.2.0/6` row and leads the
+      // undeclared `-/6` ones (§S1/AC1e) — its seq decides nothing across
+      // containers, and inside its own it is alone.
+      expect(store.listQueue(key).map((entry) => entry.cr)).toEqual([
+        "CR-A",
+        "CR-B",
+        "CR-C",
+        "CR-N",
+      ]);
+    },
+  );
+
+  test(
+    "AC12g (mixture) — when the re-slotted row lands beside a legacy positional sibling, the " +
+      "row NAMED is the moved row itself (its seq was chosen by this write), never a sibling " +
+      "for it",
+    () => {
+      const store = new Store(":memory:");
+      const key = seedProject(store);
+
+      store.replaceQueue(key, [
+        { cr: "CR-A", wave: "5", dependsOn: [], seq: 5001, release: "0.2.0" },
+        { cr: "CR-B", wave: "5", dependsOn: [], seq: 5002, release: "0.2.0" },
+        { cr: "CR-CRU-015", wave: "6", dependsOn: [], seq: 62 },
+      ]);
+
+      const report = store.replaceQueue(key, [
+        { cr: "CR-A", wave: "5", dependsOn: [] },
+        { cr: "CR-CRU-015", wave: "6", dependsOn: [] },
+        { cr: "CR-B", wave: "6", dependsOn: [] },
+      ]);
+
+      const seqs = seqOf(store, key);
+      expect([seqs.get("CR-A"), seqs.get("CR-CRU-015")]).toEqual([5001, 62]);
+      expect(seqs.get("CR-B")).toBe(6001);
+      // 62 beside 6001 is two scales in wave 6, and B is the row this write
+      // slotted: B is named, CR-CRU-015 (held, untouched) is not.
+      expect(report.defaultedSeq).toEqual(["CR-B"]);
+      // After wave 5; the declared `0.2.0/6` row before the undeclared `-/6` one.
+      expect(store.listQueue(key).map((entry) => entry.cr)).toEqual([
+        "CR-A",
+        "CR-B",
+        "CR-CRU-015",
+      ]);
+    },
+  );
+
+  test(
     "AC14 — IDEMPOTENT: posting the same seq-less payload twice on a fresh store yields " +
       "identical seq values, and those values are IN-BLOCK (the second post carries forward " +
       "what the first defaulted)",
@@ -606,6 +686,40 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
     return rows.map((row) => ({
       cr: row.cr,
       wave: /^\d+$/.test(row.wave) ? Number(row.wave) : row.wave,
+      dependsOn: [],
+    }));
+  }
+
+  /**
+   * §S3/AC12c, AC12h, AC12i — the ONE overflow wording (src/store.ts
+   * `waveOverflowMessage`) as `wave-sequence`, the bulk post and cr-plan all
+   * answer it. `seq` is the value that would LEAVE the block (AC12h) — never
+   * the post's row count, which is false the moment a declared seq near the
+   * block's end trips the refusal early.
+   */
+  function overflowMessage(wave: string, seq: number): string {
+    return (
+      `wave ${wave} would reach seq ${seq}, outside its block — a wave's seq block is ` +
+      `${WAVE_SEQ_STRIDE} positions wide, so it carries at most ${WAVE_SEQ_STRIDE - 1}; ` +
+      `nothing was written`
+    );
+  }
+
+  /** AC12i — the ONE `help[]` (`roadmapHints.waveOverflow`) every overflow 400 carries. */
+  function overflowHelp(container: string, seq: number): string[] {
+    return [
+      `split ${container} across two waves: cr-plan --cr <cr> --release <v> --wave <n+1> ` +
+        `--title <brief> moves a cr out, then re-send --crs for each wave`,
+      `seq ${seq} is past the block a wave's seq values live in — nothing was written, so the ` +
+        `stored order is still the last authored one`,
+    ];
+  }
+
+  /** `count` seq-less wave-5 rows, `CR-W5-0001`… */
+  function wave5Rows(count: number): Array<Record<string, unknown>> {
+    return Array.from({ length: count }, (_, index) => ({
+      cr: `CR-W5-${String(index + 1).padStart(4, "0")}`,
+      wave: 5,
       dependsOn: [],
     }));
   }
@@ -764,25 +878,22 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
     async () => {
       boot();
       const key = await seed("ac12c-overflow");
-      const rows = (count: number): Array<Record<string, unknown>> =>
-        Array.from({ length: count }, (_, index) => ({
-          cr: `CR-W5-${String(index + 1).padStart(4, "0")}`,
-          wave: 5,
-          dependsOn: [],
-        }));
+      const rows = wave5Rows;
 
       // The thousandth member would take wave 6's base: refused BY NAME, as
-      // wave-sequence refuses it (src/v2.ts:2220-2227), in ONE wording.
+      // wave-sequence refuses it (src/v2.ts:2245-2248), in ONE wording that
+      // states the seq that would leave the block (AC12h) and ONE help[] (AC12i).
       const refused = await bulk(key, rows(WAVE_SEQ_STRIDE));
 
       expect(refused.status).toBe(400);
       expect(refused.body.ok).toBe(false);
       expect(refused.body.error).toContain("wave 5");
-      expect(refused.body.error).toContain(`${WAVE_SEQ_STRIDE} crs`);
       expect(refused.body.error).toContain(
         `a wave's seq block is ${WAVE_SEQ_STRIDE} positions wide, so it carries at most ` +
           `${WAVE_SEQ_STRIDE - 1}; nothing was written`,
       );
+      expect(refused.body.error).toBe(overflowMessage("5", waveSeqBase("5") + WAVE_SEQ_STRIDE));
+      expect(refused.body.help).toEqual(overflowHelp("-/5", waveSeqBase("5") + WAVE_SEQ_STRIDE));
       const untouched = await get(`/api/v2/projects/${key}/queue`);
       expect(untouched.status).toBe(200);
       expect(untouched.body.entries).toEqual([]);
@@ -799,6 +910,112 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       );
       expectInBlock("CR-W5-0999", "5", seqs.get("CR-W5-0999"));
     },
+  );
+
+  test(
+    "AC12h — the overflow message states the SEQ that would leave the block, not the post's row " +
+      "count: 5999 declared plus ONE seq-less row is refused naming 6000, never 'would hold 2 " +
+      "crs'; 5998 plus one lands the row at 5999 (the safe side of AC12c)",
+    async () => {
+      boot();
+      const key = await seed("ac12h-early-trip");
+
+      const refused = await bulk(key, [
+        { cr: "CR-NEAR-END", wave: 5, dependsOn: [], seq: 5999 },
+        { cr: "CR-NEW", wave: 5, dependsOn: [] },
+      ]);
+
+      expect(refused.status).toBe(400);
+      expect(refused.body.ok).toBe(false);
+      expect(refused.body.error).toBe(overflowMessage("5", 6000));
+      expect(refused.body.error).not.toContain("would hold");
+      expect(refused.body.error).not.toContain("2 crs");
+      expect(refused.body.help).toEqual(overflowHelp("-/5", 6000));
+      expect((await get(`/api/v2/projects/${key}/queue`)).body.entries).toEqual([]);
+
+      const accepted = await bulk(key, [
+        { cr: "CR-NEAR-END", wave: 5, dependsOn: [], seq: 5998 },
+        { cr: "CR-NEW", wave: 5, dependsOn: [] },
+      ]);
+      expect(accepted.status).toBe(200);
+      expect((await seqs(key)).get("CR-NEW")).toBe(5999);
+    },
+  );
+
+  test(
+    "AC12i — the bulk overflow 400 is the SAME ENVELOPE as wave-sequence's: for one wave and one " +
+      "overflowing seq the two refusals carry byte-identical `error` and `help[]`",
+    async () => {
+      boot();
+      const key = await seed("ac12i-one-envelope");
+      await propose(key, "0.2.0");
+
+      // Wave 5 is full (999 in-block rows); CR-MOVER sits in wave 6, planned
+      // into 0.2.0 so that its container is the one wave-sequence names.
+      const filled = await bulk(key, [...wave5Rows(WAVE_SEQ_STRIDE - 1), { cr: "CR-MOVER", wave: 6, dependsOn: [] }]);
+      expect(filled.status).toBe(200);
+      expect((await plan(key, "CR-MOVER", "0.2.0", 6, "about to move")).status).toBe(200);
+      const before = await seqs(key);
+
+      // The README moves CR-MOVER into wave 5: re-slotted (AC12g), its slot
+      // would be 6000 — refused.
+      const viaBulk = await bulk(key, [...wave5Rows(WAVE_SEQ_STRIDE - 1), { cr: "CR-MOVER", wave: 5, dependsOn: [] }]);
+      // wave-sequence carrying a thousandth member of 0.2.0/5: refused by the
+      // same arithmetic, before any per-cr lookup.
+      const viaSequence = await sequence(
+        key,
+        "0.2.0",
+        5,
+        wave5Rows(WAVE_SEQ_STRIDE).map((row) => row.cr as string),
+      );
+
+      expect(viaBulk.status).toBe(400);
+      expect(viaSequence.status).toBe(400);
+      expect(viaBulk.body.error).toBe(overflowMessage("5", 6000));
+      expect(viaBulk.body.error).toBe(viaSequence.body.error!);
+      expect(viaBulk.body.help).toEqual(overflowHelp("0.2.0/5", 6000));
+      expect(viaBulk.body.help).toEqual(viaSequence.body.help!);
+      // Neither wrote anything: CR-MOVER still sits in wave 6 with its seq.
+      expect(await seqs(key)).toEqual(before);
+      const mover = (await get(`/api/v2/projects/${key}/queue`)).body.entries!.find(
+        (entry) => entry.cr === "CR-MOVER",
+      );
+      expect(mover!.wave).toBe("6");
+    },
+  );
+
+  test(
+    "AC12i (wave-sequence's OWN text) — 999 members of 0.2.0/5 are sequenced; the thousandth " +
+      "is refused with the shared wording naming seq 6000 and the shared help[]",
+    async () => {
+      boot();
+      const key = await seed("ac12i-wave-sequence-pin");
+      await propose(key, "0.2.0");
+      const rows = wave5Rows(WAVE_SEQ_STRIDE - 1);
+      expect((await bulk(key, rows)).status).toBe(200);
+      const crs = rows.map((row) => row.cr as string);
+      // 999 cr-plans; each keeps its wave (and so its held seq), so order is
+      // immaterial and they go out together.
+      const planned = await Promise.all(crs.map((cr) => plan(key, cr, "0.2.0", 5, `title ${cr}`)));
+      expect(planned.every((res) => res.status === 200)).toBe(true);
+
+      const full = await sequence(key, "0.2.0", 5, crs);
+      expect(full.status).toBe(200);
+      expect(full.body.ok).toBe(true);
+      expect((await seqs(key)).get(`CR-W5-${String(WAVE_SEQ_STRIDE - 1).padStart(4, "0")}`)).toBe(
+        waveSeqBase("5") + WAVE_SEQ_STRIDE - 1,
+      );
+
+      const refused = await sequence(key, "0.2.0", 5, [...crs, "CR-W5-1000"]);
+      expect(refused.status).toBe(400);
+      expect(refused.body.ok).toBe(false);
+      expect(refused.body.error).toBe(overflowMessage("5", waveSeqBase("5") + WAVE_SEQ_STRIDE));
+      expect(refused.body.help).toEqual(overflowHelp("0.2.0/5", waveSeqBase("5") + WAVE_SEQ_STRIDE));
+      // Nothing written: the authored block stands.
+      expect((await seqs(key)).get("CR-W5-0001")).toBe(5001);
+      expect((await seqs(key)).has("CR-W5-1000")).toBe(false);
+    },
+    30_000,
   );
 
   test(

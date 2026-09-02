@@ -23,7 +23,7 @@ THE API THIS RED PINS, and why each piece exists:
         normalise its `--track`. Without this the fleet would answer `2`
         differently on the read path (`next`) and the write path
         (`wave-sequence`), which is the exact inconsistency the fleet standard
-        exists to prevent. Mirrors `normalizeTrack` (src/store.ts:338-341).
+        exists to prevent. Mirrors `normalizeTrack` (src/store.ts:345-348).
 
     queue_tracks(entries) -> [str]
         §S3. The sorted distinct non-null STORED `track` values. `len > 1` is
@@ -347,7 +347,7 @@ class CanonicalTrackTest(_NextTestBase):
                 self.assertIsNone(
                     AXI.canonical_track(spelling),
                     f"{spelling!r} names no lane; `normalizeTrack` returns null "
-                    f"for it (src/store.ts:338-341) so the helper must too, "
+                    f"for it (src/store.ts:345-348) so the helper must too, "
                     f"rather than inventing a track")
 
     def test_no_value_at_all_is_refused_rather_than_defaulted(self):
@@ -1496,9 +1496,9 @@ class NextBlockCitationsTest(unittest.TestCase):
     CITATIONS = (
         ("the §S1 exit-code rule", "clients/STATUS-CONTRACT.md", 65, 68,
          "## Terminal states (all exit 0)", "all exit 0:"),
-        ("LANDED_STATUSES", "src/store.ts", 3788, 3788,
+        ("LANDED_STATUSES", "src/store.ts", 3925, 3925,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
-        ("canonical_track", "src/store.ts", 338, 341,
+        ("canonical_track", "src/store.ts", 345, 348,
          "export function normalizeTrack(", "}"),
         ("_next_start_help", "clients/python-crucible.py", 1349, 1362,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),

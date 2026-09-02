@@ -1122,7 +1122,8 @@ export function roadmapTableColumns(entries) {
 /**
  * CR-CRU-078 §S4/§S5 — everything zones 2 and 3 draw for ONE focused release.
  * Pure: the gate the strip focused, the release ledger, and the queue as
- * `listQueue` published it (`ORDER BY seq`).
+ * `listQueue` published it — the one canonical order (`compareQueueOrder`,
+ * CR-CRU-095 §S1: wave, release, seq), consumed verbatim.
  *
  * MEMBERSHIP has two sources, because a release has two lives (DN §8/§9):
  *   - shipped  — the ledger's `crs`, a settled fact frozen at ship time. A row

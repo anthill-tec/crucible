@@ -36,7 +36,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Store } from "../src/store.ts";
+import { Store, WAVE_SEQ_STRIDE } from "../src/store.ts";
 import type { QueueEntryInput } from "../src/store.ts";
 import { startServer, type ServerHandle } from "../src/server.ts";
 
@@ -179,6 +179,102 @@ describe("CR-CRU-095 §S2 — the STORE names a defaulted row beside an authored
       // The mismatch the report names is real: the positional value is still
       // outside wave 6's block while its release siblings sit in wave 5's.
       expect(landed!.seq).toBe(2);
+    },
+  );
+
+  test(
+    "AC12e (cr-plan) — upsertQueueEntry takes the SAME next-free-slot as the bulk post " +
+      "(max in-block seq + 1, never a count): authored A..E 5001..5005, a re-post dropping C, D " +
+      "and adding F (5006), then cr-plan G into 0.2.0/5 -> 5007, never a held value",
+    () => {
+      const store = new Store(":memory:");
+      const key = seedProject(store);
+      const crs = ["CR-A", "CR-B", "CR-C", "CR-D", "CR-E"];
+
+      store.replaceQueue(
+        key,
+        crs.map((cr) => ({ cr, wave: "5", dependsOn: [] })),
+      );
+      for (const cr of crs) {
+        store.upsertQueueEntry(key, { cr, release: "0.2.0", wave: "5", title: cr });
+      }
+      store.sequenceQueueWave(key, { release: "0.2.0", wave: "5", crs });
+      expect([...seqOf(store, key).values()]).toEqual([5001, 5002, 5003, 5004, 5005]);
+
+      // The README dropped C and D and gained F: the gapped block 5001, 5002,
+      // 5005 is held, F is appended after it (AC12a).
+      store.replaceQueue(key, [
+        { cr: "CR-A", wave: "5", dependsOn: [] },
+        { cr: "CR-B", wave: "5", dependsOn: [] },
+        { cr: "CR-E", wave: "5", dependsOn: [] },
+        { cr: "CR-F", wave: "5", dependsOn: [] },
+      ]);
+      expect(seqOf(store, key).get("CR-F")).toBe(5006);
+
+      const planned = store.upsertQueueEntry(key, {
+        cr: "CR-G",
+        release: "0.2.0",
+        wave: "5",
+        title: "planned into the gapped block",
+      });
+
+      const seqs = seqOf(store, key);
+      // base + count + 1 would be 5005 — E's. The slot is max + 1.
+      expect(seqs.get("CR-G")).toBe(5007);
+      const others = [...seqs.entries()].filter(([cr]) => cr !== "CR-G").map(([, seq]) => seq);
+      expect(others).not.toContain(seqs.get("CR-G"));
+      expect(new Set(seqs.values()).size).toBe(seqs.size);
+      // Every wave-5 value is in-block: one scale, nothing named.
+      expect(planned.defaultedSeq).toEqual([]);
+    },
+  );
+
+  test(
+    "AC11a (cr-plan) — a write names ITS OWN ROW, and only when this write chose the seq or the " +
+      "held seq is the out-of-block one: retitling authored A (5001, 0.2.0/5) beside positional " +
+      "C (2, 0.2.0/6) names nothing; retitling C names C",
+    () => {
+      const store = new Store(":memory:");
+      const key = seedProject(store);
+
+      store.replaceQueue(key, [
+        { cr: "CR-A", wave: "5", dependsOn: [] },
+        { cr: "CR-B", wave: "5", dependsOn: [] },
+        { cr: "CR-C", wave: "6", dependsOn: [], seq: 2 },
+      ]);
+      store.upsertQueueEntry(key, { cr: "CR-A", release: "0.2.0", wave: "5", title: "a" });
+      store.upsertQueueEntry(key, { cr: "CR-B", release: "0.2.0", wave: "5", title: "b" });
+      store.sequenceQueueWave(key, { release: "0.2.0", wave: "5", crs: ["CR-A", "CR-B"] });
+      // AC9: the positional row's own write into the release names it.
+      expect(
+        store.upsertQueueEntry(key, { cr: "CR-C", release: "0.2.0", wave: "6", title: "c" })
+          .defaultedSeq,
+      ).toEqual(["CR-C"]);
+
+      // A retitle that preserves A's authored in-block seq: the mixture in
+      // 0.2.0 pre-exists and C's write named it; A's seq was neither chosen
+      // here nor out of its block.
+      const retitledA = store.upsertQueueEntry(key, {
+        cr: "CR-A",
+        release: "0.2.0",
+        wave: "5",
+        title: "a, retitled",
+      });
+      expect(retitledA.changed).toBe(true);
+      expect(retitledA.defaultedSeq).toEqual([]);
+      expect(seqOf(store, key).get("CR-A")).toBe(5001);
+
+      // The same shape on the positional row: its held seq IS the
+      // out-of-block one, so it is named again.
+      const retitledC = store.upsertQueueEntry(key, {
+        cr: "CR-C",
+        release: "0.2.0",
+        wave: "6",
+        title: "c, retitled",
+      });
+      expect(retitledC.changed).toBe(true);
+      expect(retitledC.defaultedSeq).toEqual(["CR-C"]);
+      expect(seqOf(store, key).get("CR-C")).toBe(2);
     },
   );
 
@@ -643,8 +739,10 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
       expect(added.body.ok).toBe(true);
       expectDefaultedSeqWarning(added.body.warnings, ["CR-NEW"]);
       expect(added.body.entry!.release).toBe("0.2.0");
-      // Wave 5's block offset after the two positional siblings — not their scale.
-      expect(added.body.entry!.seq).toBe(5003);
+      // Wave 5's block — not the positional siblings' scale. Out-of-block
+      // values do not count toward the slot (AC12b; one slot function for
+      // cr-plan and the bulk post, AC12e), so the block's FIRST position.
+      expect(added.body.entry!.seq).toBe(5001);
     },
   );
 
@@ -691,6 +789,79 @@ describe("CR-CRU-095 §S2 — the WIRE: the bulk post and cr-plan warn across wa
       );
       expect(landed).toBeDefined();
       expect(landed!.release).toBeUndefined();
+    },
+  );
+
+  test(
+    "AC12f (cr-plan) — planning a row into a wave whose block is FULL (999 in-block members) is " +
+      "REFUSED with the shared overflow wording and the shared help[]; nothing is written",
+    async () => {
+      boot();
+      const key = await seed("ac12f-cr-plan-overflow");
+      await propose(key, "0.2.0");
+      const rows = Array.from({ length: WAVE_SEQ_STRIDE - 1 }, (_, index) => ({
+        cr: `CR-W5-${String(index + 1).padStart(4, "0")}`,
+        wave: 5,
+        dependsOn: [],
+      }));
+      expect((await bulk(key, rows)).status).toBe(200);
+
+      const refused = await plan(key, "CR-W5-1000", "0.2.0", 5, "the thousandth member");
+
+      expect(refused.status).toBe(400);
+      expect(refused.body.ok).toBe(false);
+      // The seq that would leave the block, in wave-sequence's own wording.
+      expect(refused.body.error).toBe(
+        `wave 5 would reach seq 6000, outside its block — a wave's seq block is ` +
+          `${WAVE_SEQ_STRIDE} positions wide, so it carries at most ${WAVE_SEQ_STRIDE - 1}; ` +
+          `nothing was written`,
+      );
+      expect(refused.body.help).toEqual([
+        `split 0.2.0/5 across two waves: cr-plan --cr <cr> --release <v> --wave <n+1> ` +
+          `--title <brief> moves a cr out, then re-send --crs for each wave`,
+        `seq 6000 is past the block a wave's seq values live in — nothing was written, so the ` +
+          `stored order is still the last authored one`,
+      ]);
+      const after = await get(`/api/v2/projects/${key}/queue`);
+      expect(after.body.entries).toHaveLength(WAVE_SEQ_STRIDE - 1);
+      expect(after.body.entries!.some((entry) => entry.cr === "CR-W5-1000")).toBe(false);
+      expect(after.body.entries!.every((entry) => entry.seq < 6000)).toBe(true);
+    },
+  );
+
+  test(
+    "AC11a (cr-plan, wire) — a retitle of authored A (5001, 0.2.0/5) beside positional C (2, " +
+      "0.2.0/6) carries NO defaulted-seq warning; the same retitle on C names C",
+    async () => {
+      boot();
+      const key = await seed("ac11a-retitle");
+      await propose(key, "0.2.0");
+      const seeded = await bulk(key, [
+        { cr: "CR-A", wave: 5, dependsOn: [] },
+        { cr: "CR-B", wave: 5, dependsOn: [] },
+        { cr: "CR-C", wave: 6, dependsOn: [], seq: 2 },
+      ]);
+      expect(seeded.status).toBe(200);
+      expect((await plan(key, "CR-A", "0.2.0", 5, "a")).status).toBe(200);
+      expect((await plan(key, "CR-B", "0.2.0", 5, "b")).status).toBe(200);
+      expect((await sequence(key, "0.2.0", 5, ["CR-A", "CR-B"])).status).toBe(200);
+      // AC9 — C's own write into the release names C.
+      expectDefaultedSeqWarning((await plan(key, "CR-C", "0.2.0", 6, "c")).body.warnings, ["CR-C"]);
+
+      const retitledA = await plan(key, "CR-A", "0.2.0", 5, "a, retitled");
+
+      expect(retitledA.status).toBe(200);
+      expect(retitledA.body.ok).toBe(true);
+      expect(retitledA.body.converged).toBe(false);
+      expect(retitledA.body.entry!.seq).toBe(5001);
+      expect(retitledA.body.warnings!.filter((w) => w.code === "defaulted-seq")).toEqual([]);
+
+      const retitledC = await plan(key, "CR-C", "0.2.0", 6, "c, retitled");
+
+      expect(retitledC.status).toBe(200);
+      expect(retitledC.body.converged).toBe(false);
+      expect(retitledC.body.entry!.seq).toBe(2);
+      expectDefaultedSeqWarning(retitledC.body.warnings, ["CR-C"]);
     },
   );
 });
