@@ -357,24 +357,27 @@ describe("CR-CRU-095 §S3 — the STORE defaults a seq-less, snapshot-less row i
 
       // A board that already stores positional values, as every pre-§S3
       // board does: the values are DECLARED here to stand in for what an
-      // earlier import wrote.
+      // earlier import wrote. The SHAPE (a wave-6 pair at 62/64 and a wave-4
+      // row at 7) is the pre-§S3 arrangement this project's own board carried;
+      // the rule under test is id-independent, so the rows are synthetic
+      // (CR-CRU-097 §S5/AC4).
       store.replaceQueue(key, [
-        { cr: "CR-CRU-015", wave: "6", dependsOn: [], seq: 62 },
-        { cr: "CR-CRU-017", wave: "6", dependsOn: [], seq: 64 },
-        { cr: "CR-CRU-011", wave: "4", dependsOn: [], seq: 7 },
+        { cr: "CR-W6-A", wave: "6", dependsOn: [], seq: 62 },
+        { cr: "CR-W6-B", wave: "6", dependsOn: [], seq: 64 },
+        { cr: "CR-W4-L", wave: "4", dependsOn: [], seq: 7 },
       ]);
-      expect(seqOf(store, key).get("CR-CRU-015")).toBe(62);
+      expect(seqOf(store, key).get("CR-W6-A")).toBe(62);
 
       const report = store.replaceQueue(key, [
-        { cr: "CR-CRU-015", wave: "6", dependsOn: [] },
-        { cr: "CR-CRU-017", wave: "6", dependsOn: [] },
-        { cr: "CR-CRU-011", wave: "4", dependsOn: [] },
+        { cr: "CR-W6-A", wave: "6", dependsOn: [] },
+        { cr: "CR-W6-B", wave: "6", dependsOn: [] },
+        { cr: "CR-W4-L", wave: "4", dependsOn: [] },
       ]);
 
       const seqs = seqOf(store, key);
-      expect(seqs.get("CR-CRU-015")).toBe(62);
-      expect(seqs.get("CR-CRU-017")).toBe(64);
-      expect(seqs.get("CR-CRU-011")).toBe(7);
+      expect(seqs.get("CR-W6-A")).toBe(62);
+      expect(seqs.get("CR-W6-B")).toBe(64);
+      expect(seqs.get("CR-W4-L")).toBe(7);
       // Nothing was chosen, so nothing is named (one scale per wave).
       expect(report.defaultedSeq).toEqual([]);
     },
@@ -459,19 +462,19 @@ describe("CR-CRU-095 §S3 — the STORE defaults a seq-less, snapshot-less row i
 
       // A pre-§S3 board: wave 6 stores positional values.
       store.replaceQueue(key, [
-        { cr: "CR-CRU-015", wave: "6", dependsOn: [], seq: 62 },
-        { cr: "CR-CRU-017", wave: "6", dependsOn: [], seq: 64 },
+        { cr: "CR-W6-A", wave: "6", dependsOn: [], seq: 62 },
+        { cr: "CR-W6-B", wave: "6", dependsOn: [], seq: 64 },
       ]);
 
       const report = store.replaceQueue(key, [
-        { cr: "CR-CRU-015", wave: "6", dependsOn: [] },
-        { cr: "CR-CRU-017", wave: "6", dependsOn: [] },
+        { cr: "CR-W6-A", wave: "6", dependsOn: [] },
+        { cr: "CR-W6-B", wave: "6", dependsOn: [] },
         { cr: "CR-NEW", wave: "6", dependsOn: [] },
       ]);
 
       const seqs = seqOf(store, key);
       // §S3 does not retroactively fix the board...
-      expect([seqs.get("CR-CRU-015"), seqs.get("CR-CRU-017")]).toEqual([62, 64]);
+      expect([seqs.get("CR-W6-A"), seqs.get("CR-W6-B")]).toEqual([62, 64]);
       // ...and does not extend the positional scale either.
       expect(seqs.get("CR-NEW")).toBe(6001);
       // 62/64 beside 6001 IS two scales in one wave — the pre-existing
@@ -536,26 +539,26 @@ describe("CR-CRU-095 §S3 — the STORE defaults a seq-less, snapshot-less row i
       store.replaceQueue(key, [
         { cr: "CR-A", wave: "5", dependsOn: [], seq: 5001, release: "0.2.0" },
         { cr: "CR-B", wave: "5", dependsOn: [], seq: 5002, release: "0.2.0" },
-        { cr: "CR-CRU-015", wave: "6", dependsOn: [], seq: 62 },
+        { cr: "CR-W6-A", wave: "6", dependsOn: [], seq: 62 },
       ]);
 
       const report = store.replaceQueue(key, [
         { cr: "CR-A", wave: "5", dependsOn: [] },
-        { cr: "CR-CRU-015", wave: "6", dependsOn: [] },
+        { cr: "CR-W6-A", wave: "6", dependsOn: [] },
         { cr: "CR-B", wave: "6", dependsOn: [] },
       ]);
 
       const seqs = seqOf(store, key);
-      expect([seqs.get("CR-A"), seqs.get("CR-CRU-015")]).toEqual([5001, 62]);
+      expect([seqs.get("CR-A"), seqs.get("CR-W6-A")]).toEqual([5001, 62]);
       expect(seqs.get("CR-B")).toBe(6001);
       // 62 beside 6001 is two scales in wave 6, and B is the row this write
-      // slotted: B is named, CR-CRU-015 (held, untouched) is not.
+      // slotted: B is named, CR-W6-A (held, untouched) is not.
       expect(report.defaultedSeq).toEqual(["CR-B"]);
       // After wave 5; the declared `0.2.0/6` row before the undeclared `-/6` one.
       expect(store.listQueue(key).map((entry) => entry.cr)).toEqual([
         "CR-A",
         "CR-B",
-        "CR-CRU-015",
+        "CR-W6-A",
       ]);
     },
   );
@@ -805,8 +808,8 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       const bootstrapped = await bulk(key, [
         { cr: "CR-A", wave: 5, dependsOn: [] },
         { cr: "CR-B", wave: 5, dependsOn: [] },
-        { cr: "CR-CRU-015", wave: 6, dependsOn: [], seq: 62 },
-        { cr: "CR-CRU-017", wave: 6, dependsOn: [], seq: 64 },
+        { cr: "CR-W6-A", wave: 6, dependsOn: [], seq: 62 },
+        { cr: "CR-W6-B", wave: 6, dependsOn: [], seq: 64 },
       ]);
       expect(bootstrapped.status).toBe(200);
       expect((await plan(key, "CR-A", "0.2.0", 5, "a")).status).toBe(200);
@@ -814,14 +817,14 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       expect((await sequence(key, "0.2.0", 5, ["CR-B", "CR-A"])).status).toBe(200);
       const before = await seqs(key);
       expect([before.get("CR-B"), before.get("CR-A")]).toEqual([5001, 5002]);
-      expect(before.get("CR-CRU-015")).toBe(62);
+      expect(before.get("CR-W6-A")).toBe(62);
 
       // The re-post the orchestrator runs on every README edit.
       const reposted = await bulk(key, [
         { cr: "CR-A", wave: 5, dependsOn: [] },
         { cr: "CR-B", wave: 5, dependsOn: [] },
-        { cr: "CR-CRU-015", wave: 6, dependsOn: [] },
-        { cr: "CR-CRU-017", wave: 6, dependsOn: [] },
+        { cr: "CR-W6-A", wave: 6, dependsOn: [] },
+        { cr: "CR-W6-B", wave: 6, dependsOn: [] },
       ]);
 
       expect(reposted.status).toBe(200);
@@ -830,8 +833,8 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       const after = await seqs(key);
       expect([after.get("CR-B"), after.get("CR-A")]).toEqual([5001, 5002]);
       // §S3 does not retroactively fix a board: 62 stays 62, not 6001.
-      expect(after.get("CR-CRU-015")).toBe(62);
-      expect(after.get("CR-CRU-017")).toBe(64);
+      expect(after.get("CR-W6-A")).toBe(62);
+      expect(after.get("CR-W6-B")).toBe(64);
       expect(after).toEqual(before);
     },
   );
@@ -845,22 +848,22 @@ describe("CR-CRU-095 §S3 — the WIRE: the bulk queue post defaults into the wa
       const key = await seed("ac12b-legacy-beside-block");
 
       const bootstrapped = await bulk(key, [
-        { cr: "CR-CRU-015", wave: 6, dependsOn: [], seq: 62 },
-        { cr: "CR-CRU-017", wave: 6, dependsOn: [], seq: 64 },
+        { cr: "CR-W6-A", wave: 6, dependsOn: [], seq: 62 },
+        { cr: "CR-W6-B", wave: 6, dependsOn: [], seq: 64 },
       ]);
       expect(bootstrapped.status).toBe(200);
 
       // The README gained a row in wave 6; the re-post carries no seq at all.
       const reposted = await bulk(key, [
-        { cr: "CR-CRU-015", wave: 6, dependsOn: [] },
-        { cr: "CR-CRU-017", wave: 6, dependsOn: [] },
+        { cr: "CR-W6-A", wave: 6, dependsOn: [] },
+        { cr: "CR-W6-B", wave: 6, dependsOn: [] },
         { cr: "CR-NEW", wave: 6, dependsOn: [] },
       ]);
 
       expect(reposted.status).toBe(200);
       expect(reposted.body.ok).toBe(true);
       const seqs = new Map(reposted.body.entries!.map((entry) => [entry.cr, entry.seq]));
-      expect([seqs.get("CR-CRU-015"), seqs.get("CR-CRU-017")]).toEqual([62, 64]);
+      expect([seqs.get("CR-W6-A"), seqs.get("CR-W6-B")]).toEqual([62, 64]);
       expect(seqs.get("CR-NEW")).toBe(6001);
       // Warn-and-write: the row landed AND the mixture is named, with the remedy.
       const warning = reposted.body.warnings!.find((w) => w.code === "defaulted-seq");

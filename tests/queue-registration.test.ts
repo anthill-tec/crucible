@@ -325,9 +325,9 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         const key = await createProject("queue-derived-status");
 
         const posted = await postQueue(key, [
-          { cr: "CR-CRU-014", title: "roadmap", wave: 5, dependsOn: ["CR-CRU-011"] },
-          { cr: "CR-CRU-011", title: "join key", wave: 4, dependsOn: [] },
-          { cr: "CR-CRU-013", title: "milestones", wave: 4, dependsOn: [] },
+          { cr: "CR-Q-1", title: "roadmap", wave: 5, dependsOn: ["CR-Q-2"] },
+          { cr: "CR-Q-2", title: "join key", wave: 4, dependsOn: [] },
+          { cr: "CR-Q-3", title: "milestones", wave: 4, dependsOn: [] },
         ]);
         expect([200, 202]).toContain(posted.status);
 
@@ -336,34 +336,34 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
           const q = await getQueue(key);
           expect(q.ok).toBe(true);
           expect(q.entries.length).toBe(3);
-          const e = findEntry(q.entries, "CR-CRU-014");
+          const e = findEntry(q.entries, "CR-Q-1");
           expect(e.status).toBe("PENDING");
           expect(e.planId).toBeUndefined();
-          expect(findEntry(q.entries, "CR-CRU-011").status).toBe("PENDING");
-          expect(findEntry(q.entries, "CR-CRU-013").status).toBe("PENDING");
+          expect(findEntry(q.entries, "CR-Q-2").status).toBe("PENDING");
+          expect(findEntry(q.entries, "CR-Q-3").status).toBe("PENDING");
         }
 
-        // Phase 2 — file an OPEN plan for CR-CRU-014 → IN_PROGRESS + plan link.
-        const { planId, cycleId } = await filePlan(key, "CR-CRU-014");
+        // Phase 2 — file an OPEN plan for CR-Q-1 → IN_PROGRESS + plan link.
+        const { planId, cycleId } = await filePlan(key, "CR-Q-1");
         {
           const q = await getQueue(key);
-          const e = findEntry(q.entries, "CR-CRU-014");
+          const e = findEntry(q.entries, "CR-Q-1");
           expect(e.status).toBe("IN_PROGRESS");
           expect(e.planId).toBe(planId);
           // The sibling CRs (no plan) must NOT flip — a runaway derivation fails here.
-          expect(findEntry(q.entries, "CR-CRU-011").status).toBe("PENDING");
-          expect(findEntry(q.entries, "CR-CRU-013").status).toBe("PENDING");
+          expect(findEntry(q.entries, "CR-Q-2").status).toBe("PENDING");
+          expect(findEntry(q.entries, "CR-Q-3").status).toBe("PENDING");
         }
 
         // Phase 3 — close that plan WITH a merge commit → COMPLETED.
         await closePlanWithMerge(key, planId, cycleId, "deadbee014");
         {
           const q = await getQueue(key);
-          const e = findEntry(q.entries, "CR-CRU-014");
+          const e = findEntry(q.entries, "CR-Q-1");
           expect(e.status).toBe("COMPLETED");
           expect(e.planId).toBe(planId);
-          expect(findEntry(q.entries, "CR-CRU-011").status).toBe("PENDING");
-          expect(findEntry(q.entries, "CR-CRU-013").status).toBe("PENDING");
+          expect(findEntry(q.entries, "CR-Q-2").status).toBe("PENDING");
+          expect(findEntry(q.entries, "CR-Q-3").status).toBe("PENDING");
         }
       },
     );
@@ -379,7 +379,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
           [200, 202].includes(
             (
               await postQueue(key, [
-                { cr: "CR-CRU-009", title: "release bundle", wave: 3, dependsOn: ["CR-CRU-004", "CR-CRU-005"], size: "L" },
+                { cr: "CR-Q-1", title: "release bundle", wave: 3, dependsOn: ["CR-Q-2", "CR-Q-3"], size: "L" },
               ])
             ).status,
           ),
@@ -388,10 +388,10 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         const q = await getQueue(key);
         expect(q.entries.length).toBe(1);
         const e = q.entries[0]!;
-        expect(e.cr).toBe("CR-CRU-009");
+        expect(e.cr).toBe("CR-Q-1");
         expect(e.title).toBe("release bundle");
         expect(String(e.wave)).toBe("3");
-        expect(e.dependsOn).toEqual(["CR-CRU-004", "CR-CRU-005"]);
+        expect(e.dependsOn).toEqual(["CR-Q-2", "CR-Q-3"]);
         expect(e.size).toBe("L");
       },
     );
@@ -406,9 +406,9 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         const key = await createProject("queue-idempotent");
 
         const set = [
-          { cr: "CR-CRU-001", wave: 1, dependsOn: [] },
-          { cr: "CR-CRU-002", wave: 1, dependsOn: ["CR-CRU-001"] },
-          { cr: "CR-CRU-003", wave: 2, dependsOn: ["CR-CRU-002"] },
+          { cr: "CR-Q-1", wave: 1, dependsOn: [] },
+          { cr: "CR-Q-2", wave: 1, dependsOn: ["CR-Q-1"] },
+          { cr: "CR-Q-3", wave: 2, dependsOn: ["CR-Q-2"] },
         ];
         expect([200, 202]).toContain((await postQueue(key, set)).status);
         expect([200, 202]).toContain((await postQueue(key, set)).status);
@@ -416,7 +416,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         const q = await getQueue(key);
         expect(q.entries.length).toBe(3);
         const crs = q.entries.map((e) => e.cr).sort();
-        expect(crs).toEqual(["CR-CRU-001", "CR-CRU-002", "CR-CRU-003"]);
+        expect(crs).toEqual(["CR-Q-1", "CR-Q-2", "CR-Q-3"]);
       },
     );
 
@@ -431,21 +431,21 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
           [200, 202].includes(
             (
               await postQueue(key, [
-                { cr: "CR-CRU-001", wave: 1, dependsOn: [] },
-                { cr: "CR-CRU-002", wave: 1, dependsOn: ["CR-CRU-001"] },
-                { cr: "CR-CRU-003", wave: 2, dependsOn: ["CR-CRU-002"] },
+                { cr: "CR-Q-1", wave: 1, dependsOn: [] },
+                { cr: "CR-Q-2", wave: 1, dependsOn: ["CR-Q-1"] },
+                { cr: "CR-Q-3", wave: 2, dependsOn: ["CR-Q-2"] },
               ])
             ).status,
           ),
         ).toBe(true);
 
-        // Replace: drop CR-CRU-003 entirely, re-wave CR-CRU-002.
+        // Replace: drop CR-Q-3 entirely, re-wave CR-Q-2.
         expect(
           [200, 202].includes(
             (
               await postQueue(key, [
-                { cr: "CR-CRU-001", wave: 1, dependsOn: [] },
-                { cr: "CR-CRU-002", wave: 9, dependsOn: ["CR-CRU-001"] },
+                { cr: "CR-Q-1", wave: 1, dependsOn: [] },
+                { cr: "CR-Q-2", wave: 9, dependsOn: ["CR-Q-1"] },
               ])
             ).status,
           ),
@@ -453,9 +453,9 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
 
         const q = await getQueue(key);
         expect(q.entries.length).toBe(2);
-        expect(q.entries.map((e) => e.cr).sort()).toEqual(["CR-CRU-001", "CR-CRU-002"]);
-        expect(q.entries.some((e) => e.cr === "CR-CRU-003")).toBe(false);
-        expect(String(findEntry(q.entries, "CR-CRU-002").wave)).toBe("9");
+        expect(q.entries.map((e) => e.cr).sort()).toEqual(["CR-Q-1", "CR-Q-2"]);
+        expect(q.entries.some((e) => e.cr === "CR-Q-3")).toBe(false);
+        expect(String(findEntry(q.entries, "CR-Q-2").wave)).toBe("9");
       },
     );
 
@@ -468,22 +468,22 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         const key = await createProject("queue-unknown-depends");
 
         const res = await postQueue(key, [
-          { cr: "CR-CRU-100", wave: 1, dependsOn: ["CR-CRU-999"] },
-          { cr: "CR-CRU-101", wave: 1, dependsOn: ["CR-CRU-100"] },
+          { cr: "CR-Q-1", wave: 1, dependsOn: ["CR-Q-ABSENT"] },
+          { cr: "CR-Q-2", wave: 1, dependsOn: ["CR-Q-1"] },
         ]);
         expect([200, 202]).toContain(res.status);
         const body = (await res.json()) as QueuePostResponse;
         expect(body.ok).toBe(true);
         // The forward ref is flagged...
         expect(Array.isArray(body.unknownDependencies)).toBe(true);
-        expect(body.unknownDependencies).toContain("CR-CRU-999");
+        expect(body.unknownDependencies).toContain("CR-Q-ABSENT");
         // ...but a KNOWN, in-set dependency is NOT flagged.
-        expect(body.unknownDependencies).not.toContain("CR-CRU-100");
+        expect(body.unknownDependencies).not.toContain("CR-Q-1");
 
         // ...and the entry with the forward ref is nonetheless stored.
         const q = await getQueue(key);
         expect(q.entries.length).toBe(2);
-        expect(findEntry(q.entries, "CR-CRU-100").dependsOn).toEqual(["CR-CRU-999"]);
+        expect(findEntry(q.entries, "CR-Q-1").dependsOn).toEqual(["CR-Q-ABSENT"]);
       },
     );
   });
@@ -498,9 +498,9 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         const key = await createProject("queue-validation-index");
 
         const res = await postQueue(key, [
-          { cr: "CR-CRU-001", wave: 1, dependsOn: [] },
-          { cr: "CR-CRU-002", wave: 1, dependsOn: [] },
-          { cr: "CR-CRU-003", dependsOn: [] }, // index 2 — no wave
+          { cr: "CR-Q-1", wave: 1, dependsOn: [] },
+          { cr: "CR-Q-2", wave: 1, dependsOn: [] },
+          { cr: "CR-Q-3", dependsOn: [] }, // index 2 — no wave
         ]);
         expect(res.status).toBe(400);
         const err = (await res.json()) as ErrResponse;
@@ -539,7 +539,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
 
         expect(
           [200, 202].includes(
-            (await postQueue(key, [{ cr: "CR-CRU-050", wave: 1, dependsOn: [] }])).status,
+            (await postQueue(key, [{ cr: "CR-Q-1", wave: 1, dependsOn: [] }])).status,
           ),
         ).toBe(true);
         expect((await getQueue(key)).entries.length).toBe(1);
@@ -551,7 +551,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         expect((await postJson(`/api/v2/projects/${key}/unarchive`, {})).status).toBe(200);
         const after = await getQueue(key);
         expect(after.entries.length).toBe(1);
-        expect(after.entries[0]!.cr).toBe("CR-CRU-050");
+        expect(after.entries[0]!.cr).toBe("CR-Q-1");
       },
     );
   });
@@ -572,7 +572,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
 
         expect(
           [200, 202].includes(
-            (await postQueue(key, [{ cr: "CR-CRU-060", wave: 1, dependsOn: [] }])).status,
+            (await postQueue(key, [{ cr: "CR-Q-1", wave: 1, dependsOn: [] }])).status,
           ),
         ).toBe(true);
 
@@ -599,7 +599,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
 
         expect(
           [200, 202].includes(
-            (await postQueue(key, [{ cr: "CR-CRU-070", wave: 1, dependsOn: [] }])).status,
+            (await postQueue(key, [{ cr: "CR-Q-1", wave: 1, dependsOn: [] }])).status,
           ),
         ).toBe(true);
         expect((await getQueue(key)).entries.length).toBe(1);
@@ -638,13 +638,18 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
   // `listReleases` (src/store.ts:2111) serves it, so membership here is real
   // stored evidence read back off the wire, never a fixture side-channel.
   describe("CR-CRU-083 §S1/§S2 — a shipped CR derives COMPLETED_UNTRACKED, never PENDING", () => {
-    /** Shipped in a release, never plan-tracked — the measured class
-     *  (CR-CRU-001–007, 010, 016). */
-    const SHIPPED_CR = "CR-CRU-001";
+    /**
+     * Shipped in a release, never plan-tracked. The class was MEASURED on this
+     * project's own board (CR-CRU-001–007, 010, 016 on 2026-09-02 — see the
+     * block comment above), but the contract under test is id-independent, so
+     * the fixture id is synthetic: what these tests assert is the RULE, not a
+     * reproduction of any one row (CR-CRU-097 §S5/AC4).
+     */
+    const SHIPPED_CR = "CR-Q-SHIPPED";
     /** Genuinely unstarted: no plan, in no release's `crs` (AC2's class). */
-    const UNSTARTED_CR = "CR-CRU-015";
+    const UNSTARTED_CR = "CR-Q-UNSTARTED";
     /** Fully plan-tracked through merge — the COMPLETED comparison arm (AC3). */
-    const TRACKED_CR = "CR-CRU-021";
+    const TRACKED_CR = "CR-Q-TRACKED";
 
     /** Epoch SECONDS — the unit §S4 names as `releasedAt`'s source (`git log
      *  -1 --format=%ct <tag>`). A month back, so it can never be read as the
@@ -810,7 +815,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
             await postQueue(key, [
               { cr: SHIPPED_CR, wave: 1, dependsOn: [] },
               { cr: UNSTARTED_CR, wave: 2, dependsOn: [] },
-              { cr: "CR-CRU-018", wave: 2, dependsOn: [] },
+              { cr: "CR-Q-UNSTARTED-2", wave: 2, dependsOn: [] },
             ])
           ).status,
         );
@@ -818,14 +823,14 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         // Two releases exist and neither names the unstarted CRs — the
         // exclusion is membership-based, not "no releases recorded".
         await recordRelease(key, "0.1.0", "aaa0001", [SHIPPED_CR]);
-        await recordRelease(key, "0.1.1", "aaa0002", ["CR-CRU-041"]);
+        await recordRelease(key, "0.1.1", "aaa0002", ["CR-Q-OTHER"]);
 
         const q = await getQueue(key);
         // GUARD — the new contract must EXIST, or the PENDING claims below are
         // vacuous (a plan-only derivation would satisfy them by accident).
         expect(findEntry(q.entries, SHIPPED_CR).status).toBe("COMPLETED_UNTRACKED");
 
-        for (const cr of [UNSTARTED_CR, "CR-CRU-018"]) {
+        for (const cr of [UNSTARTED_CR, "CR-Q-UNSTARTED-2"]) {
           const e = findEntry(q.entries, cr);
           expect(e.status).toBe("PENDING");
           expect(e.planId).toBeUndefined();
@@ -1001,7 +1006,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         // Two things that could plausibly rewrite settled fact: a full queue
         // replace, and a later release that names neither cr.
         expect([200, 202]).toContain((await postQueue(key, set)).status);
-        await recordRelease(key, "0.2.0", "aaa0002", ["CR-CRU-900"]);
+        await recordRelease(key, "0.2.0", "aaa0002", ["CR-Q-ELSEWHERE"]);
 
         const after = derivations((await getQueue(key)).entries);
         expect(after[TRACKED_CR]).toBe(before[TRACKED_CR]);

@@ -153,101 +153,147 @@ function firstActionable(entries: QueueEntry[]): QueueEntry | undefined {
   return entries.find((entry) => entry.status === "PENDING" && entry.lifecycle === undefined);
 }
 
+// ── THE BOARD SNAPSHOT — HISTORY, NOT A REQUIREMENT ────────────────────────
+//
+// A row-for-row transcription of THIS repository's own Crucible queue board
+// (project `crucible`, the board `worktree-flow status` prints), read on
+// 2026-09-02. It exists for ONE reason: this arrangement is what PRODUCED
+// CR-CRU-095's reported defect — the oracle recommending deferred CR-CRU-015
+// ahead of the entire active 0.2.0 release — and a synthetic id would have
+// made that reproduction a fiction (CR-CRU-097 §S3).
+//
+// IT IS ALREADY OUT OF DATE, AND THAT IS CORRECT. On 2026-09-03 CR-CRU-097,
+// 099 and 100 were sequenced into wave 5 and the declared block below moved
+// from 5024..5028 to 5027..5031 — five of the nine pinned positions. Nobody
+// may "fix" these numbers to match today's board: re-pinning them would only
+// re-arm the same trap with a fresher date. The single thing this constant
+// owes a reader is fidelity to 2026-09-02.
+//
+// Every assertion in this file that states a product RULE runs on synthetic
+// ids instead (CR-CRU-097 §S5/AC4). Only the REPRODUCTION test reads this
+// snapshot, and what it asserts is the reproduction, not the rule (AC5).
+const BOARD_SNAPSHOT_2026_09_02 = {
+  /**
+   * The board's own two scales, in the order a real board acquired them: the
+   * positional rows first (a bulk `queue-file` post that could not author a
+   * release for a shipped or a deferred wave), the authored 0.2.0 block last.
+   * Every cr id, wave, seq and disposition is a value read off the board.
+   */
+  rows: [
+    { cr: "CR-CRU-009", wave: "4", dependsOn: [], seq: 8 },
+    { cr: "CR-CRU-016", wave: "4", dependsOn: [], seq: 10 },
+    { cr: "CR-CRU-011", wave: "4", dependsOn: [], seq: 12 },
+    { cr: "CR-CRU-066", wave: "4", dependsOn: [], seq: 60 },
+    { cr: "CR-CRU-015", wave: "6", dependsOn: [], seq: 62 },
+    { cr: "CR-CRU-018", wave: "6", dependsOn: [], seq: 64 },
+    { cr: "CR-CRU-022", wave: "6", dependsOn: [], seq: 65 },
+    // Undeclared and at wave 5, so it sorts INSIDE wave 5 but AFTER every
+    // declared row there, whatever its seq (AC1e). VOID on the board — the
+    // second axis, which keeps it out of the candidate set without moving it
+    // in the order.
+    {
+      cr: "CR-CRU-082",
+      wave: "5",
+      dependsOn: [],
+      seq: 75,
+      lifecycle: { state: "VOID", reason: "voided in the queue README", at: 1_788_338_086_125 },
+    },
+    // The board's second undeclared wave-5 row. COMPLETED there (a closed
+    // plan with a merge commit); PENDING in this fixture, which changes
+    // nothing it is asked about — it sorts after the declared block, so it
+    // can never be the candidate the oracle reaches first.
+    { cr: "CR-CRU-090", wave: "5", dependsOn: [], seq: 81 },
+    { cr: "CR-CRU-095", wave: "5", dependsOn: [], seq: 5022, release: "0.2.0" },
+    { cr: "CR-CRU-096", wave: "5", dependsOn: [], seq: 5023, release: "0.2.0" },
+    { cr: "CR-CRU-079", wave: "5", dependsOn: [], seq: 5024, release: "0.2.0" },
+    { cr: "CR-CRU-085", wave: "5", dependsOn: [], seq: 5025, release: "0.2.0" },
+    { cr: "CR-CRU-093", wave: "5", dependsOn: [], seq: 5026, release: "0.2.0" },
+    { cr: "CR-CRU-075", wave: "5", dependsOn: [], seq: 5027, release: "0.2.0" },
+    { cr: "CR-CRU-094", wave: "5", dependsOn: [], seq: 5028, release: "0.2.0" },
+  ] satisfies QueueEntryInput[],
+
+  /**
+   * `0.1.0`'s recorded `crs`. Waves 1-4 are SHIPPED history on that board,
+   * which is why they carry no release (CR-091 §S6 refuses to plan a shipped
+   * one) and why they are not candidates. Release membership is how the store
+   * derives that without synthesising a plan (COMPLETED_UNTRACKED, CR-083 §S2).
+   */
+  shippedCrs: ["CR-CRU-009", "CR-CRU-016", "CR-CRU-011", "CR-CRU-066"],
+
+  /**
+   * What those rows publish under §S1's ruled key: wave leads, so the
+   * undeclared shipped waves 1-4 come first (by seq); inside wave 5 the
+   * DECLARED 0.2.0 block precedes the two undeclared rows regardless of their
+   * lower seq; and the deferred undeclared wave 6 lands LAST.
+   */
+  publishedOrder: [
+    "CR-CRU-009",
+    "CR-CRU-016",
+    "CR-CRU-011",
+    "CR-CRU-066",
+    "CR-CRU-095",
+    "CR-CRU-096",
+    "CR-CRU-079",
+    "CR-CRU-085",
+    "CR-CRU-093",
+    "CR-CRU-075",
+    "CR-CRU-094",
+    "CR-CRU-082",
+    "CR-CRU-090",
+    "CR-CRU-015",
+    "CR-CRU-018",
+    "CR-CRU-022",
+  ],
+
+  /** The row the oracle must reach first — the defect said CR-CRU-015. */
+  firstActionableCr: "CR-CRU-095",
+  /** The 0.2.0 block's endpoints, for the span assertion. */
+  releaseEnds: ["CR-CRU-095", "CR-CRU-094"],
+  /** The deferred wave-6 block's endpoints — the rows that used to outrank it. */
+  deferredEnds: ["CR-CRU-015", "CR-CRU-022"],
+};
+
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("CR-CRU-095 §S1 — listQueue publishes ONE canonical container order", () => {
   test(
-    "REPRODUCTION (AC1/AC1a/AC7/AC17) — the live board's MIXTURE: authored 0.2.0 wave-5 rows at " +
-      "seq 5022..5028 beside DEFAULTED release-less wave-6 rows at seq 62/64/65 publishes the " +
-      "0.2.0 rows FIRST, so the oracle stops recommending deferred CR-CRU-015",
+    "REPRODUCTION (AC1/AC1a/AC7/AC17) — the 2026-09-02 board snapshot's MIXTURE: authored 0.2.0 " +
+      "wave-5 rows at seq 5022..5028 beside DEFAULTED release-less wave-6 rows at seq 62/64/65 " +
+      "publishes the 0.2.0 rows FIRST, so the oracle stops recommending the deferred wave-6 row",
     () => {
       const store = new Store(":memory:");
       const key = seedProject(store);
 
-      // The board's own two scales, posted the way a real board acquires them:
-      // the positional rows first (a bulk `queue-file` post that could not
-      // author a release for a shipped or a deferred wave), the authored 0.2.0
-      // block last. Every cr id, wave, seq and disposition below is a value
-      // read off the live board on 2026-09-02.
-      store.replaceQueue(key, [
-        { cr: "CR-CRU-009", wave: "4", dependsOn: [], seq: 8 },
-        { cr: "CR-CRU-016", wave: "4", dependsOn: [], seq: 10 },
-        { cr: "CR-CRU-011", wave: "4", dependsOn: [], seq: 12 },
-        { cr: "CR-CRU-066", wave: "4", dependsOn: [], seq: 60 },
-        { cr: "CR-CRU-015", wave: "6", dependsOn: [], seq: 62 },
-        { cr: "CR-CRU-018", wave: "6", dependsOn: [], seq: 64 },
-        { cr: "CR-CRU-022", wave: "6", dependsOn: [], seq: 65 },
-        // Undeclared and at wave 5, so it sorts INSIDE wave 5 but AFTER every
-        // declared row there, whatever its seq (AC1e). VOID on the live board
-        // (recorded 2026-09-02) — the second axis, which keeps it out of the
-        // candidate set without moving it in the order.
-        {
-          cr: "CR-CRU-082",
-          wave: "5",
-          dependsOn: [],
-          seq: 75,
-          lifecycle: { state: "VOID", reason: "voided in the queue README", at: 1_788_338_086_125 },
-        },
-        // The board's second undeclared wave-5 row. COMPLETED there (a closed
-        // plan with a merge commit); PENDING in this fixture, which changes
-        // nothing it is asked about — it sorts after the declared block, so it
-        // can never be the candidate the oracle reaches first.
-        { cr: "CR-CRU-090", wave: "5", dependsOn: [], seq: 81 },
-        { cr: "CR-CRU-095", wave: "5", dependsOn: [], seq: 5022, release: "0.2.0" },
-        { cr: "CR-CRU-096", wave: "5", dependsOn: [], seq: 5023, release: "0.2.0" },
-        { cr: "CR-CRU-079", wave: "5", dependsOn: [], seq: 5024, release: "0.2.0" },
-        { cr: "CR-CRU-085", wave: "5", dependsOn: [], seq: 5025, release: "0.2.0" },
-        { cr: "CR-CRU-093", wave: "5", dependsOn: [], seq: 5026, release: "0.2.0" },
-        { cr: "CR-CRU-075", wave: "5", dependsOn: [], seq: 5027, release: "0.2.0" },
-        { cr: "CR-CRU-094", wave: "5", dependsOn: [], seq: 5028, release: "0.2.0" },
-      ]);
-      // Waves 1-4 are SHIPPED history on the live board, which is why they can
-      // carry no release (CR-091 §S6 refuses to plan a shipped one) and why
-      // they are not candidates. Release membership is how the store derives
-      // that without synthesising a plan (COMPLETED_UNTRACKED, CR-083 §S2).
+      // The arrangement that produced the defect, read off this project's own
+      // board on 2026-09-02 and frozen in BOARD_SNAPSHOT_2026_09_02. This test
+      // asserts the REPRODUCTION — that those exact rows no longer publish the
+      // deferred work ahead of the release — never a product rule; the rules
+      // live in the synthetic-id tests below (CR-CRU-097 §S5/AC4, AC5).
+      store.replaceQueue(key, BOARD_SNAPSHOT_2026_09_02.rows);
       store.recordMilestoneEvent(key, "fixture-agent", "release", {
         label: "0.1.0",
         commit: "0000000000000000000000000000000000000001",
         releasedAt: 1_760_000_000,
-        crs: ["CR-CRU-009", "CR-CRU-016", "CR-CRU-011", "CR-CRU-066"],
+        crs: BOARD_SNAPSHOT_2026_09_02.shippedCrs,
       });
 
       const entries = store.listQueue(key);
 
       // The whole canonical order, in one assertion, so the failure diff IS
-      // the report. Under the ruled KEY: wave leads, so the undeclared shipped
-      // waves 1-4 come first (by seq); inside wave 5 the DECLARED 0.2.0 block
-      // precedes the two undeclared rows regardless of their lower seq; and the
-      // deferred undeclared wave 6 lands LAST, which is the whole point.
-      expect(publishedOrder(entries)).toEqual([
-        "CR-CRU-009",
-        "CR-CRU-016",
-        "CR-CRU-011",
-        "CR-CRU-066",
-        "CR-CRU-095",
-        "CR-CRU-096",
-        "CR-CRU-079",
-        "CR-CRU-085",
-        "CR-CRU-093",
-        "CR-CRU-075",
-        "CR-CRU-094",
-        "CR-CRU-082",
-        "CR-CRU-090",
-        "CR-CRU-015",
-        "CR-CRU-018",
-        "CR-CRU-022",
-      ]);
+      // the report.
+      expect(publishedOrder(entries)).toEqual(BOARD_SNAPSHOT_2026_09_02.publishedOrder);
 
       // The oracle's recommendation, as the oracle derives it: the FIRST
       // actionable row of the published order (`actionable[0]`,
       // clients/_crucible_axi.py:1530). It must belong to the active release —
-      // today the wave-6 deferred rows reach it first.
+      // before §S1 the wave-6 deferred rows reached it first.
       expect(firstActionable(entries)?.release).toBe("0.2.0");
-      expect(firstActionable(entries)?.cr).toBe("CR-CRU-095");
+      expect(firstActionable(entries)?.cr).toBe(BOARD_SNAPSHOT_2026_09_02.firstActionableCr);
 
       // And the defect, named directly: no wave-6 row may outrank the release.
-      const release = spanOf(publishedOrder(entries), ["CR-CRU-095", "CR-CRU-094"]);
-      const deferred = spanOf(publishedOrder(entries), ["CR-CRU-015", "CR-CRU-022"]);
+      const order = publishedOrder(entries);
+      const release = spanOf(order, BOARD_SNAPSHOT_2026_09_02.releaseEnds);
+      const deferred = spanOf(order, BOARD_SNAPSHOT_2026_09_02.deferredEnds);
       expect(release.last).toBeLessThan(deferred.first);
     },
   );
@@ -562,22 +608,32 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
   );
 
   test(
-    "AC8 — GET /queue is byte-for-byte the order the store published, on the live board's " +
-      "mixture: the reader adds no ordering of its own (CR-091 AC18 regression)",
+    "AC8 — GET /queue is byte-for-byte the order the store published, on a two-scale mixture " +
+      "(declared 0.2.0/5 at 5023..5024 beside undeclared /6 at 62/64): the reader adds no " +
+      "ordering of its own (CR-091 AC18 regression)",
     async () => {
       const booted = boot();
       const key = await seed("ac8-no-rederivation");
 
+      // The two-scale SHAPE the 2026-09-02 board carried — a declared release
+      // block on the wave-block scale beside deferred rows on the legacy
+      // positional one — on synthetic ids: what is under test is the RULE that
+      // the reader re-derives nothing (CR-CRU-097 §S5/AC4).
       // Declarations ride the store directly: POST /queue carries no `release`
       // (src/v2.ts:1848-1859), and this test is about the READ, not the verb.
       booted.store.replaceQueue(key, [
-        { cr: "CR-CRU-015", wave: "6", dependsOn: [], seq: 62 },
-        { cr: "CR-CRU-018", wave: "6", dependsOn: [], seq: 64 },
-        { cr: "CR-CRU-096", wave: "5", dependsOn: [], seq: 5023, release: "0.2.0" },
-        { cr: "CR-CRU-079", wave: "5", dependsOn: [], seq: 5024, release: "0.2.0" },
+        { cr: "CR-UNDECLARED-W6-A", wave: "6", dependsOn: [], seq: 62 },
+        { cr: "CR-UNDECLARED-W6-B", wave: "6", dependsOn: [], seq: 64 },
+        { cr: "CR-DECLARED-W5-A", wave: "5", dependsOn: [], seq: 5023, release: "0.2.0" },
+        { cr: "CR-DECLARED-W5-B", wave: "5", dependsOn: [], seq: 5024, release: "0.2.0" },
       ]);
 
-      const canonical = ["CR-CRU-096", "CR-CRU-079", "CR-CRU-015", "CR-CRU-018"];
+      const canonical = [
+        "CR-DECLARED-W5-A",
+        "CR-DECLARED-W5-B",
+        "CR-UNDECLARED-W6-A",
+        "CR-UNDECLARED-W6-B",
+      ];
       const published = publishedOrder(booted.store.listQueue(key));
       const read = await get(`/api/v2/projects/${key}/queue`);
       expect(read.status).toBe(200);
@@ -591,22 +647,25 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
 
   test(
     "AC1b — a DECLARED row depending on an UNDECLARED row of a LOWER wave (shipped history) " +
-      "emits NO cross-wave-backwards: the live board's real edges CR-CRU-014 -> CR-CRU-011 and " +
-      "CR-CRU-068 -> CR-CRU-066 warn zero times",
+      "emits NO cross-wave-backwards: two such edges warn zero times",
     async () => {
       boot();
       const key = await seed("ac1b-shipped-history");
 
-      // The live board's own rows and seqs: the wave-4 dependencies cannot be
-      // declared at all (CR-091 §S6 refuses to plan a shipped release), which
-      // is exactly why "undeclared sorts last" produced 15 false warnings here.
+      // The SHAPE the ruling was measured against: a wave-4 dependency cannot
+      // be declared at all (CR-091 §S6 refuses to plan a shipped release),
+      // which is exactly why "undeclared sorts last" produced 15 false
+      // warnings when it was measured on this project's own dependency graph
+      // on 2026-09-02 (the real edges were CR-014 -> CR-011 and CR-068 ->
+      // CR-066). The rule is id-independent, so the rows are synthetic
+      // (CR-CRU-097 §S5/AC4); the measurement stays in this comment.
       const seeded = await post(`/api/v2/projects/${key}/queue`, {
         agentId: ORCH,
         entries: [
-          { cr: "CR-CRU-011", wave: 4, dependsOn: [], seq: 12 },
-          { cr: "CR-CRU-066", wave: 4, dependsOn: [], seq: 60 },
-          { cr: "CR-CRU-014", wave: 5, dependsOn: ["CR-CRU-011"], seq: 5001 },
-          { cr: "CR-CRU-068", wave: 5, dependsOn: ["CR-CRU-066"], seq: 5003 },
+          { cr: "CR-SHIPPED-W4-A", wave: 4, dependsOn: [], seq: 12 },
+          { cr: "CR-SHIPPED-W4-B", wave: 4, dependsOn: [], seq: 60 },
+          { cr: "CR-DEPENDANT-A", wave: 5, dependsOn: ["CR-SHIPPED-W4-A"], seq: 5001 },
+          { cr: "CR-DEPENDANT-B", wave: 5, dependsOn: ["CR-SHIPPED-W4-B"], seq: 5003 },
         ],
       });
       expect(seeded.status).toBe(200);
@@ -616,7 +675,7 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
       });
       expect(proposed.status).toBe(200);
 
-      for (const cr of ["CR-CRU-014", "CR-CRU-068"]) {
+      for (const cr of ["CR-DEPENDANT-A", "CR-DEPENDANT-B"]) {
         const planned = await post(`/api/v2/projects/${key}/queue/plan`, {
           agentId: ORCH,
           cr,
@@ -632,10 +691,10 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
 
       // ...and the same comparator puts that history BEFORE the release.
       expect(publishedOrder((await get(`/api/v2/projects/${key}/queue`)).body.entries!)).toEqual([
-        "CR-CRU-011",
-        "CR-CRU-066",
-        "CR-CRU-014",
-        "CR-CRU-068",
+        "CR-SHIPPED-W4-A",
+        "CR-SHIPPED-W4-B",
+        "CR-DEPENDANT-A",
+        "CR-DEPENDANT-B",
       ]);
     },
   );
@@ -650,8 +709,8 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
       const seeded = await post(`/api/v2/projects/${key}/queue`, {
         agentId: ORCH,
         entries: [
-          { cr: "CR-CRU-015", wave: 6, dependsOn: [], seq: 62 },
-          { cr: "CR-CRU-096", wave: 5, dependsOn: ["CR-CRU-015"], seq: 5023 },
+          { cr: "CR-DEFERRED-W6", wave: 6, dependsOn: [], seq: 62 },
+          { cr: "CR-DECLARED-W5", wave: 5, dependsOn: ["CR-DEFERRED-W6"], seq: 5023 },
         ],
       });
       expect(seeded.status).toBe(200);
@@ -663,7 +722,7 @@ describe("CR-CRU-095 §S1 — the READS consume the published order verbatim (AC
 
       const planned = await post(`/api/v2/projects/${key}/queue/plan`, {
         agentId: ORCH,
-        cr: "CR-CRU-096",
+        cr: "CR-DECLARED-W5",
         release: "0.2.0",
         wave: 5,
         title: "depends on deferred work",
