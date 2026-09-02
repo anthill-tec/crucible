@@ -1899,7 +1899,7 @@ function defaultedSeqWarnings(crs: string[]): QueueWarning[] {
     {
       code: "defaulted-seq",
       message:
-        `seq was defaulted for ${crs.join(", ")} while a sibling in the same wave carries ` +
+        `seq was defaulted for ${crs.join(", ")} while a sibling in the same wave or release carries ` +
         `one on a DIFFERENT SCALE — the two interleave in an order nobody authored; run ` +
         `wave-sequence --release <v> --wave <n> --crs <the whole ordered list> to author it`,
       crs,

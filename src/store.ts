@@ -288,18 +288,25 @@ export interface QueueEntryInput {
 }
 
 /**
- * CR-CRU-091 §S2/AC23 — what a queue write DEFAULTED rather than was told.
+ * CR-CRU-091 §S2/AC23 — what a queue write left on a DIFFERENT SCALE from a
+ * sibling; widened by CR-CRU-095 §S2 from the same wave to the same wave OR
+ * the same release.
  *
- * `defaultedSeq` names every cr whose `seq` this write CHOSE while a sibling
- * in the same wave holds one on a DIFFERENT SCALE — the bulk post's array
- * index beside a carried `10, 20, 30`, or `cr-plan`'s wave-block offset beside
- * either. That mix is deterministic but not authored (the two scales interleave
- * in an order nobody chose), so the route turns it into a warning naming those
- * crs with `wave-sequence` as the remedy. It is the §S3 severity ladder's
+ * `defaultedSeq` names every cr whose written `seq` sits on one scale while a
+ * sibling in the same wave or release holds one on the OTHER — the bulk post's
+ * array index beside a carried `10, 20, 30`, `cr-plan`'s wave-block offset
+ * beside either, or a positional seq a `cr-plan` PRESERVED beside a release
+ * sibling authored in its own block. A scale is derived from the wave's block
+ * (`waveSeqBase`, `WAVE_SEQ_STRIDE`), never stored, and a mixture is a
+ * difference of scale — not "this write chose the value". That mix is
+ * deterministic but not authored (the two scales interleave in an order nobody
+ * chose), so the route turns it into a warning naming those crs with
+ * `wave-sequence` as the remedy. It is the §S3 severity ladder's
  * warn-and-write rung: the write is never refused, because a backlog edit must
  * not require re-authoring an order — but silence would let a position from
- * another scale read as an authored one. A chosen position that agrees with
- * every sibling's scale is the ORDINARY case and is silent.
+ * another scale read as an authored one. A position that agrees with every
+ * sibling's scale is the ORDINARY case and is silent; a row without a release
+ * is compared on the wave axis only.
  */
 export interface QueueSeqReport {
   defaultedSeq: string[];
@@ -409,6 +416,18 @@ export function waveNumber(wave: string): number {
 /** §S4 — the first seq of a wave's block; a wave without an integer takes block 0. */
 function waveSeqBase(wave: string): number {
   return waveNumber(wave) * WAVE_SEQ_STRIDE;
+}
+
+/**
+ * CR-CRU-095 §S2 — a seq's SCALE, derived, never stored: `true` when it sits
+ * inside its own wave's block (an authored or wave-block position), `false`
+ * when it is a positional value from the bulk post's array index or an
+ * explicit `seq: 10`. Two rows on different scales interleave in an order
+ * nobody authored — that difference IS the `defaulted-seq` mixture.
+ */
+function inWaveBlock(seq: number, wave: string): boolean {
+  const base = waveSeqBase(wave);
+  return seq > base && seq < base + WAVE_SEQ_STRIDE;
 }
 
 /**
@@ -3626,19 +3645,26 @@ export class Store {
       }
     })();
     this.emit("events", projectKey);
-    // §S2/AC23 — cr-plan's position is the WAVE'S OWN BLOCK offset, never an
-    // array index, so it cannot mismatch a sibling authored in that block: the
-    // ordinary append is silent. What it CAN mismatch is a sibling whose seq
-    // sits OUTSIDE the block — an explicit `seq: 10` or a position index that
-    // rode the bulk post — and then the two are on different scales and the
-    // appended position does not read as authored. Only that is reported.
-    return {
-      changed: true,
-      defaultedSeq:
-        moved && siblings.some((row) => row.seq <= base || row.seq >= base + WAVE_SEQ_STRIDE)
-          ? [input.cr]
-          : [],
-    };
+    // §S2/AC23, widened by CR-CRU-095 §S2 — a mixture is a DIFFERENCE OF
+    // SCALE, never "this write chose the value": the row's seq (a wave-block
+    // offset when it moved, the held value when it stayed) is compared with
+    // every sibling in the SAME WAVE or the SAME RELEASE, read AFTER the write
+    // so the source wave's densified survivors are seen as they now stand. An
+    // in-block position beside a positional sibling — an explicit `seq: 10`,
+    // an index that rode the bulk post — or a preserved positional seq beside
+    // a release sibling authored in its own block: either interleaves in an
+    // order nobody authored, and only that is reported. A release-less row is
+    // never matched on the release axis (`release = ?` is false for NULL), so
+    // the live board's deferred history names nobody.
+    const scale = inWaveBlock(seq, input.wave);
+    const mixed = this.db
+      .query<QueueEntryRow, [string, string, string, string]>(
+        `SELECT * FROM queue_entries
+         WHERE project_key = ? AND cr != ? AND (wave = ? OR release = ?)`,
+      )
+      .all(projectKey, input.cr, input.wave, input.release)
+      .some((row) => inWaveBlock(row.seq, row.wave) !== scale);
+    return { changed: true, defaultedSeq: mixed ? [input.cr] : [] };
   }
 
   /**
