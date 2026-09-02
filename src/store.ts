@@ -394,14 +394,69 @@ export function compareVersionLabels(a: string, b: string): number {
 export const WAVE_SEQ_STRIDE = 1000;
 
 /**
- * §S4 — the first seq of a wave's block. `wave` is TEXT (the queue has always
- * stored the cell verbatim), so the leading integer is the lane number the
- * whole codebase already reads out of it (`public/app-logic.mjs:479`); a wave
- * carrying no integer takes block 0 and still orders deterministically.
+ * §S4 / CR-CRU-095 §S1 — the leading integer of a wave cell. `wave` is TEXT
+ * (the queue has always stored the cell verbatim), so this is the lane number
+ * the whole codebase reads out of it (`public/app-logic.mjs:479`); a cell
+ * carrying no integer is lane 0. The ONE digit read: `waveSeqBase` and the
+ * queue's sort key both rest on it, so a wave's seq block and its position in
+ * the published order cannot disagree about which lane it is.
  */
-function waveSeqBase(wave: string): number {
+export function waveNumber(wave: string): number {
   const digits = /\d+/.exec(wave);
-  return (digits === null ? 0 : Number(digits[0])) * WAVE_SEQ_STRIDE;
+  return digits === null ? 0 : Number(digits[0]);
+}
+
+/** §S4 — the first seq of a wave's block; a wave without an integer takes block 0. */
+function waveSeqBase(wave: string): number {
+  return waveNumber(wave) * WAVE_SEQ_STRIDE;
+}
+
+/**
+ * CR-CRU-095 §S1 — the CONTAINER half of the queue's sort key: `(wave number,
+ * release)`, with an UNDECLARED release sorting LAST within its wave. This is
+ * the write path's container verdict too (`dependencyWarnings`): `0` means one
+ * container, so an inversion there is `out-of-order` and `seq`'s business, not
+ * this key's; `<0` means the first container precedes the second.
+ *
+ * Wave leads: the queue has numbered its waves monotonically across releases
+ * since CR-CRU-014 ("Wave 5 (0.2.0)" after 0.1.0's waves 1–4), which is the
+ * premise `waveSeqBase`'s block arithmetic already rests on, so it is the one
+ * cross-release axis a row still has when it declares no release. Release then
+ * breaks the tie between two releases sharing a wave number (AC4), by VERSION
+ * — the same compare the proposal strip uses; a second one would order them
+ * differently. Undeclared sorts last WITHIN its wave, not globally: declared
+ * work is scheduled and undeclared is not, but shipped undeclared history
+ * (waves 1–4, which §S6 refuses to plan) must still precede the active release
+ * or every 0.2.0 row depending on it reads as "backwards" (15 false warnings
+ * on the live board, AC1b) — while a dependency on deferred undeclared wave-6
+ * work still is backwards (AC1c).
+ */
+export function compareContainers(
+  a: Pick<QueueEntry, "wave" | "release">,
+  b: Pick<QueueEntry, "wave" | "release">,
+): number {
+  const wave = waveNumber(a.wave) - waveNumber(b.wave);
+  if (wave !== 0) return wave;
+  if (a.release === b.release) return 0;
+  if (a.release === undefined) return 1;
+  if (b.release === undefined) return -1;
+  return compareVersionLabels(a.release, b.release);
+}
+
+/**
+ * CR-CRU-095 §S1 — THE canonical queue order, the one sort key every read
+ * publishes and no reader re-derives: `(wave number, release — undeclared
+ * last within its wave, seq)`. A KEY, not a pairwise rule: each component is
+ * a total order and they are consulted in a fixed position, so the result is
+ * total and independent of insertion order (AC1d) — the pairwise rule this
+ * replaced ("release when both declare, else wave") was intransitive. Within
+ * one container the authored `seq` decides, exactly (AC3).
+ */
+export function compareQueueOrder(
+  a: Pick<QueueEntry, "wave" | "release" | "seq">,
+  b: Pick<QueueEntry, "wave" | "release" | "seq">,
+): number {
+  return compareContainers(a, b) || a.seq - b.seq;
 }
 
 /**
@@ -3465,8 +3520,7 @@ export class Store {
   listQueue(projectKey: string): QueueEntry[] {
     const rows = this.db
       .query<QueueEntryRow, [string]>(
-        `SELECT * FROM queue_entries WHERE project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY}
-         ORDER BY seq ASC`,
+        `SELECT * FROM queue_entries WHERE project_key = ? AND ${Store.NOT_ARCHIVED_SUBQUERY}`,
       )
       .all(projectKey);
     // Nothing to derive for — the membership read below is pure cost here.
@@ -3477,24 +3531,28 @@ export class Store {
         shipped.add(cr);
       }
     }
-    return rows.map((row) => {
-      const derived = this.deriveQueueStatus(projectKey, row.cr, shipped);
-      return {
-        cr: row.cr,
-        ...(row.title !== null ? { title: row.title } : {}),
-        wave: row.wave,
-        dependsOn: JSON.parse(row.depends_on_json) as string[],
-        ...(row.size !== null ? { size: row.size } : {}),
-        status: derived.status,
-        ...(derived.planId !== undefined ? { planId: derived.planId } : {}),
-        seq: row.seq,
-        ...(row.release !== null ? { release: row.release } : {}),
-        ...(row.track !== null ? { track: row.track } : {}),
-        ...(row.lifecycle_json !== null
-          ? { lifecycle: JSON.parse(row.lifecycle_json) as QueueLifecycle }
-          : {}),
-      };
-    });
+    // CR-CRU-095 §S1 — published in the canonical order, and ONLY here: every
+    // reader (the routes, the roadmap, the clients) consumes this verbatim.
+    return rows
+      .map((row): QueueEntry => {
+        const derived = this.deriveQueueStatus(projectKey, row.cr, shipped);
+        return {
+          cr: row.cr,
+          ...(row.title !== null ? { title: row.title } : {}),
+          wave: row.wave,
+          dependsOn: JSON.parse(row.depends_on_json) as string[],
+          ...(row.size !== null ? { size: row.size } : {}),
+          status: derived.status,
+          ...(derived.planId !== undefined ? { planId: derived.planId } : {}),
+          seq: row.seq,
+          ...(row.release !== null ? { release: row.release } : {}),
+          ...(row.track !== null ? { track: row.track } : {}),
+          ...(row.lifecycle_json !== null
+            ? { lifecycle: JSON.parse(row.lifecycle_json) as QueueLifecycle }
+            : {}),
+        };
+      })
+      .sort(compareQueueOrder);
   }
 
   /**

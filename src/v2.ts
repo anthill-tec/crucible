@@ -6,7 +6,7 @@ import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { authHints, hints, cycleHints, identityHints, projectDeleteHints, roadmapHints } from "./hints.ts";
-import { compareVersionLabels, normalizeTrack, Store, UUID_RE, WAVE_SEQ_STRIDE } from "./store.ts";
+import { compareContainers, normalizeTrack, Store, UUID_RE, WAVE_SEQ_STRIDE, waveNumber } from "./store.ts";
 import { toToon } from "./toon.ts";
 import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
 import type { ProjectPatch, QueueEntryInput, RecordEventMeta, RunRecord, TouchAgentOpts } from "./store.ts";
@@ -1910,25 +1910,6 @@ function defaultedSeqWarnings(crs: string[]): QueueWarning[] {
 /** §S5 — a cr's container, as the warnings name it: `release/wave`. */
 function containerLabel(entry: QueueEntry): string {
   return `${entry.release ?? "-"}/${entry.wave}`;
-}
-
-/** §S5 — the leading integer of a wave cell, the lane number every consumer
- *  already reads out of it (`public/app-logic.mjs:479`). */
-function waveNumber(wave: string): number {
-  const digits = /\d+/.exec(wave);
-  return digits === null ? 0 : Number(digits[0]);
-}
-
-/**
- * §S5 — order two CONTAINERS. A different release orders by VERSION (the same
- * comparator the proposal strip uses — a second one would order them
- * differently); the same release orders by wave number.
- */
-function compareContainers(a: QueueEntry, b: QueueEntry): number {
-  const left = a.release ?? "";
-  const right = b.release ?? "";
-  if (left !== right) return compareVersionLabels(left, right);
-  return waveNumber(a.wave) - waveNumber(b.wave);
 }
 
 /**

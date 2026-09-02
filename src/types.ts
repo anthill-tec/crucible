@@ -396,10 +396,10 @@ export interface QueueEntry {
   planId?: number;
   /**
    * CR-CRU-091 §S2 — the STORED sequence within its container, published on
-   * EVERY entry and read verbatim from the column. Never re-derived from a
-   * response index: `listQueue` is `ORDER BY seq`, so an index derivation
-   * preserves authored ORDER while making `seq` mean two different numbers on
-   * one surface (AC18) — the same failure class AC3 prevents for dates.
+   * EVERY entry and read verbatim from the column. CR-CRU-095 §S1 — `listQueue`
+   * publishes rows sorted by `compareQueueOrder` (wave, release with undeclared
+   * last, seq), and that published order is the ONLY order: a reader consumes
+   * it verbatim and never re-derives it from `seq` or from array index (AC18).
    */
   seq: number;
   /** §S2 — the declared target release label. Absent when undeclared. */

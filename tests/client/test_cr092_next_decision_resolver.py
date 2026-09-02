@@ -1315,26 +1315,31 @@ class NextVerbEnvelopeTest(_NextTestBase):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# §S2 — the published `seq` is the order; a missing one is a defect to surface
+# §S2 — the PUBLISHED order is the order; a missing `seq` is a defect to surface
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class LaneOrderTest(_NextTestBase):
 
     def test_the_lane_is_ordered_by_the_published_seq(self):
-        """§S4 — `next` never re-orders the lane. The response arrives in the
-        server's `ORDER BY seq ASC`; a scrambled response is still resolved by
-        the DECLARED seq, not by arrival position."""
+        """§S4 — `next` never re-orders the lane. CR-CRU-095 §S1/AC6 made that
+        literally true: the server publishes ONE canonical order and the
+        resolver consumes position 0 of it. A deliberately scrambled response
+        [seq 30, 10, 20] is therefore answered by its FIRST published row —
+        re-sorting it by the seq VALUE would be the reader-side derivation
+        CR-091 AC18 outlawed."""
         entries = [_entry("CR-THIRD", 30), _entry("CR-FIRST", 10),
                    _entry("CR-SECOND", 20)]
         fields = self.fields(entries)
-        self.assertEqual(fields.get("cr"), "CR-FIRST")
-        self.assertEqual(fields.get("seq"), 10)
+        self.assertEqual(fields.get("cr"), "CR-THIRD")
+        self.assertEqual(fields.get("seq"), 30)
 
     def test_an_entry_with_no_seq_is_surfaced_rather_than_positioned(self):
         """§S2 — "091 publishes `seq` on every entry, so an entry without one
         is a defect to surface, not a hole to fill with a position." The
-        resolver must not silently substitute the array index."""
+        resolver must not silently substitute the array index — and, since
+        CR-CRU-095 AC6a, must not MOVE the row either: it keeps the position
+        the server published, so published first it is picked first."""
         entries = [{"cr": "CR-NOSEQ", "wave": "5", "dependsOn": [],
                     "status": "PENDING"},
                    _entry("CR-OK", 10)]
@@ -1347,9 +1352,10 @@ class LaneOrderTest(_NextTestBase):
         self.assertIn("CR-NOSEQ",
                       " ".join(w.get("detail", "") for w in warnings))
         self.assertEqual(
-            fields.get("cr"), "CR-OK",
-            "an entry with no declared position cannot be the lowest-seq one; "
-            "giving it index 0 would be exactly the derivation §S2 forbids")
+            fields.get("cr"), "CR-NOSEQ",
+            "the server published CR-NOSEQ first, so it is first; moving it "
+            "last is the client deciding an order, which CR-CRU-095 AC6 "
+            "removes — the warning above is how the defect is surfaced")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1490,7 +1496,7 @@ class NextBlockCitationsTest(unittest.TestCase):
     CITATIONS = (
         ("the §S1 exit-code rule", "clients/STATUS-CONTRACT.md", 65, 68,
          "## Terminal states (all exit 0)", "all exit 0:"),
-        ("LANDED_STATUSES", "src/store.ts", 3730, 3730,
+        ("LANDED_STATUSES", "src/store.ts", 3788, 3788,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         ("canonical_track", "src/store.ts", 338, 341,
          "export function normalizeTrack(", "}"),
