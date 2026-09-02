@@ -175,6 +175,30 @@ are the facts, and they are recorded here rather than bent to fit:
 | spine | 596px | **575.92px** |
 | overflow | — | **none**: `scrollWidth 1128 == clientWidth 1128` |
 
+**AC13's widest real case was never measured, and it is the LIVE board's actual width.** VERIFY
+measured a synthetic four-dep row at **452.7 × 211.5**; a screenshot of the running board then
+showed the real wave box at **452.7 × 238.9**, because `CR-CRU-075` genuinely declares four
+dependencies. So the 279.9px figure above is the NO-ANNOTATION case and was never representative of
+the dogfood board — the surface has been 452.7px wide the whole time. Measured live at a 1600px
+viewport the flow is 1104px with `scrollWidth 1102 == clientWidth 1102`, so a single wave still
+fits with room; it is this 173px that produces AC19d's wrap at two waves.
+
+**MEASURED ON THE USER'S OWN BROWSER, 2026-09-02** (omp browser relay, real Chrome, real board) —
+this is the authority, and it corrects three figures above:
+
+| piece | §S6 said | live in the user's Chrome |
+| --- | --- | --- |
+| available surface | 1130 | **991** — the Project rail takes the rest at a 1465px window |
+| gate | 76 (layout box) | **108** — the rotated diamond's overhang IS in the layout box |
+| wave box | 300 → 279.9 | **452.7 × 238.9** (four real deps on `CR-CRU-075`) |
+| spine | 596 | **780.7** — `56 + 24 + 452.7 + 24 + 108 + 24 + 44 + 6×8 gaps`, exact |
+| headroom | 554 | **210** |
+| overflow | — | none: `scrollWidth 989 == clientWidth 989` |
+
+**AC19d is not hypothetical on this board.** A second wave box needs `452.7 × 2 + 6 = 911.4px` of
+stage, putting the spine at ~1239px against a 991px surface — so the very next multi-wave release
+WRAPS on the user's actual screen. The wrap path is the one that will be seen, not the exception.
+
 The whole 20px difference is the content-sized wave box. §S6's argument holds with **554px of
 headroom** at the 1130px surface, and a multi-wave board measures 804.84px — still inside it.
 
@@ -258,6 +282,12 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
 
 - **AC1** — A wave in the focused in-flight release publishes `data-active="true"` with no CR
   IN_PROGRESS; a wave in a shipped or unfocused release publishes `false`.
+- **AC1a** — AC1's second clause is satisfied **structurally**, and `data-active` is therefore
+  constant-by-construction. *Recorded 2026-09-02 (VERIFY):* `active` is `kind === "proposed"` and
+  zone 2 renders wave boxes only when the focus is not shipped, so every box that renders publishes
+  `"true"`. A shipped or unfocused release publishes `false` by rendering **no wave box at all** —
+  the observable AC1's tests actually assert. The `false` branch is unreachable; it stays because
+  the attribute is C1's published fact, but no test can falsify it and none should pretend to.
 - **AC2** — The wave header renders the `· active` marker exactly when `data-active="true"`, as a
   word and a border, never motion.
 - **AC3** — The header renders the **whole-membership** count of ITS OWN wave, equal to the
@@ -417,22 +447,25 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   `Start → wave → gate → End`; making each box a stage would give a three-wave release five stages
   and four connectors, so the spine's shape would depend on the board's contents.
 - **AC19c** — The container holding the wave boxes lays them out **along** the axis, not across it.
-  *Ruled 2026-09-02:* §S5 says a multi-wave release is "the case that WIDENS this zone" and §S6's
-  budget is "per wave box" — both are horizontal claims, and a per-box budget is only a budget if
-  the boxes share the axis.
-- **AC20a** — The connectors this AC requires are **AXIS** connectors, and CR-078 AC20's
-  prohibition on "an edge element of any kind" meant **DEPENDENCY** edges — the deleted dagre web.
-  *Recorded 2026-09-02 (C4 RED found the live contradiction).* The two ACs share a number across
-  two CRs by accident. `public/styles.css:1252` and `public/app.js:2658` both still assert the
-  prohibition in the absolute; **both comments MUST be amended in the same commit that adds the
-  connectors**, or the next reader takes them as authority and reverts. Dependencies still validate
-  and never order, and still draw nothing.
-- **AC20b** — "Matching zone 1's spine" means matching its horizontal **READING**, never reusing an
-  element: zone 1 has **no connector** — its spine is `align-items: center` plus the gate pitch.
-  *Recorded 2026-09-02.* AC26 keeps zone 1 byte-identical, so nothing is added there.
+- **AC19d** — When the axis genuinely **cannot hold** the boxes they **WRAP** onto a further line;
+  they never overflow, never clip and never scroll. *Ruled 2026-09-02 after VERIFY measured AC19c
+  failing and the LIVE BOARD confirmed the mechanism (`flex-wrap: wrap` on the wave stage,
+  observed in Chrome on `/p/<key>/roadmap`).* A two-wave release whose rows carry AC13's four-dep
+  annotation paints its boxes at the same `x` with no `y` overlap — stacked across the axis, which
+  AC19c forbids — and the single AC19c test passed only because its fixture's widest annotation was
+  a TWO-dep row. Wrapping is kept as the correct degradation: §S5's rule is that **a partially drawn
+  container is a defect**, and a wrapped box is still wholly drawn, whereas `nowrap` would overflow
+  the surface or clip a box. AC19c states the intent, AC19d the fallback, and **both must be
+  asserted** — the wrap case measured, every box proven wholly painted, none clipped.
 - **AC20** — With §S5 landed, zone 2 lays out horizontally — `Start`, wave, gate, `End` with
   connectors — and the rendered width does not exceed the measured surface (1130px at 1600px
   viewport).
+- **AC20d** — AC20's budget MUST be asserted at the **real** surface, not only the controlled one.
+  *Ruled 2026-09-02 after measuring the user's own Chrome:* the surface there is **991px**, not
+  1130px, because the Project rail takes the remainder at a 1465px window. A criterion pinned only
+  to 1130px is green on a viewport nobody uses. AC20's 1130px case stays as the controlled
+  measurement; a second case measures the spine against the surface the app actually reports
+  (`[data-zone="2"]`'s own width), so the AC tracks the app rather than a constant.
 - **AC20c** — AC20's `1130px` is a **controlled** surface, not a discovered one: nothing in the
   code publishes it, so the fixture pins it at a 1600px viewport and measures inside it. *Recorded
   2026-09-02 (C5 RED, finding 6).* **Forward dependency: CR-CRU-093** (the project rail collapses)
@@ -485,6 +518,16 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   `public/styles.css`, and the e2e pair `tests/e2e/steps/roadmap-graph.steps.ts:84,96,102` driving
   `tests/e2e/features/roadmap-graph.feature:41-46` (wave 5 holds 1 node, PENDING → IN_PROGRESS,
   click drills). AC15 covers the drill only; this covers the selectors.
+- **AC28a** — AC28's **e2e half cannot corroborate anything**. *Recorded 2026-09-02 (VERIFY ran
+  it):* `tests/e2e/features/roadmap-graph.feature` fails on HEAD **and identically at the
+  merge-base** — pre-existing, not a CR-096 regression. Root cause reproduced against a live server:
+  `handleQueuePost` (`src/v2.ts:1846-1878`) never reads `fields.release`, so the scenario's POST
+  answers 200 and the row returns with no `release`; `focusedReleaseView` finds zero members and
+  zone 2 draws no wave box. `git log -S"fields.release" -- src/v2.ts` is empty — it has never
+  worked. `src/v2.ts` is untouched here, so the fix is **CR-CRU-099**. On the substance VERIFY
+  confirms the rewrite does not break the scenario: the CR is actionable so it draws as one row, the
+  AC9 union keeps it drawn once a plan makes it IN_PROGRESS, and the annotation span takes no
+  handler so the click still bubbles and drills.
 - **AC29** — **No AC fixture names a real CR of the project running Crucible.** Every fixture in
   this CR is synthetic (`CR-Q-n`, `CR-A`, `CR-W1-A`, the convention already used by
   `tests/queue-canonical-order.test.ts`'s siblings and `roadmap-graph.feature`'s `CR-RG-200`).
