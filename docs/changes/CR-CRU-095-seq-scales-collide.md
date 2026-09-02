@@ -178,9 +178,35 @@ warning (`clients/_crucible_axi.py:1517-1523`) is untouched and still fires for 
 
 ### §S3 — the bulk post defaults into the row's OWN wave block
 
-`src/store.ts:3424` writes `declaredSeq ?? index`. The fallback becomes
-`waveSeqBase(entry.wave) + <position within that wave>`, so a defaulted row lands inside its own
-wave's block and is on the same scale as an authored one by construction.
+`src/store.ts:3498` writes `declaredSeq ?? index`. The fallback becomes **the next free slot in the
+row's own wave block**: rows are processed in post order, and a row with neither a declared nor a
+held seq takes `max(seq already held or assigned in that wave AND inside its block) + 1`, or
+`waveSeqBase(wave) + 1` when the block is empty. For an all-defaulted wave — a fresh import — that
+is exactly `base + position`, mirroring `wave-sequence`'s `base + index + 1`; for a wave that
+already holds an authored block, a row added later is **appended after it**, so a default never
+collides with a held value and never disturbs an authored order. This is `wave-sequence`'s own
+arithmetic extended to a partly-filled block, not a third rule.
+
+**Ruled 2026-09-02 after C3 RED asked.** The alternatives both collide: a counter over the whole
+post gives a row inserted mid-README the seq an authored sibling already holds; a counter over only
+the defaulted rows collides with the block's first authored value every time. Appending is also the
+honest position — the row's README placement among *authored* siblings is not authored, and
+`wave-sequence` is the verb that declares it.
+
+Held values **outside** the block do not count toward the slot: a wave holding legacy positional
+`62` gets its next row at `6001`, not `63`. That is deliberate — §S3 exists to stop generating
+positional values — and it has one visible consequence: the wave now holds two scales, so
+CR-091's same-wave `defaulted-seq` fires for the new row. The warning is **true**, and it is the
+pre-existing wave axis (unchanged by §S2), newly reachable only because the default moved
+in-block. It disappears when the legacy rows do. A fresh import raises no warning at all.
+
+**Block overflow is refused, not spilled.** `wave-sequence` refuses a wave that would reach
+`WAVE_SEQ_STRIDE` members (`src/v2.ts:2220`); the bulk post refuses the same condition with the
+same message, so there is one limit in one wording. Spilling into the next wave's block would
+silently corrupt cross-container order — the defect this CR exists to remove.
+
+`waveSeqBase` is **exported** alongside `waveNumber` and `WAVE_SEQ_STRIDE` so tests and any later
+caller use the one arithmetic rather than re-deriving `waveNumber × WAVE_SEQ_STRIDE`.
 
 **This does not retroactively fix an existing board, and must not claim to.** `declaredSeq` is
 `entry.seq ?? snapshot?.seq` (`:3402`) — a **held** seq survives a re-import (CR-091's
@@ -256,8 +282,18 @@ later. Existing positional values are corrected by authoring the wave, or made h
 - **AC11** — The wave axis is preserved: a defaulted row beside an authored one in the same wave —
   including a release-less row — still warns with the same `defaulted-seq` code; the message gains
   the words "or release" and is otherwise unchanged.
-- **AC12** — A bulk post assigns a seq-less, snapshot-less row `waveSeqBase(wave) + position within
-  its wave`; importing a fresh 94-row queue leaves every row inside its own wave's block.
+- **AC12** — A bulk post assigns a seq-less, snapshot-less row the next free slot in its wave's
+  block; for an all-defaulted wave that is `waveSeqBase(wave) + position within the wave`, in post
+  order. Importing a fresh 94-row queue leaves every row inside its own wave's block.
+- **AC12a** — A row added to a wave that already holds an authored block is appended after it and
+  never collides: held `5001, 5002` plus a new seq-less row anywhere in the post → `5003`; held
+  `5001, 5005` (gap) → `5006`. Authored values are untouched.
+- **AC12b** — Held values outside the block do not count: a wave holding legacy positional `62`
+  gets its next seq-less row at `6001`, and the same-wave `defaulted-seq` warning fires for that row
+  (true, pre-existing wave axis). A fresh import raises **no** warning.
+- **AC12c** — A bulk post whose defaults would reach `WAVE_SEQ_STRIDE` members in one wave is
+  refused with `wave-sequence`'s message; nothing is written.
+- **AC12d** — A wave cell with no integer takes block 0: its rows default to `1, 2, 3…`.
 - **AC13** — Carry-forward is preserved: a row with a held `seq` keeps it across a re-import, and
   §S3 does not overwrite it (CR-091 regression).
 - **AC14** — A bulk post is idempotent: posting twice yields identical seq values.
