@@ -99,7 +99,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-095](CR-CRU-095-seq-scales-collide.md) | two seq scales collide, so `next` recommends deferred work | patch | COMPLETED (0.2.0) | 091, 092 | 5 (0.2.0) |
 | [CR-CRU-096](CR-CRU-096-zone-2-drifts-from-the-approved-design.md) | zone 2 drifts from the approved flowchart design | patch | PENDING (0.2.0) | 078, 095 | 5 (0.2.0) |
 | [CR-CRU-097](CR-CRU-097-project-independence-is-not-asserted.md) | project independence is claimed but never asserted | patch | PENDING (0.2.0) | — | 5 (0.2.0) |
-| [CR-CRU-098](CR-CRU-098-next-is-a-reading-not-a-decision.md) | `next` is a reading, not a decision | feature | PENDING (post-0.2.0) | 095 | 6 |
+| [CR-CRU-098](CR-CRU-098-the-plan-pointer-has-no-publisher.md) | the plan pointer has no publisher | feature | PENDING (post-0.2.0) | 095 | 6 |
 | [CR-CRU-079](CR-CRU-079-roadmap-deep-link-and-drill-through.md) | roadmap deep-link parity and active-CR drill-through | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-085](CR-CRU-085-roadmap-multi-track-lanes.md) | multi-track swimlanes inside a wave | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-093](CR-CRU-093-project-rail-collapses.md) | the project rail collapses, giving every workspace view its width back | feature | PENDING (0.2.0) | 006 | 5 (0.2.0) |
