@@ -96,7 +96,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-091](CR-CRU-091-roadmap-registration-is-declared.md) | roadmap registration is declared: release, wave and sequence | feature | COMPLETED (0.2.0) | 014, 084 | 5 (0.2.0) |
 | [CR-CRU-092](CR-CRU-092-next-validates-the-sequence.md) | `next`: the orchestrator validates its sequence during execution | feature | COMPLETED (0.2.0) | 091 | 5 (0.2.0) |
 | [CR-CRU-078](CR-CRU-078-roadmap-graph-and-table-together.md) | the roadmap is a release-paged flowchart with its scoped table | feature | COMPLETED (0.2.0) | 077, 084, 091 | 5 (0.2.0) |
-| [CR-CRU-095](CR-CRU-095-seq-scales-collide.md) | two seq scales collide, so `next` recommends deferred work | patch | PENDING (0.2.0) | 091, 092 | 5 (0.2.0) |
+| [CR-CRU-095](CR-CRU-095-seq-scales-collide.md) | two seq scales collide, so `next` recommends deferred work | patch | COMPLETED (0.2.0) | 091, 092 | 5 (0.2.0) |
 | [CR-CRU-096](CR-CRU-096-zone-2-drifts-from-the-approved-design.md) | zone 2 drifts from the approved flowchart design | patch | PENDING (0.2.0) | 078, 095 | 5 (0.2.0) |
 | [CR-CRU-079](CR-CRU-079-roadmap-deep-link-and-drill-through.md) | roadmap deep-link parity and active-CR drill-through | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-085](CR-CRU-085-roadmap-multi-track-lanes.md) | multi-track swimlanes inside a wave | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
@@ -198,6 +198,24 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   Not folded into 078 — unrelated to the roadmap surface, and the repo rule is a patch CR over an
   inline scope edit. Worked around by adopting the finer granularity rather than aborting the plan:
   destroying a board record to fix a label is the worse trade.
+
+- **`cycle-add` / `checkpoint` / `abort` cannot target a CR that has an aborted plan** (candidate
+  patch CR, hit 2026-09-02 executing CR-CRU-095). They resolve via
+  `resolve_plan(..., open_only=False)` (`clients/_crucible_axi.py:1731+`), so after `abort` +
+  `plan-file` the aborted plan and the open one BOTH match `--cr` and the verb refuses as ambiguous —
+  with no `--plan <id>` escape. Compounding it, the ambiguity message at
+  `clients/_crucible_axi.py:375-379` filters candidates by `open_only` but NOT by the `--cr` the
+  caller passed, so it says "80 plans — pass --cr to pick one" to a caller who already did. Fix:
+  prefer the single open plan when `--cr` matches one open and N non-open plans (or take
+  `open_only=True` for `cycle-add`), and list only the `--cr`-matching candidates. Worked around
+  in 095 by folding the client cycle into cycle 305 rather than hand-rolling the POST.
+- **`queue-file` drops lifecycle dispositions on import** (candidate patch CR, hit 2026-09-02).
+  Repopulating a cleared board via `queue-file` resurrected `CR-CRU-082` (VOID in the README) as
+  `PENDING` with `lifecycle: null`, so it read as actionable. VOID/supersede are `cr-void` /
+  `cr-supersede` dispositions, not statuses the table carries, and the import neither carries them
+  nor warns that the README's status column disagrees with the board. Re-recorded via `cr-void`;
+  no other README VOID was affected. A patch should at least WARN on a README-vs-board lifecycle
+  disagreement at import.
 
 - **CHECKED AND FOUND CORRECT — the unregistered-caller 409 is not misleading. Do not re-file it.**
   2026-08-28: the orchestrator was refused three times in one session

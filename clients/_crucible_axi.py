@@ -1247,7 +1247,7 @@ def cmd_queue(args, project_dir, ops):
 # harness's files.
 
 # §S2 axis 1 — a CR has LANDED iff its SERVER-DERIVED status is one of these
-# (`deriveQueueStatus`, src/store.ts:3730). Anything else — PENDING,
+# (`deriveQueueStatus`, src/store.ts:3925). Anything else — PENDING,
 # IN_PROGRESS — is unmerged.
 LANDED_STATUSES = ("COMPLETED", "COMPLETED_UNTRACKED")
 
@@ -1263,7 +1263,7 @@ _TRACK_LANE_RE = re.compile(r"\d+")
 
 def canonical_track(value):
     """§S3/AC18 (PURE) — the fleet's READ-side track canonicaliser: the exact
-    mirror of `normalizeTrack` (src/store.ts:338-341). The first run of digits
+    mirror of `normalizeTrack` (src/store.ts:345-348). The first run of digits
     anywhere in the value, rendered as the PRD's locked wire format
     `track-<n>`; `None` when the value names no lane.
 
@@ -1296,15 +1296,6 @@ def _entry_seq(entry):
     if isinstance(seq, int) and not isinstance(seq, bool):
         return seq
     return None
-
-
-def _lane_order(entry):
-    """§S2/§S4 — order by the seq the read PUBLISHED. An entry with no declared
-    seq sorts last rather than taking its array position: CR-CRU-091 C4 deleted
-    that derivation under its AC18 and §S2's rule here is "don't reintroduce
-    it". Python's sort is stable, so equal keys keep the server's own order."""
-    seq = _entry_seq(entry)
-    return (1, 0) if seq is None else (0, seq)
 
 
 def _is_actionable(entry):
@@ -1505,9 +1496,11 @@ def resolve_next(entries, track=None):
                           f"{', '.join(tracks)}"]},
                 [])
 
+    # CR-CRU-095 §S1 — the lane is consumed in the order the server PUBLISHED
+    # (the canonical key lives in `listQueue`); a reader re-sorting it by the
+    # seq VALUE is what CR-091 AC18 outlawed.
     lane = entries if wanted is None else [
         e for e in entries if canonical_track(e.get("track")) == wanted]
-    lane = sorted(lane, key=_lane_order)
 
     warnings = []
     unpositioned = [e.get("cr") for e in lane if _entry_seq(e) is None]

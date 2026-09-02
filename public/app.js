@@ -2365,8 +2365,9 @@
     // shared the surface with is retired (AC1).
 
     // CR-CRU-078 §S6 — the authored order is CARRIED, never re-derived. There
-    // is deliberately no ordering helper here: `listQueue` is `ORDER BY seq`,
-    // so the payload arrives in the orchestrator's own order and the render's
+    // is deliberately no ordering helper here: `listQueue` publishes the ONE
+    // canonical order (`compareQueueOrder`, CR-CRU-095 §S1: wave, release,
+    // seq), so the payload arrives in the orchestrator's own order and the render's
     // whole duty is to leave it alone. What stood here was `roadmapTopoOrder`,
     // a depends-on DFS that pulled any CR whose dependency sat later in `seq`
     // forward — discarding the assigned order under a comment claiming to
@@ -2744,8 +2745,9 @@
       };
       // CR-CRU-091/AC18 — the STORED position, published verbatim and OMITTED
       // when the payload carries none. Nothing here SORTS on it: the payload
-      // is already `ORDER BY seq`, so the position is observable rather than
-      // load-bearing, and `?? 0` would invent one the queue never authored.
+      // is already in `listQueue`'s canonical order (`compareQueueOrder`,
+      // CR-CRU-095 §S1), consumed verbatim, so the position is observable
+      // rather than load-bearing, and `?? 0` would invent one the queue never authored.
       if (typeof entry.seq === "number" && Number.isFinite(entry.seq)) {
         props["data-seq"] = String(entry.seq);
       }

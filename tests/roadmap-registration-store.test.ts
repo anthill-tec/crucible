@@ -44,7 +44,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import * as storeModule from "../src/store.ts";
-import { Store, MIGRATIONS, SCHEMA_VERSION } from "../src/store.ts";
+import { Store, MIGRATIONS, SCHEMA_VERSION, waveSeqBase } from "../src/store.ts";
 import type { QueueEntryInput } from "../src/store.ts";
 import type { QueueEntry, QueueStatus, RunEvent } from "../src/types.ts";
 
@@ -602,19 +602,26 @@ describe("CR-CRU-091 §S2 — a full replace does not erase a declaration", () =
     expect(entryOf(after, B).seq).toBe(20);
   });
 
-  test("a CR the store never held takes the posted order as its seq, exactly as before this CR", () => {
-    const store = new Store(":memory:");
-    const key = seedProject(store);
+  test(
+    "a CR the store never held takes the posted order as its RELATIVE order inside its own " +
+      "wave block (CR-CRU-095 §S3/AC12: base + position within the wave, never the array index)",
+    () => {
+      const store = new Store(":memory:");
+      const key = seedProject(store);
 
-    store.replaceQueue(key, threeUndeclared());
+      store.replaceQueue(key, threeUndeclared());
 
-    // No snapshot, no declaration: the post's own order stands (today's rule).
-    expect(store.listQueue(key).map((entry) => [entry.cr, entry.seq])).toEqual([
-      [A, 0],
-      [B, 1],
-      [C, 2],
-    ]);
-  });
+      // No snapshot, no declaration: the post's own order still stands, but as
+      // the next free slot of each row's wave block — A and B are wave 5's
+      // first and second members, C is wave 6's first. CR-CRU-091 wrote the
+      // array index (0, 1, 2) here; CR-CRU-095 §S3 retired that scale.
+      expect(store.listQueue(key).map((entry) => [entry.cr, entry.seq])).toEqual([
+        [A, waveSeqBase("5") + 1],
+        [B, waveSeqBase("5") + 2],
+        [C, waveSeqBase("6") + 1],
+      ]);
+    },
+  );
 });
 
 describe("CR-CRU-091 §S1 — a proposed release is its own record kind", () => {

@@ -6,10 +6,27 @@ import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { authHints, hints, cycleHints, identityHints, projectDeleteHints, roadmapHints } from "./hints.ts";
-import { compareVersionLabels, normalizeTrack, Store, UUID_RE, WAVE_SEQ_STRIDE } from "./store.ts";
+import {
+  compareContainers,
+  normalizeTrack,
+  QueueWaveOverflowError,
+  Store,
+  UUID_RE,
+  WAVE_SEQ_STRIDE,
+  waveNumber,
+  waveOverflowMessage,
+  waveSeqBase,
+} from "./store.ts";
 import { toToon } from "./toon.ts";
 import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
-import type { ProjectPatch, QueueEntryInput, RecordEventMeta, RunRecord, TouchAgentOpts } from "./store.ts";
+import type {
+  ProjectPatch,
+  QueueEntryInput,
+  QueueSeqReport,
+  RecordEventMeta,
+  RunRecord,
+  TouchAgentOpts,
+} from "./store.ts";
 import type {
   AgentIdentity,
   AgentRole,
@@ -1858,7 +1875,17 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
       ...(typeof fields.seq === "number" ? { seq: fields.seq } : {}),
     });
   }
-  const { defaultedSeq } = store.replaceQueue(key, entries);
+  // CR-CRU-095 §S3/AC12c, AC12i — a post whose defaults would leave a wave's
+  // block is refused in `wave-sequence`'s own envelope (message AND help[]);
+  // the store wrote nothing.
+  let report: QueueSeqReport;
+  try {
+    report = store.replaceQueue(key, entries);
+  } catch (error) {
+    if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
+    throw error;
+  }
+  const { defaultedSeq } = report;
   const known = new Set(entries.map((entry) => entry.cr));
   const unknownDependencies = [
     ...new Set(
@@ -1899,7 +1926,7 @@ function defaultedSeqWarnings(crs: string[]): QueueWarning[] {
     {
       code: "defaulted-seq",
       message:
-        `seq was defaulted for ${crs.join(", ")} while a sibling in the same wave carries ` +
+        `seq was defaulted for ${crs.join(", ")} while a sibling in the same wave or release carries ` +
         `one on a DIFFERENT SCALE — the two interleave in an order nobody authored; run ` +
         `wave-sequence --release <v> --wave <n> --crs <the whole ordered list> to author it`,
       crs,
@@ -1908,27 +1935,20 @@ function defaultedSeqWarnings(crs: string[]): QueueWarning[] {
 }
 
 /** §S5 — a cr's container, as the warnings name it: `release/wave`. */
-function containerLabel(entry: QueueEntry): string {
+function containerLabel(entry: Pick<QueueEntry, "release" | "wave">): string {
   return `${entry.release ?? "-"}/${entry.wave}`;
 }
 
-/** §S5 — the leading integer of a wave cell, the lane number every consumer
- *  already reads out of it (`public/app-logic.mjs:479`). */
-function waveNumber(wave: string): number {
-  const digits = /\d+/.exec(wave);
-  return digits === null ? 0 : Number(digits[0]);
-}
-
 /**
- * §S5 — order two CONTAINERS. A different release orders by VERSION (the same
- * comparator the proposal strip uses — a second one would order them
- * differently); the same release orders by wave number.
+ * CR-CRU-095 §S3/AC12f, AC12i — the ONE overflow envelope, as the bulk post
+ * and `cr-plan` answer the store's refusal: `wave-sequence`'s message (already
+ * on the error) and `wave-sequence`'s `help[]`, for the offending row's
+ * container and the seq that would leave the block.
  */
-function compareContainers(a: QueueEntry, b: QueueEntry): number {
-  const left = a.release ?? "";
-  const right = b.release ?? "";
-  if (left !== right) return compareVersionLabels(left, right);
-  return waveNumber(a.wave) - waveNumber(b.wave);
+function waveOverflow(error: QueueWaveOverflowError): Response {
+  return fail(400, error.message, {
+    help: roadmapHints.waveOverflow(containerLabel(error), error.seq),
+  });
 }
 
 /**
@@ -2150,12 +2170,21 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   const cycle = refuseDependencyCycle(store.listQueue(pk.key), [body.cr]);
   if (cycle !== null) return cycle;
 
-  const { changed, defaultedSeq } = store.upsertQueueEntry(pk.key, {
-    cr: body.cr,
-    release: body.release,
-    wave: String(body.wave),
-    title: body.title,
-  });
+  // CR-CRU-095 §S3/AC12f — a full block refuses the plan, in `wave-sequence`'s
+  // envelope, and nothing is written.
+  let report: QueueSeqReport & { changed: boolean };
+  try {
+    report = store.upsertQueueEntry(pk.key, {
+      cr: body.cr,
+      release: body.release,
+      wave: String(body.wave),
+      title: body.title,
+    });
+  } catch (error) {
+    if (error instanceof QueueWaveOverflowError) return waveOverflow(error);
+    throw error;
+  }
+  const { changed, defaultedSeq } = report;
   const entries = store.listQueue(pk.key);
   const touched = new Set([body.cr]);
   return json({
@@ -2237,12 +2266,11 @@ async function handleWaveSequence(store: Store, key: string, req: Request): Prom
       .map((entry) => entry.cr),
   ]);
   if (members.size >= WAVE_SEQ_STRIDE) {
-    return fail(
-      400,
-      `wave ${wave} would hold ${members.size} crs — a wave's seq block is ${WAVE_SEQ_STRIDE} ` +
-        `positions wide, so it carries at most ${WAVE_SEQ_STRIDE - 1}; nothing was written`,
-      { help: roadmapHints.waveOverflow(container, members.size) },
-    );
+    // The seq the thousandth member would take: the next wave's base.
+    const overflowing = waveSeqBase(wave) + members.size;
+    return fail(400, waveOverflowMessage(wave, overflowing), {
+      help: roadmapHints.waveOverflow(container, overflowing),
+    });
   }
   for (const cr of crs) {
     const held = byCr.get(cr);
