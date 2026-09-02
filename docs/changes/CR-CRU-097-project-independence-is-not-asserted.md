@@ -28,21 +28,38 @@ Any project running Crucible is told about *our* unshipped CR and *our* release 
 information is true of Crucible-the-project and meaningless — actively confusing — on any other
 board. An empty state may say the surface is not built yet; it may not cite the builder's backlog.
 
+**And it is not even true of Crucible.** `CR-CRU-015` is `PENDING`, **wave 6 (post-0.2.0)**
+(`docs/changes/README.md:74`), and the PRD calls the BDD harness a *"later wave"*
+(`docs/research/PRD-crucible-v2.md:409`). The string promises a release the plan does not hold, so
+it is wrong on EVERY board rather than merely irrelevant on other ones. This is the second reason
+an empty state may not cite a backlog: a plan moves, and a string does not move with it.
+
 ### §S2 — the CLI teaches our id namespace
 
-`--cr` help reads `CR id, e.g. CR-CRU-008.` in **four** clients. A CR id is a free-text key the
-caller owns; the example tells every user their ids should look like ours. `CR-<PROJECT>-<n>` is
-not a format Crucible validates, so the example is not even documenting a constraint.
+`--cr` help reads `CR id, e.g. CR-CRU-008.` in **four** of the five clients
+(`arduino-crucible.py:1079`, `bun-crucible.py:1963`, `mvn-crucible.py:1896`,
+`python-crucible.py:1352`). A CR id is a free-text key the caller owns; the example tells every
+user their ids should look like ours. `CR-<PROJECT>-<n>` is not a format Crucible validates, so the
+example is not even documenting a constraint.
+
+**The fifth client leaks a DIFFERENT project's namespace.** `rust-crucible.py:2413` reads
+`CR id, e.g. CR-NAI-203.` — so the defect class is not "our ids" but "some real project's ids", and
+a criterion naming the `CR-CRU-` literal would have shipped green over it. The rule is therefore
+stated namespace-agnostically throughout (§S4, AC2, AC7): a help line teaches the SHAPE of a
+caller-owned key, so it may not carry any project's actual namespace.
 
 ### §S3 — the regression contract replicates our live board
 
 Three test files build fixtures that are not arbitrary ids but a **snapshot of our own queue**:
 
-| file | `CR-CRU-` refs |
-| --- | --- |
-| `tests/queue-canonical-order.test.ts` | 63 |
-| `tests/queue-registration.test.ts` | 64 |
-| `tests/queue-default-into-wave-block.test.ts` | 35 |
+| file | `CR-CRU-` refs (at filing) | re-measured 2026-09-03 |
+| --- | --- | --- |
+| `tests/queue-canonical-order.test.ts` | 63 | **77** |
+| `tests/queue-registration.test.ts` | 64 | **80** |
+| `tests/queue-default-into-wave-block.test.ts` | 35 | **37** |
+
+The coupling GREW by 32 refs between filing and this re-measurement, added by CR-095's later
+cycles — which is the argument for §S6's tripwire rather than a one-time cleanup.
 
 `queue-canonical-order.test.ts` encodes `CR-CRU-015 wave 6 seq 62`, `CR-CRU-090 wave 5 seq 81`,
 `CR-CRU-095 seq 5022`, `096 → 5023`, `079 → 5024` — our authored positions, as the expected values.
@@ -75,22 +92,47 @@ a dedicated surface does not exist yet. The `--cr` help example becomes namespac
 ### §S5 — the board-replica fixtures
 
 Per file: assertions that state a RULE move to synthetic rows; rows that exist to REPRODUCE a real
-defect move into one named constant per file, commented with the board and date it was taken from,
-so a reader can tell a reproduction from a requirement at a glance.
+defect move into one named constant per file, commented with the board and **the date the snapshot
+was taken** — not "the current board", which is a claim that expires — so a reader can tell a
+reproduction from a requirement at a glance.
+
+**The decay is no longer hypothetical; it happened while this CR sat in the queue.**
+`queue-canonical-order.test.ts` pins `079→5024, 085→5025, 093→5026, 075→5027, 094→5028`. After
+CR-CRU-097/099/100 were sequenced into wave 5 on 2026-09-03 the live board reads
+`079→5027, 085→5028, 093→5029, 075→5030, 094→5031` — **five of nine pinned positions now
+diverge, and every test still passes**, because the fixtures are self-contained. That is the exact
+failure mode: the coupling does not announce itself with a red test, it silently turns a stated
+contract into a description of a board that no longer exists.
 
 ### §S6 — a tripwire, so this cannot return silently
 
-A test asserts that no `CR-CRU-` literal appears in a user-visible string or a CLI help line in
-`public/` or `clients/`, and that no test file outside a named snapshot constant asserts on one.
-Provenance comments and docstrings are exempt: they are how this codebase records design lineage
-(CR-CRU-030, CR-CRU-056 and dozens more), and stripping them would destroy the record. The
+A test asserts that no project-namespace CR literal appears in a user-visible string or a CLI help
+line in `public/` or `clients/`, and that no test file outside a named snapshot constant asserts on
+one. Provenance comments and docstrings are exempt: they are how this codebase records design
+lineage (CR-CRU-030, CR-CRU-056 and dozens more), and stripping them would destroy the record. The
 tripwire targets **behaviour and contract**, never provenance.
+
+**This EXTENDS an existing mechanism; it does not add a scanner.**
+`tests/docs-retired-mirror-references.test.ts` already walks the tree with the right exclusions
+(`:106-110` skips `__pycache__`, `node_modules`, `.git`) and already draws the comment-vs-text line
+this tripwire needs: **`extractCitableText(relPath, text)` (`:463`)** handles Python docstrings and
+TS comments and carries the carve-out concept. It is currently **file-local and not exported**, so
+this CR lifts it into a shared test helper and consumes it — that lift is part of the work, not a
+free assumption.
+
+Writing a third comment stripper is specifically what to avoid: CR-CRU-096's C1 FIX round exists
+because a hand-rolled one (`animatingSelectors`) never stripped comments, so a provenance comment
+leaked into a selector string and a test asserted on it. A tripwire whose whole correctness rests
+on "comments are exempt" must reuse the classifier that is already proven, not re-derive it.
 
 ## Acceptance criteria
 
 - **AC1** — The BDD empty state names no CR and no release version; it states the capability and
   that the dedicated surface does not exist yet.
-- **AC2** — No `--cr` help string in any of the five clients names a `CR-CRU-` id.
+- **AC2** — No `--cr` help string in any of the five clients names **any project's** CR namespace.
+  Stated per-namespace, not per-literal: four clients carry `CR-CRU-008` and `rust-crucible.py:2413`
+  carries `CR-NAI-203`, so a criterion naming only `CR-CRU-` would ship green over the fifth. The
+  help line teaches the SHAPE of a caller-owned free-text key and names no real project.
 - **AC3** — No user-visible string in `public/` contains a `CR-CRU-` literal. (Comments exempt.)
 - **AC4** — In each of the three files in §S3, every assertion that states a product RULE runs on
   synthetic ids.
@@ -98,11 +140,22 @@ tripwire targets **behaviour and contract**, never provenance.
   source board and the date, and the tests reading it assert the reproduction, not the rule.
 - **AC6** — CR-095's reproductions still reproduce: the `next`-recommends-a-deferred-CR case and
   the overlapping-seq case both still fail against pre-095 ordering.
-- **AC7** — The tripwire fails when a `CR-CRU-` literal is introduced into a user-visible string,
-  a CLI help line, or an assertion outside a snapshot constant; it passes on provenance comments
-  and docstrings.
+- **AC7** — The tripwire is **namespace-agnostic** (`CR-[A-Z]{2,}-\d+`, not `CR-CRU-`) and fails
+  when such a literal is introduced into a user-visible string, a CLI help line, or an assertion
+  outside a snapshot constant; it passes on provenance comments and docstrings. It consumes the
+  lifted `extractCitableText` (§S6) rather than a new comment stripper.
+- **AC7a** — The four files holding another project's ids as fixtures — `tests/f13-fidelity.test.ts`
+  (21 `CR-NAI-` refs), `tests/milestone-merge-rows.test.ts` (18),
+  `tests/gate-milestone-server.test.ts` (10), `tests/client/test_bun_crucible_gates.py` (4) — are
+  carved out **by name, with the reason in the carve-out itself**, never by a regex that quietly
+  excludes them. An implicit exclusion is indistinguishable from a gap in the tripwire.
 - **AC8** — Provenance is intact: the count of `CR-CRU-` references in comments and docstrings
-  across `src/`, `public/` and `clients/` is unchanged by this CR.
+  across `src/`, `public/` and `clients/` is unchanged by this CR, **measured by the §S6
+  `extractCitableText` classifier** (the AC is otherwise unmeasurable — nothing else in the repo
+  separates a comment from a string). Baseline measured 2026-09-03, excluding `__pycache__`:
+  `src/` **517**, `public/` **379**, `clients/` **618**. Of `public/`'s 379, exactly **one** sits
+  inside a string literal (`public/app.js:2354`, §S1's own defect); AC3 therefore takes `public/`
+  from 1 to 0 quoted occurrences and leaves all 378 comment references untouched.
 
 ## Non-goals
 
@@ -110,6 +163,13 @@ tripwire targets **behaviour and contract**, never provenance.
 - **Purging provenance.** Design lineage in comments is the record; it is exempt by AC8.
 - **Renaming our own CRs or board data.** The dogfood board is a real board; that is the point of
   dogfooding.
+- **Purging another project's ids from test FIXTURES.** `rust-crucible.py:2413`'s help line is in
+  scope (AC2) because a help line teaches. The 53 `CR-NAI-` fixture refs in the four files named in
+  AC7a are NOT: they cannot decay the way our own ids do — our board cannot move them, and decay
+  through our own authoring is the mechanism §S3 objects to. Churning four otherwise-untouched
+  files would also contradict CR-CRU-096's own finding that a REPRODUCTION may use real data. The
+  tripwire still covers them namespace-agnostically going forward; today's refs are carved out by
+  name so the exemption is visible rather than implied.
 - **Auditing the specs in `docs/changes/`.** Those describe Crucible-the-project and may name its
   CRs freely. Only ACs — the product's guarantees — must be synthetic, and CR-096 AC29 states that
   rule for CRs authored from now on.
