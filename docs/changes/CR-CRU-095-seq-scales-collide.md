@@ -129,13 +129,24 @@ comparators in the client. `_lane_order`'s other job — sorting a seq-less row 
 CR-091 publishes `seq` on every row, and a missing one already raises the `missing-seq` warning,
 which stays. This is a client change and lands in **cycle 305** beside the server change, as a second RED/GREEN pair on the Python stack: `cycle-add` cannot add a fifth cycle to plan 98 — the aborted plan 97 makes `--cr CR-CRU-095` ambiguous (a client defect now in the deferred register), and hand-rolling the POST would be worse. AC7 needs both halves anyway, so the cycle's contract is "the canonical order is published AND consumed".
 
-### §S2 — EXTEND CR-091's existing warning across containers
+### §S2 — EXTEND CR-091's existing warning from same-wave to same-RELEASE
 
 `defaultedSeqWarnings` keeps its wording and its `defaulted-seq` code, and its scope widens from
-"a sibling in the same wave" to "a sibling in any container the same read compares". A board whose
-authored waves sit beside defaulted ones says so, once, naming the crs and `wave-sequence` as the
-remedy — CR-091 §S3's warn-and-write rung, unchanged: the write is never refused, because a
-backlog edit must not require re-authoring an order.
+"a sibling in the same wave" to "a sibling in the same **release**". A release in which some waves
+are authored and others defaulted says so, once, naming the crs and `wave-sequence` as the remedy —
+CR-091 §S3's warn-and-write rung, unchanged: the write is never refused, because a backlog edit
+must not require re-authoring an order.
+
+**Not "any container", as first drafted — re-scoped after C1 landed, 2026-09-02.** With §S1 in
+place a cross-container mixture no longer misorders anything, so the only mixture still worth a
+warning is one the caller can *act on*. Measured on the live board, the any-container rule would
+name **66 crs on every `queue-file`** and its remedy would be valid for **0 of 66**: 53 are shipped
+(`wave-sequence` refuses a shipped release, CR-091 §S6, correctly) and 13 carry no release (nothing
+to plan them into). A permanent warning whose own remedy the server refuses is noise, and noise
+trains readers to ignore the rung. Same-release scoping names **0** today (0.2.0 is fully authored)
+and, whenever it does fire, every named cr is in a declared, plannable release — the remedy is
+always valid. Rows with no release are never compared; they cannot be authored, so there is
+nothing to warn them into.
 
 This is an extension of an existing mechanism, not a new detector. The client's `missing-seq`
 warning (`clients/_crucible_axi.py:1517-1523`) is untouched and still fires for a genuinely absent
@@ -206,9 +217,13 @@ later. Existing positional values are corrected by authoring the wave, or made h
   below `100`, both PENDING with deps satisfied — `next` answers a **0.2.0** CR, not `CR-CRU-015`.
 - **AC8** — The roadmap and the scoped table consume the same published order and require no
   ordering change of their own (CR-091 AC18 regression).
-- **AC9** — `defaulted-seq` fires when a defaulted row sits beside an authored one in a container
-  the read compares, naming the crs and `wave-sequence`; `ok: true`, exit `0`, write not refused.
-- **AC10** — It stays silent when every compared row shares a scale.
+- **AC9** — `defaulted-seq` fires when a defaulted row sits beside an authored one in the **same
+  release**, across waves, naming the crs and `wave-sequence`; `ok: true`, exit `0`, write not
+  refused. Fixture: release `0.2.0` with wave 5 authored (`5001+`) and wave 6 defaulted.
+- **AC9a** — Rows with **no** release are never compared and never named, however many authored
+  rows exist elsewhere. Fixture: the live board's 66 release-less rows beside 28 authored 0.2.0
+  rows produce **zero** `defaulted-seq` warnings.
+- **AC10** — It stays silent when every compared row in a release shares a scale.
 - **AC11** — The existing same-wave behaviour of `defaulted-seq` is preserved; its `code` and
   message wording are reused, not replaced.
 - **AC12** — A bulk post assigns a seq-less, snapshot-less row `waveSeqBase(wave) + position within
