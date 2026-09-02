@@ -233,6 +233,20 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   continue — not a diagnostic defect. What IS real is the participation record being destroyed by
   pruning as well as by `unregister`, and that is CR-CRU-094 §S2's scope.
 
+- 2026-09-03 — **a green pre-merge gate does not mean develop is green: anything reading git
+  history relative to `HEAD` changes meaning at the merge.** CR-CRU-096's non-vacuity block
+  captured its "pre-CR" build with `git merge-base develop HEAD`
+  (`tests/roadmap-visual-grammar.test.ts:739`), which resolves the pre-CR commit only while the
+  branch is unmerged. After `feature finish`, `HEAD` IS develop, so the merge-base became the
+  merged commit: the "before" build became the "after" build, AC26 compared a render against
+  itself, and four pre-CR counterfactuals inverted. **Five of develop's six failures were this
+  one line.** The pre-merge gate could not see it — I ran the full suite on the branch, where the
+  base still resolved correctly, so the tests were green for the last time at the moment I read
+  them green. Fixed by pinning `PRE_CR_COMMIT` (`761c253`). Two standing rules follow: a
+  before/after comparison must name its before-state as settled fact rather than derive it, and
+  **the regression gate must be re-run ON develop after the merge**, not only on the feature
+  branch. The user asking "are there tests now failing?" is what surfaced it.
+
 - 2026-09-02 — **a run that STARTS and never ingests cannot be reaped.** Found dogfooding
   CR-CRU-096 C2: the RED agent's first client invocation hung (see the `toEqual` trap below) and was
   killed at 600 s after the server had already created the run row, leaving
