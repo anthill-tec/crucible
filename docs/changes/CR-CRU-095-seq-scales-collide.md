@@ -64,13 +64,35 @@ So authored and defaulted scales permanently coexist on every real board.
 
 ### §S1 — the SERVER publishes one canonical order; readers keep consuming it verbatim
 
-`listQueue` orders by container first, then by the authored position within it: **release version,
-then wave number, then `seq`**.
+`listQueue` orders by container first, then by the authored position within it: **release version
+when BOTH rows declare one; otherwise wave number; then `seq`**.
 
 This reuses the comparator that already exists — `compareContainers` (`src/v2.ts:1927-1932`),
 which orders a different release by `compareVersionLabels` and the same release by `waveNumber`.
 CR-091's own comment on it warns that *"a second one would order them differently"*, so this CR
-adds no comparator; it applies the canonical one in the read that lacked it.
+adds no comparator; it lifts the canonical one so the read that lacked it shares it.
+
+**One correction to that comparator, found in RED and ruled 2026-09-02.** As it stands it reads
+`a.release ?? ""`, and `compareVersionLabels("", "0.2.0")` is **negative** — a label with fewer
+numeric components sorts first (`src/store.ts:365`). Applied verbatim, every release-less row
+would sort *before* every declared release, and the reproduction would still fail: on the live
+board **66 of 94 rows carry no release** — every shipped wave (1–4, which CR-091 §S6 correctly
+refuses to plan), plus the deferred wave 6 — and `CR-CRU-015` would still lead.
+
+So the release key applies only when **both** rows declare one. When either side is undeclared,
+the comparison falls through to **wave number**. This is correct rather than convenient: the queue
+has numbered its waves monotonically across releases since CR-CRU-014 (*"Wave 5 (0.2.0)"* after
+0.1.0's waves 1–4 — CR-091 §S4's own premise), so the wave number is a valid cross-release axis, and
+an undeclared row is one of exactly two things — shipped history that *cannot* be declared, or
+deferred work not *yet* declared. Wave fallback places history before the active release and
+deferred work after it, which is the order both `next` and the roadmap need.
+
+**Rejected: "every undeclared row sorts last."** It also fixes `next`, but the same comparator
+decides `cross-wave-backwards` (`src/v2.ts:1987-2015`), and under that rule a 0.2.0 CR depending
+on shipped wave-4 history reads as *"depends backwards"*. Measured against the live board: **15
+false warnings** (e.g. `014(0.2.0/5) → 011(-/4)`, `068(0.2.0/5) → 066(-/4)`). Wave fallback
+produces **zero**, while a genuine backwards dependency — a 0.2.0 row depending on an undeclared
+wave-6 row — still warns, correctly.
 
 **The fix is server-side, and deliberately not in `next`.** An earlier draft of this CR had the
 client sort by `(wave, seq)`. That was wrong three ways: it would be the second comparator 091
@@ -121,7 +143,17 @@ later. Existing positional values are corrected by authoring the wave, or made h
 
 ## Acceptance criteria
 
-- **AC1** — `listQueue` publishes rows ordered by release version, then wave number, then `seq`.
+- **AC1** — `listQueue` publishes rows ordered by release version when both rows declare one,
+  otherwise by wave number, then `seq`.
+- **AC1a** — An undeclared row orders against a declared one by **wave number**: an undeclared
+  wave-4 row precedes a `0.2.0`/wave-5 row; an undeclared wave-6 row follows it. Fixture: the live
+  board's shape — shipped waves 1–4 undeclared, 0.2.0 at wave 5, deferred wave 6 undeclared —
+  publishes waves 1–4, then 0.2.0, then wave 6.
+- **AC1b** — `cross-wave-backwards` does **not** fire for a declared row depending on an undeclared
+  row of a lower wave (shipped history). Fixture: the live board's 15 such edges (e.g.
+  `CR-CRU-014 → CR-CRU-011`, `CR-CRU-068 → CR-CRU-066`) produce zero warnings.
+- **AC1c** — `cross-wave-backwards` **does** fire for a declared row depending on an undeclared row
+  of a higher wave (a genuine backwards dependency on deferred work).
 - **AC2** — It uses `compareContainers`' semantics; no second version/wave comparator is
   introduced, in TypeScript or Python.
 - **AC3** — Within one container the authored `seq` order is preserved exactly; §S1 changes order
@@ -171,3 +203,21 @@ true of the client and false of the server, where CR-091 §S2/AC23 had named the
 detection; it was that the check is same-wave and the read is single-column. Writing a new
 client-side sort would have duplicated a comparator that already existed and re-introduced the
 reader-side derivation CR-091 AC18 had just deleted.
+
+**RED caught the spec being wrong a second time.** §S1 originally said to apply `compareContainers`
+*as it stands*. The C1 RED agent proved that verbatim reuse cannot pass the CR's own reproduction:
+`compareVersionLabels("", "0.2.0")` is negative, so every one of the live board's 66 undeclared
+rows would sort first and `CR-CRU-015` would still lead. The agent pinned "undeclared last" and
+flagged it for ratification instead of shipping it silently — the right call, because measured
+against the live dependency graph that rule emits **15 false `cross-wave-backwards` warnings** on
+shipped history. The ruled wave-fallback emits none. The lesson is the same one twice over: a rule
+stated from the spec is a hypothesis until it is run against the real board.
+
+**A board-data defect surfaced while testing the ruling, and was fixed.** `CR-CRU-082` is `VOID`
+in the queue README but the board held `lifecycle: null, status: PENDING` — so it read as
+actionable and the simulated oracle answered it. VOID is a lifecycle disposition recorded by
+`cr-void`, not a status `queue-file` imports; when the board was cleared and repopulated via
+`queue-file` on 2026-08-29 the disposition was lost. Recorded again via `cr-void` on 2026-09-02;
+no other README VOID lacked a board lifecycle. **Deferred, not this CR:** `queue-file` silently
+drops lifecycle dispositions on import, so a repopulated board resurrects voided work as pending.
+That is a candidate patch CR and belongs in the register, not folded here.
