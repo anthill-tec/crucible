@@ -75,13 +75,14 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-017](CR-CRU-017-run-lifecycle.md) | Run lifecycle: start/end events + the Aborted state | feature | COMPLETED (0.2.0) | 008, 011 | 5 (0.2.0) |
 | [CR-CRU-018](CR-CRU-018-responsive-mobile.md) | Responsive Crucible: mobile + tablet media support | feature | PENDING | 016, 093 | 6 (post-0.2.0) |
 | [CR-CRU-022](CR-CRU-022-roadmap-analytics.md) | Roadmap analytics: velocity + burndown + forecast | feature | PENDING | 011, 014, 091 | 6 (post-0.2.0) |
+| [CR-CRU-098](CR-CRU-098-the-plan-pointer-has-no-publisher.md) | the plan pointer has no publisher | feature | PENDING (post-0.2.0) | 095 | 6 |
 | [CR-CRU-068](CR-CRU-068-server-discloses-its-store.md) | The server never says which store it opened | bugfix | COMPLETED (0.2.0) | 043, 066 | 5 (0.2.0) |
 | [CR-CRU-069](CR-CRU-069-uninstall-inverts-install.md) | Install has no inverse: `crucible-axi uninstall` + `install.sh` teardown | feature | COMPLETED (0.2.0) | 009, 066 | 5 (0.2.0) |
 | [CR-CRU-070](CR-CRU-070-systemd-user-unit.md) | systemd `--user` unit: install script provisions and reverses it | feature | COMPLETED (0.2.0) | 066, 069 | 5 (0.2.0) |
 | [CR-CRU-071](CR-CRU-071-in-place-upgrade-safe-migration.md) | In-place upgrade: versioned, backed-up, refusable DB migration | feature | COMPLETED (0.2.0 — incl. AC8 upgrade gate + AC9 daemon restart, absorbed from 072) | 001, 043, 068 | 5 (0.2.0) |
 | [CR-CRU-072](CR-CRU-072-installer-upgrades-in-place.md) | The installer cannot upgrade: bare `uv tool install` no-ops on an existing install | bugfix | COMPLETED (0.2.0 — AC5 → 071 AC8, AC7 → 071 AC9) | 066, 069, 071 | 5 (0.2.0) |
-| [CR-CRU-073](CR-CRU-073-gate-events-expire-at-release.md) | Finished releases keep showing their gate: no-mistakes events outlive their release | bugfix | COMPLETED (0.2.0) | 013, 071, 074 | 5 (0.2.0) |
 | [CR-CRU-074](CR-CRU-074-releases-are-first-class.md) | Crucible has never been told a release happened | feature | COMPLETED (0.2.0) | 013 | 5 (0.2.0) |
+| [CR-CRU-073](CR-CRU-073-gate-events-expire-at-release.md) | Finished releases keep showing their gate: no-mistakes events outlive their release | bugfix | COMPLETED (0.2.0) | 013, 071, 074 | 5 (0.2.0) |
 | [CR-CRU-076](CR-CRU-076-roadmap-first-tab.md) | Roadmap is first in the workspace tab band | patch | COMPLETED (0.2.0) | 014, 021 | 5 (0.2.0) |
 | [CR-CRU-080](CR-CRU-080-release-ceremony-cannot-report.md) | the release ceremony cannot report a release (no agent identity) | bugfix | COMPLETED (0.2.0) | 074 | 5 (0.2.0) |
 | [CR-CRU-082](CR-CRU-082-wave-targets-a-release.md) | a wave declares the release it targets | feature | VOID | 014, 074 | 5 (0.2.0) |
@@ -99,7 +100,6 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-095](CR-CRU-095-seq-scales-collide.md) | two seq scales collide, so `next` recommends deferred work | patch | COMPLETED (0.2.0) | 091, 092 | 5 (0.2.0) |
 | [CR-CRU-096](CR-CRU-096-zone-2-drifts-from-the-approved-design.md) | zone 2 drifts from the approved flowchart design | patch | PENDING (0.2.0) | 078, 095 | 5 (0.2.0) |
 | [CR-CRU-097](CR-CRU-097-project-independence-is-not-asserted.md) | project independence is claimed but never asserted | patch | PENDING (0.2.0) | — | 5 (0.2.0) |
-| [CR-CRU-098](CR-CRU-098-the-plan-pointer-has-no-publisher.md) | the plan pointer has no publisher | feature | PENDING (post-0.2.0) | 095 | 6 |
 | [CR-CRU-079](CR-CRU-079-roadmap-deep-link-and-drill-through.md) | roadmap deep-link parity and active-CR drill-through | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-085](CR-CRU-085-roadmap-multi-track-lanes.md) | multi-track swimlanes inside a wave | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-093](CR-CRU-093-project-rail-collapses.md) | the project rail collapses, giving every workspace view its width back | feature | PENDING (0.2.0) | 006 | 5 (0.2.0) |
