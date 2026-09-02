@@ -64,8 +64,8 @@ So authored and defaulted scales permanently coexist on every real board.
 
 ### §S1 — the SERVER publishes one canonical order; readers keep consuming it verbatim
 
-`listQueue` orders by container first, then by the authored position within it: **release version
-when BOTH rows declare one; otherwise wave number; then `seq`**.
+`listQueue` orders by a **sort key**, not a pairwise comparator: **`(wave number, release version
+with an undeclared release sorting LAST within its wave, seq)`**.
 
 This reuses the comparator that already exists — `compareContainers` (`src/v2.ts:1927-1932`),
 which orders a different release by `compareVersionLabels` and the same release by `waveNumber`.
@@ -79,32 +79,55 @@ would sort *before* every declared release, and the reproduction would still fai
 board **66 of 94 rows carry no release** — every shipped wave (1–4, which CR-091 §S6 correctly
 refuses to plan), plus the deferred wave 6 — and `CR-CRU-015` would still lead.
 
-So the release key applies only when **both** rows declare one. When either side is undeclared,
-the comparison falls through to **wave number**. This is correct rather than convenient: the queue
-has numbered its waves monotonically across releases since CR-CRU-014 (*"Wave 5 (0.2.0)"* after
-0.1.0's waves 1–4 — CR-091 §S4's own premise), so the wave number is a valid cross-release axis, and
-an undeclared row is one of exactly two things — shipped history that *cannot* be declared, or
-deferred work not *yet* declared. Wave fallback places history before the active release and
-deferred work after it, which is the order both `next` and the roadmap need.
+**Second correction, also found in RED the same day: the rule must be a KEY, not a comparator.**
+The first ruling was pairwise — *release when both declare, otherwise wave* — and the RED agent
+proved it **intransitive**: `A = 0.3.0/5 seq 5004`, `B = undeclared/5 seq 5002`,
+`C = 0.10.0/5 seq 5001` gives `A < C` (release), `C < B` (wave tie → seq), `B < A` (wave tie →
+seq) — a strict cycle, and `Array.sort` then returns **three different orders across the six input
+permutations**. The published order would depend on insertion order, not on the data. The
+configuration needs two declared releases sharing a wave number (CR-091 §S4/§S8 explicitly
+tolerate it) plus one undeclared row whose seq lands inside their block — unreachable today, one
+row away from AC4's fixture.
 
-**Rejected: "every undeclared row sorts last."** It also fixes `next`, but the same comparator
+**Release-first has no transitive extension to undeclared rows.** With release as the primary key
+an undeclared row needs a sentinel: sentinel-first is the verbatim comparator (015 leads);
+sentinel-last is the 15-false-warning rule below. The pairwise fallback was the attempt to avoid
+both, and it is what breaks transitivity. **Wave-first does have one**: the queue has numbered
+its waves monotonically across releases since CR-CRU-014 (*"Wave 5 (0.2.0)"* after 0.1.0's waves
+1–4), which is the premise CR-091 §S4's seq-block arithmetic already rests on — so wave is the
+system's own cross-release axis. Release then breaks ties between two releases sharing a wave
+number (AC4), an undeclared release sorts last within its wave (declared work is scheduled;
+undeclared is not), and seq orders within the container. One key, total order, 1 result across all
+6 permutations. On any board that follows the wave convention this coincides with release-first
+for every declared pair, so AC1's intent survives; a fixture that gives a *later* release a
+*lower* wave number violates the convention and is not a valid AC1 fixture.
+
+**Rejected: "every undeclared row sorts last" (globally).** It also fixes `next`, but the same key
 decides `cross-wave-backwards` (`src/v2.ts:1987-2015`), and under that rule a 0.2.0 CR depending
 on shipped wave-4 history reads as *"depends backwards"*. Measured against the live board: **15
-false warnings** (e.g. `014(0.2.0/5) → 011(-/4)`, `068(0.2.0/5) → 066(-/4)`). Wave fallback
-produces **zero**, while a genuine backwards dependency — a 0.2.0 row depending on an undeclared
-wave-6 row — still warns, correctly.
+false warnings** (e.g. `014(0.2.0/5) → 011(-/4)`, `068(0.2.0/5) → 066(-/4)`). The ruled key
+produces **zero** (verified on the container key alone — the eight same-container `-/4 → -/4`
+inversions it also surfaces are `out-of-order`, which fires today on the README's own positional
+order and is not this CR's), while a genuine backwards dependency — a 0.2.0 row depending on an
+undeclared wave-6 row — still warns, correctly.
 
-**The fix is server-side, and deliberately not in `next`.** An earlier draft of this CR had the
-client sort by `(wave, seq)`. That was wrong three ways: it would be the second comparator 091
-warned against; it ignores `release`, so two releases sharing a wave number would tie — a
-comparison 091 §S4 tolerates in storage precisely because *no read makes it*, and a client sort
-would start making it; and it puts ordering back in a reader, which is exactly what **CR-091 AC18**
-outlawed when `buildRoadmapGraph` was caught re-deriving `seq: index`. There is also no
-version comparator in `clients/_crucible_axi.py`, so a client sort means a new Python twin of
-`compareVersionLabels` — a second source of ordering truth.
+**The fix is server-side — and the client must stop re-sorting.** An earlier draft had the client
+sort by `(wave, seq)`, wrong three ways: a second comparator; ignoring `release` so two releases
+sharing a wave number tie; and ordering in a reader, which **CR-091 AC18** outlawed. There is no
+version comparator in `clients/_crucible_axi.py` and none is added.
 
-Ordering server-side means `next`, the roadmap and the scoped table all inherit one order from one
-place, and `resolve_next` needs no change at all.
+But the gap analysis then claimed *"`resolve_next` needs no change at all"*, and RED proved that
+wrong too: `resolve_next` does `sorted(lane, key=_lane_order)` (`clients/_crucible_axi.py:1510`),
+and `_lane_order` returns `(0, seq)` (`:1301-1308`) — it **re-sorts by the seq value**, discarding
+the position the server published. Run unchanged against a canonically ordered payload of the live
+94 rows, its `actionable[0]` is still `CR-CRU-015` at seq 62. So the server fix alone leaves
+`next` wrong, and AC6 as first written ("client unchanged") made AC7 unsatisfiable.
+
+So `resolve_next` becomes a pure consumer: the seq re-sort is **deleted** and the lane is taken in
+the order the server published — CR-091 AC18's principle applied to the client too, with **zero**
+comparators in the client. `_lane_order`'s other job — sorting a seq-less row last — is vestigial:
+CR-091 publishes `seq` on every row, and a missing one already raises the `missing-seq` warning,
+which stays. This is a client change and gets its own cycle.
 
 ### §S2 — EXTEND CR-091's existing warning across containers
 
@@ -143,8 +166,9 @@ later. Existing positional values are corrected by authoring the wave, or made h
 
 ## Acceptance criteria
 
-- **AC1** — `listQueue` publishes rows ordered by release version when both rows declare one,
-  otherwise by wave number, then `seq`.
+- **AC1** — `listQueue` publishes rows ordered by the sort key `(wave number, release version with
+  an undeclared release last within its wave, seq)`. For any two declared rows on a board that
+  follows the monotonic wave convention this equals release-then-wave order.
 - **AC1a** — An undeclared row orders against a declared one by **wave number**: an undeclared
   wave-4 row precedes a `0.2.0`/wave-5 row; an undeclared wave-6 row follows it. Fixture: the live
   board's shape — shipped waves 1–4 undeclared, 0.2.0 at wave 5, deferred wave 6 undeclared —
@@ -154,15 +178,30 @@ later. Existing positional values are corrected by authoring the wave, or made h
   `CR-CRU-014 → CR-CRU-011`, `CR-CRU-068 → CR-CRU-066`) produce zero warnings.
 - **AC1c** — `cross-wave-backwards` **does** fire for a declared row depending on an undeclared row
   of a higher wave (a genuine backwards dependency on deferred work).
-- **AC2** — It uses `compareContainers`' semantics; no second version/wave comparator is
-  introduced, in TypeScript or Python.
+- **AC1d** — The order is a **total order**: `A = 0.3.0/5 seq 5004`, `B = undeclared/5 seq 5002`,
+  `C = 0.10.0/5 seq 5001` publish as `A, C, B` from **every** one of the six insertion
+  permutations. (The pairwise rule this replaced returned three different orders.)
+- **AC1e** — Within one wave, every declared row precedes every undeclared row regardless of
+  `seq`: an undeclared `-/5` row at seq 6000 and one at seq 75 both follow the whole `0.2.0/5`
+  block, and order between themselves by seq.
+- **AC2** — Exactly **one** key function decides container order, shared by `listQueue` and by
+  `dependencyWarnings`' container verdict; no second version/wave comparator is introduced, in
+  TypeScript or Python. Assert behaviourally: for distinct containers, `cross-wave-backwards` fires
+  **iff** the dependant precedes its dependency in `listQueue`.
 - **AC3** — Within one container the authored `seq` order is preserved exactly; §S1 changes order
   only BETWEEN containers.
 - **AC4** — Two releases sharing a wave number order by release version, never tie.
 - **AC5** — A row whose wave carries no integer still orders deterministically (block 0, per
   `waveSeqBase`).
-- **AC6** — `resolve_next` is UNCHANGED: it still sorts on published order and takes
-  `actionable[0]`. No client-side container sort is added.
+- **AC6** — `resolve_next` consumes the published order **verbatim**: the `sorted(lane,
+  key=_lane_order)` re-sort by seq value is deleted, `actionable[0]` is the first actionable row in
+  the order the server published, and the client contains **zero** comparators. `queue_tracks`,
+  track scoping (§S3) and the `HOLD`/`DRAINED` logic are unchanged.
+- **AC6a** — The `missing-seq` warning still fires for a row published without `seq`, and such a
+  row keeps its published position rather than being moved last.
+- **AC6b** — Regression on `tests/client/test_cr092_next_decision_resolver.py`: every existing
+  test still passes, except any that asserted the seq re-sort itself, which is amended to assert
+  published-order consumption and named in the cycle's report.
 - **AC7** — With the live board's data — authored wave-5 rows at `5001+` and defaulted wave-6 rows
   below `100`, both PENDING with deps satisfied — `next` answers a **0.2.0** CR, not `CR-CRU-015`.
 - **AC8** — The roadmap and the scoped table consume the same published order and require no
