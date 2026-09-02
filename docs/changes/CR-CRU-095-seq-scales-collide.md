@@ -27,15 +27,15 @@ CR-CRU-015 is deferred post-0.2.0. At that moment the board held **26 authored 0
 
 | writer | value | example |
 | --- | --- | --- |
-| `wave-sequence` (authored) | `waveSeqBase(wave) + index + 1` — wave `N` owns `[N×1000, N×1000+999]` (`src/store.ts:394-405`, `:3602`) | wave 5 → `5001..5026` |
-| bulk queue post (defaulted) | `declaredSeq ?? index` — the array position (`src/store.ts:3424`) | wave 6 → `62`, `64`, `65` |
+| `wave-sequence` (authored) | `waveSeqBase(wave) + index + 1` — wave `N` owns `[N×1000, N×1000+999]` (`src/store.ts:411-419`, `:3602`) | wave 5 → `5001..5026` |
+| bulk queue post (defaulted) | `declaredSeq ?? index` — the array position (`src/store.ts:3521-3531`) | wave 6 → `62`, `64`, `65` |
 
 **CR-091 §S2/AC23 already named this phenomenon precisely.** `QueueSeqReport`'s contract
-(`src/store.ts:290-303`) says `defaultedSeq` names *"every cr whose `seq` this write CHOSE while a
+(`src/store.ts:290-313`) says `defaultedSeq` names *"every cr whose `seq` this write CHOSE while a
 sibling in the same wave holds one on a DIFFERENT SCALE — the bulk post's array index beside a
 carried `10, 20, 30`, or `cr-plan`'s wave-block offset beside either. That mix is deterministic but
 not authored (the two scales interleave in an order nobody chose)"*, and `defaultedSeqWarnings`
-(`src/v2.ts:1896-1908`) emits it with `wave-sequence` as the remedy.
+(`src/v2.ts:1920-1932`) emits it with `wave-sequence` as the remedy.
 
 So the phenomenon is known, documented and warned. **The gap is its SCOPE: that check is
 same-wave.** Within wave 6 every row is positional — one scale, no siblings disagreeing — so the
@@ -43,10 +43,10 @@ warning is correctly silent, exactly as its contract says (*"A chosen position t
 every sibling's scale is the ORDINARY case and is silent"*). The collision this CR reports is
 **across containers**: wave 6's `62` against wave 5's `5001`.
 
-And nothing orders across containers. `listQueue` is `ORDER BY seq ASC` (`src/store.ts:3465-3470`)
+And nothing orders across containers. `listQueue` is `ORDER BY seq ASC` (`src/store.ts:3602-3606`)
 — one column, no container key — so a positional value from an unauthored wave sorts ahead of every
-authored wave. `resolve_next` consumes that published order (`clients/_crucible_axi.py:1510`) and
-takes `actionable[0]` (`:1530`), so the lowest positional seq wins the board.
+authored wave. `resolve_next` consumes that published order (formerly `clients/_crucible_axi.py:1510`, now deleted) and
+takes `actionable[0]` (`clients/_crucible_axi.py:1527`), so the lowest positional seq wins the board.
 
 ### Why it is the steady state, not a migration artifact
 
@@ -67,14 +67,14 @@ So authored and defaulted scales permanently coexist on every real board.
 `listQueue` orders by a **sort key**, not a pairwise comparator: **`(wave number, release version
 with an undeclared release sorting LAST within its wave, seq)`**.
 
-This reuses the comparator that already exists — `compareContainers` (`src/v2.ts:1927-1932`),
+This reuses the comparator that already exists — `compareContainers` (`src/store.ts:474-484`),
 which orders a different release by `compareVersionLabels` and the same release by `waveNumber`.
 CR-091's own comment on it warns that *"a second one would order them differently"*, so this CR
 adds no comparator; it lifts the canonical one so the read that lacked it shares it.
 
 **One correction to that comparator, found in RED and ruled 2026-09-02.** As it stands it reads
 `a.release ?? ""`, and `compareVersionLabels("", "0.2.0")` is **negative** — a label with fewer
-numeric components sorts first (`src/store.ts:365`). Applied verbatim, every release-less row
+numeric components sorts first (`src/store.ts:371`). Applied verbatim, every release-less row
 would sort *before* every declared release, and the reproduction would still fail: on the live
 board **66 of 94 rows carry no release** — every shipped wave (1–4, which CR-091 §S6 correctly
 refuses to plan), plus the deferred wave 6 — and `CR-CRU-015` would still lead.
@@ -103,7 +103,7 @@ for every declared pair, so AC1's intent survives; a fixture that gives a *later
 *lower* wave number violates the convention and is not a valid AC1 fixture.
 
 **Rejected: "every undeclared row sorts last" (globally).** It also fixes `next`, but the same key
-decides `cross-wave-backwards` (`src/v2.ts:1987-2015`), and under that rule a 0.2.0 CR depending
+decides `cross-wave-backwards` (`src/v2.ts:1994-2019`), and under that rule a 0.2.0 CR depending
 on shipped wave-4 history reads as *"depends backwards"*. Measured against the live board: **15
 false warnings** (e.g. `014(0.2.0/5) → 011(-/4)`, `068(0.2.0/5) → 066(-/4)`). The ruled key
 produces **zero** (verified on the container key alone — the eight same-container `-/4 → -/4`
@@ -117,8 +117,8 @@ sharing a wave number tie; and ordering in a reader, which **CR-091 AC18** outla
 version comparator in `clients/_crucible_axi.py` and none is added.
 
 But the gap analysis then claimed *"`resolve_next` needs no change at all"*, and RED proved that
-wrong too: `resolve_next` does `sorted(lane, key=_lane_order)` (`clients/_crucible_axi.py:1510`),
-and `_lane_order` returns `(0, seq)` (`:1301-1308`) — it **re-sorts by the seq value**, discarding
+wrong too: `resolve_next` does `sorted(lane, key=_lane_order)` (formerly `clients/_crucible_axi.py:1510`, now deleted),
+and `_lane_order` returns `(0, seq)` (formerly `:1301-1308`, deleted) — it **re-sorts by the seq value**, discarding
 the position the server published. Run unchanged against a canonically ordered payload of the live
 94 rows, its `actionable[0]` is still `CR-CRU-015` at seq 62. So the server fix alone leaves
 `next` wrong, and AC6 as first written ("client unchanged") made AC7 unsatisfiable.
@@ -148,8 +148,8 @@ string equality on the `release` column; the route cannot reach a release withou
 (`requireLiveProposal`), and the store does not need to care.
 
 **The cross-wave producer is `cr-plan`, not the bulk post.** The bulk route never forwards
-`release` (`handleQueuePost`, `src/v2.ts:1848-1859`), a held row always carries a `seq` (`NOT
-NULL`, `src/store.ts:1375`), so a row the bulk post defaults is always new and release-less — and
+`release` (`handleQueuePost`, `src/v2.ts:1860-1875`), a held row always carries a `seq` (`NOT
+NULL`, `src/store.ts:1415`), so a row the bulk post defaults is always new and release-less — and
 release-less rows are never compared on the release axis. After §S3 the bulk default lands in the
 row's own block, in scale with everything authored, so bulk cross-wave `defaulted-seq` is
 unreachable by construction. The one reachable shape is `cr-plan` declaring a row that HOLDS a
@@ -160,6 +160,8 @@ cross-wave case is not specified because it cannot occur.
 **The wave axis is unchanged.** A release-less row defaulted beside authored same-wave siblings
 still warns exactly as CR-091 AC23 shipped it. "Never compared" applies to the **release** axis
 only.
+
+**Which row is named — VERIFY ruling, cycle 308.** With the `moved &&` gate gone, a `cr-plan` that merely retitled an authored row beside a positional release-sibling named the *authored* row as "defaulted" — the mixture was real, the verb and the cr were wrong. The rule: a write names **its own row**, and only when that row's seq differs in scale from a sibling **and** either this write chose the seq (defaulted or re-slotted) **or** the row's held seq is itself the out-of-block one. So AC9 (a held positional row declared into an authored release) is named; AC11 (a fresh in-block slot beside positional siblings) is named; a retitle that preserves an in-block seq beside a positional sibling is **silent** — that mixture pre-exists, and the positional row's own write named it.
 
 **Not "any container", as first drafted — re-scoped after C1 landed, 2026-09-02.** With §S1 in
 place a cross-container mixture no longer misorders anything, so the only mixture still worth a
@@ -173,12 +175,12 @@ always valid. Rows with no release are never compared; they cannot be authored, 
 nothing to warn them into.
 
 This is an extension of an existing mechanism, not a new detector. The client's `missing-seq`
-warning (`clients/_crucible_axi.py:1517-1523`) is untouched and still fires for a genuinely absent
+warning (`clients/_crucible_axi.py:1506-1516`) is untouched and still fires for a genuinely absent
 `seq`.
 
 ### §S3 — the bulk post defaults into the row's OWN wave block
 
-`src/store.ts:3498` writes `declaredSeq ?? index`. The fallback becomes **the next free slot in the
+`src/store.ts:3521-3531` writes `declaredSeq ?? index`. The fallback becomes **the next free slot in the
 row's own wave block**: rows are processed in post order, and a row with neither a declared nor a
 held seq takes `max(seq already held or assigned in that wave AND inside its block) + 1`, or
 `waveSeqBase(wave) + 1` when the block is empty. For an all-defaulted wave — a fresh import — that
@@ -201,7 +203,7 @@ pre-existing wave axis (unchanged by §S2), newly reachable only because the def
 in-block. It disappears when the legacy rows do. A fresh import raises no warning at all.
 
 **Block overflow is refused, not spilled.** `wave-sequence` refuses a wave that would reach
-`WAVE_SEQ_STRIDE` members (`src/v2.ts:2220`); the bulk post refuses the same condition with the
+`WAVE_SEQ_STRIDE` members (`src/v2.ts:2245-2248`); the bulk post refuses the same condition with the
 same message, so there is one limit in one wording. Spilling into the next wave's block would
 silently corrupt cross-container order — the defect this CR exists to remove.
 
@@ -209,19 +211,44 @@ silently corrupt cross-container order — the defect this CR exists to remove.
 caller use the one arithmetic rather than re-deriving `waveNumber × WAVE_SEQ_STRIDE`.
 
 **This does not retroactively fix an existing board, and must not claim to.** `declaredSeq` is
-`entry.seq ?? snapshot?.seq` (`:3402`) — a **held** seq survives a re-import (CR-091's
+`entry.seq ?? snapshot?.seq` (`src/store.ts:3508-3510`) — a **held** seq survives a re-import (CR-091's
 carry-forward), so re-posting a board that already stores positional values preserves them. §S3
 therefore governs rows with neither a declared nor a held seq: a fresh import, and every row added
 later. Existing positional values are corrected by authoring the wave, or made harmless by §S1.
 
 §S1 is the load-bearing fix; §S3 stops the board generating new mixtures.
 
+**VERIFY rulings, 2026-09-02 (cycle 308).** Three findings widened or corrected the contract:
+
+- **`cr-plan` shares the slot and the limit.** `upsertQueueEntry` still slotted a moved row as
+  `base + count + 1` — CR-091's count rule — while the bulk post now uses `max + 1`. Two rules for one
+  block disagree the moment the block has a gap; VERIFY reproduced `cr-plan G` landing on `5005`, the
+  seq `E` already held, with nothing named. `cr-plan` now takes the **same next-free-slot function**
+  (`max(in-block seq in that wave) + 1`, else `base + 1`) and the **same overflow refusal** with the
+  same message. "Not a third rule" now means what it says: one slot function, one limit, one wording,
+  two callers.
+- **A held row that CHANGES WAVE in a bulk re-post is re-slotted.** "Held" means *held in that wave*:
+  a row the README moved from wave 5 to wave 6 has no valid held seq for wave 6, so carrying `5002`
+  into wave 6 leaves a foreign-block value that is out of scale there and — worse — gets the wrong
+  row named. On a wave change the bulk post treats the row as seq-less and slots it into the new
+  wave's block, exactly as `cr-plan` already re-slots on a wave move. A row that keeps its wave keeps
+  its seq (AC13 unchanged).
+- **The overflow message reports the slot, not the post's row count.** When a declared seq near the
+  block's end trips the refusal early, "would hold 2 crs" is false; the message now states the seq
+  that would leave the block. Wording otherwise shared.
+
+`inWaveBlock` is exported beside `waveSeqBase` so tests import the one predicate rather than
+re-implementing its bounds; the bulk route's overflow 400 carries the same `help[]`
+(`roadmapHints.waveOverflow`) as `wave-sequence`'s, so the two refusals are one envelope as well as
+one wording; and `wave-sequence`'s own overflow text is pinned by a test, since the refactor to the
+shared helper had left it asserted by nobody.
+
 ### Non-goals
 
 - **A second comparator, or ordering in a client.** §S1's whole point.
 - **Making a shipped release plannable, or auto-proposing a release** for deferred rows.
 - **Reordering by dependency.** Dependencies validate, never order — re-confirmed live: the board
-  correctly warned `out-of-order` for `CR-CRU-073` against a real authored order (`src/v2.ts:1999`)
+  correctly warned `out-of-order` for `CR-CRU-073` against a real authored order (`src/v2.ts:2005`)
   rather than silently fixing it.
 - **Backfilling existing positional seq.** See §S3.
 
@@ -299,6 +326,20 @@ later. Existing positional values are corrected by authoring the wave, or made h
   alternative is a row landing in the next wave's block. The message is `wave-sequence`'s, built by
   one shared helper. A re-post of held rows computes no default and is never refused by this rule.
 - **AC12d** — A wave cell with no integer takes block 0: its rows default to `1, 2, 3…`.
+- **AC12e** — `cr-plan` uses the same next-free-slot as the bulk post: with a gapped block
+  `5001, 5005` held, planning a row into that wave lands `5006`, never a held value. Reproduction:
+  authored `A..E` `5001..5005`; re-post dropping `C, D`; `cr-plan G` → `5006`, not `5005`.
+- **AC12f** — `cr-plan` refuses block overflow with the shared message and `help[]`; nothing written.
+- **AC12g** — A held row whose wave changes in a bulk re-post is re-slotted into the new wave's
+  block: `B(0.2.0/5, 5002)` re-posted as wave 6 lands `6001`-and-up, is published after wave 5, and
+  is the row named if a scale mixture results — never a sibling. A row that keeps its wave keeps
+  its seq.
+- **AC12h** — The overflow message states the seq that would leave the block, not the post's row
+  count: `5999` declared plus one seq-less row refuses naming `6000`, never "would hold 2 crs".
+- **AC12i** — The bulk overflow 400 carries `help[]` identical to `wave-sequence`'s, and
+  `wave-sequence`'s own overflow text is asserted by a test.
+- **AC11a** — A `cr-plan` that preserves an authored in-block seq (retitle, same wave) beside a
+  positional release-sibling names **nothing**; the same write on the positional row names it.
 - **AC13** — Carry-forward is preserved: a row with a held `seq` keeps it across a re-import, and
   §S3 does not overwrite it (CR-091 regression).
 - **AC14** — A bulk post is idempotent: posting twice yields identical seq values.
