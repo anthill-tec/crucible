@@ -236,8 +236,27 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   apart and does not satisfy this AC.
 - **AC4** — Motion stays reserved for IN_PROGRESS: an active wave with no running CR renders no
   animation (AC24 regression).
-- **AC5** — The wave renders the roll-up: `N merged` plus the gate state phrase from
-  `resolveGateDate`'s `state`.
+- **AC5** — The wave renders the roll-up: `N merged` plus the phrase stating that the merged work
+  is **not yet tagged**.
+- **AC5a** — The roll-up is **ABSENT** when the wave has zero merged members. *Ruled 2026-09-02
+  (C3 RED found AC5 had no absent clause while AC16 has one).* Symmetry with `+N more`: there is
+  nothing to roll up, and the release gate already states its own state on the diamond. A
+  `0 merged` line would be chrome reporting the absence of content.
+- **AC5b** — The phrase is `awaiting the tag` for **every** proposed gate state — `absent`,
+  `dated` and `unusable` alike. *Ruled 2026-09-02 (C3 RED found only the `absent` wording was ever
+  specified).* Within zone 2 the focused release is always in flight, because a SHIPPED focus
+  renders zero wave boxes (AC21) — so merged work in a wave is, in every case, merged but not yet
+  tagged, and that is the whole fact the phrase states. Three different strings would invent
+  distinctions that do not exist. The gate's date and state detail stays on the gate
+  (`resolveGateDate`'s answer, rendered once) — the roll-up MUST NOT render a date, which would be
+  the second date renderer CR-078 AC30 forbids.
+- **AC5c** — The roll-up renders as a **SIBLING** of the header `h4`, inside the wave box, after
+  the header and before every row. *Corrected 2026-09-02:* §S3 said "inside the wave header
+  block", but the approved artifact renders `.wsum` as a sibling of `<h4>` — and a `div` inside an
+  `h4` is invalid HTML, so the artifact's placement is the correct reading of "header block".
+- **AC5d** — The `✓` the artifact shows (`21 merged ✓ · awaiting the tag`) is rendered, to match
+  the approved design. It is decoration, not the channel: AC25's greyscale invariant is satisfied
+  by the WORD `merged`, so nothing depends on the glyph.
 - **AC6** — The roll-up counts **merged** entries in that wave, over the **whole** wave,
   independently of the trim: a synthetic wave of 28 with 22 merged renders `22 merged`, never
   `1 merged` (the shown rows) and never the project total.
@@ -311,10 +330,27 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   wave whose first actionable row has an unsatisfied dependency still marks that row `next`,
   because the marker states position in the published order and nothing else. Zone 2 renders no
   HOLD and no DRAINED state (CR-CRU-098 owns the published reading).
+- **AC12b** — **Exactly one row in the whole ZONE is marked**, not one per wave box. *Ruled
+  2026-09-02 (C3 RED found AC12's "exactly one" ambiguous against AC19's one-box-per-wave).* "What
+  to take up next" is a single fact about the focused release; two markers would ask the reader
+  which `next` is meant. So the marker goes on the first actionable row **among the rows the zone
+  actually draws**, in the published order across every wave — which means `nextCr` is a
+  VIEW-level fact, not a per-box one, and a wave box may render no marker at all.
+- **AC12c** — The `wave: null` loose group renders `deps` like any other row, and is **eligible**
+  for the single `next` marker. *Ruled 2026-09-02.* Arrangement is grammar and applies everywhere
+  (AC18a's own reasoning); and excluding the group would leave a release whose only actionable work
+  is unwaved with no marker anywhere, which is the one case the marker exists for.
+
 - **AC13** — A pending row with dependencies renders `deps <ids>` naming **all** of them; fixture:
   a row declaring **four** deps names four, and the row's annotation slot holds them at the §S6
   width budget (four is the widest real case observed, so the budget is measured against four, not
   three). No deps → no annotation.
+- **AC13a** — `deps` names the **full published CR id**, never an abbreviated tail. *Ruled
+  2026-09-02 (C3 RED raised it against AC29).* The approved artifact draws `deps 091, 092` with
+  this project's `CR-CRU-` prefix stripped — an abbreviation that only works for a project whose
+  ids share a prefix the product cannot know. Stripping it would be exactly the project-dependence
+  AC29 forbids, and a synthetic `CR-A` has no numeric tail to strip.
+
 - **AC14** — No tooltip and no `title` attribute is introduced on a wave row.
 - **AC15** — A row's click still drills through (CR-078 C4 `data-drill-source` regression).
 - **AC16** — `+N more` renders when scheduled CRs remain unshown, states the true remainder, and is
