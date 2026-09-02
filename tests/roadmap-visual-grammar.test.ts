@@ -671,6 +671,15 @@ let realSurfaceFixtureUrl = "";
 let widePage: Page | null = null;
 let artifactHtml = "";
 let artifactFailure = "";
+/** The commit CR-CRU-096 was filed against — `develop` at the moment the
+ *  feature branch was cut, and the state every "pre-CR" assertion below
+ *  describes. Pinned rather than derived from `git merge-base`, which answers
+ *  the pre-CR commit only while the branch is unmerged (see the note in
+ *  `beforeAll`). Verified an ancestor of `develop`; if it is ever unreachable
+ *  the AC26 test reports that instead of the suite silently comparing a render
+ *  against itself. */
+const PRE_CR_COMMIT = "63f07f5bf79ca00f53f3cf402bbca802ba57fc4c";
+
 let baselineFailure = "";
 let baselineCommit = "";
 /** The pre-CR STYLESHEET, served beside the pre-CR markup. Swapping only the
@@ -732,14 +741,18 @@ beforeAll(async () => {
 
   // AC26's BASELINE. "Byte-identical before and after this CR" is a claim
   // about two renders, so the before-state is rendered too: the shell as of
-  // the merge-base of this feature branch, which is the commit the CR was
-  // filed against. Captured defensively — a git failure must report itself in
-  // the AC26 test rather than take the other 38 assertions down with it.
+  // the commit this CR was filed against.
+  //
+  // PINNED, not derived. This read `git merge-base develop HEAD`, which is
+  // correct exactly once — on the feature branch. After the merge, HEAD IS
+  // develop, so the merge-base is the merged commit and the "before" build
+  // becomes the "after" build: every pre-CR counterfactual below inverts and
+  // AC26 compares a render against itself. The guard destroyed itself on
+  // merge, and the pre-merge gate could not see it because the branch still
+  // resolved the base correctly. A before/after comparison must name its
+  // before-state as settled fact, the way release provenance does.
   try {
-    baselineCommit = execFileSync("git", ["merge-base", "develop", "HEAD"], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-    }).trim();
+    baselineCommit = PRE_CR_COMMIT;
     const showAt = (rel: string): string =>
       execFileSync("git", ["show", `${baselineCommit}:${rel}`], {
         cwd: REPO_ROOT,
