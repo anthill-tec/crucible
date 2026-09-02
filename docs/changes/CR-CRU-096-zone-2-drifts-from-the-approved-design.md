@@ -230,20 +230,49 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   animation (AC24 regression).
 - **AC5** — The wave renders the roll-up: `N merged` plus the gate state phrase from
   `resolveGateDate`'s `state`.
-- **AC6** — The roll-up counts only `COMPLETED` entries in that wave, over the **whole** wave,
-  independently of the trim: a synthetic wave of 28 with 22 COMPLETED renders `22 merged`, never
+- **AC6** — The roll-up counts **merged** entries in that wave, over the **whole** wave,
+  independently of the trim: a synthetic wave of 28 with 22 merged renders `22 merged`, never
   `1 merged` (the shown rows) and never the project total.
+- **AC6a** — **Merged means `COMPLETED` OR `COMPLETED_UNTRACKED`**, for both the roll-up count and
+  the row exclusion. *Ruled 2026-09-02 after C2 RED asked.* They are the same fact at two
+  luminances — `public/styles.css:1337` says so in the code: "COMPLETED_UNTRACKED is the SAME
+  green, DIMMED — one hue at two luminances". An earlier draft of AC6 said "only `COMPLETED`",
+  which would have made an untracked-merged member vanish from the count AND from the rows: counted
+  nowhere, drawn nowhere. The roll-up and the trim MUST agree on this set or a member disappears
+  from the surface entirely.
 - **AC7** — The roll-up is **not** a CR rectangle: it carries no CR-node class and no
   `data-cr`, so it cannot be selected or drilled.
 - **AC8** — Each shown CR renders as one full-width row: id left, status and annotation right. No
   wrapped chip grid remains.
-- **AC9** — Merged CRs render **no rows**; the wave's rows are actionable CRs only.
+- **AC9** — Merged CRs (AC6a) render **no rows**. The wave's rows are **actionable ∪
+  IN_PROGRESS**. *Ruled 2026-09-02 after C2 RED found the contradiction:* AC9 first read "actionable
+  CRs only" while AC12 defines actionable as PENDING-with-no-lifecycle — which EXCLUDES
+  IN_PROGRESS, the very thing AC11 requires to be shown. Read literally the two ACs could not both
+  hold. Rows are the union; "actionable only" was never meant to exclude running work, since zone 2
+  exists to show what is being worked.
+- **AC9a** — A `PENDING` row carrying a `lifecycle` disposition (VOID/SUPERSEDED) is not work and
+  renders **no row**. *Ruled 2026-09-02.* No information is lost: zone 3's table carries the
+  disposition (`public/app.js:2496` `data-lifecycle`, `:2535` `roadmap-lifecycle-badge`, and
+  CR-078 AC27's lifecycle column), which is exactly §S5's argument that zone 3 is the detail
+  surface. Consequence, which is part of this AC and not a side effect: zone 2's own node badge
+  (`public/app.js:2771` `roadmap-node-lifecycle`) becomes unreachable and is REMOVED, with its
+  five existing consumers re-pointed at zone 3 rather than deleted —
+  `tests/roadmap-release-focus.test.ts:923,938,952` and
+  `tests/roadmap-visual-grammar.test.ts:1015,1122`. A surface is not allowed to disappear as a
+  by-product of a trim.
 - **AC10** — The rows are the top of the scheduled queue in the order the server PUBLISHED
   (CR-095 §S1, consumed verbatim — no client re-sort), five by default. Fixture: a synthetic wave
   authored `CR-Q-1 … CR-Q-9` with `CR-Q-1` and `CR-Q-2` COMPLETED yields rows
   `CR-Q-3, CR-Q-4, CR-Q-5, CR-Q-6, CR-Q-7`.
 - **AC11** — An IN_PROGRESS CR is present even when outside the top five. Fixture: activate the
   last scheduled CR — it still renders, with ember and motion.
+- **AC11a** — Such a CR **EXTENDS** the list; it never DISPLACES a scheduled row. *Ruled
+  2026-09-02 after C2 RED asked (§S5.2 "five by default" vs §S5.3 "always shown"; neither AC said
+  which).* Displacing would hide a scheduled CR to show a running one and would break the
+  pointer's arithmetic, which is `actionable total − actionable rows shown`; extending keeps the
+  published order strictly intact with no client-side re-ordering (CR-091 AC18). The list is
+  bounded in practice because a track runs one CR at a time, so the extras are at most the track
+  count — well inside §S6's measured budget.
 - **AC12** — The **first actionable row in the published order** renders a `next` annotation as
   **text**, on a row that keeps PENDING styling. It uses neither `▸` nor ember (§S8), and exactly
   one row is marked. Actionable is `PENDING` with no `lifecycle`; the marker is derived from the
@@ -263,7 +292,17 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
   absent when none remain. It carries no click handler.
 - **AC17** — No scroll container inside the wave: computed `overflow` stays visible/unset, and the
   wave's height grows with the rows shown, not with membership.
-- **AC18** — No `data-window-*` attribute and no `◀ earlier` / `later ▶` tag appears in zone 2.
+- **AC18** — No `data-window-*` attribute and no `◀ earlier` / `N later` tag appears **within
+  `[data-zone="2"]`**. The scoping is load-bearing and was confirmed by C2 RED: zone 1's strip
+  legitimately publishes `data-window-size`/`data-window-offset`/`data-hidden-earlier`
+  (`public/app.js:3116-3118`) and renders its own paging tags (`:3055`), which AC26 freezes. The
+  `▶` glyph itself cannot be forbidden — it is IN_PROGRESS's own status mark, `▶ in progress`
+  (`public/app-logic.mjs:1015`); only `◀` and the words *earlier*/*later* are.
+- **AC18a** — The `wave: null` group (members declaring no wave, `public/app.js:2786`
+  `app-flow-loose`) takes the **row arrangement** of AC8 but **not** the trim. *Ruled 2026-09-02:*
+  it renders no header, so it has nowhere to state whole membership and no anchor for a `+N more`
+  pointer — trimming it would hide rows with nothing declaring how many. Arrangement is grammar
+  and applies everywhere; the trim needs a count to stay honest.
 - **AC19** — Zone 2 renders one box **per wave** of the focused release; a two-wave release renders
   two.
 - **AC20** — With §S5 landed, zone 2 lays out horizontally — `Start`, wave, gate, `End` with
