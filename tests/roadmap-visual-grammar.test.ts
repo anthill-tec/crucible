@@ -9,10 +9,13 @@
 // BINDING DESIGN SOURCE, in the order the DN itself declares:
 //   docs/research/DN-crucible-roadmap-view.md
 //     §"Visual contract (approved 2026-08-28) — BINDING on implementation"
-//   .lavish/crucible-workflow-flowchart.html §1–§8/§14 — the richer reference
-//     WHERE PRESENT (it is gitignored, so the DN section governs when it is
-//     not). Every shape, colour token and motion rule asserted below is read
-//     off one of those two and never off taste.
+//   .lavish/crucible-workflow-flowchart.html §1–§8/§14 — the richer reference,
+//     TRACKED since CR-CRU-096 AC27a (`.gitignore:12` ignores `.lavish/*`,
+//     `.gitignore:18` negates this file back in), so it is present in a clean
+//     clone and AC27 fails rather than degrades when it cannot be read. The DN
+//     section still governs wherever the artifact says nothing. Every shape,
+//     colour token and motion rule asserted below is read off one of those two
+//     and never off taste.
 //
 // WHY THIS IS A SIBLING SUITE and not an edit to the C1–C4 files.
 // The four landed roadmap suites are BEHAVIOURAL and run entirely in happy-dom,
@@ -416,9 +419,55 @@ const SINGLE_WAVE_QUEUE: QueueFixture[] = HEIGHT_QUEUE.filter(
   (entry) => entry.release !== HEIGHT_RELEASE || entry.wave === "H1",
 );
 
-/** The artifact IS the binding design source AC27 compares against, and it is
- *  `.gitignore`d (`.gitignore:12` — `.lavish/`). So it is read defensively and
- *  the AC27 tests state its absence rather than crashing the suite. */
+/** AC20d — the surface the app ACTUALLY reports. `SURFACE_W` is a CONTROLLED
+ *  figure (§S6's own table at a 1600px viewport); measured in the user's own
+ *  Chrome at a 1465px window the Project rail takes the remainder and zone 2
+ *  gets 991px. A budget pinned only to 1130 is green on a surface nobody
+ *  browses at, so the second AC20 case is served at this width and measured
+ *  against the width the APP reports rather than against either constant. */
+const REAL_SURFACE_W = 991;
+
+/** AC19d — the WRAP board. AC13's widest real annotation is a FOUR-dep row,
+ *  and a wave box carrying one is far wider than half the surface, so a
+ *  two-wave release at this width genuinely CANNOT lay both boxes on one
+ *  line. The landed AC19c fixture (`HEIGHT_QUEUE`) tops out at a TWO-dep row
+ *  and therefore fits — which is why it never exercised the degradation.
+ *  AC29 — `CR-W1-*` / `CR-W2-*` are synthetic ids of this board alone. */
+const WRAP_DEPS: readonly string[] = ["CR-W1-M01", "CR-W1-M02", "CR-W1-M03", "CR-W1-M04"];
+
+const WRAP_PROPOSALS: ProposalFixture[] = [
+  { label: HEIGHT_RELEASE, targetAt: TARGET_020, timestamp: RETIRED_AT, waves: ["W1", "W2"] },
+];
+
+/** Every DRAWN row carries the four-dep annotation, so the box's width is set
+ *  by the widest case §S6's budget is stated against and not by an average. */
+const WRAP_QUEUE: QueueFixture[] = [
+  ...QUEUE.slice(0, 2),
+  ...mergedMembers("CR-W1-M", "W1", 4, 500),
+  ...scheduledMembers("CR-W1-P", "W1", 5, 520, [
+    WRAP_DEPS,
+    WRAP_DEPS,
+    WRAP_DEPS,
+    WRAP_DEPS,
+    WRAP_DEPS,
+  ]),
+  ...mergedMembers("CR-W2-M", "W2", 4, 560),
+  ...scheduledMembers("CR-W2-P", "W2", 5, 580, [
+    WRAP_DEPS,
+    WRAP_DEPS,
+    WRAP_DEPS,
+    WRAP_DEPS,
+    WRAP_DEPS,
+  ]),
+];
+
+/** The artifact IS the binding design source AC27 compares against, and since
+ *  CR-CRU-096 AC27a it is TRACKED: `.gitignore:12` ignores `.lavish/*` and
+ *  `.gitignore:18` negates this one file back in. So a clean clone has it, and
+ *  the AC27 tests HARD-FAIL on an unreadable artifact (`expect(artifactFailure)
+ *  .toBe("")`) rather than stating its absence. The read stays guarded only so
+ *  the failure is reported by AC27 instead of taking the other assertions in
+ *  this file down with it. */
 const ARTIFACT_REL = ".lavish/crucible-workflow-flowchart.html";
 
 // ── happy-dom capture: the REAL production DOM, serialised ───────────────────
@@ -611,6 +660,10 @@ let shippedFixtureUrl = "";
 let baselineFixtureUrl = "";
 let singleFixtureUrl = "";
 let artifactUrl = "";
+// CR-CRU-096 C6 — AC19d's wrap board and AC20d's real surface.
+let wrapZones = "";
+let wrapFixtureUrl = "";
+let realSurfaceFixtureUrl = "";
 /** A SECOND page, at §S6's own 1600px viewport. A second page rather than a
  *  `setViewportSize` on the shared one: the 38 landed assertions are measured
  *  at 1440×1000 and a viewport this suite forgot to put back would silently
@@ -671,6 +724,7 @@ beforeAll(async () => {
     queue: HEIGHT_LOOSE_QUEUE,
   });
   singleZones = await captureZones({ proposals: HEIGHT_PROPOSALS, queue: SINGLE_WAVE_QUEUE });
+  wrapZones = await captureZones({ proposals: WRAP_PROPOSALS, queue: WRAP_QUEUE });
   // No proposal at all, so `releaseStripFocusIndex` falls through to the last
   // gate — the newest SHIPPED tag. That is the only way to reach §S7's
   // delivered path, and with it AC23's `shipped` word and AC24's shipped axis.
@@ -751,6 +805,21 @@ beforeAll(async () => {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
+      // AC19d — the four-dep board, served at the SAME surface as every other
+      // C5 fixture: the wrap is forced by the boxes' own width, not by a
+      // narrowed stage.
+      if (pathname === "/fixture-wrap") {
+        return new Response(fixtureDocument(wrapZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      // AC20d — the same one-box board at the surface the user's own Chrome
+      // reports, so the budget is asserted somewhere it is actually browsed.
+      if (pathname === "/fixture-real-surface") {
+        return new Response(fixtureDocument(singleZones, REAL_SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
       if (pathname === "/fixture-height-loose") {
         return new Response(fixtureDocument(heightLooseZones, SURFACE_W), {
           headers: { "content-type": "text/html; charset=utf-8" },
@@ -800,6 +869,8 @@ beforeAll(async () => {
   baselineFixtureUrl = `http://127.0.0.1:${server.port}/fixture-baseline`;
   singleFixtureUrl = `http://127.0.0.1:${server.port}/fixture-single`;
   artifactUrl = `http://127.0.0.1:${server.port}/artifact`;
+  wrapFixtureUrl = `http://127.0.0.1:${server.port}/fixture-wrap`;
+  realSurfaceFixtureUrl = `http://127.0.0.1:${server.port}/fixture-real-surface`;
 
   browser = await chromium.launch();
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -2311,6 +2382,16 @@ describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and
     const stage = one(await boxesOf('[data-zone="2"] .app-flow-waves'), "wave stage");
     const boxes = await boxesOf('[data-testid="roadmap-wave"]');
     expect(boxes.length).toBe(2);
+    // AC19c is the case where the boxes FIT: this board's widest annotation is
+    // a TWO-dep row, so both boxes sit on one line and "along the axis" is
+    // what the geometry below measures. AC19d takes the case where they do not
+    // fit — the two criteria are stated against two different boards, and this
+    // guard keeps them from collapsing into one.
+    expect(
+      boxes[0]!.width + boxes[1]!.width,
+      `the AC19c board's boxes cannot share one line (stage ${round1(stage.width)}px), so this ` +
+        `test is measuring AC19d's wrap and AC19c's axis is no longer asserted anywhere`,
+    ).toBeLessThanOrEqual(stage.width);
     expect(
       boxes[1]!.x,
       `the second wave box is painted at x=${round1(boxes[1]!.x)}, not to the right of the ` +
@@ -2336,6 +2417,155 @@ describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and
         `${round1(stage.width)}px) into the ${SURFACE_W}px surface`,
     ).toBeLessThanOrEqual(SURFACE_W);
     expect(surface.scrollWidth - surface.clientWidth).toBeLessThanOrEqual(0.5);
+  });
+
+  // AC19d — the DEGRADATION, measured. §S5's rule is that a partially drawn
+  // container is a defect, and `flex-wrap: wrap` obeys it: a wrapped box is
+  // still WHOLLY drawn, where `nowrap` would overflow the surface or clip a
+  // box. So the wrap is not a drift to be removed — it is the correct
+  // behaviour at a width the axis cannot hold, and it is asserted as such.
+  test("when the axis genuinely CANNOT hold the boxes they WRAP, wholly painted (AC19d)", async () => {
+    await openWide(wrapFixtureUrl);
+    const stage = one(await boxesOf('[data-zone="2"] .app-flow-waves'), "wave stage");
+    const boxes = await boxesOf('[data-testid="roadmap-wave"]');
+    expect(boxes.length).toBe(2);
+
+    // Non-vacuity: the boxes' own widths REALLY exceed the line. Without this
+    // the test would pass on a board that simply chose to stack.
+    expect(
+      boxes[0]!.width + boxes[1]!.width,
+      `the four-dep boxes measure ${round1(boxes[0]!.width)}px and ` +
+        `${round1(boxes[1]!.width)}px, which still fit the ${round1(stage.width)}px stage — ` +
+        `this board no longer reaches AC19d's case`,
+    ).toBeGreaterThan(stage.width);
+
+    // WRAPPED, not overflowed: the second box starts a further LINE, back at
+    // the stage's own left edge and below the first.
+    expect(boxes[1]!.top).toBeGreaterThanOrEqual(boxes[0]!.bottom - 0.5);
+    expect(yOverlap(boxes[0]!, boxes[1]!)).toBeLessThanOrEqual(0);
+    expect(Math.abs(boxes[1]!.x - stage.x)).toBeLessThanOrEqual(0.5);
+
+    const wrapped = await readWide<{
+      scrollWidth: number;
+      clientWidth: number;
+      client: { left: number; right: number; top: number; bottom: number };
+      boxes: {
+        left: number;
+        right: number;
+        top: number;
+        bottom: number;
+        overflowX: number;
+        overflowY: number;
+        outside: number;
+      }[];
+    }>(
+      `(() => {
+         const flow = document.querySelector('[data-zone="2"]');
+         const fr = flow.getBoundingClientRect();
+         const client = {
+           left: fr.left + flow.clientLeft,
+           top: fr.top + flow.clientTop,
+           right: fr.left + flow.clientLeft + flow.clientWidth,
+           bottom: fr.top + flow.clientTop + flow.clientHeight,
+         };
+         const boxes = Array.from(
+           document.querySelectorAll('[data-testid="roadmap-wave"]'),
+         ).map((el) => {
+           const r = el.getBoundingClientRect();
+           const inner = {
+             left: r.left + el.clientLeft,
+             top: r.top + el.clientTop,
+             right: r.left + el.clientLeft + el.clientWidth,
+             bottom: r.top + el.clientTop + el.clientHeight,
+           };
+           const outside = Array.from(el.querySelectorAll("*")).filter((kid) => {
+             const k = kid.getBoundingClientRect();
+             if (k.width === 0 && k.height === 0) return false;
+             return (
+               k.left < inner.left - 0.5 ||
+               k.right > inner.right + 0.5 ||
+               k.top < inner.top - 0.5 ||
+               k.bottom > inner.bottom + 0.5
+             );
+           }).length;
+           return {
+             left: r.left,
+             right: r.right,
+             top: r.top,
+             bottom: r.bottom,
+             overflowX: el.scrollWidth - el.clientWidth,
+             overflowY: el.scrollHeight - el.clientHeight,
+             outside,
+           };
+         });
+         return { scrollWidth: flow.scrollWidth, clientWidth: flow.clientWidth, client, boxes };
+       })()`,
+    );
+
+    // WHOLLY PAINTED: every box lies inside the surface's own client box, and
+    // holds all of its own content — nothing is cut off at either boundary.
+    for (const [at, box] of wrapped.boxes.entries()) {
+      expect(
+        box.left >= wrapped.client.left - 0.5 &&
+          box.right <= wrapped.client.right + 0.5 &&
+          box.top >= wrapped.client.top - 0.5 &&
+          box.bottom <= wrapped.client.bottom + 0.5,
+        `wave box ${at} is painted at ` +
+          `${round1(box.left)}..${round1(box.right)} x ${round1(box.top)}..${round1(box.bottom)}, ` +
+          `outside the surface's ${round1(wrapped.client.left)}..${round1(wrapped.client.right)} x ` +
+          `${round1(wrapped.client.top)}..${round1(wrapped.client.bottom)} — it is CLIPPED, ` +
+          `which §S5 calls a defect`,
+      ).toBe(true);
+      expect(
+        box.outside,
+        `wave box ${at} paints ${box.outside} descendant(s) outside its own content box, so the ` +
+          `box is drawn but its contents are not`,
+      ).toBe(0);
+      expect(box.overflowX).toBeLessThanOrEqual(0.5);
+      expect(box.overflowY).toBeLessThanOrEqual(0.5);
+    }
+    // AND IT NEVER SCROLLS: the wrap is what keeps the surface intact.
+    expect(
+      wrapped.scrollWidth - wrapped.clientWidth,
+      `zone 2 scrolls ${round1(wrapped.scrollWidth - wrapped.clientWidth)}px past its ` +
+        `${round1(wrapped.clientWidth)}px surface, so the boxes overflowed rather than wrapped`,
+    ).toBeLessThanOrEqual(0.5);
+  });
+
+  // AC20d — the budget at the REAL surface. AC20's 1130px is a CONTROLLED
+  // figure and stays measured above; a criterion pinned only to it is green on
+  // a viewport nobody browses at, because the Project rail takes the remainder
+  // and the user's own Chrome reports 991px. This case asks the APP for its
+  // surface and measures the spine against THAT, so the criterion tracks the
+  // app instead of a constant this file happens to hold.
+  test("AC20d — the spine also fits the surface the APP itself reports, not just 1130px", async () => {
+    await openWide(realSurfaceFixtureUrl);
+    const pieces = await boxesOf('[data-zone="2"] > *');
+    expect(pieces.length).toBeGreaterThan(0);
+    const extent =
+      Math.max(...pieces.map((piece) => piece.right)) - Math.min(...pieces.map((piece) => piece.x));
+
+    const reported = await readWide<{ scrollWidth: number; clientWidth: number }>(
+      `(() => {
+         const flow = document.querySelector('[data-zone="2"]');
+         return { scrollWidth: flow.scrollWidth, clientWidth: flow.clientWidth };
+       })()`,
+    );
+
+    // Non-vacuity: the surface the app reports here is NARROWER than AC20's
+    // constant, so this is a second measurement and not the first one again.
+    expect(
+      reported.clientWidth,
+      `the app reports a ${round1(reported.clientWidth)}px surface, which is not narrower than ` +
+        `AC20's controlled ${SURFACE_W}px — AC20d would be re-measuring AC20`,
+    ).toBeLessThan(SURFACE_W);
+    expect(
+      extent,
+      `the spine measures ${round1(extent)}px against the ${round1(reported.clientWidth)}px ` +
+        `surface the app reports at a ${REAL_SURFACE_W}px shell (headroom ` +
+        `${round1(reported.clientWidth - extent)}px)`,
+    ).toBeLessThanOrEqual(reported.clientWidth + 0.5);
+    expect(reported.scrollWidth - reported.clientWidth).toBeLessThanOrEqual(0.5);
   });
 
   test("AC24 — the SHIPPED path takes the same horizontal axis", async () => {
@@ -2953,11 +3183,23 @@ describe("CR-CRU-096 AC25 — with colour removed, every row, roll-up, marker an
        })()`,
     );
 
-    // §S3/AC5 — the roll-up's channel is the WORD `merged`, never the ✓.
+    // §S3/AC5/AC25 — the roll-up's greyscale CHANNEL is the WORD `merged`,
+    // never the ✓: with the glyph deleted from the string the count still
+    // reads, which is the claim, and it is asserted on the stripped text so
+    // the glyph cannot be what satisfies it.
+    //
+    // AC5d is a SECOND, independent fact: the artifact draws `21 merged ✓ ·
+    // awaiting the tag`, so the glyph is rendered too — as decoration. Both
+    // hold, and the glyph assertion is what would fail if it were dropped from
+    // the renderer, which until now nothing anywhere noticed.
     expect(read.rollups.length).toBe(2);
     for (const rollup of read.rollups) {
-      expect(rollup).toMatch(/\d+ merged/);
+      expect(rollup.replace(/✓/g, "").replace(/\s+/g, " ").trim()).toMatch(/\d+ merged/);
       expect(rollup.toLowerCase()).toContain("awaiting the tag");
+      expect(
+        rollup,
+        `the roll-up reads "${rollup}" — the approved artifact's ✓ is not rendered (AC5d)`,
+      ).toContain("✓");
     }
     // §S5.4/AC16 — the pointer states its remainder in words and numerals.
     expect(read.pointers.length).toBe(2);
@@ -3190,8 +3432,8 @@ describe("CR-CRU-096 AC27 — zone 2 rendered against the live board matches the
   test("the artifact's own zone-2 panels are readable and horizontal", async () => {
     expect(
       artifactFailure,
-      `AC27's binding design source could not be read (${ARTIFACT_REL} is .gitignore'd): ` +
-        `${artifactFailure}`,
+      `AC27's binding design source could not be read (${ARTIFACT_REL} is TRACKED since ` +
+        `AC27a — .gitignore:18 negates it back in, so a clean clone has it): ${artifactFailure}`,
     ).toBe("");
     const panels = await artifactPanels();
     expect(panels.length).toBeGreaterThanOrEqual(2);

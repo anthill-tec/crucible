@@ -1143,7 +1143,7 @@ const roadmapActionable = (entry) => entry?.status === "PENDING" && !("lifecycle
 
 /**
  * CR-CRU-096 §S3/AC6a — MERGED is `COMPLETED` **or** `COMPLETED_UNTRACKED`:
- * one fact at two luminances (`public/styles.css:1361` — "the SAME green,
+ * one fact at two luminances (`public/styles.css:1416` — "the SAME green,
  * DIMMED"), the second being the same merge recorded before plan tracking
  * existed. The roll-up counts this set and neither row predicate admits it, so
  * the two readings cannot disagree — an earlier draft of AC6 that counted only
@@ -1280,6 +1280,13 @@ export function focusedReleaseView(gate, releases, entries) {
   // nothing new: a proposal is in flight, a shipped tag is settled. It is a
   // release fact, so it is decided here rather than re-derived from the
   // entries' run state by the renderer.
+  // AC1a — the `false` branch of `active` is UNREACHABLE by construction, and
+  // stays only because the attribute is C1's published fact. `active` is
+  // `kind === "proposed"`, and the zone renders wave boxes at all only on the
+  // not-shipped branch (`public/app.js:3076-3082`), so every box that ever
+  // renders publishes `"true"`. A shipped or unfocused release publishes
+  // `false` by rendering NO WAVE BOX AT ALL: the ABSENCE of boxes is the
+  // observable, and no test can falsify the branch itself.
   const active = kind === "proposed";
   const waves = [];
   const boxOf = new Map();
@@ -1297,12 +1304,22 @@ export function focusedReleaseView(gate, releases, entries) {
   // CR-CRU-096 §S5.2/§S5.3 + AC11a — what each box DRAWS, decided beside the
   // membership it is a window on so the two cannot drift. `entries` stays the
   // WHOLE membership, which is the one fact the header states (AC3); `rows` is
-  // the top of the scheduled queue UNION every running member, and
-  // `hiddenCount` is the SCHEDULED remainder the `+N more` pointer states.
+  // the members the box draws, and `hiddenCount` the SCHEDULED remainder the
+  // `+N more` pointer states.
+  //
+  // AC18a — the `wave: null` LOOSE group takes AC8's row ARRANGEMENT but NOT
+  // the trim: it renders no header, so it has nowhere to state whole
+  // membership and no anchor for the pointer. It therefore DRAWS its
+  // membership entire, and publishes exactly that — all of `entries` as
+  // `rows`, and a `hiddenCount` of `0`. Publishing the trimmed five there
+  // would describe a render that never happens and claim rows are hidden that
+  // are on screen anyway.
   //
   // Merged members (AC6a — `COMPLETED` and `COMPLETED_UNTRACKED` alike) are
-  // excluded by construction: neither predicate below admits them, so they
-  // roll up (§S3) and are never rows.
+  // excluded from a TRIMMED box by construction: neither predicate below
+  // admits them, so they roll up (§S3) and are never rows. The loose group
+  // draws them like everything else, which is what keeps AC9b's lifecycle
+  // badge reachable there.
   //
   // AC11a — a running CR outside the top five EXTENDS the list; it never
   // displaces a scheduled row. So the rows are re-projected by ONE filter over
@@ -1314,14 +1331,19 @@ export function focusedReleaseView(gate, releases, entries) {
   // membership − shown: the latter would count the merged members twice, once
   // in the roll-up and once in the remainder.
   for (const box of waves) {
-    const actionable = box.entries.filter(roadmapActionable);
-    const scheduled = actionable.slice(0, ROADMAP_WAVE_ROWS);
-    const drawn = new Set(scheduled);
-    for (const entry of box.entries) {
-      if (entry?.status === "IN_PROGRESS") drawn.add(entry);
+    if (box.wave === null) {
+      box.rows = box.entries.slice();
+      box.hiddenCount = 0;
+    } else {
+      const actionable = box.entries.filter(roadmapActionable);
+      const scheduled = actionable.slice(0, ROADMAP_WAVE_ROWS);
+      const drawn = new Set(scheduled);
+      for (const entry of box.entries) {
+        if (entry?.status === "IN_PROGRESS") drawn.add(entry);
+      }
+      box.rows = box.entries.filter((entry) => drawn.has(entry));
+      box.hiddenCount = actionable.length - scheduled.length;
     }
-    box.rows = box.entries.filter((entry) => drawn.has(entry));
-    box.hiddenCount = actionable.length - scheduled.length;
     // §S3/AC6 — the merged work the roll-up states: counted over the WHOLE
     // membership, independently of the trim, so it is never the merged rows
     // shown (zero, by AC9) and never the project total.
@@ -1333,8 +1355,9 @@ export function focusedReleaseView(gate, releases, entries) {
   // exactly ONE row in the whole zone is marked and a wave box may carry no
   // marker at all. It is the first actionable member among the rows the zone
   // actually DRAWS — the boxes in their first-appearance order, each box's
-  // drawn rows in the server's published order, the `wave: null` loose group
-  // included (AC12c), which draws its membership untrimmed.
+  // `rows` in the server's published order, the `wave: null` loose group
+  // included (AC12c). `rows` is now the drawn set for EVERY box, the loose
+  // group's included, so there is no group left to special-case here.
   //
   // AC12a — a `find` over arrays that are ALREADY in the published order
   // (`compareQueueOrder`, CR-CRU-095 §S1) is the whole derivation: no sort, no
@@ -1344,8 +1367,7 @@ export function focusedReleaseView(gate, releases, entries) {
   // CR-CRU-091 AC18 outlawed.
   let nextCr = null;
   for (const box of waves) {
-    const drawn = box.wave === null ? box.entries : box.rows;
-    const first = drawn.find(roadmapActionable);
+    const first = box.rows.find(roadmapActionable);
     if (first !== undefined) {
       nextCr = typeof first.cr === "string" ? first.cr : null;
       break;

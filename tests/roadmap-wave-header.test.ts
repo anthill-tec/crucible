@@ -457,7 +457,15 @@ describe("CR-CRU-096 §S1/AC1 — a wave publishes `data-active` from its RELEAS
 
     await clickGate("0.1.0");
     expect(flow().getAttribute("data-kind")).toBe("shipped");
-    expect(all('[data-testid="roadmap-wave"][data-active="true"]').length).toBe(0);
+    // AC1a — the observable AC1's second clause actually has: a SHIPPED focus
+    // publishes `false` by rendering NO WAVE BOX AT ALL. `data-active` is
+    // `kind === "proposed"` and zone 2 draws boxes only when the focus is not
+    // shipped, so a rendered box can never carry `false`; asserting the
+    // absence of boxes is the only thing here that can fail for the reason it
+    // claims. Counting `[data-active="true"]` boxes would pass vacuously on
+    // zero boxes of ANY kind.
+    expect(waveEls()).toEqual([]);
+    expect(waveNames()).toEqual([]);
 
     // Focus the OTHER proposal: its wave is now the in-flight one, and 0.4.0's
     // two waves are gone rather than lingering as active.
@@ -494,16 +502,27 @@ describe("CR-CRU-096 §S1/AC2 — the header renders the `· active` marker exac
     expect(headerSaysActive("2")).toBe(true);
   });
 
-  test("the marker tracks the published attribute across every focus — and at least one wave really does publish true, so the biconditional is not vacuous", async () => {
+  test("the marker tracks the published attribute across every focus: every wave that renders publishes true and says `active`, and the shipped focus — AC1a's `false` — renders no header to say anything", async () => {
     await mountApp();
 
     let sawActive = false;
     for (const version of ["0.4.0", "0.1.0", "0.5.0"]) {
       await clickGate(version);
+      const shipped = flow().getAttribute("data-kind") === "shipped";
+      // AC1a — the honest observable: `data-active` is `kind === "proposed"`
+      // and boxes render only for a non-shipped focus, so no rendered header
+      // can ever be paired with `false`. The `false` side of the
+      // biconditional is the ABSENCE of boxes, which is what is asserted for
+      // the shipped focus rather than a value no box can publish.
+      if (shipped) {
+        expect(waveEls()).toEqual([]);
+        continue;
+      }
+      expect(waveNames().length).toBeGreaterThan(0);
       for (const wave of waveNames()) {
-        const published = activeAttr(wave) === "true";
-        expect(headerSaysActive(wave)).toBe(published);
-        if (published) sawActive = true;
+        expect(activeAttr(wave)).toBe("true");
+        expect(headerSaysActive(wave)).toBe(true);
+        sawActive = true;
       }
     }
     expect(sawActive).toBe(true);

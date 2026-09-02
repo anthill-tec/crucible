@@ -731,14 +731,18 @@ describe("CR-CRU-096 §S3/AC5 — the wave renders the roll-up: `N merged` plus 
     // AC7/§S8 — it is a LINE of text, so its two facts survive greyscale.
     expect(text.toLowerCase()).toMatch(/\bmerged\b/);
 
-    // WHERE it renders: §S3 says "a line inside the wave header block", and
-    // the artifact draws it between the `<h4>` and the row column. Both agree
-    // on the two things asserted here — it is inside the wave box, and it is
-    // ABOVE every row and outside the column that holds them. Whether GREEN
-    // nests it in the `<h4>` or renders it as the header's sibling is not
-    // asserted: the spec and the artifact differ on that and neither is an AC.
+    // WHERE it renders: AC5c rules the roll-up a SIBLING of the header `h4`,
+    // inside the wave box, after the header and before every row. §S3's
+    // "inside the wave header block" reads that way and only that way — a
+    // `div` inside an `h4` is invalid HTML — so the approved artifact's
+    // placement is the AC.
     expect(waveEl("1").contains(rollup)).toBe(true);
     expect(rowContainer("1").contains(rollup)).toBe(false);
+    // The sibling ruling itself: the header really is the `h4`, it does NOT
+    // contain the roll-up, and the two share one parent.
+    expect(headerEl("1").tagName).toBe("H4");
+    expect(headerEl("1").contains(rollup)).toBe(false);
+    expect(rollup.parentElement).toBe(headerEl("1").parentElement);
     const order = Array.from(waveEl("1").querySelectorAll<HTMLElement>("*"));
     expect(order.indexOf(rollup)).toBeGreaterThan(order.indexOf(headerEl("1")));
     for (const row of rowEls("1")) {

@@ -228,13 +228,17 @@ export interface FocusedReleaseWave<Entry = unknown> {
   wave: string | null;
   active: boolean;
   entries: Entry[];
-  /** CR-CRU-096 §S5 — the members this box DRAWS: the top of the scheduled
-   *  queue (five by default) union every running member, in the server's
-   *  published order. A window on `entries`, never a re-ordering of it. */
+  /** CR-CRU-096 §S5 — the members this box DRAWS, in the server's published
+   *  order. A window on `entries`, never a re-ordering of it. For a wave box
+   *  that is the top of the scheduled queue (five by default) union every
+   *  running member; for the `wave: null` LOOSE group it is ALL of `entries`,
+   *  because AC18a leaves that group untrimmed. */
   rows: Entry[];
-  /** CR-CRU-096 §S5.4 — the SCHEDULED remainder `+N more` states: actionable
-   *  members minus actionable rows shown, so merged members (rolled up) are
-   *  never counted here as well. */
+  /** CR-CRU-096 §S5.4 — the SCHEDULED remainder the `+N more` pointer states:
+   *  actionable members minus actionable rows shown, so merged members
+   *  (rolled up) are never counted here as well. `0` for the `wave: null`
+   *  loose group, which hides nothing and has no header to anchor a pointer
+   *  on (AC18a). */
   hiddenCount: number;
   /** CR-CRU-096 §S3/AC6 — merged members (`COMPLETED` or
    *  `COMPLETED_UNTRACKED`, AC6a) over the WHOLE wave, the count the roll-up

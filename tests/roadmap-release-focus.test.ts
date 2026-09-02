@@ -1212,6 +1212,73 @@ describe("CR-CRU-078 AC11 — a node is its id plus a terse status mark, and eac
   });
 });
 
+// ── AC12b/AC13/AC13a on a SYNTHETIC board ──────────────────────────────────
+//
+// CR-CRU-096 AC29 — this CR's annotation contract is stated on a fixture of
+// this CR's own making. It was briefly pinned byte-exactly against the parsed
+// LIVE board (`docs/changes/README.md`), which names the real `CR-CRU-<n>` ids
+// of the project running Crucible — and the commit that added the assertion
+// edited that README too, so fixture and backlog moved together. Crucible is
+// project-INDEPENDENT: a criterion that only holds while our own backlog has a
+// given shape is not a criterion. The live-shape suite below keeps what
+// CR-CRU-078 built it for (scale, identity, the no-title rule) and so
+// CORROBORATES this contract rather than stating it.
+
+describe("CR-CRU-096 §S4/AC12b/AC13/AC13a — ONE `next` across the whole zone, and a `deps` slot naming every declared id", () => {
+  /** Two wave boxes, arranged so the PER-BOX reading AC12b rules out would
+   *  mark TWO rows: the second box opens with an actionable row of its own.
+   *  Both boxes stay under `ROADMAP_WAVE_ROWS`, so the §S5 trim hides nothing
+   *  and the drawn set is the fixture's actionable ∪ running members — the
+   *  merged member rolls up (AC6a) and is no row. The first actionable row
+   *  also declares a dependency, so the `next`+`deps` composition and the `·`
+   *  join are exercised on the same row. */
+  const ANNOTATION_QUEUE: QueueFixture[] = [
+    { cr: "CR-W1-A", title: "CR-W1-A — the top of the scheduled queue", wave: "1", dependsOn: ["CR-W1-C"], status: "PENDING", seq: 10, release: "0.2.0" },
+    { cr: "CR-W1-B", title: "CR-W1-B — under way, so it earns no dependency slot", wave: "1", dependsOn: ["CR-W1-A"], status: "IN_PROGRESS", seq: 20, release: "0.2.0" },
+    { cr: "CR-W1-C", title: "CR-W1-C — merged, so it rolls up instead of drawing", wave: "1", dependsOn: [], status: "COMPLETED", seq: 30, release: "0.2.0" },
+    { cr: "CR-W2-A", title: "CR-W2-A — the SECOND box's own first actionable row", wave: "2", dependsOn: ["CR-W1-A", "CR-W1-B"], status: "PENDING", seq: 40, release: "0.2.0" },
+    { cr: "CR-W2-B", title: "CR-W2-B — deeper in the second box", wave: "2", dependsOn: ["CR-W2-A"], status: "PENDING", seq: 50, release: "0.2.0" },
+  ];
+
+  test("every drawn row is its id, its mark and exactly the slot the FIXTURE earns — the marker ONCE across both boxes", async () => {
+    await mountApp({ queue: ANNOTATION_QUEUE });
+    // Fixture guards: two boxes really are drawn, the merged member really is
+    // absent, and the second box really does open with an actionable row —
+    // without which the cross-box rule below would pass vacuously.
+    expect(waveNames()).toEqual(["1", "2"]);
+    expect(nodesInWave("1")).toEqual(["CR-W1-A", "CR-W1-B"]);
+    expect(nodesInWave("2")).toEqual(["CR-W2-A", "CR-W2-B"]);
+
+    const drawn = nodeCrs();
+    const entryFor = (cr: string): QueueFixture =>
+      ANNOTATION_QUEUE.find((entry) => entry.cr === cr)!;
+    // AC12's rule applied ONCE across the drawn rows in document order, never
+    // per box.
+    const nextCr = firstActionableCr(drawn.map(entryFor));
+    expect(nextCr).toBe("CR-W1-A");
+    const wrong = drawn
+      .map((cr) => ({
+        cr,
+        got: (nodeFor(cr).textContent ?? "").trim(),
+        want: `${cr}${Logic.crStatusMark(entryFor(cr).status)}${expectedAnnotation(entryFor(cr), nextCr)}`,
+      }))
+      .filter((row) => row.got !== row.want);
+    expect(wrong).toEqual([]);
+    // Stated in LITERALS as well, so the sweep above cannot pass by agreeing
+    // with a helper that is wrong in the same way: `next` first, then every
+    // declared id in FULL (AC13a), joined by the design's `·`.
+    expect((nodeFor("CR-W1-A").textContent ?? "").trim()).toBe(
+      "CR-W1-Apendingnext · deps CR-W1-C",
+    );
+    expect((nodeFor("CR-W2-A").textContent ?? "").trim()).toBe(
+      "CR-W2-Apendingdeps CR-W1-A, CR-W1-B",
+    );
+    // AC12b — ONE marker for the whole ZONE: the second box's first actionable
+    // row carries none, and no other row does either.
+    expect(nodeEls().filter((node) => (node.textContent ?? "").includes("next")).length).toBe(1);
+  });
+});
+
 // ── The at-scale / live-shape render smoke ─────────────────────────────────
 //
 // Carried forward from the DELETED tests/roadmap-graph.test.ts, which was the
@@ -1463,23 +1530,18 @@ describe("CR-CRU-078 AC1/AC28 — the whole board renders at the LIVE shape, not
     });
     expect(rendered.length).toBeGreaterThan(0);
     expect(rendered.filter((row) => row.entry === undefined).map((row) => row.cr)).toEqual([]);
-    // CR-CRU-096 §S4/AC12b — ONE marker for the whole zone, so the row it
-    // belongs on is AC12's rule applied ONCE across every drawn row in
-    // document order (the boxes in first-appearance order, each box's rows in
-    // the published order). Which rows are drawn is read off the render — that
-    // is AC9/AC10's window and is asserted elsewhere — but WHAT each row must
-    // then say is built from the FIXTURE's own facts, never from the rendered
-    // annotation: a marker on a second box's first actionable row (the per-box
-    // reading AC12b rules out) fails here, and so does any other stray text.
-    const nextCr = firstActionableCr(rendered.map((row) => row.entry!));
-    const wrong = rendered
-      .filter(
-        (row) =>
-          row.got !==
-          `${row.cr}${Logic.crStatusMark(row.entry!.status)}${expectedAnnotation(row.entry!, nextCr)}`,
-      )
+    // CR-CRU-078 AC11/AC28 at SCALE — every drawn node OPENS with its own id
+    // and its status mark, so identity and the greyscale-safe mark survive at
+    // the live shape. What a row may then ADD is CR-CRU-096's annotation
+    // contract, and that contract is stated byte-exactly on that CR's own
+    // SYNTHETIC fixture above (AC29): this board is parsed from
+    // docs/changes/README.md and names the real CRs of the project running
+    // Crucible, so it may corroborate the contract and never be the fixture
+    // for it.
+    const mismatched = rendered
+      .filter((row) => !row.got.startsWith(`${row.cr}${Logic.crStatusMark(row.entry!.status)}`))
       .map((row) => ({ cr: row.cr, got: row.got }));
-    expect(wrong).toEqual([]);
+    expect(mismatched).toEqual([]);
     // Per-entry, so a long prose title is never mistaken for a status suffix.
     const leaking = rendered
       .filter((row) => row.got.includes(row.entry!.title ?? "\u0000"))

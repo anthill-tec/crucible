@@ -2731,12 +2731,12 @@
     // CR-CRU-096 AC9b — the node's lifecycle badge STAYS, and renders
     // wherever a node renders. AC9a trims the dispositioned PENDING ROW out
     // of a wave box, but it does NOT make this badge unreachable: the loose
-    // group draws `box.entries` UNTRIMMED (AC18a, `:2785`) and AC9's union is
+    // group draws its membership UNTRIMMED (AC18a, `:2854`) and AC9's union is
     // on STATUS, so a running CR is drawn whatever its `lifecycle` (AC9c).
     // On both paths dropping the span would leave the disposition published
     // as the `data-lifecycle` ATTRIBUTE alone — colour and CSS with no TEXT,
     // which is exactly what §S8 forbids. Zone 3's `roadmap-lifecycle-badge`
-    // (`:2536`) is the DETAIL surface, not a substitute for the node's word.
+    // (`:2535`) is the DETAIL surface, not a substitute for the node's word.
     // An entry with no `lifecycle` key still gets no attribute and no span:
     // absent, never defaulted.
     const RoadmapFlowNode = (entry, marked) => {
@@ -2844,15 +2844,15 @@
         ? // AC18a — the loose group takes AC8's ROW ARRANGEMENT (a column, by
           // stylesheet) but NOT the trim: it renders no header, so it has
           // nowhere to state whole membership and no anchor for a `+N more`
-          // pointer. Trimming it would hide rows with nothing declaring how
-          // many of them there are.
+          // pointer. The view publishes that: `box.rows` here IS the whole
+          // membership and `hiddenCount` is 0, so this branch reads the same
+          // `rows` every box reads — ONE answer to "what does this box draw".
           //
           // AC12c — and it is ELIGIBLE for the marker like any other group: a
-          // release whose only actionable work is unwaved is exactly the case
-          // the marker exists for.
+          // release whose only actionable work is unwaved is the case it exists for.
           div(
             { class: "app-flow-loose" },
-            box.entries.map((entry) => RoadmapFlowNode(entry, nextCr === entry.cr)),
+            box.rows.map((entry) => RoadmapFlowNode(entry, nextCr === entry.cr)),
           )
         : div(
             {

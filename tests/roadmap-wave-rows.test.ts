@@ -237,6 +237,17 @@ const NINE_LAST_ACTIVE: QueueFixture[] = NINE.map((entry) =>
 );
 const NINE_LAST_ACTIVE_ACTIONABLE = 6; // Q-3 … Q-8; Q-9 is running, not actionable
 
+/** AC13b — `deps` renders on a PENDING row ONLY. One wave, two rows carrying
+ *  the SAME declared dependencies, differing only in STATUS, so the absence on
+ *  the running row is asserted against the presence on the pending one in the
+ *  SAME render and cannot pass vacuously (a GREEN that dropped the annotation
+ *  everywhere would fail the pending half). AC29 — the ids are synthetic. */
+const DEPS_DECLARED = ["CR-X-1", "CR-X-2"];
+const DEPS_BY_STATUS: QueueFixture[] = [
+  { ...member("CR-N-1", "PENDING", 10), dependsOn: [...DEPS_DECLARED] },
+  { ...member("CR-N-2", "IN_PROGRESS", 20), dependsOn: [...DEPS_DECLARED] },
+];
+
 /** AC3-under-trim + AC17 + AC18 — a wave far bigger than the trim: 29 members,
  *  20 merged, 9 scheduled. Membership 29, rows 5, remainder 4. */
 const TWENTY_NINE_SIZE = 29;
@@ -767,29 +778,71 @@ describe("CR-CRU-096 §S5/AC11 — an IN_PROGRESS CR is present even when it fal
     expect(active.getAttribute("data-status")).toBe("IN_PROGRESS");
     expect(active.className).toContain("in_progress");
 
-    // SPEC SILENCE, pinned as the disjunction the spec actually licenses:
-    // §S5.2 says five rows and §S5.3 says the runner is always shown, but
-    // neither says whether the out-of-window runner EXTENDS the list to six or
-    // DISPLACES the fifth row. Both readings satisfy AC11, so both are allowed
-    // here and the pointer's arithmetic below is what stays exact either way.
+    // AC11a — the runner EXTENDS the list; it never DISPLACES a scheduled row
+    // (ruled 2026-09-02: displacing would hide scheduled work to show running
+    // work AND break the pointer's arithmetic, `actionable total − actionable
+    // rows shown`, while extending keeps the published order strictly intact
+    // and is bounded by the track count, a track running one CR at a time).
+    // So the render is the five scheduled rows AC10 publishes PLUS the runner.
     // Asserted FIRST because it is the one thing today's untrimmed render
     // cannot satisfy: the guarantee above passes vacuously while all nine
     // members are drawn.
-    expect([DEFAULT_ROWS, DEFAULT_ROWS + 1]).toContain(crs.length);
+    expect(crs.length).toBe(DEFAULT_ROWS + 1);
 
-    // The top of the queue is still the top: the guarantee ADDS the runner, it
-    // does not replace the head of the list.
-    expect(crs).toContain("CR-Q-3");
-    expect(crs).toContain("CR-Q-4");
+    // NOT DISPLACED: every one of AC10's five scheduled rows is still drawn,
+    // in the published order, with the runner the only addition.
+    for (const cr of NINE_EXPECTED_ROWS) expect(crs).toContain(cr);
+    expect(crs.filter((cr) => cr !== "CR-Q-9")).toEqual(NINE_EXPECTED_ROWS);
     // Merged stay rolled up, and nothing beyond the window sneaks in with it.
     expect(rowStatuses("1")).not.toContain("COMPLETED");
     expect(crs).not.toContain("CR-Q-1");
 
-    // Whichever it is, the remainder is TRUE: the scheduled CRs not drawn.
+    // And the remainder is TRUE: the scheduled CRs not drawn.
     // Actionable = PENDING with no lifecycle (clients/_crucible_axi.py:1301);
     // no fixture here carries a lifecycle, so PENDING is actionable.
     const pendingShown = rowStatuses("1").filter((s) => s === "PENDING").length;
     expect(moreCount("1")).toBe(NINE_LAST_ACTIVE_ACTIONABLE - pendingShown);
+  });
+});
+
+// ── §S4/AC13b — `deps` renders on a PENDING row ONLY ───────────────────────
+
+describe("CR-CRU-096 §S4/AC13b — `deps` renders on a PENDING row only", () => {
+  test("a running row declaring the SAME deps as a pending row renders no deps annotation, while the pending row does", async () => {
+    await mountApp({ queue: board(DEPS_BY_STATUS) });
+    expectFocused040();
+
+    // Non-vacuity, in the fixture: the two rows differ in STATUS and in
+    // nothing else — same wave, same declared dependencies.
+    expect(DEPS_BY_STATUS.map((e) => e.dependsOn)).toEqual([DEPS_DECLARED, DEPS_DECLARED]);
+    expect(DEPS_BY_STATUS.map((e) => e.status)).toEqual(["PENDING", "IN_PROGRESS"]);
+    expect(rowCrs("1")).toEqual(["CR-N-1", "CR-N-2"]);
+
+    const row = (cr: string): HTMLElement => {
+      const el = rowEls("1").find((node) => node.getAttribute("data-cr") === cr);
+      if (el === undefined) throw new Error(`wave 1 renders no row for ${cr}`);
+      return el;
+    };
+
+    // The PENDING row DOES state them — AC13/AC13a, by full published id. This
+    // is the counter-subject: a GREEN that simply never rendered `deps` would
+    // fail here, so the absence below cannot pass vacuously.
+    const pendingText = norm(row("CR-N-1").textContent);
+    expect(pendingText).toContain(`deps ${DEPS_DECLARED.join(", ")}`);
+
+    // The IN_PROGRESS row does NOT: its dependencies are not
+    // decision-relevant, the work having already started (zone 3's table
+    // carries the full dependency data for every row either way). No slot at
+    // all, and no dependency id anywhere in the row's text.
+    const running = row("CR-N-2");
+    expect(running.getAttribute("data-status")).toBe("IN_PROGRESS");
+    expect(
+      running.querySelector('[data-testid="roadmap-node-annotation"]'),
+      "a running row renders no annotation slot for its declared deps",
+    ).toBeNull();
+    const runningText = norm(running.textContent);
+    expect(runningText).not.toContain("deps");
+    for (const dep of DEPS_DECLARED) expect(runningText).not.toContain(dep);
   });
 });
 
