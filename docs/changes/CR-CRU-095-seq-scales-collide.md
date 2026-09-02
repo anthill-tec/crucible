@@ -279,9 +279,11 @@ later. Existing positional values are corrected by authoring the wave, or made h
   wave-block seq (in scale) and is **silent**.
 - **AC10** — Silent when every compared row in a release shares a scale: two authored waves, or a
   release with **no** authored wave at all (all positional, one scale).
-- **AC11** — The wave axis is preserved: a defaulted row beside an authored one in the same wave —
-  including a release-less row — still warns with the same `defaulted-seq` code; the message gains
-  the words "or release" and is otherwise unchanged.
+- **AC11** — The wave axis is preserved: a defaulted row beside a **held same-wave sibling on a
+  different scale** — including a release-less row, e.g. an in-block default beside held positional
+  `10, 20` — still warns with the same `defaulted-seq` code; the message gains the words "or
+  release" and is otherwise unchanged. (After §S3 a defaulted row beside *authored* siblings lands
+  in-block, same scale, and is correctly silent — AC12a.)
 - **AC12** — A bulk post assigns a seq-less, snapshot-less row the next free slot in its wave's
   block; for an all-defaulted wave that is `waveSeqBase(wave) + position within the wave`, in post
   order. Importing a fresh 94-row queue leaves every row inside its own wave's block.
@@ -291,8 +293,11 @@ later. Existing positional values are corrected by authoring the wave, or made h
 - **AC12b** — Held values outside the block do not count: a wave holding legacy positional `62`
   gets its next seq-less row at `6001`, and the same-wave `defaulted-seq` warning fires for that row
   (true, pre-existing wave axis). A fresh import raises **no** warning.
-- **AC12c** — A bulk post whose defaults would reach `WAVE_SEQ_STRIDE` members in one wave is
-  refused with `wave-sequence`'s message; nothing is written.
+- **AC12c** — A bulk post is refused, before anything is written, when a default would leave its
+  wave's block (`>= waveSeqBase(wave) + WAVE_SEQ_STRIDE`) — for a dense wave that is the thousandth
+  member, and a declared seq near the block's end trips it sooner, which is the safe side: the
+  alternative is a row landing in the next wave's block. The message is `wave-sequence`'s, built by
+  one shared helper. A re-post of held rows computes no default and is never refused by this rule.
 - **AC12d** — A wave cell with no integer takes block 0: its rows default to `1, 2, 3…`.
 - **AC13** — Carry-forward is preserved: a row with a held `seq` keeps it across a re-import, and
   §S3 does not overwrite it (CR-091 regression).

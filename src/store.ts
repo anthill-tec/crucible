@@ -294,11 +294,11 @@ export interface QueueEntryInput {
  *
  * `defaultedSeq` names every cr whose written `seq` sits on one scale while a
  * sibling in the same wave or release holds one on the OTHER — the bulk post's
- * array index beside a carried `10, 20, 30`, `cr-plan`'s wave-block offset
- * beside either, or a positional seq a `cr-plan` PRESERVED beside a release
- * sibling authored in its own block. A scale is derived from the wave's block
- * (`waveSeqBase`, `WAVE_SEQ_STRIDE`), never stored, and a mixture is a
- * difference of scale — not "this write chose the value". That mix is
+ * wave-block slot (CR-CRU-095 §S3) or `cr-plan`'s wave-block offset beside a
+ * carried positional `10, 20, 30`, or a positional seq a `cr-plan` PRESERVED
+ * beside a release sibling authored in its own block. A scale is derived from
+ * the wave's block (`waveSeqBase`, `WAVE_SEQ_STRIDE`), never stored, and a
+ * mixture is a difference of scale — not "this write chose the value". That mix is
  * deterministic but not authored (the two scales interleave in an order nobody
  * chose), so the route turns it into a warning naming those crs with
  * `wave-sequence` as the remedy. It is the §S3 severity ladder's
@@ -414,9 +414,30 @@ export function waveNumber(wave: string): number {
 }
 
 /** §S4 — the first seq of a wave's block; a wave without an integer takes block 0. */
-function waveSeqBase(wave: string): number {
+export function waveSeqBase(wave: string): number {
   return waveNumber(wave) * WAVE_SEQ_STRIDE;
 }
+
+/**
+ * §S4 / CR-CRU-095 §S3 — the ONE wording for a wave that would reach the
+ * stride. `wave-sequence` refuses it by name, and the bulk post refuses the
+ * same condition (its defaults would leave the block) with this same message,
+ * so there is one limit in one wording. `count` is what the wave would hold.
+ */
+export function waveOverflowMessage(wave: string, count: number): string {
+  return (
+    `wave ${wave} would hold ${count} crs — a wave's seq block is ${WAVE_SEQ_STRIDE} ` +
+    `positions wide, so it carries at most ${WAVE_SEQ_STRIDE - 1}; nothing was written`
+  );
+}
+
+/**
+ * CR-CRU-095 §S3/AC12c — a bulk post whose defaults would leave a wave's
+ * block. `replaceQueue` throws it BEFORE anything is written; the bulk route
+ * answers it as a 400 carrying the message, never as a spill into the next
+ * wave's base.
+ */
+export class QueueWaveOverflowError extends Error {}
 
 /**
  * CR-CRU-095 §S2 — a seq's SCALE, derived, never stored: `true` when it sits
@@ -3432,11 +3453,27 @@ export class Store {
    * field. A cr absent from the posted set is still dropped — with its
    * declaration, because the row itself is gone.
    *
-   * §S2/AC23 — the ONE thing it does not do silently: an entry whose `seq`
-   * came from neither the post nor the snapshot took a position index, and if
-   * a sibling in its wave carries a real value the two are on different
-   * scales. Those crs come back in `defaultedSeq` for the route to warn about
-   * — the write still lands.
+   * CR-CRU-095 §S3 — an entry whose `seq` comes from neither the post nor the
+   * snapshot takes the NEXT FREE SLOT of its own wave block: rows are
+   * processed in post order, and the slot is one past the highest IN-BLOCK
+   * seq the wave will hold after this post (declared, held, or assigned to an
+   * earlier defaulted row), or `waveSeqBase(wave) + 1` when the block is
+   * empty — `wave-sequence`'s own arithmetic extended to a partly-filled
+   * block, so a fresh import is `base + position` and a row added beside an
+   * authored block is APPENDED after it. A held value OUTSIDE the block
+   * (legacy positional `62`) is carried forward but does not count toward the
+   * slot: §S3 exists to stop generating positional values, so the next row
+   * lands at `6001`, not `63`. A default that would leave the block is
+   * REFUSED with `wave-sequence`'s own message before anything is written
+   * (AC12c) — never spilled into the next wave's base.
+   *
+   * §S2/AC23 — the ONE thing it does not do silently: a defaulted row whose
+   * in-block slot sits beside a same-wave sibling holding a seq OUTSIDE the
+   * block is on a different scale from it — a mixture is a DIFFERENCE OF
+   * SCALE, never "this write chose the value" (CR-CRU-095 §S2). Those crs come
+   * back in `defaultedSeq` for the route to warn about — the write still
+   * lands. A fresh import (every row in-block) and a re-post that carries
+   * every value forward name nobody.
    */
   replaceQueue(projectKey: string, entries: QueueEntryInput[]): QueueSeqReport {
     const now = Date.now();
@@ -3461,22 +3498,51 @@ export class Store {
         .all(projectKey)) {
         held.set(row.cr, row);
       }
-      this.db.query(`DELETE FROM queue_entries WHERE project_key = ?`).run(projectKey);
+      // §S3 — every seq is resolved BEFORE the delete, so an overflow refuses
+      // the whole post with nothing written. Precedence is unchanged: a
+      // declared seq wins, a held one survives a bootstrap that never knew
+      // the wave's authored sequence, and only a row with NEITHER is
+      // defaulted. The first pass records, per wave, the highest in-block seq
+      // the post carries (a later row's held `5002` must count for an earlier
+      // defaulted one) and which waves hold a value outside their block.
+      const seqs: Array<number | undefined> = entries.map(
+        (entry) => entry.seq ?? held.get(entry.cr)?.seq,
+      );
+      const top = new Map<string, number>();
+      const positional = new Set<string>();
+      entries.forEach((entry, index) => {
+        const seq = seqs[index];
+        if (seq === undefined) return;
+        if (inWaveBlock(seq, entry.wave)) {
+          top.set(entry.wave, Math.max(top.get(entry.wave) ?? seq, seq));
+        } else {
+          positional.add(entry.wave);
+        }
+      });
       const defaultedSeq: string[] = [];
-      const explicitWaves = new Set<string>();
-      for (const entry of entries) {
-        if ((entry.seq ?? held.get(entry.cr)?.seq) !== undefined) explicitWaves.add(entry.wave);
-      }
+      entries.forEach((entry, index) => {
+        if (seqs[index] !== undefined) return;
+        const base = waveSeqBase(entry.wave);
+        const seq = (top.get(entry.wave) ?? base) + 1;
+        if (seq >= base + WAVE_SEQ_STRIDE) {
+          throw new QueueWaveOverflowError(
+            waveOverflowMessage(
+              entry.wave,
+              entries.filter((member) => member.wave === entry.wave).length,
+            ),
+          );
+        }
+        seqs[index] = seq;
+        top.set(entry.wave, seq);
+        if (positional.has(entry.wave)) defaultedSeq.push(entry.cr);
+      });
+      this.db.query(`DELETE FROM queue_entries WHERE project_key = ?`).run(projectKey);
       entries.forEach((entry, index) => {
         const snapshot = held.get(entry.cr);
         const lifecycle =
           entry.lifecycle !== undefined
             ? JSON.stringify(entry.lifecycle)
             : snapshot?.lifecycle_json ?? null;
-        const declaredSeq = entry.seq ?? snapshot?.seq;
-        if (declaredSeq === undefined && explicitWaves.has(entry.wave)) {
-          defaultedSeq.push(entry.cr);
-        }
         this.db
           .query(
             `INSERT INTO queue_entries
@@ -3492,10 +3558,7 @@ export class Store {
             JSON.stringify(entry.dependsOn),
             entry.size ?? null,
             now,
-            // The post's own order stands only where nothing better is known:
-            // a declared seq wins, and a held one survives a bootstrap that
-            // never knew the wave's authored sequence.
-            declaredSeq ?? index,
+            seqs[index]!,
             entry.release ?? snapshot?.release ?? null,
             tracks.get(entry.cr) ?? snapshot?.track ?? null,
             lifecycle,

@@ -6,10 +6,26 @@ import { codecs, parseRunBody } from "./codecs/index.ts";
 import { parseCompile } from "./codecs/compile.ts";
 import type { CompileReport } from "./codecs/compile.ts";
 import { authHints, hints, cycleHints, identityHints, projectDeleteHints, roadmapHints } from "./hints.ts";
-import { compareContainers, normalizeTrack, Store, UUID_RE, WAVE_SEQ_STRIDE, waveNumber } from "./store.ts";
+import {
+  compareContainers,
+  normalizeTrack,
+  QueueWaveOverflowError,
+  Store,
+  UUID_RE,
+  WAVE_SEQ_STRIDE,
+  waveNumber,
+  waveOverflowMessage,
+} from "./store.ts";
 import { toToon } from "./toon.ts";
 import { AGENT_ROLES, IDENTITY_SOURCES } from "./types.ts";
-import type { ProjectPatch, QueueEntryInput, RecordEventMeta, RunRecord, TouchAgentOpts } from "./store.ts";
+import type {
+  ProjectPatch,
+  QueueEntryInput,
+  QueueSeqReport,
+  RecordEventMeta,
+  RunRecord,
+  TouchAgentOpts,
+} from "./store.ts";
 import type {
   AgentIdentity,
   AgentRole,
@@ -1858,7 +1874,16 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
       ...(typeof fields.seq === "number" ? { seq: fields.seq } : {}),
     });
   }
-  const { defaultedSeq } = store.replaceQueue(key, entries);
+  // CR-CRU-095 §S3/AC12c — a post whose defaults would leave a wave's block
+  // is refused with `wave-sequence`'s own wording; the store wrote nothing.
+  let report: QueueSeqReport;
+  try {
+    report = store.replaceQueue(key, entries);
+  } catch (error) {
+    if (error instanceof QueueWaveOverflowError) return fail(400, error.message);
+    throw error;
+  }
+  const { defaultedSeq } = report;
   const known = new Set(entries.map((entry) => entry.cr));
   const unknownDependencies = [
     ...new Set(
@@ -2218,12 +2243,9 @@ async function handleWaveSequence(store: Store, key: string, req: Request): Prom
       .map((entry) => entry.cr),
   ]);
   if (members.size >= WAVE_SEQ_STRIDE) {
-    return fail(
-      400,
-      `wave ${wave} would hold ${members.size} crs — a wave's seq block is ${WAVE_SEQ_STRIDE} ` +
-        `positions wide, so it carries at most ${WAVE_SEQ_STRIDE - 1}; nothing was written`,
-      { help: roadmapHints.waveOverflow(container, members.size) },
-    );
+    return fail(400, waveOverflowMessage(wave, members.size), {
+      help: roadmapHints.waveOverflow(container, members.size),
+    });
   }
   for (const cr of crs) {
     const held = byCr.get(cr);
