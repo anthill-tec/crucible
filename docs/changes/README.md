@@ -233,6 +233,26 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   continue — not a diagnostic defect. What IS real is the participation record being destroyed by
   pruning as well as by `unregister`, and that is CR-CRU-094 §S2's scope.
 
+- 2026-09-03 — **an out-of-order `cycle-activate` prescribes a transition no client can perform.**
+  `cycle-activate 319` on a plan with 316 still pending refuses with
+  `help[]: ["activate cycle 316 first — cycles activate in ascending order", "or transition cycle
+  316 pending→skipped, then retry this activation"]`. The second instruction is unreachable from the
+  fleet: `cycle-done` takes only a cycle id and `--agent` (no `--status`), and `abort` targets
+  PLANS, so no client exposes a pending→skipped transition. The refusal is correct and its first
+  instruction works; the second names an operation that exists only server-side, if at all. Same
+  family as CR-CRU-099 AC6 — a message citing a consumer that cannot corroborate it. Candidate
+  patch CR; worked around by folding the out-of-order cycle's content into an earlier cycle and
+  recording the label offset.
+
+- 2026-09-03 — **`python-crucible.py test` emits no `runId`; `bun-crucible.py` does.** Found by
+  CR-CRU-097's C1 agent, which could report bun run ids and could not report python ones:
+  `runId` has ZERO hits in `clients/python-crucible.py`, while the bun client prints it per
+  CR-CRU-017's run lifecycle. A python-stack ingest is therefore identifiable only by
+  `agentId` + `cycleId` + its pass/fail shape, so no report, brief or commit message can cite a
+  python run by id — and the orchestrator cannot verify a claimed python run at all. Adjacent to
+  CR-CRU-094 (participation recorded, not inferred) but distinct: that CR is about the agent/cycle
+  binding, this is about the run's own identity being unpublished on one stack of five.
+
 - 2026-09-03 — **a green pre-merge gate does not mean develop is green: anything reading git
   history relative to `HEAD` changes meaning at the merge.** CR-CRU-096's non-vacuity block
   captured its "pre-CR" build with `git merge-base develop HEAD`
