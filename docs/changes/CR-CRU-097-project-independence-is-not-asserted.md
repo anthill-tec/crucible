@@ -48,6 +48,27 @@ a criterion naming the `CR-CRU-` literal would have shipped green over it. The r
 stated namespace-agnostically throughout (§S4, AC2, AC7): a help line teaches the SHAPE of a
 caller-owned key, so it may not carry any project's actual namespace.
 
+**Re-measured 2026-09-03 by DRIVING every verb's `--help`, not by grepping for the example
+string — and `--cr` is a small fraction of it.** The gap analysis looked for `CR id, e.g.` and so
+found one help line per client; enumerating what the CLI actually PRINTS finds **21
+(client, verb) surfaces leaking 13 distinct real CR ids across FIVE namespaces**:
+
+| leaked id | printed by |
+| --- | --- |
+| `CR-CRU-054` | `register` + `unregister` help — bun, mvn, python, rust |
+| `CR-CRU-086` | `milestone` help (`--crs`/`--repair-provenance`) — **all five** |
+| `CR-CRU-017` | `test`, `regression`, `pre-merge-gate` help — bun |
+| `CR-CRU-008`, `CR-CRU-044`, `CR-SAN-013` | bun root help |
+| `CR-CRU-030`, `CR-CRU-044`, `CR-CRU-056`, `CR-SAN-001` | python root help |
+| `CR-ES-12`, `CR-SU-8` | mvn root help |
+| `CR-NAI-203`, `CR-NAI-305` | rust root help, `pre-merge-gate` help |
+
+Most are **provenance citations that happen to sit inside a `help=` string** rather than beside it
+in a comment — `"… the repair is REFUSED (§S4, CR-CRU-086 §S2)."` is printed to every user of every
+project. §S6 exempts provenance in **comments and docstrings**; text that argparse RENDERS is not a
+comment, and the exemption does not reach it. The remedy keeps the rule and moves the citation: the
+help states the behaviour, the adjacent code comment carries the lineage.
+
 ### §S3 — the regression contract replicates our live board
 
 Three test files build fixtures that are not arbitrary ids but a **snapshot of our own queue**:
@@ -129,10 +150,13 @@ on "comments are exempt" must reuse the classifier that is already proven, not r
 
 - **AC1** — The BDD empty state names no CR and no release version; it states the capability and
   that the dedicated surface does not exist yet.
-- **AC2** — No `--cr` help string in any of the five clients names **any project's** CR namespace.
-  Stated per-namespace, not per-literal: four clients carry `CR-CRU-008` and `rust-crucible.py:2413`
-  carries `CR-NAI-203`, so a criterion naming only `CR-CRU-` would ship green over the fifth. The
-  help line teaches the SHAPE of a caller-owned free-text key and names no real project.
+- **AC2** — **No help string any client PRINTS** names any project's CR namespace — every verb's
+  `--help` and each client's root help, not just `--cr`. Stated per-namespace, not per-literal, and
+  measured by DRIVING the CLI rather than by grepping for an example: 21 (client, verb) surfaces
+  leak 13 ids across five namespaces today (§S2's table). A `§`-citation inside a `help=` string is
+  in scope precisely because it is rendered; the exemption in §S6 covers comments and docstrings
+  only. Where a citation is load-bearing for a maintainer it moves to the adjacent comment, so the
+  lineage survives (AC8) and the user-facing line states behaviour.
 - **AC3** — No user-visible string in `public/` contains a `CR-CRU-` literal. (Comments exempt.)
 - **AC4** — In each of the three files in §S3, every assertion that states a product RULE runs on
   synthetic ids.

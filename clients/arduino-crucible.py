@@ -1076,7 +1076,8 @@ def main():
                              "Requires --agent <registered id> (§S2b) — the registered id is "
                              "also stored as the plan's orchestrator (the free-text "
                              "--orchestrator label is retired).")
-    pf.add_argument("--cr", required=True, help="CR id, e.g. CR-CRU-008.")
+    pf.add_argument("--cr", required=True,
+                    help="CR id — caller-owned free text, e.g. CR-<PROJECT>-<n>.")
     pf.add_argument("--title", help="Optional plan title.")
     pf.add_argument("--cycles", required=True, help='Comma-separated cycle labels, e.g. "a,b,c".')
     pf.add_argument("--wave", help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")

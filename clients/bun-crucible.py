@@ -1960,7 +1960,8 @@ def main():
     pf = sub.add_parser("plan-file",
                         help="File a cycle plan; prints the ASSIGNED numeric cycle ids. "
                              "Requires --agent <registered id> (§S2b).")
-    pf.add_argument("--cr", required=True, help="CR id, e.g. CR-CRU-008.")
+    pf.add_argument("--cr", required=True,
+                    help="CR id — caller-owned free text, e.g. CR-<PROJECT>-<n>.")
     pf.add_argument("--title", help="Optional plan title.")
     pf.add_argument("--cycles", required=True,
                     help='Comma-separated cycle labels, e.g. "a,b,c".')

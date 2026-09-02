@@ -2343,7 +2343,9 @@
     const CompilePanel = () =>
       div({ class: greyed("app-center") }, CompileFeed());
 
-    // §S5.5 — BDD keeps a placeholder naming the REAL landing CR (0.2.0).
+    // CR-CRU-097 §S1/§S4 — the empty state states the CAPABILITY, not the
+    // plan: it names no CR and no release version, because a backlog is the
+    // builder's and a shipped string does not move when the plan does.
     const BddFeed = () =>
       div(
         { "data-testid": "pane-scroll", class: "app-pane-content" },
@@ -2351,7 +2353,7 @@
           div(
             { class: "app-empty" },
             "BDD run results already stream into the Runs timeline — " +
-              "the dedicated BDD surface lands in CR-CRU-015 (0.2.0)",
+              "a dedicated BDD surface does not exist yet",
           ),
         ),
       );
