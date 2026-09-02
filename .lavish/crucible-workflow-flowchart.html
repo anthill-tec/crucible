@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crucible — release strip, active-release flowchart, scoped table</title>
+<style>
+  :root{
+    --bg:#0e1013; --bg-1:#15181d; --bg-2:#1c2027;
+    --ink:#e8e6e3; --ink-dim:#9a958b;
+    --ember:#ff7a1a; --ember-dim:#b35415; --heat:#ffb347;
+    --ok:#4ade80; --line:#2a2f38;
+    --mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;min-width:0}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:26px 22px 80px}
+  h1{font-size:20px;margin:0 0 4px}
+  h2{font-size:14px;margin:32px 0 6px;color:var(--heat);text-transform:uppercase;letter-spacing:.4px}
+  h2 .n{color:var(--ink-dim);font-weight:400;text-transform:none;letter-spacing:0}
+  p{margin:8px 0}.sub{color:var(--ink-dim);font-size:13px}
+  code{font-family:var(--mono);font-size:12px;background:var(--bg-2);padding:1px 5px;border-radius:4px}
+  .card{background:var(--bg-1);border:1px solid var(--line);border-radius:10px;padding:15px 17px;margin:12px 0}
+  .lead{border-left:3px solid var(--ember);padding-left:14px;margin:14px 0}
+  .zone{font-family:var(--mono);font-size:10px;letter-spacing:.5px;text-transform:uppercase;
+    color:var(--ink-dim);margin:0 0 6px;display:flex;gap:8px;align-items:center}
+  .zone::after{content:"";flex:1;height:1px;background:var(--line)}
+
+  .flow{display:flex;align-items:center;gap:0;overflow-x:auto;padding:12px 2px 4px}
+  .arrow{flex:0 0 24px;height:2px;background:var(--line);position:relative}
+  .arrow::after{content:"";position:absolute;right:-1px;top:-4px;border:5px solid transparent;border-left-color:var(--line)}
+  .arrow.hot{background:var(--ember)}.arrow.hot::after{border-left-color:var(--ember)}
+  .term{flex:0 0 auto;width:52px;height:52px;border-radius:999px;border:2px solid #4a5160;background:var(--bg-2);
+    display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10.5px;color:var(--ink-dim)}
+
+  .gate{flex:0 0 auto;width:84px;height:84px;transform:rotate(45deg);border:2px solid var(--heat);
+    background:rgba(255,179,71,.06);display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:.5}
+  .gate>span{transform:rotate(-45deg);text-align:center;font-family:var(--mono);font-size:9.5px;line-height:1.35;color:var(--heat)}
+  .gate .n{font-size:13px;color:var(--ink)}
+  /* a 84px square rotated 45deg occupies ~119px across, so the column IS that
+     diagonal - otherwise the diamonds interlock and the captions collide. */
+  /* gap >= (119-84)/2: the rotated square hangs ~18px BELOW its layout box, so a
+     smaller gap draws the caption inside the diamond. */
+  /* NO scroll container: a partially drawn container is a defect, so the strip
+     shows only WHOLE gates and the remainder becomes a clickable page tag. */
+  .striprail{position:relative;display:flex;align-items:center;gap:8px}
+  .striprail .flow{flex:1 1 auto;padding:18px 0;justify-content:center}
+  .fadeL,.fadeR{position:absolute;top:0;bottom:0;width:54px;pointer-events:none;z-index:2}
+  .fadeL{left:0;background:linear-gradient(90deg,var(--bg-1) 30%,transparent)}
+  .fadeR{right:0;background:linear-gradient(270deg,var(--bg-1) 30%,transparent)}
+  .ptag{flex:0 0 auto;font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);background:var(--bg-2);
+    border:1px solid var(--line);border-radius:6px;padding:9px 8px;cursor:pointer;line-height:1.3;
+    text-align:center;white-space:nowrap;user-select:none}
+  .ptag:hover{border-color:var(--ember);color:var(--ember)}
+  .ptag[data-off="1"]{visibility:hidden}
+  .edgen{font-family:var(--mono);
+    font-size:9px;color:var(--ink-dim);background:var(--bg-2);border:1px solid var(--line);
+    border-radius:4px;padding:3px 6px;white-space:nowrap}
+  .gatecol{flex:0 0 auto;width:120px;display:flex;flex-direction:column;align-items:center;gap:21px}
+  .gatecol .gate{margin:0 auto}
+  .gdate{font-family:var(--mono);font-size:8.5px;letter-spacing:.02em;color:var(--ink-dim);
+    max-width:116px;text-align:center;line-height:1.25}
+  .gdate.t{color:var(--heat)}.gdate.none{opacity:.55;font-style:italic}
+  .gdate.late{color:var(--fail)}
+  .gate.planned{border-style:dashed}.gate.planned>span{color:var(--ink-dim)}
+  .gate.focus{opacity:1;box-shadow:0 0 0 3px rgba(255,122,26,.28);border-color:var(--ember)}
+  .gate.focus>span{color:var(--ember)}.gate.focus .n{color:var(--ink)}
+
+  .wave{flex:0 0 auto;min-width:150px;border:1.5px solid var(--line);border-radius:9px;background:var(--bg-2);padding:8px 10px}
+  .wave.active{border-color:var(--ember)}
+  .wave h4{margin:0 0 5px;font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;
+    color:var(--ink-dim);display:flex;justify-content:space-between;gap:10px}
+  .wave.active h4{color:var(--ember)}
+  .crs{display:flex;flex-direction:column;gap:4px;margin-top:5px}
+  .cr{font-family:var(--mono);font-size:11px;padding:3px 7px;border-radius:5px;border:1px solid var(--line);
+    background:var(--bg-1);white-space:nowrap;display:flex;justify-content:space-between;gap:8px}
+  .cr.done{border-color:rgba(74,222,128,.4);color:var(--ok)}
+  .cr.live{border-color:var(--ember);color:var(--ember);box-shadow:0 0 0 2px rgba(255,122,26,.2)}
+  .cr.pend{color:var(--ink-dim)}
+  .cr .t{opacity:.65;font-size:10px}
+  .delivered{flex:0 0 auto;border:1.5px solid var(--line);border-radius:9px;background:var(--bg-2);padding:10px 13px;min-width:210px}
+  .delivered .big{font-family:var(--mono);font-size:22px;line-height:1.15}
+  .delivered .cue{font-size:10.5px;color:var(--ink-dim)}
+  .empty{flex:0 0 auto;border:1.5px dashed var(--line);border-radius:9px;padding:12px 14px;
+    color:var(--ink-dim);font-size:12px;text-align:center;min-width:180px}
+
+  .lanes{display:grid;grid-template-columns:54px 1fr;gap:5px}
+  .lbl{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);writing-mode:vertical-rl;transform:rotate(180deg);
+    display:flex;align-items:center;justify-content:center;border-right:1px dashed var(--line)}
+  .row{display:flex;gap:7px;align-items:center;padding:5px 0;border-bottom:1px dashed var(--line)}
+  .row:last-child{border-bottom:0}
+
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:4px}
+  th,td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--ink-dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.4px}
+  td.mono,th.mono{font-family:var(--mono);font-size:11.5px}
+  tr.live td{background:rgba(255,122,26,.06)}
+  tr.live td:first-child{box-shadow:inset 3px 0 0 var(--ember)}
+  .st{font-family:var(--mono);font-size:10.5px;padding:1px 7px;border-radius:999px;border:1px solid var(--line)}
+  .st.ok{color:var(--ok);border-color:rgba(74,222,128,.4)}
+  .st.on{color:var(--ember);border-color:var(--ember)}
+  .st.pd{color:var(--ink-dim)}
+  .scroll{max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+  .yes{color:var(--ok)}.no{color:var(--ink-dim)}
+  .q{border:1px solid var(--ember-dim);border-left:4px solid var(--ember);border-radius:8px;
+    background:rgba(255,122,26,.05);padding:12px 15px;margin:11px 0}
+  .legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(232px,1fr));gap:10px}
+  .lg{display:flex;gap:10px;align-items:center;font-size:12.5px}
+  .sw{flex:0 0 46px;height:28px;border:2px solid var(--line);border-radius:6px;background:var(--bg-2);
+    display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:9.5px;color:var(--ink-dim)}
+  .sw.t{border-radius:999px}
+  .sw.g{transform:rotate(45deg) scale(.66);border-color:var(--heat)}
+  .sw.gp{transform:rotate(45deg) scale(.66);border-color:var(--ink-dim);border-style:dashed}
+  .sw.ok{border-color:rgba(74,222,128,.45);color:var(--ok)}
+  .sw.on{border-color:var(--ember);color:var(--ember);box-shadow:0 0 0 2px rgba(255,122,26,.2)}
+  .sw.dim{opacity:.5}
+  .sw.ln{border-style:dashed}
+  .q h3{margin:0 0 5px;font-size:13px;color:var(--ember)}
+.more{font-family:var(--mono);font-size:9.5px;color:var(--ink-dim);text-align:center;padding:2px 0}
+@keyframes crpulse{0%,100%{box-shadow:0 0 0 2px rgba(255,122,26,.18)}50%{box-shadow:0 0 0 4px rgba(255,122,26,.42)}}
+.cr.pulse{animation:crpulse 1.5s ease-in-out infinite}
+.wsum{font-family:var(--mono);font-size:10px;color:var(--ok);opacity:.92;padding:1px 0 3px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Release strip → <span style="color:var(--ember)">active release</span> flowchart → its table</h1>
+  <p class="sub">Mockup for review, no code written. Every figure read from your live board:
+    88 queue rows, 4 shipped releases, 1 in flight, single track.</p>
+
+  <div class="lead">
+    <p style="margin:0"><b>Ten instructions, applied.</b> It is a workflow <b>flowchart</b>, not a
+    graph. Releases are already sequential, so the top level is just that sequence, and clicking a
+    release drills into it. The system defaults to the release <b>in progress</b>. The table sits on
+    the same surface and always shows the <b>focused release's</b> CRs. Waves are the abstract
+    container of CRs. Swimlanes appear only when a project runs more than one track. And historical
+    waves are not redrawn here — the <b>Workflow history view is enough</b> for those.</p>
+  </div>
+
+  <h2>1 · Landing <span class="n">— 0.2.0 focused because it is in progress</span></h2>
+  <div class="card">
+    <div class="zone">zone 1 · release strip</div>
+    <div class="flow">
+      <div class="term">Start</div>
+      <div class="arrow"></div>
+      <div class="gatecol"><div class="gate"><span>0.1.0<br><span class="n">60</span><br>shipped</span></div><div class="gdate">2026-08-19</div></div>
+      <div class="arrow"></div>
+      <div class="gatecol"><div class="gate"><span>0.1.1<br><span class="n">0</span><br>shipped</span></div><div class="gdate">2026-08-19</div></div>
+      <div class="arrow"></div>
+      <div class="gatecol"><div class="gate"><span>0.1.2<br><span class="n">1</span><br>shipped</span></div><div class="gdate">2026-08-20</div></div>
+      <div class="arrow"></div>
+      <div class="gatecol"><div class="gate"><span>0.1.3<br><span class="n">1</span><br>shipped</span></div><div class="gdate">2026-08-27</div></div>
+      <div class="arrow hot"></div>
+      <div class="gatecol"><div class="gate planned focus"><span>0.2.0<br><span class="n">20</span><br>in flight</span></div><div class="gdate none">no target declared</div></div>
+      <div class="arrow"></div>
+      <div class="term">End</div>
+    </div>
+
+    <div class="zone" style="margin-top:14px">zone 2 &middot; flowchart &mdash; CR-CRU-096 TARGET. One CR per ROW: merged collapse into the SUMMARY row; the rows below are the top of the SCHEDULED queue.</div>
+    <div class="flow">
+      <div class="term">Start</div>
+      <div class="arrow hot"></div>
+      <div class="wave active" style="min-width:300px">
+        <h4><span>Wave 5 &middot; active</span><span>28</span></h4>
+        <div class="wsum">21 merged &#10003; &middot; awaiting the tag</div>
+        <div class="crs">
+                    <div class="cr pend">CR-CRU-095 <span class="t"><b>next</b> &middot; deps 091, 092</span></div>
+          <div class="cr pend">CR-CRU-096 <span class="t">deps 078</span></div>
+          <div class="cr pend">CR-CRU-079 <span class="t">deps 078</span></div>
+          <div class="cr pend">CR-CRU-085 <span class="t">deps 078</span></div>
+          <div class="cr pend">CR-CRU-093 <span class="t">deps 006</span></div>
+          <div class="more">+2 more &mdash; see the table below</div>
+        </div>
+      </div>
+      <div class="arrow hot"></div>
+      <div class="gatecol"><div class="gate planned focus" style="width:76px;height:76px"><span>0.2.0<br><b>planned</b></span></div><div class="gdate none">no target declared</div></div>
+      <div class="arrow"></div>
+      <div class="term">End</div>
+    </div>
+    <p class="sub" style="margin-top:8px">Zone 2 answers one question &mdash; <b>what is being worked, and what is next</b>. It is not an inventory: zone 3&rsquo;s table below already holds the detailed list of all 28. So the 21 merged CRs collapse into a single <span class="t">21 merged &#10003;</span> summary row, exactly as this design already did, and the rows beneath are the top of the scheduled queue. <b>No paging machinery</b> &mdash; no <span class="t">&#9664; earlier</span> tag, because nothing to the left is hidden (it is summarised), and no pager for the remainder, because the table is the detail surface. <span class="t">+2 more</span> is a static POINTER, not a control. The header count <b>28</b> and the roll-up <b>21 merged</b> always state the WHOLE wave, so a trimmed view can never misreport the true size.</p>
+    <p class="sub"><b>Why the spine is horizontal:</b> measured on the live board, an UNCAPPED grid of all 28 CRs makes the wave box <b>1082 &times; 150</b>, so a horizontal spine would need <b>1378px</b> against the <b>1130px</b> the roadmap actually has &mdash; it cannot fit, which is why the shipped build stacks vertically and drops its connectors. One CR per row, merged collapsed to the summary and only the scheduled top shown puts the box at ~300px and the budget at ~<b>600px</b>: the spine fits comfortably. The layout and the trim are ONE decision, not two.</p>
+    <p class="sub"><b>Scope:</b> zone 2 draws <b>every wave of the FOCUSED release</b> &mdash; one box per wave, not one box ever. Crucible shows a single Wave 5 box only because 0.2.0 spans exactly one wave; 0.1.0 spanned waves 1&ndash;4. A multi-wave ACTIVE release is therefore the case that widens this zone, and the spine budget below must be read per wave box.</p>
+
+    <div class="zone" style="margin-top:14px">zone 2 &middot; the same wave with CR-CRU-095 ACTIVATED &mdash; an active CR is ALWAYS shown, and is the only thing that moves</div>
+    <div class="flow">
+      <div class="term">Start</div>
+      <div class="arrow hot"></div>
+      <div class="wave active" style="min-width:300px">
+        <h4><span>Wave 5 &middot; active</span><span>28</span></h4>
+        <div class="wsum">21 merged &#10003; &middot; awaiting the tag</div>
+        <div class="crs">
+                    <div class="cr live pulse">CR-CRU-095 <span class="t">&#9656; active &middot; C1 RED</span></div>
+          <div class="cr pend">CR-CRU-096 <span class="t">deps 078</span></div>
+          <div class="cr pend">CR-CRU-079 <span class="t">deps 078</span></div>
+          <div class="cr pend">CR-CRU-085 <span class="t">deps 078</span></div>
+          <div class="cr pend">CR-CRU-093 <span class="t">deps 006</span></div>
+          <div class="more">+2 more &mdash; see the table below</div>
+        </div>
+      </div>
+      <div class="arrow hot"></div>
+      <div class="gatecol"><div class="gate planned focus" style="width:76px;height:76px"><span>0.2.0<br><b>planned</b></span></div><div class="gdate none">no target declared</div></div>
+      <div class="arrow"></div>
+      <div class="term">End</div>
+    </div>
+    <p class="sub" style="margin-top:8px">Activation is a GUARANTEE, not a coincidence: the active CR is always present even when it sits outside the scheduled top, because an orchestrator may activate out of authored order. Motion stays reserved for IN_PROGRESS (&sect;5, CR-078 AC24) &mdash; <span class="t"><b>next</b></span> above carries NO glyph and NO colour of its own &mdash; &#9656; and ember are reserved for IN_PROGRESS, and &ldquo;next&rdquo; is a scheduling fact, not a state, so it is written as plain bold TEXT on a PENDING row. The two never read alike, and neither relies on colour.</p>
+
+    <div class="zone" style="margin-top:14px">zone 3 · table — always the focused release, never the whole project</div>
+    <div class="scroll">
+      <table>
+        <tr><th class="mono">CR</th><th>title</th><th class="mono">depends on</th><th>status</th><th class="mono">cycle</th></tr>
+        <tr class="live"><td class="mono">CR-CRU-078</td><td>graph and table are complementary</td><td class="mono">077, 084</td><td><span class="st on">▸ next</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-079</td><td>roadmap deep-link parity and active-CR</td><td class="mono">078</td><td><span class="st pd">pending</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-077</td><td>the roadmap graph is the execution DAG</td><td class="mono">014, 076, 080, 083, 084</td><td><span class="st ok">✓ merged</span></td><td class="mono">6/6</td></tr>
+        <tr><td class="mono">CR-CRU-084</td><td>a release records the package(s) it delivered</td><td class="mono">080, 081</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-088</td><td>a failure detail printed after its own leaf</td><td class="mono">087</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-087</td><td>CI floats to the newest bun</td><td class="mono">—</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-083</td><td>derived status conflates "never started" with</td><td class="mono">014, 081</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-086</td><td>the provenance repair must never erase</td><td class="mono">081</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-081</td><td>release provenance must use commit ancestry</td><td class="mono">080</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-080</td><td>the release ceremony cannot report a release</td><td class="mono">074</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-076</td><td>Roadmap is first in the workspace tab band</td><td class="mono">014, 021</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-074</td><td>Crucible has never been told a release</td><td class="mono">013</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-073</td><td>Finished releases keep showing their gate</td><td class="mono">013, 071, 074</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-072</td><td>The installer cannot upgrade</td><td class="mono">066, 069, 071</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-071</td><td>In-place upgrade</td><td class="mono">001, 043, 068</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-070</td><td>systemd --user unit</td><td class="mono">066, 069</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-069</td><td>Install has no inverse</td><td class="mono">009, 066</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-068</td><td>The server never says which store it opened</td><td class="mono">043, 066</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-017</td><td>Run lifecycle: start/end events + the Aborted</td><td class="mono">008, 011</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+        <tr><td class="mono">CR-CRU-014</td><td>Execution roadmap</td><td class="mono">011, 013</td><td><span class="st ok">✓ merged</span></td><td class="mono">—</td></tr>
+      </table>
+    </div>
+    <p class="sub" style="margin:8px 0 0">20 rows, not 88. Row grammar is the DN's, with <b>one amendment</b>: <b>CR id + brief title + bare depends-on +
+      status + cycle overlay</b>. The DN forbade titles on <i>graph nodes</i>, which still holds — the
+      flowchart labels carry no title. The <b>table</b> is where the title belongs, which is the DN's
+      own division: structure in the picture, detail in the rows. The highlighted row is the CR selected in the
+      flowchart; clicking a row drills to that CR's cycles in Workflow.</p>
+  </div>
+
+  <h2>2 · Selecting a shipped release <span class="n">— states what it delivered; Workflow owns its history</span></h2>
+  <div class="card">
+    <div class="zone">zone 1 · strip — focus moved to 0.1.0</div>
+    <div class="flow">
+      <div class="term">Start</div>
+      <div class="arrow"></div>
+      <div class="gatecol"><div class="gate focus"><span>0.1.0<br><span class="n">60</span><br>shipped</span></div><div class="gdate">2026-08-19</div></div>
+      <div class="arrow"></div>
+      <div class="gatecol"><div class="gate"><span>0.1.1<br><span class="n">0</span></span></div><div class="gdate">2026-08-19</div></div>
+      <div class="arrow"></div>
+      <div class="gatecol"><div class="gate"><span>0.1.2<br><span class="n">1</span></span></div><div class="gdate">2026-08-20</div></div>
+      <div class="arrow"></div>
+      <div class="gatecol"><div class="gate"><span>0.1.3<br><span class="n">1</span></span></div><div class="gdate">2026-08-27</div></div>
+      <div class="arrow"></div>
+      <div class="gatecol"><div class="gate planned"><span>0.2.0<br><span class="n">20</span></span></div><div class="gdate none">no target declared</div></div>
+      <div class="arrow"></div>
+      <div class="term">End</div>
+    </div>
+
+    <div class="zone" style="margin-top:14px">zone 2 · flowchart — delivered summary, not a wave reconstruction</div>
+    <div class="flow">
+      <div class="term">Start</div>
+      <div class="arrow"></div>
+      <div class="delivered">
+        <div class="big">60 CRs</div>
+        <div class="cue">waves 1–4 · shipped 2026-08-19</div>
+        <div class="cue">pypi <code>crucible-axi</code> · npm <code>@anthill-tec/crucible-server</code></div>
+      </div>
+      <div class="arrow"></div>
+      <div class="gatecol"><div class="gate focus" style="width:76px;height:76px"><span>0.1.0<br><b>shipped</b></span></div><div class="gdate">2026-08-19</div></div>
+      <div class="arrow"></div>
+      <div class="term">End</div>
+    </div>
+
+    <div class="zone" style="margin-top:14px">zone 3 · table — 0.1.0's 60 CRs, in authored order</div>
+    <div class="scroll" style="max-height:148px">
+      <table>
+        <tr><th class="mono">CR</th><th>title</th><th class="mono">depends on</th><th>status</th><th class="mono">wave</th></tr>
+        <tr><td class="mono">CR-CRU-001</td><td>Domain core + SQLite storage</td><td class="mono">—</td><td><span class="st ok">✓ merged</span></td><td class="mono">1</td></tr>
+        <tr><td class="mono">CR-CRU-002</td><td>Codec translation layer</td><td class="mono">001</td><td><span class="st ok">✓ merged</span></td><td class="mono">1</td></tr>
+        <tr><td class="mono">CR-CRU-003</td><td>v1 compatibility shim + contract tests</td><td class="mono">001, 002</td><td><span class="st ok">✓ merged</span></td><td class="mono">1</td></tr>
+        <tr><td class="mono">CR-CRU-004</td><td>Clean v2 API + SSE</td><td class="mono">003</td><td><span class="st ok">✓ merged</span></td><td class="mono">2</td></tr>
+        <tr><td class="mono">CR-CRU-005</td><td>AXI layer: TOON subset + help hints</td><td class="mono">004</td><td><span class="st ok">✓ merged</span></td><td class="mono">2</td></tr>
+        <tr><td class="mono">CR-CRU-006</td><td>Dashboard shell (Mission Control + workspace</td><td class="mono">004</td><td><span class="st ok">✓ merged</span></td><td class="mono">3</td></tr>
+        <tr><td colspan="5" class="sub" style="text-align:center">…54 more, in authored order</td></tr>
+      </table>
+    </div>
+    <p class="sub" style="margin:8px 0 0">No wave boxes here, deliberately: <b>the Workflow history view
+      is enough for historical waves</b>, so the roadmap does not duplicate it. The table keeps a
+      <code>wave</code> column because this release spans four.</p>
+  </div>
+
+  <h2>3 · A release that shipped nothing <span class="n">— 0.1.1, drawn honestly</span></h2>
+  <div class="card">
+    <div class="flow">
+      <div class="term">Start</div>
+      <div class="arrow"></div>
+      <div class="empty">no CRs in this release<br><span style="font-size:10.5px">it shipped both packages — that is the whole story</span></div>
+      <div class="arrow"></div>
+      <div class="gatecol"><div class="gate focus" style="width:76px;height:76px"><span>0.1.1<br><b>shipped</b></span></div><div class="gdate">2026-08-19</div></div>
+      <div class="arrow"></div>
+      <div class="term">End</div>
+    </div>
+    <p class="sub" style="margin:0"><code>0.1.1</code> genuinely carries <code>crs: []</code> with two
+      packages — a packaging fix. Its table is empty with the same message. Not hidden, not back-filled.</p>
+  </div>
+
+  <h2>4 · Multi-track <span class="n">— swimlanes only when tracks &gt; 1</span></h2>
+  <div class="card">
+    <div class="flow">
+      <div class="arrow hot" style="flex:0 0 16px"></div>
+      <div class="wave active" style="min-width:330px">
+        <h4><span>Wave 5 · active · 2 tracks</span><span>20</span></h4>
+        <div class="lanes">
+          <div class="lbl">track-1</div>
+          <div><div class="row">
+            <div class="cr done">CR-CRU-080 <span class="t">✓</span></div>
+            <div class="arrow" style="flex:0 0 16px"></div>
+            <div class="cr live">CR-CRU-078 <span class="t">▸ 2/6</span></div>
+          </div></div>
+          <div class="lbl">track-2</div>
+          <div><div class="row">
+            <div class="cr done">CR-CRU-084 <span class="t">✓</span></div>
+            <div class="arrow" style="flex:0 0 16px"></div>
+            <div class="cr live">CR-CRU-081 <span class="t">▸ 1/4</span></div>
+          </div></div>
+        </div>
+      </div>
+      <div class="arrow hot"></div>
+      <div class="gatecol"><div class="gate planned" style="width:76px;height:76px"><span>0.2.0<br><b>planned</b></span></div><div class="gdate none">no target declared</div></div>
+    </div>
+    <p class="sub" style="margin:0">The table gains a <code>track</code> column in this case. Crucible is
+      single-track, so neither lanes nor that column appear — correct, not a gap. Two CRs are concurrent
+      <i>because they sit in different lanes</i>; no fan-out edges needed to say so.</p>
+  </div>
+
+
+  <h2>5 · Shape and colour grammar <span class="n">— shape says what it is, colour says where it stands</span></h2>
+  <div class="card">
+    <p class="sub" style="margin:0 0 10px">Two independent channels, so neither has to carry the other's
+      meaning: <b>shape</b> is the kind of thing, <b>colour</b> is its state.</p>
+    <div class="legend">
+      <div class="lg"><div class="sw t">Start</div><div><b>Stadium</b> — terminal. One Start, one End.</div></div>
+      <div class="lg"><div class="sw g">◇</div><div><b>Diamond</b> — release gate, in the flow.</div></div>
+      <div class="lg"><div class="sw gp">◇</div><div><b>Dashed diamond</b> — release <b>proposed</b> by the orchestrator, not cut.</div></div>
+      <div class="lg"><div class="sw">▤</div><div><b>Box</b> — wave: the abstract container of CRs.</div></div>
+      <div class="lg"><div class="sw">CR</div><div><b>Rectangle</b> — one CR; id + terse status. Never a title — that is the table's column.</div></div>
+      <div class="lg"><div class="sw ln">⌇</div><div><b>Dashed divider</b> — track swimlane, multi-track only.</div></div>
+    </div>
+    <div class="legend" style="margin-top:12px">
+      <div class="lg"><div class="sw ok">✓</div><div><b>Green</b> — COMPLETED, merged.</div></div>
+      <div class="lg"><div class="sw ok" style="opacity:.72">✓</div><div><b>Green, dimmed</b> — COMPLETED_UNTRACKED: shipped before plan tracking.</div></div>
+      <div class="lg"><div class="sw on">▸</div><div><b>Ember</b> — IN_PROGRESS. The only thing that ever moves.</div></div>
+      <div class="lg"><div class="sw">·</div><div><b>Plain</b> — PENDING, nothing to report yet.</div></div>
+      <div class="lg"><div class="sw g" style="border-color:var(--heat)">◇</div><div><b>Amber</b> — a release, shipped or planned.</div></div>
+      <div class="lg"><div class="sw dim">◇</div><div><b>Dimmed</b> — not the focused release; click to focus.</div></div>
+    </div>
+    <p class="sub" style="margin:10px 0 0">Colour never encodes anything shape already says, and no
+      element relies on colour alone — status is also written as text, so the view survives a
+      colour-blind reader and a greyscale screenshot.</p>
+  </div>
+
+  <h2>6 · Selection and navigation</h2>
+  <div class="card">
+    <table>
+      <tr><th>Action</th><th>Flowchart</th><th>Table</th></tr>
+      <tr><td>Land on Roadmap</td><td>focuses the release in progress</td><td>that release's CRs</td></tr>
+      <tr><td>Click another diamond</td><td>redraws for that release</td><td>follows the focus, always</td></tr>
+      <tr><td>Click the active wave</td><td>opens / closes in place</td><td>narrows to that wave</td></tr>
+      <tr><td>Click a CR or its row</td><td colspan="2">drills to Workflow — that CR's cycles, <code>← roadmap</code> back (existing behaviour)</td></tr>
+      <tr><td>Historical waves</td><td colspan="2">not drawn here — the Workflow history view owns them</td></tr>
+    </table>
+  </div>
+
+  <h2>7 · Conditional chrome <span class="n">— the single rule</span></h2>
+  <div class="card">
+    <table>
+      <tr><th>Element</th><th>Drawn when</th><th>Crucible today</th></tr>
+      <tr><td>Release strip</td><td>always — it is the spine</td><td class="yes">5 gates</td></tr>
+      <tr><td>Active-release focus</td><td>a release is in progress; else newest shipped</td><td class="yes">0.2.0</td></tr>
+      <tr><td>Wave container</td><td>the focused release is the active one</td><td class="yes">W5 only</td></tr>
+      <tr><td>Delivered summary</td><td>the focused release has shipped</td><td class="yes">0.1.0–0.1.3</td></tr>
+      <tr><td>Track lanes + table column</td><td>&gt; 1 track reported</td><td class="no">no — single track</td></tr>
+      <tr><td>Wave column in the table</td><td>the release spans &gt; 1 wave</td><td class="yes">0.1.0 only</td></tr>
+      <tr><td>Dashed gate</td><td><b>the orchestrator registered a proposed release</b>; one per proposal</td><td class="yes">0.2.0 — once registered</td></tr>
+      <tr><td>Motion</td><td>the CR is <code>IN_PROGRESS</code></td><td class="no">none active</td></tr>
+    </table>
+  </div>
+
+  <h2>8 · What determines every position</h2>
+  <div class="card">
+    <table>
+      <tr><th>Visual</th><th>Determined by</th><th>Data</th></tr>
+      <tr><td>Strip order</td><td>shipped by ship date; <b>proposed always after them, in version order</b></td><td class="mono">releases[].releasedAt · semver</td></tr>
+      <tr><td>Which CRs are inside — shipped</td><td>release membership — settled fact, frozen at ship</td><td class="mono">releases[].crs</td></tr>
+      <tr><td>Which CRs are inside — proposed</td><td><b>declared by the orchestrator</b> when the CR is planned</td><td class="mono">cr-plan --release</td></tr>
+      <tr><td>Dashed gate exists</td><td><b>an orchestrator-registered proposal</b> — never inferred</td><td class="mono">proposed-release record</td></tr>
+      <tr><td>Order in the wave / table</td><td>authored queue order</td><td class="mono">queue row index</td></tr>
+      <tr><td>Lane</td><td>reported track; absent ⇒ no lanes</td><td class="mono">plan.track</td></tr>
+      <tr><td>Node label</td><td>CR id + terse status, never the title</td><td class="mono">derived status</td></tr>
+      <tr><td>Table title cell</td><td>the CR's own brief title</td><td class="mono">CR spec H1</td></tr>
+      <tr><td>Motion + cycle</td><td>active cycle of an open plan</td><td class="mono">plan.cycles</td></tr>
+      <tr><td>Packages on the gate</td><td>what the release published</td><td class="mono">releases[].packages</td></tr>
+      <tr><td>Date under a shipped gate</td><td>the tag's own commit date, written at release time</td><td class="mono">releases[].releasedAt</td></tr>
+      <tr><td>Date under a proposed gate</td><td>the orchestrator's declared target — empty state when none</td><td class="mono">release-propose --target</td></tr>
+    </table>
+    <p class="sub" style="margin:7px 0 0">No row reads "whatever the layout chose". Nothing here needs a
+      layout engine, a crossing heuristic, or a compound-graph library.</p>
+  </div>
+
+  <h2>9 · The containment model <span class="n">— release ⊃ wave ⊃ CR, all three declared</span></h2>
+  <div class="card">
+    <p class="sub" style="margin:0 0 10px"><b>Your model:</b> a release is a <b>super container</b>. When a CR is
+      planned it is the orchestrator's job to state <b>which release it targets and which wave it belongs to</b>;
+      once a wave's sequence is decided, the orchestrator sends that <b>ordered sequence of CRs with its metadata</b>.
+      So all three levels are <b>declared data</b> — nothing about the roadmap is inferred by the renderer.</p>
+
+    <div class="flow" style="justify-content:flex-start;gap:0">
+      <div class="gate planned" style="flex:0 0 auto"><span>release<br><span class="n">0.2.0</span><br>super container</span></div>
+      <div class="arrow"></div>
+      <div class="wave" style="flex:0 0 auto"><h4><span>wave 5</span><span>container</span></h4>
+        <div class="crs"><div class="cr done">CR-CRU-080 <span>seq 1</span></div><div class="cr live">CR-CRU-078 <span>seq 19</span></div><div class="cr pend">CR-CRU-079 <span>seq 20</span></div></div></div>
+    </div>
+    <p class="sub" style="margin:8px 0 0"><b>This overrides my recommendation</b> — I argued for deriving membership
+      from the queue's release qualifier, and you are right that declaring it is correct. Checking the code before
+      writing this section proved my suggestion was not merely weaker but <b>impossible</b>, which is the second
+      finding below.</p>
+
+    <div style="border:1px dashed rgba(255,122,26,.55); border-radius:8px; padding:10px 13px; margin:12px 0 0">
+      <div class="sub" style="color:var(--ember); margin-bottom:6px"><b>&#9650; TWO CODE FACTS, BOTH VERIFIED — one kills my own proposal</b></div>
+      <p class="sub" style="margin:0 0 7px"><b>1 · The release target never reaches the server today.</b>
+        <code>parse_queue_table</code> (<code>clients/_crucible_axi.py:1958-1976</code>) reads the Wave cell with
+        <code>re.match(r"\s*(\d+)", wave_cell)</code> and keeps <b>only the leading integer</b>. The release
+        qualifier — the <code>(0.2.0)</code> / <code>(post-0.2.0)</code> part this board has carried for months —
+        is <b>discarded at parse time</b>. Each entry POSTs as <code>{cr, title, wave, dependsOn}</code>: there is
+        no release field at all. So "derive membership from the queue qualifier" could not have worked — the data
+        is thrown away before transmission. Declaring it is the only workable answer.</p>
+      <p class="sub" style="margin:0"><b>2 · A proposal cannot be a dateless <code>release</code> milestone.</b>
+        <code>public/app-logic.mjs:875-893</code> deliberately sorts an undated release <b>OLDEST</b>, its comment
+        stating why: <i>"an undated tag is legacy history, and calling it the newest would hand it the gating of every
+        unshipped CR on a date nobody recorded."</i> Omitting <code>releasedAt</code> would park 0.2.0 at the
+        <b>head</b> of the strip. A proposal must be its own kind, ordered by <b>version</b>, and must stay outside
+        <code>listReleases</code>' <code>type === 'release'</code> filter so settled history is never polluted by a plan.</p>
+    </div>
+
+    <table style="margin-top:12px">
+      <tr><th>Rule</th><th>Consequence</th></tr>
+      <tr><td>Who declares</td><td><b>Mainline orchestrator only</b> — the existing <code>ORCHESTRATOR</code> role. A track executes; it never re-plans the roadmap.</td></tr>
+      <tr><td>A proposal is a plan</td><td>Revisable and withdrawable at any time; a CR may be moved between waves or releases <b>until it ships</b>.</td></tr>
+      <tr><td>A shipped release is a fact</td><td>Immutable, membership frozen into <code>crs</code>. The shipped record <b>supersedes and consumes</b> its proposal — one gate, never a pair.</td></tr>
+      <tr><td>Zero-CR containers are legal</td><td>A proposed release with no CRs is a declared intent; 0.1.1 proves a <i>shipped</i> one happens too.</td></tr>
+      <tr><td>Gate retirement</td><td>A proposal retires nothing — CR-CRU-073's rule stays scoped to real releases.</td></tr>
+      <tr><td><b>A shipped release carries its ship date</b></td><td>Recorded by the orchestrator's release tasks, which already do this — <code>releasedAt</code> is the tag's own commit date, written by <code>emit_release_milestone</code> at release time. Existing behaviour (CR-CRU-080 §S4), now <b>displayed</b>.</td></tr>
+      <tr><td><b>A proposed release carries a target date</b></td><td>Declared at proposal time and revisable, because a milestone is <b>time-bound</b>. It is a <b>declaration</b>, not an estimate — see the forecast boundary below.</td></tr>
+      <tr><td>Version still orders the strip</td><td>A target date is a plan and can slip; the version cannot. If a declared target contradicts version order, that is a <b>planning conflict to surface</b>, not a reason to re-sort the flow.</td></tr>
+    </table>
+  </div>
+
+  <h2>10 · The AXI interface <span class="n">— built during design, one CR at a time</span></h2>
+  <div class="card">
+    <p class="sub" style="margin:0 0 10px">You left this to me, then gave me five constraints. The one that reshapes
+      it most: <b>the roadmap is built during the design phase, as each CR is authored</b> — not snapshotted at the
+      end. So the API is <b>incremental and declarative</b>, and the client's job is to <b>ask the orchestrator for
+      what it is missing</b> rather than accept a half-planned CR or fail blankly.</p>
+
+    <div class="zone">the ordered call chain — outermost container first</div>
+    <table>
+      <tr><th>#</th><th>Call</th><th>When, and why it sits here</th><th></th></tr>
+      <tr><td class="mono">0</td><td class="mono">register --role ORCHESTRATOR</td>
+        <td>Identity before any write. Already enforced — an unregistered id gets <code>HTTP 409</code>; it refused me twice today.</td><td class="yes">exists</td></tr>
+      <tr><td class="mono">1</td><td class="mono">release-propose --label 0.2.0 --target 2026-10-15</td>
+        <td><b>Design phase, once per planned release.</b> The super container must exist before a CR can target it. <code>--target</code> is the declared date (optional, revisable); the strip still <b>orders by version</b>.</td><td class="no">new</td></tr>
+      <tr><td class="mono">2</td><td class="mono">cr-plan --cr … --release … --wave … --title …</td>
+        <td><b>As each CR is authored.</b> Declares both memberships + the brief title. Re-running with different values is a legitimate <b>re-plan</b>, not an error.</td><td class="no">new</td></tr>
+      <tr><td class="mono">3</td><td class="mono">wave-sequence --release … --wave … --crs A,B,C…</td>
+        <td><b>When the wave's order is decided</b>, and again whenever it changes. Carries the <b>whole ordered list</b>; array position becomes <code>seq</code>.</td><td class="no">new</td></tr>
+      <tr><td class="mono">4</td><td class="mono">cr-supersede · cr-void</td>
+        <td><b>Gap-analysis phase</b> — see §11. Declarations, never deletions.</td><td class="no">new</td></tr>
+      <tr><td class="mono">5</td><td class="mono">plan-file → cycle-add → cycle-activate → cycle-done → cr-close → cr-merged</td>
+        <td>Execution, unchanged. The roadmap is fully declared before a cycle runs.</td><td class="yes">exists</td></tr>
+      <tr><td class="mono">5b</td><td class="mono">next [--track N]</td><td><b>Throughout execution</b> — the orchestrator asks what is actionable; validates the declared sequence against live state (§13).</td><td class="no">new</td></tr>
+      <tr><td class="mono">6</td><td class="mono">milestone --type release --label … --crs … --packages …</td>
+        <td>The cut. Freezes membership as settled fact and consumes the proposal from step 1.</td><td class="yes">exists</td></tr>
+    </table>
+
+    <p class="sub" style="margin:12px 0 6px"><b>Step 3 is one call, and that is the load-bearing decision.</b>
+      <b>The order is the payload.</b> Sending CRs one at a time makes their sequence an accident of arrival — exactly
+      the CR-CRU-077 AC2 defect you already paid <b>+41% crossings</b> for, where authored order was not carried as
+      data so the layout substituted its own. It also lands the field the app already reads: <code>data.seq</code>,
+      shipped in CR-077 C2 as "numeric, distinct, strictly increasing in authored order".</p>
+
+    <div class="zone" style="margin-top:14px">the client ASKS — principle 9 + principle 7, not a blank failure</div>
+    <p class="sub" style="margin:0 0 8px">Your requirement 2. A <code>cr-plan</code> missing its targeting must not be
+      accepted, and must not fail with "missing argument". It answers with the <b>live candidates</b>, so the
+      orchestrator never guesses or remembers:</p>
+    <div class="card" style="background:var(--bg);margin:0 0 8px">
+      <pre class="mono" style="margin:0;font-size:11.5px;color:var(--ink-dim);white-space:pre-wrap">$ python3 clients/python-crucible.py cr-plan --cr CR-CRU-092 --title "…"
+cr-plan: ok=false needs=[release, wave]                       <span style="color:var(--heat)"># exit 2 — usage, principle 6</span>
+releases[2]{label,status,waves}:                              <span style="color:var(--heat)"># ambient context, principle 7</span>
+  0.2.0,proposed,"4,5"
+  0.3.0,proposed,"—"
+help[2]:                                                      <span style="color:var(--heat)"># next-step templates, principle 9</span>
+  cr-plan --cr CR-CRU-092 --release 0.2.0 --wave 5 --title "…"
+  release-propose --label 0.3.1        <span style="color:var(--heat)"># if it targets a release that does not exist yet</span></pre>
+    </div>
+    <p class="sub" style="margin:0">It <b>never guesses</b>, even when only one wave is open — silent inference is the
+      whole failure class this design removes. When no release is proposed at all, principle 5 applies: a definitive
+      empty state that says <i>propose one first</i>, with the template to do it.</p>
+
+    <div class="zone" style="margin-top:14px">division of labour — your requirement 5</div>
+    <table>
+      <tr><th></th><th>Owns</th><th>Deliberately does not</th></tr>
+      <tr><td><b>Server API</b></td><td>Plain functional REST. Idempotent writes, structured records, referential refusals. No opinion about ergonomics.</td><td>No guidance, no templates, no prompting. It answers what is true and what it rejected.</td></tr>
+      <tr><td><b>Client (AXI)</b></td><td>The whole agent-facing surface: TOON envelope (P1), <code>--fields</code> (P2), <code>--full</code> (P3), <code>totalCount</code> (P4), empty states (P5), errors on stdout + exit 0/1/2 + idempotency (P6), ambient context (P7), content-first (P8), <code>help[]</code> (P9), consistent <code>--help</code> (P10).</td><td>No business rules of its own. If the client had to decide anything, two clients would decide differently.</td></tr>
+    </table>
+    <p class="sub" style="margin:9px 0 0">All three new verbs land in the shared parser <code>clients/_crucible_axi.py</code>
+      so all five clients get them at once — the CR-CRU-054 DRY rule. Worth flagging: <code>queue-file</code> is in
+      <b>1 of 5</b> clients today, python only, and roadmap registration is stack-agnostic orchestrator work — that
+      is already a correctness gap, and these verbs must not repeat it.</p>
+  </div>
+
+  <h2>11 · Editing the roadmap <span class="n">— add, reorder, supersede; nothing is ever deleted</span></h2>
+  <div class="card">
+    <p class="sub" style="margin:0 0 10px">Your requirements 3 and 4. An initial roadmap is a <b>draft</b>: gap analysis
+      kills some CRs, new ones arrive, and the queue gets reordered. Two rules make that safe.</p>
+
+    <table>
+      <tr><th>Rule</th><th>Why</th></tr>
+      <tr><td><b>1 · Declarative replace, not positional edits</b> — reorder and insert are the <i>same</i> call:
+        <code>wave-sequence</code> with the new list.</td>
+        <td>No <code>--after X</code> / <code>--move-to N</code> API, which is stateful and misfires when two edits
+          race. Sending the intended order cannot express "the order I did not intend". One verb covers add anywhere,
+          reorder, and drop-from-wave, and it converges on re-run.</td></tr>
+      <tr><td><b>2 · Removal is a declaration, never a deletion</b> — <code>cr-supersede</code> or <code>cr-void</code>.</td>
+        <td>The queue's history is evidence. This project has the scar: a provenance repair that <b>silently dropped
+          nine CRs</b> from a shipped release's membership, and CR-CRU-086 exists because erasing a record destroys
+          the account of what happened. A killed CR stays visible as killed.</td></tr>
+    </table>
+
+    <table style="margin-top:10px">
+      <tr><th>Verb</th><th>Meaning</th><th>Real precedent on your board</th></tr>
+      <tr><td class="mono">cr-supersede --cr X --by Y</td><td>The work still happens, <b>elsewhere</b>. X points at its successor.</td>
+        <td>CR-CRU-089 — "VOID; <b>fixed by</b> CR-CRU-088". It had a successor, so it was a supersession, not a void.</td></tr>
+      <tr><td class="mono">cr-void --cr X --reason …</td><td>The work is <b>not happening</b>. No successor exists.</td>
+        <td>CR-CRU-082 — "a wave cannot declare the release it targets". Genuinely dead, nothing replaced it.</td></tr>
+    </table>
+    <p class="sub" style="margin:9px 0 0">Distinguishing them is not pedantry: a <b>superseded</b> CR's dependants are
+      still satisfied — by its successor — while a <b>voided</b> CR's dependants are now broken and must be surfaced.
+      Collapsing both into "removed" is what makes a dependency silently rot. Neither may touch a CR that has already
+      shipped inside a cut release: that membership is settled fact.</p>
+
+    <div class="zone" style="margin-top:14px">acceptance shape</div>
+    <table>
+      <tr><th>Do</th><th>Expect</th></tr>
+      <tr><td>Generate the whole roadmap twice, end to end</td><td>Second run reports <code>converged</code> everywhere and mutates nothing.</td></tr>
+      <tr><td>Insert a CR mid-wave and re-send the list</td><td>Its neighbours' <code>seq</code> shift by one; <b>no other wave changes</b>.</td></tr>
+      <tr><td>Move one CR to another wave via <code>cr-plan</code></td><td>It leaves the old wave's sequence, the gap closes, and only that CR moves.</td></tr>
+      <tr><td>Supersede a CR that others depend on</td><td>Dependants resolve through the successor; the board still shows the superseded CR and the pointer.</td></tr>
+      <tr><td>Void a CR that others depend on</td><td>The broken dependants are <b>named in the response</b>, not discovered later on a render.</td></tr>
+      <tr><td>Attempt either on a shipped CR</td><td>Named refusal — settled fact is immutable.</td></tr>
+    </table>
+    <div style="border:1px dashed rgba(255,179,71,.5); border-radius:8px; padding:10px 13px; margin:14px 0 0">
+      <div class="sub" style="color:var(--heat); margin-bottom:6px"><b>&#9650; TWO TRAPS THE DATE REQUIREMENT WALKS INTO — both checked</b></div>
+      <p class="sub" style="margin:0 0 7px"><b>1 · <code>releasedAt</code> is epoch SECONDS, not milliseconds.</b>
+        Documented at <code>public/app-logic.mjs:874</code> — "the tag's OWN commit date, epoch SECONDS" — and the
+        stored values confirm it (<code>0.1.0 → 1787149125</code>). Nothing formats it as a date today; it is used
+        <b>only for sorting</b>, so the unit has never mattered. The moment it becomes <b>visible</b> the first naive
+        <code>new Date(releasedAt)</code> renders <b>1970-01-21</b> — I did exactly that in my own verification an
+        hour ago and had to correct it. So: a target date must use the <b>same unit</b> (one convention, not two),
+        and both dates must go through <b>one shared formatter</b>.</p>
+      <p class="sub" style="margin:0"><b>2 · A declared target is not the deferred forecast.</b>
+        <code>docs/research/DN-crucible-roadmap-view.md:31</code> already rules a <i>"forecast/possible release
+        date"</i> out of this surface: the confidence-gated P50/P80 band belongs to <b>CR-CRU-022</b>, deferred past
+        0.2.0, and the standing rule was to <b>omit</b> the row rather than estimate it. Your requirement does not
+        reopen that — an orchestrator <b>declaring</b> a target is authored data, the opposite of a fabricated
+        estimate. They compose later: the declared target is the commitment, CR-022's band is the prediction, and a
+        gap between them is the interesting signal. Worth writing into the spec so nobody reads it as overturning
+        that decision.</p>
+    </div>
+  </div>
+
+  <h2>12 · Dependencies validate, they never order <span class="n">— the orchestrator owns the sequence</span></h2>
+  <div class="card">
+    <p class="sub" style="margin:0 0 10px">Your rule: <code>dependsOn</code> is a <b>cue and a validation input</b>,
+      and the orchestrator is <b>ultimately responsible for the sequence</b>. That is not a new policy here — it is
+      already law in the server: <code>src/v2.ts:1759</code> says an unresolvable dependency is
+      <i>"flagged in <code>unknownDependencies</code>, never rejected"</i>, and <code>queue-file</code> already
+      returns that array today. So the design extends an existing rule instead of introducing a competing one.</p>
+
+    <table>
+      <tr><th>What validation finds</th><th>Response</th><th>Why that severity</th></tr>
+      <tr><td><b>A cycle</b> — A depends on B depends on A</td><td class="no">hard refusal</td>
+        <td>Provably unsequenceable. No ordering satisfies it, so there is no orchestrator judgement to defer to; accepting it would store a roadmap that cannot be executed.</td></tr>
+      <tr><td><b>Unknown dependency</b> — a dep naming a CR that does not exist</td><td>flagged, <b>never rejected</b></td>
+        <td>Existing law (<code>v2.ts:1759</code>). During design a CR routinely depends on one not yet authored; refusing would make incremental authoring impossible.</td></tr>
+      <tr><td><b>Out-of-order</b> — B sits before its dependency A</td><td>warned, <b>offending pairs named</b>, the sequence stands</td>
+        <td><b>Your rule.</b> The orchestrator may know something the graph does not — a dep already satisfied out-of-band, or a deliberate parallel start. Crucible reports; it does not re-sort.</td></tr>
+      <tr><td><b>Cross-wave backwards</b> — a CR depends on one in a <i>later</i> wave</td><td>warned, both containers named</td>
+        <td>Usually a mis-assigned wave rather than a bad sequence, so the useful output names the two containers, not the two CRs.</td></tr>
+    </table>
+
+    <p class="sub" style="margin:10px 0 0">The consistent line: <b>Crucible never substitutes an order of its own.</b>
+      That is the same commitment CR-CRU-077 AC2 makes about the render layer — authored order wins over the layout's
+      preference — applied to the write path. A tool that silently re-sorts is a tool the orchestrator has to fight.</p>
+  </div>
+
+  <h2>13 · The <code>next</code> interface <span class="n">— sequence validation during execution</span></h2>
+  <div class="card">
+    <p class="sub" style="margin:0 0 10px">Your requirement. During execution the orchestrator asks Crucible what it
+      should pick up, and that answer <b>validates the declared sequence against live state</b>. There is no
+      <code>next</code> verb in the client fleet today — I checked all five — but the orchestrator already
+      <b>thinks in this vocabulary</b>, so the verb adopts it rather than inventing one.</p>
+
+    <div class="zone">the three decisions — borrowed verbatim from the vocabulary already in use</div>
+    <table>
+      <tr><th>Decision</th><th>Means</th><th>Carries</th></tr>
+      <tr><td class="mono" style="color:var(--ok)">NEXT</td><td>This CR is actionable now.</td>
+        <td>The CR, its position in the wave (<code>seq</code>), and the <code>help[]</code> template for the call that starts it.</td></tr>
+      <tr><td class="mono" style="color:var(--ember)">HOLD</td><td>The next CR in sequence is <b>blocked</b>.</td>
+        <td><b>The trigger</b> — precisely which dependency or in-flight CR is holding it. A hold without its cause is useless.</td></tr>
+      <tr><td class="mono">DRAINED</td><td>Nothing left for this track.</td>
+        <td>A definitive empty state (P5): wave complete, or awaiting assignment. Never an empty array with no explanation.</td></tr>
+    </table>
+
+    <div class="zone" style="margin-top:14px">multi-track — the track id is required, never guessed</div>
+    <div class="card" style="background:var(--bg);margin:0 0 8px">
+      <pre class="mono" style="margin:0;font-size:11.5px;color:var(--ink-dim);white-space:pre-wrap">$ python3 clients/python-crucible.py next --track 2
+next: ok=true decision=NEXT track=2
+cr=CR-CRU-079 release=0.2.0 wave=5 seq=20
+help[1]:
+  plan-file --cr CR-CRU-079 --title "…" --cycles "…" --wave 5
+
+$ python3 clients/python-crucible.py next            <span style="color:var(--heat)"># multi-track project, no --track</span>
+next: ok=false needs=[track]  tracks=[1,2]           <span style="color:var(--heat)"># exit 2 — never picks a lane for you</span></pre>
+    </div>
+    <p class="sub" style="margin:0 0 10px"><b>Single-track projects omit it</b> — Crucible itself is single-track, so
+      <code>next</code> takes no argument here and the flag would be noise. It becomes <b>required</b> the moment more
+      than one track is reported, which is the same conditional-chrome rule the swimlanes follow (§7): the interface
+      grows only when the data justifies it. Track assignment comes from the metadata that rode in with
+      <code>wave-sequence</code> (§10 step 3), so nothing new has to be declared.</p>
+
+    <table>
+      <tr><th>Property</th><th>Rule</th></tr>
+      <tr><td>Read-only</td><td><code>next</code> changes nothing. It is an oracle, not a scheduler — asking twice gives the same answer, and asking does not claim the CR.</td></tr>
+      <tr><td>It validates, it does not correct</td><td>If the declared sequence says X is next but X's dependency is unmerged, the answer is <b>HOLD with the trigger named</b> — not a silent skip to the next actionable CR. Skipping would be Crucible re-ordering the roadmap behind the orchestrator's back (§12).</td></tr>
+      <tr><td>Two <code>next</code>s must not be confused</td><td>The harness's <code>worktree-flow next</code> reads its own lane plan; this one reads the <b>declared roadmap</b>. They answer different questions, and a <b>disagreement between them is a real signal</b> — the lane plan has drifted from the roadmap — so neither should be silently reconciled into the other.</td></tr>
+    </table>
+  </div>
+
+  <h2>14 · Layout at scale <span class="n">— whole containers only, and the strip does not own the window</span></h2>
+  <div class="card">
+    <p class="sub" style="margin:0 0 10px">Your last issue, and I measured it in the running app rather than guess.
+      <b>The release strip is the one zone that grows without bound</b> — a project that ships monthly adds a diamond
+      a month forever — and it does not get the whole window: the <b>project rail on the right takes
+      434 of 1576px, 27.5%</b>, leaving the roadmap <b>1130px</b>.</p>
+
+    <table>
+      <tr><th>Measured on the live board, 1600px viewport</th><th>Value</th></tr>
+      <tr><td><code>app-center</code> — the roadmap surface</td><td class="mono">1130px</td></tr>
+      <tr><td><code>app-pane</code> — the Project + Vitals rail</td><td class="mono">434px &middot; 27.5%</td></tr>
+      <tr><td>Release gates that fit today (144px pitch + terminals)</td><td class="mono">6.8</td></tr>
+      <tr><td>Release gates that fit with the rail collapsed</td><td class="mono">9.8 &nbsp;<span style="color:var(--ok)">(+38% width)</span></td></tr>
+    </table>
+    <p class="sub" style="margin:8px 0 12px">So Crucible's five gates fit <b>now</b>, and stop fitting at the seventh —
+      well inside 0.3.x. Both fixes are needed: <b>paging</b> because growth is unbounded, and the collapse because 27.5%
+      is a lot to spend on a rail while reading a timeline.</p>
+
+    <div class="zone">zone 1 — every container drawn WHOLE; the remainder is a clickable tag. Click either tag.</div>
+    <div class="striprail" id="rail">
+      <div class="ptag" id="pL" onclick="page(-1)">&#9664;<br><span id="nL">0</span><br>earlier</div>
+      <div class="flow" id="railflow"></div>
+      <div class="ptag" id="pR" onclick="page(1)"><span id="nR">0</span><br>later<br>&#9654;</div>
+    </div>
+    <p class="sub" style="margin:8px 0 0" id="railnote"></p>
+
+    <table style="margin-top:12px">
+      <tr><th>Rule</th><th>Why</th></tr>
+      <tr><td><b>Every container is drawn whole, or not at all</b></td>
+        <td><b>Your correction, and it is the stronger rule.</b> I had proposed free scrolling with labelled edges — but
+          a half-drawn diamond is a <b>defect</b>, not something a label excuses. The window holds
+          <code>floor(width / pitch)</code> gates and never a fraction of one.</td></tr>
+      <tr><td><b>The remainder becomes a clickable tag</b> — <code>&#9664; N earlier</code> / <code>N later &#9654;</code></td>
+        <td>The tag is the affordance <i>and</i> the count: it says how much is hidden and pages to it on click. When
+          nothing is hidden on a side, that tag <b>disappears</b> rather than sitting there disabled.</td></tr>
+      <tr><td><b>Paging, not scrolling</b> — a click advances a whole window</td>
+        <td>Snapping to whole gates is what makes the "never partial" guarantee hold by construction, instead of
+          depending on where a drag happened to stop.</td></tr>
+      <tr><td><b>Landing window contains the focused release</b></td>
+        <td>Unchanged from before, and it survives your correction: a twenty-release project that opens on 0.1.0 hides
+          the only thing you came to see. The window is positioned around the focus, not at offset 0.</td></tr>
+      <tr><td>Past pages left, plan pages right</td>
+        <td>Direction keeps its meaning: leftwards is history, rightwards is commitment — free from ship-order +
+          version order (§8).</td></tr>
+      <tr><td><b>Window size is measured, never hardcoded</b></td>
+        <td>It depends on the rail below: <b>6 gates with the rail open, 9 with it collapsed</b>. So collapsing the rail
+          does not merely add space — it <b>reduces the hidden counts</b>, and the two features are one behaviour.</td></tr>
+    </table>
+
+    <p class="sub" style="margin:11px 0 0"><b>What this deleted, which is the point:</b> no scroll container, no edge
+      fades, no scroll-position state, and no drag affordance to teach. It also removed a defect class outright — I had
+      to fix the scroll container <b>slicing the diamonds' top and bottom vertices</b> (a scroll container clips on both
+      axes, and a rotated square hangs ~18px past its layout box). With paging, that bug cannot exist. Fewer moving
+      parts and a stronger guarantee.</p>
+
+    <div class="zone" style="margin-top:14px">the collapsible rail — shell work, not roadmap work</div>
+    <table>
+      <tr><th>Point</th><th>Detail</th></tr>
+      <tr><td><b>It belongs to a different CR</b></td>
+        <td>Every workspace view gains the width — Workflow, Runs, Coverage, Compile, BDD — so the collapse is
+          <b>shell chrome</b>. Smuggling it into the roadmap CR would hide a cross-cutting change inside a feature and
+          make the AC untestable. It wants its own small CR.</td></tr>
+      <tr><td><b>The state must live outside the render tree</b></td>
+        <td>Not a guess — <code>public/app.js:2490</code> already says it, verbatim: state kept <i>"OUTSIDE the render
+          tree exactly like <code>lensOpenKeys</code> and <code>state.collapsedCycles</code>"</i>. The body re-renders
+          on the poll cadence, so a mount-local flag gives the click a <b>sub-poll lifetime</b> — the exact bug
+          CR-CRU-077 hit with expansion state.</td></tr>
+      <tr><td><b>And it must persist</b></td>
+        <td>CR-077 left this gap open in writing: <i>"Still persisted nowhere: a reload comes up collapsed."</i>
+          The pattern to close it already exists — <code>localStorage</code> key <code>crucible.density.mode</code>
+          (<code>app.js:435</code>). A rail the user collapses should still be collapsed after a reload.</td></tr>
+      <tr><td>Nothing to migrate</td>
+        <td>I checked the shell: there is <b>no collapse affordance anywhere</b> today — the only toggles are the tab chips and the roadmap's table/graph segmented control, which CR-CRU-078 removes. This is net-new.</td></tr>
+    </table>
+  </div>
+
+  <h2>15 · What survives from CR-CRU-077</h2>
+  <div class="card">
+    <table>
+      <tr><th>Keep — measured, layout-agnostic</th><th>Discard</th></tr>
+      <tr>
+        <td>Release membership from <code>crs</code>; ship-order sorting by <code>releasedAt</code>;
+            authored order; id + status labels; the four derived statuses; per-release counts;
+            <code>packages</code> on the gate.</td>
+        <td>cytoscape + dagre; the 160 drawn <code>dep:</code> edges; the <code>fold:</code> reroute
+            machinery; the post-layout re-seat and its +41% crossings; every assertion written against
+            cytoscape's element registry.</td>
+      </tr>
+    </table>
+  </div>
+
+</div>
+
+<script>
+// Demo of the paging rule: the window holds only WHOLE gates. Real app measures
+// available width (which changes when the project rail collapses) - here it is fixed at 5.
+const RELEASES = [
+  { v:"0.1.0", n:60, cap:"2026-08-19" },
+  { v:"0.1.1", n:0,  cap:"2026-08-19" },
+  { v:"0.1.2", n:1,  cap:"2026-08-20" },
+  { v:"0.1.3", n:1,  cap:"2026-08-27" },
+  { v:"0.2.0", n:20, cap:"no target declared", cls:"planned focus", capcls:"none" },
+  { v:"0.3.0", n:6,  cap:"target 2026-10-15", cls:"planned", capcls:"t" },
+  { v:"0.4.0", n:0,  cap:"target 2026-12-01", cls:"planned", capcls:"t" },
+  { v:"0.5.0", n:0,  cap:"target 2027-02-01", cls:"planned", capcls:"t" },
+];
+const WINDOW = 5;
+// landing: the window CONTAINS the focused release, not offset 0
+const focusIdx = RELEASES.findIndex(r => (r.cls||"").includes("focus"));
+let start = Math.min(Math.max(0, focusIdx - Math.floor(WINDOW/2)), RELEASES.length - WINDOW);
+function render(){
+  const shown = RELEASES.slice(start, start + WINDOW);
+  document.getElementById("railflow").innerHTML = shown.map((r,k) =>
+    (k ? '<div class="arrow' + (shown[k-1] && (r.cls||"").includes("focus") ? ' hot' : '') + '"></div>' : '') +
+    '<div class="gatecol"><div class="gate ' + (r.cls||"") + '"><span>' + r.v +
+    '<br><span class="n">' + r.n + '</span></span></div>' +
+    '<div class="gdate ' + (r.capcls||"") + '">' + r.cap + '</div></div>').join("");
+  const before = start, after = RELEASES.length - (start + WINDOW);
+  document.getElementById("nL").textContent = before;
+  document.getElementById("nR").textContent = after;
+  document.getElementById("pL").dataset.off = before ? "0" : "1";
+  document.getElementById("pR").dataset.off = after ? "0" : "1";
+  document.getElementById("railnote").innerHTML = "Window holds <b>" + WINDOW +
+    "</b> whole gates \u00b7 showing <b>" + shown[0].v + " \u2192 " + shown[shown.length-1].v +
+    "</b> \u00b7 <b>" + before + "</b> earlier, <b>" + after + "</b> later. " +
+    (before || after ? "No gate is ever drawn partially." : "Everything fits: both tags hidden.");
+}
+function page(dir){
+  start = Math.min(Math.max(0, start + dir * WINDOW), RELEASES.length - WINDOW);
+  render();
+}
+render();
+</script>
+</body>
+</html>

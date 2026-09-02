@@ -162,6 +162,28 @@ connectors. Measured, because the arrangement decision governs whether horizonta
 | available surface | 1130px | 1130px | 1100px |
 | fits horizontally | **no**, over by 248px | **yes** | yes |
 
+**MEASURED in real Chromium at a 1600px viewport, cycle 313** — this table was the ARGUMENT; these
+are the facts, and they are recorded here rather than bent to fit:
+
+| piece | table | measured |
+| --- | --- | --- |
+| wave box | 300 × 228 | **279.9 × 211.5** |
+| terminals | 100 (as 2 × 50) | **100.0 — but 56.0 + 44.0**; `Start` and `End` are content-sized, and the total matching is a coincidence of two word widths |
+| gate | 76 | **76.0** (`--app-gate-side`) |
+| connectors | 72 | **72.0** (3 × 24) |
+| gaps | — | **48.0** (6 × 8) |
+| spine | 596px | **575.92px** |
+| overflow | — | **none**: `scrollWidth 1128 == clientWidth 1128` |
+
+The whole 20px difference is the content-sized wave box. §S6's argument holds with **554px of
+headroom** at the 1130px surface, and a multi-wave board measures 804.84px — still inside it.
+
+**Two columns of the original table were measuring different things**, which cycle 313 surfaced and
+is worth recording: `gate 76` is the layout BOX, but the diamond is that square rotated 45°, so it
+PAINTS ~107.5px (76·√2) and overhangs both adjacent gaps plus ~7.7px of each neighbouring
+connector. The approved artifact reserves a 120px `.gatecol` for exactly that overhang. The paint
+does not extend the flow's own extent (measured bounds 11.0–586.92 inside 0–1130), so AC20 holds.
+
 ¹ `Start + arrow + wave + arrow + gate + arrow + End`, measured from the live board and from the
 artifact's own `div.flow` children.
 
@@ -411,6 +433,23 @@ So this section adds no new colours or shapes. It constrains what §S1–§S5 in
 - **AC20** — With §S5 landed, zone 2 lays out horizontally — `Start`, wave, gate, `End` with
   connectors — and the rendered width does not exceed the measured surface (1130px at 1600px
   viewport).
+- **AC20c** — AC20's `1130px` is a **controlled** surface, not a discovered one: nothing in the
+  code publishes it, so the fixture pins it at a 1600px viewport and measures inside it. *Recorded
+  2026-09-02 (C5 RED, finding 6).* **Forward dependency: CR-CRU-093** (the project rail collapses)
+  moves the real surface without moving this constant, so when 093 lands this number must be
+  re-measured rather than trusted.
+- **AC27a** — The approved artifact is **TRACKED** (`.lavish/crucible-workflow-flowchart.html`,
+  `.gitignore` negation added 2026-09-02). *Ruled after C5 RED, finding 5:* `.lavish/` was ignored,
+  so AC27's binding source was absent from a clean clone and its three tests could never pass in
+  CI — an acceptance criterion whose authority is untracked is unverifiable by anyone but its
+  author, and this CR exists precisely because the design and the code diverged with nothing in the
+  repo able to notice. The 198 KB storyboard MIRROR stays ignored: it is regenerable, and it is not
+  cited by any AC.
+- **AC27b** — AC27 compares **STRUCTURE**, never the artifact's CSS. *Recorded (C5 RED, finding
+  2):* the artifact's own `.flow` is `overflow-x: auto` with `gap: 0` — a scroll container, which
+  §S5 explicitly bans ("a partially drawn container is a defect"). Live is strictly stricter
+  (`overflow: visible`, `gap: 8`). "Match the panel" means match the panel's structure and grammar;
+  it never means copy its stylesheet.
 - **AC21** — The SHIPPED path renders the delivered summary with **0 wave boxes and 0 CR nodes**,
   the CR count, the ship date, and every package with its version.
 - **AC22** — The shipped path compresses a contiguous wave run: waves 1,2,3,4 render `waves 1–4`;
