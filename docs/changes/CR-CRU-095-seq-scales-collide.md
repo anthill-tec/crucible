@@ -28,14 +28,14 @@ CR-CRU-015 is deferred post-0.2.0. At that moment the board held **26 authored 0
 | writer | value | example |
 | --- | --- | --- |
 | `wave-sequence` (authored) | `waveSeqBase(wave) + index + 1` — wave `N` owns `[N×1000, N×1000+999]` (`src/store.ts:411-419`, `:3602`) | wave 5 → `5001..5026` |
-| bulk queue post (defaulted) | `declaredSeq ?? index` — the array position (`src/store.ts:3521-3531`) | wave 6 → `62`, `64`, `65` |
+| bulk queue post (defaulted) | `declaredSeq ?? index` — the array position (`src/store.ts:3532-3575`) | wave 6 → `62`, `64`, `65` |
 
 **CR-091 §S2/AC23 already named this phenomenon precisely.** `QueueSeqReport`'s contract
 (`src/store.ts:290-313`) says `defaultedSeq` names *"every cr whose `seq` this write CHOSE while a
 sibling in the same wave holds one on a DIFFERENT SCALE — the bulk post's array index beside a
 carried `10, 20, 30`, or `cr-plan`'s wave-block offset beside either. That mix is deterministic but
 not authored (the two scales interleave in an order nobody chose)"*, and `defaultedSeqWarnings`
-(`src/v2.ts:1920-1932`) emits it with `wave-sequence` as the remedy.
+(`src/v2.ts:1923-1935`) emits it with `wave-sequence` as the remedy.
 
 So the phenomenon is known, documented and warned. **The gap is its SCOPE: that check is
 same-wave.** Within wave 6 every row is positional — one scale, no siblings disagreeing — so the
@@ -43,9 +43,9 @@ warning is correctly silent, exactly as its contract says (*"A chosen position t
 every sibling's scale is the ORDINARY case and is silent"*). The collision this CR reports is
 **across containers**: wave 6's `62` against wave 5's `5001`.
 
-And nothing orders across containers. `listQueue` is `ORDER BY seq ASC` (`src/store.ts:3602-3606`)
+And nothing orders across containers. `listQueue` is `ORDER BY seq ASC` (`src/store.ts:3639-3643`)
 — one column, no container key — so a positional value from an unauthored wave sorts ahead of every
-authored wave. `resolve_next` consumes that published order (formerly `clients/_crucible_axi.py:1510`, now deleted) and
+authored wave. `resolve_next` consumes that published order (the `sorted(lane, key=_lane_order)` line, deleted by this CR) and
 takes `actionable[0]` (`clients/_crucible_axi.py:1527`), so the lowest positional seq wins the board.
 
 ### Why it is the steady state, not a migration artifact
@@ -67,14 +67,14 @@ So authored and defaulted scales permanently coexist on every real board.
 `listQueue` orders by a **sort key**, not a pairwise comparator: **`(wave number, release version
 with an undeclared release sorting LAST within its wave, seq)`**.
 
-This reuses the comparator that already exists — `compareContainers` (`src/store.ts:474-484`),
+This reuses the comparator that already exists — `compareContainers` (`src/store.ts:505-508`),
 which orders a different release by `compareVersionLabels` and the same release by `waveNumber`.
 CR-091's own comment on it warns that *"a second one would order them differently"*, so this CR
 adds no comparator; it lifts the canonical one so the read that lacked it shares it.
 
 **One correction to that comparator, found in RED and ruled 2026-09-02.** As it stands it reads
 `a.release ?? ""`, and `compareVersionLabels("", "0.2.0")` is **negative** — a label with fewer
-numeric components sorts first (`src/store.ts:371`). Applied verbatim, every release-less row
+numeric components sorts first (`src/store.ts:372`). Applied verbatim, every release-less row
 would sort *before* every declared release, and the reproduction would still fail: on the live
 board **66 of 94 rows carry no release** — every shipped wave (1–4, which CR-091 §S6 correctly
 refuses to plan), plus the deferred wave 6 — and `CR-CRU-015` would still lead.
@@ -103,7 +103,7 @@ for every declared pair, so AC1's intent survives; a fixture that gives a *later
 *lower* wave number violates the convention and is not a valid AC1 fixture.
 
 **Rejected: "every undeclared row sorts last" (globally).** It also fixes `next`, but the same key
-decides `cross-wave-backwards` (`src/v2.ts:1994-2019`), and under that rule a 0.2.0 CR depending
+decides `cross-wave-backwards` (`src/v2.ts:2007-2035`), and under that rule a 0.2.0 CR depending
 on shipped wave-4 history reads as *"depends backwards"*. Measured against the live board: **15
 false warnings** (e.g. `014(0.2.0/5) → 011(-/4)`, `068(0.2.0/5) → 066(-/4)`). The ruled key
 produces **zero** (verified on the container key alone — the eight same-container `-/4 → -/4`
@@ -117,8 +117,8 @@ sharing a wave number tie; and ordering in a reader, which **CR-091 AC18** outla
 version comparator in `clients/_crucible_axi.py` and none is added.
 
 But the gap analysis then claimed *"`resolve_next` needs no change at all"*, and RED proved that
-wrong too: `resolve_next` does `sorted(lane, key=_lane_order)` (formerly `clients/_crucible_axi.py:1510`, now deleted),
-and `_lane_order` returns `(0, seq)` (formerly `:1301-1308`, deleted) — it **re-sorts by the seq value**, discarding
+wrong too: `resolve_next` does `sorted(lane, key=_lane_order)` (the `sorted(lane, key=_lane_order)` line, deleted by this CR),
+and `_lane_order` returns `(0, seq)` (`_lane_order`, deleted by this CR) — it **re-sorts by the seq value**, discarding
 the position the server published. Run unchanged against a canonically ordered payload of the live
 94 rows, its `actionable[0]` is still `CR-CRU-015` at seq 62. So the server fix alone leaves
 `next` wrong, and AC6 as first written ("client unchanged") made AC7 unsatisfiable.
@@ -148,8 +148,8 @@ string equality on the `release` column; the route cannot reach a release withou
 (`requireLiveProposal`), and the store does not need to care.
 
 **The cross-wave producer is `cr-plan`, not the bulk post.** The bulk route never forwards
-`release` (`handleQueuePost`, `src/v2.ts:1860-1875`), a held row always carries a `seq` (`NOT
-NULL`, `src/store.ts:1415`), so a row the bulk post defaults is always new and release-less — and
+`release` (`handleQueuePost`, `src/v2.ts:1824-1840`), a held row always carries a `seq` (`NOT
+NULL`, `src/store.ts:1446`), so a row the bulk post defaults is always new and release-less — and
 release-less rows are never compared on the release axis. After §S3 the bulk default lands in the
 row's own block, in scale with everything authored, so bulk cross-wave `defaulted-seq` is
 unreachable by construction. The one reachable shape is `cr-plan` declaring a row that HOLDS a
@@ -175,12 +175,12 @@ always valid. Rows with no release are never compared; they cannot be authored, 
 nothing to warn them into.
 
 This is an extension of an existing mechanism, not a new detector. The client's `missing-seq`
-warning (`clients/_crucible_axi.py:1506-1516`) is untouched and still fires for a genuinely absent
+warning (`clients/_crucible_axi.py:1505-1516`) is untouched and still fires for a genuinely absent
 `seq`.
 
 ### §S3 — the bulk post defaults into the row's OWN wave block
 
-`src/store.ts:3521-3531` writes `declaredSeq ?? index`. The fallback becomes **the next free slot in the
+`src/store.ts:3532-3575` writes `declaredSeq ?? index`. The fallback becomes **the next free slot in the
 row's own wave block**: rows are processed in post order, and a row with neither a declared nor a
 held seq takes `max(seq already held or assigned in that wave AND inside its block) + 1`, or
 `waveSeqBase(wave) + 1` when the block is empty. For an all-defaulted wave — a fresh import — that
@@ -203,7 +203,7 @@ pre-existing wave axis (unchanged by §S2), newly reachable only because the def
 in-block. It disappears when the legacy rows do. A fresh import raises no warning at all.
 
 **Block overflow is refused, not spilled.** `wave-sequence` refuses a wave that would reach
-`WAVE_SEQ_STRIDE` members (`src/v2.ts:2245-2248`); the bulk post refuses the same condition with the
+`WAVE_SEQ_STRIDE` members (`src/v2.ts:2268-2274`); the bulk post refuses the same condition with the
 same message, so there is one limit in one wording. Spilling into the next wave's block would
 silently corrupt cross-container order — the defect this CR exists to remove.
 
@@ -211,7 +211,7 @@ silently corrupt cross-container order — the defect this CR exists to remove.
 caller use the one arithmetic rather than re-deriving `waveNumber × WAVE_SEQ_STRIDE`.
 
 **This does not retroactively fix an existing board, and must not claim to.** `declaredSeq` is
-`entry.seq ?? snapshot?.seq` (`src/store.ts:3508-3510`) — a **held** seq survives a re-import (CR-091's
+`entry.seq ?? snapshot?.seq` (`src/store.ts:3542-3546`) — a **held** seq survives a re-import (CR-091's
 carry-forward), so re-posting a board that already stores positional values preserves them. §S3
 therefore governs rows with neither a declared nor a held seq: a fresh import, and every row added
 later. Existing positional values are corrected by authoring the wave, or made harmless by §S1.
@@ -248,7 +248,7 @@ shared helper had left it asserted by nobody.
 - **A second comparator, or ordering in a client.** §S1's whole point.
 - **Making a shipped release plannable, or auto-proposing a release** for deferred rows.
 - **Reordering by dependency.** Dependencies validate, never order — re-confirmed live: the board
-  correctly warned `out-of-order` for `CR-CRU-073` against a real authored order (`src/v2.ts:2005`)
+  correctly warned `out-of-order` for `CR-CRU-073` against a real authored order (`src/v2.ts:2019`)
   rather than silently fixing it.
 - **Backfilling existing positional seq.** See §S3.
 
