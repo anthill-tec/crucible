@@ -67,11 +67,17 @@ never declared a release.
 posted fields, on the same footing as the fields beside them. `replaceQueue` already accepts,
 normalises and stores all three, and its carry-forward already depends on them.
 
-**One new refusal is required, and it is a defect of its own.** `replaceQueue` throws a plain
-`Error` when a track carries no lane number (`src/store.ts:3517-3522`), and `handleQueuePost`
-catches only `QueueWaveOverflowError` (`:1884-1887`) — so wiring `track` without a validation path
-would answer **500** to authored input. The handler refuses a malformed track by name and index, as
-it already does for `dependsOn` and `seq`.
+**Two new refusals are required, and each guards a different kind of thing.** `replaceQueue` throws
+a plain `Error` when a track carries no lane number (`src/store.ts:3517-3522`), and
+`handleQueuePost` catches only `QueueWaveOverflowError` (`:1884-1887`) — so wiring `track` without a
+validation path would answer **500** to authored input. The handler refuses a malformed track by
+name and index, as it already does for `dependsOn` and `seq`.
+
+`lifecycle` needs the same treatment for a different reason: it is the one declared field that is a
+**structure**, and `listQueue` republishes it AS a `QueueLifecycle`, so an accepted scalar or `{}`
+is a value no reader of that type can trust. It is refused by name and index too — AC4b, ratified
+2026-09-03. This paragraph originally said "one new refusal"; that was too narrow, and cycle 320
+raised it rather than quietly widening the code.
 
 **`queue-file` is out of scope, and is a second dropper.** `parse_queue_table` emits only
 `{cr, title, wave, dependsOn}` (`clients/_crucible_axi.py:2394`) and the README table has no release
@@ -112,8 +118,20 @@ reads. No new documentation format is invented.
 - **AC4** — `track` and `lifecycle` are stored from the bulk post on the same footing as `release`,
   so `QueueEntryInput` has no key the route silently ignores.
 - **AC4a** — A malformed `track` is refused **400** by name and index, never 500. Proven by posting
-  a track with no lane number, which reaches `replaceQueue`'s existing refusal today as an uncaught
-  `Error`.
+  a track with no lane number. Note the state this describes: **today the route answers 200**,
+  because it never forwards `track` at all, so `replaceQueue`'s existing refusal
+  (`src/store.ts:3517-3522`) is unreachable. 500 is what §S1 would create by wiring `track` without
+  validation — `replaceQueue` throws a plain `Error`, not a `QueueWaveOverflowError`, and the
+  handler catches only the latter. Measured 2026-09-03 (cycle 320).
+- **AC4b** — A `lifecycle` that is not a `QueueLifecycle` is refused **400** by name and index.
+  **Ratified by the user 2026-09-03** after cycle 320 raised it; it is a refusal this spec did not
+  originally ask for, and it is now a requirement rather than an agent's addition. It asserts only
+  what the type declares — `state` in `{SUPERSEDED, VOID}` and `at` a number — and asserts NOTHING
+  about the disposition itself. Rationale: `replaceQueue` stringifies the value verbatim and
+  `listQueue` republishes it AS a `QueueLifecycle`, so a scalar or a `{}` would be a value no
+  reader of that type can trust, and accepting it silently is the exact defect class §S2 exists to
+  kill. `track`'s refusal guards a normalisation; this one guards a STRUCTURE, which is why §S1's
+  "exactly one new refusal" was too narrow.
 - **AC5** — A guard fails when a key `QueueEntryInput` declares is never read by `handleQueuePost`.
   It must fail today if `release` is removed again, and it must consume `tests/helpers/source-scan.ts`
   rather than walk the tree itself — asserted by the helper's exports being imported, and by that
