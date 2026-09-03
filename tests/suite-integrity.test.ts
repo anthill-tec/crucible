@@ -138,15 +138,33 @@ function stripTomlComments(toml: string): string {
 }
 
 // Every `pathIgnorePatterns` assignment the config actually makes. The match
-// is deliberately UNANCHORED and demands `= [`, which is the union of the
-// two regexes this replaces — so it reports everything either of them did,
-// and over-reporting is the loud direction (a spelling that excludes nothing
-// is reported, which fails a guard; the reverse would hide a real
-// exclusion).
+// is deliberately UNANCHORED and demands `= [`, which is the union of the two
+// regexes this replaces PLUS TOML's quoted key spellings — so it reports
+// everything either of them did, and over-reporting stays the loud direction
+// (a spelling that excludes nothing is reported, which fails a guard; the
+// reverse would hide a real exclusion).
+//
+// THE QUOTED KEY — C3 FIX P3-2, the one spelling where that reverse really
+// happened. TOML lets a key be bare, basic-quoted or literal-quoted, and all
+// three are the SAME assignment: bun 1.3.14 honours `pathIgnorePatterns`,
+// `"pathIgnorePatterns"` and `'pathIgnorePatterns'` identically (measured over
+// the fixture at the end of this file — each hides the file, and bun's own
+// summary counts one). Demanding `=` IMMEDIATELY after the bare key missed
+// both quoted forms, so a real exclusion was invisible to the guard rather
+// than an inert one being reported. Only the CLOSING quote needs handling:
+// the match is unanchored, so a leading `"` is simply never consumed.
+//
+// WHAT THIS GUARD DELIBERATELY DOES NOT COVER, so the completeness claim
+// above is only about the key it names: `[test] root = "…"` also restricts
+// discovery — measured over the same two-file fixture, `root = "tests/hidden"`
+// yields `Ran 1 test across 1 file.` — but it is a different key with
+// different semantics (a narrowing of where bun LOOKS, not a list of what it
+// skips) and is outside this CR's scope. It is named here because a reader
+// must not read "every exclusion" for "every way discovery can shrink".
 export function discoveryExclusions(bunfigToml: string): DiscoveryExclusion[] {
   const config = stripTomlComments(bunfigToml);
   const found: DiscoveryExclusion[] = [];
-  const re = /pathIgnorePatterns\s*=\s*(\[[^\]]*\])/g;
+  const re = /pathIgnorePatterns["']?\s*=\s*(\[[^\]]*\])/g;
   let m: RegExpExecArray | null;
   // eslint-disable-next-line no-cond-assign
   while ((m = re.exec(config)) !== null) {
@@ -360,6 +378,18 @@ describe("Collected count surfaced in the regression envelope (§S2)", () => {
 // This stays a CORROBORATION. §S1's `bunfig` assertion above is the primary
 // guarantee precisely because it reads CONFIGURATION rather than run history,
 // so it holds under any invocation.
+//
+// WHY THIS CHECK STANDS SKIPPED INSIDE EVERY CLIENT RUN, and why that is BY
+// DESIGN rather than a broken guard (C3 FIX P3-4). `_wipe` deletes `junit.xml`
+// and its stamp before the run starts, and bun's JUnit reporter flushes only
+// at process EXIT — so at the moment this file is COLLECTED, inside ANY client
+// invocation, the artifact does not yet exist and `fullRunProof` reports
+// exactly that. The orchestrator's own whole-suite client gate therefore
+// always logs this skip: the check concludes only in a bare `bun test` run
+// AFTER a whole-suite client run has left an artifact behind. That is
+// consequence 1 of §S1's own Problem statement, unchanged from develop, and
+// it is why the primary guarantee is the `bunfig` assertion above rather than
+// this one.
 
 const REPORTS_DIR = path.join(REPO_ROOT, "test-reports");
 
@@ -390,7 +420,7 @@ export interface FullRunProof {
 // THE PRECONDITION, as a function of a reports directory alone, so the tests
 // below can plant every input shape instead of mutating the real one.
 export function fullRunProof(reportsDir: string): FullRunProof {
-  const junitPath = path.join(reportsDir, "junit.xml");
+  const junitPath = path.join(reportsDir, JUNIT_ARTIFACT);
   const recordPath = path.join(reportsDir, SCOPE_RECORD);
 
   if (!fs.existsSync(junitPath)) {
@@ -412,13 +442,16 @@ export function fullRunProof(reportsDir: string): FullRunProof {
   }
 
   let scope: unknown;
+  let artifact: unknown;
   let targets: unknown;
   try {
     const parsed = JSON.parse(fs.readFileSync(recordPath, "utf8")) as {
       scope?: unknown;
+      artifact?: unknown;
       targets?: unknown;
     };
     scope = parsed.scope;
+    artifact = parsed.artifact;
     targets = parsed.targets;
   } catch {
     return {
@@ -429,17 +462,54 @@ export function fullRunProof(reportsDir: string): FullRunProof {
     };
   }
 
-  if (scope === FULL_SCOPE) return { provenFull: true, reason: "" };
+  // SCOPE FIRST, THEN THE BINDING. A stamp that does not even claim fullness
+  // is refused for the reason its reader expects — the scope it does record —
+  // and the binding below is asked only of a stamp that does claim it.
+  if (scope !== FULL_SCOPE) {
+    const named = Array.isArray(targets) ? targets.map(String) : [];
+    return {
+      provenFull: false,
+      reason:
+        `${SCOPE_RECORD} records scope=${JSON.stringify(scope)}` +
+        (named.length > 0 ? ` (targets: ${named.join(", ")})` : "") +
+        `, so ${junitPath} describes how the previous command was invoked, not ` +
+        "what the tree contains",
+    };
+  }
 
-  const named = Array.isArray(targets) ? targets.map(String) : [];
-  return {
-    provenFull: false,
-    reason:
-      `${SCOPE_RECORD} records scope=${JSON.stringify(scope)}` +
-      (named.length > 0 ? ` (targets: ${named.join(", ")})` : "") +
-      `, so ${junitPath} describes how the previous command was invoked, not ` +
-      "what the tree contains",
-  };
+  // THE BINDING (C3 FIX P3-1). A scope claim is proof about ONE artifact —
+  // the one its writer named — and the whole reason this record exists is that
+  // only the producer knows the scope. A stamp naming a different file made no
+  // statement about the file being read here, so it cannot license the parity
+  // comparison over it; letting it do so would be the stale-state defect §S1
+  // removes, one level up. An ABSENT name is refused for the same reason and
+  // in the same direction: every stamp this client writes names its artifact
+  // (`_scope_record`), so an unnamed one came from a different or older writer
+  // whose claim cannot be tied to `junit.xml` at all. Refusing costs at most
+  // one documented SKIP — the failure-free direction this corroboration is
+  // built on — while accepting costs a false green.
+  if (typeof artifact !== "string" || artifact.length === 0) {
+    return {
+      provenFull: false,
+      reason:
+        `${recordPath} claims scope=${FULL_SCOPE} but names no artifact, so ` +
+        `nothing binds that claim to ${junitPath} — every stamp this client ` +
+        `writes names its artifact (${JUNIT_ARTIFACT}), so an unnamed one is ` +
+        "from another writer and proves nothing about this file",
+    };
+  }
+  if (artifact !== JUNIT_ARTIFACT) {
+    return {
+      provenFull: false,
+      reason:
+        `${recordPath} certifies scope=${FULL_SCOPE} for ` +
+        `artifact=${JSON.stringify(artifact)}, not ` +
+        `${JSON.stringify(JUNIT_ARTIFACT)} — the stamp is proof about a ` +
+        `different artifact and says nothing about ${junitPath}`,
+    };
+  }
+
+  return { provenFull: true, reason: "" };
 }
 
 // A test file with the mtime the filesystem reports for it. The pair, not the
