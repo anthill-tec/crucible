@@ -78,6 +78,7 @@ CR-SAN-013-C1-RED) are readability habits only. Identity carries displayName + s
 
 import argparse
 import contextlib
+import json
 import os
 import re
 import shutil
@@ -90,6 +91,8 @@ import xml.etree.ElementTree as ET
 CRUCIBLE_URL = os.environ.get("CRUCIBLE_URL", "http://localhost:3849")
 DEFAULT_REPORTS = "test-reports"
 DEFAULT_JUNIT = "junit.xml"
+# CR-CRU-101 §S1 — the junit artifact's scope record (see `_scope_path`).
+DEFAULT_SCOPE = "junit-scope.json"
 
 
 def _resolve_project_dir(arg_value):
@@ -442,23 +445,74 @@ def _junit_path(reports_dir):
     return os.path.join(reports_dir, DEFAULT_JUNIT)
 
 
+# ── CR-CRU-101 §S1 — the artifact says what SCOPE produced it ───────────────
+#
+# `test-reports/junit.xml` is written ONLY here (`bunfig.toml` carries no
+# `[test]` section, so a bare `bun test` writes nothing to it), and `_wipe`
+# deletes the previous one immediately before each run. That makes this client
+# the ONLY place that knows whether the artifact it is about to produce covers
+# the whole suite or a subset — the invocation's `targets`.
+#
+# It cannot be recovered downstream: bun's JUnit output records test counts,
+# not a file total and not how the runner was invoked, so the only
+# artifact-internal proxy for "this run was full" is "its file set equals the
+# on-disk set" — which is precisely the conclusion the corroboration in
+# tests/suite-integrity.test.ts draws FROM the artifact. A precondition
+# identical to its conclusion can never fail. So the scope is RECORDED here,
+# beside the artifact, and that check reads it as its precondition.
+#
+# The record is a local artifact like the report itself (`test-reports/` is
+# gitignored) and is wiped WITH it: a scope record outliving the artifact it
+# describes would certify the NEXT one, which is the stale-state defect this
+# exists to remove. A record that cannot be written is simply absent, and an
+# absent record makes the corroboration SKIP — the safe direction, so stamping
+# never fails a run.
+def _scope_path(reports_dir):
+    return os.path.join(reports_dir, DEFAULT_SCOPE)
+
+
+def _scope_record(targets):
+    """What the artifact a `targets` invocation produces can prove about
+    itself: `full` when no target is named (bun collects the whole suite),
+    `scoped` otherwise. The named targets ride along so a skip can state the
+    scope the artifact actually had rather than only that it was not full."""
+    named = [str(t) for t in (targets or [])]
+    return {"scope": "scoped" if named else "full",
+            "artifact": DEFAULT_JUNIT,
+            "targets": named}
+
+
+def _write_scope_record(reports_dir, targets):
+    try:
+        with open(_scope_path(reports_dir), "w", encoding="utf-8") as fh:
+            json.dump(_scope_record(targets), fh)
+    except OSError:
+        pass
+
+
 def _wipe(reports_dir):
-    jp = _junit_path(reports_dir)
-    if os.path.exists(jp):
-        try:
-            os.remove(jp)
-        except OSError:
-            pass
+    """Remove the previous run's artifact AND its scope record — together, so
+    neither can ever describe the other run."""
+    for path in (_junit_path(reports_dir), _scope_path(reports_dir)):
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def _bun_test_cmd(bun, targets, junit_path, coverage, coverage_dir):
-    """Build the `bun test` invocation. Targeted (file paths) or whole-suite."""
+    """Build the `bun test` invocation — targeted (file paths) or whole-suite —
+    and stamp the scope of the artifact it will produce (§S1). The stamp is
+    derived from the SAME `targets` this function branches on, in the same
+    call, so the record structurally cannot disagree with the command."""
     cmd = [bun, "test"]
     if targets:
         cmd += list(targets)
     cmd += ["--reporter=junit", f"--reporter-outfile={junit_path}"]
     if coverage:
         cmd += ["--coverage", "--coverage-reporter=lcov", f"--coverage-dir={coverage_dir}"]
+    _write_scope_record(os.path.dirname(junit_path) or ".", targets)
     return cmd
 
 

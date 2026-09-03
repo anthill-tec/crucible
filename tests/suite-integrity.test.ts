@@ -214,29 +214,166 @@ describe("Collected count surfaced in the regression envelope (§S2)", () => {
 });
 
 // ── Corroborating parity check (cheap — no full-suite spawn) ─────────────
+//
+// CR-CRU-101 §S1 — IT STATES ITS OWN PRECONDITION.
+//
+// THE DEFECT THIS REPLACES, MEASURED (2026-09-03): this check compared the
+// on-disk `tests/**/*.test.ts` set with the distinct file set in
+// `test-reports/junit.xml` left behind by WHATEVER RAN LAST, on the premise —
+// stated only in its own skip message — that the artifact came from a FULL
+// run. Nothing enforced it. The artifact held ONE distinct file
+// (`tests/boot-safety.test.ts`) against 144 on-disk files, and
+// `bun test tests/suite-integrity.test.ts` reported 3 pass / 1 fail:
+// "Expected - 143 / Received + 0". No code defect existed. The previous
+// command had simply been narrower than the tree — which is what this repo's
+// dispatch discipline REQUIRES of every sub-agent ("run ONLY the suites you
+// touch"). The assertion was detecting compliance, not invisible coverage.
+//
+// WHERE THE PROOF COMES FROM, and why nowhere else will do: bun's JUnit output
+// records test counts, not a file total and not how the runner was invoked, so
+// the only artifact-INTERNAL proxy for "this run was full" is "its file set
+// equals the on-disk set" — the conclusion itself. A precondition identical to
+// its conclusion can never fail, and a check that can never fail detects
+// nothing. The scope is known exactly once, at the PRODUCER:
+// `clients/bun-crucible.py`'s `_bun_test_cmd` receives `targets` (empty =
+// whole-suite) at the moment it builds the invocation, having just `_wipe`d the
+// previous artifact. It stamps that scope beside the artifact
+// (`test-reports/junit-scope.json`), and this check reads the stamp as its
+// precondition — asserting it BEFORE the parity conclusion, and SKIPPING with
+// the reason named when it does not hold.
+//
+// `bunfig.toml` carries no `[test]` section, so a bare `bun test` writes
+// NOTHING to `test-reports/`: artifact and stamp are only ever written
+// together by the client and only ever removed together by `_wipe`, so a stamp
+// is never stale with respect to the artifact beside it.
+//
+// This stays a CORROBORATION. §S1's `bunfig` assertion above is the primary
+// guarantee precisely because it reads CONFIGURATION rather than run history,
+// so it holds under any invocation.
+
+const REPORTS_DIR = path.join(REPO_ROOT, "test-reports");
+
+// The producing client's stamp: its filename and the two scope values it
+// writes. Pinned here because the SKIP path is failure-free — a client-side
+// rename would retire this corroboration permanently and SILENTLY, the one
+// direction no test reports. The values are proven behaviourally below (the
+// real client is spawned twice); the filename is additionally pinned against
+// the client's own source, so a rename fails HERE.
+const SCOPE_RECORD = "junit-scope.json";
+const FULL_SCOPE = "full";
+const SCOPED_SCOPE = "scoped";
+
+export interface FullRunProof {
+  provenFull: boolean;
+  // Non-empty whenever `provenFull` is false: `test.skipIf` prints no reason
+  // of its own (bun 1.3.14), so the caller emits this at COLLECTION time the
+  // way the missing-artifact case has always been reported.
+  reason: string;
+}
+
+// THE PRECONDITION, as a function of a reports directory alone, so the tests
+// below can plant every input shape instead of mutating the real one.
+export function fullRunProof(reportsDir: string): FullRunProof {
+  const junitPath = path.join(reportsDir, "junit.xml");
+  const recordPath = path.join(reportsDir, SCOPE_RECORD);
+
+  if (!fs.existsSync(junitPath)) {
+    return {
+      provenFull: false,
+      reason:
+        `${junitPath} does not exist — no prior client run has left an ` +
+        "artifact at this path (a bare `bun test` writes none)",
+    };
+  }
+  if (!fs.existsSync(recordPath)) {
+    return {
+      provenFull: false,
+      reason:
+        `${junitPath} has no ${SCOPE_RECORD} beside it, so the scope of the ` +
+        "run that produced it is unknown — it may cover one file or the whole " +
+        "tree, and only the producing client could have said which",
+    };
+  }
+
+  let scope: unknown;
+  let targets: unknown;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(recordPath, "utf8")) as {
+      scope?: unknown;
+      targets?: unknown;
+    };
+    scope = parsed.scope;
+    targets = parsed.targets;
+  } catch {
+    return {
+      provenFull: false,
+      reason:
+        `${recordPath} (the ${SCOPE_RECORD} beside ${junitPath}) is not ` +
+        "readable JSON, so the artifact's scope cannot be established",
+    };
+  }
+
+  if (scope === FULL_SCOPE) return { provenFull: true, reason: "" };
+
+  const named = Array.isArray(targets) ? targets.map(String) : [];
+  return {
+    provenFull: false,
+    reason:
+      `${SCOPE_RECORD} records scope=${JSON.stringify(scope)}` +
+      (named.length > 0 ? ` (targets: ${named.join(", ")})` : "") +
+      `, so ${junitPath} describes how the previous command was invoked, not ` +
+      "what the tree contains",
+  };
+}
+
+export interface ParityGap {
+  // On disk, absent from the run: INVISIBLE COVERAGE, the thing worth catching.
+  neverRan: string[];
+  // In the run, absent from disk: a file deleted since, or a stale artifact.
+  ranButAbsent: string[];
+}
+
+// THE CONCLUSION, likewise pure. Both directions are reported (never a bare
+// count), so two errors cancelling out cannot pass, and the failure NAMES the
+// files instead of printing two 145-element lists.
+export function junitParityGap(onDisk: string[], ranFiles: string[]): ParityGap {
+  const ran = new Set(ranFiles);
+  const disk = new Set(onDisk);
+  return {
+    neverRan: onDisk.filter((rel) => !ran.has(rel)).sort(),
+    ranButAbsent: ranFiles.filter((rel) => !disk.has(rel)).sort(),
+  };
+}
 
 describe(
   "On-disk vs an existing junit artifact (corroboration only — §S1's " +
     "bunfig assertion above is the PRIMARY guarantee)",
   () => {
-    const junitPath = path.join(REPO_ROOT, "test-reports", "junit.xml");
-    const junitExists = fs.existsSync(junitPath);
-    if (!junitExists) {
+    const junitPath = path.join(REPORTS_DIR, "junit.xml");
+    const proof = fullRunProof(REPORTS_DIR);
+    if (!proof.provenFull) {
       // Clear, non-silent explanation for the skip below — printed once at
-      // collection time regardless of which reporter is in use.
+      // collection time regardless of which reporter is in use, because
+      // `test.skipIf` prints no reason of its own.
       console.error(
-        `[suite-integrity] skipping junit-artifact corroboration: ${junitPath} ` +
-          "does not exist (no prior real bun run has left one behind at this " +
-          "path) — this is a documented, expected skip, not a dodge; §S1's " +
-          "bunfig assertion above remains the primary guarantee regardless.",
+        `[suite-integrity] skipping junit-artifact corroboration: ${proof.reason} ` +
+          "— this is a documented, expected skip, not a dodge; §S1's bunfig " +
+          "assertion above remains the primary guarantee regardless.",
       );
     }
 
-    test.skipIf(!junitExists)(
-      "on-disk tests/**/*.test.ts file count equals the distinct file count " +
-        "in test-reports/junit.xml from a prior real run (skipped when " +
-        "absent, per the console note logged above)",
+    test.skipIf(!proof.provenFull)(
+      "given an artifact PROVEN to come from a whole-suite client run, every " +
+        "on-disk tests/**/*.test.ts file appears in it and it names no file " +
+        "that is not on disk (skipped, with the reason logged above, whenever " +
+        "that precondition cannot be established)",
       () => {
+        // The PRECONDITION, asserted before the conclusion (AC5) — re-read
+        // here rather than trusted from collection time, so an artifact
+        // replaced mid-run cannot license a comparison against itself.
+        const recheck = fullRunProof(REPORTS_DIR);
+        expect(recheck).toEqual({ provenFull: true, reason: "" });
+
         const onDisk = listTestFilesOnDisk(TESTS_DIR)
           .map((f) => path.relative(REPO_ROOT, f).split(path.sep).join("/"))
           .filter((rel) => rel !== SELF_RELATIVE)
@@ -247,51 +384,22 @@ describe(
           .filter((rel) => rel !== SELF_RELATIVE)
           .sort();
 
-        expect({ onDiskCount: onDisk.length, ranFiles }).toEqual({
-          onDiskCount: onDisk.length,
-          ranFiles: onDisk,
+        expect(junitParityGap(onDisk, ranFiles)).toEqual({
+          neverRan: [],
+          ranButAbsent: [],
         });
       },
     );
   },
 );
 
-// ── CR-CRU-101 §S1 — the corroboration states its own PRECONDITION ───────
+// ── CR-CRU-101 §S1 — the precondition's own tests ────────────────────────
 //
-// THE DEFECT, MEASURED (feature/CR-CRU-101, 2026-09-03, before this block
-// existed): `test-reports/junit.xml` held ONE distinct file
-// (`tests/boot-safety.test.ts`) against 144 on-disk `.test.ts` files, and
-// `bun test tests/suite-integrity.test.ts` reported 3 pass / 1 fail — the
-// corroboration above, failing with "Expected - 143 / Received + 0". No code
-// defect existed. The previous command had simply been narrower than the
-// tree, which is what this repo's own dispatch discipline REQUIRES of every
-// sub-agent ("run ONLY the suites you touch"). The assertion was detecting
-// compliance.
-//
-// WHERE THE PROOF MUST COME FROM, and why nowhere else will do: bun's JUnit
-// output records test counts, not a file total and not how it was invoked, so
-// the only artifact-INTERNAL proxy for "this run was full" is "its file set
-// equals the on-disk set" — the conclusion itself. A precondition identical
-// to its conclusion can never fail. The scope is known exactly once, at the
-// producer: `clients/bun-crucible.py`'s `_bun_test_cmd` receives `targets`
-// (empty = whole-suite) at the moment it builds the invocation, and `_wipe`
-// deletes the previous artifact immediately before. So the client stamps what
-// it is about to produce, and this check reads that stamp.
-//
-// bunfig.toml carries no `[test]` section, so a bare `bun test` writes NOTHING
-// to `test-reports/` — the artifact and its stamp are only ever written
-// together, by the client, and are only ever removed together, by `_wipe`.
-// A stamp is therefore never stale with respect to the artifact beside it.
-
-// The producing client's stamp: filename and the two scope values. Pinned
-// here because the SKIP path is failure-free — a client-side rename would
-// disable this corroboration permanently and SILENTLY, which is the one
-// direction no test would ever report. The values are proven behaviourally
-// (the real client is spawned below); the filename is additionally pinned
-// against the client source, so the rename fails HERE.
-const SCOPE_RECORD = "junit-scope.json";
-const FULL_SCOPE = "full";
-const SCOPED_SCOPE = "scoped";
+// Planted inputs, never the real `test-reports/`: the shapes that matter here
+// (no stamp, a scoped stamp, a corrupt stamp) are exactly the states this
+// check must not fail on, and planting them is the only way to assert that
+// without waiting for one to occur. The two REAL client spawns then prove the
+// cross-stack half — that the stamp this reads is the stamp the client writes.
 
 function plantReportsDir(files: Record<string, string>): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cr101-scope-"));
