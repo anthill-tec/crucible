@@ -99,9 +99,10 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-078](CR-CRU-078-roadmap-graph-and-table-together.md) | the roadmap is a release-paged flowchart with its scoped table | feature | COMPLETED (0.2.0) | 077, 084, 091 | 5 (0.2.0) |
 | [CR-CRU-095](CR-CRU-095-seq-scales-collide.md) | two seq scales collide, so `next` recommends deferred work | patch | COMPLETED (0.2.0) | 091, 092 | 5 (0.2.0) |
 | [CR-CRU-096](CR-CRU-096-zone-2-drifts-from-the-approved-design.md) | zone 2 drifts from the approved flowchart design | patch | COMPLETED (0.2.0) | 078, 095 | 5 (0.2.0) |
-| [CR-CRU-097](CR-CRU-097-project-independence-is-not-asserted.md) | project independence is claimed but never asserted | patch | PENDING (0.2.0) | — | 5 (0.2.0) |
+| [CR-CRU-097](CR-CRU-097-project-independence-is-not-asserted.md) | project independence is claimed but never asserted | patch | COMPLETED (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-099](CR-CRU-099-a-declared-release-is-dropped-on-queue-post.md) | a declared release is dropped on queue post | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-100](CR-CRU-100-a-test-asserts-an-invariant-over-live-data.md) | a test asserts an invariant over live data | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
+| [CR-CRU-101](CR-CRU-101-suite-integrity-contradicts-scoped-runs.md) | the suite-integrity corroboration contradicts scoped runs | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-079](CR-CRU-079-roadmap-deep-link-and-drill-through.md) | roadmap deep-link parity and active-CR drill-through | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-085](CR-CRU-085-roadmap-multi-track-lanes.md) | multi-track swimlanes inside a wave | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-093](CR-CRU-093-project-rail-collapses.md) | the project rail collapses, giving every workspace view its width back | feature | PENDING (0.2.0) | 006 | 5 (0.2.0) |
@@ -232,6 +233,26 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   the same conclusion in the spec itself. The three 409s were operational friction — re-register and
   continue — not a diagnostic defect. What IS real is the participation record being destroyed by
   pruning as well as by `unregister`, and that is CR-CRU-094 §S2's scope.
+
+- 2026-09-03 — **an out-of-order `cycle-activate` prescribes a transition no client can perform.**
+  `cycle-activate 319` on a plan with 316 still pending refuses with
+  `help[]: ["activate cycle 316 first — cycles activate in ascending order", "or transition cycle
+  316 pending→skipped, then retry this activation"]`. The second instruction is unreachable from the
+  fleet: `cycle-done` takes only a cycle id and `--agent` (no `--status`), and `abort` targets
+  PLANS, so no client exposes a pending→skipped transition. The refusal is correct and its first
+  instruction works; the second names an operation that exists only server-side, if at all. Same
+  family as CR-CRU-099 AC6 — a message citing a consumer that cannot corroborate it. Candidate
+  patch CR; worked around by folding the out-of-order cycle's content into an earlier cycle and
+  recording the label offset.
+
+- 2026-09-03 — **`python-crucible.py test` emits no `runId`; `bun-crucible.py` does.** Found by
+  CR-CRU-097's C1 agent, which could report bun run ids and could not report python ones:
+  `runId` has ZERO hits in `clients/python-crucible.py`, while the bun client prints it per
+  CR-CRU-017's run lifecycle. A python-stack ingest is therefore identifiable only by
+  `agentId` + `cycleId` + its pass/fail shape, so no report, brief or commit message can cite a
+  python run by id — and the orchestrator cannot verify a claimed python run at all. Adjacent to
+  CR-CRU-094 (participation recorded, not inferred) but distinct: that CR is about the agent/cycle
+  binding, this is about the run's own identity being unpublished on one stack of five.
 
 - 2026-09-03 — **a green pre-merge gate does not mean develop is green: anything reading git
   history relative to `HEAD` changes meaning at the merge.** CR-CRU-096's non-vacuity block

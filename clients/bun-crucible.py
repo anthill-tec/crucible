@@ -882,15 +882,21 @@ def _run_left_open_warning(run_id, cause):
     close. It names the settlement path precisely, because the alternative
     reading — "the run was lost" — is wrong and would send an operator hunting
     for a missing event."""
+    # THE DETAIL NAMES NO CR AND NO UNBUILT ROUTE (CR-CRU-097 AC3a). This
+    # string is emitted to the user in the AXI envelope on ANY project's
+    # board, so it states what the client DOES — posts no abort, the server
+    # settles the run — and nothing about our backlog. The lineage lives
+    # here: a client-side abort endpoint is CR-CRU-017 §S2 and is not built,
+    # which is WHY there is no post to make; when it ships, this warning
+    # changes behaviour, not just wording.
     return {
         "code": "run-left-open",
-        "detail": (f"{cause} — run {run_id} was never closed by an ingest. The "
-                   f"client posts NO abort (POST /api/v2/runs/<id>/abort is "
-                   f"CR-CRU-017 §S2 and does not exist yet): the server settles "
-                   f"it with its own auto-abort — reason `agent died` as soon as "
+        "detail": (f"{cause} — run {run_id} was never closed by an ingest. "
+                   f"The client posts no abort: the server settles it with "
+                   f"its own auto-abort — reason `agent died` as soon as "
                    f"this agent tombstones, else `abandoned` once the run is "
-                   f"older than CRUCIBLE_RUN_ABANDON_MS. The run is abandoned, "
-                   f"not lost"),
+                   f"older than CRUCIBLE_RUN_ABANDON_MS. The run is "
+                   f"abandoned, not lost"),
     }
 
 
@@ -1816,7 +1822,7 @@ def _add_no_lifecycle_arg(p):
     board learns the real wall-clock span. Set the flag — or
     $BUN_CRUCIBLE_NO_LIFECYCLE — for the unchanged single-shot ingest."""
     p.add_argument("--no-lifecycle", action="store_true",
-                   help="Do NOT wrap the run in the CR-CRU-017 run lifecycle: skip "
+                   help="Do NOT wrap the run in the run lifecycle: skip "
                         "POST /api/v2/runs/start and send no runId, so the ingest is "
                         "the single-shot event it was before the lifecycle existed "
                         "(env twin: $BUN_CRUCIBLE_NO_LIFECYCLE=1).")
@@ -1852,8 +1858,25 @@ def cmd_dashboard():
     return cmd_status(_axi().status_namespace())
 
 
+# CR-CRU-097 §S2/AC2 — the ROOT help's description, and deliberately NOT
+# `__doc__`. The module docstring is this client's design record: it cites the
+# CRs that shaped it, and argparse printed all of it to every user of every
+# project. The docstring stays exactly as it is (AC8 — provenance intact);
+# what the CLI RENDERS states the tool's behaviour and names no backlog.
+_CLI_DESCRIPTION = (
+    "Bun + TypeScript Crucible CLI — one entry point for the orchestrator and for the\n"
+    "RED/GREEN/FIX/VERIFY agent lifecycle, and for running TypeScript test targets\n"
+    "(`bun test` → JUnit XML, optional lcov coverage) with the result ingested to\n"
+    "Crucible.\n"
+    "\n"
+    "Tool-specific (bun test / JUnit-XML / lcov / tsc), never project-specific: the\n"
+    "project path, the bun package dir and the bun binary are all parameterizable.\n"
+    "Run `<verb> --help` for a verb's own flags."
+)
+
+
 def main():
-    p = argparse.ArgumentParser(prog="bun-crucible", description=__doc__,
+    p = argparse.ArgumentParser(prog="bun-crucible", description=_CLI_DESCRIPTION,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     # §S14 — subcommand is OPTIONAL: a bare invocation falls through to the
     # no-arg live dashboard (below), never argparse's required-subcommand error.
@@ -1866,7 +1889,7 @@ def main():
     # runtime hard stop owns the refusal so it arrives as a structured envelope.
     r.add_argument("--agent",
                    help="Agent id — a free-form identifier. REQUIRED, but enforced at "
-                        "RUNTIME by the §S5 hard stop (CR-CRU-054 §S2b) so a missing "
+                        "RUNTIME by the §S5 hard stop so a missing "
                         "id yields the ok:false AXI envelope, not a bare argparse "
                         "usage error. "
                                                 "Agent id — a free-form identifier. The role is declared by "
@@ -1895,9 +1918,13 @@ def main():
     r.set_defaults(func=cmd_register)
 
     u = sub.add_parser("unregister", help="Unregister an agent")
+    # CR-CRU-054 §S2b — the same runtime hard stop `register` uses: --agent is
+    # NOT argparse-required, so the refusal arrives as the §S5 structured
+    # envelope. Lineage lives here rather than in the help line, which every
+    # project's users read (CR-CRU-097 §S2/AC2).
     u.add_argument("--agent",
                    help="Agent id — REQUIRED, but enforced at RUNTIME by the §S5 "
-                        "hard stop (CR-CRU-054 §S2b) so a missing id yields "
+                        "hard stop so a missing id yields "
                         "the ok:false AXI envelope, not a bare argparse "
                         "usage error.")
     _add_project_dir_arg(u)
@@ -1960,7 +1987,8 @@ def main():
     pf = sub.add_parser("plan-file",
                         help="File a cycle plan; prints the ASSIGNED numeric cycle ids. "
                              "Requires --agent <registered id> (§S2b).")
-    pf.add_argument("--cr", required=True, help="CR id, e.g. CR-CRU-008.")
+    pf.add_argument("--cr", required=True,
+                    help="CR id — caller-owned free text, e.g. CR-<PROJECT>-<n>.")
     pf.add_argument("--title", help="Optional plan title.")
     pf.add_argument("--cycles", required=True,
                     help='Comma-separated cycle labels, e.g. "a,b,c".')
@@ -2145,7 +2173,7 @@ def main():
                          "(§S1/§S3) — on a recording only: with "
                          "--repair-provenance an empty value writes nothing "
                          "(it never overwrites a stored set) and the repair is "
-                         "REFUSED (§S4, CR-CRU-086 §S2).")
+                         "REFUSED.")
     # CR-CRU-081 §S3 — the OPT-IN correction path: without this flag a
     # re-post of an already-recorded release is the server's dedup replay
     # (CR-CRU-080 §S3), which is what keeps an ordinary run unable to

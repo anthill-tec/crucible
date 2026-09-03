@@ -1500,7 +1500,11 @@ class NextBlockCitationsTest(unittest.TestCase):
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         ("canonical_track", "src/store.ts", 345, 348,
          "export function normalizeTrack(", "}"),
-        ("_next_start_help", "clients/python-crucible.py", 1349, 1362,
+        # Re-pinned 2026-09-03 (CR-CRU-097 C4): §S2's citation moves added
+        # lines above this block, drifting it 1349-1362 -> 1370-1384. This is
+        # the guard doing its job — the CR that shifted the file is the CR
+        # that re-pins it.
+        ("_next_start_help", "clients/python-crucible.py", 1370, 1384,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 

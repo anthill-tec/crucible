@@ -1059,7 +1059,21 @@ describe("§S5 Compile/BDD tab bodies (user defect 2026-07-15)", () => {
     expect(body.textContent ?? "").toContain("no compile events yet");
   });
 
-  test("BDD tab body text names the real landing CR (CR-CRU-015) and never CR-CRU-007", async () => {
+  // RETIRED by CR-CRU-097 AC1/AC1b (2026-09-03). This test asserted
+  // `toContain("CR-CRU-015")` on the rendered BDD body — it made naming OUR
+  // backlog to every project the product CONTRACT, which is the §S1 defect
+  // CR-CRU-097 exists to remove. Its 2026-07-15 content was "names the RIGHT
+  // CR, not the stale wrong one (007)"; post-AC1 the right thing is NO CR at
+  // all, so the assertion is SUPERSEDED, not dropped for convenience.
+  //
+  // Its successor is `tests/project-independence-strings.test.ts`, which
+  // asserts the same surface POSITIVELY and more strongly: the rendered body
+  // matches neither `CR-[A-Z]{2,}-\d+` nor a release version, AND still states
+  // the capability ("Runs timeline", "does not exist yet"), behind a
+  // non-vacuity guard proving the BDD pane actually rendered. What survives
+  // here is the part that is not about a CR id: the tab is reachable and its
+  // body renders.
+  test("the BDD tab is reachable and renders a body (the CR-naming half is retired — see above)", async () => {
     const key = "bdd-tab-p1";
     await mountApp({
       pathname: `/p/${key}`,
@@ -1075,7 +1089,8 @@ describe("§S5 Compile/BDD tab bodies (user defect 2026-07-15)", () => {
     await settle();
 
     const body = document.querySelector('[data-testid="workspace-body"]')!;
-    expect(body.textContent ?? "").toContain("CR-CRU-015");
+    expect((body.textContent ?? "").trim().length).toBeGreaterThan(0);
+    // The stale-CR half of the original defect still cannot return.
     expect(body.textContent ?? "").not.toContain("CR-CRU-007");
   });
 });

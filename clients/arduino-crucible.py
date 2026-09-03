@@ -1076,7 +1076,8 @@ def main():
                              "Requires --agent <registered id> (§S2b) — the registered id is "
                              "also stored as the plan's orchestrator (the free-text "
                              "--orchestrator label is retired).")
-    pf.add_argument("--cr", required=True, help="CR id, e.g. CR-CRU-008.")
+    pf.add_argument("--cr", required=True,
+                    help="CR id — caller-owned free text, e.g. CR-<PROJECT>-<n>.")
     pf.add_argument("--title", help="Optional plan title.")
     pf.add_argument("--cycles", required=True, help='Comma-separated cycle labels, e.g. "a,b,c".')
     pf.add_argument("--wave", help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")
@@ -1213,7 +1214,7 @@ def main():
                          "(§S1/§S3) — on a recording only: with "
                          "--repair-provenance an empty value writes nothing "
                          "(it never overwrites a stored set) and the repair is "
-                         "REFUSED (§S4, CR-CRU-086 §S2).")
+                         "REFUSED.")
     # CR-CRU-081 §S3 — the OPT-IN correction path: without this flag a
     # re-post of an already-recorded release is the server's dedup replay
     # (CR-CRU-080 §S3), which is what keeps an ordinary run unable to

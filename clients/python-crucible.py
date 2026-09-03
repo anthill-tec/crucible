@@ -1228,8 +1228,25 @@ def cmd_dashboard():
     return cmd_status(_axi().status_namespace())
 
 
+# CR-CRU-097 §S2/AC2 — the ROOT help's description, and deliberately NOT
+# `__doc__`. The module docstring is this client's design record: it cites the
+# CRs that shaped it, and argparse printed all of it to every user of every
+# project. The docstring stays exactly as it is (AC8 — provenance intact);
+# what the CLI RENDERS states the tool's behaviour and names no backlog.
+_CLI_DESCRIPTION = (
+    "Python + unittest Crucible CLI — one entry point for the orchestrator and for\n"
+    "the RED/GREEN/FIX/VERIFY agent lifecycle, and for running Python test targets\n"
+    "(unittest via xmlrunner → JUnit XML, optional coverage.py) with the result\n"
+    "ingested to Crucible.\n"
+    "\n"
+    "Tool-specific (unittest / xmlrunner / JUnit-XML / coverage.py), never\n"
+    "project-specific: the project path and the interpreter are parameterizable.\n"
+    "Run `<verb> --help` for a verb's own flags."
+)
+
+
 def main():
-    p = argparse.ArgumentParser(prog="python-crucible", description=__doc__,
+    p = argparse.ArgumentParser(prog="python-crucible", description=_CLI_DESCRIPTION,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     # §S14 — subcommand is OPTIONAL: a bare invocation falls through to the
     # no-arg live dashboard, never argparse's required-subcommand error.
@@ -1245,7 +1262,7 @@ def main():
     # runtime hard stop owns the refusal so it arrives as a structured envelope.
     r.add_argument("--agent",
                    help="Agent id — a free-form identifier. REQUIRED, but enforced at "
-                        "RUNTIME by the §S5 hard stop (CR-CRU-054 §S2b) so a missing "
+                        "RUNTIME by the §S5 hard stop so a missing "
                         "id yields the ok:false AXI envelope, not a bare argparse "
                         "usage error. "
                                                 "Agent id — a free-form identifier. The role is declared by "
@@ -1275,9 +1292,13 @@ def main():
     r.set_defaults(func=cmd_register)
 
     u = sub.add_parser("unregister", help="Unregister an agent")
+    # CR-CRU-054 §S2b — the same runtime hard stop `register` uses: --agent is
+    # NOT argparse-required, so the refusal arrives as the §S5 structured
+    # envelope. Lineage lives here rather than in the help line, which every
+    # project's users read (CR-CRU-097 §S2/AC2).
     u.add_argument("--agent",
                    help="Agent id — REQUIRED, but enforced at RUNTIME by the §S5 "
-                        "hard stop (CR-CRU-054 §S2b) so a missing id yields "
+                        "hard stop so a missing id yields "
                         "the ok:false AXI envelope, not a bare argparse "
                         "usage error.")
     _add_project_dir_arg(u)
@@ -1349,7 +1370,8 @@ def main():
     pf = sub.add_parser("plan-file",
                         help="File a cycle plan; prints the ASSIGNED numeric cycle ids. "
                              "Requires --agent <registered id> (§S2b).")
-    pf.add_argument("--cr", required=True, help="CR id, e.g. CR-CRU-008.")
+    pf.add_argument("--cr", required=True,
+                    help="CR id — caller-owned free text, e.g. CR-<PROJECT>-<n>.")
     pf.add_argument("--title", help="Optional plan title.")
     pf.add_argument("--cycles", required=True,
                     help='Comma-separated cycle labels, e.g. "a,b,c".')
@@ -1529,7 +1551,7 @@ def main():
                          "(§S1/§S3) — on a recording only: with "
                          "--repair-provenance an empty value writes nothing "
                          "(it never overwrites a stored set) and the repair is "
-                         "REFUSED (§S4, CR-CRU-086 §S2).")
+                         "REFUSED.")
     # CR-CRU-081 §S3 — the OPT-IN correction path: without this flag a
     # re-post of an already-recorded release is the server's dedup replay
     # (CR-CRU-080 §S3), which is what keeps an ordinary run unable to
