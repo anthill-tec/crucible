@@ -4,7 +4,7 @@
 - **Wave**: 5 (0.2.0) — one leak is a user-visible string in a shipped surface. Release membership
   is the user's call.
 - **Depends on**: none — every change is local to a string, a help line, or a fixture.
-- **Status**: PENDING (0.2.0) — filed 2026-09-02
+- **Status**: COMPLETED (0.2.0) — filed 2026-09-02, shipped 2026-09-03
 - **Found by**: the user, on reading CR-CRU-096's gap analysis. The analysis had reported the
   AC fixtures as *stale* (they decay on every merge) and filed that as a spec-update. The user
   named the actual defect: a project-INDEPENDENT product cannot take the dogfood project's backlog
