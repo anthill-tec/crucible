@@ -72,67 +72,76 @@ feature (`tests/e2e/features/roadmap-graph.feature`) that **had never passed** b
 filing of this CR attributed that AC to CR-CRU-099, which is the CR that FIXED the route, not the
 one that recorded the hole.)
 
-The primary guarantee (the `bunfig` assertion, which proves the runner is configured to discover
-every file) is unaffected and stays. Only the corroboration half is defective.
+The primary guarantee (the `bunfig` assertions, which prove the runner is CONFIGURED to discover
+every file) is unaffected and stays. It is also enough: CR-CRU-096 AC28a's e2e hole was a feature
+that ran and FAILED, not a file that never ran, so the deleted junit comparison would not have
+caught it either. The invisible-coverage worry is answered by config, not by run history.
 
 ## Scope
 
-### §S1 — the corroboration states its own precondition
+### §S1 — the corroboration is DELETED
 
-The check runs only against an artifact it can prove came from a **full** run. Absent that proof it
-SKIPS with the reason named, exactly as it already does when the artifact is missing. A skip that
-says why is honest; a failure that describes the previous command is not.
+**Amended 2026-09-04 by user ruling, and the amendment is the point of this CR.** §S1 originally
+said the corroboration must state its own precondition, and an earlier AC6 forbade deleting it. Both
+were the orchestrator's invention, not the problem's requirement, and together they cost ~900 lines
+across four cycles: a client-written scope stamp, an artifact binding, three-case mtime arithmetic,
+an anti-vacuity skip, a two-channel fixture with its own summary-line parser, and a filename drift
+guard — all of it machinery to make one secondary check trustworthy.
 
-**Where the proof comes from, since the gap analysis settled it:** the producing client, which knows
-its own scope at the moment it builds the invocation. This CR therefore changes
-`clients/bun-crucible.py` as well as the test — a shipped client surface, named here rather than
-discovered mid-implementation.
+What settled it was VERIFY's own measurement: **the corroboration can never conclude inside a client
+run.** `_wipe` deletes the artifact and bun flushes its report only at process exit, so at collection
+time the artifact does not exist and the check always skips. It concludes only in a bare `bun test`
+issued by hand after a whole-suite client run — which is not a thing that happens in this project's
+workflow. Every piece of the machinery above was defending a check that never fires.
 
-**One option is REJECTED, and the rejection is the point.** "Infer fullness from the artifact
-itself" cannot work: bun's JUnit output records test counts, not a file total and not how it was
-invoked, so the only artifact-internal proxy for "this was full" is *"its file set equals the
-on-disk set"* — which is the check's own conclusion. A precondition identical to the conclusion
-yields a test that can never fail, satisfying AC5 vacuously while detecting nothing.
+So the junit comparison, and everything that existed only to license it, is removed: the check
+itself, the scope stamp in `clients/bun-crucible.py`, and the client test that pinned the stamp. With
+no prior-run artifact read at all, a run can no longer fail because of how the previous command was
+invoked — which is the whole defect, closed by subtraction.
 
-### §S2 — invisible coverage keeps a detector that cannot decay
+The primary guarantee is untouched and needs no run history: the `bunfig` assertions, which read
+CONFIG. CR-CRU-047 §S1's reasoning already stands on its own — with no permanent exclusion possible,
+on-disk/run parity holds BY CONSTRUCTION.
 
-The "a file on disk never ran" question is answered without depending on run history, and the
-guarantee on the real tree stays STRUCTURAL — the `bunfig` assertion, which holds under any
-invocation because it reads config rather than history.
+### §S2 — the structural guarantee is shown to be load-bearing
 
-What is added is proof that the structural assertion is **load-bearing**, which today is asserted
-and never demonstrated: a scratch fixture in which a `.test.ts` file exists that the runner's
-discovery does not reach, showing the guard fires on it. The fixture machinery already exists in
-this file for the `regression` envelope check — two files, real spawn, milliseconds.
+The one thing worth adding: proof that the `bunfig` assertion is not a tautology. A scratch fixture
+where a `.test.ts` file sits behind a `pathIgnorePatterns` entry, showing that a real bun run misses
+the file AND that the guard reports the entry; remove the entry and both observations flip.
+
+That requires the guard's decision to be a pure function of config TEXT so it can be asked about the
+fixture's config, while the two existing assertions keep reading the real `bunfig.toml`.
 
 **Why not enumerate discovery on the real tree:** bun 1.3.14 has no discovery-listing or dry-run
 flag (checked across `bun test --help`), so "enumerate what the runner would collect" over this repo
 means actually running it — which restores the ~5.5-minute nested full-suite `Bun.spawn` that
 CR-CRU-047 deliberately deleted, and that this file's own header explains at length. The fixture buys
-the same signal at fixture cost.
+the signal at fixture cost.
 
 ## Acceptance criteria
 
-- **AC1** — A run that includes this check never fails because a PREVIOUS run's artifact described a
-  different set of files. Proven against the sequence that produces it — a scoped run, then a run
-  containing the check — rather than against a full run through the client, which masks it by
-  rewriting the artifact first (see the measurement in the Problem statement).
-- **AC2** — With a genuinely stale-or-partial artifact, the corroboration SKIPS and names the
-  reason; it never fails.
-- **AC3** — §S1's `bunfig` discovery assertion is untouched and still fails if the runner is
-  configured to miss a directory.
-- **AC4** — §S2's detector fails when a `.test.ts` file exists that the runner's discovery does not
-  reach, proven by adding such a file in a scratch fixture rather than by assertion.
-- **AC5** — The check does not read `test-reports/` as a source of truth about the tree. Any
-  reference to a prior run's artifact is corroboration only, and its precondition is asserted before
-  its conclusion.
-- **AC6** — The corroboration is REPAIRED, not deleted. A change that removes the junit comparison
-  outright satisfies AC1 trivially and is not this CR: AC2 and AC5 presuppose the check still exists
-  and still concludes something when its precondition holds.
+- **AC1** — No run can fail because a PREVIOUS run's artifact described a different set of files.
+  Satisfied by there being no such read: nothing under `tests/` consults `test-reports/` to decide
+  anything about the tree. Proven by the sequence that used to produce the failure — a scoped run,
+  then a run containing the check.
+- **AC2** — Nothing remains that skips, warns or explains itself about a stale artifact, because
+  nothing reads one. A skip message about a file the suite no longer opens is dead prose.
+- **AC3** — The `bunfig` discovery assertions keep their titles, still read the real `bunfig.toml`,
+  and still fail if the runner is configured to miss a directory.
+- **AC4** — The structural guarantee is shown load-bearing: a `.test.ts` behind a
+  `pathIgnorePatterns` entry is missed by a REAL bun run and reported by the guard, both observed in
+  a scratch fixture; removing the entry flips both. Observed, never asserted.
+- **AC5** — `test-reports/` is not read anywhere under `tests/`, and `clients/bun-crucible.py` is
+  byte-identical to its state on `develop`. The simplification is complete rather than partial: no
+  stamp, no binding, no mtime arithmetic, no orphan client surface.
+- **AC6** — RETRACTED 2026-09-04. It required the corroboration be repaired rather than deleted, and
+  it was the orchestrator's invention. Deleting the check is the correct fix, and this AC was the
+  reason four cycles were spent not doing it. Recorded rather than erased: a retracted AC is a
+  finding about how this CR was specified.
 
 ## Non-goals
 
-- **Deleting the junit corroboration.** See AC6.
+- **Keeping the junit corroboration.** See the retracted AC6 and §S1.
 - **Making a bare `bun test` write the artifact.** Adding a `[test]` reporter section to
   `bunfig.toml` would refresh `junit.xml` on every invocation and mask the defect rather than fix it,
   and it would write a report file on every ad-hoc run.
