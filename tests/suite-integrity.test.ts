@@ -345,6 +345,47 @@ export function junitParityGap(onDisk: string[], ranFiles: string[]): ParityGap 
   };
 }
 
+// ── CR-CRU-101 §S1 FIX — the inputs the comparison needs, gathered ONCE ──
+//
+// Scope alone cannot separate two byte-identical configurations:
+//   * a full artifact that omits an EXISTING file — invisible coverage, must
+//     fail (AC6);
+//   * a full artifact that predates a NEWLY ADDED file — history, must not
+//     fail (AC1).
+// The distinguishing fact is TIME, and it is not in the artifact's file set:
+// it is the artifact's own mtime against each on-disk file's. Gathered here,
+// where the filesystem is read, and handed to the comparator as INPUTS so the
+// comparator stays pure and every shape can be planted.
+
+export interface TimedFile {
+  rel: string;
+  mtimeMs: number;
+}
+
+export interface ParityInputs {
+  // `junit.xml`'s mtime: bun flushes it at process exit, so it is the moment
+  // the run ENDED — every file the run could have collected is older.
+  artifactMtimeMs: number;
+  onDisk: TimedFile[];
+  ranFiles: string[];
+}
+
+function parityInputs(root: string, testsDir: string, reportsDir: string): ParityInputs {
+  const junitPath = path.join(reportsDir, "junit.xml");
+  return {
+    artifactMtimeMs: fs.statSync(junitPath).mtimeMs,
+    onDisk: listTestFilesOnDisk(testsDir)
+      .map((full) => ({
+        rel: path.relative(root, full).split(path.sep).join("/"),
+        mtimeMs: fs.statSync(full).mtimeMs,
+      }))
+      .filter((f) => f.rel !== SELF_RELATIVE),
+    ranFiles: distinctJunitTestcaseFiles(fs.readFileSync(junitPath, "utf8")).filter(
+      (r) => r !== SELF_RELATIVE,
+    ),
+  };
+}
+
 describe(
   "On-disk vs an existing junit artifact (corroboration only — §S1's " +
     "bunfig assertion above is the PRIMARY guarantee)",
@@ -654,6 +695,177 @@ describe(
           new RegExp(`^DEFAULT_SCOPE\\s*=\\s*["']${SCOPE_RECORD.replace(".", "\\.")}["']`, "m")
             .test(clientSource),
         ).toBe(true);
+      },
+    );
+  },
+);
+
+// ── CR-CRU-101 §S1 FIX — the TIME dimension's own tests ──────────────────
+//
+// THE DEFECT THIS FIXES, MEASURED ON THIS BRANCH (2026-09-03): with a
+// `test-reports/junit.xml` naming all 145 on-disk `.test.ts` files and a
+// `{"scope":"full"}` stamp beside it, creating ONE new test file and running
+// `bun test tests/suite-integrity.test.ts` reported 1 fail —
+// `neverRan: ["tests/zz-…-scratch.test.ts"]`. No code defect existed: the
+// proven-full artifact simply PREDATED the file. That is AC1 verbatim
+// ("never fails because a PREVIOUS run's artifact described a different set
+// of files"), and it is the standing configuration during TDD, since every
+// RED phase adds a test file.
+//
+// It is also byte-identical, in SCOPE terms, to the step-D proof of AC6 (a
+// proven-full artifact minus `tests/store.test.ts` must FAIL). Same file
+// sets, opposite required verdicts — so scope cannot decide it and TIME must:
+// a file NEWER than the artifact could not have been in that run; a file
+// OLDER than it and absent from it was skipped while it existed.
+//
+// Mtimes are planted with `fs.utimesSync`, never slept for.
+
+// Seconds — `fs.utimesSync` takes seconds, `fs.Stats.mtimeMs` reports ms.
+function plantMtime(target: string, epochSeconds: number): void {
+  fs.utimesSync(target, epochSeconds, epochSeconds);
+}
+
+describe(
+  "CR-CRU-101 §S1 FIX — the corroboration weighs the artifact's AGE, so a " +
+    "newly added file is not mistaken for invisible coverage",
+  () => {
+    // One fixed instant, so every case below is deterministic.
+    const ARTIFACT_MS = 1_700_000_000_000;
+    const OLDER_MS = ARTIFACT_MS - 60_000;
+    const NEWER_MS = ARTIFACT_MS + 60_000;
+
+    test(
+      "CASE 1 — a file NEWER than the artifact and absent from it could not " +
+        "have been in that run: it is EXCLUDED from the comparison and NAMED, " +
+        "never failed on (AC1, the measured defect)",
+      () => {
+        const gap = junitParityGap(
+          [
+            { rel: "tests/a.test.ts", mtimeMs: OLDER_MS },
+            { rel: "tests/zz-scratch.test.ts", mtimeMs: NEWER_MS },
+          ],
+          ["tests/a.test.ts"],
+          ARTIFACT_MS,
+        );
+
+        expect(gap.neverRan).toEqual([]);
+        expect(gap.excludedNewer).toEqual(["tests/zz-scratch.test.ts"]);
+        expect(gap.vacuous).toBe(false);
+        expect(gap.comparedCount).toBe(1);
+      },
+    );
+
+    test(
+      "CASE 2 — a file OLDER than the artifact and absent from it existed " +
+        "while that full run happened, so it is INVISIBLE COVERAGE: still a " +
+        "gap, still named (AC6, C1's step-D proof, preserved)",
+      () => {
+        const gap = junitParityGap(
+          [
+            { rel: "tests/a.test.ts", mtimeMs: OLDER_MS },
+            { rel: "tests/store.test.ts", mtimeMs: OLDER_MS },
+          ],
+          ["tests/a.test.ts"],
+          ARTIFACT_MS,
+        );
+
+        expect(gap.neverRan).toEqual(["tests/store.test.ts"]);
+        expect(gap.excludedNewer).toEqual([]);
+        expect(gap.vacuous).toBe(false);
+      },
+    );
+
+    test(
+      "CASE 3 — an artifact naming a file no longer on disk records a " +
+        "DELETION since the run: named, not failed on (a deletion time is " +
+        "unrecoverable, and a junit artifact cannot name a file that never " +
+        "existed)",
+      () => {
+        const gap = junitParityGap(
+          [{ rel: "tests/a.test.ts", mtimeMs: OLDER_MS }],
+          ["tests/a.test.ts", "tests/deleted.test.ts"],
+          ARTIFACT_MS,
+        );
+
+        expect(gap.neverRan).toEqual([]);
+        expect(gap.ranButAbsent).toEqual(["tests/deleted.test.ts"]);
+        expect(gap.vacuous).toBe(false);
+      },
+    );
+
+    test(
+      "ANTI-VACUITY — when case 1 excludes EVERY on-disk file (a `git " +
+        "checkout` resetting every mtime does exactly this) the comparison " +
+        "set is EMPTY, and an empty comparison must SKIP with the reason, " +
+        "never pass: a green tick over an empty set is the vacuity §S1 " +
+        "refused, one layer down",
+      () => {
+        const gap = junitParityGap(
+          [
+            { rel: "tests/a.test.ts", mtimeMs: NEWER_MS },
+            { rel: "tests/b.test.ts", mtimeMs: NEWER_MS },
+          ],
+          [],
+          ARTIFACT_MS,
+        );
+
+        expect(gap.vacuous).toBe(true);
+        expect(gap.comparedCount).toBe(0);
+        expect(gap.neverRan).toEqual([]);
+        expect(gap.reason).toContain("2");
+        expect(gap.reason.toLowerCase()).toContain("empty");
+      },
+    );
+
+    test(
+      "THE ORCHESTRATOR'S REPRODUCTION, END TO END on a fixture tree: a full " +
+        "artifact with a full stamp, then a test file created AFTERWARDS — " +
+        "the precondition still holds, the conclusion is still reached, and " +
+        "it does NOT fail; the new file is named as excluded-because-newer",
+      () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), "cr101-fix-e2e-"));
+        try {
+          const testsDir = path.join(root, "tests");
+          const reportsDir = path.join(root, "test-reports");
+          fs.mkdirSync(testsDir);
+          fs.mkdirSync(reportsDir);
+
+          const ranAt = Math.floor(ARTIFACT_MS / 1000);
+          for (const name of ["a.test.ts", "b.test.ts"]) {
+            const file = path.join(testsDir, name);
+            fs.writeFileSync(file, "// existed before the run\n");
+            plantMtime(file, ranAt - 60);
+          }
+
+          // A FULL run over exactly those files, stamped `full` by the client.
+          fs.writeFileSync(
+            path.join(reportsDir, "junit.xml"),
+            junitFor(["tests/a.test.ts", "tests/b.test.ts"]),
+          );
+          fs.writeFileSync(
+            path.join(reportsDir, SCOPE_RECORD),
+            JSON.stringify({ scope: FULL_SCOPE, artifact: "junit.xml", targets: [] }),
+          );
+          plantMtime(path.join(reportsDir, "junit.xml"), ranAt);
+
+          // ...and then a RED phase adds a test file, as every RED phase does.
+          const added = path.join(testsDir, "zz-cr101-scratch.test.ts");
+          fs.writeFileSync(added, "// added after that run\n");
+          plantMtime(added, ranAt + 60);
+
+          expect(fullRunProof(reportsDir).provenFull).toBe(true);
+
+          const inputs = parityInputs(root, testsDir, reportsDir);
+          const gap = junitParityGap(inputs.onDisk, inputs.ranFiles, inputs.artifactMtimeMs);
+
+          expect(gap.neverRan).toEqual([]);
+          expect(gap.ranButAbsent).toEqual([]);
+          expect(gap.excludedNewer).toEqual(["tests/zz-cr101-scratch.test.ts"]);
+          expect(gap.vacuous).toBe(false);
+          expect(gap.comparedCount).toBe(2);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
       },
     );
   },
