@@ -3,7 +3,7 @@
 - **Type**: bug
 - **Wave**: 5 (0.2.0) — release membership is the user's call
 - **Depends on**: none
-- **Status**: PENDING (0.2.0) — filed 2026-09-03
+- **Status**: COMPLETED (0.2.0) — filed 2026-09-03, gap-analysed and corrected 2026-09-03, AC6 retracted and the design simplified by user ruling 2026-09-04, shipped 2026-09-04
 - **Found by**: CR-CRU-097's full gate, then traced to the orchestration rule it conflicts with
 
 ## Problem
