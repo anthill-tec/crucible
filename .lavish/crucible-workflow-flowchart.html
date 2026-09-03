@@ -401,7 +401,7 @@
       <tr><th>Visual</th><th>Determined by</th><th>Data</th></tr>
       <tr><td>Strip order</td><td>shipped by ship date; <b>proposed always after them, in version order</b></td><td class="mono">releases[].releasedAt · semver</td></tr>
       <tr><td>Which CRs are inside — shipped</td><td>release membership — settled fact, frozen at ship</td><td class="mono">releases[].crs</td></tr>
-      <tr><td>Which CRs are inside — proposed</td><td><b>declared by the orchestrator</b> when the CR is planned</td><td class="mono">cr-plan --release</td></tr>
+      <tr><td>Which CRs are inside — proposed</td><td><b>declared by the orchestrator</b> when the CR is planned. <b>Two declaring paths since CR-CRU-099</b>, both orchestrator-gated: the per-CR verb, and the bulk queue post, which reads <code>release</code>/<code>track</code>/<code>lifecycle</code> since that CR. Membership is still never inferred — CR-CRU-104 makes the two paths share one rule rather than mirror it</td><td class="mono">cr-plan --release · POST …/queue</td></tr>
       <tr><td>Dashed gate exists</td><td><b>an orchestrator-registered proposal</b> — never inferred</td><td class="mono">proposed-release record</td></tr>
       <tr><td>Order in the wave / table</td><td>authored queue order</td><td class="mono">queue row index</td></tr>
       <tr><td>Lane</td><td>reported track; absent ⇒ no lanes</td><td class="mono">plan.track</td></tr>
@@ -436,19 +436,32 @@
 
     <div style="border:1px dashed rgba(255,122,26,.55); border-radius:8px; padding:10px 13px; margin:12px 0 0">
       <div class="sub" style="color:var(--ember); margin-bottom:6px"><b>&#9650; TWO CODE FACTS, BOTH VERIFIED — one kills my own proposal</b></div>
-      <p class="sub" style="margin:0 0 7px"><b>1 · The release target never reaches the server today.</b>
-        <code>parse_queue_table</code> (<code>clients/_crucible_axi.py:1958-1976</code>) reads the Wave cell with
+      <p class="sub" style="margin:0 0 7px"><b>1 · The release target never reaches the server from the queue file.</b>
+        <code>parse_queue_table</code> reads the Wave cell with
         <code>re.match(r"\s*(\d+)", wave_cell)</code> and keeps <b>only the leading integer</b>. The release
         qualifier — the <code>(0.2.0)</code> / <code>(post-0.2.0)</code> part this board has carried for months —
-        is <b>discarded at parse time</b>. Each entry POSTs as <code>{cr, title, wave, dependsOn}</code>: there is
-        no release field at all. So "derive membership from the queue qualifier" could not have worked — the data
-        is thrown away before transmission. Declaring it is the only workable answer.</p>
+        is <b>discarded at parse time</b>. Each entry POSTs as <code>{cr, title, wave, dependsOn}</code>: the
+        bootstrap <b>sends</b> no release field. So "derive membership from the queue qualifier" could not have
+        worked — the data is thrown away before transmission. Declaring it is the only workable answer.
+        <b>Amended after CR-CRU-099:</b> this is still true of what <code>queue-file</code> SENDS, and no longer
+        true of the ROUTE — the bulk post accepts and stores a declared <code>release</code>. The client-side gap
+        is deliberate and still open, with its own register entry; what changed is that the door exists, not that
+        the queue file walks through it.</p>
       <p class="sub" style="margin:0"><b>2 · A proposal cannot be a dateless <code>release</code> milestone.</b>
-        <code>public/app-logic.mjs:875-893</code> deliberately sorts an undated release <b>OLDEST</b>, its comment
-        stating why: <i>"an undated tag is legacy history, and calling it the newest would hand it the gating of every
-        unshipped CR on a date nobody recorded."</i> Omitting <code>releasedAt</code> would park 0.2.0 at the
-        <b>head</b> of the strip. A proposal must be its own kind, ordered by <b>version</b>, and must stay outside
-        <code>listReleases</code>' <code>type === 'release'</code> filter so settled history is never polluted by a plan.</p>
+        <code>listReleases</code> (<code>src/store.ts</code>) orders releases by <b>when they SHIPPED, not when they
+        were ingested</b> — <code>releasedAt</code> when present, and an undated row stands in its ingest instant
+        instead, which is what keeps pre-provenance rows in the newest-ingest-first order they already had.
+        Either way an undated 0.2.0 would be ordered by an instant <b>nobody recorded as a ship date</b>, and would
+        hand a plan the gating of shipped history. A proposal must be its own kind, ordered by <b>version</b>, and
+        must stay outside <code>listReleases</code>' <code>type === 'release'</code> filter so settled history is
+        never polluted by a plan — which is what shipped: <code>recordMilestoneEvent</code> type-scopes
+        <code>targetAt</code> to a proposal and <code>releasedAt</code>/<code>crs</code>/<code>packages</code> to a
+        release, in both directions.
+        <b>Amended 2026-09-03:</b> the conclusion is unchanged and now CODE, but the evidence had rotted — this
+        cited <code>public/app-logic.mjs:875-893</code> and quoted a comment about an undated tag being "legacy
+        history". That file no longer holds the ordering at all (it resolves gate DATES; the release sort moved
+        server-side into <code>listReleases</code>) and the quoted sentence exists nowhere in the tree. Symbol
+        anchors above, no line numbers, per the citation rule.</p>
     </div>
 
     <table style="margin-top:12px">
