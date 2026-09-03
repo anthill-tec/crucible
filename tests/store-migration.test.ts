@@ -281,19 +281,6 @@ function rowCounts(dbPath: string): Record<string, number> {
   }
 }
 
-function eventRoleCount(dbPath: string): number {
-  const db = new Database(dbPath);
-  try {
-    return (
-      db
-        .query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM events WHERE role IS NOT NULL`)
-        .get()?.n ?? -1
-    );
-  } finally {
-    db.close();
-  }
-}
-
 /** Sorted `sqlite_master` DDL — an exact structural fingerprint. */
 function schemaFingerprint(dbPath: string): string {
   const db = new Database(dbPath);
@@ -460,6 +447,43 @@ function classificationsOf(
 }
 
 /**
+ * CR-CRU-100 — THE PRESERVATION STATEMENT, said ONCE and asserted by both the
+ * §S1 synthetic store and the §S2 copy of the real one, so the two cannot
+ * drift into saying different things about the same guarantee.
+ *
+ * Every classification present BEFORE the migration is present and UNCHANGED
+ * after it — `role_inferred` included — and none was re-derived over an
+ * existing value. That is what `backfillInferredEventRoles` actually
+ * guarantees: its `role IS NULL` predicate can only ever ADD a role, never
+ * change or remove one.
+ *
+ * `role_inferred` is load-bearing. A DECLARED role that comes back INFERRED
+ * has been re-derived even when the value is identical, which is exactly what
+ * dropping that predicate produces.
+ *
+ * Rows carrying no role before are excluded: preservation says nothing about
+ * them, and the backfill is free to classify them — which is why an
+ * equality-of-COUNT assertion is the wrong statement and this one is not.
+ * Returns the pre-migration declared set, so a caller can say more about it.
+ */
+function expectRolesPreserved(
+  before: Record<string, EventRoleRow>,
+  after: Record<string, EventRoleRow>,
+): Record<string, EventRoleRow> {
+  const declaredBefore = Object.fromEntries(
+    Object.entries(before).filter(([, row]) => row.role !== null),
+  );
+  // Preservation over an empty set holds trivially — that vacuous pass is the
+  // failure mode this guards.
+  expect(Object.keys(declaredBefore).length).toBeGreaterThan(0);
+  const preserved = Object.fromEntries(
+    Object.entries(after).filter(([id]) => id in declaredBefore),
+  );
+  expect(preserved).toEqual(declaredBefore);
+  return declaredBefore;
+}
+
+/**
  * Returns the thrown error, or `undefined` when `fn` returned normally — a
  * plain `expect(...).toThrow()` cannot also assert on what the call left on
  * disk, and AC5/AC7 are as much about the untouched file as about the throw.
@@ -575,47 +599,98 @@ describe("CR-CRU-071 AC1 — the store carries a schema version", () => {
   });
 });
 
+/**
+ * CR-CRU-100 AC5 — whether the live dog-food store is here at all, decided
+ * ONCE at collection time so the AC2 check below can be a real bun skip.
+ */
+const LIVE_STORE_PRESENT = fs.existsSync(LIVE_STORE);
+
+if (!LIVE_STORE_PRESENT) {
+  // AC5 demands the skip SAY WHY. `test.skipIf` reports the skip but prints no
+  // reason, so the reason is emitted here, at the moment the decision is made.
+  console.log(
+    "[cr071] AC2 SKIPPED: no data/crucible.db to snapshot — the live " +
+      "dog-food store is never committed (`git ls-files data/` is empty), so " +
+      "this check cannot run here; CR-CRU-100 §S1 covers role preservation " +
+      "on a store the test builds",
+  );
+}
+
 describe("CR-CRU-071 AC2 — existing stores are baselined without loss", () => {
-  test("AC2 — a copy of the REAL dog-food store is stamped from 0 with identical row counts", () => {
-    const dbPath = copyOfRealStore();
-    if (dbPath === null) {
-      // No live store here (CI). SKIPPED rather than substituting a synthetic
-      // db and calling it "the real dog-food store" — AC2's whole point is
-      // that the proof runs against the highest-value database in the project
-      // (CR-CRU-043), not against something shaped like it.
-      console.log("[cr071] AC2 skipped: no data/crucible.db to snapshot");
-      return;
-    }
+  // CR-CRU-100 AC5 — a DECLARATION-time skip, so a run without the live store
+  // reports this as SKIPPED and not as a green line that never executed. That
+  // green line is this CR's own defect one layer down: `data/crucible.db` is
+  // never committed (`git ls-files data/` is empty), so CI takes this branch
+  // EVERY time. Nothing is lost to it — CR-CRU-100 §S1 asserts the same
+  // role-preservation statement on a store the test builds, which is exactly
+  // what runs where this one cannot.
+  test.skipIf(!LIVE_STORE_PRESENT)(
+    "AC2 — a copy of the REAL dog-food store is stamped from 0 with identical row counts",
+    () => {
+      const dbPath = copyOfRealStore();
+      if (dbPath === null) {
+        // The RESIDUAL case, named rather than hidden: the live store EXISTS
+        // (the skip above did not fire) but `sqlite3 .backup` failed — no
+        // sqlite3 binary, or an unreadable file. A declaration-time skip
+        // cannot see that, and bun has no runtime skip, so this branch STILL
+        // READS AS A PASS. It is left that way deliberately: the alternative
+        // is throwing, which would turn "no sqlite3 CLI on this machine" into
+        // a red suite — a new failure mode this CR was not asked to create.
+        // The log says so out loud instead. Never a synthetic stand-in called
+        // "the real dog-food store": AC2's whole point is that the proof runs
+        // against the highest-value database in the project (CR-CRU-043).
+        console.log(
+          "[cr071] AC2 NOT RUN, and reported as a PASS: data/crucible.db is " +
+            "present but `sqlite3 .backup` failed, so there is no copy to " +
+            "migrate; CR-CRU-100 §S1 still covers role preservation",
+        );
+        return;
+      }
 
-    // Counts are MEASURED from the copy, never pinned as literals: the live
-    // store grows, and the assertion AC2 actually demands is before-vs-after
-    // EQUALITY ("no data movement"), which absolute numbers would not add to.
-    // The live store is STAMPED once this CR has shipped and actually run
-    // against it, so asserting it arrives unstamped would make this test
-    // self-invalidating — it would pass only until the feature worked. (It
-    // did: the dog-food store went to v5 the day CR-071 merged.) The AC is
-    // "an UNSTAMPED store is baselined losslessly", so the copy is put back
-    // into that condition explicitly. Legitimate because this is a throwaway
-    // snapshot, never the live file.
-    resetUserVersion(dbPath);
+      // Counts are MEASURED from the copy, never pinned as literals: the live
+      // store grows, and the assertion AC2 actually demands is before-vs-after
+      // EQUALITY ("no data movement"), which absolute numbers would not add
+      // to. The live store is STAMPED once this CR has shipped and actually
+      // run against it, so asserting it arrives unstamped would make this test
+      // self-invalidating — it would pass only until the feature worked. (It
+      // did: the dog-food store went to v5 the day CR-071 merged.) The AC is
+      // "an UNSTAMPED store is baselined losslessly", so the copy is put back
+      // into that condition explicitly. Legitimate because this is a throwaway
+      // snapshot, never the live file.
+      resetUserVersion(dbPath);
 
-    const before = rowCounts(dbPath);
-    const rolesBefore = eventRoleCount(dbPath);
-    expect(userVersion(dbPath)).toBe(0);
-    // Guard against a vacuous pass on an empty db: the real store has rows.
-    expect(before.events).toBeGreaterThan(0);
-    expect(before.plans).toBeGreaterThan(0);
+      const before = rowCounts(dbPath);
+      // The classifications the copy carries BEFORE the migration, read under
+      // the CURRENT column names: the live store is long past CR-CRU-059's
+      // rename, so both reads address `role`/`role_inferred`. (§S1's synthetic
+      // store starts pre-rename — which is why the helper takes the names.)
+      const classifiedBefore = classificationsOf(dbPath, CURRENT_CLASSIFICATION);
+      expect(userVersion(dbPath)).toBe(0);
+      // Guard against a vacuous pass on an empty db: the real store has rows.
+      expect(before.events).toBeGreaterThan(0);
+      expect(before.plans).toBeGreaterThan(0);
 
-    const store = Store.open(dbPath);
+      const store = Store.open(dbPath);
 
-    // No data movement.
-    expect(rowCounts(dbPath)).toEqual(before);
-    // No retrofit re-ran destructively: CR-CRU-057's backfilled roles survive.
-    expect(eventRoleCount(dbPath)).toBe(rolesBefore);
-    // ... and the store now knows what shape it is.
-    expect(userVersion(dbPath)).toBe(schemaVersion());
-    expect(schemaVersionOf(store)).toBe(schemaVersion());
-  });
+      // No data movement.
+      expect(rowCounts(dbPath)).toEqual(before);
+      // No retrofit re-ran destructively: CR-CRU-057's classifications
+      // survive. CR-CRU-100 §S2 — an equality of role COUNT stood here and
+      // drifted RED between sessions, because a count is a property of the
+      // store's CONTENTS, not of the migration: the backfill ADDS a role to
+      // any classifiable-but-unclassified event, so the number moves whenever
+      // the live store gains one. The statement CR-CRU-057 actually guarantees
+      // is preservation, asserted through the SAME helper §S1 uses so the real
+      // store can say nothing weaker, and nothing different.
+      expectRolesPreserved(
+        classifiedBefore,
+        classificationsOf(dbPath, CURRENT_CLASSIFICATION),
+      );
+      // ... and the store now knows what shape it is.
+      expect(userVersion(dbPath)).toBe(schemaVersion());
+      expect(schemaVersionOf(store)).toBe(schemaVersion());
+    },
+  );
 });
 
 describe("CR-CRU-071 AC3 — migrations are an ordered, idempotent chain", () => {
@@ -966,14 +1041,6 @@ describe("CR-CRU-100 §S1 — roles are PRESERVED across a migration, on a store
     expect(dbPath.startsWith(os.tmpdir())).toBe(true);
 
     const before = classificationsOf(dbPath, PRE_RENAME_CLASSIFICATION);
-    // Only the events that ALREADY carry a classification — the only rows
-    // preservation says anything about.
-    const declaredBefore = Object.fromEntries(
-      Object.entries(before).filter(([, row]) => row.role !== null),
-    );
-    // Preservation over an empty set holds trivially — that vacuous pass is
-    // the failure mode this guards.
-    expect(Object.keys(declaredBefore).length).toBeGreaterThan(0);
     // AC3 — the fixture CONTAINS an event whose role must be backfilled, so an
     // equality-of-count assertion could not pass this store. Asserted as a
     // precondition so no later edit can quietly restore equality of count.
@@ -983,18 +1050,12 @@ describe("CR-CRU-100 §S1 — roles are PRESERVED across a migration, on a store
 
     const after = classificationsOf(dbPath, CURRENT_CLASSIFICATION);
 
-    // THE INVARIANT: every role present before the migration is present and
-    // unchanged after, and none was re-derived over an existing value. That is
-    // what `backfillInferredEventRoles` actually guarantees — its `role IS
-    // NULL` predicate can only ever ADD a role, never change or remove one —
-    // and it is what the equality-of-count assertion this CR replaces
-    // contradicted. `role_inferred` is load-bearing here: a DECLARED role that
-    // comes back inferred has been re-derived, which is exactly what removing
-    // that predicate produces (AC2).
-    const preserved = Object.fromEntries(
-      Object.entries(after).filter(([id]) => id in declaredBefore),
-    );
-    expect(preserved).toEqual(declaredBefore);
+    // THE INVARIANT, stated once in `expectRolesPreserved` and asserted here
+    // and against the real store (§S2) by the same helper: every role present
+    // before the migration is present and unchanged after, and none was
+    // re-derived over an existing value. It is what the equality-of-count
+    // assertion this CR replaces contradicted.
+    const declaredBefore = expectRolesPreserved(before, after);
 
     // The count never DECREASES, and here it STRICTLY GROWS, because the
     // backfill classified `e-null` — mechanical proof that equality of count
