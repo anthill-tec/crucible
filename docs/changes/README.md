@@ -198,6 +198,17 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   MOVED by a later requirement (CR-CRU-078 rewrote the e2e scenario to declare a release through
   that route), not an oversight repaired.
 
+- **An AC may not require editing a shipped CR — and one did** (recorded 2026-09-03, CR-CRU-099
+  cycle 322 VERIFY). CR-CRU-099 AC8 was written as *"the ACs that cite the e2e suite as in-cycle
+  corroboration are corrected"*. Those ACs are CR-CRU-096 AC28 / AC28a, and 096 is SHIPPED, so the
+  AC demanded breaking the standing rule that an implemented CR is never edited. VERIFY found it
+  **unperformed**, and the honest reason is that it was **unperformable as written**. Reworded to
+  discharge on the recording surfaces the rule allows (the fixing CR's own scope section, a
+  line-cited reference, and this register). **The check to run when writing an AC:** does satisfying
+  it require a commit to a CR that has already shipped? If yes, the AC is aimed at the wrong
+  artifact. Adjacent to CR-CRU-094's lesson that a record must survive its author, this one is that
+  a record must not be REWRITTEN by a later author either.
+
 - **`plan-file --cycles` splits silently on a comma inside a label** (candidate patch CR, hit
   2026-08-28 filing CR-CRU-078). `--cycles` is comma-delimited, so a label containing a comma —
   `"C1 data + authored order - proposals read, formatter wiring, seq verbatim"` — became THREE

@@ -173,11 +173,21 @@ rule. Dimension 3 (code vs design intent) should have caught it and did not.
   block (CR-CRU-095 §S3), so it is in scale and warns only on a genuine difference of scale, exactly
   as `cr-plan` does. CR-CRU-095 is shipped and is not edited; this AC supersedes its reachability
   claim and cites it.
-- **AC8** — The ACs that cite the e2e suite as in-cycle corroboration are corrected to name it as a
-  **release-tier** consumer. The suite is NOT added to a per-cycle gate: it already runs in the
-  release gate (`.github/workflows/release.yml:124-136`), which is the tier the PRD assigns it
-  (`docs/research/PRD-crucible-v2.md:123`, `:396`, `:425`). A release-tier suite cited as per-cycle
-  evidence is the defect; moving it would be the wrong fix.
+- **AC8** — The e2e suite's TIER is put on the record as a **release-tier** consumer, and the
+  citation defect is recorded against the ACs that made it. The suite is NOT added to a per-cycle
+  gate: it already runs in the release gate (`.github/workflows/release.yml:124-136`), which is the
+  tier the PRD assigns it (`docs/research/PRD-crucible-v2.md:123`, `:396`, `:425`). A release-tier
+  suite cited as per-cycle evidence is the defect; moving it would be the wrong fix.
+  **REWORDED 2026-09-03, after VERIFY (cycle 322) found this AC unperformed and unperformable as
+  written.** It originally read *"the ACs that cite the e2e suite … are corrected"* — those ACs are
+  CR-CRU-096 AC28 (`:518-519`) and AC28a (`:521-524`), and **CR-CRU-096 is shipped**. The standing
+  rule is that an implemented CR is never edited and its record is settled fact, so the original
+  wording required breaking that rule to satisfy this one. It is discharged the way the rule allows:
+  the tier is stated HERE (§S2's "Why nothing caught it"), this AC cites 096 AC28/AC28a by line, and
+  the class is entered in the deferred register. Note what is already on record and needs no repair:
+  **096 AC28a itself withdrew the corroboration claim** (*"AC28's e2e half cannot corroborate
+  anything"*), so the substance was never left standing as true — what was missing, and what this AC
+  adds, is naming the TIER that makes it unrunnable per-cycle by design rather than by accident.
 - **AC9** — **Declaring release membership through this route requires the `ORCHESTRATOR` role, per
   §S3.** A post that declares `release`, `track` or `lifecycle` without an orchestrator caller is
   refused; a post that declares none of them is accepted exactly as today, with no `agentId`
