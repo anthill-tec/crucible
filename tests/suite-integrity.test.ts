@@ -1172,6 +1172,25 @@ function writeExclusionFixtureProject(dir: string, bunfig: string): void {
   fs.writeFileSync(path.join(dir, "bunfig.toml"), bunfig);
 }
 
+// The number of FILES bun says it collected, read off its run summary — the
+// console channel, and a pure function of the captured text so planted
+// strings can exercise it as well as real runs. bun writes exactly one such
+// line per run, in singular or plural depending on the counts:
+//
+//     Ran 1 test across 1 file. [9.00ms]
+//     Ran 2 tests across 2 files. [10.00ms]
+//
+// The FILE count is the second number, never the first: the two differ in
+// any run with more than one test per file. `null` when no summary line is
+// present, which is a REFUSAL TO ANSWER and not a count of zero — an
+// exclusion that hid every file would otherwise be indistinguishable from a
+// run that never reported, and this channel exists precisely to catch that
+// shape.
+export function collectedFileCount(consoleText: string): number | null {
+  const m = /^Ran \d+ tests? across (\d+) files?\./m.exec(consoleText);
+  return m === null ? null : Number(m[1]);
+}
+
 export interface FixtureRunObservation {
   // Every `.test.ts` under the fixture's tests/ tree, whatever ran.
   onDisk: string[];
