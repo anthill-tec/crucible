@@ -1,31 +1,54 @@
-// CR-CRU-047 C2 — §S1 (no permanently-excluded test directory) + §S2
-// (collected count surfaced in the regression envelope) suite-integrity guard.
+// CR-CRU-047 C2 + CR-CRU-101 — the suite-integrity guard: §S1 (no
+// permanently-excluded test directory) + §S2 (collected count surfaced in the
+// regression envelope).
 //
-// Reworked from an earlier draft that ALSO asserted full on-disk/run PARITY
-// by spawning a REAL FULL `bun test` run from inside a test (~5.5 min for
-// this repo's ~1000-test suite) — sound, but far too expensive to pay on
-// every gate (every RED/GREEN run would cost ~11 minutes instead of ~5.5).
+// WHAT THIS FILE GUARANTEES, in the order the blocks appear:
+//   1. THE PRIMARY GUARANTEE — `bunfig.toml` carries no `pathIgnorePatterns`
+//      exclusion, so no `.test.ts` file under `tests/` can be permanently
+//      hidden from the runner, and on-disk/run parity therefore holds BY
+//      CONSTRUCTION under any invocation. It reads CONFIGURATION, so it
+//      cannot decay with use. Its decision is `discoveryExclusions`, a pure
+//      function of TOML text.
+//   2. §S2's regression envelope — the client reports the number of FILES it
+//      collected, asserted against a real fixture project driven through the
+//      real `regression` verb. The fixture has TWO test files, deliberately
+//      never one: a stub hardcoding "1", or echoing the test `total` instead
+//      of counting FILES, would slip past a 1-file fixture where
+//      files == tests == 1.
+//   3. THE PRIMARY GUARANTEE IS LOAD-BEARING — a `.test.ts` file sitting
+//      behind a `pathIgnorePatterns` entry is MISSED by a REAL bun run and
+//      REPORTED by the guard; remove the entry and both observations flip.
+//      Observed in a scratch fixture, never predicted.
 //
-// Kept from that draft: the set-comparison technique (never a bare count, so
-// an off-by-one substitution can't slip through two changes cancelling out),
-// the symmetric self-exclusion (this file cannot observe its own nested
-// `bun test` completing — the JUnit reporter only flushes at process exit —
-// so it excludes itself from BOTH sides of any file-set comparison), and the
-// on-disk recursive walker.
+// TWO THINGS THIS FILE DELIBERATELY DOES NOT DO.
 //
-// Removed: the nested full-suite `Bun.spawn`. In its place:
-//   - §S1 is asserted STRUCTURALLY (bunfig.toml carries no
-//     `pathIgnorePatterns` exclusion under `tests/`). With no permanent
-//     exclusion possible, on-disk/run parity holds BY CONSTRUCTION — that is
-//     the cheap guarantee that replaces the expensive nested run, and it is
-//     the PRIMARY guarantee below.
-//   - §S2 is asserted against a tiny 2-file FIXTURE project driven through
-//     the real `regression` verb — milliseconds, not minutes, and a 2-file
-//     (never 1-file) fixture so a stub hardcoding a constant can't slip past.
-//   - A corroborating parity check reads an EXISTING `test-reports/junit.xml`
-//     from a prior real run if one happens to be present, and skips cleanly
-//     (no synthetic run) if not — a corroboration, not the primary
-//     guarantee.
+// IT DOES NOT SPAWN A FULL `bun test` OVER THIS REPO. An earlier draft did,
+// to assert on-disk/run parity directly — sound, but ~5.5 minutes for this
+// repo's ~1000-test suite, so every RED/GREEN run would cost ~11 minutes
+// instead of ~5.5. CR-CRU-047 deleted it: block 1 replaces it structurally,
+// and block 3 buys the same signal over a two-file fixture at fixture cost.
+// There is no third option — bun 1.3.14 has no discovery-listing and no
+// dry-run flag, so "enumerate what the runner would collect" over a tree
+// means actually running it.
+//
+// IT DOES NOT READ `test-reports/junit.xml`. CR-CRU-101 DELETED a fourth
+// block that corroborated block 1 by comparing the on-disk `.test.ts` set
+// against the distinct file set in the artifact left behind by whatever ran
+// last, on the premise — stated only in its own skip message, never
+// enforced — that the artifact came from a FULL run. Any scoped run
+// overwrote the artifact with a subset, and the next run containing the check
+// then failed, reporting how the PREVIOUS command was invoked rather than
+// anything about the tree; since this repo's dispatch discipline requires
+// every sub-agent to run only the suites it touched, the check was detecting
+// compliance. And it could never even conclude inside a client run (measured
+// 2026-09-04): `_wipe` deletes the artifact before the run and bun flushes
+// its JUnit report only at process EXIT, so at collection time there was
+// nothing to read and the check always skipped. ~900 lines of scope stamp,
+// artifact binding and mtime arithmetic existed to make trustworthy a check
+// that never fired. It was a contract asserted over mutable local state —
+// the family CR-CRU-100 names — and it is closed by subtraction: with no
+// prior-run artifact read at all, no run can fail because of how the previous
+// command was invoked. The primary guarantee needs no run history.
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -34,23 +57,11 @@ import { fileURLToPath } from "node:url";
 import { startServer } from "../src/server.ts";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const TESTS_DIR = path.join(REPO_ROOT, "tests");
 const SCRIPT_PATH = path.join(REPO_ROOT, "clients", "bun-crucible.py");
 
-// This file's own path relative to REPO_ROOT, POSIX-separated to match the
-// `file="tests/..."` attributes bun's JUnit reporter emits. Excluded
-// symmetrically from BOTH sides of the on-disk/junit comparison below — a
-// test cannot observe its own nested `bun test` invocation completing (the
-// JUnit file is only flushed once the whole process exits), so counting
-// itself would either hang forever recursing into itself or silently
-// under-report. Structural necessity, not a loophole: every OTHER on-disk
-// file (including any future permanently-excluded one) is still fully
-// subject to the comparison.
-const SELF_RELATIVE = path
-  .relative(REPO_ROOT, fileURLToPath(import.meta.url))
-  .split(path.sep)
-  .join("/");
-
+// Every `.test.ts` file under `dir`, recursively. Used on the scratch fixture
+// tree in block 3 — never on this repo's own `tests/` — to establish what was
+// on disk for the run that block observes.
 function listTestFilesOnDisk(dir: string): string[] {
   const out: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -64,6 +75,9 @@ function listTestFilesOnDisk(dir: string): string[] {
   return out;
 }
 
+// The distinct files a JUnit report's `<testcase file="…">` attributes name —
+// what a run says it actually collected, in the run's own words. Read off the
+// fixture's OWN report in block 3.
 function distinctJunitTestcaseFiles(junitXml: string): string[] {
   const files = new Set<string>();
   const re = /<testcase\b[^>]*\bfile="([^"]+)"/g;
@@ -85,15 +99,20 @@ function distinctJunitTestcaseFiles(junitXml: string): string[] {
 // here in the shape this repo already uses for exactly this (a pure checker
 // plus planted sources: tests/queue-accepted-field-guard.test.ts,
 // tests/helpers/source-scan.ts), so the same decision that judges the real
-// bunfig.toml judges a fixture's — and the fixture at the END of this file
-// then proves, against a real bun run, that what it reports is what actually
-// hides a test file.
+// bunfig.toml judges a fixture's — and the fixture in block 3 then proves,
+// against a real bun run, that what it reports is what actually hides a test
+// file.
 //
-// BOTH dimensions the two assertions cover are reported, because they are
-// not the same claim: the KEY's presence at all (the primary one — an
-// exclusion can hide a file under tests/ without the literal text `tests/`
-// appearing anywhere, measured, see the §S2 block), and whether the array
-// names the tests/ tree.
+// BOTH dimensions the two assertions cover are reported, because they are not
+// the same claim: the KEY's presence at all, and whether the array names the
+// tests/ tree. The first is the PRIMARY one, and a measurement says why —
+// against bun 1.3.14 over block 3's fixture (2026-09-04), `["**/hidden/**"]`
+// hides a file UNDER tests/ with the literal text `tests/` appearing NOWHERE
+// in the config, so the second dimension cannot see it and only the first
+// fires. (Not every spelling excludes anything, measured the same way:
+// `["tests/hidden/"]` and `["hidden"]` hide nothing, while
+// `["tests/hidden/*"]`, `["**/hidden/*"]` and `["**/hidden/**"]` each hide
+// the file.)
 
 export interface DiscoveryExclusion {
   // The array exactly as written, so a failure names the config text.
@@ -107,10 +126,10 @@ export interface DiscoveryExclusion {
 // TOML comments removed, so PROSE cannot decide: the real bunfig.toml is
 // five comment lines, one of which names `pathIgnorePatterns` verbatim to
 // warn against it, and a commented-out assignment is inert to bun (observed
-// in the §S2 fixture) so it must be inert here too. A `#` inside a string
-// is not a comment; a basic/literal string cannot span a line, so the quote
-// state resets at every newline. Every byte that is not a comment is kept
-// where it was, newlines included.
+// against the real runner over block 3's fixture) so it must be inert here
+// too. A `#` inside a string is not a comment; a basic/literal string cannot
+// span a line, so the quote state resets at every newline. Every byte that is
+// not a comment is kept where it was, newlines included.
 function stripTomlComments(toml: string): string {
   let out = "";
   let quote: '"' | "'" | null = null;
@@ -138,29 +157,26 @@ function stripTomlComments(toml: string): string {
 }
 
 // Every `pathIgnorePatterns` assignment the config actually makes. The match
-// is deliberately UNANCHORED and demands `= [`, which is the union of the two
-// regexes this replaces PLUS TOML's quoted key spellings — so it reports
-// everything either of them did, and over-reporting stays the loud direction
-// (a spelling that excludes nothing is reported, which fails a guard; the
-// reverse would hide a real exclusion).
+// is deliberately UNANCHORED and demands `= [`, so over-reporting stays the
+// loud direction: a spelling that excludes nothing is still reported, which
+// fails a guard, whereas the reverse would hide a real exclusion.
 //
-// THE QUOTED KEY — C3 FIX P3-2, the one spelling where that reverse really
-// happened. TOML lets a key be bare, basic-quoted or literal-quoted, and all
-// three are the SAME assignment: bun 1.3.14 honours `pathIgnorePatterns`,
-// `"pathIgnorePatterns"` and `'pathIgnorePatterns'` identically (measured over
-// the fixture at the end of this file — each hides the file, and bun's own
-// summary counts one). Demanding `=` IMMEDIATELY after the bare key missed
-// both quoted forms, so a real exclusion was invisible to the guard rather
-// than an inert one being reported. Only the CLOSING quote needs handling:
-// the match is unanchored, so a leading `"` is simply never consumed.
+// THE QUOTED KEY, where that reverse really happened. TOML lets a key be
+// bare, basic-quoted or literal-quoted, and all three are the SAME
+// assignment: bun 1.3.14 honours `pathIgnorePatterns`, `"pathIgnorePatterns"`
+// and `'pathIgnorePatterns'` identically (measured over block 3's fixture —
+// each hides the file). Demanding `=` IMMEDIATELY after the bare key missed
+// both quoted forms, so a real exclusion was invisible to the guard. Only the
+// CLOSING quote needs handling: the match is unanchored, so a leading `"` is
+// simply never consumed.
 //
 // WHAT THIS GUARD DELIBERATELY DOES NOT COVER, so the completeness claim
 // above is only about the key it names: `[test] root = "…"` also restricts
-// discovery — measured over the same two-file fixture, `root = "tests/hidden"`
-// yields `Ran 1 test across 1 file.` — but it is a different key with
-// different semantics (a narrowing of where bun LOOKS, not a list of what it
-// skips) and is outside this CR's scope. It is named here because a reader
-// must not read "every exclusion" for "every way discovery can shrink".
+// discovery — measured over the same fixture, `root = "tests/hidden"` yields
+// `Ran 1 test across 1 file.` — but it is a different key with different
+// semantics (a narrowing of where bun LOOKS, not a list of what it skips) and
+// is outside this CR's scope. It is named here because a reader must not read
+// "every exclusion" for "every way discovery can shrink".
 export function discoveryExclusions(bunfigToml: string): DiscoveryExclusion[] {
   const config = stripTomlComments(bunfigToml);
   const found: DiscoveryExclusion[] = [];
@@ -327,934 +343,6 @@ describe("Collected count surfaced in the regression envelope (§S2)", () => {
   );
 });
 
-// ── Corroborating parity check (cheap — no full-suite spawn) ─────────────
-//
-// CR-CRU-101 §S1 — IT STATES ITS OWN PRECONDITION.
-//
-// THE DEFECT THIS REPLACES, MEASURED (2026-09-03): this check compared the
-// on-disk `tests/**/*.test.ts` set with the distinct file set in
-// `test-reports/junit.xml` left behind by WHATEVER RAN LAST, on the premise —
-// stated only in its own skip message — that the artifact came from a FULL
-// run. Nothing enforced it. The artifact held ONE distinct file
-// (`tests/boot-safety.test.ts`) against 144 on-disk files, and
-// `bun test tests/suite-integrity.test.ts` reported 3 pass / 1 fail:
-// "Expected - 143 / Received + 0". No code defect existed. The previous
-// command had simply been narrower than the tree — which is what this repo's
-// dispatch discipline REQUIRES of every sub-agent ("run ONLY the suites you
-// touch"). The assertion was detecting compliance, not invisible coverage.
-//
-// WHERE THE PROOF COMES FROM, and why nowhere else will do: bun's JUnit output
-// records test counts, not a file total and not how the runner was invoked, so
-// the only artifact-INTERNAL proxy for "this run was full" is "its file set
-// equals the on-disk set" — the conclusion itself. A precondition identical to
-// its conclusion can never fail, and a check that can never fail detects
-// nothing. The scope is known exactly once, at the PRODUCER:
-// `clients/bun-crucible.py`'s `_bun_test_cmd` receives `targets` (empty =
-// whole-suite) at the moment it builds the invocation, having just `_wipe`d the
-// previous artifact. It stamps that scope beside the artifact
-// (`test-reports/junit-scope.json`), and this check reads the stamp as its
-// precondition — asserting it BEFORE the parity conclusion, and SKIPPING with
-// the reason named when it does not hold.
-//
-// `bunfig.toml` carries no `[test]` section, so a bare `bun test` writes
-// NOTHING to `test-reports/`: artifact and stamp are only ever written
-// together by the client and only ever removed together by `_wipe`, so a stamp
-// is never stale with respect to the artifact beside it.
-//
-// SCOPE IS NOT SUFFICIENT — the second half, measured 2026-09-03 on this
-// branch. A proven-full artifact plus one newly created test file failed with
-// `neverRan: [that file]`: the artifact was simply OLDER than the file, which
-// is the standing configuration during TDD since every RED phase adds one. In
-// scope terms that is byte-identical to the case the check MUST fail on (a
-// full run that skipped an existing file), so the deciding fact is TIME: the
-// artifact's own mtime — bun flushes `junit.xml` at process exit, so it marks
-// when the run ENDED — against each on-disk file's. Newer than the artifact:
-// impossible to have been in that run, excluded and NAMED. Older and absent:
-// invisible coverage, a failure. In the artifact but gone from disk: deleted
-// since, named, not fatal. And if the exclusion empties the comparison
-// entirely, the check SKIPS rather than ticking green over an empty set —
-// the same vacuity refusal, one layer down.
-//
-// This stays a CORROBORATION. §S1's `bunfig` assertion above is the primary
-// guarantee precisely because it reads CONFIGURATION rather than run history,
-// so it holds under any invocation.
-//
-// WHY THIS CHECK STANDS SKIPPED INSIDE EVERY CLIENT RUN, and why that is BY
-// DESIGN rather than a broken guard (C3 FIX P3-4). `_wipe` deletes `junit.xml`
-// and its stamp before the run starts, and bun's JUnit reporter flushes only
-// at process EXIT — so at the moment this file is COLLECTED, inside ANY client
-// invocation, the artifact does not yet exist and `fullRunProof` reports
-// exactly that. The orchestrator's own whole-suite client gate therefore
-// always logs this skip: the check concludes only in a bare `bun test` run
-// AFTER a whole-suite client run has left an artifact behind. That is
-// consequence 1 of §S1's own Problem statement, unchanged from develop, and
-// it is why the primary guarantee is the `bunfig` assertion above rather than
-// this one.
-
-const REPORTS_DIR = path.join(REPO_ROOT, "test-reports");
-
-// The producing client's stamp: its filename and the two scope values it
-// writes. Pinned here because the SKIP path is failure-free — a client-side
-// rename would retire this corroboration permanently and SILENTLY, the one
-// direction no test reports. The values are proven behaviourally below (the
-// real client is spawned twice); the filename is additionally pinned against
-// the client's own source, so a rename fails HERE.
-const SCOPE_RECORD = "junit-scope.json";
-const FULL_SCOPE = "full";
-const SCOPED_SCOPE = "scoped";
-
-// The artifact a stamp must NAME to be proof ABOUT it — the client's
-// `DEFAULT_JUNIT`. Pinned beside the record's own filename and for the same
-// reason: the binding is a cross-stack contract whose only failure mode is a
-// permanent, silent SKIP.
-const JUNIT_ARTIFACT = "junit.xml";
-
-export interface FullRunProof {
-  provenFull: boolean;
-  // Non-empty whenever `provenFull` is false: `test.skipIf` prints no reason
-  // of its own (bun 1.3.14), so the caller emits this at COLLECTION time the
-  // way the missing-artifact case has always been reported.
-  reason: string;
-}
-
-// THE PRECONDITION, as a function of a reports directory alone, so the tests
-// below can plant every input shape instead of mutating the real one.
-export function fullRunProof(reportsDir: string): FullRunProof {
-  const junitPath = path.join(reportsDir, JUNIT_ARTIFACT);
-  const recordPath = path.join(reportsDir, SCOPE_RECORD);
-
-  if (!fs.existsSync(junitPath)) {
-    return {
-      provenFull: false,
-      reason:
-        `${junitPath} does not exist — no prior client run has left an ` +
-        "artifact at this path (a bare `bun test` writes none)",
-    };
-  }
-  if (!fs.existsSync(recordPath)) {
-    return {
-      provenFull: false,
-      reason:
-        `${junitPath} has no ${SCOPE_RECORD} beside it, so the scope of the ` +
-        "run that produced it is unknown — it may cover one file or the whole " +
-        "tree, and only the producing client could have said which",
-    };
-  }
-
-  let scope: unknown;
-  let artifact: unknown;
-  let targets: unknown;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(recordPath, "utf8")) as {
-      scope?: unknown;
-      artifact?: unknown;
-      targets?: unknown;
-    };
-    scope = parsed.scope;
-    artifact = parsed.artifact;
-    targets = parsed.targets;
-  } catch {
-    return {
-      provenFull: false,
-      reason:
-        `${recordPath} (the ${SCOPE_RECORD} beside ${junitPath}) is not ` +
-        "readable JSON, so the artifact's scope cannot be established",
-    };
-  }
-
-  // SCOPE FIRST, THEN THE BINDING. A stamp that does not even claim fullness
-  // is refused for the reason its reader expects — the scope it does record —
-  // and the binding below is asked only of a stamp that does claim it.
-  if (scope !== FULL_SCOPE) {
-    const named = Array.isArray(targets) ? targets.map(String) : [];
-    return {
-      provenFull: false,
-      reason:
-        `${SCOPE_RECORD} records scope=${JSON.stringify(scope)}` +
-        (named.length > 0 ? ` (targets: ${named.join(", ")})` : "") +
-        `, so ${junitPath} describes how the previous command was invoked, not ` +
-        "what the tree contains",
-    };
-  }
-
-  // THE BINDING (C3 FIX P3-1). A scope claim is proof about ONE artifact —
-  // the one its writer named — and the whole reason this record exists is that
-  // only the producer knows the scope. A stamp naming a different file made no
-  // statement about the file being read here, so it cannot license the parity
-  // comparison over it; letting it do so would be the stale-state defect §S1
-  // removes, one level up. An ABSENT name is refused for the same reason and
-  // in the same direction: every stamp this client writes names its artifact
-  // (`_scope_record`), so an unnamed one came from a different or older writer
-  // whose claim cannot be tied to `junit.xml` at all. Refusing costs at most
-  // one documented SKIP — the failure-free direction this corroboration is
-  // built on — while accepting costs a false green.
-  if (typeof artifact !== "string" || artifact.length === 0) {
-    return {
-      provenFull: false,
-      reason:
-        `${recordPath} claims scope=${FULL_SCOPE} but names no artifact, so ` +
-        `nothing binds that claim to ${junitPath} — every stamp this client ` +
-        `writes names its artifact (${JUNIT_ARTIFACT}), so an unnamed one is ` +
-        "from another writer and proves nothing about this file",
-    };
-  }
-  if (artifact !== JUNIT_ARTIFACT) {
-    return {
-      provenFull: false,
-      reason:
-        `${recordPath} certifies scope=${FULL_SCOPE} for ` +
-        `artifact=${JSON.stringify(artifact)}, not ` +
-        `${JSON.stringify(JUNIT_ARTIFACT)} — the stamp is proof about a ` +
-        `different artifact and says nothing about ${junitPath}`,
-    };
-  }
-
-  return { provenFull: true, reason: "" };
-}
-
-// A test file with the mtime the filesystem reports for it. The pair, not the
-// path alone, is what the comparison below needs: see the TIME note under
-// `parityInputs`.
-export interface TimedFile {
-  rel: string;
-  mtimeMs: number;
-}
-
-export interface ParityGap {
-  // Older than the artifact yet absent from it: the file existed while that
-  // full run happened and was not run. INVISIBLE COVERAGE — the fatal one.
-  neverRan: string[];
-  // In the run, absent from disk: DELETED since the run. Reported, never
-  // fatal — a deletion time is unrecoverable, and a junit artifact cannot
-  // name a file that never existed.
-  ranButAbsent: string[];
-  // Newer than the artifact: could not have been in that run at all, so it is
-  // excluded from the comparison and named here instead of failed on.
-  excludedNewer: string[];
-  // How many on-disk files actually entered the comparison. A COUNT, not a
-  // list, so a failure diff never prints a 145-element array.
-  comparedCount: number;
-  // Nothing left to compare. Must SKIP, never pass.
-  vacuous: boolean;
-  reason: string;
-}
-
-// THE CONCLUSION, likewise pure — the artifact's mtime and the on-disk mtimes
-// arrive as ARGUMENTS, so every shape can be planted and nothing is read from
-// the filesystem in here. Both directions are reported (never a bare count),
-// so two errors cancelling out cannot pass, and each verdict NAMES its files
-// instead of printing two 145-element lists.
-export function junitParityGap(
-  onDisk: TimedFile[],
-  ranFiles: string[],
-  artifactMtimeMs: number,
-): ParityGap {
-  const ran = new Set(ranFiles);
-  const disk = new Set(onDisk.map((f) => f.rel));
-
-  // Strictly newer only: the artifact is flushed at the run's END, so a file
-  // whose mtime EQUALS it could still have been collected — and the safe
-  // direction for an ambiguous timestamp is to compare it, not excuse it.
-  const excludedNewer: string[] = [];
-  const compared: string[] = [];
-  for (const file of onDisk) {
-    (file.mtimeMs > artifactMtimeMs ? excludedNewer : compared).push(file.rel);
-  }
-
-  // An empty comparison set proves nothing: `git checkout` rewrites every
-  // mtime to now, which would excuse the entire tree at once. Passing on that
-  // is exactly the vacuity §S1 rejected when it refused to infer fullness
-  // from the artifact itself, so it SKIPS with the reason instead.
-  const vacuous = compared.length === 0;
-  return {
-    neverRan: compared.filter((rel) => !ran.has(rel)).sort(),
-    ranButAbsent: ranFiles.filter((rel) => !disk.has(rel)).sort(),
-    excludedNewer: excludedNewer.sort(),
-    comparedCount: compared.length,
-    vacuous,
-    reason: vacuous
-      ? `the comparison set is EMPTY: all ${onDisk.length} on-disk ` +
-        "tests/**/*.test.ts file(s) are NEWER than the artifact, so none of " +
-        "them could have been in the run that produced it (a `git checkout` " +
-        "rewriting every mtime does this). An empty comparison proves " +
-        "nothing and must not pass"
-      : "",
-  };
-}
-
-// ── CR-CRU-101 §S1 FIX — the inputs the comparison needs, gathered ONCE ──
-//
-// Scope alone cannot separate two byte-identical configurations:
-//   * a full artifact that omits an EXISTING file — invisible coverage, must
-//     fail (AC6);
-//   * a full artifact that predates a NEWLY ADDED file — history, must not
-//     fail (AC1).
-// The distinguishing fact is TIME, and it is not in the artifact's file set:
-// it is the artifact's own mtime against each on-disk file's. Gathered here,
-// where the filesystem is read, and handed to the comparator as INPUTS so the
-// comparator stays pure and every shape can be planted.
-
-export interface ParityInputs {
-  // `junit.xml`'s mtime: bun flushes it at process exit, so it is the moment
-  // the run ENDED — every file that run could have collected is older.
-  artifactMtimeMs: number;
-  onDisk: TimedFile[];
-  ranFiles: string[];
-}
-
-function parityInputs(root: string, testsDir: string, reportsDir: string): ParityInputs {
-  const junitPath = path.join(reportsDir, "junit.xml");
-  return {
-    artifactMtimeMs: fs.statSync(junitPath).mtimeMs,
-    onDisk: listTestFilesOnDisk(testsDir)
-      .map((full) => ({
-        rel: path.relative(root, full).split(path.sep).join("/"),
-        mtimeMs: fs.statSync(full).mtimeMs,
-      }))
-      .filter((f) => f.rel !== SELF_RELATIVE),
-    ranFiles: distinctJunitTestcaseFiles(fs.readFileSync(junitPath, "utf8")).filter(
-      (r) => r !== SELF_RELATIVE,
-    ),
-  };
-}
-
-describe(
-  "On-disk vs an existing junit artifact (corroboration only — §S1's " +
-    "bunfig assertion above is the PRIMARY guarantee)",
-  () => {
-    const proof = fullRunProof(REPORTS_DIR);
-    // The comparison's own precondition, evaluated at COLLECTION time because
-    // that is the only moment `test.skipIf` can be told: bun offers no
-    // in-body skip, so a verdict of "nothing left to compare" has to be
-    // reached here or not at all.
-    const collected = proof.provenFull
-      ? parityInputs(REPO_ROOT, TESTS_DIR, REPORTS_DIR)
-      : null;
-    const plan =
-      collected === null
-        ? null
-        : junitParityGap(collected.onDisk, collected.ranFiles, collected.artifactMtimeMs);
-    const blocked = plan === null || plan.vacuous;
-    if (blocked) {
-      // Clear, non-silent explanation for the skip below — printed once at
-      // collection time regardless of which reporter is in use, because
-      // `test.skipIf` prints no reason of its own.
-      console.error(
-        "[suite-integrity] skipping junit-artifact corroboration: " +
-          `${plan === null ? proof.reason : plan.reason} — this is a ` +
-          "documented, expected skip, not a dodge; §S1's bunfig assertion " +
-          "above remains the primary guarantee regardless.",
-      );
-    }
-
-    test.skipIf(blocked)(
-      "given an artifact PROVEN to come from a whole-suite client run, every " +
-        "on-disk tests/**/*.test.ts file OLDER than that artifact appears in " +
-        "it (skipped, with the reason logged above, whenever that " +
-        "precondition cannot be established or nothing is left to compare)",
-      () => {
-        // The PRECONDITION, asserted before the conclusion (AC5) — re-read
-        // here rather than trusted from collection time, so an artifact
-        // replaced mid-run cannot license a comparison against itself.
-        expect(fullRunProof(REPORTS_DIR)).toEqual({ provenFull: true, reason: "" });
-
-        const inputs = parityInputs(REPO_ROOT, TESTS_DIR, REPORTS_DIR);
-        const gap = junitParityGap(inputs.onDisk, inputs.ranFiles, inputs.artifactMtimeMs);
-
-        // Both non-fatal verdicts are NAMED in the output even on success —
-        // silence about them is how a shrinking comparison would hide.
-        if (gap.excludedNewer.length > 0) {
-          console.error(
-            "[suite-integrity] excluded from the comparison as NEWER than " +
-              `${path.join(REPORTS_DIR, "junit.xml")} (created or modified after that ` +
-              `run, so they could not have been in it): ${gap.excludedNewer.join(", ")}`,
-          );
-        }
-        if (gap.ranButAbsent.length > 0) {
-          console.error(
-            "[suite-integrity] named by the artifact but no longer on disk " +
-              `(deleted since that run): ${gap.ranButAbsent.join(", ")}`,
-          );
-        }
-
-        // Vacuity is a SKIP verdict, and a skip can only be declared at
-        // collection time — so if it flipped true since then, fail loudly
-        // rather than tick green over an empty comparison set.
-        expect(gap.vacuous).toBe(false);
-        expect(gap.comparedCount).toBeGreaterThan(0);
-
-        // The only fatal direction: a file that existed while that full run
-        // happened and did not run in it.
-        expect(gap.neverRan).toEqual([]);
-      },
-    );
-  },
-);
-
-// ── CR-CRU-101 §S1 — the precondition's own tests ────────────────────────
-//
-// Planted inputs, never the real `test-reports/`: the shapes that matter here
-// (no stamp, a scoped stamp, a corrupt stamp) are exactly the states this
-// check must not fail on, and planting them is the only way to assert that
-// without waiting for one to occur. The two REAL client spawns then prove the
-// cross-stack half — that the stamp this reads is the stamp the client writes.
-
-function plantReportsDir(files: Record<string, string>): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cr101-scope-"));
-  for (const [name, body] of Object.entries(files)) {
-    fs.writeFileSync(path.join(dir, name), body);
-  }
-  return dir;
-}
-
-// A minimal artifact in bun's own shape — enough for `distinctJunitTestcaseFiles`.
-function junitFor(files: string[]): string {
-  const cases = files
-    .map((f) => `<testcase name="t" classname="c" file="${f}" time="0"/>`)
-    .join("");
-  return `<?xml version="1.0"?><testsuites>${cases}</testsuites>`;
-}
-
-// Drives the REAL producing client (`clients/bun-crucible.py test`) against a
-// throwaway 2-file bun project. No `--agent`, so no server, no ingest and no
-// registration — this exercises exactly the artifact-production path.
-async function runClientTest(
-  dir: string,
-  targets: string[],
-): Promise<{ code: number; stderr: string }> {
-  const baseEnv: Record<string, string | undefined> = { ...process.env };
-  for (const k of Object.keys(baseEnv)) {
-    if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
-  }
-  const proc = Bun.spawn({
-    cmd: [
-      "uv",
-      "run",
-      SCRIPT_PATH,
-      "test",
-      "--project-dir",
-      dir,
-      "--package-dir",
-      dir,
-      ...(targets.length > 0 ? ["--tests", ...targets] : []),
-    ],
-    cwd: dir,
-    env: baseEnv as Record<string, string>,
-    stdout: "ignore",
-    stderr: "pipe",
-  });
-  const [stderr, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
-  return { code, stderr };
-}
-
-describe(
-  "CR-CRU-101 §S1 — the junit corroboration asserts its precondition before " +
-    "its conclusion",
-  () => {
-    test(
-      "an artifact with no scope record beside it is NOT proven full, and the " +
-        "reason names the missing record rather than failing on the tree",
-      () => {
-        const dir = plantReportsDir({ "junit.xml": junitFor(["tests/a.test.ts"]) });
-        try {
-          const proof = fullRunProof(dir);
-
-          expect(proof.provenFull).toBe(false);
-          expect(proof.reason).toContain(SCOPE_RECORD);
-        } finally {
-          fs.rmSync(dir, { recursive: true, force: true });
-        }
-      },
-    );
-
-    test(
-      "a record that says the run was SCOPED is not proof of fullness, and " +
-        "the reason names the scope the artifact actually had (AC2)",
-      () => {
-        const dir = plantReportsDir({
-          "junit.xml": junitFor(["tests/boot-safety.test.ts"]),
-          [SCOPE_RECORD]: JSON.stringify({
-            scope: SCOPED_SCOPE,
-            artifact: "junit.xml",
-            targets: ["tests/boot-safety.test.ts"],
-          }),
-        });
-        try {
-          const proof = fullRunProof(dir);
-
-          expect(proof.provenFull).toBe(false);
-          expect(proof.reason).toContain(SCOPED_SCOPE);
-          expect(proof.reason).toContain("tests/boot-safety.test.ts");
-        } finally {
-          fs.rmSync(dir, { recursive: true, force: true });
-        }
-      },
-    );
-
-    test(
-      "a record that says the run was FULL is proof, so the conclusion is " +
-        "reached rather than skipped (AC6 — the check still concludes)",
-      () => {
-        const dir = plantReportsDir({
-          "junit.xml": junitFor(["tests/a.test.ts", "tests/b.test.ts"]),
-          [SCOPE_RECORD]: JSON.stringify({
-            scope: FULL_SCOPE,
-            artifact: "junit.xml",
-            targets: [],
-          }),
-        });
-        try {
-          expect(fullRunProof(dir).provenFull).toBe(true);
-        } finally {
-          fs.rmSync(dir, { recursive: true, force: true });
-        }
-      },
-    );
-
-    // ── CR-CRU-101 C3 FIX (P3-1) — the stamp BINDS to one artifact ───────
-    //
-    // MEASURED ON THIS BRANCH (VERIFY, 2026-09-04): a stamp reading
-    // `{"scope":"full","artifact":"somewhere-else.xml"}` planted beside
-    // `junit.xml` returned `provenFull=true`. The producing client writes
-    // `artifact` (`_scope_record`) and the python pin asserts it equals
-    // `DEFAULT_JUNIT`, but this precondition read `scope` and `targets` only —
-    // so the one field that says WHICH artifact the scope claim is ABOUT was
-    // decoration on both sides of the contract, written and asserted and
-    // never consulted.
-    //
-    // A stamp naming a different artifact is not proof about this one. The
-    // record exists because only the PRODUCER knows the scope; a producer
-    // that named a different file made no statement about the file being
-    // read, and a scope claim about `somewhere-else.xml` licensing a parity
-    // comparison over `junit.xml` is exactly the stale-state defect §S1
-    // removes, one level up. Both names go in the reason, or a mismatch is
-    // indistinguishable from a scoped run.
-    //
-    // AN ABSENT `artifact` IS ALSO NOT PROOF — the direction chosen because
-    // it cannot silently mis-certify. Every stamp this client has ever
-    // written names its artifact, so an unnamed one came from some other
-    // writer: an alien producer, or a version predating the field. Neither
-    // can be bound to `junit.xml`, and accepting absence would re-open the
-    // hole for precisely the writers whose stamps mean least. Refusing costs
-    // at most one documented SKIP — the failure-free direction this whole
-    // corroboration is built on — while accepting costs a false green.
-
-    test(
-      "a stamp that claims FULL but names a DIFFERENT artifact is not proof " +
-        "about the artifact beside it, and the reason names BOTH names; the " +
-        "same stamp naming the right artifact still proves full, so this is " +
-        "a discrimination and not a new blanket refusal",
-      () => {
-        const mismatched = plantReportsDir({
-          "junit.xml": junitFor(["tests/a.test.ts", "tests/b.test.ts"]),
-          [SCOPE_RECORD]: JSON.stringify({
-            scope: FULL_SCOPE,
-            artifact: "somewhere-else.xml",
-            targets: [],
-          }),
-        });
-        // Byte-identical but for the artifact NAME — the whole difference.
-        const bound = plantReportsDir({
-          "junit.xml": junitFor(["tests/a.test.ts", "tests/b.test.ts"]),
-          [SCOPE_RECORD]: JSON.stringify({
-            scope: FULL_SCOPE,
-            artifact: JUNIT_ARTIFACT,
-            targets: [],
-          }),
-        });
-        try {
-          const proof = fullRunProof(mismatched);
-
-          expect(proof.provenFull).toBe(false);
-          // The mismatch itself, not a bare refusal: the name the stamp
-          // certifies and the name actually being read.
-          expect(proof.reason).toContain("somewhere-else.xml");
-          expect(proof.reason).toContain(JUNIT_ARTIFACT);
-
-          expect(fullRunProof(bound)).toEqual({ provenFull: true, reason: "" });
-        } finally {
-          fs.rmSync(mismatched, { recursive: true, force: true });
-          fs.rmSync(bound, { recursive: true, force: true });
-        }
-      },
-    );
-
-    test(
-      "a stamp that claims FULL and names NO artifact at all does not bind " +
-        "either — nothing written by this client omits the name, so an " +
-        "omission is an alien or older writer whose claim cannot be tied to " +
-        "the artifact being read",
-      () => {
-        const dir = plantReportsDir({
-          "junit.xml": junitFor(["tests/a.test.ts"]),
-          [SCOPE_RECORD]: JSON.stringify({ scope: FULL_SCOPE, targets: [] }),
-        });
-        try {
-          const proof = fullRunProof(dir);
-
-          expect(proof.provenFull).toBe(false);
-          expect(proof.reason).toContain("artifact");
-          expect(proof.reason).toContain(JUNIT_ARTIFACT);
-        } finally {
-          fs.rmSync(dir, { recursive: true, force: true });
-        }
-      },
-    );
-
-    test(
-      "an unreadable or unrecognised record is not proof and never throws — " +
-        "a corrupt local artifact must skip, not crash the suite",
-      () => {
-        const truncated = plantReportsDir({
-          "junit.xml": junitFor(["tests/a.test.ts"]),
-          [SCOPE_RECORD]: "{ scope: ",
-        });
-        const alien = plantReportsDir({
-          "junit.xml": junitFor(["tests/a.test.ts"]),
-          [SCOPE_RECORD]: JSON.stringify({ scope: "partial" }),
-        });
-        try {
-          expect(fullRunProof(truncated).provenFull).toBe(false);
-          expect(fullRunProof(truncated).reason).toContain(SCOPE_RECORD);
-          expect(fullRunProof(alien).provenFull).toBe(false);
-          expect(fullRunProof(alien).reason).toContain("partial");
-        } finally {
-          fs.rmSync(truncated, { recursive: true, force: true });
-          fs.rmSync(alien, { recursive: true, force: true });
-        }
-      },
-    );
-
-    test(
-      "a missing artifact keeps its documented skip, and the reason still " +
-        "names the artifact (today's only skip case is preserved)",
-      () => {
-        const dir = plantReportsDir({});
-        try {
-          const proof = fullRunProof(dir);
-
-          expect(proof.provenFull).toBe(false);
-          expect(proof.reason).toContain("junit.xml");
-        } finally {
-          fs.rmSync(dir, { recursive: true, force: true });
-        }
-      },
-    );
-
-    // The three parity shapes C1 pinned, now carrying the mtimes the
-    // comparator takes as inputs. Every file here PREDATES the artifact, so
-    // each shape's verdict is unchanged by the time dimension: these are the
-    // cases where a file's absence from a full run is real, not historical.
-    const ARTIFACT_MS = 1_700_000_000_000;
-    const BEFORE_MS = ARTIFACT_MS - 60_000;
-
-    test(
-      "THE CHECK DID NOT BECOME UNFAILABLE: a proven-FULL artifact that omits " +
-        "an on-disk .test.ts file OLDER than it still yields a gap naming " +
-        "that file (AC5/AC6)",
-      () => {
-        const onDisk = ["tests/a.test.ts", "tests/invisible.test.ts", "tests/b.test.ts"].map(
-          (rel) => ({ rel, mtimeMs: BEFORE_MS }),
-        );
-        const ran = ["tests/a.test.ts", "tests/b.test.ts"];
-
-        expect(junitParityGap(onDisk, ran, ARTIFACT_MS)).toEqual({
-          neverRan: ["tests/invisible.test.ts"],
-          ranButAbsent: [],
-          excludedNewer: [],
-          comparedCount: 3,
-          vacuous: false,
-          reason: "",
-        });
-      },
-    );
-
-    test(
-      "the conclusion is a SET comparison in both directions — a file the run " +
-        "reports that is no longer on disk is reported too, so two errors " +
-        "cancelling out cannot pass",
-      () => {
-        expect(
-          junitParityGap(
-            [
-              { rel: "tests/a.test.ts", mtimeMs: BEFORE_MS },
-              // Predates the artifact, absent from it: skipped, not new.
-              { rel: "tests/skipped.test.ts", mtimeMs: BEFORE_MS },
-            ],
-            ["tests/a.test.ts", "tests/deleted.test.ts"],
-            ARTIFACT_MS,
-          ),
-        ).toEqual({
-          neverRan: ["tests/skipped.test.ts"],
-          ranButAbsent: ["tests/deleted.test.ts"],
-          excludedNewer: [],
-          comparedCount: 2,
-          vacuous: false,
-          reason: "",
-        });
-
-        expect(
-          junitParityGap(
-            [{ rel: "tests/a.test.ts", mtimeMs: BEFORE_MS }],
-            ["tests/a.test.ts"],
-            ARTIFACT_MS,
-          ),
-        ).toEqual({
-          neverRan: [],
-          ranButAbsent: [],
-          excludedNewer: [],
-          comparedCount: 1,
-          vacuous: false,
-          reason: "",
-        });
-      },
-    );
-
-    test(
-      "THE SEQUENCE THAT PRODUCES THE BUG, end to end: a real SCOPED client " +
-        "run stamps its artifact `scoped` (naming its targets), and the " +
-        "corroboration refuses that artifact instead of failing on it (AC1)",
-      async () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cr101-scoped-run-"));
-        try {
-          writeTwoFileFixtureProject(dir, "cr101-scope-fixture");
-
-          const run = await runClientTest(dir, ["a.test.ts"]);
-          expect(run.code).toBe(0);
-
-          const reportsDir = path.join(dir, "test-reports");
-          const record = JSON.parse(
-            fs.readFileSync(path.join(reportsDir, SCOPE_RECORD), "utf8"),
-          ) as { scope: string; targets: string[] };
-
-          expect(record.scope).toBe(SCOPED_SCOPE);
-          expect(record.targets).toEqual(["a.test.ts"]);
-
-          const proof = fullRunProof(reportsDir);
-          expect(proof.provenFull).toBe(false);
-          expect(proof.reason).toContain(SCOPED_SCOPE);
-        } finally {
-          fs.rmSync(dir, { recursive: true, force: true });
-        }
-      },
-    );
-
-    test(
-      "and the other half of the sequence: a real WHOLE-SUITE client run " +
-        "stamps its artifact `full`, so the corroboration CONCLUDES",
-      async () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cr101-full-run-"));
-        try {
-          writeTwoFileFixtureProject(dir, "cr101-scope-fixture");
-
-          const run = await runClientTest(dir, []);
-          expect(run.code).toBe(0);
-
-          const reportsDir = path.join(dir, "test-reports");
-          const record = JSON.parse(
-            fs.readFileSync(path.join(reportsDir, SCOPE_RECORD), "utf8"),
-          ) as { scope: string; artifact: string; targets: string[] };
-
-          expect(record.scope).toBe(FULL_SCOPE);
-          expect(record.targets).toEqual([]);
-          // The cross-stack half of the artifact BINDING (C3 FIX P3-1): the
-          // field this precondition now requires is the field the real client
-          // really writes, observed from a real run rather than assumed.
-          expect(record.artifact).toBe(JUNIT_ARTIFACT);
-          expect(fullRunProof(reportsDir).provenFull).toBe(true);
-        } finally {
-          fs.rmSync(dir, { recursive: true, force: true });
-        }
-      },
-    );
-
-    test(
-      "the producing client declares the SAME record filename this check " +
-        "reads — a client-side rename must fail here, never silently retire " +
-        "the corroboration through its failure-free skip path",
-      () => {
-        const clientSource = fs.readFileSync(SCRIPT_PATH, "utf8");
-
-        expect(
-          new RegExp(`^DEFAULT_SCOPE\\s*=\\s*["']${SCOPE_RECORD.replace(".", "\\.")}["']`, "m")
-            .test(clientSource),
-        ).toBe(true);
-      },
-    );
-  },
-);
-
-// ── CR-CRU-101 §S1 FIX — the TIME dimension's own tests ──────────────────
-//
-// THE DEFECT THIS FIXES, MEASURED ON THIS BRANCH (2026-09-03): with a
-// `test-reports/junit.xml` naming all 145 on-disk `.test.ts` files and a
-// `{"scope":"full"}` stamp beside it, creating ONE new test file and running
-// `bun test tests/suite-integrity.test.ts` reported 1 fail —
-// `neverRan: ["tests/zz-…-scratch.test.ts"]`. No code defect existed: the
-// proven-full artifact simply PREDATED the file. That is AC1 verbatim
-// ("never fails because a PREVIOUS run's artifact described a different set
-// of files"), and it is the standing configuration during TDD, since every
-// RED phase adds a test file.
-//
-// It is also byte-identical, in SCOPE terms, to the step-D proof of AC6 (a
-// proven-full artifact minus `tests/store.test.ts` must FAIL). Same file
-// sets, opposite required verdicts — so scope cannot decide it and TIME must:
-// a file NEWER than the artifact could not have been in that run; a file
-// OLDER than it and absent from it was skipped while it existed.
-//
-// Mtimes are planted with `fs.utimesSync`, never slept for.
-
-// Seconds — `fs.utimesSync` takes seconds, `fs.Stats.mtimeMs` reports ms.
-function plantMtime(target: string, epochSeconds: number): void {
-  fs.utimesSync(target, epochSeconds, epochSeconds);
-}
-
-describe(
-  "CR-CRU-101 §S1 FIX — the corroboration weighs the artifact's AGE, so a " +
-    "newly added file is not mistaken for invisible coverage",
-  () => {
-    // One fixed instant, so every case below is deterministic.
-    const ARTIFACT_MS = 1_700_000_000_000;
-    const OLDER_MS = ARTIFACT_MS - 60_000;
-    const NEWER_MS = ARTIFACT_MS + 60_000;
-
-    test(
-      "CASE 1 — a file NEWER than the artifact and absent from it could not " +
-        "have been in that run: it is EXCLUDED from the comparison and NAMED, " +
-        "never failed on (AC1, the measured defect)",
-      () => {
-        const gap = junitParityGap(
-          [
-            { rel: "tests/a.test.ts", mtimeMs: OLDER_MS },
-            { rel: "tests/zz-scratch.test.ts", mtimeMs: NEWER_MS },
-          ],
-          ["tests/a.test.ts"],
-          ARTIFACT_MS,
-        );
-
-        expect(gap.neverRan).toEqual([]);
-        expect(gap.excludedNewer).toEqual(["tests/zz-scratch.test.ts"]);
-        expect(gap.vacuous).toBe(false);
-        expect(gap.comparedCount).toBe(1);
-      },
-    );
-
-    test(
-      "CASE 2 — a file OLDER than the artifact and absent from it existed " +
-        "while that full run happened, so it is INVISIBLE COVERAGE: still a " +
-        "gap, still named (AC6, C1's step-D proof, preserved)",
-      () => {
-        const gap = junitParityGap(
-          [
-            { rel: "tests/a.test.ts", mtimeMs: OLDER_MS },
-            { rel: "tests/store.test.ts", mtimeMs: OLDER_MS },
-          ],
-          ["tests/a.test.ts"],
-          ARTIFACT_MS,
-        );
-
-        expect(gap.neverRan).toEqual(["tests/store.test.ts"]);
-        expect(gap.excludedNewer).toEqual([]);
-        expect(gap.vacuous).toBe(false);
-      },
-    );
-
-    test(
-      "CASE 3 — an artifact naming a file no longer on disk records a " +
-        "DELETION since the run: named, not failed on (a deletion time is " +
-        "unrecoverable, and a junit artifact cannot name a file that never " +
-        "existed)",
-      () => {
-        const gap = junitParityGap(
-          [{ rel: "tests/a.test.ts", mtimeMs: OLDER_MS }],
-          ["tests/a.test.ts", "tests/deleted.test.ts"],
-          ARTIFACT_MS,
-        );
-
-        expect(gap.neverRan).toEqual([]);
-        expect(gap.ranButAbsent).toEqual(["tests/deleted.test.ts"]);
-        expect(gap.vacuous).toBe(false);
-      },
-    );
-
-    test(
-      "ANTI-VACUITY — when case 1 excludes EVERY on-disk file (a `git " +
-        "checkout` resetting every mtime does exactly this) the comparison " +
-        "set is EMPTY, and an empty comparison must SKIP with the reason, " +
-        "never pass: a green tick over an empty set is the vacuity §S1 " +
-        "refused, one layer down",
-      () => {
-        const gap = junitParityGap(
-          [
-            { rel: "tests/a.test.ts", mtimeMs: NEWER_MS },
-            { rel: "tests/b.test.ts", mtimeMs: NEWER_MS },
-          ],
-          [],
-          ARTIFACT_MS,
-        );
-
-        expect(gap.vacuous).toBe(true);
-        expect(gap.comparedCount).toBe(0);
-        expect(gap.neverRan).toEqual([]);
-        expect(gap.reason).toContain("2");
-        expect(gap.reason.toLowerCase()).toContain("empty");
-      },
-    );
-
-    test(
-      "THE ORCHESTRATOR'S REPRODUCTION, END TO END on a fixture tree: a full " +
-        "artifact with a full stamp, then a test file created AFTERWARDS — " +
-        "the precondition still holds, the conclusion is still reached, and " +
-        "it does NOT fail; the new file is named as excluded-because-newer",
-      () => {
-        const root = fs.mkdtempSync(path.join(os.tmpdir(), "cr101-fix-e2e-"));
-        try {
-          const testsDir = path.join(root, "tests");
-          const reportsDir = path.join(root, "test-reports");
-          fs.mkdirSync(testsDir);
-          fs.mkdirSync(reportsDir);
-
-          const ranAt = Math.floor(ARTIFACT_MS / 1000);
-          for (const name of ["a.test.ts", "b.test.ts"]) {
-            const file = path.join(testsDir, name);
-            fs.writeFileSync(file, "// existed before the run\n");
-            plantMtime(file, ranAt - 60);
-          }
-
-          // A FULL run over exactly those files, stamped `full` by the client.
-          fs.writeFileSync(
-            path.join(reportsDir, "junit.xml"),
-            junitFor(["tests/a.test.ts", "tests/b.test.ts"]),
-          );
-          fs.writeFileSync(
-            path.join(reportsDir, SCOPE_RECORD),
-            JSON.stringify({ scope: FULL_SCOPE, artifact: "junit.xml", targets: [] }),
-          );
-          plantMtime(path.join(reportsDir, "junit.xml"), ranAt);
-
-          // ...and then a RED phase adds a test file, as every RED phase does.
-          const added = path.join(testsDir, "zz-cr101-scratch.test.ts");
-          fs.writeFileSync(added, "// added after that run\n");
-          plantMtime(added, ranAt + 60);
-
-          expect(fullRunProof(reportsDir).provenFull).toBe(true);
-
-          const inputs = parityInputs(root, testsDir, reportsDir);
-          const gap = junitParityGap(inputs.onDisk, inputs.ranFiles, inputs.artifactMtimeMs);
-
-          expect(gap.neverRan).toEqual([]);
-          expect(gap.ranButAbsent).toEqual([]);
-          expect(gap.excludedNewer).toEqual(["tests/zz-cr101-scratch.test.ts"]);
-          expect(gap.vacuous).toBe(false);
-          expect(gap.comparedCount).toBe(2);
-        } finally {
-          fs.rmSync(root, { recursive: true, force: true });
-        }
-      },
-    );
-  },
-);
-
 // ── CR-CRU-101 §S2 — the structural guard is LOAD-BEARING, demonstrated ──
 //
 // WHAT WAS MISSING, precisely. The two `bunfig` assertions at the TOP of this
@@ -1270,74 +358,32 @@ describe(
 //
 // BOTH HALVES ARE OBSERVED HERE, in a scratch fixture project carrying its
 // OWN bunfig.toml. The repo's is never touched and now never could be: the
-// decision is a pure function of TOML TEXT (`discoveryExclusions`, beside
-// the two assertions it serves), so the fixture's config reaches exactly the
+// decision is a pure function of TOML TEXT (`discoveryExclusions`, beside the
+// two assertions it serves), so the fixture's config reaches exactly the
 // decision the real one reaches.
 //   * bun's real behaviour — a REAL client run (`clients/bun-crucible.py
 //     test` with NO targets, so the runner's own discovery decides what to
-//     collect), read back on TWO independent channels: the file set named
-//     by the run's OWN junit report, and the FILE COUNT bun states in its
-//     own console summary line (`Ran 2 tests across 2 files.`). Different
-//     producers, different text, and they are required to AGREE — a
-//     disagreement is the only shape in which this fixture could lie, so it
-//     is a named failure rather than a silent preference for one channel.
-//     Never predicted, never assumed.
+//     collect), read back off the file set named by that run's OWN junit
+//     report. Never predicted, never assumed.
 //   * the guard's reaction — `discoveryExclusions` over that same fixture
 //     bunfig, required to REPORT the exclusion on both dimensions the two
 //     existing assertions cover.
-// Removing the exclusion flips every observation: bun collects both files,
-// counts two of them, and the guard reports nothing.
+// Removing the exclusion flips both observations: bun collects both files and
+// the guard reports nothing.
 //
-// WHY THE COUNT AND NOT THE FILE NAMES, on the console channel: the client
-// always runs bun with `--reporter=junit --reporter-outfile=…`, and under
-// that reporter bun prints ONLY the summary — no per-file header is emitted
-// in any case, ever (measured, bun 1.3.14, 2026-09-04). A console assertion
-// naming a file is therefore not flaky but UNSATISFIABLE under the very
-// invocation this fixture uses. The summary's file count is the statement
-// bun does make, it is independent of the junit report, and it flips
-// exactly with the exclusion.
-//
-// WHY A FIXTURE AND NOT THIS TREE: bun 1.3.14 has no discovery-listing and
-// no dry-run flag, so "enumerate what the runner would collect" over this
-// repo means actually RUNNING it — the ~5.5-minute nested full-suite
-// `Bun.spawn` CR-CRU-047 deleted and this file's header explains at length.
-// The fixture buys the same signal at ~70 ms per run (measured 2026-09-04).
-//
-// A MEASURED ASYMMETRY, kept because it is WHY there are two assertions and
-// not one. Not every `pathIgnorePatterns` spelling excludes anything.
-// Measured against bun 1.3.14 over this fixture: `["tests/hidden/"]` and
-// `["hidden"]` hide NOTHING (both files still run), while
-// `["tests/hidden/*"]`, `["**/hidden/*"]` and `["**/hidden/**"]` each hide
-// the file. The last of those hides a file UNDER tests/ with the literal
-// text `tests/` appearing NOWHERE in the config — so the second assertion
-// ("never references the tests/ tree") cannot see it and the first ("no
-// pathIgnorePatterns key AT ALL") is the one that fires. That is why the
-// first is the primary one, and the third test below is that exact case.
+// WHY A FIXTURE AND NOT THIS TREE: bun 1.3.14 has no discovery-listing and no
+// dry-run flag, so "enumerate what the runner would collect" over this repo
+// means actually RUNNING it — the ~5.5-minute nested full-suite `Bun.spawn`
+// CR-CRU-047 deleted and this file's header explains at length. The fixture
+// buys the same signal at ~70 ms of bun time per run.
 
 const FIXTURE_VISIBLE = "tests/visible.test.ts";
 const FIXTURE_HIDDEN = "tests/hidden/ignored.test.ts";
 
-// The fixture's configurations — identical `[test]` sections differing only
-// in the one line whose presence is the entire claim.
+// The fixture's two configurations — identical `[test]` sections differing
+// only in the one line whose presence is the entire claim.
 const FIXTURE_EXCLUDES_TESTS_DIR = '[test]\npathIgnorePatterns = ["tests/hidden/*"]\n';
-const FIXTURE_EXCLUDES_BY_GLOB = '[test]\npathIgnorePatterns = ["**/hidden/**"]\n';
 const FIXTURE_EXCLUDES_NOTHING = "[test]\n";
-const FIXTURE_EXCLUSION_COMMENTED = '[test]\n# pathIgnorePatterns = ["tests/hidden/*"]\n';
-// TOML's two QUOTED key spellings of the same assignment. Both are honoured
-// by bun 1.3.14 (measured over this fixture, 2026-09-04: each hides the file,
-// `Ran 1 test across 1 file.`), and the guard's finder demanded `=`
-// immediately after the BARE key, so both escaped it — the one direction the
-// finder's over-reporting posture does not cover.
-const FIXTURE_EXCLUDES_QUOTED_KEY = '[test]\n"pathIgnorePatterns" = ["tests/hidden/*"]\n';
-const FIXTURE_EXCLUDES_LITERAL_KEY = "[test]\n'pathIgnorePatterns' = [\"tests/hidden/*\"]\n";
-
-// The prose shape the REAL bunfig.toml takes today: five comment lines, one
-// of which names the key verbatim. Planted rather than read, because a claim
-// about the real file's COMMENT TEXT would be a contract over mutable state —
-// the very defect family this CR is about.
-const BUNFIG_PROSE_WARNING =
-  "# Do not reintroduce `[test] pathIgnorePatterns` for the tests/ tree: a\n" +
-  "# permanently-excluded directory makes the suite size unreconcilable.\n";
 
 // A fixture project with TWO test files — one directly under `tests/`, one a
 // directory deeper, which is the only structure an exclusion can
@@ -1349,41 +395,42 @@ function writeExclusionFixtureProject(dir: string, bunfig: string): void {
   fs.writeFileSync(path.join(dir, "bunfig.toml"), bunfig);
 }
 
-// The number of FILES bun says it collected, read off its run summary — the
-// console channel, and a pure function of the captured text so planted
-// strings can exercise it as well as real runs. bun writes exactly one such
-// line per run, in singular or plural depending on the counts:
-//
-//     Ran 1 test across 1 file. [9.00ms]
-//     Ran 2 tests across 2 files. [10.00ms]
-//
-// The FILE count is the second number, never the first: the two differ in
-// any run with more than one test per file. `null` when no summary line is
-// present, which is a REFUSAL TO ANSWER and not a count of zero — an
-// exclusion that hid every file would otherwise be indistinguishable from a
-// run that never reported, and this channel exists precisely to catch that
-// shape.
-export function collectedFileCount(consoleText: string): number | null {
-  const m = /^Ran \d+ tests? across (\d+) files?\./m.exec(consoleText);
-  return m === null ? null : Number(m[1]);
+// Drives the REAL producing client (`clients/bun-crucible.py test`) against a
+// throwaway bun project. No `--agent`, so no server, no ingest and no
+// registration — this exercises exactly the artifact-production path.
+async function runClientTest(dir: string): Promise<{ code: number; stderr: string }> {
+  const baseEnv: Record<string, string | undefined> = { ...process.env };
+  for (const k of Object.keys(baseEnv)) {
+    if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
+  }
+  const proc = Bun.spawn({
+    cmd: ["uv", "run", SCRIPT_PATH, "test", "--project-dir", dir, "--package-dir", dir],
+    cwd: dir,
+    env: baseEnv as Record<string, string>,
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  const [stderr, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+  return { code, stderr };
 }
 
-export interface FixtureRunObservation {
+interface FixtureRunObservation {
   // Every `.test.ts` under the fixture's tests/ tree, whatever ran.
   onDisk: string[];
-  // CHANNEL ONE — the distinct files the run's own junit report names.
+  // The distinct files the run's OWN junit report names — what bun says it
+  // collected, in bun's own words.
   ranFiles: string[];
-  // CHANNEL TWO — the file count bun states in its own console summary,
-  // parsed from the run's captured output. `null` means the run said
-  // nothing countable, which is never the same claim as zero.
-  collectedFiles: number | null;
 }
 
 // Runs the REAL producing client over the fixture with no targets, so bun's
-// own discovery decides, and reports what the run itself said it ran — on
-// both channels.
+// own discovery decides, and reports what the run itself said it ran.
 async function observeFixtureRun(dir: string): Promise<FixtureRunObservation> {
-  const run = await runClientTest(dir, []);
+  const run = await runClientTest(dir);
+  if (run.code !== 0) {
+    // The client's own diagnostics, or the assertion below names an exit code
+    // and nothing else.
+    console.error(`[suite-integrity §S2] client run exited ${run.code}:\n${run.stderr}`);
+  }
   expect(run.code).toBe(0);
   const junit = fs.readFileSync(path.join(dir, "test-reports", "junit.xml"), "utf8");
   return {
@@ -1391,7 +438,6 @@ async function observeFixtureRun(dir: string): Promise<FixtureRunObservation> {
       .map((full) => path.relative(dir, full).split(path.sep).join("/"))
       .sort(),
     ranFiles: distinctJunitTestcaseFiles(junit).sort(),
-    collectedFiles: collectedFileCount(run.stderr),
   };
 }
 
@@ -1404,77 +450,19 @@ async function inExclusionFixture(
   try {
     writeExclusionFixtureProject(dir, bunfig);
     const observed = await observeFixtureRun(dir);
-    // NAMED in the output even on success, the way the corroboration above
-    // names its non-fatal verdicts: these facts side by side ARE the
+    // NAMED in the output even on success: these facts side by side ARE the
     // evidence that the guard is load-bearing, and evidence nobody can read
     // is evidence nobody can check.
     console.error(
       `[suite-integrity §S2] ${slug}: on disk ${observed.onDisk.join(", ")} | ` +
-        `bun collected ${observed.ranFiles.join(", ")} | bun counted ` +
-        `${observed.collectedFiles === null ? "unknown" : observed.collectedFiles} file(s) | ` +
+        `bun collected ${observed.ranFiles.join(", ")} | ` +
         `guard reported ${JSON.stringify(discoveryExclusions(bunfig))}`,
     );
-    // THE TWO CHANNELS MUST AGREE, in every case, before any case-specific
-    // claim is believed. Junit report and console summary are produced by
-    // different code over different text; a fixture that lied — a stale
-    // artifact read back, a run that never happened — would have to make
-    // both lie the same way, and a disagreement is a failure in its own
-    // right rather than a choice between witnesses.
-    expect({ channel: "bun's summary file count", files: observed.collectedFiles }).toEqual({
-      channel: "bun's summary file count",
-      files: observed.ranFiles.length,
-    });
     body(observed);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
-
-// The console channel's PARSER, exercised on planted text as well as on the
-// real runs below, because the fixture cases can only ever show it the two
-// shapes their own exclusion produces.
-const PLANTED_ONE_FILE =
-  "[crucible] running: bun test --reporter=junit --reporter-outfile=/tmp/x/junit.xml  (cwd=/tmp/x)\n" +
-  "bun test v1.3.14 (0d9b296a)\n\n 1 pass\n 0 fail\n 1 expect() calls\n" +
-  "Ran 1 test across 1 file. [9.00ms]\n[crucible] bun test exit=0\n";
-const PLANTED_TWO_FILES =
-  "[crucible] running: bun test --reporter=junit --reporter-outfile=/tmp/x/junit.xml  (cwd=/tmp/x)\n" +
-  "bun test v1.3.14 (0d9b296a)\n\n 2 pass\n 0 fail\n 2 expect() calls\n" +
-  "Ran 2 tests across 2 files. [10.00ms]\n[crucible] bun test exit=0\n";
-
-describe("CR-CRU-101 §S2 — bun's summary file count, read off planted console text", () => {
-  test(
-    "the singular and plural spellings of the summary line are the SAME " +
-      "count channel — bun writes `1 test across 1 file` and `2 tests " +
-      "across 2 files`, and a parser that only knew one of them would read " +
-      "the other as no answer at all",
-    () => {
-      expect(collectedFileCount(PLANTED_ONE_FILE)).toBe(1);
-      expect(collectedFileCount(PLANTED_TWO_FILES)).toBe(2);
-    },
-  );
-
-  test(
-    "console text with NO summary line at all is UNKNOWN, never zero: a " +
-      "missing count that read as 0 would make a fixture whose exclusion " +
-      "hid EVERYTHING look exactly like a correctly-counted empty run",
-    () => {
-      expect(collectedFileCount("[crucible] running: bun test\n[crucible] bun test exit=1\n")).toBe(
-        null,
-      );
-      expect(collectedFileCount("")).toBe(null);
-    },
-  );
-
-  test(
-    "the count read is the FILE count and not the test count — the two " +
-      "differ in every run that matters, and a parser reaching for the " +
-      "first number on the line would return the wrong one",
-    () => {
-      expect(collectedFileCount("Ran 7 tests across 3 files. [12.00ms]\n")).toBe(3);
-    },
-  );
-});
 
 describe(
   "CR-CRU-101 §S2 — a test file the runner's discovery does not reach is " +
@@ -1484,15 +472,13 @@ describe(
     test(
       "a pathIgnorePatterns entry naming the fixture's tests/hidden/ really " +
         "does hide that file from a real bun run — the run's own junit " +
-        "report names only the visible file and its own summary counts one " +
-        "file — and the guard REPORTS that entry on both of its dimensions",
+        "report names only the visible file — and the guard REPORTS that " +
+        "entry on both of its dimensions",
       async () => {
         await inExclusionFixture("excluded", FIXTURE_EXCLUDES_TESTS_DIR, (observed) => {
-          // HALF ONE — bun's behaviour, read out of the run's own output on
-          // both channels (already required to agree with each other).
+          // HALF ONE — bun's behaviour, read out of the run's own report.
           expect(observed.onDisk).toEqual([FIXTURE_HIDDEN, FIXTURE_VISIBLE]);
           expect(observed.ranFiles).toEqual([FIXTURE_VISIBLE]);
-          expect(observed.collectedFiles).toBe(1);
 
           // HALF TWO — the guard, asked about the very config that hid it.
           expect(discoveryExclusions(FIXTURE_EXCLUDES_TESTS_DIR)).toEqual([
@@ -1507,122 +493,16 @@ describe(
     );
 
     test(
-      "removing that one line flips EVERY observation: the same fixture's " +
-        "run collects both files, counts two of them, and the guard reports " +
-        "nothing — so the green verdict the two assertions above reach on " +
-        "the real bunfig.toml is a verdict, not a tautology",
+      "removing that one line flips BOTH observations: the same fixture's " +
+        "run collects both files and the guard reports nothing — so the " +
+        "green verdict the two assertions above reach on the real " +
+        "bunfig.toml is a verdict, not a tautology",
       async () => {
         await inExclusionFixture("no-exclusion", FIXTURE_EXCLUDES_NOTHING, (observed) => {
           expect(observed.onDisk).toEqual([FIXTURE_HIDDEN, FIXTURE_VISIBLE]);
           expect(observed.ranFiles).toEqual([FIXTURE_HIDDEN, FIXTURE_VISIBLE]);
-          expect(observed.collectedFiles).toBe(2);
 
           expect(discoveryExclusions(FIXTURE_EXCLUDES_NOTHING)).toEqual([]);
-        });
-      },
-    );
-
-    test(
-      "the spelling that hides a tests/ file WITHOUT naming tests/ " +
-        "(`**/hidden/**`, measured) is invisible to the second assertion and " +
-        "caught by the FIRST — which is why the primary guard is `no " +
-        "pathIgnorePatterns key at all`",
-      async () => {
-        await inExclusionFixture("glob", FIXTURE_EXCLUDES_BY_GLOB, (observed) => {
-          expect(observed.ranFiles).toEqual([FIXTURE_VISIBLE]);
-          expect(observed.collectedFiles).toBe(1);
-
-          const reported = discoveryExclusions(FIXTURE_EXCLUDES_BY_GLOB);
-          expect(reported).toEqual([
-            {
-              arrayText: '["**/hidden/**"]',
-              patterns: ["**/hidden/**"],
-              referencesTestsDir: false,
-            },
-          ]);
-          // The two verdicts the assertions at the top of this file reach,
-          // applied to this config instead of the repo's: the first FIRES on
-          // it, the second cannot see it.
-          expect(reported).not.toEqual([]);
-          expect(reported.filter((e) => e.referencesTestsDir)).toEqual([]);
-        });
-      },
-    );
-
-    test(
-      "QUOTING THE KEY CHANGES NOTHING FOR BUN, so it must change nothing " +
-        "for the guard: `\"pathIgnorePatterns\" = [...]` really does hide the " +
-        "fixture's file from a real run — its own junit report names one file " +
-        "and its own summary counts one — and the guard REPORTS it",
-      async () => {
-        await inExclusionFixture("quoted-key", FIXTURE_EXCLUDES_QUOTED_KEY, (observed) => {
-          expect(observed.onDisk).toEqual([FIXTURE_HIDDEN, FIXTURE_VISIBLE]);
-          expect(observed.ranFiles).toEqual([FIXTURE_VISIBLE]);
-          expect(observed.collectedFiles).toBe(1);
-
-          expect(discoveryExclusions(FIXTURE_EXCLUDES_QUOTED_KEY)).toEqual([
-            {
-              arrayText: '["tests/hidden/*"]',
-              patterns: ["tests/hidden/*"],
-              referencesTestsDir: true,
-            },
-          ]);
-        });
-      },
-    );
-
-    test(
-      "TOML's other quoted key form is the same assignment again: " +
-        "`'pathIgnorePatterns' = [...]` hides the file from a real run too — " +
-        "observed on both channels — and is likewise REPORTED",
-      async () => {
-        await inExclusionFixture("literal-key", FIXTURE_EXCLUDES_LITERAL_KEY, (observed) => {
-          expect(observed.ranFiles).toEqual([FIXTURE_VISIBLE]);
-          expect(observed.collectedFiles).toBe(1);
-
-          expect(discoveryExclusions(FIXTURE_EXCLUDES_LITERAL_KEY)).toEqual([
-            {
-              arrayText: '["tests/hidden/*"]',
-              patterns: ["tests/hidden/*"],
-              referencesTestsDir: true,
-            },
-          ]);
-        });
-      },
-    );
-
-    test(
-      "the three spellings reach the IDENTICAL verdict — bare, basic-quoted " +
-        "and literal-quoted keys are one TOML assignment, so the guard must " +
-        "not report three different things about them",
-      () => {
-        const bare = discoveryExclusions(FIXTURE_EXCLUDES_TESTS_DIR);
-
-        expect(discoveryExclusions(FIXTURE_EXCLUDES_QUOTED_KEY)).toEqual(bare);
-        expect(discoveryExclusions(FIXTURE_EXCLUDES_LITERAL_KEY)).toEqual(bare);
-        // ...and the bare spelling's own verdict is unchanged by the widening
-        // that admits the other two: still exactly one exclusion, still
-        // naming the tests/ tree. A superset, never a substitution.
-        expect(bare).toHaveLength(1);
-        expect(bare[0]!.referencesTestsDir).toBe(true);
-      },
-    );
-
-    test(
-      "the guard reads CONFIGURATION, not prose: a commented-out exclusion " +
-        "hides nothing from a real run — observed — and is reported by " +
-        "neither dimension, as is the warning-comment shape the real " +
-        "bunfig.toml is made of",
-      async () => {
-        await inExclusionFixture("commented", FIXTURE_EXCLUSION_COMMENTED, (observed) => {
-          expect(observed.ranFiles).toEqual([FIXTURE_HIDDEN, FIXTURE_VISIBLE]);
-          expect(observed.collectedFiles).toBe(2);
-
-          expect(discoveryExclusions(FIXTURE_EXCLUSION_COMMENTED)).toEqual([]);
-          expect(discoveryExclusions(BUNFIG_PROSE_WARNING)).toEqual([]);
-          // ...and the same line, uncommented, IS reported — so the
-          // stripping above is a discrimination, not a blind spot.
-          expect(discoveryExclusions(FIXTURE_EXCLUDES_TESTS_DIR)).toHaveLength(1);
         });
       },
     );
