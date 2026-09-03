@@ -1689,4 +1689,184 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
       },
     );
   });
+
+  // ── CR-CRU-099 §S3/AC9 — declaring membership is ORCHESTRATOR work ───────
+  //
+  // THE RULE. §S3: a post that declares `release`, `track` or `lifecycle` is
+  // roadmap registration and requires the `ORCHESTRATOR` role, exactly as
+  // `cr-plan` does; a post declaring none of them is queue BOOTSTRAP and stays
+  // open. The five roadmap verbs (`handleCrPlan`, `handleWaveSequence`,
+  // `handleCrLifecycle` and their siblings) have enforced the role through
+  // `requireOrchestrator` since CR-CRU-091 §S3. `handleQueuePost` never did,
+  // and before §S1 that was harmless — the route could not write membership,
+  // so the rule was enforced by the very defect this CR fixes. §S1 removed the
+  // accident, so the rule is stated here or it is stated nowhere.
+  //
+  // ONE AUTHORIZATION RULE, ONE WORDING. These fixtures assert the refusal
+  // `requireOrchestrator` already answers — 409, the caller named, the
+  // required role named, a state-derived `help[]` — and NOT a second error
+  // shape invented for this route. tests/roadmap-registration-routes.test.ts
+  // (AC16) pins the same three refusal shapes on the five verbs; what is new
+  // here is only WHICH POSTS the rule reaches.
+  //
+  // WHY THE OPEN HALF IS ASSERTED AS HARD AS THE REFUSAL. A guard that proved
+  // only the refusal would let the gate silently widen to every queue post,
+  // and the post it would break is the orchestrator's own roadmap import.
+  // `queue-file` (`cmd_queue_file`, clients/_crucible_axi.py) builds its rows
+  // with `parse_queue_table` — `{cr, title, wave, dependsOn}` per row, nothing
+  // else — and sends them through the shared `ops.post` as
+  // `{"entries": [...]}`, which carries NO `agentId` and no other identity
+  // field; `ops.post` adds none. Read off that client's source on 2026-09-03,
+  // not assumed, and pinned independently by
+  // tests/client/test_queue_file_verb.py (`_posted_entries`). The open-path
+  // fixture below therefore posts that exact shape and requires 200 — a client
+  // change is explicitly out of this CR's scope.
+  describe("CR-CRU-099 §S3/AC9 — declaring membership requires ORCHESTRATOR; bootstrap stays open", () => {
+    const RELEASE = "0.2.0";
+    const RED_CALLER = "red-1";
+
+    /** The three declarations §S3 names, each as the whole entry carrying it.
+     *  All three are WELL-FORMED on purpose: a malformed `track` or
+     *  `lifecycle` is refused by AC4a/AC4b's own validation and would prove
+     *  nothing about the role gate. */
+    const DECLARED: Array<{ field: string; entry: Record<string, unknown> }> = [
+      { field: "release", entry: { cr: "CR-Q99-G", wave: "5", dependsOn: [], release: RELEASE } },
+      { field: "track", entry: { cr: "CR-Q99-G", wave: "5", dependsOn: [], track: "track-2" } },
+      {
+        field: "lifecycle",
+        entry: {
+          cr: "CR-Q99-G",
+          wave: "5",
+          dependsOn: [],
+          lifecycle: { state: "VOID", reason: "gate probe", at: 1_787_149_125_000 },
+        },
+      },
+    ];
+
+    /** The row every refusal fixture holds first: this route is a FULL
+     *  REPLACE, so a refusal that ran the write is visible here as a lost row
+     *  (the AC4a technique). */
+    const HELD: Record<string, unknown> = { cr: "CR-Q99-HELD", wave: "5", dependsOn: [] };
+
+    /** POSTs the bulk route as `agentId` — or, when it is undefined, with NO
+     *  identity field at all, which is `queue-file`'s own shape. */
+    async function postAs(
+      key: string,
+      agentId: string | undefined,
+      entries: Array<Record<string, unknown>>,
+    ): Promise<Response> {
+      return postJson(queuePath(key), agentId === undefined ? { entries } : { agentId, entries });
+    }
+
+    /** A LIVE registered caller that is NOT an orchestrator. A TDD role cannot
+     *  register unbound (CR-CRU-056 §S1 refuses that 409), so RED is bound to
+     *  the ACTIVE cycle of a throwaway plan filed on a cr that never enters
+     *  the queue — the fixture tests/roadmap-registration-routes.test.ts uses
+     *  for the same reason. */
+    async function registerRed(key: string): Promise<string> {
+      const { planId, cycleId } = await filePlan(key, "CR-Q99-GATE-BIND");
+      const activated = await patchJson(plansPath(key, `/${planId}/cycles/${cycleId}`), {
+        agentId: ORCH,
+        status: "active",
+      });
+      expect(activated.status).toBe(200);
+      const red = await postJson("/api/v2/agents/register", {
+        projectKey: key,
+        agentId: RED_CALLER,
+        role: "RED",
+        cycleId,
+      });
+      expect(red.status).toBe(200);
+      return RED_CALLER;
+    }
+
+    async function crs(key: string): Promise<string[]> {
+      return (await getQueue(key)).entries.map((entry) => entry.cr);
+    }
+
+    test(
+      "AC9 a declared `release`, `track` or `lifecycle` from a REGISTERED NON-ORCHESTRATOR is " +
+        "refused 409 naming the caller and the required role — the refusal the five roadmap verbs " +
+        "already answer — and the queue it would have replaced is untouched",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-gate-non-orchestrator");
+        const red = await registerRed(key);
+        expect([200, 202]).toContain((await postQueue(key, [HELD])).status);
+
+        for (const declaration of DECLARED) {
+          const res = await postAs(key, red, [declaration.entry]);
+          expect(`${declaration.field}:${res.status}`).toBe(`${declaration.field}:409`);
+          const body = (await res.json()) as ErrResponse;
+          expect(body.ok).toBe(false);
+          expect(body.error).toContain("ORCHESTRATOR");
+          expect(body.error).toContain("RED");
+          expect(body.error).toContain(red);
+          expect(Array.isArray(body.help)).toBe(true);
+          // WROTE NOTHING — the full replace never ran, so the held row is
+          // still the whole queue.
+          expect(await crs(key)).toEqual(["CR-Q99-HELD"]);
+        }
+
+        // THE GATE IS ON THE DECLARATION, NOT ON THE CALLER: the same
+        // non-orchestrator, the same route, one field fewer — accepted.
+        expect([200, 202]).toContain(
+          (await postAs(key, red, [HELD, { cr: "CR-Q99-OPEN", wave: "5", dependsOn: [] }])).status,
+        );
+        expect(await crs(key)).toEqual(["CR-Q99-HELD", "CR-Q99-OPEN"]);
+      },
+    );
+
+    test(
+      "AC9 the same three declared with NO `agentId` at all — `queue-file`'s payload plus a " +
+        "declaration — are refused 409 for carrying no registered caller, and write nothing",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-gate-anonymous");
+        expect([200, 202]).toContain((await postQueue(key, [HELD])).status);
+
+        for (const declaration of DECLARED) {
+          const res = await postAs(key, undefined, [declaration.entry]);
+          expect(`${declaration.field}:${res.status}`).toBe(`${declaration.field}:409`);
+          const body = (await res.json()) as ErrResponse;
+          expect(body.ok).toBe(false);
+          // `requireRegisteredCaller`'s own wording, reached through
+          // `requireOrchestrator` — no second spelling for this route.
+          expect(body.error).toContain("agentId");
+          expect(Array.isArray(body.help)).toBe(true);
+          expect(await crs(key)).toEqual(["CR-Q99-HELD"]);
+        }
+      },
+    );
+
+    test(
+      "AC9 the OPEN half — `queue-file`'s own payload, `{entries:[{cr,title,wave,dependsOn}]}` with " +
+        "no identity field of any kind, is accepted exactly as today and stores its rows: the gate " +
+        "keys on the declaration, so the orchestrator's roadmap import needs no client change",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-099-gate-bootstrap");
+        // The shape `cmd_queue_file` sends, verbatim — `parse_queue_table`'s
+        // four keys and nothing else, no `agentId`.
+        const res = await postAs(key, undefined, [
+          { cr: "CR-QF-1", title: "queue file row", wave: "5", dependsOn: [] },
+          { cr: "CR-QF-2", title: "another row", wave: "6", dependsOn: ["CR-QF-1"] },
+        ]);
+        expect([200, 202]).toContain(res.status);
+        const body = (await res.json()) as QueuePostResponse;
+        expect(body.ok).toBe(true);
+        const entries = (await getQueue(key)).entries;
+        expect(entries.map((entry) => entry.cr)).toEqual(["CR-QF-1", "CR-QF-2"]);
+        expect(findEntry(entries, "CR-QF-1").title).toBe("queue file row");
+        expect(findEntry(entries, "CR-QF-2").dependsOn).toEqual(["CR-QF-1"]);
+        // A bootstrap row declares no membership, so it carries none: the open
+        // path fabricates nothing on the way through.
+        for (const cr of ["CR-QF-1", "CR-QF-2"]) {
+          expect("release" in findEntry(entries, cr)).toBe(false);
+          expect("track" in findEntry(entries, cr)).toBe(false);
+          expect("lifecycle" in findEntry(entries, cr)).toBe(false);
+        }
+      },
+    );
+  });
 });

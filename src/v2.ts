@@ -1821,6 +1821,17 @@ function handleQueueGet(store: Store, key: string, req: Request, url: URL): Resp
  * Validation 400s name the offending field AND index. Unknown dependsOn
  * targets (forward refs to CRs not in the posted set) are ACCEPTED and
  * flagged in `unknownDependencies`, never rejected.
+ *
+ * CR-CRU-099 §S3/AC9 — the caller gate is FIELD-CONDITIONAL. A post that
+ * declares `release`, `track` or `lifecycle` is roadmap registration and
+ * takes the same `requireOrchestrator` the five roadmap verbs take
+ * (`handleCrPlan`, `handleWaveSequence`, `handleCrLifecycle` and their
+ * siblings) — one authorization rule, one refusal wording. A post declaring
+ * none of them is queue BOOTSTRAP and stays open, because the only real
+ * caller of this route is `queue-file` (`cmd_queue_file` in
+ * `clients/_crucible_axi.py`), whose payload is `{"entries": …}` with no
+ * `agentId` at all: a route-wide gate would refuse the orchestrator's own
+ * roadmap import.
  */
 async function handleQueuePost(store: Store, key: string, req: Request): Promise<Response> {
   if (!UUID_RE.test(key)) {
@@ -1833,6 +1844,25 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
   const rawEntries = body.entries;
   if (!Array.isArray(rawEntries)) {
     return fail(400, "queue body must carry an `entries` array");
+  }
+  // §S3/AC9 — "declares" means exactly what the forwarding spreads below
+  // treat as declared: a value that is neither absent nor null. A post whose
+  // membership fields would write nothing declares nothing, so it is
+  // bootstrap and stays open. The scan reads the POSTED entries and lives
+  // here in the handler, before any per-entry validation, so authorization
+  // precedes body shape exactly as it does on the five roadmap routes.
+  const declaresMembership = rawEntries.some((entry: unknown) => {
+    if (entry === null || typeof entry !== "object") return false;
+    const posted = entry as Record<string, unknown>;
+    return (
+      (posted.release ?? null) !== null ||
+      (posted.track ?? null) !== null ||
+      (posted.lifecycle ?? null) !== null
+    );
+  });
+  if (declaresMembership) {
+    const caller = requireOrchestrator(store, key, body);
+    if ("fail" in caller) return caller.fail;
   }
   const entries: QueueEntryInput[] = [];
   for (let index = 0; index < rawEntries.length; index++) {
