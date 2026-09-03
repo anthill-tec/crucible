@@ -37,6 +37,7 @@ import type {
   PackageRef,
   Project,
   QueueEntry,
+  QueueLifecycle,
   RunContext,
   RunEvent,
   RunSchema,
@@ -1862,6 +1863,57 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     if (fields.seq !== undefined && fields.seq !== null && !Number.isInteger(fields.seq)) {
       return fail(400, `entry at index ${index} has a non-integer \`seq\``);
     }
+    // CR-CRU-099 §S1/AC4a — `track` is NORMALISED on write and REFUSED when it
+    // carries no lane number: `replaceQueue` throws a plain `Error` for it
+    // (src/store.ts:3517-3522) and this handler catches only
+    // `QueueWaveOverflowError`, so authored input would be answered 500. The
+    // refusal is pre-empted here through the SAME normaliser — one lane rule,
+    // one wording — naming the field and the index, as `dependsOn` and `seq`
+    // already do above.
+    if (
+      fields.track !== undefined &&
+      fields.track !== null &&
+      normalizeTrack(String(fields.track)) === null
+    ) {
+      return fail(
+        400,
+        `entry at index ${index} has a \`track\` carrying no lane number: ` +
+          `"${String(fields.track)}" — tracks are numbered lanes (wire format track-<n>), so ` +
+          `declare e.g. 2, track-2 or "Track 2"`,
+      );
+    }
+    // §S1 — `lifecycle` is the one declared field that is a STRUCTURE, so its
+    // SHAPE is refused by name and index exactly as a non-array `dependsOn`
+    // is. `replaceQueue` stringifies it verbatim into `lifecycle_json`
+    // (src/store.ts:3579-3582) and `listQueue` publishes it back as a
+    // `QueueLifecycle` (:3669-3671), so anything else is a value no reader of
+    // that type can trust. What is asserted is exactly what `QueueLifecycle`
+    // declares (src/types.ts:365-372) — no further rule about the disposition
+    // itself, which is `cr-supersede`/`cr-void`'s business.
+    const declared =
+      typeof fields.lifecycle === "object" &&
+      fields.lifecycle !== null &&
+      !Array.isArray(fields.lifecycle)
+        ? (fields.lifecycle as Record<string, unknown>)
+        : undefined;
+    const state = declared?.state;
+    const at = declared?.at;
+    let lifecycle: QueueLifecycle | undefined;
+    if (fields.lifecycle !== undefined && fields.lifecycle !== null) {
+      if ((state !== "SUPERSEDED" && state !== "VOID") || typeof at !== "number") {
+        return fail(
+          400,
+          `entry at index ${index} has a \`lifecycle\` that is not one: a lifecycle carries ` +
+            `{state: "SUPERSEDED" | "VOID", by?, reason?, at: epoch ms}`,
+        );
+      }
+      lifecycle = {
+        state,
+        ...(typeof declared?.by === "string" ? { by: declared.by } : {}),
+        ...(typeof declared?.reason === "string" ? { reason: declared.reason } : {}),
+        at,
+      };
+    }
     entries.push({
       cr: fields.cr,
       ...(fields.title !== undefined && fields.title !== null
@@ -1873,6 +1925,22 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
         ? { size: String(fields.size) }
         : {}),
       ...(typeof fields.seq === "number" ? { seq: fields.seq } : {}),
+      // CR-CRU-099 §S1 — the three DECLARED fields `QueueEntryInput` accepts
+      // (src/store.ts:283-287), on the same footing as the six above: read
+      // when the caller sends one, ABSENT when undeclared — never defaulted,
+      // because an absent declaration is a fact — and left to `replaceQueue`'s
+      // carry-forward, which already depends on all three. Until this CR the
+      // route accepted them and read none, so a declared release was answered
+      // `200` and stored as nothing (CR-CRU-091 §S8's five-verb boundary,
+      // moved here because CR-CRU-078's e2e scenario declares through THIS
+      // route).
+      ...(fields.release !== undefined && fields.release !== null
+        ? { release: String(fields.release) }
+        : {}),
+      ...(fields.track !== undefined && fields.track !== null
+        ? { track: String(fields.track) }
+        : {}),
+      ...(lifecycle !== undefined ? { lifecycle } : {}),
     });
   }
   // CR-CRU-095 §S3/AC12c, AC12i — a post whose defaults would leave a wave's

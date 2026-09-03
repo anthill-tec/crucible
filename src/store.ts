@@ -3499,12 +3499,22 @@ export class Store {
    * (AC12c) — never spilled into the next wave's base.
    *
    * §S2/AC23 — the ONE thing it does not do silently: a defaulted row whose
-   * in-block slot sits beside a same-wave sibling holding a seq OUTSIDE the
-   * block is on a different scale from it — a mixture is a DIFFERENCE OF
-   * SCALE, never "this write chose the value" (CR-CRU-095 §S2). Those crs come
-   * back in `defaultedSeq` for the route to warn about — the write still
-   * lands. A fresh import (every row in-block) and a re-post that carries
-   * every value forward name nobody.
+   * in-block slot sits beside a sibling in the SAME WAVE OR THE SAME RELEASE
+   * holding a seq OUTSIDE the block is on a different scale from it — a
+   * mixture is a DIFFERENCE OF SCALE, never "this write chose the value"
+   * (CR-CRU-095 §S2). Those crs come back in `defaultedSeq` for the route to
+   * warn about — the write still lands. A fresh import (every row in-block)
+   * and a re-post that carries every value forward name nobody.
+   *
+   * CR-CRU-099 §S1/AC7 — the RELEASE axis is compared HERE too, not only in
+   * `upsertQueueEntry`. CR-CRU-095 §S2 scoped it to that one writer because a
+   * row this route defaulted was "always new and release-less"; §S1 forwards
+   * the caller's `release`, so a bulk-defaulted row can now be a member of a
+   * release whose other wave carries positional seq — the shape §S2 declared
+   * unreachable. A release on two scales is a property of the RELEASE, not of
+   * the writer that got there, so both writers answer it identically. An
+   * UNDECLARED release is still never compared on that axis (CR-CRU-095 AC9a),
+   * and this write still names only ITS OWN defaulted rows (AC11a).
    */
   replaceQueue(projectKey: string, entries: QueueEntryInput[]): QueueSeqReport {
     const now = Date.now();
@@ -3553,25 +3563,50 @@ export class Store {
         }
         return list;
       };
+      // CR-CRU-099 §S1/AC7 — the two axes `defaultedSeq` compares on, gathered
+      // in one pass: the WAVE holding an out-of-block seq (CR-CRU-091 AC23) and
+      // the RELEASE holding one (CR-CRU-095 §S2). The release half was
+      // implemented in `upsertQueueEntry` alone because a row this route
+      // defaulted was "always new and release-less" — §S1 forwards `release`,
+      // so that premise is gone and the same comparison belongs here. A row's
+      // release is the one this write will STORE (`entry.release ??
+      // snapshot?.release`, :3599), and an UNDECLARED one is never compared —
+      // the in-memory twin of `release = ?` being false for NULL, which is
+      // what keeps the live board's release-less history naming nobody
+      // (CR-CRU-095 AC9a).
       const positional = new Set<string>();
+      const positionalReleases = new Set<string>();
+      const releaseOf = (entry: QueueEntryInput): string | undefined =>
+        entry.release ?? held.get(entry.cr)?.release ?? undefined;
       entries.forEach((entry, index) => {
         const seq = seqs[index];
         if (seq === undefined) return;
         waveSeqsOf(entry.wave).push(seq);
-        if (!inWaveBlock(seq, entry.wave)) positional.add(entry.wave);
+        if (inWaveBlock(seq, entry.wave)) return;
+        positional.add(entry.wave);
+        const release = releaseOf(entry);
+        if (release !== undefined) positionalReleases.add(release);
       });
       const defaultedSeq: string[] = [];
       entries.forEach((entry, index) => {
         if (seqs[index] !== undefined) return;
         const waveSeqs = waveSeqsOf(entry.wave);
-        const seq = nextFreeSlot(
-          entry.wave,
-          waveSeqs,
-          entry.release ?? held.get(entry.cr)?.release ?? undefined,
-        );
+        const release = releaseOf(entry);
+        const seq = nextFreeSlot(entry.wave, waveSeqs, release);
         seqs[index] = seq;
         waveSeqs.push(seq);
-        if (positional.has(entry.wave)) defaultedSeq.push(entry.cr);
+        // A slot from `nextFreeSlot` is IN-BLOCK by construction, so the
+        // mixture test `upsertQueueEntry` makes — a sibling in the same wave
+        // or release whose scale DIFFERS — reduces to "that wave, or that
+        // release, holds an out-of-block value". The row named is ITS OWN: a
+        // position this write invented, never a mixture that pre-existed it,
+        // which the positional row's own write named (CR-CRU-095 AC11a).
+        if (
+          positional.has(entry.wave) ||
+          (release !== undefined && positionalReleases.has(release))
+        ) {
+          defaultedSeq.push(entry.cr);
+        }
       });
       this.db.query(`DELETE FROM queue_entries WHERE project_key = ?`).run(projectKey);
       entries.forEach((entry, index) => {
