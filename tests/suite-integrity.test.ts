@@ -247,6 +247,20 @@ describe("Collected count surfaced in the regression envelope (§S2)", () => {
 // together by the client and only ever removed together by `_wipe`, so a stamp
 // is never stale with respect to the artifact beside it.
 //
+// SCOPE IS NOT SUFFICIENT — the second half, measured 2026-09-03 on this
+// branch. A proven-full artifact plus one newly created test file failed with
+// `neverRan: [that file]`: the artifact was simply OLDER than the file, which
+// is the standing configuration during TDD since every RED phase adds one. In
+// scope terms that is byte-identical to the case the check MUST fail on (a
+// full run that skipped an existing file), so the deciding fact is TIME: the
+// artifact's own mtime — bun flushes `junit.xml` at process exit, so it marks
+// when the run ENDED — against each on-disk file's. Newer than the artifact:
+// impossible to have been in that run, excluded and NAMED. Older and absent:
+// invisible coverage, a failure. In the artifact but gone from disk: deleted
+// since, named, not fatal. And if the exclusion empties the comparison
+// entirely, the check SKIPS rather than ticking green over an empty set —
+// the same vacuity refusal, one layer down.
+//
 // This stays a CORROBORATION. §S1's `bunfig` assertion above is the primary
 // guarantee precisely because it reads CONFIGURATION rather than run history,
 // so it holds under any invocation.
@@ -326,22 +340,73 @@ export function fullRunProof(reportsDir: string): FullRunProof {
   };
 }
 
-export interface ParityGap {
-  // On disk, absent from the run: INVISIBLE COVERAGE, the thing worth catching.
-  neverRan: string[];
-  // In the run, absent from disk: a file deleted since, or a stale artifact.
-  ranButAbsent: string[];
+// A test file with the mtime the filesystem reports for it. The pair, not the
+// path alone, is what the comparison below needs: see the TIME note under
+// `parityInputs`.
+export interface TimedFile {
+  rel: string;
+  mtimeMs: number;
 }
 
-// THE CONCLUSION, likewise pure. Both directions are reported (never a bare
-// count), so two errors cancelling out cannot pass, and the failure NAMES the
-// files instead of printing two 145-element lists.
-export function junitParityGap(onDisk: string[], ranFiles: string[]): ParityGap {
+export interface ParityGap {
+  // Older than the artifact yet absent from it: the file existed while that
+  // full run happened and was not run. INVISIBLE COVERAGE — the fatal one.
+  neverRan: string[];
+  // In the run, absent from disk: DELETED since the run. Reported, never
+  // fatal — a deletion time is unrecoverable, and a junit artifact cannot
+  // name a file that never existed.
+  ranButAbsent: string[];
+  // Newer than the artifact: could not have been in that run at all, so it is
+  // excluded from the comparison and named here instead of failed on.
+  excludedNewer: string[];
+  // How many on-disk files actually entered the comparison. A COUNT, not a
+  // list, so a failure diff never prints a 145-element array.
+  comparedCount: number;
+  // Nothing left to compare. Must SKIP, never pass.
+  vacuous: boolean;
+  reason: string;
+}
+
+// THE CONCLUSION, likewise pure — the artifact's mtime and the on-disk mtimes
+// arrive as ARGUMENTS, so every shape can be planted and nothing is read from
+// the filesystem in here. Both directions are reported (never a bare count),
+// so two errors cancelling out cannot pass, and each verdict NAMES its files
+// instead of printing two 145-element lists.
+export function junitParityGap(
+  onDisk: TimedFile[],
+  ranFiles: string[],
+  artifactMtimeMs: number,
+): ParityGap {
   const ran = new Set(ranFiles);
-  const disk = new Set(onDisk);
+  const disk = new Set(onDisk.map((f) => f.rel));
+
+  // Strictly newer only: the artifact is flushed at the run's END, so a file
+  // whose mtime EQUALS it could still have been collected — and the safe
+  // direction for an ambiguous timestamp is to compare it, not excuse it.
+  const excludedNewer: string[] = [];
+  const compared: string[] = [];
+  for (const file of onDisk) {
+    (file.mtimeMs > artifactMtimeMs ? excludedNewer : compared).push(file.rel);
+  }
+
+  // An empty comparison set proves nothing: `git checkout` rewrites every
+  // mtime to now, which would excuse the entire tree at once. Passing on that
+  // is exactly the vacuity §S1 rejected when it refused to infer fullness
+  // from the artifact itself, so it SKIPS with the reason instead.
+  const vacuous = compared.length === 0;
   return {
-    neverRan: onDisk.filter((rel) => !ran.has(rel)).sort(),
+    neverRan: compared.filter((rel) => !ran.has(rel)).sort(),
     ranButAbsent: ranFiles.filter((rel) => !disk.has(rel)).sort(),
+    excludedNewer: excludedNewer.sort(),
+    comparedCount: compared.length,
+    vacuous,
+    reason: vacuous
+      ? `the comparison set is EMPTY: all ${onDisk.length} on-disk ` +
+        "tests/**/*.test.ts file(s) are NEWER than the artifact, so none of " +
+        "them could have been in the run that produced it (a `git checkout` " +
+        "rewriting every mtime does this). An empty comparison proves " +
+        "nothing and must not pass"
+      : "",
   };
 }
 
@@ -357,14 +422,9 @@ export function junitParityGap(onDisk: string[], ranFiles: string[]): ParityGap 
 // where the filesystem is read, and handed to the comparator as INPUTS so the
 // comparator stays pure and every shape can be planted.
 
-export interface TimedFile {
-  rel: string;
-  mtimeMs: number;
-}
-
 export interface ParityInputs {
   // `junit.xml`'s mtime: bun flushes it at process exit, so it is the moment
-  // the run ENDED — every file the run could have collected is older.
+  // the run ENDED — every file that run could have collected is older.
   artifactMtimeMs: number;
   onDisk: TimedFile[];
   ranFiles: string[];
@@ -390,45 +450,70 @@ describe(
   "On-disk vs an existing junit artifact (corroboration only — §S1's " +
     "bunfig assertion above is the PRIMARY guarantee)",
   () => {
-    const junitPath = path.join(REPORTS_DIR, "junit.xml");
     const proof = fullRunProof(REPORTS_DIR);
-    if (!proof.provenFull) {
+    // The comparison's own precondition, evaluated at COLLECTION time because
+    // that is the only moment `test.skipIf` can be told: bun offers no
+    // in-body skip, so a verdict of "nothing left to compare" has to be
+    // reached here or not at all.
+    const collected = proof.provenFull
+      ? parityInputs(REPO_ROOT, TESTS_DIR, REPORTS_DIR)
+      : null;
+    const plan =
+      collected === null
+        ? null
+        : junitParityGap(collected.onDisk, collected.ranFiles, collected.artifactMtimeMs);
+    const blocked = plan === null || plan.vacuous;
+    if (blocked) {
       // Clear, non-silent explanation for the skip below — printed once at
       // collection time regardless of which reporter is in use, because
       // `test.skipIf` prints no reason of its own.
       console.error(
-        `[suite-integrity] skipping junit-artifact corroboration: ${proof.reason} ` +
-          "— this is a documented, expected skip, not a dodge; §S1's bunfig " +
-          "assertion above remains the primary guarantee regardless.",
+        "[suite-integrity] skipping junit-artifact corroboration: " +
+          `${plan === null ? proof.reason : plan.reason} — this is a ` +
+          "documented, expected skip, not a dodge; §S1's bunfig assertion " +
+          "above remains the primary guarantee regardless.",
       );
     }
 
-    test.skipIf(!proof.provenFull)(
+    test.skipIf(blocked)(
       "given an artifact PROVEN to come from a whole-suite client run, every " +
-        "on-disk tests/**/*.test.ts file appears in it and it names no file " +
-        "that is not on disk (skipped, with the reason logged above, whenever " +
-        "that precondition cannot be established)",
+        "on-disk tests/**/*.test.ts file OLDER than that artifact appears in " +
+        "it (skipped, with the reason logged above, whenever that " +
+        "precondition cannot be established or nothing is left to compare)",
       () => {
         // The PRECONDITION, asserted before the conclusion (AC5) — re-read
         // here rather than trusted from collection time, so an artifact
         // replaced mid-run cannot license a comparison against itself.
-        const recheck = fullRunProof(REPORTS_DIR);
-        expect(recheck).toEqual({ provenFull: true, reason: "" });
+        expect(fullRunProof(REPORTS_DIR)).toEqual({ provenFull: true, reason: "" });
 
-        const onDisk = listTestFilesOnDisk(TESTS_DIR)
-          .map((f) => path.relative(REPO_ROOT, f).split(path.sep).join("/"))
-          .filter((rel) => rel !== SELF_RELATIVE)
-          .sort();
+        const inputs = parityInputs(REPO_ROOT, TESTS_DIR, REPORTS_DIR);
+        const gap = junitParityGap(inputs.onDisk, inputs.ranFiles, inputs.artifactMtimeMs);
 
-        const junitXml = fs.readFileSync(junitPath, "utf8");
-        const ranFiles = distinctJunitTestcaseFiles(junitXml)
-          .filter((rel) => rel !== SELF_RELATIVE)
-          .sort();
+        // Both non-fatal verdicts are NAMED in the output even on success —
+        // silence about them is how a shrinking comparison would hide.
+        if (gap.excludedNewer.length > 0) {
+          console.error(
+            "[suite-integrity] excluded from the comparison as NEWER than " +
+              `${path.join(REPORTS_DIR, "junit.xml")} (created or modified after that ` +
+              `run, so they could not have been in it): ${gap.excludedNewer.join(", ")}`,
+          );
+        }
+        if (gap.ranButAbsent.length > 0) {
+          console.error(
+            "[suite-integrity] named by the artifact but no longer on disk " +
+              `(deleted since that run): ${gap.ranButAbsent.join(", ")}`,
+          );
+        }
 
-        expect(junitParityGap(onDisk, ranFiles)).toEqual({
-          neverRan: [],
-          ranButAbsent: [],
-        });
+        // Vacuity is a SKIP verdict, and a skip can only be declared at
+        // collection time — so if it flipped true since then, fail loudly
+        // rather than tick green over an empty comparison set.
+        expect(gap.vacuous).toBe(false);
+        expect(gap.comparedCount).toBeGreaterThan(0);
+
+        // The only fatal direction: a file that existed while that full run
+        // happened and did not run in it.
+        expect(gap.neverRan).toEqual([]);
       },
     );
   },
@@ -594,16 +679,30 @@ describe(
       },
     );
 
+    // The three parity shapes C1 pinned, now carrying the mtimes the
+    // comparator takes as inputs. Every file here PREDATES the artifact, so
+    // each shape's verdict is unchanged by the time dimension: these are the
+    // cases where a file's absence from a full run is real, not historical.
+    const ARTIFACT_MS = 1_700_000_000_000;
+    const BEFORE_MS = ARTIFACT_MS - 60_000;
+
     test(
       "THE CHECK DID NOT BECOME UNFAILABLE: a proven-FULL artifact that omits " +
-        "an on-disk .test.ts file still yields a gap naming that file (AC5/AC6)",
+        "an on-disk .test.ts file OLDER than it still yields a gap naming " +
+        "that file (AC5/AC6)",
       () => {
-        const onDisk = ["tests/a.test.ts", "tests/invisible.test.ts", "tests/b.test.ts"];
+        const onDisk = ["tests/a.test.ts", "tests/invisible.test.ts", "tests/b.test.ts"].map(
+          (rel) => ({ rel, mtimeMs: BEFORE_MS }),
+        );
         const ran = ["tests/a.test.ts", "tests/b.test.ts"];
 
-        expect(junitParityGap(onDisk, ran)).toEqual({
+        expect(junitParityGap(onDisk, ran, ARTIFACT_MS)).toEqual({
           neverRan: ["tests/invisible.test.ts"],
           ranButAbsent: [],
+          excludedNewer: [],
+          comparedCount: 3,
+          vacuous: false,
+          reason: "",
         });
       },
     );
@@ -614,18 +713,37 @@ describe(
         "cancelling out cannot pass",
       () => {
         expect(
-          junitParityGap(["tests/a.test.ts", "tests/added.test.ts"], [
-            "tests/a.test.ts",
-            "tests/deleted.test.ts",
-          ]),
+          junitParityGap(
+            [
+              { rel: "tests/a.test.ts", mtimeMs: BEFORE_MS },
+              // Predates the artifact, absent from it: skipped, not new.
+              { rel: "tests/skipped.test.ts", mtimeMs: BEFORE_MS },
+            ],
+            ["tests/a.test.ts", "tests/deleted.test.ts"],
+            ARTIFACT_MS,
+          ),
         ).toEqual({
-          neverRan: ["tests/added.test.ts"],
+          neverRan: ["tests/skipped.test.ts"],
           ranButAbsent: ["tests/deleted.test.ts"],
+          excludedNewer: [],
+          comparedCount: 2,
+          vacuous: false,
+          reason: "",
         });
 
-        expect(junitParityGap(["tests/a.test.ts"], ["tests/a.test.ts"])).toEqual({
+        expect(
+          junitParityGap(
+            [{ rel: "tests/a.test.ts", mtimeMs: BEFORE_MS }],
+            ["tests/a.test.ts"],
+            ARTIFACT_MS,
+          ),
+        ).toEqual({
           neverRan: [],
           ranButAbsent: [],
+          excludedNewer: [],
+          comparedCount: 1,
+          vacuous: false,
+          reason: "",
         });
       },
     );
