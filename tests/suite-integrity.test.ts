@@ -75,6 +75,93 @@ function distinctJunitTestcaseFiles(junitXml: string): string[] {
   return Array.from(files);
 }
 
+// ── The §S1 guard's DECISION, as a pure function of the config text ──────
+//
+// CR-CRU-101 §S2/AC3. Both assertions below used to read
+// REPO_ROOT/bunfig.toml inline and decide with a regex in their own bodies,
+// which made the decision unaskable about any other config — so the guard's
+// SENSITIVITY could never be shown, and a guard nobody can show to be
+// sensitive is indistinguishable from one that is merely green. Extracted
+// here in the shape this repo already uses for exactly this (a pure checker
+// plus planted sources: tests/queue-accepted-field-guard.test.ts,
+// tests/helpers/source-scan.ts), so the same decision that judges the real
+// bunfig.toml judges a fixture's — and the fixture at the END of this file
+// then proves, against a real bun run, that what it reports is what actually
+// hides a test file.
+//
+// BOTH dimensions the two assertions cover are reported, because they are
+// not the same claim: the KEY's presence at all (the primary one — an
+// exclusion can hide a file under tests/ without the literal text `tests/`
+// appearing anywhere, measured, see the §S2 block), and whether the array
+// names the tests/ tree.
+
+export interface DiscoveryExclusion {
+  // The array exactly as written, so a failure names the config text.
+  arrayText: string;
+  // Its entries, unquoted — TOML's basic and literal string forms alike.
+  patterns: string[];
+  // Whether the array text names the tests/ tree.
+  referencesTestsDir: boolean;
+}
+
+// TOML comments removed, so PROSE cannot decide: the real bunfig.toml is
+// five comment lines, one of which names `pathIgnorePatterns` verbatim to
+// warn against it, and a commented-out assignment is inert to bun (observed
+// in the §S2 fixture) so it must be inert here too. A `#` inside a string
+// is not a comment; a basic/literal string cannot span a line, so the quote
+// state resets at every newline. Every byte that is not a comment is kept
+// where it was, newlines included.
+function stripTomlComments(toml: string): string {
+  let out = "";
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < toml.length; i += 1) {
+    const ch = toml[i]!;
+    if (quote !== null) {
+      out += ch;
+      if (ch === "\\" && quote === '"') {
+        out += toml[i + 1] ?? "";
+        i += 1;
+      } else if (ch === quote || ch === "\n") {
+        quote = null;
+      }
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+      out += ch;
+    } else if (ch === "#") {
+      while (i < toml.length && toml[i] !== "\n") i += 1;
+      out += "\n";
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+// Every `pathIgnorePatterns` assignment the config actually makes. The match
+// is deliberately UNANCHORED and demands `= [`, which is the union of the
+// two regexes this replaces — so it reports everything either of them did,
+// and over-reporting is the loud direction (a spelling that excludes nothing
+// is reported, which fails a guard; the reverse would hide a real
+// exclusion).
+export function discoveryExclusions(bunfigToml: string): DiscoveryExclusion[] {
+  const config = stripTomlComments(bunfigToml);
+  const found: DiscoveryExclusion[] = [];
+  const re = /pathIgnorePatterns\s*=\s*(\[[^\]]*\])/g;
+  let m: RegExpExecArray | null;
+  // eslint-disable-next-line no-cond-assign
+  while ((m = re.exec(config)) !== null) {
+    const arrayText = m[1]!;
+    found.push({
+      arrayText,
+      patterns: Array.from(arrayText.matchAll(/"([^"]*)"|'([^']*)'/g)).map(
+        (q) => q[1] ?? q[2] ?? "",
+      ),
+      referencesTestsDir: /tests\//.test(arrayText),
+    });
+  }
+  return found;
+}
+
 describe(
   "No permanently-excluded test directory (§S1 guard) — " +
     "bunfig.toml carries no pathIgnorePatterns exclusion",
@@ -84,12 +171,12 @@ describe(
         "(a future permanently-excluded directory must fail this, not just " +
         "silently shrink the count)",
       () => {
-        const bunfigPath = path.join(REPO_ROOT, "bunfig.toml");
-        const raw = fs.readFileSync(bunfigPath, "utf8");
+        const raw = fs.readFileSync(path.join(REPO_ROOT, "bunfig.toml"), "utf8");
 
-        const pathIgnorePatternsMatch = /^\s*pathIgnorePatterns\s*=\s*(\[[^\]]*\])/m.exec(raw);
-
-        expect(pathIgnorePatternsMatch).toBeNull();
+        // Same verdict, same subject, same file — reached through the
+        // extracted decision, whose sensitivity is demonstrated against a
+        // real bun run in the §S2 fixture at the end of this file.
+        expect(discoveryExclusions(raw)).toEqual([]);
       },
     );
 
@@ -97,12 +184,9 @@ describe(
       "even if some future pathIgnorePatterns line existed for an unrelated " +
         "reason, it must never reference the tests/ tree",
       () => {
-        const bunfigPath = path.join(REPO_ROOT, "bunfig.toml");
-        const raw = fs.readFileSync(bunfigPath, "utf8");
+        const raw = fs.readFileSync(path.join(REPO_ROOT, "bunfig.toml"), "utf8");
 
-        const referencesTestsDir = /pathIgnorePatterns\s*=\s*\[[^\]]*tests\//.test(raw);
-
-        expect(referencesTestsDir).toBe(false);
+        expect(discoveryExclusions(raw).filter((e) => e.referencesTestsDir)).toEqual([]);
       },
     );
   },
@@ -1107,7 +1191,17 @@ async function inExclusionFixture(
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `cr101-s2-${slug}-`));
   try {
     writeExclusionFixtureProject(dir, bunfig);
-    body(await observeFixtureRun(dir));
+    const observed = await observeFixtureRun(dir);
+    // NAMED in the output even on success, the way the corroboration above
+    // names its non-fatal verdicts: these two facts side by side ARE the
+    // evidence that the guard is load-bearing, and evidence nobody can read
+    // is evidence nobody can check.
+    console.error(
+      `[suite-integrity §S2] ${slug}: on disk ${observed.onDisk.join(", ")} | ` +
+        `bun collected ${observed.ranFiles.join(", ")} | guard reported ` +
+        `${JSON.stringify(discoveryExclusions(bunfig))}`,
+    );
+    body(observed);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
