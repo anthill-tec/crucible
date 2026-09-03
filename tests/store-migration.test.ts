@@ -419,6 +419,47 @@ function eventRole(dbPath: string, id: string): EventRoleRow {
 }
 
 /**
+ * CR-CRU-100 §S1 — the classification columns a store carries, under the names
+ * THAT store uses. `makePreRenameStore` writes the pre-CR-CRU-059 pair, the
+ * migration renames it to the current pair, so the before and after reads of
+ * the same fact address different columns. Preservation is a statement about
+ * the fact, never about a column name.
+ */
+interface ClassificationCols {
+  readonly role: string;
+  readonly inferred: string;
+}
+
+const PRE_RENAME_CLASSIFICATION: ClassificationCols = {
+  role: "phase",
+  inferred: "phase_inferred",
+};
+
+const CURRENT_CLASSIFICATION: ClassificationCols = {
+  role: "role",
+  inferred: "role_inferred",
+};
+
+function classificationsOf(
+  dbPath: string,
+  cols: ClassificationCols,
+): Record<string, EventRoleRow> {
+  const db = new Database(dbPath);
+  try {
+    return Object.fromEntries(
+      db
+        .query<{ id: string; role: string | null; role_inferred: number | null }, []>(
+          `SELECT id, ${cols.role} AS role, ${cols.inferred} AS role_inferred FROM events`,
+        )
+        .all()
+        .map((row) => [row.id, { role: row.role, role_inferred: row.role_inferred }]),
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/**
  * Returns the thrown error, or `undefined` when `fn` returned normally — a
  * plain `expect(...).toThrow()` cannot also assert on what the call left on
  * disk, and AC5/AC7 are as much about the untouched file as about the throw.
@@ -874,5 +915,95 @@ describe("CR-CRU-071 AC7 — a failed migration fails the upgrade", () => {
     const found = siblings(dir, PRE_UPGRADE_RE);
     expect(found.length).toBe(1);
     expect(messageOf(error)).toContain(path.join(dir, found[0]!));
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * CR-CRU-100 §S1 — the synthetic history the preservation contract runs
+ * against, appended to `makePreRenameStore`'s own two rows through its
+ * `extraSql` seam. No fourth store builder: that builder already produces the
+ * exact pre-CR-CRU-059 `phase`/`phase_inferred` shape this contract needs.
+ *
+ * Every row is a distinct way a migration could get a classification wrong:
+ *
+ *   e-declared              (the builder's) GREEN/declared while the agent id
+ *                           says RED — a re-derivation shows up as a CHANGED
+ *                           role.
+ *   e-null                  (the builder's) unclassified, agent id parses as
+ *                           FIX — the AC3 row the backfill MUST classify,
+ *                           which is why equality-of-count cannot hold here.
+ *   e-cr100-agreeing        RED/declared and the agent id also says RED, so
+ *                           the role CANNOT change: only `role_inferred`
+ *                           flipping 0 -> 1 reveals the re-derivation. This
+ *                           row is why provenance is asserted, not just value.
+ *   e-cr100-unparseable     GREEN/declared under an id the migration-only
+ *                           suffix rule cannot parse — survives untouched.
+ *   e-cr100-was-inferred    FIX/INFERRED already while the id says GREEN — an
+ *                           earlier labeled backfill is data too, and is not
+ *                           re-decided on a later boot.
+ *   e-cr100-unclassifiable  unclassified under an unparseable id — stays NULL
+ *                           in BOTH columns; no role is ever fabricated.
+ */
+const CR100_SYNTHETIC_ROLE_HISTORY = `
+  INSERT INTO events (id, project_key, agent_id, kind, tier, timestamp, phase, phase_inferred)
+  VALUES
+    ('e-cr100-agreeing',       'p1', 'cr100-worker-RED',   'test', 'unit', 3000, 'RED',   0),
+    ('e-cr100-unparseable',    'p1', 'plain-agent-1',      'test', 'unit', 4000, 'GREEN', 0),
+    ('e-cr100-was-inferred',   'p1', 'legacy-agent-GREEN', 'test', 'unit', 5000, 'FIX',   1),
+    ('e-cr100-unclassifiable', 'p1', 'claude-sandesh',     'test', 'unit', 6000, NULL,    NULL);
+`;
+
+describe("CR-CRU-100 §S1 — roles are PRESERVED across a migration, on a store the test builds", () => {
+  test("§S1 — every classification present before the migration survives it unchanged, and the backfill still adds", () => {
+    const dir = tmpDir();
+    const dbPath = makePreRenameStore(dir, CR100_SYNTHETIC_ROLE_HISTORY);
+
+    // AC1 — provable on a machine with no dog-food store: the db under test is
+    // a scratch file this test wrote, and nothing below reads, snapshots or
+    // opens `data/crucible.db`.
+    expect(dbPath.startsWith(os.tmpdir())).toBe(true);
+
+    const before = classificationsOf(dbPath, PRE_RENAME_CLASSIFICATION);
+    // Only the events that ALREADY carry a classification — the only rows
+    // preservation says anything about.
+    const declaredBefore = Object.fromEntries(
+      Object.entries(before).filter(([, row]) => row.role !== null),
+    );
+    // Preservation over an empty set holds trivially — that vacuous pass is
+    // the failure mode this guards.
+    expect(Object.keys(declaredBefore).length).toBeGreaterThan(0);
+    // AC3 — the fixture CONTAINS an event whose role must be backfilled, so an
+    // equality-of-count assertion could not pass this store. Asserted as a
+    // precondition so no later edit can quietly restore equality of count.
+    expect(before["e-null"]).toEqual({ role: null, role_inferred: null });
+
+    Store.open(dbPath);
+
+    const after = classificationsOf(dbPath, CURRENT_CLASSIFICATION);
+
+    // THE INVARIANT: every role present before the migration is present and
+    // unchanged after, and none was re-derived over an existing value. That is
+    // what `backfillInferredEventRoles` actually guarantees — its `role IS
+    // NULL` predicate can only ever ADD a role, never change or remove one —
+    // and it is what the equality-of-count assertion this CR replaces
+    // contradicted. `role_inferred` is load-bearing here: a DECLARED role that
+    // comes back inferred has been re-derived, which is exactly what removing
+    // that predicate produces (AC2).
+    const preserved = Object.fromEntries(
+      Object.entries(after).filter(([id]) => id in declaredBefore),
+    );
+    expect(preserved).toEqual(declaredBefore);
+
+    // The count never DECREASES, and here it STRICTLY GROWS, because the
+    // backfill classified `e-null` — mechanical proof that equality of count
+    // is the wrong assertion for this fixture (AC3).
+    const classifiedAfter = Object.values(after).filter((row) => row.role !== null);
+    expect(classifiedAfter.length).toBeGreaterThan(Object.keys(declaredBefore).length);
+    expect(after["e-null"]).toEqual({ role: "FIX", role_inferred: 1 });
+    // Nothing is fabricated: an id the suffix rule cannot parse keeps NULL in
+    // BOTH columns rather than reading as "declared nothing".
+    expect(after["e-cr100-unclassifiable"]).toEqual({ role: null, role_inferred: null });
   });
 });
