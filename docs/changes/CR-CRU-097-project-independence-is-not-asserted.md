@@ -179,6 +179,24 @@ on "comments are exempt" must reuse the classifier that is already proven, not r
 
 - **AC1** — The BDD empty state names no CR and no release version; it states the capability and
   that the dedicated surface does not exist yet.
+- **AC1b** — **No test asserts the removed string as a REQUIREMENT.**
+  `tests/storyboard-fidelity.test.ts:1062-1080` did exactly that: *"BDD tab body text names the real
+  landing CR (CR-CRU-015) and never CR-CRU-007"*, asserting `toContain("CR-CRU-015")` on the
+  rendered body. It enshrined the coupling as the product contract, so AC1 could not be satisfied
+  without it going red — and it did, in the full gate, after three cycles had passed.
+
+  Its original defect (2026-07-15) was the tab naming the **wrong** CR (007 instead of 015), so its
+  real content was "names the right thing, not a stale wrong thing". Post-AC1 the right thing is
+  **no CR at all**, which `tests/project-independence-strings.test.ts` now asserts positively. The
+  assertion is therefore **superseded, not deleted for convenience**, and is retired with narration
+  naming its successor — the repo's retirement convention, which
+  `tests/docs-retired-mirror-references.test.ts` enforces.
+
+  **Lineage of the miss:** my gap analysis ran Dimension 6 ("enumerate ALL consumers") over
+  `public/`, `clients/` and §S3's three test files, and never asked *which tests assert on the
+  string being removed*. That is the third under-enumeration in this CR — the help surfaces (21,
+  not 4), the runtime warning strings (AC3a), and now this. Enumerating a symbol's consumers means
+  grepping for the **value**, not only the site.
 - **AC2** — **No help string any client PRINTS** names any project's CR namespace — every verb's
   `--help` and each client's root help, not just `--cr`. Stated per-namespace, not per-literal, and
   measured by DRIVING the CLI rather than by grepping for an example: 21 (client, verb) surfaces
