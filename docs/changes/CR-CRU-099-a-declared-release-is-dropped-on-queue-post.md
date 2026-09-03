@@ -105,6 +105,32 @@ endpoint only. `QueueEntryInput` (`src/store.ts:270-288`) is the declared, expor
 contract of what `replaceQueue` accepts, so the guard compares its keys against the keys the handler
 reads. No new documentation format is invented.
 
+### §S3 — declaring membership is orchestrator work, and the route must say so
+
+**Added 2026-09-03 on the user's ruling, after §S1 landed.** The approved design states the rule
+plainly: *"Who declares — **Mainline orchestrator only** — the existing `ORCHESTRATOR` role. A
+track executes; it never re-plans the roadmap"* (`.lavish/crucible-workflow-flowchart.html:456`,
+with the machinery table at `:404` naming `cr-plan --release` as the declaring verb).
+
+The five roadmap routes enforce it through `requireOrchestrator` (`src/v2.ts:2181`, `:2220`,
+`:2280`, `:2409`). **The bulk queue post does not** — `handleQueuePost` checks the project key and
+the body shape and nothing else. Before §S1 that was harmless: the route could not write
+membership, so the rule was enforced by the very defect this CR fixes. §S1 removes the accident and
+leaves nothing in its place, so any caller could declare membership.
+
+**The gate is FIELD-CONDITIONAL, not route-wide** (ruled after the alternatives were measured):
+
+- A post declaring `release`, `track` or `lifecycle` is **roadmap registration** and requires the
+  `ORCHESTRATOR` role, exactly as `cr-plan` does.
+- A post declaring none of them is **queue bootstrap** and stays open. This is not a courtesy: the
+  only real caller, `queue-file`, sends `{"entries": …}` with **no `agentId` at all**
+  (`clients/_crucible_axi.py:2422`), so a route-wide gate would break the orchestrator's own import
+  and force a client change this CR explicitly scoped out.
+
+This is also a gap in this CR's own gap analysis, recorded rather than quietly fixed: six
+dimensions were checked and none asked whether the fix respected the design's **authorization**
+rule. Dimension 3 (code vs design intent) should have caught it and did not.
+
 ## Acceptance criteria
 
 - **AC1** — `POST .../queue` with `release` declared stores it; the subsequent `GET .../queue`
@@ -152,6 +178,11 @@ reads. No new documentation format is invented.
   release gate (`.github/workflows/release.yml:124-136`), which is the tier the PRD assigns it
   (`docs/research/PRD-crucible-v2.md:123`, `:396`, `:425`). A release-tier suite cited as per-cycle
   evidence is the defect; moving it would be the wrong fix.
+- **AC9** — **Declaring release membership through this route requires the `ORCHESTRATOR` role, per
+  §S3.** A post that declares `release`, `track` or `lifecycle` without an orchestrator caller is
+  refused; a post that declares none of them is accepted exactly as today, with no `agentId`
+  required. Both halves asserted: the refusal, and the unchanged open path — a guard that only
+  proves the refusal would let the gate silently widen to every queue post and break `queue-file`.
 
 ## Non-goals
 
