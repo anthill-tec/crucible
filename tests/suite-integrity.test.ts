@@ -117,21 +117,33 @@ describe(
 // stub that hardcodes "1", or that echoes the existing test `total` instead
 // of counting FILES, would slip past a 1-file fixture where files==tests==1).
 
-function writeTwoFileFixtureProject(dir: string, projectKey: string): void {
+// The fixture PRIMITIVES. Shared by both fixture shapes in this file —
+// CR-047's flat 2-file project just below and CR-CRU-101 §S2's nested one at
+// the end — so "a bun project bun will collect tests from" is described
+// once, not twice.
+function writeFixturePackage(dir: string): void {
   fs.writeFileSync(
     path.join(dir, "package.json"),
     JSON.stringify({ name: "cr047-suite-integrity-fixture", version: "0.0.0", private: true }),
   );
+}
+
+// One fixture test file at `rel` (POSIX-separated, parent directories
+// created): the smallest unit bun collects and stamps into its report.
+function writeFixtureTest(dir: string, rel: string, title: string): void {
+  const full = path.join(dir, ...rel.split("/"));
+  fs.mkdirSync(path.dirname(full), { recursive: true });
   fs.writeFileSync(
-    path.join(dir, "a.test.ts"),
+    full,
     'import { test, expect } from "bun:test";\n\n' +
-      'test("first fixture test", () => {\n  expect(1 + 1).toBe(2);\n});\n',
+      `test("${title}", () => {\n  expect(1 + 1).toBe(2);\n});\n`,
   );
-  fs.writeFileSync(
-    path.join(dir, "b.test.ts"),
-    'import { test, expect } from "bun:test";\n\n' +
-      'test("second fixture test", () => {\n  expect(2 + 2).toBe(4);\n});\n',
-  );
+}
+
+function writeTwoFileFixtureProject(dir: string, projectKey: string): void {
+  writeFixturePackage(dir);
+  writeFixtureTest(dir, "a.test.ts", "first fixture test");
+  writeFixtureTest(dir, "b.test.ts", "second fixture test");
   fs.writeFileSync(path.join(dir, ".env"), `CRUCIBLE_PROJECT_KEY=${projectKey}\n`);
 }
 
@@ -984,6 +996,211 @@ describe(
         } finally {
           fs.rmSync(root, { recursive: true, force: true });
         }
+      },
+    );
+  },
+);
+
+// ── CR-CRU-101 §S2 — the structural guard is LOAD-BEARING, demonstrated ──
+//
+// WHAT WAS MISSING, precisely. The two `bunfig` assertions at the TOP of this
+// file are the primary guarantee of the whole suite-integrity claim: with no
+// `pathIgnorePatterns` in `bunfig.toml`, on-disk/run parity holds BY
+// CONSTRUCTION, under any invocation, because it reads CONFIGURATION rather
+// than run history. But neither half of that reasoning was ever
+// demonstrated — not that a `pathIgnorePatterns` entry really does hide a
+// `.test.ts` file from bun, and not that the guard would report the entry
+// that hid it. Both were asserted. A guard whose sensitivity is never shown
+// is indistinguishable from a guard that is merely green (AC3), and "a file
+// on disk that never ran" had never once been OBSERVED (AC4).
+//
+// BOTH HALVES ARE OBSERVED HERE, in a scratch fixture project carrying its
+// OWN bunfig.toml. The repo's is never touched and now never could be: the
+// decision is a pure function of TOML TEXT (`discoveryExclusions`, beside
+// the two assertions it serves), so the fixture's config reaches exactly the
+// decision the real one reaches.
+//   * bun's real behaviour — a REAL client run (`clients/bun-crucible.py
+//     test` with NO targets, so the runner's own discovery decides what to
+//     collect), and the file set read back out of the run's OWN junit
+//     report and its OWN console output. Never predicted, never assumed.
+//   * the guard's reaction — `discoveryExclusions` over that same fixture
+//     bunfig, required to REPORT the exclusion on both dimensions the two
+//     existing assertions cover.
+// Removing the exclusion flips both observations: bun collects both files
+// and the guard reports nothing.
+//
+// WHY A FIXTURE AND NOT THIS TREE: bun 1.3.14 has no discovery-listing and
+// no dry-run flag, so "enumerate what the runner would collect" over this
+// repo means actually RUNNING it — the ~5.5-minute nested full-suite
+// `Bun.spawn` CR-CRU-047 deleted and this file's header explains at length.
+// The fixture buys the same signal at ~70 ms per run (measured 2026-09-04).
+//
+// A MEASURED ASYMMETRY, kept because it is WHY there are two assertions and
+// not one. Not every `pathIgnorePatterns` spelling excludes anything.
+// Measured against bun 1.3.14 over this fixture: `["tests/hidden/"]` and
+// `["hidden"]` hide NOTHING (both files still run), while
+// `["tests/hidden/*"]`, `["**/hidden/*"]` and `["**/hidden/**"]` each hide
+// the file. The last of those hides a file UNDER tests/ with the literal
+// text `tests/` appearing NOWHERE in the config — so the second assertion
+// ("never references the tests/ tree") cannot see it and the first ("no
+// pathIgnorePatterns key AT ALL") is the one that fires. That is why the
+// first is the primary one, and the third test below is that exact case.
+
+const FIXTURE_VISIBLE = "tests/visible.test.ts";
+const FIXTURE_HIDDEN = "tests/hidden/ignored.test.ts";
+
+// The fixture's configurations — identical `[test]` sections differing only
+// in the one line whose presence is the entire claim.
+const FIXTURE_EXCLUDES_TESTS_DIR = '[test]\npathIgnorePatterns = ["tests/hidden/*"]\n';
+const FIXTURE_EXCLUDES_BY_GLOB = '[test]\npathIgnorePatterns = ["**/hidden/**"]\n';
+const FIXTURE_EXCLUDES_NOTHING = "[test]\n";
+const FIXTURE_EXCLUSION_COMMENTED = '[test]\n# pathIgnorePatterns = ["tests/hidden/*"]\n';
+
+// The prose shape the REAL bunfig.toml takes today: five comment lines, one
+// of which names the key verbatim. Planted rather than read, because a claim
+// about the real file's COMMENT TEXT would be a contract over mutable state —
+// the very defect family this CR is about.
+const BUNFIG_PROSE_WARNING =
+  "# Do not reintroduce `[test] pathIgnorePatterns` for the tests/ tree: a\n" +
+  "# permanently-excluded directory makes the suite size unreconcilable.\n";
+
+// A fixture project with TWO test files — one directly under `tests/`, one a
+// directory deeper, which is the only structure an exclusion can
+// discriminate between — and `bunfig` as its own bunfig.toml.
+function writeExclusionFixtureProject(dir: string, bunfig: string): void {
+  writeFixturePackage(dir);
+  writeFixtureTest(dir, FIXTURE_VISIBLE, "visible fixture test");
+  writeFixtureTest(dir, FIXTURE_HIDDEN, "hidden fixture test");
+  fs.writeFileSync(path.join(dir, "bunfig.toml"), bunfig);
+}
+
+export interface FixtureRunObservation {
+  // Every `.test.ts` under the fixture's tests/ tree, whatever ran.
+  onDisk: string[];
+  // The distinct files the run's own junit report names.
+  ranFiles: string[];
+  // The run's own console output — bun's other, independent statement of
+  // what it collected, so neither channel is the only witness.
+  console: string;
+}
+
+// Runs the REAL producing client over the fixture with no targets, so bun's
+// own discovery decides, and reports what the run itself said it ran.
+async function observeFixtureRun(dir: string): Promise<FixtureRunObservation> {
+  const run = await runClientTest(dir, []);
+  expect(run.code).toBe(0);
+  const junit = fs.readFileSync(path.join(dir, "test-reports", "junit.xml"), "utf8");
+  return {
+    onDisk: listTestFilesOnDisk(path.join(dir, "tests"))
+      .map((full) => path.relative(dir, full).split(path.sep).join("/"))
+      .sort(),
+    ranFiles: distinctJunitTestcaseFiles(junit).sort(),
+    console: run.stderr,
+  };
+}
+
+async function inExclusionFixture(
+  slug: string,
+  bunfig: string,
+  body: (observed: FixtureRunObservation) => void,
+): Promise<void> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `cr101-s2-${slug}-`));
+  try {
+    writeExclusionFixtureProject(dir, bunfig);
+    body(await observeFixtureRun(dir));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe(
+  "CR-CRU-101 §S2 — a test file the runner's discovery does not reach is " +
+    "MISSED by a real run and REPORTED by the guard, both observed in a " +
+    "scratch fixture (AC3/AC4)",
+  () => {
+    test(
+      "a pathIgnorePatterns entry naming the fixture's tests/hidden/ really " +
+        "does hide that file from a real bun run — the run's own junit " +
+        "report and console name only the visible file — and the guard " +
+        "REPORTS that entry on both of its dimensions",
+      async () => {
+        await inExclusionFixture("excluded", FIXTURE_EXCLUDES_TESTS_DIR, (observed) => {
+          // HALF ONE — bun's behaviour, read out of the run's own output.
+          expect(observed.onDisk).toEqual([FIXTURE_HIDDEN, FIXTURE_VISIBLE]);
+          expect(observed.ranFiles).toEqual([FIXTURE_VISIBLE]);
+          expect(observed.console).toContain(`${FIXTURE_VISIBLE}:`);
+          expect(observed.console).not.toContain(FIXTURE_HIDDEN);
+
+          // HALF TWO — the guard, asked about the very config that hid it.
+          expect(discoveryExclusions(FIXTURE_EXCLUDES_TESTS_DIR)).toEqual([
+            {
+              arrayText: '["tests/hidden/*"]',
+              patterns: ["tests/hidden/*"],
+              referencesTestsDir: true,
+            },
+          ]);
+        });
+      },
+    );
+
+    test(
+      "removing that one line flips BOTH observations: the same fixture's " +
+        "run collects both files and the guard reports nothing — so the " +
+        "green verdict the two assertions above reach on the real " +
+        "bunfig.toml is a verdict, not a tautology",
+      async () => {
+        await inExclusionFixture("no-exclusion", FIXTURE_EXCLUDES_NOTHING, (observed) => {
+          expect(observed.onDisk).toEqual([FIXTURE_HIDDEN, FIXTURE_VISIBLE]);
+          expect(observed.ranFiles).toEqual([FIXTURE_HIDDEN, FIXTURE_VISIBLE]);
+          expect(observed.console).toContain(`${FIXTURE_HIDDEN}:`);
+
+          expect(discoveryExclusions(FIXTURE_EXCLUDES_NOTHING)).toEqual([]);
+        });
+      },
+    );
+
+    test(
+      "the spelling that hides a tests/ file WITHOUT naming tests/ " +
+        "(`**/hidden/**`, measured) is invisible to the second assertion and " +
+        "caught by the FIRST — which is why the primary guard is `no " +
+        "pathIgnorePatterns key at all`",
+      async () => {
+        await inExclusionFixture("glob", FIXTURE_EXCLUDES_BY_GLOB, (observed) => {
+          expect(observed.ranFiles).toEqual([FIXTURE_VISIBLE]);
+          expect(observed.console).not.toContain(FIXTURE_HIDDEN);
+
+          const reported = discoveryExclusions(FIXTURE_EXCLUDES_BY_GLOB);
+          expect(reported).toEqual([
+            {
+              arrayText: '["**/hidden/**"]',
+              patterns: ["**/hidden/**"],
+              referencesTestsDir: false,
+            },
+          ]);
+          // The two verdicts the assertions at the top of this file reach,
+          // applied to this config instead of the repo's: the first FIRES on
+          // it, the second cannot see it.
+          expect(reported).not.toEqual([]);
+          expect(reported.filter((e) => e.referencesTestsDir)).toEqual([]);
+        });
+      },
+    );
+
+    test(
+      "the guard reads CONFIGURATION, not prose: a commented-out exclusion " +
+        "hides nothing from a real run — observed — and is reported by " +
+        "neither dimension, as is the warning-comment shape the real " +
+        "bunfig.toml is made of",
+      async () => {
+        await inExclusionFixture("commented", FIXTURE_EXCLUSION_COMMENTED, (observed) => {
+          expect(observed.ranFiles).toEqual([FIXTURE_HIDDEN, FIXTURE_VISIBLE]);
+
+          expect(discoveryExclusions(FIXTURE_EXCLUSION_COMMENTED)).toEqual([]);
+          expect(discoveryExclusions(BUNFIG_PROSE_WARNING)).toEqual([]);
+          // ...and the same line, uncommented, IS reported — so the
+          // stripping above is a discrimination, not a blind spot.
+          expect(discoveryExclusions(FIXTURE_EXCLUDES_TESTS_DIR)).toHaveLength(1);
+        });
       },
     );
   },
