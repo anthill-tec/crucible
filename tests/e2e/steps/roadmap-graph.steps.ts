@@ -59,11 +59,18 @@ Step(
 // The queue full-replace POST with the CR DECLARED into a release (CR-CRU-091
 // §S2's `release` field): membership of a proposed release is that declaration
 // and nothing else, so the flowchart cannot draw the CR without it.
+//
+// CR-CRU-099 §S3/AC9 — declaring membership through the bulk route is
+// ORCHESTRATOR work, gated by the same `requireOrchestrator` the five roadmap
+// verbs use, so this post carries the orchestrator the scenario registers
+// above — exactly as the release-proposal step does. A bulk post declaring
+// NONE of `release`/`track`/`lifecycle` (roadmap.steps.ts's queue step, and
+// `queue-file`'s import) still needs no caller.
 Step(
   "a CR queue registering cr {string} titled {string} in wave {string} for release {string} is posted for that project",
   async ({ request, world }, cr: string, title: string, wave: string, release: string) => {
     const res = await request.post(`/api/v2/projects/${world.projectKey as string}/queue`, {
-      data: { entries: [{ cr, title, wave, dependsOn: [], release }] },
+      data: { agentId: world.orchestratorId as string, entries: [{ cr, title, wave, dependsOn: [], release }] },
     });
     expect(res.ok()).toBe(true);
   },

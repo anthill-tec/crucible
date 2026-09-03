@@ -3,7 +3,7 @@
 - **Type**: bug
 - **Wave**: 5 (0.2.0) — release membership is the user's call
 - **Depends on**: none — the fix is local to one request handler
-- **Status**: PENDING (0.2.0) — filed 2026-09-02, **gap-analysed and corrected 2026-09-03**
+- **Status**: COMPLETED (0.2.0) — filed 2026-09-02, gap-analysed and corrected 2026-09-03, shipped 2026-09-03
 - **Found by**: CR-CRU-096's VERIFY cycle, running an e2e scenario no cycle had run
 
 ## Problem
@@ -67,11 +67,17 @@ never declared a release.
 posted fields, on the same footing as the fields beside them. `replaceQueue` already accepts,
 normalises and stores all three, and its carry-forward already depends on them.
 
-**One new refusal is required, and it is a defect of its own.** `replaceQueue` throws a plain
-`Error` when a track carries no lane number (`src/store.ts:3517-3522`), and `handleQueuePost`
-catches only `QueueWaveOverflowError` (`:1884-1887`) — so wiring `track` without a validation path
-would answer **500** to authored input. The handler refuses a malformed track by name and index, as
-it already does for `dependsOn` and `seq`.
+**Two new refusals are required, and each guards a different kind of thing.** `replaceQueue` throws
+a plain `Error` when a track carries no lane number (`src/store.ts:3517-3522`), and
+`handleQueuePost` catches only `QueueWaveOverflowError` (`:1884-1887`) — so wiring `track` without a
+validation path would answer **500** to authored input. The handler refuses a malformed track by
+name and index, as it already does for `dependsOn` and `seq`.
+
+`lifecycle` needs the same treatment for a different reason: it is the one declared field that is a
+**structure**, and `listQueue` republishes it AS a `QueueLifecycle`, so an accepted scalar or `{}`
+is a value no reader of that type can trust. It is refused by name and index too — AC4b, ratified
+2026-09-03. This paragraph originally said "one new refusal"; that was too narrow, and cycle 320
+raised it rather than quietly widening the code.
 
 **`queue-file` is out of scope, and is a second dropper.** `parse_queue_table` emits only
 `{cr, title, wave, dependsOn}` (`clients/_crucible_axi.py:2394`) and the README table has no release
@@ -99,6 +105,32 @@ endpoint only. `QueueEntryInput` (`src/store.ts:270-288`) is the declared, expor
 contract of what `replaceQueue` accepts, so the guard compares its keys against the keys the handler
 reads. No new documentation format is invented.
 
+### §S3 — declaring membership is orchestrator work, and the route must say so
+
+**Added 2026-09-03 on the user's ruling, after §S1 landed.** The approved design states the rule
+plainly: *"Who declares — **Mainline orchestrator only** — the existing `ORCHESTRATOR` role. A
+track executes; it never re-plans the roadmap"* (`.lavish/crucible-workflow-flowchart.html:456`,
+with the machinery table at `:404` naming `cr-plan --release` as the declaring verb).
+
+The five roadmap routes enforce it through `requireOrchestrator` (`src/v2.ts:2181`, `:2220`,
+`:2280`, `:2409`). **The bulk queue post does not** — `handleQueuePost` checks the project key and
+the body shape and nothing else. Before §S1 that was harmless: the route could not write
+membership, so the rule was enforced by the very defect this CR fixes. §S1 removes the accident and
+leaves nothing in its place, so any caller could declare membership.
+
+**The gate is FIELD-CONDITIONAL, not route-wide** (ruled after the alternatives were measured):
+
+- A post declaring `release`, `track` or `lifecycle` is **roadmap registration** and requires the
+  `ORCHESTRATOR` role, exactly as `cr-plan` does.
+- A post declaring none of them is **queue bootstrap** and stays open. This is not a courtesy: the
+  only real caller, `queue-file`, sends `{"entries": …}` with **no `agentId` at all**
+  (`clients/_crucible_axi.py:2422`), so a route-wide gate would break the orchestrator's own import
+  and force a client change this CR explicitly scoped out.
+
+This is also a gap in this CR's own gap analysis, recorded rather than quietly fixed: six
+dimensions were checked and none asked whether the fix respected the design's **authorization**
+rule. Dimension 3 (code vs design intent) should have caught it and did not.
+
 ## Acceptance criteria
 
 - **AC1** — `POST .../queue` with `release` declared stores it; the subsequent `GET .../queue`
@@ -112,8 +144,20 @@ reads. No new documentation format is invented.
 - **AC4** — `track` and `lifecycle` are stored from the bulk post on the same footing as `release`,
   so `QueueEntryInput` has no key the route silently ignores.
 - **AC4a** — A malformed `track` is refused **400** by name and index, never 500. Proven by posting
-  a track with no lane number, which reaches `replaceQueue`'s existing refusal today as an uncaught
-  `Error`.
+  a track with no lane number. Note the state this describes: **today the route answers 200**,
+  because it never forwards `track` at all, so `replaceQueue`'s existing refusal
+  (`src/store.ts:3517-3522`) is unreachable. 500 is what §S1 would create by wiring `track` without
+  validation — `replaceQueue` throws a plain `Error`, not a `QueueWaveOverflowError`, and the
+  handler catches only the latter. Measured 2026-09-03 (cycle 320).
+- **AC4b** — A `lifecycle` that is not a `QueueLifecycle` is refused **400** by name and index.
+  **Ratified by the user 2026-09-03** after cycle 320 raised it; it is a refusal this spec did not
+  originally ask for, and it is now a requirement rather than an agent's addition. It asserts only
+  what the type declares — `state` in `{SUPERSEDED, VOID}` and `at` a number — and asserts NOTHING
+  about the disposition itself. Rationale: `replaceQueue` stringifies the value verbatim and
+  `listQueue` republishes it AS a `QueueLifecycle`, so a scalar or a `{}` would be a value no
+  reader of that type can trust, and accepting it silently is the exact defect class §S2 exists to
+  kill. `track`'s refusal guards a normalisation; this one guards a STRUCTURE, which is why §S1's
+  "exactly one new refusal" was too narrow.
 - **AC5** — A guard fails when a key `QueueEntryInput` declares is never read by `handleQueuePost`.
   It must fail today if `release` is removed again, and it must consume `tests/helpers/source-scan.ts`
   rather than walk the tree itself — asserted by the helper's exports being imported, and by that
@@ -129,11 +173,26 @@ reads. No new documentation format is invented.
   block (CR-CRU-095 §S3), so it is in scale and warns only on a genuine difference of scale, exactly
   as `cr-plan` does. CR-CRU-095 is shipped and is not edited; this AC supersedes its reachability
   claim and cites it.
-- **AC8** — The ACs that cite the e2e suite as in-cycle corroboration are corrected to name it as a
-  **release-tier** consumer. The suite is NOT added to a per-cycle gate: it already runs in the
-  release gate (`.github/workflows/release.yml:124-136`), which is the tier the PRD assigns it
-  (`docs/research/PRD-crucible-v2.md:123`, `:396`, `:425`). A release-tier suite cited as per-cycle
-  evidence is the defect; moving it would be the wrong fix.
+- **AC8** — The e2e suite's TIER is put on the record as a **release-tier** consumer, and the
+  citation defect is recorded against the ACs that made it. The suite is NOT added to a per-cycle
+  gate: it already runs in the release gate (`.github/workflows/release.yml:124-136`), which is the
+  tier the PRD assigns it (`docs/research/PRD-crucible-v2.md:123`, `:396`, `:425`). A release-tier
+  suite cited as per-cycle evidence is the defect; moving it would be the wrong fix.
+  **REWORDED 2026-09-03, after VERIFY (cycle 322) found this AC unperformed and unperformable as
+  written.** It originally read *"the ACs that cite the e2e suite … are corrected"* — those ACs are
+  CR-CRU-096 AC28 (`:518-519`) and AC28a (`:521-524`), and **CR-CRU-096 is shipped**. The standing
+  rule is that an implemented CR is never edited and its record is settled fact, so the original
+  wording required breaking that rule to satisfy this one. It is discharged the way the rule allows:
+  the tier is stated HERE (§S2's "Why nothing caught it"), this AC cites 096 AC28/AC28a by line, and
+  the class is entered in the deferred register. Note what is already on record and needs no repair:
+  **096 AC28a itself withdrew the corroboration claim** (*"AC28's e2e half cannot corroborate
+  anything"*), so the substance was never left standing as true — what was missing, and what this AC
+  adds, is naming the TIER that makes it unrunnable per-cycle by design rather than by accident.
+- **AC9** — **Declaring release membership through this route requires the `ORCHESTRATOR` role, per
+  §S3.** A post that declares `release`, `track` or `lifecycle` without an orchestrator caller is
+  refused; a post that declares none of them is accepted exactly as today, with no `agentId`
+  required. Both halves asserted: the refusal, and the unchanged open path — a guard that only
+  proves the refusal would let the gate silently widen to every queue post and break `queue-file`.
 
 ## Non-goals
 

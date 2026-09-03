@@ -37,6 +37,7 @@ import type {
   PackageRef,
   Project,
   QueueEntry,
+  QueueLifecycle,
   RunContext,
   RunEvent,
   RunSchema,
@@ -1820,6 +1821,17 @@ function handleQueueGet(store: Store, key: string, req: Request, url: URL): Resp
  * Validation 400s name the offending field AND index. Unknown dependsOn
  * targets (forward refs to CRs not in the posted set) are ACCEPTED and
  * flagged in `unknownDependencies`, never rejected.
+ *
+ * CR-CRU-099 §S3/AC9 — the caller gate is FIELD-CONDITIONAL. A post that
+ * declares `release`, `track` or `lifecycle` is roadmap registration and
+ * takes the same `requireOrchestrator` the five roadmap verbs take
+ * (`handleCrPlan`, `handleWaveSequence`, `handleCrLifecycle` and their
+ * siblings) — one authorization rule, one refusal wording. A post declaring
+ * none of them is queue BOOTSTRAP and stays open, because the only real
+ * caller of this route is `queue-file` (`cmd_queue_file` in
+ * `clients/_crucible_axi.py`), whose payload is `{"entries": …}` with no
+ * `agentId` at all: a route-wide gate would refuse the orchestrator's own
+ * roadmap import.
  */
 async function handleQueuePost(store: Store, key: string, req: Request): Promise<Response> {
   if (!UUID_RE.test(key)) {
@@ -1832,6 +1844,25 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
   const rawEntries = body.entries;
   if (!Array.isArray(rawEntries)) {
     return fail(400, "queue body must carry an `entries` array");
+  }
+  // §S3/AC9 — "declares" means exactly what the forwarding spreads below
+  // treat as declared: a value that is neither absent nor null. A post whose
+  // membership fields would write nothing declares nothing, so it is
+  // bootstrap and stays open. The scan reads the POSTED entries and lives
+  // here in the handler, before any per-entry validation, so authorization
+  // precedes body shape exactly as it does on the five roadmap routes.
+  const declaresMembership = rawEntries.some((entry: unknown) => {
+    if (entry === null || typeof entry !== "object") return false;
+    const posted = entry as Record<string, unknown>;
+    return (
+      (posted.release ?? null) !== null ||
+      (posted.track ?? null) !== null ||
+      (posted.lifecycle ?? null) !== null
+    );
+  });
+  if (declaresMembership) {
+    const caller = requireOrchestrator(store, key, body);
+    if ("fail" in caller) return caller.fail;
   }
   const entries: QueueEntryInput[] = [];
   for (let index = 0; index < rawEntries.length; index++) {
@@ -1862,6 +1893,58 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     if (fields.seq !== undefined && fields.seq !== null && !Number.isInteger(fields.seq)) {
       return fail(400, `entry at index ${index} has a non-integer \`seq\``);
     }
+    // CR-CRU-099 §S1/AC4a — `track` is NORMALISED on write and REFUSED when it
+    // carries no lane number: `replaceQueue`'s own `normalizeTrack` guard
+    // throws a plain `Error` (see its pre-transaction normalisation loop in
+    // `src/store.ts`) and this handler catches only `QueueWaveOverflowError`,
+    // so authored input would be answered 500. The refusal is pre-empted here
+    // through the SAME normaliser — one lane rule, one wording — naming the
+    // field and the index, as `dependsOn` and `seq` already do above.
+    if (
+      fields.track !== undefined &&
+      fields.track !== null &&
+      normalizeTrack(String(fields.track)) === null
+    ) {
+      return fail(
+        400,
+        `entry at index ${index} has a \`track\` carrying no lane number: ` +
+          `"${String(fields.track)}" — tracks are numbered lanes (wire format track-<n>), so ` +
+          `declare e.g. 2, track-2 or "Track 2"`,
+      );
+    }
+    // §S1 — `lifecycle` is the one declared field that is a STRUCTURE, so its
+    // SHAPE is refused by name and index exactly as a non-array `dependsOn`
+    // is. `replaceQueue` stringifies it verbatim into `lifecycle_json` (its
+    // INSERT's `lifecycle` binding) and `listQueue` publishes it back as a
+    // `QueueLifecycle` (its `JSON.parse(row.lifecycle_json)` projection), so
+    // anything else is a value no reader of that type can trust. What is
+    // asserted is exactly what `QueueLifecycle` declares (`src/types.ts`) — no
+    // further rule about the disposition itself, which is
+    // `handleCrLifecycle`'s business (`cr-supersede` / `cr-void`).
+    const declared =
+      typeof fields.lifecycle === "object" &&
+      fields.lifecycle !== null &&
+      !Array.isArray(fields.lifecycle)
+        ? (fields.lifecycle as Record<string, unknown>)
+        : undefined;
+    const state = declared?.state;
+    const at = declared?.at;
+    let lifecycle: QueueLifecycle | undefined;
+    if (fields.lifecycle !== undefined && fields.lifecycle !== null) {
+      if ((state !== "SUPERSEDED" && state !== "VOID") || typeof at !== "number") {
+        return fail(
+          400,
+          `entry at index ${index} has a \`lifecycle\` that is not one: a lifecycle carries ` +
+            `{state: "SUPERSEDED" | "VOID", by?, reason?, at: epoch ms}`,
+        );
+      }
+      lifecycle = {
+        state,
+        ...(typeof declared?.by === "string" ? { by: declared.by } : {}),
+        ...(typeof declared?.reason === "string" ? { reason: declared.reason } : {}),
+        at,
+      };
+    }
     entries.push({
       cr: fields.cr,
       ...(fields.title !== undefined && fields.title !== null
@@ -1873,6 +1956,22 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
         ? { size: String(fields.size) }
         : {}),
       ...(typeof fields.seq === "number" ? { seq: fields.seq } : {}),
+      // CR-CRU-099 §S1 — the three fields the `QueueEntryInput` interface
+      // DECLARES, on the same footing as the six above: read
+      // when the caller sends one, ABSENT when undeclared — never defaulted,
+      // because an absent declaration is a fact — and left to `replaceQueue`'s
+      // carry-forward, which already depends on all three. Until this CR the
+      // route accepted them and read none, so a declared release was answered
+      // `200` and stored as nothing (CR-CRU-091 §S8's five-verb boundary,
+      // moved here because CR-CRU-078's e2e scenario declares through THIS
+      // route).
+      ...(fields.release !== undefined && fields.release !== null
+        ? { release: String(fields.release) }
+        : {}),
+      ...(fields.track !== undefined && fields.track !== null
+        ? { track: String(fields.track) }
+        : {}),
+      ...(lifecycle !== undefined ? { lifecycle } : {}),
     });
   }
   // CR-CRU-095 §S3/AC12c, AC12i — a post whose defaults would leave a wave's

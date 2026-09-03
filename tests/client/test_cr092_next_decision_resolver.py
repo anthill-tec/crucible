@@ -1496,7 +1496,12 @@ class NextBlockCitationsTest(unittest.TestCase):
     CITATIONS = (
         ("the §S1 exit-code rule", "clients/STATUS-CONTRACT.md", 65, 68,
          "## Terminal states (all exit 0)", "all exit 0:"),
-        ("LANDED_STATUSES", "src/store.ts", 3925, 3925,
+        # Re-pinned 2026-09-03 (CR-CRU-099 C1): §S1's release-axis widening
+        # added +61 lines to replaceQueue, above this construct, drifting it
+        # 3925 -> 3961. Same rule as the entry below — the CR that shifted the
+        # file is the CR that re-pins it, and this guard is the only thing in
+        # the repo that caught the drift.
+        ("LANDED_STATUSES", "src/store.ts", 3961, 3961,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         ("canonical_track", "src/store.ts", 345, 348,
          "export function normalizeTrack(", "}"),

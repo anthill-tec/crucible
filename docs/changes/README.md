@@ -100,7 +100,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-095](CR-CRU-095-seq-scales-collide.md) | two seq scales collide, so `next` recommends deferred work | patch | COMPLETED (0.2.0) | 091, 092 | 5 (0.2.0) |
 | [CR-CRU-096](CR-CRU-096-zone-2-drifts-from-the-approved-design.md) | zone 2 drifts from the approved flowchart design | patch | COMPLETED (0.2.0) | 078, 095 | 5 (0.2.0) |
 | [CR-CRU-097](CR-CRU-097-project-independence-is-not-asserted.md) | project independence is claimed but never asserted | patch | COMPLETED (0.2.0) | — | 5 (0.2.0) |
-| [CR-CRU-099](CR-CRU-099-a-declared-release-is-dropped-on-queue-post.md) | a declared release is dropped on queue post | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
+| [CR-CRU-099](CR-CRU-099-a-declared-release-is-dropped-on-queue-post.md) | a declared release is dropped on queue post | bug | COMPLETED (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-100](CR-CRU-100-a-test-asserts-an-invariant-over-live-data.md) | a test asserts an invariant over live data | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-101](CR-CRU-101-suite-integrity-contradicts-scoped-runs.md) | the suite-integrity corroboration contradicts scoped runs | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-102](CR-CRU-102-dependency-annotations-return-to-the-designs-bare-form.md) | dependency annotations return to the design's bare form | patch | PENDING (0.2.0) | — | 5 (0.2.0) |
@@ -183,15 +183,31 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   validate `by` and re-point dependants, or rename the field to what it actually is (the CR's
   dependants, listed).
 
-- **CR-CRU-091 ships a store surface no HTTP client can reach** (note, not a defect).
-  `QueueEntryInput.release` / `.track` / `.lifecycle` are unreachable from every route:
-  `handleQueuePost` forwards only `cr/title/wave/dependsOn/size/seq` (`src/v2.ts:1848-1859`), and
-  the five new routes go through `upsertQueueEntry` / `sequenceQueueWave` / `setQueueLifecycle`
-  rather than `replaceQueue`. Consequently `replaceQueue`'s own `track` normalisation and refusal
-  (`src/store.ts:3362-3373`) and its `entry.lifecycle` branch are exercised by tests alone. This is
-  consistent with §S8 (the per-entry `seq` is "the one wire addition beyond the five-route table"),
-  and the carry-forward path those fields feed IS reachable and load-bearing — but the write side
-  of them is dead until something wires it.
+- **CLOSED by CR-CRU-099 (2026-09-03) — CR-CRU-091's unreachable store surface is now wired.**
+  The note read: *"`QueueEntryInput.release` / `.track` / `.lifecycle` are unreachable from every
+  route: `handleQueuePost` forwards only `cr/title/wave/dependsOn/size/seq`, and the five new routes
+  go through `upsertQueueEntry` / `sequenceQueueWave` / `setQueueLifecycle` rather than
+  `replaceQueue` … the write side of them is dead until something wires it."* CR-CRU-099 §S1 wired
+  all three through `handleQueuePost`, so `replaceQueue`'s `track` normalisation and its
+  `entry.lifecycle` branch now have wire coverage, and both refusals are asserted at the route
+  (AC4a, AC4b). The note's `src/v2.ts:1848-1859` citation was also stale before it closed — a
+  seventh instance of citation drift, and the reason the closing text quotes itself rather than
+  pointing at a line.
+  **What was NOT a defect stays recorded**: the surface was deliberate. CR-CRU-091 §S8 called the
+  per-entry `seq` *"the one wire addition beyond the five-route table"*, so this is a boundary
+  MOVED by a later requirement (CR-CRU-078 rewrote the e2e scenario to declare a release through
+  that route), not an oversight repaired.
+
+- **An AC may not require editing a shipped CR — and one did** (recorded 2026-09-03, CR-CRU-099
+  cycle 322 VERIFY). CR-CRU-099 AC8 was written as *"the ACs that cite the e2e suite as in-cycle
+  corroboration are corrected"*. Those ACs are CR-CRU-096 AC28 / AC28a, and 096 is SHIPPED, so the
+  AC demanded breaking the standing rule that an implemented CR is never edited. VERIFY found it
+  **unperformed**, and the honest reason is that it was **unperformable as written**. Reworded to
+  discharge on the recording surfaces the rule allows (the fixing CR's own scope section, a
+  line-cited reference, and this register). **The check to run when writing an AC:** does satisfying
+  it require a commit to a CR that has already shipped? If yes, the AC is aimed at the wrong
+  artifact. Adjacent to CR-CRU-094's lesson that a record must survive its author, this one is that
+  a record must not be REWRITTEN by a later author either.
 
 - **`plan-file --cycles` splits silently on a comma inside a label** (candidate patch CR, hit
   2026-08-28 filing CR-CRU-078). `--cycles` is comma-delimited, so a label containing a comma —
