@@ -3,95 +3,126 @@
 - **Type**: bug
 - **Wave**: 5 (0.2.0) — release membership is the user's call
 - **Depends on**: none
-- **Status**: PENDING (0.2.0) — filed 2026-09-02
+- **Status**: PENDING (0.2.0) — filed 2026-09-02, **gap-analysed and corrected 2026-09-03**
 - **Found by**: CR-CRU-096's regression gate, then reproduced at the merge base
 
 ## Problem
 
-`tests/store-migration.test.ts:538` — "AC2 — a copy of the REAL dog-food store is stamped from 0
-with identical row counts" — **fails on `develop`**, and has nothing to do with the CR whose gate
-surfaced it. Proven by running the file in a clean worktree at `63f07f5`: byte-identical failure.
+`tests/store-migration.test.ts` — "AC2 — a copy of the REAL dog-food store is stamped from 0 with
+identical row counts" — **fails on `develop`**, and has nothing to do with the CR whose gate
+surfaced it. Reproduced at HEAD 2026-09-03: `14 pass / 1 fail`.
 
 ```
 expect(eventRoleCount(dbPath)).toBe(rolesBefore)
-Expected: 637
-Received: 638   (tests/store-migration.test.ts:573)
+Expected: 716
+Received: 717
 ```
 
-The test copies the **live dog-food store** (`data/crucible.db`), counts role-bearing events, opens
-the copy through `Store.open` so the migrations run, and asserts the count is unchanged — the
-CR-CRU-057 guarantee that backfilled roles are not re-derived destructively.
+**The numbers move every session.** Filing quoted `637 / 638`; the same assertion measured
+`716 / 717` a day later with no code change between. That drift is not incidental — it is the
+defect, stated by the test itself.
 
-It now fails because opening the store backfills **one more** role than the copy already had. The
-count is a property of *today's data*, not of the code: a role-bearing event ingested during this
-session is one the backfill can newly classify. The assertion was true when written and is false
-now, with no code change between.
+### The failing line is NOT the criterion its test is named for
+
+Corrected by gap analysis. The test makes two before/after comparisons, and only one fails:
+
+- `expect(rowCounts(dbPath)).toEqual(before)` — **PASSES.** This is CR-CRU-071 AC2's actual stated
+  criterion ("same row counts for `projects`/`plans`/`plan_cycles`/`events`/`rollups`"), and it is
+  data-INDEPENDENT: it compares the same copy before and after migration, so it holds for any store.
+- `expect(eventRoleCount(dbPath)).toBe(rolesBefore)` — **FAILS.** An additional assertion defending
+  CR-CRU-057's backfill, beyond anything AC2 asks for.
+
+### The invariant is incompatible with CR-CRU-057 by construction, not merely data-dependent
+
+The backfill is `UPDATE events SET role = ?, role_inferred = 1 WHERE id = ? AND role IS NULL`
+(`src/store.ts`, `backfillInferredEventRoles`). It can only ever **add** a role; it can never change
+or remove one. So an equality-of-count assertion fails on **any** store holding a
+classifiable-but-unclassified event — not just ours, and not just today.
+
+This matters for the fix: a synthetic fixture that contains "events whose roles must be backfilled"
+would fail the *same* assertion. The invariant has to become **preservation** — no existing role is
+changed or lost, and the count never DECREASES — which is what CR-CRU-057 actually guarantees. An
+equality assertion forbids the backfill from ever doing its job.
 
 ## Why this is the same disease CR-CRU-096 AC29 names
 
 CR-CRU-096 AC29 rules that **no AC fixture may name a real CR of the project running Crucible**,
-because a criterion that only holds while our own backlog has a given shape is not a criterion.
-This test is the store-side instance of exactly that: its fixture is our own live, mutable database,
-so the invariant it states decays every time we dog-food. CR-CRU-096 fixed the roadmap-side
-instances; nobody looked at the store side.
+because a criterion that only holds while our own backlog has a given shape is not a criterion. This
+test is the store-side instance: its fixture is our own live, mutable database. CR-CRU-096 fixed the
+roadmap-side instances; nobody looked at the store side.
 
 The distinction that keeps this honest, already recorded under CR-CRU-097: a **reproduction** may
-use real data — that is what makes it a reproduction. A **contract** may not. `AC2` is a contract:
-it asserts migration does not lose or re-derive data, which must hold for every store, not for one
-snapshot of ours.
+use real data — that is what makes it a reproduction. A **contract** may not.
 
-## A second defect in the same test
+## What this CR SUPERSEDES, and what it deliberately does not
 
-The run emits, every time:
+**CR-CRU-071 AC2 is shipped and is not edited.** It states, in bold: *"Proven against a **copy of the
+real dog-food store, not a synthetic fixture**: same row counts for
+`projects`/`plans`/`plan_cycles`/`events`/`rollups` before and after."*
 
-```
-[crucible] CORRUPT DATABASE at /tmp/crucible-cr071-XXXX/crucible.db — moving it aside
-… and starting with a fresh db (SQLiteError: file is not a database)
-```
-
-So one of the copies the test makes is **not a valid database** and the store silently starts a
-fresh one. A test that means to exercise migration against a real store is, on that path,
-exercising it against an empty file — and passing. The copy is almost certainly torn: the live
-server holds the DB open with WAL, and copying only `crucible.db` without its `-wal`/`-shm` yields
-an inconsistent file. This is a second, quieter failure mode hiding inside a test whose loud
-failure is the row count.
+That choice is honoured. **Ruled 2026-09-03 (option 1): nothing shipped is weakened.** The
+real-store check KEEPS its `rowCounts` equality, because it passes and is data-independent. Only the
+role-count line — which is not AC2's criterion — is restated as preservation, and it gains a
+synthetic fixture so the contract is provable where no dog-food store exists. CR-CRU-071 AC2's proof
+obligation survives intact.
 
 ## Scope
 
-### §S1 — the contract runs against a store the test builds
+### §S1 — the role-preservation contract runs against a store the test builds
 
-`AC2`'s invariant is restated over a store the test constructs with a known, synthetic history
-covering the cases the migration must survive — including events with roles already present and
-events whose roles must be backfilled. The assertion becomes a statement about migration, provable
-on any machine and in CI, where `copyOfRealStore()` currently returns `null` and the test SKIPS
-entirely (so CI has never run this at all).
+A store constructed with known synthetic history covering the cases the migration must survive:
+events with roles already present, and events whose roles must be backfilled. Against it, the
+assertion is CR-CRU-057's real guarantee — **every role present before migration is present and
+unchanged after, and no role is re-derived over an existing value** — provable on any machine and in
+CI, where the live store is absent.
 
-### §S2 — the real store is still exercised, but as a smoke check
+### §S2 — the real store keeps AC2's equality, and gains nothing weaker
 
-The dog-food store is genuinely valuable: it is the only store with real history. It is retained as
-a separate, clearly-labelled check that asserts only what is true of ANY store — migration
-completes, `SCHEMA_VERSION` reaches the current value, no table is dropped, and total row count does
-not DECREASE. No exact-count equality, because exact counts are a property of the data.
+The dog-food store stays exactly as strong as CR-CRU-071 left it: `rowCounts` equality before and
+after, `user_version` reaching `SCHEMA_VERSION`, no table dropped. **No count assertion is
+loosened.** The only change is that its role assertion moves from equality-of-count to the same
+preservation statement §S1 makes, because equality is what contradicts the backfill.
 
-### §S3 — the copy is consistent or the test refuses to run
+### §S3 — RETRACTED: the snapshot is already consistent
 
-Copying a live SQLite database means copying its WAL, or using SQLite's own backup API / `VACUUM
-INTO`. `copyOfRealStore()` takes a consistent snapshot; if it cannot, it SKIPS with a stated reason
-rather than silently handing a torn file to a store that will quietly replace it. The
-`CORRUPT DATABASE` path must never be reachable from a passing test.
+**Withdrawn 2026-09-03 by gap analysis; it described a defect that does not exist.**
+
+The filing claimed the copy was "almost certainly torn" and prescribed "SQLite's own backup API".
+`snapshotLiveStore` **already uses it** — `sqlite3 <live> ".backup '<dest>'"`, with a comment
+explaining why a file copy would be wrong. Verified by running the identical command: exit 0, a
+valid 18 MB SQLite file, `user_version 8`, 766 events.
+
+The `CORRUPT DATABASE … file is not a database` line is **a deliberate fixture**: a passing test
+writes `"this is not sqlite"` to a scratch path to prove `Store.open` survives corruption.
+`copyOfRealStore` has exactly one consumer — the AC2 test — so no copy this suite makes is invalid.
+Nothing here needs fixing, and the original AC4 (*"the log line does not appear in a passing run"*)
+would have required muting or deleting legitimate coverage.
 
 ## Acceptance criteria
 
-- **AC1** — `AC2`'s role-preservation invariant runs against a test-built store with synthetic
-  history, and passes on a machine with no dog-food store present.
-- **AC2** — The rewritten contract FAILS if CR-CRU-057's backfill is made destructive (prove it by
-  reverting that guard in a scratch edit, not by assertion alone).
-- **AC3** — The live-store check asserts only data-independent properties; it contains no
-  exact-count equality against a live table.
-- **AC4** — `copyOfRealStore()` produces a consistent snapshot, or skips with a stated reason. The
-  `CORRUPT DATABASE … file is not a database` log line does not appear in a passing run.
-- **AC5** — Both checks run in CI. The suite must not be silently skipped there — a skip that hides
-  a never-executed contract is the defect this CR exists for.
-- **AC6** — Regression: `tests/store-migration.test.ts` is green on `develop` with the live
-  dog-food store present, and green again after ingesting a new role-bearing event (the exact
-  mutation that broke it).
+- **AC1** — The role-preservation contract runs against a test-built store with synthetic history
+  and passes on a machine with no dog-food store present.
+- **AC2** — It FAILS if CR-CRU-057's backfill is made destructive — prove it by scratch-editing
+  `backfillInferredEventRoles`'s `AND role IS NULL` guard away so it overwrites an existing role,
+  not by assertion alone. Restore byte-identically and show it.
+- **AC3** — The contract is satisfied by a fixture that CONTAINS an event needing backfill, so a
+  count-equality assertion could not pass it. This is the AC that pins the corrected diagnosis: the
+  old invariant forbade the backfill from working.
+- **AC4** — CR-CRU-071 AC2's `rowCounts` equality against the real store is **retained unchanged**,
+  and the real-store check adds no assertion weaker than the one it shipped with. A diff showing
+  that equality still present is the evidence.
+- **AC5** — The synthetic contract runs in CI. The live-store check is expected to SKIP there and
+  says so with a stated reason — `data/crucible.db` is never committed (`git ls-files data/` is
+  empty) and CI declares `CRUCIBLE_DB` only for the e2e job, so it cannot run and must not pretend
+  to. A skip that hides a never-executed contract is the defect this CR exists for; §S1 is what
+  removes it.
+- **AC6** — Regression: `tests/store-migration.test.ts` is green on `develop` with the live store
+  present, and green again after ingesting a new role-bearing event — the exact mutation that broke
+  it, which today moves the count by one.
+
+## Non-goals
+
+- **Weakening any CR-CRU-071 criterion.** Ruled out explicitly; see §S2.
+- **Silencing the `CORRUPT DATABASE` log.** It belongs to a passing test that earns it (§S3).
+- **Rewriting `snapshotLiveStore`.** It already takes a consistent snapshot; it is consumed as-is.
+- **Editing CR-CRU-071's spec.** Shipped CRs are never edited; the supersession is recorded here.
