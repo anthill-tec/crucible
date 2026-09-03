@@ -638,13 +638,20 @@ describe("CR-CRU-071 AC2 — existing stores are baselined without loss", () => 
         //
         // Which case is LOUD and which is SILENT, because the distinction is
         // the whole justification: a machine with NO sqlite3 is already RED
-        // and is deliberately left that way. `snapshotLiveStore` reaches its
-        // `exitCode !== 0` return — the only route here — only if
-        // `Bun.spawnSync` RETURNED, and on a missing executable it THROWS, so
-        // that machine fails this test rather than passing it. This silent
-        // branch therefore buys nothing for the missing-binary case; it
-        // covers only the strictly rarer one where the binary is present and
-        // the copy itself fails. THAT is what makes the silence acceptable:
+        // and is deliberately left that way. TWO routes reach this branch and
+        // NEITHER of them is the missing-binary one. `snapshotLiveStore`
+        // returns null from its `existsSync` guard, which is evaluated at RUN
+        // time while `LIVE_STORE_PRESENT` and the `test.skipIf` are decided
+        // once at module load — so it fires only if the live store vanished
+        // between collection and here, with sqlite3 never invoked at all. Its
+        // other return needs `exitCode !== 0`, which requires `Bun.spawnSync`
+        // to have RETURNED, and on a missing executable it THROWS, so that
+        // machine fails this test rather than passing it. This silent branch
+        // therefore buys nothing for the missing-binary case; it covers only
+        // the strictly rarer ones where the binary is present and the copy
+        // itself fails, or the source disappeared underfoot (the log below
+        // names the first, being the only one anything in this suite could
+        // plausibly produce). THAT is what makes the silence acceptable:
         // an unreadable or locked store is a genuinely exceptional local
         // condition, not a machine shape CI can have, whereas the common,
         // reproducible "this host has no sqlite3" is loud already. The log
@@ -1072,14 +1079,20 @@ describe("CR-CRU-100 §S1 — roles are PRESERVED across a migration, on a store
     // precondition above uses, and for the same reason. `expectRolesPreserved`
     // guards non-vacuity with a floor of `> 0` only, and `makePreRenameStore`
     // writes `e-declared` unconditionally, so that floor can never fire for
-    // §S1: every row of `CR100_SYNTHETIC_ROLE_HISTORY` could be deleted and
-    // this test would stay green. Each row is a distinct way a migration can
-    // get a classification wrong (enumerated on that constant), so the set is
-    // pinned by name — losing one now fails here. The two rows that carry no
-    // role before are outside this set and pinned individually below and
-    // above (`e-null`, `e-cr100-unclassifiable`). The helper keeps the bare
-    // `> 0` floor for §S2, whose store is the real one and whose membership
-    // cannot be enumerated.
+    // §S1: the hole this pin closes is the three DECLARED rows
+    // `CR100_SYNTHETIC_ROLE_HISTORY` adds — `e-cr100-agreeing`,
+    // `e-cr100-unparseable`, `e-cr100-was-inferred`. Delete all three and,
+    // before this assertion, the test stayed green on `e-declared` alone.
+    // Each is a distinct way a migration can get a classification wrong
+    // (enumerated on that constant), so the set is pinned by name — losing
+    // one now fails here. The rows carrying no role before are outside the
+    // declared set and were ALREADY pinned individually, so this assertion
+    // claims no credit for them: `e-null` above and below, and
+    // `e-cr100-unclassifiable` by the NULL/NULL assertion below, which has
+    // always failed if that row goes missing (a deleted row reads back as
+    // `undefined`, never as NULL/NULL).
+    // The helper keeps the bare `> 0` floor for §S2, whose store is the real
+    // one and whose membership cannot be enumerated.
     expect(Object.keys(declaredBefore).sort()).toEqual([
       "e-cr100-agreeing",
       "e-cr100-unparseable",
