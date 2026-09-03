@@ -3,7 +3,7 @@
 - **Type**: bug
 - **Wave**: 5 (0.2.0) — release membership is the user's call
 - **Depends on**: none — the fix is local to one request handler
-- **Status**: PENDING (0.2.0) — filed 2026-09-02, **gap-analysed and corrected 2026-09-03**
+- **Status**: COMPLETED (0.2.0) — filed 2026-09-02, gap-analysed and corrected 2026-09-03, shipped 2026-09-03
 - **Found by**: CR-CRU-096's VERIFY cycle, running an e2e scenario no cycle had run
 
 ## Problem

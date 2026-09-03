@@ -100,7 +100,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-095](CR-CRU-095-seq-scales-collide.md) | two seq scales collide, so `next` recommends deferred work | patch | COMPLETED (0.2.0) | 091, 092 | 5 (0.2.0) |
 | [CR-CRU-096](CR-CRU-096-zone-2-drifts-from-the-approved-design.md) | zone 2 drifts from the approved flowchart design | patch | COMPLETED (0.2.0) | 078, 095 | 5 (0.2.0) |
 | [CR-CRU-097](CR-CRU-097-project-independence-is-not-asserted.md) | project independence is claimed but never asserted | patch | COMPLETED (0.2.0) | — | 5 (0.2.0) |
-| [CR-CRU-099](CR-CRU-099-a-declared-release-is-dropped-on-queue-post.md) | a declared release is dropped on queue post | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
+| [CR-CRU-099](CR-CRU-099-a-declared-release-is-dropped-on-queue-post.md) | a declared release is dropped on queue post | bug | COMPLETED (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-100](CR-CRU-100-a-test-asserts-an-invariant-over-live-data.md) | a test asserts an invariant over live data | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-101](CR-CRU-101-suite-integrity-contradicts-scoped-runs.md) | the suite-integrity corroboration contradicts scoped runs | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-102](CR-CRU-102-dependency-annotations-return-to-the-designs-bare-form.md) | dependency annotations return to the design's bare form | patch | PENDING (0.2.0) | — | 5 (0.2.0) |
