@@ -350,6 +350,17 @@ const WIDE_VIEWPORT = { width: 1600, height: 1200 };
  *  finding. Nothing below fails on a budget line. */
 const BUDGET = { terminals: 100, wave: 300, gate: 76, connectors: 72, gaps: 48, total: 596 };
 
+/** CR-CRU-102 AC4 — the DESIGN's own two figures, quoted from the approved
+ *  artifact's "why the spine is horizontal" paragraph: "only the scheduled
+ *  top shown puts the box at ~300px and the budget at ~600px". `BUDGET.wave`
+ *  above IS that first figure (CR-CRU-096 recorded it from the same
+ *  paragraph) and is reused rather than restated; the spine figure is the
+ *  artifact's own ~600, which §S6's table decomposes into a 596px sum. AC4
+ *  asserts the design's rounded figure, and the table's arithmetic keeps
+ *  being REPORTED by the budget test above — the two are the argument and the
+ *  fact, and neither is derived from the other. */
+const DESIGN_SPINE_W = 600;
+
 const HEIGHT_RELEASE = "0.4.0";
 
 const HEIGHT_PROPOSALS: ProposalFixture[] = [
@@ -664,6 +675,17 @@ let artifactUrl = "";
 let wrapZones = "";
 let wrapFixtureUrl = "";
 let realSurfaceFixtureUrl = "";
+// CR-CRU-102 C2 — AC4's four-dependency measurement board, and the LIVE
+// board it is corroborated against.
+let bareDepsZones = "";
+let bareDepsFixtureUrl = "";
+let liveDepsZones = "";
+let liveDepsFixtureUrl = "";
+/** WHY the live corroboration did not run, in words. Exactly one of this and
+ *  `liveDepsZones` is set: the third state — neither captured nor explained —
+ *  is what the corroboration test refuses, so a `beforeAll` that silently
+ *  skipped the read cannot read as a pass. */
+let liveDepsSkip = "";
 /** A SECOND page, at §S6's own 1600px viewport. A second page rather than a
  *  `setViewportSize` on the shared one: the 38 landed assertions are measured
  *  at 1440×1000 and a viewport this suite forgot to put back would silently
@@ -833,6 +855,19 @@ beforeAll(async () => {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
+      // CR-CRU-102 AC4 — the four-dependency measurement board and the LIVE
+      // board beside it, both at the 1130px surface the design's own figures
+      // are stated against.
+      if (pathname === "/fixture-bare-deps") {
+        return new Response(fixtureDocument(bareDepsZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      if (pathname === "/fixture-live-deps") {
+        return new Response(fixtureDocument(liveDepsZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
       if (pathname === "/fixture-height-loose") {
         return new Response(fixtureDocument(heightLooseZones, SURFACE_W), {
           headers: { "content-type": "text/html; charset=utf-8" },
@@ -884,6 +919,8 @@ beforeAll(async () => {
   artifactUrl = `http://127.0.0.1:${server.port}/artifact`;
   wrapFixtureUrl = `http://127.0.0.1:${server.port}/fixture-wrap`;
   realSurfaceFixtureUrl = `http://127.0.0.1:${server.port}/fixture-real-surface`;
+  bareDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-bare-deps`;
+  liveDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-live-deps`;
 
   browser = await chromium.launch();
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -2430,6 +2467,129 @@ describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and
         `${round1(stage.width)}px) into the ${SURFACE_W}px surface`,
     ).toBeLessThanOrEqual(SURFACE_W);
     expect(surface.scrollWidth - surface.clientWidth).toBeLessThanOrEqual(0.5);
+  });
+
+  // ── CR-CRU-102 AC4 — the design's MEASUREMENT, turned into a test ────────
+  //
+  // The approved artifact's whole argument for a horizontal spine is a
+  // measurement: "One CR per row, merged collapsed to the summary and only
+  // the scheduled top shown puts the box at ~300px and the budget at ~600px:
+  // the spine fits comfortably." CR-CRU-096 recorded those figures in
+  // `BUDGET` and REPORTED against them — the budget test above says in as
+  // many words that "nothing below fails on a budget line". AC4 makes the
+  // design's two figures an ASSERTION, and states it on the case that widens
+  // the box: a FOUR-dependency row, the widest the design's own annotation
+  // grammar draws.
+  //
+  // ON A SYNTHETIC BOARD, and that is AC4's settled reading rather than a
+  // convenience. AC4's text names "the live board's widest real row", which
+  // taken literally is a criterion that holds only while OUR OWN backlog has
+  // a four-dependency row — precisely what CR-CRU-096's AC29 forbids ("a
+  // criterion that only holds while our own backlog has a given shape is not
+  // a criterion"), and that row is scheduled to ship. So the measurement runs
+  // on a board this file authors, whose ids carry NUMERIC tails so the
+  // annotation abbreviates exactly as a real one does, and the live board
+  // CORROBORATES in the test below — never the other way round. Same division
+  // as AC27 (the artifact is the source, the render is the subject) and as
+  // CR-CRU-102's own AC8.
+  test("AC4 — a FOUR-dependency wave box holds the design's ~300px, and the spine its ~600px", async () => {
+    await openWide(bareDepsFixtureUrl);
+    const stages = await boxesOf('[data-zone="2"] .app-flow-waves');
+    expect(
+      stages.length,
+      `${bareDepsFixtureUrl} draws no wave stage, so AC4's four-dependency board is not ` +
+        `built: there is nothing to measure and the design's ~${BUDGET.wave}px box is ` +
+        `still only a claim`,
+    ).toBe(1);
+    const box = one(await boxesOf('[data-testid="roadmap-wave"]'), "wave box");
+
+    // Fixture guard — the surface really IS the one the design measured at.
+    const zone = one(await boxesOf('[data-zone="2"]'), "zone 2");
+    expect(round1(zone.width)).toBe(SURFACE_W);
+
+    // NON-VACUITY: the board really draws a FOUR-dependency row AND that row's
+    // annotation really is the BARE form. Both halves matter — a three-dep
+    // board would measure a narrower case than the design's figure is stated
+    // against, and a board that abbreviated nothing would measure the width
+    // CR-CRU-102 exists to remove. The bare form is what the pattern below
+    // can only match: a published id fails `\d+`.
+    const slots = await boxesOf('[data-testid="roadmap-node-annotation"]');
+    const declared = slots
+      .filter((slot) => slot.text.includes("deps "))
+      .map((slot) => slot.text.slice(slot.text.indexOf("deps ")));
+    const four = declared.filter((text) => /^deps \d+(?:, \d+){3}$/.test(text));
+    expect(
+      four.length,
+      `no DRAWN row renders four dependencies in the bare form — this board's annotations ` +
+        `read ${JSON.stringify(declared)}, so its wave box is not the case the design's ` +
+        `~${BUDGET.wave}px figure is stated against`,
+    ).toBeGreaterThan(0);
+
+    // The two readings AC4 asks for. Both messages carry the MEASURED number,
+    // because the point of the criterion is the figure and not the verdict.
+    expect(
+      box.width,
+      `the four-dependency wave box measures ${round1(box.width)}px against the design's ` +
+        `~${BUDGET.wave}px, with its widest annotation reading ${JSON.stringify(four[0])}`,
+    ).toBeLessThanOrEqual(BUDGET.wave);
+
+    const pieces = await boxesOf('[data-zone="2"] > *');
+    expect(pieces.length).toBe(7);
+    const spine = pieces[6]!.right - pieces[0]!.x;
+    expect(
+      spine,
+      `the spine measures ${round1(spine)}px against the design's ~${DESIGN_SPINE_W}px budget ` +
+        `(§S6's table decomposes it as ${BUDGET.total}px), on a wave box of ` +
+        `${round1(box.width)}px`,
+    ).toBeLessThanOrEqual(DESIGN_SPINE_W);
+  });
+
+  // AC4's CORROBORATION — the same two readings on the board this project
+  // actually runs, which is where the 452.7px the CR quotes was measured. It
+  // corroborates and never carries the criterion: the store is not committed
+  // (`git ls-files data/` is empty) and the four-dependency row is a CR that
+  // will ship, so a criterion resting on it would decay. When either is
+  // missing this states WHY, in the shape CR-CRU-100 AC5 established for a
+  // reading that cannot be taken here.
+  test("AC4 — the LIVE board corroborates the same two figures, or says why it cannot", async () => {
+    if (liveDepsSkip !== "") {
+      // NOT RUN, and reported as a pass — with the reason in the run's own
+      // output, never a silent green line.
+      console.log(`[cr102] AC4 live corroboration NOT RUN: ${liveDepsSkip}`);
+      return;
+    }
+    expect(
+      liveDepsZones,
+      "the live board was neither captured nor explained — beforeAll set no zones and named " +
+        "no reason, so this test would have passed without corroborating anything",
+    ).not.toBe("");
+
+    await openWide(liveDepsFixtureUrl);
+    const box = one(await boxesOf('[data-testid="roadmap-wave"]'), "live wave box");
+    const slots = await boxesOf('[data-testid="roadmap-node-annotation"]');
+    const declared = slots
+      .filter((slot) => slot.text.includes("deps "))
+      .map((slot) => slot.text.slice(slot.text.indexOf("deps ")));
+    const four = declared.filter((text) => /^deps \d+(?:, \d+){3}$/.test(text));
+    expect(
+      four.length,
+      `the live board's drawn rows annotate ${JSON.stringify(declared)} — none of them is a ` +
+        `four-dependency row in the bare form, so this board corroborates nothing`,
+    ).toBeGreaterThan(0);
+
+    const pieces = await boxesOf('[data-zone="2"] > *');
+    const spine =
+      Math.max(...pieces.map((piece) => piece.right)) - Math.min(...pieces.map((piece) => piece.x));
+    expect(
+      box.width,
+      `the LIVE four-dependency wave box measures ${round1(box.width)}px against the design's ` +
+        `~${BUDGET.wave}px (annotation ${JSON.stringify(four[0])}); the CR recorded 452.7px for ` +
+        `the same row while it rendered full ids`,
+    ).toBeLessThanOrEqual(BUDGET.wave);
+    expect(
+      spine,
+      `the LIVE spine measures ${round1(spine)}px against the design's ~${DESIGN_SPINE_W}px`,
+    ).toBeLessThanOrEqual(DESIGN_SPINE_W);
   });
 
   // AC19d — the DEGRADATION, measured. §S5's rule is that a partially drawn
