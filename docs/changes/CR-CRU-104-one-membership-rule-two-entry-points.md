@@ -68,6 +68,33 @@ adding a future invariant to one path and not the other FAILS, which is the prop
 to buy. CR-CRU-099's convergence probe lived in `/tmp` and was thrown away; this one is in the
 suite.
 
+### §S3 — the accepted-field guard measures STORES, not MENTIONS
+
+CR-CRU-099 §S2 left a guard that answers the wrong question, and said so in its own header
+(`tests/queue-accepted-field-guard.test.ts`, the "ONE SILENT HOLE" section). It asks whether the
+handler NAMES each declared field anywhere in its body. What the defect class needs is whether the
+field's value reaches the object handed to the writer.
+
+Those come apart whenever a field is named TWICE — once by a validation, once by the forwarding.
+Delete only the forwarding and the field is silently dropped again, while the validation keeps the
+guard green. Measured one key at a time against the real route on 2026-09-03: deleting `track`'s
+forwarding spread alone left the guard passing 7/7 (`run-9bb593a3`), and it fired only once the
+validation went too (`run-ec83722b`); `lifecycle` behaved identically (`run-0f20ebdf` green,
+`run-774779c2` red).
+
+**So the guard would not have caught the bug it was written for.** CR-CRU-099's defect was a route
+that accepted `release` and stored nothing. `release` is protected today only by accident — it
+carries no validation, so its single appearance IS its forwarding.
+
+This belongs in THIS CR rather than a tenth one because it is the same failure as the duality
+itself: a check that reports two things agree when it cannot see whether they do. §S2 above buys
+that property for the two ROUTES; §S3 buys it for the route-vs-type contract.
+
+What must NOT be lost: the guard's denominator stays the exported `QueueEntryInput` interface, and
+it stays unpinned to any count or list, for the reason CR-CRU-099 gave — a pinned list is edited by
+the same commit that would forget the field. The named blind spots that remain acceptable
+(destructuring, computed keys) stay named.
+
 ## Open ruling — NOT decided here
 
 **Should the bulk post refuse dependency cycles?** `cr-plan` and `wave-sequence` do.
@@ -101,6 +128,19 @@ ruling would repeat CR-CRU-102's `AC19d` — an answer invented without asking.
   behaviour still hold, unweakened. Those CRs are shipped and are not edited.
 - **AC7** — The dependency-cycle asymmetry is recorded, not silently closed: a test or a stated
   non-goal makes clear the bulk post's cycle behaviour is deliberate and pending a ruling.
+- **AC8** — Deleting a declared field's FORWARDING while leaving any validation of it in place FAILS
+  the accepted-field guard. Proven by performing that deletion for each of `release`, `track` and
+  `lifecycle` and observing the failure, which is the same experiment that established the hole —
+  three of those four mutations pass today.
+- **AC9** — The guard still fires when a field is dropped entirely, still refuses to be satisfied by
+  DELETING a declaration rather than reading it, and still reports a field named only in a comment
+  or only inside a string literal as unforwarded. The shapes CR-CRU-099 bought with a failing
+  self-test are not surrendered to buy AC8.
+- **AC10** — The guard's denominator remains the exported input interface, unpinned to any count or
+  hardcoded field list. A test that must be edited by the commit that adds a field cannot catch that
+  commit forgetting the field.
+- **AC11** — Whatever blind spots the guard still has after AC8 are named in the file, with the
+  measurement that established each. A named limit is the deliverable; an unnamed one is the defect.
 
 ## Non-goals
 
