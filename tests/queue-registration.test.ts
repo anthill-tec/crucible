@@ -1849,19 +1849,19 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         // The shape `cmd_queue_file` sends, verbatim — `parse_queue_table`'s
         // four keys and nothing else, no `agentId`.
         const res = await postAs(key, undefined, [
-          { cr: "CR-QF-1", title: "queue file row", wave: "5", dependsOn: [] },
-          { cr: "CR-QF-2", title: "another row", wave: "6", dependsOn: ["CR-QF-1"] },
+          { cr: "CR-Q99-QF1", title: "queue file row", wave: "5", dependsOn: [] },
+          { cr: "CR-Q99-QF2", title: "another row", wave: "6", dependsOn: ["CR-Q99-QF1"] },
         ]);
         expect([200, 202]).toContain(res.status);
         const body = (await res.json()) as QueuePostResponse;
         expect(body.ok).toBe(true);
         const entries = (await getQueue(key)).entries;
-        expect(entries.map((entry) => entry.cr)).toEqual(["CR-QF-1", "CR-QF-2"]);
-        expect(findEntry(entries, "CR-QF-1").title).toBe("queue file row");
-        expect(findEntry(entries, "CR-QF-2").dependsOn).toEqual(["CR-QF-1"]);
+        expect(entries.map((entry) => entry.cr)).toEqual(["CR-Q99-QF1", "CR-Q99-QF2"]);
+        expect(findEntry(entries, "CR-Q99-QF1").title).toBe("queue file row");
+        expect(findEntry(entries, "CR-Q99-QF2").dependsOn).toEqual(["CR-Q99-QF1"]);
         // A bootstrap row declares no membership, so it carries none: the open
         // path fabricates nothing on the way through.
-        for (const cr of ["CR-QF-1", "CR-QF-2"]) {
+        for (const cr of ["CR-Q99-QF1", "CR-Q99-QF2"]) {
           expect("release" in findEntry(entries, cr)).toBe(false);
           expect("track" in findEntry(entries, cr)).toBe(false);
           expect("lifecycle" in findEntry(entries, cr)).toBe(false);
