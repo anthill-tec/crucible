@@ -103,6 +103,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-099](CR-CRU-099-a-declared-release-is-dropped-on-queue-post.md) | a declared release is dropped on queue post | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-100](CR-CRU-100-a-test-asserts-an-invariant-over-live-data.md) | a test asserts an invariant over live data | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-101](CR-CRU-101-suite-integrity-contradicts-scoped-runs.md) | the suite-integrity corroboration contradicts scoped runs | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
+| [CR-CRU-102](CR-CRU-102-dependency-annotations-return-to-the-designs-bare-form.md) | dependency annotations return to the design's bare form | patch | PENDING (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-079](CR-CRU-079-roadmap-deep-link-and-drill-through.md) | roadmap deep-link parity and active-CR drill-through | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-085](CR-CRU-085-roadmap-multi-track-lanes.md) | multi-track swimlanes inside a wave | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-093](CR-CRU-093-project-rail-collapses.md) | the project rail collapses, giving every workspace view its width back | feature | PENDING (0.2.0) | 006 | 5 (0.2.0) |
