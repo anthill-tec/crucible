@@ -1390,7 +1390,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         // `state` outside the two declared values is not one, and `at` — epoch
         // MILLISECONDS, required — is not optional. Which disposition is
         // legitimate for a cr is `cr-supersede`/`cr-void`'s business
-        // (src/v2.ts:2331-2350), not this route's.
+        // (`handleCrLifecycle` in `src/v2.ts`), not this route's.
         const rejected: unknown[] = [
           "VOID",
           42,
@@ -1568,7 +1568,8 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
     //
     // CR-CRU-095 §S2 widened `defaulted-seq` from "a sibling in the same wave"
     // to "the same wave OR the same release", and implemented the release half
-    // in `upsertQueueEntry` ALONE (src/store.ts:3768-3777) for one stated
+    // in `upsertQueueEntry` ALONE (its `const scale` / `const mixed` pair,
+    // whose sibling query is `(wave = ? OR release = ?)`) for one stated
     // reason: *"the bulk route never forwards `release` … a row the bulk post
     // defaults is always new and release-less … so a bulk cross-wave
     // `defaulted-seq` is unreachable by construction"*. §S1 forwards it, so

@@ -3570,7 +3570,8 @@ export class Store {
       // defaulted was "always new and release-less" — §S1 forwards `release`,
       // so that premise is gone and the same comparison belongs here. A row's
       // release is the one this write will STORE (`entry.release ??
-      // snapshot?.release`, :3599), and an UNDECLARED one is never compared —
+      // snapshot?.release` — the same expression this method's INSERT binds to
+      // the `release` column), and an UNDECLARED one is never compared —
       // the in-memory twin of `release = ?` being false for NULL, which is
       // what keeps the live board's release-less history naming nobody
       // (CR-CRU-095 AC9a).

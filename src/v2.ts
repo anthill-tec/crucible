@@ -1864,12 +1864,12 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
       return fail(400, `entry at index ${index} has a non-integer \`seq\``);
     }
     // CR-CRU-099 §S1/AC4a — `track` is NORMALISED on write and REFUSED when it
-    // carries no lane number: `replaceQueue` throws a plain `Error` for it
-    // (src/store.ts:3517-3522) and this handler catches only
-    // `QueueWaveOverflowError`, so authored input would be answered 500. The
-    // refusal is pre-empted here through the SAME normaliser — one lane rule,
-    // one wording — naming the field and the index, as `dependsOn` and `seq`
-    // already do above.
+    // carries no lane number: `replaceQueue`'s own `normalizeTrack` guard
+    // throws a plain `Error` (see its pre-transaction normalisation loop in
+    // `src/store.ts`) and this handler catches only `QueueWaveOverflowError`,
+    // so authored input would be answered 500. The refusal is pre-empted here
+    // through the SAME normaliser — one lane rule, one wording — naming the
+    // field and the index, as `dependsOn` and `seq` already do above.
     if (
       fields.track !== undefined &&
       fields.track !== null &&
@@ -1884,12 +1884,13 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     }
     // §S1 — `lifecycle` is the one declared field that is a STRUCTURE, so its
     // SHAPE is refused by name and index exactly as a non-array `dependsOn`
-    // is. `replaceQueue` stringifies it verbatim into `lifecycle_json`
-    // (src/store.ts:3579-3582) and `listQueue` publishes it back as a
-    // `QueueLifecycle` (:3669-3671), so anything else is a value no reader of
-    // that type can trust. What is asserted is exactly what `QueueLifecycle`
-    // declares (src/types.ts:365-372) — no further rule about the disposition
-    // itself, which is `cr-supersede`/`cr-void`'s business.
+    // is. `replaceQueue` stringifies it verbatim into `lifecycle_json` (its
+    // INSERT's `lifecycle` binding) and `listQueue` publishes it back as a
+    // `QueueLifecycle` (its `JSON.parse(row.lifecycle_json)` projection), so
+    // anything else is a value no reader of that type can trust. What is
+    // asserted is exactly what `QueueLifecycle` declares (`src/types.ts`) — no
+    // further rule about the disposition itself, which is
+    // `handleCrLifecycle`'s business (`cr-supersede` / `cr-void`).
     const declared =
       typeof fields.lifecycle === "object" &&
       fields.lifecycle !== null &&
@@ -1925,8 +1926,8 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
         ? { size: String(fields.size) }
         : {}),
       ...(typeof fields.seq === "number" ? { seq: fields.seq } : {}),
-      // CR-CRU-099 §S1 — the three DECLARED fields `QueueEntryInput` accepts
-      // (src/store.ts:283-287), on the same footing as the six above: read
+      // CR-CRU-099 §S1 — the three fields the `QueueEntryInput` interface
+      // DECLARES, on the same footing as the six above: read
       // when the caller sends one, ABSENT when undeclared — never defaulted,
       // because an absent declaration is a fact — and left to `replaceQueue`'s
       // carry-forward, which already depends on all three. Until this CR the
