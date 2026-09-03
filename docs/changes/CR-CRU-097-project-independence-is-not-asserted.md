@@ -79,6 +79,19 @@ behaviour. `arduino` needed no change — it already passed a short literal. The
 exemption follows the **rendering**, never the syntax. A comment or docstring is exempt because
 nobody renders it; the moment it is passed to a renderer it is a user-visible string.
 
+**The classifier must not treat `//` inside a STRING as a comment (VERIFY, 2026-09-03).** The
+lifted `extractCitableText`'s TS/JS branch extracts line comments with `/\/\/[^\n]*/g` over the raw
+file, so it cannot tell a comment from a `//` inside a string literal. Proved as a pure function:
+`extractCitableText("public/probe.js", 'const u = "http://board/CR-QQQ-9";')` returns `CR-QQQ-9`
+as PROSE — so a shipped UI string carrying a URL beside a CR id is classified as provenance and
+dropped from every tripwire dimension, since AC3 and AC7 both filter on `!isProse`. A regex
+literal (`/a\/\//`) behaves the same. Nothing is red today (`public/` live count is 0), which is
+exactly the problem: the CR's durability claim is that a future leak fails **on the day it is
+written**, and this whole class — any string containing a URL, path or regex beside a CR id — is
+invisible. The self-test did not reach it because it plants the literal in a bare string with the
+comment on its own line, the easy case. The branch must respect string literals, and the self-test
+must include the URL case.
+
 **Detection subtlety worth keeping.** argparse wraps help text **after a hyphen**, so a leaked id
 can arrive as `CR-CRU-` + newline + `086` and a naive per-line regex sees nothing. The check
 un-wraps first (`joinWrapped`) and additionally drives every surface with `COLUMNS=200` — two
@@ -175,12 +188,26 @@ on "comments are exempt" must reuse the classifier that is already proven, not r
   lineage survives (AC8) and the user-facing line states behaviour. Verified by DRIVING all
   **159** surfaces (5 root + every verb of every client) at `COLUMNS=200`: zero literals.
 - **AC3** — No user-visible string in `public/` contains a `CR-CRU-` literal. (Comments exempt.)
-- **AC4** — In each of the three files in §S3, every assertion that states a product RULE runs on
-  synthetic ids.
+- **AC3a** — No **runtime string a client emits** names any project's CR namespace: warning
+  `detail`, error text and any other envelope prose, across `clients/**` including the shared
+  `_crucible_axi.py`. This closes §S6's `clients/` clause, which AC2 (help output) and AC3
+  (`public/` strings) between them leave open. Asserted over the classifier's live-code positions,
+  so provenance comments and docstrings stay exempt and `.md` stays exempt by kind.
+- **AC4** — In each of the **three files §S5 actually rewrote** — `queue-canonical-order.test.ts`,
+  `queue-registration.test.ts`, `queue-default-into-wave-block.test.ts` — every assertion that
+  states a product RULE runs on synthetic ids, and each is pinned at zero **BY NAME**. The by-name
+  pin matters: membership of the generic residue table is a weaker guarantee, because adding an
+  entry there would legally re-admit real board ids into a converted file's assertions.
 - **AC5** — Rows kept for reproduction live in one named constant per file, commented with the
   source board and the date, and the tests reading it assert the reproduction, not the rule.
 - **AC6** — CR-095's reproductions still reproduce: the `next`-recommends-a-deferred-CR case and
-  the overlapping-seq case both still fail against pre-095 ordering.
+  the overlapping-seq case both still fail against pre-095 ordering. **Made observable (VERIFY
+  ruled this PARTIAL: it rested on assertion, since "fails against pre-095" is only directly
+  visible by reverting the fix).** The testable property is that the fixture is still
+  DISCRIMINATING: `BOARD_SNAPSHOT_2026_09_02`'s naive/positional reading must differ from the
+  published order it asserts, and the deferred CR must still sort ahead of the active release under
+  that naive reading. A fixture whose two readings have converged no longer reproduces anything,
+  and would pass for the wrong reason.
 - **AC7** — The tripwire is **namespace-agnostic** (`CR-[A-Z]{2,}-\d+`, not `CR-CRU-`) and fails
   when such a literal is introduced into a user-visible string, a CLI help line, or an assertion
   outside a snapshot constant; it passes on provenance comments and docstrings. It consumes the
@@ -190,7 +217,18 @@ on "comments are exempt" must reuse the classifier that is already proven, not r
   `tests/gate-milestone-server.test.ts` (10), `tests/client/test_bun_crucible_gates.py` (4) — are
   carved out **by name, with the reason in the carve-out itself**, never by a regex that quietly
   excludes them. An implicit exclusion is indistinguishable from a gap in the tripwire.
-- **AC8** — Provenance is intact: the count of `CR-CRU-` references in comments and docstrings
+- **AC8** — Provenance is intact, **stated reproducibly** (VERIFY found it was not). The quantity
+  is the count of `/CR-[A-Z]{2,}-\d+/` matches — the same namespace-agnostic pattern AC7 uses, NOT
+  `CR-CRU-` — in the prose positions `extractCitableText` reports, over `src/`, `public/` and
+  `clients/`, excluding `__pycache__`. Both numbers are recorded: the baseline at `develop` and the
+  value at HEAD, because C3 legitimately ADDS provenance comments (citing CR-CRU-054 and CR-CRU-097)
+  and a single figure cannot be both. Under `/CR-CRU-\d+/` the `clients/` prose count is **601**,
+  not 615; 615 is the namespace-agnostic count, the extra 14 being `CR-NAI-*`/`CR-SAN-*` provenance
+  mostly in `rust-crucible.py`. `src/` 512 and `public/` 379 reproduce under either pattern because
+  those trees carry no foreign namespace — which is why the mismatch was invisible on two of three
+  figures. **A test pins this**; it was UNASSERTED, living only in spec prose.
+- **AC8-legacy** — the original wording, kept for the record: the count of `CR-CRU-` references in
+  comments and docstrings
   across `src/`, `public/` and `clients/` is unchanged by this CR, **measured by the §S6
   `extractCitableText` classifier** (the AC is otherwise unmeasurable — nothing else in the repo
   separates a comment from a string). Baseline measured 2026-09-03, excluding `__pycache__`:
@@ -205,9 +243,25 @@ on "comments are exempt" must reuse the classifier that is already proven, not r
   every addition is a `#` comment. Second, the classifier reports 12 "live-code" references in
   `clients/` that are all in `clients/STATUS-CONTRACT.md`: **markdown has no comment syntax**, so
   documentation prose reads as code to any classifier. `.md` is therefore exempt BY KIND, not by
-  pattern. Measured live-code references carrying a CR id: `public/` **0** (AC3), and `src/` **0**
-  quoted — no server response string names a CR, so there is no fourth leaking surface behind the
-  API's `help[]`.
+  pattern. Measured live-code references carrying a CR id: `public/` **0** (AC3) and `src/` **0** quoted — no
+  server response string names a CR.
+
+  **CORRECTED 2026-09-03 by VERIFY: there IS a further leaking surface, and this AC previously
+  denied it.** Of the 12 live-code `clients/` references, **10** are in `STATUS-CONTRACT.md` and
+  **two are live string literals in shipped client code**, emitted to the user at runtime in the
+  AXI envelope on any project's board:
+  - `clients/bun-crucible.py:889` — the `run-left-open` warning detail: *"POST
+    /api/v2/runs/<id>/abort is CR-CRU-017 §S2 and does not exist yet"*. This is §S1's defect
+    verbatim, one level deeper: it names OUR unshipped CR to every project.
+  - `clients/_crucible_axi.py:1513` — the `missing-seq` warning detail: *"CR-CRU-091 declares one
+    on every entry"*. It lives in the SHARED module, so all five clients emit it — the widest
+    single leak in this CR.
+
+  I asserted "no fourth leaking surface" after re-deriving only the `src/` half and accepting the
+  `clients/` half as reported. §S6 already required this surface ("no `CR-CRU-` literal appears in
+  a user-visible string … in `public/` **or `clients/`**") — but the shipped tripwire covers
+  `public/` strings (AC3) and `clients/` **help** (AC2), and a runtime message is reached by
+  neither. A §S clause with no AC is a wish (CR-CRU-078's lesson); AC3a is that AC.
 
 ## Non-goals
 
