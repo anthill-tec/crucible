@@ -135,6 +135,9 @@ and the `/queue` endpoint are untouched; CR-014's `queue-file` tests still pass
 byte-unchanged. This is additive wiring, not a re-implementation.
 
 **AC5 — Model B intimated.** A Sandesh message records the new fleet verb.
+NOT TEST-VERIFIABLE, and said so deliberately: it is a standing cross-project
+obligation (the `intimate-modelb-on-client-changes` contract), recorded as an AC
+so close-out does not forget it, not a criterion a suite can assert.
 
 ## Non-goals
 - No change to the queue API, the parser, or the Roadmap UI.

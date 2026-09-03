@@ -18,8 +18,16 @@ expect({ onDiskCount: onDisk.length, ranFiles }).toEqual({ onDiskCount: onDisk.l
 
 Its premise — stated in its own skip message — is that the artifact comes from *"a prior real bun
 run"*, meaning a **full** one. Nothing enforces that. Any scoped run overwrites `junit.xml` with a
-subset, and the next full run then fails, reporting a difference that describes **how the previous
-command was invoked** rather than anything about the tree.
+subset, and **the next run that includes this check then fails**, reporting a difference that
+describes **how the previous command was invoked** rather than anything about the tree.
+
+**Measured 2026-09-03, because the filing had this backwards.** The failure does NOT land on the
+next full gate: a full run rewrites `junit.xml` with every file before the check reads it, so it
+passes — which is why `develop` is green immediately after a day of scoped runs. It lands on any
+run whose own scope is narrower than the tree. A scoped client run leaving an artifact of two
+classnames, followed by `bun test tests/suite-integrity.test.ts`, fails; the full gate over the same
+tree passes. So the defect is invisible exactly when the whole suite runs, and fires exactly when
+the orchestration discipline is followed.
 
 ## Why this is structural, not bad luck
 
@@ -63,9 +71,10 @@ and the config, so it holds under any invocation.
 
 ## Acceptance criteria
 
-- **AC1** — After a scoped run of one file, the full gate passes. Reproduce the current failure
-  first (run one file, then the full suite, and observe the failure) so the fix is proven against
-  the real sequence.
+- **AC1** — A run that includes this check never fails because a PREVIOUS run's artifact described a
+  different set of files. Proven against the sequence that produces it — a scoped run, then a run
+  containing the check — rather than against the full gate, which masks it (see the measurement in
+  the Problem statement).
 - **AC2** — With a genuinely stale-or-partial artifact, the corroboration SKIPS and names the
   reason; it never fails.
 - **AC3** — §S1's `bunfig` discovery assertion is untouched and still fails if the runner is

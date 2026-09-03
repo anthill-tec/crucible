@@ -85,9 +85,11 @@ comparison is widened to cover exactly those properties for the components the a
 
 ## Acceptance criteria
 
-- **AC1** — The delivered summary renders as a card: border `1.5px`, radius `9px`, an elevated
-  background distinct from the pane behind it, and `min-width` at least `210px`. Asserted through
-  the app's own token, never a hex literal.
+- **AC1** — The delivered summary renders as a card, MEASURED on the rendered element: a visible
+  border of the design's `1.5px` weight, corner radius `9px`, a background elevated distinctly
+  from the pane behind it, and a laid-out width no narrower than the design's `210px` floor.
+  Asserted on computed/measured values through the app's own token, never a hex literal — and
+  satisfied by any implementation reaching those measurements, not only by a `border` property.
 - **AC2** — Its headline renders at mono **22px** and its cue at the design's 10.5px in the app's
   **sans** token; the two are provably different sizes and different family CLASSES in one render,
   so a flat mono run fails. Family is asserted as monospace-vs-sans, never a font name.
@@ -96,7 +98,8 @@ comparison is widened to cover exactly those properties for the components the a
   rather than as CSS.
 - **AC4** — Terminals render **square** at the design's `52px` with its `2px` border, so the
   existing `999px` radius yields a circle. Asserted on the measured box, not the declared rule.
-- **AC5** — The wave box border is `1.5px`.
+- **AC5** — The wave box's border renders at the design's `1.5px` weight, measured on the
+  rendered element rather than read off a declaration.
 - **AC6** — AC27's comparison covers border width, radius, `min-width` and box aspect for the
   components the artifact depicts, and FAILS when any one is moved away from the artifact. Proven
   by mutating one value in a scratch fixture, not by assertion alone.

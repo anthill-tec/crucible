@@ -83,9 +83,15 @@ The design's own rule is restored as the governing one: **the spine budget is re
   at or below its **~600px** budget. The design's measurement becomes a test rather than a claim.
 - **AC5** — `AC19d` and its wrap test are gone, and no test asserts wrapping as intended
   behaviour. AC19c and its fit guard survive unchanged.
-- **AC6** — CR-CRU-096's `AC13a` byte-exact annotation assertions are updated to the bare form, and
-  the AC13a text is corrected in place with a note that the full-id form contradicted the approved
-  design. The synthetic fixtures CR-CRU-097 moved them onto are kept.
+- **AC6** — No test asserts the full-id annotation form. CR-CRU-096's `AC13a` byte-exact assertions
+  read the bare form, and the synthetic fixtures CR-CRU-097 moved them onto are kept.
+  **REWORDED 2026-09-03 by the queue rigidity review.** It previously required that *"the AC13a text
+  is corrected in place"* — CR-CRU-096 is **shipped**, and the standing rule is that an implemented
+  CR is never edited, so satisfying it would have meant breaking that rule. This is the same defect
+  that made CR-CRU-099 AC8 unperformable, filed after that lesson and before it was learnt. The
+  superseded characterisation is recorded HERE instead: **CR-CRU-096 AC13a's full-id annotation form
+  contradicted the approved design** (`.lavish/crucible-workflow-flowchart.html`, the zone-2 row
+  grammar), which is why its assertions move to the bare form under this CR rather than its own.
 
 ## Open question — NOT ruled here
 

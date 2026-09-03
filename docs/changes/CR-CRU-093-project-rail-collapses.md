@@ -12,7 +12,7 @@
 ## Problem
 
 The workspace body is a two-column grid — the active view, then the Project + Vitals rail
-(`public/app.js:4022-4025`; `grid-template-columns: minmax(0, 2.6fr) minmax(260px, 1fr)` at
+(`WorkspaceBody`'s grid container in `public/app.js`; `grid-template-columns: minmax(0, 2.6fr) minmax(260px, 1fr)` at
 `public/styles.css:212-214`). The rail is permanent: nothing in the shell collapses it.
 
 Measured on the live board at a 1600px viewport (§14): `.app-center` 1130px, `.app-pane` 434px —
@@ -20,8 +20,8 @@ Measured on the live board at a 1600px viewport (§14): `.app-center` 1130px, `.
 **~+38%** width to the view.
 
 This is shell chrome, not roadmap work. All six workspace views wrap in `.app-center` and all six
-gain the width — Runs (`public/app.js:1931`), Coverage (`:2281`), Compile (`:2308`),
-BDD (`:2324`), Roadmap (`:3078`), Workflow (`:3943`) — so it is its own CR rather than a
+gain the width — the Runs, Coverage, Compile, BDD, Roadmap and Workflow view wrappers in
+`public/app.js` — so it is its own CR rather than a
 cross-cutting change smuggled inside a feature.
 
 ## Scope
@@ -32,10 +32,10 @@ cross-cutting change smuggled inside a feature.
 
 | Thing | Location |
 |---|---|
-| Grid container | `public/app.js:4022` (`data-testid="workspace-body"`), `public/styles.css:212-214` |
-| The rail | `public/app.js:2200-2230` — `ProjectPane`, `data-testid="project-pane"`, `greyed("app-pane")` at `:2202`; `VitalsRail` at `:2119-2121` |
+| Grid container | `WorkspaceBody` in `public/app.js` (`data-testid="workspace-body"`), `public/styles.css:212-214` |
+| The rail | `ProjectPane` in `public/app.js` — `data-testid="project-pane"`, wrapped in `greyed("app-pane")`; `VitalsRail` beside it |
 | Rail box + own scroller | `public/styles.css:222-232` |
-| The six view wrappers | `public/app.js:1931`, `:2281`, `:2308`, `:2324`, `:3078`, `:3943` |
+| The six view wrappers | one per tab name in `public/app.js` (`WorkspaceRuns`, `WorkspaceCoverage`, `WorkspaceCompile`, `WorkspaceBdd`, `RoadmapPanel`, `WorkspaceWorkflow`) |
 | Tab names | `public/app-logic.d.mts:67` — `"Roadmap" \| "Workflow" \| "Runs" \| "Coverage" \| "Compile" \| "BDD"` |
 
 Collapsing removes the rail's grid column so the view column takes the full body width; the rail's
@@ -45,8 +45,8 @@ own vertical scroller (`public/styles.css:232`) and the 660px pane floor
 ### §S2 The affordance
 
 Net-new — no collapse affordance exists in the shell today. The only toggles are the tab chips
-(`public/app.js:1866`, `data-testid="workspace-tab"`), the roadmap's table/graph segmented control
-(`public/app.js:3057-3070`, removed by CR-CRU-078), the density chip (`public/app.js:449`) and the
+(the tab strip, `data-testid="workspace-tab"`), the roadmap's table/graph segmented control
+(removed by CR-CRU-078), the density chip and the
 row-level lens/cycle expanders (`public/styles.css:983-986`). None of them collapses a shell region.
 
 A single user-operated control toggles the rail:
@@ -56,28 +56,28 @@ A single user-operated control toggles the rail:
   control is a defect, not a state.
 - A `<button>`, keyboard-reachable, accessible name `collapse project rail` / `expand project rail`,
   carrying `aria-expanded` (`"true"` expanded, `"false"` collapsed) — the shell's existing
-  aria idiom (`public/app.js:3425-3427`).
+  aria idiom already used by the shell's other expanders.
 - The rail's `class` binding is the reactive `greyed("app-pane")` closure
-  (`public/app.js:375-376`, applied at `:2202`). The collapsed modifier composes **into** that
+  (`greyed()`, applied to the rail by `ProjectPane`). The collapsed modifier composes **into** that
   binding; an imperative `classList` write is wiped on the next re-render.
 
 ### §S3 The state lives OUTSIDE the render tree
 
-Not a preference — `public/app.js:2490` already states the rule verbatim: state kept
+Not a preference — `roadmapExpandedKeys`'s own comment already states the rule verbatim: state kept
 
 > OUTSIDE the render tree exactly like lensOpenKeys and state.collapsedCycles
 
-Follow `lensOpenKeys` (`public/app.js:3102-3112`): a module-scope value plus a `van.state` rev that
+Follow `lensOpenKeys` in `public/app.js`: a module-scope value plus a `van.state` rev that
 the class binding reads, so a toggle re-renders only what changed and never rebuilds the pane.
-`state.collapsedCycles` (`public/app.js:51`, predicate/toggle at `:1001-1006`) is the same pattern
+`state.collapsedCycles` and its predicate/toggle in `public/app.js` is the same pattern
 on the reactive store.
 
 Failure mode being designed out: the shell re-renders on every live frame — SSE messages
-(`public/app.js:321`) and the 5000 ms poll fallback (`public/app.js:337`). A mount-local flag gives
+(the SSE stream) and the poll fallback (`POLL_MS`). A mount-local flag gives
 the click a sub-poll lifetime, so **the rail silently re-expands on the next poll tick**. That is
 exactly the bug CR-CRU-077 hit with expansion state.
 
-The pane container is shared by every tab (`public/app.js:4024`), so the state is global to the
+The pane container is shared by every tab (`WorkspaceBody`'s pane column), so the state is global to the
 workspace, not per-tab, and survives tab switches and detail open/close.
 
 ### §S4 It persists across reload
@@ -86,7 +86,7 @@ CR-CRU-077 §S2 left this gap open in writing — "Expansion state is UI state, 
 (`docs/changes/CR-CRU-077-roadmap-graph-is-the-execution-dag.md:194`); a reload comes up with the
 user's choice discarded. Do not repeat it.
 
-Reuse the existing preference pattern, `DENSITY_STORAGE_KEY` (`public/app.js:434-437`):
+Reuse the existing preference pattern, `DENSITY_STORAGE_KEY` and its read-with-fallback guard in `public/app.js`:
 
 - Key: `crucible.rail.collapsed`, values `"collapsed"` / `"expanded"` — a closed value set read
   through an `includes`-style guard, mirroring `DENSITY_MODES.includes(storedDensity)`.
@@ -116,22 +116,25 @@ The e2e harness already carries the viewport step
   control with accessible name `expand project rail` sits inside the viewport bounds; clicking it
   restores `.app-center` to its pre-collapse width (±1px). Zero visible control while collapsed
   fails this AC.
-- **AC3** — **the state survives a poll tick.** Collapse the rail, then let at least one full
-  5000 ms poll interval (`public/app.js:337`) elapse **and** deliver one data frame. The rail is
-  still collapsed and `.app-center`'s measured width is unchanged. A mount-local flag fails here.
+- **AC3** — **the state survives a poll tick.** Collapse the rail, then let at least one full poll
+  interval (the shell's own `POLL_MS`) elapse **and** deliver one data frame. The rail is still
+  collapsed and `.app-center`'s measured width is unchanged. A mount-local flag fails here.
 - **AC4** — **the state survives navigation.** Collapsing on one tab, then switching
   Roadmap → Runs → Workflow and opening + closing a run detail, leaves the rail collapsed on every
   one of them; the state is workspace-global, not per-tab.
-- **AC5** — **the state survives reload.** After collapsing,
-  `localStorage.getItem("crucible.rail.collapsed") === "collapsed"`; after `page.reload()` the rail
-  renders collapsed on first paint. Expanding then reloading comes up expanded with the key
-  `"expanded"`.
-- **AC6** — **a corrupt stored value falls back to expanded, without throwing.** For each of
-  `"{"`, `"true"`, `""`, `"COLLAPSED"` and the key absent, boot renders the rail **expanded** and
-  no uncaught exception or `console.error` is emitted during load. Mirrors the density guard at
-  `public/app.js:436-437`.
-- **AC7** — **every view renders clean at both widths.** For each of the six tabs
-  (`public/app-logic.d.mts:67`) at viewport 1600×900, in **both** rail states: the tab's
+- **AC5** — **the state survives reload.** After collapsing, a page reload renders the rail
+  collapsed **on first paint**, with no expanded flash; after expanding, a reload comes up expanded.
+  **REWORDED 2026-09-03 by the queue rigidity review.** It previously dictated the storage key AND
+  its exact string values (`localStorage.getItem("crucible.rail.collapsed") === "collapsed"`). That
+  is a mechanism, not a requirement: where the state lives is the implementer's decision, and the
+  shell already has a persisted-preference pattern (the density toggle) that may be the right thing
+  to reuse. What must hold is survival across a reload, first-paint included.
+- **AC6** — **a stored value the shell cannot interpret falls back to expanded, without throwing.**
+  Whatever persistence AC5 chooses, a corrupt, empty, wrongly-typed, wrongly-cased or absent value
+  each boots **expanded** with no uncaught exception and no `console.error`. The shell's existing
+  preference guard is the pattern to follow — find it rather than invent a second one.
+- **AC7** — **every view renders clean at both widths.** For each workspace tab the shell declares
+  (its own tab-name union — six today) at viewport 1600×900, in **both** rail states: the tab's
   `[data-testid="pane-scroll"]` has `scrollWidth <= clientWidth`, and
   `document.body.scrollWidth <= window.innerWidth`. Twelve assertions; any single clip fails.
 - **AC8** — **toggling does not remount the pane.** Across a collapse and a re-expand, the active
@@ -139,17 +142,21 @@ The e2e harness already carries the viewport step
   (the CR-CRU-016 reading-position contract). A re-render that rebuilds the pane fails.
 - **AC9** — **the toggle composes with `greyed()`.** With `state.backendUp === false` the collapsed
   rail carries BOTH the `greyed` class and the collapsed modifier, and stays collapsed. A modifier
-  that replaces the reactive class binding (`public/app.js:375-376`) fails.
+  that replaces the shell's existing reactive class binding, rather than composing with it, fails.
 - **AC10** — **the control is accessible.** It is a `<button>`, focusable and activatable by
   keyboard (Tab then Enter/Space toggles), and its `aria-expanded` reads `"true"` expanded /
   `"false"` collapsed at every step.
 - **AC11** — **the 1024×640 floor is unbroken.** At viewport 1024×640, collapsing the rail keeps
-  `document.body.scrollWidth <= window.innerWidth` and leaves the 660px pane-content floor
-  (`public/styles.css:283`) unviolated — no pane child is squeezed below it.
+  `document.body.scrollWidth <= window.innerWidth` and leaves the pane-content `min-width` floor
+  (`.app-pane-content > *` in `public/styles.css`) unviolated — no pane child is squeezed below it.
 - **AC12** — **no roadmap behaviour changes.** With the rail expanded vs collapsed, the Roadmap tab
-  renders the identical set of CR rows in the identical order and the identical release membership;
-  no new `data-testid` is added under `[data-testid="workspace-body"] > .app-center`; and the
-  collapse control is not a descendant of `.app-center`. This CR's diff touches shell chrome only.
+  renders the identical set of CR rows in the identical order and the identical release membership,
+  and the collapse control is not a descendant of `.app-center`. This CR's diff touches shell chrome
+  only.
+  **REWORDED 2026-09-03 by the queue rigidity review.** It also forbade adding *any* new
+  `data-testid` under `[data-testid="workspace-body"] > .app-center`, which would have blocked the
+  implementer from giving their own work a test handle. The requirement is that the roadmap's
+  RENDERED CONTENT is unchanged, not that the DOM gains no attribute.
 
 ## Estimated size
 

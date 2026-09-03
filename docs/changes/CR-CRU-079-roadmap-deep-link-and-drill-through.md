@@ -27,20 +27,20 @@ Project pane's `🗺 roadmap` chip — and states *"Both activate the tab at `/p
 **Neither honours it.** Both are bare tab-state assignments:
 
 - the chip — `data-testid="roadmap-chip"` inside `project-pane`,
-  `onclick: () => (state.workspaceTab = "Roadmap")` (`public/app.js:2218-2220`);
+  `onclick: () => (state.workspaceTab = "Roadmap")` (the `roadmap-chip` button in the project pane);
 - the tab strip — `onclick: () => { if (!t.disabled) state.workspaceTab = t.name; }`
-  (`public/app.js:1876-1878`).
+  (the workspace tab strip's `onclick`).
 
 Both render the roadmap; neither touches the URL. After either click `location.pathname` is still
 `/p/<key>`, so you cannot copy the URL of what you are looking at and a reload lands on Workflow.
-What *does* work is direct entry: the parser sets `route.roadmap` (`public/app-logic.mjs:73-83`) and
-`public/app.js:79` flips the tab on load. So the route exists and is honoured **inbound only** —
+What *does* work is direct entry: the parser sets `route.roadmap` (`routeParse` in `public/app-logic.mjs`) and
+the shell flips the tab on load. So the route exists and is honoured **inbound only** —
 nothing in the app ever produces it.
 
 That reframes the defect. It is not one door failing while the other works; it is that the
 shareable URL is reachable only by typing it. And the chip's behaviour is not a silent failure at
-all — CR-CRU-014 shipped it deliberately as a "one-rule tab swap" (`public/app.js:2387`), with a
-passing test named for that contract (`tests/roadmap-pane.test.ts:191`). The real conflict is
+all — CR-CRU-014 shipped it deliberately as a "one-rule tab swap" (the chip's own comment in `public/app.js`), with a
+passing test named for that contract (`tests/roadmap-pane.test.ts`, the test named for that contract). The real conflict is
 F14's "deep-linkable" against CR-014's swap; §S1 records how it was resolved.
 
 ### 2. The row drill-through does not target the clicked CR
@@ -65,13 +65,13 @@ is implemented, the targeting is not.
 
 **User decision 2026-08-28, after gap analysis: both entry points navigate.** The analysis found
 the Problem statement's premise wrong in a way that changes this section's scope — the tab strip
-(`public/app.js:1876-1878`) mutates `state.workspaceTab` exactly as the chip does
-(`public/app.js:2220`), so **neither** door produced the URL; only direct entry did
-(`public/app.js:79`). Fixing the chip alone would have inverted the privilege instead of removing
+(the workspace tab strip's `onclick`) mutates `state.workspaceTab` exactly as the chip does
+(the chip), so **neither** door produced the URL; only direct entry did
+(direct entry through `routeParse`). Fixing the chip alone would have inverted the privilege instead of removing
 it, and left AC2 unsatisfiable.
 
 So both the Roadmap **tab** and the `🗺 roadmap` **chip** navigate to `/p/<key>/roadmap` through
-the existing `navigate(pathname)` helper (`public/app.js:99`, `history.pushState` at `:116`) rather
+the existing `navigate(pathname)` helper (`navigate(pathname)`, whose `history.pushState` is what AC2c's Back/Forward relies on) rather
 than assigning tab state. One rule for both doors: the destination is a route, not a mode flag.
 
 **Routing IN requires routing OUT.** The moment either door owns the URL, leaving the Roadmap tab
@@ -80,18 +80,18 @@ is on screen, which is a worse failure than the one this CR fixes, because it is
 shareable. Every exit routes: another tab, and the row drill-through of §S2.
 
 **This overturns a shipped characterisation, deliberately and on the record.** CR-CRU-014 shipped
-the chip as a "one-rule tab swap" — stated in `public/app.js:2387` and named in a passing test,
-`tests/roadmap-pane.test.ts:191` ("same destination, one-rule tab swap"). That test asserts only
+the chip as a "one-rule tab swap" — stated in the chip's own comment and named in a passing test in
+`tests/roadmap-pane.test.ts` ("same destination, one-rule tab swap"). That test asserts only
 `tabIsOn("Roadmap")` and never the pathname, so it does not break here — but its NAME and comment
 become false and MUST be corrected in this CR rather than left to mislead the next reader. The
 conflict was between F14's "deep-linkable" claim and CR-014's swap; the user resolved it in F14's
 favour.
 
 **Scope of the rule: the Roadmap tab only.** `/p/<key>/roadmap` is the ONLY routed workspace tab
-(CR-CRU-014 §S3, parser at `public/app-logic.mjs:73-83`). Runs, Coverage, Compile and BDD have no
+(CR-CRU-014 §S3, `routeParse` in `public/app-logic.mjs`). Runs, Coverage, Compile and BDD have no
 route segment, so they keep the state swap — there is no URL for them to navigate to, and inventing
-one is a different CR. `public/app.js:3387`'s "NOT a navigate() pathname change" comment describes
-the un-routed Runs tab and stays true.
+one is a different CR. The un-routed Runs tab's "NOT a navigate() pathname change" comment
+describes that tab and stays true.
 
 ### §S2 Targeted drill-through
 
@@ -126,7 +126,7 @@ never silently drops the user into unrelated history — the current failure mod
 - **AC2c** — **browser back and forward move between the two URLs.** After chip-or-tab into the
   roadmap and then out to another tab, browser Back returns to `/p/<key>/roadmap` **with the
   roadmap rendered**, and Forward returns to `/p/<key>`. This is the payoff of routing rather than
-  swapping, and it is what `navigate()`'s existing `pushState` (`public/app.js:116`) buys; a
+  swapping, and it is what `navigate()`'s existing `pushState` (`navigate()`'s `pushState`) buys; a
   `replaceState` implementation passes AC1/AC2 and fails this one.
 - **AC3** — clicking a CR row lands on **that CR**: the roadmap focuses the release that CR
   belongs to, pages the strip so that release's gate is shown **whole**, and the CR is
@@ -139,19 +139,22 @@ never silently drops the user into unrelated history — the current failure mod
   window** intact — not reset to the default focus.
 - **AC6** — a CR with no workflow history never produces an untargeted landing. **Note the
   starting point, established by gap analysis 2026-08-28: `PENDING` and `COMPLETED_UNTRACKED` rows
-  are ALREADY inert** — `public/app.js:2392` navigates only for `IN_PROGRESS` and `COMPLETED`, so
+  are ALREADY inert** — the row's click gate navigates only for `IN_PROGRESS` and `COMPLETED`, so
   the "or no navigation at all" limb of this AC passes today with zero work. To earn its keep the
   AC asserts the inertness is DELIBERATE and covered: a `PENDING` row click changes neither the tab
   nor the pathname, a `COMPLETED_UNTRACKED` row behaves identically, and if either is later made
   navigable it must land with an explicit empty state naming the CR. The untargeted-landing failure
   this CR exists to remove belongs to `COMPLETED`/`IN_PROGRESS` rows (AC3/AC4), not to this one.
-- **AC7** — F14½'s frame status is corrected in the storyboard to match reality once shipped.
+- **AC7** — The storyboard's F14½ frame status matches what shipped. **NOT TEST-VERIFIABLE, and
+  said so deliberately:** `.lavish/` is gitignored, so no test in this repo can assert it. It is a
+  CLOSE-OUT OBLIGATION recorded as an AC so it is not forgotten, and the tracked
+  `docs/research/DN-crucible-roadmap-view.md` is the governing record where the two disagree.
 - **AC8** — **the superseded characterisation is corrected where it is written, not just
-  overridden in code.** `tests/roadmap-pane.test.ts:191`'s test name and `public/app.js:2387`'s
+  overridden in code.** The `roadmap-pane` test named for the swap contract, and the chip's own
   comment both describe the chip as a "one-rule tab swap". Once §S1 lands that is false. Both are
   updated to state the routed contract and to name this CR as the CR that changed it. Leaving a
   passing test whose NAME asserts the opposite of the shipped behaviour is how the next reader gets
-  misled — the same class of defect as `public/app.js:2387-2390`'s current comment, which promises
+  misled — the same class of defect as the chip comment's current promise, which promises
   targeting the code never implemented.
 
 ## Estimated size
@@ -168,7 +171,7 @@ this rule is NOT CR-020 §S1.3 — that CR has only §S1 and §S2, and its `§S1
 checkbox concerns which CR groups appear for open vs closed plans, not collapse. The
 behaviour is real but emergent: expansion is an OPT-IN open set, empty on load, so everything
 reads as collapsed by default. The governing precedent is `roadmapExpandedKeys`
-(`public/app.js:2490-2500`), which had to be hoisted OUTSIDE the render tree because the body
+(`roadmapExpandedKeys`, hoisted OUTSIDE the render tree), which had to be hoisted OUTSIDE the render tree because the body
 re-runs on every queue/plans/releases change and a mount-local Set "silently re-collapsed
 whatever the user had opened on the very next SSE frame". The target expansion must be an
 explicit, addressed state on that same pattern rather than a global "expand all", or history
