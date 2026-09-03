@@ -309,6 +309,19 @@ export declare function lifecycleBadge(
  *  an unrecognised value, which supports no claim. */
 export declare function crStatusMark(status: string | null | undefined): string;
 
+/** CR-CRU-102 §S1/AC1/AC2 — one dependency id in the BARE form the approved
+ *  design draws, derived from the two ids compared and never from a known
+ *  prefix: the common leading text trimmed back to the last non-digit, and
+ *  the dependency's remainder returned only when it is entirely digits.
+ *  Otherwise the FULL published id, which is what a synthetic board with no
+ *  numeric tail renders (AC7). `""` for a dependency that is not a string;
+ *  the full id when the ROW's id is not one, because nothing can be compared.
+ *  RENDERING ONLY — `dependsOn` keeps full ids on the wire (AC3). */
+export declare function bareDependencyId(
+  cr: string | null | undefined,
+  dependency: string | null | undefined,
+): string;
+
 export declare function livenessGlyph(agent: CrucibleAgentLike): LivenessGlyphResult;
 
 export declare function routeParse(pathname: string): RouteState;

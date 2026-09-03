@@ -350,6 +350,17 @@ const WIDE_VIEWPORT = { width: 1600, height: 1200 };
  *  finding. Nothing below fails on a budget line. */
 const BUDGET = { terminals: 100, wave: 300, gate: 76, connectors: 72, gaps: 48, total: 596 };
 
+/** CR-CRU-102 AC4 — the DESIGN's own two figures, quoted from the approved
+ *  artifact's "why the spine is horizontal" paragraph: "only the scheduled
+ *  top shown puts the box at ~300px and the budget at ~600px". `BUDGET.wave`
+ *  above IS that first figure (CR-CRU-096 recorded it from the same
+ *  paragraph) and is reused rather than restated; the spine figure is the
+ *  artifact's own ~600, which §S6's table decomposes into a 596px sum. AC4
+ *  asserts the design's rounded figure, and the table's arithmetic keeps
+ *  being REPORTED by the budget test above — the two are the argument and the
+ *  fact, and neither is derived from the other. */
+const DESIGN_SPINE_W = 600;
+
 const HEIGHT_RELEASE = "0.4.0";
 
 const HEIGHT_PROPOSALS: ProposalFixture[] = [
@@ -427,38 +438,95 @@ const SINGLE_WAVE_QUEUE: QueueFixture[] = HEIGHT_QUEUE.filter(
  *  against the width the APP reports rather than against either constant. */
 const REAL_SURFACE_W = 991;
 
-/** AC19d — the WRAP board. AC13's widest real annotation is a FOUR-dep row,
- *  and a wave box carrying one is far wider than half the surface, so a
- *  two-wave release at this width genuinely CANNOT lay both boxes on one
- *  line. The landed AC19c fixture (`HEIGHT_QUEUE`) tops out at a TWO-dep row
- *  and therefore fits — which is why it never exercised the degradation.
- *  AC29 — `CR-W1-*` / `CR-W2-*` are synthetic ids of this board alone. */
-const WRAP_DEPS: readonly string[] = ["CR-W1-M01", "CR-W1-M02", "CR-W1-M03", "CR-W1-M04"];
+/** CR-CRU-102 AC4 — the MEASUREMENT boards. The artifact reads its ~300px off
+ *  "one CR per row, merged collapsed to the summary and only the scheduled top
+ *  shown", which is the shape `SINGLE_WAVE_QUEUE` above already draws — so
+ *  these are that board carrying the WIDEST annotation the row grammar draws:
+ *  FOUR declared dependencies, the widest real row there is.
+ *
+ *  THE TAILS ARE THE POINT. `CR-B-101` beside `CR-B-014` shares `CR-B-` (the
+ *  two part at the first digit and the trim takes that digit back), leaving
+ *  `014` — entirely digits, so the row renders `deps 014, 091, 092, 095`.
+ *  That is byte-for-byte the annotation the live board renders for its own
+ *  four-dependency row, and the string AC1 names. A fixture whose remainder
+ *  were NOT numeric would fall back to the published ids (AC7) and measure
+ *  the very width CR-CRU-102 removes.
+ *
+ *  TWO BOARDS, because the zone's one `next` marker can land ON the
+ *  four-dependency row and that changes the reading. Every figure below was
+ *  measured in this suite's own Chromium on 2026-09-04, and each says which
+ *  board produced it so a reader can reproduce it rather than take it:
+ *    • `BARE_DEPS_QUEUE` at 1130px — marker on a dep-free row: box 279.9px,
+ *      spine 575.9px. Both asserted, against the design's own figures.
+ *    • the SAME board with the four dependencies moved onto its first
+ *      scheduled row, so the marker prefixes them: box 319.8px, spine
+ *      615.8px. The 39.9px is the `next · ` prefix, not the dependencies.
+ *      That variant is not kept, because a single wave cannot say anything
+ *      about a per-wave-box budget; `STACKED_DEPS_QUEUE` below is the case
+ *      that can, and it is asserted there.
+ *    • `STACKED_DEPS_QUEUE` at 991px — the 319.8px stacked box beside a
+ *      279.9px sibling: they sum to 599.8px inside a 605.8px stage.
+ *
+ *  Wave `5` and the four-dependency row are the live board's own shape,
+ *  deliberately, so the synthetic readings and the live corroboration are
+ *  measurements of the same case. AC29/AC8 — `CR-B-*` is INVENTED, the
+ *  namespace CR-CRU-102 C1's own suite established for the abbreviating case,
+ *  and it names no CR of this project. */
+const BARE_DEPS: readonly string[] = ["CR-B-014", "CR-B-091", "CR-B-092", "CR-B-095"];
 
-const WRAP_PROPOSALS: ProposalFixture[] = [
-  { label: HEIGHT_RELEASE, targetAt: TARGET_020, timestamp: RETIRED_AT, waves: ["W1", "W2"] },
+const BARE_DEPS_PROPOSALS: ProposalFixture[] = [
+  { label: HEIGHT_RELEASE, targetAt: TARGET_020, timestamp: RETIRED_AT, waves: ["5"] },
 ];
 
-/** Every DRAWN row carries the four-dep annotation, so the box's width is set
- *  by the widest case §S6's budget is stated against and not by an average. */
-const WRAP_QUEUE: QueueFixture[] = [
+/** The LIVE-SHAPED board: the zone's one `next` marker (AC12b) falls on the
+ *  first actionable row, and here that row declares NOTHING — which is the
+ *  live board's own arrangement today, where the marker sits on a one-dep row
+ *  and the four-dependency row is further down the scheduled queue. Every row
+ *  below it carries the four dependencies, drawn or trimmed away, so the box
+ *  is sized by the widest case the design's figure is stated against however
+ *  many rows the trim happens to show. */
+const BARE_DEPS_QUEUE: QueueFixture[] = [
   ...QUEUE.slice(0, 2),
-  ...mergedMembers("CR-W1-M", "W1", 4, 500),
-  ...scheduledMembers("CR-W1-P", "W1", 5, 520, [
-    WRAP_DEPS,
-    WRAP_DEPS,
-    WRAP_DEPS,
-    WRAP_DEPS,
-    WRAP_DEPS,
-  ]),
-  ...mergedMembers("CR-W2-M", "W2", 4, 560),
-  ...scheduledMembers("CR-W2-P", "W2", 5, 580, [
-    WRAP_DEPS,
-    WRAP_DEPS,
-    WRAP_DEPS,
-    WRAP_DEPS,
-    WRAP_DEPS,
-  ]),
+  ...mergedMembers("CR-B-2", "5", 20, 500),
+  ...scheduledMembers(
+    "CR-B-1",
+    "5",
+    9,
+    520,
+    Array.from({ length: 9 }, (_slot, at) => (at === 0 ? [] : BARE_DEPS)),
+  ),
+];
+
+/** The STACKED worst case, and a TWO-wave release so the design's own premise
+ *  — the spine budget is read PER WAVE BOX, and the boxes therefore share one
+ *  line — is what the reading is stated against. The first scheduled row of
+ *  wave `5` declares all four dependencies, so the zone's single `next`
+ *  marker prefixes the widest annotation there is; wave `6` carries the same
+ *  rows without the marker. Served at `REAL_SURFACE_W`, the width the app
+ *  itself reports, because "do two boxes fit one line" is only a question at
+ *  the surface a user actually browses. */
+const STACKED_DEPS_PROPOSALS: ProposalFixture[] = [
+  { label: HEIGHT_RELEASE, targetAt: TARGET_020, timestamp: RETIRED_AT, waves: ["5", "6"] },
+];
+
+const STACKED_DEPS_QUEUE: QueueFixture[] = [
+  ...QUEUE.slice(0, 2),
+  ...mergedMembers("CR-B-2", "5", 4, 500),
+  ...scheduledMembers(
+    "CR-B-1",
+    "5",
+    5,
+    520,
+    Array.from({ length: 5 }, () => BARE_DEPS),
+  ),
+  ...mergedMembers("CR-B-4", "6", 4, 560),
+  ...scheduledMembers(
+    "CR-B-3",
+    "6",
+    5,
+    580,
+    Array.from({ length: 5 }, () => BARE_DEPS),
+  ),
 ];
 
 /** The artifact IS the binding design source AC27 compares against, and since
@@ -660,10 +728,25 @@ let shippedFixtureUrl = "";
 let baselineFixtureUrl = "";
 let singleFixtureUrl = "";
 let artifactUrl = "";
-// CR-CRU-096 C6 — AC19d's wrap board and AC20d's real surface.
-let wrapZones = "";
-let wrapFixtureUrl = "";
+// CR-CRU-096 C6 — AC20d's real surface.
 let realSurfaceFixtureUrl = "";
+// CR-CRU-102 C2 — AC4's two four-dependency measurement boards, and the LIVE
+// board they are corroborated against.
+let bareDepsZones = "";
+let bareDepsFixtureUrl = "";
+let stackedDepsZones = "";
+let stackedDepsFixtureUrl = "";
+let liveDepsZones = "";
+let liveDepsFixtureUrl = "";
+/** The live board's own four-dependency CR, read out of the live board rather
+ *  than named here: which row it is decays as the backlog moves, and AC29 is
+ *  why nothing in this file may depend on today's answer. */
+let liveDepsCr = "";
+/** WHY the live corroboration did not run, in words. Exactly one of this and
+ *  `liveDepsZones` is set: the third state — neither captured nor explained —
+ *  is what the corroboration test refuses, so a `beforeAll` that silently
+ *  skipped the read cannot read as a pass. */
+let liveDepsSkip = "";
 /** A SECOND page, at §S6's own 1600px viewport. A second page rather than a
  *  `setViewportSize` on the shared one: the 38 landed assertions are measured
  *  at 1440×1000 and a viewport this suite forgot to put back would silently
@@ -719,6 +802,93 @@ const pageEl = (): Page => {
   return page;
 };
 
+/**
+ * CR-CRU-102 AC4's CORROBORATION — the LIVE board captured, or the reason it
+ * could not be, in words. Sets `liveDepsZones` and `liveDepsCr` and returns
+ * `""`, or sets neither and returns the reason.
+ *
+ * WHY IT IS ONLY A CORROBORATION. AC4's text names "the live board's widest
+ * real row (four dependencies)", and a criterion resting on that would hold
+ * only while our own backlog carries such a row — CR-CRU-096's AC29 forbids
+ * exactly that, and the row in question is a CR that will ship. So the
+ * criterion is asserted on the synthetic board above and this reads the real
+ * thing so the two can be compared. It never builds a stand-in: a board this
+ * function authored would corroborate nothing.
+ *
+ * The project is named the way every client names it — the repo root's `.env`
+ * — and reached at `$CRUCIBLE_URL`, the fleet's own default
+ * (`clients/bun-crucible.py:90`). Off this workstation none of that is
+ * present: `.env` is ignored (`.gitignore:8`) and the store it serves is
+ * never committed, so a STATED skip is the ordinary case and the reading is
+ * a bonus wherever it can be taken.
+ */
+async function captureLiveDeps(): Promise<string> {
+  let key = "";
+  try {
+    const env = readFileSync(path.join(REPO_ROOT, ".env"), "utf8");
+    key = /^CRUCIBLE_PROJECT_KEY=(.+)$/m.exec(env)?.[1]?.trim() ?? "";
+  } catch (failure) {
+    const said = failure instanceof Error ? failure.message : String(failure);
+    return (
+      `the repo root has no readable .env to name the live project (${said}), so there ` +
+      `is no live board to read`
+    );
+  }
+  if (key === "") {
+    return (
+      "the repo root's .env declares no CRUCIBLE_PROJECT_KEY, so the live board cannot " +
+      "be identified"
+    );
+  }
+  const base = process.env.CRUCIBLE_URL ?? "http://localhost:3849";
+  const payload = async (route: string): Promise<Record<string, unknown>> => {
+    const answer = await fetch(`${base}/api/v2/projects/${key}/${route}`);
+    if (!answer.ok) throw new Error(`${route} answered HTTP ${answer.status}`);
+    return (await answer.json()) as Record<string, unknown>;
+  };
+  let queue: QueueFixture[] = [];
+  let proposals: ProposalFixture[] = [];
+  let releases: ReleaseFixture[] = [];
+  try {
+    queue = ((await payload("queue")).entries ?? []) as QueueFixture[];
+    proposals = ((await payload("release-proposals")).proposals ?? []) as ProposalFixture[];
+    releases = ((await payload("releases")).releases ?? []) as ReleaseFixture[];
+  } catch (failure) {
+    const said = failure instanceof Error ? failure.message : String(failure);
+    return (
+      `no live board answered at ${base} (${said}), and the store it would have served ` +
+      `is never committed`
+    );
+  }
+  if (proposals.length === 0) {
+    return (
+      `the live board at ${base} has no PROPOSED release, so zone 2 draws a delivered ` +
+      `summary and no wave box to measure`
+    );
+  }
+  // The widest row the board can DRAW an annotation on, by `roadmapActionable`'s
+  // own rule (`public/app-logic.mjs`): PENDING, with no lifecycle disposition.
+  const actionable = queue.filter(
+    (entry) => entry.status === "PENDING" && !("lifecycle" in entry),
+  );
+  const widest = actionable.reduce<QueueFixture | null>(
+    (best, entry) =>
+      best === null || entry.dependsOn.length > best.dependsOn.length ? entry : best,
+    null,
+  );
+  const declared = widest === null ? 0 : widest.dependsOn.length;
+  if (widest === null || declared < 4) {
+    return (
+      `the live board's widest schedulable row declares ${declared} dependencies, not ` +
+      `the four the design's figure is stated against — which is AC29's point, and why ` +
+      `the criterion itself is asserted on a board this file authors`
+    );
+  }
+  liveDepsCr = widest.cr;
+  liveDepsZones = await captureZones({ releases, proposals, queue });
+  return "";
+}
+
 beforeAll(async () => {
   populatedZones = await captureZones();
   emptyZones = await captureZones({ releases: [], proposals: [], queue: [] });
@@ -733,7 +903,20 @@ beforeAll(async () => {
     queue: HEIGHT_LOOSE_QUEUE,
   });
   singleZones = await captureZones({ proposals: HEIGHT_PROPOSALS, queue: SINGLE_WAVE_QUEUE });
-  wrapZones = await captureZones({ proposals: WRAP_PROPOSALS, queue: WRAP_QUEUE });
+  bareDepsZones = await captureZones({
+    proposals: BARE_DEPS_PROPOSALS,
+    queue: BARE_DEPS_QUEUE,
+  });
+  stackedDepsZones = await captureZones({
+    proposals: STACKED_DEPS_PROPOSALS,
+    queue: STACKED_DEPS_QUEUE,
+  });
+  // CR-CRU-102 AC4's CORROBORATION — the board this project actually runs,
+  // read from the live server through the same three payloads `captureZones`
+  // scripts, so what Chromium measures is the production render of production
+  // data and not a re-statement of it. Sets EITHER `liveDepsZones` or
+  // `liveDepsSkip`, never neither.
+  liveDepsSkip = await captureLiveDeps();
   // No proposal at all, so `releaseStripFocusIndex` falls through to the last
   // gate — the newest SHIPPED tag. That is the only way to reach §S7's
   // delivered path, and with it AC23's `shipped` word and AC24's shipped axis.
@@ -818,18 +1001,30 @@ beforeAll(async () => {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
-      // AC19d — the four-dep board, served at the SAME surface as every other
-      // C5 fixture: the wrap is forced by the boxes' own width, not by a
-      // narrowed stage.
-      if (pathname === "/fixture-wrap") {
-        return new Response(fixtureDocument(wrapZones, SURFACE_W), {
-          headers: { "content-type": "text/html; charset=utf-8" },
-        });
-      }
       // AC20d — the same one-box board at the surface the user's own Chrome
       // reports, so the budget is asserted somewhere it is actually browsed.
       if (pathname === "/fixture-real-surface") {
         return new Response(fixtureDocument(singleZones, REAL_SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      // CR-CRU-102 AC4 — the four-dependency measurement board and the LIVE
+      // board beside it, both at the 1130px surface the design's own figures
+      // are stated against.
+      if (pathname === "/fixture-bare-deps") {
+        return new Response(fixtureDocument(bareDepsZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      // The stacked worst case at the width the APP reports, because "do the
+      // boxes share one line" is only a question at the surface browsed.
+      if (pathname === "/fixture-stacked-deps") {
+        return new Response(fixtureDocument(stackedDepsZones, REAL_SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      if (pathname === "/fixture-live-deps") {
+        return new Response(fixtureDocument(liveDepsZones, SURFACE_W), {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
@@ -882,8 +1077,10 @@ beforeAll(async () => {
   baselineFixtureUrl = `http://127.0.0.1:${server.port}/fixture-baseline`;
   singleFixtureUrl = `http://127.0.0.1:${server.port}/fixture-single`;
   artifactUrl = `http://127.0.0.1:${server.port}/artifact`;
-  wrapFixtureUrl = `http://127.0.0.1:${server.port}/fixture-wrap`;
   realSurfaceFixtureUrl = `http://127.0.0.1:${server.port}/fixture-real-surface`;
+  bareDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-bare-deps`;
+  stackedDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-stacked-deps`;
+  liveDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-live-deps`;
 
   browser = await chromium.launch();
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -2397,13 +2594,18 @@ describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and
     expect(boxes.length).toBe(2);
     // AC19c is the case where the boxes FIT: this board's widest annotation is
     // a TWO-dep row, so both boxes sit on one line and "along the axis" is
-    // what the geometry below measures. AC19d takes the case where they do not
-    // fit — the two criteria are stated against two different boards, and this
-    // guard keeps them from collapsing into one.
+    // what the geometry below measures. The FIT is the guarantee — the
+    // design's budget is read per wave box, and a per-box budget only means
+    // something while the boxes share the axis. What a release too wide for
+    // one line does is deliberately UNSPECIFIED: CR-CRU-102 leaves that
+    // question open for the user to rule, so nothing here or anywhere else
+    // asserts a behaviour for it. This guard therefore also keeps the test
+    // honest about its own subject: a board whose boxes stopped fitting
+    // would be measuring something this criterion never claimed.
     expect(
       boxes[0]!.width + boxes[1]!.width,
       `the AC19c board's boxes cannot share one line (stage ${round1(stage.width)}px), so this ` +
-        `test is measuring AC19d's wrap and AC19c's axis is no longer asserted anywhere`,
+        `test no longer measures the FIT that AC19c's axis is stated against`,
     ).toBeLessThanOrEqual(stage.width);
     expect(
       boxes[1]!.x,
@@ -2432,117 +2634,263 @@ describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and
     expect(surface.scrollWidth - surface.clientWidth).toBeLessThanOrEqual(0.5);
   });
 
-  // AC19d — the DEGRADATION, measured. §S5's rule is that a partially drawn
-  // container is a defect, and `flex-wrap: wrap` obeys it: a wrapped box is
-  // still WHOLLY drawn, where `nowrap` would overflow the surface or clip a
-  // box. So the wrap is not a drift to be removed — it is the correct
-  // behaviour at a width the axis cannot hold, and it is asserted as such.
-  test("when the axis genuinely CANNOT hold the boxes they WRAP, wholly painted (AC19d)", async () => {
-    await openWide(wrapFixtureUrl);
+  // ── CR-CRU-102 AC4 — the design's MEASUREMENT, turned into a test ────────
+  //
+  // The approved artifact's whole argument for a horizontal spine is a
+  // measurement: "One CR per row, merged collapsed to the summary and only
+  // the scheduled top shown puts the box at ~300px and the budget at ~600px:
+  // the spine fits comfortably." CR-CRU-096 recorded those figures in
+  // `BUDGET` and REPORTED against them — the budget test above says in as
+  // many words that "nothing below fails on a budget line". AC4 makes the
+  // design's two figures an ASSERTION, and states it on the case that widens
+  // the box: a FOUR-dependency row, the widest the design's own annotation
+  // grammar draws.
+  //
+  // ON A SYNTHETIC BOARD, and that is AC4's settled reading rather than a
+  // convenience. AC4's text names "the live board's widest real row", which
+  // taken literally is a criterion that holds only while OUR OWN backlog has
+  // a four-dependency row — precisely what CR-CRU-096's AC29 forbids ("a
+  // criterion that only holds while our own backlog has a given shape is not
+  // a criterion"), and that row is scheduled to ship. So the measurement runs
+  // on a board this file authors, whose ids carry NUMERIC tails so the
+  // annotation abbreviates exactly as a real one does, and the live board
+  // CORROBORATES in the test below — never the other way round. Same division
+  // as AC27 (the artifact is the source, the render is the subject) and as
+  // CR-CRU-102's own AC8.
+  //
+  // WHAT ~300px ACTUALLY IS, measured in this same Chromium off the artifact
+  // itself — because the number is not the kind of number it looks like. The
+  // artifact's wave box measures exactly 300.0px and it is a DECLARED
+  // `min-width: 300px`, whose own widest row (`CR-CRU-095 next · deps 091,
+  // 092`) is only 210px of max-content: the design drew a box with ~90px of
+  // slack, never a content ceiling. The shipped box has no min-width worth
+  // reaching (`.app-flow-wave { min-width: 150px }`) and is ROW-DRIVEN: its
+  // width is the widest row's max-content plus 22px of chrome (padding 10+10,
+  // border 1+1). So the comparison is not like-for-like, and the two boards
+  // below are how this file stays honest about it rather than picking the
+  // reading it prefers:
+  //   • LIVE-SHAPED — four dependencies, marker elsewhere: box 279.9px,
+  //     spine 575.9px. Asserted against the design's own ~300px and ~600px,
+  //     strictly. That is the statement the bare form earns: the same row
+  //     measured 452.7px in the user's own browser while it rendered full
+  //     ids, and it is back inside the design's scale.
+  //   • STACKED — the same four dependencies with the zone's one `next`
+  //     marker landing ON that row: box 319.8px, and 615.8px of spine were
+  //     the single-wave reading taken while this was ruled. The 39.9px
+  //     difference is the `next · ` prefix, NOT the dependencies, and it is
+  //     shipped typography being wider than the mock's. Asserting THAT
+  //     against a declared-with-slack 300 would compare two different kinds
+  //     of figure, and inventing a wider constant to admit it would be
+  //     choosing a tolerance to fit a result. So the case is asserted against
+  //     the design's load-bearing PREMISE instead — the budget is read per
+  //     wave box, so the boxes share one line — which is `AC19c`'s own guard
+  //     shape and needs no new number. Both boards report their measured
+  //     figures in the assertions that read them, so neither is lost.
+  test("AC4 — a FOUR-dependency wave box holds the design's ~300px, and the spine its ~600px", async () => {
+    await openWide(bareDepsFixtureUrl);
+    const stages = await boxesOf('[data-zone="2"] .app-flow-waves');
+    expect(
+      stages.length,
+      `${bareDepsFixtureUrl} draws no wave stage, so AC4's four-dependency board is not ` +
+        `built: there is nothing to measure and the design's ~${BUDGET.wave}px box is ` +
+        `still only a claim`,
+    ).toBe(1);
+    const box = one(await boxesOf('[data-testid="roadmap-wave"]'), "wave box");
+
+    // Fixture guard — the surface really IS the one the design measured at.
+    const zone = one(await boxesOf('[data-zone="2"]'), "zone 2");
+    expect(round1(zone.width)).toBe(SURFACE_W);
+
+    // NON-VACUITY: the board really draws a FOUR-dependency row AND that row's
+    // annotation really is the BARE form. Both halves matter — a three-dep
+    // board would measure a narrower case than the design's figure is stated
+    // against, and a board that abbreviated nothing would measure the width
+    // CR-CRU-102 exists to remove. The bare form is what the pattern below
+    // can only match: a published id fails `\d+`.
+    const slots = await boxesOf('[data-testid="roadmap-node-annotation"]');
+    const declared = slots
+      .filter((slot) => slot.text.includes("deps "))
+      .map((slot) => slot.text.slice(slot.text.indexOf("deps ")));
+    const four = declared.filter((text) => /^deps \d+(?:, \d+){3}$/.test(text));
+    expect(
+      four.length,
+      `no DRAWN row renders four dependencies in the bare form — this board's annotations ` +
+        `read ${JSON.stringify(declared)}, so its wave box is not the case the design's ` +
+        `~${BUDGET.wave}px figure is stated against`,
+    ).toBeGreaterThan(0);
+
+    // The two readings AC4 asks for. Both messages carry the MEASURED number,
+    // because the point of the criterion is the figure and not the verdict.
+    expect(
+      box.width,
+      `the four-dependency wave box measures ${round1(box.width)}px against the design's ` +
+        `~${BUDGET.wave}px, with its widest annotation reading ${JSON.stringify(four[0])}`,
+    ).toBeLessThanOrEqual(BUDGET.wave);
+
+    const pieces = await boxesOf('[data-zone="2"] > *');
+    expect(pieces.length).toBe(7);
+    const spine = pieces[6]!.right - pieces[0]!.x;
+    expect(
+      spine,
+      `the spine measures ${round1(spine)}px against the design's ~${DESIGN_SPINE_W}px budget ` +
+        `(§S6's table decomposes it as ${BUDGET.total}px), on a wave box of ` +
+        `${round1(box.width)}px`,
+    ).toBeLessThanOrEqual(DESIGN_SPINE_W);
+  });
+
+  // AC4's WORST CASE, asserted against the design's premise rather than
+  // against a constant that would have to be invented for it. The design's
+  // own words: "A multi-wave ACTIVE release is therefore the case that widens
+  // this zone, and the spine budget must be read per wave box." A per-box
+  // budget is only a budget if the boxes share the axis, so THE reading that
+  // matters for the widest possible row is whether two such boxes still lie
+  // on one line at the surface the app itself reports. That is `AC19c`'s
+  // guard shape, at `REAL_SURFACE_W` rather than the controlled 1130px,
+  // because it is the width a user actually browses — and it is exactly the
+  // premise the retired wrap fallback was written to deny, when a four-dep
+  // box rendering full ids measured 452.7px and two of them could not fit.
+  test("AC4 — the WIDEST case, `next` on the four-dependency row, still puts two boxes on one line", async () => {
+    await openWide(stackedDepsFixtureUrl);
     const stage = one(await boxesOf('[data-zone="2"] .app-flow-waves'), "wave stage");
     const boxes = await boxesOf('[data-testid="roadmap-wave"]');
-    expect(boxes.length).toBe(2);
-
-    // Non-vacuity: the boxes' own widths REALLY exceed the line. Without this
-    // the test would pass on a board that simply chose to stack.
     expect(
-      boxes[0]!.width + boxes[1]!.width,
-      `the four-dep boxes measure ${round1(boxes[0]!.width)}px and ` +
-        `${round1(boxes[1]!.width)}px, which still fit the ${round1(stage.width)}px stage — ` +
-        `this board no longer reaches AC19d's case`,
-    ).toBeGreaterThan(stage.width);
+      boxes.length,
+      `${stackedDepsFixtureUrl} draws ${boxes.length} wave boxes, so the per-wave-box ` +
+        `premise has nothing to be read against`,
+    ).toBe(2);
 
-    // WRAPPED, not overflowed: the second box starts a further LINE, back at
-    // the stage's own left edge and below the first.
-    expect(boxes[1]!.top).toBeGreaterThanOrEqual(boxes[0]!.bottom - 0.5);
-    expect(yOverlap(boxes[0]!, boxes[1]!)).toBeLessThanOrEqual(0);
-    expect(Math.abs(boxes[1]!.x - stage.x)).toBeLessThanOrEqual(0.5);
-
-    const wrapped = await readWide<{
-      scrollWidth: number;
+    // Fixture guard — the board really is served at the width the app reports
+    // browsing at. Read off the LAYOUT box: zone 2's own 1px border means its
+    // client box is 989px inside a 991px element, and the surface AC20d
+    // measures against is the element.
+    const reported = await readWide<{
+      offsetWidth: number;
       clientWidth: number;
-      client: { left: number; right: number; top: number; bottom: number };
-      boxes: {
-        left: number;
-        right: number;
-        top: number;
-        bottom: number;
-        overflowX: number;
-        overflowY: number;
-        outside: number;
-      }[];
+      scrollWidth: number;
     }>(
       `(() => {
          const flow = document.querySelector('[data-zone="2"]');
-         const fr = flow.getBoundingClientRect();
-         const client = {
-           left: fr.left + flow.clientLeft,
-           top: fr.top + flow.clientTop,
-           right: fr.left + flow.clientLeft + flow.clientWidth,
-           bottom: fr.top + flow.clientTop + flow.clientHeight,
+         return {
+           offsetWidth: flow.offsetWidth,
+           clientWidth: flow.clientWidth,
+           scrollWidth: flow.scrollWidth,
          };
-         const boxes = Array.from(
-           document.querySelectorAll('[data-testid="roadmap-wave"]'),
-         ).map((el) => {
-           const r = el.getBoundingClientRect();
-           const inner = {
-             left: r.left + el.clientLeft,
-             top: r.top + el.clientTop,
-             right: r.left + el.clientLeft + el.clientWidth,
-             bottom: r.top + el.clientTop + el.clientHeight,
-           };
-           const outside = Array.from(el.querySelectorAll("*")).filter((kid) => {
-             const k = kid.getBoundingClientRect();
-             if (k.width === 0 && k.height === 0) return false;
-             return (
-               k.left < inner.left - 0.5 ||
-               k.right > inner.right + 0.5 ||
-               k.top < inner.top - 0.5 ||
-               k.bottom > inner.bottom + 0.5
-             );
-           }).length;
-           return {
-             left: r.left,
-             right: r.right,
-             top: r.top,
-             bottom: r.bottom,
-             overflowX: el.scrollWidth - el.clientWidth,
-             overflowY: el.scrollHeight - el.clientHeight,
-             outside,
-           };
-         });
-         return { scrollWidth: flow.scrollWidth, clientWidth: flow.clientWidth, client, boxes };
        })()`,
     );
+    expect(reported.offsetWidth).toBe(REAL_SURFACE_W);
 
-    // WHOLLY PAINTED: every box lies inside the surface's own client box, and
-    // holds all of its own content — nothing is cut off at either boundary.
-    for (const [at, box] of wrapped.boxes.entries()) {
-      expect(
-        box.left >= wrapped.client.left - 0.5 &&
-          box.right <= wrapped.client.right + 0.5 &&
-          box.top >= wrapped.client.top - 0.5 &&
-          box.bottom <= wrapped.client.bottom + 0.5,
-        `wave box ${at} is painted at ` +
-          `${round1(box.left)}..${round1(box.right)} x ${round1(box.top)}..${round1(box.bottom)}, ` +
-          `outside the surface's ${round1(wrapped.client.left)}..${round1(wrapped.client.right)} x ` +
-          `${round1(wrapped.client.top)}..${round1(wrapped.client.bottom)} — it is CLIPPED, ` +
-          `which §S5 calls a defect`,
-      ).toBe(true);
-      expect(
-        box.outside,
-        `wave box ${at} paints ${box.outside} descendant(s) outside its own content box, so the ` +
-          `box is drawn but its contents are not`,
-      ).toBe(0);
-      expect(box.overflowX).toBeLessThanOrEqual(0.5);
-      expect(box.overflowY).toBeLessThanOrEqual(0.5);
-    }
-    // AND IT NEVER SCROLLS: the wrap is what keeps the surface intact.
+    // NON-VACUITY: this really is the STACKED row — four dependencies in the
+    // bare form with the zone's one `next` marker prefixed onto the same row,
+    // which is what makes it the widest row the grammar draws. Without this
+    // the test could measure the live-shaped board a second time.
+    const slots = await boxesOf('[data-testid="roadmap-node-annotation"]');
+    const stacked = slots.filter((slot) =>
+      /^next · deps \d+(?:, \d+){3}$/.test(slot.text),
+    );
     expect(
-      wrapped.scrollWidth - wrapped.clientWidth,
-      `zone 2 scrolls ${round1(wrapped.scrollWidth - wrapped.clientWidth)}px past its ` +
-        `${round1(wrapped.clientWidth)}px surface, so the boxes overflowed rather than wrapped`,
-    ).toBeLessThanOrEqual(0.5);
+      stacked.length,
+      `no drawn row carries the marker AND four bare dependencies — the annotations read ` +
+        `${JSON.stringify(slots.map((slot) => slot.text))}, so this is not the widest case`,
+    ).toBe(1);
+
+    const pieces = await boxesOf('[data-zone="2"] > *');
+    const spine =
+      Math.max(...pieces.map((piece) => piece.right)) - Math.min(...pieces.map((piece) => piece.x));
+    const widest = Math.max(boxes[0]!.width, boxes[1]!.width);
+
+    // The design's premise, read off the pixels: BOTH boxes on ONE line.
+    expect(
+      boxes[0]!.width + boxes[1]!.width,
+      `the widest four-dependency box measures ${round1(widest)}px (the stacked row adds the ` +
+        `marker's own width to the design's ~${BUDGET.wave}px figure) and the two boxes sum to ` +
+        `${round1(boxes[0]!.width + boxes[1]!.width)}px against a ${round1(stage.width)}px ` +
+        `stage on the ${REAL_SURFACE_W}px surface, spine ${round1(spine)}px — so the per-wave-box ` +
+        `budget the design reads is no longer satisfiable and the boxes cannot share the axis`,
+    ).toBeLessThanOrEqual(stage.width);
+    expect(
+      boxes[1]!.x,
+      `the second wave box is painted at x=${round1(boxes[1]!.x)}, not to the right of the ` +
+        `first (right edge ${round1(boxes[0]!.right)}) — the boxes left the axis`,
+    ).toBeGreaterThanOrEqual(boxes[0]!.right - 0.5);
+    expect(yOverlap(boxes[0]!, boxes[1]!)).toBeGreaterThan(0);
+    // …and the surface stays intact: nothing overflows it to achieve the fit.
+    expect(reported.scrollWidth - reported.clientWidth).toBeLessThanOrEqual(0.5);
+  });
+
+  // AC4's CORROBORATION — the same two readings on the board this project
+  // actually runs, which is where the 452.7px the CR quotes was measured. It
+  // corroborates and never carries the criterion: the store is not committed
+  // (`git ls-files data/` is empty) and the four-dependency row is a CR that
+  // will ship, so a criterion resting on it would decay. When either is
+  // missing this states WHY, in the shape CR-CRU-100 AC5 established for a
+  // reading that cannot be taken here.
+  test("AC4 — the LIVE board corroborates the same two figures, or says why it cannot", async () => {
+    if (liveDepsSkip !== "") {
+      // NOT RUN, and reported as a pass — with the reason in the run's own
+      // output, never a silent green line.
+      console.log(`[cr102] AC4 live corroboration NOT RUN: ${liveDepsSkip}`);
+      return;
+    }
+    expect(
+      liveDepsZones,
+      "the live board was neither captured nor explained — beforeAll set no zones and named " +
+        "no reason, so this test would have passed without corroborating anything",
+    ).not.toBe("");
+
+    await openWide(liveDepsFixtureUrl);
+    // Keyed on the row `beforeAll` FOUND, never on a row named here, and read
+    // together with the box that CONTAINS it — the live release may span any
+    // number of waves, and the reading AC4 asks for is the box carrying the
+    // four-dependency row.
+    const rowSelector = `[data-testid="roadmap-node"][data-cr="${liveDepsCr}"]`;
+    const live = await readWide<{ drawn: boolean; annotation: string; boxWidth: number }>(
+      `(() => {
+         const row = document.querySelector(${JSON.stringify(rowSelector)});
+         if (row === null) return { drawn: false, annotation: "", boxWidth: 0 };
+         const slot = row.querySelector('[data-testid="roadmap-node-annotation"]');
+         const box = row.closest('[data-testid="roadmap-wave"]');
+         return {
+           drawn: true,
+           annotation: slot === null ? "" : (slot.textContent || "").replace(/\\s+/g, " ").trim(),
+           boxWidth: box === null ? 0 : box.getBoundingClientRect().width,
+         };
+       })()`,
+    );
+    if (!live.drawn) {
+      // The row EXISTS in the live queue — `beforeAll` found it there — but the
+      // §S5 trim does not draw it, which is a fact about today's board and not
+      // about the product. Stated, and the criterion stays asserted above.
+      console.log(
+        `[cr102] AC4 live corroboration NOT RUN: the live board's four-dependency row ` +
+          `${liveDepsCr} is not among the rows the focused release draws, so its wave box ` +
+          `is not the box the design's figure is stated against`,
+      );
+      return;
+    }
+
+    // Drawn — so the annotation MUST be the bare form. This half is product
+    // behaviour, not board shape, and it fails rather than explains itself.
+    const declared = live.annotation.slice(live.annotation.indexOf("deps "));
+    expect(
+      declared,
+      `the live board draws ${liveDepsCr} annotated ${JSON.stringify(live.annotation)}, which ` +
+        `is not four dependencies in the bare form — the box measured below would be the ` +
+        `full-id width this CR removes`,
+    ).toMatch(/^deps \d+(?:, \d+){3}$/);
+
+    const pieces = await boxesOf('[data-zone="2"] > *');
+    const spine =
+      Math.max(...pieces.map((piece) => piece.right)) - Math.min(...pieces.map((piece) => piece.x));
+    expect(
+      live.boxWidth,
+      `the LIVE wave box carrying ${liveDepsCr} measures ${round1(live.boxWidth)}px against ` +
+        `the design's ~${BUDGET.wave}px, annotated ${JSON.stringify(declared)}; the CR ` +
+        `recorded 452.7px for the same row while it rendered full ids`,
+    ).toBeLessThanOrEqual(BUDGET.wave);
+    expect(
+      spine,
+      `the LIVE spine measures ${round1(spine)}px against the design's ~${DESIGN_SPINE_W}px`,
+    ).toBeLessThanOrEqual(DESIGN_SPINE_W);
   });
 
   // AC20d — the budget at the REAL surface. AC20's 1130px is a CONTROLLED

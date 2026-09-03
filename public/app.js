@@ -2511,10 +2511,17 @@
         cell(
           "deps",
           // AC20 — dependency is stated HERE and nowhere else on this surface.
+          //
+          // CR-CRU-102 §S1/AC2 — in the same BARE form zone 2's annotation
+          // slot writes, from the same rule and with the same two arguments:
+          // §S5's row grammar has always said "bare depends-on", and one rule
+          // with two callers is what keeps node and row from writing a
+          // dependency two ways. `entry.dependsOn` is untouched — AC3's
+          // consumers, `orderWarning` above among them, read the full ids.
           deps.map((d) =>
             span(
               { "data-testid": "roadmap-depends-chip", class: "app-chip app-roadmap-dep" },
-              d,
+              L.bareDependencyId(entry.cr, d),
             ),
           ),
         ),
@@ -2786,13 +2793,33 @@
       // which stay with the CR that is actually running (CR-078 AC24). The row
       // keeps its PENDING styling — being next adds a word, not a state.
       //
-      // AC13/AC13a — every declared dependency is named, by its FULL published
-      // id: the artifact's `deps 091, 092` strips a prefix only this project's
-      // ids happen to share, and reproducing that is the project-dependence
-      // AC29 forbids. No truncation and no `and N more` fold. AC13 states the
-      // slot for a PENDING row, which is the row whose declared dependencies
-      // are still a constraint; a merged or running member's are settled or
-      // moot, so the slot stays empty for it.
+      // AC13 — every declared dependency is named. No truncation and no
+      // `and N more` fold. AC13 states the slot for a PENDING row, which is
+      // the row whose declared dependencies are still a constraint; a merged
+      // or running member's are settled or moot, so the slot stays empty for
+      // it.
+      //
+      // HOW each one is WRITTEN is `bareDependencyId`, and CR-CRU-102 §S1
+      // SUPERSEDES the full-id decision that stood here. The reasoning that
+      // decision rested on is intact and is why the rule looks the way it
+      // does: CR-CRU-096's `AC13a` ruled the artifact's `deps 091, 092` out
+      // because stripping `CR-CRU-` is knowledge of one backlog's shape, and
+      // `AC29` forbids a criterion that only holds while our own backlog has
+      // a given shape. That conflict was real and the ruling was correct.
+      // §S1 resolves it in favour of BOTH by deriving the abbreviation from
+      // the DATA: the row's own id and the dependency id are COMPARED, their
+      // common leading text trimmed back to the last non-digit, and the
+      // remainder rendered only if it is entirely digits. This surface knows
+      // no prefix — it hands two strings to one rule (`bareDependencyId`,
+      // public/app-logic.mjs), which zone 3's depends-on chip
+      // (`RoadmapRow`) calls with the same two arguments, so node and row
+      // cannot write the same dependency two ways.
+      //
+      // AC3 — this is the ONLY thing that abbreviates. `entry.dependsOn`
+      // still carries full ids, and every consumer that RESOLVES one reads
+      // them: `roadmapSelectOn`/`roadmapDrillIn` off `entry.cr`,
+      // `roadmapLateDeps`'s inversion check, and the order warning that names
+      // the offending pair.
       //
       // AC14 — it is VISIBLE TEXT: no `title`, no `aria-describedby`, no
       // tooltip machinery. AC15 — and it takes no handler of its own, so a
@@ -2804,7 +2831,9 @@
           : [];
       const annotation = [];
       if (marked === true) annotation.push(span({ class: "app-flow-node-next" }, "next"));
-      if (deps.length > 0) annotation.push(`deps ${deps.join(", ")}`);
+      if (deps.length > 0) {
+        annotation.push(`deps ${deps.map((dep) => L.bareDependencyId(entry.cr, dep)).join(", ")}`);
+      }
       return div(
         props,
         span({ class: "app-flow-node-cr" }, entry.cr),

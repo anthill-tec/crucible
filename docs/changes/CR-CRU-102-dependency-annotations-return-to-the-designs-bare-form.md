@@ -3,7 +3,7 @@
 - **Type**: patch
 - **Wave**: 5 (0.2.0)
 - **Depends on**: none — the annotation is a rendering of data already published
-- **Status**: PENDING (0.2.0) — filed 2026-09-03
+- **Status**: COMPLETED (0.2.0) — filed 2026-09-03, rigidity-reviewed 2026-09-03, gap-analysed and corrected 2026-09-04, shipped 2026-09-04
 - **Found by**: the user, reviewing the approved design against the shipped board after CR-CRU-097
 
 ## Problem

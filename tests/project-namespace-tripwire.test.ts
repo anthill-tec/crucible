@@ -727,9 +727,21 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // lineage, never shed it. Raising HEAD is the maintenance this table exists to
 // require; raising `develop` to match would be the self-satisfying assertion
 // the paragraph above forbids.
+// UPDATED 2026-09-04 by CR-CRU-102 §S1. `public/` HEAD moves 379 -> 388.
+// Cycle 331 replaced the annotation slot's full-id decision with the
+// data-derived rule, and the +9 is that reasoning written down where a reader
+// of the code will meet it: `public/app.js` +3 (the rewritten zone-2 slot
+// comment and zone 3's chip, both naming CR-CRU-102 and the CR-CRU-096 AC13a
+// ruling they supersede in EFFECT), `public/app-logic.mjs` +5 (the
+// `bareDependencyId` doc comment, which carries the AC13a/AC29 reconciliation
+// because that is what explains the rule's shape) and `public/app-logic.d.mts`
+// +1 (the declaration's own citation). Every one is prose on a `//` or ` * `
+// line, none in a string — verified by measuring `git show develop:<path>`
+// against the working tree file by file, not assumed. The `develop` baseline
+// is UNCHANGED at 378 and stays the floor.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 525 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 379 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 388 },
   clients: { exts: [".py"], develop: 601, head: 619 },
 };
 

@@ -1022,6 +1022,68 @@ export function crStatusMark(status) {
     : "";
 }
 
+/** A run of digits and nothing else — the ONE test the rule applies to the
+ *  remainder. Anchored, so a remainder that is numeric but for one character
+ *  fails it. */
+const ALL_DIGITS = /^\d+$/;
+
+/**
+ * CR-CRU-102 §S1/AC1/AC2/AC6 — the BARE form of one dependency id, as read
+ * beside the row that declares it. The approved design
+ * (`.lavish/crucible-workflow-flowchart.html`, zone 2 lines 195-198) draws
+ * `deps 078`, and this is how that is produced WITHOUT the product knowing
+ * any project's id prefix:
+ *
+ *   1. find the two ids' common leading text;
+ *   2. trim that back to the last character that is NOT a digit;
+ *   3. return the dependency's remainder if it is entirely digits;
+ *   4. otherwise return the dependency's FULL published id.
+ *
+ * WHY THIS SATISFIES `AC29` RATHER THAN REVERSING `AC13a`. CR-CRU-096's
+ * AC13a ruled the design's abbreviation out because stripping `CR-CRU-` is
+ * knowledge of one backlog's shape, and AC29 forbids a criterion that only
+ * holds while our own backlog looks a certain way. That was a correct
+ * resolution of a real conflict. What this function knows is nothing: it
+ * COMPARES the two strings it was handed. On a board whose ids share
+ * `CR-CRU-` the comparison yields `078`; on a synthetic board `CR-W2-A`
+ * beside `CR-W1-A` it yields `1-A`, which is not numeric, so the full id
+ * renders. The same code serves both, and no prefix appears in it.
+ *
+ * STEP 2 IS WHY THE WHOLE NUMBER COMES BACK. `CR-CRU-096` and `CR-CRU-078`
+ * share `CR-CRU-0` — the leading zero of both numbers — so an untrimmed
+ * remainder would read `78`, a DIFFERENT number. Walking back over every
+ * digit the match reached lands on the separator, and `078` is what the
+ * design draws.
+ *
+ * The remainder must be ALL digits, not merely start with one: `CR-H-A01`
+ * beside `CR-H-M02` leaves `M02`, and rendering that would abbreviate an id
+ * to something no reader could complete. A dependency that is already bare
+ * abbreviates to itself, so nothing is lost when the two ids share nothing.
+ *
+ * A dependency that is not a string names nothing and yields `""`, for
+ * `crStatusMark`'s reason. An unusable ROW id is different: the dependency is
+ * still a published id and is still named, in FULL — nothing is compared and
+ * nothing is guessed.
+ *
+ * RENDERING ONLY. `dependsOn` carries full ids on the wire and every consumer
+ * that RESOLVES one — deep links, drill-through targeting, the
+ * dependency-order warning that names offending pairs — keeps reading them
+ * (AC3). This function is called where text is drawn and nowhere else.
+ */
+export function bareDependencyId(cr, dependency) {
+  if (typeof dependency !== "string" || dependency === "") return "";
+  if (typeof cr !== "string") return dependency;
+  let shared = 0;
+  while (shared < cr.length && shared < dependency.length && cr[shared] === dependency[shared]) {
+    shared += 1;
+  }
+  while (shared > 0 && dependency[shared - 1] >= "0" && dependency[shared - 1] <= "9") {
+    shared -= 1;
+  }
+  const remainder = dependency.slice(shared);
+  return ALL_DIGITS.test(remainder) ? remainder : dependency;
+}
+
 /** The id prefix a CR's own H1 opens with, and the separator that ends it. */
 const TITLE_ID_SEPARATOR = /^\s*[—–:·|-]+\s*/;
 
@@ -1419,6 +1481,7 @@ if (typeof window !== "undefined") {
     briefCrTitle,
     lifecycleBadge,
     crStatusMark,
+    bareDependencyId,
     projectRollupLabel,
     projectActivity,
     orderProjects,

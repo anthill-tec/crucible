@@ -356,10 +356,22 @@ describe("CR-CRU-078 §S6/AC13 — Roadmap table renders CR rows in the AUTHORED
     expect((badge!.textContent ?? "").trim()).toBe("IN_PROGRESS");
 
     // depends-on rendered as chips (not free text), naming the upstream CR.
+    //
+    // CR-CRU-102 §S1/AC2 — in the BARE form, which on THIS fixture is the
+    // abbreviating branch: `CR-RM-002` and `CR-RM-001` share `CR-RM-00`,
+    // which trims back over both digits to `CR-RM-`, leaving `001` — entirely
+    // digits, so `001` renders. The full id is unchanged in `dependsOn` and
+    // in `data-cr`, which is what every consumer resolves on (AC3); this is
+    // the rendering only. The suites whose synthetic ids have no numeric tail
+    // (`CR-W1-A`, `CR-H-M02`, `CR-D-11` beside `CR-K-1`) still show FULL ids
+    // and are deliberately untouched — that is AC7's fallback, not a
+    // regression.
     const chips = Array.from(
       second.querySelectorAll<HTMLElement>('[data-testid="roadmap-depends-chip"]'),
     ).map((c) => (c.textContent ?? "").trim());
-    expect(chips).toEqual(["CR-RM-001"]);
+    expect(chips).toEqual(["001"]);
+    // The row still publishes the full id it was authored with.
+    expect(second.getAttribute("data-cr")).toBe("CR-RM-002");
 
     // Each derived status badge matches GET /queue exactly.
     expect(

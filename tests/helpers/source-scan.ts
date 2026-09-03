@@ -345,13 +345,12 @@ export function jsCommentRuns(text: string): { blocks: string[]; lines: string[]
   return { blocks, lines };
 }
 
-// The COMPLEMENT of the inert layer: every comment run and every string's
-// prose blanked, every other byte left exactly where it was. Newlines inside
-// a blanked run are KEPT, so the result is offset- and line-identical to the
-// input — an index found in the live code is an index into the original file,
-// and a line number derived from it is the line a reader will open.
-export function jsLiveCode(text: string): string {
-  const spans = jsInertSpans(text);
+// Blanks the given spans of `text` — every byte replaced by a space, newlines
+// KEPT — so the result is offset- and line-identical to the input: an index
+// found in it is an index into the original file, and a line number derived
+// from it is the line a reader will open. The one blanking loop, shared by
+// both projections below so they cannot drift apart.
+function blankSpans(text: string, spans: JsInertSpan[]): string {
   if (spans.length === 0) return text;
   let out = "";
   let cursor = 0;
@@ -361,6 +360,39 @@ export function jsLiveCode(text: string): string {
     cursor = span.end;
   }
   return out + text.slice(cursor);
+}
+
+// The COMPLEMENT of the inert layer: every comment run and every string's
+// prose blanked, every other byte left exactly where it was.
+export function jsLiveCode(text: string): string {
+  return blankSpans(text, jsInertSpans(text));
+}
+
+// THE THIRD PROJECTION of the same walk: only COMMENT runs blanked, so live
+// code AND the prose inside string literals both stand. It is the mirror of
+// what `jsLiveCode` reports and it exists because the two guards need
+// OPPOSITE halves of the same determination.
+//
+// ADDED in CR-CRU-102 §S1 for the AC6 prefix guard, which asks whether the
+// shipped tree spells a project's id PREFIX anywhere the product can read
+// it. That literal lives INSIDE a string (`"CR-CRU-"`), which is exactly
+// what `jsLiveCode` blanks — so the accepted-field guard's projection would
+// hide the leak this one exists to find. Comments must still be exempt,
+// because `public/app.js` carries 197 OCCURRENCES of the shape in its
+// provenance narration (CR-CRU-097 AC8 protects those) — occurrences, not
+// lines: `(readFileSync("public/app.js","utf8").match(/CR-[A-Z]{2,}-/g) ?? [])
+// .length` is 197 where the same count over `jsUncommented(text)` is 0 — and a
+// scan of raw text would report every one of them.
+//
+// Extending here rather than stripping locally is §S6's standing rule: a
+// second walk of this grammar is the CR-CRU-096 defect (a hand-rolled
+// stripper never stripped comments, so a provenance comment leaked into a
+// selector string and a test asserted on it).
+export function jsUncommented(text: string): string {
+  return blankSpans(
+    text,
+    jsInertSpans(text).filter((span) => span.kind !== "string"),
+  );
 }
 
 // Extracts ONLY docstring/comment prose from a file — never string literals
