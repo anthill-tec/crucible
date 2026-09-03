@@ -882,15 +882,21 @@ def _run_left_open_warning(run_id, cause):
     close. It names the settlement path precisely, because the alternative
     reading — "the run was lost" — is wrong and would send an operator hunting
     for a missing event."""
+    # THE DETAIL NAMES NO CR AND NO UNBUILT ROUTE (CR-CRU-097 AC3a). This
+    # string is emitted to the user in the AXI envelope on ANY project's
+    # board, so it states what the client DOES — posts no abort, the server
+    # settles the run — and nothing about our backlog. The lineage lives
+    # here: a client-side abort endpoint is CR-CRU-017 §S2 and is not built,
+    # which is WHY there is no post to make; when it ships, this warning
+    # changes behaviour, not just wording.
     return {
         "code": "run-left-open",
-        "detail": (f"{cause} — run {run_id} was never closed by an ingest. The "
-                   f"client posts NO abort (POST /api/v2/runs/<id>/abort is "
-                   f"CR-CRU-017 §S2 and does not exist yet): the server settles "
-                   f"it with its own auto-abort — reason `agent died` as soon as "
+        "detail": (f"{cause} — run {run_id} was never closed by an ingest. "
+                   f"The client posts no abort: the server settles it with "
+                   f"its own auto-abort — reason `agent died` as soon as "
                    f"this agent tombstones, else `abandoned` once the run is "
-                   f"older than CRUCIBLE_RUN_ABANDON_MS. The run is abandoned, "
-                   f"not lost"),
+                   f"older than CRUCIBLE_RUN_ABANDON_MS. The run is "
+                   f"abandoned, not lost"),
     }
 
 

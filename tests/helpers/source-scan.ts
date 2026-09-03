@@ -135,6 +135,142 @@ export function pythonStatementStrings(text: string): string[] {
   return out;
 }
 
+// Lexes a `.ts`/`.js`-family source file's COMMENT layer the way
+// `pythonStatementStrings` above lexes Python's string layer: by walking the
+// text ONCE and consuming whole string literals, template literals and regex
+// literals, so a `//` that is not a comment is never read as one.
+//
+// ADDED in CR-CRU-097's C4 fix round, closing a defect the lift inherited
+// verbatim. The previous version found line comments with `/\/\/[^\n]*/g`
+// over the RAW file, which cannot tell a comment from a `//` inside a
+// string or a regex: `const u = "http://board/CR-X-1";` classified `CR-X-1`
+// as PROSE. Every namespace-tripwire dimension filters on `!isProse`, so the
+// whole class "a shipped string carrying a URL, a path or a regex beside a
+// CR id" was invisible to all of them. Nothing was red the day it was found;
+// the claim being defended is that a future leak fails on the day it is
+// WRITTEN, and that class would have passed silently.
+//
+// THE ONE AMBIGUITY IN THE GRAMMAR, and the direction it is resolved in: a
+// bare `/` is a regex opener or a division operator depending on the
+// preceding token, which no lexer can decide without the expression
+// grammar. The rule here is the standard one — a regex may begin where a
+// VALUE may begin, i.e. after an operator, an opening bracket, a comma, a
+// semicolon, a newline or one of the value-position keywords — and where it
+// is still ambiguous (after `}`, which closes a block AND an object
+// literal) the `/` is read as a REGEX. That is the loud direction: reading a
+// division as a regex can only make the scan consume too little prose, which
+// makes a guard REPORT more, while the reverse would hide a `//` inside a
+// regex and open a silent hole. Both slips are then bounded by the
+// newline guard below: a regex literal cannot span a line, so a mis-opened
+// one is abandoned at the newline instead of swallowing the file.
+// The value-position keywords, as a static lookup: a `/` directly after one
+// of these opens a regex (`return /x/.test(s)`), never a division.
+const JS_VALUE_KEYWORDS: Record<string, true> = {
+  await: true,
+  case: true,
+  delete: true,
+  do: true,
+  else: true,
+  in: true,
+  instanceof: true,
+  new: true,
+  of: true,
+  return: true,
+  throw: true,
+  typeof: true,
+  void: true,
+  yield: true,
+};
+
+function regexMayOpenAt(text: string, slash: number): boolean {
+  let k = slash - 1;
+  while (k >= 0 && /\s/.test(text[k])) k--;
+  if (k < 0) return true;
+  const prev = text[k];
+  if (!/[A-Za-z0-9_$]/.test(prev)) return !(prev === ")" || prev === "]" || prev === ".");
+  let start = k;
+  while (start >= 0 && /[A-Za-z0-9_$]/.test(text[start])) start--;
+  return JS_VALUE_KEYWORDS[text.slice(start + 1, k + 1)] === true;
+}
+
+// Consumes the literal opening at `open` and returns the index just past it,
+// or `open + 1` when the text does not in fact close a literal there (an
+// apostrophe in a comment-free line, a `/` that was division after all) — so
+// a misread never swallows the rest of the file. `'` and `"` bail at a
+// newline; a template literal may span lines and tracks `${...}` brace depth
+// so a `}` inside a substitution does not end it early; a regex tracks its
+// `[...]` class, inside which `/` is literal.
+function skipLiteral(text: string, open: number, kind: "quote" | "regex"): number {
+  const quote = text[open];
+  const template = quote === "`";
+  let depth = 0;
+  let inClass = false;
+  let i = open + 1;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "\\") {
+      i += 2;
+      continue;
+    }
+    if (c === "\n" && !template) return open + 1;
+    if (kind === "regex") {
+      if (c === "[") inClass = true;
+      else if (c === "]") inClass = false;
+      else if (c === "/" && !inClass) return i + 1;
+      i++;
+      continue;
+    }
+    if (template) {
+      if (c === "$" && text[i + 1] === "{") {
+        depth++;
+        i += 2;
+        continue;
+      }
+      if (c === "}" && depth > 0) {
+        depth--;
+        i++;
+        continue;
+      }
+    }
+    if (c === quote && depth === 0) return i + 1;
+    i++;
+  }
+  return open + 1;
+}
+
+export function jsCommentRuns(text: string): { blocks: string[]; lines: string[] } {
+  const blocks: string[] = [];
+  const lines: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "/" && text[i + 1] === "/") {
+      let j = i + 2;
+      while (j < text.length && text[j] !== "\n") j++;
+      lines.push(text.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      const end = close === -1 ? text.length : close + 2;
+      blocks.push(text.slice(i, end));
+      i = end;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      i = skipLiteral(text, i, "quote");
+      continue;
+    }
+    if (c === "/" && regexMayOpenAt(text, i)) {
+      i = skipLiteral(text, i, "regex");
+      continue;
+    }
+    i++;
+  }
+  return { blocks, lines };
+}
+
 // Extracts ONLY docstring/comment prose from a file — never string literals
 // (fixture JUnit XML bodies, argv arrays, tmp-file names written by a test)
 // — so a fixture like `<testsuite name="toon.test.ts">` or a dynamically
@@ -172,7 +308,12 @@ export function extractCitableText(relPath: string, text: string): string {
     );
     return `${docstrings}\n${lineComments}`;
   }
-  const blockComments = (text.match(/\/\*[\s\S]*?\*\//g) ?? [])
+  // The comment RUNS come from the lexer above, not from a regex over the
+  // raw file; everything downstream of this point is unchanged, so the
+  // output shape (blocks first, then all line comments joined as one wrapped
+  // run) is exactly what it was before C4.
+  const runs = jsCommentRuns(text);
+  const blockComments = runs.blocks
     .map((block) =>
       joinWrapped(
         block
@@ -183,8 +324,6 @@ export function extractCitableText(relPath: string, text: string): string {
       ),
     )
     .join("\n");
-  const lineComments = joinWrapped(
-    (text.match(/\/\/[^\n]*/g) ?? []).map((line) => line.replace(/^\/\/\s?/, "")),
-  );
+  const lineComments = joinWrapped(runs.lines.map((line) => line.replace(/^\/\/\s?/, "")));
   return `${blockComments}\n${lineComments}`;
 }

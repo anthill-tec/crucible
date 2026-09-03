@@ -285,7 +285,7 @@ describe("CR-CRU-095 §S1 — listQueue publishes ONE canonical container order"
 
       // The oracle's recommendation, as the oracle derives it: the FIRST
       // actionable row of the published order (`actionable[0]`,
-      // clients/_crucible_axi.py:1530). It must belong to the active release —
+      // clients/_crucible_axi.py:1531). It must belong to the active release —
       // before §S1 the wave-6 deferred rows reached it first.
       expect(firstActionable(entries)?.release).toBe("0.2.0");
       expect(firstActionable(entries)?.cr).toBe(BOARD_SNAPSHOT_2026_09_02.firstActionableCr);
@@ -295,6 +295,49 @@ describe("CR-CRU-095 §S1 — listQueue publishes ONE canonical container order"
       const release = spanOf(order, BOARD_SNAPSHOT_2026_09_02.releaseEnds);
       const deferred = spanOf(order, BOARD_SNAPSHOT_2026_09_02.deferredEnds);
       expect(release.last).toBeLessThan(deferred.first);
+    },
+  );
+
+  // AC6 — THE REPRODUCTION'S DISCRIMINATING POWER, MADE OBSERVABLE.
+  //
+  // VERIFY ruled AC6 PARTIAL: the reproduction above survives structurally,
+  // but nothing pinned that it still FAILS against pre-095 ordering, and
+  // "still fails against pre-095" is otherwise visible only by reverting the
+  // fix. What IS testable without a revert is the fixture's discriminating
+  // power: its naive positional reading must still disagree with the
+  // published order it asserts, and the deferred wave-6 block must still
+  // outrank the active release under that naive reading. Both readings are
+  // computed from the SAME frozen rows, so this cannot rot independently of
+  // the snapshot it guards.
+  test(
+    "AC6 — the 2026-09-02 snapshot still DISCRIMINATES: its pre-095 positional reading disagrees " +
+      "with the published order, and still ranks the deferred wave-6 block ahead of the release",
+    () => {
+      // THE PRE-095 READING, inline: the `seq` VALUE ascending, with no
+      // notion of a wave block or a declared release container — literally
+      // the `sorted(lane, key=_lane_order)` line §S1 DELETED from
+      // `resolve_next`.
+      const naive = [...BOARD_SNAPSHOT_2026_09_02.rows]
+        .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
+        .map((row) => row.cr);
+      const published = BOARD_SNAPSHOT_2026_09_02.publishedOrder;
+
+      // NON-VACUITY FIRST: the two readings must be permutations of the SAME
+      // set, so every disagreement below is about ORDER alone. A dropped or
+      // mistyped row would otherwise satisfy the inequality for free.
+      expect([...naive].sort()).toEqual([...published].sort());
+
+      // The disagreement itself — the two readings have NOT converged.
+      expect(naive).not.toEqual(published);
+
+      // And the reported defect, under the pre-095 reading: the WHOLE
+      // deferred wave-6 block outranks the WHOLE active release. This is the
+      // exact inversion of the reproduction's own assertion above
+      // (`release.last < deferred.first` on the published order), which is
+      // what makes the fixture a reproduction rather than a decoration.
+      const release = spanOf(naive, BOARD_SNAPSHOT_2026_09_02.releaseEnds);
+      const deferred = spanOf(naive, BOARD_SNAPSHOT_2026_09_02.deferredEnds);
+      expect(deferred.last).toBeLessThan(release.first);
     },
   );
 

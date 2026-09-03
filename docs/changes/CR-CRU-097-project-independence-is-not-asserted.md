@@ -222,11 +222,27 @@ on "comments are exempt" must reuse the classifier that is already proven, not r
   `CR-CRU-` — in the prose positions `extractCitableText` reports, over `src/`, `public/` and
   `clients/`, excluding `__pycache__`. Both numbers are recorded: the baseline at `develop` and the
   value at HEAD, because C3 legitimately ADDS provenance comments (citing CR-CRU-054 and CR-CRU-097)
-  and a single figure cannot be both. Under `/CR-CRU-\d+/` the `clients/` prose count is **601**,
-  not 615; 615 is the namespace-agnostic count, the extra 14 being `CR-NAI-*`/`CR-SAN-*` provenance
-  mostly in `rust-crucible.py`. `src/` 512 and `public/` 379 reproduce under either pattern because
-  those trees carry no foreign namespace — which is why the mismatch was invisible on two of three
-  figures. **A test pins this**; it was UNASSERTED, living only in spec prose.
+  and a single figure cannot be both.
+
+  **MEASURED 2026-09-03 in C4, with the classifier, namespace-agnostic** — `src/` / `public/` /
+  `clients/`: `develop` **512 / 378 / 601**, HEAD **512 / 379 / 619**. Only the HEAD triple is
+  ASSERTED. The `develop` triple is recorded in the test as a comment with the command that
+  produced it (`git ls-tree -r develop` + `git show develop:<path>`, classified file by file),
+  because asserting it live would rot the instant this branch merges: `develop` would then BE this
+  tree and the "baseline" would silently become the HEAD figure — the exact class of
+  self-satisfying assertion this CR exists to remove.
+
+  `clients/` moved **615 → 619** in C4: AC3a's two runtime strings lost their citations to their
+  adjacent comments, and each move also carries a C4 citation, so lineage GREW. Under
+  `/CR-CRU-\d+/` instead, `clients/` is `develop` **588** and HEAD **605** (615 → 601 pre-C4). Note
+  the collision, because it is what made the mis-measurement plausible: `develop`'s
+  namespace-agnostic `clients/` count is **601** — the very number this AC once reported as HEAD's
+  `CR-CRU-`-only count. Two different measurements of two different trees coincided. The extra 14
+  agnostic-vs-`CR-CRU-` references are `CR-NAI-*`/`CR-SAN-*` provenance, mostly in
+  `rust-crucible.py`. `src/` and `public/` reproduce under either pattern because those trees carry
+  no foreign namespace — which is why the mismatch was invisible on two of three figures.
+  **A test pins this** (`tests/project-namespace-tripwire.test.ts`, the AC8 block); it was
+  UNASSERTED, living only in spec prose.
 - **AC8-legacy** — the original wording, kept for the record: the count of `CR-CRU-` references in
   comments and docstrings
   across `src/`, `public/` and `clients/` is unchanged by this CR, **measured by the §S6

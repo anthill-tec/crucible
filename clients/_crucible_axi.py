@@ -1327,7 +1327,7 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1349-1362`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1370-1384`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
             f'--cycles "<c1,c2>" --agent <agentId>')
@@ -1505,14 +1505,18 @@ def resolve_next(entries, track=None):
     warnings = []
     unpositioned = [e.get("cr") for e in lane if _entry_seq(e) is None]
     if unpositioned:
-        # §S2 — 091 publishes `seq` on EVERY entry, so an entry without one is
-        # a defect to surface, not a hole to fill with a position.
+        # CR-CRU-091 §S2 — the roadmap publishes `seq` on EVERY entry, so an
+        # entry without one is a defect to surface, not a hole to fill with a
+        # position. THE DETAIL NAMES NO CR (CR-CRU-097 AC3a): this module is
+        # SHARED, so all five clients emit this string on any project's
+        # board, and it states the contract it checks rather than the id of
+        # the CR that wrote it. The lineage stays here.
         warnings.append({
             "code": "missing-seq",
             "detail": (f"the queue published no seq for "
-                       f"{', '.join(unpositioned)} — CR-CRU-091 declares one "
-                       f"on every entry, so this is a roadmap defect; re-run "
-                       f"wave-sequence for its wave"),
+                       f"{', '.join(unpositioned)} — the roadmap declares "
+                       f"one on every entry, so this is a roadmap defect; "
+                       f"re-run wave-sequence for its wave"),
         })
 
     if not entries:

@@ -46,7 +46,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractCitableText, joinWrapped, listFiles, REPO_ROOT } from "./helpers/source-scan";
 
-// The one pattern, used by all three dimensions. Namespace-agnostic (AC7):
+// The one pattern, used by all four dimensions (AC2 printed help, AC3
+// `public/` strings, AC3a client runtime strings, AC7 test assertions).
+// Namespace-agnostic (AC7):
 // two-or-more capitals for the project segment, digits for the number. It
 // matches OUR ids, another project's ids, and a test's invented ids alike —
 // telling those apart is the job of the reasoned carve-outs below, never of
@@ -344,10 +346,12 @@ function assertedLiterals(relPath: string, text: string): Leak[] {
     .map((o) => ({ relPath, line: o.line, id: o.id }));
 }
 
-// AC3's checker. `public/` ships to every project's browser, so the rule is
-// harder there: ANY occurrence outside a comment is a leak, asserted or not,
-// and no synthetic allow-list applies — invented ids have no business in
-// shipped UI text either.
+// AC3's checker, and AC3a's — ONE checker for both shipped trees, because
+// the rule is identical: `public/` ships to every project's browser and
+// `clients/` ships the prose of every AXI envelope, so ANY occurrence
+// outside a comment is a leak, asserted or not, and no synthetic allow-list
+// applies — invented ids have no business in shipped text either. A second
+// checker for the second tree would be a second place for the rule to drift.
 function userVisibleLiterals(relPath: string, text: string): Leak[] {
   return classifyOccurrences(relPath, text)
     .filter((o) => !o.isProse)
@@ -487,11 +491,43 @@ const SYNTHETIC_TRIPWIRE_FIXTURE = {
     "});",
   ].join("\n"),
   assertedLeaks: ["CR-ZZZ-3"],
+  // The `public/` self-test, now carrying the classifier's HARD cases as
+  // well as the easy one. The first two lines are the easy shape (a bare
+  // string, the comment on its own line); the last two are a `//` that is
+  // NOT a comment — inside a URL and inside a regex literal. Before C4 both
+  // read as provenance and were dropped from AC3, AC3a AND AC7, all three of
+  // which filter on `!isProse`, so the whole class "any shipped string
+  // containing a URL, a path or a regex beside a CR id" was invisible.
   publicSurface: [
     "// CR-QQQ-1 §S2 — provenance for the block below.",
     'const empty = "No BDD results yet — see CR-QQQ-2 for the plan.";',
+    'const link = "http://board.example/roadmap/CR-QQQ-9";',
+    'const r = /a\\/\\//; const s = "CR-QQQ-6";',
   ].join("\n"),
-  publicLeaks: ["CR-QQQ-2"],
+  publicLeaks: ["CR-QQQ-2", "CR-QQQ-9", "CR-QQQ-6"],
+  // The same two hard cases as STANDALONE probes of the lifted classifier
+  // itself, not of a checker built on it. They are separate entries because
+  // the claim is different: above, "the checker reports the leak"; here,
+  // "`extractCitableText` does not call this prose". That second claim is
+  // the one tests/docs-retired-mirror-references.test.ts also rests on, so
+  // it is pinned on the helper rather than only through this file.
+  urlProbe: 'const u = "http://board/CR-QQQ-9";',
+  regexProbe: 'const r = /a\\/\\//; const s = "CR-QQQ-6";',
+  commentProbe: "// CR-QQQ-1 §S2 — a real line comment stays prose.",
+  commentProbeProse: ["CR-QQQ-1"],
+  // AC3a's self-test input — a client's RUNTIME warning, in Python: the
+  // provenance `#` comment above it is exempt, the `detail` string the user
+  // reads in the AXI envelope is not. Python needs its own planted case
+  // because the classifier lexes `.py` by a different branch (docstrings and
+  // `#` runs) than the `.js`/`.ts` one above.
+  clientRuntime: [
+    "# CR-QQQ-4 §S2 — the roadmap declares a seq on every entry.",
+    "def _missing_seq_warning(crs):",
+    '    """CR-QQQ-5 §S1 — the structured warning, docstring exempt."""',
+    '    return {"code": "missing-seq",',
+    '            "detail": f"no seq for {crs} — CR-QQQ-8 declares one on every entry"}',
+  ].join("\n"),
+  clientRuntimeLeaks: ["CR-QQQ-8"],
   wrappedHelp: [
     "  --repair-provenance   Rewrite the run's provenance; a mismatch is REFUSED (§S4, CR-",
     "                        QQQ-3 §S2).",
@@ -548,20 +584,181 @@ describe("CR-CRU-097 AC3 — no user-visible string in public/ names a CR", () =
     expect(leaks).toEqual([]);
   });
 
-  test("the public/ checker reports a planted literal in a string and spares the comment above it", () => {
+  test("the public/ checker reports a planted literal in a string, in a URL and beside a regex, and spares the comment above them", () => {
     const leaks = userVisibleLiterals("public/probe.js", SYNTHETIC_TRIPWIRE_FIXTURE.publicSurface);
     expect(leaks.map((l) => l.id)).toEqual(SYNTHETIC_TRIPWIRE_FIXTURE.publicLeaks);
   });
 });
 
+// THE CLASSIFIER'S OWN CONTRACT, pinned here because every dimension above
+// filters on `!isProse` and therefore inherits it. The lift (§S6) moved
+// `extractCitableText` out of tests/docs-retired-mirror-references.test.ts
+// unchanged — including a defect: the TS/JS branch found line comments with
+// `/\/\/[^\n]*/g` over the RAW file, so it could not tell a comment from a
+// `//` inside a string literal or a regex literal. `"http://…/CR-X-1"`
+// classified as PROSE, which made a whole class of shipped string — any one
+// carrying a URL, a path or a regex beside a CR id — invisible to AC3, AC3a
+// and AC7 alike. Nothing was red on the day it was found (`public/` live
+// count was 0), and that is exactly why it is pinned: the CR's durability
+// claim is that a future leak fails on the day it is WRITTEN, and this class
+// would have passed silently.
+//
+// Stated as a property of the pure function, not of a checker built on it,
+// because tests/docs-retired-mirror-references.test.ts rests on the same
+// function and reads no CR ids at all.
+describe("CR-CRU-097 §S6 — the lifted classifier tells a comment from a `//` inside a string or a regex", () => {
+  const proseIds = (relPath: string, text: string): string[] =>
+    extractCitableText(relPath, text).match(CR_LITERAL) ?? [];
+
+  test("a CR id inside a URL in a shipped string is NOT prose", () => {
+    expect(proseIds("public/probe.js", SYNTHETIC_TRIPWIRE_FIXTURE.urlProbe)).toEqual([]);
+  });
+
+  test("a CR id in a string after a regex literal containing `//` is NOT prose", () => {
+    expect(proseIds("public/probe.js", SYNTHETIC_TRIPWIRE_FIXTURE.regexProbe)).toEqual([]);
+  });
+
+  test("a real line comment is still prose — the fix narrows nothing it should keep", () => {
+    expect(proseIds("public/probe.js", SYNTHETIC_TRIPWIRE_FIXTURE.commentProbe)).toEqual(
+      SYNTHETIC_TRIPWIRE_FIXTURE.commentProbeProse,
+    );
+  });
+});
+
+describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () => {
+  // THE FOURTH LEAKING SURFACE. §S6 required "no CR literal in a
+  // user-visible string in public/ OR clients/", but the shipped tripwire
+  // reached `clients/` only through AC2 (what --help PRINTS) and `public/`
+  // only through AC3 (browser strings). A warning `detail` or an error
+  // message assembled at runtime is reached by NEITHER, and two were live:
+  // bun-crucible's `run-left-open` named an unshipped CR of OURS to every
+  // project, and `_crucible_axi.py`'s `missing-seq` did the same from the
+  // SHARED module, so all five clients emitted it. A §S clause with no AC is
+  // a wish (CR-CRU-078's lesson); this is that AC.
+  //
+  // The rule is AC3's, applied to the other shipped tree, so it reuses AC3's
+  // checker rather than growing a fourth: any occurrence at a LIVE-CODE
+  // position is a leak, because there is no way to tell from the source
+  // whether a given string is rendered today, and the envelope is assembled
+  // from many of them. Provenance comments and docstrings stay exempt
+  // through the same classifier.
+  //
+  // `.md` is exempt BY KIND, not by pattern: `clients/STATUS-CONTRACT.md`
+  // holds 10 references and markdown has no comment syntax, so documentation
+  // prose reads as live code to any classifier. The extension list states
+  // that exemption; it is not a silent omission.
+  test("no CR literal sits at a live-code position in any client", () => {
+    const files = listFiles("clients", [".py"]);
+    // Non-vacuity: the five clients plus the shared module and the TOON
+    // codec. A walker that silently returned nothing would pass otherwise.
+    expect(files.length).toBeGreaterThanOrEqual(CLIENTS.length + 2);
+    const leaks = files.flatMap((abs) => {
+      const relPath = abs.slice(REPO_ROOT.length + 1);
+      return userVisibleLiterals(relPath, readFileSync(abs, "utf8"));
+    });
+    expect(leaks).toEqual([]);
+  });
+
+  test("the checker reports a literal in a client's warning detail and spares its comment and docstring", () => {
+    const leaks = userVisibleLiterals("clients/probe.py", SYNTHETIC_TRIPWIRE_FIXTURE.clientRuntime);
+    expect(leaks.map((l) => l.id)).toEqual(SYNTHETIC_TRIPWIRE_FIXTURE.clientRuntimeLeaks);
+  });
+});
+
+// AC8 — THE PROVENANCE COUNT, MEASURED WITH THE CLASSIFIER AND PINNED.
+//
+// AC8 lived only in spec prose until C4: it asserted that design lineage
+// survives this CR, and nothing checked it. Worse, its figures were twice
+// mis-measured — first as RAW grep totals rather than prose positions, then
+// with `/CR-CRU-\d+/` where AC7's own pattern is namespace-agnostic. The
+// `clients/` tree is the only one where that second slip is visible, because
+// it is the only one carrying a foreign namespace (`CR-NAI-*`/`CR-SAN-*`
+// provenance, mostly in rust-crucible.py); `src/` and `public/` reproduce
+// identically under either pattern, which is exactly why the mismatch went
+// unnoticed on two of three figures.
+//
+// The quantity is therefore fixed here as: matches of CR_LITERAL — the SAME
+// pattern every dimension above uses — in the positions `extractCitableText`
+// reports as prose, per tree, excluding `__pycache__` (listFiles does that).
+//
+// BOTH FIGURES ARE RECORDED because one cannot be both: C3 legitimately ADDS
+// provenance comments (§S2 moved five citations out of `help=` strings into
+// adjacent `#` comments) and C4 adds four more (the two runtime strings of
+// AC3a, whose lineage moved to their comments). Only the HEAD figure is
+// ASSERTED. The baseline is stated, not computed, and deliberately so: it
+// was obtained by classifying `git ls-tree -r develop` + `git show
+// develop:<path>` for each file of each tree (2026-09-03, develop at the
+// merge-base of this branch), and asserting it live would rot the moment
+// this branch merges — `develop` would then BE this tree and the baseline
+// would silently become the HEAD figure, which is the exact class of
+// self-satisfying assertion this CR exists to remove.
+//
+// Under `/CR-CRU-\d+/` instead, for the record: develop `clients/` is 588
+// and HEAD is 605. Note the collision that makes this worth spelling out —
+// develop's namespace-agnostic `clients/` count is 601, the very number the
+// spec once reported as HEAD's `CR-CRU-`-only count. Two different
+// measurements of two different trees happened to coincide.
+const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 512 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 379 },
+  clients: { exts: [".py"], develop: 601, head: 619 },
+};
+
+describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
+  test("each tree's prose citation count is the recorded HEAD figure, and never below its develop baseline", () => {
+    const measured: Record<string, number> = {};
+    for (const [tree, entry] of Object.entries(PROSE_CITATIONS)) {
+      const files = listFiles(tree, entry.exts);
+      // Non-vacuity: `clients/` is the smallest of the three at 7 files. A
+      // walker that silently returned nothing would otherwise report 0 and
+      // fail loudly only by luck.
+      expect(files.length).toBeGreaterThanOrEqual(7);
+      measured[tree] = files.reduce((total, abs) => {
+        const relPath = abs.slice(REPO_ROOT.length + 1);
+        const prose = extractCitableText(relPath, readFileSync(abs, "utf8"));
+        return total + (prose.match(CR_LITERAL) ?? []).length;
+      }, 0);
+    }
+
+    expect(measured).toEqual({
+      src: PROSE_CITATIONS.src.head,
+      public: PROSE_CITATIONS.public.head,
+      clients: PROSE_CITATIONS.clients.head,
+    });
+
+    // "Provenance is INTACT" is the directional half of the claim, and it is
+    // about the measurement, not about the table: a tree may gain lineage,
+    // never shed it.
+    for (const [tree, entry] of Object.entries(PROSE_CITATIONS)) {
+      expect(measured[tree]).toBeGreaterThanOrEqual(entry.develop);
+    }
+  });
+});
+
 describe("CR-CRU-097 AC7/AC7a — no test asserts on a project CR literal outside a named, dated snapshot", () => {
   test("the three files §S5 rewrote assert on nothing but synthetic ids", () => {
-    // §S3's board replicas, by name: the rule assertions now run on
+    // §S3's board replicas, BY NAME — the rule assertions now run on
     // synthetic rows and the one reproduction lives in the dated constant.
+    //
+    // CORRECTED in C4. This list previously named
+    // `queue-defaulted-seq-scope.test.ts`, which this CR never touched and
+    // which appears in no §S clause, and OMITTED
+    // `queue-registration.test.ts` — §S5's LARGEST conversion (80 real refs
+    // down to 13). The consequence was that the biggest rewrite was pinned
+    // only by the residue-ceiling test below, which is strictly weaker: an
+    // entry added to PRE_CR_ASSERTION_RESIDUE would legally re-admit real
+    // board ids into its assertions, which is precisely what the by-name pin
+    // exists to forbid.
+    //
+    // `queue-defaulted-seq-scope.test.ts` needs no pin of its own and gets
+    // none: it is absent from PRE_CR_ASSERTION_RESIDUE, and an absent file
+    // must be at ZERO by that test's own rule, so it is already covered by
+    // the stronger half of the ceiling. Inventing a second assertion for an
+    // untouched file would add no guarantee.
     for (const rel of [
       join("tests", "queue-canonical-order.test.ts"),
       join("tests", "queue-default-into-wave-block.test.ts"),
-      join("tests", "queue-defaulted-seq-scope.test.ts"),
+      join("tests", "queue-registration.test.ts"),
     ]) {
       expect(assertedLiterals(rel, readFileSync(join(REPO_ROOT, rel), "utf8"))).toEqual([]);
     }
