@@ -647,6 +647,25 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
   // holds 10 references and markdown has no comment syntax, so documentation
   // prose reads as live code to any classifier. The extension list states
   // that exemption; it is not a silent omission.
+  // KNOWN BLIND SPOT, narrated because the sibling guard narrates its own
+  // analogous one (re-verify, 2026-09-03). `pythonStatementStrings` treats ANY
+  // triple-quoted literal whose opening quote is preceded only by whitespace
+  // (plus an optional r/b/u/f prefix) as a docstring. So a MULTI-LINE runtime
+  // message written as a parenthesised continuation, or as a dict value
+  // beginning on its own line, lands in the exempt set:
+  //   extractCitableText("clients/probe.py",
+  //     'def f():\n    msg = (\n        """user message CR-YYY-1"""\n    )')
+  // returns CR-YYY-1 as PROSE, while the same text as an f-string is correctly
+  // live. Nothing leaks today and the shape is unused: for all seven
+  // clients/*.py this lexer's docstring count equals Python's own
+  // `ast.get_docstring` count (8/58/73/80/64/86/128). But AC3a's claim is
+  // DURABILITY — a future leak must fail on the day it is written — and a
+  // multi-line warning detail written that way would pass silently, which is
+  // exactly the class C4 closed on the TS/JS side. Tightening the lexer to
+  // require the literal be the first statement of a def/class/module would
+  // close it; that is deferred rather than done here because this helper is
+  // SHARED with tests/docs-retired-mirror-references.test.ts, whose contract
+  // rests on the same function, and a change there is not this cycle's to make.
   test("no CR literal sits at a live-code position in any client", () => {
     const files = listFiles("clients", [".py"]);
     // Non-vacuity: the five clients plus the shared module and the TOON
@@ -744,7 +763,14 @@ describe("CR-CRU-097 AC7/AC7a — no test asserts on a project CR literal outsid
     // `queue-defaulted-seq-scope.test.ts`, which this CR never touched and
     // which appears in no §S clause, and OMITTED
     // `queue-registration.test.ts` — §S5's LARGEST conversion (80 real refs
-    // down to 13). The consequence was that the biggest rewrite was pinned
+    // down to 16). RE-CORRECTED after re-verify: this comment first said "13",
+    // a figure carried verbatim from C2's commit message that no measure of
+    // the file yields. `git show develop:tests/queue-registration.test.ts`
+    // holds 80 matches of /CR-[A-Z]{2,}-\d+/; C2's own commit and HEAD both
+    // hold 16 (7 distinct ids over 16 lines, 2 at non-prose positions). A
+    // comment written to correct one untrue claim had shipped with its own —
+    // the stated-and-unreproducible figure AC8 exists to eliminate.
+    // The consequence was that the biggest rewrite was pinned
     // only by the residue-ceiling test below, which is strictly weaker: an
     // entry added to PRE_CR_ASSERTION_RESIDUE would legally re-admit real
     // board ids into its assertions, which is precisely what the by-name pin
