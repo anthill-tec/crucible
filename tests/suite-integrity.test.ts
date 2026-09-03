@@ -255,3 +255,298 @@ describe(
     );
   },
 );
+
+// ── CR-CRU-101 §S1 — the corroboration states its own PRECONDITION ───────
+//
+// THE DEFECT, MEASURED (feature/CR-CRU-101, 2026-09-03, before this block
+// existed): `test-reports/junit.xml` held ONE distinct file
+// (`tests/boot-safety.test.ts`) against 144 on-disk `.test.ts` files, and
+// `bun test tests/suite-integrity.test.ts` reported 3 pass / 1 fail — the
+// corroboration above, failing with "Expected - 143 / Received + 0". No code
+// defect existed. The previous command had simply been narrower than the
+// tree, which is what this repo's own dispatch discipline REQUIRES of every
+// sub-agent ("run ONLY the suites you touch"). The assertion was detecting
+// compliance.
+//
+// WHERE THE PROOF MUST COME FROM, and why nowhere else will do: bun's JUnit
+// output records test counts, not a file total and not how it was invoked, so
+// the only artifact-INTERNAL proxy for "this run was full" is "its file set
+// equals the on-disk set" — the conclusion itself. A precondition identical
+// to its conclusion can never fail. The scope is known exactly once, at the
+// producer: `clients/bun-crucible.py`'s `_bun_test_cmd` receives `targets`
+// (empty = whole-suite) at the moment it builds the invocation, and `_wipe`
+// deletes the previous artifact immediately before. So the client stamps what
+// it is about to produce, and this check reads that stamp.
+//
+// bunfig.toml carries no `[test]` section, so a bare `bun test` writes NOTHING
+// to `test-reports/` — the artifact and its stamp are only ever written
+// together, by the client, and are only ever removed together, by `_wipe`.
+// A stamp is therefore never stale with respect to the artifact beside it.
+
+// The producing client's stamp: filename and the two scope values. Pinned
+// here because the SKIP path is failure-free — a client-side rename would
+// disable this corroboration permanently and SILENTLY, which is the one
+// direction no test would ever report. The values are proven behaviourally
+// (the real client is spawned below); the filename is additionally pinned
+// against the client source, so the rename fails HERE.
+const SCOPE_RECORD = "junit-scope.json";
+const FULL_SCOPE = "full";
+const SCOPED_SCOPE = "scoped";
+
+function plantReportsDir(files: Record<string, string>): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cr101-scope-"));
+  for (const [name, body] of Object.entries(files)) {
+    fs.writeFileSync(path.join(dir, name), body);
+  }
+  return dir;
+}
+
+// A minimal artifact in bun's own shape — enough for `distinctJunitTestcaseFiles`.
+function junitFor(files: string[]): string {
+  const cases = files
+    .map((f) => `<testcase name="t" classname="c" file="${f}" time="0"/>`)
+    .join("");
+  return `<?xml version="1.0"?><testsuites>${cases}</testsuites>`;
+}
+
+// Drives the REAL producing client (`clients/bun-crucible.py test`) against a
+// throwaway 2-file bun project. No `--agent`, so no server, no ingest and no
+// registration — this exercises exactly the artifact-production path.
+async function runClientTest(
+  dir: string,
+  targets: string[],
+): Promise<{ code: number; stderr: string }> {
+  const baseEnv: Record<string, string | undefined> = { ...process.env };
+  for (const k of Object.keys(baseEnv)) {
+    if (k.startsWith("WORKFLOW_")) delete baseEnv[k];
+  }
+  const proc = Bun.spawn({
+    cmd: [
+      "uv",
+      "run",
+      SCRIPT_PATH,
+      "test",
+      "--project-dir",
+      dir,
+      "--package-dir",
+      dir,
+      ...(targets.length > 0 ? ["--tests", ...targets] : []),
+    ],
+    cwd: dir,
+    env: baseEnv as Record<string, string>,
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  const [stderr, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+  return { code, stderr };
+}
+
+describe(
+  "CR-CRU-101 §S1 — the junit corroboration asserts its precondition before " +
+    "its conclusion",
+  () => {
+    test(
+      "an artifact with no scope record beside it is NOT proven full, and the " +
+        "reason names the missing record rather than failing on the tree",
+      () => {
+        const dir = plantReportsDir({ "junit.xml": junitFor(["tests/a.test.ts"]) });
+        try {
+          const proof = fullRunProof(dir);
+
+          expect(proof.provenFull).toBe(false);
+          expect(proof.reason).toContain(SCOPE_RECORD);
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test(
+      "a record that says the run was SCOPED is not proof of fullness, and " +
+        "the reason names the scope the artifact actually had (AC2)",
+      () => {
+        const dir = plantReportsDir({
+          "junit.xml": junitFor(["tests/boot-safety.test.ts"]),
+          [SCOPE_RECORD]: JSON.stringify({
+            scope: SCOPED_SCOPE,
+            artifact: "junit.xml",
+            targets: ["tests/boot-safety.test.ts"],
+          }),
+        });
+        try {
+          const proof = fullRunProof(dir);
+
+          expect(proof.provenFull).toBe(false);
+          expect(proof.reason).toContain(SCOPED_SCOPE);
+          expect(proof.reason).toContain("tests/boot-safety.test.ts");
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test(
+      "a record that says the run was FULL is proof, so the conclusion is " +
+        "reached rather than skipped (AC6 — the check still concludes)",
+      () => {
+        const dir = plantReportsDir({
+          "junit.xml": junitFor(["tests/a.test.ts", "tests/b.test.ts"]),
+          [SCOPE_RECORD]: JSON.stringify({
+            scope: FULL_SCOPE,
+            artifact: "junit.xml",
+            targets: [],
+          }),
+        });
+        try {
+          expect(fullRunProof(dir).provenFull).toBe(true);
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test(
+      "an unreadable or unrecognised record is not proof and never throws — " +
+        "a corrupt local artifact must skip, not crash the suite",
+      () => {
+        const truncated = plantReportsDir({
+          "junit.xml": junitFor(["tests/a.test.ts"]),
+          [SCOPE_RECORD]: "{ scope: ",
+        });
+        const alien = plantReportsDir({
+          "junit.xml": junitFor(["tests/a.test.ts"]),
+          [SCOPE_RECORD]: JSON.stringify({ scope: "partial" }),
+        });
+        try {
+          expect(fullRunProof(truncated).provenFull).toBe(false);
+          expect(fullRunProof(truncated).reason).toContain(SCOPE_RECORD);
+          expect(fullRunProof(alien).provenFull).toBe(false);
+          expect(fullRunProof(alien).reason).toContain("partial");
+        } finally {
+          fs.rmSync(truncated, { recursive: true, force: true });
+          fs.rmSync(alien, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test(
+      "a missing artifact keeps its documented skip, and the reason still " +
+        "names the artifact (today's only skip case is preserved)",
+      () => {
+        const dir = plantReportsDir({});
+        try {
+          const proof = fullRunProof(dir);
+
+          expect(proof.provenFull).toBe(false);
+          expect(proof.reason).toContain("junit.xml");
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test(
+      "THE CHECK DID NOT BECOME UNFAILABLE: a proven-FULL artifact that omits " +
+        "an on-disk .test.ts file still yields a gap naming that file (AC5/AC6)",
+      () => {
+        const onDisk = ["tests/a.test.ts", "tests/invisible.test.ts", "tests/b.test.ts"];
+        const ran = ["tests/a.test.ts", "tests/b.test.ts"];
+
+        expect(junitParityGap(onDisk, ran)).toEqual({
+          neverRan: ["tests/invisible.test.ts"],
+          ranButAbsent: [],
+        });
+      },
+    );
+
+    test(
+      "the conclusion is a SET comparison in both directions — a file the run " +
+        "reports that is no longer on disk is reported too, so two errors " +
+        "cancelling out cannot pass",
+      () => {
+        expect(
+          junitParityGap(["tests/a.test.ts", "tests/added.test.ts"], [
+            "tests/a.test.ts",
+            "tests/deleted.test.ts",
+          ]),
+        ).toEqual({
+          neverRan: ["tests/added.test.ts"],
+          ranButAbsent: ["tests/deleted.test.ts"],
+        });
+
+        expect(junitParityGap(["tests/a.test.ts"], ["tests/a.test.ts"])).toEqual({
+          neverRan: [],
+          ranButAbsent: [],
+        });
+      },
+    );
+
+    test(
+      "THE SEQUENCE THAT PRODUCES THE BUG, end to end: a real SCOPED client " +
+        "run stamps its artifact `scoped` (naming its targets), and the " +
+        "corroboration refuses that artifact instead of failing on it (AC1)",
+      async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cr101-scoped-run-"));
+        try {
+          writeTwoFileFixtureProject(dir, "cr101-scope-fixture");
+
+          const run = await runClientTest(dir, ["a.test.ts"]);
+          expect(run.code).toBe(0);
+
+          const reportsDir = path.join(dir, "test-reports");
+          const record = JSON.parse(
+            fs.readFileSync(path.join(reportsDir, SCOPE_RECORD), "utf8"),
+          ) as { scope: string; targets: string[] };
+
+          expect(record.scope).toBe(SCOPED_SCOPE);
+          expect(record.targets).toEqual(["a.test.ts"]);
+
+          const proof = fullRunProof(reportsDir);
+          expect(proof.provenFull).toBe(false);
+          expect(proof.reason).toContain(SCOPED_SCOPE);
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test(
+      "and the other half of the sequence: a real WHOLE-SUITE client run " +
+        "stamps its artifact `full`, so the corroboration CONCLUDES",
+      async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cr101-full-run-"));
+        try {
+          writeTwoFileFixtureProject(dir, "cr101-scope-fixture");
+
+          const run = await runClientTest(dir, []);
+          expect(run.code).toBe(0);
+
+          const reportsDir = path.join(dir, "test-reports");
+          const record = JSON.parse(
+            fs.readFileSync(path.join(reportsDir, SCOPE_RECORD), "utf8"),
+          ) as { scope: string; targets: string[] };
+
+          expect(record.scope).toBe(FULL_SCOPE);
+          expect(record.targets).toEqual([]);
+          expect(fullRunProof(reportsDir).provenFull).toBe(true);
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test(
+      "the producing client declares the SAME record filename this check " +
+        "reads — a client-side rename must fail here, never silently retire " +
+        "the corroboration through its failure-free skip path",
+      () => {
+        const clientSource = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+        expect(
+          new RegExp(`^DEFAULT_SCOPE\\s*=\\s*["']${SCOPE_RECORD.replace(".", "\\.")}["']`, "m")
+            .test(clientSource),
+        ).toBe(true);
+      },
+    );
+  },
+);
