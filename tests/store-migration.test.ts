@@ -630,13 +630,25 @@ describe("CR-CRU-071 AC2 — existing stores are baselined without loss", () => 
       const dbPath = copyOfRealStore();
       if (dbPath === null) {
         // The RESIDUAL case, named rather than hidden: the live store EXISTS
-        // (the skip above did not fire) but `sqlite3 .backup` failed — no
-        // sqlite3 binary, or an unreadable file. A declaration-time skip
-        // cannot see that, and bun has no runtime skip, so this branch STILL
-        // READS AS A PASS. It is left that way deliberately: the alternative
-        // is throwing, which would turn "no sqlite3 CLI on this machine" into
-        // a red suite — a new failure mode this CR was not asked to create.
-        // The log says so out loud instead. Never a synthetic stand-in called
+        // (the declaration-time skip did not fire) AND `sqlite3` is on PATH,
+        // but `.backup` exited non-zero — an unreadable, locked or corrupt
+        // source, or a destination it could not write. A declaration-time
+        // skip cannot see that, and bun has no runtime skip, so this branch
+        // STILL READS AS A PASS.
+        //
+        // Which case is LOUD and which is SILENT, because the distinction is
+        // the whole justification: a machine with NO sqlite3 is already RED
+        // and is deliberately left that way. `snapshotLiveStore` reaches its
+        // `exitCode !== 0` return — the only route here — only if
+        // `Bun.spawnSync` RETURNED, and on a missing executable it THROWS, so
+        // that machine fails this test rather than passing it. This silent
+        // branch therefore buys nothing for the missing-binary case; it
+        // covers only the strictly rarer one where the binary is present and
+        // the copy itself fails. THAT is what makes the silence acceptable:
+        // an unreadable or locked store is a genuinely exceptional local
+        // condition, not a machine shape CI can have, whereas the common,
+        // reproducible "this host has no sqlite3" is loud already. The log
+        // says it out loud here instead. Never a synthetic stand-in called
         // "the real dog-food store": AC2's whole point is that the proof runs
         // against the highest-value database in the project (CR-CRU-043).
         console.log(
@@ -1056,6 +1068,24 @@ describe("CR-CRU-100 §S1 — roles are PRESERVED across a migration, on a store
     // re-derived over an existing value. It is what the equality-of-count
     // assertion this CR replaces contradicted.
     const declaredBefore = expectRolesPreserved(before, after);
+    // The declared set's MEMBERSHIP, pinned in the same shape AC3's
+    // precondition above uses, and for the same reason. `expectRolesPreserved`
+    // guards non-vacuity with a floor of `> 0` only, and `makePreRenameStore`
+    // writes `e-declared` unconditionally, so that floor can never fire for
+    // §S1: every row of `CR100_SYNTHETIC_ROLE_HISTORY` could be deleted and
+    // this test would stay green. Each row is a distinct way a migration can
+    // get a classification wrong (enumerated on that constant), so the set is
+    // pinned by name — losing one now fails here. The two rows that carry no
+    // role before are outside this set and pinned individually below and
+    // above (`e-null`, `e-cr100-unclassifiable`). The helper keeps the bare
+    // `> 0` floor for §S2, whose store is the real one and whose membership
+    // cannot be enumerated.
+    expect(Object.keys(declaredBefore).sort()).toEqual([
+      "e-cr100-agreeing",
+      "e-cr100-unparseable",
+      "e-cr100-was-inferred",
+      "e-declared",
+    ]);
 
     // The count never DECREASES, and here it STRICTLY GROWS, because the
     // backfill classified `e-null` — mechanical proof that equality of count
