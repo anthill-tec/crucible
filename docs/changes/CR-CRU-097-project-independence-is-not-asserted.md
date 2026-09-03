@@ -69,6 +69,22 @@ project. §S6 exempts provenance in **comments and docstrings**; text that argpa
 comment, and the exemption does not reach it. The remedy keeps the rule and moves the citation: the
 help states the behaviour, the adjacent code comment carries the lineage.
 
+**A DOCSTRING IS NOT EXEMPT WHEN IT IS RENDERED — found in C3, and it is why four root surfaces
+leaked nine ids at once.** `bun`, `mvn`, `python` and `rust` build their parser with
+`description=__doc__`: the module docstring **IS** the root `--help`. §S6's exemption assumed a
+docstring is a maintainer artefact that no user reads, and for these four it was the primary
+user-facing text. The remedy preserves both: the docstring stays **byte-identical** (AC8 intact,
+and it is the file's design record) and argparse is given a dedicated `_CLI_DESCRIPTION` that states
+behaviour. `arduino` needed no change — it already passed a short literal. The general rule: the
+exemption follows the **rendering**, never the syntax. A comment or docstring is exempt because
+nobody renders it; the moment it is passed to a renderer it is a user-visible string.
+
+**Detection subtlety worth keeping.** argparse wraps help text **after a hyphen**, so a leaked id
+can arrive as `CR-CRU-` + newline + `086` and a naive per-line regex sees nothing. The check
+un-wraps first (`joinWrapped`) and additionally drives every surface with `COLUMNS=200` — two
+independent defences, because either alone can be defeated by a terminal width. Denominator matters
+too: **21 of 159** driven surfaces leaked, so a spot check of a few verbs would have found nothing.
+
 ### §S3 — the regression contract replicates our live board
 
 Three test files build fixtures that are not arbitrary ids but a **snapshot of our own queue**:
@@ -156,7 +172,8 @@ on "comments are exempt" must reuse the classifier that is already proven, not r
   leak 13 ids across five namespaces today (§S2's table). A `§`-citation inside a `help=` string is
   in scope precisely because it is rendered; the exemption in §S6 covers comments and docstrings
   only. Where a citation is load-bearing for a maintainer it moves to the adjacent comment, so the
-  lineage survives (AC8) and the user-facing line states behaviour.
+  lineage survives (AC8) and the user-facing line states behaviour. Verified by DRIVING all
+  **159** surfaces (5 root + every verb of every client) at `COLUMNS=200`: zero literals.
 - **AC3** — No user-visible string in `public/` contains a `CR-CRU-` literal. (Comments exempt.)
 - **AC4** — In each of the three files in §S3, every assertion that states a product RULE runs on
   synthetic ids.
@@ -177,9 +194,20 @@ on "comments are exempt" must reuse the classifier that is already proven, not r
   across `src/`, `public/` and `clients/` is unchanged by this CR, **measured by the §S6
   `extractCitableText` classifier** (the AC is otherwise unmeasurable — nothing else in the repo
   separates a comment from a string). Baseline measured 2026-09-03, excluding `__pycache__`:
-  `src/` **517**, `public/` **379**, `clients/` **618**. Of `public/`'s 379, exactly **one** sits
-  inside a string literal (`public/app.js:2354`, §S1's own defect); AC3 therefore takes `public/`
-  from 1 to 0 quoted occurrences and leaves all 378 comment references untouched.
+  the classifier itself, post-CR: prose (comments + docstrings) `src/` **512**, `public/` **379**,
+  `clients/` **615**. The earlier figures in this AC (517/379/618) were **totals**, not prose counts
+  — a mis-specified baseline, corrected here: a criterion about provenance must be measured with the
+  provenance classifier, not with a raw grep.
+
+  Two consequences the raw total hid. First, `clients/` legitimately drops 5 raw references, because
+  at five sites the citation stood in BOTH the `help=` string and the adjacent comment; deleting the
+  rendered copy loses no lineage, and `git diff` confirms every removal is from a `help=` string and
+  every addition is a `#` comment. Second, the classifier reports 12 "live-code" references in
+  `clients/` that are all in `clients/STATUS-CONTRACT.md`: **markdown has no comment syntax**, so
+  documentation prose reads as code to any classifier. `.md` is therefore exempt BY KIND, not by
+  pattern. Measured live-code references carrying a CR id: `public/` **0** (AC3), and `src/` **0**
+  quoted — no server response string names a CR, so there is no fourth leaking surface behind the
+  API's `help[]`.
 
 ## Non-goals
 

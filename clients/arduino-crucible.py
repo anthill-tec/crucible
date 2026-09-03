@@ -1214,7 +1214,7 @@ def main():
                          "(§S1/§S3) — on a recording only: with "
                          "--repair-provenance an empty value writes nothing "
                          "(it never overwrites a stored set) and the repair is "
-                         "REFUSED (§S4, CR-CRU-086 §S2).")
+                         "REFUSED.")
     # CR-CRU-081 §S3 — the OPT-IN correction path: without this flag a
     # re-post of an already-recorded release is the server's dedup replay
     # (CR-CRU-080 §S3), which is what keeps an ordinary run unable to

@@ -2082,8 +2082,23 @@ def _add_log_arg(p):
     )
 
 
+# CR-CRU-097 §S2/AC2 — the ROOT help's description, and deliberately NOT
+# `__doc__`. The module docstring is this client's design record: it cites the
+# CRs that shaped it, and argparse printed all of it to every user of every
+# project. The docstring stays exactly as it is (AC8 — provenance intact);
+# what the CLI RENDERS states the tool's behaviour and names no backlog.
+_CLI_DESCRIPTION = (
+    "Rust + Cargo Crucible CLI — one entry point for the orchestrator and for the "
+    "rust-{red,green,fix,verify} agent lifecycle, and for running Cargo targets "
+    "(nextest, check, clippy, llvm-cov) with the result ingested to Crucible.\n\n"
+    "Tool-specific (Cargo / Nextest / JUnit-XML / llvm-cov / Clippy), never "
+    "project-specific: the project path is parameterizable. Run `<verb> --help` "
+    "for a verb's own flags."
+)
+
+
 def main():
-    p = argparse.ArgumentParser(prog="rust-crucible", description=__doc__)
+    p = argparse.ArgumentParser(prog="rust-crucible", description=_CLI_DESCRIPTION)
     # §S14 — subcommand is OPTIONAL: a bare invocation falls through to the
     # no-arg live dashboard (below), never argparse's required-subcommand error.
     sub = p.add_subparsers(dest="cmd", required=False)
@@ -2096,7 +2111,7 @@ def main():
     r.add_argument(
         "--agent",
         help="Agent id — a free-form identifier. REQUIRED, but enforced at RUNTIME "
-             "by the §S5 hard stop (CR-CRU-054 §S2b) so a missing id yields the "
+             "by the §S5 hard stop so a missing id yields the "
              "ok:false AXI envelope, not a bare argparse usage error. "
              "The role is declared by --role and "
              "is never inferred from the agentId's shape; any CR-<PROJ>-NNN-<cycle>-<ROLE> "
@@ -2129,9 +2144,13 @@ def main():
     r.set_defaults(func=cmd_register)
 
     u = sub.add_parser("unregister", help="Unregister an agent")
+    # CR-CRU-054 §S2b — the same runtime hard stop `register` uses: --agent is
+    # NOT argparse-required, so the refusal arrives as the §S5 structured
+    # envelope. Lineage lives here rather than in the help line, which every
+    # project's users read (CR-CRU-097 §S2/AC2).
     u.add_argument("--agent",
                    help="Agent id — REQUIRED, but enforced at RUNTIME by the §S5 "
-                        "hard stop (CR-CRU-054 §S2b) so a missing id yields "
+                        "hard stop so a missing id yields "
                         "the ok:false AXI envelope, not a bare argparse "
                         "usage error.")
     _add_project_dir_arg(u)
@@ -2357,12 +2376,16 @@ def main():
         "--keep-target", action="store_true",
         help="Skip the post-run `cargo clean` reclaim (keep target/ artifacts).",
     )
+    # The zero-warning baseline this gate defends was established by
+    # CR-NAI-305 (2026-06-05) on the workspace this client was written
+    # against. That is lineage for a maintainer; it moved out of the printed
+    # help (CR-CRU-097 §S2/AC2) because a help line naming another project's
+    # backlog teaches every user of this client the wrong thing.
     pmg.add_argument(
         "--skip-clippy", action="store_true",
         help="Bypass the fail-fast clippy gate. By DEFAULT the gate runs `clippy --workspace "
              "--all-targets --all-features -- -D warnings` BEFORE the coverage regression and "
-             "aborts on any lint (the workspace was cleaned to zero -D warnings by CR-NAI-305, "
-             "2026-06-05). Pass this only for a deliberate bypass.",
+             "aborts on any lint. Pass this only for a deliberate bypass.",
     )
     _add_project_dir_arg(pmg)
     pmg.set_defaults(func=cmd_pre_merge_gate)
@@ -2591,7 +2614,7 @@ def main():
                          "(§S1/§S3) — on a recording only: with "
                          "--repair-provenance an empty value writes nothing "
                          "(it never overwrites a stored set) and the repair is "
-                         "REFUSED (§S4, CR-CRU-086 §S2).")
+                         "REFUSED.")
     # CR-CRU-081 §S3 — the OPT-IN correction path: without this flag a
     # re-post of an already-recorded release is the server's dedup replay
     # (CR-CRU-080 §S3), which is what keeps an ordinary run unable to
