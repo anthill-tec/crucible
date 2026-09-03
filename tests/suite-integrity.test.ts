@@ -373,6 +373,12 @@ const SCOPE_RECORD = "junit-scope.json";
 const FULL_SCOPE = "full";
 const SCOPED_SCOPE = "scoped";
 
+// The artifact a stamp must NAME to be proof ABOUT it — the client's
+// `DEFAULT_JUNIT`. Pinned beside the record's own filename and for the same
+// reason: the binding is a cross-stack contract whose only failure mode is a
+// permanent, silent SKIP.
+const JUNIT_ARTIFACT = "junit.xml";
+
 export interface FullRunProof {
   provenFull: boolean;
   // Non-empty whenever `provenFull` is false: `test.skipIf` prints no reason
@@ -735,6 +741,96 @@ describe(
       },
     );
 
+    // ── CR-CRU-101 C3 FIX (P3-1) — the stamp BINDS to one artifact ───────
+    //
+    // MEASURED ON THIS BRANCH (VERIFY, 2026-09-04): a stamp reading
+    // `{"scope":"full","artifact":"somewhere-else.xml"}` planted beside
+    // `junit.xml` returned `provenFull=true`. The producing client writes
+    // `artifact` (`_scope_record`) and the python pin asserts it equals
+    // `DEFAULT_JUNIT`, but this precondition read `scope` and `targets` only —
+    // so the one field that says WHICH artifact the scope claim is ABOUT was
+    // decoration on both sides of the contract, written and asserted and
+    // never consulted.
+    //
+    // A stamp naming a different artifact is not proof about this one. The
+    // record exists because only the PRODUCER knows the scope; a producer
+    // that named a different file made no statement about the file being
+    // read, and a scope claim about `somewhere-else.xml` licensing a parity
+    // comparison over `junit.xml` is exactly the stale-state defect §S1
+    // removes, one level up. Both names go in the reason, or a mismatch is
+    // indistinguishable from a scoped run.
+    //
+    // AN ABSENT `artifact` IS ALSO NOT PROOF — the direction chosen because
+    // it cannot silently mis-certify. Every stamp this client has ever
+    // written names its artifact, so an unnamed one came from some other
+    // writer: an alien producer, or a version predating the field. Neither
+    // can be bound to `junit.xml`, and accepting absence would re-open the
+    // hole for precisely the writers whose stamps mean least. Refusing costs
+    // at most one documented SKIP — the failure-free direction this whole
+    // corroboration is built on — while accepting costs a false green.
+
+    test(
+      "a stamp that claims FULL but names a DIFFERENT artifact is not proof " +
+        "about the artifact beside it, and the reason names BOTH names; the " +
+        "same stamp naming the right artifact still proves full, so this is " +
+        "a discrimination and not a new blanket refusal",
+      () => {
+        const mismatched = plantReportsDir({
+          "junit.xml": junitFor(["tests/a.test.ts", "tests/b.test.ts"]),
+          [SCOPE_RECORD]: JSON.stringify({
+            scope: FULL_SCOPE,
+            artifact: "somewhere-else.xml",
+            targets: [],
+          }),
+        });
+        // Byte-identical but for the artifact NAME — the whole difference.
+        const bound = plantReportsDir({
+          "junit.xml": junitFor(["tests/a.test.ts", "tests/b.test.ts"]),
+          [SCOPE_RECORD]: JSON.stringify({
+            scope: FULL_SCOPE,
+            artifact: JUNIT_ARTIFACT,
+            targets: [],
+          }),
+        });
+        try {
+          const proof = fullRunProof(mismatched);
+
+          expect(proof.provenFull).toBe(false);
+          // The mismatch itself, not a bare refusal: the name the stamp
+          // certifies and the name actually being read.
+          expect(proof.reason).toContain("somewhere-else.xml");
+          expect(proof.reason).toContain(JUNIT_ARTIFACT);
+
+          expect(fullRunProof(bound)).toEqual({ provenFull: true, reason: "" });
+        } finally {
+          fs.rmSync(mismatched, { recursive: true, force: true });
+          fs.rmSync(bound, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test(
+      "a stamp that claims FULL and names NO artifact at all does not bind " +
+        "either — nothing written by this client omits the name, so an " +
+        "omission is an alien or older writer whose claim cannot be tied to " +
+        "the artifact being read",
+      () => {
+        const dir = plantReportsDir({
+          "junit.xml": junitFor(["tests/a.test.ts"]),
+          [SCOPE_RECORD]: JSON.stringify({ scope: FULL_SCOPE, targets: [] }),
+        });
+        try {
+          const proof = fullRunProof(dir);
+
+          expect(proof.provenFull).toBe(false);
+          expect(proof.reason).toContain("artifact");
+          expect(proof.reason).toContain(JUNIT_ARTIFACT);
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
+
     test(
       "an unreadable or unrecognised record is not proof and never throws — " +
         "a corrupt local artifact must skip, not crash the suite",
@@ -887,10 +983,14 @@ describe(
           const reportsDir = path.join(dir, "test-reports");
           const record = JSON.parse(
             fs.readFileSync(path.join(reportsDir, SCOPE_RECORD), "utf8"),
-          ) as { scope: string; targets: string[] };
+          ) as { scope: string; artifact: string; targets: string[] };
 
           expect(record.scope).toBe(FULL_SCOPE);
           expect(record.targets).toEqual([]);
+          // The cross-stack half of the artifact BINDING (C3 FIX P3-1): the
+          // field this precondition now requires is the field the real client
+          // really writes, observed from a real run rather than assumed.
+          expect(record.artifact).toBe(JUNIT_ARTIFACT);
           expect(fullRunProof(reportsDir).provenFull).toBe(true);
         } finally {
           fs.rmSync(dir, { recursive: true, force: true });
@@ -1153,6 +1253,13 @@ const FIXTURE_EXCLUDES_TESTS_DIR = '[test]\npathIgnorePatterns = ["tests/hidden/
 const FIXTURE_EXCLUDES_BY_GLOB = '[test]\npathIgnorePatterns = ["**/hidden/**"]\n';
 const FIXTURE_EXCLUDES_NOTHING = "[test]\n";
 const FIXTURE_EXCLUSION_COMMENTED = '[test]\n# pathIgnorePatterns = ["tests/hidden/*"]\n';
+// TOML's two QUOTED key spellings of the same assignment. Both are honoured
+// by bun 1.3.14 (measured over this fixture, 2026-09-04: each hides the file,
+// `Ran 1 test across 1 file.`), and the guard's finder demanded `=`
+// immediately after the BARE key, so both escaped it — the one direction the
+// finder's over-reporting posture does not cover.
+const FIXTURE_EXCLUDES_QUOTED_KEY = '[test]\n"pathIgnorePatterns" = ["tests/hidden/*"]\n';
+const FIXTURE_EXCLUDES_LITERAL_KEY = "[test]\n'pathIgnorePatterns' = [\"tests/hidden/*\"]\n";
 
 // The prose shape the REAL bunfig.toml takes today: five comment lines, one
 // of which names the key verbatim. Planted rather than read, because a claim
@@ -1369,6 +1476,65 @@ describe(
           expect(reported).not.toEqual([]);
           expect(reported.filter((e) => e.referencesTestsDir)).toEqual([]);
         });
+      },
+    );
+
+    test(
+      "QUOTING THE KEY CHANGES NOTHING FOR BUN, so it must change nothing " +
+        "for the guard: `\"pathIgnorePatterns\" = [...]` really does hide the " +
+        "fixture's file from a real run — its own junit report names one file " +
+        "and its own summary counts one — and the guard REPORTS it",
+      async () => {
+        await inExclusionFixture("quoted-key", FIXTURE_EXCLUDES_QUOTED_KEY, (observed) => {
+          expect(observed.onDisk).toEqual([FIXTURE_HIDDEN, FIXTURE_VISIBLE]);
+          expect(observed.ranFiles).toEqual([FIXTURE_VISIBLE]);
+          expect(observed.collectedFiles).toBe(1);
+
+          expect(discoveryExclusions(FIXTURE_EXCLUDES_QUOTED_KEY)).toEqual([
+            {
+              arrayText: '["tests/hidden/*"]',
+              patterns: ["tests/hidden/*"],
+              referencesTestsDir: true,
+            },
+          ]);
+        });
+      },
+    );
+
+    test(
+      "TOML's other quoted key form is the same assignment again: " +
+        "`'pathIgnorePatterns' = [...]` hides the file from a real run too — " +
+        "observed on both channels — and is likewise REPORTED",
+      async () => {
+        await inExclusionFixture("literal-key", FIXTURE_EXCLUDES_LITERAL_KEY, (observed) => {
+          expect(observed.ranFiles).toEqual([FIXTURE_VISIBLE]);
+          expect(observed.collectedFiles).toBe(1);
+
+          expect(discoveryExclusions(FIXTURE_EXCLUDES_LITERAL_KEY)).toEqual([
+            {
+              arrayText: '["tests/hidden/*"]',
+              patterns: ["tests/hidden/*"],
+              referencesTestsDir: true,
+            },
+          ]);
+        });
+      },
+    );
+
+    test(
+      "the three spellings reach the IDENTICAL verdict — bare, basic-quoted " +
+        "and literal-quoted keys are one TOML assignment, so the guard must " +
+        "not report three different things about them",
+      () => {
+        const bare = discoveryExclusions(FIXTURE_EXCLUDES_TESTS_DIR);
+
+        expect(discoveryExclusions(FIXTURE_EXCLUDES_QUOTED_KEY)).toEqual(bare);
+        expect(discoveryExclusions(FIXTURE_EXCLUDES_LITERAL_KEY)).toEqual(bare);
+        // ...and the bare spelling's own verdict is unchanged by the widening
+        // that admits the other two: still exactly one exclusion, still
+        // naming the tests/ tree. A superset, never a substitution.
+        expect(bare).toHaveLength(1);
+        expect(bare[0]!.referencesTestsDir).toBe(true);
       },
     );
 
