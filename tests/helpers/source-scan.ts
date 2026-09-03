@@ -200,7 +200,20 @@ function regexMayOpenAt(text: string, slash: number): boolean {
 // newline; a template literal may span lines and tracks `${...}` brace depth
 // so a `}` inside a substitution does not end it early; a regex tracks its
 // `[...]` class, inside which `/` is literal.
-function skipLiteral(text: string, open: number, kind: "quote" | "regex"): number {
+//
+// `holes`, when passed, collects the LIVE-CODE ranges inside a template
+// literal — the interior of each top-level `${...}` — because that text is
+// expression code wearing a literal's clothes: `` `sent ${String(x.y)}` ``
+// names `x.y` in code, while the prose around it names nothing. Only the
+// outermost substitution of a nest is recorded, which keeps the whole nest
+// on the live-code side. Callers that only need the literal's end pass
+// nothing and are unaffected.
+function skipLiteral(
+  text: string,
+  open: number,
+  kind: "quote" | "regex",
+  holes?: { start: number; end: number }[],
+): number {
   const quote = text[open];
   const template = quote === "`";
   let depth = 0;
@@ -223,11 +236,13 @@ function skipLiteral(text: string, open: number, kind: "quote" | "regex"): numbe
     if (template) {
       if (c === "$" && text[i + 1] === "{") {
         depth++;
+        if (depth === 1 && holes !== undefined) holes.push({ start: i + 2, end: text.length });
         i += 2;
         continue;
       }
       if (c === "}" && depth > 0) {
         depth--;
+        if (depth === 0 && holes !== undefined) holes[holes.length - 1]!.end = i;
         i++;
         continue;
       }
@@ -238,28 +253,72 @@ function skipLiteral(text: string, open: number, kind: "quote" | "regex"): numbe
   return open + 1;
 }
 
-export function jsCommentRuns(text: string): { blocks: string[]; lines: string[] } {
-  const blocks: string[] = [];
-  const lines: string[] = [];
+// THE INERT LAYER as spans over the original text: everything that is NOT
+// live code — comment runs, and the prose inside string literals. This is
+// what the walk above actually determines; `jsCommentRuns` is a projection of
+// it and `jsLiveCode` is its complement, so there is still exactly ONE walk
+// of this grammar in the repo.
+//
+// ADDED in CR-CRU-099 §S2 for the accepted-field guard, which needs the
+// MIRROR IMAGE of what the citation scans need: a file's live CODE, with the
+// prose taken out. Both halves of that guard's determination — which keys an
+// interface declares, which fields a handler dereferences — are wrong if
+// prose counts. `handleQueuePost` carries a comment naming `fields.release`
+// two lines above the code that reads it, so a scan over raw text would keep
+// reporting the field READ long after the read was deleted; a `help=` string
+// naming a field would do the same. Both are the silent direction. Extending
+// here rather than stripping locally is §S6's standing rule: CR-CRU-096
+// shipped a hand-rolled stripper and a provenance comment leaked into a
+// selector string.
+//
+// A template literal contributes its PROSE only — each `${...}` interior is
+// live code and is left standing (see `skipLiteral`'s `holes`), which is why
+// `` `... ${String(fields.track)}` `` still reads as a field dereference.
+export interface JsInertSpan {
+  start: number;
+  end: number;
+  kind: "block" | "line" | "string";
+}
+
+export function jsInertSpans(text: string): JsInertSpan[] {
+  const spans: JsInertSpan[] = [];
   let i = 0;
   while (i < text.length) {
     const c = text[i];
     if (c === "/" && text[i + 1] === "/") {
       let j = i + 2;
       while (j < text.length && text[j] !== "\n") j++;
-      lines.push(text.slice(i, j));
+      spans.push({ start: i, end: j, kind: "line" });
       i = j;
       continue;
     }
     if (c === "/" && text[i + 1] === "*") {
       const close = text.indexOf("*/", i + 2);
       const end = close === -1 ? text.length : close + 2;
-      blocks.push(text.slice(i, end));
+      spans.push({ start: i, end, kind: "block" });
       i = end;
       continue;
     }
     if (c === '"' || c === "'" || c === "`") {
-      i = skipLiteral(text, i, "quote");
+      const holes: { start: number; end: number }[] = [];
+      const end = skipLiteral(text, i, "quote", holes);
+      // A MISREAD — `skipLiteral` found no closing quote and answered
+      // `open + 1` — contributes no span at all, exactly as the walk did
+      // before it reported string spans: an apostrophe in live code must not
+      // blank the rest of the file.
+      if (end <= i + 1) {
+        i = i + 1;
+        continue;
+      }
+      // The literal minus its substitutions: prose runs from the opening
+      // quote (or from the end of the previous hole) to the next hole.
+      let cursor = i;
+      for (const hole of holes) {
+        if (hole.start > cursor) spans.push({ start: cursor, end: hole.start, kind: "string" });
+        cursor = hole.end;
+      }
+      if (end > cursor) spans.push({ start: cursor, end, kind: "string" });
+      i = end;
       continue;
     }
     if (c === "/" && regexMayOpenAt(text, i)) {
@@ -268,7 +327,40 @@ export function jsCommentRuns(text: string): { blocks: string[]; lines: string[]
     }
     i++;
   }
+  return spans;
+}
+
+// Unchanged in behaviour by the span refactor: the same comment runs, in the
+// same order, sliced from the same offsets — `blocks` and `lines` are the two
+// comment kinds separated, exactly as the previous loop pushed them, and the
+// string spans this walk now also reports are not comments and are dropped
+// here.
+export function jsCommentRuns(text: string): { blocks: string[]; lines: string[] } {
+  const blocks: string[] = [];
+  const lines: string[] = [];
+  for (const span of jsInertSpans(text)) {
+    if (span.kind === "string") continue;
+    (span.kind === "block" ? blocks : lines).push(text.slice(span.start, span.end));
+  }
   return { blocks, lines };
+}
+
+// The COMPLEMENT of the inert layer: every comment run and every string's
+// prose blanked, every other byte left exactly where it was. Newlines inside
+// a blanked run are KEPT, so the result is offset- and line-identical to the
+// input — an index found in the live code is an index into the original file,
+// and a line number derived from it is the line a reader will open.
+export function jsLiveCode(text: string): string {
+  const spans = jsInertSpans(text);
+  if (spans.length === 0) return text;
+  let out = "";
+  let cursor = 0;
+  for (const span of spans) {
+    out += text.slice(cursor, span.start);
+    out += text.slice(span.start, span.end).replace(/[^\n]/g, " ");
+    cursor = span.end;
+  }
+  return out + text.slice(cursor);
 }
 
 // Extracts ONLY docstring/comment prose from a file — never string literals
