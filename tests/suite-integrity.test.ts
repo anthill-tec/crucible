@@ -1105,13 +1105,27 @@ describe(
 // decision the real one reaches.
 //   * bun's real behaviour — a REAL client run (`clients/bun-crucible.py
 //     test` with NO targets, so the runner's own discovery decides what to
-//     collect), and the file set read back out of the run's OWN junit
-//     report and its OWN console output. Never predicted, never assumed.
+//     collect), read back on TWO independent channels: the file set named
+//     by the run's OWN junit report, and the FILE COUNT bun states in its
+//     own console summary line (`Ran 2 tests across 2 files.`). Different
+//     producers, different text, and they are required to AGREE — a
+//     disagreement is the only shape in which this fixture could lie, so it
+//     is a named failure rather than a silent preference for one channel.
+//     Never predicted, never assumed.
 //   * the guard's reaction — `discoveryExclusions` over that same fixture
 //     bunfig, required to REPORT the exclusion on both dimensions the two
 //     existing assertions cover.
-// Removing the exclusion flips both observations: bun collects both files
-// and the guard reports nothing.
+// Removing the exclusion flips every observation: bun collects both files,
+// counts two of them, and the guard reports nothing.
+//
+// WHY THE COUNT AND NOT THE FILE NAMES, on the console channel: the client
+// always runs bun with `--reporter=junit --reporter-outfile=…`, and under
+// that reporter bun prints ONLY the summary — no per-file header is emitted
+// in any case, ever (measured, bun 1.3.14, 2026-09-04). A console assertion
+// naming a file is therefore not flaky but UNSATISFIABLE under the very
+// invocation this fixture uses. The summary's file count is the statement
+// bun does make, it is independent of the junit report, and it flips
+// exactly with the exclusion.
 //
 // WHY A FIXTURE AND NOT THIS TREE: bun 1.3.14 has no discovery-listing and
 // no dry-run flag, so "enumerate what the runner would collect" over this
@@ -1161,15 +1175,17 @@ function writeExclusionFixtureProject(dir: string, bunfig: string): void {
 export interface FixtureRunObservation {
   // Every `.test.ts` under the fixture's tests/ tree, whatever ran.
   onDisk: string[];
-  // The distinct files the run's own junit report names.
+  // CHANNEL ONE — the distinct files the run's own junit report names.
   ranFiles: string[];
-  // The run's own console output — bun's other, independent statement of
-  // what it collected, so neither channel is the only witness.
-  console: string;
+  // CHANNEL TWO — the file count bun states in its own console summary,
+  // parsed from the run's captured output. `null` means the run said
+  // nothing countable, which is never the same claim as zero.
+  collectedFiles: number | null;
 }
 
 // Runs the REAL producing client over the fixture with no targets, so bun's
-// own discovery decides, and reports what the run itself said it ran.
+// own discovery decides, and reports what the run itself said it ran — on
+// both channels.
 async function observeFixtureRun(dir: string): Promise<FixtureRunObservation> {
   const run = await runClientTest(dir, []);
   expect(run.code).toBe(0);
@@ -1179,7 +1195,7 @@ async function observeFixtureRun(dir: string): Promise<FixtureRunObservation> {
       .map((full) => path.relative(dir, full).split(path.sep).join("/"))
       .sort(),
     ranFiles: distinctJunitTestcaseFiles(junit).sort(),
-    console: run.stderr,
+    collectedFiles: collectedFileCount(run.stderr),
   };
 }
 
@@ -1193,19 +1209,76 @@ async function inExclusionFixture(
     writeExclusionFixtureProject(dir, bunfig);
     const observed = await observeFixtureRun(dir);
     // NAMED in the output even on success, the way the corroboration above
-    // names its non-fatal verdicts: these two facts side by side ARE the
+    // names its non-fatal verdicts: these facts side by side ARE the
     // evidence that the guard is load-bearing, and evidence nobody can read
     // is evidence nobody can check.
     console.error(
       `[suite-integrity §S2] ${slug}: on disk ${observed.onDisk.join(", ")} | ` +
-        `bun collected ${observed.ranFiles.join(", ")} | guard reported ` +
-        `${JSON.stringify(discoveryExclusions(bunfig))}`,
+        `bun collected ${observed.ranFiles.join(", ")} | bun counted ` +
+        `${observed.collectedFiles === null ? "unknown" : observed.collectedFiles} file(s) | ` +
+        `guard reported ${JSON.stringify(discoveryExclusions(bunfig))}`,
     );
+    // THE TWO CHANNELS MUST AGREE, in every case, before any case-specific
+    // claim is believed. Junit report and console summary are produced by
+    // different code over different text; a fixture that lied — a stale
+    // artifact read back, a run that never happened — would have to make
+    // both lie the same way, and a disagreement is a failure in its own
+    // right rather than a choice between witnesses.
+    expect({ channel: "bun's summary file count", files: observed.collectedFiles }).toEqual({
+      channel: "bun's summary file count",
+      files: observed.ranFiles.length,
+    });
     body(observed);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
+
+// The console channel's PARSER, exercised on planted text as well as on the
+// real runs below, because the fixture cases can only ever show it the two
+// shapes their own exclusion produces.
+const PLANTED_ONE_FILE =
+  "[crucible] running: bun test --reporter=junit --reporter-outfile=/tmp/x/junit.xml  (cwd=/tmp/x)\n" +
+  "bun test v1.3.14 (0d9b296a)\n\n 1 pass\n 0 fail\n 1 expect() calls\n" +
+  "Ran 1 test across 1 file. [9.00ms]\n[crucible] bun test exit=0\n";
+const PLANTED_TWO_FILES =
+  "[crucible] running: bun test --reporter=junit --reporter-outfile=/tmp/x/junit.xml  (cwd=/tmp/x)\n" +
+  "bun test v1.3.14 (0d9b296a)\n\n 2 pass\n 0 fail\n 2 expect() calls\n" +
+  "Ran 2 tests across 2 files. [10.00ms]\n[crucible] bun test exit=0\n";
+
+describe("CR-CRU-101 §S2 — bun's summary file count, read off planted console text", () => {
+  test(
+    "the singular and plural spellings of the summary line are the SAME " +
+      "count channel — bun writes `1 test across 1 file` and `2 tests " +
+      "across 2 files`, and a parser that only knew one of them would read " +
+      "the other as no answer at all",
+    () => {
+      expect(collectedFileCount(PLANTED_ONE_FILE)).toBe(1);
+      expect(collectedFileCount(PLANTED_TWO_FILES)).toBe(2);
+    },
+  );
+
+  test(
+    "console text with NO summary line at all is UNKNOWN, never zero: a " +
+      "missing count that read as 0 would make a fixture whose exclusion " +
+      "hid EVERYTHING look exactly like a correctly-counted empty run",
+    () => {
+      expect(collectedFileCount("[crucible] running: bun test\n[crucible] bun test exit=1\n")).toBe(
+        null,
+      );
+      expect(collectedFileCount("")).toBe(null);
+    },
+  );
+
+  test(
+    "the count read is the FILE count and not the test count — the two " +
+      "differ in every run that matters, and a parser reaching for the " +
+      "first number on the line would return the wrong one",
+    () => {
+      expect(collectedFileCount("Ran 7 tests across 3 files. [12.00ms]\n")).toBe(3);
+    },
+  );
+});
 
 describe(
   "CR-CRU-101 §S2 — a test file the runner's discovery does not reach is " +
@@ -1215,15 +1288,15 @@ describe(
     test(
       "a pathIgnorePatterns entry naming the fixture's tests/hidden/ really " +
         "does hide that file from a real bun run — the run's own junit " +
-        "report and console name only the visible file — and the guard " +
-        "REPORTS that entry on both of its dimensions",
+        "report names only the visible file and its own summary counts one " +
+        "file — and the guard REPORTS that entry on both of its dimensions",
       async () => {
         await inExclusionFixture("excluded", FIXTURE_EXCLUDES_TESTS_DIR, (observed) => {
-          // HALF ONE — bun's behaviour, read out of the run's own output.
+          // HALF ONE — bun's behaviour, read out of the run's own output on
+          // both channels (already required to agree with each other).
           expect(observed.onDisk).toEqual([FIXTURE_HIDDEN, FIXTURE_VISIBLE]);
           expect(observed.ranFiles).toEqual([FIXTURE_VISIBLE]);
-          expect(observed.console).toContain(`${FIXTURE_VISIBLE}:`);
-          expect(observed.console).not.toContain(FIXTURE_HIDDEN);
+          expect(observed.collectedFiles).toBe(1);
 
           // HALF TWO — the guard, asked about the very config that hid it.
           expect(discoveryExclusions(FIXTURE_EXCLUDES_TESTS_DIR)).toEqual([
@@ -1238,15 +1311,15 @@ describe(
     );
 
     test(
-      "removing that one line flips BOTH observations: the same fixture's " +
-        "run collects both files and the guard reports nothing — so the " +
-        "green verdict the two assertions above reach on the real " +
-        "bunfig.toml is a verdict, not a tautology",
+      "removing that one line flips EVERY observation: the same fixture's " +
+        "run collects both files, counts two of them, and the guard reports " +
+        "nothing — so the green verdict the two assertions above reach on " +
+        "the real bunfig.toml is a verdict, not a tautology",
       async () => {
         await inExclusionFixture("no-exclusion", FIXTURE_EXCLUDES_NOTHING, (observed) => {
           expect(observed.onDisk).toEqual([FIXTURE_HIDDEN, FIXTURE_VISIBLE]);
           expect(observed.ranFiles).toEqual([FIXTURE_HIDDEN, FIXTURE_VISIBLE]);
-          expect(observed.console).toContain(`${FIXTURE_HIDDEN}:`);
+          expect(observed.collectedFiles).toBe(2);
 
           expect(discoveryExclusions(FIXTURE_EXCLUDES_NOTHING)).toEqual([]);
         });
@@ -1261,7 +1334,7 @@ describe(
       async () => {
         await inExclusionFixture("glob", FIXTURE_EXCLUDES_BY_GLOB, (observed) => {
           expect(observed.ranFiles).toEqual([FIXTURE_VISIBLE]);
-          expect(observed.console).not.toContain(FIXTURE_HIDDEN);
+          expect(observed.collectedFiles).toBe(1);
 
           const reported = discoveryExclusions(FIXTURE_EXCLUDES_BY_GLOB);
           expect(reported).toEqual([
@@ -1288,6 +1361,7 @@ describe(
       async () => {
         await inExclusionFixture("commented", FIXTURE_EXCLUSION_COMMENTED, (observed) => {
           expect(observed.ranFiles).toEqual([FIXTURE_HIDDEN, FIXTURE_VISIBLE]);
+          expect(observed.collectedFiles).toBe(2);
 
           expect(discoveryExclusions(FIXTURE_EXCLUSION_COMMENTED)).toEqual([]);
           expect(discoveryExclusions(BUNFIG_PROSE_WARNING)).toEqual([]);
