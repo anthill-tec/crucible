@@ -1302,8 +1302,15 @@ body {
    stacked a multi-wave release vertically INSIDE a horizontal spine. §S5
    calls a multi-wave release "the case that WIDENS this zone" and §S6 states
    its budget per wave box — a per-box budget is only a budget if the boxes
-   share the axis. So the default `row` stands for both containers, and
-   `flex-wrap` is what a release too wide for one line does. */
+   share the axis. So the default `row` stands for both containers.
+
+   What a release TOO WIDE for one line should do is UNRULED. `AC19d`, which
+   answered that case by declaring a wrap the intended degradation, is
+   RETIRED — an answer invented without asking, to a widening that was itself
+   caused by rendering full ids; the bare annotation removes the cause. The
+   question is left OPEN for the user to decide, and nothing asserts a
+   behaviour for it: this comment neither endorses the `flex-wrap` below nor
+   argues against it. */
 .app-flow-waves,
 .app-flow-packages {
   display: flex;

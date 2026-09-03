@@ -378,9 +378,11 @@ export function jsLiveCode(text: string): string {
 // it. That literal lives INSIDE a string (`"CR-CRU-"`), which is exactly
 // what `jsLiveCode` blanks — so the accepted-field guard's projection would
 // hide the leak this one exists to find. Comments must still be exempt,
-// because `public/app.js` carries 186 occurrences of the shape in its
-// provenance narration (CR-CRU-097 AC8 protects those), and a scan of raw
-// text would report every one of them.
+// because `public/app.js` carries 197 OCCURRENCES of the shape in its
+// provenance narration (CR-CRU-097 AC8 protects those) — occurrences, not
+// lines: `(readFileSync("public/app.js","utf8").match(/CR-[A-Z]{2,}-/g) ?? [])
+// .length` is 197 where the same count over `jsUncommented(text)` is 0 — and a
+// scan of raw text would report every one of them.
 //
 // Extending here rather than stripping locally is §S6's standing rule: a
 // second walk of this grammar is the CR-CRU-096 defect (a hand-rolled

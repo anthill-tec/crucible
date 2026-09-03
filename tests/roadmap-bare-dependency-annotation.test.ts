@@ -537,7 +537,9 @@ describe("CR-CRU-102 AC3 — every non-rendering consumer still reads the FULL i
 // naming our own literal would have shipped green over it.
 //
 // COMMENTS ARE EXEMPT and that exemption is load-bearing: `public/app.js`
-// carries 186 occurrences of the shape in provenance narration that CR-CRU-097
+// carries 197 OCCURRENCES of the shape — occurrences, not lines: matching
+// `NAMESPACE_PREFIX` over the raw text counts 197, the same match over
+// `jsUncommented(text)` counts 0 — in provenance narration that CR-CRU-097
 // AC8 requires be kept. The discrimination is NOT hand-rolled here — it is
 // `jsUncommented`, added to tests/helpers/source-scan.ts by this CR as the
 // third projection of the walk that file already performs. The
