@@ -2594,13 +2594,18 @@ describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and
     expect(boxes.length).toBe(2);
     // AC19c is the case where the boxes FIT: this board's widest annotation is
     // a TWO-dep row, so both boxes sit on one line and "along the axis" is
-    // what the geometry below measures. AC19d takes the case where they do not
-    // fit — the two criteria are stated against two different boards, and this
-    // guard keeps them from collapsing into one.
+    // what the geometry below measures. The FIT is the guarantee — the
+    // design's budget is read per wave box, and a per-box budget only means
+    // something while the boxes share the axis. What a release too wide for
+    // one line does is deliberately UNSPECIFIED: CR-CRU-102 leaves that
+    // question open for the user to rule, so nothing here or anywhere else
+    // asserts a behaviour for it. This guard therefore also keeps the test
+    // honest about its own subject: a board whose boxes stopped fitting
+    // would be measuring something this criterion never claimed.
     expect(
       boxes[0]!.width + boxes[1]!.width,
       `the AC19c board's boxes cannot share one line (stage ${round1(stage.width)}px), so this ` +
-        `test is measuring AC19d's wrap and AC19c's axis is no longer asserted anywhere`,
+        `test no longer measures the FIT that AC19c's axis is stated against`,
     ).toBeLessThanOrEqual(stage.width);
     expect(
       boxes[1]!.x,
