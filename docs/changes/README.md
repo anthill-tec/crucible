@@ -183,15 +183,20 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   validate `by` and re-point dependants, or rename the field to what it actually is (the CR's
   dependants, listed).
 
-- **CR-CRU-091 ships a store surface no HTTP client can reach** (note, not a defect).
-  `QueueEntryInput.release` / `.track` / `.lifecycle` are unreachable from every route:
-  `handleQueuePost` forwards only `cr/title/wave/dependsOn/size/seq` (`src/v2.ts:1848-1859`), and
-  the five new routes go through `upsertQueueEntry` / `sequenceQueueWave` / `setQueueLifecycle`
-  rather than `replaceQueue`. Consequently `replaceQueue`'s own `track` normalisation and refusal
-  (`src/store.ts:3362-3373`) and its `entry.lifecycle` branch are exercised by tests alone. This is
-  consistent with §S8 (the per-entry `seq` is "the one wire addition beyond the five-route table"),
-  and the carry-forward path those fields feed IS reachable and load-bearing — but the write side
-  of them is dead until something wires it.
+- **CLOSED by CR-CRU-099 (2026-09-03) — CR-CRU-091's unreachable store surface is now wired.**
+  The note read: *"`QueueEntryInput.release` / `.track` / `.lifecycle` are unreachable from every
+  route: `handleQueuePost` forwards only `cr/title/wave/dependsOn/size/seq`, and the five new routes
+  go through `upsertQueueEntry` / `sequenceQueueWave` / `setQueueLifecycle` rather than
+  `replaceQueue` … the write side of them is dead until something wires it."* CR-CRU-099 §S1 wired
+  all three through `handleQueuePost`, so `replaceQueue`'s `track` normalisation and its
+  `entry.lifecycle` branch now have wire coverage, and both refusals are asserted at the route
+  (AC4a, AC4b). The note's `src/v2.ts:1848-1859` citation was also stale before it closed — a
+  seventh instance of citation drift, and the reason the closing text quotes itself rather than
+  pointing at a line.
+  **What was NOT a defect stays recorded**: the surface was deliberate. CR-CRU-091 §S8 called the
+  per-entry `seq` *"the one wire addition beyond the five-route table"*, so this is a boundary
+  MOVED by a later requirement (CR-CRU-078 rewrote the e2e scenario to declare a release through
+  that route), not an oversight repaired.
 
 - **`plan-file --cycles` splits silently on a comma inside a label** (candidate patch CR, hit
   2026-08-28 filing CR-CRU-078). `--cycles` is comma-delimited, so a label containing a comma —
