@@ -191,7 +191,7 @@
         <h4><span>Wave 5 &middot; active</span><span>28</span></h4>
         <div class="wsum">21 merged &#10003; &middot; awaiting the tag</div>
         <div class="crs">
-                    <div class="cr live pulse">CR-CRU-095 <span class="t">&#9656; active &middot; C1 RED</span></div>
+                    <div class="cr live pulse">CR-CRU-095 <span class="t">&#9656; active</span></div>
           <div class="cr pend">CR-CRU-096 <span class="t">deps 078</span></div>
           <div class="cr pend">CR-CRU-079 <span class="t">deps 078</span></div>
           <div class="cr pend">CR-CRU-085 <span class="t">deps 078</span></div>
@@ -205,6 +205,13 @@
       <div class="term">End</div>
     </div>
     <p class="sub" style="margin-top:8px">Activation is a GUARANTEE, not a coincidence: the active CR is always present even when it sits outside the scheduled top, because an orchestrator may activate out of authored order. Motion stays reserved for IN_PROGRESS (&sect;5, CR-078 AC24) &mdash; <span class="t"><b>next</b></span> above carries NO glyph and NO colour of its own &mdash; &#9656; and ember are reserved for IN_PROGRESS, and &ldquo;next&rdquo; is a scheduling fact, not a state, so it is written as plain bold TEXT on a PENDING row. The two never read alike, and neither relies on colour.</p>
+    <p class="sub" style="margin-top:8px"><b>Amended 2026-09-03 (user ruling).</b> This design originally
+      drew the active row as <span class="t">&#9656; active &middot; C1 RED</span> &mdash; a <b>cycle overlay</b>
+      inside the zone 2 row. It was dropped during CR-CRU-096 and the drop is <b>accepted</b>: the design now
+      matches what ships, <span class="t">&#9656; active</span> alone. The cycle is not lost &mdash; it rides
+      <b>zone 3's own <code>cycle</code> column</b> (below, <span class="mono">6/6</span>), which is the DN's
+      division this design already states: structure in the picture, detail in the rows. Zone 2 answers
+      <i>what is being worked and what is next</i>; which cycle it is in is detail.</p>
 
     <div class="zone" style="margin-top:14px">zone 3 · table — always the focused release, never the whole project</div>
     <div class="scroll">
