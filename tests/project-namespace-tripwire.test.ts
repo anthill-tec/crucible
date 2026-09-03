@@ -717,8 +717,18 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // develop's namespace-agnostic `clients/` count is 601, the very number the
 // spec once reported as HEAD's `CR-CRU-`-only count. Two different
 // measurements of two different trees happened to coincide.
+// UPDATED 2026-09-03 by CR-CRU-099 cycle 320: `src/` HEAD moves 512 -> 524.
+// That cycle wired `release`/`track`/`lifecycle` through `handleQueuePost` and
+// taught `replaceQueue`'s defaulting the release axis, and its twelve new
+// citations are provenance comments in `src/v2.ts` and `src/store.ts` naming
+// CR-CRU-099, CR-CRU-091 and CR-CRU-095 — prose, not `help=` strings, so they
+// land in exactly the positions this classifier counts. The `develop` baseline
+// is UNCHANGED at 512 and stays the floor: a tree may gain lineage, never shed
+// it. Raising HEAD is the maintenance this table exists to require; raising
+// `develop` to match would be the self-satisfying assertion the paragraph above
+// forbids.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 512 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 524 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 379 },
   clients: { exts: [".py"], develop: 601, head: 619 },
 };
