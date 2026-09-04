@@ -3955,6 +3955,50 @@ export class Store {
   }
 
   /**
+   * CR-CRU-106 §S2a — `cr-depends`: the PER-CR write of ONE dependency set.
+   *
+   * The only writer of `depends_on_json` besides `replaceQueue`, and that is
+   * the hole this CR fills: `upsertQueueEntry` hardcodes `'[]'` on INSERT and
+   * never touches the column again, so before this writer existed the whole
+   * approved API could not declare a dependency at all — every one of the
+   * board's dependency rows arrived through the migration door.
+   *
+   * Returns `null` when the cr was never registered, exactly as
+   * `setQueueLifecycle` above does and for the same reason: a dependency
+   * belongs to a queued cr, and built on upsert semantics this verb would
+   * conjure a row with no release and no title and hang dependencies off it.
+   * The route turns that `null` into the refusal (AC10).
+   *
+   * Converged (§S7) when the stored JSON already IS the list this call would
+   * write — the ORDER included, because the column holds the caller's
+   * verbatim id list and `listQueue` publishes it unchanged, so a reorder is
+   * a real re-declaration rather than a no-op. `filed_at`, `seq` and every
+   * other column are then left untouched, which is what keeps a whole
+   * generation script re-runnable byte-for-byte. Deliberately NOT
+   * `upsertQueueEntry`'s rule: that writer compares release, wave and title,
+   * the three axes it owns, and this one owns exactly one other.
+   */
+  declareQueueDependencies(
+    projectKey: string,
+    cr: string,
+    dependsOn: string[],
+  ): { changed: boolean } | null {
+    const held = this.db
+      .query<QueueEntryRow, [string, string]>(
+        `SELECT * FROM queue_entries WHERE project_key = ? AND cr = ?`,
+      )
+      .get(projectKey, cr);
+    if (held === null) return null;
+    const declared = JSON.stringify(dependsOn);
+    if (held.depends_on_json === declared) return { changed: false };
+    this.db
+      .query(`UPDATE queue_entries SET depends_on_json = ? WHERE project_key = ? AND cr = ?`)
+      .run(declared, projectKey, cr);
+    this.emit("events", projectKey);
+    return { changed: true };
+  }
+
+  /**
    * CR-CRU-014 §S1 — derive a cr's queue status + plan link from its plans.
    *
    * CR-CRU-083 §S2/AC4 (amended) — `shipped` (every cr id any release's

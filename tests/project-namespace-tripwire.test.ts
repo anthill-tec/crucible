@@ -751,10 +751,26 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // other nine `src/` files stay at their develop counts. `public/` and
 // `clients/` are untouched and re-measure at 390 and 619. The `develop`
 // baselines are UNCHANGED at 512/378/601 and stay the floors.
+// UPDATED 2026-09-04 by CR-CRU-106 §S1/§S2/§S2a. `src/` HEAD moves 541 -> 549
+// and `clients/` 619 -> 627. C1 gave the DEPENDENCY axis its own verb, and the
+// citations are the reasoning written where a reader of the code will meet it:
+// `src/v2.ts` +7 (`handleCrDepends`'s doc comment, the corrected
+// `refuseDependencyCycle` precondition, both cycle callers' comments, the
+// prospective-graph note, the route and `V2Body`'s new field), `src/store.ts`
+// +1 (`declareQueueDependencies`' JSDoc — the second writer of
+// `depends_on_json`), `clients/_crucible_axi.py` +5 (the `cr-depends` section
+// header, its path helper, the ask, the state-derived help and its registrar)
+// and `clients/python-crucible.py` +3 (the delegator and its registrar call).
+// Measured with THIS file's `extractCitableText` file by file against
+// `git show develop:<path>`, which attributes the whole +16 to those FOUR
+// files and leaves every other file of both trees at its develop count; every
+// citation is prose on a `//`, ` * ` or docstring line, none in a string.
+// `public/` is untouched by this CR and re-measures at 390. The `develop`
+// baselines are UNCHANGED at 512/378/601 and stay the floors.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 541 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 549 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 390 },
-  clients: { exts: [".py"], develop: 601, head: 619 },
+  clients: { exts: [".py"], develop: 601, head: 627 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
