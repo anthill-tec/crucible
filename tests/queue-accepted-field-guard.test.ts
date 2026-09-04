@@ -1,4 +1,4 @@
-// CR-CRU-099 §S2/AC5 — THE ACCEPTED-FIELD GUARD.
+// CR-CRU-099 §S2/AC5 + CR-CRU-104 §S3/AC8 — THE ACCEPTED-FIELD GUARD.
 //
 // An accepted field the handler never reads is INDISTINGUISHABLE FROM SUCCESS
 // at the call site: the caller sends it, the route answers 200, the store
@@ -7,6 +7,12 @@
 // warning, no red test, a row that is a member of no release. §S2 says the
 // defect is a CLASS, not one bug, so this file makes the next dropped column
 // a test failure instead of an invisible row.
+//
+// CR-CRU-104 §S3 sharpened "never reads" into "never STORES". A field the
+// handler validates and then leaves off the object it hands the store is
+// exactly as indistinguishable from success, and that is the shape the first
+// version of this guard passed — see THE NUMERATOR below for the measurement
+// and for the half that was added to close it.
 //
 // ── THE DENOMINATOR, NAMED ─────────────────────────────────────────────────
 //
@@ -26,55 +32,100 @@
 // parse that yielded nothing would otherwise pass this guard trivially), and
 // anchored on the three keys the CR is about, so the guard cannot be
 // satisfied by DELETING a declaration rather than reading it.
+// Measured 2026-09-04: adding `owner?: string;` to that interface and nothing
+// else reports `owner` by name, with no edit to this file
+// (run-823c06aa-7706-4145-acf4-3c34a1429eef); deleting `release?: string;`
+// instead of storing it fails the denominator anchor rather than satisfying
+// the criterion (run-41ea42f3-0d7d-4fbc-8510-85f1b9ea13f3).
 //
 // ── THE NUMERATOR, NAMED ───────────────────────────────────────────────────
 //
-// "The keys the handler reads" is derived as: within `handleQueuePost`'s own
-// body, with comments blanked, a dereference of the posted-entry object by
-// that key — `fields.release`, or `fields["release"]`. The binding name is
-// not hardcoded: it is read off the handler's own narrowing line
-// (`const fields = raw as Record<string, unknown>`), which is the point where
-// untyped request JSON becomes readable, i.e. §S2's "boundary where authored
-// data enters".
+// TWO questions per declared key, because a field is dropped in two different
+// places and only both together mean STORED:
+//
+//   READ — within `handleQueuePost`'s own body, with prose blanked, a
+//     dereference of the posted-entry object by that key: `fields.release` or
+//     `fields["release"]`. The binding name is not hardcoded — it is read off
+//     the handler's own narrowing line (`const fields = raw as Record<string,
+//     unknown>`), the point where untyped request JSON becomes readable, i.e.
+//     §S2's "boundary where authored data enters".
+//
+//   FORWARD — the key is a PROPERTY of the object handed to the writer, and
+//     the expression bound to it traces back to that dereference. The object
+//     is located structurally, never by line number and never by the shape of
+//     one field's forwarding: `store.replaceQueue(<key>, <sink>)` names the
+//     array the store is handed, the `<sink>.push(` calls name the literals
+//     pushed into it, and `balancedEnd` walks each argument to its own closer.
+//     A property may be `key: <expr>` or the SHORTHAND `{ key }` — the shape
+//     the handler actually uses for all three fields this CR is about — so the
+//     bound expression is followed through the handler's own bindings, every
+//     initialiser and every re-assignment of a name it reaches, to a fixpoint.
+//     That chain is three hops deep for `lifecycle` today (`{ lifecycle }` ->
+//     `lifecycle = {state, …}` -> `const state = declared?.state` ->
+//     `const declared = … fields.lifecycle …`), which is why one hop was not
+//     enough.
+//
+// CR-CRU-104 §S3/AC8 ADDED the second question, and this header is where the
+// first one alone was admitted to be the wrong question. The two come apart
+// whenever a field is named TWICE — once by a validation, once by the
+// forwarding: delete only the forwarding and the field is dropped again
+// silently while the validation keeps the guard green. RE-MEASURED against
+// the CURRENT route on 2026-09-04, one key at a time, deleting ONLY the
+// property from the pushed literal and leaving every validation and every
+// local binding standing:
+//   * `release` — guard GREEN 7/7 (run-9505b202-263e-41d3-89d0-2c6b67c57bad)
+//   * `track` — GREEN 7/7 (run-47ae5fbd-b53f-40be-a832-14ce61f24c76)
+//   * `lifecycle` — GREEN 7/7 (run-38a15191-74e8-4309-b405-ffbf7e4c4f6f)
+// ALL THREE, where CR-CRU-099's 2026-09-03 measurement had `release` firing:
+// that field was protected only by ACCIDENT — it carried no validation, so
+// its single appearance WAS its forwarding — and CR-CRU-104 C1 removed even
+// the accident by hoisting the value into a `const release` the membership
+// gate reads. With the FORWARD half in place the same three mutations fire by
+// name (run-26e0f165-c398-4ccf-9d02-ad3117d0e416,
+// run-f7c330d9-2d7e-4ee4-900c-7f021f0291ea,
+// run-4c0a440b-4c0e-4ddc-adb3-ece3bbf5e3b5).
 //
 // ── WHAT THIS DERIVATION CANNOT SEE, stated rather than implied ────────────
 //
-// 1. A key read by DESTRUCTURING (`const { release } = fields`) or by a
-//    computed key (`fields[name]`) is not seen, and would be reported as
-//    unread. That direction is loud: it fails in the commit that introduces
-//    it, at which point the reader either restores a plain dereference or
-//    teaches this guard the new shape. The opposite direction — a read this
-//    scan invents — cannot happen, because a literal `fields.<key>` in live
-//    code IS a read.
-// 2. THE ONE SILENT HOLE, MEASURED, NOT ASSUMED: a key that is READ AND THEN
-//    DISCARDED — validated at the top of the loop, left off the object that
-//    is pushed — satisfies this guard. So what is enforced here is that the
-//    handler MENTIONS every declared key; the defect class §S2 names is that
-//    it STORES every declared key, and a mentioned-but-unstored field is
-//    exactly as indistinguishable from success as an unmentioned one. This
-//    guard would NOT have caught this CR's own bug had the route merely
-//    validated `release` and dropped it.
-//    Measured against the real route on 2026-09-03, one key at a time:
-//      * deleting ONLY `track`'s forwarding spread, leaving the AC4a
-//        validation that reads `fields.track` — guard GREEN, 7/7
-//        (run-9bb593a3-4df8-43c6-b2f8-820d62b75207);
-//      * deleting that validation as well — guard FIRES by name
-//        (run-ec83722b-3c38-4fa8-903f-5a6ff5c42329);
-//      * `lifecycle` behaves identically (spread only: GREEN,
-//        run-0f20ebdf-693c-4415-bdf6-0ac13d7d7cd5; whole handling:
-//        FIRES, run-774779c2-8efe-4674-9f4a-efcb4dbd1627);
-//      * `release` is the clean case only because it has no validation of
-//        its own — its single appearance IS the forwarding, so deleting the
-//        forwarding fires the guard (run-1c9ff695-bdbd-4bad-9c46-36a7cbd865cb).
-//    A NAMED limit is worth more than a silent one, which is why it is here
-//    rather than in a report nobody re-reads. What covers the gap today is
-//    behavioural, not lexical: AC1/AC4's round trips in
-//    tests/queue-registration.test.ts prove today's keys reach the STORE and
-//    come back byte-identically. This file is the FORWARD guarantee — the
-//    key nobody has written a round trip for yet — and those tests are the
-//    value guarantee. Neither replaces the other, and closing this hole is a
-//    decision that was referred UP (it needs the pushed object literal
-//    identified structurally), not one taken here.
+// 1. Shapes neither half recognises, all of them LOUD — they fail in the
+//    commit that introduces them, at which point the reader either restores
+//    the plain shape or teaches this guard the new one. A key read by
+//    DESTRUCTURING (`const { release: posted } = fields`) or by a computed
+//    key (`fields[name]`) is reported UNREAD (measured 2026-09-04: replacing
+//    `release`'s dereference with a destructuring pattern, forwarding intact,
+//    fires the unread finding — run-1c8964a0-4ece-4706-9f79-b80588844d9f).
+//    A key forwarded under a QUOTED property name (`{ "release": release }`)
+//    or a computed one (`{ [key]: value }`) is reported UNFORWARDED (measured
+//    2026-09-04: quoting the property name and changing nothing else fires —
+//    run-5af625cb-e7f4-4ac2-a004-5c7dbb9b484a). The quoted case is invisible
+//    for a reason worth naming rather than fixing: this scan runs on the
+//    live-code projection, which blanks string literals, so `"release"` is
+//    whitespace by the time the pushed span is read — the same projection
+//    that makes a field named in a comment or a string not count as a read.
+//    The opposite direction — a read or a forwarding this scan INVENTS —
+//    cannot happen, because a literal `fields.<key>` in live code IS a read
+//    and a literal `key` at property position IS a property.
+// 2. THE ONE REMAINING SILENT HOLE, MEASURED, NOT ASSUMED: VALUE IDENTITY is
+//    not proven, and cannot be by a lexical scan. What is enforced is that
+//    the key is a property of the stored object AND that that property's
+//    expression closure dereferences the declared field. A handler that reads
+//    the field and stores something else under its name keeps both facts
+//    true. Measured 2026-09-04 against the real route, rewriting `release`'s
+//    binding to `fields.release !== undefined ? "" : undefined` — the field
+//    read, an empty string stored — guard GREEN 10/10
+//    (run-9467329a-0153-4a2f-9ca9-265a643f9871). The boundary is exact,
+//    because the neighbouring mutation IS caught: rewriting the pushed
+//    property to `{ release: track }`, a closure that no longer names
+//    `fields.release`, FIRES (run-15ed86c2-acf6-4b1d-ada9-15fbc567fddc). So a
+//    WRONG SOURCE is caught; a wrong VALUE from the right source is not. The
+//    closure is a text union rather than a dataflow graph, which is the same
+//    limit seen from the other side: a dereference reached only through a
+//    dead assignment of the same binding would count.
+//    What covers that gap is behavioural, not lexical: AC1/AC4's round trips
+//    in tests/queue-registration.test.ts post a value and require it back
+//    byte-identically. This file is the FORWARD guarantee — the key nobody
+//    has written a round trip for yet — and those tests are the VALUE
+//    guarantee. Neither replaces the other.
 // 3. A key accepted by `replaceQueue` WITHOUT being declared on the interface
 //    would be invisible, because the interface is the denominator. There is
 //    no such key today (the type carries no index signature).
@@ -84,6 +135,17 @@
 //    extracted body may contain no second top-level declaration), because
 //    THAT direction would hide a dropped field behind a neighbouring
 //    function's code.
+// 5. The WRITE SHAPE is the one this route uses and no other: a named array
+//    handed to `store.replaceQueue`, filled by `push`. A handler that built
+//    that array by `map`, or handed the store an inline literal, or aliased
+//    the store, makes the derivation THROW by name — `writerSink` and
+//    `pushedObjects` both refuse rather than pass — so the failure is "teach
+//    this guard the new write shape", never a silent green. A span that
+//    over-ran its own closer is refused for the same reason and asserted
+//    against directly, because that direction could show a property the
+//    pushed literal never carried. Where there are SEVERAL push sites the key
+//    is required in EVERY one, since each is handed to the store and a push
+//    that omits it is a row missing the field; there is one site today.
 //
 // ── IT EXTENDS, IT DOES NOT REINVENT ───────────────────────────────────────
 //
@@ -104,6 +166,17 @@
 // dereference — the discrimination is prose-vs-code, not quote-vs-no-quote.
 // The self-test below plants both shapes and requires both to be reported
 // unread.
+//
+// The two structural walks come from the same place for the same reason.
+// `balancedEnd` and `unnestedEnd` were file-local to
+// tests/project-namespace-tripwire.test.ts, which proved them on its
+// assertion spans; §S3 needed the identical walks to find the span of the
+// object handed to the store, and `unnestedEnd` is the tripwire's own
+// `statementEnd` PARAMETERISED by its terminator set (`;` there, `;` or `,`
+// for an object property's value) rather than copied — two bodies differing
+// by one character in a character class is the CR-CRU-096 defect shape. Both
+// now live beside `jsLiveCode`, and both are run ON its output, so a brace
+// inside a comment or a string cannot be counted.
 //
 // WHY A THIRD FILE, and not a `describe` bolted onto one of the two existing
 // source-scanning guards: tests/docs-retired-mirror-references.test.ts owns
@@ -379,32 +452,133 @@ function withoutForwardingOf(handlerCode: string, key: string): string {
   return mutated;
 }
 
-export interface UnreadField {
+// Every identifier a piece of code names. The closure below expands them and
+// does not care which are locals: a name with nothing bound to it in the
+// handler contributes nothing to expand.
+const IDENTIFIER = /[A-Za-z_$][A-Za-z0-9_$]*/g;
+
+// Every right-hand side `id` is assigned from, anywhere in the handler body:
+// a `const`/`let`/`var` initialiser, its optional type annotation skipped, or
+// a bare RE-ASSIGNMENT — which is how the handler builds the one declared
+// field that is a STRUCTURE (`let lifecycle: QueueLifecycle | undefined;`
+// followed by `lifecycle = { … }` inside the shape check). The `=` must be an
+// assignment: not `==`, not `=>`, not the tail of `!==`.
+function assignedFrom(handlerBody: string, id: string): string[] {
+  const at = new RegExp(`\\b${escaped(id)}\\b[ \\t]*(?::[^=;\\n]*)?=(?![=>])`, "g");
+  const values: string[] = [];
+  for (const match of handlerBody.matchAll(at)) {
+    const equals = match.index! + match[0].length - 1;
+    if (/[=!<>+\-*/%&|^~]/.test(handlerBody[equals - 1] ?? "")) continue;
+    values.push(handlerBody.slice(equals + 1, unnestedEnd(handlerBody, equals + 1, ",;")));
+  }
+  return values;
+}
+
+// The text an expression can reach through the handler's own bindings: the
+// expression itself, plus the right-hand side of every binding it names,
+// transitively, to a fixpoint.
+//
+// This is what makes the SHORTHAND property shape readable. `{ lifecycle }`
+// names a local, and the dereference that fills it is three hops away
+// (`lifecycle = {state, …}` -> `const state = declared?.state` ->
+// `const declared = … fields.lifecycle …`); one hop would have covered
+// `release` and `track` and missed `lifecycle` entirely.
+//
+// `binding` — the posted-entry object — is the SOURCE and is never expanded,
+// so the chain that produced it (`raw`, `rawEntries`, `body`) cannot drag
+// unrelated dereferences into the closure.
+function tracedFrom(handlerBody: string, expression: string, binding: string): string {
+  let text = expression;
+  const seen = new Set<string>([binding]);
+  const pending = [...expression.matchAll(IDENTIFIER)].map((match) => match[0]);
+  while (pending.length > 0) {
+    const id = pending.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const value of assignedFrom(handlerBody, id)) {
+      text += `\n${value}`;
+      for (const match of value.matchAll(IDENTIFIER)) pending.push(match[0]);
+    }
+  }
+  return text;
+}
+
+// Whether `key`'s value REACHES the object handed to the writer: the key is a
+// property of every literal pushed into the writer's array, and at least one
+// expression bound to it traces back to a dereference of the posted entry by
+// that key.
+//
+// EVERY literal, because each one is handed to the store and a push that
+// omits the key is a row missing it. At least ONE bound expression, because a
+// key written twice in one literal is written once per branch, and either
+// branch reaching the store is a forwarding.
+function forwardsField(handlerBody: string, binding: string, key: string, sink: string): boolean {
+  for (const [start, end] of pushedObjects(handlerBody, sink)) {
+    const properties = propertiesNamed(handlerBody.slice(start, end), key);
+    if (properties.length === 0) return false;
+    if (
+      !properties.some((property) =>
+        readsField(tracedFrom(handlerBody, property.value, binding), binding, key),
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export interface UnforwardedField {
   key: string;
+  /** Which half failed: the handler never read it, or never stored what it read. */
+  stage: "read" | "forward";
   message: string;
 }
 
 // THE CHECKER, as a pure function of the two source texts, so the self-tests
 // below can plant a shape without touching a real file and the mutation tests
-// can delete a read without touching `src/`.
-export function unreadAcceptedFields(typeCode: string, handlerCode: string): UnreadField[] {
+// can delete a read or a forwarding without touching `src/`.
+//
+// Two questions per declared key, in the order a reader needs them: a field
+// that is never read is reported as unread rather than as unstored, because
+// sending that reader looking for a forwarding when the dereference itself is
+// gone is the wrong sentence.
+export function unforwardedAcceptedFields(
+  typeCode: string,
+  handlerCode: string,
+): UnforwardedField[] {
   const type = jsLiveCode(typeCode);
   const handler = jsLiveCode(handlerCode);
   const block = handlerBlock(handler);
   const binding = fieldsBinding(block.body);
-  const unread: UnreadField[] = [];
+  const sink = writerSink(block.body);
+  const where = `${HANDLER_NAME} (${HANDLER_FILE}:${block.line})`;
+  const findings: UnforwardedField[] = [];
   for (const declared of declaredKeys(type)) {
-    if (readsField(block.body, binding, declared.key)) continue;
-    unread.push({
+    const declares = `${TYPE_NAME} declares \`${declared.key}\` (${TYPE_FILE}:${declared.line})`;
+    if (!readsField(block.body, binding, declared.key)) {
+      findings.push({
+        key: declared.key,
+        stage: "read",
+        message:
+          `${declares} but ${where} never reads \`${binding}.${declared.key}\` — the route ` +
+          `accepts that field, answers 200 and drops it, which is indistinguishable from ` +
+          `success at the call site`,
+      });
+      continue;
+    }
+    if (forwardsField(block.body, binding, declared.key, sink)) continue;
+    findings.push({
       key: declared.key,
+      stage: "forward",
       message:
-        `${TYPE_NAME} declares \`${declared.key}\` (${TYPE_FILE}:${declared.line}) but ` +
-        `${HANDLER_NAME} (${HANDLER_FILE}:${block.line}) never reads ` +
-        `\`${binding}.${declared.key}\` — the route accepts that field, answers 200 and drops ` +
-        `it, which is indistinguishable from success at the call site`,
+        `${declares} and ${where} READS \`${binding}.${declared.key}\`, but that value never ` +
+        `reaches \`${sink}\`, the object handed to \`${HANDLER_ANCHOR}\` — the field is ` +
+        `validated and then discarded, which is exactly as indistinguishable from success at ` +
+        `the call site as never reading it, and leaves a validation standing to keep this ` +
+        `guard green`,
     });
   }
-  return unread;
+  return findings;
 }
 
 // Removes every read of `key` from a handler text — the mutation that stands
@@ -453,7 +627,7 @@ const PLANTED = {
   unread: ["release", "track"],
 } as const;
 
-describe("CR-CRU-099 §S2/AC5 — the bulk queue route reads every field its input type declares", () => {
+describe("CR-CRU-099 §S2/AC5 + CR-CRU-104 §S3/AC8 — the bulk queue route STORES every field its input type declares", () => {
   const typeCode = readSource(TYPE_FILE);
   const handlerCode = readSource(HANDLER_FILE);
 
@@ -488,12 +662,13 @@ describe("CR-CRU-099 §S2/AC5 — the bulk queue route reads every field its inp
   );
 
   test(
-    "AC5 — no key the input type declares is unread by the handler: a field the route accepts " +
-      "and never reads is reported by name, with the handler named beside it",
+    "AC5/AC8 — no key the input type declares is unforwarded by the handler: a field the route " +
+      "accepts and then never reads, or reads and never stores, is reported by name with the " +
+      "handler named beside it",
     () => {
       // The findings, not their count: a failure prints the sentence a reader
       // needs — which key, which type, which handler, which line.
-      expect(unreadAcceptedFields(typeCode, handlerCode).map((f) => f.message)).toEqual([]);
+      expect(unforwardedAcceptedFields(typeCode, handlerCode).map((f) => f.message)).toEqual([]);
     },
   );
 
@@ -512,11 +687,11 @@ describe("CR-CRU-099 §S2/AC5 — the bulk queue route reads every field its inp
       // `release`'s read deleted from the route: the absolute form failed
       // here too and printed the same defect a second time as eight lines of
       // noise, which is how a reader learns to distrust a guard.
-      const baseline = unreadAcceptedFields(typeCode, handlerCode).map((f) => f.key);
+      const baseline = unforwardedAcceptedFields(typeCode, handlerCode).map((f) => f.key);
       const caught: Record<string, string[]> = {};
       const expected: Record<string, string[]> = {};
       for (const key of keys) {
-        caught[key] = unreadAcceptedFields(
+        caught[key] = unforwardedAcceptedFields(
           typeCode,
           withoutReadsOf(handlerCode, binding, key),
         ).map((f) => f.key);
@@ -536,7 +711,7 @@ describe("CR-CRU-099 §S2/AC5 — the bulk queue route reads every field its inp
       // Selected by key rather than by position, for the same reason the
       // sensitivity claim above is a delta: a live defect elsewhere must not
       // turn this message assertion into a second report of it.
-      const planted = unreadAcceptedFields(
+      const planted = unforwardedAcceptedFields(
         typeCode,
         withoutReadsOf(handlerCode, binding, "release"),
       ).find((finding) => finding.key === "release");
@@ -555,7 +730,7 @@ describe("CR-CRU-099 §S2/AC5 — the bulk queue route reads every field its inp
     "a key named only in a comment, or only inside a string literal, is NOT a read — the lifted " +
       "comment classifier is what decides, and this guard would be worthless without it",
     () => {
-      expect(unreadAcceptedFields(PLANTED.type, PLANTED.handler).map((f) => f.key)).toEqual([
+      expect(unforwardedAcceptedFields(PLANTED.type, PLANTED.handler).map((f) => f.key)).toEqual([
         ...PLANTED.unread,
       ]);
       // The same fixture over RAW text — the scan this guard refuses to be —
@@ -590,7 +765,7 @@ describe("CR-CRU-099 §S2/AC5 — the bulk queue route reads every field its inp
       // And it DECIDES: the same planted fixture is silent when the
       // classifier is bypassed (asserted above) and reports two dropped
       // fields when it is not.
-      expect(unreadAcceptedFields(PLANTED.type, PLANTED.handler).length).toBe(2);
+      expect(unforwardedAcceptedFields(PLANTED.type, PLANTED.handler).length).toBe(2);
     },
   );
 
@@ -629,11 +804,11 @@ describe("CR-CRU-099 §S2/AC5 — the bulk queue route reads every field its inp
       // The same DELTA form as the read-sensitivity claim above, for the same
       // reason: a live defect elsewhere must not be reported a second time
       // here as nine lines of noise.
-      const baseline = unreadAcceptedFields(typeCode, handlerCode).map((f) => f.key);
+      const baseline = unforwardedAcceptedFields(typeCode, handlerCode).map((f) => f.key);
       const caught: Record<string, string[]> = {};
       const expected: Record<string, string[]> = {};
       for (const key of keys) {
-        caught[key] = unreadAcceptedFields(typeCode, withoutForwardingOf(handlerCode, key)).map(
+        caught[key] = unforwardedAcceptedFields(typeCode, withoutForwardingOf(handlerCode, key)).map(
           (f) => f.key,
         );
         expected[key] = keys.filter((k) => k === key || baseline.includes(k));
@@ -653,7 +828,7 @@ describe("CR-CRU-099 §S2/AC5 — the bulk queue route reads every field its inp
       const dropped = withoutForwardingOf(handlerCode, "track");
       const binding = fieldsBinding(handlerBlock(jsLiveCode(dropped)).body);
       expect(readsField(handlerBlock(jsLiveCode(dropped)).body, binding, "track")).toBe(true);
-      const finding = unreadAcceptedFields(typeCode, dropped).find((f) => f.key === "track");
+      const finding = unforwardedAcceptedFields(typeCode, dropped).find((f) => f.key === "track");
       expect(finding).toBeDefined();
       expect(finding!.message).toContain("`track`");
       expect(finding!.message).toContain(HANDLER_NAME);
