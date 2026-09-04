@@ -3021,14 +3021,48 @@ describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and
     expect(reported.scrollWidth - reported.clientWidth).toBeLessThanOrEqual(0.5);
   });
 
-  // AC4's CORROBORATION — the same two readings on the board this project
-  // actually runs, which is where the 452.7px the CR quotes was measured. It
+  // AC4's CORROBORATION — the readings on the board this project actually
+  // runs, which is where the 452.7px the CR quotes was measured. It
   // corroborates and never carries the criterion: the store is not committed
   // (`git ls-files data/` is empty) and the four-dependency row is a CR that
   // will ship, so a criterion resting on it would decay. When either is
   // missing this states WHY, in the shape CR-CRU-100 AC5 established for a
   // reading that cannot be taken here.
-  test("AC4 — the LIVE board corroborates the same two figures, or says why it cannot", async () => {
+  //
+  // ── CR-CRU-103 AC7, a RULED AMENDMENT (user, 2026-09-04) ────────────────
+  //
+  // This half no longer asserts `DESIGN_SPINE_W`. It REPORTS the spine it
+  // measures and asserts the data-independent invariant instead: the spine
+  // FITS the surface the app reports. The `~600px` criterion is untouched
+  // where it belongs — on the SYNTHETIC four-dependency board above, whose
+  // composition this file authors and whose reading is the criterion.
+  //
+  // WHY, and it is not a tolerance being widened to admit a result.
+  // `DESIGN_SPINE_W` is the artifact's figure for a FIXED COMPOSITION: one
+  // wave box holding the scheduled top with merged work collapsed. The LIVE
+  // spine is whatever the drawn rows happen to make it, and nothing in this
+  // repository controls that. The wave-box reading below SURVIVES for exactly
+  // the reason this one cannot: the `deps \d+(?:, \d+){3}` guard above pins
+  // the row's composition before the box is measured, so `BUDGET.wave` is
+  // still read against the case it is stated against. No guard can pin how
+  // many rows the focused release draws.
+  //
+  // MEASURED, and this is the whole argument. The assertion SKIPPED at
+  // CR-CRU-102's merge — the four-dependency row sat outside the drawn top,
+  // so the `!live.drawn` path took it. Closing that CR shifted the drawn rows,
+  // the assertion went live, and it failed at 621.1px; within the hour, as
+  // CR-CRU-104 was filed and CR-CRU-103 went IN_PROGRESS, the same reading
+  // drifted to 625.1px. CR-CRU-103's own terminal shrink takes 8px off it
+  // (two terminals, 56px to 52px), reaching ~613px — so implementing this CR
+  // correctly could never have closed the gap, and no correct implementation
+  // ever could. This is the CR-CRU-096 `AC29` decay CR-CRU-102's own comment
+  // predicted, arriving in under a day.
+  //
+  // Do NOT "restore" the stricter assertion. It was not lost; it was ruled
+  // out of this half, and CR-CRU-102's spec is history and stays unedited —
+  // the amendment is recorded in CR-CRU-103's AC7 and here, beside the code
+  // it governs.
+  test("AC4 — the LIVE board corroborates the wave box and REPORTS its spine, or says why it cannot", async () => {
     if (liveDepsSkip !== "") {
       // NOT RUN, and reported as a pass — with the reason in the run's own
       // output, never a silent green line.
@@ -3091,10 +3125,39 @@ describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and
         `the design's ~${BUDGET.wave}px, annotated ${JSON.stringify(declared)}; the CR ` +
         `recorded 452.7px for the same row while it rendered full ids`,
     ).toBeLessThanOrEqual(BUDGET.wave);
+
+    // The SURFACE the app reports, read off the app the way AC20d reads it
+    // rather than off `SURFACE_W` — the invariant is "it fits what it is
+    // given", and the constant is not what the element reports.
+    const reported = await readWide<{ scrollWidth: number; clientWidth: number }>(
+      `(() => {
+         const flow = document.querySelector('[data-zone="2"]');
+         return { scrollWidth: flow.scrollWidth, clientWidth: flow.clientWidth };
+       })()`,
+    );
+
+    // REPORTED, always, whatever the verdict: the figure is the point of a
+    // corroboration, and AC7 asks for it in the run's own output.
+    console.log(
+      `[cr102/cr103 AC7] the LIVE spine measures ${round1(spine)}px on a ` +
+        `${round1(reported.clientWidth)}px reported surface (headroom ` +
+        `${round1(reported.clientWidth - spine)}px), with ${pieces.length} pieces and the ` +
+        `${liveDepsCr} wave box at ${round1(live.boxWidth)}px — the design's ` +
+        `~${DESIGN_SPINE_W}px is the SYNTHETIC board's criterion and is asserted there, ` +
+        `never here`,
+    );
+
+    // The invariant that does NOT depend on data we do not control.
     expect(
       spine,
-      `the LIVE spine measures ${round1(spine)}px against the design's ~${DESIGN_SPINE_W}px`,
-    ).toBeLessThanOrEqual(DESIGN_SPINE_W);
+      `the LIVE spine measures ${round1(spine)}px and does not fit the ` +
+        `${round1(reported.clientWidth)}px surface the app reports`,
+    ).toBeLessThanOrEqual(reported.clientWidth + 0.5);
+    expect(
+      reported.scrollWidth - reported.clientWidth,
+      `the live board overflows its own surface by ` +
+        `${round1(reported.scrollWidth - reported.clientWidth)}px`,
+    ).toBeLessThanOrEqual(0.5);
   });
 
   // AC20d — the budget at the REAL surface. AC20's 1130px is a CONTROLLED
