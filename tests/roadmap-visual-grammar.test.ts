@@ -854,6 +854,10 @@ const fixtureDocument = (zones: string, appWidth = 1360, stylesheet = "/styles.c
      clipped by the .app-strip-track overflow. */
   body { margin: 0; }
   #app { width: ${appWidth}px; }
+  /* TEMPORARY MUTATION - VERIFY's P2-2 probe, reverted by the GREEN commit.
+     53.7px wider than the card's content needs, and the width property is one
+     AC6's comparison does not read. */
+  .app-flow-delivered { width: 392px; }
 </style>
 </head>
 <body>
@@ -4801,6 +4805,47 @@ async function backdropOf(selector: string): Promise<string> {
   );
 }
 
+/** What a box's OWN cascade needs for the content it holds, and what it
+ *  actually USES — both read in one pass so the two figures come from one
+ *  layout.
+ *
+ *  The need is measured on a CLONE of the box, inserted into the box's own
+ *  parent so every inherited length, family and token resolves identically,
+ *  carrying an INLINE `width: max-content`. Inline wins over any stylesheet
+ *  width, including an `!important`-free explicit one, so the probe reports
+ *  the intrinsic answer whatever rule the box itself matched. The clone keeps
+ *  its class and every attribute — nothing is stripped, so its cascade is the
+ *  original's — which means the design's own `min-width` floor is part of the
+ *  answer: the probe reports the NARROWEST width the box's rules permit for
+ *  this content, not a width they would forbid.
+ *
+ *  It is taken out of flow (`position: absolute`, off-surface, hidden) so a
+ *  flex parent cannot re-lay-out the siblings being measured, and removed
+ *  inside the same evaluation, so no other query can ever observe two of it. */
+async function widthNeeded(
+  selector: string,
+): Promise<{ found: boolean; used: number; need: number }> {
+  return await readWide<{ found: boolean; used: number; need: number }>(
+    `(() => {
+       const found = document.querySelector(${JSON.stringify(selector)});
+       if (found === null || found.parentElement === null) {
+         return { found: false, used: 0, need: 0 };
+       }
+       const probe = found.cloneNode(true);
+       probe.style.position = "absolute";
+       probe.style.left = "-99999px";
+       probe.style.top = "0";
+       probe.style.visibility = "hidden";
+       probe.style.width = "max-content";
+       found.parentElement.appendChild(probe);
+       const need = probe.getBoundingClientRect().width;
+       const used = found.getBoundingClientRect().width;
+       probe.remove();
+       return { found: true, used, need };
+     })()`,
+  );
+}
+
 const DELIVERED_CARD = '[data-zone="2"] [data-testid="roadmap-delivered"]';
 const DELIVERED_HEADLINE = '[data-testid="roadmap-delivered-crs"]';
 const DELIVERED_CUES =
@@ -4876,23 +4921,70 @@ describe("CR-CRU-103 §S1 — the delivered summary renders as a CARD", () => {
         `${round1(figures.card.minWidth)}px floor`,
     ).toBeGreaterThanOrEqual(figures.card.minWidth);
 
-    // The CEILING, and the whole reason AC1a was added: a floor ALONE is
-    // passed by the very sprawl this CR closes, because the broken card is
-    // wider than the floor and not narrower. This board states the DESIGN's
-    // OWN facts — sixty members, waves 1–4, the artifact's own ship date and
-    // its two packages — so the design's own card is what that content needs,
-    // measured in this same engine.
+    // ── The CEILING, in the words AC1a actually states: no wider than its
+    //    content needs. Measured on the CARD ITSELF — the width it uses
+    //    against the width its own cascade needs for the facts it holds — so
+    //    the bound is a statement about this card and not a comparison that
+    //    another render happens to win.
+    //
+    //    This is the clause the criterion was MISSING. A floor alone is
+    //    passed by the very sprawl this CR closes, and so were both of the
+    //    bounds below: an explicit `width` 53.7px past what the content needs
+    //    left them green (the shipped card measures 338.3px for these facts,
+    //    a `.app-flow-delivered { width: 392px }` still reads under the
+    //    artifact's 393.3px, and `width` is not a property AC6 compares).
+    //    Anything that sizes the box past its content — an explicit width, a
+    //    stretching parent, a flex-basis — fails HERE and only here.
+    //
+    //    The tolerance is half a device pixel, and it admits nothing: the
+    //    probe is the SAME content in the SAME engine on the SAME page, so
+    //    the two figures are equal on a card sized by its content. Half a
+    //    pixel is there for the layout rounding of a fractional border, never
+    //    for a width worth arguing about.
+    const bound = await widthNeeded(DELIVERED_CARD);
+    expect(bound.found, "the delivered summary vanished before its width could be probed").toBe(
+      true,
+    );
+
+    // REPORTED, whatever the verdict: the two figures the ceiling turns on,
+    // in the run's own output, so a future reading of this card does not have
+    // to re-derive them from a diff.
+    console.log(
+      `[cr103 AC1a] the delivered card USES ${round1(bound.used)}px and NEEDS ` +
+        `${round1(bound.need)}px for these facts, against the design's ` +
+        `${round1(figures.card.width)}px card and its ${round1(figures.card.minWidth)}px floor`,
+    );
+    expect(
+      bound.used,
+      `the delivered summary USES ${round1(bound.used)}px where its own rules NEED ` +
+        `${round1(bound.need)}px for the facts it states — ` +
+        `${round1(bound.used - bound.need)}px wider than its content needs`,
+    ).toBeLessThanOrEqual(bound.need + 0.5);
+
+    // What the ARTIFACT adds, and it is not the same bound twice: the clause
+    // above passes any card that is as wide as its content, however wide the
+    // content made itself. The §S1 defect was exactly that — facts laid side
+    // by side made the card's own max-content 682.8px, and a card 682.8px
+    // wide around 682.8px of content needs every pixel it takes. This board
+    // states the DESIGN's OWN facts — sixty members, waves 1–4, the
+    // artifact's own ship date and its two packages — so the design's card is
+    // how wide that content is SUPPOSED to be, measured in this same engine.
     expect(
       card.width,
       `the delivered summary measures ${round1(card.width)}px for the same facts the design's ` +
         `own card draws in ${round1(figures.card.width)}px — ` +
-        `${round1(card.width - figures.card.width)}px wider than this content needs`,
+        `${round1(card.width - figures.card.width)}px wider than the design draws this content`,
     ).toBeLessThanOrEqual(figures.card.width);
 
-    // The same bound stated WITHOUT the artifact, so the ceiling does not rest
-    // on one comparison: a card is no wider than its widest fact plus its own
-    // chrome. Facts STACKED inside a box satisfy that; facts laid side by side
-    // across the surface do not, which is exactly the shape of the defect.
+    // And the STACKING invariant, stated without either the artifact or the
+    // probe: a card is no wider than its widest fact plus its own chrome.
+    // Say plainly what it can and cannot catch. For the card that shipped it
+    // is an ARITHMETIC IDENTITY and cannot fail: `.app-flow-delivered-crs` is
+    // `display: block`, so the widest fact always fills the content box
+    // whatever the box's width. It is kept because the shape it DOES fail is
+    // the shape the defect had — facts laid side by side across a row-flex
+    // card leave the widest one far short of the box — so it is the guard
+    // against that layout returning, and it is not a ceiling on width.
     const chrome = card.padLeft + card.padRight + 2 * card.borderTopWidth;
     const widest = Math.max(...facts.map((fact) => fact.width));
     expect(
