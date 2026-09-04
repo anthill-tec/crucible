@@ -35,16 +35,40 @@ exactly how the two rows still marked NO came to be.
 The tell: CR-CRU-099's VERIFY had to **construct a board configuration** to prove the two writers
 answered identically. Needing an experiment to know whether two code paths agree is the finding.
 
-## Why both doors stay
+## Why both doors stay — CORRECTED 2026-09-04 by user ruling
 
-Neither path is removable, so "delete one" is not the answer:
+**What the approved design actually declares.** `.lavish/crucible-workflow-flowchart.html` §12's
+ordered call chain is PER-CR by design: `register` → `release-propose` → **`cr-plan`** →
+`wave-sequence` → `cr-supersede`/`cr-void` → the execution verbs → `next` → `milestone`. There is no
+bulk queue post in it, and the design says why at step 3: *"The order is the payload. Sending CRs
+one at a time makes their sequence an accident of arrival."* Membership is declared by `cr-plan`;
+ORDER is declared by `wave-sequence`.
 
-- `cr-plan --release` is the declaring verb the approved design names
-  (`.lavish/crucible-workflow-flowchart.html`, the machinery table's proposed-membership row), and
-  it is how a single CR is re-planned or moved between releases.
-- The bulk post is the only declaring path the bootstrap and the e2e scenario have. CR-CRU-078
-  rewrote `tests/e2e/features/roadmap-graph.feature` to declare a release through it, and that
-  scenario had never passed until CR-CRU-099 made the route read the field.
+**The bulk post is the orchestrator's own invention, and its legitimate purpose is MIGRATION.** It
+was built to move THIS project's existing README-table roadmap onto the board. That is why the
+approved API carries only per-CR verbs. The README-based approach is to be PHASED OUT as Crucible
+becomes able to author a whole roadmap through the AXI clients and the backend.
+
+**User ruling 2026-09-04, three parts:**
+
+1. **The bulk door STAYS** — it is genuinely useful for migrating an existing project onto the
+   Roadmap approach, and this CR's job of making it obey ONE membership rule is exactly right for a
+   migration door. What changes is its STATUS: a migration path, not a co-equal declaring path, and
+   never the interface our own scenarios reach for.
+2. **The e2e scenario is REWRITTEN onto `cr-plan`.** CR-CRU-078 pointed
+   `tests/e2e/features/roadmap-graph.feature` at the bulk post; it must declare through the approved
+   per-CR verb instead. Filed as its own CR — it is a scenario change, not part of this duality.
+3. **The chain needs a DEPS-DECLARING STEP, and it needs the user's approval before implementation.**
+   93 of the board's 102 rows carry `dependsOn` that no approved verb can set, because they arrived
+   through the migration door. The step is being put to the user in the Lavish artifact for approval;
+   nothing is implemented until then.
+
+So "delete one door" is still not the answer, but the reason is migration, not parity of standing:
+
+- `cr-plan --release` is the declaring verb the approved design names, and the interface every new
+  CR uses.
+- The bulk post is the MIGRATION door. It must not answer differently from `cr-plan` — a migration
+  that stores membership the per-CR verb would have refused is a migration that corrupts the board.
 
 ## Scope
 
@@ -151,11 +175,12 @@ CR-CRU-102's. It was CR-CRU-096's; CR-CRU-102 is the CR that RETIRED it.)
   the label they declare. What must NOT change is what each shipped assertion MEASURES — a fixture
   gaining a precondition is legitimate; an assertion losing its subject is not. Every suite touched
   is listed in the report with the reason.
-- **AC13** — No PRODUCT caller is broken. `queue-file` sends no `release` at all
-  (`clients/_crucible_axi.py`'s `parse_queue_table` keeps only the leading integer of the Wave
-  cell), so the bootstrap path is unaffected, and the e2e scenario PROPOSES the release before it
-  posts (`tests/e2e/features/roadmap-graph.feature:37-38`). Both verified by reading, and both
-  stated here so the refusal is known to be test-only churn rather than assumed to be.
+- **AC13** — A bulk post declaring NO release stays open to any caller, and no PRODUCT caller is
+  refused. **REWRITTEN 2026-09-04:** this AC first justified itself by naming `queue-file` — the
+  README-table bootstrap command, which is the orchestrator's own migration tooling and not part
+  of the approved API. Citing it made the criterion a defence of an unapproved interface. The
+  operative requirement is the one above: the release-less post is unguarded, because identity is
+  only demanded of a caller that DECLARES membership (CR-CRU-099 §S3/AC9, field-conditional).
 
 ## Non-goals
 
