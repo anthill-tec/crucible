@@ -406,6 +406,7 @@
       <tr><td>Order in the wave / table</td><td>authored queue order</td><td class="mono">queue row index</td></tr>
       <tr><td>Lane</td><td>reported track; absent ⇒ no lanes</td><td class="mono">plan.track</td></tr>
       <tr><td>Node label</td><td>CR id + terse status, never the title</td><td class="mono">derived status</td></tr>
+      <tr><td>The <code>deps</code> annotation on a row</td><td><b>declared by the orchestrator</b>, whole set at a time — never inferred from wave order. Rendered as the design draws it: the bare number, derived by comparing the two ids rather than by knowing any prefix (CR-CRU-102)</td><td class="mono">cr-depends --on</td></tr>
       <tr><td>Table title cell</td><td>the CR's own brief title</td><td class="mono">CR spec H1</td></tr>
       <tr><td>Motion + cycle</td><td>active cycle of an open plan</td><td class="mono">plan.cycles</td></tr>
       <tr><td>Packages on the gate</td><td>what the release published</td><td class="mono">releases[].packages</td></tr>
@@ -493,6 +494,8 @@
         <td><b>Design phase, once per planned release.</b> The super container must exist before a CR can target it. <code>--target</code> is the declared date (optional, revisable); the strip still <b>orders by version</b>.</td><td class="no">new</td></tr>
       <tr><td class="mono">2</td><td class="mono">cr-plan --cr … --release … --wave … --title …</td>
         <td><b>As each CR is authored.</b> Declares both memberships + the brief title. Re-running with different values is a legitimate <b>re-plan</b>, not an error.</td><td class="no">new</td></tr>
+      <tr><td class="mono">2b</td><td class="mono">cr-depends --cr … --on A,B,C…</td>
+        <td><b>When a CR's dependencies are known</b>, and again whenever they change. Carries the <b>whole set</b>; re-sending REPLACES it, so a dropped dep is a declaration and not an accident. Deps are their own axis, so a re-plan at step 2 never restates or loses them. ORCHESTRATOR-gated and cycle-refusing. <b>APPROVED 2026-09-04 — shape A of three.</b></td><td class="no">new</td></tr>
       <tr><td class="mono">3</td><td class="mono">wave-sequence --release … --wave … --crs A,B,C…</td>
         <td><b>When the wave's order is decided</b>, and again whenever it changes. Carries the <b>whole ordered list</b>; array position becomes <code>seq</code>.</td><td class="no">new</td></tr>
       <tr><td class="mono">4</td><td class="mono">cr-supersede · cr-void</td>
@@ -510,33 +513,36 @@
       data so the layout substituted its own. It also lands the field the app already reads: <code>data.seq</code>,
       shipped in CR-077 C2 as "numeric, distinct, strictly increasing in authored order".</p>
 
-    <div style="border:2px dashed var(--heat); border-radius:8px; padding:11px 14px; margin:14px 0 0">
-      <div class="sub" style="color:var(--heat); margin-bottom:6px"><b>&#9650; PROPOSED &mdash; STEP 2b, A DEPS-DECLARING VERB. AWAITING YOUR APPROVAL, NOT IMPLEMENTED.</b></div>
+    <div style="border:2px solid var(--ok, #5ec26a); border-radius:8px; padding:11px 14px; margin:14px 0 0">
+      <div class="sub" style="color:var(--ok, #5ec26a); margin-bottom:6px"><b>&#10003; APPROVED 2026-09-04 &mdash; STEP 2b, A DEPS-DECLARING VERB. SHAPE A OF THREE. Filed as CR-CRU-106.</b></div>
       <p class="sub" style="margin:0 0 7px"><b>Why this gap exists, stated plainly.</b> The chain above has no step that
         declares <code>dependsOn</code>, yet <b>93 of the board's 102 rows carry dependencies</b>. They arrived through
         the orchestrator's own <b>bulk queue post</b> &mdash; migration tooling built to move this project's
         README-table roadmap onto the board, and no part of this approved API. So today a dependency can only be
         declared by the migration door, which means a project authored natively in Crucible <b>cannot declare one at
         all</b>. That is the hole your ruling names.</p>
-      <p class="sub" style="margin:0 0 7px"><b>Three shapes, and a recommendation.</b></p>
+      <p class="sub" style="margin:0 0 7px"><b>Three shapes were offered. You approved A.</b></p>
       <table>
         <tr><th>Shape</th><th>Call</th><th>Trade</th></tr>
-        <tr><td><b>A &mdash; its own verb</b> <span style="color:var(--heat)">(recommended)</span></td>
+        <tr><td><b>A &mdash; its own verb</b> <span style="color:var(--ok, #5ec26a)">&#10003; APPROVED</span></td>
           <td class="mono">cr-depends --cr CR-X --on A,B,C</td>
           <td>The WHOLE set is the payload, exactly as step 3 argues for order: re-sending replaces, so a dropped dep
             is a declaration and not an accident of arrival. Deps are their own axis &mdash; a re-plan of release or
             wave must not silently restate them. One new verb, and the graph stays declarative.</td></tr>
-        <tr><td>B &mdash; a flag on step 2</td><td class="mono">cr-plan &hellip; --depends-on A,B,C</td>
+        <tr><td>B &mdash; a flag on step 2 <span class="n">(rejected)</span></td><td class="mono">cr-plan &hellip; --depends-on A,B,C</td>
           <td>No new verb. But <code>cr-plan</code> is "membership + title", and re-planning a CR's release would then
             have to re-send its deps or lose them &mdash; the accident-of-arrival failure, one axis over.</td></tr>
-        <tr><td>C &mdash; fold into step 3</td><td class="mono">wave-sequence &hellip; --crs A,B,C --deps &hellip;</td>
+        <tr><td>C &mdash; fold into step 3 <span class="n">(rejected)</span></td><td class="mono">wave-sequence &hellip; --crs A,B,C --deps &hellip;</td>
           <td>Order and graph in one call, but a dependency can cross waves and releases, so the wave call is the
             wrong container for it.</td></tr>
       </table>
-      <p class="sub" style="margin:7px 0 0">Whichever you pick, two things follow: the verb is <b>ORCHESTRATOR-gated</b>
-        like every other declaring verb, and it <b>refuses a cycle</b> the way <code>cr-plan</code> already does. The
-        migration door keeps accepting an unknown dep and flagging it (CR-CRU-014 &sect;S1), because a bulk import cannot
-        require its own targets to exist yet. <b>Nothing is implemented until you rule.</b></p>
+      <p class="sub" style="margin:7px 0 0">Two things follow from the approval, and both are in CR-CRU-106: the verb is
+        <b>ORCHESTRATOR-gated</b> like every other declaring verb, and it <b>refuses a cycle</b> the way
+        <code>cr-plan</code> already does. The migration door keeps accepting an unknown dep and flagging it
+        (CR-CRU-014 &sect;S1), because a bulk import cannot require its own targets to exist yet &mdash; that asymmetry is
+        deliberate and is stated rather than inherited. One question the CR must ANSWER rather than assume: whether an
+        unknown dependency TARGET is refused here (as <code>cr-plan</code> refuses an unproposed release) or
+        accepted-and-flagged (as CR-CRU-014 does). The two precedents disagree, so the choice is forced into the open.</p>
     </div>
 
     <div class="zone" style="margin-top:14px">the client ASKS — principle 9 + principle 7, not a blank failure</div>
