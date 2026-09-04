@@ -108,7 +108,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-104](CR-CRU-104-one-membership-rule-two-entry-points.md) | release membership has one rule, not one per entry point | bugfix | COMPLETED (0.2.0) | 099 | 5 (0.2.0) |
 | [CR-CRU-106](CR-CRU-106-a-dependency-is-declared-by-its-own-verb.md) | a dependency is declared by its own verb | feature | COMPLETED (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-107](CR-CRU-107-a-cycle-label-list-refuses-the-wrong-delimiter.md) | a cycle label list refuses the wrong delimiter | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
-| [CR-CRU-105](CR-CRU-105-the-e2e-scenario-declares-through-the-approved-verb.md) | the e2e scenario declares membership through the approved verb | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
+| [CR-CRU-105](CR-CRU-105-the-e2e-scenario-declares-through-the-approved-verb.md) | the e2e scenario declares membership through the approved verb | bug | COMPLETED (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-079](CR-CRU-079-roadmap-deep-link-and-drill-through.md) | roadmap deep-link parity and active-CR drill-through | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-085](CR-CRU-085-roadmap-multi-track-lanes.md) | multi-track swimlanes inside a wave | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-093](CR-CRU-093-project-rail-collapses.md) | the project rail collapses, giving every workspace view its width back | feature | PENDING (0.2.0) | 006 | 5 (0.2.0) |

@@ -1,4 +1,4 @@
-Feature: CR-CRU-014 §S3, amended by CR-CRU-083 AC7 and CR-CRU-078 §S1/§S4 — the roadmap FLOWCHART zone: the focused release's waves + the status-gated node→Workflow swap
+Feature: CR-CRU-014 §S3, amended by CR-CRU-083 AC7, CR-CRU-078 §S1/§S4 and CR-CRU-105 §S1 — the roadmap FLOWCHART zone: the focused release's waves + the status-gated node→Workflow swap
   The roadmap renders every zone at once (CR-CRU-078 §S1/AC1 retired the
   exclusive table|graph toggle this scenario used to click). CR-CRU-078 §S4
   then replaced what zone 2 DRAWS: CR-CRU-077's dependency-composed
@@ -15,8 +15,12 @@ Feature: CR-CRU-014 §S3, amended by CR-CRU-083 AC7 and CR-CRU-078 §S1/§S4 —
       no longer needs a published cytoscape handle to see anything;
     • zone 2 needs a FOCUSED RELEASE to draw, so the scenario now declares
       one: an ORCHESTRATOR-role agent proposes `0.2.0` (CR-CRU-091 §S8) and
-      the queue registers its CR into it. That is the real registration path,
-      not a fixture — which is what an e2e is for.
+      then declares its CR's membership through `cr-plan` — the approved
+      design's §12 step 2, POST …/queue/plan (CR-CRU-105 §S1). It is NOT the
+      bulk queue post: that is the migration door, kept for moving an
+      existing README-table roadmap onto the board, never for our own
+      scenarios. That is the real registration path, not a fixture — which
+      is what an e2e is for.
 
   Gating rule (CR-CRU-083 AC7, mirroring the row since CR-CRU-014): the tap is
   landable ONLY for a node whose OWN derived status is evidence of tracked
@@ -35,7 +39,7 @@ Feature: CR-CRU-014 §S3, amended by CR-CRU-083 AC7 and CR-CRU-078 §S1/§S4 —
     And an online agent "rm-graph" with message "graph runner" is registered on that project
     And an orchestrator "rm-graph-orch" is registered on that project
     And a release "0.2.0" is proposed for that project
-    And a CR queue registering cr "CR-RG-200" titled "Graph CR" in wave "5" for release "0.2.0" is posted for that project
+    And a cr-plan declaring cr "CR-RG-200" titled "Graph CR" into wave "5" of release "0.2.0" is posted for that project
     When I open the workspace for that project
     And I click the "Roadmap" workspace tab
     Then the roadmap flowchart for release "0.2.0" renders wave "5" holding 1 CR nodes within 3 seconds
