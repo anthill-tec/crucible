@@ -4,7 +4,7 @@
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 102 — that CR re-measures the spine budget, and this one changes the terminal
   geometry the budget is measured against, so they land in order
-- **Status**: PENDING (0.2.0) — filed 2026-09-03, **scope corrected the same day**
+- **Status**: COMPLETED (0.2.0) — filed 2026-09-03, scope corrected the same day, gap-analysed 2026-09-04 (§S3/AC5 retracted, AC1a/AC3a added), AC7 amended by user ruling, shipped 2026-09-04
 - **Found by**: the user, comparing a screenshot of the live shipped-release view against the
   approved design. **Ruling: the design is the authority.** Second ruling: assert the font FAMILY
   CLASS, never a font name — Crucible already has its own `--mono`/`--sans` tokens.
