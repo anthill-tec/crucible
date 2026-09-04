@@ -37,6 +37,14 @@
 // convergence probe lived in /tmp and was thrown away; this one is in the
 // suite, so adding an invariant to one path and not the other FAILS (AC4).
 //
+// AC4's SENSITIVITY, re-measured 2026-09-04 (run-b7977f02) because C1's
+// record said only the parity test fires: when `cr-plan` skips the
+// live-proposal invariant the bulk post keeps, TWO tests fire — the §S2/AC3
+// scenario "a release nobody proposed" AND the AC5 shipped-wordings test,
+// which asserts `cr-plan`'s 404 and its help[] directly. Both directions of a
+// one-sided gate are therefore covered, and the AC5 test is not the
+// insensitive pin the earlier claim implied.
+//
 // Every server here is booted on an OS-assigned port against an mkdtempSync
 // scratch db. The live data/crucible.db and port 3849 are never touched.
 import { describe, test, expect, afterEach } from "bun:test";
@@ -762,6 +770,57 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
         const board = await entries(key);
         expect(board.map((e) => e.cr)).toEqual(["CR-104-T"]);
         expect("track" in board[0]!).toBe(false);
+      },
+    );
+
+    test(
+      "a NON-STRING `track` is refused 400 by both before its lane content is judged — the bulk " +
+        "door coerced it with `String()` too, so `2` and `{}` became the lanes `track-2` and " +
+        "nothing at all; the STRING spellings the lane rule names are untouched and still store " +
+        "`track-2`",
+      async () => {
+        boot();
+        const key = await seed("cru104-track-type-parity");
+        await propose(key, "0.2.0");
+        expect([200, 202]).toContain(
+          (
+            await bulk(key, [
+              { cr: "CR-104-T", wave: "5", dependsOn: [], release: "0.2.0", seq: 5001 },
+            ])
+          ).status,
+        );
+
+        const bulkRes = await bulk(key, [
+          { cr: "CR-104-T", wave: "5", dependsOn: [], release: "0.2.0" },
+          { cr: "CR-104-T2", wave: "5", dependsOn: [], track: 2 },
+        ]);
+        const seqRes = await post(sequencePath(key), {
+          agentId: ORCH,
+          release: "0.2.0",
+          wave: "5",
+          crs: ["CR-104-T"],
+          track: 2,
+        });
+        const sentence = `\`track\` must be declared as a string — ${LANE_RULE}`;
+        expect(bulkRes.status).toBe(400);
+        expect(bulkRes.body.error).toBe(`entry at index 1: ${sentence}`);
+        expect(seqRes.status).toBe(400);
+        expect(seqRes.body.error).toBe(sentence);
+        // Neither write ran, and the untracked seeded row still stands.
+        const held = await entries(key);
+        expect(held.map((e) => e.cr)).toEqual(["CR-104-T"]);
+        expect("track" in held[0]!).toBe(false);
+
+        // NON-VACUITY, and the shipped lane rule's own examples: `2` and
+        // `Track 2` AS STRINGS — which is all a CLI flag can produce — still
+        // land on the same normalised lane.
+        for (const spelling of ["2", "Track 2"]) {
+          const accepted = await bulk(key, [
+            { cr: "CR-104-T", wave: "5", dependsOn: [], release: "0.2.0", track: spelling },
+          ]);
+          expect([200, 202]).toContain(accepted.status);
+          expect((await entries(key)).find((e) => e.cr === "CR-104-T")!.track).toBe("track-2");
+        }
       },
     );
 

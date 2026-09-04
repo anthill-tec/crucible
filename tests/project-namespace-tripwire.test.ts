@@ -737,8 +737,22 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // re-measure at their recorded 390 and 619. The `develop` baselines are
 // UNCHANGED at 512/378/601 and stay the floors — a floor never moves, in
 // either direction, for a re-pin.
+// RE-PINNED 2026-09-04 by CR-CRU-104's VERIFY round. `src/` HEAD moves
+// 538 -> 541, all three in `src/v2.ts`: the membership gate now owns the
+// SHAPE of a declaration as well as its meaning (the migration door coerced a
+// non-string release with `String()` and stored the label the coercion
+// produced, which `cr-plan` type-refuses), and the +3 is that decision
+// written where a reader of the code will meet it — `MembershipDeclaration`'s
+// doc comment, `RELEASE_REQUIRED`'s (the one sentence both doors now answer)
+// and the gate's own shape-before-meaning comment. Measured with THIS file's
+// `extractCitableText` file by file against `git show develop:<path>`: 7
+// citations added and 4 removed on `//`/` * ` lines of that one file, none in
+// a string, so `src/v2.ts` moves 175 -> 178 over develop's 163 while the
+// other nine `src/` files stay at their develop counts. `public/` and
+// `clients/` are untouched and re-measure at 390 and 619. The `develop`
+// baselines are UNCHANGED at 512/378/601 and stay the floors.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 538 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 541 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 390 },
   clients: { exts: [".py"], develop: 601, head: 619 },
 };

@@ -1914,23 +1914,30 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
     if (fields.seq !== undefined && fields.seq !== null && !Number.isInteger(fields.seq)) {
       return fail(400, `entry at index ${index} has a non-integer \`seq\``);
     }
-    // CR-CRU-104 §S1 — the membership this entry DECLARES, in the values the
-    // forwarding spreads below hand to `replaceQueue`, put through the ONE
-    // membership decision `cr-plan` and `wave-sequence` also pass through:
-    // the live-proposal requirement — the rule this route did not have, so a
-    // migration could store membership in a release nobody proposed — and
-    // the lane refusal CR-CRU-099 §S1/AC4a added here because
-    // `replaceQueue`'s own `normalizeTrack` guard throws a plain `Error` this
-    // handler does not catch, which would answer authored input 500. Refused
-    // by field name AND index, this route's own shape. The NORMALISED track
-    // is `replaceQueue`'s business (its pre-transaction normaliser is the
-    // store's write boundary); what is forwarded is what was declared.
-    const release =
-      fields.release !== undefined && fields.release !== null ? String(fields.release) : undefined;
-    const track =
-      fields.track !== undefined && fields.track !== null ? String(fields.track) : undefined;
-    const membership = declareMembership(proposed, { release, track }, index);
+    // CR-CRU-104 §S1 — the membership this entry DECLARES, AS RECEIVED, put
+    // through the ONE membership decision `cr-plan` and `wave-sequence` also
+    // pass through: the SHAPE of a declared label or lane, the live-proposal
+    // requirement — the rule this route did not have, so a migration could
+    // store membership in a release nobody proposed — and the lane refusal
+    // CR-CRU-099 §S1/AC4a added here because `replaceQueue`'s own
+    // `normalizeTrack` guard throws a plain `Error` this handler does not
+    // catch, which would answer authored input 500. Refused by field name AND
+    // index, this route's own shape.
+    //
+    // Nothing is COERCED on the way in. This route used to hand the gate
+    // `String(fields.release)`, which turned a JSON number into the label
+    // `"2"` and stored it while `cr-plan` type-refused the same input: a
+    // migration storing membership the per-CR verb would have refused, which
+    // is this CR's own thesis one field lower down. What the gate returns is
+    // what may be stored — the declared label, and the NORMALISED lane.
+    const membership = declareMembership(
+      proposed,
+      { release: fields.release, track: fields.track },
+      index,
+    );
     if ("fail" in membership) return membership.fail;
+    const release = membership.release;
+    const track = membership.track;
     // §S1 — `lifecycle` is the one declared field that is a STRUCTURE, so its
     // SHAPE is refused by name and index exactly as a non-array `dependsOn`
     // is. `replaceQueue` stringifies it verbatim into `lifecycle_json` (its
@@ -1983,7 +1990,10 @@ async function handleQueuePost(store: Store, key: string, req: Request): Promise
       // route accepted them and read none, so a declared release was answered
       // `200` and stored as nothing (CR-CRU-091 §S8's five-verb boundary,
       // moved here because CR-CRU-078's e2e scenario declares through THIS
-      // route).
+      // route). `release` and `track` are the values the membership gate
+      // VETTED and returned; a property one literal deeper than these would
+      // store nothing under its name at all, which the AC11 half of
+      // tests/queue-accepted-field-guard.test.ts now fires on.
       ...(release !== undefined ? { release } : {}),
       ...(track !== undefined ? { track } : {}),
       ...(lifecycle !== undefined ? { lifecycle } : {}),
@@ -2162,12 +2172,28 @@ function unknownDependencies(entries: QueueEntry[], touched: Set<string>): strin
 }
 
 /** CR-CRU-104 §S1 — what a caller DECLARES about a cr's release membership,
- *  in the values that would be STORED. A field is absent when the caller
- *  declared none, which is a fact and never a default (CR-CRU-099 §S1). */
+ *  AS RECEIVED. Each field is `unknown` because the SHAPE of a declaration is
+ *  itself one of the rules the gate below owns: the migration door coerced a
+ *  non-string with `String()` and stored the label the coercion produced —
+ *  membership `cr-plan` type-refuses — so a parameter typed `string` would put
+ *  the type check outside the one decision and let the two doors part again. A
+ *  field is UNDECLARED when it is absent or null, which is a fact and never a
+ *  default (CR-CRU-099 §S1). */
 interface MembershipDeclaration {
-  release?: string | undefined;
-  track?: string | undefined;
+  release?: unknown;
+  track?: unknown;
 }
+
+/**
+ * CR-CRU-091 §S8's TYPE refusal of a declared release, as `cr-plan` has
+ * answered it since that CR shipped, hoisted to ONE string in CR-CRU-104's
+ * VERIFY round: the migration door now answers the same meaning for the same
+ * input (a non-string or empty label) in its own field+index shape, and a
+ * second wording of it is exactly what §S1 forbids. `handleCrPlan` states the
+ * REQUIREDNESS — its whole declaration is a release — and the gate states the
+ * SHAPE; both cite this sentence.
+ */
+const RELEASE_REQUIRED = "`release` is required — the release this cr targets";
 
 /**
  * CR-CRU-104 §S1 — the LIVE proposals a declaration may target, resolved ONCE
@@ -2204,15 +2230,47 @@ function liveProposalLabels(store: Store, key: string): ReadonlySet<string> {
  * `at` is the offending `entries[]` INDEX, and is the one thing that differs
  * between the two shapes: the bulk post refuses by field name AND index, the
  * per-CR verbs by field. The ANSWER — status, meaning, `help[]` — is the same
- * either way. Returns the NORMALISED track for the caller that stores one.
+ * either way. Returns the values that may be STORED: the validated release and
+ * the NORMALISED track.
  */
 function declareMembership(
   proposed: ReadonlySet<string>,
   declared: MembershipDeclaration,
   at?: number,
-): { track: string | undefined } | { fail: Response } {
+): { release: string | undefined; track: string | undefined } | { fail: Response } {
+  // CR-CRU-104 §S1 — the SHAPE of a declaration, refused before its meaning
+  // is judged: you cannot ask whether a label holds a live proposal, or which
+  // lane a value names, until it is a label at all. The migration door used
+  // to coerce here (`String(fields.release)`), which stored `2` as `"2"` and
+  // `cr-plan` type-refuses the same input — the divergence this CR is about,
+  // one field lower down. `cr-plan`'s own sentence is answered rather than a
+  // second wording of it; on the bulk door it answers a value that WAS
+  // declared and carries no label, in that route's field+index shape.
+  if (
+    declared.release !== undefined &&
+    declared.release !== null &&
+    (typeof declared.release !== "string" || declared.release.length === 0)
+  ) {
+    return {
+      fail: fail(
+        400,
+        at === undefined ? RELEASE_REQUIRED : `entry at index ${at}: ${RELEASE_REQUIRED}`,
+      ),
+    };
+  }
+  if (
+    declared.track !== undefined &&
+    declared.track !== null &&
+    typeof declared.track !== "string"
+  ) {
+    const sentence = `\`track\` must be declared as a string — ${TRACK_LANE_RULE}`;
+    return {
+      fail: fail(400, at === undefined ? sentence : `entry at index ${at}: ${sentence}`),
+    };
+  }
+  const release = typeof declared.release === "string" ? declared.release : undefined;
   let track: string | undefined;
-  if (declared.track !== undefined) {
+  if (typeof declared.track === "string") {
     const normalized = normalizeTrack(declared.track);
     if (normalized === null) {
       // The two SHIPPED wordings, verbatim — one names the field and the
@@ -2229,15 +2287,15 @@ function declareMembership(
     }
     track = normalized;
   }
-  if (declared.release !== undefined && !proposed.has(declared.release)) {
-    const sentence = `release ${declared.release} has no live proposal — it is not a plannable target`;
+  if (release !== undefined && !proposed.has(release)) {
+    const sentence = `release ${release} has no live proposal — it is not a plannable target`;
     return {
       fail: fail(404, at === undefined ? sentence : `entry at index ${at}: ${sentence}`, {
-        help: roadmapHints.unproposedRelease(declared.release),
+        help: roadmapHints.unproposedRelease(release),
       }),
     };
   }
-  return { track };
+  return { release, track };
 }
 
 /** §S8 — the wire shape of one proposal: the candidate list §S6 asks from. */
@@ -2333,8 +2391,11 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
   if (typeof body.cr !== "string" || body.cr.length === 0) {
     return fail(400, "`cr` is required — the CR this plan declares");
   }
+  // The REQUIREDNESS is this verb's own — its whole declaration is a release
+  // — and the sentence is the one the gate answers for a declared value that
+  // carries no label, so the two doors cannot fork it.
   if (typeof body.release !== "string" || body.release.length === 0) {
-    return fail(400, "`release` is required — the release this cr targets");
+    return fail(400, RELEASE_REQUIRED);
   }
   if (body.wave === undefined || body.wave === null || String(body.wave).length === 0) {
     return fail(400, "`wave` is required — the wave within the release");
@@ -2416,13 +2477,14 @@ async function handleWaveSequence(store: Store, key: string, req: Request): Prom
     }
     crs.push(cr);
   }
-  // CR-CRU-104 §S1 — the ONE membership rule: the track is normalised (and a
-  // value carrying no lane number refused BY NAME, §S2/AC17) before anything
-  // is stored, and the release must hold a live proposal — the same decision,
-  // in the same order, the migration door now passes through.
+  // CR-CRU-104 §S1 — the ONE membership rule: a declared lane is a string
+  // (nothing is coerced here either) and is normalised — a value carrying no
+  // lane number refused BY NAME, §S2/AC17 — before anything is stored, and
+  // the release must hold a live proposal: the same decision, in the same
+  // order, the migration door passes through.
   const membership = declareMembership(liveProposalLabels(store, pk.key), {
     release: body.release,
-    ...(body.track !== undefined && body.track !== null ? { track: String(body.track) } : {}),
+    track: body.track,
   });
   if ("fail" in membership) return membership.fail;
   const { track } = membership;

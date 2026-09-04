@@ -85,6 +85,20 @@
 // run-f7c330d9-2d7e-4ee4-900c-7f021f0291ea,
 // run-4c0a440b-4c0e-4ddc-adb3-ece3bbf5e3b5).
 //
+// CR-CRU-104's VERIFY round CLOSED a hole this block used to leave unnamed,
+// which AC11 makes a defect rather than a caveat: the forward half asked
+// whether a declared key stood at property position ANYWHERE inside the
+// pushed span, at any brace depth, so moving a forwarding one literal deeper
+// — `...(release !== undefined ? { meta: { release } } : {})`, a genuine drop
+// because `replaceQueue` then stores no release — kept the guard GREEN 10/10
+// (run-12efb408) while the two behavioural suites fired 14 failures on the
+// same tree (run-f5593f78). It was the plausible refactor, not a contrived
+// one: this CR's own vocabulary groups the pair (`MembershipDeclaration
+// { release, track }`). What is demanded now is a property OF THE ROW —
+// depth 0 of the pushed literal, or of a literal a `...` spread merges into
+// it, which is where all six optional fields live — and the same mutation
+// FIRES by name (run-6ae45a48 in-suite, key by key).
+//
 // ── WHAT THIS DERIVATION CANNOT SEE, stated rather than implied ────────────
 //
 // 1. Shapes neither half recognises, all of them LOUD — they fail in the
@@ -136,16 +150,21 @@
 //    THAT direction would hide a dropped field behind a neighbouring
 //    function's code.
 // 5. The WRITE SHAPE is the one this route uses and no other: a named array
-//    handed to `store.replaceQueue`, filled by `push`. A handler that built
-//    that array by `map`, or handed the store an inline literal, or aliased
-//    the store, makes the derivation THROW by name — `writerSink` and
-//    `pushedObjects` both refuse rather than pass — so the failure is "teach
-//    this guard the new write shape", never a silent green. A span that
-//    over-ran its own closer is refused for the same reason and asserted
-//    against directly, because that direction could show a property the
-//    pushed literal never carried. Where there are SEVERAL push sites the key
-//    is required in EVERY one, since each is handed to the store and a push
-//    that omits it is a row missing the field; there is one site today.
+//    handed to `store.replaceQueue`, filled by `push`, whose row is an object
+//    literal plus `...` spreads of parenthesised conditionals. A handler that
+//    built that array by `map`, or handed the store an inline literal, or
+//    aliased the store, or spread a CALL or a named object into the row
+//    (`...spreadOf({ release })`, `...membership`) makes the derivation THROW
+//    by name — `writerSink`, `pushedObjects`, `literalInterior` and
+//    `spreadLiterals` all refuse rather than pass — so the failure is "teach
+//    this guard the new write shape", never a silent green. The one exception
+//    is a spread of a NAMED object, which merges no literal this walk can
+//    read and therefore reports its keys UNFORWARDED: the loud direction. A
+//    span that over-ran its own closer is refused for the same reason and
+//    asserted against directly, because that direction could show a property
+//    the pushed literal never carried. Where there are SEVERAL push sites the
+//    key is required in EVERY one, since each is handed to the store and a
+//    push that omits it is a row missing the field; there is one site today.
 //
 // ── IT EXTENDS, IT DOES NOT REINVENT ───────────────────────────────────────
 //
@@ -399,25 +418,151 @@ interface Property {
   value: string;
 }
 
-// A property NAMED `key` in an object-literal span — `key: <expr>`, or the
-// SHORTHAND `key` that binds a local of the same name, which is the shape the
-// handler uses for all three fields this CR is about. Anchored on the `{` or
-// `,` that can precede a property NAME so a VALUE that happens to be an
-// identifier of that name (`{ lane: track }`) is never read as one.
-function propertiesNamed(span: string, key: string): Property[] {
-  const at = new RegExp(`(?<=^|[{,])\\s*${escaped(key)}\\s*(?::|(?=[,}])|$)`, "g");
-  const found: Property[] = [];
-  for (const match of span.matchAll(at)) {
-    const start = match.index!;
-    const after = start + match[0].length;
-    if (!match[0].endsWith(":")) {
-      found.push({ start, end: after, value: key });
-      continue;
+// ── THE ROW, AND WHAT COUNTS AS ONE OF ITS PROPERTIES ──────────────────────
+//
+// CR-CRU-104 §S3/AC11. `replaceQueue` reads the properties OF THE ROW: a name
+// one literal deeper is a name it never sees. The first version of this scan
+// asked whether a declared key appeared at property position ANYWHERE inside
+// the pushed span, at any brace depth, which answered "forwarded" for
+// `{ meta: { release } }` — a row carrying no release at all. Measured
+// 2026-09-04 against the real route, that rewrite left this guard GREEN 10/10
+// (run-12efb408) while the two behavioural suites fired 14 failures on the
+// same tree (run-f5593f78).
+//
+// Depth is NOT counted in braces, because a `...` spread is transparent: the
+// handler forwards all six optional fields as `...(cond ? { key } : {})`, so
+// the property the store reads sits inside an inner literal that the spread
+// merges into the row. What the walk below determines is which literals those
+// are.
+
+// The interior of the object literal that opens at or after `from`: from just
+// past its `{` to just before the matching `}`. Refused by name when there is
+// none, for the reason `writerSink` and `pushedObjects` refuse — a span this
+// walk guessed at is the silent direction.
+function literalInterior(text: string, from: number, what: string): Span {
+  const open = text.indexOf("{", from);
+  if (open === -1) {
+    throw new Error(
+      `${what} in ${HANDLER_NAME} (${HANDLER_FILE}) is not an object literal — this guard reads ` +
+        `the properties of the row handed to \`${HANDLER_ANCHOR}\`, so another way of building ` +
+        `that row must be taught to it rather than silently unchecked`,
+    );
+  }
+  return [open + 1, balancedEnd(text, open) - 1];
+}
+
+const SPREAD = "...";
+
+// The `...` spread expressions at the TOP LEVEL of one literal's interior:
+// each element of the literal, split at the interior's own unnested commas,
+// whose first non-space characters are `...`.
+function spreadExpressions(span: string, start: number, end: number): Span[] {
+  const spreads: Span[] = [];
+  for (let i = start; i < end; ) {
+    const next = Math.min(unnestedEnd(span, i, ","), end);
+    const element = span.slice(i, next);
+    const head = element.search(/\S/);
+    if (head !== -1 && element.startsWith(SPREAD, head)) {
+      spreads.push([i + head + SPREAD.length, next]);
     }
-    const close = unnestedEnd(span, after, ",;");
-    const rest = span.slice(close).search(/\S/);
-    const end = rest !== -1 && span[close + rest] === "," ? close + rest + 1 : close;
-    found.push({ start, end, value: span.slice(after, close) });
+    i = next + 1;
+  }
+  return spreads;
+}
+
+// The object literals ONE spread merges into the row, as spans over `span`.
+// Transparency is decided by what ENCLOSES the literal, never by brace depth:
+// `...(cond ? { release } : {})` puts `release` on the row, and
+// `...spreadOf({ release })` does not. A literal reached through anything but
+// a GROUPING paren or a conditional's `?`/`:` therefore THROWS by name rather
+// than being guessed at — a merge this walk invented could show a property
+// the row never carried. A spread of a NAMED object (`...membership`) merges
+// no literal this walk can see, so its keys report UNFORWARDED, which is the
+// loud direction.
+function spreadLiterals(span: string, from: number, to: number): Span[] {
+  const merged: Span[] = [];
+  for (let i = from; i < to; i++) {
+    if (span[i] !== "{") continue;
+    const before = span.slice(from, i).replace(/\s+$/, "");
+    const previous = before[before.length - 1] ?? "";
+    // A `(` is a grouping paren only when nothing callable precedes it.
+    const grouping = previous === "(" && !/[A-Za-z0-9_$)\]]$/.test(before.slice(0, -1).trimEnd());
+    if (!grouping && previous !== "?" && previous !== ":") {
+      throw new Error(
+        `${HANDLER_NAME} (${HANDLER_FILE}) spreads \`${span.slice(from, to).trim()}\` into the ` +
+          `row handed to \`${HANDLER_ANCHOR}\` — this guard reads a spread of a parenthesised ` +
+          `conditional and refuses to guess which properties any other spread merges, because a ` +
+          `merge it invented would show a property the row never carried`,
+      );
+    }
+    const end = balancedEnd(span, i);
+    merged.push([i + 1, end - 1]);
+    i = end - 1;
+  }
+  return merged;
+}
+
+// Every literal whose TOP-LEVEL properties are properties of the ROW: the
+// pushed literal, plus the branches of every spread merged into it, to a
+// fixpoint — a branch may itself spread.
+function mergedLiterals(span: string): Span[] {
+  const row = literalInterior(span, 0, `the object pushed into \`${HANDLER_ANCHOR}\`'s array`);
+  const merged: Span[] = [row];
+  const pending: Span[] = [row];
+  while (pending.length > 0) {
+    const [start, end] = pending.shift()!;
+    for (const [from, to] of spreadExpressions(span, start, end)) {
+      for (const branch of spreadLiterals(span, from, to)) {
+        merged.push(branch);
+        pending.push(branch);
+      }
+    }
+  }
+  return merged;
+}
+
+// A property NAMED `key` at the TOP LEVEL of one literal's interior —
+// `key: <expr>`, or the SHORTHAND `key` that binds a local of the same name,
+// which is the shape the handler uses for all three fields this CR is about.
+// Read element by element, so a name at any other depth cannot match and a
+// VALUE that happens to be an identifier of that name (`{ lane: track }`) is
+// never read as one.
+function propertiesNamed(interior: string, key: string): Property[] {
+  const at = new RegExp(`^\\s*${escaped(key)}\\s*(?::|(?=[,}])|$)`);
+  const found: Property[] = [];
+  for (let i = 0; i < interior.length; ) {
+    const next = Math.min(unnestedEnd(interior, i, ","), interior.length);
+    const match = at.exec(interior.slice(i, next));
+    if (match !== null) {
+      const after = i + match[0].length;
+      // The trailing comma belongs to the property: deleting or wrapping the
+      // span must leave the literal's remaining properties separated as they
+      // were.
+      const end = next < interior.length ? next + 1 : next;
+      found.push({
+        start: i,
+        end,
+        value: match[0].endsWith(":") ? interior.slice(after, next) : key,
+      });
+    }
+    i = next + 1;
+  }
+  return found;
+}
+
+// The properties of the ROW named `key`, as spans over the pushed span: what
+// `replaceQueue` receives under that name, from whichever merged literal
+// carries it.
+function rowProperties(span: string, key: string): Property[] {
+  const found: Property[] = [];
+  for (const [start, end] of mergedLiterals(span)) {
+    for (const property of propertiesNamed(span.slice(start, end), key)) {
+      found.push({
+        start: start + property.start,
+        end: start + property.end,
+        value: property.value,
+      });
+    }
   }
   return found;
 }
@@ -431,7 +576,7 @@ function forwardingSites(handlerCode: string, key: string): Span[] {
   const sink = writerSink(block.body);
   const sites: Span[] = [];
   for (const [start, end] of pushedObjects(block.body, sink)) {
-    for (const property of propertiesNamed(block.body.slice(start, end), key)) {
+    for (const property of rowProperties(block.body.slice(start, end), key)) {
       sites.push([block.start + start + property.start, block.start + start + property.end]);
     }
   }
@@ -543,17 +688,18 @@ function tracedFrom(handlerBody: string, expression: string, binding: string): s
 }
 
 // Whether `key`'s value REACHES the object handed to the writer: the key is a
-// property of every literal pushed into the writer's array, and at least one
-// expression bound to it traces back to a dereference of the posted entry by
-// that key.
+// property OF THE ROW every push hands the store — at depth 0 of the pushed
+// literal or of a literal a spread merges into it, never a name one literal
+// deeper (AC11) — and at least one expression bound to it traces back to a
+// dereference of the posted entry by that key.
 //
-// EVERY literal, because each one is handed to the store and a push that
-// omits the key is a row missing it. At least ONE bound expression, because a
-// key written twice in one literal is written once per branch, and either
-// branch reaching the store is a forwarding.
+// EVERY push, because each one is handed to the store and a push that omits
+// the key is a row missing it. At least ONE bound expression, because a key
+// written twice in one row is written once per branch, and either branch
+// reaching the store is a forwarding.
 function forwardsField(handlerBody: string, binding: string, key: string, sink: string): boolean {
   for (const [start, end] of pushedObjects(handlerBody, sink)) {
-    const properties = propertiesNamed(handlerBody.slice(start, end), key);
+    const properties = rowProperties(handlerBody.slice(start, end), key);
     if (properties.length === 0) return false;
     if (
       !properties.some((property) =>
@@ -809,9 +955,10 @@ describe("CR-CRU-099 §S2/AC5 + CR-CRU-104 §S3/AC8 — the bulk queue route STO
   );
 
   test(
-    "CR-CRU-104 §S3/AC8 — the object handed to the writer is located STRUCTURALLY: the writer " +
-      "call names the array, the pushes into that array name the literal, and each such span " +
-      "carries the two REQUIRED keys without swallowing the writer call itself",
+    "CR-CRU-104 §S3/AC8+AC11 — the ROW handed to the writer is located STRUCTURALLY: the writer " +
+      "call names the array, the pushes into that array name the literal, the spreads merged into " +
+      "it name the rest, and each such span carries the two REQUIRED keys at the row's own depth " +
+      "without swallowing the writer call itself",
     () => {
       const block = handlerBlock(jsLiveCode(handlerCode));
       const sink = writerSink(block.body);
@@ -824,8 +971,12 @@ describe("CR-CRU-099 §S2/AC5 + CR-CRU-104 §S3/AC8 — the bulk queue route STO
       for (const [start, end] of spans) {
         const span = block.body.slice(start, end);
         expect(span).not.toContain(HANDLER_ANCHOR);
+        // The row literal plus every literal a spread merges into it — the
+        // handler forwards its six optional fields that way, so a walk that
+        // found only the pushed literal would report them all unforwarded.
+        expect(mergedLiterals(span).length).toBeGreaterThan(1);
         for (const key of REQUIRED_KEYS) {
-          expect(propertiesNamed(span, key).map((property) => property.value.length > 0)).toEqual([
+          expect(rowProperties(span, key).map((property) => property.value.length > 0)).toEqual([
             true,
           ]);
         }
