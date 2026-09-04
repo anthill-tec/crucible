@@ -5159,9 +5159,14 @@ const TYPE_SCALE: ScaleRow[] = [
     // `.app-badge.app-roadmap-status` carries the rule. A guard keyed on the
     // class alone would measure the cell — 12.5px sans — and report the
     // collapse this CR was filed with.
+    //
+    // Scoped to a DATA row, and the guard proved why: the same selector
+    // unscoped also matches the table HEAD's status cell, and
+    // `.app-roadmap-head` is mono 10px — the leaf's own figure. The wrapper
+    // counter-reading caught that on its first run.
     row: "status pill (`.st`, `:100`) — mono 10px, border 1px, radius 999px",
-    leaf: '[data-zone="3"] [data-testid="roadmap-status-badge"]',
-    wrapper: '[data-zone="3"] .app-roadmap-cell.app-roadmap-status',
+    leaf: '[data-zone="3"] [data-testid="roadmap-row"] [data-testid="roadmap-status-badge"]',
+    wrapper: '[data-zone="3"] [data-testid="roadmap-row"] .app-roadmap-cell.app-roadmap-status',
     fontSize: 10,
     borderTopWidth: 1,
     radius: 999,
