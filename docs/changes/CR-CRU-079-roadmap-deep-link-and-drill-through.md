@@ -3,7 +3,8 @@
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 078
-- **Status**: PENDING (0.2.0) — AC3/AC5 re-based 2026-08-28 on the paged release model
+- **Status**: PENDING (0.2.0) — AC3/AC5 re-based 2026-08-28 on the paged release model; re-analysed
+  2026-09-05 after CR-CRU-078/083/105 landed (AC3 rewritten, AC6 scoped, AC8 widened, §S1 and Risk corrected)
 - **Design documents — READ THESE FIRST**: `docs/research/DN-crucible-roadmap-view.md` — the TRACKED decision record, and the governing one; **decision 7c** (`:28`, approved) is the drill-through contract this CR implements. The visual it was approved on is `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §6, §14 (2026-08-28) — absolute path, but `.lavish/` is **gitignored**, so where the two disagree or the flowchart is absent, the DN governs. Storyboard frames F14/F14½/F14a are illustrations, not the record: F14a was superseded and trimmed to a pointer on 2026-08-28 while its decision 7c survives in the DN.
 
 > The design document is the contract for this CR. Implement what it specifies — do not
@@ -74,6 +75,15 @@ So both the Roadmap **tab** and the `🗺 roadmap` **chip** navigate to `/p/<key
 the existing `navigate(pathname)` helper (`navigate(pathname)`, whose `history.pushState` is what AC2c's Back/Forward relies on) rather
 than assigning tab state. One rule for both doors: the destination is a route, not a mode flag.
 
+**The route is the source of truth and the tab FOLLOWS it — on navigate and on popstate.** Today
+`route.roadmap` flips `workspaceTab` exactly once, at boot; `navigate()` and the `popstate` handler
+carry CR-CRU-016's one rule that a same-surface navigation *"never touches the active workspace
+tab"*, so navigating to `/p/<key>/roadmap` would change the URL and leave Workflow on screen, and
+Back would restore the URL without the roadmap. The Roadmap segment is therefore the one carved
+exception to that rule: whenever the route is (re)parsed on the workspace surface, the Roadmap tab
+is active if and only if `route.roadmap` is set. CR-CRU-016's comment in `navigate()` is corrected
+to name the exception.
+
 **Routing IN requires routing OUT.** The moment either door owns the URL, leaving the Roadmap tab
 must return the pathname to `/p/<key>` — otherwise the address bar claims `roadmap` while Workflow
 is on screen, which is a worse failure than the one this CR fixes, because it is silently
@@ -98,6 +108,11 @@ describes that tab and stays true.
 Clicking a CR row navigates to that CR's context in the Workflow view and **lands on it**:
 the CR's group expanded, scrolled into view, and marked as the drill-through target. For an
 `IN_PROGRESS` CR this lands on its **active cycles** as they are tracked (decision 7c).
+
+The expansion state to address is the one the Workflow pane already holds: `lensOpenKeys`, hoisted
+outside the render tree and keyed `cr:<project>:<cr>` (`lensKey`), which is exactly the addressed,
+per-CR open set the Risk section asks for. Landing ADDS the target's key; it does not introduce a
+second expansion holder or an "expand all".
 
 The back affordance returns to the roadmap with expansion and scroll intact, per the one-rule
 pane model (`← roadmap`), consistent with CR-020 §S2's navigation contract.
@@ -128,31 +143,34 @@ never silently drops the user into unrelated history — the current failure mod
   roadmap rendered**, and Forward returns to `/p/<key>`. This is the payoff of routing rather than
   swapping, and it is what `navigate()`'s existing `pushState` (`navigate()`'s `pushState`) buys; a
   `replaceState` implementation passes AC1/AC2 and fails this one.
-- **AC3** — clicking a CR row lands on **that CR**: the roadmap focuses the release that CR
-  belongs to, pages the strip so that release's gate is shown **whole**, and the CR is
-  distinguishable as the target in the table. Asserted for a specific CR id, with the further
-  assertion that the focused release is **that CR's** release — landing on the default in-flight
-  release when the target sits in another release must fail this AC.
+- **AC3** — clicking a `COMPLETED` or `IN_PROGRESS` CR row lands on **that CR** in the Workflow
+  view: its `cr-group` is expanded, scrolled into view, and marked as the drill-through target,
+  and no other group is expanded by the landing. Asserted for a specific CR id on a board holding
+  several groups — a landing that leaves every group collapsed (today's behaviour) fails this AC.
+  *Rewritten 2026-09-05:* the prior text described a roadmap-side landing (focus the CR's release,
+  page the strip) for a click that §S2 sends to Workflow, and its "must fail when the target sits
+  in another release" limb could not fail — the table draws only the focused release's rows, so a
+  clicked row is always in it.
 - **AC4** — for an `IN_PROGRESS` CR the landing shows its **active cycles**, not merely its
   group header.
 - **AC5** — the back affordance returns to the roadmap with the **prior focused release and page
   window** intact — not reset to the default focus.
-- **AC6** — a CR with no workflow history never produces an untargeted landing. **Note the
-  starting point, established by gap analysis 2026-08-28: `PENDING` and `COMPLETED_UNTRACKED` rows
-  are ALREADY inert** — the row's click gate navigates only for `IN_PROGRESS` and `COMPLETED`, so
-  the "or no navigation at all" limb of this AC passes today with zero work. To earn its keep the
-  AC asserts the inertness is DELIBERATE and covered: a `PENDING` row click changes neither the tab
-  nor the pathname, a `COMPLETED_UNTRACKED` row behaves identically, and if either is later made
-  navigable it must land with an explicit empty state naming the CR. The untargeted-landing failure
-  this CR exists to remove belongs to `COMPLETED`/`IN_PROGRESS` rows (AC3/AC4), not to this one.
+- **AC6** — a `PENDING` or `COMPLETED_UNTRACKED` row stays inert under §S1's routing: the click
+  changes neither the tab nor the pathname. The inertness itself shipped in CR-CRU-083 AC7
+  (`roadmapDrillable`) and is already covered there and in the roadmap-graph e2e; what this CR
+  adds is the pathname half, since §S1 makes every exit a route and an inert row must not become
+  one. *Scoped 2026-09-05:* the earlier text re-asserted CR-083's coverage and added an
+  untestable "if later made navigable" clause; both dropped.
 - **AC7** — The storyboard's F14½ frame status matches what shipped. **NOT TEST-VERIFIABLE, and
   said so deliberately:** `.lavish/` is gitignored, so no test in this repo can assert it. It is a
   CLOSE-OUT OBLIGATION recorded as an AC so it is not forgotten, and the tracked
   `docs/research/DN-crucible-roadmap-view.md` is the governing record where the two disagree.
 - **AC8** — **the superseded characterisation is corrected where it is written, not just
-  overridden in code.** The `roadmap-pane` test named for the swap contract, and the chip's own
-  comment both describe the chip as a "one-rule tab swap". Once §S1 lands that is false. Both are
-  updated to state the routed contract and to name this CR as the CR that changed it. Leaving a
+  overridden in code.** The `roadmap-pane` test named for the swap contract, the chip's own
+  comment, and the row's drill comment (which also calls the drill "a one-rule tab swap") all
+  describe a tab swap. Once §S1 lands that is false for the chip AND for the drill, which is now
+  a route-out. All are updated to state the routed contract and to name this CR as the CR that
+  changed it. Leaving a
   passing test whose NAME asserts the opposite of the shipped behaviour is how the next reader gets
   misled — the same class of defect as the chip comment's current promise, which promises
   targeting the code never implemented.
@@ -170,12 +188,10 @@ the pane's own default-collapsed behaviour. **Cited correctly after gap analysis
 this rule is NOT CR-020 §S1.3 — that CR has only §S1 and §S2, and its `§S1.3` acceptance
 checkbox concerns which CR groups appear for open vs closed plans, not collapse. The
 behaviour is real but emergent: expansion is an OPT-IN open set, empty on load, so everything
-reads as collapsed by default. The governing precedent is `roadmapExpandedKeys`
-(`roadmapExpandedKeys`, hoisted OUTSIDE the render tree), which had to be hoisted OUTSIDE the render tree because the body
-re-runs on every queue/plans/releases change and a mount-local Set "silently re-collapsed
-whatever the user had opened on the very next SSE frame". The target expansion must be an
-explicit, addressed state on that same pattern rather than a global "expand all", or history
-becomes unusable at 63 groups.
+reads as collapsed by default. *Corrected 2026-09-05:* `roadmapExpandedKeys` no longer exists;
+the Workflow pane's `lensOpenKeys` is ALREADY the hoisted, project-keyed, per-CR open set, so the
+risk is already mitigated by shipped structure. §S2 adds the target's key to it. The residual risk
+is only that a landing expands more than its target, which AC3 asserts against.
 
 Second risk: this changes the mechanism of TWO shipped affordances from state-mutation to routing,
 and one of them (the chip) had that mechanism deliberately specified and tested by CR-CRU-014. The
