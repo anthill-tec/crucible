@@ -3,7 +3,8 @@
 - **Type**: bug
 - **Wave**: 5 (0.2.0) — release membership is the user's call
 - **Depends on**: none — `cr-plan` has carried `--release` since CR-CRU-091
-- **Status**: PENDING (0.2.0) — filed 2026-09-04
+- **Status**: PENDING (0.2.0) — filed 2026-09-04, gap-analysed 2026-09-04 (2 clauses added; baseline: the
+  scenario passes today through the bulk door, `1 passed (1.4s)`)
 - **Found by**: the user, on discovering the orchestrator had been loading the roadmap through an
   interface the approved design does not contain: *"I remember approving an API specifically in the
   Lavish editor for this. I haven't asked you to implement your own interfaces without asking ME."*
@@ -49,13 +50,16 @@ legitimately exercises the migration door, it stays and says so.
 
 ## Acceptance criteria
 
-- **AC1** — The scenario declares membership through `cr-plan`, and passes. Proven by running the
-  e2e suite, not by inspection.
+- **AC1** — The scenario declares membership through `cr-plan`, and passes. Proven by running
+  `bun run test:e2e` — the Playwright features are NOT in `pre-merge-gate`'s `bun test`, so the gate
+  does not prove this and the run must be quoted.
 - **AC2** — The scenario's assertions are unchanged in substance: the wave holds its node, the
   PENDING tap is inert, and the IN_PROGRESS tap swaps to Workflow. A step changing interface may not
   quietly change what the scenario proves.
 - **AC3** — No remaining e2e scenario declares release membership through the bulk post, or any that
-  does is a DELIBERATE migration-door scenario and says so in its own text.
+  does is a DELIBERATE migration-door scenario and says so in its own text. `roadmap.feature`'s
+  bulk step declares NO release (CR-CRU-014 §S1's original shape) and is outside this criterion; the
+  bulk-with-release step in `roadmap-graph.steps.ts` has this scenario as its only user and goes.
 - **AC4** — The `release-propose` step is untouched; it already matches the approved chain's step 1.
 - **AC5** — CR-CRU-096 `AC28a`'s record stands: it documented that this scenario had never passed,
   and this CR does not edit that shipped text. The correction is recorded HERE.
