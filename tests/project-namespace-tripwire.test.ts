@@ -721,8 +721,24 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // construction. `src/` and `clients/` are untouched by this CR and re-measure
 // at their recorded 525 and 619. The `develop` baselines are UNCHANGED at
 // 512/378/601 and stay the floors.
+// UPDATED 2026-09-04 by CR-CRU-104 §S1. `src/` HEAD moves 525 -> 538. C1
+// replaced the bulk queue post's ad-hoc membership handling with the ONE gate
+// `cr-plan` and `wave-sequence` also reach, and the +13 is that decision
+// written where a reader of the code will meet it: `src/v2.ts` +12 (the
+// migration-door narration on `handleQueuePost` and the per-entry membership
+// and `lifecycle`-shape comments, which cite CR-CRU-091 and CR-CRU-099
+// alongside this CR because they name the rules being unified) and
+// `src/store.ts` +1 (`TRACK_LANE_RULE`'s own JSDoc, the lane rule as one
+// string). Both are prose on `//` or ` * ` lines, neither is in a string —
+// measured by classifying `git show develop:<path>` against the working tree
+// file by file with this file's own `extractCitableText`, which attributes
+// the whole +13 to those TWO files and leaves the other eight `src/` files at
+// their develop counts. `public/` and `clients/` are untouched by this CR and
+// re-measure at their recorded 390 and 619. The `develop` baselines are
+// UNCHANGED at 512/378/601 and stay the floors — a floor never moves, in
+// either direction, for a re-pin.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 525 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 538 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 390 },
   clients: { exts: [".py"], develop: 601, head: 619 },
 };
