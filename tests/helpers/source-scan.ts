@@ -368,6 +368,67 @@ export function jsLiveCode(text: string): string {
   return blankSpans(text, jsInertSpans(text));
 }
 
+// Walks from `from` to the end of the balanced bracket group it opens, or to
+// the `;` that ends the statement when one arrives at depth 0 — so an
+// unterminated group can never swallow the rest of the file.
+//
+// LIFTED in CR-CRU-104 §S3 from tests/project-namespace-tripwire.test.ts,
+// which proved it (its assertion-span and object-literal walks both call it),
+// because the accepted-field guard needs the same walk to find the span of
+// the object literal handed to the store — and a second hand-rolled brace
+// counter is §S6's standing prohibition. Behaviour is unchanged by the lift:
+// the body moved verbatim.
+//
+// Run it on `jsLiveCode(text)`, whose offsets are identical to the raw file's,
+// and a brace inside a string or a comment cannot be counted.
+export function balancedEnd(text: string, from: number): number {
+  let depth = 0;
+  let i = from;
+  let opened = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === "(" || c === "[" || c === "{") {
+      depth++;
+      opened = true;
+    } else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (opened && depth <= 0) return i + 1;
+    } else if (c === ";" && depth <= 0 && opened) {
+      return i;
+    }
+    i++;
+  }
+  return text.length;
+}
+
+// The COMPANION walk, for a span whose start is NOT a bracket: from `from`,
+// to the first character of `terminators` that is not nested inside a bracket
+// group, or to the closer of the group that ENCLOSES `from` — so a matcher
+// chained after a closing paren stays inside the span
+// (`expect(v).toBe("CR-X-1")` puts the literal in the matcher, not in
+// `expect`'s own arguments, and `balancedEnd` above would stop one call too
+// early and see nothing), and an unterminated span can never swallow the rest
+// of the file.
+//
+// LIFTED in CR-CRU-104 §S3 from tests/project-namespace-tripwire.test.ts's
+// `statementEnd`, PARAMETERISED by the terminator set rather than copied: the
+// tripwire ends a statement (`;`), the accepted-field guard ends an object
+// property's value expression (`;` or `,`), and the two bodies were otherwise
+// character-identical. A second copy differing by one character in a set is
+// the CR-CRU-096 defect shape.
+export function unnestedEnd(text: string, from: number, terminators: string): number {
+  let depth = 0;
+  for (let i = from; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth < 0) return i;
+    } else if (terminators.includes(c) && depth === 0) return i;
+  }
+  return text.length;
+}
+
 // THE THIRD PROJECTION of the same walk: only COMMENT runs blanked, so live
 // code AND the prose inside string literals both stand. It is the mirror of
 // what `jsLiveCode` reports and it exists because the two guards need

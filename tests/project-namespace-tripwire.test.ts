@@ -44,7 +44,14 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { extractCitableText, joinWrapped, listFiles, REPO_ROOT } from "./helpers/source-scan";
+import {
+  balancedEnd,
+  extractCitableText,
+  joinWrapped,
+  listFiles,
+  REPO_ROOT,
+  unnestedEnd,
+} from "./helpers/source-scan";
 
 // The one pattern, used by all four dimensions (AC2 printed help, AC3
 // `public/` strings, AC3a client runtime strings, AC7 test assertions).
@@ -112,46 +119,6 @@ type Span = [number, number];
 
 function spanContains(spans: Span[], index: number): boolean {
   return spans.some(([start, end]) => index >= start && index < end);
-}
-
-// Walks from `from` to the end of the balanced bracket group it opens.
-function balancedEnd(text: string, from: number): number {
-  let depth = 0;
-  let i = from;
-  let opened = false;
-  while (i < text.length) {
-    const c = text[i];
-    if (c === "(" || c === "[" || c === "{") {
-      depth++;
-      opened = true;
-    } else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (opened && depth <= 0) return i + 1;
-    } else if (c === ";" && depth <= 0 && opened) {
-      return i;
-    }
-    i++;
-  }
-  return text.length;
-}
-
-// Walks from `from` to the end of the STATEMENT it opens, so a matcher
-// chained after the closing paren stays inside the span —
-// `expect(v).toBe("CR-X-1")` puts the literal in the matcher, not in
-// `expect`'s own arguments, and a group-balanced walk would stop one call
-// too early and see nothing. Bails at the enclosing block's closer so an
-// unterminated statement can never swallow the rest of the file.
-function statementEnd(text: string, from: number): number {
-  let depth = 0;
-  for (let i = from; i < text.length; i++) {
-    const c = text[i];
-    if (c === "(" || c === "[" || c === "{") depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth < 0) return i;
-    } else if (c === ";" && depth === 0) return i;
-  }
-  return text.length;
 }
 
 // EXEMPT BY KIND #1 — a `describe()` / `test()` / `it()` TITLE that cites the
@@ -320,7 +287,7 @@ function assertionSpans(relPath: string, text: string): Span[] {
       return;
     }
     const start = o.index + o.length - 1;
-    spans.push([start, statementEnd(text, start)]);
+    spans.push([start, unnestedEnd(text, start, ";")]);
   });
   return spans;
 }

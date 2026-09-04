@@ -119,7 +119,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { REPO_ROOT, jsLiveCode } from "./helpers/source-scan";
+import { REPO_ROOT, balancedEnd, jsLiveCode, unnestedEnd } from "./helpers/source-scan";
 
 const TYPE_FILE = "src/store.ts";
 const TYPE_NAME = "QueueEntryInput";
@@ -248,6 +248,135 @@ function readsField(handlerBody: string, binding: string, key: string): boolean 
   const dot = new RegExp(`\\b${binding}\\.${key}\\b`);
   const indexed = new RegExp(`\\b${binding}\\[\\s*(['"])${key}\\1\\s*\\]`);
   return dot.test(handlerBody) || indexed.test(handlerBody);
+}
+
+// Every name this file interpolates into a regex — a declared key, the fields
+// binding, the writer's own dotted call — comes from the source being
+// scanned, so it is escaped rather than trusted: `$` is legal in an
+// identifier and `.` is the whole point of `store.replaceQueue`.
+function escaped(name: string): string {
+  return name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// ── THE OBJECT HANDED TO THE WRITER, LOCATED STRUCTURALLY ──────────────────
+//
+// CR-CRU-104 §S3. Never by line number and never by the shape of one field's
+// forwarding: the writer call names the array it is handed, the pushes into
+// that array name the literals, and the lifted `balancedEnd` walks each
+// argument to its own closer.
+
+// The array `replaceQueue` is handed. Read off the call rather than
+// hardcoded, for the same reason the fields binding is: a rename must be a
+// NAMED failure here, not nine phantom findings.
+const WRITER_CALL = new RegExp(
+  `${escaped(HANDLER_ANCHOR)}\\(\\s*[A-Za-z_$][A-Za-z0-9_$]*\\s*,\\s*([A-Za-z_$][A-Za-z0-9_$]*)\\s*\\)`,
+);
+
+function writerSink(handlerBody: string): string {
+  const match = WRITER_CALL.exec(handlerBody);
+  if (match === null) {
+    throw new Error(
+      `${HANDLER_NAME} (${HANDLER_FILE}) no longer hands \`${HANDLER_ANCHOR}\` a named array of ` +
+        `entries, so this guard cannot tell which object reaches the store; teach it the new ` +
+        `write shape rather than letting it report every key forwarded`,
+    );
+  }
+  return match[1]!;
+}
+
+type Span = [number, number];
+
+// Every object literal pushed into that array, as spans over `handlerBody`.
+// Both directions of a mis-derivation are refused rather than trusted: a span
+// that swallowed the writer call has OVER-RUN its closer, which is the silent
+// direction (it would show a property the pushed literal never had), and a
+// body with no push site at all is not a handler this guard can read.
+function pushedObjects(handlerBody: string, sink: string): Span[] {
+  const opener = new RegExp(`\\b${escaped(sink)}\\.push\\(`, "g");
+  const spans: Span[] = [];
+  for (const match of handlerBody.matchAll(opener)) {
+    const open = match.index! + match[0].length - 1;
+    const end = balancedEnd(handlerBody, open);
+    const span: Span = [open + 1, end - 1];
+    if (handlerBody.slice(span[0], span[1]).includes(HANDLER_ANCHOR)) {
+      throw new Error(
+        `the extracted span of \`${sink}.push(...)\` in ${HANDLER_NAME} (${HANDLER_FILE}) ` +
+          `contains \`${HANDLER_ANCHOR}\` — it over-ran the argument's own closer, so a property ` +
+          `the pushed object never carried could stand in for a forwarded field`,
+      );
+    }
+    spans.push(span);
+  }
+  if (spans.length === 0) {
+    throw new Error(
+      `${HANDLER_NAME} (${HANDLER_FILE}) pushes nothing into \`${sink}\`, the array it hands ` +
+        `\`${HANDLER_ANCHOR}\` — this guard reads the pushed object literal, so a different ` +
+        `way of filling that array must be taught to it rather than silently unchecked`,
+    );
+  }
+  return spans;
+}
+
+interface Property {
+  /** Offset within the span, leading whitespace included. */
+  start: number;
+  /** Offset just past it, a trailing comma included. */
+  end: number;
+  /** What the key is bound to: the value expression, or the key itself when shorthand. */
+  value: string;
+}
+
+// A property NAMED `key` in an object-literal span — `key: <expr>`, or the
+// SHORTHAND `key` that binds a local of the same name, which is the shape the
+// handler uses for all three fields this CR is about. Anchored on the `{` or
+// `,` that can precede a property NAME so a VALUE that happens to be an
+// identifier of that name (`{ lane: track }`) is never read as one.
+function propertiesNamed(span: string, key: string): Property[] {
+  const at = new RegExp(`(?<=^|[{,])\\s*${escaped(key)}\\s*(?::|(?=[,}])|$)`, "g");
+  const found: Property[] = [];
+  for (const match of span.matchAll(at)) {
+    const start = match.index!;
+    const after = start + match[0].length;
+    if (!match[0].endsWith(":")) {
+      found.push({ start, end: after, value: key });
+      continue;
+    }
+    const close = unnestedEnd(span, after, ",;");
+    const rest = span.slice(close).search(/\S/);
+    const end = rest !== -1 && span[close + rest] === "," ? close + rest + 1 : close;
+    found.push({ start, end, value: span.slice(after, close) });
+  }
+  return found;
+}
+
+// Removes `key` as a PROPERTY of the object handed to the writer, and nothing
+// else: every validation of it, every local binding of it and every other
+// property stay exactly where they were. This is §S3's mutation — the
+// deletion that dropped a declared field again while this guard stayed green
+// — applied to the REAL handler source, so the claim is made about the code
+// that ships. Offset-safe because the live-code projection the spans are
+// found in is byte-for-byte as long as the file it came from.
+function withoutForwardingOf(handlerCode: string, key: string): string {
+  const block = handlerBlock(jsLiveCode(handlerCode));
+  const sink = writerSink(block.body);
+  const cuts: Span[] = [];
+  for (const [start, end] of pushedObjects(block.body, sink)) {
+    for (const property of propertiesNamed(block.body.slice(start, end), key)) {
+      cuts.push([block.start + start + property.start, block.start + start + property.end]);
+    }
+  }
+  if (cuts.length === 0) {
+    throw new Error(
+      `\`${key}\` is not a property of the object ${HANDLER_NAME} (${HANDLER_FILE}) hands to ` +
+        `\`${HANDLER_ANCHOR}\`, so there is no forwarding of it to delete — the field this ` +
+        `mutation exists to drop is already dropped`,
+    );
+  }
+  let mutated = handlerCode;
+  for (const [start, end] of [...cuts].reverse()) {
+    mutated = mutated.slice(0, start) + mutated.slice(end);
+  }
+  return mutated;
 }
 
 export interface UnreadField {
@@ -452,11 +581,83 @@ describe("CR-CRU-099 §S2/AC5 — the bulk queue route reads every field its inp
       // column 0 — which is the property the projection would otherwise buy.
       const imported = /^import \{([^}]+)\} from "\.\/helpers\/source-scan";$/m.exec(own);
       expect(imported).not.toBeNull();
-      expect(imported![1]!.split(",").map((name) => name.trim())).toEqual(["REPO_ROOT", "jsLiveCode"]);
+      expect(imported![1]!.split(",").map((name) => name.trim())).toEqual([
+        "REPO_ROOT",
+        "balancedEnd",
+        "jsLiveCode",
+        "unnestedEnd",
+      ]);
       // And it DECIDES: the same planted fixture is silent when the
       // classifier is bypassed (asserted above) and reports two dropped
       // fields when it is not.
       expect(unreadAcceptedFields(PLANTED.type, PLANTED.handler).length).toBe(2);
+    },
+  );
+
+  test(
+    "CR-CRU-104 §S3/AC8 — the object handed to the writer is located STRUCTURALLY: the writer " +
+      "call names the array, the pushes into that array name the literal, and each such span " +
+      "carries the two REQUIRED keys without swallowing the writer call itself",
+    () => {
+      const block = handlerBlock(jsLiveCode(handlerCode));
+      const sink = writerSink(block.body);
+      const spans = pushedObjects(block.body, sink);
+      // Non-vacuity from both ends, and it is asserted HERE rather than inside
+      // the derivation on purpose: the mutations below delete a required key's
+      // forwarding, and a derivation that refused to run on that input could
+      // not be measured by them.
+      expect(spans.length).toBeGreaterThan(0);
+      for (const [start, end] of spans) {
+        const span = block.body.slice(start, end);
+        expect(span).not.toContain(HANDLER_ANCHOR);
+        for (const key of REQUIRED_KEYS) {
+          expect(propertiesNamed(span, key).map((property) => property.value.length > 0)).toEqual([
+            true,
+          ]);
+        }
+      }
+    },
+  );
+
+  test(
+    "CR-CRU-104 §S3/AC8 sensitivity, key by key — deleting ONLY a declared key's FORWARDING, " +
+      "with every validation and every local binding of it left standing, adds exactly that key " +
+      "to this guard's findings: what is enforced is that the value REACHES the object handed to " +
+      "the writer, not that the handler mentions the field somewhere",
+    () => {
+      const keys = declaredKeys(jsLiveCode(typeCode)).map((declared) => declared.key);
+      // The same DELTA form as the read-sensitivity claim above, for the same
+      // reason: a live defect elsewhere must not be reported a second time
+      // here as nine lines of noise.
+      const baseline = unreadAcceptedFields(typeCode, handlerCode).map((f) => f.key);
+      const caught: Record<string, string[]> = {};
+      const expected: Record<string, string[]> = {};
+      for (const key of keys) {
+        caught[key] = unreadAcceptedFields(typeCode, withoutForwardingOf(handlerCode, key)).map(
+          (f) => f.key,
+        );
+        expected[key] = keys.filter((k) => k === key || baseline.includes(k));
+      }
+      expect(caught).toEqual(expected);
+    },
+  );
+
+  test(
+    "CR-CRU-104 §S3/AC8 — the diagnostic of a dropped FORWARDING says which failure it is: the " +
+      "key is still READ, so a message about a missing read would send the reader looking for " +
+      "something that is still there",
+    () => {
+      // `track` is the sharpest case: its AC4a validation reads `fields.track`
+      // and stays, so the field is mentioned by the handler and stored by
+      // nothing.
+      const dropped = withoutForwardingOf(handlerCode, "track");
+      const binding = fieldsBinding(handlerBlock(jsLiveCode(dropped)).body);
+      expect(readsField(handlerBlock(jsLiveCode(dropped)).body, binding, "track")).toBe(true);
+      const finding = unreadAcceptedFields(typeCode, dropped).find((f) => f.key === "track");
+      expect(finding).toBeDefined();
+      expect(finding!.message).toContain("`track`");
+      expect(finding!.message).toContain(HANDLER_NAME);
+      expect(finding!.message).toContain(HANDLER_ANCHOR);
     },
   );
 });
