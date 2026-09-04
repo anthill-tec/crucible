@@ -2534,7 +2534,7 @@
         // clicks most.
         onclick: () => {
           roadmapSelectOn(entry.cr);
-          roadmapDrillIn(entry.status);
+          roadmapDrillIn(entry);
         },
       };
       // CR-CRU-091/AC18 — the STORED position, verbatim, omitted when absent.
@@ -2743,10 +2743,43 @@
 
     // CR-CRU-079 §S1 — the drill is a ROUTE-OUT, not a tab swap: it leaves
     // the Roadmap route through the same door as any other exit, and the
-    // tab follows the route onto Workflow. Where it LANDS in Workflow (that
-    // CR's group, its active cycles) is CR-CRU-079 §S2.
-    const roadmapDrillIn = (status) => {
-      if (roadmapDrillable(status)) selectWorkspaceTab("Workflow");
+    // tab follows the route onto Workflow.
+    //
+    // CR-CRU-079 §S2 — and it CARRIES its CR. The target is hoisted
+    // addressed state (project-keyed Map + rev, exactly `roadmapSelectedCrs`
+    // below, and for the same reason: this click unmounts the pane). The
+    // landing ADDS the target's `cr:` key to the Workflow pane's own
+    // `lensOpenKeys` — the one expansion holder, never an "expand all" — and
+    // the Workflow pane marks the ONE element it lands on with
+    // `data-drill-target` (the mirror of the row's `data-drill-source`) and
+    // scrolls it into view. A closed plan lands on its history `cr-group`;
+    // an OPEN plan has no history group (CR-CRU-020 §S1.3), so an
+    // IN_PROGRESS CR lands on its ACTIVE root — "that CR's active cycles",
+    // DN decision 7c.
+    const roadmapDrillTargets = new Map();
+    const roadmapDrillRev = van.state(0);
+    const roadmapDrillTarget = () =>
+      roadmapDrillRev.val >= 0 ? roadmapDrillTargets.get(state.route.projectKey) : undefined;
+    const roadmapDrillIn = (entry) => {
+      if (!roadmapDrillable(entry.status)) return;
+      roadmapDrillTargets.set(state.route.projectKey, entry.cr);
+      roadmapDrillRev.val += 1;
+      const crKey = lensKey("cr", entry.cr);
+      if (!lensOpenKeys.has(crKey)) {
+        lensOpenKeys.add(crKey);
+        lensOpenRev.val += 1;
+      }
+      selectWorkspaceTab("Workflow");
+      revealDrillTarget(entry.cr);
+    };
+    // §S2 — `← roadmap`: the target is consumed and the roadmap is re-entered
+    // by ROUTE (§S1). `roadmapFocusVersions` and `roadmapStripOffsets` are
+    // not touched, so the focused release and page window the user left are
+    // the ones they return to (AC5).
+    const roadmapDrillOut = () => {
+      roadmapDrillTargets.delete(state.route.projectKey);
+      roadmapDrillRev.val += 1;
+      selectWorkspaceTab("Roadmap");
     };
 
     // §S7/AC17 — the SELECTED CR: ONE value, two renderings. Zone 2's node and
@@ -2816,7 +2849,7 @@
         // row beside it) and it drills, for an entry that has somewhere to go.
         onclick: () => {
           roadmapSelectOn(entry.cr);
-          roadmapDrillIn(entry.status);
+          roadmapDrillIn(entry);
         },
       };
       // CR-CRU-091/AC18 — the STORED position, published verbatim and OMITTED
@@ -3870,6 +3903,22 @@
       }
     };
 
+    // CR-CRU-079 §S2 — the drill-through's landing scroll, the same retry
+    // shape as `revealCycleRow` above: the Workflow pane mounts its marked
+    // target asynchronously after the route-out, so wait for the ONE element
+    // wearing `data-drill-target` for this CR, then scroll + blink it.
+    const revealDrillTarget = (cr, attempts = 0) => {
+      const el = document.querySelector(`[data-drill-target="true"][data-cr="${cr}"]`);
+      if (el !== null) {
+        el.scrollIntoView();
+        locateBlink(el);
+        return;
+      }
+      if (attempts < 30) {
+        setTimeout(() => revealDrillTarget(cr, attempts + 1), 5);
+      }
+    };
+
     // CR-CRU-025 §S2 — the trailing "⚑ Cycle" badge on a declared boundary
     // marker. A SEPARATE node from the marker body; clicking it (and ONLY it —
     // stopPropagation keeps the click off C3's future accordion body) flips the
@@ -3975,6 +4024,15 @@
     const scopedPlans = () =>
       state.plans.filter((p) => p.projectKey === state.route.projectKey);
 
+    // CR-CRU-079 §S2 — the OPEN plan's root is the drill-through target for
+    // an IN_PROGRESS CR (it has no history group to land on), so it wears
+    // the mark when the hoisted target names it.
+    const crRootProps = (cr) => {
+      const props = { "data-testid": "workflow-cr-root", "data-cr": cr, class: "app-cr-root" };
+      if (roadmapDrillTarget() === cr) props["data-drill-target"] = "true";
+      return props;
+    };
+
     const WorkflowActive = () => {
       const openPlans = scopedPlans().filter((p) => p.status === "open");
       return div(
@@ -4000,7 +4058,7 @@
                 // independently omitted when absent), the cycle rows
                 // INDENTED beneath it.
                 div(
-                  { "data-testid": "workflow-cr-root", "data-cr": plan.cr, class: "app-cr-root" },
+                  crRootProps(plan.cr),
                   span(
                     { "data-testid": "cr-root-id", class: "app-heat-ink" },
                     plan.cr,
@@ -4195,13 +4253,17 @@
 
     const LensCrGroup = (node) => {
       const key = lensKey("cr", node.cr);
+      const props = {
+        "data-testid": "cr-group",
+        "data-cr": node.cr,
+        "data-status": node.status ?? "inferred",
+        class: "app-cr-group",
+      };
+      // CR-CRU-079 §S2 — the closed plan's group is the drill-through target
+      // for a COMPLETED CR; the landing already opened `key`.
+      if (roadmapDrillTarget() === node.cr) props["data-drill-target"] = "true";
       return div(
-        {
-          "data-testid": "cr-group",
-          "data-cr": node.cr,
-          "data-status": node.status ?? "inferred",
-          class: "app-cr-group",
-        },
+        props,
         // CR-CRU-020 §S1.2 — the existing header row IS the toggle; only the
         // cycle list collapses (by default) beneath it. CR-CRU-021 §S6 #6/#9
         // — the collapsed form is INLINE DIM TEXT, not pill-chips:
@@ -4334,10 +4396,25 @@
 
     // CR-CRU-021 §S6 #10 — NO `Workflow — <project>` rail-title above the
     // active header: the F13 header structure is the pane's whole top.
+    // CR-CRU-079 §S2 — `← roadmap`, the DN's own words: the way back from a
+    // drill-through landing, rendered only while a target is held.
+    const WorkflowBackToRoadmap = () =>
+      roadmapDrillTarget() === undefined
+        ? ""
+        : button(
+            {
+              "data-testid": "workflow-back-to-roadmap",
+              class: "app-chip",
+              onclick: () => roadmapDrillOut(),
+            },
+            "← roadmap",
+          );
+
     const WorkflowFeed = () =>
       div(
         { "data-testid": "pane-scroll", class: "app-pane-content" },
         paneRunway(
+          () => WorkflowBackToRoadmap(),
           div(
             { class: "app-workflow-cols" },
             () => WorkflowPrimary(),

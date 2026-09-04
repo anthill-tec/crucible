@@ -221,6 +221,7 @@ const SYNTHETIC_NAMESPACES: Record<string, string> = {
   "CR-DECLARED": "§S5's synthetic declaration-order rows (AC4's remedy)",
   "CR-DEFERRED": "§S5's synthetic wave-6 rows (AC4's remedy)",
   "CR-DRIFT": "e2e agent-identity fixture",
+  "CR-DT": "roadmap-drill-through fixtures — the rows and plans a landing chooses between",
   "CR-GW": "workflow gate-widget fixture",
   "CR-NEW": "§S5's synthetic newly-planned rows (AC4's remedy)",
   "CR-NT": "f13 fidelity fixture — a no-title CR",
@@ -795,9 +796,23 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // other eight `public/` files are untouched. `src/` and `clients/` are
 // untouched and re-measure at 550 and 639. The `develop` baselines are
 // UNCHANGED at 512/378/601 and stay the floors.
+// UPDATED 2026-09-05 by CR-CRU-079 §S2 (C2). `public/` HEAD moves 400 -> 405,
+// all of it `public/app.js` +5 (206 -> 211): the row drill-through now
+// carries its CR as hoisted addressed state and the Workflow pane lands on
+// it, and each piece of that plumbing names the CR where the code is met —
+// the `roadmapDrillTargets` holder comment (which also cites CR-CRU-020
+// §S1.3 for why an open plan lands on its active root), `revealDrillTarget`,
+// `crRootProps`, the `LensCrGroup` mark and `WorkflowBackToRoadmap`, less
+// the §S1 pointer the rewritten holder comment absorbed. Every one is prose
+// on a `//` line, none in a string (the `← roadmap` chip text carries no
+// id) — measured by classifying `git show HEAD:<path>` against the working
+// tree file by file with this file's own `extractCitableText`; the other
+// nine `public/` files are untouched. `src/` and `clients/` are untouched
+// and re-measure at 550 and 639. The `develop` baselines are UNCHANGED at
+// 512/378/601 and stay the floors.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 550 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 400 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 405 },
   clients: { exts: [".py"], develop: 601, head: 639 },
 };
 
