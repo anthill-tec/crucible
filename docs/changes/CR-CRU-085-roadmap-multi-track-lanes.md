@@ -3,7 +3,7 @@
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 078
-- **Status**: PENDING (0.2.0) — moved into 0.2.0 by user direction 2026-08-28 — re-scoped 2026-08-28: the wave container ships in CR-078; this CR owns lanes only
+- **Status**: PENDING (0.2.0) — moved into 0.2.0 by user direction 2026-08-28 — re-scoped 2026-08-28: the wave container ships in CR-078; this CR owns lanes only — gap-analysed 2026-09-05 (§S1 collapsed, §S2 names the track source, AC5/AC7 simplified, row-cap ruled by the user, Risk corrected)
 - **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §4, §5, §7 (approved 2026-08-28). Absolute path so it resolves from a worktree; it carries the lane grammar, the shape/colour vocabulary it must reuse, and the conditional-chrome rule.
 
 > The design document is the contract for this CR. Implement what it specifies — do not
@@ -38,17 +38,27 @@ So this is deferred rather than dropped: the design stands, and it is built when
 
 ## Scope
 
-### §S1 Wave container
+### §S1 Wave container — shipped, not this CR's
 
-A wave renders as a container around the CRs it holds, drawn **only where it is informative** —
-more than one track, or more than one wave inside a release. Never drawn as a boundary that
-terminates a release (the release is the delivery unit; the wave is a synchronization device).
+The container is CR-CRU-078's (`RoadmapFlowWave`) and CR-CRU-096's; its drawing rules live there.
+This CR adds lanes INSIDE it and changes nothing about when or how the box itself is drawn (AC4).
 
 ### §S2 Track swimlanes
 
-Within a wave container, each track renders as its own lane. Lane membership and count are
-**derived from the reported track assignments** — the project's mainline orchestrator decides how
-many tracks exist, and Crucible neither sets nor caps that number.
+Within a wave container, each track renders as its own lane, in the design's §4 grammar: a grid
+of `label cell · row`, one pair per track, the label being the declared track id.
+
+**The track source is the queue row's declared `track`** (`entry.track`, CR-CRU-091 §S2's wire
+field, the metadata that rode in with `wave-sequence` — design §10 step 3), read through the SAME
+derivation the table's `track` column already uses (`roadmapTableColumns`' distinct-labels rule,
+CR-CRU-078 AC12), so lanes and column cannot disagree. It is NOT the plan's `track`: CR-CRU-078's
+`roadmap-lane-badge` reads `plan.track` for an ACTIVE row and stays as it is. The project's mainline
+orchestrator decides how many tracks exist; Crucible neither sets nor caps that number.
+
+**The wave's row cap is unchanged — user ruling 2026-09-05.** The box still shows CR-CRU-096
+§S5.2's rows (the top of the scheduled queue union every running member) and one wave-level
+`+N more`; lanes PARTITION those shown rows. The lane count comes from the wave's WHOLE membership,
+so a track whose members are all beyond the cap still draws its lane, with its label and no rows.
 
 ### §S3 Degenerate cases render nothing, not an error
 
@@ -65,13 +75,17 @@ container. None of these are error states, and none produce a warning or an empt
   data, so the "Crucible is single-track" case and a multi-track case are both expressible.
 - **AC4** — lanes render **only** when more than one track is reported; the wave container itself
   is CR-078's and must be unchanged by this CR.
-- **AC5** — the flowchart still lays out without overlap or clipping with lanes present; asserted
-  on rendered output, not on the builder's data, since nested-container layout is the risk this CR
-  carries.
+- **AC5** — laning is a partition, asserted on the rendered DOM: every `roadmap-node` in a laned
+  wave is a descendant of exactly ONE lane, lanes are siblings in the design's grid form (label
+  cell then row), and the wave's node count and `+N more` are identical with and without lanes.
+  *Simplified 2026-09-05:* the earlier "no overlap or clipping on rendered output" defended
+  against a layered graph layout CR-CRU-078 deleted; zone 2 is plain DOM and the lanes are a CSS
+  grid, which cannot overlap by construction.
 - **AC6** — CR-078's behaviour is unchanged when this chrome is absent: removing track data from
   the fixture reproduces exactly the CR-078 render.
-- **AC7** — the table gains its `track` column under the same condition as the lanes, and loses it
-  when only one track is reported.
+- **AC7** — the table's `track` column is UNCHANGED: it already appears under exactly the lanes'
+  condition (CR-CRU-078 AC12, `roadmapTableColumns`), and the lanes read that same derivation
+  rather than adding a second rule. A test asserts lanes and column appear and disappear together.
 
 ## Estimated size
 
@@ -79,9 +93,10 @@ M — nested containers plus lane assignment, and the layout verification that g
 
 ## Risk
 
-Nested subgraphs (lanes inside a wave container) are the layout-fragile case. If a layered layout
-cannot place a case cleanly, the honest fallback is fewer nested containers — never a fabricated
-layout. AC5 asserts against rendered output for exactly this reason.
+*Corrected 2026-09-05:* the layered-layout risk this section carried is gone — CR-CRU-078 replaced
+the cytoscape graph with plain DOM, and the lanes are the design's CSS grid. The remaining risk is
+the row cap: a lane must partition the rows the wave already shows, never widen or re-derive them
+(§S2's ruling), or the box's count, `+N more` and AC6's identical-render guarantee all break.
 
 Second risk: this CR is unobservable on Crucible's own board (single-track), so it must be proven
 against multi-track fixtures rather than by looking at the live dog-food instance.
