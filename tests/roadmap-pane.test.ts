@@ -239,7 +239,14 @@ describe("§S3 — Roadmap is a first-class workspace tab", () => {
     expect(tabIsOn("Workflow")).toBe(false);
   });
 
-  test("the Project pane's 🗺 roadmap chip activates the Roadmap tab (same destination, one-rule tab swap)", async () => {
+  // CR-CRU-079 §S1/AC1/AC8 — RENAMED. This test shipped under CR-CRU-014 as
+  // "(same destination, one-rule tab swap)" and asserted only the tab, so it
+  // passed while the chip left the URL at /p/<key>. CR-CRU-079 overturned
+  // that characterisation: the chip is a DOOR onto the /p/<key>/roadmap
+  // ROUTE (navigate(), pushState), and the tab FOLLOWS the route. The name
+  // now states the routed contract, and the body asserts the URL — the
+  // half a tab-only assertion could never fail on.
+  test("the Project pane's 🗺 roadmap chip ROUTES to /p/<key>/roadmap — the tab follows the route (CR-CRU-079 §S1 supersedes CR-CRU-014's tab swap)", async () => {
     const key = "roadmap-chip-1";
     await mountApp({
       pathname: `/p/${key}`,
@@ -249,6 +256,7 @@ describe("§S3 — Roadmap is a first-class workspace tab", () => {
 
     // Cold /p/<key> defaults to Workflow — the chip must flip to Roadmap.
     expect(tabIsOn("Workflow")).toBe(true);
+    expect(location.pathname).toBe(`/p/${key}`);
     const chip = document.querySelector<HTMLElement>('[data-testid="roadmap-chip"]');
     expect(chip).not.toBeNull();
     expect((chip!.textContent ?? "")).toContain("🗺");
@@ -256,8 +264,12 @@ describe("§S3 — Roadmap is a first-class workspace tab", () => {
     chip!.click();
     await settle();
 
+    // AC1 — the door produces the URL. Asserted FIRST: the tab swap passes
+    // against the unfixed code, the pathname is what this CR adds.
+    expect(location.pathname).toBe(`/p/${key}/roadmap`);
     expect(tabIsOn("Roadmap")).toBe(true);
     expect(tabIsOn("Workflow")).toBe(false);
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
   });
 
   test("the Roadmap surface is a TAB, not a slide-over — no scrim and no overlay element exist while it is active", async () => {
@@ -275,6 +287,173 @@ describe("§S3 — Roadmap is a first-class workspace tab", () => {
     // No slide-over / scrim chrome of any kind.
     expect(document.querySelector(".app-scrim")).toBeNull();
     expect(document.querySelector('[data-testid="roadmap-overlay"]')).toBeNull();
+  });
+});
+
+// ── CR-CRU-079 §S1 — deep-link parity: BOTH doors route, every exit routes ──
+//
+// Ground truth this suite fails against (verified 2026-09-05): the chip is
+// `onclick: () => (state.workspaceTab = "Roadmap")`, the tab strip is
+// `if (!t.disabled) state.workspaceTab = t.name`, and `navigate()` /
+// `popstate` never touch the tab on a same-surface move — `route.roadmap`
+// flips the tab ONCE, at boot. So neither door produces the URL, leaving the
+// tab never returns it, and Back/Forward move the address bar without the
+// pane. Every test here is asserted on `location.pathname` FIRST, because the
+// tab half already passes and would prove nothing.
+//
+// Back/Forward are the REAL `history.back()` / `history.forward()` —
+// happy-dom re-lands the pushState entry and dispatches `popstate` through
+// the production listener — so a `replaceState` implementation (nothing to go
+// back to) fails AC2c while passing AC1/AC2, exactly as the CR says it must.
+
+describe("CR-CRU-079 §S1 — both Roadmap doors route to /p/<key>/roadmap and every exit routes back", () => {
+  /** The always-enabled non-Roadmap tabs on a backend project (Coverage
+   *  gates on coverage data, BDD on project type — neither is a door out
+   *  that every fixture can click). */
+  const EXIT_TABS = ["Workflow", "Runs", "Compile"] as const;
+
+  test("AC1 — clicking the Roadmap TAB from /p/<key> produces location.pathname === /p/<key>/roadmap with the roadmap pane mounted", async () => {
+    const key = "roadmap-route-tab-1";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Tab Door Project" })],
+      queue: [],
+    });
+    expect(tabIsOn("Workflow")).toBe(true);
+    expect(location.pathname).toBe(`/p/${key}`);
+
+    tabButton("Roadmap")!.click();
+    await settle();
+
+    expect(location.pathname).toBe(`/p/${key}/roadmap`);
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Workflow")).toBe(false);
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
+  });
+
+  test("AC2 — no door is privileged: the pathname after a tab click is byte-identical to the pathname after a chip click from the same /p/<key> start", async () => {
+    const key = "roadmap-route-parity-1";
+    const fixtures = {
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Parity Project" })],
+      queue: [] as QueueEntryFixture[],
+    };
+
+    await mountApp(fixtures);
+    expect(location.pathname).toBe(`/p/${key}`);
+    tabButton("Roadmap")!.click();
+    await settle();
+    const afterTab = location.pathname;
+
+    await mountApp(fixtures);
+    expect(location.pathname).toBe(`/p/${key}`);
+    document.querySelector<HTMLElement>('[data-testid="roadmap-chip"]')!.click();
+    await settle();
+    const afterChip = location.pathname;
+
+    expect(afterTab).toBe(afterChip);
+    // Bound: "identical" must mean identical at the ROUTE, not both still
+    // sitting on /p/<key> — fixing one door and not the other fails here.
+    expect(afterTab).toBe(`/p/${key}/roadmap`);
+    expect(afterChip).toBe(`/p/${key}/roadmap`);
+  });
+
+  test("AC2b — from /p/<key>/roadmap, clicking ANY other workspace tab returns location.pathname to /p/<key> with that tab on and the roadmap pane gone", async () => {
+    for (const exitTab of EXIT_TABS) {
+      const key = `roadmap-route-exit-${exitTab.toLowerCase()}`;
+      await mountApp({
+        pathname: `/p/${key}/roadmap`,
+        projects: [project({ key, name: `Exit via ${exitTab}` })],
+        queue: [],
+      });
+      expect(tabIsOn("Roadmap")).toBe(true);
+      expect(location.pathname).toBe(`/p/${key}/roadmap`);
+
+      tabButton(exitTab)!.click();
+      await settle();
+
+      // The address bar must not keep claiming `roadmap` while another pane
+      // is on screen — that URL would be silently shareable.
+      expect(location.pathname).toBe(`/p/${key}`);
+      expect(tabIsOn(exitTab)).toBe(true);
+      expect(tabIsOn("Roadmap")).toBe(false);
+      expect(document.querySelector('[data-testid="roadmap-empty"]')).toBeNull();
+    }
+  });
+
+  test("AC2c — after chip in and tab out, browser Back re-renders the roadmap at /p/<key>/roadmap and Forward returns to /p/<key> (pushState, not replaceState)", async () => {
+    const key = "roadmap-route-history-1";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "History Project" })],
+      queue: [],
+    });
+    const entriesAtStart = history.length;
+
+    // In through the chip…
+    document.querySelector<HTMLElement>('[data-testid="roadmap-chip"]')!.click();
+    await settle();
+    expect(location.pathname).toBe(`/p/${key}/roadmap`);
+
+    // …out through another tab.
+    tabButton("Runs")!.click();
+    await settle();
+    expect(location.pathname).toBe(`/p/${key}`);
+    expect(tabIsOn("Runs")).toBe(true);
+    // Two routed moves = two pushed entries. A replaceState door leaves the
+    // stack where it started and has nothing for Back to land on.
+    expect(history.length).toBe(entriesAtStart + 2);
+
+    history.back();
+    await settle();
+
+    // Back: the URL AND the pane — the tab follows the route on popstate.
+    expect(location.pathname).toBe(`/p/${key}/roadmap`);
+    expect(tabIsOn("Roadmap")).toBe(true);
+    expect(tabIsOn("Runs")).toBe(false);
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).not.toBeNull();
+
+    history.forward();
+    await settle();
+
+    expect(location.pathname).toBe(`/p/${key}`);
+    expect(tabIsOn("Roadmap")).toBe(false);
+    expect(document.querySelector('[data-testid="roadmap-empty"]')).toBeNull();
+  });
+
+  test("AC6 — a PENDING row and a COMPLETED_UNTRACKED row stay inert under routing: after entering through the Roadmap tab, clicking either changes neither the tab nor the pathname, and pushes no history entry", async () => {
+    const key = "roadmap-route-inert-1";
+    await mountApp({
+      pathname: `/p/${key}`,
+      projects: [project({ key, name: "Inert Rows Project" })],
+      queue: [
+        { cr: "CR-RM-080", title: "Not yet planned", wave: "5", dependsOn: [], status: "PENDING" },
+        { cr: "CR-RM-081", title: "Shipped untracked", wave: "5", dependsOn: [], status: "COMPLETED_UNTRACKED" },
+      ],
+    });
+
+    // Enter through a DOOR, not a cold load, so the pathname under test is
+    // one the app produced — and so an inert row that quietly routed OUT
+    // would be caught against a URL that was routed IN.
+    tabButton("Roadmap")!.click();
+    await settle();
+    expect(location.pathname).toBe(`/p/${key}/roadmap`);
+    expect(tabIsOn("Roadmap")).toBe(true);
+    const entriesOnRoadmap = history.length;
+
+    for (const cr of ["CR-RM-080", "CR-RM-081"]) {
+      const row = roadmapRow(cr);
+      expect(row).toBeDefined();
+      expect(row!.getAttribute("data-drill-source")).toBeNull();
+
+      row!.click();
+      await settle();
+
+      expect(location.pathname).toBe(`/p/${key}/roadmap`);
+      expect(tabIsOn("Roadmap")).toBe(true);
+      expect(tabIsOn("Workflow")).toBe(false);
+      expect(history.length).toBe(entriesOnRoadmap);
+    }
   });
 });
 

@@ -781,9 +781,23 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // citation is prose on a `//`, ` * `, `#` or docstring line, none in a
 // string. `public/` is untouched and re-measures at 390. The `develop`
 // baselines are UNCHANGED at 512/378/601 and stay the floors.
+// UPDATED 2026-09-05 by CR-CRU-079 §S1 (C1). `public/` HEAD moves 390 -> 400,
+// all of it `public/app.js` +10 (196 -> 206): the Roadmap tab became the one
+// ROUTED workspace tab, and the reasoning is written where the code is met —
+// `navigate()`'s ONE RULE comment now names its carved exception (CR-CRU-079,
+// CR-CRU-021), the `roadmapTabFollows`/`selectWorkspaceTab` helpers open
+// with their citations, the tab strip, the 🗺 chip (CR-CRU-014 superseded
+// by CR-CRU-079), the row drill comment (CR-CRU-078 §S7 wording superseded)
+// and `roadmapDrillIn` each name the CR that changed them. Every one is
+// prose on a `//` line, none in a string — measured by classifying `git show
+// HEAD:<path>` against the working tree file by file with this file's own
+// `extractCitableText`; `public/app-logic.mjs` re-measures at 79 and the
+// other eight `public/` files are untouched. `src/` and `clients/` are
+// untouched and re-measure at 550 and 639. The `develop` baselines are
+// UNCHANGED at 512/378/601 and stay the floors.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 550 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 390 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 400 },
   clients: { exts: [".py"], develop: 601, head: 639 },
 };
 
