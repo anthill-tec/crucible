@@ -9,7 +9,8 @@
 //
 // WHY A SIBLING SUITE. tests/roadmap-pane.test.ts holds §S1 (both doors
 // route) but has no strip box model, so it cannot page the release strip —
-// and AC5 is asserted on a page window that is NOT the landing one.
+// and AC5 is asserted on a page window that is NEITHER the landing one NOR
+// the focused release's own page.
 // tests/roadmap-selection-durability.test.ts has the box model and the tab
 // swap but no scroll interception and no Workflow-side readers. This file
 // composes the two: the roadmap-pane mount, the durability harness's measured
@@ -143,9 +144,14 @@ const PROPOSED_020: ProposalFixture = {
 //
 // 21 gates at a window of 8 land on offset 16 with the 0.2.0 proposal focused.
 // `0.1.9` is gate index 9 — one window BACK from the landing page — so
-// focusing it requires paging first, and a return that reset either holder
-// would show 0.2.0 / offset 16 again. Same shape as
-// tests/roadmap-selection-durability.test.ts so the arithmetic is known.
+// focusing it requires paging first; the strip is then paged one window
+// further, to offset 0, so the window the user leaves contains NEITHER the
+// landing focus NOR the focused gate. That is what makes AC5's page-window
+// limb failable: a return that reset the focus would show 0.2.0, and a return
+// that dropped the offset would re-derive the page that CONTAINS the focus
+// (index 9 → offset 8, the strip's own landing rule) — not the 0 the user
+// left. Same shape as tests/roadmap-selection-durability.test.ts so the
+// arithmetic is known.
 const DURABLE_COUNT = 20;
 const DURABLE_FOCUS = "0.1.9";
 const BACK_MEMBER = "CR-DT-401";
@@ -361,6 +367,15 @@ function focusedVersion(): string | null {
   return on.length === 0 ? null : (on[0]!.getAttribute("data-version") ?? null);
 }
 
+/** The version zone 2 is following, read off its own mark. Unlike
+ *  `focusedVersion()` this survives paging the focused gate OUT of the
+ *  window, which AC5 below does on purpose. */
+function flowVersion(): string | null {
+  const el = document.querySelector<HTMLElement>('[data-testid="roadmap-flow"]');
+  if (el === null) throw new Error('no [data-testid="roadmap-flow"] rendered');
+  return el.getAttribute("data-version");
+}
+
 async function clickGate(version: string): Promise<void> {
   const gate = gateEls().find((g) => g.getAttribute("data-version") === version);
   if (gate === undefined) throw new Error(`no gate rendered for ${version}`);
@@ -545,7 +560,7 @@ describe("CR-CRU-079 §S2/AC5 — the `← roadmap` affordance returns to the ro
     { planId: 401, cr: BACK_MEMBER, projectKey: KEY, status: "closed", wave: "3", cycles: [{ id: 4011, label: "c1", status: "done" }] },
   ];
 
-  test("after paging the strip back one window and focusing 0.1.9, drilling into CR-DT-401 and clicking `← roadmap` lands on /p/<key>/roadmap with 0.1.9 still focused (not the 0.2.0 default) and offset 8 still shown (not the landing 16)", async () => {
+  test("after paging back, focusing 0.1.9 and paging back again to offset 0, drilling into CR-DT-401 and clicking `← roadmap` lands on /p/<key>/roadmap with 0.1.9 still focused (not the 0.2.0 default) and offset 0 still shown (neither the landing 16 nor 0.1.9's own page 8)", async () => {
     await mountApp({
       key: KEY,
       releases: durableLedger(),
@@ -556,16 +571,28 @@ describe("CR-CRU-079 §S2/AC5 — the `← roadmap` affordance returns to the ro
 
     // Landing defaults — what a reset would fall back to.
     expect(focusedVersion()).toBe("0.2.0");
+    expect(flowVersion()).toBe("0.2.0");
     expect(attrNumber("data-window-size")).toBe(8);
     expect(attrNumber("data-window-offset")).toBe(16);
 
-    // The user moves BOTH holders away from their defaults.
+    // The user moves BOTH holders away from their defaults…
     await clickTag("earlier");
     await clickGate(DURABLE_FOCUS);
+    expect(attrNumber("data-window-offset")).toBe(8);
+    expect(focusedVersion()).toBe(DURABLE_FOCUS);
+    // …and then pages the window AWAY from the focus. Offset 8 is the page
+    // that CONTAINS 0.1.9 — exactly what the strip re-derives when it holds
+    // no offset — so asserting it on return could never tell a kept offset
+    // from a dropped one. Offset 0 can: it is neither the landing 16 nor the
+    // focus's own 8.
+    await clickTag("earlier");
     const offsetBefore = attrNumber("data-window-offset");
     const windowBefore = gateVersions();
-    expect(offsetBefore).toBe(8);
-    expect(focusedVersion()).toBe(DURABLE_FOCUS);
+    expect(offsetBefore).toBe(0);
+    expect(windowBefore).not.toContain(DURABLE_FOCUS);
+    // The focused gate is off-window, so zone 2 is the focus's witness now.
+    expect(focusedVersion()).toBeNull();
+    expect(flowVersion()).toBe(DURABLE_FOCUS);
     expect(rowCrs()).toEqual([BACK_MEMBER]);
 
     // Drill through — the Roadmap pane is unmounted, Workflow lands on the CR.
@@ -590,12 +617,12 @@ describe("CR-CRU-079 §S2/AC5 — the `← roadmap` affordance returns to the ro
     expect(tabIsOn("Workflow")).toBe(false);
     expect(stripEl()).not.toBeNull();
 
-    // AC5 — the PRIOR focused release and page window, not the defaults.
-    expect(focusedVersion()).toBe(DURABLE_FOCUS);
-    expect(focusedVersion()).not.toBe("0.2.0");
+    // AC5 — the PRIOR focused release and page window: not the defaults, and
+    // not the page the focus alone would re-derive.
+    expect(flowVersion()).toBe(DURABLE_FOCUS);
     expect(attrNumber("data-window-offset")).toBe(offsetBefore);
-    expect(attrNumber("data-window-offset")).not.toBe(16);
     expect(gateVersions()).toEqual(windowBefore);
+    expect(focusedVersion()).toBeNull();
     // Zone 3 follows the same release it followed before the drill.
     expect(rowCrs()).toEqual([BACK_MEMBER]);
   });
