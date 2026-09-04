@@ -4,7 +4,7 @@
 - **Wave**: 5 (0.2.0) — release membership is the user's call
 - **Depends on**: 099 — that CR made the bulk post a declaring path; this one makes it obey the
   same rule as the other one
-- **Status**: PENDING (0.2.0) — filed 2026-09-03
+- **Status**: COMPLETED (0.2.0) — filed 2026-09-03, gap-analysed 2026-09-04 (AC12/AC13 added), reframed by user ruling (the bulk door is MIGRATION tooling), shipped 2026-09-04
 - **Found by**: the user, on reading CR-099's close-out: *"end this duality once and for all"*
 
 ## Problem

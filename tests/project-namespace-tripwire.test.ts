@@ -44,7 +44,14 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { extractCitableText, joinWrapped, listFiles, REPO_ROOT } from "./helpers/source-scan";
+import {
+  balancedEnd,
+  extractCitableText,
+  joinWrapped,
+  listFiles,
+  REPO_ROOT,
+  unnestedEnd,
+} from "./helpers/source-scan";
 
 // The one pattern, used by all four dimensions (AC2 printed help, AC3
 // `public/` strings, AC3a client runtime strings, AC7 test assertions).
@@ -112,46 +119,6 @@ type Span = [number, number];
 
 function spanContains(spans: Span[], index: number): boolean {
   return spans.some(([start, end]) => index >= start && index < end);
-}
-
-// Walks from `from` to the end of the balanced bracket group it opens.
-function balancedEnd(text: string, from: number): number {
-  let depth = 0;
-  let i = from;
-  let opened = false;
-  while (i < text.length) {
-    const c = text[i];
-    if (c === "(" || c === "[" || c === "{") {
-      depth++;
-      opened = true;
-    } else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (opened && depth <= 0) return i + 1;
-    } else if (c === ";" && depth <= 0 && opened) {
-      return i;
-    }
-    i++;
-  }
-  return text.length;
-}
-
-// Walks from `from` to the end of the STATEMENT it opens, so a matcher
-// chained after the closing paren stays inside the span —
-// `expect(v).toBe("CR-X-1")` puts the literal in the matcher, not in
-// `expect`'s own arguments, and a group-balanced walk would stop one call
-// too early and see nothing. Bails at the enclosing block's closer so an
-// unterminated statement can never swallow the rest of the file.
-function statementEnd(text: string, from: number): number {
-  let depth = 0;
-  for (let i = from; i < text.length; i++) {
-    const c = text[i];
-    if (c === "(" || c === "[" || c === "{") depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      depth--;
-      if (depth < 0) return i;
-    } else if (c === ";" && depth === 0) return i;
-  }
-  return text.length;
 }
 
 // EXEMPT BY KIND #1 — a `describe()` / `test()` / `it()` TITLE that cites the
@@ -320,7 +287,7 @@ function assertionSpans(relPath: string, text: string): Span[] {
       return;
     }
     const start = o.index + o.length - 1;
-    spans.push([start, statementEnd(text, start)]);
+    spans.push([start, unnestedEnd(text, start, ";")]);
   });
   return spans;
 }
@@ -754,8 +721,38 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // construction. `src/` and `clients/` are untouched by this CR and re-measure
 // at their recorded 525 and 619. The `develop` baselines are UNCHANGED at
 // 512/378/601 and stay the floors.
+// UPDATED 2026-09-04 by CR-CRU-104 §S1. `src/` HEAD moves 525 -> 538. C1
+// replaced the bulk queue post's ad-hoc membership handling with the ONE gate
+// `cr-plan` and `wave-sequence` also reach, and the +13 is that decision
+// written where a reader of the code will meet it: `src/v2.ts` +12 (the
+// migration-door narration on `handleQueuePost` and the per-entry membership
+// and `lifecycle`-shape comments, which cite CR-CRU-091 and CR-CRU-099
+// alongside this CR because they name the rules being unified) and
+// `src/store.ts` +1 (`TRACK_LANE_RULE`'s own JSDoc, the lane rule as one
+// string). Both are prose on `//` or ` * ` lines, neither is in a string —
+// measured by classifying `git show develop:<path>` against the working tree
+// file by file with this file's own `extractCitableText`, which attributes
+// the whole +13 to those TWO files and leaves the other eight `src/` files at
+// their develop counts. `public/` and `clients/` are untouched by this CR and
+// re-measure at their recorded 390 and 619. The `develop` baselines are
+// UNCHANGED at 512/378/601 and stay the floors — a floor never moves, in
+// either direction, for a re-pin.
+// RE-PINNED 2026-09-04 by CR-CRU-104's VERIFY round. `src/` HEAD moves
+// 538 -> 541, all three in `src/v2.ts`: the membership gate now owns the
+// SHAPE of a declaration as well as its meaning (the migration door coerced a
+// non-string release with `String()` and stored the label the coercion
+// produced, which `cr-plan` type-refuses), and the +3 is that decision
+// written where a reader of the code will meet it — `MembershipDeclaration`'s
+// doc comment, `RELEASE_REQUIRED`'s (the one sentence both doors now answer)
+// and the gate's own shape-before-meaning comment. Measured with THIS file's
+// `extractCitableText` file by file against `git show develop:<path>`: 7
+// citations added and 4 removed on `//`/` * ` lines of that one file, none in
+// a string, so `src/v2.ts` moves 175 -> 178 over develop's 163 while the
+// other nine `src/` files stay at their develop counts. `public/` and
+// `clients/` are untouched and re-measure at 390 and 619. The `develop`
+// baselines are UNCHANGED at 512/378/601 and stay the floors.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 525 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 541 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 390 },
   clients: { exts: [".py"], develop: 601, head: 619 },
 };
