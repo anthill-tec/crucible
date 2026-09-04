@@ -2407,6 +2407,279 @@ class Cr092NextVerbAxiConformanceTest(unittest.TestCase):
             f"{offenders!r}")
 
 
+# ── CR-CRU-106 §S1 / AC7 -- `cr-depends`, in all five, and NO deps flag on
+# `cr-plan`/`wave-sequence` in any ──────────────────────────────────────────
+#
+# `cr-depends` WRITES, so the roadmap section's rule applies unchanged: the
+# census's unreachable CRUCIBLE_URL gives it a genuine envelope-bearing
+# failure in both of its shapes. `build_argv` fills `--cr` (argparse-required)
+# and `--agent` and never `--on` (not required, because §S1/AC6 make the
+# client ASK for it), so the primary drive is the USAGE refusal (exit 2, one
+# read that fails, nothing POSTed) -- exactly `cr-plan`'s shape in the
+# CR-CRU-091 section. A second drive declares `--on` and so reaches the wire,
+# which is the TRANSPORT failure (exit 1). Both are measured.
+#
+# AC7 is the fleet's half of "no dependency flag or argument appears on
+# `cr-plan` or `wave-sequence`" (shapes B and C, both rejected). The server
+# half -- a `dependsOn` in a `cr-plan` body is ignored -- is
+# `tests/cr-depends-envelope.test.ts`'s. Here it is read off each client's
+# REAL argparse, the same option-string set the roadmap section already
+# collects, so a flag added to the shared registrar OR hand-rolled in one
+# client fails in the same place.
+
+CR106_DEPENDS_VERB = "cr-depends"
+
+# The two verbs AC7 forbids a dependency flag on, and the spellings a flag
+# would plausibly take. `--on` is `cr-depends`' own flag; on either of these
+# two it would be shape B/C by another name.
+CR106_NO_DEPS_FLAG_VERBS = ("cr-plan", "wave-sequence")
+CR106_FORBIDDEN_DEPS_FLAGS = ("--on", "--depends", "--depends-on", "--deps",
+                              "--dependson")
+
+CR106_EXPECTED_EXIT = {"ask": 2, "declared": 1}
+
+_DEPENDS_DRIVE_CACHE = None
+
+
+def _get_depends_drives():
+    """Drive `cr-depends` twice per client -- the ask and the declaration --
+    plus `--help`, as real subprocesses, cached at module scope exactly like
+    `_get_roadmap_drives()`. `(client, "options")` keeps the subparser's real
+    option strings; `(client, verb, "options")` keeps `cr-plan`'s and
+    `wave-sequence`'s for AC7."""
+    global _DEPENDS_DRIVE_CACHE
+    if _DEPENDS_DRIVE_CACHE is not None:
+        return _DEPENDS_DRIVE_CACHE
+    fake_bin_dir = _build_fake_bin_dir()
+    toon_module = _load_toon_module()
+    drives = {}
+    try:
+        for client_key, script_path in CLIENT_FILES.items():
+            project_dir = _make_project_dir(client_key)
+            try:
+                verbs = enumerate_verbs(client_key, script_path)
+                for verb in CR106_NO_DEPS_FLAG_VERBS:
+                    subparser = verbs.get(verb)
+                    drives[(client_key, verb, "options")] = (
+                        None if subparser is None else
+                        {opt for action in subparser._actions
+                         for opt in action.option_strings})
+                subparser = verbs.get(CR106_DEPENDS_VERB)
+                if subparser is None:
+                    drives[(client_key, "options")] = None
+                    continue
+                drives[(client_key, "options")] = {
+                    opt for action in subparser._actions
+                    for opt in action.option_strings}
+                argv = build_argv(CR106_DEPENDS_VERB, subparser, project_dir)
+                for case, extra in (("ask", ()),
+                                    ("declared", ("--on", "CR-CRU-999"))):
+                    result = drive_verb(script_path, argv + list(extra),
+                                        project_dir, fake_bin_dir)
+                    _emits, axi = classify_envelope(result.stdout, toon_module)
+                    drives[(client_key, case)] = {"result": result, "axi": axi}
+                drives[(client_key, "help")] = drive_verb(
+                    script_path, [CR106_DEPENDS_VERB, "--help"], project_dir,
+                    fake_bin_dir)
+            finally:
+                shutil.rmtree(project_dir, ignore_errors=True)
+    finally:
+        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+    _DEPENDS_DRIVE_CACHE = drives
+    return drives
+
+
+class Cr106CrDependsAxiConformanceTest(unittest.TestCase):
+    """CR-CRU-106 §S1 -- `cr-depends` measured against the fleet standard in
+    all five clients, and AC7's flag ABSENCE read off the same argparse."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.drives = _get_depends_drives()
+        cls.census = _get_census()
+
+    def _axi(self, client_key, case):
+        return (self.drives.get((client_key, case)) or {}).get("axi") or {}
+
+    def _result(self, client_key, case):
+        return (self.drives.get((client_key, case)) or {}).get("result")
+
+    def test_cr_depends_is_a_real_subcommand_in_all_five_clients(self):
+        """CR-CRU-091 §S3's "gap not to repeat": the verb reached python only
+        when it landed; it must reach all five."""
+        missing = [c for c in CLIENT_FILES
+                   if self.drives.get((c, "options")) is None]
+        self.assertEqual(
+            missing, [],
+            f"`cr-depends` must be a registered subcommand in every client, "
+            f"never the 1 client `queue-file` reaches; absent from: {missing!r}")
+
+    def test_help_exits_zero_and_names_the_verb_in_all_five_clients(self):
+        """P10 -- `<client> cr-depends --help`, as a real subprocess."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            result = self.drives.get((client_key, "help"))
+            if result is None or result.returncode != 0:
+                offenders[client_key] = (
+                    f"exit {getattr(result, 'returncode', None)}")
+            elif CR106_DEPENDS_VERB not in result.stdout:
+                offenders[client_key] = "help omits its own verb"
+        self.assertEqual(
+            offenders, {},
+            f"P10 -- `<client> cr-depends --help` must exit 0 and list the "
+            f"verb in all five clients: {offenders!r}")
+
+    def test_both_drives_write_one_toon_envelope_carrying_verb_ok_context_warnings(self):
+        """P1/P7 -- the fleet's envelope shape, on stdout ALONE, naming its
+        own verb, in both the ask and the declaration."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for case in CR106_EXPECTED_EXIT:
+                label = f"{client_key}:{case}"
+                axi = self._axi(client_key, case)
+                result = self._result(client_key, case)
+                if not axi:
+                    offenders[label] = (
+                        f"no envelope; stdout="
+                        f"{getattr(result, 'stdout', None)!r}")
+                    continue
+                absent = [f for f in ("verb", "ok", "context", "warnings")
+                          if f not in axi]
+                if absent:
+                    offenders[label] = f"missing {absent!r}"
+                elif axi.get("verb") != CR106_DEPENDS_VERB:
+                    offenders[label] = f"envelope names {axi.get('verb')!r}"
+                elif not (result.stdout or "").lstrip().startswith("axi:"):
+                    offenders[label] = f"prose precedes it: {result.stdout!r}"
+        self.assertEqual(
+            offenders, {},
+            f"P1/P7 -- stdout carries the `cr-depends` envelope ALONE, with "
+            f"verb/ok/context/warnings: {offenders!r}")
+
+    def test_the_ask_exits_two_and_the_declaration_fails_transport_with_one(self):
+        """P6 -- the ask is a USAGE refusal the client resolves itself (§S6:
+        never a blank argparse failure, and nothing posted); the declaration
+        reaches the unreachable wire and fails TRANSPORT."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for case, expected in CR106_EXPECTED_EXIT.items():
+                result = self._result(client_key, case)
+                if result is None or result.returncode != expected:
+                    offenders[f"{client_key}:{case}"] = (
+                        f"exit {getattr(result, 'returncode', None)}, "
+                        f"expected {expected}")
+        self.assertEqual(
+            offenders, {},
+            f"P6 -- `cr-depends` exit codes: {offenders!r}")
+
+    def test_the_ask_names_on_lists_candidates_and_carries_the_role(self):
+        """§S1/AC6 through the census's own machinery: with `--on` undeclared
+        the envelope is the ASK -- `needs`, a candidate `crs[]` (empty here,
+        with a STRUCTURED warning saying why) and pre-filled `help[]` naming
+        the caller's own `--cr` -- identically in every client, because the
+        asking is the SHARED module's."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            axi = self._axi(client_key, "ask")
+            if axi.get("ok") is not False:
+                offenders[client_key] = f"ok={axi.get('ok')!r}"
+            elif axi.get("needs") != ["on"]:
+                offenders[client_key] = f"needs={axi.get('needs')!r}"
+            elif "crs" not in axi:
+                offenders[client_key] = "no crs[] candidate list"
+            elif axi.get("requiredRole") != CR091_ROADMAP_ROLE:
+                offenders[client_key] = (
+                    f"requiredRole={axi.get('requiredRole')!r}")
+            elif not any(step.startswith("cr-depends --cr ")
+                         for step in axi.get("help") or []):
+                offenders[client_key] = f"help={axi.get('help')!r}"
+            elif "queue-unavailable" not in {
+                    w.get("code") for w in axi.get("warnings") or []
+                    if isinstance(w, dict)}:
+                offenders[client_key] = f"warnings={axi.get('warnings')!r}"
+        self.assertEqual(
+            offenders, {},
+            f"§S1/AC6 -- all five clients must ask identically: {offenders!r}")
+
+    def test_every_envelope_carries_convergence_total_count_help_and_role(self):
+        """§S7/P4/P9/AC16 -- the roadmap envelope's four constants ride both
+        shapes, including a call that never landed."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for case in CR106_EXPECTED_EXIT:
+                axi = self._axi(client_key, case)
+                label = f"{client_key}:{case}"
+                if not isinstance(axi.get("converged"), bool):
+                    offenders[label] = f"converged={axi.get('converged')!r}"
+                elif not isinstance(axi.get("totalCount"), int):
+                    offenders[label] = f"totalCount={axi.get('totalCount')!r}"
+                elif not axi.get("help"):
+                    offenders[label] = "no help[]"
+                elif axi.get("requiredRole") != CR091_ROADMAP_ROLE:
+                    offenders[label] = (
+                        f"requiredRole={axi.get('requiredRole')!r}")
+        self.assertEqual(
+            offenders, {},
+            f"§S7/P4/P9/AC16 -- converged, totalCount, help[] and "
+            f"requiredRole ride every `cr-depends` envelope: {offenders!r}")
+
+    def test_every_client_offers_fields_and_full(self):
+        """P2/P3 -- the projection flags are part of the verb surface in every
+        client, never a python-only courtesy."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            options = self.drives.get((client_key, "options")) or set()
+            absent = [flag for flag in ("--fields", "--full")
+                      if flag not in options]
+            if absent:
+                offenders[client_key] = absent
+        self.assertEqual(
+            offenders, {},
+            f"P2/P3 -- `cr-depends` offers `--fields` and `--full` in every "
+            f"client: {offenders!r}")
+
+    def test_the_fleet_census_also_reads_cr_depends_as_enveloped(self):
+        """Belt and braces: the verb must also pass the file's PRIMARY census
+        -- the one whose per-client bare counts the rust/mvn guards above
+        assert are zero -- not only this section's own drives."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            per_verb = self.census.get(client_key, {})
+            if CR106_DEPENDS_VERB not in per_verb:
+                offenders[client_key] = "not enumerated"
+            elif not per_verb[CR106_DEPENDS_VERB]:
+                offenders[client_key] = "BARE"
+        self.assertEqual(
+            offenders, {},
+            f"`cr-depends` must be enveloped in the fleet-wide census too: "
+            f"{offenders!r}")
+
+    def test_ac7_no_dependency_flag_on_cr_plan_or_wave_sequence_in_any_client(self):
+        """AC7 -- shapes B (`--depends-on` on `cr-plan`) and C (folding into
+        `wave-sequence`) were REJECTED; neither verb carries a dependency flag
+        in any client. Asserted as an ABSENCE on each client's real argparse,
+        so the two verbs are also proven to still EXIST there (an unregistered
+        verb would trivially carry no flag)."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for verb in CR106_NO_DEPS_FLAG_VERBS:
+                options = self.drives.get((client_key, verb, "options"))
+                label = f"{client_key}:{verb}"
+                if options is None:
+                    offenders[label] = "verb not registered"
+                    continue
+                present = [flag for flag in CR106_FORBIDDEN_DEPS_FLAGS
+                           if flag in options]
+                present += [opt for opt in options
+                            if "depend" in opt.lower() and opt not in present]
+                if present:
+                    offenders[label] = present
+        self.assertEqual(
+            offenders, {},
+            f"AC7 -- no dependency flag on `cr-plan` or `wave-sequence` "
+            f"anywhere in the fleet: {offenders!r}")
+
+
 # ── CR-CRU-092 §S5/AC11 -- the harness lane plan, BEHAVIOURALLY ────────────
 
 _HARNESS_DB_NAMES = (".wf-schedule.db", ".nai-schedule.db")

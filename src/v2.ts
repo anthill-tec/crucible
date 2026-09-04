@@ -124,6 +124,9 @@ interface V2Body {
   targetAt?: unknown;
   by?: unknown;
   reason?: unknown;
+  // CR-CRU-106 §S1 — `cr-depends`' whole payload: the complete dependency
+  // set. `cr` is already declared above.
+  dependsOn?: unknown;
 }
 
 // §S3 — all help[] wording lives in src/hints.ts (one reviewable module).
@@ -2102,9 +2105,18 @@ function findDependencyCycle(graph: Map<string, string[]>, start: string): strin
 }
 
 /**
- * §S5 — the cycle check both write verbs run BEFORE writing. Neither verb
- * edits `dependsOn`, so the stored graph is the graph the write would leave
- * behind: refusing here means nothing was written, which is the whole point.
+ * §S5 — the cycle check every write verb runs BEFORE writing: refusing here
+ * means nothing was written, which is the whole point.
+ *
+ * `entries` is the graph the write would LEAVE BEHIND, and the CALLER owes
+ * that. CR-CRU-106 §S2 — this used to read "neither verb edits `dependsOn`,
+ * so the stored graph IS that graph", and that precondition is gone:
+ * `cr-depends` edits exactly that column, so for it the stored rows are
+ * precisely not the post-write graph and it hands the PROSPECTIVE ones — the
+ * stored rows with the subject's set replaced by the declared one. Every ring
+ * a declaration could close is invisible to a stored-graph read, because the
+ * closing edge is still in the request body; a guard reading `listQueue` for
+ * that verb would pass the cycle and then write it.
  */
 function refuseDependencyCycle(entries: QueueEntry[], touched: string[]): Response | null {
   const known = new Set(entries.map((entry) => entry.cr));
@@ -2410,8 +2422,10 @@ async function handleCrPlan(store: Store, key: string, req: Request): Promise<Re
     release: body.release,
   });
   if ("fail" in membership) return membership.fail;
-  // §S5 — the cycle refusal runs BEFORE the write. Neither verb edits
-  // dependsOn, so the stored graph is already the graph the write leaves.
+  // §S5 — the cycle refusal runs BEFORE the write. THIS verb edits no
+  // `dependsOn`, so the stored graph already is the graph the write leaves
+  // (CR-CRU-106 §S2 — a verb that does edit it owes the prospective graph
+  // instead, and `handleCrDepends` builds one).
   const cycle = refuseDependencyCycle(store.listQueue(pk.key), [body.cr]);
   if (cycle !== null) return cycle;
 
@@ -2526,6 +2540,10 @@ async function handleWaveSequence(store: Store, key: string, req: Request): Prom
       });
     }
   }
+  // §S5 — the same rule, same reason: THIS verb writes `seq` and `track`, not
+  // `dependsOn`, so the rows it already read ARE the post-write graph
+  // (CR-CRU-106 §S2 corrected the guard's own precondition; this call is
+  // unaffected because the premise still holds here).
   const cycle = refuseDependencyCycle(entries, crs);
   if (cycle !== null) return cycle;
 
@@ -2555,6 +2573,93 @@ async function handleWaveSequence(store: Store, key: string, req: Request): Prom
     entries: sequenced.filter((entry) => touched.has(entry.cr)),
     warnings,
     unknownDependencies: unknownDependencies(sequenced, touched),
+  });
+}
+
+/**
+ * CR-CRU-106 §S1/§S2/§S2a — POST …/projects/<key>/queue/depends:
+ * `cr-depends`. The DEPENDENCY axis, declared by its own verb.
+ *
+ * The WHOLE set is the payload and re-sending REPLACES it — the design's own
+ * step-3 argument ("the order is the payload") applied to a second axis: a
+ * dependency dropped from a re-sent set is a declaration, not an accident of
+ * arrival. An EMPTY array is therefore a legitimate declaration that a cr
+ * depends on nothing, never a missing field.
+ *
+ * §S3's asymmetry, stated rather than inherited: an unknown TARGET is
+ * ACCEPTED and flagged in `unknownDependencies`, matching the migration
+ * door's CR-CRU-014 §S1 behaviour, while `cr-plan` REFUSES an unproposed
+ * release. The two precedents disagree on purpose, and AC5 rules this one —
+ * the cycle check already filters to known crs so an unknown target cannot
+ * hide a ring, and refusing would make declaration ORDER-DEPENDENT.
+ */
+async function handleCrDepends(store: Store, key: string, req: Request): Promise<Response> {
+  const pk = requireProject(store, key);
+  if ("fail" in pk) return pk.fail;
+  const body = (await readBody(req)) ?? {};
+  const caller = requireOrchestrator(store, pk.key, body);
+  if ("fail" in caller) return caller.fail;
+  if (typeof body.cr !== "string" || body.cr.length === 0) {
+    return fail(400, "`cr` is required — the cr whose dependency set this declares");
+  }
+  // An ABSENT `dependsOn` is a malformed call and an EMPTY one is a
+  // declaration, so the two cannot collapse into a falsiness test.
+  if (!Array.isArray(body.dependsOn)) {
+    return fail(400, "`dependsOn` is required — the WHOLE set; `[]` declares that this cr depends on nothing");
+  }
+  // handleQueuePost's precedent: the offending field AND its index.
+  const dependsOn: string[] = [];
+  for (let index = 0; index < body.dependsOn.length; index++) {
+    const dep: unknown = body.dependsOn[index];
+    if (typeof dep !== "string" || dep.length === 0) {
+      return fail(400, `\`dependsOn\` entry at index ${index} is not a non-empty cr id`);
+    }
+    if (dependsOn.includes(dep)) {
+      return fail(400, `\`dependsOn\` names ${dep} twice — at index ${index}; one dependency, one declaration`);
+    }
+    dependsOn.push(dep);
+  }
+  // §S2 — the cycle refusal runs over the PROSPECTIVE graph: the stored rows
+  // with the SUBJECT's set replaced by the declared one. Handing the stored
+  // rows here would refuse only a ring the board already holds, and accept —
+  // then write — every ring a declaration closes, because the closing edge is
+  // the one still in this body. Measured: with `store.listQueue(pk.key)` in
+  // this call, `1 → 2 → 3` plus a declaration of `3 → 1` answers
+  // `ok:true` and the store comes back holding the ring.
+  //
+  // A subject holding NO row contributes no node, so this can never fire
+  // ahead of the §S2a refusal below; the order of the two is a matter of
+  // which fact is worth reading first, not of reachability.
+  const cycle = refuseDependencyCycle(
+    store
+      .listQueue(pk.key)
+      .map((entry) => (entry.cr === body.cr ? { ...entry, dependsOn } : entry)),
+    [body.cr],
+  );
+  if (cycle !== null) return cycle;
+
+  // §S2a — the writer's own read of the row is the registration fact, so the
+  // route asks the question once: `null` is "this cr holds no queue row", and
+  // nothing was written on the way to the refusal.
+  const written = store.declareQueueDependencies(pk.key, body.cr, dependsOn);
+  if (written === null) {
+    return fail(404, `cr ${body.cr} is not registered in this project's queue`, {
+      help: roadmapHints.unregisteredCr(body.cr),
+    });
+  }
+  const declared = store.listQueue(pk.key);
+  // AC9 — the same reporting envelope `cr-plan` answers with, scoped to the
+  // ONE cr this call touched: `dependencyWarnings` names a pair only when it
+  // involves a touched cr, so a verb that forgot to name its subject here
+  // would go silent on the very finding it just created. §S7 — a converged
+  // call wrote nothing and earns no warning, even while the finding stands.
+  const touched = new Set([body.cr]);
+  return json({
+    ok: true,
+    converged: !written.changed,
+    entry: declared.find((entry) => entry.cr === body.cr),
+    warnings: written.changed ? dependencyWarnings(declared, touched) : [],
+    unknownDependencies: unknownDependencies(declared, touched),
   });
 }
 
@@ -3128,6 +3233,11 @@ export function handleV2(
       }
       if (segments[2] === "sequence") {
         return handleWaveSequence(store, segments[0]!, req);
+      }
+      // CR-CRU-106 §S1 — the dependency axis joins the same block, under the
+      // same rule: `queue/depends`, never `queue/cr-depends`.
+      if (segments[2] === "depends") {
+        return handleCrDepends(store, segments[0]!, req);
       }
     }
     if (

@@ -875,12 +875,15 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
   //
   // The open ruling in CR-CRU-104's spec: `cr-plan` and `wave-sequence` refuse
   // a dependency CYCLE; the bulk post does not, and this CR does not change
-  // that. `src/hints.ts`'s cycle help names *"re-post the queue with
-  // `dependsOn` corrected"* as the remedy, which makes the bulk post the
-  // deliberate ESCAPE HATCH — refusing cycles there could reject a legitimate
-  // bootstrap re-post of a README that momentarily contains one, leaving no way
-  // back. CR-CRU-014 §S1 is the precedent: unknown `dependsOn` targets are
-  // ACCEPTED and flagged, never rejected.
+  // that. The bulk post is the deliberate ESCAPE HATCH from a cycle: refusing
+  // cycles there could reject a legitimate bootstrap re-post of a README that
+  // momentarily contains one, leaving no way back. CR-CRU-014 §S1 is the
+  // precedent: unknown `dependsOn` targets are ACCEPTED and flagged, never
+  // rejected. (`src/hints.ts`'s cycle remedy used to point at the bulk post
+  // as well; CR-CRU-106 §S2b retargeted it to `cr-depends`, the dependency
+  // axis's own verb, because a natively-authored project has no queue to
+  // re-post — the hint is no longer evidence either way, and the reasoning
+  // above stands on its own.)
   //
   // This test therefore asserts the asymmetry EXISTS and is deliberate. It is
   // the record, not the ruling: when the user rules, this test changes with

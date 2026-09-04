@@ -371,9 +371,14 @@ export const roadmapHints = {
     `split ${container} across two waves: cr-plan --cr <cr> --release <v> --wave <n+1> --title <brief> moves a cr out, then re-send --crs for each wave`,
     `seq ${seq} is past the block a wave's seq values live in — nothing was written, so the stored order is still the last authored one`,
   ],
-  /** §S5 — the ONE finding that refuses: a dependency cycle. */
+  /**
+   * §S5 — the ONE finding that refuses: a dependency cycle. CR-CRU-106 §S2b —
+   * the remedy names `cr-depends`, the axis's own verb: it used to send the
+   * caller back through the bulk queue post, and a natively-authored project
+   * has no queue to re-post.
+   */
   dependencyCycle: (members: string[]): string[] => [
-    `POST /api/v2/projects/<key>/queue — re-post the queue with ${members[0] ?? "the cycle"}'s dependsOn corrected; the cycle is ${members.join(" → ")}`,
+    `cr-depends --cr ${members[0] ?? "<cr>"} --on <corrected set> — re-declare the WHOLE set without the edge that closes the ring; the cycle is ${members.join(" → ")}`,
     "every other dependency finding is accepted and reported — a cycle is the only one that refuses, because no order can satisfy it",
   ],
   /** §S3/AC14 — a lifecycle verb aimed at a cr a cut release already shipped. */

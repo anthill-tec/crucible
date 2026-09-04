@@ -2484,6 +2484,12 @@ def queue_sequence_path(project_key):
     return f"/api/v2/projects/{project_key}/queue/sequence"
 
 
+def queue_depends_path(project_key):
+    """CR-CRU-106 §S1 — `…/projects/<key>/queue/depends`, under the same rule:
+    `queue/depends`, never `queue/cr-depends`."""
+    return f"/api/v2/projects/{project_key}/queue/depends"
+
+
 def queue_lifecycle_path(project_key, cr, verb):
     """§S8 — `…/projects/<key>/queue/<cr>/supersede` | `/void`."""
     return f"/api/v2/projects/{project_key}/queue/{cr}/{verb}"
@@ -2885,6 +2891,189 @@ def lifecycle_help(verb, args, dependants):
                 f"--title <brief> — {', '.join(dependants)} still depend on "
                 f"the now-VOID {args.cr}", "queue"]
     return ["queue"]
+
+
+# ── CR-CRU-106 §S1/§S2a — `cr-depends`: the dependency axis ────────────────
+#
+# Lands HERE, once, for the same CR-CRU-054 DRY reason the five roadmap verbs
+# do, and holds NO business rule: it never validates a target, never decides
+# whether a set closes a cycle and never infers a set. It POSTs the WHOLE set
+# and renders what came back.
+#
+# §S6/P6 — the ONE field this verb will not guess. `--cr` is argparse-required
+# exactly as `cr-plan`'s, `cr-supersede`'s and `cr-void`'s are: the SUBJECT is
+# the thing the caller is naming, and the asking is for what the declaration
+# TARGETS, which is the case §S1 points at ("exactly as `cr-plan` does for
+# `--release`/`--wave`").
+CR_DEPENDS_DECLARED_FIELDS = ("on",)
+
+
+def undeclared_cr_depends_fields(args):
+    """P6 — the fields the caller left undeclared.
+
+    `is None` and not falsiness, and the distinction is load-bearing: §S1
+    makes an EMPTY set a legitimate declaration that a cr depends on nothing,
+    so `--on ""` is an answer while an ABSENT `--on` is the question. A
+    truthiness test would collapse the two and make "depends on nothing"
+    unsayable.
+    """
+    return [field for field in CR_DEPENDS_DECLARED_FIELDS
+            if getattr(args, field, None) is None]
+
+
+def queue_candidates(resp):
+    """P7 (PURE) — the crs this board actually holds, from `GET …/queue`: the
+    live candidates a dependency declaration can name.
+
+    A dependency's candidates are CRs, not release proposals, because
+    `dependsOn` points at crs — so this verb's ask reads the queue where
+    `cr-plan`'s reads the proposals. Only the columns that identify a
+    candidate are carried; the row's full declaration is `queue`'s answer to
+    give, not this ask's."""
+    return [{"cr": str(e.get("cr")),
+             "wave": str(e.get("wave")),
+             "status": str(e.get("status"))}
+            for e in (resp or {}).get("entries") or []
+            if isinstance(e, dict)]
+
+
+def cr_depends_ask_help(cr):
+    """P9 (PURE) — the pre-filled next steps, with the caller's OWN `--cr`
+    already substituted: the declaration it was about to make, and the empty
+    declaration, which is the one a caller cannot otherwise guess is legal.
+
+    ONE line per SHAPE rather than one per candidate, unlike
+    `cr_plan_ask_help`: a release proposal list is bounded by the milestones a
+    project has open, while a dependency may name any cr on the board, so a
+    template per candidate would emit a line per row of a 100-row roadmap and
+    bury the two shapes that matter. The candidates themselves ride the
+    envelope's own list.
+
+    NOTE: the CR fixes that an empty set is a legitimate declaration (§S1) but
+    names no command-line spelling for one; `--on ""` is this client half's
+    reading, reported as a spec silence rather than smuggled in."""
+    return [f"cr-depends --cr {cr} --on <a,b,c> — the WHOLE set; re-sending "
+            f"REPLACES it",
+            f'cr-depends --cr {cr} --on "" — declares that {cr} depends on '
+            f"nothing",
+            "queue"]
+
+
+def emit_cr_depends_ask(args, project_dir, ops, needs, agent_id):
+    """§S1/§S6 — resolve the undeclared `cr-depends` BEFORE posting: read the
+    live candidates, emit the `ok:false` envelope on stdout, exit 2, POST
+    nothing.
+
+    A candidate read that FAILS is not "an empty board", and degrades exactly
+    as `emit_cr_plan_ask` degrades its own: an empty list plus a STRUCTURED
+    warning naming the condition, and still no guess, because the caller's own
+    declaration is what is missing either way."""
+    resp = ops.get(f"/api/v2/projects/{ops.project_key(project_dir)}/queue")
+    warnings = []
+    if resp.get("ok"):
+        candidates = queue_candidates(resp)
+    else:
+        candidates = []
+        warnings.append({
+            "code": "queue-unavailable",
+            "detail": (f"could not read the registered CR queue: "
+                       f"{resp.get('error')}"),
+        })
+    full = bool(getattr(args, "full", False))
+    visible = truncate_rows(
+        select_row_fields(candidates, getattr(args, "fields", None)), full=full)
+    ops.emit("cr-depends", False,
+             {"converged": False,
+              "needs": needs,
+              "crs": visible,
+              "totalCount": len(candidates),
+              "requiredRole": ROADMAP_ROLE,
+              "help": cr_depends_ask_help(args.cr)},
+             ops.context(project_dir, agent_id=agent_id, cr=args.cr),
+             warnings,
+             f"cr-depends: ok=False needs={','.join(needs)} — nothing was "
+             f"posted; {len(candidates)} cr(s) on the board to depend on")
+    return EXIT_USAGE
+
+
+def cr_depends_help(args, unknown):
+    """§S10 P9 (PURE) — the STATE-DERIVED next step after a declaration.
+
+    AC5 rules that an unknown target is ACCEPTED and FLAGGED, so the flag is
+    given somewhere to go: the declaration stands, and the actionable thing
+    left is planning the target it names."""
+    if unknown:
+        return [f"cr-plan --cr {unknown[0]} --release <v> --wave <n> "
+                f"--title <brief> — {', '.join(unknown)} is not on the board; "
+                f"the declaration stands and is flagged", "queue"]
+    return ["queue", "next"]
+
+
+def cmd_cr_depends(args, project_dir, ops):
+    """§S1 — declare one cr's COMPLETE dependency set → POST …/queue/depends.
+    The whole set is the payload and re-sending REPLACES it, so a dependency
+    dropped from a re-sent set is a declaration rather than an accident of
+    arrival.
+
+    §S6 — a call that declares no `--on` is resolved HERE and never reaches
+    the server."""
+    agent_id = ops.agent_id(args)
+    needs = undeclared_cr_depends_fields(args)
+    if needs:
+        return emit_cr_depends_ask(args, project_dir, ops, needs, agent_id)
+    full = bool(getattr(args, "full", False))
+    resp = ops.post(queue_depends_path(ops.project_key(project_dir)),
+                    {"cr": args.cr, "dependsOn": parse_crs(args.on),
+                     "agentId": agent_id}) or {}
+    ok = bool(resp.get("ok", False))
+    context = ops.context(project_dir, agent_id=agent_id, cr=args.cr)
+    if not ok:
+        ops.emit("cr-depends", False,
+                 roadmap_failure_fields("cr-depends", resp, ops, full),
+                 context, [],
+                 f"cr-depends: ok=False error={resp.get('error')}")
+        return 1
+    unknown = roadmap_scalar_list(resp, "unknownDependencies")
+    declared = roadmap_entry(resp, args) or {}
+    converged = bool(resp.get("converged", False))
+    ops.emit("cr-depends", True,
+             {"converged": converged,
+              "entry": declared,
+              "unknownDependencies": unknown,
+              "totalCount": 1,
+              "help": cr_depends_help(args, unknown)},
+             context, resp.get("warnings") or [],
+             f"cr-depends: ok=True cr={args.cr} "
+             f"dependsOn={len(parse_crs(args.on))} converged={converged}"
+             + (f" unknownDependencies={','.join(unknown)}" if unknown else ""))
+    return 0
+
+
+def add_cr_depends_verb(sub, func, *, parents=(), add_args=()):
+    """CR-CRU-106 §S1 — register the ONE `cr-depends` subparser on `sub`.
+
+    A single callable rather than `add_roadmap_verbs`' verb-name→delegator
+    dict, following `add_next_verb`'s precedent for the same reason: one verb
+    needs one delegator, and a one-entry dict would be ceremony that hides
+    that. It is its OWN registrar rather than a sixth entry in
+    `add_roadmap_verbs` because that registrar's contract is CR-CRU-091's
+    frozen five, asserted by name in the fleet inventory.
+    """
+    cd = sub.add_parser(
+        "cr-depends", parents=list(parents),
+        help="Declare one CR's COMPLETE dependency set → POST …/queue/depends "
+             "(§S1). Re-sending REPLACES the set. Omit --on and the client "
+             "ASKS instead of guessing. ORCHESTRATOR only.")
+    cd.add_argument("--cr", required=True,
+                    help="The CR whose dependency set this declares.")
+    cd.add_argument("--on",
+                    help="The WHOLE set, comma-separated. Undeclared → the "
+                         'client lists the board\'s crs and exits 2 (§S6); '
+                         '--on "" declares that this CR depends on nothing.')
+    add_roadmap_projection_args(cd)
+    for adder in add_args:
+        adder(cd)
+    cd.set_defaults(func=func)
 
 
 def add_roadmap_projection_args(p):

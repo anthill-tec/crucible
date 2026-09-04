@@ -1596,6 +1596,13 @@ def cmd_wave_sequence(args):
     return _axi().cmd_wave_sequence(args, _resolve_project_dir(args.project_dir), _ops())
 
 
+def cmd_cr_depends(args):
+    """CR-CRU-106 §S1 — declare one CR's COMPLETE dependency set → POST
+    …/queue/depends; with `--on` undeclared the client ASKS instead of
+    guessing. Delegates to the shared implementation."""
+    return _axi().cmd_cr_depends(args, _resolve_project_dir(args.project_dir), _ops())
+
+
 def cmd_cr_supersede(args):
     """§S3 — record that a CR's work moves to a successor → POST
     …/queue/<cr>/supersede. Delegates to the shared implementation."""
@@ -2009,6 +2016,12 @@ def main():
         {"release-propose": cmd_release_propose, "cr-plan": cmd_cr_plan,
           "wave-sequence": cmd_wave_sequence, "cr-supersede": cmd_cr_supersede,
           "cr-void": cmd_cr_void},
+        add_args=(_add_workflow_agent_arg, _add_project_args))
+
+    # ── CR-CRU-106 §S1 — the DEPENDENCY axis, its own verb and its own
+    # registrar (`add_roadmap_verbs`' contract is CR-CRU-091's frozen five).
+    _axi().add_cr_depends_verb(
+        sub, cmd_cr_depends,
         add_args=(_add_workflow_agent_arg, _add_project_args))
 
     # ── CR-CRU-092 §S6 — the roadmap READ verb. Its subparser is built by the
