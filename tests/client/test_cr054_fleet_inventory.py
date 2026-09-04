@@ -969,16 +969,17 @@ class Cr106CrDependsVerbInventoryTest(unittest.TestCase):
         self.assertEqual(len(CR106_DEPENDS_VERBS), 1)
 
     def test_the_depends_set_is_disjoint_from_every_earlier_frozen_set(self):
-        for label, other in (("CR-CRU-054's THE_42", THE_42),
-                             ("CR-CRU-091's roadmap set",
-                              CR091_ROADMAP_VERB_FUNCTIONS),
-                             ("CR-CRU-092's next set",
-                              CR092_NEXT_VERB_FUNCTIONS)):
+        """The renumbering happens ONCE, in the fleet-count re-freeze cycle;
+        until then each CR's additions are their own set and no fixture may
+        quietly absorb another's."""
+        for label, other in (("THE_42", THE_42),
+                             ("the roadmap set", CR091_ROADMAP_VERB_FUNCTIONS),
+                             ("the next set", CR092_NEXT_VERB_FUNCTIONS)):
             with self.subTest(other=label):
                 overlap = CR106_DEPENDS_VERB_FUNCTIONS & other
                 self.assertEqual(
                     overlap, frozenset(),
-                    f"the CR-CRU-106 set must not touch {label}; "
+                    f"the cr-depends set must not touch {label}; "
                     f"overlap: {overlap!r}")
         verb_overlap = set(CR106_DEPENDS_VERBS) & (
             set(CR091_ROADMAP_VERBS) | set(CR092_NEXT_VERBS))

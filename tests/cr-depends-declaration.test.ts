@@ -5,10 +5,10 @@
 // gate and the PROSPECTIVE-graph cycle refusal) and §S2a (a dependency needs a
 // row to belong to) — ACs 1, 2, 3, 4, 5, 6, 10 and 11.
 //
-// NOT this cycle, and deliberately unasserted here: the reporting envelope's
-// warnings (AC9), the cycle refusal's remedy hint retarget (§S2b), the
-// migration door's stated asymmetry (AC8) and the no-flag-on-cr-plan census
-// (AC7). They are the next cycle's.
+// Deliberately unasserted here, and asserted in the sibling
+// `cr-depends-envelope.test.ts` (cycle 2): the reporting envelope's warnings
+// (AC9), the cycle refusal's remedy hint retarget (§S2b), the migration
+// door's stated asymmetry (AC8) and the no-flag-on-cr-plan census (AC7).
 //
 // ── What is broken today ───────────────────────────────────────────────────
 //

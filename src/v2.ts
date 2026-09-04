@@ -2648,11 +2648,17 @@ async function handleCrDepends(store: Store, key: string, req: Request): Promise
     });
   }
   const declared = store.listQueue(pk.key);
+  // AC9 — the same reporting envelope `cr-plan` answers with, scoped to the
+  // ONE cr this call touched: `dependencyWarnings` names a pair only when it
+  // involves a touched cr, so a verb that forgot to name its subject here
+  // would go silent on the very finding it just created. §S7 — a converged
+  // call wrote nothing and earns no warning, even while the finding stands.
   const touched = new Set([body.cr]);
   return json({
     ok: true,
     converged: !written.changed,
     entry: declared.find((entry) => entry.cr === body.cr),
+    warnings: written.changed ? dependencyWarnings(declared, touched) : [],
     unknownDependencies: unknownDependencies(declared, touched),
   });
 }

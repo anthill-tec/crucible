@@ -767,10 +767,24 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // citation is prose on a `//`, ` * ` or docstring line, none in a string.
 // `public/` is untouched by this CR and re-measures at 390. The `develop`
 // baselines are UNCHANGED at 512/378/601 and stay the floors.
+// UPDATED 2026-09-04 by CR-CRU-106 §S2b + fleet parity (C2). `src/` HEAD moves
+// 549 -> 550 and `clients/` 627 -> 639. `src/hints.ts` +1: the cycle remedy's
+// doc comment, which now says why the hint stopped naming the migration door.
+// `clients/` +12 is the same +3 C1 gave `python-crucible.py`, landed in each
+// of the other four (`arduino-` 84 -> 87, `bun-` 119 -> 122, `mvn-` 107 ->
+// 110, `rust-` 100 -> 103): the `cr-depends` delegator's docstring and the
+// registrar call's comment, which names the frozen five it stays out of.
+// Measured with THIS file's `extractCitableText` file by file against
+// `git show HEAD:<path>`; `src/v2.ts`, `python-crucible.py` and
+// `_crucible_axi.py` re-measure at their C1 counts (the AC9 comment in
+// `handleCrDepends` cites AC9/§S7 by section, not by CR literal). Every
+// citation is prose on a `//`, ` * `, `#` or docstring line, none in a
+// string. `public/` is untouched and re-measures at 390. The `develop`
+// baselines are UNCHANGED at 512/378/601 and stay the floors.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 549 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 550 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 390 },
-  clients: { exts: [".py"], develop: 601, head: 627 },
+  clients: { exts: [".py"], develop: 601, head: 639 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
