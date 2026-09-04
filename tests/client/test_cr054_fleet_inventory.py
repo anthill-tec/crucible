@@ -803,17 +803,18 @@ CR092_NEXT_VERB_FUNCTIONS = frozenset({"cmd_next"})
 CR092_NEXT_VERBS = ("next",)
 
 
-def _next_registrar_delegator(path):
-    """The delegator a file hands the SHARED `add_next_verb(...)` registrar,
-    read from the call's second positional argument. `next` is ONE verb, so
-    the registrar takes a plain callable where `add_roadmap_verbs` takes a
-    verb-name -> delegator dict -- the registration a client owns is still
-    exactly this one name, read from the AST rather than by grep."""
+def _single_verb_registrar_delegator(path, registrar):
+    """The delegator a file hands a SHARED one-verb registrar
+    (`add_next_verb(...)`, `add_cr_depends_verb(...)`), read from the call's
+    second positional argument. A one-verb registrar takes a plain callable
+    where `add_roadmap_verbs` takes a verb-name -> delegator dict -- the
+    registration a client owns is still exactly this one name, read from the
+    AST rather than by grep."""
     for node in ast.walk(ast.parse(path.read_text())):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if not (isinstance(func, ast.Attribute) and func.attr == "add_next_verb"):
+        if not (isinstance(func, ast.Attribute) and func.attr == registrar):
             continue
         if len(node.args) >= 2 and isinstance(node.args[1], ast.Name):
             return node.args[1].id
@@ -821,7 +822,7 @@ def _next_registrar_delegator(path):
 
 
 _ALL_CLIENT_NEXT_REGISTRATIONS = {
-    client: _next_registrar_delegator(path)
+    client: _single_verb_registrar_delegator(path, "add_next_verb")
     for client, path in CLIENT_FILES.items()
 }
 
@@ -932,6 +933,140 @@ class Cr092NextVerbInventoryTest(unittest.TestCase):
             missing, [],
             f"the shared module must define the verb the clients delegate "
             f"to (SS4/SS6); missing: {missing!r}")
+
+# ---------------------------------------------------------------------------
+# CR-CRU-106 SS1 -- `cr-depends` joins the fleet inventory.
+#
+# The same one-verb discipline as the CR-CRU-092 section above. Two things are
+# this section's own. First, the verb has its OWN registrar
+# (`add_cr_depends_verb`) rather than being a sixth entry in
+# `add_roadmap_verbs`, because that registrar's contract is CR-CRU-091's
+# FROZEN FIVE, asserted by name above -- so this section also asserts that no
+# client smuggles `cr-depends` into the roadmap dict. Second, the verb reached
+# python only when it first landed (cycle 1), which is precisely the
+# `queue-file` shape CR-CRU-091 SS3 calls "the gap not to repeat"; cycle 2
+# brings it to parity, and this section is what keeps it there.
+# ---------------------------------------------------------------------------
+
+# The one shared-implementation delegator, in every client.
+CR106_DEPENDS_VERB_FUNCTIONS = frozenset({"cmd_cr_depends"})
+
+# The CLI verb name that function is registered under (5 clients x 1 verb).
+CR106_DEPENDS_VERBS = ("cr-depends",)
+
+_ALL_CLIENT_DEPENDS_REGISTRATIONS = {
+    client: _single_verb_registrar_delegator(path, "add_cr_depends_verb")
+    for client, path in CLIENT_FILES.items()
+}
+
+
+class Cr106CrDependsVerbInventoryTest(unittest.TestCase):
+    """CR-CRU-106 SS1 -- one verb, in all five clients, registered exactly
+    once each, by its OWN registrar."""
+
+    def test_the_depends_set_holds_exactly_the_one_verb(self):
+        self.assertEqual(len(CR106_DEPENDS_VERB_FUNCTIONS), 1)
+        self.assertEqual(len(CR106_DEPENDS_VERBS), 1)
+
+    def test_the_depends_set_is_disjoint_from_every_earlier_frozen_set(self):
+        for label, other in (("CR-CRU-054's THE_42", THE_42),
+                             ("CR-CRU-091's roadmap set",
+                              CR091_ROADMAP_VERB_FUNCTIONS),
+                             ("CR-CRU-092's next set",
+                              CR092_NEXT_VERB_FUNCTIONS)):
+            with self.subTest(other=label):
+                overlap = CR106_DEPENDS_VERB_FUNCTIONS & other
+                self.assertEqual(
+                    overlap, frozenset(),
+                    f"the CR-CRU-106 set must not touch {label}; "
+                    f"overlap: {overlap!r}")
+        verb_overlap = set(CR106_DEPENDS_VERBS) & (
+            set(CR091_ROADMAP_VERBS) | set(CR092_NEXT_VERBS))
+        self.assertEqual(
+            verb_overlap, set(),
+            f"`cr-depends` is a new CLI verb name, not a rename; "
+            f"overlap: {verb_overlap!r}")
+
+    def test_cmd_cr_depends_is_defined_in_all_five_clients(self):
+        missing = {
+            name: [c for c in CLIENT_FILES
+                   if name not in _ALL_CLIENT_FUNCTION_NAMES[c]]
+            for name in CR106_DEPENDS_VERB_FUNCTIONS
+        }
+        missing = {k: v for k, v in missing.items() if v}
+        self.assertEqual(
+            missing, {},
+            f"SS3's 'gap not to repeat' -- `cr-depends` reached python only "
+            f"in cycle 1; it must land at parity; missing from: {missing!r}")
+
+    def test_no_client_defines_cmd_cr_depends_twice(self):
+        offenders = []
+        for client, counts in _ALL_CLIENT_FUNCTION_NAMES.items():
+            for name in CR106_DEPENDS_VERB_FUNCTIONS:
+                if counts.get(name, 0) > 1:
+                    offenders.append(f"{client}:{name} ({counts[name]}x)")
+        self.assertEqual(
+            offenders, [],
+            f"a duplicate top-level def would silently make the SECOND "
+            f"definition win at import time: {offenders!r}")
+
+    def test_the_shared_registrar_registers_the_depends_verb_name(self):
+        registered = _add_parser_verb_names(AXI_MODULE_PATH)
+        missing = [v for v in CR106_DEPENDS_VERBS if v not in registered]
+        self.assertEqual(
+            missing, [],
+            f"`_crucible_axi.add_cr_depends_verb` must register the verb "
+            f"name; missing: {missing!r}")
+
+    def test_every_client_wires_cr_depends_to_its_own_delegator(self):
+        """The 5 (verb x client) pairs, at the registration level. The LIVE
+        argparse enumeration and envelope conformance for the same 5 pairs
+        lives in the sibling `test_client_fleet_envelope_census.py`."""
+        offenders = {}
+        for client, delegator in _ALL_CLIENT_DEPENDS_REGISTRATIONS.items():
+            if delegator is None:
+                offenders[client] = "unwired: no add_cr_depends_verb(...) call"
+            elif delegator not in CR106_DEPENDS_VERB_FUNCTIONS:
+                offenders[client] = f"wired to a non-delegator: {delegator!r}"
+        self.assertEqual(
+            offenders, {},
+            f"each client must wire `cr-depends` to its own delegator "
+            f"(5 clients x 1 verb): {offenders!r}")
+
+    def test_no_client_hand_rolls_the_cr_depends_subparser(self):
+        offenders = {}
+        for client, registered in _ALL_CLIENT_VERB_NAMES.items():
+            forked = [v for v in CR106_DEPENDS_VERBS if v in registered]
+            if forked:
+                offenders[client] = forked
+        self.assertEqual(
+            offenders, {},
+            f"the `cr-depends` subparser is built ONCE, by "
+            f"`_crucible_axi.add_cr_depends_verb`: {offenders!r}")
+
+    def test_no_client_smuggles_cr_depends_into_the_frozen_five(self):
+        """The roadmap registrar's contract is CR-CRU-091's FROZEN FIVE. A
+        client handing it a sixth `cr-depends` entry would either be ignored
+        by the registrar (a silently unwired verb) or, if the registrar grew
+        to accept it, would fork the count the fleet inventory freezes."""
+        offenders = {
+            client: sorted(set(mapping) & set(CR106_DEPENDS_VERBS))
+            for client, mapping in _ALL_CLIENT_ROADMAP_REGISTRATIONS.items()
+            if set(mapping) & set(CR106_DEPENDS_VERBS)
+        }
+        self.assertEqual(
+            offenders, {},
+            f"`cr-depends` has its OWN registrar; the roadmap dict stays the "
+            f"frozen five: {offenders!r}")
+
+    def test_the_shared_module_holds_the_implementation_the_clients_delegate_to(self):
+        shared = _defined_function_names(AXI_MODULE_PATH)
+        missing = sorted(n for n in CR106_DEPENDS_VERB_FUNCTIONS
+                         if n not in shared)
+        self.assertEqual(
+            missing, [],
+            f"the shared module must define the verb the clients delegate "
+            f"to; missing: {missing!r}")
 
 
 
