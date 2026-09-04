@@ -854,10 +854,6 @@ const fixtureDocument = (zones: string, appWidth = 1360, stylesheet = "/styles.c
      clipped by the .app-strip-track overflow. */
   body { margin: 0; }
   #app { width: ${appWidth}px; }
-  /* TEMPORARY MUTATION - VERIFY's P2-2 probe, reverted by the GREEN commit.
-     53.7px wider than the card's content needs, and the width property is one
-     AC6's comparison does not read. */
-  .app-flow-delivered { width: 392px; }
 </style>
 </head>
 <body>
@@ -3054,13 +3050,39 @@ describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and
   // MEASURED, and this is the whole argument. The assertion SKIPPED at
   // CR-CRU-102's merge — the four-dependency row sat outside the drawn top,
   // so the `!live.drawn` path took it. Closing that CR shifted the drawn rows,
-  // the assertion went live, and it failed at 621.1px; within the hour, as
-  // CR-CRU-104 was filed and CR-CRU-103 went IN_PROGRESS, the same reading
-  // drifted to 625.1px. CR-CRU-103's own terminal shrink takes 8px off it
-  // (two terminals, 56px to 52px), reaching ~613px — so implementing this CR
-  // correctly could never have closed the gap, and no correct implementation
-  // ever could. This is the CR-CRU-096 `AC29` decay CR-CRU-102's own comment
-  // predicted, arriving in under a day.
+  // the assertion went live, and it failed at 621.1px, reading 625.1px by the
+  // time CR-CRU-103 was in flight. Asserting a fixed-composition figure
+  // against data this repository does not control is the CR-CRU-096 `AC29`
+  // decay CR-CRU-102's own comment predicted, arriving in under a day.
+  //
+  // THE MECHANISM, CORRECTED (VERIFY, 2026-09-04) — and the correction
+  // REVERSES what this comment itself used to teach. It taught that
+  // CR-CRU-103's terminal change SUBTRACTS from the spine and brings it back
+  // toward the criterion, and charged the 621.1 → 625.1px move to board
+  // drift. Both were wrong, and wrong in the OPPOSITE direction: the change
+  // ADDS, and the move was never drift — it was this CR's own stylesheet.
+  // The retracted figures are quoted in CR-CRU-103's AC7, which records the
+  // correction; they are not repeated here, because a permanent comment
+  // teaches whatever it states.
+  //
+  // VERIFY established it by controlled A/B rather than argument — only
+  // `public/styles.css` swapped, the live store held still: 621.1px of spine
+  // on develop's stylesheet, 625.1px on this branch's, and reverting ONLY the
+  // `.app-flow-terminal` geometry on top of HEAD returns exactly 621.1px.
+  // The cause is that develop's terminals were CONTENT-sized, so the two
+  // words gave two different boxes: `Start` rendered 56×22 and `End` only
+  // 44×22 — 100px for the pair. Squaring both to 52×52 makes 104px, so this
+  // CR ADDS 4px to the spine. No correct implementation of it could have
+  // closed the gap, because closing the gap was never what it does.
+  //
+  // The SYNTHETIC board above moves identically, 575.9px → 579.9px, cutting
+  // its headroom against the `600px` criterion from 24.1px to 20.1px — the
+  // criterion still holds there, which is why it stays asserted there and
+  // this half only reports.
+  //
+  // The amendment's CONCLUSION is unchanged and strengthened by all of this:
+  // the live spine exceeds ~600px BEFORE and AFTER this CR, by more after.
+  // What was wrong was the mechanism, never the ruling.
   //
   // Do NOT "restore" the stricter assertion. It was not lost; it was ruled
   // out of this half, and CR-CRU-102's spec is history and stays unedited —
