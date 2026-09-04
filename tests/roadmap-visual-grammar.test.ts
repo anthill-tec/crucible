@@ -2526,6 +2526,12 @@ interface Boxed {
   color: string;
   fontWeight: string;
   cursor: string;
+  /** CR-CRU-103 AC9 — the two channels the Correction's table states BESIDE a
+   *  size: the wave header's `uppercase` and the `+N more` pointer's centring.
+   *  Read here so the type-scale guard measures them off the same box every
+   *  other reading in this file comes from. */
+  textTransform: string;
+  textAlign: string;
   /** CR-CRU-103 §S1/§S2 — the CHROME and TYPE dimensions §S4 says AC27's
    *  comparison lacked, read where every other box reading already is.
    *  `fontFamily` is the RESOLVED list: it is compared against the app's own
@@ -2563,6 +2569,8 @@ function __box(el) {
     color: cs.color,
     fontWeight: cs.fontWeight,
     cursor: cs.cursor,
+    textTransform: cs.textTransform,
+    textAlign: cs.textAlign,
     fontSize: px(cs.fontSize),
     fontFamily: cs.fontFamily,
     radius: px(cs.borderTopLeftRadius),
@@ -3843,6 +3851,25 @@ interface PanelShape {
   delivered: string | null;
 }
 
+/** The artifact's own zone-2 `.flow` panels, found the way the mock is
+ *  authored: the `.zone` caption that names zone 2, then the `.flow` that
+ *  follows it. Extracted so the STRUCTURE comparison below and §S4's CHROME
+ *  comparison read the same panels — two definitions of "the artifact's
+ *  zone-2 panels" is one definition too many. */
+const ARTIFACT_FLOWS = `
+function __artifactFlows() {
+  const text = (el) => el === null ? "" : (el.textContent || "").replace(/\\s+/g, " ").trim();
+  return Array.from(document.querySelectorAll(".zone"))
+    .filter((z) => text(z).toLowerCase().indexOf("zone 2") === 0)
+    .map((z) => {
+      let node = z.nextElementSibling;
+      while (node !== null && !node.classList.contains("flow")) node = node.nextElementSibling;
+      return node;
+    })
+    .filter((node) => node !== null);
+}
+`;
+
 /** The artifact's own zone-2 panels, read out of the artifact's own DOM. */
 const ARTIFACT_SHAPES = `
 function __artifactPanels() {
@@ -3858,15 +3885,7 @@ function __artifactPanels() {
     if (el.classList.contains("empty")) return "empty";
     return "unknown(" + el.className + ")";
   };
-  const flows = Array.from(document.querySelectorAll(".zone"))
-    .filter((z) => text(z).toLowerCase().indexOf("zone 2") === 0)
-    .map((z) => {
-      let node = z.nextElementSibling;
-      while (node !== null && !node.classList.contains("flow")) node = node.nextElementSibling;
-      return node;
-    })
-    .filter((node) => node !== null);
-  return flows.map((flow) => {
+  return __artifactFlows().map((flow) => {
     const kids = Array.from(flow.children);
     const wave = flow.querySelector(".wave");
     const delivered = flow.querySelector(".delivered");
@@ -3964,7 +3983,7 @@ function __livePanel() {
 const artifactPanels = async (): Promise<PanelShape[]> => {
   await openWide(artifactUrl);
   return await readWide<PanelShape[]>(
-    `(() => { ${ARTIFACT_SHAPES} return __artifactPanels(); })()`,
+    `(() => { ${ARTIFACT_FLOWS} ${ARTIFACT_SHAPES} return __artifactPanels(); })()`,
   );
 };
 
@@ -3984,6 +4003,212 @@ const isHorizontal = (shape: PanelShape): boolean =>
           Math.max(stage.top, shape.stages[at - 1]!.top) >
           0),
   );
+
+// ── CR-CRU-103 §S4/AC6 — the CHROME and GEOMETRY dimension AC27 lacked ─────
+//
+// Everything above compares STRUCTURE: the role sequence, the header, the
+// roll-up, the row arrangement, the markers, `/^\d+ merged/`. It reads no
+// border width, no radius, no `min-width` and no box aspect — which is why a
+// delivered summary rendering NO CARD AT ALL and a terminal rendering 56×22
+// where the artifact draws 52×52 both passed it while diverging from the very
+// artifact the comparison claims to match. §S4 widens it over exactly those
+// four properties, for the components the artifact's own zone-2 panels
+// depict.
+//
+// Read the way every other reading here is read: off the artifact's own
+// render, in the same Chromium, never off my reading of its stylesheet. Both
+// sides declare `1.5px` on the wave box and on the delivered card and both
+// RENDER `1px`, because Chromium rounds a sub-pixel border to whole device
+// pixels at DPR 1 (§S3's retraction is that finding). So nothing below
+// asserts a weight — it asserts that the two renders report the SAME one.
+//
+// `min-width` is compared as the component's RULE, not as the mock's own
+// composition: the artifact's active panel writes `style="min-width:300px"`
+// on its wave box, a figure about the board that mock draws, which CR-CRU-102
+// measured as a declared box carrying ~90px of slack around a 210px widest
+// row. The inline declaration is therefore stripped, the computed value read
+// and the inline put straight back — leaving the `.wave` RULE the design
+// states, `150px`, which is also the app's. Same division AC27 already draws
+// when it calls the artifact's counts "its own board's", applied to a length.
+//
+// BOX ASPECT is compared only where the artifact's rule FIXES both sides of
+// the box: the terminal (`52×52`), the connector (`24×2`) and the gate's
+// diamond (a square, turned 45°). A wave box, a CR row, a delivered card and
+// a gate column are sized by the facts they carry, so their aspect is their
+// board's data and not the design's — asserting it would be exactly the AC29
+// decay CR-CRU-102's AC4 ran into.
+
+/** One component's chrome and geometry, on whichever side is being read. */
+interface Chromed {
+  found: number;
+  borderTopWidth: number;
+  radius: number;
+  minWidth: number;
+  /** The inline `min-width` that was stripped to reach the RULE, reported so
+   *  the strip is visible in the failure message rather than silent. */
+  inlineMinWidth: string;
+  width: number;
+  height: number;
+  aspect: number;
+}
+
+const CHROME_FN = `
+function __chrome(scope, selectors) {
+  const px = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+  const out = {};
+  for (const name of Object.keys(selectors)) {
+    const found = scope === null || scope === undefined
+      ? [] : Array.from(scope.querySelectorAll(selectors[name]));
+    if (found.length === 0) {
+      out[name] = { found: 0, borderTopWidth: 0, radius: 0, minWidth: 0,
+                    inlineMinWidth: "", width: 0, height: 0, aspect: 0 };
+      continue;
+    }
+    const el = found[0];
+    const r = el.getBoundingClientRect();
+    const inline = el.style.minWidth;
+    el.style.minWidth = "";
+    const cs = getComputedStyle(el);
+    out[name] = {
+      found: found.length,
+      borderTopWidth: px(cs.borderTopWidth),
+      radius: px(cs.borderTopLeftRadius),
+      minWidth: px(cs.minWidth),
+      inlineMinWidth: inline,
+      width: r.width,
+      height: r.height,
+      aspect: r.height === 0 ? 0 : r.width / r.height,
+    };
+    el.style.minWidth = inline;
+  }
+  return out;
+}
+`;
+
+/** A component BOTH sides draw, and what a comparison of it can honestly say.
+ *
+ *  `live` is deliberately the component ITSELF and not the panel child that
+ *  holds it: the artifact's `.flow` puts its wave box directly on the spine
+ *  while the app wraps its boxes in an `.app-flow-waves` flex container, and
+ *  measuring that container instead of the box is the same wrapper-for-leaf
+ *  error the Correction records. */
+interface ChromeSubject {
+  name: string;
+  design: string;
+  live: string;
+  /** Which of the artifact's two zone-2 panels draws it. */
+  panel: "active" | "shipped" | "both";
+  /** The artifact's rule fixes both sides of this box, so its aspect is a
+   *  design figure and not the board's data. */
+  fixedBox: boolean;
+  /** Set ONLY where the two sides are MEASURED to differ on radius and this
+   *  CR did not rule on it. The reason is printed with the run's readings, so
+   *  the exception is a stated measurement and never a silent gap. */
+  radiusExempt: string;
+}
+
+const AC27_CHROME: ChromeSubject[] = [
+  {
+    name: "the spine's terminal",
+    design: ".term",
+    live: '[data-testid="roadmap-flow-terminal"]',
+    panel: "both",
+    fixedBox: true,
+    radiusExempt: "",
+  },
+  {
+    name: "the connector",
+    design: ".arrow",
+    live: '[data-testid="roadmap-flow-connector"]',
+    panel: "both",
+    fixedBox: true,
+    radiusExempt: "",
+  },
+  {
+    name: "the wave box",
+    design: ".wave",
+    live: '[data-testid="roadmap-wave"]',
+    panel: "active",
+    fixedBox: false,
+    radiusExempt: "",
+  },
+  {
+    name: "a CR row",
+    design: ".wave .cr",
+    live: '[data-testid="roadmap-node"]',
+    panel: "active",
+    fixedBox: false,
+    radiusExempt: "",
+  },
+  {
+    name: "the delivered summary",
+    design: ".delivered",
+    live: '[data-testid="roadmap-delivered"]',
+    panel: "shipped",
+    fixedBox: false,
+    radiusExempt: "",
+  },
+  {
+    name: "the gate COLUMN",
+    design: ".gatecol",
+    live: '[data-testid="roadmap-flow-gate"]',
+    panel: "both",
+    fixedBox: false,
+    radiusExempt: "",
+  },
+  {
+    name: "the gate's diamond",
+    design: ".gatecol .gate",
+    live: ".app-flow-gate-version",
+    panel: "both",
+    fixedBox: true,
+    // MEASURED, both sides, in this same Chromium: the artifact's diamond
+    // reports `0px` and the app's reports `2px`. That 2px is CR-CRU-078's own
+    // shipped rule (`.app-strip-gate-version, .app-flow-gate-version`), shared
+    // with zone 1's strip gate, and CR-CRU-103 rules on the delivered card and
+    // the terminals only — §S4 widens AC27's comparison, it does not
+    // re-decide a shipped shape. Recorded here rather than dropped, so the one
+    // property this widening cannot assert is a stated reading with its two
+    // figures in it.
+    radiusExempt: "the artifact's diamond renders 0px and the app's 2px — CR-CRU-078's shipped rule",
+  },
+];
+
+const artifactChrome = async (
+  panel: "active" | "shipped",
+  subjects: ChromeSubject[],
+): Promise<Record<string, Chromed> | null> => {
+  await openWide(artifactUrl);
+  const selectors: Record<string, string> = {};
+  for (const subject of subjects) selectors[subject.name] = subject.design;
+  return await readWide<Record<string, Chromed> | null>(
+    `(() => {
+       ${ARTIFACT_FLOWS}
+       ${CHROME_FN}
+       const flows = __artifactFlows();
+       const flow = flows.find((f) => ${JSON.stringify(panel)} === "shipped"
+         ? f.querySelector(".delivered") !== null
+         : f.querySelector(".wave") !== null);
+       return flow === undefined || flow === null
+         ? null : __chrome(flow, ${JSON.stringify(selectors)});
+     })()`,
+  );
+};
+
+const liveChrome = async (
+  url: string,
+  subjects: ChromeSubject[],
+): Promise<Record<string, Chromed>> => {
+  await openWide(url);
+  const selectors: Record<string, string> = {};
+  for (const subject of subjects) selectors[subject.name] = subject.live;
+  return await readWide<Record<string, Chromed>>(
+    `(() => {
+       ${CHROME_FN}
+       return __chrome(document.querySelector('[data-zone="2"]'), ${JSON.stringify(selectors)});
+     })()`,
+  );
+};
 
 describe("CR-CRU-096 AC27 — zone 2 rendered against the live board matches the artifact's panels", () => {
   test("the artifact's own zone-2 panels are readable and horizontal", async () => {
@@ -4078,6 +4303,105 @@ describe("CR-CRU-096 AC27 — zone 2 rendered against the live board matches the
       expect(summary).toMatch(/waves? /);
       expect(summary.toLowerCase()).toContain("shipped");
     }
+  });
+
+  test("AC6 — and on CHROME and GEOMETRY: border width, radius, min-width and box aspect", async () => {
+    expect(artifactFailure).toBe("");
+    const reported: string[] = [];
+    for (const [panel, url] of [
+      ["active", singleFixtureUrl],
+      ["shipped", shippedFixtureUrl],
+    ] as const) {
+      const subjects = AC27_CHROME.filter(
+        (subject) => subject.panel === panel || subject.panel === "both",
+      );
+      const designSide = await artifactChrome(panel, subjects);
+      expect(
+        designSide,
+        `the artifact draws no zone-2 ${panel} panel, so §S4's comparison has no source`,
+      ).not.toBeNull();
+      const liveSide = await liveChrome(url, subjects);
+
+      // NON-VACUITY, before a single comparison is made: the artifact's own
+      // panel really does report a border, a radius and a min-width across
+      // these components. Without this the whole block could be four
+      // properties agreeing at zero — which is exactly how a comparison that
+      // reads nothing passes.
+      expect(
+        subjects.some((subject) => (designSide![subject.name]?.borderTopWidth ?? 0) > 0),
+        `no component of the artifact's ${panel} panel reports a border, so comparing border ` +
+          `width proves nothing`,
+      ).toBe(true);
+      expect(
+        subjects.some((subject) => (designSide![subject.name]?.radius ?? 0) > 0),
+        `no component of the artifact's ${panel} panel reports a radius`,
+      ).toBe(true);
+      expect(
+        subjects.some((subject) => (designSide![subject.name]?.minWidth ?? 0) > 0),
+        `no component of the artifact's ${panel} panel declares a min-width`,
+      ).toBe(true);
+
+      for (const subject of subjects) {
+        const source = designSide![subject.name]!;
+        const drawn = liveSide[subject.name]!;
+        const where = `${panel} panel — ${subject.name} (artifact \`${subject.design}\`, live \`${subject.live}\`)`;
+        expect(
+          source.found,
+          `${where}: the ARTIFACT draws none, so this component has no design source`,
+        ).toBeGreaterThan(0);
+        expect(
+          drawn.found,
+          `${where}: the artifact draws ${source.found} and the live board draws none`,
+        ).toBeGreaterThan(0);
+
+        expect(
+          round1(drawn.borderTopWidth),
+          `${where}: renders a ${round1(drawn.borderTopWidth)}px border where the design's own ` +
+            `renders ${round1(source.borderTopWidth)}px`,
+        ).toBe(round1(source.borderTopWidth));
+
+        if (subject.radiusExempt === "") {
+          expect(
+            round1(drawn.radius),
+            `${where}: renders a ${round1(drawn.radius)}px corner radius against the design's ` +
+              `${round1(source.radius)}px`,
+          ).toBe(round1(source.radius));
+        }
+
+        expect(
+          round1(drawn.minWidth),
+          `${where}: declares a ${round1(drawn.minWidth)}px min-width against the design's own ` +
+            `rule at ${round1(source.minWidth)}px` +
+            (source.inlineMinWidth === ""
+              ? ""
+              : ` (the mock's panel overrides it inline to ${source.inlineMinWidth}, which is ` +
+                `that board's composition and is stripped before the rule is read)`),
+        ).toBe(round1(source.minWidth));
+
+        if (subject.fixedBox) {
+          // The reading a lozenge fails: the design fixes both sides of this
+          // box, so its width-to-height ratio is a design figure. A 56×22
+          // terminal reports 2.55 against the artifact's 1.00 and no
+          // structural comparison above can see it.
+          expect(
+            Math.abs(drawn.aspect - source.aspect) <= 0.02,
+            `${where}: measures ${round1(drawn.width)}×${round1(drawn.height)} — aspect ` +
+              `${drawn.aspect.toFixed(2)} against the design's ${round1(source.width)}×` +
+              `${round1(source.height)}, aspect ${source.aspect.toFixed(2)}`,
+          ).toBe(true);
+        }
+
+        reported.push(
+          `${panel}/${subject.name}: border ${round1(drawn.borderTopWidth)}px vs ` +
+            `${round1(source.borderTopWidth)}px, radius ${round1(drawn.radius)}px vs ` +
+            `${round1(source.radius)}px${subject.radiusExempt === "" ? "" : ` [NOT ASSERTED: ${subject.radiusExempt}]`}` +
+            `, min-width ${round1(drawn.minWidth)}px vs ${round1(source.minWidth)}px` +
+            `, aspect ${drawn.aspect.toFixed(2)} vs ${source.aspect.toFixed(2)}` +
+            `${subject.fixedBox ? "" : " [aspect NOT ASSERTED: content-sized on both sides]"}`,
+        );
+      }
+    }
+    console.log(`[cr103] AC6 — AC27's widened comparison:\n  ${reported.join("\n  ")}`);
   });
 });
 
@@ -4747,5 +5071,197 @@ describe("CR-CRU-103 AC3a — the LIVE board corroborates the card, or says why 
         `${headline.fontSize}px, terminals ${round1(terminals[0]!.width)}x` +
         `${round1(terminals[0]!.height)} — measured on ${JSON.stringify(headline.text)}`,
     );
+  });
+});
+
+// ── CR-CRU-103 AC9 — the type scale is PINNED, because it already matches ──
+//
+// This CR was FILED with a wrong divergence table claiming the roadmap's whole
+// type scale had collapsed to sans 15px. It had not. The reading was taken on
+// the flex WRAPPERS — `.app-flow-node`, the wave's `<h4>`, zone 3's row and
+// its status CELL — every one of which inherits the shell's `--sans 15px`
+// (12.5px in zone 3's row), while the styled LEAF inside each carries the mono
+// rule the design asks for. The Correction re-measured the seven rows on the
+// correct elements and found the design's scale already implemented.
+//
+// So this guard exists to stop a future cycle "fixing" a scale that matches:
+// it pins the Correction's own seven rows as UNCHANGED, and it pins them ON
+// THE LEAVES. Every row below also measures the WRAPPER the wrong reading
+// took and REQUIRES the two to disagree — that is what proves a leaf was
+// measured, and it is the one assertion my own wrong table would have failed.
+//
+// Family is asserted as a CLASS against the app's own `--mono` token (the
+// user's standing ruling), never as a font name. Sizes are the Correction's
+// LIVE column, verbatim: they are the shipped figures, and pinning them is
+// the whole point.
+//
+// The suite carried ZERO `fontSize`/`fontFamily` assertions before CR-CRU-103,
+// so this is new coverage rather than a second statement of C1's AC2, which
+// reads the delivered card's own two leaves and nothing else.
+
+/** One row of the Correction's table, as the LEAF that carries it. */
+interface ScaleRow {
+  /** The Correction's own row, quoted, so a failure names the table entry. */
+  row: string;
+  leaf: string;
+  /** The flex wrapper the WRONG reading measured. Required to disagree. */
+  wrapper: string;
+  fontSize: number;
+  /** Stated only where the Correction's table states it beside the size. */
+  textTransform?: string;
+  textAlign?: string;
+  borderTopWidth?: number;
+  radius?: number;
+}
+
+const TYPE_SCALE: ScaleRow[] = [
+  {
+    row: "CR row (`.cr`, `:76`) — mono 11px",
+    leaf: '[data-zone="2"] [data-testid="roadmap-node"] .app-flow-node-cr',
+    wrapper: '[data-zone="2"] [data-testid="roadmap-node"]',
+    fontSize: 11,
+  },
+  {
+    row: "wave header (`.wave h4`, `:72`) — mono 10px uppercase",
+    leaf: '[data-zone="2"] .app-flow-wave-label',
+    wrapper: '[data-zone="2"] [data-testid="roadmap-wave-header"]',
+    fontSize: 10,
+    textTransform: "uppercase",
+  },
+  {
+    row: "row annotation (`.cr .t`, `:81`) — `.app-flow-node-status` 10px",
+    leaf: '[data-zone="2"] [data-testid="roadmap-node-status"]',
+    wrapper: '[data-zone="2"] [data-testid="roadmap-node"]',
+    fontSize: 10,
+  },
+  {
+    row: "row annotation (`.cr .t`, `:81`) — `.app-flow-node-annotation` 9.5px",
+    leaf: '[data-zone="2"] [data-testid="roadmap-node-annotation"]',
+    wrapper: '[data-zone="2"] [data-testid="roadmap-node"]',
+    fontSize: 9.5,
+  },
+  {
+    row: "roll-up (`.wsum`) — mono 9.5px",
+    leaf: '[data-zone="2"] [data-testid="roadmap-wave-rollup"]',
+    wrapper: '[data-zone="2"] [data-testid="roadmap-wave"]',
+    fontSize: 9.5,
+  },
+  {
+    row: "pointer (`.more`, `:120`) — mono 9.5px centred",
+    leaf: '[data-zone="2"] [data-testid="roadmap-wave-more"]',
+    wrapper: '[data-zone="2"] .app-flow-wave-body',
+    fontSize: 9.5,
+    textAlign: "center",
+  },
+  {
+    // The wrapper here is not merely an ancestor, it is a NAME COLLISION: the
+    // column CELL carries `app-roadmap-status` too, and only
+    // `.app-badge.app-roadmap-status` carries the rule. A guard keyed on the
+    // class alone would measure the cell — 12.5px sans — and report the
+    // collapse this CR was filed with.
+    row: "status pill (`.st`, `:100`) — mono 10px, border 1px, radius 999px",
+    leaf: '[data-zone="3"] [data-testid="roadmap-status-badge"]',
+    wrapper: '[data-zone="3"] .app-roadmap-cell.app-roadmap-status',
+    fontSize: 10,
+    borderTopWidth: 1,
+    radius: 999,
+  },
+  {
+    row: "zone 3 cells (`td.mono`, `:97`) — mono 11.5px",
+    leaf: '[data-zone="3"] [data-testid="roadmap-row"] .app-roadmap-cr',
+    wrapper: '[data-zone="3"] [data-testid="roadmap-row"]',
+    fontSize: 11.5,
+  },
+];
+
+describe("CR-CRU-103 AC9 — the type scale the Correction re-measured is PINNED", () => {
+  test("AC9 — the Correction's seven rows render UNCHANGED, measured on the styled LEAVES", async () => {
+    await openWide(singleFixtureUrl);
+    const mono = await tokenFamily("--mono");
+    const sans = await tokenFamily("--sans");
+    expect(mono, "the app declares no --mono token").not.toBe("");
+    expect(sans, "the app declares no --sans token").not.toBe("");
+    // Non-vacuity of the family channel: the app's two tokens really are two
+    // different CLASSES, so "monospace" below is a reading and not a tautology.
+    expect(familyClass(mono), "the app's --mono token is not a monospace stack").toBe("monospace");
+    expect(familyClass(sans), "the app's --sans token is not a sans stack").toBe("sans-serif");
+
+    const reported: string[] = [];
+    for (const row of TYPE_SCALE) {
+      const leaves = await boxesOf(row.leaf);
+      expect(
+        leaves.length,
+        `${row.row}: the board draws no \`${row.leaf}\`, so the row is not measured at all`,
+      ).toBeGreaterThan(0);
+      const wrappers = await boxesOf(row.wrapper);
+      expect(
+        wrappers.length,
+        `${row.row}: the board draws no \`${row.wrapper}\`, so the wrapper counter-reading is ` +
+          `unavailable and nothing proves a LEAF was measured`,
+      ).toBeGreaterThan(0);
+      const wrapper = wrappers[0]!;
+
+      for (const leaf of leaves) {
+        expect(
+          leaf.fontSize,
+          `${row.row}: \`${row.leaf}\` renders at ${leaf.fontSize}px — the Correction measured ` +
+            `${row.fontSize}px and this CR changes no type scale`,
+        ).toBe(row.fontSize);
+        expect(
+          leaf.fontFamily,
+          `${row.row}: \`${row.leaf}\` renders in a family that is not the app's own --mono ` +
+            `token (${leaf.fontFamily})`,
+        ).toBe(mono);
+        expect(
+          familyClass(leaf.fontFamily),
+          `${row.row}: \`${row.leaf}\` resolves to the ${familyClass(leaf.fontFamily)} class`,
+        ).toBe("monospace");
+        if (row.textTransform !== undefined) {
+          expect(
+            leaf.textTransform,
+            `${row.row}: \`${row.leaf}\` renders ${leaf.textTransform}, not ${row.textTransform}`,
+          ).toBe(row.textTransform);
+        }
+        if (row.textAlign !== undefined) {
+          expect(
+            leaf.textAlign,
+            `${row.row}: \`${row.leaf}\` aligns ${leaf.textAlign}, not ${row.textAlign}`,
+          ).toBe(row.textAlign);
+        }
+        if (row.borderTopWidth !== undefined) {
+          expect(
+            round1(leaf.borderTopWidth),
+            `${row.row}: \`${row.leaf}\` draws a ${round1(leaf.borderTopWidth)}px border`,
+          ).toBe(row.borderTopWidth);
+        }
+        if (row.radius !== undefined) {
+          expect(
+            round1(leaf.radius),
+            `${row.row}: \`${row.leaf}\` draws a ${round1(leaf.radius)}px radius`,
+          ).toBe(row.radius);
+        }
+      }
+
+      // THE READING THIS GUARD IS FOR. The wrapper the wrong table measured
+      // does NOT carry the leaf's size — so a size read off it is a fact about
+      // the shell's inherited sans and never about the roadmap's scale. If
+      // these two ever agree, the leaf under test has stopped being a leaf and
+      // every pin above is measuring the wrapper again.
+      expect(
+        wrapper.fontSize !== leaves[0]!.fontSize,
+        `${row.row}: the wrapper \`${row.wrapper}\` renders at ${wrapper.fontSize}px and the ` +
+          `leaf \`${row.leaf}\` at ${leaves[0]!.fontSize}px — they AGREE, so this row no longer ` +
+          `proves it measured the styled leaf rather than the flex wrapper, which is the ` +
+          `measurement error this CR was filed with`,
+      ).toBe(true);
+
+      reported.push(
+        `${row.row} → leaf ${leaves[0]!.fontSize}px ${familyClass(leaves[0]!.fontFamily)} ` +
+          `(n=${leaves.length}), wrapper \`${row.wrapper}\` ${wrapper.fontSize}px ` +
+          `${familyClass(wrapper.fontFamily)}`,
+      );
+    }
+    expect(reported.length).toBe(TYPE_SCALE.length);
+    console.log(`[cr103] AC9 — the type scale, on its leaves:\n  ${reported.join("\n  ")}`);
   });
 });
