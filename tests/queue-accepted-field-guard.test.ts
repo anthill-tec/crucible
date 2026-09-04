@@ -422,6 +422,29 @@ function propertiesNamed(span: string, key: string): Property[] {
   return found;
 }
 
+// WHERE `key` is a property of the object handed to the writer, as spans over
+// `handlerCode`: one site per pushed literal that names it. The two mutations
+// below share this walk rather than each carrying its own — two bodies
+// differing by one character is the CR-CRU-096 defect shape.
+function forwardingSites(handlerCode: string, key: string): Span[] {
+  const block = handlerBlock(jsLiveCode(handlerCode));
+  const sink = writerSink(block.body);
+  const sites: Span[] = [];
+  for (const [start, end] of pushedObjects(block.body, sink)) {
+    for (const property of propertiesNamed(block.body.slice(start, end), key)) {
+      sites.push([block.start + start + property.start, block.start + start + property.end]);
+    }
+  }
+  if (sites.length === 0) {
+    throw new Error(
+      `\`${key}\` is not a property of the object ${HANDLER_NAME} (${HANDLER_FILE}) hands to ` +
+        `\`${HANDLER_ANCHOR}\`, so there is no forwarding of it to mutate — the field these ` +
+        `mutations exist to drop is already dropped`,
+    );
+  }
+  return sites;
+}
+
 // Removes `key` as a PROPERTY of the object handed to the writer, and nothing
 // else: every validation of it, every local binding of it and every other
 // property stay exactly where they were. This is §S3's mutation — the
@@ -430,24 +453,40 @@ function propertiesNamed(span: string, key: string): Property[] {
 // that ships. Offset-safe because the live-code projection the spans are
 // found in is byte-for-byte as long as the file it came from.
 function withoutForwardingOf(handlerCode: string, key: string): string {
-  const block = handlerBlock(jsLiveCode(handlerCode));
-  const sink = writerSink(block.body);
-  const cuts: Span[] = [];
-  for (const [start, end] of pushedObjects(block.body, sink)) {
-    for (const property of propertiesNamed(block.body.slice(start, end), key)) {
-      cuts.push([block.start + start + property.start, block.start + start + property.end]);
-    }
-  }
-  if (cuts.length === 0) {
-    throw new Error(
-      `\`${key}\` is not a property of the object ${HANDLER_NAME} (${HANDLER_FILE}) hands to ` +
-        `\`${HANDLER_ANCHOR}\`, so there is no forwarding of it to delete — the field this ` +
-        `mutation exists to drop is already dropped`,
-    );
-  }
   let mutated = handlerCode;
-  for (const [start, end] of [...cuts].reverse()) {
+  for (const [start, end] of [...forwardingSites(handlerCode, key)].reverse()) {
     mutated = mutated.slice(0, start) + mutated.slice(end);
+  }
+  return mutated;
+}
+
+// The wrapper the mutation below nests a forwarding under. Its own name, and
+// no key any interface declares, so the row it builds carries the declared
+// key at no depth the store can read.
+const NESTED_UNDER = "meta";
+
+// Moves `key`'s forwarding one literal DEEPER — `{ release }` becomes
+// `{ meta: { release } }` — and changes nothing else. This is AC11's
+// mutation: the field is still read, still named at property position, still
+// traced to its dereference, and `replaceQueue` stores NOTHING under that
+// name, because a row's `release` is a property of the row and not of some
+// object inside it. It is the plausible refactor, not a contrived one: this
+// CR's own vocabulary groups the pair (`MembershipDeclaration { release,
+// track }`), so `membership: { release, track }` inside the pushed literal is
+// the shape a future reader would reach for.
+function withNestedForwardingOf(handlerCode: string, key: string): string {
+  let mutated = handlerCode;
+  for (const [start, end] of [...forwardingSites(handlerCode, key)].reverse()) {
+    const site = handlerCode.slice(start, end);
+    // The trailing comma, when the property carried one, belongs to the
+    // WRAPPER: it separates the row's properties, not the nested one's.
+    const comma = site.endsWith(",");
+    const property = comma ? site.slice(0, -1) : site;
+    mutated =
+      mutated.slice(0, start) +
+      ` ${NESTED_UNDER}: {${property} }` +
+      (comma ? "," : "") +
+      mutated.slice(end);
   }
   return mutated;
 }
@@ -833,6 +872,34 @@ describe("CR-CRU-099 §S2/AC5 + CR-CRU-104 §S3/AC8 — the bulk queue route STO
       expect(finding!.message).toContain("`track`");
       expect(finding!.message).toContain(HANDLER_NAME);
       expect(finding!.message).toContain(HANDLER_ANCHOR);
+    },
+  );
+
+  test(
+    "CR-CRU-104 §S3/AC11 sensitivity, key by key — NESTING a declared key's forwarding one " +
+      "literal deeper (`{ meta: { release } }`) adds exactly that key to this guard's findings: " +
+      "what is enforced is a property of the ROW, not a property NAME somewhere inside the pushed " +
+      "span, because `replaceQueue` stores nothing under a name it never sees at the top",
+    () => {
+      const keys = declaredKeys(jsLiveCode(typeCode)).map((declared) => declared.key);
+      // The same DELTA form as the two sensitivity claims above.
+      const baseline = unforwardedAcceptedFields(typeCode, handlerCode).map((f) => f.key);
+      const caught: Record<string, string[]> = {};
+      const expected: Record<string, string[]> = {};
+      for (const key of keys) {
+        caught[key] = unforwardedAcceptedFields(
+          typeCode,
+          withNestedForwardingOf(handlerCode, key),
+        ).map((f) => f.key);
+        expected[key] = keys.filter((k) => k === key || baseline.includes(k));
+      }
+      expect(caught).toEqual(expected);
+      // And it is the FORWARD half that reports it: the field is still read,
+      // still at property position, still traced to its dereference — the
+      // only thing that changed is the depth at which the row carries it.
+      const nested = withNestedForwardingOf(handlerCode, "release");
+      const finding = unforwardedAcceptedFields(typeCode, nested).find((f) => f.key === "release");
+      expect(finding?.stage).toBe("forward");
     },
   );
 });

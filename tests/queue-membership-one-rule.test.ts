@@ -100,6 +100,13 @@ function unproposedHelp(release: string): string[] {
   ];
 }
 
+/** CR-CRU-091 §S8's TYPE refusal, as `cr-plan` has answered it since that CR
+ *  shipped: one sentence for a missing, non-string or empty `release`. Pinned
+ *  ONCE here because AC3/AC5 require the migration door — which coerced a
+ *  non-string with `String()` and stored the result — to answer this meaning
+ *  in its own field+index shape rather than a third wording of it. */
+const RELEASE_REQUIRED = "`release` is required — the release this cr targets";
+
 /** CR-CRU-099 §S1/AC4a — the lane rule's tail, shared verbatim by the bulk
  *  post's indexed refusal, `wave-sequence`'s field refusal and
  *  `replaceQueue`'s own guard. The PREFIXES differ (§S1: each route keeps its
@@ -377,18 +384,44 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
   // same way, and the ANSWERS are compared as one object. What is compared:
   // the status, the refusal's MEANING (each route's own positional prefix
   // stripped — that prefix is the shape §S1 lets each door keep), the help[],
-  // every warning, the row the write left, and the whole board after it.
+  // every warning, whether the door reported writing nothing, the
+  // `unknownDependencies` it published, the row the write left, and EVERY row
+  // of the board after it with its `seq`, `release` and `track` — not just
+  // which crs survived, which is all this table compared until AC11: a door
+  // that answered identically about the row under test while re-slotting or
+  // re-labelling its neighbours passed.
+  //
+  // What it still does NOT compare, and why: the response BODY beyond those
+  // fields (each door publishes its own shape — the bulk post returns the
+  // whole `entries` list, `cr-plan` the single `entry`, and comparing the
+  // envelopes would compare shapes §S1 lets them keep), the `status` string
+  // and `dependsOn` of each row (no membership rule writes either), and
+  // `lifecycle`, which only the bulk door can declare.
   //
   // Track and lifecycle are NOT in this table: `cr-plan` cannot express them,
   // so their parity is between the bulk post and `wave-sequence` and is
   // asserted in its own test below.
 
-  /** One membership declaration, in the terms BOTH routes accept. */
+  /** One membership declaration, in the terms BOTH routes accept.
+   *
+   *  `release` is `unknown` rather than `string` because the TYPE of a
+   *  declared label is itself a parity question: the migration door coerced
+   *  with `String()` what `cr-plan` type-refuses, and a table typed `string`
+   *  cannot express the input that measured the divergence. */
   interface Declaration {
     cr: string;
-    release: string;
+    release: unknown;
     wave: string;
     title: string;
+  }
+
+  /** One row of the board, as the comparison reads it: the cr AND the three
+   *  values a declaration writes. The board used to be compared as a list of
+   *  crs, which left every OTHER row's `seq`, `release` and `track` outside
+   *  the comparison — a door that answered identically about the row under
+   *  test while re-slotting or re-labelling its neighbours would have passed. */
+  function rowOf(entry: QueueEntryWire): string {
+    return `${entry.cr}|${entry.seq}|${entry.release ?? ""}|${entry.track ?? ""}`;
   }
 
   /** The comparable half of a route's reply, plus what it left on the board. */
@@ -397,6 +430,9 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
     meaning: string | undefined;
     help: string[] | undefined;
     warnings: string[];
+    /** The no-op fact: did the door report writing nothing? */
+    converged: boolean;
+    unknownDependencies: string[];
     stored: { release: string | null; seq: number; wave: string; title: string | null } | undefined;
     board: string[];
   }
@@ -418,6 +454,14 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
       warnings: (res.body.warnings ?? [])
         .map((w) => `${w.code}|${w.message}|${(w.crs ?? []).join(",")}`)
         .sort(),
+      // Compared as the BOOLEAN FACT, not as the field: `cr-plan` publishes
+      // `converged` and the full-replace door has no per-CR convergence to
+      // publish, so an absent one reads as "this door wrote". A scenario that
+      // re-declared IDENTICAL values would part the two here, and that is the
+      // upsert-vs-full-replace difference §S1 lets each door keep, not a
+      // membership rule forking.
+      converged: res.body.converged === true,
+      unknownDependencies: [...(res.body.unknownDependencies ?? [])].sort(),
       stored:
         row === undefined
           ? undefined
@@ -427,7 +471,7 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
               wave: row.wave,
               title: row.title ?? null,
             },
-      board: board.map((entry) => entry.cr).sort(),
+      board: board.map(rowOf).sort(),
     };
   }
 
@@ -497,8 +541,57 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
         meaning: unproposedSentence("0.9.0"),
         help: unproposedHelp("0.9.0"),
         warnings: [],
+        converged: false,
+        unknownDependencies: [],
         stored: undefined,
-        board: ["CR-104-HELD"],
+        board: ["CR-104-HELD|5001||"],
+      },
+    },
+    {
+      name:
+        "AC3/AC5 — a NON-STRING release: REFUSED 400 by both with `cr-plan`'s own sentence, and " +
+        "nothing written. The migration door coerced it with `String()` and stored the label the " +
+        "coercion produced — membership the per-CR verb type-refuses, which is this CR's thesis " +
+        "in one line. The board even HOLDS a proposal for the coerced label, so the only thing " +
+        "wrong with the declaration is its type",
+      board: async (key) => {
+        await propose(key, "2");
+        expect([200, 202]).toContain(
+          (await bulk(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }])).status,
+        );
+      },
+      declaration: { cr: "CR-104-NEW", release: 2, wave: "5", title: "a coerced label" },
+      expected: {
+        status: 400,
+        meaning: RELEASE_REQUIRED,
+        help: undefined,
+        warnings: [],
+        converged: false,
+        unknownDependencies: [],
+        stored: undefined,
+        board: ["CR-104-HELD|5001||"],
+      },
+    },
+    {
+      name:
+        "AC3/AC5 — an EMPTY release is the same refusal, not a 404 about a proposal nobody could " +
+        "hold: `cr-plan` refuses the empty string by type, and the migration door used to carry it " +
+        "as far as the live-proposal gate and answer 404 `release  has no live proposal`",
+      board: async (key) => {
+        expect([200, 202]).toContain(
+          (await bulk(key, [{ cr: "CR-104-HELD", wave: "5", dependsOn: [] }])).status,
+        );
+      },
+      declaration: { cr: "CR-104-NEW", release: "", wave: "5", title: "no label at all" },
+      expected: {
+        status: 400,
+        meaning: RELEASE_REQUIRED,
+        help: undefined,
+        warnings: [],
+        converged: false,
+        unknownDependencies: [],
+        stored: undefined,
+        board: ["CR-104-HELD|5001||"],
       },
     },
     {
@@ -512,8 +605,10 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
         meaning: undefined,
         help: undefined,
         warnings: [],
+        converged: false,
+        unknownDependencies: [],
         stored: { release: "0.2.0", seq: 5001, wave: "5", title: "a real target" },
-        board: ["CR-104-NEW"],
+        board: ["CR-104-NEW|5001|0.2.0|"],
       },
     },
     {
@@ -538,8 +633,10 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
         meaning: undefined,
         help: undefined,
         warnings: [`defaulted-seq|${defaultedSeqMessage(["CR-104-NEW"])}|CR-104-NEW`],
+        converged: false,
+        unknownDependencies: [],
         stored: { release: "0.2.0", seq: 5002, wave: "5", title: "unauthored position" },
-        board: ["CR-104-AU", "CR-104-NEW", "CR-104-W6"],
+        board: ["CR-104-AU|5001|0.2.0|", "CR-104-NEW|5002|0.2.0|", "CR-104-W6|2|0.2.0|"],
       },
     },
     {
@@ -563,8 +660,10 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
         meaning: undefined,
         help: undefined,
         warnings: [],
+        converged: false,
+        unknownDependencies: [],
         stored: { release: "0.2.0", seq: 5002, wave: "5", title: "in scale" },
-        board: ["CR-104-NEW", "CR-104-S5", "CR-104-S6"],
+        board: ["CR-104-NEW|5002|0.2.0|", "CR-104-S5|5001|0.2.0|", "CR-104-S6|6001|0.2.0|"],
       },
     },
     {
@@ -587,8 +686,10 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
         meaning: undefined,
         help: undefined,
         warnings: [`defaulted-seq|${defaultedSeqMessage(["CR-104-NEW"])}|CR-104-NEW`],
+        converged: false,
+        unknownDependencies: [],
         stored: { release: "0.2.0", seq: 5001, wave: "5", title: "beside a positional" },
-        board: ["CR-104-NEW", "CR-104-P"],
+        board: ["CR-104-NEW|5001|0.2.0|", "CR-104-P|10|0.2.0|"],
       },
     },
   ];
@@ -762,8 +863,10 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
 
   test(
     "AC5 `cr-plan`'s and `wave-sequence`'s shipped refusals are unchanged: the unproposed-release " +
-      "404 keeps CR-CRU-091 §S8's sentence and help[] byte-for-byte, and `wave-sequence`'s track " +
-      "refusal keeps CR-CRU-091 §S2/AC17's field-shaped wording",
+      "404 keeps CR-CRU-091 §S8's sentence and help[] byte-for-byte, `cr-plan`'s TYPE refusal of a " +
+      "non-string release keeps its own — the sentence the migration door now answers too, so " +
+      "closing that divergence moved the second door and not this one — and `wave-sequence`'s " +
+      "track refusal keeps CR-CRU-091 §S2/AC17's field-shaped wording",
     async () => {
       boot();
       const key = await seed("cru104-ac5-wordings");
@@ -777,6 +880,19 @@ describe("CR-CRU-104 §S1/§S2 — one membership rule, two entry points", () =>
       expect(planned.status).toBe(404);
       expect(planned.body.error).toBe(unproposedSentence("0.9.0"));
       expect(planned.body.help).toEqual(unproposedHelp("0.9.0"));
+
+      // The input P2-b measured: a JSON NUMBER where a label belongs.
+      // `cr-plan` type-refuses it, help-less, and that answer does not move.
+      const numeric = await post(planPath(key), {
+        agentId: ORCH,
+        cr: "CR-104-W",
+        release: 2,
+        wave: "5",
+        title: "a coerced label",
+      });
+      expect(numeric.status).toBe(400);
+      expect(numeric.body.error).toBe(RELEASE_REQUIRED);
+      expect(numeric.body.help).toBeUndefined();
 
       await propose(key, "0.2.0");
       const sequenced = await post(sequencePath(key), {
