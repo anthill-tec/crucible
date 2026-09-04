@@ -348,6 +348,16 @@ export function normalizeTrack(value: string): string | null {
 }
 
 /**
+ * CR-CRU-104 §S1 — the lane rule itself, as ONE string. Every refusal of a
+ * value `normalizeTrack` rejects cites it: `replaceQueue`'s pre-transaction
+ * guard below, the bulk post's indexed refusal and `wave-sequence`'s
+ * field refusal (`src/v2.ts`). The three PREFIXES differ because each route
+ * keeps its own shape; the rule they cite may not fork.
+ */
+export const TRACK_LANE_RULE =
+  `tracks are numbered lanes (wire format track-<n>), so declare e.g. 2, track-2 or "Track 2"`;
+
+/**
  * CR-CRU-091 §S1 — order two release labels by VERSION: numeric-component
  * compare, so `0.10.0` sorts AFTER `0.3.0` (a plain string compare puts it
  * before, which is the bug this exists to avoid).
@@ -3526,8 +3536,8 @@ export class Store {
       const normalized = normalizeTrack(entry.track);
       if (normalized === null) {
         throw new Error(
-          `queue entry ${entry.cr}: track "${entry.track}" carries no lane number — tracks are ` +
-            `numbered lanes (wire format track-<n>), so declare e.g. 2, track-2 or "Track 2"`,
+          `queue entry ${entry.cr}: track "${entry.track}" carries no lane number — ` +
+            TRACK_LANE_RULE,
         );
       }
       tracks.set(entry.cr, normalized);

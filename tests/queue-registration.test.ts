@@ -330,6 +330,20 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
     return postJson(queuePath(key), { agentId: ORCH, entries });
   }
 
+  /** CR-CRU-104 AC1/AC12 — a DECLARED release must hold a LIVE PROPOSAL, on
+   *  this route exactly as on `cr-plan` (CR-CRU-091 §S8). Every fixture below
+   *  that declares one therefore proposes the label first: a fixture gaining a
+   *  PRECONDITION leaves what its assertions measure untouched, and none of
+   *  them was ever about an unproposed target — the release-LESS fixtures
+   *  (AC6, AC9's bootstrap half) keep no proposal, which is their subject. */
+  async function propose(key: string, label: string): Promise<void> {
+    const res = await postJson(`/api/v2/projects/${key}/release-proposals`, {
+      agentId: ORCH,
+      label,
+    });
+    expect(res.status).toBe(200);
+  }
+
   async function getQueue(key: string): Promise<QueueGetResponse> {
     const res = await getJson(queuePath(key));
     expect(res.status).toBe(200);
@@ -1249,6 +1263,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
       async () => {
         handle = boot();
         const key = await createProject("queue-099-release-stored");
+        await propose(key, RELEASE);
         const res = await postQueue(key, [
           { cr: "CR-Q99-A", title: "Graph CR", wave: "5", dependsOn: [], release: RELEASE },
         ]);
@@ -1272,6 +1287,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
       async () => {
         handle = boot();
         const key = await createProject("queue-099-release-membership");
+        await propose(key, RELEASE);
         expect([200, 202]).toContain(
           (
             await postQueue(key, [
@@ -1310,6 +1326,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
       async () => {
         handle = boot();
         const key = await createProject("queue-099-every-declared-key");
+        await propose(key, RELEASE);
         // `at` is epoch MILLISECONDS — the unit `QueueLifecycle` declares
         // (src/types.ts:360-363).
         const lifecycle = { state: "VOID", reason: "folded into CR-Q99-A", at: 1_787_149_125_000 };
@@ -1496,6 +1513,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
       async () => {
         handle = boot();
         const key = await createProject("queue-099-defaulted-and-release-bearing");
+        await propose(key, RELEASE);
         expect([200, 202]).toContain(
           (
             await postQueue(key, [
@@ -1535,6 +1553,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
       async () => {
         handle = boot();
         const key = await createProject("queue-099-release-bearing-wave-axis");
+        await propose(key, RELEASE);
         // Legacy positional `62` in wave 6's terms is wave 5's out-of-block
         // value here: held, carried forward, and not counted toward the slot.
         expect([200, 202]).toContain(
@@ -1589,6 +1608,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
       async () => {
         handle = boot();
         const key = await createProject("queue-099-release-axis");
+        await propose(key, RELEASE);
         // CR-CRU-095 AC9's fixture, reached through the BULK route: release
         // 0.2.0 with wave 5 authored (5001+) and a wave-6 row of the SAME
         // release holding positional seq 2.
@@ -1631,6 +1651,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
       async () => {
         handle = boot();
         const key = await createProject("queue-099-release-axis-one-scale");
+        await propose(key, RELEASE);
         expect([200, 202]).toContain(
           (
             await postQueue(key, [
@@ -1663,6 +1684,7 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
       async () => {
         handle = boot();
         const key = await createProject("queue-099-release-axis-null");
+        await propose(key, RELEASE);
         expect([200, 202]).toContain(
           (
             await postQueue(key, [
