@@ -1288,14 +1288,28 @@ body {
   border: 5px solid transparent;
   border-left-color: var(--line);
 }
+/* CR-CRU-103 §S2/AC4 — the approved artifact's own `.term`: a 52×52 box under
+   the `999px` radius this rule ALREADY carried, which is a circle. The radius
+   was never the defect; the BOX was — 56×22 reads as a lozenge whatever
+   radius it takes, because a fully rounded box is only a circle when it is
+   square. So the side and the 2px border are the design's, the box CENTRES
+   its word instead of padding out to a size, and `box-sizing: border-box`
+   keeps the 52px a box figure the way the strip's own gate cell does
+   (`:1185`). The border COLOUR stays the app's `--line` token: the artifact's
+   `#4a5160` is no token of this app's, and colour is the CR's non-goal. */
 .app-flow-terminal {
+  box-sizing: border-box;
   flex: 0 0 auto;
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font: 600 10px/1.4 var(--mono);
   text-transform: uppercase;
   color: var(--ink-dim);
-  border: 1px solid var(--line);
+  border: 2px solid var(--line);
   border-radius: 999px;
-  padding: 3px 12px;
 }
 /* CR-CRU-096 §S6/AC19c — the wave boxes lie ALONG the axis, not across it: a
    `.app-flow-waves { flex-direction: column }` stood below this rule and
@@ -1456,14 +1470,52 @@ body {
 .app-roadmap-lifecycle.superseded { font-style: italic; }
 .app-flow-node-lifecycle.void,
 .app-roadmap-lifecycle.void { text-decoration: line-through; }
+/* CR-CRU-103 §S1/AC1/AC1a/AC2 — the approved artifact's own `.delivered`:
+   `border:1.5px solid var(--line); border-radius:9px; background:var(--bg-2);
+   padding:10px 13px; min-width:210px`, with `flex:0 0 auto` beside the
+   min-width. Neither half is decoration. The border, the radius and the
+   elevated face are what make the summary READ as a container at all; the
+   `flex:0 0 auto` on a BLOCK box is what BOUNDS it, because a block's
+   intrinsic width is its widest LINE — so the card is as wide as the widest
+   fact it states and no wider.
+
+   The `display:flex; flex-wrap:wrap; align-items:baseline` that stood here
+   made that intrinsic width the SUM of the facts instead: 682.8px of caption
+   for facts the design draws in 393.3px, which pushed the release diamond
+   818.8px down a 1130px surface. The large empty gap the user reported was
+   never a spacing bug — it was an absent box.
+
+   `box-sizing: border-box` for the reason the strip's gate cell declares it
+   (`:1185`): the design's `min-width` is a figure about the BOX. */
 .app-flow-delivered {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 10px;
-  font: 400 11px/1.4 var(--mono);
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  min-width: 210px;
+  border: 1.5px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg-2);
+  padding: 10px 13px;
+  font: 400 10.5px/1.4 var(--sans);
   color: var(--ink-dim);
 }
+/* The artifact's `.big` — ONE number taken at a glance, over a small sans
+   cue. `display:block` IS the design's line break: the caption's facts are
+   siblings here, so the headline claims its own line by being a block and the
+   cue flows under it. The 22px mono against the cue's 10.5px sans is the
+   hierarchy §S1 says went missing, and the ink is the shell's own `--ink`
+   because the design's `.big` overrides no colour and inherits it. */
+.app-flow-delivered-crs {
+  display: block;
+  font: 400 22px/1.15 var(--mono);
+  color: var(--ink);
+}
+/* The design states the cue as ONE line — `waves 1–4 · shipped 2026-08-19` —
+   while the app publishes the wave span and the ship date as two spans,
+   because they are two facts and the date is `resolveGateDate`'s own answer
+   carried through (AC30). So the separator is DRAWN rather than authored, and
+   only when there is a date to separate: that answer is `""` for some states,
+   and a dangling `·` would punctuate a fact the release does not have. */
+.app-flow-delivered-date:not(:empty)::before { content: " · "; }
 /* Zone 2's own terminating gate: the SAME diamond zone 1 draws for the same
    release (its shape, its amber and its dash are shared rules above), stacked
    over its date with the same overhang. It is always the FOCUSED release, so

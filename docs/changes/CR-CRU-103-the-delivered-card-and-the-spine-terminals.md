@@ -4,7 +4,7 @@
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 102 — that CR re-measures the spine budget, and this one changes the terminal
   geometry the budget is measured against, so they land in order
-- **Status**: PENDING (0.2.0) — filed 2026-09-03, **scope corrected the same day**
+- **Status**: COMPLETED (0.2.0) — filed 2026-09-03, scope corrected the same day, gap-analysed 2026-09-04 (§S3/AC5 retracted, AC1a/AC3a added), AC7 amended by user ruling, shipped 2026-09-04
 - **Found by**: the user, comparing a screenshot of the live shipped-release view against the
   approved design. **Ruling: the design is the authority.** Second ruling: assert the font FAMILY
   CLASS, never a font name — Crucible already has its own `--mono`/`--sans` tokens.
@@ -118,9 +118,14 @@ comparison is widened to cover exactly those properties for the components the a
 - **AC2** — Its headline renders at mono **22px** and its cue at the design's 10.5px in the app's
   **sans** token; the two are provably different sizes and different family CLASSES in one render,
   so a flat mono run fails. Family is asserted as monospace-vs-sans, never a font name.
-- **AC3** — With the card restored, the gap between the delivered card and the release gate is at
-  most the design's connector width — the layout defect the user reported, asserted as geometry
-  rather than as CSS.
+- **AC3** — With the card restored, the release gate is no longer DISPLACED: the shipped spine
+  measures at or below the design's own shipped panel, both sides' flow gaps subtracted so the
+  comparison is like-for-like, and the connector between card and gate is the design's width.
+  Geometry, not CSS. **CORRECTED 2026-09-04, ratifying C1:** the original wording asked only that
+  "the gap between the card and the gate is at most the design's connector width", which is TRUE of
+  the BROKEN render too — `.app-roadmap-flow` packs from flex-start, so an uncontained card never
+  opened a gap beside the gate, it PUSHED the gate right. That criterion could not fail. C1
+  implemented both clauses and reported the defect; this is the wording catching up.
 - **AC3a** — AC1/AC1a/AC2/AC3 are measured on a FIXTURE carrying a SHIPPED focus, not on the live
   board. **Added 2026-09-04 by gap analysis:** driving the live board in Chromium, no
   `.app-flow-delivered` element exists at all — the focused release is the 0.2.0 PROPOSAL, which
@@ -135,14 +140,57 @@ comparison is widened to cover exactly those properties for the components the a
 - **AC6** — AC27's comparison covers border width, radius, `min-width` and box aspect for the
   components the artifact depicts, and FAILS when any one is moved away from the artifact. Proven
   by mutating one value in a scratch fixture, not by assertion alone.
-- **AC7** — CR-CRU-102's spine budget assertion is re-measured under the `52×52` terminals and
-  still holds at the design's `~600px`.
+- **AC7** — **AMENDED 2026-09-04 by user ruling** — a deliberate exception to the frozen-spec rule,
+  taken because CR-CRU-103 is the CR that changes this geometry and the alternative was leaving
+  `develop` red on a known-unsound assertion. CR-CRU-102's spine budget is re-measured under the
+  `52×52` terminals, and its two halves are separated:
+  - the SYNTHETIC board keeps asserting the design's `~600px` strictly — that is the criterion;
+  - the LIVE board REPORTS its measured figure and asserts only the data-independent invariant that
+    the spine FITS the surface. It no longer asserts `~600px`.
+
+  Why: `~600px` is the design's figure for a SPECIFIC composition, while the live spine is whatever
+  the drawn rows happen to make it. Measured: it SKIPPED at CR-CRU-102's merge (the four-dep row sat
+  outside the drawn top), then closing that CR shifted the drawn rows, the assertion went live, and
+  it failed at **621.1px**, reading **625.1px** by the time this CR was in flight. Asserting a
+  fixed-composition figure against data we do not control is the CR-CRU-096 `AC29` decay
+  CR-CRU-102's own comment predicted, arriving in under a day.
+
+  **CORRECTED 2026-09-04 by VERIFY, and the correction reverses my own claim.** This AC first said
+  "the terminal shrink takes 8px off it, reaching ~613px", and attributed the 621.1 → 625.1px move
+  to board drift. Both were wrong, and wrong in the opposite DIRECTION. VERIFY ran a controlled A/B
+  with only `public/styles.css` swapped and the live store held still: **621.1px on develop's
+  stylesheet, 625.1px on this branch's**, and reverting only the `.app-flow-terminal` geometry on
+  top of HEAD returns exactly 621.1px. The cause: develop's terminals were CONTENT-sized, so
+  `Start` rendered 56×22 but `End` rendered only **44×22** — 100px for the pair. Squaring them to
+  `52×52` makes 104px, so **this CR ADDS 4px to the spine rather than removing 8px**, and `~613px`
+  was never reachable. The synthetic board moves identically, `575.9px → 579.9px`, cutting headroom
+  against the `600px` criterion from 24.1px to 20.1px.
+
+  The amendment's CONCLUSION is unchanged and in fact strengthened: the live spine exceeds `~600px`
+  before AND after this CR, by more after. What was wrong was the mechanism, which a permanent
+  comment would have taught to every future reader.
 - **AC8** — Zone 1 and zone 3 markup is byte-identical, as CR-CRU-096 AC26 required for its scope.
 - **AC9** — The type-scale properties listed in the Correction are asserted as **unchanged**, so a
   future cycle cannot "fix" a scale that already matches. This is the guard my own wrong measurement
   would have needed. *Cost checked 2026-09-04: the suite today carries ZERO `fontSize`/`fontFamily`
   assertions, so this is new coverage rather than duplication, and its marginal cost is near zero
   because AC1/AC1a/AC2/AC4 are extending the same measurement harness anyway.*
+
+## Knock-ons recorded 2026-09-04, ratifying C1
+
+- **AC4 supersedes CR-CRU-078 `AC21`'s aspect clause for zone 2.** `AC21`'s `expectStadium` asserts
+  "longer than it is tall", which a `52×52` circle cannot satisfy. Per the standing ruling that the
+  design is the authority, zone 2's terminal takes an `expectCircle` (the same fully-round-ends
+  clause, square box instead of longer-than-tall) and its test is renamed. Zone 1's
+  `.app-strip-terminal` is a different rule, keeps its lozenge and keeps `expectStadium`. Recorded
+  because a shipped CR's criterion changed meaning for one surface, and that must not be
+  discoverable only from a diff.
+- **§S1's `673px` is a LIVE-board figure.** On the design-content fixture the same defect measures
+  `682.8px`. Same defect class, same magnitude — read the number as the live board's.
+- **The `~600px` budget is the PROPOSED path's.** The design's own SHIPPED panel measures `689.3px`
+  in the same engine (a `393.3px` delivered card plus a `120px` gate column). C1 read that off the
+  artifact rather than inventing a constant, and subtracted each side's own flow gaps (the artifact
+  declares `gap:0`, the app `8px`) so the comparison is like-for-like.
 
 ## Non-goals
 
@@ -154,3 +202,13 @@ comparison is widened to cover exactly those properties for the components the a
   the artifact's.
 - **Font names.** Per the user's ruling, criteria assert family class against the app's existing
   `--mono` / `--sans` tokens.
+- **The terminal's remaining chrome.** The artifact's `.term` also declares `background: var(--bg-2)`
+  and mono `10.5px`, and its border colour is the literal `#4a5160` — no token of this app. AC4
+  asserts square / `52px` / `2px` only. Colour is already a non-goal and a hex literal is forbidden,
+  so the border stays `var(--line)`, the app keeps its `600 10px` uppercase word, and no fill was
+  added. **If the design's fill and 10.5px are wanted, they need their own AC.**
+- **The cue's separator as markup.** The design writes one cue line (`waves 1–4 · shipped
+  2026-08-19`); the app publishes the wave span and the ship date as separate elements, the date
+  being `resolveGateDate`'s own answer. C1 drew the join in CSS, suppressed when that answer is
+  empty so no dangling separator punctuates a fact the release lacks. No markup was added, and none
+  is required by an AC.
