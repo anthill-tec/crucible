@@ -3,7 +3,7 @@
 - **Type**: bug
 - **Wave**: 5 (0.2.0) — release membership is the user's call
 - **Depends on**: none — `cr-plan` has carried `--release` since CR-CRU-091
-- **Status**: PENDING (0.2.0) — filed 2026-09-04, gap-analysed 2026-09-04 (2 clauses added; baseline: the
+- **Status**: COMPLETED (0.2.0) — shipped 2026-09-04; filed 2026-09-04, gap-analysed 2026-09-04 (2 clauses added; baseline: the
   scenario passes today through the bulk door, `1 passed (1.4s)`)
 - **Found by**: the user, on discovering the orchestrator had been loading the roadmap through an
   interface the approved design does not contain: *"I remember approving an API specifically in the
