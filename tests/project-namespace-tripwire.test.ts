@@ -739,9 +739,24 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // line, none in a string — verified by measuring `git show develop:<path>`
 // against the working tree file by file, not assumed. The `develop` baseline
 // is UNCHANGED at 378 and stays the floor.
+// UPDATED 2026-09-04 by CR-CRU-103 §S1/§S2. `public/` HEAD moves 388 -> 390.
+// C1 gave the delivered card and the spine terminal their own stylesheet
+// blocks, and each opens with the citation that explains why the geometry is
+// what it is: `public/styles.css` +2 (the `/* CR-CRU-103 §S2/AC4 … .term */`
+// and `/* CR-CRU-103 §S1/AC1/AC1a/AC2 … .delivered */` block headers). Both
+// are prose on a `/* */` comment line, neither is in a string — measured by
+// classifying `git show develop:<path>` against the working tree file by
+// file, which attributes the whole +2 to that ONE file and leaves the other
+// nine `public/` files at their develop counts. The branch's other new prose
+// (the AC7/AC1a reasoning comments in
+// `tests/roadmap-visual-grammar.test.ts`) moves NOTHING here: `tests/` is not
+// one of the three tracked trees, so it is invisible to this measure by
+// construction. `src/` and `clients/` are untouched by this CR and re-measure
+// at their recorded 525 and 619. The `develop` baselines are UNCHANGED at
+// 512/378/601 and stay the floors.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 525 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 388 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 390 },
   clients: { exts: [".py"], develop: 601, head: 619 },
 };
 
