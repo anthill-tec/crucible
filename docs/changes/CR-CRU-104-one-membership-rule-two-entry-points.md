@@ -106,7 +106,9 @@ rather than rejected, which is precedent for the bulk post being more permissive
 
 This CR therefore does NOT change cycle behaviour on the bulk post. The row stays in the table above
 as a known, deliberate asymmetry until the user rules otherwise. Implementing a refusal without that
-ruling would repeat CR-CRU-102's `AC19d` — an answer invented without asking.
+ruling would repeat `AC19d` — CR-CRU-096's criterion, retired by CR-CRU-102 as "an answer invented
+without asking". (**Corrected 2026-09-04 by gap analysis:** this line previously called `AC19d`
+CR-CRU-102's. It was CR-CRU-096's; CR-CRU-102 is the CR that RETIRED it.)
 
 ## Acceptance criteria
 
@@ -141,6 +143,19 @@ ruling would repeat CR-CRU-102's `AC19d` — an answer invented without asking.
   commit forgetting the field.
 - **AC11** — Whatever blind spots the guard still has after AC8 are named in the file, with the
   measurement that established each. A named limit is the deliverable; an unnamed one is the defect.
+- **AC12** — **The blast radius of AC1 is enumerated and closed, not discovered.** *Added 2026-09-04
+  by gap analysis, which measured it:* `198` release-carrying object literals across `18` test
+  suites declare a release, and CR-CRU-099's own `tests/queue-registration.test.ts` posts
+  `release: "0.2.0"` on a FRESH project with NO proposal and asserts `200/202` plus the stored value
+  (`:1252-1262`). AC1 refuses exactly that configuration, so those fixtures must gain a proposal for
+  the label they declare. What must NOT change is what each shipped assertion MEASURES — a fixture
+  gaining a precondition is legitimate; an assertion losing its subject is not. Every suite touched
+  is listed in the report with the reason.
+- **AC13** — No PRODUCT caller is broken. `queue-file` sends no `release` at all
+  (`clients/_crucible_axi.py`'s `parse_queue_table` keeps only the leading integer of the Wave
+  cell), so the bootstrap path is unaffected, and the e2e scenario PROPOSES the release before it
+  posts (`tests/e2e/features/roadmap-graph.feature:37-38`). Both verified by reading, and both
+  stated here so the refusal is known to be test-only churn rather than assumed to be.
 
 ## Non-goals
 
@@ -148,4 +163,6 @@ ruling would repeat CR-CRU-102's `AC19d` — an answer invented without asking.
 - **Changing cycle behaviour on the bulk post.** Open ruling above.
 - **`queue-file` declaring a release.** Still the client-side gap CR-CRU-099 §S1 scoped out, with its
   own register entry.
-- **Editing CR-CRU-091, CR-CRU-095 or CR-CRU-099.** All shipped.
+- **Editing CR-CRU-091, CR-CRU-095 or CR-CRU-099's SPEC TEXT.** All shipped; all records. Their
+  test FIXTURES are live artifacts and may gain a proposal where AC1 requires one (AC12) — what may
+  never change is what an assertion measures.
