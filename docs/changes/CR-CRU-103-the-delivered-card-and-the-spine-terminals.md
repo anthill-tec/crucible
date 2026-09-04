@@ -151,11 +151,24 @@ comparison is widened to cover exactly those properties for the components the a
   Why: `~600px` is the design's figure for a SPECIFIC composition, while the live spine is whatever
   the drawn rows happen to make it. Measured: it SKIPPED at CR-CRU-102's merge (the four-dep row sat
   outside the drawn top), then closing that CR shifted the drawn rows, the assertion went live, and
-  it failed at **621.1px** — drifting to **625.1px** within the hour as CR-CRU-104 was filed and
-  CR-CRU-103 went IN_PROGRESS. This CR's terminal shrink takes 8px off it, reaching ~613px, so
-  implementing CR-CRU-103 correctly could never have fixed it. Asserting a fixed-composition figure
-  against data we do not control is the CR-CRU-096 `AC29` decay CR-CRU-102's own comment predicted,
-  arriving in under a day.
+  it failed at **621.1px**, reading **625.1px** by the time this CR was in flight. Asserting a
+  fixed-composition figure against data we do not control is the CR-CRU-096 `AC29` decay
+  CR-CRU-102's own comment predicted, arriving in under a day.
+
+  **CORRECTED 2026-09-04 by VERIFY, and the correction reverses my own claim.** This AC first said
+  "the terminal shrink takes 8px off it, reaching ~613px", and attributed the 621.1 → 625.1px move
+  to board drift. Both were wrong, and wrong in the opposite DIRECTION. VERIFY ran a controlled A/B
+  with only `public/styles.css` swapped and the live store held still: **621.1px on develop's
+  stylesheet, 625.1px on this branch's**, and reverting only the `.app-flow-terminal` geometry on
+  top of HEAD returns exactly 621.1px. The cause: develop's terminals were CONTENT-sized, so
+  `Start` rendered 56×22 but `End` rendered only **44×22** — 100px for the pair. Squaring them to
+  `52×52` makes 104px, so **this CR ADDS 4px to the spine rather than removing 8px**, and `~613px`
+  was never reachable. The synthetic board moves identically, `575.9px → 579.9px`, cutting headroom
+  against the `600px` criterion from 24.1px to 20.1px.
+
+  The amendment's CONCLUSION is unchanged and in fact strengthened: the live spine exceeds `~600px`
+  before AND after this CR, by more after. What was wrong was the mechanism, which a permanent
+  comment would have taught to every future reader.
 - **AC8** — Zone 1 and zone 3 markup is byte-identical, as CR-CRU-096 AC26 required for its scope.
 - **AC9** — The type-scale properties listed in the Correction are asserted as **unchanged**, so a
   future cycle cannot "fix" a scale that already matches. This is the guard my own wrong measurement
