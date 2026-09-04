@@ -529,6 +529,63 @@ const STACKED_DEPS_QUEUE: QueueFixture[] = [
   ),
 ];
 
+// ── CR-CRU-103 §S1/AC3a — the board the DELIVERED CARD is measured on ──────
+//
+// A SHIPPED focus, because only a shipped release draws AC8's delivered
+// summary: `proposals: []` is what makes `releaseStripFocusIndex` fall
+// through to the newest shipped tag, the same single change `shippedZones`
+// already makes to reach §S7's delivered path.
+//
+// Its CONTENT is the DESIGN's OWN, and that is the point rather than
+// decoration: sixty members spanning waves 1–4, shipped on the artifact's own
+// date, delivering the artifact's own two packages. The artifact draws
+// `60 CRs` / `waves 1–4 · shipped 2026-08-19` / `pypi crucible-axi · npm
+// @anthill-tec/crucible-server` and this board states the same facts, so
+// AC1a's "no wider than its content needs" becomes a comparison of TWO
+// RENDERS OF THE SAME CONTENT instead of a constant this file would have to
+// invent. It is also the shape §S1 measured the 673px sprawl on.
+//
+// AC29 — every id below is synthetic. `CR-D-*` is this board's own prefix and
+// names no CR of this project; `0.9.0` is no release of it either.
+const DELIVERED_RELEASE = "0.9.0";
+
+/** The four waves the release spans, so `compressWaveRuns` answers the
+ *  design's own `waves 1–4` rather than a list. */
+const DELIVERED_WAVES = ["1", "2", "3", "4"];
+
+const DELIVERED_CRS: string[] = Array.from(
+  { length: 60 },
+  (_slot, at) => `CR-D-${pad2(at + 1)}`,
+);
+
+const DELIVERED_QUEUE: QueueFixture[] = DELIVERED_CRS.map((cr, at) => ({
+  cr,
+  title: `${cr} — a delivered change`,
+  wave: DELIVERED_WAVES[at % DELIVERED_WAVES.length]!,
+  dependsOn: [],
+  status: "COMPLETED" as QueueStatus,
+  seq: at + 1,
+  release: DELIVERED_RELEASE,
+}));
+
+/** ONE shipped tag and no proposal, carrying the artifact's own two packages
+ *  and its own ship date (`SHIP_010` IS 2026-08-19, the date the artifact
+ *  prints). `crCount` reads `crs.length` for a shipped release
+ *  (`focusedReleaseView`), so the headline states the design's own `60 CRs`. */
+const DELIVERED_SHIPPED: ReleaseFixture[] = [
+  {
+    version: DELIVERED_RELEASE,
+    commit: "0de1ade",
+    releasedAt: SHIP_010,
+    crs: DELIVERED_CRS,
+    packages: [
+      { registry: "pypi", name: "crucible-axi", version: DELIVERED_RELEASE },
+      { registry: "npm", name: "@anthill-tec/crucible-server", version: DELIVERED_RELEASE },
+    ],
+    timestamp: SHIP_010 * 1000,
+  },
+];
+
 /** The artifact IS the binding design source AC27 compares against, and since
  *  CR-CRU-096 AC27a it is TRACKED: `.gitignore:12` ignores `.lavish/*` and
  *  `.gitignore:18` negates this one file back in. So a clean clone has it, and
@@ -747,6 +804,15 @@ let liveDepsCr = "";
  *  is what the corroboration test refuses, so a `beforeAll` that silently
  *  skipped the read cannot read as a pass. */
 let liveDepsSkip = "";
+// CR-CRU-103 C1 — §S1's delivered-card board, and the LIVE board it is
+// corroborated against (AC3a).
+let deliveredZones = "";
+let deliveredFixtureUrl = "";
+let liveDeliveredZones = "";
+let liveDeliveredFixtureUrl = "";
+/** WHY AC3a's live corroboration did not run, in words — the same
+ *  exactly-one-of-two contract `liveDepsSkip` carries above. */
+let liveDeliveredSkip = "";
 /** A SECOND page, at §S6's own 1600px viewport. A second page rather than a
  *  `setViewportSize` on the shared one: the 38 landed assertions are measured
  *  at 1440×1000 and a viewport this suite forgot to put back would silently
@@ -889,6 +955,70 @@ async function captureLiveDeps(): Promise<string> {
   return "";
 }
 
+/**
+ * CR-CRU-103 AC3a's CORROBORATION — the delivered card as the board this
+ * project actually runs draws it, or the reason it could not be read.
+ *
+ * WHY IT IS ONLY A CORROBORATION, and why the criteria are asserted on a
+ * fixture: gap analysis drove the live board in this same Chromium and found
+ * NO `.app-flow-delivered` element at all, because the focused release is the
+ * 0.2.0 PROPOSAL and a proposal draws wave boxes instead. CR-CRU-096's AC29
+ * governs — a criterion that only holds while our own board has a given focus
+ * is not a criterion.
+ *
+ * So this reads the live board's OWN releases and queue with the proposal list
+ * WITHHELD, which is the one change that makes `releaseStripFocusIndex` fall
+ * through to the newest shipped tag (`shippedZones` above makes exactly the
+ * same one). Every fact the card then states — its count, its waves, its date,
+ * its packages — is the live store's own; only WHICH release is focused is
+ * this function's doing, and it is stated here rather than implied.
+ */
+async function captureLiveDelivered(): Promise<string> {
+  let key = "";
+  try {
+    const env = readFileSync(path.join(REPO_ROOT, ".env"), "utf8");
+    key = /^CRUCIBLE_PROJECT_KEY=(.+)$/m.exec(env)?.[1]?.trim() ?? "";
+  } catch (failure) {
+    const said = failure instanceof Error ? failure.message : String(failure);
+    return (
+      `the repo root has no readable .env to name the live project (${said}), so there ` +
+      `is no live board to read`
+    );
+  }
+  if (key === "") {
+    return (
+      "the repo root's .env declares no CRUCIBLE_PROJECT_KEY, so the live board cannot " +
+      "be identified"
+    );
+  }
+  const base = process.env.CRUCIBLE_URL ?? "http://localhost:3849";
+  let queue: QueueFixture[] = [];
+  let releases: ReleaseFixture[] = [];
+  try {
+    const read = async (route: string): Promise<Record<string, unknown>> => {
+      const answer = await fetch(`${base}/api/v2/projects/${key}/${route}`);
+      if (!answer.ok) throw new Error(`${route} answered HTTP ${answer.status}`);
+      return (await answer.json()) as Record<string, unknown>;
+    };
+    queue = ((await read("queue")).entries ?? []) as QueueFixture[];
+    releases = ((await read("releases")).releases ?? []) as ReleaseFixture[];
+  } catch (failure) {
+    const said = failure instanceof Error ? failure.message : String(failure);
+    return (
+      `no live board answered at ${base} (${said}), and the store it would have served ` +
+      `is never committed`
+    );
+  }
+  if (releases.length === 0) {
+    return (
+      `the live board at ${base} records no shipped release, so it has no delivered ` +
+      `summary to corroborate`
+    );
+  }
+  liveDeliveredZones = await captureZones({ releases, queue, proposals: [] });
+  return "";
+}
+
 beforeAll(async () => {
   populatedZones = await captureZones();
   emptyZones = await captureZones({ releases: [], proposals: [], queue: [] });
@@ -921,6 +1051,16 @@ beforeAll(async () => {
   // gate — the newest SHIPPED tag. That is the only way to reach §S7's
   // delivered path, and with it AC23's `shipped` word and AC24's shipped axis.
   shippedZones = await captureZones({ releases: [SHIPPED[0]!], proposals: [] });
+  // CR-CRU-103 §S1 — the delivered card's own board: a shipped focus carrying
+  // the DESIGN's own facts, so AC1a compares two renders of one content.
+  deliveredZones = await captureZones({
+    releases: DELIVERED_SHIPPED,
+    proposals: [],
+    queue: DELIVERED_QUEUE,
+  });
+  // AC3a's CORROBORATION. Sets EITHER `liveDeliveredZones` or
+  // `liveDeliveredSkip`, never neither.
+  liveDeliveredSkip = await captureLiveDelivered();
 
   // AC26's BASELINE. "Byte-identical before and after this CR" is a claim
   // about two renders, so the before-state is rendered too: the shell as of
@@ -1038,6 +1178,19 @@ beforeAll(async () => {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
+      // CR-CRU-103 §S1/AC3a — the delivered card's board and the LIVE board
+      // beside it, both at the 1130px surface the design's figures are
+      // stated against.
+      if (pathname === "/fixture-delivered") {
+        return new Response(fixtureDocument(deliveredZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      if (pathname === "/fixture-live-delivered") {
+        return new Response(fixtureDocument(liveDeliveredZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
       if (pathname === "/fixture-baseline") {
         return new Response(fixtureDocument(baselineZones, SURFACE_W, "/styles-baseline.css"), {
           headers: { "content-type": "text/html; charset=utf-8" },
@@ -1081,6 +1234,8 @@ beforeAll(async () => {
   bareDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-bare-deps`;
   stackedDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-stacked-deps`;
   liveDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-live-deps`;
+  deliveredFixtureUrl = `http://127.0.0.1:${server.port}/fixture-delivered`;
+  liveDeliveredFixtureUrl = `http://127.0.0.1:${server.port}/fixture-live-delivered`;
 
   browser = await chromium.launch();
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -1262,6 +1417,28 @@ describe("AC21 — every element renders as its DECLARED shape (measured)", () =
     ).toBe(true);
   };
 
+  // CR-CRU-103 §S2/AC4 — the CIRCLE zone 2's terminals are: the same fully
+  // round ends `expectStadium` demands, on a SQUARE box. A circle is the
+  // stadium at aspect 1:1, and it is the shape the approved artifact draws
+  // (`.term { width:52px; height:52px; border-radius:999px }`), so the aspect
+  // clause above ("longer than it is tall") is the one reading the design
+  // contradicts — for zone 2 only. Zone 1's strip terminal is a different
+  // rule (`.app-strip-terminal`) and keeps the lozenge.
+  const expectCircle = (m: Measured, what: string): void => {
+    expect(m.rotation, `${what} is not axis-aligned`).toBe(0);
+    expect(m.boxH, `${what} has no measurable height`).toBeGreaterThan(0);
+    expect(
+      m.radius >= m.boxH / 2 - 0.5,
+      `${what}: corner radius ${m.radius}px does not reach the half-height ` +
+        `${m.boxH / 2}px, so its ends are not round — it is a rectangle`,
+    ).toBe(true);
+    expect(
+      Math.abs(m.boxW - m.boxH) <= 0.5,
+      `${what}: ${m.boxW}x${m.boxH} — a fully rounded box that is not square is a lozenge, ` +
+        `not the design's circle`,
+    ).toBe(true);
+  };
+
   // A diamond is a SQUARE turned 45°, and the measurements that prove it are
   // the ones a rectangle can never fake: the painted bounding box is the
   // square's DIAGONAL, and the local top-left corner is painted at the top
@@ -1335,7 +1512,7 @@ describe("AC21 — every element renders as its DECLARED shape (measured)", () =
   // pair inside zone 1's `.flow` AND another inside zone 2's (its lines
   // 142/154 and 159/172), so a board showing both zones shows two pairs.
   // Asserted per zone for exactly that reason.
-  test("zone 2 draws exactly one Start and one End, each a stadium", async () => {
+  test("zone 2 draws exactly one Start and one End, each a CIRCLE", async () => {
     const terminals = await measureAll(
       '[data-testid="roadmap-flow"] [data-testid="roadmap-flow-terminal"]',
     );
@@ -1344,8 +1521,8 @@ describe("AC21 — every element renders as its DECLARED shape (measured)", () =
     const ends = await measureAll('[data-testid="roadmap-flow"] [data-terminal="end"]');
     expect(starts.length).toBe(1);
     expect(ends.length).toBe(1);
-    expectStadium(starts[0]!, "zone 2 Start terminal");
-    expectStadium(ends[0]!, "zone 2 End terminal");
+    expectCircle(starts[0]!, "zone 2 Start terminal");
+    expectCircle(ends[0]!, "zone 2 End terminal");
   });
 
   test("a SHIPPED release is a solid diamond in the strip", async () => {
@@ -2349,6 +2526,19 @@ interface Boxed {
   color: string;
   fontWeight: string;
   cursor: string;
+  /** CR-CRU-103 §S1/§S2 — the CHROME and TYPE dimensions §S4 says AC27's
+   *  comparison lacked, read where every other box reading already is.
+   *  `fontFamily` is the RESOLVED list: it is compared against the app's own
+   *  `--mono`/`--sans` token and classified by the generic family it ends in,
+   *  never against a font name. */
+  fontSize: number;
+  fontFamily: string;
+  radius: number;
+  padLeft: number;
+  padRight: number;
+  /** `0` when the element declares `auto`, which `parseFloat` cannot read —
+   *  and which is itself the reading a missing floor gives. */
+  minWidth: number;
 }
 
 const BOX_FN = `
@@ -2373,6 +2563,12 @@ function __box(el) {
     color: cs.color,
     fontWeight: cs.fontWeight,
     cursor: cs.cursor,
+    fontSize: px(cs.fontSize),
+    fontFamily: cs.fontFamily,
+    radius: px(cs.borderTopLeftRadius),
+    padLeft: px(cs.paddingLeft),
+    padRight: px(cs.paddingRight),
+    minWidth: px(cs.minWidth),
   };
 }
 `;
@@ -4075,5 +4271,481 @@ describe("CR-CRU-096 — the same probes on the PRE-CR render report the drift t
 
     // …and the pre-CR trim did not exist either: every member drew a chip.
     expect(chips.length).toBe(FOCUSED_CRS.length);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CR-CRU-103 — THE DELIVERED CARD (§S1) AND THE SPINE'S TERMINALS (§S2)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Spec: docs/changes/CR-CRU-103-the-delivered-card-and-the-spine-terminals.md
+//       §S1 (the delivered summary has no card), §S2 (the terminals are
+//       lozenges), AC1, AC1a, AC2, AC3, AC3a, AC4.
+//
+// §S3/AC5 are RETRACTED and NOTHING below reads the wave box's border: the
+// rule already declares the design's `1.5px`, and a DPR-1 render reports
+// `1px` because Chromium rounds a sub-pixel border to whole device pixels.
+// Asserting it would be machinery built to watch a browser round.
+//
+// That same rounding is why every border weight below is compared against the
+// ARTIFACT's own RENDERED weight rather than against the declared number: the
+// design's `.delivered` declares `1.5px` too, so both renders round
+// identically and the comparison stays a measurement instead of becoming a
+// restatement of a stylesheet. It is AC27's division — the artifact is the
+// source, the render is the subject — applied to chrome and type instead of
+// structure, which is the dimension §S4 says AC27 lacked.
+//
+// AC3a — measured on a FIXTURE carrying a SHIPPED focus. Gap analysis drove
+// the LIVE board in this same Chromium and found no `.app-flow-delivered`
+// element at all: the focused release is the 0.2.0 PROPOSAL, which draws wave
+// boxes and no delivered summary. CR-CRU-096's AC29 governs — a criterion
+// that only holds while our own board has a given focus is not a criterion —
+// so the criteria are asserted on the board below and the live board
+// CORROBORATES or states why it cannot, exactly as CR-CRU-102's AC4 does.
+
+/** The DESIGN's own delivered card, headline, cue, terminal, connector and
+ *  shipped spine, as THIS Chromium renders them. Measured once, off the
+ *  approved artifact, so not one figure asserted below is a constant this file
+ *  chose — the same division AC27 already draws. */
+interface DesignFigures {
+  card: Boxed;
+  big: Boxed;
+  cue: Boxed;
+  term: Boxed;
+  connector: Boxed;
+  /** The artifact's own shipped zone-2 panel, end to end, and the gap its
+   *  `.flow` puts between the pieces (`gap:0`, against the app's own 8px). A
+   *  spine is only comparable to a spine once both are read the same way. */
+  spine: number;
+  gap: number;
+}
+
+let designFigures: DesignFigures | null = null;
+
+const design = async (): Promise<DesignFigures> => {
+  if (designFigures !== null) return designFigures;
+  expect(
+    artifactFailure,
+    "the approved artifact could not be read, so the design's own figures are unavailable",
+  ).toBe("");
+  await openWide(artifactUrl);
+  const cues = await boxesOf(".delivered .cue");
+  expect(cues.length, "the artifact draws no `.cue` inside its delivered card").toBeGreaterThan(0);
+  const terms = await boxesOf(".term");
+  expect(terms.length, "the artifact draws no `.term` terminal").toBeGreaterThan(0);
+  const arrows = await boxesOf(".arrow");
+  expect(arrows.length, "the artifact draws no `.arrow` connector").toBeGreaterThan(0);
+  // The artifact's SHIPPED panel, found from the card it draws rather than by
+  // counting `.flow` elements down the document.
+  const panel = await readWide<{ spine: number; gap: number; pieces: number }>(
+    `(() => {
+       const card = document.querySelector(".delivered");
+       const flow = card === null ? null : card.closest(".flow");
+       if (flow === null) return { spine: 0, gap: 0, pieces: 0 };
+       const kids = Array.from(flow.children).map((kid) => kid.getBoundingClientRect());
+       return {
+         spine: Math.max(...kids.map((r) => r.right)) - Math.min(...kids.map((r) => r.left)),
+         gap: kids.length < 2 ? 0 : kids[1].left - kids[0].right,
+         pieces: kids.length,
+       };
+     })()`,
+  );
+  expect(
+    panel.pieces,
+    "the artifact's shipped panel is not the 7-piece spine the app's is compared against",
+  ).toBe(7);
+  designFigures = {
+    card: one(await boxesOf(".delivered"), "the artifact's delivered card"),
+    big: one(await boxesOf(".delivered .big"), "the artifact's delivered headline"),
+    cue: cues[0]!,
+    term: terms[0]!,
+    connector: arrows[0]!,
+    spine: panel.spine,
+    gap: panel.gap,
+  };
+  return designFigures;
+};
+
+/** The GENERIC family a resolved font-family list ends in — `monospace` or
+ *  `sans-serif`. Family is asserted as a CLASS and never as a font name (the
+ *  user's own ruling), which is why this reads the LAST entry of the list: the
+ *  named faces in front of it are the ones a criterion may not depend on. */
+const familyClass = (family: string): string => {
+  const parts = family.split(",");
+  return (parts[parts.length - 1] ?? "").trim().replace(/^["']|["']$/g, "");
+};
+
+/** One of the APP's OWN family tokens, resolved exactly the way `tokenColor`
+ *  resolves a colour: the declared value onto a probe, then read back. So the
+ *  expected value is the shipped token rather than a font name written here. */
+async function tokenFamily(name: string): Promise<string> {
+  return await readWide<string>(
+    `(() => {
+       const declared = getComputedStyle(document.documentElement)
+         .getPropertyValue(${JSON.stringify(name)}).trim();
+       if (declared === "") return "";
+       const probe = document.createElement("span");
+       probe.style.fontFamily = declared;
+       document.body.appendChild(probe);
+       const resolved = getComputedStyle(probe).fontFamily;
+       probe.remove();
+       return resolved;
+     })()`,
+  );
+}
+
+/** The colour actually PAINTED behind an element — the first ancestor that
+ *  paints one. "Elevated distinctly from the pane behind it" is a comparison
+ *  against that, and a transparent card fails it by having nothing of its
+ *  own. */
+async function backdropOf(selector: string): Promise<string> {
+  return await readWide<string>(
+    `(() => {
+       const found = document.querySelector(${JSON.stringify(selector)});
+       if (found === null) return "";
+       for (let node = found.parentElement; node !== null; node = node.parentElement) {
+         const painted = getComputedStyle(node).backgroundColor;
+         if (painted !== "" && painted !== "transparent" && painted !== "rgba(0, 0, 0, 0)") {
+           return painted;
+         }
+       }
+       return "";
+     })()`,
+  );
+}
+
+const DELIVERED_CARD = '[data-zone="2"] [data-testid="roadmap-delivered"]';
+const DELIVERED_HEADLINE = '[data-testid="roadmap-delivered-crs"]';
+const DELIVERED_CUES =
+  '[data-testid="roadmap-delivered-waves"], [data-testid="roadmap-delivered-date"]';
+const FLOW_TERMINALS = '[data-zone="2"] [data-testid="roadmap-flow-terminal"]';
+
+describe("CR-CRU-103 §S1 — the delivered summary renders as a CARD", () => {
+  test("AC1 — a border of the design's weight, its 9px radius, and a background ELEVATED from the pane", async () => {
+    const figures = await design();
+    await openWide(deliveredFixtureUrl);
+    const card = one(await boxesOf(DELIVERED_CARD), "the delivered summary");
+
+    // Non-vacuity of the weight comparison: the design's own card renders a
+    // border in this engine, so "the same weight" cannot be satisfied by no
+    // border at all.
+    expect(
+      figures.card.borderTopWidth,
+      "the artifact's own delivered card reports no border, so there is nothing to compare against",
+    ).toBeGreaterThan(0);
+    expect(
+      card.borderTopWidth,
+      `the delivered summary renders a ${round1(card.borderTopWidth)}px border where the ` +
+        `design's own card renders ${round1(figures.card.borderTopWidth)}px — both declare the ` +
+        `design's 1.5px, which Chromium rounds to whole device pixels at DPR 1`,
+    ).toBe(figures.card.borderTopWidth);
+    expect(
+      card.borderTopStyle,
+      `the delivered summary's border is ${card.borderTopStyle}, not the design's ` +
+        `${figures.card.borderTopStyle}`,
+    ).toBe(figures.card.borderTopStyle);
+    expect(
+      round1(card.radius),
+      `the delivered summary renders a ${round1(card.radius)}px corner radius against the ` +
+        `design's ${round1(figures.card.radius)}px`,
+    ).toBe(round1(figures.card.radius));
+
+    // The face, through the APP's OWN token — never a hex literal.
+    const elevated = await tokenColor("--bg-2", wide());
+    expect(elevated, "the app declares no --bg-2 token to elevate the card with").not.toBe("");
+    expect(
+      card.backgroundColor,
+      `the delivered summary paints ${card.backgroundColor} where the app's own --bg-2 token ` +
+        `resolves to ${elevated}`,
+    ).toBe(elevated);
+
+    // …and ELEVATED DISTINCTLY, which is a comparison against what is
+    // actually painted behind it rather than against a second token name.
+    const behind = await backdropOf(DELIVERED_CARD);
+    expect(behind, "nothing behind the delivered summary paints a background").not.toBe("");
+    expect(
+      sameHue(card.backgroundColor, behind),
+      `the delivered summary paints ${card.backgroundColor} on a pane painting ${behind}, so it ` +
+        `is not elevated from the pane behind it`,
+    ).toBe(false);
+  });
+
+  test("AC1a — its width is BOUNDED: the design's floor, and no wider than its content needs", async () => {
+    const figures = await design();
+    await openWide(deliveredFixtureUrl);
+    const card = one(await boxesOf(DELIVERED_CARD), "the delivered summary");
+    const facts = await boxesOf(`${DELIVERED_CARD} > *`);
+    expect(facts.length, "the delivered summary draws no facts to bound it").toBeGreaterThan(0);
+
+    // The FLOOR is the design's own declared `min-width`, read off the
+    // artifact instead of restated here.
+    expect(
+      figures.card.minWidth,
+      "the artifact's delivered card declares no min-width, so the floor has no source",
+    ).toBeGreaterThan(0);
+    expect(
+      card.width,
+      `the delivered summary measures ${round1(card.width)}px against the design's ` +
+        `${round1(figures.card.minWidth)}px floor`,
+    ).toBeGreaterThanOrEqual(figures.card.minWidth);
+
+    // The CEILING, and the whole reason AC1a was added: a floor ALONE is
+    // passed by the very sprawl this CR closes, because the broken card is
+    // wider than the floor and not narrower. This board states the DESIGN's
+    // OWN facts — sixty members, waves 1–4, the artifact's own ship date and
+    // its two packages — so the design's own card is what that content needs,
+    // measured in this same engine.
+    expect(
+      card.width,
+      `the delivered summary measures ${round1(card.width)}px for the same facts the design's ` +
+        `own card draws in ${round1(figures.card.width)}px — ` +
+        `${round1(card.width - figures.card.width)}px wider than this content needs`,
+    ).toBeLessThanOrEqual(figures.card.width);
+
+    // The same bound stated WITHOUT the artifact, so the ceiling does not rest
+    // on one comparison: a card is no wider than its widest fact plus its own
+    // chrome. Facts STACKED inside a box satisfy that; facts laid side by side
+    // across the surface do not, which is exactly the shape of the defect.
+    const chrome = card.padLeft + card.padRight + 2 * card.borderTopWidth;
+    const widest = Math.max(...facts.map((fact) => fact.width));
+    expect(
+      card.width,
+      `the delivered summary measures ${round1(card.width)}px around a widest fact of ` +
+        `${round1(widest)}px plus ${round1(chrome)}px of its own chrome, so ` +
+        `${round1(card.width - widest - chrome)}px of it is dead space`,
+    ).toBeLessThanOrEqual(widest + chrome + 1);
+  });
+
+  test("AC2 — the headline is the MONO token at 22px and the cue the SANS token at 10.5px, in one render", async () => {
+    const figures = await design();
+    await openWide(deliveredFixtureUrl);
+    const mono = await tokenFamily("--mono");
+    const sans = await tokenFamily("--sans");
+    expect(mono, "the app declares no --mono token").not.toBe("");
+    expect(sans, "the app declares no --sans token").not.toBe("");
+    // Non-vacuity: the app's two tokens really are different family CLASSES,
+    // so the two halves below cannot both be satisfied by one flat run.
+    expect(familyClass(mono), `the app's --mono token is not a monospace stack`).toBe("monospace");
+    expect(familyClass(sans), `the app's --sans token is not a sans stack`).toBe("sans-serif");
+
+    const headline = one(
+      await boxesOf(`${DELIVERED_CARD} ${DELIVERED_HEADLINE}`),
+      "the delivered headline",
+    );
+    const cues = await boxesOf(DELIVERED_CUES);
+    expect(cues.length, "the delivered summary draws no cue").toBe(2);
+
+    expect(
+      headline.fontSize,
+      `the headline ${JSON.stringify(headline.text)} renders at ${headline.fontSize}px against ` +
+        `the design's ${figures.big.fontSize}px`,
+    ).toBe(figures.big.fontSize);
+    expect(
+      headline.fontFamily,
+      `the headline renders in ${headline.fontFamily}, which is not the app's own --mono token`,
+    ).toBe(mono);
+
+    for (const cue of cues) {
+      expect(
+        cue.fontSize,
+        `the cue ${JSON.stringify(cue.text)} renders at ${cue.fontSize}px against the design's ` +
+          `${figures.cue.fontSize}px`,
+      ).toBe(figures.cue.fontSize);
+      expect(
+        cue.fontFamily,
+        `the cue ${JSON.stringify(cue.text)} renders in ${cue.fontFamily}, which is not the ` +
+          `app's own --sans token`,
+      ).toBe(sans);
+      // BOTH channels, in ONE render: a flat mono caption fails here even if a
+      // size above had somehow matched.
+      expect(
+        cue.fontSize !== headline.fontSize &&
+          familyClass(cue.fontFamily) !== familyClass(headline.fontFamily),
+        `the headline (${headline.fontSize}px ${familyClass(headline.fontFamily)}) and the cue ` +
+          `${JSON.stringify(cue.text)} (${cue.fontSize}px ${familyClass(cue.fontFamily)}) do ` +
+          `not differ in BOTH size and family class, so the summary reads as one ` +
+          `undifferentiated run`,
+      ).toBe(true);
+    }
+  });
+});
+
+describe("CR-CRU-103 AC3 — the restored card no longer displaces the release gate", () => {
+  test("AC3 — a CONNECTOR is what stands between them, and the shipped spine holds the design's own", async () => {
+    const figures = await design();
+    await openWide(deliveredFixtureUrl);
+    const pieces = await boxesOf('[data-zone="2"] > *');
+    expect(pieces.map(spineRole)).toEqual([
+      "terminal",
+      "connector",
+      "delivered",
+      "connector",
+      "gate",
+      "connector",
+      "terminal",
+    ]);
+    const card = pieces[2]!;
+    const between = pieces[3]!;
+    const gate = pieces[4]!;
+
+    expect(
+      figures.connector.width,
+      "the artifact's own connector measures nothing, so the design's width has no source",
+    ).toBeGreaterThan(0);
+    expect(
+      round1(between.width),
+      `the connector between the card and the gate measures ${round1(between.width)}px against ` +
+        `the design's ${round1(figures.connector.width)}px`,
+    ).toBe(round1(figures.connector.width));
+
+    // AC3's own words, measured: what sits between the card and the gate is
+    // that connector, and the leftover is at most one more connector's width.
+    // STATED HONESTLY — this clause holds on the pre-change render too. The
+    // spine packs from `flex-start`, so an uncontained card never opened a gap
+    // BESIDE the gate; it DISPLACED the gate, which is the next reading.
+    const leftover = gate.x - card.right - between.width;
+    expect(
+      leftover,
+      `${round1(leftover)}px of the space between the card and the gate is not the connector, ` +
+        `against the design's ${round1(figures.connector.width)}px connector`,
+    ).toBeLessThanOrEqual(figures.connector.width);
+
+    // THE DISPLACEMENT — "the large empty gap" the user reported, which is a
+    // SPINE reading: an uncontained caption pushes the diamond across the
+    // surface. Compared against the design's own SHIPPED panel rather than
+    // against CR-CRU-102's ~600px, because that figure is the PROPOSED path's
+    // (a ~300px wave box) and the design's own shipped panel is wider than it.
+    // Both sides have their own `.flow` gaps subtracted — the artifact
+    // declares `gap:0` and the app 8px — so this compares two spines and not
+    // two different kinds of figure, which is the trap CR-CRU-102 named.
+    const appGap = pieces[1]!.x - pieces[0]!.right;
+    const spine = pieces[6]!.right - pieces[0]!.x;
+    const bare = spine - appGap * (pieces.length - 1);
+    const designBare = figures.spine - figures.gap * 6;
+    expect(
+      bare,
+      `the shipped spine measures ${round1(spine)}px (${round1(bare)}px without its own ` +
+        `${round1(appGap)}px gaps) against the design's ${round1(figures.spine)}px ` +
+        `(${round1(designBare)}px without its ${round1(figures.gap)}px gaps), on a delivered ` +
+        `card of ${round1(card.width)}px that puts the gate ${round1(gate.x - pieces[0]!.x)}px ` +
+        `from the spine's start`,
+    ).toBeLessThanOrEqual(designBare);
+  });
+});
+
+describe("CR-CRU-103 §S2/AC4 — the spine's terminals are the design's CIRCLES", () => {
+  test("AC4 — zone 2's terminals measure SQUARE at the design's side with its 2px border", async () => {
+    const figures = await design();
+    // Non-vacuity: the design's own terminal really is square, so "the same
+    // side" is a circle's measurement and not a lozenge's.
+    expect(
+      Math.abs(figures.term.width - figures.term.height) <= 0.5,
+      `the artifact's own terminal measures ${round1(figures.term.width)}x` +
+        `${round1(figures.term.height)}, which is not square`,
+    ).toBe(true);
+
+    await openWide(deliveredFixtureUrl);
+    const terminals = await boxesOf(FLOW_TERMINALS);
+    expect(terminals.length, "zone 2 does not draw exactly two terminals").toBe(2);
+    for (const terminal of terminals) {
+      expect(
+        round1(terminal.width),
+        `the ${JSON.stringify(terminal.text)} terminal measures ` +
+          `${round1(terminal.width)}x${round1(terminal.height)} against the design's ` +
+          `${round1(figures.term.width)}x${round1(figures.term.height)}`,
+      ).toBe(round1(figures.term.width));
+      expect(round1(terminal.height)).toBe(round1(figures.term.height));
+      expect(
+        Math.abs(terminal.width - terminal.height) <= 0.5,
+        `the ${JSON.stringify(terminal.text)} terminal measures ` +
+          `${round1(terminal.width)}x${round1(terminal.height)} — a fully rounded box that is ` +
+          `not square is a LOZENGE, not the design's circle`,
+      ).toBe(true);
+      expect(
+        terminal.borderTopWidth,
+        `the ${JSON.stringify(terminal.text)} terminal draws a ` +
+          `${round1(terminal.borderTopWidth)}px border against the design's ` +
+          `${round1(figures.term.borderTopWidth)}px`,
+      ).toBe(figures.term.borderTopWidth);
+      // The CIRCLE is the CONSEQUENCE of the square box under the radius the
+      // rule already carries — no new radius is asserted, and none is needed.
+      expect(
+        terminal.radius >= terminal.height / 2 - 0.5,
+        `the ${JSON.stringify(terminal.text)} terminal's ${round1(terminal.radius)}px radius ` +
+          `does not reach the half-height ${round1(terminal.height / 2)}px, so its ends are ` +
+          `not round`,
+      ).toBe(true);
+    }
+  });
+});
+
+describe("CR-CRU-103 AC3a — the LIVE board corroborates the card, or says why it cannot", () => {
+  test("AC3a — the same readings on the board this project actually runs", async () => {
+    if (liveDeliveredSkip !== "") {
+      // NOT RUN, and reported as a pass — with the reason in the run's own
+      // output, never a silent green line.
+      console.log(`[cr103] AC3a live corroboration NOT RUN: ${liveDeliveredSkip}`);
+      return;
+    }
+    expect(
+      liveDeliveredZones,
+      "the live board was neither captured nor explained — beforeAll set no zones and named " +
+        "no reason, so this test would have passed without corroborating anything",
+    ).not.toBe("");
+
+    const figures = await design();
+    await openWide(liveDeliveredFixtureUrl);
+    const cards = await boxesOf(DELIVERED_CARD);
+    if (cards.length !== 1) {
+      console.log(
+        `[cr103] AC3a live corroboration NOT RUN: the live board draws ${cards.length} ` +
+          `delivered summaries, so there is no card of its own to measure`,
+      );
+      return;
+    }
+    const card = cards[0]!;
+    const headline = one(
+      await boxesOf(`${DELIVERED_CARD} ${DELIVERED_HEADLINE}`),
+      "the live delivered headline",
+    );
+    const terminals = await boxesOf(FLOW_TERMINALS);
+    const mono = await tokenFamily("--mono");
+
+    // The CHROME and the TYPE, which are product facts and hold whatever the
+    // live store happens to record. The width CEILING is deliberately NOT
+    // asserted here: the live release's own packages are its own, so its card
+    // is not the same content as the design's, and the figure is REPORTED
+    // instead of bounded against a card drawn for other facts.
+    expect(
+      card.borderTopWidth,
+      `the LIVE delivered card renders a ${round1(card.borderTopWidth)}px border against the ` +
+        `design's ${round1(figures.card.borderTopWidth)}px`,
+    ).toBe(figures.card.borderTopWidth);
+    expect(round1(card.radius)).toBe(round1(figures.card.radius));
+    expect(
+      card.width,
+      `the LIVE delivered card measures ${round1(card.width)}px against the design's ` +
+        `${round1(figures.card.minWidth)}px floor`,
+    ).toBeGreaterThanOrEqual(figures.card.minWidth);
+    expect(
+      headline.fontSize,
+      `the LIVE headline ${JSON.stringify(headline.text)} renders at ${headline.fontSize}px ` +
+        `against the design's ${figures.big.fontSize}px`,
+    ).toBe(figures.big.fontSize);
+    expect(headline.fontFamily).toBe(mono);
+    expect(terminals.length).toBe(2);
+    for (const terminal of terminals) {
+      expect(
+        Math.abs(terminal.width - terminal.height) <= 0.5,
+        `the LIVE ${JSON.stringify(terminal.text)} terminal measures ` +
+          `${round1(terminal.width)}x${round1(terminal.height)}, which is not square`,
+      ).toBe(true);
+    }
+    console.log(
+      `[cr103] AC3a live corroboration: card ${round1(card.width)}px, border ` +
+        `${round1(card.borderTopWidth)}px, radius ${round1(card.radius)}px, headline ` +
+        `${headline.fontSize}px, terminals ${round1(terminals[0]!.width)}x` +
+        `${round1(terminals[0]!.height)} — measured on ${JSON.stringify(headline.text)}`,
+    );
   });
 });
