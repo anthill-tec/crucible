@@ -3,8 +3,7 @@
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 078
-- **Status**: PENDING (0.2.0) — AC3/AC5 re-based 2026-08-28 on the paged release model; re-analysed
-  2026-09-05 after CR-CRU-078/083/105 landed (AC3 rewritten, AC6 scoped, AC8 widened, §S1 and Risk corrected)
+- **Status**: COMPLETED (0.2.0) — shipped 2026-09-05; AC3/AC5 re-based 2026-08-28, re-analysed 2026-09-05
 - **Design documents — READ THESE FIRST**: `docs/research/DN-crucible-roadmap-view.md` — the TRACKED decision record, and the governing one; **decision 7c** (`:28`, approved) is the drill-through contract this CR implements. The visual it was approved on is `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §6, §14 (2026-08-28) — absolute path, but `.lavish/` is **gitignored**, so where the two disagree or the flowchart is absent, the DN governs. Storyboard frames F14/F14½/F14a are illustrations, not the record: F14a was superseded and trimmed to a pointer on 2026-08-28 while its decision 7c survives in the DN.
 
 > The design document is the contract for this CR. Implement what it specifies — do not

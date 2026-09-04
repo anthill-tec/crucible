@@ -123,7 +123,11 @@
       // within the SAME surface (detail open/close, tab-owned pane swaps)
       // never touches the active workspace tab or the agent filter; only a
       // surface change (home↔workspace, project→project) lands on Workflow
-      // (the CR-CRU-021 §S1 primary tab).
+      // (the CR-CRU-021 §S1 primary tab). ONE CARVED EXCEPTION (CR-CRU-079
+      // §S1): the Roadmap tab is the only ROUTED tab (/p/<key>/roadmap), so
+      // it FOLLOWS the route — see roadmapTabFollows — on every same-surface
+      // move too; Runs/Coverage/Compile/BDD have no route segment and keep
+      // the state swap.
       const sameSurface =
         next.page === state.route.page &&
         (next.page !== "workspace" || next.projectKey === state.route.projectKey);
@@ -134,6 +138,39 @@
         state.selectedAgent = null;
         scopeChanged();
       }
+      roadmapTabFollows(next);
+    }
+
+    // CR-CRU-079 §S1 — the route is the source of truth for the Roadmap tab
+    // and the tab FOLLOWS it, on navigate() AND popstate: whenever the route
+    // is (re)parsed on the workspace surface, Roadmap is active iff
+    // `route.roadmap` is set. Leaving the segment lands on Workflow (the
+    // CR-CRU-021 §S1 primary tab); a tab-strip exit then sets its own tab.
+    // Roadmap-specific by design — it is the only tab with a URL to follow.
+    function roadmapTabFollows(route) {
+      if (route.page !== "workspace") return;
+      if (route.roadmap === true) state.workspaceTab = "Roadmap";
+      else if (state.workspaceTab === "Roadmap") state.workspaceTab = "Workflow";
+    }
+
+    // CR-CRU-079 §S1 — BOTH doors (tab strip + 🗺 chip) route to
+    // /p/<key>/roadmap through navigate() (pushState, so Back/Forward work —
+    // AC2c), and routing IN requires routing OUT: from the Roadmap route,
+    // every exit (another tab, the row drill-through) returns the pathname
+    // to /p/<key> first, so the address bar never claims `roadmap` while
+    // another pane is on screen (AC2b). A repeat click on the current route
+    // pushes nothing.
+    function workspacePath(suffix) {
+      return `/p/${encodeURIComponent(state.route.projectKey)}${suffix}`;
+    }
+    function selectWorkspaceTab(name) {
+      const onRoadmap = state.route.roadmap === true;
+      if (name === "Roadmap") {
+        if (!onRoadmap) navigate(workspacePath("/roadmap"));
+        return;
+      }
+      if (onRoadmap) navigate(workspacePath(""));
+      state.workspaceTab = name;
     }
 
     // CR-CRU-026 §S1 — a scope-changing transition (home↔workspace,
@@ -194,6 +231,9 @@
         next.page === prev.page &&
         (next.page !== "workspace" || next.projectKey === prev.projectKey);
       if (!sameSurface) scopeChanged();
+      // CR-CRU-079 §S1 — Back/Forward across /p/<key>/roadmap re-lands the
+      // pane, not just the URL.
+      roadmapTabFollows(next);
     });
 
     // CR-CRU-012 §S2 — close the Projects manager slide-over back to home
@@ -1909,8 +1949,10 @@
                   }`,
                 disabled: t.disabled,
                 title: t.hint ?? "",
+                // CR-CRU-079 §S1 — the Roadmap tab is a ROUTE (both doors
+                // navigate, every exit routes back); the rest stay a swap.
                 onclick: () => {
-                  if (!t.disabled) state.workspaceTab = t.name;
+                  if (!t.disabled) selectWorkspaceTab(t.name);
                 },
               },
               t.name,
@@ -2246,14 +2288,16 @@
           const p = currentProject();
           return p === null ? div() : ProjectPaneCard(p);
         },
-        // CR-CRU-014 §S3 — the 🗺 roadmap chip: a one-rule tab swap to the
-        // Roadmap tab (same destination as the /p/<key>/roadmap deep-link),
-        // no slide-over.
+        // CR-CRU-014 §S3 — the 🗺 roadmap chip: no slide-over, same
+        // destination as the /p/<key>/roadmap deep-link. CR-CRU-079 §S1
+        // supersedes CR-014's "one-rule tab swap": the chip is a DOOR onto the
+        // /p/<key>/roadmap ROUTE (navigate(), pushState) and the tab FOLLOWS
+        // the route — byte-identical pathname to the tab-strip door (AC2).
         button(
           {
             "data-testid": "roadmap-chip",
             class: "app-chip app-roadmap-chip",
-            onclick: () => (state.workspaceTab = "Roadmap"),
+            onclick: () => selectWorkspaceTab("Roadmap"),
           },
           "🗺 roadmap",
         ),
@@ -2477,17 +2521,20 @@
         class: () =>
           `app-roadmap-row${active ? " on" : ""}${selected() ? " selected" : ""}`,
         // §S7 — one click, two effects. It SELECTS, which is what highlights
-        // the flowchart node for the same entry (AC17), and it drills: the
-        // one-rule tab swap (no overlay), the SAME gate the flowchart node
-        // uses — an open (IN_PROGRESS) row lands on the Workflow tab at that
-        // CR's active section; a COMPLETED row lands on its Workflow history
-        // group; a PENDING or COMPLETED_UNTRACKED row is inert, there is no
-        // plan to land on. The selection outlives the swap because it is held
-        // outside the render tree, which is what makes the highlight readable
-        // for the rows a user clicks most.
+        // the flowchart node for the same entry (AC17), and it drills: a
+        // ROUTE-OUT to /p/<key> (CR-CRU-079 §S1 — every Roadmap exit routes;
+        // CR-078's "one-rule tab swap" wording is superseded), no overlay,
+        // the SAME gate the flowchart node uses — an open (IN_PROGRESS) row
+        // lands on the Workflow tab at that CR's active section; a COMPLETED
+        // row lands on its Workflow history group; a PENDING or
+        // COMPLETED_UNTRACKED row is inert (neither tab nor pathname moves,
+        // no history entry — AC6), there is no plan to land on. The selection
+        // outlives the route because it is held outside the render tree,
+        // which is what makes the highlight readable for the rows a user
+        // clicks most.
         onclick: () => {
           roadmapSelectOn(entry.cr);
-          roadmapDrillIn(entry.status);
+          roadmapDrillIn(entry);
         },
       };
       // CR-CRU-091/AC18 — the STORED position, verbatim, omitted when absent.
@@ -2682,9 +2729,9 @@
     // DELIVERED and reconstructs no waves at all — the Workflow history view
     // owns those, and duplicating them here is an explicit non-goal (§S4/AC8).
 
-    // CR-CRU-083 AC7 — the one-rule Workflow swap, status-gated: only a CR
-    // with a plan to land on is landable, so a PENDING or COMPLETED_UNTRACKED
-    // node is inert. Node and row share the predicate because they are two
+    // CR-CRU-083 AC7 — the Workflow drill, status-gated: only a CR with a
+    // plan to land on is landable, so a PENDING or COMPLETED_UNTRACKED node
+    // is inert. Node and row share the predicate because they are two
     // renderings of one entry, and they must not disagree about it.
     //
     // §S7/AC18 — and the MARK is read off the SAME predicate, so a row can
@@ -2694,8 +2741,45 @@
     // before it is clicked.
     const roadmapDrillable = (status) => status === "IN_PROGRESS" || status === "COMPLETED";
 
-    const roadmapDrillIn = (status) => {
-      if (roadmapDrillable(status)) state.workspaceTab = "Workflow";
+    // CR-CRU-079 §S1 — the drill is a ROUTE-OUT, not a tab swap: it leaves
+    // the Roadmap route through the same door as any other exit, and the
+    // tab follows the route onto Workflow.
+    //
+    // CR-CRU-079 §S2 — and it CARRIES its CR. The target is hoisted
+    // addressed state (project-keyed Map + rev, exactly `roadmapSelectedCrs`
+    // below, and for the same reason: this click unmounts the pane). The
+    // landing ADDS the target's `cr:` key to the Workflow pane's own
+    // `lensOpenKeys` — the one expansion holder, never an "expand all" — and
+    // the Workflow pane marks the ONE element it lands on with
+    // `data-drill-target` (the mirror of the row's `data-drill-source`) and
+    // scrolls it into view. A closed plan lands on its history `cr-group`;
+    // an OPEN plan has no history group (CR-CRU-020 §S1.3), so an
+    // IN_PROGRESS CR lands on its ACTIVE root — "that CR's active cycles",
+    // DN decision 7c.
+    const roadmapDrillTargets = new Map();
+    const roadmapDrillRev = van.state(0);
+    const roadmapDrillTarget = () =>
+      roadmapDrillRev.val >= 0 ? roadmapDrillTargets.get(state.route.projectKey) : undefined;
+    const roadmapDrillIn = (entry) => {
+      if (!roadmapDrillable(entry.status)) return;
+      roadmapDrillTargets.set(state.route.projectKey, entry.cr);
+      roadmapDrillRev.val += 1;
+      const crKey = lensKey("cr", entry.cr);
+      if (!lensOpenKeys.has(crKey)) {
+        lensOpenKeys.add(crKey);
+        lensOpenRev.val += 1;
+      }
+      selectWorkspaceTab("Workflow");
+      revealDrillTarget(entry.cr);
+    };
+    // §S2 — `← roadmap`: the target is consumed and the roadmap is re-entered
+    // by ROUTE (§S1). `roadmapFocusVersions` and `roadmapStripOffsets` are
+    // not touched, so the focused release and page window the user left are
+    // the ones they return to (AC5).
+    const roadmapDrillOut = () => {
+      roadmapDrillTargets.delete(state.route.projectKey);
+      roadmapDrillRev.val += 1;
+      selectWorkspaceTab("Roadmap");
     };
 
     // §S7/AC17 — the SELECTED CR: ONE value, two renderings. Zone 2's node and
@@ -2765,7 +2849,7 @@
         // row beside it) and it drills, for an entry that has somewhere to go.
         onclick: () => {
           roadmapSelectOn(entry.cr);
-          roadmapDrillIn(entry.status);
+          roadmapDrillIn(entry);
         },
       };
       // CR-CRU-091/AC18 — the STORED position, published verbatim and OMITTED
@@ -3819,6 +3903,22 @@
       }
     };
 
+    // CR-CRU-079 §S2 — the drill-through's landing scroll, the same retry
+    // shape as `revealCycleRow` above: the Workflow pane mounts its marked
+    // target asynchronously after the route-out, so wait for the ONE element
+    // wearing `data-drill-target` for this CR, then scroll + blink it.
+    const revealDrillTarget = (cr, attempts = 0) => {
+      const el = document.querySelector(`[data-drill-target="true"][data-cr="${cr}"]`);
+      if (el !== null) {
+        el.scrollIntoView();
+        locateBlink(el);
+        return;
+      }
+      if (attempts < 30) {
+        setTimeout(() => revealDrillTarget(cr, attempts + 1), 5);
+      }
+    };
+
     // CR-CRU-025 §S2 — the trailing "⚑ Cycle" badge on a declared boundary
     // marker. A SEPARATE node from the marker body; clicking it (and ONLY it —
     // stopPropagation keeps the click off C3's future accordion body) flips the
@@ -3924,6 +4024,15 @@
     const scopedPlans = () =>
       state.plans.filter((p) => p.projectKey === state.route.projectKey);
 
+    // CR-CRU-079 §S2 — the OPEN plan's root is the drill-through target for
+    // an IN_PROGRESS CR (it has no history group to land on), so it wears
+    // the mark when the hoisted target names it.
+    const crRootProps = (cr) => {
+      const props = { "data-testid": "workflow-cr-root", "data-cr": cr, class: "app-cr-root" };
+      if (roadmapDrillTarget() === cr) props["data-drill-target"] = "true";
+      return props;
+    };
+
     const WorkflowActive = () => {
       const openPlans = scopedPlans().filter((p) => p.status === "open");
       return div(
@@ -3949,7 +4058,7 @@
                 // independently omitted when absent), the cycle rows
                 // INDENTED beneath it.
                 div(
-                  { "data-testid": "workflow-cr-root", "data-cr": plan.cr, class: "app-cr-root" },
+                  crRootProps(plan.cr),
                   span(
                     { "data-testid": "cr-root-id", class: "app-heat-ink" },
                     plan.cr,
@@ -4144,13 +4253,17 @@
 
     const LensCrGroup = (node) => {
       const key = lensKey("cr", node.cr);
+      const props = {
+        "data-testid": "cr-group",
+        "data-cr": node.cr,
+        "data-status": node.status ?? "inferred",
+        class: "app-cr-group",
+      };
+      // CR-CRU-079 §S2 — the closed plan's group is the drill-through target
+      // for a COMPLETED CR; the landing already opened `key`.
+      if (roadmapDrillTarget() === node.cr) props["data-drill-target"] = "true";
       return div(
-        {
-          "data-testid": "cr-group",
-          "data-cr": node.cr,
-          "data-status": node.status ?? "inferred",
-          class: "app-cr-group",
-        },
+        props,
         // CR-CRU-020 §S1.2 — the existing header row IS the toggle; only the
         // cycle list collapses (by default) beneath it. CR-CRU-021 §S6 #6/#9
         // — the collapsed form is INLINE DIM TEXT, not pill-chips:
@@ -4283,10 +4396,25 @@
 
     // CR-CRU-021 §S6 #10 — NO `Workflow — <project>` rail-title above the
     // active header: the F13 header structure is the pane's whole top.
+    // CR-CRU-079 §S2 — `← roadmap`, the DN's own words: the way back from a
+    // drill-through landing, rendered only while a target is held.
+    const WorkflowBackToRoadmap = () =>
+      roadmapDrillTarget() === undefined
+        ? ""
+        : button(
+            {
+              "data-testid": "workflow-back-to-roadmap",
+              class: "app-chip",
+              onclick: () => roadmapDrillOut(),
+            },
+            "← roadmap",
+          );
+
     const WorkflowFeed = () =>
       div(
         { "data-testid": "pane-scroll", class: "app-pane-content" },
         paneRunway(
+          () => WorkflowBackToRoadmap(),
           div(
             { class: "app-workflow-cols" },
             () => WorkflowPrimary(),
