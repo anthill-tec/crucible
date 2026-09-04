@@ -3,8 +3,8 @@
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
 - **Depends on**: none — `cr-plan` and `wave-sequence` already exist and are untouched by this
-- **Status**: PENDING (0.2.0) — filed 2026-09-04, gap-analysed 2026-09-04 (6 findings; AC5 ruled by
-  the user, AC9 simplified, ACs 10-11 added)
+- **Status**: COMPLETED (0.2.0) — filed 2026-09-04, gap-analysed 2026-09-04 (6 findings; AC5 ruled by
+  the user, AC9 simplified, ACs 10-11 added), shipped 2026-09-04
 - **Approved by**: the user, 2026-09-04, in the Lavish artifact — **shape A of three offered**, now
   recorded as **step 2b** of the design's ordered call chain
 
