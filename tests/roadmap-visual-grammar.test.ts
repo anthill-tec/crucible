@@ -5633,15 +5633,18 @@ describe("CR-CRU-085 §S2/AC5 — the lane grid is the design's two columns, mea
 // name, `aria-expanded`, where the control sits, the greyed() composition, the
 // roadmap's unchanged content) lives in tests/workspace-rail-collapse.test.ts.
 //
-// WHY IT BRINGS ITS OWN SERVER, BROWSER AND PAGE. Every measurement above is
-// taken on a STATIC capture — `fixtureDocument` serves serialised zones with
+// WHY IT BRINGS ITS OWN SERVER AND PAGE (ON THE FILE'S BROWSER). Every
+// measurement above is taken on a STATIC capture — `fixtureDocument` serves
+// serialised zones with
 // no script at all, deliberately, "so nothing can re-lay-out what is being
 // measured". A collapse is a CLICK: it needs the whole shell running, its own
 // grid container, and a real `.app-pane` beside a real `.app-center`. So this
 // block serves the REAL public/index.html with the REAL scripts against a
 // scripted API, in its own page at the 1600×900 the design's figures were
 // measured at — leaving the 1440×1000 and wide pages, and the 84 assertions
-// that read them, untouched.
+// that read them, untouched. That page is opened on the file's OWN Chromium
+// (`sharedBrowser`): its own BrowserContext keeps it as isolated as a separate
+// browser did, at one process instead of three.
 //
 // RED phase — expected to FAIL against current production, which renders no
 // collapse affordance anywhere: `ProjectPane` (public/app.js) has a section
@@ -5662,9 +5665,84 @@ const SLIVER_MAX_W = 36;
 const RAIL_GAIN_FLOOR = 1.3;
 
 let railServer: Server<undefined> | null = null;
-let railBrowser: Browser | null = null;
 let railPage: Page | null = null;
 let railUrl = "";
+
+/** Per-step deadlines, every one of them well inside the 180s/300s budgets of
+ *  the tests that contain them, so a stall reports the STEP it stalled on and
+ *  not merely "this test timed out". */
+const OPEN_MS = 60_000;
+const NAV_MS = 60_000;
+const PROBE_MS = 30_000;
+const CLOSE_MS = 30_000;
+
+/** Both CR-CRU-093 blocks run their pages on the file's OWN Chromium, launched
+ *  once in the top-level `beforeAll`. Launching one per block put THREE
+ *  Chromium processes in this single file — load this file never carried
+ *  before this CR, and the most likely cause of the §S5 stall seen under the
+ *  full suite. `newPage()` still gives each block its own BrowserContext, so
+ *  storage, cookies and instrumentation stay isolated exactly as they were.
+ *  The browser is closed by the file's own `afterAll`, never by a block. */
+const sharedBrowser = (): Browser => {
+  if (browser === null) throw new Error("CR-CRU-093: the file's Chromium never launched");
+  return browser;
+};
+
+/** Bound ONE await, and name it. Playwright's own defaults cover navigation
+ *  and locator waits, but `newPage`, `evaluate` and `close` carry no deadline
+ *  at all: a page wedged in one of those burns the entire test budget and
+ *  reports only "timed out", naming nothing. Every await below therefore
+ *  fails fast and says which step stalled. The losing operation is left to
+ *  Playwright — the page it belongs to is closed in teardown. */
+async function step<T>(what: string, ms: number, run: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const running = run();
+  // A step that loses to its deadline keeps running: its eventual rejection —
+  // typically "Target closed" once teardown reaps the page — may not surface
+  // as an unhandled rejection and take the whole run down with it.
+  running.catch(() => {});
+  try {
+    return await Promise.race([
+      running,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`no result within ${ms}ms`)), ms);
+      }),
+    ]);
+  } catch (error) {
+    // The step's NAME in front of whatever went wrong, so the report reads
+    // "AC11 stalled opening its page" and never a bare "timed out" with the
+    // whole budget burnt and no location.
+    throw new Error(
+      `CR-CRU-093: ${what} — ${error instanceof Error ? error.message : String(error)}`,
+    );
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/** Teardown may never BE the failure. Closing a page that is already gone, or
+ *  one wedged behind a hung evaluate, surfaces as an `(unnamed)` hook timeout
+ *  that tells a reader nothing and buries the test failure that caused it. So
+ *  a close that throws or stalls is reported by name and stepped over, and the
+ *  rest of the teardown still runs. */
+async function closeQuietly(what: string, close: () => Promise<unknown>): Promise<void> {
+  try {
+    await step(`closing ${what}`, CLOSE_MS, close);
+  } catch (error) {
+    console.log(`CR-CRU-093 teardown: ${what} did not close cleanly — ${String(error)}`);
+  }
+}
+
+/** Same, for the throwaway servers: a stop that throws may not strand the
+ *  teardown that follows it. */
+function stopQuietly(what: string, server: Server<undefined> | null): void {
+  if (server === null) return;
+  try {
+    server.stop(true);
+  } catch (error) {
+    console.log(`CR-CRU-093 teardown: ${what} did not stop cleanly — ${String(error)}`);
+  }
+}
 
 const CONTENT_TYPES: Record<string, string> = {
   ".js": "text/javascript; charset=utf-8",
@@ -5738,11 +5816,17 @@ const railPageEl = (): Page => {
  *  the default once CR-CRU-093 §S4's persistence lands. */
 async function liveWorkspace(): Promise<Page> {
   const p = railPageEl();
-  await p.goto(railUrl, { waitUntil: "load" });
-  await p.evaluate(() => window.localStorage.clear());
-  await p.reload({ waitUntil: "load" });
-  await p.waitForSelector(RAIL_CENTER, { state: "attached", timeout: 30_000 });
-  await p.waitForSelector(RAIL_PANE, { state: "attached", timeout: 30_000 });
+  await step("the live shell's first load", NAV_MS, () => p.goto(railUrl, { waitUntil: "load" }));
+  await step("clearing the live shell's storage", PROBE_MS, () =>
+    p.evaluate(() => window.localStorage.clear()),
+  );
+  await step("the live shell's reload", NAV_MS, () => p.reload({ waitUntil: "load" }));
+  await step(`waiting for ${RAIL_CENTER}`, NAV_MS, () =>
+    p.waitForSelector(RAIL_CENTER, { state: "attached", timeout: 30_000 }),
+  );
+  await step(`waiting for ${RAIL_PANE}`, NAV_MS, () =>
+    p.waitForSelector(RAIL_PANE, { state: "attached", timeout: 30_000 }),
+  );
   return p;
 }
 
@@ -5819,18 +5903,18 @@ describe("CR-CRU-093 — the project rail collapses to a sliver", () => {
       },
     });
     railUrl = `http://127.0.0.1:${railServer.port}/p/${RAIL_KEY}/roadmap`;
-    railBrowser = await chromium.launch();
-    railPage = await railBrowser.newPage({ viewport: RAIL_VIEWPORT });
+    railPage = await step("opening the live-shell page", OPEN_MS, () =>
+      sharedBrowser().newPage({ viewport: RAIL_VIEWPORT }),
+    );
   }, 180_000);
 
   afterAll(async () => {
-    if (railPage !== null) await railPage.close();
-    if (railBrowser !== null) await railBrowser.close();
-    if (railServer !== null) railServer.stop(true);
+    const openPage = railPage;
+    if (openPage !== null) await closeQuietly("the live-shell page", () => openPage.close());
+    stopQuietly("the live-shell server", railServer);
     railPage = null;
-    railBrowser = null;
     railServer = null;
-  });
+  }, 120_000);
 
   test("AC1 — collapsing hands the view column at least 1.30x its width, and the rail keeps a sliver of at most 36px", async () => {
     const p = await liveWorkspace();
@@ -5966,7 +6050,6 @@ const PANE_CHILD_FLOOR = 660;
 const SLIVER_LABEL = "project · vitals";
 
 let sweepServer: Server<undefined> | null = null;
-let sweepBrowser: Browser | null = null;
 let sweepPage: Page | null = null;
 let sweepUrl = "";
 
@@ -6022,11 +6105,6 @@ function serveShell(api: (pathname: string) => Response | null): Server<undefine
   });
 }
 
-const sweepBrowserEl = (): Browser => {
-  if (sweepBrowser === null) throw new Error("CR-CRU-093 §S5: no Chromium browser");
-  return sweepBrowser;
-};
-
 const sweepPageEl = (): Page => {
   if (sweepPage === null) throw new Error("CR-CRU-093 §S5: no Chromium page");
   return sweepPage;
@@ -6035,69 +6113,92 @@ const sweepPageEl = (): Page => {
 /** A clean workspace on the Roadmap route with NOTHING stored — every sweep
  *  starts from the shell's own default, whatever §S4 later persists. */
 async function freshWorkspace(p: Page): Promise<void> {
-  await p.goto(sweepUrl, { waitUntil: "load" });
-  await p.evaluate(() => window.localStorage.clear());
-  await p.reload({ waitUntil: "load" });
-  await p.waitForSelector(RAIL_PANE, { state: "attached", timeout: 30_000 });
-  await p.waitForSelector('[data-testid="pane-scroll"]', { state: "attached", timeout: 30_000 });
+  await step("the sweep shell's first load", NAV_MS, () => p.goto(sweepUrl, { waitUntil: "load" }));
+  await step("clearing the sweep shell's storage", PROBE_MS, () =>
+    p.evaluate(() => window.localStorage.clear()),
+  );
+  await step("the sweep shell's reload", NAV_MS, () => p.reload({ waitUntil: "load" }));
+  await step(`waiting for ${RAIL_PANE}`, NAV_MS, () =>
+    p.waitForSelector(RAIL_PANE, { state: "attached", timeout: 30_000 }),
+  );
+  await step('waiting for [data-testid="pane-scroll"]', NAV_MS, () =>
+    p.waitForSelector('[data-testid="pane-scroll"]', { state: "attached", timeout: 30_000 }),
+  );
 }
 
 /** The rail's state as the shell publishes it — `aria-expanded` on the one
  *  control, read by accessible name (never a class token). */
 async function railIsCollapsed(p: Page): Promise<boolean> {
-  return p.evaluate(() => {
-    const named = Array.from(document.querySelectorAll("button")).filter((button) => {
-      const name = (button.getAttribute("aria-label") ?? button.textContent ?? "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase();
-      return name === "collapse project rail" || name === "expand project rail";
-    });
-    if (named.length !== 1) {
-      throw new Error(
-        `CR-CRU-093 §S2: expected exactly ONE rail control; found ${named.length}`,
-      );
-    }
-    return named[0]!.getAttribute("aria-expanded") === "false";
-  });
+  return step("reading the rail control's aria-expanded", PROBE_MS, () =>
+    p.evaluate(() => {
+      const named = Array.from(document.querySelectorAll("button")).filter((button) => {
+        const name = (button.getAttribute("aria-label") ?? button.textContent ?? "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toLowerCase();
+        return name === "collapse project rail" || name === "expand project rail";
+      });
+      if (named.length !== 1) {
+        throw new Error(
+          `CR-CRU-093 §S2: expected exactly ONE rail control; found ${named.length}`,
+        );
+      }
+      return named[0]!.getAttribute("aria-expanded") === "false";
+    }),
+  );
 }
 
 /** Drive the rail to a state through its own control, and wait for the grid to
  *  settle at the width that state implies. */
 async function setRail(p: Page, collapsed: boolean): Promise<void> {
   if ((await railIsCollapsed(p)) === collapsed) return;
-  await (await railControl(p, collapsed ? COLLAPSE_NAME : EXPAND_NAME)).click();
-  await p.waitForFunction(
-    ({ max, want }) => {
-      const pane = document.querySelector('[data-testid="project-pane"]');
-      if (pane === null) return false;
-      const width = pane.getBoundingClientRect().width;
-      return want ? width <= max : width > max;
-    },
-    { max: SLIVER_MAX_W, want: collapsed },
-    { timeout: 5_000 },
+  const state = collapsed ? "collapsed" : "expanded";
+  const control = await step(`finding the rail control to go ${state}`, PROBE_MS, () =>
+    railControl(p, collapsed ? COLLAPSE_NAME : EXPAND_NAME),
+  );
+  await step(`clicking the rail control to go ${state}`, PROBE_MS, () => control.click());
+  await step(`waiting for the pane to settle ${state}`, PROBE_MS, () =>
+    p.waitForFunction(
+      ({ max, want }) => {
+        const pane = document.querySelector('[data-testid="project-pane"]');
+        if (pane === null) return false;
+        const width = pane.getBoundingClientRect().width;
+        return want ? width <= max : width > max;
+      },
+      { max: SLIVER_MAX_W, want: collapsed },
+      { timeout: 5_000 },
+    ),
   );
 }
 
 /** Select a tab through the shell's own strip and wait for its pane. */
 async function selectTab(p: Page, name: string): Promise<void> {
-  await p.locator('[data-testid="workspace-tab"]', { hasText: new RegExp(`^${name}$`) }).click();
-  await p.waitForFunction(
-    (want) =>
-      Array.from(document.querySelectorAll('[data-testid="workspace-tab"]')).some(
-        (tab) => (tab.textContent ?? "").trim() === want && tab.classList.contains("on"),
-      ),
-    name,
-    { timeout: 10_000 },
+  await step(`clicking the ${name} tab`, PROBE_MS, () =>
+    p.locator('[data-testid="workspace-tab"]', { hasText: new RegExp(`^${name}$`) }).click(),
   );
-  await p.waitForSelector('[data-testid="pane-scroll"]', { state: "attached", timeout: 30_000 });
+  await step(`waiting for the ${name} tab to read selected`, PROBE_MS, () =>
+    p.waitForFunction(
+      (want) =>
+        Array.from(document.querySelectorAll('[data-testid="workspace-tab"]')).some(
+          (tab) => (tab.textContent ?? "").trim() === want && tab.classList.contains("on"),
+        ),
+      name,
+      { timeout: 10_000 },
+    ),
+  );
+  await step(`waiting for the ${name} pane`, NAV_MS, () =>
+    p.waitForSelector('[data-testid="pane-scroll"]', { state: "attached", timeout: 30_000 }),
+  );
   // One settled frame after the swap, so a pane measured here is a pane the
-  // engine has finished laying out.
-  await p.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      }),
+  // engine has finished laying out. Bounded: a page whose frames have stopped
+  // ticking never resolves this, and that is precisely the stall to name.
+  await step(`waiting for a settled frame on the ${name} pane`, PROBE_MS, () =>
+    p.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }),
+    ),
   );
 }
 
@@ -6105,28 +6206,38 @@ describe("CR-CRU-093 §S5 — every view survives the width change", () => {
   beforeAll(async () => {
     sweepServer = serveShell(sweepApi);
     sweepUrl = `http://127.0.0.1:${sweepServer.port}/p/${SWEEP_KEY}/roadmap`;
-    sweepBrowser = await chromium.launch();
-    sweepPage = await sweepBrowser.newPage({ viewport: RAIL_VIEWPORT });
+    sweepPage = await step("opening the sweep page", OPEN_MS, () =>
+      sharedBrowser().newPage({ viewport: RAIL_VIEWPORT }),
+    );
   }, 180_000);
 
   afterAll(async () => {
-    if (sweepPage !== null) await sweepPage.close();
-    if (sweepBrowser !== null) await sweepBrowser.close();
-    if (sweepServer !== null) sweepServer.stop(true);
+    const openPage = sweepPage;
+    if (openPage !== null) await closeQuietly("the sweep page", () => openPage.close());
+    stopQuietly("the sweep server", sweepServer);
     sweepPage = null;
-    sweepBrowser = null;
     sweepServer = null;
-  });
+  }, 120_000);
 
   test("AC5 — a reload after collapsing paints the rail collapsed on the FIRST frame, with no expanded flash", async () => {
-    // Its own page: the sampler below is installed for every subsequent
-    // document in the page, and the sweep pages must stay uninstrumented.
-    const p = await sweepBrowserEl().newPage({ viewport: RAIL_VIEWPORT });
+    // Its own page, and the ONE case here that cannot share `sweepPage`:
+    // `addInitScript` below instruments every subsequent document in whatever
+    // page it is installed on, and AC7/AC11 must measure an uninstrumented
+    // shell. The page is opened on the file's shared browser all the same.
+    const p = await step("opening the first-paint page", OPEN_MS, () =>
+      sharedBrowser().newPage({ viewport: RAIL_VIEWPORT }),
+    );
     try {
-      await p.goto(sweepUrl, { waitUntil: "load" });
-      await p.evaluate(() => window.localStorage.clear());
-      await p.reload({ waitUntil: "load" });
-      await p.waitForSelector(RAIL_PANE, { state: "attached", timeout: 30_000 });
+      await step("the first-paint page's first load", NAV_MS, () =>
+        p.goto(sweepUrl, { waitUntil: "load" }),
+      );
+      await step("clearing the first-paint page's storage", PROBE_MS, () =>
+        p.evaluate(() => window.localStorage.clear()),
+      );
+      await step("the first-paint page's reload", NAV_MS, () => p.reload({ waitUntil: "load" }));
+      await step(`waiting for ${RAIL_PANE}`, NAV_MS, () =>
+        p.waitForSelector(RAIL_PANE, { state: "attached", timeout: 30_000 }),
+      );
       await setRail(p, true);
       const collapsedWidth = await measuredWidth(p, RAIL_PANE);
       expect(collapsedWidth).toBeLessThanOrEqual(SLIVER_MAX_W);
@@ -6136,25 +6247,31 @@ describe("CR-CRU-093 §S5 — every view survives the width change", () => {
       // "no expanded flash" clause falsifiable: an implementation that mounts
       // expanded and applies the stored preference in an effect leaves a
       // rail-wide frame in the record, even if it is invisible to the eye.
-      await p.addInitScript(() => {
-        const widths: number[] = [];
-        (window as unknown as { __railFirstPaint: number[] }).__railFirstPaint = widths;
-        const sample = (): void => {
-          const pane = document.querySelector('[data-testid="project-pane"]');
-          if (pane !== null) widths.push(Math.round(pane.getBoundingClientRect().width));
+      await step("installing the first-paint sampler", PROBE_MS, () =>
+        p.addInitScript(() => {
+          const widths: number[] = [];
+          (window as unknown as { __railFirstPaint: number[] }).__railFirstPaint = widths;
+          const sample = (): void => {
+            const pane = document.querySelector('[data-testid="project-pane"]');
+            if (pane !== null) widths.push(Math.round(pane.getBoundingClientRect().width));
+            requestAnimationFrame(sample);
+          };
           requestAnimationFrame(sample);
-        };
-        requestAnimationFrame(sample);
-      });
+        }),
+      );
 
-      await p.reload({ waitUntil: "load" });
-      await p.waitForSelector(RAIL_PANE, { state: "attached", timeout: 30_000 });
+      await step("the sampled reload", NAV_MS, () => p.reload({ waitUntil: "load" }));
+      await step(`waiting for ${RAIL_PANE} on the sampled load`, NAV_MS, () =>
+        p.waitForSelector(RAIL_PANE, { state: "attached", timeout: 30_000 }),
+      );
       // Let the shell finish booting — its first data frames land here, and a
       // late re-expand is exactly what this test refuses to miss.
       await p.waitForTimeout(1_500);
 
-      const widths = await p.evaluate(
-        () => (window as unknown as { __railFirstPaint?: number[] }).__railFirstPaint ?? [],
+      const widths = await step("reading the sampled widths", PROBE_MS, () =>
+        p.evaluate(
+          () => (window as unknown as { __railFirstPaint?: number[] }).__railFirstPaint ?? [],
+        ),
       );
       // Non-vacuity: an empty record would pass every bound below.
       expect(widths.length).toBeGreaterThan(5);
@@ -6163,21 +6280,29 @@ describe("CR-CRU-093 §S5 — every view survives the width change", () => {
       // …and no expanded frame anywhere after it.
       expect(Math.max(...widths)).toBeLessThanOrEqual(SLIVER_MAX_W);
     } finally {
-      await p.close();
+      await closeQuietly("the first-paint page", () => p.close());
     }
   }, 180_000);
 
   test("AC7 — every tab the shell declares renders clean at 1600x900, rail expanded AND collapsed", async () => {
     const p = sweepPageEl();
+    // This case states its own viewport rather than inheriting the page's: AC11
+    // shares this page at the 1024×640 floor, and "at 1600x900" is this test's
+    // claim, not an artefact of what ran before it.
+    await step("sizing the sweep page to 1600x900", PROBE_MS, () =>
+      p.setViewportSize(RAIL_VIEWPORT),
+    );
     await freshWorkspace(p);
 
     // The tab list comes from the shell's own strip — AC7 sweeps "its own
     // tab-name union", not an array this file maintains.
-    const tabs = await p.$$eval('[data-testid="workspace-tab"]', (els) =>
-      els.map((el) => ({
-        name: (el.textContent ?? "").trim(),
-        disabled: (el as HTMLButtonElement).disabled,
-      })),
+    const tabs = await step("reading the shell's tab strip", PROBE_MS, () =>
+      p.$$eval('[data-testid="workspace-tab"]', (els) =>
+        els.map((el) => ({
+          name: (el.textContent ?? "").trim(),
+          disabled: (el as HTMLButtonElement).disabled,
+        })),
+      ),
     );
     // Non-vacuity, both halves: six today, and every one of them selectable —
     // a gated tab would drop silently out of the matrix.
@@ -6190,16 +6315,18 @@ describe("CR-CRU-093 §S5 — every view survives the width change", () => {
       const state = collapsed ? "collapsed" : "expanded";
       for (const { name } of tabs) {
         await selectTab(p, name);
-        const measured = await p.evaluate(() => {
-          const scroller = document.querySelector('[data-testid="pane-scroll"]');
-          return {
-            found: scroller !== null,
-            scrollWidth: scroller === null ? 0 : scroller.scrollWidth,
-            clientWidth: scroller === null ? 0 : scroller.clientWidth,
-            bodyScrollWidth: document.body.scrollWidth,
-            innerWidth: window.innerWidth,
-          };
-        });
+        const measured = await step(`measuring ${name} (${state})`, PROBE_MS, () =>
+          p.evaluate(() => {
+            const scroller = document.querySelector('[data-testid="pane-scroll"]');
+            return {
+              found: scroller !== null,
+              scrollWidth: scroller === null ? 0 : scroller.scrollWidth,
+              clientWidth: scroller === null ? 0 : scroller.clientWidth,
+              bodyScrollWidth: document.body.scrollWidth,
+              innerWidth: window.innerWidth,
+            };
+          }),
+        );
         if (!measured.found) {
           offenders.push(`${name} (${state}): no [data-testid="pane-scroll"] rendered`);
         } else if (measured.scrollWidth > measured.clientWidth) {
@@ -6222,56 +6349,66 @@ describe("CR-CRU-093 §S5 — every view survives the width change", () => {
   }, 300_000);
 
   test("AC11 — at 1024x640 the collapsed rail keeps the page unscrolled, the 660px pane floor unbroken, and its own sliver content inside the pane", async () => {
-    const p = await sweepBrowserEl().newPage({ viewport: FLOOR_VIEWPORT });
+    // AC11 SHARES the sweep page rather than opening a fourth: it states the
+    // floor viewport itself, and `freshWorkspace` reloads from cleared storage,
+    // so it begins on a clean document that owes nothing to AC7 — and the file
+    // holds ONE Chromium instead of three.
+    const p = sweepPageEl();
+    await step("sizing the sweep page to 1024x640", PROBE_MS, () =>
+      p.setViewportSize(FLOOR_VIEWPORT),
+    );
     try {
       await freshWorkspace(p);
       await setRail(p, true);
 
-      const measured = await p.evaluate(
-        ({ expandName, label }) => {
-          const norm = (text: string | null): string =>
-            (text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
-          const box = (el: Element) => {
-            const r = el.getBoundingClientRect();
-            return {
-              left: Math.round(r.left * 10) / 10,
-              right: Math.round(r.right * 10) / 10,
-              top: Math.round(r.top * 10) / 10,
-              bottom: Math.round(r.bottom * 10) / 10,
-              width: Math.round(r.width * 10) / 10,
-              height: Math.round(r.height * 10) / 10,
+      const measured = await step("measuring the collapsed floor layout", PROBE_MS, () =>
+        p.evaluate(
+          ({ expandName, label }) => {
+            const norm = (text: string | null): string =>
+              (text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+            const box = (el: Element) => {
+              const r = el.getBoundingClientRect();
+              return {
+                left: Math.round(r.left * 10) / 10,
+                right: Math.round(r.right * 10) / 10,
+                top: Math.round(r.top * 10) / 10,
+                bottom: Math.round(r.bottom * 10) / 10,
+                width: Math.round(r.width * 10) / 10,
+                height: Math.round(r.height * 10) / 10,
+              };
             };
-          };
-          const pane = document.querySelector('[data-testid="project-pane"]');
-          const center = document.querySelector('[data-testid="workspace-body"] > .app-center');
-          if (pane === null || center === null) {
-            throw new Error("CR-CRU-093 AC11: the workspace body has no pane or no view column");
-          }
-          const buttons = Array.from(pane.querySelectorAll("button")).filter(
-            (button) => norm(button.getAttribute("aria-label") ?? button.textContent) === expandName,
-          );
-          // The sliver's WORDS, found by the words themselves — the element
-          // that carries them and nothing else (§S2: "the pane's own
-          // `Project · Vitals` label, rotated").
-          const labels = Array.from(pane.querySelectorAll("*")).filter(
-            (el) => el.children.length === 0 && norm(el.textContent) === label,
-          );
-          return {
-            pane: box(pane),
-            center: box(center),
-            button: buttons.length === 1 ? box(buttons[0]!) : null,
-            buttonCount: buttons.length,
-            label: labels.length === 1 ? box(labels[0]!) : null,
-            labelCount: labels.length,
-            paneChildren: Array.from(document.querySelectorAll(".app-pane-content > *")).map(
-              (el) => Math.round(el.getBoundingClientRect().width),
-            ),
-            bodyScrollWidth: document.body.scrollWidth,
-            innerWidth: window.innerWidth,
-            innerHeight: window.innerHeight,
-          };
-        },
-        { expandName: EXPAND_NAME, label: SLIVER_LABEL },
+            const pane = document.querySelector('[data-testid="project-pane"]');
+            const center = document.querySelector('[data-testid="workspace-body"] > .app-center');
+            if (pane === null || center === null) {
+              throw new Error("CR-CRU-093 AC11: the workspace body has no pane or no view column");
+            }
+            const buttons = Array.from(pane.querySelectorAll("button")).filter(
+              (button) =>
+                norm(button.getAttribute("aria-label") ?? button.textContent) === expandName,
+            );
+            // The sliver's WORDS, found by the words themselves — the element
+            // that carries them and nothing else (§S2: "the pane's own
+            // `Project · Vitals` label, rotated").
+            const labels = Array.from(pane.querySelectorAll("*")).filter(
+              (el) => el.children.length === 0 && norm(el.textContent) === label,
+            );
+            return {
+              pane: box(pane),
+              center: box(center),
+              button: buttons.length === 1 ? box(buttons[0]!) : null,
+              buttonCount: buttons.length,
+              label: labels.length === 1 ? box(labels[0]!) : null,
+              labelCount: labels.length,
+              paneChildren: Array.from(document.querySelectorAll(".app-pane-content > *")).map(
+                (el) => Math.round(el.getBoundingClientRect().width),
+              ),
+              bodyScrollWidth: document.body.scrollWidth,
+              innerWidth: window.innerWidth,
+              innerHeight: window.innerHeight,
+            };
+          },
+          { expandName: EXPAND_NAME, label: SLIVER_LABEL },
+        ),
       );
 
       // The page itself never scrolls sideways at the supported minimum.
@@ -6330,7 +6467,15 @@ describe("CR-CRU-093 §S5 — every view survives the width change", () => {
       );
       expect(offscreen.map(({ what }) => what)).toEqual([]);
     } finally {
-      await p.close();
+      // Hand the shared page back at the sweep's own width. Reported, never
+      // thrown: a teardown failure here would mask the assertion above.
+      try {
+        await step("restoring the sweep viewport", PROBE_MS, () =>
+          p.setViewportSize(RAIL_VIEWPORT),
+        );
+      } catch (error) {
+        console.log(`CR-CRU-093 AC11: the sweep viewport was not restored — ${String(error)}`);
+      }
     }
   }, 180_000);
 });
