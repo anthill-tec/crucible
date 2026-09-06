@@ -3,7 +3,7 @@
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 078
-- **Status**: PENDING (0.2.0) — moved into 0.2.0 by user direction 2026-08-28 — re-scoped 2026-08-28: the wave container ships in CR-078; this CR owns lanes only — gap-analysed 2026-09-05 (§S1 collapsed, §S2 names the track source, AC5/AC7 simplified, row-cap ruled by the user, Risk corrected)
+- **Status**: IN PROGRESS (0.2.0) — moved into 0.2.0 by user direction 2026-08-28 — re-scoped 2026-08-28: the wave container ships in CR-078; this CR owns lanes only — gap-analysed 2026-09-05 (§S1 collapsed, §S2 names the track source, AC5/AC7 simplified, row-cap ruled by the user, Risk corrected) — amended 2026-09-06 at branch cut by user ruling: design §4's laned header segment is in scope (new AC8, AC4 narrowed to the container's drawing rules)
 - **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §4, §5, §7 (approved 2026-08-28). Absolute path so it resolves from a worktree; it carries the lane grammar, the shape/colour vocabulary it must reuse, and the conditional-chrome rule.
 
 > The design document is the contract for this CR. Implement what it specifies — do not
@@ -38,10 +38,18 @@ So this is deferred rather than dropped: the design stands, and it is built when
 
 ## Scope
 
-### §S1 Wave container — shipped, not this CR's
+### §S1 Wave container — its drawing rules are shipped, not this CR's
 
-The container is CR-CRU-078's (`RoadmapFlowWave`) and CR-CRU-096's; its drawing rules live there.
-This CR adds lanes INSIDE it and changes nothing about when or how the box itself is drawn (AC4).
+The container is CR-CRU-078's (`RoadmapFlowWave`) and CR-CRU-096's; its DRAWING RULES live there —
+when the box appears, the membership count its header states, its merged roll-up, its row cap and
+its one `+N more`. This CR adds lanes INSIDE it and changes none of those (AC4).
+
+It does add ONE segment to the header, because the approved design's multi-track wave states three
+facts, not two — `<h4><span>Wave 5 · active · 2 tracks</span><span>20</span></h4>` (design §4). The
+lane count is a fact about the wave, so the wave says it in words (§S8's greyscale invariant: never
+a colour or a shape alone), and it appears under exactly the lanes' own condition (AC8). *User
+ruling 2026-09-06: the design artifact is the authority; AC4's "unchanged" governs the drawing
+rules, not this segment.*
 
 ### §S2 Track swimlanes
 
@@ -73,8 +81,11 @@ container. None of these are error states, and none produce a warning or an empt
   lanes render and **no error or warning** is produced.
 - **AC3** — no test asserts a hard-coded track count; lane count is always derived from fixture
   data, so the "Crucible is single-track" case and a multi-track case are both expressible.
-- **AC4** — lanes render **only** when more than one track is reported; the wave container itself
-  is CR-078's and must be unchanged by this CR.
+- **AC4** — lanes render **only** when more than one track is reported; the wave container's
+  DRAWING RULES are CR-078's and CR-096's and must be unchanged by this CR: when the box is drawn,
+  the whole-membership count in its header, its merged roll-up, its row cap and its single
+  `+N more` all render exactly as they do today. *Amended 2026-09-06 (user ruling)* — the header's
+  new track-count segment (AC8) is this CR's, and is the only header change it may make.
 - **AC5** — laning is a partition, asserted on the rendered DOM: every `roadmap-node` in a laned
   wave is a descendant of exactly ONE lane, lanes are siblings in the design's grid form (label
   cell then row), and the wave's node count and `+N more` are identical with and without lanes.
@@ -86,6 +97,12 @@ container. None of these are error states, and none produce a warning or an empt
 - **AC7** — the table's `track` column is UNCHANGED: it already appears under exactly the lanes'
   condition (CR-CRU-078 AC12, `roadmapTableColumns`), and the lanes read that same derivation
   rather than adding a second rule. A test asserts lanes and column appear and disappear together.
+- **AC8** — a laned wave's header states its track count in WORDS, as the design's third segment
+  (`Wave 5 · active · 2 tracks`), and states it under exactly the lanes' own condition: a wave that
+  draws no lanes carries no such segment, and the count it states is the same one the lanes are
+  derived from, never a second derivation. The header's other facts (identity, active marker,
+  whole-membership count) are untouched — AC4. *Added 2026-09-06 (user ruling)*, from design §4;
+  the AC list carried the lanes but not the header segment the same case draws.
 
 ## Estimated size
 
