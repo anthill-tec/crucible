@@ -3,7 +3,7 @@
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 078
-- **Status**: IN PROGRESS (0.2.0) — moved into 0.2.0 by user direction 2026-08-28 — re-scoped 2026-08-28: the wave container ships in CR-078; this CR owns lanes only — gap-analysed 2026-09-05 (§S1 collapsed, §S2 names the track source, AC5/AC7 simplified, row-cap ruled by the user, Risk corrected) — amended 2026-09-06 at branch cut by user ruling: design §4's laned header segment is in scope (new AC8, AC4 narrowed to the container's drawing rules)
+- **Status**: IN PROGRESS (0.2.0) — moved into 0.2.0 by user direction 2026-08-28 — re-scoped 2026-08-28: the wave container ships in CR-078; this CR owns lanes only — gap-analysed 2026-09-05 (§S1 collapsed, §S2 names the track source, AC5/AC7 simplified, row-cap ruled by the user, Risk corrected) — amended 2026-09-06 at branch cut by user ruling: design §4's laned header segment is in scope (new AC8, AC4 narrowed to the container's drawing rules) — amended 2026-09-06 mid-cycle by user ruling: a mixed-membership wave keeps every node in a residual lane (new AC9, §S3)
 - **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §4, §5, §7 (approved 2026-08-28). Absolute path so it resolves from a worktree; it carries the lane grammar, the shape/colour vocabulary it must reuse, and the conditional-chrome rule.
 
 > The design document is the contract for this CR. Implement what it specifies — do not
@@ -73,6 +73,14 @@ so a track whose members are all beyond the cap still draws its lane, with its l
 One track → no lane chrome. No track data → no lanes. A single wave in a single release → no wave
 container. None of these are error states, and none produce a warning or an empty-state message.
 
+**A laned wave whose membership is MIXED keeps every node — user ruling 2026-09-06.** Some members
+declaring a track while others declare none is reachable data (a two-track project with unassigned
+CRs), and laning must not answer it by drawing a node nowhere: the box's count, its `+N more` and
+its visible nodes would then disagree, and a `nextCr` naming an untracked member would mark
+nothing. The untracked members are drawn in a RESIDUAL lane — what is left over, not a derived
+track — so AC5's partition still holds and AC7's single derivation is untouched (`distinctLabels`
+still answers which tracks exist, and the residual is the complement of that set).
+
 ## Acceptance criteria
 
 - **AC1** — with **N** distinct tracks reported in a wave, the graph renders **N** lanes, and each
@@ -103,6 +111,15 @@ container. None of these are error states, and none produce a warning or an empt
   derived from, never a second derivation. The header's other facts (identity, active marker,
   whole-membership count) are untouched — AC4. *Added 2026-09-06 (user ruling)*, from design §4;
   the AC list carried the lanes but not the header segment the same case draws.
+- **AC9** — in a laned wave, a member declaring NO track is drawn in a RESIDUAL lane whose label
+  states the absence in words (§S8 — never a blank cell or a colour alone). The residual lane
+  renders only when such a member exists, is drawn LAST, and is NOT a track: AC8's header count and
+  the table's `track` column both stay the count of DECLARED tracks, so a mixed wave states the
+  same number of tracks it would state with the untracked members removed. With the residual lane
+  present, AC5's partition still holds over every node the box draws, and the box's node count and
+  `+N more` are unchanged. *Added 2026-09-06 (user ruling)* — GREEN surfaced that the first
+  implementation drew such a member nowhere, so the box's count, its pointer and its visible nodes
+  disagreed and a `nextCr` naming it marked nothing.
 
 ## Estimated size
 
