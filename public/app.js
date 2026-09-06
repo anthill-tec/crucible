@@ -2278,7 +2278,25 @@
     // toggle that flips the holder and bumps the rev. The shell re-renders on
     // every SSE frame and on the 5s poll fallback, so a mount-local flag would
     // silently re-expand the rail on the next tick (the CR-CRU-077 bug).
-    let railCollapsed = false;
+    // CR-CRU-093 §S4/AC5 — the flag is a persisted workspace preference,
+    // stored exactly like the density mode above: ONE key, a closed value set,
+    // read HERE — in `main`'s body, before the first render — so the very
+    // first frame the pane paints on already has the stored width. Applying it
+    // from an effect or a post-mount callback paints an expanded flash first.
+    // AC6 — an `includes` guard over the closed set, so absent, empty,
+    // whitespace, wrongly-typed and wrongly-cased values all mean "expanded",
+    // silently; and a storage accessor that throws (privacy mode, storage
+    // disabled) costs the preference, never the boot.
+    const RAIL_STORAGE_KEY = "crucible.rail.collapsed";
+    const RAIL_STATES = ["collapsed", "expanded"];
+    let storedRail = null;
+    try {
+      storedRail = window.localStorage.getItem(RAIL_STORAGE_KEY);
+    } catch {
+      storedRail = null;
+    }
+    let railCollapsed =
+      (RAIL_STATES.includes(storedRail) ? storedRail : "expanded") === "collapsed";
     const railCollapsedRev = van.state(0);
     const isRailCollapsed = () => {
       railCollapsedRev.val; // subscribe the enclosing binding to toggle flips
@@ -2287,6 +2305,11 @@
     const toggleRailCollapsed = () => {
       railCollapsed = !railCollapsed;
       railCollapsedRev.val += 1;
+      try {
+        window.localStorage.setItem(RAIL_STORAGE_KEY, railCollapsed ? "collapsed" : "expanded");
+      } catch {
+        // A full or disabled store loses the preference, not the toggle.
+      }
     };
     // CR-CRU-093 §S2/AC9 — the collapsed modifier composes INTO `greyed()`'s
     // reactive closure instead of replacing it: ONE binding reads both the rev
