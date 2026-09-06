@@ -3098,7 +3098,18 @@
                       ),
                     ]),
                   )
-                : box.rows.map((entry) => RoadmapFlowNode(entry, nextCr === entry.cr)),
+                : null,
+              // CR-CRU-085 §S3/AC9 — the IMPLICIT SOLO LANE
+              // (`DN-model-b-language.md`, LOCKED: "`track` absent = implicit
+              // solo lane (no UI noise, byte-identical lens output)"): a member
+              // declaring no track is drawn HERE, in the body beside the grid,
+              // with no lane, no label and no divider — byte-identical to the
+              // arrangement CR-CRU-078 gives it. The grid above and these rows
+              // are the box's `rows` entire (`soloRows` is the published
+              // remainder), so the box draws every node it counts. With no
+              // lanes published `soloRows` IS `box.rows`, so this one line is
+              // also CR-CRU-078's flat list, unchanged (AC2/AC6).
+              box.soloRows.map((entry) => RoadmapFlowNode(entry, nextCr === entry.cr)),
               // §S5.4/AC16 — a static POINTER at that detail surface, and by
               // §S8 deliberately NOT a node: no `roadmap-node` test id, no
               // `data-cr`, no `data-status`, no `data-drill-source` and no

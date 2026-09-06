@@ -253,6 +253,15 @@ export interface FocusedReleaseWave<Entry = unknown> {
    *  the same published order. EMPTY unless more than one track is reported
    *  (AC2/AC4) — one track, or none, draws no lane chrome at all. */
   lanes: FocusedReleaseWaveLane<Entry>[];
+  /** CR-CRU-085 §S3/AC9 — the rows drawn in the wave BODY, OUTSIDE the lane
+   *  grid: the IMPLICIT SOLO LANE (`DN-model-b-language.md`, LOCKED:
+   *  "`track` absent = implicit solo lane (no UI noise, byte-identical lens
+   *  output)"), so they carry no lane, no label and no divider. Together with
+   *  the lanes' `rows` they are `rows` ENTIRE, in the same published order —
+   *  one pass puts every row in exactly one bucket, so no drawn member can be
+   *  drawn nowhere. With no lanes published this is ALL of `rows`, which is
+   *  the flat list CR-CRU-078 draws. */
+  soloRows: Entry[];
 }
 
 /** CR-CRU-085 §S2 — ONE track's swimlane inside a wave box: the declared
