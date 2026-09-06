@@ -2272,17 +2272,66 @@
         CoverageMeter(project),
       );
 
+    // CR-CRU-093 §S3 — the rail's collapsed flag is keyed OUTSIDE the render
+    // tree, on the `lensOpenKeys` shape: a holder, a van.state rev beside it,
+    // a predicate that reads the rev to subscribe its enclosing binding, and a
+    // toggle that flips the holder and bumps the rev. The shell re-renders on
+    // every SSE frame and on the 5s poll fallback, so a mount-local flag would
+    // silently re-expand the rail on the next tick (the CR-CRU-077 bug).
+    let railCollapsed = false;
+    const railCollapsedRev = van.state(0);
+    const isRailCollapsed = () => {
+      railCollapsedRev.val; // subscribe the enclosing binding to toggle flips
+      return railCollapsed;
+    };
+    const toggleRailCollapsed = () => {
+      railCollapsed = !railCollapsed;
+      railCollapsedRev.val += 1;
+    };
+    // CR-CRU-093 §S2/AC9 — the collapsed modifier composes INTO `greyed()`'s
+    // reactive closure instead of replacing it: ONE binding reads both the rev
+    // and `state.backendUp`, so a liveness flip cannot drop the modifier and a
+    // collapse cannot drop `greyed`. An imperative classList write would be
+    // wiped by the next flip.
+    const railClass = () =>
+      greyed(isRailCollapsed() ? "app-pane app-pane-collapsed" : "app-pane")();
+
     // §S5.2 — the workspace's right rail: project card, then the project's
     // agents (live + tombstoned) as ⌁-marked indented sub-rows, then Vitals.
     // This pane exists ONLY inside the workspace.
     const ProjectPane = () =>
       div(
-        { "data-testid": "project-pane", class: greyed("app-pane") },
+        { "data-testid": "project-pane", class: railClass },
         // §S5.2 (a) — F8 section title above the project card (uppercase
         // mono, ember accent, wide letter-spacing — styles.css).
+        // CR-CRU-093 §S2 — the title now heads a ROW that also carries the
+        // collapse control, so the control lives ON the pane and the collapsed
+        // sliver keeps it on screen (design §14.1). Collapsed, the row swaps
+        // the title for the rotated `Project · Vitals` label.
         div(
-          { "data-testid": "pane-section-title", class: "app-pane-section-title" },
-          "Project",
+          { class: "app-pane-head" },
+          div(
+            { "data-testid": "pane-section-title", class: "app-pane-section-title" },
+            "Project",
+          ),
+          button(
+            {
+              "data-testid": "rail-toggle",
+              class: "app-rail-toggle",
+              // AC10 — the accessible name rides on `aria-label` so the glyph
+              // cannot pollute it, and `aria-expanded` tracks every step (the
+              // shell's first).
+              "aria-label": () =>
+                isRailCollapsed() ? "expand project rail" : "collapse project rail",
+              "aria-expanded": () => (isRailCollapsed() ? "false" : "true"),
+              onclick: toggleRailCollapsed,
+            },
+            () => (isRailCollapsed() ? "»" : "«"),
+          ),
+          () =>
+            isRailCollapsed()
+              ? span({ class: "app-rail-sliver-label" }, "Project · Vitals")
+              : span(),
         ),
         () => {
           const p = currentProject();

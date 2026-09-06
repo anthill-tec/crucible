@@ -230,6 +230,56 @@ body {
 /* CR-CRU-029 §S1 — the right rail keeps being its own vertical scroller
    (unchanged from CR-016). */
 .app-pane { overflow-y: auto; }
+/* CR-CRU-093 §S2 — the rail's header row: the section title that already
+   headed the pane, plus the collapse control, which lives ON the pane so the
+   collapsed sliver keeps it on screen (design §14.1). */
+.app-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.app-rail-toggle {
+  flex: 0 0 auto;
+  font: 600 11px var(--mono);
+  color: var(--ink-dim);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 5px;
+  cursor: pointer;
+}
+.app-rail-toggle:hover { color: var(--heat); border-color: var(--heat); }
+/* CR-CRU-093 §S2/AC1 — collapsed, the rail's GRID COLUMN narrows to the 34px
+   sliver measured on the live board (design §14.1: pane 394px → 34px, view
+   1025px → 1385px, a 1.351× gain against AC1's 1.30× floor), and the pane
+   keeps only its header row — the re-open button above the rotated
+   `Project · Vitals` label. Track sizing lives on the grid container, so the
+   pane's own modifier reaches it through `:has()` (the idiom `.app-main`
+   already uses above). `.app-pane`'s vertical scroller and the 660px
+   `.app-pane-content > *` floor are untouched: this is a column width, not a
+   content change. */
+.app-workspace-body:has(> .app-pane-collapsed) {
+  grid-template-columns: minmax(0, 2.6fr) 34px;
+}
+.app-pane-collapsed {
+  padding: 8px 4px;
+  overflow-x: hidden;
+}
+.app-pane-collapsed > *:not(.app-pane-head) { display: none; }
+.app-pane-collapsed .app-pane-head {
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 10px;
+}
+.app-rail-sliver-label {
+  writing-mode: vertical-rl;
+  font: 600 10px var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--ember);
+  white-space: nowrap;
+}
 /* CR-CRU-029 §S1 (mechanism a) — a central pane is a HEIGHT-BOUNDED,
    NON-scrolling flex column: it delegates BOTH scroll axes to its
    `.app-pane-content` child so that child stays viewport-sized and both
@@ -337,6 +387,11 @@ body {
   color: var(--ember);
   margin: 2px 0 8px;
 }
+/* CR-CRU-093 §S2 — collapsed, the sliver carries the re-open button and the
+   rotated `Project · Vitals` label ONLY (design §14.1), so the row's title
+   stands down. Stated beside the rule it modifies, and after it, so the base
+   rule stays the first `.app-pane-section-title` declaration in this file. */
+.app-pane-collapsed .app-pane-section-title { display: none; }
 /* §S5.2 (d)/(e) — F8 vitals card anatomy: dim uppercase label ABOVE a
    bright 600-weight value line. */
 .app-vitals-label {
