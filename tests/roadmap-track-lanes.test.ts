@@ -937,3 +937,296 @@ describe("CR-CRU-085 §S2 — the lane count comes from the wave's WHOLE members
     expect(laneNodeCrs(WAVE, "track-3")).toEqual(["CR-R-01"]);
   });
 });
+
+// ── AC9 / §S3 — a member declaring NO track is the IMPLICIT SOLO LANE ──────
+//
+// `docs/research/DN-model-b-language.md` (LOCKED): "`track` absent = implicit
+// solo lane (no UI noise, byte-identical lens output)". So in a MIXED wave —
+// some members declaring a track, others declaring none — an untracked member
+// is neither homeless nor a residual lane: its node is drawn in the wave BODY,
+// OUTSIDE the lane grid, with no lane, no label and no divider, byte-identical
+// to the arrangement CR-078 gives it. The box therefore draws every node it
+// counts, and the implicit lane is NOT a track: the header's count (AC8) and
+// the table's `track` column stay the count of DECLARED tracks.
+//
+// RED — production publishes `box.lanes` from the declared tracks and, whenever
+// it has any, draws the lane GRID INSTEAD of `box.rows`
+// (public/app.js:3084-3101), so an untracked member's node is currently drawn
+// NOWHERE: the box's count, its `+N more` and its visible nodes disagree.
+
+/** A MIXED membership: three DECLARED tracks plus three members declaring
+ *  none, INTERLEAVED so the untracked members are neither a prefix nor a
+ *  suffix of the published order, one merged member so the roll-up is real,
+ *  one running member, and a remainder past the cap so the wave's `+N more`
+ *  is a number rather than an absence. */
+const MIXED: QueueFixture[] = [
+  member("CR-X-M1", "COMPLETED", "track-1", 10),
+  member("CR-X-01", "PENDING", "track-1", 20),
+  member("CR-X-02", "PENDING", undefined, 30),
+  member("CR-X-03", "PENDING", "track-2", 40),
+  member("CR-X-04", "PENDING", undefined, 50),
+  member("CR-X-05", "PENDING", "track-1", 60),
+  member("CR-X-06", "PENDING", "track-2", 70),
+  member("CR-X-07", "PENDING", undefined, 80),
+  { ...member("CR-X-R1", "IN_PROGRESS", "track-3", 90), planId: 51 },
+];
+
+/** The SAME membership with every declared track removed — the un-laned
+ *  render AC9 calls "byte-identical": same members, same order, no lanes. */
+const MIXED_UNTRACKED: QueueFixture[] = untracked(MIXED);
+
+/** The same wave with its UNTRACKED members DELETED — AC9's "the same number
+ *  of tracks it would state with the untracked members removed". */
+const MIXED_DECLARED_ONLY: QueueFixture[] = MIXED.filter((entry) => entry.track !== undefined);
+
+/** A laned fixture whose FIRST actionable row — the one the view names
+ *  (`nextCr`, public/app-logic.mjs:1457-1464) — declares no track. */
+const NEXT_UNTRACKED: QueueFixture[] = [
+  member("CR-Y-01", "PENDING", undefined, 10),
+  member("CR-Y-02", "PENDING", "track-1", 20),
+  member("CR-Y-03", "PENDING", "track-2", 30),
+];
+
+/** The members of a fixture that declare NO track — the implicit solo lane's
+ *  membership, derived from the data like every other expectation (AC3). */
+const untrackedOf = (members: QueueFixture[]): QueueFixture[] =>
+  members.filter((entry) => entry.track === undefined);
+
+/** …and the ones the box actually DRAWS, which is what must appear as nodes. */
+const drawnUntracked = (members: QueueFixture[]): QueueFixture[] =>
+  untrackedOf(drawnMembers(members));
+
+/** The row `nextCr` names: the first actionable member among the DRAWN rows,
+ *  in the published order (`focusedReleaseView`). A fixture with no actionable
+ *  member cannot state a marker, so it fails loudly rather than asserting an
+ *  empty marker set is correct. */
+function firstActionable(members: QueueFixture[]): QueueFixture {
+  const first = drawnMembers(members).find((entry) => entry.status === "PENDING");
+  if (first === undefined) {
+    throw new Error("fixture declares no actionable drawn member — it cannot name a next row");
+  }
+  return first;
+}
+
+/** The wave BODY — the one element CR-078/CR-096 draw the rows and the
+ *  `+N more` into. Read off the pointer, exactly as the AC6 test above reads
+ *  it, rather than by class name. */
+function waveBodyEl(wave: string): HTMLElement {
+  const pointer = moreEl(wave);
+  if (pointer === null) {
+    throw new Error(`wave ${wave} renders no \`+N more\` to anchor its body on`);
+  }
+  const body = pointer.parentElement;
+  if (body === null) throw new Error(`wave ${wave}'s \`+N more\` has no parent element`);
+  return body;
+}
+
+/** The nodes drawn as DIRECT children of the wave body — i.e. outside the lane
+ *  grid — in document order. */
+const bodyNodeCrs = (wave: string): string[] =>
+  Array.from(waveBodyEl(wave).children)
+    .filter((child) => child.getAttribute("data-testid") === "roadmap-node")
+    .map((child) => child.getAttribute("data-cr") ?? "");
+
+/** The `next` marker, read the way the sibling suites read it
+ *  (`.app-flow-node-next`, tests/roadmap-visual-grammar.test.ts:3688). */
+const markedCrs = (wave: string): string[] =>
+  nodeEls(wave)
+    .filter((node) => node.querySelector(".app-flow-node-next") !== null)
+    .map((node) => node.getAttribute("data-cr") ?? "");
+
+describe("CR-CRU-085 AC9/§S3 — in a laned wave, a member declaring NO track is the implicit solo lane: drawn in the body, outside the grid, with no chrome", () => {
+  test("a mixed wave draws a node for EVERY member it draws, the untracked ones included, and draws none of them twice", async () => {
+    await mountApp({ queue: queueOf(MIXED) });
+
+    // The fixture really is the mixed case: more than one DECLARED track (so
+    // the wave is laned at all) and members declaring none (so the implicit
+    // lane has something in it).
+    expect(declaredTracks(MIXED).length).toBeGreaterThan(1);
+    expect(laneEls(WAVE).length).toBe(expectedLaneCount(MIXED));
+    expect(drawnUntracked(MIXED).map((entry) => entry.cr)).toEqual(["CR-X-02", "CR-X-04"]);
+
+    // The drawn set BY ID — never a bare count, which a node drawn twice would
+    // satisfy exactly as well as a node drawn nowhere would break.
+    const drawn = drawnMembers(MIXED).map((entry) => entry.cr);
+    expect(nodeCrs(WAVE).slice().sort()).toEqual(drawn.slice().sort());
+    expect(nodeCrs(WAVE).length).toBe(drawn.length);
+    for (const entry of drawnUntracked(MIXED)) {
+      expect(nodeCrs(WAVE)).toContain(entry.cr);
+    }
+  });
+
+  test("the untracked member's node carries NO lane chrome: it is inside no lane, no label names it, and no extra lane pair is minted for it", async () => {
+    await mountApp({ queue: queueOf(MIXED) });
+
+    const tracks = declaredTracks(MIXED);
+    const grid = lanesElOrThrow(WAVE);
+
+    for (const entry of drawnUntracked(MIXED)) {
+      const node = nodeEl(WAVE, entry.cr);
+      expect(lanesContaining(WAVE, node)).toEqual([]);
+      expect(grid.contains(node)).toBe(false);
+    }
+
+    // The grid is still the DECLARED tracks' own `label cell · row` pairs, in
+    // first-appearance order — no lane, no label and no divider was added for
+    // the members that declare nothing.
+    expect(laneTracks(WAVE)).toEqual(tracks);
+    expect(laneLabelTracks(WAVE)).toEqual(tracks);
+    expect(laneLabelTexts(WAVE)).toEqual(tracks);
+    expect(laneEls(WAVE).length).toBe(expectedLaneCount(MIXED));
+    expect(laneLabelEls(WAVE).length).toBe(expectedLaneCount(MIXED));
+    expect(Array.from(grid.children).map((child) => child.getAttribute("data-testid"))).toEqual(
+      tracks.flatMap(() => ["roadmap-wave-lane-label", "roadmap-wave-lane"]),
+    );
+
+    // …and no lane vocabulary was minted for the ABSENCE of a track: nothing in
+    // the box carries an empty `data-track`, and no label states one of the
+    // untracked members.
+    expect(waveEl(WAVE).querySelectorAll('[data-track=""]').length).toBe(0);
+    for (const entry of untrackedOf(MIXED)) {
+      expect(laneLabelTexts(WAVE)).not.toContain(entry.cr);
+    }
+  });
+
+  test("laning partitions the DECLARED-track members only: each of their nodes is inside exactly ONE lane, and each untracked node is inside NONE", async () => {
+    await mountApp({ queue: queueOf(MIXED) });
+    expect(laneEls(WAVE).length).toBe(expectedLaneCount(MIXED));
+
+    for (const entry of drawnMembers(MIXED)) {
+      const holders = lanesContaining(WAVE, nodeEl(WAVE, entry.cr)).map((lane) =>
+        lane.getAttribute("data-track"),
+      );
+      expect({ cr: entry.cr, holders }).toEqual({
+        cr: entry.cr,
+        holders: entry.track === undefined ? [] : [declaredTrackOf(entry)],
+      });
+    }
+
+    // Each lane still holds exactly its own track's drawn rows, in the
+    // published order — no untracked member leaked into one.
+    const drawn = new Set(drawnMembers(MIXED).map((entry) => entry.cr));
+    for (const track of declaredTracks(MIXED)) {
+      expect(laneNodeCrs(WAVE, track)).toEqual(
+        MIXED.filter((entry) => entry.track === track && drawn.has(entry.cr)).map(
+          (entry) => entry.cr,
+        ),
+      );
+    }
+  });
+
+  test("the untracked node sits in the wave body in the published order, byte-identical to the same fixture with its track data stripped", async () => {
+    await mountApp({ queue: queueOf(MIXED_UNTRACKED) });
+
+    // CR-078's arrangement for this membership, MEASURED rather than assumed —
+    // the render the laned box must reproduce for these members.
+    expect(lanesEl(WAVE)).toBeNull();
+    expect(bodyNodeCrs(WAVE)).toEqual(drawnMembers(MIXED_UNTRACKED).map((entry) => entry.cr));
+    const unlanedHtml = new Map(
+      drawnUntracked(MIXED).map((entry) => [entry.cr, nodeEl(WAVE, entry.cr).outerHTML]),
+    );
+
+    await mountApp({ queue: queueOf(MIXED) });
+    expect(laneEls(WAVE).length).toBe(expectedLaneCount(MIXED));
+
+    // The body's own node children are EXACTLY the untracked members, in the
+    // box's published order; the lane grid holds every other drawn row.
+    expect(bodyNodeCrs(WAVE)).toEqual(drawnUntracked(MIXED).map((entry) => entry.cr));
+
+    const body = waveBodyEl(WAVE);
+    expect(lanesElOrThrow(WAVE).parentElement).toBe(body);
+    for (const entry of drawnUntracked(MIXED)) {
+      const node = nodeEl(WAVE, entry.cr);
+      expect(node.parentElement).toBe(body);
+      // Byte-identical: the same element, drawn the same way, as the render
+      // that never saw a track.
+      const unlaned = unlanedHtml.get(entry.cr);
+      if (unlaned === undefined) {
+        throw new Error(`the un-laned render drew no node for ${entry.cr} to compare against`);
+      }
+      expect(node.outerHTML).toBe(unlaned);
+    }
+
+    // …and the `+N more` pointer is still the body's LAST child, where CR-078
+    // leaves it.
+    const children = Array.from(body.children);
+    expect(children[children.length - 1]?.getAttribute("data-testid")).toBe("roadmap-wave-more");
+  });
+
+  test("the wave's node total, its `+N more` and its whole-membership count are the un-laned render's, mixed track data or not", async () => {
+    await mountApp({ queue: queueOf(MIXED_UNTRACKED) });
+
+    const baseline = {
+      nodes: nodeCrs(WAVE).slice().sort(),
+      total: nodeCrs(WAVE).length,
+      more: moreText(WAVE),
+      count: countText(WAVE),
+    };
+    expect(baseline.total).toBe(drawnMembers(MIXED).length);
+    expect(baseline.more).toBe(`+${hiddenCount(MIXED)} more — see the table below`);
+    expect(baseline.count).toBe(String(MIXED.length));
+    expect(laneEls(WAVE)).toEqual([]);
+
+    await mountApp({ queue: queueOf(MIXED) });
+
+    // Lanes really are drawn here — so what follows is the LANED box's answer,
+    // not the un-laned one measured twice.
+    expect(laneEls(WAVE).length).toBe(expectedLaneCount(MIXED));
+    expect(nodeCrs(WAVE).length).toBe(baseline.total);
+    expect(nodeCrs(WAVE).slice().sort()).toEqual(baseline.nodes);
+    expect(moreText(WAVE)).toBe(baseline.more);
+    expect(waveEl(WAVE).querySelectorAll('[data-testid="roadmap-wave-more"]').length).toBe(1);
+    expect(countText(WAVE)).toBe(baseline.count);
+    expect(waveEl(WAVE).getAttribute("data-cr-count")).toBe(String(MIXED.length));
+  });
+
+  test("the header states the count of DECLARED tracks — the same k as the fixture with its untracked members deleted — and the table's `track` column is unaffected", async () => {
+    await mountApp({ queue: queueOf(MIXED_DECLARED_ONLY) });
+
+    const declaredOnly = {
+      k: headerTrackCount(WAVE),
+      lanes: laneEls(WAVE).length,
+      tracks: laneTracks(WAVE),
+      column: tableHasTrackColumn(),
+    };
+    expect(declaredOnly.k).toBe(declaredTracks(MIXED_DECLARED_ONLY).length);
+    expect(declaredOnly.column).toBe(true);
+
+    await mountApp({ queue: queueOf(MIXED) });
+
+    // AC9's premise, asserted before the header is read: this box DRAWS every
+    // member it counts. A header stating k while one of its members is drawn
+    // nowhere is not the implicit solo lane — it is the defect AC9 names.
+    expect(nodeCrs(WAVE).slice().sort()).toEqual(
+      drawnMembers(MIXED)
+        .map((entry) => entry.cr)
+        .sort(),
+    );
+
+    // The implicit lane is NOT a track: adding untracked members changes
+    // neither the stated count, nor the lanes, nor the table's column.
+    expect(headerTrackCount(WAVE)).toBe(declaredOnly.k);
+    expect(laneEls(WAVE).length).toBe(declaredOnly.lanes);
+    expect(laneTracks(WAVE)).toEqual(declaredOnly.tracks);
+    expect(tableHasTrackColumn()).toBe(declaredOnly.column);
+    expect(headerText(WAVE)).toContain(`· ${declaredTracks(MIXED).length} tracks`);
+  });
+
+  test("a `nextCr` naming an untracked member still marks that node, and marks only it", async () => {
+    await mountApp({ queue: queueOf(NEXT_UNTRACKED) });
+
+    // The fixture's premise: the wave IS laned, and the row the view names
+    // next — the first actionable drawn member — declares no track.
+    expect(laneEls(WAVE).length).toBe(expectedLaneCount(NEXT_UNTRACKED));
+    const next = firstActionable(NEXT_UNTRACKED);
+    expect(next.track).toBeUndefined();
+
+    // The marker survives the implicit lane: one marked row in the box, and it
+    // is that member's node — drawn outside every lane, marked all the same.
+    expect(markedCrs(WAVE)).toEqual([next.cr]);
+    expect(norm(nodeEl(WAVE, next.cr).querySelector(".app-flow-node-next")?.textContent)).toBe(
+      "next",
+    );
+    expect(lanesContaining(WAVE, nodeEl(WAVE, next.cr))).toEqual([]);
+  });
+});
