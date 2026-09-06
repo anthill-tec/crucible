@@ -3,7 +3,7 @@
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 078
-- **Status**: IN PROGRESS (0.2.0) — moved into 0.2.0 by user direction 2026-08-28 — re-scoped 2026-08-28: the wave container ships in CR-078; this CR owns lanes only — gap-analysed 2026-09-05 (§S1 collapsed, §S2 names the track source, AC5/AC7 simplified, row-cap ruled by the user, Risk corrected) — amended 2026-09-06 at branch cut by user ruling: design §4's laned header segment is in scope (new AC8, AC4 narrowed to the container's drawing rules) — amended 2026-09-06 mid-cycle by user ruling: a mixed-membership wave keeps every node in a residual lane (new AC9, §S3)
+- **Status**: IN PROGRESS (0.2.0) — moved into 0.2.0 by user direction 2026-08-28 — re-scoped 2026-08-28: the wave container ships in CR-078; this CR owns lanes only — gap-analysed 2026-09-05 (§S1 collapsed, §S2 names the track source, AC5/AC7 simplified, row-cap ruled by the user, Risk corrected) — amended 2026-09-06 at branch cut by user ruling: design §4's laned header segment is in scope (new AC8, AC4 narrowed to the container's drawing rules) — amended 2026-09-06 mid-cycle by user ruling: a mixed-membership wave draws every node, the untracked members as the ontology's implicit solo lane with NO chrome (new AC9, §S3, AC5 narrowed to declared-track nodes)
 - **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §4, §5, §7 (approved 2026-08-28). Absolute path so it resolves from a worktree; it carries the lane grammar, the shape/colour vocabulary it must reuse, and the conditional-chrome rule.
 
 > The design document is the contract for this CR. Implement what it specifies — do not
@@ -73,13 +73,23 @@ so a track whose members are all beyond the cap still draws its lane, with its l
 One track → no lane chrome. No track data → no lanes. A single wave in a single release → no wave
 container. None of these are error states, and none produce a warning or an empty-state message.
 
-**A laned wave whose membership is MIXED keeps every node — user ruling 2026-09-06.** Some members
-declaring a track while others declare none is reachable data (a two-track project with unassigned
-CRs), and laning must not answer it by drawing a node nowhere: the box's count, its `+N more` and
-its visible nodes would then disagree, and a `nextCr` naming an untracked member would mark
-nothing. The untracked members are drawn in a RESIDUAL lane — what is left over, not a derived
-track — so AC5's partition still holds and AC7's single derivation is untouched (`distinctLabels`
-still answers which tracks exist, and the residual is the complement of that set).
+**A laned wave whose membership is MIXED keeps every node — user ruling 2026-09-06, corrected the
+same day against the locked ontology.** Some members declaring a track while others declare none is
+reachable data (a two-track project with unassigned CRs), and laning must not answer it by drawing
+a node nowhere: the box's count, its `+N more` and its visible nodes would then disagree, and a
+`nextCr` naming an untracked member would mark nothing.
+
+Such a member is not homeless — it is the **implicit solo lane**: `docs/research/DN-model-b-language.md`
+(LOCKED) reads "`track` absent = implicit solo lane (**no UI noise, byte-identical lens output**)".
+So it has a home in the model AND that home draws no chrome: its node renders in the wave body
+outside the lane grid, with no lane, no label and no divider, byte-identical to the arrangement
+CR-078 gives it today. A labelled residual lane — an earlier reading of this same case — is exactly
+the UI noise that sentence forbids, and it would also mint lane vocabulary design §4 does not carry.
+
+Nothing new is DECLARED for any of this. Design §11 settles that too: the distinction "becomes
+required the moment more than one track is reported … so nothing new has to be declared", the same
+conditional-chrome rule §7 gives the lanes. The renderer reads the tracks the queue rows already
+report, through the one derivation AC7 names.
 
 ## Acceptance criteria
 
@@ -94,12 +104,15 @@ still answers which tracks exist, and the residual is the complement of that set
   the whole-membership count in its header, its merged roll-up, its row cap and its single
   `+N more` all render exactly as they do today. *Amended 2026-09-06 (user ruling)* — the header's
   new track-count segment (AC8) is this CR's, and is the only header change it may make.
-- **AC5** — laning is a partition, asserted on the rendered DOM: every `roadmap-node` in a laned
-  wave is a descendant of exactly ONE lane, lanes are siblings in the design's grid form (label
-  cell then row), and the wave's node count and `+N more` are identical with and without lanes.
+- **AC5** — laning is a partition over the members that DECLARE a track, asserted on the rendered
+  DOM: every `roadmap-node` of a declared-track member in a laned wave is a descendant of exactly
+  ONE lane, lanes are siblings in the design's grid form (label cell then row), and the wave's node
+  count and `+N more` are identical with and without lanes.
   *Simplified 2026-09-05:* the earlier "no overlap or clipping on rendered output" defended
   against a layered graph layout CR-CRU-078 deleted; zone 2 is plain DOM and the lanes are a CSS
   grid, which cannot overlap by construction.
+  *Narrowed 2026-09-06 (user ruling):* the partition is over declared-track nodes because an
+  untracked member belongs to the implicit solo lane, which draws no lane at all (AC9).
 - **AC6** — CR-078's behaviour is unchanged when this chrome is absent: removing track data from
   the fixture reproduces exactly the CR-078 render.
 - **AC7** — the table's `track` column is UNCHANGED: it already appears under exactly the lanes'
@@ -111,15 +124,17 @@ still answers which tracks exist, and the residual is the complement of that set
   derived from, never a second derivation. The header's other facts (identity, active marker,
   whole-membership count) are untouched — AC4. *Added 2026-09-06 (user ruling)*, from design §4;
   the AC list carried the lanes but not the header segment the same case draws.
-- **AC9** — in a laned wave, a member declaring NO track is drawn in a RESIDUAL lane whose label
-  states the absence in words (§S8 — never a blank cell or a colour alone). The residual lane
-  renders only when such a member exists, is drawn LAST, and is NOT a track: AC8's header count and
-  the table's `track` column both stay the count of DECLARED tracks, so a mixed wave states the
-  same number of tracks it would state with the untracked members removed. With the residual lane
-  present, AC5's partition still holds over every node the box draws, and the box's node count and
-  `+N more` are unchanged. *Added 2026-09-06 (user ruling)* — GREEN surfaced that the first
-  implementation drew such a member nowhere, so the box's count, its pointer and its visible nodes
-  disagreed and a `nextCr` naming it marked nothing.
+- **AC9** — in a laned wave, a member declaring NO track is the **implicit solo lane**
+  (`DN-model-b-language.md`, LOCKED: "`track` absent = implicit solo lane (no UI noise,
+  byte-identical lens output)"): its `roadmap-node` is drawn in the wave body OUTSIDE the lane grid,
+  with no lane, no label and no divider — byte-identical to the arrangement CR-078 gives it. So the
+  box draws every node it counts: no member is drawn nowhere, the node total and `+N more` are the
+  un-laned render's, and a `nextCr` naming an untracked member still marks it. The implicit lane is
+  NOT a track: AC8's header count and the table's `track` column both stay the count of DECLARED
+  tracks, so a mixed wave states the same number of tracks it would state with the untracked members
+  removed. *Added 2026-09-06 (user ruling), rewritten the same day against the locked ontology* —
+  GREEN surfaced that the first implementation drew such a member nowhere; the first remedy drew it
+  in a labelled residual lane, which is the UI noise the ontology forbids.
 
 ## Estimated size
 
