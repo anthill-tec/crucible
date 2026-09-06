@@ -277,6 +277,24 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   CR-CRU-094 (participation recorded, not inferred) but distinct: that CR is about the agent/cycle
   binding, this is about the run's own identity being unpublished on one stack of five.
 
+- 2026-09-06 — **DEFERRED, to fold into CR-CRU-096's lineage after CR-CRU-093 ships (user ruling):
+  a wave row's dependency annotation has no bound, so the wave box overflows the design's ~300px on
+  real data.** Measured on the live board while CR-093 was in flight: the box holds **332.4px**
+  against `BUDGET.wave = 300` (`tests/roadmap-visual-grammar.test.ts`, CR-CRU-096 AC20/AC4's
+  live-board probe), because `CR-CRU-075` renders `pending next · deps 014, 091, 092, 095` — the
+  first row ever to carry the `next` marker AND a four-dependency list. Isolated by experiment: the
+  pre-CR-085 tree fails identically at 333px with the same board, so no shipped code caused it; the
+  trigger was execution state (activating CR-093's plan moved `next` onto the four-dep row).
+  **Approved remedy — cap the COUNT, do not widen the budget** (widening postpones it: one more
+  declared dependency overflows any new figure). The row states the first three bare ids then a
+  remainder count (`deps 014, 091, 092 +1`), the remainder being a count and never an ellipsis;
+  `entry.dependsOn` keeps every full id (CR-CRU-102 AC3 — display-only), and zone 3's `deps` column
+  still states the whole set. **Why it belongs to 096, not a new CR:** 096 set the budget and owns
+  the probe that measures it; CR-CRU-102 bounded each id's LENGTH and its own comment says "this is
+  the ONLY thing that abbreviates", leaving the COUNT unbounded — a contradiction legible from the
+  two specs with no test run. Recorded in the `gap-analysis` skill as Dimension 3's bounded-surface
+  check so the next one is caught at design time.
+
 - 2026-09-06 — **FILED as [CR-CRU-108](CR-CRU-108-one-published-track-fact-and-an-unstarvable-help-test.md) §S4
   (user-directed at the SCRUM after CR-CRU-085 merged) — `CR-CRU-097 §S2/AC2`'s printed-help test
   HANGS when the Chromium suite runs before it in the same bun process.**
