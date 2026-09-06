@@ -277,7 +277,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   CR-CRU-094 (participation recorded, not inferred) but distinct: that CR is about the agent/cycle
   binding, this is about the run's own identity being unpublished on one stack of five.
 
-- 2026-09-06 — **DEFERRED, to fold into CR-CRU-096's lineage after CR-CRU-093 ships (user ruling):
+- 2026-09-06 — **DEFERRED — to be FILED as its own patch CR at the SCRUM after CR-CRU-093 ships:
   a wave row's dependency annotation has no bound, so the wave box overflows the design's ~300px on
   real data.** Measured on the live board while CR-093 was in flight: the box holds **332.4px**
   against `BUDGET.wave = 300` (`tests/roadmap-visual-grammar.test.ts`, CR-CRU-096 AC20/AC4's
@@ -289,11 +289,17 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   declared dependency overflows any new figure). The row states the first three bare ids then a
   remainder count (`deps 014, 091, 092 +1`), the remainder being a count and never an ellipsis;
   `entry.dependsOn` keeps every full id (CR-CRU-102 AC3 — display-only), and zone 3's `deps` column
-  still states the whole set. **Why it belongs to 096, not a new CR:** 096 set the budget and owns
-  the probe that measures it; CR-CRU-102 bounded each id's LENGTH and its own comment says "this is
-  the ONLY thing that abbreviates", leaving the COUNT unbounded — a contradiction legible from the
-  two specs with no test run. Recorded in the `gap-analysis` skill as Dimension 3's bounded-surface
-  check so the next one is caught at design time.
+  still states the whole set.
+  **It is a NEW CR, not a change to 096 — correcting an orchestrator suggestion made 2026-09-06.**
+  The orchestrator proposed "folding it into CR-CRU-096's lineage"; that was wrong and the user
+  caught it. `CR-CRU-096` is **COMPLETED (0.2.0), shipped 2026-09-03**, and the standing rule
+  recorded below from CR-CRU-099's cycle 322 VERIFY is explicit: an AC may not require editing a
+  shipped CR. The new CR therefore CITES 096 and 102 as lineage and edits neither: 096 set the
+  budget and owns the probe that measures it; CR-CRU-102 bounded each id's LENGTH while its own
+  comment says "this is the ONLY thing that abbreviates", leaving the COUNT unbounded — a
+  contradiction legible from the two specs with no test run.
+  Recorded in the `gap-analysis` skill as Dimension 3's bounded-surface check so the next one is
+  caught at design time rather than by a RED agent mid-implementation.
 
 - 2026-09-06 — **FILED as [CR-CRU-108](CR-CRU-108-one-published-track-fact-and-an-unstarvable-help-test.md) §S4
   (user-directed at the SCRUM after CR-CRU-085 merged) — `CR-CRU-097 §S2/AC2`'s printed-help test
