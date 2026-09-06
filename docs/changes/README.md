@@ -115,6 +115,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-075](CR-CRU-075-queue-file-fleet-parity.md) | queue-file fleet parity + AXI verb-surface census enforcement | patch | PENDING (0.2.0) | 014, 091, 092, 095 | 5 (0.2.0) |
 | [CR-CRU-094](CR-CRU-094-agent-participation-is-recorded.md) | agent participation is recorded, not inferred | feature | PENDING (0.2.0) | 056 | 5 (0.2.0) |
 | [CR-CRU-108](CR-CRU-108-one-published-track-fact-and-an-unstarvable-help-test.md) | one published multi-track fact, and a printed-help test that cannot be starved | patch | PENDING (0.2.0) | 085, 092, 097 | 5 (0.2.0) |
+| [CR-CRU-109](CR-CRU-109-a-wave-row-annotation-fits-its-box.md) | a wave row's dependency annotation fits the box it is drawn in | patch | PENDING (0.2.0) | 096, 102 | 5 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
@@ -277,7 +278,8 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   CR-CRU-094 (participation recorded, not inferred) but distinct: that CR is about the agent/cycle
   binding, this is about the run's own identity being unpublished on one stack of five.
 
-- 2026-09-06 — **DEFERRED — to be FILED as its own patch CR at the SCRUM after CR-CRU-093 ships:
+- 2026-09-06 — **FILED as [CR-CRU-109](CR-CRU-109-a-wave-row-annotation-fits-its-box.md) (user-directed,
+  filed immediately rather than held for the SCRUM):
   a wave row's dependency annotation has no bound, so the wave box overflows the design's ~300px on
   real data.** Measured on the live board while CR-093 was in flight: the box holds **332.4px**
   against `BUDGET.wave = 300` (`tests/roadmap-visual-grammar.test.ts`, CR-CRU-096 AC20/AC4's
