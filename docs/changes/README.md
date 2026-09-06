@@ -114,6 +114,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-093](CR-CRU-093-project-rail-collapses.md) | the project rail collapses, giving every workspace view its width back | feature | PENDING (0.2.0) | 006 | 5 (0.2.0) |
 | [CR-CRU-075](CR-CRU-075-queue-file-fleet-parity.md) | queue-file fleet parity + AXI verb-surface census enforcement | patch | PENDING (0.2.0) | 014, 091, 092, 095 | 5 (0.2.0) |
 | [CR-CRU-094](CR-CRU-094-agent-participation-is-recorded.md) | agent participation is recorded, not inferred | feature | PENDING (0.2.0) | 056 | 5 (0.2.0) |
+| [CR-CRU-108](CR-CRU-108-one-published-track-fact-and-an-unstarvable-help-test.md) | one published multi-track fact, and a printed-help test that cannot be starved | patch | PENDING (0.2.0) | 085, 092, 097 | 5 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
@@ -276,8 +277,9 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   CR-CRU-094 (participation recorded, not inferred) but distinct: that CR is about the agent/cycle
   binding, this is about the run's own identity being unpublished on one stack of five.
 
-- 2026-09-06 — **`CR-CRU-097 §S2/AC2`'s printed-help test HANGS when the Chromium suite runs before
-  it in the same bun process** (candidate patch CR, found by CR-CRU-085's pre-merge gate).
+- 2026-09-06 — **FILED as [CR-CRU-108](CR-CRU-108-one-published-track-fact-and-an-unstarvable-help-test.md) §S4
+  (user-directed at the SCRUM after CR-CRU-085 merged) — `CR-CRU-097 §S2/AC2`'s printed-help test
+  HANGS when the Chromium suite runs before it in the same bun process.**
   `tests/project-namespace-tripwire.test.ts:512` drives every client verb's `--help` for real —
   ~157 `Bun.spawn` calls behind a 180 s cap. Standalone it takes **2.5 s**; run as
   `bun test tests/roadmap-visual-grammar.test.ts tests/project-namespace-tripwire.test.ts` it hits
@@ -285,12 +287,23 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   CR-085's**: the same two-file pairing reproduces on `1f5498c`, develop's head at that branch cut
   (96 pass / 1 fail, 180001 ms), so a browser suite earlier in the process leaves subprocess
   spawning unusable for the rest of the run. It is ORDER-DEPENDENT, which is why one gate run of
-  the identical tree passed it at 2.5 s and the next two timed out — the full-suite figures were
-  2122/1 each time, with every other slow test's duration identical to the millisecond
-  (26113/22062/15006 ms). Candidate fixes: give the help test its own process (a separate bun
-  invocation in the gate), cap concurrency inside `collectHelpSurfaces`, or have the browser suite
-  release whatever it holds. Deliberately NOT folded into CR-CRU-085 — it predates the branch and
-  the repo rule is a patch CR over an inline scope edit.
+  the identical tree passed it at 2.5 s and two others timed out — the same tree answered 2122/1,
+  2122/1 and 2123/0, with every other slow test's duration identical to the millisecond
+  (26113/22062/15006 ms). **A gate that answers differently on re-run cannot gate**, which is why
+  this became a CR rather than staying a note (CR-108 AC10 measures three consecutive gate runs).
+
+- 2026-09-06 — **FILED as [CR-CRU-108](CR-CRU-108-one-published-track-fact-and-an-unstarvable-help-test.md)
+  §S1–§S3 (user-directed, same SCRUM) — the multi-track rule is computed twice and reconciled by
+  nobody.** CR-CRU-092 §S3 defines it once (sorted distinct non-null `entry.track`; multi-track iff
+  `len(tracks) > 1`) and implements it in `clients/_crucible_axi.py` (`queue_tracks` → `resolve_next`);
+  the browser re-implements the same predicate in `public/app-logic.mjs` (`declaredLabel` /
+  `distinctLabels`), read by CR-CRU-078 AC12's `track` column and CR-CRU-085 §S2's lanes. They agree
+  by inspection, not construction — `queue_tracks` skips a falsy value, `declaredLabel` trims and
+  drops an empty string — and `handleQueueGet` publishes `{ok, entries}` with no track fact at all,
+  so the server that OWNS the normalisation (`normalizeTrack`, `TRACK_LANE_RULE`) is the one surface
+  that never answers the question its own rule defines. Same defect on the track axis that
+  CR-CRU-104 §S1 settled for release membership: one rule, reached by every entry point. Design §11
+  permits the fix — publishing a DERIVED fact is not a declaration.
 
 - 2026-09-03 — **a green pre-merge gate does not mean develop is green: anything reading git
   history relative to `HEAD` changes meaning at the merge.** CR-CRU-096's non-vacuity block
