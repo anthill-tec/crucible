@@ -5927,3 +5927,411 @@ describe("CR-CRU-093 — the project rail collapses to a sliver", () => {
     expect(await railAria(p)).toBe("true");
   }, 120_000);
 });
+
+// ── CR-CRU-093 §S4/§S5 — first paint, and every view at BOTH widths ────────
+//
+// Spec: docs/changes/CR-CRU-093-project-rail-collapses.md §S4, §S5 —
+//       AC5's FIRST-PAINT half, AC7 (every view clean at both widths),
+//       AC11 (the 1024×640 floor, sliver included).
+//
+// WHY THESE THREE ARE HERE AND THE REST OF §S3/§S4 IS NOT. "on first paint,
+// with no expanded flash" is a claim about FRAMES, "scrollWidth <=
+// clientWidth" about a resolved box, and "the sliver's content is inside the
+// pane's box" about geometry — none of the three exists without an engine, and
+// happy-dom runs none (this file's header states the split). The state claims
+// of the same CR — survives a poll tick, survives navigation, survives a
+// reload, boots expanded from a corrupt value, does not remount the pane —
+// need no layout and live in tests/workspace-rail-collapse.test.ts.
+//
+// WHY IT BRINGS ITS OWN SERVER AND BOARD rather than reusing the block above:
+// AC7 sweeps EVERY tab the shell declares, and `workspaceTabs`
+// (public/app-logic.mjs) gates Coverage until the project reports
+// `latestCoverageEventId` and BDD unless the project is a `frontend`. Against
+// the block above's backend project two of the six tabs are `disabled`, and a
+// sweep that silently skipped two would be a sweep of four. The API is
+// otherwise `railApi`'s, verbatim.
+//
+// RED phase — AC5's first paint fails on the ABSENCE of §S4: nothing in
+// public/app.js reads or writes the rail's flag (`railCollapsed` is
+// re-initialised to `false` on every boot), so a reload comes back expanded and
+// the sampled frames are rail-wide. AC7 and AC11 sweep behaviour that cycle
+// 353 shipped: whatever they find is the finding §S5 exists to surface.
+
+const SWEEP_KEY = "rail-sweep-key";
+/** CR-CRU-023 §S1's minimum supported screen, which AC11 names. */
+const FLOOR_VIEWPORT = { width: 1024, height: 640 };
+/** `.app-pane-content > * { min-width: 660px }` (public/styles.css) — the
+ *  floor AC11 says the sliver may not break. */
+const PANE_CHILD_FLOOR = 660;
+const SLIVER_LABEL = "project · vitals";
+
+let sweepServer: Server<undefined> | null = null;
+let sweepBrowser: Browser | null = null;
+let sweepPage: Page | null = null;
+let sweepUrl = "";
+
+/** The block above's board, with ONE substitution: a project that leaves every
+ *  declared tab selectable (§S5 asserts each of the six, not the four a
+ *  backend project without coverage would let you open). */
+function sweepApi(pathname: string): Response | null {
+  if (pathname === "/api/v2/projects") {
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        projects: [
+          {
+            key: SWEEP_KEY,
+            name: SWEEP_KEY,
+            type: "frontend",
+            agentsOnline: 0,
+            agentsTotal: 0,
+            active: true,
+            lastActivity: Date.now(),
+            latestCoverageEventId: "evt-sweep-coverage",
+          },
+        ],
+      }),
+      { headers: { "content-type": "application/json; charset=utf-8" } },
+    );
+  }
+  return railApi(pathname);
+}
+
+/** The real public/ served over HTTP with the SPA fallback the production
+ *  server performs, so a deep route boots the workspace. */
+function serveShell(api: (pathname: string) => Response | null): Server<undefined> {
+  return Bun.serve({
+    port: 0,
+    fetch(request) {
+      const { pathname } = new URL(request.url);
+      const scripted = api(pathname);
+      if (scripted !== null) return scripted;
+      const name = pathname.replace(/^\/+/, "");
+      if (name === "" || !name.includes(".")) {
+        return new Response(INDEX_HTML_SRC, {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(name) || name.includes("..")) {
+        return new Response("not found", { status: 404 });
+      }
+      const type = CONTENT_TYPES[path.extname(name)];
+      const file = Bun.file(path.join(PUBLIC_DIR, name));
+      return new Response(file, type === undefined ? undefined : { headers: { "content-type": type } });
+    },
+  });
+}
+
+const sweepBrowserEl = (): Browser => {
+  if (sweepBrowser === null) throw new Error("CR-CRU-093 §S5: no Chromium browser");
+  return sweepBrowser;
+};
+
+const sweepPageEl = (): Page => {
+  if (sweepPage === null) throw new Error("CR-CRU-093 §S5: no Chromium page");
+  return sweepPage;
+};
+
+/** A clean workspace on the Roadmap route with NOTHING stored — every sweep
+ *  starts from the shell's own default, whatever §S4 later persists. */
+async function freshWorkspace(p: Page): Promise<void> {
+  await p.goto(sweepUrl, { waitUntil: "load" });
+  await p.evaluate(() => window.localStorage.clear());
+  await p.reload({ waitUntil: "load" });
+  await p.waitForSelector(RAIL_PANE, { state: "attached", timeout: 30_000 });
+  await p.waitForSelector('[data-testid="pane-scroll"]', { state: "attached", timeout: 30_000 });
+}
+
+/** The rail's state as the shell publishes it — `aria-expanded` on the one
+ *  control, read by accessible name (never a class token). */
+async function railIsCollapsed(p: Page): Promise<boolean> {
+  return p.evaluate(() => {
+    const named = Array.from(document.querySelectorAll("button")).filter((button) => {
+      const name = (button.getAttribute("aria-label") ?? button.textContent ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      return name === "collapse project rail" || name === "expand project rail";
+    });
+    if (named.length !== 1) {
+      throw new Error(
+        `CR-CRU-093 §S2: expected exactly ONE rail control; found ${named.length}`,
+      );
+    }
+    return named[0]!.getAttribute("aria-expanded") === "false";
+  });
+}
+
+/** Drive the rail to a state through its own control, and wait for the grid to
+ *  settle at the width that state implies. */
+async function setRail(p: Page, collapsed: boolean): Promise<void> {
+  if ((await railIsCollapsed(p)) === collapsed) return;
+  await (await railControl(p, collapsed ? COLLAPSE_NAME : EXPAND_NAME)).click();
+  await p.waitForFunction(
+    ({ max, want }) => {
+      const pane = document.querySelector('[data-testid="project-pane"]');
+      if (pane === null) return false;
+      const width = pane.getBoundingClientRect().width;
+      return want ? width <= max : width > max;
+    },
+    { max: SLIVER_MAX_W, want: collapsed },
+    { timeout: 5_000 },
+  );
+}
+
+/** Select a tab through the shell's own strip and wait for its pane. */
+async function selectTab(p: Page, name: string): Promise<void> {
+  await p.locator('[data-testid="workspace-tab"]', { hasText: new RegExp(`^${name}$`) }).click();
+  await p.waitForFunction(
+    (want) =>
+      Array.from(document.querySelectorAll('[data-testid="workspace-tab"]')).some(
+        (tab) => (tab.textContent ?? "").trim() === want && tab.classList.contains("on"),
+      ),
+    name,
+    { timeout: 10_000 },
+  );
+  await p.waitForSelector('[data-testid="pane-scroll"]', { state: "attached", timeout: 30_000 });
+  // One settled frame after the swap, so a pane measured here is a pane the
+  // engine has finished laying out.
+  await p.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
+}
+
+describe("CR-CRU-093 §S5 — every view survives the width change", () => {
+  beforeAll(async () => {
+    sweepServer = serveShell(sweepApi);
+    sweepUrl = `http://127.0.0.1:${sweepServer.port}/p/${SWEEP_KEY}/roadmap`;
+    sweepBrowser = await chromium.launch();
+    sweepPage = await sweepBrowser.newPage({ viewport: RAIL_VIEWPORT });
+  }, 180_000);
+
+  afterAll(async () => {
+    if (sweepPage !== null) await sweepPage.close();
+    if (sweepBrowser !== null) await sweepBrowser.close();
+    if (sweepServer !== null) sweepServer.stop(true);
+    sweepPage = null;
+    sweepBrowser = null;
+    sweepServer = null;
+  });
+
+  test("AC5 — a reload after collapsing paints the rail collapsed on the FIRST frame, with no expanded flash", async () => {
+    // Its own page: the sampler below is installed for every subsequent
+    // document in the page, and the sweep pages must stay uninstrumented.
+    const p = await sweepBrowserEl().newPage({ viewport: RAIL_VIEWPORT });
+    try {
+      await p.goto(sweepUrl, { waitUntil: "load" });
+      await p.evaluate(() => window.localStorage.clear());
+      await p.reload({ waitUntil: "load" });
+      await p.waitForSelector(RAIL_PANE, { state: "attached", timeout: 30_000 });
+      await setRail(p, true);
+      const collapsedWidth = await measuredWidth(p, RAIL_PANE);
+      expect(collapsedWidth).toBeLessThanOrEqual(SLIVER_MAX_W);
+
+      // Sample the rail's measured width on EVERY animation frame of the next
+      // document, from the first frame it exists on. This is what makes the
+      // "no expanded flash" clause falsifiable: an implementation that mounts
+      // expanded and applies the stored preference in an effect leaves a
+      // rail-wide frame in the record, even if it is invisible to the eye.
+      await p.addInitScript(() => {
+        const widths: number[] = [];
+        (window as unknown as { __railFirstPaint: number[] }).__railFirstPaint = widths;
+        const sample = (): void => {
+          const pane = document.querySelector('[data-testid="project-pane"]');
+          if (pane !== null) widths.push(Math.round(pane.getBoundingClientRect().width));
+          requestAnimationFrame(sample);
+        };
+        requestAnimationFrame(sample);
+      });
+
+      await p.reload({ waitUntil: "load" });
+      await p.waitForSelector(RAIL_PANE, { state: "attached", timeout: 30_000 });
+      // Let the shell finish booting — its first data frames land here, and a
+      // late re-expand is exactly what this test refuses to miss.
+      await p.waitForTimeout(1_500);
+
+      const widths = await p.evaluate(
+        () => (window as unknown as { __railFirstPaint?: number[] }).__railFirstPaint ?? [],
+      );
+      // Non-vacuity: an empty record would pass every bound below.
+      expect(widths.length).toBeGreaterThan(5);
+      // AC5 — collapsed ON FIRST PAINT…
+      expect({ firstPaintWidth: widths[0] }).toEqual({ firstPaintWidth: expect.any(Number) });
+      expect(widths[0]).toBeLessThanOrEqual(SLIVER_MAX_W);
+      // …and no expanded frame anywhere after it.
+      expect(Math.max(...widths)).toBeLessThanOrEqual(SLIVER_MAX_W);
+    } finally {
+      await p.close();
+    }
+  }, 180_000);
+
+  test("AC7 — every tab the shell declares renders clean at 1600x900, rail expanded AND collapsed", async () => {
+    const p = sweepPageEl();
+    await freshWorkspace(p);
+
+    // The tab list comes from the shell's own strip — AC7 sweeps "its own
+    // tab-name union", not an array this file maintains.
+    const tabs = await p.$$eval('[data-testid="workspace-tab"]', (els) =>
+      els.map((el) => ({
+        name: (el.textContent ?? "").trim(),
+        disabled: (el as HTMLButtonElement).disabled,
+      })),
+    );
+    // Non-vacuity, both halves: six today, and every one of them selectable —
+    // a gated tab would drop silently out of the matrix.
+    expect(tabs.length).toBe(6);
+    expect(tabs.filter((tab) => tab.disabled).map((tab) => tab.name)).toEqual([]);
+
+    const offenders: string[] = [];
+    for (const collapsed of [false, true]) {
+      await setRail(p, collapsed);
+      const state = collapsed ? "collapsed" : "expanded";
+      for (const { name } of tabs) {
+        await selectTab(p, name);
+        const measured = await p.evaluate(() => {
+          const scroller = document.querySelector('[data-testid="pane-scroll"]');
+          return {
+            found: scroller !== null,
+            scrollWidth: scroller === null ? 0 : scroller.scrollWidth,
+            clientWidth: scroller === null ? 0 : scroller.clientWidth,
+            bodyScrollWidth: document.body.scrollWidth,
+            innerWidth: window.innerWidth,
+          };
+        });
+        if (!measured.found) {
+          offenders.push(`${name} (${state}): no [data-testid="pane-scroll"] rendered`);
+        } else if (measured.scrollWidth > measured.clientWidth) {
+          offenders.push(
+            `${name} (${state}): pane-scroll overflows — scrollWidth ${measured.scrollWidth} > ` +
+              `clientWidth ${measured.clientWidth}`,
+          );
+        }
+        if (measured.bodyScrollWidth > measured.innerWidth) {
+          offenders.push(
+            `${name} (${state}): the PAGE scrolls horizontally — body.scrollWidth ` +
+              `${measured.bodyScrollWidth} > innerWidth ${measured.innerWidth}`,
+          );
+        }
+      }
+    }
+
+    // Twelve readings; any single clip names itself here.
+    expect(offenders).toEqual([]);
+  }, 300_000);
+
+  test("AC11 — at 1024x640 the collapsed rail keeps the page unscrolled, the 660px pane floor unbroken, and its own sliver content inside the pane", async () => {
+    const p = await sweepBrowserEl().newPage({ viewport: FLOOR_VIEWPORT });
+    try {
+      await freshWorkspace(p);
+      await setRail(p, true);
+
+      const measured = await p.evaluate(
+        ({ expandName, label }) => {
+          const norm = (text: string | null): string =>
+            (text ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+          const box = (el: Element) => {
+            const r = el.getBoundingClientRect();
+            return {
+              left: Math.round(r.left * 10) / 10,
+              right: Math.round(r.right * 10) / 10,
+              top: Math.round(r.top * 10) / 10,
+              bottom: Math.round(r.bottom * 10) / 10,
+              width: Math.round(r.width * 10) / 10,
+              height: Math.round(r.height * 10) / 10,
+            };
+          };
+          const pane = document.querySelector('[data-testid="project-pane"]');
+          const center = document.querySelector('[data-testid="workspace-body"] > .app-center');
+          if (pane === null || center === null) {
+            throw new Error("CR-CRU-093 AC11: the workspace body has no pane or no view column");
+          }
+          const buttons = Array.from(pane.querySelectorAll("button")).filter(
+            (button) => norm(button.getAttribute("aria-label") ?? button.textContent) === expandName,
+          );
+          // The sliver's WORDS, found by the words themselves — the element
+          // that carries them and nothing else (§S2: "the pane's own
+          // `Project · Vitals` label, rotated").
+          const labels = Array.from(pane.querySelectorAll("*")).filter(
+            (el) => el.children.length === 0 && norm(el.textContent) === label,
+          );
+          return {
+            pane: box(pane),
+            center: box(center),
+            button: buttons.length === 1 ? box(buttons[0]!) : null,
+            buttonCount: buttons.length,
+            label: labels.length === 1 ? box(labels[0]!) : null,
+            labelCount: labels.length,
+            paneChildren: Array.from(document.querySelectorAll(".app-pane-content > *")).map(
+              (el) => Math.round(el.getBoundingClientRect().width),
+            ),
+            bodyScrollWidth: document.body.scrollWidth,
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+          };
+        },
+        { expandName: EXPAND_NAME, label: SLIVER_LABEL },
+      );
+
+      // The page itself never scrolls sideways at the supported minimum.
+      expect(measured.bodyScrollWidth).toBeLessThanOrEqual(measured.innerWidth);
+
+      // The 660px floor: no central-pane child squeezed below it.
+      expect(measured.paneChildren.length).toBeGreaterThan(0);
+      expect(measured.paneChildren.filter((width) => width < PANE_CHILD_FLOOR)).toEqual([]);
+
+      // THE FALSIFIABLE HALF (AC11 as narrowed 2026-09-06) — the sliver's own
+      // content. The collapsed pane is 34px wide and clips its overflow
+      // (public/styles.css), so a control or a label that does not fit is
+      // invisible on screen while still measuring a box: these bounds are read
+      // off the boxes, which is why they can fail.
+      expect({ buttons: measured.buttonCount, labels: measured.labelCount }).toEqual({
+        buttons: 1,
+        labels: 1,
+      });
+      const inside = [
+        { what: "the re-open button", box: measured.button! },
+        { what: "the rotated Project · Vitals label", box: measured.label! },
+      ];
+      const clipped = inside.filter(
+        ({ box }) =>
+          box.width <= 0 ||
+          box.height <= 0 ||
+          box.left < measured.pane.left - 0.5 ||
+          box.right > measured.pane.right + 0.5 ||
+          box.top < measured.pane.top - 0.5 ||
+          box.bottom > measured.pane.bottom + 0.5,
+      );
+      expect(
+        clipped.map(
+          ({ what, box }) =>
+            `${what} ${JSON.stringify(box)} escapes the pane ${JSON.stringify(measured.pane)}`,
+        ),
+      ).toEqual([]);
+
+      // …and does not sit over the view column it just gave the width to.
+      const overlapping = inside.filter(({ box }) => box.left < measured.center.right - 0.5);
+      expect(
+        overlapping.map(
+          ({ what, box }) =>
+            `${what} at left ${box.left} overlaps the view column ending at ${measured.center.right}`,
+        ),
+      ).toEqual([]);
+
+      // Fully on screen, too: a sliver pushed off the right edge is not a
+      // sliver the user can re-open.
+      const offscreen = inside.filter(
+        ({ box }) =>
+          box.left < 0 ||
+          box.top < 0 ||
+          box.right > measured.innerWidth + 0.5 ||
+          box.bottom > measured.innerHeight + 0.5,
+      );
+      expect(offscreen.map(({ what }) => what)).toEqual([]);
+    } finally {
+      await p.close();
+    }
+  }, 180_000);
+});

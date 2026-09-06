@@ -38,7 +38,7 @@
 // `data-testid="project-pane"`, `greyed("app-pane")`, a section title, the
 // project card, the roadmap chip and `VitalsRail` — and `aria-expanded`
 // appears ZERO times in the whole shell.
-import { describe, test, expect, afterEach, setSystemTime } from "bun:test";
+import { describe, test, expect, afterEach, setSystemTime, spyOn } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
@@ -158,6 +158,19 @@ interface MountOpts {
   proposals?: ProposalFixture[];
   queue?: QueueFixture[];
   plans?: PlanFixture[];
+  /** CR-CRU-093 §S4 — what the origin's web storage already holds when the
+   *  shell boots. A re-registration hands happy-dom a FRESH window, so a
+   *  reload is modelled by carrying the previous window's storage across
+   *  (`reloadApp` below); tests/density.test.ts seeds `localStorage` the same
+   *  way for the same reason. Both stores are carried because AC5 leaves the
+   *  mechanism to the implementer — nothing here names a key. */
+  storageSeed?: StorageSnapshot;
+}
+
+/** Every string the origin holds, per web storage. */
+interface StorageSnapshot {
+  local: Record<string, string>;
+  session: Record<string, string>;
 }
 
 /** happy-dom runs no layout engine, so the release strip would measure a zero
@@ -209,6 +222,17 @@ async function mountApp(opts: MountOpts = {}): Promise<void> {
   if (GlobalRegistrator.isRegistered) await GlobalRegistrator.unregister();
   await GlobalRegistrator.register({ url: `http://localhost/p/${key}/roadmap` });
   document.body.innerHTML = '<div id="app"></div>';
+  // CR-CRU-093 §S4 — seeded BEFORE the shell is evaluated, because boot is
+  // when a persisted preference is read (the density guard reads its key at
+  // module top level, public/app.js).
+  if (opts.storageSeed !== undefined) {
+    for (const [k, v] of Object.entries(opts.storageSeed.local)) {
+      window.localStorage.setItem(k, v);
+    }
+    for (const [k, v] of Object.entries(opts.storageSeed.session)) {
+      window.sessionStorage.setItem(k, v);
+    }
+  }
   installLayout();
 
   const okResponse = (body: unknown): Response =>
@@ -499,4 +523,280 @@ describe("the project rail's collapse control", () => {
     expect(crRowOrder()).toEqual(rowsExpanded);
     expect(releaseMembership()).toEqual(membershipExpanded);
   });
+});
+
+// ── §S3 — the state lives OUTSIDE the render tree ──────────────────────────
+//
+// Spec: docs/changes/CR-CRU-093-project-rail-collapses.md §S3, §S4 —
+//       AC3 (survives a poll tick), AC4 (survives navigation),
+//       AC5 (survives reload), AC6 (an uninterpretable stored value boots
+//       expanded), AC8 (toggling does not remount the pane).
+//
+// WHY THESE LIVE HERE AND NOT IN CHROMIUM. Every claim below is about STATE
+// and STORAGE, not geometry: "still collapsed after a poll frame", "still
+// collapsed on the Workflow tab", "the same element node", "boots expanded
+// from a corrupt string". A layout engine decides none of them, and each is
+// decidable from the rendered DOM — the control's accessible name, its
+// `aria-expanded`, and element identity. AC5's FIRST-PAINT half is the one
+// clause that needs a real engine (there is no paint to be early to without
+// one), and it is asserted in tests/roadmap-visual-grammar.test.ts.
+//
+// RED phase — §S4 does not exist: `grep localStorage public/app.js` returns
+// only the density preference, and the rail's flag (`railCollapsed`,
+// public/app.js) is initialised to `false` on every boot with nothing read and
+// nothing written. AC5 and AC6 therefore fail on the ABSENCE of persistence.
+
+/** Every string the origin currently holds. A happy-dom re-registration hands
+ *  the shell a brand-new window (and so a brand-new, empty storage), which is
+ *  exactly why a "reload" has to carry this across. */
+function snapshotStorage(): StorageSnapshot {
+  const dump = (store: Storage): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (let i = 0; i < store.length; i++) {
+      const k = store.key(i);
+      if (k !== null) out[k] = store.getItem(k) ?? "";
+    }
+    return out;
+  };
+  return { local: dump(window.localStorage), session: dump(window.sessionStorage) };
+}
+
+/** THE RELOAD. The app is torn down and re-mounted from source with the
+ *  origin's storage carried across — which is what a browser reload is. The
+ *  assertions that follow read the RENDERED state, never a key, because AC5
+ *  was reworded on 2026-09-03 precisely so the mechanism stays GREEN's
+ *  choice. */
+async function reloadApp(opts: MountOpts = {}): Promise<void> {
+  const carried = snapshotStorage();
+  await mountApp({ ...opts, storageSeed: carried });
+}
+
+/** The keys whose value the collapse ITSELF wrote — the implementation's own
+ *  persistence handle, discovered rather than invented (AC6 has to corrupt
+ *  whatever GREEN chose, and AC5 forbids this file from naming it). */
+function writtenKeys(before: StorageSnapshot, after: StorageSnapshot): StorageSnapshot {
+  const changed = (
+    was: Record<string, string>,
+    now: Record<string, string>,
+  ): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(now)) if (was[k] !== v) out[k] = v;
+    return out;
+  };
+  return { local: changed(before.local, after.local), session: changed(before.session, after.session) };
+}
+
+const keyCount = (snap: StorageSnapshot): number =>
+  Object.keys(snap.local).length + Object.keys(snap.session).length;
+
+/** The same keys, every one of them holding `value` — the seed AC6 boots
+ *  from. */
+const seededWith = (keys: StorageSnapshot, value: string): StorageSnapshot => ({
+  local: Object.fromEntries(Object.keys(keys.local).map((k) => [k, value])),
+  session: Object.fromEntries(Object.keys(keys.session).map((k) => [k, value])),
+});
+
+/** The workspace's ONE active pane scroller (public/app.js `activePaneEl`:
+ *  "exactly one pane-scroll renders per route"). */
+function paneScroll(): HTMLElement {
+  const el = document.querySelector<HTMLElement>('[data-testid="pane-scroll"]');
+  if (el === null) throw new Error('no [data-testid="pane-scroll"] rendered');
+  return el;
+}
+
+/** Click a tab in the shell's own strip, by the name it draws. */
+async function switchTab(name: string): Promise<void> {
+  const tabs = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('[data-testid="workspace-tab"]'),
+  );
+  const tab = tabs.find((button) => norm(button.textContent) === name);
+  if (tab === undefined) {
+    throw new Error(
+      `no workspace tab named "${name}"; the strip draws ` +
+        tabs.map((b) => `"${norm(b.textContent)}"`).join(", "),
+    );
+  }
+  if (tab.disabled) throw new Error(`the "${name}" tab is disabled in this fixture`);
+  tab.click();
+  await settle();
+}
+
+/** Open the run detail through the shell's OWN entry point for it — a
+ *  Back/Forward landing on `/p/<key>/run/<id>`, which public/app.js's popstate
+ *  listener parses and turns into `state.route.overlay` (the same route
+ *  `navigate()` builds when a run row is clicked). Nothing here assigns the
+ *  route. */
+async function openRunDetail(key: string, eventId: string): Promise<void> {
+  history.pushState(null, "", `/p/${key}/run/${eventId}`);
+  window.dispatchEvent(new Event("popstate"));
+  await settle();
+}
+
+/** Close it the way a user does — Escape, which the shell binds to
+ *  `closeDetail()` (public/app.js). */
+async function closeRunDetail(): Promise<void> {
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await settle();
+}
+
+/** The rail's state as the SHELL publishes it: the control's accessible name
+ *  and `aria-expanded`. Mechanism-free — no class token, no storage key. */
+function expectRailCollapsed(where: string): void {
+  expect(`${where}: ${accessibleName(railToggle())}`).toBe(`${where}: ${EXPAND_NAME}`);
+  expect(`${where}: ${ariaExpanded()}`).toBe(`${where}: false`);
+}
+
+function expectRailExpanded(where: string): void {
+  expect(`${where}: ${accessibleName(railToggle())}`).toBe(`${where}: ${COLLAPSE_NAME}`);
+  expect(`${where}: ${ariaExpanded()}`).toBe(`${where}: true`);
+}
+
+describe("the rail's collapsed state, outside the render tree", () => {
+  test("survives a poll tick that delivers a data frame", async () => {
+    await mountApp();
+    await toggleRail();
+    expectRailCollapsed("collapsed");
+
+    // Count the frames the SHELL fetches, so "a poll tick elapsed" is a fact
+    // and not an assumption about timers.
+    const fetched: string[] = [];
+    const scriptedGlobals = globalThis as unknown as { fetch: typeof fetch };
+    const inner = scriptedGlobals.fetch;
+    scriptedGlobals.fetch = ((url: string, init?: RequestInit) => {
+      fetched.push(String(url));
+      return inner(url as unknown as RequestInfo, init);
+    }) as unknown as typeof fetch;
+
+    // AC3 — one FULL poll interval: the shell polls on `setInterval(refetch,
+    // 5000)` (public/app.js; a bare literal, there is no POLL_MS constant).
+    // Real timers, driven by the shell's own interval — nothing here calls
+    // `refetch` directly, because the bug being designed out is precisely that
+    // the shell's own re-render re-expands the rail.
+    await sleep(6_000);
+    await settle();
+
+    // The frame really was delivered: the poll refetched the project slice.
+    expect(fetched.some((url) => url.includes("/api/v2/projects"))).toBe(true);
+
+    // AC3 — still collapsed. A mount-local flag fails right here.
+    expectRailCollapsed("after one poll frame");
+  }, 30_000);
+
+  test("survives switching tabs and opening and closing a run detail", async () => {
+    await mountApp();
+    // The workspace lands on the Roadmap route (mountApp's url), so this
+    // collapse happens on ONE tab and every later reading is on another.
+    await toggleRail();
+    expectRailCollapsed("Roadmap");
+
+    // AC4 — the pane is a single instance shared by every tab (§S1), so the
+    // state is workspace-global.
+    await switchTab("Runs");
+    expect(document.querySelector('[data-testid="workspace-runs"]')).not.toBeNull();
+    expectRailCollapsed("Runs");
+
+    await switchTab("Workflow");
+    expectRailCollapsed("Workflow");
+
+    await openRunDetail("rail-collapse-key", "evt-rail-1");
+    // Non-vacuity: the detail really did open, so "still collapsed" is a
+    // reading taken over a detail and not over the same feed twice.
+    expect(document.querySelector('[data-testid="run-overlay"]')).not.toBeNull();
+    expectRailCollapsed("run detail open");
+
+    await closeRunDetail();
+    expect(document.querySelector('[data-testid="run-overlay"]')).toBeNull();
+    expectRailCollapsed("run detail closed");
+  }, 30_000);
+
+  test("survives a reload, in both directions", async () => {
+    await mountApp();
+    expectRailExpanded("first boot");
+
+    await toggleRail();
+    expectRailCollapsed("collapsed");
+
+    // AC5 — the reload. Asserted on the RENDERED state (the control's own
+    // name and `aria-expanded`), never on a storage key: the key, the value
+    // set and the store are GREEN's to choose.
+    await reloadApp();
+    expectRailCollapsed("after reload");
+
+    // …and the other direction, so a hardcoded "always boot collapsed" is not
+    // a passing implementation either.
+    await toggleRail();
+    expectRailExpanded("expanded");
+    await reloadApp();
+    expectRailExpanded("after second reload");
+  }, 30_000);
+
+  test("boots EXPANDED from a stored value it cannot interpret, without throwing and without console.error", async () => {
+    // Discover the handle rather than inventing one: collapse once and read
+    // what the collapse itself wrote. AC5 forbids this file from naming a key,
+    // and AC6 has to corrupt whatever GREEN actually chose.
+    await mountApp();
+    const clean = snapshotStorage();
+    await toggleRail();
+    const written = writtenKeys(clean, snapshotStorage());
+    if (keyCount(written) === 0) {
+      throw new Error(
+        "CR-CRU-093 §S4/AC6: collapsing the rail wrote NOTHING to localStorage or " +
+          "sessionStorage, so there is no stored value to make uninterpretable — the " +
+          "persistence AC5 requires does not exist yet (public/app.js reads and writes " +
+          "the rail's flag nowhere; `railCollapsed` is re-initialised to false on every " +
+          "boot). Follow DENSITY_STORAGE_KEY + DENSITY_MODES.includes(...).",
+      );
+    }
+
+    // Every shape a stored preference can arrive in and still mean nothing:
+    // corrupt, empty, whitespace, wrongly-typed (a JSON object, and a bare
+    // boolean — storage holds strings), and wrongly-cased.
+    const uninterpretable = ["\u0000\u0001garbage", "", "   ", '{"collapsed":true}', "true", "COLLAPSED", "Collapsed"];
+    for (const value of uninterpretable) {
+      const errors = spyOn(console, "error");
+      try {
+        // A throw during boot fails the test here, which is AC6's "without
+        // throwing" half — the shell never gets to render.
+        await mountApp({ storageSeed: seededWith(written, value) });
+        expectRailExpanded(`stored ${JSON.stringify(value)}`);
+        expect({ value, consoleErrors: errors.mock.calls.map((call) => String(call[0])) }).toEqual({
+          value,
+          consoleErrors: [],
+        });
+      } finally {
+        errors.mockRestore();
+      }
+    }
+
+    // …and ABSENT: nothing stored at all boots expanded too.
+    const errors = spyOn(console, "error");
+    try {
+      await mountApp({ storageSeed: { local: {}, session: {} } });
+      expectRailExpanded("nothing stored");
+      expect(errors.mock.calls.map((call) => String(call[0]))).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  }, 60_000);
+
+  test("collapsing and re-expanding never remounts the active pane or moves its reading position", async () => {
+    await mountApp();
+
+    const before = paneScroll();
+    // CR-CRU-016's contract is about a READING POSITION, so give it one: at
+    // scrollTop 0 a remounted pane would compare equal to a kept one.
+    before.scrollTop = 137;
+    expect(before.scrollTop).toBe(137);
+
+    await toggleRail();
+    // AC8 — the SAME element node (identity, not equality). A binding that
+    // re-renders the body on a rail flip rebuilds this box and loses the
+    // position.
+    expect(paneScroll()).toBe(before);
+    expect(paneScroll().scrollTop).toBe(137);
+
+    await toggleRail();
+    expect(paneScroll()).toBe(before);
+    expect(paneScroll().scrollTop).toBe(137);
+  }, 30_000);
 });
