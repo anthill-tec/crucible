@@ -5615,3 +5615,315 @@ describe("CR-CRU-085 §S2/AC5 — the lane grid is the design's two columns, mea
     }
   });
 });
+
+// ── CR-CRU-093 §S1/§S2 — the project rail collapses to a sliver ────────────
+//
+// Spec: docs/changes/CR-CRU-093-project-rail-collapses.md — AC1 (the width
+//       gain is GEOMETRIC), AC2 (the collapsed rail is re-openable), AC10's
+//       keyboard half.
+// Approved design: `.lavish/crucible-workflow-flowchart.html` §14 and §14.1 —
+//       §14.1 is the live board captured at 1600×900: the pane 394px → 34px,
+//       the view 1025px → 1385px, a 1.351× gain, which is why AC1's floor is
+//       1.30× and its sliver bound is ≤ 36px rather than the 0px the first
+//       draft asked for.
+//
+// WHY IT IS HERE. AC1 is stated in `boundingBox()` and AC2 ends in "±1px", so
+// it needs the engine this file already exists to provide — happy-dom runs no
+// layout, and the structural half of the same CR (element type, accessible
+// name, `aria-expanded`, where the control sits, the greyed() composition, the
+// roadmap's unchanged content) lives in tests/workspace-rail-collapse.test.ts.
+//
+// WHY IT BRINGS ITS OWN SERVER, BROWSER AND PAGE. Every measurement above is
+// taken on a STATIC capture — `fixtureDocument` serves serialised zones with
+// no script at all, deliberately, "so nothing can re-lay-out what is being
+// measured". A collapse is a CLICK: it needs the whole shell running, its own
+// grid container, and a real `.app-pane` beside a real `.app-center`. So this
+// block serves the REAL public/index.html with the REAL scripts against a
+// scripted API, in its own page at the 1600×900 the design's figures were
+// measured at — leaving the 1440×1000 and wide pages, and the 84 assertions
+// that read them, untouched.
+//
+// RED phase — expected to FAIL against current production, which renders no
+// collapse affordance anywhere: `ProjectPane` (public/app.js) has a section
+// title, the project card, the roadmap chip and `VitalsRail`, and the shell
+// contains ZERO `aria-expanded` attributes.
+
+const RAIL_VIEWPORT = { width: 1600, height: 900 };
+const RAIL_KEY = "rail-collapse-key";
+/** AC1's own selectors, verbatim. */
+const RAIL_BODY = '[data-testid="workspace-body"]';
+const RAIL_CENTER = '[data-testid="workspace-body"] > .app-center';
+const RAIL_PANE = '[data-testid="project-pane"]';
+const COLLAPSE_NAME = "collapse project rail";
+const EXPAND_NAME = "expand project rail";
+/** AC1, amended 2026-09-06: the sliver keeps the control, so the collapsed
+ *  rail is bounded, not absent. */
+const SLIVER_MAX_W = 36;
+const RAIL_GAIN_FLOOR = 1.3;
+
+let railServer: Server<undefined> | null = null;
+let railBrowser: Browser | null = null;
+let railPage: Page | null = null;
+let railUrl = "";
+
+const CONTENT_TYPES: Record<string, string> = {
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+};
+
+/** The scripted board, reusing this file's own fixtures so the shell has a
+ *  populated roadmap to reflow — the CR ids are synthetic (AC29). */
+function railApi(pathname: string): Response | null {
+  const json = (body: unknown): Response =>
+    new Response(JSON.stringify(body), {
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+  if (pathname === "/api/stream") {
+    // A real, open SSE channel: the shell's watchdog rests on it, and a
+    // refused stream would leave the page reconnecting mid-measurement.
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(": open\n\n"));
+      },
+    });
+    return new Response(stream, {
+      headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+    });
+  }
+  if (/^\/api\/v2\/projects\/[^/]+\/release-proposals$/.test(pathname)) {
+    return json({ ok: true, proposals: PROPOSALS, totalCount: PROPOSALS.length });
+  }
+  if (/^\/api\/v2\/projects\/[^/]+\/releases$/.test(pathname)) {
+    return json({ ok: true, releases: SHIPPED });
+  }
+  if (/^\/api\/v2\/projects\/[^/]+\/queue$/.test(pathname)) {
+    return json({ ok: true, entries: QUEUE });
+  }
+  if (/^\/api\/v2\/projects\/[^/]+\/plans$/.test(pathname)) return json({ ok: true, plans: [] });
+  if (pathname === "/api/v2/plans") return json({ ok: true, plans: [] });
+  if (pathname === "/api/v2/projects") {
+    return json({
+      ok: true,
+      projects: [
+        {
+          key: RAIL_KEY,
+          name: RAIL_KEY,
+          type: "backend",
+          agentsOnline: 0,
+          agentsTotal: 0,
+          active: true,
+          lastActivity: Date.now(),
+        },
+      ],
+    });
+  }
+  if (pathname === "/api/v2/agents") return json({ ok: true, agents: [] });
+  if (pathname === "/api/v2/events") return json({ ok: true, events: [] });
+  if (pathname === "/api/v2/health") {
+    return json({ ok: true, version: "2.0.0-test", counts: { events: 0 } });
+  }
+  if (pathname.startsWith("/api/")) return json({ ok: true });
+  return null;
+}
+
+const railPageEl = (): Page => {
+  if (railPage === null) throw new Error("CR-CRU-093: no Chromium page for the live shell");
+  return railPage;
+};
+
+/** A clean workspace on the Roadmap route, rail EXPANDED. The stored
+ *  preference is cleared before the measured load so this block keeps measuring
+ *  the default once CR-CRU-093 §S4's persistence lands. */
+async function liveWorkspace(): Promise<Page> {
+  const p = railPageEl();
+  await p.goto(railUrl, { waitUntil: "load" });
+  await p.evaluate(() => window.localStorage.clear());
+  await p.reload({ waitUntil: "load" });
+  await p.waitForSelector(RAIL_CENTER, { state: "attached", timeout: 30_000 });
+  await p.waitForSelector(RAIL_PANE, { state: "attached", timeout: 30_000 });
+  return p;
+}
+
+async function measuredWidth(p: Page, selector: string): Promise<number> {
+  const box = await p.locator(selector).first().boundingBox();
+  if (box === null) throw new Error(`CR-CRU-093: ${selector} has no layout box in the live shell`);
+  return box.width;
+}
+
+/** The one control, named. Throws with the missing name spelled out so a RED
+ *  run reads as "the affordance does not exist" and never as a selector typo. */
+async function railControl(p: Page, name: string) {
+  const control = p.getByRole("button", { name });
+  const found = await control.count();
+  if (found !== 1) {
+    throw new Error(
+      `CR-CRU-093 §S2: expected exactly ONE <button> with accessible name ` +
+        `"${name}" in the live shell; found ${found}`,
+    );
+  }
+  return control;
+}
+
+/** `aria-expanded` off whichever of the two names the control currently
+ *  carries — AC10 requires it at EVERY step, in both states. */
+const railAria = async (p: Page): Promise<string | null> =>
+  p.evaluate(() => {
+    const named = Array.from(document.querySelectorAll("button")).filter((button) => {
+      const name = (button.getAttribute("aria-label") ?? button.textContent ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      return name === "collapse project rail" || name === "expand project rail";
+    });
+    return named.length === 1 ? named[0]!.getAttribute("aria-expanded") : null;
+  });
+
+async function collapseRail(p: Page): Promise<void> {
+  await (await railControl(p, COLLAPSE_NAME)).click();
+  await p.waitForFunction(
+    (max) => {
+      const pane = document.querySelector('[data-testid="project-pane"]');
+      return pane !== null && pane.getBoundingClientRect().width <= max;
+    },
+    SLIVER_MAX_W,
+    { timeout: 5_000 },
+  );
+}
+
+describe("CR-CRU-093 — the project rail collapses to a sliver", () => {
+  beforeAll(async () => {
+    railServer = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const { pathname } = new URL(request.url);
+        const api = railApi(pathname);
+        if (api !== null) return api;
+        const name = pathname.replace(/^\/+/, "");
+        // The SPA fallback the real server performs: a deep route serves the
+        // app shell, so /p/<key>/roadmap boots the workspace.
+        if (name === "" || !name.includes(".")) {
+          return new Response(INDEX_HTML_SRC, {
+            headers: { "content-type": "text/html; charset=utf-8" },
+          });
+        }
+        // Static passthrough for public/, path-guarded so the throwaway server
+        // cannot be walked out of the directory it serves.
+        if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(name) || name.includes("..")) {
+          return new Response("not found", { status: 404 });
+        }
+        const type = CONTENT_TYPES[path.extname(name)];
+        const file = Bun.file(path.join(PUBLIC_DIR, name));
+        return new Response(file, type === undefined ? undefined : { headers: { "content-type": type } });
+      },
+    });
+    railUrl = `http://127.0.0.1:${railServer.port}/p/${RAIL_KEY}/roadmap`;
+    railBrowser = await chromium.launch();
+    railPage = await railBrowser.newPage({ viewport: RAIL_VIEWPORT });
+  }, 180_000);
+
+  afterAll(async () => {
+    if (railPage !== null) await railPage.close();
+    if (railBrowser !== null) await railBrowser.close();
+    if (railServer !== null) railServer.stop(true);
+    railPage = null;
+    railBrowser = null;
+    railServer = null;
+  });
+
+  test("AC1 — collapsing hands the view column at least 1.30x its width, and the rail keeps a sliver of at most 36px", async () => {
+    const p = await liveWorkspace();
+
+    const bodyBefore = await measuredWidth(p, RAIL_BODY);
+    const centerBefore = await measuredWidth(p, RAIL_CENTER);
+    const paneBefore = await measuredWidth(p, RAIL_PANE);
+    // Non-vacuity: the rail really is a rail before it is collapsed — the grid
+    // gives it `minmax(260px, 1fr)` (public/styles.css).
+    expect(paneBefore).toBeGreaterThanOrEqual(260);
+    expect(centerBefore).toBeGreaterThan(paneBefore);
+
+    await collapseRail(p);
+
+    const bodyAfter = await measuredWidth(p, RAIL_BODY);
+    const centerAfter = await measuredWidth(p, RAIL_CENTER);
+    const paneAfter = await measuredWidth(p, RAIL_PANE);
+
+    // AC1, both halves — measured boxes, never class presence, and the ratio
+    // derived from the two readings rather than the design's own figures.
+    expect(paneAfter).toBeLessThanOrEqual(SLIVER_MAX_W);
+    expect(centerAfter / centerBefore).toBeGreaterThanOrEqual(RAIL_GAIN_FLOOR);
+
+    // The width came OUT OF THE RAIL: the body did not grow, and the sliver is
+    // still a real box on screen (a 0px column is a different design, and is
+    // what the amended AC1 rejects).
+    expect(Math.abs(bodyAfter - bodyBefore)).toBeLessThanOrEqual(1);
+    expect(paneAfter).toBeGreaterThan(0);
+  }, 120_000);
+
+  test("AC2 — collapsed, exactly one visible re-open control sits inside the viewport and restores the view column", async () => {
+    const p = await liveWorkspace();
+    const centerBefore = await measuredWidth(p, RAIL_CENTER);
+
+    await collapseRail(p);
+
+    const reopen = p.getByRole("button", { name: EXPAND_NAME });
+    expect(await reopen.count()).toBe(1);
+    expect(await reopen.isVisible()).toBe(true);
+
+    // "inside the viewport bounds" — the sliver's control is reachable, not
+    // scrolled or clipped off-screen.
+    const box = await reopen.boundingBox();
+    if (box === null) throw new Error("CR-CRU-093 AC2: the re-open control has no layout box");
+    expect(box.width).toBeGreaterThan(0);
+    expect(box.height).toBeGreaterThan(0);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(RAIL_VIEWPORT.width);
+    expect(box.y + box.height).toBeLessThanOrEqual(RAIL_VIEWPORT.height);
+
+    await reopen.click();
+    await p.waitForFunction(
+      (want) => {
+        const center = document.querySelector('[data-testid="workspace-body"] > .app-center');
+        return center !== null && Math.abs(center.getBoundingClientRect().width - want) <= 1;
+      },
+      centerBefore,
+      { timeout: 5_000 },
+    );
+    expect(Math.abs((await measuredWidth(p, RAIL_CENTER)) - centerBefore)).toBeLessThanOrEqual(1);
+  }, 120_000);
+
+  test("AC10 — Enter collapses the rail from the keyboard and Space re-opens it, with aria-expanded tracking both", async () => {
+    const p = await liveWorkspace();
+    const centerBefore = await measuredWidth(p, RAIL_CENTER);
+
+    // A real engine, so this is the PLATFORM activating a real `<button>` —
+    // the reason AC10 asks for a button and not the shell's existing
+    // click-only expander spans.
+    await (await railControl(p, COLLAPSE_NAME)).focus();
+    expect(await railAria(p)).toBe("true");
+    await p.keyboard.press("Enter");
+    await p.waitForFunction(
+      (max) => {
+        const pane = document.querySelector('[data-testid="project-pane"]');
+        return pane !== null && pane.getBoundingClientRect().width <= max;
+      },
+      SLIVER_MAX_W,
+      { timeout: 5_000 },
+    );
+    expect(await railAria(p)).toBe("false");
+
+    await (await railControl(p, EXPAND_NAME)).focus();
+    await p.keyboard.press("Space");
+    await p.waitForFunction(
+      (want) => {
+        const center = document.querySelector('[data-testid="workspace-body"] > .app-center');
+        return center !== null && Math.abs(center.getBoundingClientRect().width - want) <= 1;
+      },
+      centerBefore,
+      { timeout: 5_000 },
+    );
+    expect(await railAria(p)).toBe("true");
+  }, 120_000);
+});
