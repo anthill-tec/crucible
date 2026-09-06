@@ -1376,6 +1376,44 @@ body {
   text-transform: uppercase;
   color: var(--ink-dim);
 }
+/* CR-CRU-085 §S2/AC5 — the SWIMLANES, the approved artifact's own
+   `.lanes { display:grid; grid-template-columns:54px 1fr; gap:5px }` (§4): a
+   two-column grid whose cells are the label and the track's rows, laid out in
+   pairs. The pair is two SIBLING cells rather than a wrapper each, which is
+   what keeps every label in one column and every lane's rows aligned in the
+   other. */
+.app-flow-wave-lanes {
+  display: grid;
+  grid-template-columns: 54px 1fr;
+  gap: 5px;
+}
+/* The artifact's `.lbl`: the track id set along the lane's edge, dim mono like
+   the header's own facts, with §5's DASHED edge as the swimlane divider. §S8 —
+   the divider is decoration only; the track is named in words here and counted
+   in words in the header. */
+.app-flow-wave-lane-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 400 9.5px/1.4 var(--mono);
+  color: var(--ink-dim);
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  border-right: 1px dashed var(--line);
+}
+/* The lane's ROW CELL. It keeps CR-CRU-096 AC8's arrangement — ONE CR PER
+   FULL-WIDTH ROW — because laning partitions those rows and does not restate
+   how they are drawn; the artifact's horizontal `.row` predates that ruling.
+   §5 again: the divider between lanes is DASHED, and the last lane closes the
+   box rather than drawing an edge across it. */
+.app-flow-wave-lane {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.app-flow-wave-lane:last-child { border-bottom: 0; }
 /* AC21 — a CR is a LEAF RECTANGLE: its id on the left, its terse status on
    the right, and never a title (AC11 — the title's one home is the table). */
 .app-flow-node {

@@ -110,7 +110,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-107](CR-CRU-107-a-cycle-label-list-refuses-the-wrong-delimiter.md) | a cycle label list refuses the wrong delimiter | bug | PENDING (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-105](CR-CRU-105-the-e2e-scenario-declares-through-the-approved-verb.md) | the e2e scenario declares membership through the approved verb | bug | COMPLETED (0.2.0) | — | 5 (0.2.0) |
 | [CR-CRU-079](CR-CRU-079-roadmap-deep-link-and-drill-through.md) | roadmap deep-link parity and active-CR drill-through | feature | COMPLETED (0.2.0) | 078 | 5 (0.2.0) |
-| [CR-CRU-085](CR-CRU-085-roadmap-multi-track-lanes.md) | multi-track swimlanes inside a wave | feature | PENDING (0.2.0) | 078 | 5 (0.2.0) |
+| [CR-CRU-085](CR-CRU-085-roadmap-multi-track-lanes.md) | multi-track swimlanes inside a wave | feature | COMPLETED (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-093](CR-CRU-093-project-rail-collapses.md) | the project rail collapses, giving every workspace view its width back | feature | PENDING (0.2.0) | 006 | 5 (0.2.0) |
 | [CR-CRU-075](CR-CRU-075-queue-file-fleet-parity.md) | queue-file fleet parity + AXI verb-surface census enforcement | patch | PENDING (0.2.0) | 014, 091, 092, 095 | 5 (0.2.0) |
 | [CR-CRU-094](CR-CRU-094-agent-participation-is-recorded.md) | agent participation is recorded, not inferred | feature | PENDING (0.2.0) | 056 | 5 (0.2.0) |
@@ -275,6 +275,22 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   python run by id — and the orchestrator cannot verify a claimed python run at all. Adjacent to
   CR-CRU-094 (participation recorded, not inferred) but distinct: that CR is about the agent/cycle
   binding, this is about the run's own identity being unpublished on one stack of five.
+
+- 2026-09-06 — **`CR-CRU-097 §S2/AC2`'s printed-help test HANGS when the Chromium suite runs before
+  it in the same bun process** (candidate patch CR, found by CR-CRU-085's pre-merge gate).
+  `tests/project-namespace-tripwire.test.ts:512` drives every client verb's `--help` for real —
+  ~157 `Bun.spawn` calls behind a 180 s cap. Standalone it takes **2.5 s**; run as
+  `bun test tests/roadmap-visual-grammar.test.ts tests/project-namespace-tripwire.test.ts` it hits
+  the cap exactly (180002 ms) and nothing else in either file changes timing. **Pre-existing, not
+  CR-085's**: the same two-file pairing reproduces on `1f5498c`, develop's head at that branch cut
+  (96 pass / 1 fail, 180001 ms), so a browser suite earlier in the process leaves subprocess
+  spawning unusable for the rest of the run. It is ORDER-DEPENDENT, which is why one gate run of
+  the identical tree passed it at 2.5 s and the next two timed out — the full-suite figures were
+  2122/1 each time, with every other slow test's duration identical to the millisecond
+  (26113/22062/15006 ms). Candidate fixes: give the help test its own process (a separate bun
+  invocation in the gate), cap concurrency inside `collectHelpSurfaces`, or have the browser suite
+  release whatever it holds. Deliberately NOT folded into CR-CRU-085 — it predates the branch and
+  the repo rule is a patch CR over an inline scope edit.
 
 - 2026-09-03 — **a green pre-merge gate does not mean develop is green: anything reading git
   history relative to `HEAD` changes meaning at the merge.** CR-CRU-096's non-vacuity block

@@ -2992,9 +2992,24 @@
             // than a second derivation that could drift from it.
             h4(
               { "data-testid": "roadmap-wave-header", class: "app-flow-wave-header" },
+              // CR-CRU-085 §S1/AC8 — the design's THIRD segment, `Wave 5 ·
+              // active · 2 tracks`: the wave's track count stated in WORDS
+              // (§S8 — the lanes' dashed dividers are decoration, never the
+              // only channel), under exactly the lanes' own condition and from
+              // the SAME published `box.lanes` the body draws, never a second
+              // count that could disagree with them. A wave that draws no
+              // lanes carries no segment at all, and the header's other facts
+              // — identity, the active marker, the whole-membership count —
+              // are untouched (AC4).
+              //
+              // It is a SEGMENT OF THE IDENTITY PHRASE, not a third child: the
+              // design's header is two spans (`<span>Wave 5 · active · 2
+              // tracks</span><span>20</span>`), so the count belongs inside
+              // the label the phrase is already written in. Never singular:
+              // lanes exist only above one track.
               span(
                 { class: "app-flow-wave-label" },
-                `Wave ${box.wave}${box.active === true ? " · active" : ""}`,
+                `Wave ${box.wave}${box.active === true ? " · active" : ""}${box.lanes.length > 0 ? ` · ${box.lanes.length} tracks` : ""}`,
               ),
               span(
                 { "data-testid": "roadmap-wave-count", class: "app-flow-wave-count" },
@@ -3042,7 +3057,53 @@
             // states whole membership, so the two facts stay distinct.
             div(
               { class: "app-flow-wave-body" },
-              box.rows.map((entry) => RoadmapFlowNode(entry, nextCr === entry.cr)),
+              // CR-CRU-085 §S2/AC1/AC5 — the SWIMLANES, when the box
+              // publishes any: design §4's `div.lanes` grid of `label cell ·
+              // row` PAIRS, one pair per track, the two cells SIBLINGS under
+              // the container in that order because that is what a two-column
+              // grid is — a wrapper per lane would not be it. Each lane draws
+              // the rows the view already assigned it, by the same
+              // `RoadmapFlowNode` under the same one marking rule, so laning
+              // partitions the box's rows and re-derives nothing.
+              //
+              // AC2/AC6 — with no lanes published (one reported track, or
+              // none) the body is exactly what CR-CRU-078/CR-CRU-096 draw: the
+              // flat node list, the `+N more` its sibling, and no lane chrome
+              // and no message standing in for it.
+              box.lanes.length > 0
+                ? div(
+                    { "data-testid": "roadmap-wave-lanes", class: "app-flow-wave-lanes" },
+                    box.lanes.flatMap((lane) => [
+                      div(
+                        {
+                          "data-testid": "roadmap-wave-lane-label",
+                          "data-track": lane.track,
+                          class: "app-flow-wave-lane-label",
+                        },
+                        lane.track,
+                      ),
+                      div(
+                        {
+                          "data-testid": "roadmap-wave-lane",
+                          "data-track": lane.track,
+                          class: "app-flow-wave-lane",
+                        },
+                        lane.rows.map((entry) => RoadmapFlowNode(entry, nextCr === entry.cr)),
+                      ),
+                    ]),
+                  )
+                : null,
+              // CR-CRU-085 §S3/AC9 — the IMPLICIT SOLO LANE
+              // (`DN-model-b-language.md`, LOCKED: "`track` absent = implicit
+              // solo lane (no UI noise, byte-identical lens output)"): a member
+              // declaring no track is drawn HERE, in the body beside the grid,
+              // with no lane, no label and no divider — byte-identical to the
+              // arrangement CR-CRU-078 gives it. The grid above and these rows
+              // are the box's `rows` entire (`soloRows` is the published
+              // remainder), so the box draws every node it counts. With no
+              // lanes published `soloRows` IS `box.rows`, so this one line is
+              // also CR-CRU-078's flat list, unchanged (AC2/AC6).
+              box.soloRows.map((entry) => RoadmapFlowNode(entry, nextCr === entry.cr)),
               // §S5.4/AC16 — a static POINTER at that detail surface, and by
               // §S8 deliberately NOT a node: no `roadmap-node` test id, no
               // `data-cr`, no `data-status`, no `data-drill-source` and no

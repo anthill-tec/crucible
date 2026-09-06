@@ -245,6 +245,33 @@ export interface FocusedReleaseWave<Entry = unknown> {
    *  states. Independent of the trim: `0` means the wave has none, and AC5a
    *  renders no roll-up then. */
   mergedCount: number;
+  /** CR-CRU-085 §S2 — the box's track swimlanes, in the tracks'
+   *  first-appearance order. The lane SET is the WHOLE membership's distinct
+   *  declared `track` labels (`roadmapTableColumns`' rule, AC7), so a lane
+   *  whose every member is merged or beyond the row cap is still published,
+   *  with no `rows`; a lane's `rows` are a subset of the box's own `rows`, in
+   *  the same published order. EMPTY unless more than one track is reported
+   *  (AC2/AC4) — one track, or none, draws no lane chrome at all — and always
+   *  EMPTY for the `wave: null` loose group, which has no box to lane and
+   *  draws its rows flat (AC18a). */
+  lanes: FocusedReleaseWaveLane<Entry>[];
+  /** CR-CRU-085 §S3/AC9 — the rows drawn in the wave BODY, OUTSIDE the lane
+   *  grid: the IMPLICIT SOLO LANE (`DN-model-b-language.md`, LOCKED:
+   *  "`track` absent = implicit solo lane (no UI noise, byte-identical lens
+   *  output)"), so they carry no lane, no label and no divider. Together with
+   *  the lanes' `rows` they are `rows` ENTIRE, in the same published order —
+   *  one pass puts every row in exactly one bucket, so no drawn member can be
+   *  drawn nowhere. With no lanes published this is ALL of `rows`, which is
+   *  the flat list CR-CRU-078 draws. */
+  soloRows: Entry[];
+}
+
+/** CR-CRU-085 §S2 — ONE track's swimlane inside a wave box: the declared
+ *  track id the lane is labelled with, and that track's share of the rows the
+ *  box draws (possibly none). */
+export interface FocusedReleaseWaveLane<Entry = unknown> {
+  track: string;
+  rows: Entry[];
 }
 
 /** CR-CRU-078 §S4/§S5 — everything zones 2 and 3 draw for ONE focused

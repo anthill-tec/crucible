@@ -1356,7 +1356,16 @@ export function focusedReleaseView(gate, releases, entries) {
     const wave = declaredLabel(entry, "wave") ?? null;
     let box = boxOf.get(wave);
     if (box === undefined) {
-      box = { wave, active, entries: [], rows: [], hiddenCount: 0, mergedCount: 0 };
+      box = {
+        wave,
+        active,
+        entries: [],
+        rows: [],
+        hiddenCount: 0,
+        mergedCount: 0,
+        lanes: [],
+        soloRows: [],
+      };
       boxOf.set(wave, box);
       waves.push(box);
     }
@@ -1410,6 +1419,52 @@ export function focusedReleaseView(gate, releases, entries) {
     // membership, independently of the trim, so it is never the merged rows
     // shown (zero, by AC9) and never the project total.
     box.mergedCount = box.entries.filter(roadmapMerged).length;
+    // CR-CRU-085 §S2/AC1/AC4/AC7 — the box's LANES, decided here beside the
+    // membership they partition, for the same reason `rows` and `hiddenCount`
+    // are: the renderer draws a published answer instead of deriving a second
+    // one.
+    //
+    // AC7 — the tracks are `distinctLabels(…, "track")`, the SAME rule the
+    // table's `track` column already applies (`roadmapTableColumns`), over the
+    // queue row's DECLARED `track` (CR-CRU-091 §S2's wire field) and never the
+    // plan's. One derivation, so the lanes and that column cannot disagree.
+    //
+    // §S2's row-cap ruling — the lane SET comes from the box's WHOLE
+    // membership while a lane's ROWS are a subset of the rows the box already
+    // draws: a track whose every member is merged or beyond the cap still gets
+    // its lane, labelled and empty, and laning never widens the drawn set.
+    // AC4 — the cap, the roll-up and the single wave-level `+N more` stay
+    // CR-CRU-096's, untouched.
+    //
+    // Design §7/AC2/§S3 — the chrome exists only above ONE track: a single
+    // declared track, or none at all, publishes NO lanes, and neither is an
+    // error state.
+    //
+    // CR-CRU-085 §S3/AC9 — the lanes partition the DECLARED-track rows only.
+    // A member declaring no track is the IMPLICIT SOLO LANE
+    // (`docs/research/DN-model-b-language.md`, LOCKED: "`track` absent =
+    // implicit solo lane (no UI noise, byte-identical lens output)"), so it is
+    // published as `soloRows` — the rows drawn in the wave BODY, outside the
+    // grid, with no lane, no label and no divider. The split is ONE PASS over
+    // `box.rows` appending each row to exactly one bucket, so the lane rows and
+    // `soloRows` are `box.rows` entire, in the published order, BY
+    // CONSTRUCTION: the renderer cannot lose a row the box counts. An unlaned
+    // box (one declared track, or none) publishes no lanes and ALL its rows as
+    // `soloRows` — which is exactly the flat list CR-CRU-078 draws (AC2/AC6).
+    //
+    // AC18a — and the `wave: null` LOOSE GROUP is never laned, whatever its
+    // members declare: it has no box, no header and no grid, and its renderer
+    // draws `rows` flat. Publishing lanes there would publish a partition
+    // nothing draws, so what it publishes is no lanes and `soloRows` entire —
+    // the shape always describes what is actually drawn.
+    const laneTracks = box.wave === null ? [] : distinctLabels(box.entries, "track");
+    const laned = laneTracks.length > 1 ? laneTracks : [];
+    const laneRows = new Map(laned.map((track) => [track, []]));
+    box.soloRows = [];
+    for (const entry of box.rows) {
+      (laneRows.get(declaredLabel(entry, "track")) ?? box.soloRows).push(entry);
+    }
+    box.lanes = laned.map((track) => ({ track, rows: laneRows.get(track) }));
   }
 
   // CR-CRU-096 §S4/AC12b — `nextCr` is a VIEW-level fact, not a per-box one:

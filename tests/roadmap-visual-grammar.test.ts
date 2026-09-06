@@ -369,6 +369,14 @@ const HEIGHT_PROPOSALS: ProposalFixture[] = [
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");
 
+/** Every measurement helper below declares the SAME one track — one declared
+ *  track is what a solo project reports — because CR-CRU-085 lanes a box the
+ *  moment it holds two, and a laned box is 59px wider (§4's 54px label column
+ *  plus the 5px gap) and taller by its lane cells' padding: a second track
+ *  here would silently re-measure a different box against the UNLANED budget
+ *  these boards exist to hold. */
+const MEASURED_TRACK = "1";
+
 /** Merged members: AC6a's PAIR, because `COMPLETED` and `COMPLETED_UNTRACKED`
  *  are one fact at two luminances and both must roll up rather than draw. */
 const mergedMembers = (prefix: string, wave: string, count: number, from: number): QueueFixture[] =>
@@ -380,7 +388,7 @@ const mergedMembers = (prefix: string, wave: string, count: number, from: number
     status: (at % 5 === 4 ? "COMPLETED_UNTRACKED" : "COMPLETED") as QueueStatus,
     seq: from + at,
     release: HEIGHT_RELEASE,
-    track: "1",
+    track: MEASURED_TRACK,
   }));
 
 /** Scheduled members — `PENDING` with the `lifecycle` key ABSENT, which is
@@ -401,7 +409,7 @@ const scheduledMembers = (
     status: "PENDING" as QueueStatus,
     seq: from + at,
     release: HEIGHT_RELEASE,
-    track: "2",
+    track: MEASURED_TRACK,
   }));
 
 /** Wave `H1` holds 29 and draws 5; wave `H2` holds 10 and draws 5. The two
@@ -527,6 +535,39 @@ const STACKED_DEPS_QUEUE: QueueFixture[] = [
     580,
     Array.from({ length: 5 }, () => BARE_DEPS),
   ),
+];
+
+// ── CR-CRU-085 §S2/AC5 — the board the LANE GRID is measured on ────────────
+//
+// Its OWN board, deliberately not one of the measurement boards above: those
+// hold §S6's UNLANED budget and a second declared track would silently widen
+// every box they measure. This one exists to be laned, so the grid the
+// stylesheet declares can be read off the pixels instead of off its text.
+//
+// Three tracks, INTERLEAVED, all inside CR-CRU-096's row cap so every member
+// is drawn: with the rows split by position rather than by the track each one
+// declares, the lanes would still fill and the geometry below would still
+// pass — the interleave is what keeps the grid's cells honest.
+//
+// AC29 — every id is synthetic: `CR-L-*` names no CR of this project.
+const LANED_TRACKS = ["track-1", "track-2", "track-3"];
+
+const LANED_PROPOSALS: ProposalFixture[] = [
+  { label: HEIGHT_RELEASE, targetAt: TARGET_020, timestamp: RETIRED_AT, waves: ["5"] },
+];
+
+const LANED_QUEUE: QueueFixture[] = [
+  ...QUEUE.slice(0, 2),
+  ...Array.from({ length: 6 }, (_slot, at) => ({
+    cr: `CR-L-${pad2(at + 1)}`,
+    title: `CR-L-${pad2(at + 1)} — scheduled, on a declared track`,
+    wave: "5",
+    dependsOn: [] as string[],
+    status: "PENDING" as QueueStatus,
+    seq: 700 + at,
+    release: HEIGHT_RELEASE,
+    track: LANED_TRACKS[at % LANED_TRACKS.length]!,
+  })),
 ];
 
 // ── CR-CRU-103 §S1/AC3a — the board the DELIVERED CARD is measured on ──────
@@ -793,6 +834,9 @@ let bareDepsZones = "";
 let bareDepsFixtureUrl = "";
 let stackedDepsZones = "";
 let stackedDepsFixtureUrl = "";
+// CR-CRU-085 §S2/AC5 — the laned board the lane grid's geometry is read off.
+let lanedZones = "";
+let lanedFixtureUrl = "";
 let liveDepsZones = "";
 let liveDepsFixtureUrl = "";
 /** The live board's own four-dependency CR, read out of the live board rather
@@ -1041,6 +1085,7 @@ beforeAll(async () => {
     proposals: STACKED_DEPS_PROPOSALS,
     queue: STACKED_DEPS_QUEUE,
   });
+  lanedZones = await captureZones({ proposals: LANED_PROPOSALS, queue: LANED_QUEUE });
   // CR-CRU-102 AC4's CORROBORATION — the board this project actually runs,
   // read from the live server through the same three payloads `captureZones`
   // scripts, so what Chromium measures is the production render of production
@@ -1163,6 +1208,13 @@ beforeAll(async () => {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
+      // CR-CRU-085 §S2/AC5 — the laned board, at the same 1130px surface every
+      // other zone-2 geometry on this page is measured at.
+      if (pathname === "/fixture-laned") {
+        return new Response(fixtureDocument(lanedZones, SURFACE_W), {
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
       if (pathname === "/fixture-live-deps") {
         return new Response(fixtureDocument(liveDepsZones, SURFACE_W), {
           headers: { "content-type": "text/html; charset=utf-8" },
@@ -1233,6 +1285,7 @@ beforeAll(async () => {
   realSurfaceFixtureUrl = `http://127.0.0.1:${server.port}/fixture-real-surface`;
   bareDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-bare-deps`;
   stackedDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-stacked-deps`;
+  lanedFixtureUrl = `http://127.0.0.1:${server.port}/fixture-laned`;
   liveDepsFixtureUrl = `http://127.0.0.1:${server.port}/fixture-live-deps`;
   deliveredFixtureUrl = `http://127.0.0.1:${server.port}/fixture-delivered`;
   liveDeliveredFixtureUrl = `http://127.0.0.1:${server.port}/fixture-live-delivered`;
@@ -5445,5 +5498,120 @@ describe("CR-CRU-103 AC9 — the type scale the Correction re-measured is PINNED
     }
     expect(reported.length).toBe(TYPE_SCALE.length);
     console.log(`[cr103] AC9 — the type scale, on its leaves:\n  ${reported.join("\n  ")}`);
+  });
+});
+
+// ── CR-CRU-085 §S2/AC5 — the LANE GRID, read off the pixels ────────────────
+//
+// The lane suite (`tests/roadmap-track-lanes.test.ts`) runs in happy-dom,
+// which lays nothing out: there the grid is asserted as CSS TEXT and DOM
+// STRUCTURE only. A `grid-template-columns` a later rule overrode, a label
+// column the cascade collapsed to zero, two lane cells drawn on top of each
+// other, or a last lane still closing the box with an edge across it would all
+// leave that suite green. This is the one probe that measures the grid.
+//
+// It states NO px budget for a laned box — the design states none, and a
+// number invented here would pin something nothing approved. What it pins is
+// the design's own `grid-template-columns: 54px 1fr` (§4) and the relative
+// geometry that makes a swimlane a swimlane.
+
+/** The design's label column, `.lavish/crucible-workflow-flowchart.html:88`. */
+const DESIGN_LANE_LABEL_W = 54;
+
+interface LaneCell {
+  track: string;
+  x: number;
+  right: number;
+  top: number;
+  bottom: number;
+  width: number;
+  borderBottom: number;
+}
+
+interface LaneGrid {
+  columns: string;
+  right: number;
+  labels: LaneCell[];
+  rows: LaneCell[];
+}
+
+const laneGrid = async (): Promise<LaneGrid> =>
+  await readWide<LaneGrid>(
+    `(() => {
+       const grid = document.querySelector(
+         '[data-zone="2"] [data-testid="roadmap-wave-lanes"]');
+       if (grid === null) throw new Error("the laned board drew no lane grid");
+       const px = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+       const cell = (el) => {
+         const r = el.getBoundingClientRect();
+         return {
+           track: el.getAttribute("data-track") || "",
+           x: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width,
+           borderBottom: px(getComputedStyle(el).borderBottomWidth),
+         };
+       };
+       const pick = (testid) => Array.from(
+         grid.querySelectorAll('[data-testid="' + testid + '"]')).map(cell);
+       return {
+         columns: getComputedStyle(grid).gridTemplateColumns,
+         right: grid.getBoundingClientRect().right,
+         labels: pick("roadmap-wave-lane-label"),
+         rows: pick("roadmap-wave-lane"),
+       };
+     })()`,
+  );
+
+describe("CR-CRU-085 §S2/AC5 — the lane grid is the design's two columns, measured", () => {
+  test("every label shares ONE 54px column, every lane's rows start at one left edge in the other, consecutive lanes do not overlap, and the last lane closes the box", async () => {
+    await openWide(lanedFixtureUrl);
+    const grid = await laneGrid();
+
+    // Non-vacuity: the board really is laned, one pair per declared track, and
+    // the labels name the tracks the fixture declared.
+    expect(grid.labels.map((cell) => cell.track)).toEqual(LANED_TRACKS);
+    expect(grid.rows.map((cell) => cell.track)).toEqual(LANED_TRACKS);
+    expect(grid.labels.length).toBeGreaterThan(1);
+
+    // The design's own declaration, SURVIVING the cascade: two columns, the
+    // first resolved to its 54px and the second taking the rest.
+    const columns = grid.columns.split(/\s+/).map((token) => round1(parseFloat(token)));
+    expect(columns.length).toBe(2);
+    expect(columns[0]).toBe(DESIGN_LANE_LABEL_W);
+    expect(columns[1]!).toBeGreaterThan(DESIGN_LANE_LABEL_W);
+
+    // ONE label column: every label cell is the same slab of x, at the design's
+    // width — which is what a `label cell · row` grid buys over a wrapper each.
+    for (const label of grid.labels) {
+      expect(round1(label.width)).toBe(DESIGN_LANE_LABEL_W);
+      expect(round1(label.x)).toBe(round1(grid.labels[0]!.x));
+      expect(round1(label.right)).toBe(round1(grid.labels[0]!.right));
+    }
+
+    // The rows sit in the REMAINING column: past every label, on one left edge,
+    // and out to the grid's own right edge.
+    for (const row of grid.rows) {
+      expect(round1(row.x)).toBe(round1(grid.rows[0]!.x));
+      expect(row.x).toBeGreaterThan(grid.labels[0]!.right);
+      expect(round1(row.right)).toBe(round1(grid.right));
+    }
+
+    // A lane is a SWIMLANE: its label and its rows are one band, and the bands
+    // stack. Overlapping cells would draw one track's work across another's.
+    for (let at = 0; at < grid.rows.length; at++) {
+      const row = grid.rows[at]!;
+      const label = grid.labels[at]!;
+      expect(row.bottom).toBeGreaterThan(row.top);
+      expect(Math.min(row.bottom, label.bottom) - Math.max(row.top, label.top)).toBeGreaterThan(0);
+      const next = grid.rows[at + 1];
+      if (next !== undefined) expect(row.bottom).toBeLessThanOrEqual(next.top);
+    }
+
+    // §5 — the divider is BETWEEN lanes: every lane but the last draws its
+    // dashed edge, and the last closes the box instead of ruling a line across
+    // it (`public/styles.css` `.app-flow-wave-lane:last-child`).
+    expect(grid.rows[grid.rows.length - 1]!.borderBottom).toBe(0);
+    for (const row of grid.rows.slice(0, -1)) {
+      expect(row.borderBottom).toBeGreaterThan(0);
+    }
   });
 });
