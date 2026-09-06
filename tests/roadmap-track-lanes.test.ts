@@ -534,6 +534,20 @@ const laneLabelTracks = (wave: string): string[] =>
 
 const laneLabelTexts = (wave: string): string[] => laneLabelEls(wave).map((l) => norm(l.textContent));
 
+/** The track a FIXTURE entry declares, narrowed to the `string` a lane's
+ *  `data-track` is compared against. A fixture that declares none is a broken
+ *  fixture, not a passing null branch: the entry is named and the test fails
+ *  loudly rather than asserting that "no lane holds it" is correct. */
+const declaredTrackOf = (entry: QueueFixture): string => {
+  const track = entry.track;
+  if (track === undefined) {
+    throw new Error(
+      `fixture ${entry.cr} declares no track — it cannot assert a lane's data-track`,
+    );
+  }
+  return track;
+};
+
 /** AC5's partition, read the only way that can fail for the reason it claims:
  *  how many lanes CONTAIN this node. `0` is an unlaned node, `2` is a node
  *  drawn twice or drawn inside nested lanes; the criterion is exactly `1`. */
@@ -582,7 +596,9 @@ describe("CR-CRU-085 AC1 — a wave draws one lane per REPORTED track, and each 
     // position would imply (the fixture interleaves the two tracks).
     for (const entry of TWO_TRACKS) {
       const holders = lanesContaining(WAVE, nodeEl(WAVE, entry.cr));
-      expect(holders.map((lane) => lane.getAttribute("data-track"))).toEqual([entry.track]);
+      expect(holders.map((lane) => lane.getAttribute("data-track"))).toEqual([
+        declaredTrackOf(entry),
+      ]);
     }
 
     for (const track of tracks) {
@@ -605,7 +621,9 @@ describe("CR-CRU-085 AC1 — a wave draws one lane per REPORTED track, and each 
 
     for (const entry of THREE_TRACKS) {
       const holders = lanesContaining(WAVE, nodeEl(WAVE, entry.cr));
-      expect(holders.map((lane) => lane.getAttribute("data-track"))).toEqual([entry.track]);
+      expect(holders.map((lane) => lane.getAttribute("data-track"))).toEqual([
+        declaredTrackOf(entry),
+      ]);
     }
   });
 });
