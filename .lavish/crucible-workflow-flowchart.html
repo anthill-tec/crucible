@@ -121,6 +121,16 @@
 @keyframes crpulse{0%,100%{box-shadow:0 0 0 2px rgba(255,122,26,.18)}50%{box-shadow:0 0 0 4px rgba(255,122,26,.42)}}
 .cr.pulse{animation:crpulse 1.5s ease-in-out infinite}
 .wsum{font-family:var(--mono);font-size:10px;color:var(--ok);opacity:.92;padding:1px 0 3px}
+
+/* §14.1 — CR-093 collapse frames. Captured from the running board, so the
+   figures are evidence rather than illustration: no hand-built mock can be
+   wrong about a width it never measured. */
+.shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px;margin:12px 0}
+.shots figure{margin:0;min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px}
+.shots img{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:6px;background:var(--bg-2)}
+.shots figcaption{font-size:11.5px;color:var(--ink-dim);line-height:1.5;padding:8px 2px 2px}
+.shots figcaption b{color:var(--ink)}
+.shots .mono{font-family:var(--mono);font-size:10.5px}
 </style>
 </head>
 <body>
@@ -777,6 +787,78 @@ next: ok=false needs=[track]  tracks=[1,2]           <span style="color:var(--he
       <tr><td>Nothing to migrate</td>
         <td>I checked the shell: there is <b>no collapse affordance anywhere</b> today — the only toggles are the tab chips and the roadmap's table/graph segmented control, which CR-CRU-078 removes. This is net-new.</td></tr>
     </table>
+
+    <div class="zone" style="margin-top:16px">§14.1 — how it collapses · CR-CRU-093 gap analysis 2026-09-06 · <b style="color:var(--ok)">your three corrections applied</b></div>
+    <div class="q">
+      <h3>Not a drawing — this is your board, captured at 1600&times;900</h3>
+      <p class="sub" style="margin:0">First draft was a hand-built mock with the toggle in the tabs row. You corrected it
+        three ways: <b>(1)</b> it did not look like what is online, <b>(2)</b> the behaviour is <b>global</b>, not the
+        Roadmap's, and <b>(3)</b> the toggle belongs <b>on the app pane itself</b>. All three are applied below. The
+        collapsed frames are the live board with the sliver injected client-side, screenshotted, then reverted — so every
+        number under them was measured, not designed.</p>
+    </div>
+
+    <div class="shots">
+      <figure>
+        <img src="rail-expanded.webp" alt="The live Crucible workspace with the project rail expanded: the release strip shows one gate and a '4 earlier' tag.">
+        <figcaption><b>Today.</b> <code>.app-pane</code> <b>394px</b> of a 1431px body — <b>27.5%</b>, reproducing §14's
+          measured share. The strip can draw <b>one</b> whole gate, so four releases hide behind
+          <code>&#9664; 4 earlier</code>.</figcaption>
+      </figure>
+      <figure>
+        <img src="rail-collapsed.webp" alt="The same workspace with the rail collapsed to a 34px sliver: the release strip now shows all five gates.">
+        <figcaption><b>Collapsed, toggle ON the pane.</b> The pane becomes a <b>34px</b> sliver carrying only the
+          re-open button and a vertical <span class="mono">PROJECT · VITALS</span> label; the view goes
+          <b>1025 &rarr; 1385px</b> (<b>1.351&times;</b>). <b style="color:var(--ok)">All five gates now draw</b> — the
+          hidden tag is gone, and nothing asked it to page.</figcaption>
+      </figure>
+      <figure>
+        <img src="rail-collapsed-runs.webp" alt="The Runs tab with the same rail collapsed, showing the run timeline at full width.">
+        <figcaption><b>Global, by construction.</b> Same sliver, Runs tab, same 1385px. There is exactly ONE
+          <code>.app-pane</code> in the shell — <code>ProjectPane</code>, mounted once beside the body — so every tab
+          inherits the state with nothing per-tab to build.</figcaption>
+      </figure>
+    </div>
+
+    <table style="margin-top:12px">
+      <tr><th>Your correction</th><th>What the code says</th><th>Consequence for CR-CRU-093</th></tr>
+      <tr class="live"><td><b>The toggle goes on the app pane itself</b></td>
+        <td>The pane's first child is already its section title (<code>ProjectPane</code> &rarr;
+          <code>.app-pane-section-title</code> "Project"), so the button has a header to sit in — and when collapsed the
+          sliver keeps it on screen, which is the requirement a 0px pane could not meet.</td>
+        <td><b>AC1 changes</b>: "the pane contributes 0px" becomes "&le; 36px", and the stated gain moves from
+          &ge;1.30&times; to <b>&ge;1.30&times;</b> still — measured 1.351&times;, so the threshold survives the sliver.</td></tr>
+      <tr class="live"><td><b>It is global, not the Roadmap's</b></td>
+        <td>Already true and nothing to add: <code>.app-pane</code> renders in exactly one place
+          (<code>public/app.js</code> &rarr; <code>ProjectPane</code>), mounted by <code>Workspace</code> beside
+          <code>WorkspaceBody</code>. <code>Home</code> is <code>Timeline()</code> full-width — it has <b>no</b> right
+          pane, so there is no second surface to make consistent.</td>
+        <td>The spec's non-goal "the workspace rail only" is <b>kept but reworded</b>: it excludes the tabs row and the
+          top bar, and states that home carries no pane rather than implying one was skipped. <b>AC4</b> (state is
+          workspace-global, survives tab switches) already pins the behaviour you asked for.</td></tr>
+      <tr class="live"><td><b>It must look like what is online</b></td>
+        <td>Captured, not drawn — the three frames above are the running board at
+          <code>127.0.0.1:3849</code>.</td>
+        <td>The both-widths sweep (<b>AC7</b>) keeps its value: these frames are two of the twelve cells, and the strip
+          already re-measures through <code>stripWindowSize()</code> + a <code>ResizeObserver</code>.</td></tr>
+    </table>
+
+    <table style="margin-top:10px">
+      <tr><th>Measured on your board, 2026-09-06</th><th>Rail open</th><th>Rail slivered</th></tr>
+      <tr><td><code>.app-workspace-body</code></td><td class="mono">1431px</td><td class="mono">1431px</td></tr>
+      <tr><td><code>.app-center</code> — the view</td><td class="mono">1025px</td><td class="mono"><b>1385px</b> (1.351&times;)</td></tr>
+      <tr><td><code>.app-pane</code> — the rail</td><td class="mono">394px &middot; 27.5%</td><td class="mono"><b>34px</b> &middot; 2.4%</td></tr>
+      <tr><td>Release gates drawn whole</td><td class="mono">1 &middot; <code>&#9664; 4 earlier</code></td><td class="mono"><b>5</b> &middot; no hidden tag</td></tr>
+    </table>
+
+    <p class="sub" style="margin:10px 0 0"><b>What the sliver costs, stated plainly:</b> a 0px pane would have given
+      <b>1.398&times;</b>; the 34px sliver gives <b>1.351&times;</b>. You buy back <b>~3.4%</b> of body width in exchange for
+      the re-open control living where the thing it controls lives — and for never having to answer "where did my rail
+      go". <b>AC11 becomes falsifiable again</b> because of this choice: at 1024&times;640 the sliver takes real width, so
+      "no pane child is squeezed below the 660px floor" is now a test that can fail, where against a 0px pane it could
+      not. The remaining amendment is <b>AC12</b>'s carve-out: the strip's window legitimately moves 1&rarr;5 here (6&rarr;9
+      on the design's 1600px figures), and <code>tests/roadmap-release-strip.test.ts:945</code> already asserts exactly
+      that under the name "the rail-collapse case (CR-093)".</p>
   </div>
 
   <h2>15 · What survives from CR-CRU-077</h2>
