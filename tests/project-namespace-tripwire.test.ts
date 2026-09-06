@@ -810,9 +810,37 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // nine `public/` files are untouched. `src/` and `clients/` are untouched
 // and re-measure at 550 and 639. The `develop` baselines are UNCHANGED at
 // 512/378/601 and stay the floors.
+// UPDATED 2026-09-06 by CR-CRU-085 §S1/§S2/§S3. `public/` HEAD moves 405 ->
+// 423 (+18), all of it the laned wave box's own lineage in the four files
+// the CR touched, written where a reader of the code will meet it:
+// `public/app.js` +7 (211 -> 218) — the header's THIRD segment (§S1/AC8),
+// the `div.lanes` grid (§S2/AC1/AC5), the implicit-solo-lane body (§S3/AC9)
+// and the two AC2/AC6 notes stating that an UNLANED body is exactly the flat
+// list CR-CRU-078/CR-CRU-096 already draw (one of those lines names BOTH,
+// which is why six added lines are seven occurrences); `public/app-logic.mjs`
+// +5 (79 -> 84) — `focusedReleaseView`'s lane partition (§S2/AC1/AC4/AC7,
+// citing CR-CRU-091 §S2's declared `track` wire field, and stating that
+// CR-CRU-096's cap and roll-up are untouched) and its `soloRows` remainder
+// (§S3/AC9, CR-CRU-078's flat list); `public/app-logic.d.mts` +4 (48 -> 52)
+// — the JSDoc on the box's `lanes`, on `soloRows` and on the
+// `FocusedReleaseWaveLane` shape itself; `public/styles.css` +2 (67 -> 69) —
+// the `.lanes` grid block (§S2/AC5) and the lane's ROW CELL, which keeps
+// CR-CRU-096 AC8's ONE CR PER FULL-WIDTH ROW ontology rather than restating
+// it. Every one is prose on a `//`, `/* ` or ` * ` line, none in a string
+// (the lane label renders a track id, which carries no CR literal); the
+// other six `public/` files — the five vendor bundles and `index.html` —
+// are untouched at 0.
+// Measured by classifying `git show 1f5498c:<path>` — the BRANCH CUT, not
+// `HEAD`, because this CR is already committed on the branch and the working
+// tree equals `HEAD` — against the working tree file by file with this
+// file's own `extractCitableText`. The +18 decomposes exactly into the four
+// per-file deltas above (7 + 5 + 4 + 2) and every other `public/` file
+// re-measures at its branch-cut count. `src/` and `clients/` are untouched
+// and re-measure at 550 and 639. The `develop` baselines are UNCHANGED at
+// 512/378/601 and stay the floors.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 550 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 405 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 423 },
   clients: { exts: [".py"], develop: 601, head: 639 },
 };
 
