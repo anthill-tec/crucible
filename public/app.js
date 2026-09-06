@@ -2354,7 +2354,7 @@
           () =>
             isRailCollapsed()
               ? span({ class: "app-rail-sliver-label" }, "Project · Vitals")
-              : span(),
+              : "",
         ),
         () => {
           const p = currentProject();

@@ -6159,7 +6159,6 @@ describe("CR-CRU-093 §S5 — every view survives the width change", () => {
       // Non-vacuity: an empty record would pass every bound below.
       expect(widths.length).toBeGreaterThan(5);
       // AC5 — collapsed ON FIRST PAINT…
-      expect({ firstPaintWidth: widths[0] }).toEqual({ firstPaintWidth: expect.any(Number) });
       expect(widths[0]).toBeLessThanOrEqual(SLIVER_MAX_W);
       // …and no expanded frame anywhere after it.
       expect(Math.max(...widths)).toBeLessThanOrEqual(SLIVER_MAX_W);
