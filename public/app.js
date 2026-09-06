@@ -2992,10 +2992,6 @@
             // than a second derivation that could drift from it.
             h4(
               { "data-testid": "roadmap-wave-header", class: "app-flow-wave-header" },
-              span(
-                { class: "app-flow-wave-label" },
-                `Wave ${box.wave}${box.active === true ? " · active" : ""}`,
-              ),
               // CR-CRU-085 §S1/AC8 — the design's THIRD segment, `Wave 5 ·
               // active · 2 tracks`: the wave's track count stated in WORDS
               // (§S8 — the lanes' dashed dividers are decoration, never the
@@ -3006,17 +3002,15 @@
               // — identity, the active marker, the whole-membership count —
               // are untouched (AC4).
               //
-              // The segment carries its own separators as TEXT because the
-              // header is READ as one phrase out of its `textContent`: with
-              // the spacing left to the stylesheet, `2 tracks` would run
-              // straight into the count beside it (`2 tracks20`). Never
-              // singular: lanes exist only above one track.
-              box.lanes.length > 0
-                ? span(
-                    { class: "app-flow-wave-tracks" },
-                    ` · ${box.lanes.length} tracks `,
-                  )
-                : null,
+              // It is a SEGMENT OF THE IDENTITY PHRASE, not a third child: the
+              // design's header is two spans (`<span>Wave 5 · active · 2
+              // tracks</span><span>20</span>`), so the count belongs inside
+              // the label the phrase is already written in. Never singular:
+              // lanes exist only above one track.
+              span(
+                { class: "app-flow-wave-label" },
+                `Wave ${box.wave}${box.active === true ? " · active" : ""}${box.lanes.length > 0 ? ` · ${box.lanes.length} tracks` : ""}`,
+              ),
               span(
                 { "data-testid": "roadmap-wave-count", class: "app-flow-wave-count" },
                 String(box.entries.length),

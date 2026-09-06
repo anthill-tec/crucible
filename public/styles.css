@@ -1370,19 +1370,12 @@ body {
   padding-bottom: 6px;
 }
 .app-flow-wave-label,
-.app-flow-wave-tracks,
 .app-flow-wave-count {
   display: block;
   font: 600 10px/1.4 var(--mono);
   text-transform: uppercase;
   color: var(--ink-dim);
 }
-/* CR-CRU-085 §S1/AC8 — the header's THIRD SEGMENT (`· 2 tracks`) is part of
-   the identity PHRASE on the left, not a third thing spread across the header:
-   its auto margin takes the free space the header's `space-between` would
-   otherwise open in front of it, leaving the membership count the only thing
-   on the right. */
-.app-flow-wave-tracks { margin-right: auto; }
 /* CR-CRU-085 §S2/AC5 — the SWIMLANES, the approved artifact's own
    `.lanes { display:grid; grid-template-columns:54px 1fr; gap:5px }` (§4): a
    two-column grid whose cells are the label and the track's rows, laid out in

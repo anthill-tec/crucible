@@ -246,6 +246,21 @@ const CAPPED: QueueFixture[] = [
 
 const CAPPED_UNTRACKED: QueueFixture[] = untracked(CAPPED);
 
+/** AC7's real SCOPE. A release spanning TWO waves whose two declared tracks
+ *  both sit in wave 1 — wave 2's members declare none. §S2 scopes the LANES to
+ *  one wave's membership (`box.entries`) while the table's `track` column is
+ *  `roadmapTableColumns` over the whole focused-release membership, so this is
+ *  the membership on which the two scopes give different answers. */
+const SECOND_WAVE = "2";
+
+const TWO_WAVE_PROPOSAL: ProposalFixture = { ...PROPOSED_040, waves: [WAVE, SECOND_WAVE] };
+
+const TRACKS_IN_ONE_WAVE: QueueFixture[] = [
+  ...TWO_TRACKS,
+  { ...member("CR-W2-01", "PENDING", undefined, 50), wave: SECOND_WAVE },
+  { ...member("CR-W2-02", "PENDING", undefined, 60), wave: SECOND_WAVE },
+];
+
 /** CR-CRU-096 §S5.2's shipped row cap — the container's rule, referenced here
  *  so the expectations below are derived from the fixture rather than copied
  *  off a render. */
@@ -566,9 +581,13 @@ const laneNodeCrs = (wave: string, track: string): string[] => {
 
 /** AC8 — the track count the HEADER states, in words, as the design's third
  *  segment. Read out of the header's text rather than off a nested tag, for
- *  the same reason the sibling suite reads `· active` that way. */
+ *  the same reason the sibling suite reads `· active` that way. The segment is
+ *  the last thing in the identity phrase and the membership count is the next
+ *  SPAN, so the header's `textContent` runs the two together (`2 tracks20`) —
+ *  the tail guard rejects a longer WORD (`trackside`) without demanding the
+ *  whitespace no markup puts between two adjacent spans. */
 const headerTrackCount = (wave: string): number | null => {
-  const match = /·\s*(\d+)\s+tracks?\b/.exec(headerText(wave));
+  const match = /·\s*(\d+)\s+tracks?(?![a-z])/.exec(headerText(wave));
   return match === null ? null : Number(match[1]);
 };
 
@@ -857,6 +876,37 @@ describe("CR-CRU-085 AC7 — the lanes and the table's `track` column appear and
     await mountApp({ queue: queueOf(NO_TRACKS) });
     expect(laneEls(WAVE).length).toBe(expectedLaneCount(NO_TRACKS));
     expect(tableHasTrackColumn()).toBe(false);
+  });
+
+  // §S2 is why "together" is a statement about the DERIVATION and not about
+  // every box on the page: the lanes are scoped to ONE wave's membership
+  // (`box.entries`) and the table's `track` column to the whole focused
+  // release's (`roadmapTableColumns`). Both read the same declared `track`
+  // through the same rule, so neither can report a track the other does not
+  // know — but a release whose tracks all sit in one wave draws the column
+  // once and the lanes in that wave only, and the wave beside it stays
+  // CR-CRU-078's flat list. Nothing pinned that, and AC7's wording ("appear
+  // and disappear together") reads stricter than the behaviour §S2 mandates.
+  test("a release whose two tracks both sit in ONE wave shows the table's `track` column, lanes that wave, and leaves the other wave unlaned (§S2's per-wave scope)", async () => {
+    await mountApp({ proposals: [TWO_WAVE_PROPOSAL], queue: queueOf(TRACKS_IN_ONE_WAVE) });
+
+    // Non-vacuity: the focus is the two-wave proposal and BOTH its waves draw.
+    expect(flow().getAttribute("data-version")).toBe("0.4.0");
+    expect(waveNames()).toEqual([WAVE, SECOND_WAVE]);
+
+    // The whole release reports two tracks, so the table states the column.
+    expect(tableHasTrackColumn()).toBe(true);
+
+    // Wave 1 holds both of them and draws both lanes; wave 2 reports none and
+    // draws no lane, no label and no track segment in its header.
+    expect(laneEls(WAVE).length).toBe(expectedLaneCount(TWO_TRACKS));
+    expect(laneEls(SECOND_WAVE).length).toBe(0);
+    expect(laneLabelEls(SECOND_WAVE)).toEqual([]);
+    expect(headerTrackCount(SECOND_WAVE)).toBeNull();
+
+    // And wave 2 still DREW its members — the absence above is the track
+    // scope's answer, not an empty box.
+    expect(nodeCrs(SECOND_WAVE)).toEqual(["CR-W2-01", "CR-W2-02"]);
   });
 });
 

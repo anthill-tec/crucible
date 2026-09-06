@@ -1451,7 +1451,13 @@ export function focusedReleaseView(gate, releases, entries) {
     // CONSTRUCTION: the renderer cannot lose a row the box counts. An unlaned
     // box (one declared track, or none) publishes no lanes and ALL its rows as
     // `soloRows` — which is exactly the flat list CR-CRU-078 draws (AC2/AC6).
-    const laneTracks = distinctLabels(box.entries, "track");
+    //
+    // AC18a — and the `wave: null` LOOSE GROUP is never laned, whatever its
+    // members declare: it has no box, no header and no grid, and its renderer
+    // draws `rows` flat. Publishing lanes there would publish a partition
+    // nothing draws, so what it publishes is no lanes and `soloRows` entire —
+    // the shape always describes what is actually drawn.
+    const laneTracks = box.wave === null ? [] : distinctLabels(box.entries, "track");
     const laned = laneTracks.length > 1 ? laneTracks : [];
     const laneRows = new Map(laned.map((track) => [track, []]));
     box.soloRows = [];

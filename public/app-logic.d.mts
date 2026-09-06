@@ -251,7 +251,9 @@ export interface FocusedReleaseWave<Entry = unknown> {
    *  whose every member is merged or beyond the row cap is still published,
    *  with no `rows`; a lane's `rows` are a subset of the box's own `rows`, in
    *  the same published order. EMPTY unless more than one track is reported
-   *  (AC2/AC4) — one track, or none, draws no lane chrome at all. */
+   *  (AC2/AC4) — one track, or none, draws no lane chrome at all — and always
+   *  EMPTY for the `wave: null` loose group, which has no box to lane and
+   *  draws its rows flat (AC18a). */
   lanes: FocusedReleaseWaveLane<Entry>[];
   /** CR-CRU-085 §S3/AC9 — the rows drawn in the wave BODY, OUTSIDE the lane
    *  grid: the IMPLICIT SOLO LANE (`DN-model-b-language.md`, LOCKED:
