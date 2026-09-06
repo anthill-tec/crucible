@@ -838,9 +838,42 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // re-measures at its branch-cut count. `src/` and `clients/` are untouched
 // and re-measure at 550 and 639. The `develop` baselines are UNCHANGED at
 // 512/378/601 and stay the floors.
+// UPDATED 2026-09-06 by CR-CRU-093 §S2/§S3/§S4. `public/` HEAD moves 423 ->
+// 431 (+8), all of it the collapsible rail's own lineage in the two files
+// the CR touched, written where a reader of the code will meet it:
+// `public/app.js` +5 (218 -> 223) — the §S3 note on the collapsed flag being
+// keyed OUTSIDE the render tree (holder, rev, predicate, toggle), which also
+// names CR-CRU-077 as the bug a mount-local flag reproduces when the shell
+// re-renders on every SSE frame — that one line is why FOUR added
+// `CR-CRU-093` occurrences are five (CR-CRU-077 goes 2 -> 3); the §S4/AC5
+// persistence note, stating that the preference is read in `main`'s body
+// BEFORE the first render so no expanded flash paints, with AC6's closed-set
+// guard; the §S2/AC9 note that the collapsed modifier composes INTO
+// `greyed()`'s reactive closure rather than replacing it; and the §S2 note
+// that the pane title now heads a ROW carrying the collapse control.
+// `public/styles.css` +3 (69 -> 72) — the three §S2 blocks the CR added: the
+// `.app-pane-head` header row that puts the control ON the pane, the
+// §S2/AC1 collapsed GRID COLUMN narrowing to the 34px sliver (carrying
+// design §14.1's measured 1.351× gain against AC1's 1.30× floor), and the
+// title's stand-down, stated beside and after the rule it modifies. Every
+// one is prose on a `//` or `/* ` line, none in a string (the sliver renders
+// `Project · Vitals` and the toggle an `aria-label`, neither carrying a CR
+// literal); `public/app-logic.mjs` and `public/app-logic.d.mts` re-measure
+// UNCHANGED at 84 and 52, and the other six `public/` files — the five
+// vendor bundles and `index.html` — are untouched at 0.
+// Measured by classifying `git show 6932ea1:<path>` — the BRANCH CUT
+// (develop's head, merged in at c0d52bf), not `HEAD`, because this CR is
+// already committed on the branch and the working tree equals `HEAD`, and
+// NOT `1f5498c`, which is CR-CRU-085's cut and predates that CR's own +18 —
+// against the working tree file by file with this file's own
+// `extractCitableText`. The +8 decomposes exactly into the two per-file
+// deltas above (5 + 3), every other `public/` file re-measures at its
+// branch-cut count, and the branch cut itself re-measures at the recorded
+// 423. `src/` and `clients/` are untouched and re-measure at 550 and 639.
+// The `develop` baselines are UNCHANGED at 512/378/601 and stay the floors.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 550 },
-  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 423 },
+  public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 431 },
   clients: { exts: [".py"], develop: 601, head: 639 },
 };
 

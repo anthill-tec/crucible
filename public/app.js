@@ -2272,17 +2272,89 @@
         CoverageMeter(project),
       );
 
+    // CR-CRU-093 §S3 — the rail's collapsed flag is keyed OUTSIDE the render
+    // tree, on the `lensOpenKeys` shape: a holder, a van.state rev beside it,
+    // a predicate that reads the rev to subscribe its enclosing binding, and a
+    // toggle that flips the holder and bumps the rev. The shell re-renders on
+    // every SSE frame and on the 5s poll fallback, so a mount-local flag would
+    // silently re-expand the rail on the next tick (the CR-CRU-077 bug).
+    // CR-CRU-093 §S4/AC5 — the flag is a persisted workspace preference,
+    // stored exactly like the density mode above: ONE key, a closed value set,
+    // read HERE — in `main`'s body, before the first render — so the very
+    // first frame the pane paints on already has the stored width. Applying it
+    // from an effect or a post-mount callback paints an expanded flash first.
+    // AC6 — an `includes` guard over the closed set, so absent, empty,
+    // whitespace, wrongly-typed and wrongly-cased values all mean "expanded",
+    // silently; and a storage accessor that throws (privacy mode, storage
+    // disabled) costs the preference, never the boot.
+    const RAIL_STORAGE_KEY = "crucible.rail.collapsed";
+    const RAIL_STATES = ["collapsed", "expanded"];
+    let storedRail = null;
+    try {
+      storedRail = window.localStorage.getItem(RAIL_STORAGE_KEY);
+    } catch {
+      storedRail = null;
+    }
+    let railCollapsed =
+      (RAIL_STATES.includes(storedRail) ? storedRail : "expanded") === "collapsed";
+    const railCollapsedRev = van.state(0);
+    const isRailCollapsed = () => {
+      railCollapsedRev.val; // subscribe the enclosing binding to toggle flips
+      return railCollapsed;
+    };
+    const toggleRailCollapsed = () => {
+      railCollapsed = !railCollapsed;
+      railCollapsedRev.val += 1;
+      try {
+        window.localStorage.setItem(RAIL_STORAGE_KEY, railCollapsed ? "collapsed" : "expanded");
+      } catch {
+        // A full or disabled store loses the preference, not the toggle.
+      }
+    };
+    // CR-CRU-093 §S2/AC9 — the collapsed modifier composes INTO `greyed()`'s
+    // reactive closure instead of replacing it: ONE binding reads both the rev
+    // and `state.backendUp`, so a liveness flip cannot drop the modifier and a
+    // collapse cannot drop `greyed`. An imperative classList write would be
+    // wiped by the next flip.
+    const railClass = () =>
+      greyed(isRailCollapsed() ? "app-pane app-pane-collapsed" : "app-pane")();
+
     // §S5.2 — the workspace's right rail: project card, then the project's
     // agents (live + tombstoned) as ⌁-marked indented sub-rows, then Vitals.
     // This pane exists ONLY inside the workspace.
     const ProjectPane = () =>
       div(
-        { "data-testid": "project-pane", class: greyed("app-pane") },
+        { "data-testid": "project-pane", class: railClass },
         // §S5.2 (a) — F8 section title above the project card (uppercase
         // mono, ember accent, wide letter-spacing — styles.css).
+        // CR-CRU-093 §S2 — the title now heads a ROW that also carries the
+        // collapse control, so the control lives ON the pane and the collapsed
+        // sliver keeps it on screen (design §14.1). Collapsed, the row swaps
+        // the title for the rotated `Project · Vitals` label.
         div(
-          { "data-testid": "pane-section-title", class: "app-pane-section-title" },
-          "Project",
+          { class: "app-pane-head" },
+          div(
+            { "data-testid": "pane-section-title", class: "app-pane-section-title" },
+            "Project",
+          ),
+          button(
+            {
+              "data-testid": "rail-toggle",
+              class: "app-rail-toggle",
+              // AC10 — the accessible name rides on `aria-label` so the glyph
+              // cannot pollute it, and `aria-expanded` tracks every step (the
+              // shell's first).
+              "aria-label": () =>
+                isRailCollapsed() ? "expand project rail" : "collapse project rail",
+              "aria-expanded": () => (isRailCollapsed() ? "false" : "true"),
+              onclick: toggleRailCollapsed,
+            },
+            () => (isRailCollapsed() ? "»" : "«"),
+          ),
+          () =>
+            isRailCollapsed()
+              ? span({ class: "app-rail-sliver-label" }, "Project · Vitals")
+              : "",
         ),
         () => {
           const p = currentProject();
