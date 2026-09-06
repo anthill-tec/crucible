@@ -3,7 +3,7 @@
 - **Type**: feature
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 006
-- **Status**: PENDING (0.2.0) — moved into 0.2.0 by user direction 2026-08-28 — gap-analysed 2026-09-06 (six citation drifts corrected, AC11 narrowed, AC12 given a carve-out) — design ruling 2026-09-06: the toggle lives ON the pane and the collapsed rail is a SLIVER, approved against a captured preview of the live board
+- **Status**: COMPLETED (0.2.0) — shipped 2026-09-06 — moved into 0.2.0 by user direction 2026-08-28 — gap-analysed 2026-09-06 (six citation drifts corrected, AC11 narrowed, AC12 given a carve-out) — design ruling 2026-09-06: the toggle lives ON the pane and the collapsed rail is a SLIVER, approved against a captured preview of the live board
 - **Design document — READ IT FIRST**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §14 and §14.1 (§14 approved 2026-08-28, §14.1 approved 2026-09-06). Absolute path so it resolves from a worktree; §14 carries the measured widths and the collapse rules, §14.1 carries the approved affordance — three captures of the live board, the sliver's measured trade, and why the behaviour is global.
 
 > The design document is the contract for this CR. Implement what it specifies — do not
