@@ -317,7 +317,7 @@ def _open_plans(project_dir):
     return _axi().open_plans(_get, _plans_path(project_dir))
 
 
-def _emit_ingest_axi_resp(verb, resp, project_dir, agent):
+def _emit_ingest_axi_resp(verb, resp, project_dir, agent, warnings=None):
     """Emit the §S1 envelope for a SERVER-parsed ingest (junit-dir path): run fields
     come from the server response `run`. CR-CRU-050 §S2 — `pending` is printed
     alongside, so the line always sums. CR-CRU-056 §S3 — the client RESOLVES no
@@ -325,7 +325,9 @@ def _emit_ingest_axi_resp(verb, resp, project_dir, agent):
     stale binding gets a 409, surfaced via `error`). C5 — the envelope context
     ECHOES the attachment the SERVER reported (`context.cycleId` on the ingest
     response), so the agent sees which cycle absorbed its evidence without a
-    second `GET /api/v2/events`; absent → the key is omitted."""
+    second `GET /api/v2/events`; absent → the key is omitted. CR-CRU-094 §S3 —
+    `warnings` carries the run's pre-flight finding onto the envelope, so the
+    stderr line and `warnings[]` say the same thing."""
     s = resp.get("run", {}) or {}
     run = {"passed": s.get("passed"), "failed": s.get("failed"),
            "pending": s.get("pending", 0), "total": s.get("total")}
@@ -335,7 +337,7 @@ def _emit_ingest_axi_resp(verb, resp, project_dir, agent):
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
 
 
 def _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, agent,
@@ -942,7 +944,8 @@ def _select_maven_no_report_cause(output: str) -> str | None:
     return None
 
 
-def _emit_compile_fallback_axi(verb, rc, build_output, project_dir, agent):
+def _emit_compile_fallback_axi(verb, rc, build_output, project_dir, agent,
+                               warnings=None):
     """CR-CRU-058 §S1 — the envelope for the RED-as-compile path: the run
     produced no reports at all, so there is no `run:` block to carry and the
     §S2 next step is the build error, never the verb's successor.
@@ -956,7 +959,10 @@ def _emit_compile_fallback_axi(verb, rc, build_output, project_dir, agent):
     CR-CRU-064 AC2 — and its CAPTURED OUTPUT: `_compile_fallback` threads its
     `mvn clean test-compile` capture out to here, so the shared helper can
     compose the real cause into the detail rather than the prefix alone. The
-    helper owns the composition; this site never pre-composes a detail."""
+    helper owns the composition; this site never pre-composes a detail.
+
+    CR-CRU-094 §S3 — `warnings` carries the caller's pre-flight finding ahead
+    of the no-report one, so this exit says what every other exit says."""
     _emit_axi(verb, False,
               {"stage": "compile",
                "help": _axi().no_report_help(
@@ -964,7 +970,8 @@ def _emit_compile_fallback_axi(verb, rc, build_output, project_dir, agent):
                    "fix the build/test-compile errors ingested to Crucible "
                    "(and echoed on stderr)")},
               _axi_context(project_dir, agent_id=agent),
-              [_axi().no_report_warning(
+              list(warnings or [])
+              + [_axi().no_report_warning(
                   verb, "surefire reports", rc, build_output,
                   cause=_select_maven_no_report_cause(build_output))],
               f"{verb}: ok=False — no reports, ingested as compile (rc={rc})")
@@ -1122,16 +1129,24 @@ def cmd_regression(args, verb="regression"):
     project_dir = _resolve_project_dir(args.project_dir)
     identity = None
     try:
+        preflight_warnings = []
         if getattr(args, "agent", None):
             identity = _open_gate_identity(project_dir, args.agent,
                                            getattr(args, "cycle", None),
                                            "gated regression run starting")
-        return _regression_run(args, identity, verb)
+            # CR-CRU-094 §S3 — the same pre-flight attribution check `cmd_test`
+            # makes, before this (far longer) reactor sweep burns its minutes.
+            preflight_warnings = _axi().preflight_cycle_warnings(
+                _get, _project_key(project_dir), args.agent,
+                cycle_id=getattr(args, "cycle", None),
+                context=_run_context())
+        return _regression_run(args, identity, verb, preflight_warnings)
     finally:
         _close_gate_identity(project_dir, identity)
 
 
-def _regression_run(args, identity=None, verb="regression"):
+def _regression_run(args, identity=None, verb="regression",
+                    preflight_warnings=()):
     """REGRESSION tier — full reactor suite WITH JaCoCo coverage. Orchestrator
     pre-merge gate. Parses surefire + failsafe + jacoco.csv → /api/v2/runs/parsed.
     Coverage is published ONLY here, and ONLY when zero failures.
@@ -1139,8 +1154,11 @@ def _regression_run(args, identity=None, verb="regression"):
     `identity` is the caller's `GatedRunIdentity` (CR-CRU-056): the narration
     ticks report through it, so a tick that re-creates a pruned row hands this
     run ownership of that row. `verb` (CR-CRU-058 §S1) names the envelope — see
-    `cmd_regression`.
+    `cmd_regression`. `preflight_warnings` (CR-CRU-094 §S3) is the caller's
+    pre-flight finding, decided BEFORE the sweep started; it rides every
+    envelope this body can emit, ahead of whatever the run itself discovers.
     """
+    preflight_warnings = list(preflight_warnings)
     project_dir = _resolve_project_dir(args.project_dir)
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
@@ -1188,7 +1206,7 @@ def _regression_run(args, identity=None, verb="regression"):
         rc, build_output = _compile_fallback(maven_dir, project_dir,
                                              args.agent, common)
         _emit_compile_fallback_axi(verb, rc, build_output, project_dir,
-                                   args.agent)
+                                   args.agent, preflight_warnings)
         return rc
 
     _warn_if_stale(dirs)
@@ -1214,7 +1232,7 @@ def _regression_run(args, identity=None, verb="regression"):
     help_steps = (_axi().run_help(verb, ok, summary["failed"], CRUCIBLE_URL)
                   if verb != "regression" else None)
     _emit_ingest_summary_axi(verb, resp, summary, files, project_dir, args.agent,
-                             help_steps=help_steps)
+                             help_steps=help_steps, warnings=preflight_warnings)
     return 0 if (resp.get("ok") and summary["failed"] == 0) else 1
 
 
@@ -1228,6 +1246,14 @@ def cmd_test(args):
     extra = [f"-Dtest={args.test}"] if getattr(args, "test", None) else []
     cmd = _mvn_base(maven_dir) + ["clean", "test"] + extra + common
     env = os.environ.copy()
+    # CR-CRU-094 §S3 — PRE-FLIGHT, before maven spawns and while `--cycle` can
+    # still be supplied: ask the board whether this agent is bound and say so
+    # on both channels if it is not. Best-effort — a failed lookup warns about
+    # nothing and never delays the run. One implementation, shared.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     print(f"[test] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
     result = _run_logged(cmd, maven_dir, env, getattr(args, "log", None))
     print(f"[test] mvn exit={result.returncode}", file=sys.stderr)
@@ -1242,13 +1268,15 @@ def cmd_test(args):
     ctx = _run_context()
     if len(dirs) == 1:
         resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier="unit", context=ctx)
-        _emit_ingest_axi_resp("test", resp, project_dir, args.agent)
+        _emit_ingest_axi_resp("test", resp, project_dir, args.agent,
+                              preflight_warnings)
         failed = (resp.get("run") or {}).get("failed") or 0
     else:
         summary, tree, files = _parse_junit(dirs)
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, tier="unit", context=ctx,
                               files=files)
-        _emit_ingest_summary_axi("test", resp, summary, files, project_dir, args.agent)
+        _emit_ingest_summary_axi("test", resp, summary, files, project_dir, args.agent,
+                                 warnings=preflight_warnings)
         failed = summary["failed"]
     if failed and failed > 0:
         return 1
@@ -1262,6 +1290,13 @@ def cmd_check(args):
     maven_dir = _resolve_maven_dir(args.maven_dir, project_dir)
     common = _common_mvn_flags(args)
     cmd = _mvn_base(maven_dir) + ["clean", "test-compile"] + common
+    # CR-CRU-094 §S3 — `check` INGESTS on a failing test-compile, so it is one
+    # of the five ingesting verbs the pre-flight covers; asked before maven
+    # spawns, while `--cycle` can still be supplied.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     print(f"[check] running: {' '.join(cmd)}  (cwd={maven_dir})", file=sys.stderr)
     result = subprocess.run(cmd, cwd=maven_dir, capture_output=True, text=True)
     output = (result.stdout or "") + (result.stderr or "")
@@ -1273,7 +1308,8 @@ def cmd_check(args):
     legacy = f"check: ok={ok} exit={result.returncode}"
     _emit_axi("check", ok,
               {"exit": result.returncode, "help": _axi().HELP_STEPS["check"]},
-              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+              _axi_context(project_dir, agent_id=args.agent),
+              preflight_warnings, legacy)
     return 0 if ok else (result.returncode or 1)
 
 
@@ -1293,15 +1329,23 @@ def cmd_auto_ingest(args):
         return rc
     _warn_if_stale(dirs)
     ctx = _run_context()
+    # CR-CRU-094 §S3 — this verb runs no maven and offers no `--cycle`, so its
+    # ingest is the furthest from the run that produced the reports and an
+    # unattributed store here is the hardest to notice; checked before the POST.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None), context=ctx)
     if len(dirs) == 1 and not args.coverage:
         resp = _ingest_junit_dir(project_dir, args.agent, dirs[0], tier="unit", context=ctx)
-        _emit_ingest_axi_resp("auto-ingest", resp, project_dir, args.agent)
+        _emit_ingest_axi_resp("auto-ingest", resp, project_dir, args.agent,
+                              preflight_warnings)
     else:
         summary, tree, files = _parse_junit(dirs)
         coverage = _collect_jacoco(maven_dir) if (args.coverage and summary["failed"] == 0) else None
         resp = _ingest_parsed(project_dir, args.agent, summary, tree, coverage,
                               tier="regression", context=ctx, files=files)
-        _emit_ingest_summary_axi("auto-ingest", resp, summary, files, project_dir, args.agent)
+        _emit_ingest_summary_axi("auto-ingest", resp, summary, files, project_dir, args.agent,
+                                 warnings=preflight_warnings)
     return 0 if resp.get("ok") else 1
 
 
@@ -1558,7 +1602,7 @@ def cmd_abort(args):
 def cmd_status(args):
     """§S6 — the plan/status READ verb (alias `plans`, no --agent): GET …/plans
     and return the queue as a uniform-table §S1 envelope plus a top-level
-    lastRunCr. CR-CRU-054 §S2 — delegates to the shared implementation."""
+    lastClosedCr. CR-CRU-054 §S2 — delegates to the shared implementation."""
     return _axi().cmd_status(args, _resolve_project_dir(args.project_dir), _ops())
 
 
@@ -1994,7 +2038,9 @@ def main():
     ab.set_defaults(func=cmd_abort)
 
     for _name in ("status", "plans"):
-        sv = sub.add_parser(_name, help="Read the plan queue (GET …/plans) as a TOON-AXI table + lastRunCr.")
+        sv = sub.add_parser(_name,
+                            help="Read the plan queue (GET …/plans) as a TOON-AXI table "
+                                 "+ lastClosedCr (the last CR to close).")
         sv.add_argument("--fields",
                         help="Comma-separated EXTRA columns to add to the minimal "
                              "cr,wave,status,activeCycleId set (§S10).")

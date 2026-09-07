@@ -79,6 +79,13 @@ interface MigrationStep {
   readonly to: number;
   readonly description?: string;
   apply(db: Database): void;
+  // CR-CRU-094 §S1/AC2 — the per-step "is this retrofit already owed?" probe
+  // `MigrationStep` has carried since CR-CRU-071 (`src/store.ts`,
+  // `MigrationStep.satisfiedBy`) and `inferBaselineVersion` walks. Declared
+  // here because AC2 asserts the NEW step's probe directly; optional, exactly
+  // as production declares it, so every existing use of this seam type is
+  // untouched.
+  readonly satisfiedBy?: (db: Database) => boolean;
 }
 
 interface StoreMigration {
@@ -1109,5 +1116,190 @@ describe("CR-CRU-100 §S1 — roles are PRESERVED across a migration, on a store
     // Nothing is fabricated: an id the suffix rule cannot parse keeps NULL in
     // BOTH columns rather than reading as "declared nothing".
     expect(after["e-cr100-unclassifiable"]).toEqual({ role: null, role_inferred: null });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * CR-CRU-094 §S1 — a store as the PREVIOUS build left it: every table in its
+ * production shape, real rows in `events`, NO `cycle_id`, stamped at 8.
+ *
+ * `makePreRenameStore` above is the established way to build an old-shaped
+ * store and this follows it, with one deliberate difference. That fixture
+ * hand-writes the ONE table CR-CRU-059's rename touches, which is all it
+ * needs; AC2's claim is "loses no row, in ANY table", so this file is opened
+ * ONCE by this build to get the real table set, given rows, and then walked
+ * BACK across the single column this CR adds. That is the only honest way to
+ * write a version-8 file from the build that speaks 9 — and it is a no-op
+ * today, where the column does not exist yet.
+ */
+const PRE_CYCLE_ID_VERSION = 8;
+
+function makePreCycleIdStore(dir: string): string {
+  const dbPath = path.join(dir, "crucible.db");
+  Store.open(dbPath);
+  const db = new Database(dbPath);
+  try {
+    db.query(
+      `INSERT INTO projects (key, name, type, sut_root, created_at)
+       VALUES ('p-cr094', 'P', 'backend', '/tmp/p', 1000)`,
+    ).run();
+    // One run that WAS attached (its blob carries the binding) and one that
+    // never was: AC2 is about both rows surviving, and §S1's "context is not
+    // removed" about the blob surviving intact.
+    db.query(
+      `INSERT INTO events (id, project_key, agent_id, kind, tier, timestamp, context)
+       VALUES ('e-cr094-linked', 'p-cr094', 'worker-RED', 'test', 'unit', 1000, '{"cycleId":41}')`,
+    ).run();
+    db.query(
+      `INSERT INTO events (id, project_key, agent_id, kind, tier, timestamp)
+       VALUES ('e-cr094-unlinked', 'p-cr094', 'orch-1', 'test', 'unit', 2000)`,
+    ).run();
+    const cols = db
+      .query<{ name: string }, []>(`PRAGMA table_info(events)`)
+      .all()
+      .map((c) => c.name);
+    if (cols.includes("cycle_id")) db.exec(`ALTER TABLE events DROP COLUMN cycle_id`);
+    db.exec(`PRAGMA user_version = ${PRE_CYCLE_ID_VERSION}`);
+  } finally {
+    db.close();
+  }
+  return dbPath;
+}
+
+/**
+ * The step that must exist for `events` to gain `cycle_id`, named by the
+ * MISSING CONTRACT rather than by an index-out-of-bounds TypeError — the same
+ * discipline the seam accessors above follow.
+ */
+function appendedCycleIdStep(): MigrationStep {
+  const chain = migrationChain();
+  const step = chain[PRE_CYCLE_ID_VERSION];
+  if (step === undefined) {
+    throw new Error(
+      `CR-CRU-094 §S1/AC2: MIGRATIONS holds ${chain.length} step(s) — the ` +
+        `${PRE_CYCLE_ID_VERSION} -> ${PRE_CYCLE_ID_VERSION + 1} body that adds ` +
+        `events.cycle_id has not been appended`,
+    );
+  }
+  return step;
+}
+
+/** A step's own "already done?" probe, run against a store FILE. */
+function stepSatisfiedBy(step: MigrationStep, dbPath: string): boolean {
+  const db = new Database(dbPath);
+  try {
+    return step.satisfiedBy?.(db) === true;
+  } finally {
+    db.close();
+  }
+}
+
+/** The stored `context` blob per event id — §S1's "not removed" half. */
+function storedContexts(dbPath: string): Record<string, string | null> {
+  const db = new Database(dbPath);
+  try {
+    return Object.fromEntries(
+      db
+        .query<{ id: string; context: string | null }, []>(`SELECT id, context FROM events`)
+        .all()
+        .map((r) => [r.id, r.context]),
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * CR-CRU-094 §S1/AC2 — `events.cycle_id` arrives by APPENDING a body.
+ *
+ * WHAT THIS BLOCK DELIBERATELY DOES NOT RE-TEST, because CR-CRU-071 already
+ * enforces it for EVERY future body, generically, in this very file:
+ *   • "AC1 — a freshly opened store is stamped with SCHEMA_VERSION and
+ *     structurally matches it" — a new column missing from a brand-new store,
+ *     or a stamp that moves without the structure, fails there;
+ *   • "AC3 — MIGRATIONS is a contiguous ordered chain ending at
+ *     SCHEMA_VERSION" — an appended body with the wrong `from`/`to`, or a
+ *     hand-edited constant, fails there;
+ *   • "AC3 — re-opening a migrated store converges: no further migration, no
+ *     new backup" — idempotence, generically.
+ * AC2 is therefore discharged by citing those and adding ONLY what they
+ * cannot see: row preservation across THIS retrofit, the new step's own
+ * `satisfiedBy`, and falsifiable NUMBERS for the version and the chain.
+ */
+describe("CR-CRU-094 §S1/AC2 — events.cycle_id is an APPENDED body: additive, lossless, re-runnable", () => {
+  test("AC2 — a store from the PREVIOUS build gains cycle_id and loses NOT ONE row, in any table", () => {
+    const dir = tmpDir();
+    const dbPath = makePreCycleIdStore(dir);
+
+    // Precondition, so the test can never pass by testing nothing: the store
+    // really is at the previous version, really lacks the column, and really
+    // holds rows to lose.
+    expect(userVersion(dbPath)).toBe(PRE_CYCLE_ID_VERSION);
+    expect(columnsOf(dbPath, "events")).not.toContain("cycle_id");
+    const before = rowCounts(dbPath);
+    expect(before.events).toBe(2);
+    expect(before.projects).toBe(1);
+
+    Store.open(dbPath);
+
+    expect(columnsOf(dbPath, "events")).toContain("cycle_id");
+    expect(userVersion(dbPath)).toBe(PRE_CYCLE_ID_VERSION + 1);
+    // EVERY counted table, not just `events`: a retrofit that rebuilds a table
+    // (the CREATE-copy-DROP shape an ALTER-averse migration reaches for) shows
+    // up here as a lost row somewhere, which is the whole point of comparing
+    // the map rather than one count.
+    expect(rowCounts(dbPath)).toEqual(before);
+    // §S1 — `context.cycleId` is NOT removed and NOT rewritten: the column is
+    // the new stored fact, the blob stays the one all four existing consumers
+    // read. A migration that "moved" the binding out of the JSON fails here.
+    expect(storedContexts(dbPath)).toEqual({
+      "e-cr094-linked": '{"cycleId":41}',
+      "e-cr094-unlinked": null,
+    });
+  });
+
+  test("AC2 — the new step's satisfiedBy flips false -> true, and a FRESH store never runs the retrofit", () => {
+    const dir = tmpDir();
+    const dbPath = makePreCycleIdStore(dir);
+    const step = appendedCycleIdStep();
+
+    expect({ from: step.from, to: step.to }).toEqual({
+      from: PRE_CYCLE_ID_VERSION,
+      to: PRE_CYCLE_ID_VERSION + 1,
+    });
+    // Owed before, not owed after — the probe `inferBaselineVersion` walks and
+    // the chain uses to decide whether a step has anything left to do.
+    expect(stepSatisfiedBy(step, dbPath)).toBe(false);
+
+    Store.open(dbPath);
+
+    expect(stepSatisfiedBy(step, dbPath)).toBe(true);
+
+    // A store THIS build created is at the end of the chain already: the base
+    // pass writes `cycle_id` whole, so the retrofit never runs, no recovery
+    // point is written, and the probe is satisfied from the first byte.
+    const freshDir = tmpDir();
+    const fresh = path.join(freshDir, "crucible.db");
+    const store = Store.open(fresh);
+
+    expect(migrationOf(store)).toBeNull();
+    expect(columnsOf(fresh, "events")).toContain("cycle_id");
+    expect(stepSatisfiedBy(step, fresh)).toBe(true);
+    expect(siblings(freshDir, PRE_UPGRADE_RE)).toEqual([]);
+  });
+
+  test("AC2 — SCHEMA_VERSION is 9 and MIGRATION_BODIES gained exactly ONE entry, appended", () => {
+    // Falsifiable numbers on purpose. §S1 measured eight bodies on
+    // 2026-09-07, so this CR's is #9 and the version goes 8 -> 9. An edit that
+    // reaches the number by hand-editing the DERIVED constant, or by rewriting
+    // an existing body instead of appending one, fails here — which the
+    // generic chain pin above cannot detect, because a chain of any length is
+    // contiguous and any last step ends at its own length.
+    expect(schemaVersion()).toBe(PRE_CYCLE_ID_VERSION + 1);
+    expect(migrationChain().length).toBe(PRE_CYCLE_ID_VERSION + 1);
+    // APPENDED, not inserted: the body that WAS last is still last-but-one.
+    expect(migrationChain()[PRE_CYCLE_ID_VERSION - 1]!.description).toContain("queue_entries");
   });
 });

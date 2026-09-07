@@ -1008,10 +1008,99 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // baseline" is the standing half of the claim and only the equality pin is
 // re-recorded, exactly as CR-CRU-093 re-recorded 405 -> 431. The `develop`
 // baselines are UNCHANGED at 512/378/601 and stay the floors.
+// UPDATED 2026-09-07 by CR-CRU-094 §S1. `src/` HEAD moves 550 -> 556 (+6),
+// all of it the cycle binding's own lineage in the three files the CR
+// touched, written where a reader of the code will meet it: `src/store.ts`
+// +4 (243 -> 247) — the `EventRow.cycle_id` field (stating that the column is
+// DERIVED at insert and NULL on every pre-094 row), the appended migration
+// body's `apply` (why an ALTER and not a rebuild, and why history is left
+// NULL), the `createBaseTables` DDL line (so a fresh store and the end of the
+// chain agree and the retrofit never runs) and `insertEvent`'s note that the
+// column is derived at the ONE row-insert seam from the context the ONE
+// ingest seam stamped, plus `toEvent`'s note that the projection is served
+// from the COLUMN rather than re-derived from the blob — those last two are
+// two lines and two occurrences, and the body's `description:` string
+// (`CR-094`) and the DDL's own `--` line inside the template literal are NOT
+// among them, the first because CR_LITERAL requires two-or-more capitals in
+// the project segment and the second because a template literal is a string;
+// `src/types.ts` +1 (49 -> 50) — `RunEvent.cycleId`'s JSDoc, stating the key
+// is ABSENT rather than null when a run carries no cycle; `src/v2.ts` +1
+// (185 -> 186) — `eventBrief`'s note that the top-level key sits BESIDE an
+// untouched `context`, which §S1 keeps authoritative for the frontend.
+// Measured by classifying `git show 97deaa8:<path>` — the RED commit this
+// CR's implementation builds on, not `HEAD`, because the implementation is
+// already committed and the working tree equals `HEAD` — against the working
+// tree file by file with this file's own `extractCitableText`; the +6
+// decomposes exactly into the three per-file deltas above (4 + 1 + 1) and
+// every other `src/` file re-measures unchanged. `public/` and `clients/` are
+// untouched by this CR and re-measure at 435 and 639.
+// GROWTH IS THE DIRECTION THE RULE PERMITS — only the equality pin is
+// re-recorded, exactly as CR-CRU-093 re-recorded 405 -> 431 and CR-CRU-109
+// 431 -> 435 for `public/`. The `develop` baselines are UNCHANGED at
+// 512/378/601 and stay the floors.
+// UPDATED 2026-09-07 by CR-CRU-094 §S2/§S3. TWO heads move: `src/` 556 -> 560
+// (+4) and `clients/` 639 -> 642 (+3). Seven citation lines, one per new
+// comment block, each written where a reader of the code will meet the fact
+// it explains. `src/store.ts` +2 (247 -> 249) — `recordLifecycleEvent`'s note
+// that the cycle is carried TOP-LEVEL and never as a `context`, because a
+// cycle's RUNS are selected through `context.cycleId`, and `insertEvent`'s
+// note that the lifecycle record is the second source the one row-insert seam
+// derives the column from, the run-bearing constructors still stamping
+// `context` alone; `src/v2.ts` +2 (186 -> 188) — the register route's note
+// that the binding validated one statement earlier is what the registration
+// event records, and the unregister route's note that the binding joins
+// firstSeen/role in the SAME pre-deletion snapshot. `clients/` is the §S3
+// half: `clients/_crucible_axi.py` +1 (120 -> 121) — the pre-flight section
+// header, stating that the binding is READ from the board and never inferred
+// from a missing local `--cycle`; `clients/bun-crucible.py` +2 (122 -> 124) —
+// the `cmd_test` and `cmd_regression` call sites, each stating that the check
+// runs while `--cycle` can still be supplied and is best-effort. Measured by
+// classifying `git show c5e9f27:<path>` — the RED commit this cycle's
+// implementation builds on — against the working tree file by file with this
+// file's own `extractCitableText`; the +4 and the +3 decompose exactly into
+// the per-file deltas above (2 + 2 and 1 + 2) and every other `src/` and
+// `clients/` file re-measures unchanged. `public/` is untouched by this cycle
+// and re-measures at 435 — §S2 touches no rendering and §S3 no frontend.
+// GROWTH IS THE DIRECTION THE RULE PERMITS — only the equality pins are
+// re-recorded, as CR-CRU-093 re-recorded 405 -> 431, CR-CRU-109 431 -> 435
+// and CR-CRU-094 §S1 550 -> 556. The `develop` baselines are UNCHANGED at
+// 512/378/601 and stay the floors.
+// UPDATED 2026-09-07 by CR-CRU-094 §S3's fleet roll-out. `clients/` HEAD moves
+// 642 -> 672 (+30). §S3 landed as a pin on ONE client and one pair of call
+// sites; the roll-out gave the pre-flight to all five clients and to every
+// ingesting verb, and the +30 is one CR literal per added prose line — 30
+// lines added, NONE removed, so the net delta and the added-line count are the
+// same number, which is the cheapest form this table's arithmetic ever takes.
+// Per client: `clients/bun-crucible.py` +4 (124 -> 128), `python-crucible.py`
+// +7 (96 -> 103), `mvn-crucible.py` +7 (110 -> 117), `rust-crucible.py` +6
+// (103 -> 109) and `arduino-crucible.py` +6 (87 -> 93). Every one is a `#`
+// seam comment stating why the pre-flight sits at THAT call site (before the
+// runner spawns, while `--cycle` can still be supplied, and in the
+// envelope-owning caller rather than the shared helper) or a docstring line
+// documenting the new `warnings` / `preflight_warnings` parameter that carries
+// the finding into the envelope; none is in a string. 27 of the 30 name
+// CR-CRU-094 §S3 and the other 3 name CR-CRU-058 §S1 from INSIDE those same
+// §S3 blocks — the emit-free step-form rule is what fixes where the seam may
+// go, so the comment that explains the placement has to cite it.
+// `clients/_crucible_axi.py` re-measures UNCHANGED at 121 even though the
+// commit touches it: its whole diff is a line-number re-pin inside an existing
+// docstring, which moves no citation. `clients/toon.py` stays at 1.
+// Measured with THIS file's own `extractCitableText` over the working tree
+// against `git show 663a1c5:<path>` — the commit before the roll-out, not
+// `develop`, because the 642 being replaced is this CR's own §S2/§S3 figure —
+// file by file; the +30 decomposes exactly into the five per-client deltas
+// above (4 + 7 + 7 + 6 + 6) and 663a1c5 itself re-measures at the recorded
+// 642. `src/` and `public/` are untouched by the roll-out and re-measure at
+// 560 and 435.
+// GROWTH IS THE DIRECTION THE RULE PERMITS — only the equality pin is
+// re-recorded, as CR-CRU-093 re-recorded 405 -> 431 and CR-CRU-109 431 -> 435
+// for `public/`, and as this CR itself re-recorded `src/` 550 -> 556 and
+// 556 -> 560 and `clients/` 639 -> 642. The `develop` baselines are UNCHANGED
+// at 512/378/601 and stay the floors — a floor never moves for a re-pin.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
-  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 550 },
+  src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 560 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 435 },
-  clients: { exts: [".py"], develop: 601, head: 639 },
+  clients: { exts: [".py"], develop: 601, head: 672 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

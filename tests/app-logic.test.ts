@@ -12,7 +12,17 @@ import {
   workspaceTabs,
   projectRollupLabel,
   emptyStates,
+  // CR-CRU-094 §S1/AC3 — the three EXPORTED functions that consume the
+  // module-private composite-key helpers this CR must leave alone.
+  planCycleIndex,
+  timelineRows,
+  workflowLens,
   type CrucibleEventBrief,
+  // ... and the DECLARED shapes themselves (`public/app-logic.d.mts`), which
+  // are AC3's third consumer: annotating the fixture with them means a
+  // declaration that stopped carrying `context.cycleId` stops COMPILING here.
+  type LensPlanLike,
+  type LensRunLike,
 } from "../public/app-logic.mjs";
 // CR-CRU-007 §S5 — projectActivity/orderProjects do not exist yet (GREEN adds
 // them). A namespace import stays loadable even for not-yet-exported names
@@ -513,5 +523,133 @@ describe("emptyStates — storyboard F1 empty states", () => {
 
   test("projects and events both present → null", () => {
     expect(emptyStates({ projects: [{ key: "p1" }], events: [{ id: "e1" }] })).toBeNull();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// CR-CRU-094 §S1/AC3 — the COMPOSITE-KEY CYCLE INDEX is unchanged.
+//
+// THESE PASS ON ARRIVAL, and that is the point. §S1 adds `events.cycle_id`
+// beside `context.cycleId`, keeping the blob authoritative for the frontend;
+// AC3 is the regression wall that says so. A wall is worth nothing if it is
+// only built after the thing it guards has already moved, so it is built here,
+// against today's behaviour, and re-run after.
+//
+// HOW THESE SITES WERE FOUND — worth writing down, because it is not
+// reproducible with the obvious tool. `public/app-logic.mjs` holds five
+// literal NUL bytes, and one of them IS this key's separator, so the file
+// reads as BINARY: a pattern search for `cycleId` inside it returns NOTHING,
+// silently. The six reads were enumerated by decoding the file's bytes in
+// Python. `planCycleIndexKey` and `planCycleLookupKey` are module-private, so
+// they are asserted through the three exported functions that consume them —
+// `planCycleIndex`, `timelineRows` and `workflowLens` — which is also what a
+// consumer can actually observe.
+describe("CR-CRU-094 §S1/AC3 — app-logic's context.cycleId consumers, guarded before the column lands", () => {
+  // The separator itself, named rather than inlined: a bare `\u0000` in the
+  // middle of a template literal is exactly the character that made this key
+  // invisible to search in the first place.
+  const NUL = "\u0000";
+  const DECLARED_CR = "CR-DECLARED-1";
+  const LEGACY_CR = "CR-AUTH-2";
+
+  // ONE fixture for all three assertions below, so "same events in, same runs
+  // matched out" is a claim about one arrangement and not three.
+  //
+  // `status: "closed"` is load-bearing, not decoration: the lens is
+  // closed-plans-only (CR-CRU-020 §S1.3 strips an OPEN plan's CR node), so an
+  // open fixture would assert against an empty tree and prove nothing.
+  const plans: LensPlanLike[] = [
+    {
+      planId: 1,
+      projectKey: "proj-a",
+      cr: DECLARED_CR,
+      status: "closed",
+      wave: "5",
+      closedAt: 9000,
+      cycles: [{ id: 41, label: "C1", status: "done" }],
+    },
+    // A LEGACY plan: no `projectKey`, so it keeps the pre-CR-CRU-026 bare-id
+    // linkage the fallback exists to preserve.
+    {
+      planId: 2,
+      cr: LEGACY_CR,
+      status: "closed",
+      wave: "5",
+      closedAt: 8000,
+      cycles: [{ id: 77, label: "L1", status: "done" }],
+    },
+  ];
+
+  function run(id: string, projectKey: string, cycleId?: number): LensRunLike {
+    return {
+      id,
+      projectKey,
+      agentId: `agent-${id}`,
+      kind: "test",
+      timestamp: 1000,
+      failed: 0,
+      ...(cycleId !== undefined ? { context: { cycleId } } : {}),
+    };
+  }
+
+  const events: Array<LensRunLike & { failed: number }> = [
+    { ...run("e-bound", "proj-a", 41), timestamp: 1000 },
+    // THE COLLISION the compound key exists to stop: another project's run
+    // carrying the SAME cycle id. Cycle ids are per-project.
+    { ...run("e-collision", "proj-b", 41), timestamp: 2000 },
+    // Matched by the BARE-ID fallback, because its plan declares no project.
+    { ...run("e-legacy", "proj-c", 77), timestamp: 3000 },
+    { ...run("e-unlinked", "proj-a"), timestamp: 4000 },
+  ];
+
+  test("planCycleIndex keys a declared plan's cycle by `<projectKey>\\x00<cycleId>` and a legacy plan's by the bare id", () => {
+    const index = planCycleIndex(plans);
+
+    // The separator is a NUL, and the legacy key is a NUMBER, not the string
+    // "77" — both halves of §S3.3's collision-safety argument, asserted as
+    // values rather than described.
+    expect([...index.keys()]).toEqual([`proj-a${NUL}41`, 77]);
+    expect(index.get(`proj-a${NUL}41`)?.plan.cr).toBe(DECLARED_CR);
+    expect(index.get(77)?.plan.cr).toBe(LEGACY_CR);
+    // A bare id for a DECLARED plan is not a key: that is what stops the
+    // cross-project collision the fixture plants.
+    expect(index.has(41)).toBe(false);
+  });
+
+  test("timelineRows resolves an event against the index by compound key, with the bare-id fallback", () => {
+    const rows = timelineRows(events, plans);
+
+    // A `done` cycle's declared marker heads its linked run; the collision run
+    // and the unlinked run render as plain cards with no boundary of their own.
+    expect(rows.map((r) => r.kind)).toEqual([
+      "declared-marker",
+      "card",
+      "card",
+      "declared-marker",
+      "card",
+      "card",
+    ]);
+    const markers = rows.filter((r) => r.kind === "declared-marker");
+    expect(markers.map((r) => (r as { cycle: { id: number } }).cycle.id)).toEqual([41, 77]);
+    expect(markers.map((r) => (r as { plan: { cr: string } }).plan.cr)).toEqual([
+      DECLARED_CR,
+      LEGACY_CR,
+    ]);
+  });
+
+  test("workflowLens attaches each run to the cycle its (projectKey, cycleId) names, and tails the rest", () => {
+    const lens = workflowLens({ plans, events });
+
+    const crs = lens.waves.flatMap((wave) => wave.crs);
+    expect(crs.map((c) => c.cr).sort()).toEqual([LEGACY_CR, DECLARED_CR].sort());
+
+    const declared = crs.find((c) => c.cr === DECLARED_CR)!;
+    const legacy = crs.find((c) => c.cr === LEGACY_CR)!;
+    // EXACTLY one run each — the collision run does NOT join cycle 41 despite
+    // carrying its id, which is the whole behaviour the composite key buys.
+    expect(declared.cycles[0]!.runs.map((r) => r.id)).toEqual(["e-bound"]);
+    expect(legacy.cycles[0]!.runs.map((r) => r.id)).toEqual(["e-legacy"]);
+    // Nothing is DROPPED: a run that matches no cycle lands in the tail.
+    expect(lens.ungrouped.map((r) => r.id).sort()).toEqual(["e-collision", "e-unlinked"]);
   });
 });

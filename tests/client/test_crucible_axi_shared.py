@@ -670,7 +670,7 @@ class StatusContractDocTest(unittest.TestCase):
 
     def test_contract_doc_exists_and_documents_the_core_envelope_fields(self):
         text = self._read_contract()
-        for field in ("ok", "context", "warnings", "plans", "lastRunCr"):
+        for field in ("ok", "context", "warnings", "plans", "lastClosedCr"):
             self.assertIn(
                 field, text,
                 f"the contract doc must name the top-level envelope field "
@@ -712,6 +712,44 @@ class StatusContractDocTest(unittest.TestCase):
             "ok:true", normalized,
             "the contract doc must show the tolerant-degrade envelope is "
             "ok:true (a definitive data-state, never a command failure)")
+
+    def test_contract_doc_names_the_last_closed_cr_field_and_never_the_old_name(self):
+        """CR-CRU-094 §S4/AC7 -- this doc is the FLEET-FACING contract, so the
+        rename is only real once the doc states the fact computed and stops
+        advertising the name that lied. Clean break, per the CR-CRU-059 §S0
+        precedent: the old key is not documented as a deprecated alias, it is
+        GONE -- otherwise a reader is entitled to expect both keys, which is
+        exactly the dual-key state AC7 forbids."""
+        text = self._read_contract()
+        self.assertIn(
+            "lastClosedCr", text,
+            "the contract doc must document the renamed top-level field "
+            "`lastClosedCr` -- the fleet reads its envelope shape from here")
+        self.assertNotIn(
+            "lastRunCr", text,
+            "the OLD key must be gone from the contract doc entirely -- not "
+            "kept as an alias, a deprecation note, or a second table row; a "
+            "contract naming both keys documents the dual-key state the "
+            "rename exists to remove")
+
+    def test_contract_doc_states_the_computation_the_field_name_now_claims(self):
+        """CR-CRU-094 §S4/AC7 -- the name must be redeemable against the doc:
+        the row states the COMPUTATION literally (the `cr` of the plan with
+        the latest `closedAt`) rather than a paraphrase, and it still records
+        the null case. Passes today for the computation clause (the doc
+        already states it against the old key) -- it is asserted so the
+        rename cannot quietly replace a stated computation with a
+        name-shaped restatement."""
+        normalized = " ".join(self._read_contract().replace("`", "").split()).lower()
+        self.assertIn(
+            "the cr of the plan with the latest closedat", normalized,
+            "the contract doc must state the COMPUTATION the field performs, "
+            "verbatim -- a paraphrase (\"the last CR\") is what let the old "
+            "name drift from what it computed")
+        self.assertIn(
+            "null when none has closed", normalized,
+            "the contract doc must keep the explicit-null case (nothing has "
+            "closed yet), never a fabricated guess")
 
     def test_contract_doc_names_axi_principles_satisfied_by_fields_and_behavior(self):
         text = self._read_contract()

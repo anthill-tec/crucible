@@ -332,3 +332,65 @@ describe("§S1 — GET /api/v2/events?project=<k>&cycleId=<id> (anchored fetch)"
     expect(body.cycle).toBeUndefined();
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// CR-CRU-094 §S1/AC3 — `Store.listEventsForCycle` is the FOURTH consumer of
+// `context.cycleId`, and the only server-side one: it pulls every row whose
+// `context` is non-NULL and matches on the PARSED value, because the binding
+// lives in a JSON blob. §S1 adds `events.cycle_id` beside that blob and says
+// this consumer is the one a later CR could turn into a real `WHERE` clause —
+// which is exactly why its behaviour is pinned HERE, before the column lands.
+//
+// PASSES ON ARRIVAL by design. It is the regression wall, not a RED signal.
+describe("CR-CRU-094 §S1/AC3 — Store.listEventsForCycle still matches on the parsed context.cycleId", () => {
+  test("one fixture, both attachment paths: a server-STAMPED run and an EXPLICIT one match, nothing else does", async () => {
+    const handle = boot();
+    const key = await createProject(handle);
+    const { planId, a, b } = await filePlanAB(handle, key, "CR-AUTH-3");
+    // A plan runs ONE active cycle at a time (CR-CRU-024 §S0), so the fixture
+    // is built in execution order: A runs and closes, then B opens.
+    await transition(handle, key, planId, a, "active");
+
+    // Two ways a run reaches cycle A. The server STAMPS a bound agent's
+    // registration (CR-CRU-056 §S3 — the very seam this CR hangs its column
+    // on), and an unbound caller may send `context.cycleId` itself. §S1 keeps
+    // `context` authoritative for both, so this consumer must go on matching
+    // both, byte-identically.
+    const bound = await postJson(handle, "/api/v2/agents/register", {
+      projectKey: key,
+      agentId: "bound-red",
+      role: "RED",
+      cycleId: a,
+    });
+    expect(bound.status).toBe(200);
+    const stamped = await postParsedRun(handle, key, "bound-red");
+
+    await registerAgent(handle, key, "explicit-orch");
+    const explicit = await postParsedRun(handle, key, "explicit-orch", { cycleId: a });
+
+    await transition(handle, key, planId, a, "done");
+    await transition(handle, key, planId, b, "active");
+    await registerAgent(handle, key, "other-orch");
+    const otherCycle = await postParsedRun(handle, key, "other-orch", { cycleId: b });
+    await registerAgent(handle, key, "unlinked-orch");
+    const unlinked = await postParsedRun(handle, key, "unlinked-orch");
+
+    const matched = handle.store.listEventsForCycle(key, a).map((e) => e.id).sort();
+
+    // EXACTLY the two, so a filter that widened (matching every row with a
+    // context, or every row of the project) fails rather than passing bigger.
+    expect(matched).toEqual([stamped.id, explicit.id].sort());
+    expect(matched).not.toContain(otherCycle.id);
+    expect(matched).not.toContain(unlinked.id);
+    // The registration lifecycle rows carry no context at all and are
+    // therefore invisible to this consumer — stated because §S2, a LATER
+    // cycle, is about giving them one.
+    expect(matched.length).toBe(2);
+
+    // ... and the route built on it agrees, run for run: the store method and
+    // the anchored fetch cannot drift apart unnoticed.
+    const { body } = await getAnchoredEvents(handle, key, a);
+    expect(body.events.map((e) => e.id).sort()).toEqual(matched);
+    expect(body.events.every((e) => e.context?.cycleId === a)).toBe(true);
+  });
+});

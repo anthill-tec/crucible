@@ -6,6 +6,10 @@
 // (RED phase), so they currently 404 through src/server.ts's catch-all
 // until GREEN wires handleV2 to dispatch them.
 import { describe, test, expect, afterEach } from "bun:test";
+// CR-CRU-094 §S1/AC1 — the column is read STRAIGHT OUT OF THE STORE FILE by a
+// second connection, the way tests/store-migration.test.ts's `columnsOf` /
+// `rowCounts` already inspect a store; nothing else in this file needs sqlite.
+import { Database } from "bun:sqlite";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -644,5 +648,262 @@ describe("v2 API — runs, events, status (CR-CRU-004 §S1+§S2+§S5)", () => {
       const body = (await res.json()) as ErrResponse;
       expect(body.ok).toBe(false);
     });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// CR-CRU-094 §S1/AC1 — THE CYCLE BINDING RIDES THE RUN, AS A COLUMN.
+//
+// RED. Re-verified against production on 2026-09-07: `createBaseTables`'s
+// `CREATE TABLE IF NOT EXISTS events` block has no `cycle_id`, and `eventBrief`
+// projects no top-level `cycleId` — it passes `context` through verbatim and
+// stops there. Every assertion below fails for that one reason.
+//
+// WHY THE COLUMN IS READ OUT OF THE SQLITE FILE AND NOT OFF THE RESPONSE: a
+// fixture asserting only `context.cycleId` passes TODAY — CR-CRU-056 §S3 has
+// stamped the blob since it merged — and therefore proves nothing about this
+// CR. So this block's store is FILE-BACKED, not `:memory:`, and a second
+// read-only connection reads the row back, the same "open the store file and
+// inspect it raw" approach tests/store-migration.test.ts's `columnsOf` /
+// `rowCounts` established.
+//
+// ONE SEAM, NOT TWO. §S1 pins the stamp at `resolveIngestAttach`'s return, and
+// the gates route calls that same function. A test cannot observe "there is
+// only ONE write site" — absence of a second site is not an observable. What
+// it CAN observe is the property that makes the single seam worth having:
+// BOTH STAMPED SURFACES AGREE, a run and a gate posted by the same bound agent
+// carrying the same column, with the gate route gaining no write of its own.
+// That is how the last AC1 test below is written, deliberately.
+const SYNTHETIC_CR = "CR-AUTH-1";
+
+describe("CR-CRU-094 §S1/AC1 — the cycle binding rides the run as a column", () => {
+  let handle: ReturnType<typeof startServer> | undefined;
+  let dbPath = "";
+  let dirs: string[] = [];
+
+  afterEach(() => {
+    handle?.stop();
+    handle = undefined;
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+    dirs = [];
+  });
+
+  /** A REAL server on a REAL store file — `:memory:` has no file to read. */
+  function boot(): void {
+    const dir = freshDir();
+    dirs.push(dir);
+    dbPath = join(dir, "crucible.db");
+    handle = startServer({ port: 0, dbPath });
+  }
+
+  async function send(method: string, path_: string, body: unknown): Promise<Response> {
+    return fetch(`http://localhost:${handle!.server.port}${path_}`, {
+      method,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function newProject(): Promise<string> {
+    const res = await send("POST", "/api/v2/projects", { name: `cyc-${crypto.randomUUID()}` });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as OkResponse & { project: { key: string } };
+    return body.project.key;
+  }
+
+  /** `register --agent <id> --role <r> [--cycle <n>]`, over the real route. */
+  async function register(
+    key: string,
+    agentId: string,
+    role: string,
+    cycleId?: number,
+  ): Promise<void> {
+    const res = await send("POST", "/api/v2/agents/register", {
+      projectKey: key,
+      agentId,
+      role,
+      ...(cycleId !== undefined ? { cycleId } : {}),
+    });
+    expect(res.status).toBe(200);
+  }
+
+  /** Files a one-cycle plan and activates it, through the real plans API. */
+  async function activeCycle(key: string): Promise<number> {
+    await register(key, "fixture-orch", "ORCHESTRATOR");
+    const filed = await send("POST", `/api/v2/projects/${key}/plans`, {
+      agentId: "fixture-orch",
+      cr: SYNTHETIC_CR,
+      cycles: [{ label: "solo" }],
+    });
+    expect(filed.status).toBe(201);
+    const plan = (await filed.json()) as { planId: number; cycles: Array<{ id: number }> };
+    const cycleId = plan.cycles[0]!.id;
+    const activated = await send(
+      "PATCH",
+      `/api/v2/projects/${key}/plans/${plan.planId}/cycles/${cycleId}`,
+      { agentId: "fixture-orch", status: "active" },
+    );
+    expect(activated.status).toBe(200);
+    return cycleId;
+  }
+
+  /** A parsed run ingested with NO explicit context — the binding is the
+   *  server's to resolve, which is the case §S1 is about. */
+  async function ingestRun(key: string, agentId: string): Promise<string> {
+    const res = await send("POST", "/api/v2/runs/parsed", {
+      projectKey: key,
+      agentId,
+      summary: { total: 4, passed: 4, failed: 0, pending: 0, duration_ms: 80 },
+      tree: [{ name: "s", status: "pass", children: [{ name: "t1", status: "pass" }] }],
+    });
+    expect(res.status).toBe(200);
+    return ((await res.json()) as RunsPostResponse).event;
+  }
+
+  /** The SECOND stamped surface, same seam. */
+  async function ingestGate(key: string, agentId: string): Promise<string> {
+    const res = await send("POST", "/api/v2/gates", {
+      projectKey: key,
+      agentId,
+      gate: { intent: "merge gate", outcome: "passed", steps: [{ name: "tests", status: "passed" }] },
+    });
+    expect(res.status).toBe(201);
+    return ((await res.json()) as OkResponse & { event: string }).event;
+  }
+
+  async function briefOf(key: string, eventId: string): Promise<Record<string, unknown>> {
+    const res = await fetch(
+      `http://localhost:${handle!.server.port}/api/v2/events?project=${key}&limit=100`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as EventsListResponse;
+    const brief = body.events.find((e) => e.id === eventId);
+    if (brief === undefined) throw new Error(`event ${eventId} is absent from the feed`);
+    return brief;
+  }
+
+  function eventsColumns(): string[] {
+    const db = new Database(dbPath);
+    try {
+      return db
+        .query<{ name: string }, []>("PRAGMA table_info(events)")
+        .all()
+        .map((c) => c.name);
+    } finally {
+      db.close();
+    }
+  }
+
+  /** The stored binding, read out of the FILE. Fails with the MISSING
+   *  CONTRACT rather than a bare `no such column` SQLite error. */
+  function storedCycleId(eventId: string): number | null {
+    if (!eventsColumns().includes("cycle_id")) {
+      throw new Error(
+        "CR-CRU-094 §S1/AC1: `events` has no `cycle_id` column — the binding is not on the run",
+      );
+    }
+    const db = new Database(dbPath);
+    try {
+      const row = db
+        .query<{ cycle_id: number | null }, [string]>(
+          "SELECT cycle_id FROM events WHERE id = ?",
+        )
+        .get(eventId);
+      if (row === null) throw new Error(`no events row for ${eventId}`);
+      return row.cycle_id;
+    } finally {
+      db.close();
+    }
+  }
+
+  /** Which RUN rows carry a given binding — bounded, so a stamp that leaks
+   *  onto rows it never resolved fails instead of passing wider. Scoped to
+   *  `kind = 'test'` because §S2 (a LATER cycle) will stamp lifecycle rows
+   *  too, and that must not retro-break this AC. */
+  function runRowsBoundTo(cycleId: number): string[] {
+    if (!eventsColumns().includes("cycle_id")) {
+      throw new Error(
+        "CR-CRU-094 §S1/AC1: `events` has no `cycle_id` column — the binding is not on the run",
+      );
+    }
+    const db = new Database(dbPath);
+    try {
+      return db
+        .query<{ id: string }, [number]>(
+          "SELECT id FROM events WHERE kind = 'test' AND cycle_id = ? ORDER BY id",
+        )
+        .all(cycleId)
+        .map((r) => r.id);
+    } finally {
+      db.close();
+    }
+  }
+
+  test("AC1 — a run ingested by an agent registered `--cycle N` carries cycle_id = N in the store FILE", async () => {
+    boot();
+    const key = await newProject();
+    const cycleId = await activeCycle(key);
+    await register(key, "bound-red", "RED", cycleId);
+
+    const eventId = await ingestRun(key, "bound-red");
+
+    expect(storedCycleId(eventId)).toBe(cycleId);
+    // Bounded: EXACTLY this run, not "at least one". A stamp applied to every
+    // row of the project would satisfy a `>= 1` count and fail here.
+    expect(runRowsBoundTo(cycleId)).toEqual([eventId]);
+  });
+
+  test("AC1 — the API projects a TOP-LEVEL cycleId on that run, beside an UNTOUCHED context passthrough", async () => {
+    boot();
+    const key = await newProject();
+    const cycleId = await activeCycle(key);
+    await register(key, "bound-green", "GREEN", cycleId);
+    const eventId = await ingestRun(key, "bound-green");
+
+    const brief = await briefOf(key, eventId);
+
+    // The reader can tell a bound run from an unbound one without unpacking a
+    // blob — which is the whole observable §S1 exists to add.
+    expect(brief.cycleId).toBe(cycleId);
+    // AC3 at the wire, for consumer #1: `public/app.js`'s `linkedRunsFor`,
+    // `runningRunsFor` and the runFeed card filter all read `e.context?.cycleId`
+    // off exactly this payload. The column must not DISPLACE the blob — §S1
+    // keeps `context` authoritative for the frontend on purpose.
+    expect(brief.context).toEqual({ cycleId });
+  });
+
+  test("AC1 — an UNBOUND caller's run projects NO cycleId key at all: absent, never null and never 0", async () => {
+    boot();
+    const key = await newProject();
+    await register(key, "unbound-orch", "ORCHESTRATOR");
+
+    const eventId = await ingestRun(key, "unbound-orch");
+    const brief = await briefOf(key, eventId);
+
+    // ABSENT, matching the additive convention `eventBrief` already uses for
+    // `action` / `firstSeen` / `role` / `gate` / `version`. A truthiness check
+    // would pass on `null` and on `0`; this one cannot.
+    expect("cycleId" in brief).toBe(false);
+    expect(brief.context).toBeUndefined();
+    // ... and the column agrees: nullable, unset, never a placeholder 0.
+    expect(storedCycleId(eventId)).toBeNull();
+  });
+
+  test("AC1 — BOTH stamped surfaces agree: a gate from the same bound agent carries the same column", async () => {
+    boot();
+    const key = await newProject();
+    const cycleId = await activeCycle(key);
+    await register(key, "bound-verify", "VERIFY", cycleId);
+
+    const runId = await ingestRun(key, "bound-verify");
+    const gateId = await ingestGate(key, "bound-verify");
+
+    // The gates route adds no stamping of its own; it calls the SAME
+    // `resolveIngestAttach`. If the column were written at the run route
+    // instead of at that seam, this is the assertion that fails.
+    expect(storedCycleId(gateId)).toBe(cycleId);
+    expect(storedCycleId(runId)).toBe(cycleId);
+    const gateBrief = await briefOf(key, gateId);
+    expect(gateBrief.cycleId).toBe(cycleId);
   });
 });

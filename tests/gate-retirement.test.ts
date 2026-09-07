@@ -26,8 +26,12 @@
 //     retention-eligible like any other event.
 //   SCHEMA_VERSION — the retired_at column is CR-CRU-071 chain step 6 → 7, and
 //     that same migration stamps retired_at on every gate that predates the
-//     column (the three versionless strays). The value the chain now ends at is
-//     8: CR-CRU-091 §S2 appended the queue_entries declaration step.
+//     column (the three versionless strays). Where the chain ENDS is not this
+//     file's business: SCHEMA_VERSION === MIGRATIONS.length, so every later CR
+//     that appends a body moves the total (CR-CRU-091 §S2 appended the
+//     queue_entries declaration step, CR-CRU-094 §S1 appended events.cycle_id)
+//     while THIS body keeps its own position. The assertions below therefore
+//     name the body and read its own from/to — they never pin the total.
 //
 // ── Safety ──────────────────────────────────────────────────────────────────
 // Every store here is an mkdtempSync scratch file or ":memory:"; the live
@@ -98,6 +102,39 @@ function schemaVersion(): number {
     throw new Error("CR-CRU-073: src/store.ts exports no numeric SCHEMA_VERSION");
   }
   return mod.SCHEMA_VERSION;
+}
+
+/** One CR-CRU-071 chain body, as much of it as this file reads. */
+interface ChainStep {
+  readonly from: number;
+  readonly to: number;
+  readonly description?: string;
+  satisfiedBy?(db: Database): boolean;
+}
+
+function migrationChain(): readonly ChainStep[] {
+  const mod = storeModule as { MIGRATIONS?: unknown };
+  if (!Array.isArray(mod.MIGRATIONS)) {
+    throw new Error("CR-CRU-073: src/store.ts exports no MIGRATIONS chain");
+  }
+  return mod.MIGRATIONS as readonly ChainStep[];
+}
+
+/**
+ * The ONE body this file owns, found by what it declares — never by index and
+ * never by the chain's length, both of which every later CR is free to move.
+ */
+function retiredAtStep(): ChainStep {
+  const chain = migrationChain();
+  const owned = chain.filter((step) => (step.description ?? "").includes("retired_at"));
+  if (owned.length !== 1) {
+    throw new Error(
+      `CR-CRU-073: expected exactly ONE retired_at body in the ${chain.length}-step ` +
+        `migration chain, found ${owned.length} — the release-retirement marker is not ` +
+        `where the store's schema comes from`,
+    );
+  }
+  return owned[0] as ChainStep;
 }
 
 const GATE = {
@@ -261,12 +298,34 @@ describe("CR-CRU-073 AC4 — retired is a stored marker: excluded from the pane,
 });
 
 describe("CR-CRU-073 AC5 — the migration adds retired_at and retires pre-column gates", () => {
-  test("SCHEMA_VERSION derives to 8", () => {
-    // A LITERAL on purpose (a tripwire, not a tautology): a chain step must
-    // make a human look. It fired for CR-CRU-091 §S2's queue_entries step,
-    // which is legitimate, so it is consciously RE-ARMED at 8 — the retired_at
-    // step this file owns is still 6 → 7 and is asserted by effect below.
-    expect(schemaVersion()).toBe(8);
+  test("the retired_at body is in the chain at its own position, and a store this build opens has run it", () => {
+    // The tripwire, said about the BODY instead of about the total. A literal
+    // total (this once read `toBe(8)`) re-fires on every later CR that appends
+    // an unrelated step — CR-CRU-091 §S2 and CR-CRU-094 §S1 both tripped it —
+    // and re-arming it teaches the next reader to re-pin rather than look. The
+    // claim that actually belongs to CR-CRU-073 is: exactly ONE retired_at
+    // body exists, it is one version wide, it sits where its own `from` says,
+    // and it is INSIDE the chain this build writes.
+    const chain = migrationChain();
+    const step = retiredAtStep();
+    // src/store.ts: `from = index`, `to = index + 1` — positions ARE version
+    // numbers, so a body that moved (inserted before, reordered) fails here.
+    expect(chain.indexOf(step)).toBe(step.from);
+    expect(step.to).toBe(step.from + 1);
+    expect(schemaVersion()).toBe(chain.length);
+    expect(step.to).toBeLessThanOrEqual(schemaVersion());
+
+    // …and it is not merely declared: a store opened by THIS build answers the
+    // body's own "already done?" probe with true. Deleting the body's effect
+    // (or the retired_at column from the base CREATE TABLE) fails here.
+    const dbPath = path.join(tmpDir(), "crucible.db");
+    Store.open(dbPath);
+    const db = new Database(dbPath);
+    try {
+      expect(step.satisfiedBy?.(db)).toBe(true);
+    } finally {
+      db.close();
+    }
   });
 
   test("a v6 store with versionless gate rows migrates: retired_at added and stamped on every pre-column gate, losslessly and idempotently", () => {

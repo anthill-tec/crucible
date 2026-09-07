@@ -13,8 +13,17 @@ docs/changes/CR-CRU-030-fleet-toon-axi-compliance.md:
   Dispatch note: "Full `--fields`/`count` AXI-CLI polish is a later slice --
   this slice pins the core status verb + the empty-state." -- so this file
   does NOT assert a `count` field (§S12, out of scope here); it pins the core
-  `plans[]` table + `lastRunCr` + the explicit (never-empty-stdout) empty-queue
-  case.
+  `plans[]` table + the last-closed-CR convenience field + the explicit
+  (never-empty-stdout) empty-queue case.
+
+  CR-CRU-094 §S4 (AC7) RENAME: the quoted §S6 prose above is CR-CRU-030's,
+  left VERBATIM because that CR is shipped and is not edited by this one. The
+  field it calls `lastRunCr` is now emitted as `lastClosedCr` -- the name
+  states the fact computed (the `cr` of the plan with the latest `closedAt`,
+  i.e. the last CR to close/merge) instead of reading as "the CR of the most
+  recent run", which is not what it ever computed. The old key is a CLEAN
+  BREAK, not an alias: an envelope carrying BOTH keys fails AC7, following
+  the CR-CRU-059 §S0 precedent ("no dual-key handling, no deprecation path").
 
   CR-CRU-030-C1-RED (cycle 83) alignment fix: the core-fields test below was
   split so its `activeCycleLabel`/`mergeCommit` assertions run under
@@ -213,7 +222,10 @@ class StatusQueueTableTest(_BaseStatusTest):
                            "a CLOSED plan (all cycles terminal) must report activeCycleLabel "
                            "as null, not fabricate one")
 
-    def test_status_lastruncr_is_the_plan_with_latest_closedat(self):
+    def test_status_last_closed_cr_is_the_plan_with_latest_closedat(self):
+        """CR-CRU-094 §S4/AC7 -- the DISCRIMINATION that gives the field its
+        meaning (LATEST `closedAt`, not list order / highest planId) survives
+        the rename; it is not dropped in it."""
         plans = _plans_response([
             {"planId": "plan-1", "cr": "CR-OLD", "status": "closed", "cycles": [],
              "merge": {"commit": "aaa"}, "closedAt": 1000},
@@ -226,11 +238,16 @@ class StatusQueueTableTest(_BaseStatusTest):
 
         self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
         axi = self._decode_axi(out)
-        self.assertEqual(axi.get("lastRunCr"), "CR-NEW",
-                          "lastRunCr must be the plan with the LATEST closedAt, not the "
-                          "highest planId or list order")
+        self.assertEqual(axi.get("lastClosedCr"), "CR-NEW",
+                          "lastClosedCr must be the plan with the LATEST closedAt, not "
+                          "the highest planId or list order")
+        self.assertNotIn(
+            "lastRunCr", axi,
+            f"the old key must be ABSENT from the envelope -- an envelope "
+            f"carrying BOTH keys is the dual-key state the rename forbids; "
+            f"got {sorted(axi)!r}")
 
-    def test_status_no_closed_plans_lastruncr_is_none(self):
+    def test_status_no_closed_plans_last_closed_cr_is_explicit_null(self):
         plans = _plans_response([
             {"planId": "plan-1", "cr": "CR-OPEN", "wave": "1", "status": "open", "cycles": []},
         ])
@@ -239,9 +256,19 @@ class StatusQueueTableTest(_BaseStatusTest):
 
         self.assertEqual(code, 0)
         axi = self._decode_axi(out)
-        self.assertIsNone(axi.get("lastRunCr"),
-                           "no closed plan exists yet -- lastRunCr must be explicit null, "
-                           "never a fabricated guess")
+        self.assertIn(
+            "lastClosedCr", axi,
+            f"the key must be EXPLICITLY present and null (never dropped) so a "
+            f"reader can tell 'nothing has closed' from 'the client is older "
+            f"than the field'; got {sorted(axi)!r}")
+        self.assertIsNone(axi.get("lastClosedCr"),
+                           "no closed plan exists yet -- lastClosedCr must be explicit "
+                           "null, never a fabricated guess")
+        self.assertNotIn(
+            "lastRunCr", axi,
+            f"the old key must be ABSENT from the envelope -- an envelope "
+            f"carrying BOTH keys is the dual-key state the rename forbids; "
+            f"got {sorted(axi)!r}")
 
     def test_status_empty_queue_is_explicit_ok_true_not_error(self):
         """CR-CRU-035 §S1: this NO-OPEN-PLAN empty state (a reachable server,
@@ -255,6 +282,19 @@ class StatusQueueTableTest(_BaseStatusTest):
         axi = self._decode_axi(out)
         self.assertIs(axi.get("ok"), True)
         self.assertEqual(axi.get("plans"), [])
+        # CR-CRU-094 §S4/AC7 -- the empty-board shape: the last-closed-CR key
+        # is present and EXPLICITLY null (no plan has closed because no plan
+        # exists), the old key is gone, and the never-empty-stdout contract
+        # below is unchanged by the rename.
+        self.assertIn(
+            "lastClosedCr", axi,
+            f"an empty board must still carry the key as an explicit null; "
+            f"got {sorted(axi)!r}")
+        self.assertIsNone(axi.get("lastClosedCr"))
+        self.assertNotIn(
+            "lastRunCr", axi,
+            f"the old key must be ABSENT from the empty-board envelope too; "
+            f"got {sorted(axi)!r}")
         self.assertEqual(
             axi.get("warnings"), [],
             "the no-plan empty state must NOT carry the status-unavailable "
@@ -297,7 +337,16 @@ class StatusQueueTableTest(_BaseStatusTest):
         self.assertEqual(axi.get("plans"), [],
                           "the unavailable state must report an EMPTY board, never "
                           "fabricated/stale plan rows")
-        self.assertIsNone(axi.get("lastRunCr"))
+        self.assertIn(
+            "lastClosedCr", axi,
+            f"the unavailable envelope must still carry the last-closed-CR key "
+            f"as an EXPLICIT null (never a dropped key); got {sorted(axi)!r}")
+        self.assertIsNone(axi.get("lastClosedCr"))
+        self.assertNotIn(
+            "lastRunCr", axi,
+            f"the old key must be ABSENT from the envelope -- an envelope "
+            f"carrying BOTH keys is the dual-key state the rename forbids; "
+            f"got {sorted(axi)!r}")
         help_steps = axi.get("help") or []
         self.assertTrue(help_steps, "the unavailable envelope must carry a help[] "
                                      "next-step hint (AXI principle 9)")

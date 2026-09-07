@@ -261,6 +261,27 @@ def _open_plans_response(plans):
     return {"ok": True, "plans": plans}
 
 
+def _plans_gets(get_mock):
+    """The GET paths this run issued against the PLANS surface.
+
+    CR-CRU-056 §S3's contract is that the client-side attach RESOLVER is gone:
+    no plans lookup picks a cycle, and the ingest body carries no cycleId.
+    That is what the assertion below pins. It used to spell it
+    `get_mock.assert_not_called()` -- "no GET at all" -- which pins the
+    TRANSPORT rather than the contract, and CR-CRU-094 §S3 makes the
+    difference load-bearing: pre-flight reads the caller's OWN binding
+    (`GET /api/v2/agents?project=<key>` -> `boundCycleId`) to answer "am I
+    bound?", which resolves nothing and attaches nothing. Forbidding that read
+    would guarantee nothing extra while forbidding the CR the spec mandates.
+    """
+    paths = []
+    for call in get_mock.call_args_list:
+        args, kwargs = call
+        path = args[0] if args else kwargs.get("path")
+        paths.append(str(path))
+    return [p for p in paths if "/plans" in p]
+
+
 def _post_call_for_path(post_mock, path):
     for call in post_mock.call_args_list:
         args, kwargs = call
@@ -694,7 +715,20 @@ class RustCrucibleStatusHookSafeTest(_BaseRustAxiTest):
         self.assertEqual(axi.get("plans"), [],
                           "the unavailable state must report an EMPTY board, never "
                           "fabricated/stale plan rows")
-        self.assertIsNone(axi.get("lastRunCr"))
+        # CR-CRU-094 §S4/AC7 — the field now states the fact it computes (the
+        # `cr` of the plan with the latest `closedAt`), and the old name that
+        # read as "the CR of the most recent run" is a CLEAN BREAK, not an
+        # alias (the CR-CRU-059 §S0 precedent: no dual-key handling).
+        self.assertIn(
+            "lastClosedCr", axi,
+            f"the unavailable envelope must still carry the last-closed-CR key "
+            f"as an EXPLICIT null (never a dropped key); got {sorted(axi)!r}")
+        self.assertIsNone(axi.get("lastClosedCr"))
+        self.assertNotIn(
+            "lastRunCr", axi,
+            f"the old key must be ABSENT from the envelope -- an envelope "
+            f"carrying BOTH keys is the dual-key state the rename forbids; "
+            f"got {sorted(axi)!r}")
         help_steps = axi.get("help") or []
         self.assertTrue(help_steps, "the unavailable envelope must carry a help[] "
                                      "next-step hint (AXI principle 9)")
@@ -1016,7 +1050,10 @@ class RustCrucibleCycleBindingTest(_BaseRustAxiTest):
                 "--crate", "some-crate",
             ])
         self.assertEqual(code, 0, f"stdout={out!r}")
-        get_mock.assert_not_called()
+        self.assertEqual(
+            _plans_gets(get_mock), [],
+            "the client-side active-cycle resolver is DELETED -- no plans lookup "
+            "may run before an ingest; got %r" % (_plans_gets(get_mock),))
         ingest_call = _post_call_for_path(post_mock, "/api/v2/runs")
         self.assertIsNotNone(ingest_call, "the run must actually be POSTed")
         self.assertNotIn(

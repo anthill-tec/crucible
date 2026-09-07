@@ -445,9 +445,9 @@ def truncate_field(value, full=False, limit=TRUNCATE_LIMIT):
     return value[:limit] + f" (truncated, {len(value)} chars total — use --full)"
 
 
-def last_run_cr(plans):
+def last_closed_cr(plans):
     """§S6 — the `cr` of the plan with the LATEST `closedAt` (the last CR to
-    merge), or None when no plan has closed yet — never a fabricated guess."""
+    close), or None when no plan has closed yet — never a fabricated guess."""
     closed = [p for p in (plans or []) if p.get("closedAt") is not None]
     if not closed:
         return None
@@ -674,6 +674,98 @@ def no_title_warning(cr):
         "detail": (f"plan filed for {cr} with no title — --title was unset; "
                    f"the plan is title-less until one is supplied"),
     }
+
+
+# ── CR-CRU-094 §S3 — the PRE-FLIGHT attribution check, for all five clients ─
+#
+# A run whose agent is bound to no cycle is stored with no cycle attribution,
+# and NOTHING backfills a stored run's cycle (`plan-backfill` backfills a
+# plan's wave). The warning therefore fires when the run STARTS, while
+# `--cycle` can still be supplied — the same voice as `no_wave_warning`/
+# `no_title_warning`: name the omission, then name the lever that fixes it.
+#
+# The binding is READ from the board (`GET /api/v2/agents?project=<key>` →
+# `boundCycleId`, absent when unbound), never inferred from the absence of a
+# local `--cycle` flag: a caller that registered bound in an EARLIER process
+# passes no flag now and has nothing missing.
+
+MISSING_CYCLE_CODE = "no-cycle"
+
+# The lookup is a courtesy on the way to the run, so it is bounded far tighter
+# than the hook-safe read timeout: a slow board must cost a test run a moment,
+# never its start.
+PREFLIGHT_TIMEOUT_S = 3
+
+
+def no_cycle_warning():
+    """Build the §S3 `no-cycle` warning for a run with no cycle attribution."""
+    return {
+        "code": MISSING_CYCLE_CODE,
+        "detail": ("this run has no cycle attribution — its agent is bound to "
+                   "no cycle and no --cycle was supplied, so the stored run "
+                   "cannot be traced to the cycle it belongs to; supply "
+                   "`--cycle <id>` now (nothing backfills a stored run's "
+                   "cycle) or leave it project-scoped deliberately"),
+    }
+
+
+def no_cycle_line():
+    """The stderr half of the §S3 warning — the shape
+    `gate_identity_skipped_line` uses to tell an operator, at the moment it
+    matters, why something did not happen."""
+    w = no_cycle_warning()
+    return f"[crucible] WARN: {w['code']} — {w['detail']}"
+
+
+def _bound_cycle_id(resp, agent_id):
+    """`(known, bound_cycle_id)` for `agent_id` in a `GET /api/v2/agents`
+    response. `known` is False whenever the board did not actually answer for
+    this agent — an error envelope, a malformed body, or an id the board does
+    not hold — because an UNANSWERED lookup is not evidence of a missing
+    binding."""
+    if not isinstance(resp, dict) or not resp.get("ok"):
+        return (False, None)
+    agents = resp.get("agents")
+    if not isinstance(agents, list):
+        return (False, None)
+    for agent in agents:
+        if isinstance(agent, dict) and agent.get("agentId") == agent_id:
+            return (True, agent.get("boundCycleId"))
+    return (False, None)
+
+
+def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
+                             context=None, stream=None):
+    """§S3 — the pre-flight attribution check every ingesting run makes BEFORE
+    it spawns its runner. Returns the envelope `warnings[]` fragment (`[]` or
+    one `{code, detail}`) and prints the same warning's stderr line, so both
+    channels are fed from ONE decision.
+
+    Best-effort and NEVER blocking, per AC5: an unreachable board, a timeout,
+    a malformed answer or ANY raised exception yields no warning and the run
+    proceeds. `get` is the calling client's own `_get` (its test harnesses
+    patch that name), called with the short `PREFLIGHT_TIMEOUT_S` bound.
+    """
+    try:
+        if not agent_id or not project_key:
+            return []
+        # `--cycle` supplied, or an explicit `context.cycleId`: the run WILL be
+        # attributed, so there is nothing to warn about and nothing to ask.
+        if cycle_id is not None:
+            return []
+        if isinstance(context, dict) and context.get("cycleId") is not None:
+            return []
+        resp = get(f"/api/v2/agents?project={project_key}",
+                   timeout=PREFLIGHT_TIMEOUT_S)
+        known, bound = _bound_cycle_id(resp, agent_id)
+        if not known or bound is not None:
+            return []
+        print(no_cycle_line(), file=stream if stream is not None else sys.stderr)
+        return [no_cycle_warning()]
+    except Exception:
+        # Attribution is a courtesy; a suite must never become unrunnable
+        # because it could not be computed.
+        return []
 
 
 # ── CR-CRU-058 §S1/§S2 — the toolchain-gate help/warning vocabulary ────────
@@ -1105,7 +1197,7 @@ class ClientOps:
 def cmd_status(args, project_dir, ops):
     """§S6 — the plan/status READ verb (alias `plans`, no --agent). GET …/plans
     and return the queue as a uniform-table §S1 envelope plus a top-level
-    `lastRunCr`."""
+    `lastClosedCr` — the `cr` of the plan with the latest `closedAt`."""
     resp = ops.get(ops.plans_path(project_dir))
     if not resp.get("ok"):
         # CR-CRU-035 §S1 — hook-safe tolerant degrade: a plans-fetch failure
@@ -1119,7 +1211,7 @@ def cmd_status(args, project_dir, ops):
                   f"{resp.get('error')}")
         legacy = f"[crucible] status: board unavailable — {resp.get('error')}"
         ops.emit("status", True,
-                 {"plans": [], "lastRunCr": None, "count": 0,
+                 {"plans": [], "lastClosedCr": None, "count": 0,
                   "help": [f"check the Crucible server is running / reachable "
                            f"at {ops.base_url}"]},
                  ops.context(project_dir),
@@ -1128,7 +1220,7 @@ def cmd_status(args, project_dir, ops):
         return 0
     plans = resp.get("plans", [])
     full_rows = build_status_rows(plans)
-    last = last_run_cr(plans)
+    last = last_closed_cr(plans)
     # §S10 — the DEFAULT projection is the minimal base column set
     # (cr,wave,status,activeCycleId); `--fields a,b,c` ADDS the requested extras
     # to that base, never replaces it.
@@ -1141,13 +1233,13 @@ def cmd_status(args, project_dir, ops):
     if not rows:
         legacy = "status: ok=True — no plans filed for this project"
         ops.emit("status", True,
-                 {"plans": [], "lastRunCr": None, "count": 0,
+                 {"plans": [], "lastClosedCr": None, "count": 0,
                   "help": HELP_STEPS["status"]},
                  ops.context(project_dir), [], legacy)
         return 0
-    legacy = f"status: ok=True plans={len(rows)} lastRunCr={last}"
+    legacy = f"status: ok=True plans={len(rows)} lastClosedCr={last}"
     ops.emit("status", True,
-             {"plans": rows, "lastRunCr": last, "count": count,
+             {"plans": rows, "lastClosedCr": last, "count": count,
               "help": HELP_STEPS["status"]},
              ops.context(project_dir), [], legacy)
     return 0
@@ -1247,7 +1339,7 @@ def cmd_queue(args, project_dir, ops):
 # harness's files.
 
 # §S2 axis 1 — a CR has LANDED iff its SERVER-DERIVED status is one of these
-# (`deriveQueueStatus`, src/store.ts:3961). Anything else — PENDING,
+# (`deriveQueueStatus`, src/store.ts:4073). Anything else — PENDING,
 # IN_PROGRESS — is unmerged.
 LANDED_STATUSES = ("COMPLETED", "COMPLETED_UNTRACKED")
 
@@ -1263,7 +1355,7 @@ _TRACK_LANE_RE = re.compile(r"\d+")
 
 def canonical_track(value):
     """§S3/AC18 (PURE) — the fleet's READ-side track canonicaliser: the exact
-    mirror of `normalizeTrack` (src/store.ts:345-348). The first run of digits
+    mirror of `normalizeTrack` (src/store.ts:349-352). The first run of digits
     anywhere in the value, rendered as the PRD's locked wire format
     `track-<n>`; `None` when the value names no lane.
 
@@ -1327,7 +1419,7 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1370-1384`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1422-1436`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
             f'--cycles "<c1,c2>" --agent <agentId>')

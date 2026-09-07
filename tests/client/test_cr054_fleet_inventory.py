@@ -1071,5 +1071,164 @@ class Cr106CrDependsVerbInventoryTest(unittest.TestCase):
 
 
 
+# ---------------------------------------------------------------------------
+# CR-CRU-094 SS4 (AC7/AC8) -- the status field is renamed to state the fact it
+# computes, fleet-wide, and the old name is GONE.
+#
+# This section is the PRESENCE half of AC8, in the harness AC8 names ("asserted
+# by extending the two EXISTING harnesses ... rather than a parallel checker").
+# The ENVELOPE half -- what the five clients actually emit on the wire, and
+# what their live `--help` prints -- lives in the sibling
+# `test_client_fleet_envelope_census.py`, exactly as the CR-CRU-091/092
+# sections above split registration from conformance.
+#
+# What the field computes has never changed: the `cr` of the plan with the
+# latest `closedAt` -- the last CR to close/merge. Only the NAME moves, from
+# one that read as "the CR of the most recent run" (which the fleet does not
+# compute anywhere) to one that traces to the column it sorts by. It is a
+# CLEAN BREAK, not an alias: the CR-CRU-059 SS0 precedent for a fleet-wide
+# rename is "no alias, no dual-key handling, no deprecation path".
+# ---------------------------------------------------------------------------
+
+# The shared computation, at its single locus, under its new name.
+CR094_LAST_CLOSED_CR_FUNCTION = "last_closed_cr"
+
+# The spellings the rename retires. A client still carrying either -- in code,
+# in a docstring, or in help text -- is a client still advertising the field
+# that lied, so a provenance note must DESCRIBE the old name rather than spell
+# it, the same discipline the shipped-CR carve-out follows.
+CR094_RETIRED_SPELLINGS = ("lastRunCr", "last_run_cr")
+
+
+def _status_verb_registration(path):
+    """The (verb names, help text) argparse advertises for the status/plans
+    verb PAIR in `path`. All five clients register the pair with one loop
+    (`for _name in ("status", "plans"): sub.add_parser(_name, help=...)`), so
+    the extraction keys off that idiom rather than a line number: find the
+    `for` whose iterable is a literal tuple naming `status`, and return its
+    `add_parser(help=...)` constant. Returns (None, None) when a client stops
+    using the shared idiom -- reported as a failure below, never as a silent
+    pass on a surface that moved."""
+    tree = ast.parse(path.read_text(), filename=str(path))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.For):
+            continue
+        try:
+            names = ast.literal_eval(node.iter)
+        except (ValueError, SyntaxError):
+            continue
+        if not isinstance(names, (tuple, list)) or "status" not in names:
+            continue
+        for call in ast.walk(node):
+            if not (isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Attribute)
+                    and call.func.attr == "add_parser"):
+                continue
+            for kw in call.keywords:
+                if kw.arg == "help" and isinstance(kw.value, ast.Constant):
+                    return tuple(names), kw.value.value
+    return None, None
+
+
+_ALL_CLIENT_STATUS_REGISTRATIONS = {
+    client: _status_verb_registration(path)
+    for client, path in CLIENT_FILES.items()
+}
+
+
+class Cr094LastClosedCrRenameInventoryTest(unittest.TestCase):
+    """AC7 -- one renamed field, at one locus, advertised identically by all
+    five clients, with the retired name present nowhere in the shipped fleet
+    source."""
+
+    def test_the_shared_module_computes_the_field_under_its_new_name(self):
+        """The computation stays where it is (one locus the five clients
+        delegate to); only its name moves."""
+        shared = _defined_function_names(AXI_MODULE_PATH)
+        self.assertIn(
+            CR094_LAST_CLOSED_CR_FUNCTION, shared,
+            f"the shared module must define the computation under the name "
+            f"that states it; defined names lack "
+            f"{CR094_LAST_CLOSED_CR_FUNCTION!r}")
+        self.assertNotIn(
+            "last_run_cr", shared,
+            "the old function name must be GONE, not kept as a wrapper or an "
+            "alias -- a second name for one computation is how the fleet ends "
+            "up emitting both keys")
+
+    def test_no_client_defines_the_renamed_computation_privately(self):
+        """Fleet discipline: the clients delegate, they do not each carry a
+        private copy of the computation under the new name."""
+        offenders = [client for client, counts in _ALL_CLIENT_FUNCTION_NAMES.items()
+                     if CR094_LAST_CLOSED_CR_FUNCTION in counts]
+        self.assertEqual(
+            offenders, [],
+            f"the computation lives ONCE, in the shared module; no client may "
+            f"fork it under the new name: {offenders!r}")
+
+    def test_the_retired_spellings_survive_nowhere_in_the_shipped_fleet_source(self):
+        """The clean break, across the shared module and all five clients --
+        which covers both per-client sites at once (the `cmd_status` docstring
+        and the argparse help string), and any third the sweep would otherwise
+        miss."""
+        offenders = {}
+        for label, path in [("_crucible_axi", AXI_MODULE_PATH)] + list(CLIENT_FILES.items()):
+            text = path.read_text()
+            hits = [s for s in CR094_RETIRED_SPELLINGS if s in text]
+            if hits:
+                offenders[label] = hits
+        self.assertEqual(
+            offenders, {},
+            f"the retired spellings must appear NOWHERE in the shipped fleet "
+            f"source -- not as a key, a function, an alias, or a docstring "
+            f"mention: {offenders!r}")
+
+    def test_every_client_registers_the_status_and_plans_pair_with_one_help_string(self):
+        """Non-vacuity for the two help tests below: if this extraction found
+        nothing, 'no client advertises the old wording' would be vacuously
+        true in every client."""
+        offenders = {}
+        for client, (names, help_text) in _ALL_CLIENT_STATUS_REGISTRATIONS.items():
+            if names is None or help_text is None:
+                offenders[client] = "no status/plans add_parser(help=...) found"
+            elif set(names) != {"status", "plans"}:
+                offenders[client] = f"registers {names!r}, not the verb pair"
+        self.assertEqual(
+            offenders, {},
+            f"every client must register the status verb and its plans alias "
+            f"from one help string, or the help assertions below measure "
+            f"nothing: {offenders!r}")
+
+    def test_every_client_help_names_the_field_and_states_the_fact_it_computes(self):
+        offenders = {}
+        for client, (_names, help_text) in _ALL_CLIENT_STATUS_REGISTRATIONS.items():
+            squeezed = " ".join((help_text or "").split()).lower()
+            if "lastclosedcr" not in squeezed:
+                offenders[client] = f"help does not name the field: {help_text!r}"
+            elif "last cr to close" not in squeezed:
+                offenders[client] = (
+                    f"help does not state the fact computed: {help_text!r}")
+        self.assertEqual(
+            offenders, {},
+            f"all five clients advertise this field; each must name it and "
+            f"say what it is -- the last CR to close: {offenders!r}")
+
+    def test_no_client_help_still_describes_the_field_as_the_most_recent_run(self):
+        """The defect stated as a REJECTION, not only as a new expectation: a
+        client left describing the CR of the most recent run keeps the
+        misreading alive even where the envelope key is already correct."""
+        offenders = {}
+        for client, (_names, help_text) in _ALL_CLIENT_STATUS_REGISTRATIONS.items():
+            squeezed = " ".join((help_text or "").split()).lower()
+            stale = [phrase for phrase in ("lastruncr", "most recent run")
+                     if phrase in squeezed]
+            if stale:
+                offenders[client] = stale
+        self.assertEqual(
+            offenders, {},
+            f"no client's help may still carry the retired name or the 'most "
+            f"recent run' reading: {offenders!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

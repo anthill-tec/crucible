@@ -306,7 +306,7 @@ def _open_plans(project_dir):
     return _axi().open_plans(_get, _plans_path(project_dir))
 
 
-def _emit_ingest_axi(verb, resp, project_dir, agent):
+def _emit_ingest_axi(verb, resp, project_dir, agent, warnings=None):
     """Emit the §S1 envelope for an ingest verb:
     run{passed,failed,pending,total} (from the SERVER-parsed response).
     CR-CRU-050 §S2 — the server's junit codec already classifies `<skipped/>`
@@ -316,7 +316,9 @@ def _emit_ingest_axi(verb, resp, project_dir, agent):
     the envelope context ECHOES the attachment the SERVER reported
     (`context.cycleId` on the ingest response), so the agent sees which cycle
     absorbed its evidence without a second `GET /api/v2/events`; absent → the
-    key is omitted."""
+    key is omitted. CR-CRU-094 §S3 — `warnings` carries the run's pre-flight
+    finding onto the envelope, so the stderr line and `warnings[]` say the
+    same thing."""
     s = resp.get("run", {}) or {}
     run = {"passed": s.get("passed"), "failed": s.get("failed"),
            "pending": s.get("pending", 0), "total": s.get("total")}
@@ -326,7 +328,7 @@ def _emit_ingest_axi(verb, resp, project_dir, agent):
     err = resp.get("error")
     if err is not None:
         result_fields["error"] = err
-    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, [])
+    _emit_axi(verb, bool(resp.get("ok")), result_fields, context, warnings or [])
 
 
 def _clippy_help(ok, errors, lints, scope):
@@ -774,6 +776,14 @@ def _clean_stale_junit(project_dir, profile=None):
 def cmd_auto_ingest(args):
     """Detect: junit XML present → ingest tests. Absent → cargo check stderr → ingest compile."""
     project_dir = _resolve_project_dir(args.project_dir)
+    # CR-CRU-094 §S3 — this verb offers no `--cycle` at all and its ingest is
+    # the furthest of any from the run that produced the report, so an
+    # unattributed store here is the hardest to notice. Best-effort, on both
+    # channels, before either ingest branch below POSTs.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     _clean_stale_junit(project_dir)
     ci = f"{project_dir}/target/nextest/ci/junit.xml"
     default = f"{project_dir}/target/nextest/default/junit.xml"
@@ -782,7 +792,8 @@ def cmd_auto_ingest(args):
     if junit_path:
         resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier="unit",
                                  context=_run_context())
-        _emit_ingest_axi("auto-ingest", resp, project_dir, args.agent)
+        _emit_ingest_axi("auto-ingest", resp, project_dir, args.agent,
+                         preflight_warnings)
         s = resp.get("run", {}) or {}
         return 0 if (resp.get("ok") and (s.get("failed") or 0) == 0) else 1
 
@@ -836,8 +847,9 @@ def cmd_auto_ingest(args):
     _emit_axi("auto-ingest", ok, result_fields,
               _axi_context(project_dir, agent_id=args.agent,
                            cycle_id=_axi().echoed_cycle_id(resp)),
-              [] if ok
-              else [_axi().ingest_failed_warning("auto-ingest", CRUCIBLE_URL)],
+              preflight_warnings if ok
+              else preflight_warnings
+              + [_axi().ingest_failed_warning("auto-ingest", CRUCIBLE_URL)],
               f"ingest compile: ok={resp.get('ok')} errors={err_count} "
               f"warnings={warn_count} cargo_exit={result.returncode}")
     return 0 if ok else 1
@@ -853,17 +865,30 @@ def cmd_regression_ingest(args):
     project_dir = _resolve_project_dir(args.project_dir)
     identity = None
     try:
+        preflight_warnings = []
         if getattr(args, "agent", None):
             identity = _open_gate_identity(project_dir, args.agent,
                                            getattr(args, "cycle", None),
                                            "gated regression run starting")
-        return _regression_ingest_run(args)
+            # CR-CRU-094 §S3 — the pre-flight attribution check, before this
+            # (far longer) coverage sweep burns its minutes and while `--cycle`
+            # can still be supplied. Best-effort; never delays the run.
+            preflight_warnings = _axi().preflight_cycle_warnings(
+                _get, _project_key(project_dir), args.agent,
+                cycle_id=getattr(args, "cycle", None),
+                context=_run_context())
+        return _regression_ingest_run(args, preflight_warnings)
     finally:
         _close_gate_identity(project_dir, identity)
 
 
-def _regression_ingest_run(args):
-    """Full regression: cargo clean → llvm-cov nextest → parse junit + lcov → /api/v2/runs/parsed."""
+def _regression_ingest_run(args, preflight_warnings=()):
+    """Full regression: cargo clean → llvm-cov nextest → parse junit + lcov → /api/v2/runs/parsed.
+
+    CR-CRU-094 §S3 — `preflight_warnings` is the caller's pre-flight finding,
+    decided BEFORE the sweep started; it rides every envelope this body can
+    emit, ahead of whatever the run itself discovers."""
+    preflight_warnings = list(preflight_warnings)
     project_dir = _resolve_project_dir(args.project_dir)
     crates = [c.strip() for c in args.crates.split(",") if c.strip()]
 
@@ -892,7 +917,8 @@ def _regression_ingest_run(args):
                   {"help": _axi().no_report_help("regression-ingest",
                                                  "junit.xml")},
                   _axi_context(project_dir, agent_id=args.agent),
-                  [_axi().no_report_warning(
+                  preflight_warnings
+                  + [_axi().no_report_warning(
                       "regression-ingest", "junit.xml", result.returncode,
                       result.stderr or result.stdout or "")],
                   "[crucible] ERROR: no junit.xml after llvm-cov nextest")
@@ -954,7 +980,8 @@ def _regression_ingest_run(args):
     _emit_axi("regression-ingest", ok, result_fields,
               _axi_context(project_dir, agent_id=args.agent,
                            cycle_id=_axi().echoed_cycle_id(resp)),
-              [] if ok else [_axi().ingest_failed_warning(
+              preflight_warnings if ok
+              else preflight_warnings + [_axi().ingest_failed_warning(
                   "regression-ingest", CRUCIBLE_URL)],
               f"regression: ok={resp.get('ok')} "
               f"passed={passed} failed={failed} pending={pending} total={total} "
@@ -1039,6 +1066,14 @@ def cmd_test(args):
         cmd += ["-E", args.filter]
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", "12")
+    # CR-CRU-094 §S3 — PRE-FLIGHT, before nextest spawns and while `--cycle`
+    # can still be supplied: ask the board whether this agent is bound and say
+    # so on both channels if it is not. Best-effort — a failed lookup warns
+    # about nothing and never delays the run. One implementation, shared.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
     result = _run_logged(cmd, project_dir, env, getattr(args, "log", None))
     print(f"[crucible] cargo nextest exit={result.returncode}", file=sys.stderr)
@@ -1049,7 +1084,8 @@ def cmd_test(args):
         if junit_path:
             resp = _ingest_junit_axi(project_dir, args.agent, junit_path, tier="unit",
                                      context=_run_context())
-            _emit_ingest_axi("test", resp, project_dir, args.agent)
+            _emit_ingest_axi("test", resp, project_dir, args.agent,
+                             preflight_warnings)
             s = resp.get("run", {}) or {}
             if (s.get("failed") or 0) > 0:
                 return 1
@@ -1063,7 +1099,8 @@ def cmd_test(args):
                                       cwd=project_dir, env=env)
         _ingest_rustc_stderr(project_dir, args.agent, check_result.stderr, kind="test-compile")
         _emit_axi("test", False, {"help": _axi().HELP_STEPS["test"]},
-                  _axi_context(project_dir, agent_id=args.agent), [])
+                  _axi_context(project_dir, agent_id=args.agent),
+                  preflight_warnings)
         return result.returncode or 1
     return result.returncode
 
@@ -1078,6 +1115,13 @@ def cmd_check(args):
         cmd += ["--features", args.features]
     env = os.environ.copy()
     env.setdefault("CARGO_BUILD_JOBS", "12")
+    # CR-CRU-094 §S3 — `check` INGESTS the rustc errors on a failing compile,
+    # so it is one of the five ingesting verbs the pre-flight covers; asked
+    # before cargo spawns, while `--cycle` can still be supplied.
+    preflight_warnings = _axi().preflight_cycle_warnings(
+        _get, _project_key(project_dir), args.agent,
+        cycle_id=getattr(args, "cycle", None),
+        context=_run_context())
     print(f"[crucible] running: {' '.join(cmd)}", file=sys.stderr)
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=project_dir, env=env)
     err_count = result.stderr.count("error[E") + result.stderr.count("error: ")
@@ -1092,7 +1136,8 @@ def cmd_check(args):
     legacy = f"check: ok={ok} exit={result.returncode}"
     _emit_axi("check", ok,
               {"exit": result.returncode, "help": _axi().HELP_STEPS["check"]},
-              _axi_context(project_dir, agent_id=args.agent), [], legacy)
+              _axi_context(project_dir, agent_id=args.agent),
+              preflight_warnings, legacy)
     return 0 if ok else (result.returncode or 1)
 
 
@@ -1904,7 +1949,7 @@ def cmd_abort(args):
 def cmd_status(args):
     """§S6 — the plan/status READ verb (alias `plans`, no --agent): GET …/plans
     and return the queue as a uniform-table §S1 envelope plus a top-level
-    lastRunCr. CR-CRU-054 §S2 — delegates to the shared implementation."""
+    lastClosedCr. CR-CRU-054 §S2 — delegates to the shared implementation."""
     return _axi().cmd_status(args, _resolve_project_dir(args.project_dir), _ops())
 
 
@@ -2528,7 +2573,8 @@ def main():
     for _name in ("status", "plans"):
         sv = sub.add_parser(_name,
                             help="Read the plan queue (GET …/plans) as a TOON-AXI table "
-                                 "+ lastRunCr. Read-only; `plans` is an alias of `status`.")
+                                 "+ lastClosedCr (the last CR to close). Read-only; "
+                                 "`plans` is an alias of `status`.")
         sv.add_argument("--fields",
                         help="Comma-separated EXTRA columns to add to the minimal "
                              "cr,wave,status,activeCycleId set (§S10).")

@@ -23,7 +23,7 @@ THE API THIS RED PINS, and why each piece exists:
         normalise its `--track`. Without this the fleet would answer `2`
         differently on the read path (`next`) and the write path
         (`wave-sequence`), which is the exact inconsistency the fleet standard
-        exists to prevent. Mirrors `normalizeTrack` (src/store.ts:345-348).
+        exists to prevent. Mirrors `normalizeTrack` (src/store.ts:349-352).
 
     queue_tracks(entries) -> [str]
         §S3. The sorted distinct non-null STORED `track` values. `len > 1` is
@@ -347,7 +347,7 @@ class CanonicalTrackTest(_NextTestBase):
                 self.assertIsNone(
                     AXI.canonical_track(spelling),
                     f"{spelling!r} names no lane; `normalizeTrack` returns null "
-                    f"for it (src/store.ts:345-348) so the helper must too, "
+                    f"for it (src/store.ts:349-352) so the helper must too, "
                     f"rather than inventing a track")
 
     def test_no_value_at_all_is_refused_rather_than_defaulted(self):
@@ -1501,15 +1501,35 @@ class NextBlockCitationsTest(unittest.TestCase):
         # 3925 -> 3961. Same rule as the entry below — the CR that shifted the
         # file is the CR that re-pins it, and this guard is the only thing in
         # the repo that caught the drift.
-        ("LANDED_STATUSES", "src/store.ts", 3961, 3961,
+        # Re-pinned 2026-09-07 (CR-CRU-094 C4), 3961 -> 4073. This drift is
+        # INHERITED, not ours: the entry already fails identically on
+        # `develop`, verified by running this suite in a throwaway `develop`
+        # worktree, so some CR between 099 and this branch's cut shifted
+        # `src/store.ts` above `deriveQueueStatus` and did not re-pin. It is
+        # fixed here opportunistically because the entry below had to move
+        # anyway and a one-line re-record while already in the table is
+        # cheaper than a second visit — NOT because CR-CRU-094 caused it. The
+        # reason it survived on `develop` at all is that no merge gate runs
+        # this suite; that gap is recorded separately as a candidate CR.
+        ("LANDED_STATUSES", "src/store.ts", 4073, 4073,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
-        ("canonical_track", "src/store.ts", 345, 348,
+        # Re-pinned 2026-09-07 (CR-CRU-094 C4), 345-348 -> 349-352. This drift
+        # IS ours, and it is the ordinary case the rule above describes:
+        # §S1/§S2 (cycles 358/359) added the `EventRow.cycle_id` field, the
+        # appended migration body and `recordLifecycleEvent`'s note to
+        # `src/store.ts` ABOVE `normalizeTrack`, moving it down four lines.
+        # The CR that shifted the file re-pins it.
+        ("canonical_track", "src/store.ts", 349, 352,
          "export function normalizeTrack(", "}"),
         # Re-pinned 2026-09-03 (CR-CRU-097 C4): §S2's citation moves added
         # lines above this block, drifting it 1349-1362 -> 1370-1384. This is
         # the guard doing its job — the CR that shifted the file is the CR
         # that re-pins it.
-        ("_next_start_help", "clients/python-crucible.py", 1370, 1384,
+        # Re-pinned 2026-09-07 (CR-CRU-094 §S3): wiring the pre-flight
+        # attribution check into this client's `test`/`regression`/
+        # `auto-ingest`/`check` verbs added lines above this block, drifting
+        # it 1370-1384 -> 1422-1436. Same rule, same guard.
+        ("_next_start_help", "clients/python-crucible.py", 1422, 1436,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 
