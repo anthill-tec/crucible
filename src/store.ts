@@ -1950,6 +1950,7 @@ export class Store {
     action: "registered" | "unregistered",
     firstSeen?: number,
     role?: AgentRole,
+    cycleId?: number,
   ): RunEvent {
     const event: RunEvent = {
       id: this.nextEventId(),
@@ -1960,6 +1961,15 @@ export class Store {
       timestamp: Date.now(),
       action,
       ...(firstSeen !== undefined ? { firstSeen } : {}),
+      // CR-CRU-094 §S2 — the cycle the agent was bound to, captured by the
+      // route from the binding the row still held, so the register/unregister
+      // pair records who worked WHICH CYCLE in which role after the row is
+      // gone (deleted, or pruned for silence) and for an agent that ingested
+      // nothing. TOP-LEVEL, never a `context`: a cycle's RUNS are selected
+      // through `context.cycleId` (`listEventsForCycle`, and the frontend's
+      // `linkedRunsFor`/`runningRunsFor`), so a lifecycle event carrying no
+      // `context` can never be counted as a run of the cycle it names.
+      ...(cycleId !== undefined ? { cycleId } : {}),
       // CR-CRU-057 §S1 — the declared role, captured by the route BEFORE the
       // agents row is deleted (the same survives-deletion contract firstSeen
       // has carried since CR-CRU-011 §S1). Declared, so never inferred.
@@ -2766,7 +2776,14 @@ export class Store {
         // the gates route alike — gets it for free, and no caller can set one
         // representation without the other, so the column can never disagree
         // with `context.cycleId`. NULL (never 0) when the run carries none.
-        event.context?.cycleId ?? null,
+        //
+        // CR-CRU-094 §S2 — the second source is the LIFECYCLE record, which
+        // has no `context` of its own to derive from (giving it one would
+        // enrol a register/unregister event in the cycle's RUN lists). Only
+        // `recordLifecycleEvent` sets the top-level field; every run-bearing
+        // constructor still stamps `context` alone, so the two
+        // representations remain incapable of disagreeing.
+        event.context?.cycleId ?? event.cycleId ?? null,
       );
     this.enforceRetention(event.projectKey);
     this.emit("events", event.projectKey);

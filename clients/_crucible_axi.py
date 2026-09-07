@@ -676,6 +676,98 @@ def no_title_warning(cr):
     }
 
 
+# ── CR-CRU-094 §S3 — the PRE-FLIGHT attribution check, for all five clients ─
+#
+# A run whose agent is bound to no cycle is stored with no cycle attribution,
+# and NOTHING backfills a stored run's cycle (`plan-backfill` backfills a
+# plan's wave). The warning therefore fires when the run STARTS, while
+# `--cycle` can still be supplied — the same voice as `no_wave_warning`/
+# `no_title_warning`: name the omission, then name the lever that fixes it.
+#
+# The binding is READ from the board (`GET /api/v2/agents?project=<key>` →
+# `boundCycleId`, absent when unbound), never inferred from the absence of a
+# local `--cycle` flag: a caller that registered bound in an EARLIER process
+# passes no flag now and has nothing missing.
+
+MISSING_CYCLE_CODE = "no-cycle"
+
+# The lookup is a courtesy on the way to the run, so it is bounded far tighter
+# than the hook-safe read timeout: a slow board must cost a test run a moment,
+# never its start.
+PREFLIGHT_TIMEOUT_S = 3
+
+
+def no_cycle_warning():
+    """Build the §S3 `no-cycle` warning for a run with no cycle attribution."""
+    return {
+        "code": MISSING_CYCLE_CODE,
+        "detail": ("this run has no cycle attribution — its agent is bound to "
+                   "no cycle and no --cycle was supplied, so the stored run "
+                   "cannot be traced to the cycle it belongs to; supply "
+                   "`--cycle <id>` now (nothing backfills a stored run's "
+                   "cycle) or leave it project-scoped deliberately"),
+    }
+
+
+def no_cycle_line():
+    """The stderr half of the §S3 warning — the shape
+    `gate_identity_skipped_line` uses to tell an operator, at the moment it
+    matters, why something did not happen."""
+    w = no_cycle_warning()
+    return f"[crucible] WARN: {w['code']} — {w['detail']}"
+
+
+def _bound_cycle_id(resp, agent_id):
+    """`(known, bound_cycle_id)` for `agent_id` in a `GET /api/v2/agents`
+    response. `known` is False whenever the board did not actually answer for
+    this agent — an error envelope, a malformed body, or an id the board does
+    not hold — because an UNANSWERED lookup is not evidence of a missing
+    binding."""
+    if not isinstance(resp, dict) or not resp.get("ok"):
+        return (False, None)
+    agents = resp.get("agents")
+    if not isinstance(agents, list):
+        return (False, None)
+    for agent in agents:
+        if isinstance(agent, dict) and agent.get("agentId") == agent_id:
+            return (True, agent.get("boundCycleId"))
+    return (False, None)
+
+
+def preflight_cycle_warnings(get, project_key, agent_id, cycle_id=None,
+                             context=None, stream=None):
+    """§S3 — the pre-flight attribution check every ingesting run makes BEFORE
+    it spawns its runner. Returns the envelope `warnings[]` fragment (`[]` or
+    one `{code, detail}`) and prints the same warning's stderr line, so both
+    channels are fed from ONE decision.
+
+    Best-effort and NEVER blocking, per AC5: an unreachable board, a timeout,
+    a malformed answer or ANY raised exception yields no warning and the run
+    proceeds. `get` is the calling client's own `_get` (its test harnesses
+    patch that name), called with the short `PREFLIGHT_TIMEOUT_S` bound.
+    """
+    try:
+        if not agent_id or not project_key:
+            return []
+        # `--cycle` supplied, or an explicit `context.cycleId`: the run WILL be
+        # attributed, so there is nothing to warn about and nothing to ask.
+        if cycle_id is not None:
+            return []
+        if isinstance(context, dict) and context.get("cycleId") is not None:
+            return []
+        resp = get(f"/api/v2/agents?project={project_key}",
+                   timeout=PREFLIGHT_TIMEOUT_S)
+        known, bound = _bound_cycle_id(resp, agent_id)
+        if not known or bound is not None:
+            return []
+        print(no_cycle_line(), file=stream if stream is not None else sys.stderr)
+        return [no_cycle_warning()]
+    except Exception:
+        # Attribution is a courtesy; a suite must never become unrunnable
+        # because it could not be computed.
+        return []
+
+
 # ── CR-CRU-058 §S1/§S2 — the toolchain-gate help/warning vocabulary ────────
 #
 # The verbs C3 gives envelopes to (`unit`/`module`/`compile`/`e2e`/`docker-*`/

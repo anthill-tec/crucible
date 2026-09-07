@@ -1015,7 +1015,7 @@ def cmd_test(args):
     # CR-CRU-017 §S4 — the RUN lifecycle rides INSIDE the identity bracket: the
     # server refuses a run-start from an unregistered caller, so the run can
     # only be opened once the identity heartbeat above has landed.
-    run_id, run_warnings = None, []
+    run_id, run_warnings, preflight_warnings = None, [], []
     try:
         cmd = _bun_test_cmd(bun, args.tests, junit_path, False, None)
         env = os.environ.copy()
@@ -1031,6 +1031,14 @@ def cmd_test(args):
             identity = _open_gate_identity(project_dir, args.agent,
                                            getattr(args, "cycle", None),
                                            "gated test run starting")
+            # CR-CRU-094 §S3 — PRE-FLIGHT, while `--cycle` can still be
+            # supplied: ask the board whether this agent is bound and say so
+            # on both channels if it is not. Best-effort — a failed lookup
+            # warns about nothing and never delays the run.
+            preflight_warnings = _axi().preflight_cycle_warnings(
+                _get, _project_key(project_dir), args.agent,
+                cycle_id=getattr(args, "cycle", None),
+                context=_run_context())
             # bun ≥1.3 hides per-test completion lines when it detects an agent
             # session (CLAUDECODE / AGENT / REPL_ID / AI_AGENT env). Drop them all for the
             # wrapped runner so the full ✓/✗ line family streams: §S2b counts it
@@ -1048,6 +1056,10 @@ def cmd_test(args):
                 run_id, run_warnings = _start_run(project_dir, args.agent,
                                                   tier="unit",
                                                   context=_run_context())
+            # The pre-flight finding rides the SAME envelope warnings[] the
+            # run's own lifecycle warnings do, ahead of them (it was decided
+            # first) — §S3's second channel.
+            run_warnings = preflight_warnings + run_warnings
         # §S4 — the wrapped span: the run is already OPEN, so a signal from here
         # on has an open run to disclose (the trap is inert without one).
         try:
@@ -1122,7 +1134,7 @@ def cmd_regression(args, verb="regression"):
     identity = None
     # CR-CRU-017 §S4 — the run lifecycle, opened inside the identity bracket
     # exactly as `cmd_test` does.
-    run_id, run_warnings = None, []
+    run_id, run_warnings, preflight_warnings = None, [], []
     try:
         cmd = _bun_test_cmd(bun, None, junit_path, coverage_on, coverage_dir)
         print(f"[crucible] running: {' '.join(cmd)}  (cwd={package_dir})", file=sys.stderr)
@@ -1135,6 +1147,12 @@ def cmd_regression(args, verb="regression"):
             identity = _open_gate_identity(project_dir, args.agent,
                                            getattr(args, "cycle", None),
                                            "gated regression run starting")
+            # CR-CRU-094 §S3 — the same pre-flight attribution check cmd_test
+            # makes, before this (far longer) sweep burns its minutes.
+            preflight_warnings = _axi().preflight_cycle_warnings(
+                _get, _project_key(project_dir), args.agent,
+                cycle_id=getattr(args, "cycle", None),
+                context=_run_context())
             # Same §S2b setup as cmd_test (whole-suite M via package walk),
             # including the agent-quieting env strip.
             for _quieting_var in ("CLAUDECODE", "AGENT", "REPL_ID", "AI_AGENT"):
@@ -1148,6 +1166,7 @@ def cmd_regression(args, verb="regression"):
                 run_id, run_warnings = _start_run(project_dir, args.agent,
                                                   tier="regression",
                                                   context=_run_context())
+            run_warnings = preflight_warnings + run_warnings
         try:
             with _abandon_trap(run_id):
                 result = _run_logged(cmd, package_dir, env, log_path, narrator)

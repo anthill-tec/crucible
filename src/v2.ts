@@ -618,7 +618,17 @@ async function handleAgentTouch(
   // value just validated at this boundary), so a finished agent's registration
   // stays classifiable after its row is deleted.
   if (!existed) {
-    store.recordLifecycleEvent(pk.key, agentId, "registered", undefined, opts.role);
+    // CR-CRU-094 §S2 — and the cycle binding validated one statement above,
+    // so an agent that registers bound is attributable from its registration
+    // alone — before any run, and after its row is pruned for silence.
+    store.recordLifecycleEvent(
+      pk.key,
+      agentId,
+      "registered",
+      undefined,
+      opts.role,
+      opts.boundCycleId,
+    );
   }
   return json({ ok: true, changed: !existed, help: hints.registered });
 }
@@ -643,7 +653,17 @@ async function handleAgentUnregister(store: Store, req: Request): Promise<Respon
   // the final journal entry names the role the agent actually declared, read
   // from the row while it still existed.
   if (agent !== null && body.silent !== true) {
-    store.recordLifecycleEvent(pk.key, agentId, "unregistered", agent.firstSeen, agent.role);
+    // CR-CRU-094 §S2 — the cycle binding joins firstSeen/role in that SAME
+    // pre-deletion snapshot: the closing entry names the cycle the agent was
+    // bound to while the row still said so.
+    store.recordLifecycleEvent(
+      pk.key,
+      agentId,
+      "unregistered",
+      agent.firstSeen,
+      agent.role,
+      agent.boundCycleId,
+    );
   }
   return json({ ok: true, changed: agent !== null });
 }
