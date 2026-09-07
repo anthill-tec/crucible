@@ -1097,10 +1097,44 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // for `public/`, and as this CR itself re-recorded `src/` 550 -> 556 and
 // 556 -> 560 and `clients/` 639 -> 642. The `develop` baselines are UNCHANGED
 // at 512/378/601 and stay the floors — a floor never moves for a re-pin.
+// UPDATED 2026-09-07 by CR-CRU-075 §S1. `clients/` HEAD moves 672 -> 687
+// (+15). §S1 gave `queue-file` the shared registrar every other fleet-wide
+// verb has had since CR-CRU-091, and each added citation line is a seam
+// comment saying where the verb is registered from now. 15 lines added, NONE
+// removed, so the net delta and the added-line count are again the same
+// number. Per file: `clients/_crucible_axi.py` +4 (121 -> 125) — the
+// `add_queue_file_verb` docstring's own opening line, its note that
+// CR-CRU-014 §S2 put the parse and the full-replace POST in this module and
+// left the SUBPARSER per-client (the defect §S1 closes), and two §S1/AC2
+// lines on the failure paths, one stating that an `ok:false` envelope still
+// carries `help[]` and one that the parse names the offending CR in `error`;
+// `arduino-crucible.py`, `bun-crucible.py`, `mvn-crucible.py` and
+// `rust-crucible.py` +2 each (93 -> 95, 128 -> 130, 117 -> 119, 109 -> 111) —
+// one module-level `one thin delegator` section header and one `main()`
+// call-site comment apiece; `python-crucible.py` +3 (103 -> 106) — the one
+// client that already had a `cmd_queue_file`, so it gains no delegator header
+// and instead carries a three-line call-site comment recording that the
+// subparser it hand-rolled from CR-CRU-014 §S2 is exactly what let one verb
+// work on one stack and be `invalid choice` on the other four.
+// `clients/toon.py` stays at 1. Every one is a `#` comment or a docstring
+// line, none in a string. §S2 is TESTS ONLY and moves no count in any of the
+// three trees.
+// Measured with THIS file's own `extractCitableText` over the working tree
+// against `git show d425048:<path>` — the commit before §S1, not `develop`,
+// because the 672 being replaced is CR-CRU-094 §S3's roll-out figure — file
+// by file; the +15 decomposes exactly into the six per-file deltas above
+// (4 + 2 + 2 + 2 + 3 + 2), and d425048 itself re-measures at the recorded
+// 672. `src/` and `public/` are untouched by this CR and re-measure at 560
+// and 435.
+// GROWTH IS THE DIRECTION THE RULE PERMITS — only the equality pin is
+// re-recorded, as CR-CRU-093 re-recorded 405 -> 431, CR-CRU-109 431 -> 435
+// for `public/`, and CR-CRU-094 `src/` 550 -> 556 and 556 -> 560 and
+// `clients/` 639 -> 642. The `develop` baselines are UNCHANGED at
+// 512/378/601 and stay the floors — a floor never moves for a re-pin.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 560 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 435 },
-  clients: { exts: [".py"], develop: 601, head: 672 },
+  clients: { exts: [".py"], develop: 601, head: 687 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {

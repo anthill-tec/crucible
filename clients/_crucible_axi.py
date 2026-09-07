@@ -2500,14 +2500,30 @@ def cmd_queue_file(args, project_dir, ops):
     except OSError as e:
         msg = f"could not read queue file {path}: {e}"
         print(f"[crucible] ERROR: {msg}", file=sys.stderr)
-        ops.emit("queue-file", False, {"error": msg}, ops.context(project_dir),
+        # CR-CRU-075 §S1/AC2 — AXI principle 6: an ok:false envelope carries the
+        # next step for THIS failure. Nothing was read, so the step is the
+        # source itself: the path tried, and the flag that overrides it.
+        ops.emit("queue-file", False,
+                 {"error": msg,
+                  "help": [f"create the queue table at {path}, or read it from "
+                           f"elsewhere: queue-file --from-file <path>"]},
+                 ops.context(project_dir),
                  [], f"queue-file: ok=False error={msg}")
         return 1
     try:
         entries = parse_queue_table(text)
     except QueueParseError as e:
         print(f"[crucible] ERROR: {e}", file=sys.stderr)
-        ops.emit("queue-file", False, {"error": str(e)}, ops.context(project_dir),
+        # CR-CRU-075 §S1/AC2 — the parse named the offending CR in `error`;
+        # the step is that row. Nothing was POSTed, so re-running after the fix
+        # registers the whole set (the endpoint is a full replace).
+        ops.emit("queue-file", False,
+                 {"error": str(e),
+                  "help": [f"fix the row this error names in {path} — a row "
+                           f"carries the header's column count and a Wave cell "
+                           f"starting with an integer",
+                           "queue-file"]},
+                 ops.context(project_dir),
                  [], f"queue-file: ok=False error={e}")
         return 1
     queue_path = f"/api/v2/projects/{ops.project_key(project_dir)}/queue"
@@ -3316,6 +3332,38 @@ def add_next_verb(sub, func, *, parents=(), add_args=()):
     for adder in add_args:
         adder(nx)
     nx.set_defaults(func=func)
+
+
+def add_queue_file_verb(sub, func, *, parents=(), add_args=()):
+    """CR-CRU-075 §S1 — register the ONE `queue-file` subparser on `sub`.
+
+    CR-CRU-014 §S2 put the parse and the full-replace POST in this module from
+    the start but left the SUBPARSER per-client: python hand-rolled its own and
+    the other four registered nothing, so one verb was an envelope on one stack
+    and argparse's `invalid choice` on four. The body lands here for the reason
+    `add_next_verb` and `add_cr_depends_verb` above give — one verb needs one
+    flag surface — through their identical seam: `func` is the CALLER'S own
+    delegator, `parents` the shared parent a client like arduino already
+    carries, `add_args` that client's own project-dir convention.
+
+    `--from-file` is OPTIONAL and carries no default, so the shared
+    `cmd_queue_file` keeps resolving the unset case to
+    `<project>/docs/changes/README.md` (§S2) rather than the registrar deciding
+    a path five clients would then have to agree on.
+
+    No `--agent`: the verb registers a PROJECT's queue, not an agent's work,
+    and has never declared an identity — AC6's unchanged surface.
+    """
+    qf = sub.add_parser(
+        "queue-file", parents=list(parents),
+        help="Parse docs/changes/README.md (or --from-file) queue table and "
+             "POST the full CR set → /api/v2/projects/<key>/queue (§S2).")
+    qf.add_argument("--from-file", dest="from_file",
+                    help="Source Markdown file (default: "
+                         "<project>/docs/changes/README.md).")
+    for adder in add_args:
+        adder(qf)
+    qf.set_defaults(func=func)
 
 
 def remove_agent_silent(project_dir, agent_id, ops):

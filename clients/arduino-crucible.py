@@ -927,6 +927,16 @@ def cmd_next(args):
     return _axi().cmd_next(args, _project_dir(args), _ops())
 
 
+# ── CR-CRU-075 §S1 — `queue-file`: one thin delegator ──────────────────────
+
+
+def cmd_queue_file(args):
+    """§S2 — parse docs/changes/README.md (or --from-file) into queue entries
+    and POST the full set to /api/v2/projects/<key>/queue. Delegates to the
+    shared implementation."""
+    return _axi().cmd_queue_file(args, _project_dir(args), _ops())
+
+
 def _add_project_dir_arg(p):
     """§S4/AC10 — the project-dir flag ALONE, named exactly as the other four
     clients name theirs. This client's `common` parent bundles `--agent` with
@@ -1208,6 +1218,13 @@ def main():
     # client's own. No --agent: `next` is read-only (§S4), so `common` (which
     # bundles --agent) is deliberately NOT the parent here.
     _axi().add_next_verb(sub, cmd_next, add_args=(_add_project_dir_arg,))
+
+    # ── CR-CRU-075 §S1 — the queue REGISTRATION verb, shared registrar for the
+    # same reason: one verb, one flag surface across five clients. Like `next`
+    # it declares no identity, so `common` is not the parent here; only this
+    # client's own project-dir convention is injected.
+    _axi().add_queue_file_verb(sub, cmd_queue_file,
+                               add_args=(_add_project_dir_arg,))
 
     gr = sub.add_parser("gate-run", parents=[common],
                         help="axi PROXY: run `no-mistakes axi run`, post throttled interim + final gates.")

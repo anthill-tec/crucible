@@ -1530,8 +1530,9 @@ class Cr091RoadmapVerbAxiConformanceTest(unittest.TestCase):
         self.assertEqual(
             missing, [],
             f"AC13 -- every roadmap verb must be a real argparse subcommand in "
-            f"every client (5 x 5 = 25 pairs), never the 1 client `queue-file` "
-            f"reaches: {missing!r}")
+            f"every client (5 x 5 = 25 pairs); a fleet verb registered on some "
+            f"clients and not on others is the defect this counts: "
+            f"{missing!r}")
 
     def test_every_pair_emits_a_toon_envelope_carrying_verb_ok_context_warnings(self):
         """P1/P7 -- the fleet's own envelope shape, decoded by the SAME
@@ -2000,14 +2001,15 @@ class Cr092NextVerbAxiConformanceTest(unittest.TestCase):
 
     def test_next_is_a_real_subcommand_in_all_five_clients(self):
         """AC12 -- "the verb exists in all five clients", enumerated from each
-        client's REAL argparse. `queue-file` reaches 1 of 5; this verb lands at
-        parity ON ARRIVAL."""
+        client's REAL argparse. This verb landed at parity ON ARRIVAL, which
+        is what §S6 asked of it."""
         missing = [c for c in CLIENT_FILES
                    if self.drives.get((c, "registered")) is None]
         self.assertEqual(
             missing, [],
-            f"AC12 -- `next` must be a registered subcommand in every client, "
-            f"never the 1 client `queue-file` reaches; absent from: {missing!r}")
+            f"AC12 -- `next` must be a registered subcommand in every client; "
+            f"a fleet verb that reaches some of the five and not the rest is "
+            f"the defect; absent from: {missing!r}")
 
     def test_help_exits_zero_and_names_the_verb_in_all_five_clients(self):
         """P10/AC12 -- driven as a REAL subprocess (`<client> next --help`),
@@ -2511,8 +2513,9 @@ class Cr106CrDependsAxiConformanceTest(unittest.TestCase):
                    if self.drives.get((c, "options")) is None]
         self.assertEqual(
             missing, [],
-            f"`cr-depends` must be a registered subcommand in every client, "
-            f"never the 1 client `queue-file` reaches; absent from: {missing!r}")
+            f"`cr-depends` must be a registered subcommand in every client; a "
+            f"fleet verb that reaches some of the five and not the rest is the "
+            f"defect; absent from: {missing!r}")
 
     def test_help_exits_zero_and_names_the_verb_in_all_five_clients(self):
         """P10 -- `<client> cr-depends --help`, as a real subprocess."""
@@ -3113,6 +3116,444 @@ class Cr094LastClosedCrEnvelopeCensusTest(unittest.TestCase):
             offenders, {},
             f"no client may still advertise the retired name or the 'most "
             f"recent run' reading of this field: {offenders!r}")
+
+
+# ── CR-CRU-075 §S2/AC5 — `queue-file`, enveloped on all five clients ───────
+#
+# Presence and conformance are separate assertions, and this is the second
+# one: the sibling `test_cr054_fleet_inventory.py` says the verb is REGISTERED
+# in all five clients, and this section says what each of the five actually
+# writes on stdout — on the success path and on BOTH failure paths, because a
+# wired subparser that emits prose, or an error with no next step in it, is a
+# conformance failure however correct the write is.
+#
+# The success path needs an answer, so it is driven against a local stub that
+# accepts the one POST `queue-file` makes — the same "fake counterpart, real
+# mechanism" idiom `next` uses above, applied to a write instead of a read.
+# The two failure paths need no server at all: nothing is POSTed on either, so
+# they run on the census's own unreachable URL and still exercise the real
+# refusal.
+
+CR075_QUEUE_FILE_VERB = "queue-file"
+
+# The queue table, in the `docs/changes/README.md` shape `parse_queue_table`
+# reads. The ids belong to NO project: this fixture drives a genuine POST, and
+# a real board's CR ids in it would be a claim about that board's queue. The
+# parser is namespace-agnostic by construction (it normalises a bare `001` to
+# THIS row's own prefix), which is exactly what the second row exercises.
+_QUEUE_TABLE_HEADER = ("| CR | Title | Wave | Depends on |\n"
+                       "|---|---|---|---|\n")
+
+_QUEUE_TABLE_ROWS = (
+    "| [QF-CENSUS-001](./QF-CENSUS-001.md) | first queued item | 5 | — |\n"
+    "| [QF-CENSUS-002](./QF-CENSUS-002.md) | second queued item | 6 | 001 |\n"
+)
+
+# A row whose column count differs from the header's — `parse_queue_table`
+# raises naming the CR, and nothing is POSTed.
+_QUEUE_TABLE_MALFORMED = _QUEUE_TABLE_HEADER + (
+    "| [QF-CENSUS-003](./QF-CENSUS-003.md) | third queued item | 7 |\n"
+)
+
+_MALFORMED_ROW_CR = "QF-CENSUS-003"
+
+# What the parse owes, and therefore what the POST body and the success
+# envelope must both carry — the value that has to survive the client's parse,
+# the JSON POST, the server's answer and the TOON encode to be observed.
+_QUEUE_EXPECTED_ENTRIES = [
+    {"cr": "QF-CENSUS-001", "title": "first queued item", "wave": "5",
+     "dependsOn": []},
+    {"cr": "QF-CENSUS-002", "title": "second queued item", "wave": "6",
+     "dependsOn": ["QF-CENSUS-001"]},
+]
+
+
+class _QueueFileStubServer:
+    """A real HTTP server accepting the ONE full-replace POST `queue-file`
+    makes, recording every request with its method, path and decoded body —
+    so "the client sent the parsed queue to the queue endpoint" is measured
+    across a genuine socket from the genuine subprocess, not inferred from the
+    envelope the same client printed."""
+
+    def __init__(self):
+        self.requests = []
+        stub = self
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.0"
+
+            def _answer(self, status, body):
+                encoded = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b""
+                try:
+                    body = json.loads(raw.decode() or "null")
+                except ValueError:
+                    body = None
+                stub.requests.append(("POST", self.path, body))
+                if self.path.endswith("/queue"):
+                    self._answer(200, {"ok": True, "unknownDependencies": []})
+                else:
+                    self._answer(404, {"ok": False,
+                                       "error": f"no stub for {self.path}"})
+
+            def do_GET(self):
+                stub.requests.append(("GET", self.path, None))
+                self._answer(404, {"ok": False,
+                                   "error": f"no stub for {self.path}"})
+
+            def log_message(self, *args):
+                pass
+
+        self._httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0),
+                                                      _Handler)
+        self.base_url = f"http://127.0.0.1:{self._httpd.server_address[1]}"
+        self._thread = threading.Thread(target=self._httpd.serve_forever,
+                                        daemon=True)
+        self._thread.start()
+
+    def env(self):
+        """The base-URL overrides `drive_verb` needs (arduino accepts
+        `CRUCIBLE_BASE` as its second choice), plus a blanked orchestrator env
+        so an ambient session cannot colour the `context` block."""
+        return {"CRUCIBLE_URL": self.base_url,
+                "CRUCIBLE_BASE": self.base_url,
+                "WORKFLOW_ROLE": "", "WORKFLOW_WAVE": ""}
+
+    def close(self):
+        self._httpd.shutdown()
+        self._httpd.server_close()
+        self._thread.join(timeout=5)
+
+
+# §S2 — the exit each drive owes. The success POST is answered `ok: true`, so
+# the fleet's `0 if ok else 1` gives 0; both failures refuse before the wire.
+CR075_EXPECTED_EXIT = {"success": 0, "unreadable": 1, "malformed": 1}
+
+_QUEUE_FILE_DRIVE_CACHE = None
+
+
+def _get_queue_file_drives():
+    """Drive `queue-file` once per (client × case) as real subprocesses,
+    cached at module scope exactly like `_get_census()`.
+
+    Each value keeps the RAW `CompletedProcess` (exit codes and stdout PURITY
+    are asserted, not only the envelope), the decoded `axi`, and — for the
+    success case — the requests the stub actually saw. `(client, "options")`
+    holds the subparser's real option strings, argparse's own ground truth for
+    the flag surface the ONE shared registrar builds."""
+    global _QUEUE_FILE_DRIVE_CACHE
+    if _QUEUE_FILE_DRIVE_CACHE is not None:
+        return _QUEUE_FILE_DRIVE_CACHE
+    fake_bin_dir = _build_fake_bin_dir()
+    toon_module = _load_toon_module()
+    stub = _QueueFileStubServer()
+    drives = {}
+    try:
+        for client_key, script_path in CLIENT_FILES.items():
+            project_dir = _make_project_dir(client_key)
+            try:
+                subparser = enumerate_verbs(client_key, script_path).get(
+                    CR075_QUEUE_FILE_VERB)
+                if subparser is None:
+                    drives[(client_key, "options")] = None
+                    continue
+                drives[(client_key, "options")] = {
+                    opt for action in subparser._actions
+                    for opt in action.option_strings}
+
+                # The default source, at the path the verb resolves on its
+                # own: `<project-dir>/docs/changes/README.md`.
+                queue_path = project_dir / "docs" / "changes" / "README.md"
+                queue_path.parent.mkdir(parents=True, exist_ok=True)
+                queue_path.write_text(_QUEUE_TABLE_HEADER + _QUEUE_TABLE_ROWS,
+                                      encoding="utf-8")
+                malformed_path = project_dir / "malformed-queue.md"
+                malformed_path.write_text(_QUEUE_TABLE_MALFORMED,
+                                          encoding="utf-8")
+                absent_path = project_dir / "no-such-queue-table.md"
+
+                base_argv = [CR075_QUEUE_FILE_VERB,
+                             "--project-dir", str(project_dir)]
+                cases = (
+                    # The success path is the only one that reaches the wire,
+                    # so it is the only one that needs the stub.
+                    ("success", [], stub.env()),
+                    ("unreadable", ["--from-file", str(absent_path)], None),
+                    ("malformed", ["--from-file", str(malformed_path)], None),
+                )
+                for case, extra_argv, extra_env in cases:
+                    seen = len(stub.requests)
+                    result = drive_verb(script_path, base_argv + extra_argv,
+                                        project_dir, fake_bin_dir,
+                                        extra_env=extra_env)
+                    _emits, axi = classify_envelope(result.stdout, toon_module)
+                    drives[(client_key, case)] = {
+                        "result": result, "axi": axi,
+                        "requests": stub.requests[seen:],
+                        "source": str(absent_path) if case == "unreadable"
+                        else str(queue_path)}
+                drives[(client_key, "help")] = drive_verb(
+                    script_path, [CR075_QUEUE_FILE_VERB, "--help"],
+                    project_dir, fake_bin_dir)
+            finally:
+                shutil.rmtree(project_dir, ignore_errors=True)
+    finally:
+        stub.close()
+        shutil.rmtree(fake_bin_dir, ignore_errors=True)
+    _QUEUE_FILE_DRIVE_CACHE = drives
+    return drives
+
+
+class Cr075QueueFileAxiConformanceTest(unittest.TestCase):
+    """CR-CRU-075 AC5 — `queue-file` measured against the fleet standard in
+    all five clients, on the success path and on both failure paths.
+
+    Until §S1 this verb was registered on ONE client, which is why the three
+    sections above each cite it. Presence is now the sibling inventory
+    harness's assertion; what this class adds is that all five clients emit a
+    real TOON-AXI envelope for it, and that neither refusal is a bare error.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.drives = _get_queue_file_drives()
+        cls.census = _get_census()
+
+    def _drive(self, client_key, case):
+        return self.drives.get((client_key, case)) or {}
+
+    def _cases(self):
+        for client_key in CLIENT_FILES:
+            for case in CR075_EXPECTED_EXIT:
+                yield client_key, case
+
+    def test_queue_file_is_a_real_subcommand_in_all_five_clients(self):
+        """Enumerated from each client's REAL argparse, never a hand list —
+        the same ground truth the rest of the census reads."""
+        missing = [c for c in CLIENT_FILES
+                   if self.drives.get((c, "options")) is None]
+        self.assertEqual(
+            missing, [],
+            f"`queue-file` must be a registered subcommand in every client; "
+            f"absent from: {missing!r}")
+
+    def test_every_client_carries_the_shared_registrars_own_flag(self):
+        """One registrar builds one flag surface, so the flag the SHARED
+        registrar declares must be on all five. A client that grew its own
+        `--from-file` spelling would have forked the surface even while every
+        envelope assertion below still passed."""
+        offenders = {
+            client_key: sorted(options)
+            for client_key, options in (
+                (c, self.drives.get((c, "options")) or set())
+                for c in CLIENT_FILES)
+            if "--from-file" not in options
+        }
+        self.assertEqual(
+            offenders, {},
+            f"`--from-file` is declared once, by the shared registrar, and "
+            f"must reach every client: {offenders!r}")
+
+    def test_every_case_writes_one_toon_envelope_naming_the_verb_on_stdout(self):
+        """P1 — the envelope, on stdout, naming its OWN verb, with nothing
+        printed before it, on all fifteen (client × case) drives."""
+        offenders = {}
+        for client_key, case in self._cases():
+            drive = self._drive(client_key, case)
+            axi = drive.get("axi")
+            result = drive.get("result")
+            label = f"{client_key}:{case}"
+            if not axi:
+                offenders[label] = (f"no envelope; stdout="
+                                    f"{getattr(result, 'stdout', None)!r}")
+            elif axi.get("verb") != CR075_QUEUE_FILE_VERB:
+                offenders[label] = f"envelope names {axi.get('verb')!r}"
+            elif not (result.stdout or "").lstrip().startswith("axi:"):
+                offenders[label] = f"prose precedes it: {result.stdout!r}"
+        self.assertEqual(
+            offenders, {},
+            f"stdout is the machine channel and carries the `queue-file` "
+            f"envelope ALONE, on success and on both refusals: {offenders!r}")
+
+    def test_every_case_exits_with_the_code_its_outcome_owes(self):
+        """The fleet's `0 if ok else 1`, measured rather than assumed: an
+        enveloped failure that exits 0 is the silent-success shape this
+        census exists to catch."""
+        offenders = {}
+        for client_key, case in self._cases():
+            result = self._drive(client_key, case).get("result")
+            code = getattr(result, "returncode", None)
+            if code != CR075_EXPECTED_EXIT[case]:
+                offenders[f"{client_key}:{case}"] = (
+                    f"exit {code}, expected {CR075_EXPECTED_EXIT[case]}")
+        self.assertEqual(
+            offenders, {},
+            f"each outcome owes its exit code, and the envelope's `ok` must "
+            f"agree with it: {offenders!r}")
+
+    def test_the_success_envelope_carries_the_parsed_queue_back_to_the_caller(self):
+        """The observable outcome of the success path: not "it did not crash"
+        but the entries the caller registered, parsed from the table and
+        round-tripped through the POST, the answer and the TOON encode."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            axi = self._drive(client_key, "success").get("axi") or {}
+            if axi.get("ok") is not True:
+                offenders[client_key] = f"ok={axi.get('ok')!r}"
+            elif axi.get("entries") != _QUEUE_EXPECTED_ENTRIES:
+                offenders[client_key] = f"entries={axi.get('entries')!r}"
+            elif axi.get("unknownDependencies") != []:
+                offenders[client_key] = (
+                    f"unknownDependencies="
+                    f"{axi.get('unknownDependencies')!r}")
+        self.assertEqual(
+            offenders, {},
+            f"every client must return the whole parsed queue — both rows, "
+            f"the second's bare dependency normalised to its own namespace: "
+            f"{offenders!r}")
+
+    def test_the_success_path_posts_the_parsed_queue_to_this_projects_queue_endpoint(self):
+        """The other side of the wire, recorded by the stub: exactly ONE POST,
+        at the project's own queue path, carrying the entries. A client that
+        printed a convincing envelope without ever sending the queue fails
+        here and nowhere else."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            requests = self._drive(client_key, "success").get("requests") or []
+            writes = [r for r in requests if r[0] == "POST"]
+            if len(writes) != 1:
+                offenders[client_key] = f"{len(writes)} POSTs: {requests!r}"
+                continue
+            _method, path, body = writes[0]
+            if path != f"/api/v2/projects/detector-{client_key}-key/queue":
+                offenders[client_key] = f"POSTed to {path!r}"
+            elif (body or {}).get("entries") != _QUEUE_EXPECTED_ENTRIES:
+                offenders[client_key] = f"body={body!r}"
+        self.assertEqual(
+            offenders, {},
+            f"one full-replace POST per client, at that project's own queue "
+            f"path, carrying the parsed entries: {offenders!r}")
+
+    def test_neither_failure_path_reaches_the_wire(self):
+        """Both refusals happen in the client, so nothing may be registered
+        by a run that failed — the loud failure CR-CRU-014 §S2 specified is
+        loud AND inert."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for case in ("unreadable", "malformed"):
+                requests = self._drive(client_key, case).get("requests") or []
+                if requests:
+                    offenders[f"{client_key}:{case}"] = requests
+        self.assertEqual(
+            offenders, {},
+            f"a refused `queue-file` POSTs nothing: {offenders!r}")
+
+    def test_both_failure_envelopes_are_structured_and_carry_an_actionable_help(self):
+        """AXI principle 6 — an `ok:false` envelope names the failure AND the
+        next step. Both refusals, all five clients, and the malformed one must
+        name the offending row rather than only that a row was bad."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            for case in ("unreadable", "malformed"):
+                label = f"{client_key}:{case}"
+                drive = self._drive(client_key, case)
+                axi = drive.get("axi") or {}
+                help_lines = axi.get("help")
+                if axi.get("ok") is not False:
+                    offenders[label] = f"ok={axi.get('ok')!r}"
+                elif not (axi.get("error") or "").strip():
+                    offenders[label] = f"error={axi.get('error')!r}"
+                elif not isinstance(help_lines, list) or not help_lines:
+                    offenders[label] = f"help={help_lines!r}"
+                elif case == "unreadable" and \
+                        drive["source"] not in " ".join(help_lines):
+                    offenders[label] = (f"help does not name the source "
+                                        f"tried: {help_lines!r}")
+                elif case == "malformed" and \
+                        _MALFORMED_ROW_CR not in axi.get("error", ""):
+                    offenders[label] = f"error does not name the row: " \
+                                       f"{axi.get('error')!r}"
+        self.assertEqual(
+            offenders, {},
+            f"both refusals owe an ok:false envelope with an error and a "
+            f"help[] a caller can act on: {offenders!r}")
+
+    def test_the_two_failure_paths_do_not_share_one_generic_help(self):
+        """Each failure gets the step for ITS failure. A single array shared
+        by both, or an echo of the success path's, is help in name only —
+        the caller who cannot read the source and the caller with a bad row
+        have nothing to do in common."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            helps = {case: ((self._drive(client_key, case).get("axi") or {})
+                            .get("help"))
+                     for case in ("success", "unreadable", "malformed")}
+            if helps["unreadable"] == helps["malformed"]:
+                offenders[client_key] = f"both refusals: {helps!r}"
+            elif helps["unreadable"] == helps["success"] \
+                    or helps["malformed"] == helps["success"]:
+                offenders[client_key] = f"echoes the success help: {helps!r}"
+        self.assertEqual(
+            offenders, {},
+            f"the two refusals owe two different next steps: {offenders!r}")
+
+    def test_the_human_line_lands_on_stderr_only(self):
+        """P1's second half, asserted in both directions: no envelope on
+        stderr, and the human sentence still exists rather than having been
+        deleted to pass."""
+        offenders = {}
+        for client_key, case in self._cases():
+            result = self._drive(client_key, case).get("result")
+            stderr = getattr(result, "stderr", "") or ""
+            if "axi:" in stderr:
+                offenders[f"{client_key}:{case}"] = f"envelope on stderr"
+            elif CR075_QUEUE_FILE_VERB not in stderr:
+                offenders[f"{client_key}:{case}"] = f"no human line: {stderr!r}"
+        self.assertEqual(
+            offenders, {},
+            f"the human line is stderr-only, and still present: "
+            f"{offenders!r}")
+
+    def test_help_exits_zero_and_names_the_verb_in_all_five_clients(self):
+        """P10 — `<client> queue-file --help`, as a real subprocess. A verb
+        whose help is broken is a broken agent-facing surface however correct
+        its write path is."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            result = self.drives.get((client_key, "help"))
+            if result is None or result.returncode != 0:
+                offenders[client_key] = (
+                    f"exit {getattr(result, 'returncode', None)}")
+            elif CR075_QUEUE_FILE_VERB not in result.stdout:
+                offenders[client_key] = "help omits the verb name"
+        self.assertEqual(
+            offenders, {},
+            f"every client's `queue-file --help` must exit 0 and name the "
+            f"verb: {offenders!r}")
+
+    def test_the_fleet_census_also_reads_queue_file_as_enveloped(self):
+        """Belt and braces: the verb must also pass the file's PRIMARY census
+        — the one whose per-client bare counts the guards above assert are
+        zero — not only this section's own drives."""
+        offenders = {}
+        for client_key in CLIENT_FILES:
+            per_verb = self.census.get(client_key, {})
+            if CR075_QUEUE_FILE_VERB not in per_verb:
+                offenders[client_key] = "not enumerated"
+            elif not per_verb[CR075_QUEUE_FILE_VERB]:
+                offenders[client_key] = "BARE"
+        self.assertEqual(
+            offenders, {},
+            f"`queue-file` must be enveloped in the fleet-wide census too: "
+            f"{offenders!r}")
 
 
 if __name__ == "__main__":

@@ -20,6 +20,8 @@ list can never silently miss a nested def.
 """
 
 import ast
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -708,9 +710,8 @@ class Cr091RoadmapVerbInventoryTest(unittest.TestCase):
         missing = {k: v for k, v in missing.items() if v}
         self.assertEqual(
             missing, {},
-            f"SS3's 'gap not to repeat' -- `queue-file` reaches python "
-            f"only, so all five roadmap verbs reach all five clients; "
-            f"missing from: {missing!r}")
+            f"SS3's 'gap not to repeat': all five roadmap verbs reach all "
+            f"five clients, never some of them; missing from: {missing!r}")
 
     def test_no_client_defines_a_roadmap_verb_function_twice(self):
         offenders = []
@@ -868,8 +869,8 @@ class Cr092NextVerbInventoryTest(unittest.TestCase):
         missing = {k: v for k, v in missing.items() if v}
         self.assertEqual(
             missing, {},
-            f"SS6's 'gap not to repeat' -- `queue-file` reaches python only, "
-            f"so `next` lands at parity ON ARRIVAL; missing from: {missing!r}")
+            f"SS6's 'gap not to repeat': `next` lands at parity ON ARRIVAL, "
+            f"in all five clients; missing from: {missing!r}")
 
     def test_no_client_defines_cmd_next_twice(self):
         offenders = []
@@ -1228,6 +1229,757 @@ class Cr094LastClosedCrRenameInventoryTest(unittest.TestCase):
             offenders, {},
             f"no client's help may still carry the retired name or the 'most "
             f"recent run' reading: {offenders!r}")
+
+
+# ---------------------------------------------------------------------------
+# CR-CRU-075 SS2 -- `queue-file` joins the fleet inventory, and the inventory
+# stops depending on somebody remembering to add the NEXT one.
+#
+# Two things land here and they are deliberately different in kind.
+#
+# FIRST, the per-CR set. `queue-file` is frozen exactly as CR-CRU-091 SS3,
+# CR-CRU-092 SS6 and CR-CRU-106 SS1 froze theirs: its own named set, checked
+# by the SAME `_defined_in_every_client` / duplicate-definition /
+# shared-registrar / no-hand-rolled-subparser machinery, and disjoint from all
+# four earlier sets. THE_42 and its four categories are NOT touched -- those
+# are CR-CRU-054's own per-name drift VERDICTS, evidenced in
+# docs/research/DN-client-fleet-inventory.md, and dropping a delegator nobody
+# measured into one of them would assert a measurement nobody made.
+#
+# SECOND, and this is the part that closes the actual hole: a per-CR set still
+# needs a human to write it, so the verb NOBODY freezes stays invisible --
+# which is exactly how `queue-file` sat in 1 of 5 clients across three CRs that
+# each cited it, by name, as the gap not to repeat. The derived check further
+# down reads the shared module's REGISTRARS and requires every verb name they
+# register to be wired in all five clients. It holds no list of verbs, so a
+# verb added tomorrow is enforced the day it lands.
+# ---------------------------------------------------------------------------
+
+# The one shared-implementation delegator, in every client.
+CR075_QUEUE_FILE_VERB_FUNCTIONS = frozenset({"cmd_queue_file"})
+
+# The CLI verb name that function is registered under (5 clients x 1 verb).
+CR075_QUEUE_FILE_VERBS = ("queue-file",)
+
+# Every post-CR-054 frozen verb-function set, by the label its own section
+# uses. The point of the tuple is that the sets stay FOUR: collapsing any two
+# of them into one count is what the four sections each refused, and what the
+# integrity test below now refuses in one place.
+POST_CR054_VERB_FUNCTION_SETS = (
+    ("the roadmap set", CR091_ROADMAP_VERB_FUNCTIONS),
+    ("the next set", CR092_NEXT_VERB_FUNCTIONS),
+    ("the cr-depends set", CR106_DEPENDS_VERB_FUNCTIONS),
+    ("the queue-file set", CR075_QUEUE_FILE_VERB_FUNCTIONS),
+)
+
+POST_CR054_VERB_NAME_SETS = (
+    ("the roadmap verbs", frozenset(CR091_ROADMAP_VERBS)),
+    ("the next verb", frozenset(CR092_NEXT_VERBS)),
+    ("the cr-depends verb", frozenset(CR106_DEPENDS_VERBS)),
+    ("the queue-file verb", frozenset(CR075_QUEUE_FILE_VERBS)),
+)
+
+
+def _queue_file_registration_offenders(client_paths):
+    """Which of `client_paths` fails to wire `queue-file` onto its OWN
+    delegator through the shared registrar, and why.
+
+    Lifted out of the assertion rather than inlined into it so the injection
+    proof below drives the REAL check against a scratch fleet, instead of a
+    second copy of the check that could pass while the shipped one does
+    not."""
+    offenders = {}
+    for client, path in client_paths.items():
+        delegator = _single_verb_registrar_delegator(path, "add_queue_file_verb")
+        if delegator is None:
+            offenders[client] = "unwired: no add_queue_file_verb(...) call"
+        elif delegator not in CR075_QUEUE_FILE_VERB_FUNCTIONS:
+            offenders[client] = f"wired to a non-delegator: {delegator!r}"
+    return offenders
+
+
+def _scratch_fleet(tmpdir):
+    """Copies of the shared module and all five clients under `tmpdir`, for
+    the injection proofs -- mirroring CR-CRU-054 SS3's own on-disk idiom
+    (`test_cr054_drift_guard.py`'s scratch-file proof). The copies are only
+    ever PARSED, never imported or run, so a mutation that breaks a runtime
+    import is still a fair input to an AST checker. The real tree is never
+    written to."""
+    dest = Path(tmpdir) / "clients"
+    dest.mkdir(parents=True)
+    axi_copy = dest / AXI_MODULE_PATH.name
+    shutil.copy(AXI_MODULE_PATH, axi_copy)
+    clients = {}
+    for client, path in CLIENT_FILES.items():
+        clients[client] = dest / path.name
+        shutil.copy(path, clients[client])
+    return axi_copy, clients
+
+
+def _node_span(text, node):
+    """The absolute (start, end) offsets of `node` in `text`, from the AST's
+    own line/column positions -- so an injection cuts exactly the expression
+    the parser saw, never a regex's guess at it."""
+    starts = [0]
+    for line in text.splitlines(keepends=True):
+        starts.append(starts[-1] + len(line))
+    return (starts[node.lineno - 1] + node.col_offset,
+            starts[node.end_lineno - 1] + node.end_col_offset)
+
+
+def _called_registrar_name(node):
+    """The registrar a Call node names, whether the client spells it on the
+    shared module (`_axi().add_x_verb(...)`) or as a bare import."""
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return getattr(func, "id", None)
+
+
+def _drop_registrar_call(path, registrar):
+    """Delete one client's whole `registrar(...)` statement, in place, on a
+    SCRATCH copy -- the shape of a client that never wired the verb."""
+    text = path.read_text()
+    for node in ast.walk(ast.parse(text)):
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+            continue
+        if _called_registrar_name(node.value) != registrar:
+            continue
+        start, end = _node_span(text, node)
+        path.write_text(text[:start] + "pass" + text[end:])
+        return True
+    return False
+
+
+def _drop_registrar_dict_entry(path, verb):
+    """Delete ONE verb from a client's registrar dict, in place, on a SCRATCH
+    copy -- the subtler shape: the client still calls the registrar, it just
+    stopped handing it one of the verbs."""
+    text = path.read_text()
+    for node in ast.walk(ast.parse(text)):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values):
+            if not (isinstance(key, ast.Constant) and key.value == verb):
+                continue
+            start, _ = _node_span(text, key)
+            _, end = _node_span(text, value)
+            path.write_text(text[:start] + text[end:].lstrip(", "))
+            return True
+    return False
+
+
+def _wire_call_after(path, registrar, call_source):
+    """Insert `call_source` immediately after a client's existing
+    `registrar(...)` statement, at that statement's own indentation -- on a
+    SCRATCH copy. This is how the four wired clients of the unnamed-verb proof
+    are wired."""
+    text = path.read_text()
+    for node in ast.walk(ast.parse(text)):
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+            continue
+        if _called_registrar_name(node.value) != registrar:
+            continue
+        lines = text.splitlines(keepends=True)
+        lines.insert(node.end_lineno, " " * node.col_offset + call_source + "\n")
+        path.write_text("".join(lines))
+        return True
+    return False
+
+
+def _bury_registrar_call_in_dead_code(path, registrar, *, shape):
+    """Rewrite one client's `registrar(...)` statement, in place on a SCRATCH
+    copy, into a registration that is still WRITTEN but can never RUN --
+    `shape="dead function"` moves it into a module-level function nothing
+    calls, `shape="if False"` leaves it where it is under a test that is never
+    true. Both keep the file parseable and keep every character of the call,
+    which is the point: only reachability changed."""
+    text = path.read_text()
+    for node in ast.walk(ast.parse(text)):
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+            continue
+        if _called_registrar_name(node.value) != registrar:
+            continue
+        indent = " " * node.col_offset
+        call = ast.unparse(node)
+        start, end = _node_span(text, node)
+        if shape == "if False":
+            path.write_text(text[:start] + "if False:\n" + indent + "    "
+                            + call + text[end:])
+        elif shape == "dead function":
+            path.write_text(text[:start] + "pass" + text[end:]
+                            + "\n\ndef _wiring_nothing_calls(sub, *funcs):\n"
+                            + "    " + call + "\n")
+        else:
+            raise ValueError(f"unknown dead-code shape: {shape!r}")
+        return True
+    return False
+
+
+def _hoist_registrar_call_to_module_level(path, registrar):
+    """Move one client's `registrar(...)` statement out of `main()` and to the
+    END of the module, in place on a SCRATCH copy -- the OTHER shape the rule
+    accepts. A module body runs, so a registration written there is wired, and
+    a rule that only ever looked inside `main()` would report this client as an
+    offender."""
+    text = path.read_text()
+    for node in ast.walk(ast.parse(text)):
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+            continue
+        if _called_registrar_name(node.value) != registrar:
+            continue
+        call = ast.unparse(node)
+        start, end = _node_span(text, node)
+        path.write_text(text[:start] + "pass" + text[end:] + "\n" + call + "\n")
+        return True
+    return False
+
+
+class Cr075QueueFileVerbInventoryTest(unittest.TestCase):
+    """CR-CRU-075 SS2/AC3 -- one verb, in all five clients, registered exactly
+    once each, by its OWN shared registrar.
+
+    The verb this section freezes is the one the three sections above each
+    named as the counter-example: `queue-file` shipped in CR-CRU-014 SS2 with
+    its parse and its POST in the shared module and its SUBPARSER left
+    per-client, so it was an envelope on python and argparse's `invalid
+    choice` on the other four. SS1 wired it through `add_queue_file_verb`;
+    this section is what keeps it there."""
+
+    def test_the_queue_file_set_holds_exactly_the_one_verb(self):
+        self.assertEqual(len(CR075_QUEUE_FILE_VERB_FUNCTIONS), 1)
+        self.assertEqual(len(CR075_QUEUE_FILE_VERBS), 1)
+
+    def test_the_queue_file_set_is_disjoint_from_every_earlier_frozen_set(self):
+        """The per-CR sets stay per-CR. This CR adds a fourth one and a
+        DERIVED check; it does not renumber, merge or absorb any of the
+        three that precede it."""
+        for label, other in (("THE_42", THE_42),
+                             ("the roadmap set", CR091_ROADMAP_VERB_FUNCTIONS),
+                             ("the next set", CR092_NEXT_VERB_FUNCTIONS),
+                             ("the cr-depends set",
+                              CR106_DEPENDS_VERB_FUNCTIONS)):
+            with self.subTest(other=label):
+                overlap = CR075_QUEUE_FILE_VERB_FUNCTIONS & other
+                self.assertEqual(
+                    overlap, frozenset(),
+                    f"the queue-file set must not touch {label}; "
+                    f"overlap: {overlap!r}")
+        verb_overlap = set(CR075_QUEUE_FILE_VERBS) & (
+            set(CR091_ROADMAP_VERBS) | set(CR092_NEXT_VERBS)
+            | set(CR106_DEPENDS_VERBS))
+        self.assertEqual(
+            verb_overlap, set(),
+            f"`queue-file` is CR-014's own CLI verb name, not a rename of a "
+            f"later one; overlap: {verb_overlap!r}")
+
+    def test_cmd_queue_file_is_defined_in_all_five_clients(self):
+        missing = {
+            name: [c for c in CLIENT_FILES
+                   if name not in _ALL_CLIENT_FUNCTION_NAMES[c]]
+            for name in CR075_QUEUE_FILE_VERB_FUNCTIONS
+        }
+        missing = {k: v for k, v in missing.items() if v}
+        self.assertEqual(
+            missing, {},
+            f"the delegator the three sections above call 'the gap not to "
+            f"repeat' must itself reach all five clients; missing from: "
+            f"{missing!r}")
+
+    def test_no_client_defines_cmd_queue_file_twice(self):
+        offenders = []
+        for client, counts in _ALL_CLIENT_FUNCTION_NAMES.items():
+            for name in CR075_QUEUE_FILE_VERB_FUNCTIONS:
+                if counts.get(name, 0) > 1:
+                    offenders.append(f"{client}:{name} ({counts[name]}x)")
+        self.assertEqual(
+            offenders, [],
+            f"a duplicate top-level def would silently make the SECOND "
+            f"definition win at import time: {offenders!r}")
+
+    def test_the_shared_registrar_registers_the_queue_file_verb_name(self):
+        registered = _add_parser_verb_names(AXI_MODULE_PATH)
+        missing = [v for v in CR075_QUEUE_FILE_VERBS if v not in registered]
+        self.assertEqual(
+            missing, [],
+            f"`_crucible_axi.add_queue_file_verb` must register the verb "
+            f"name; missing: {missing!r}")
+
+    def test_every_client_wires_queue_file_to_its_own_delegator(self):
+        """The 5 (verb x client) pairs, at the registration level. The LIVE
+        argparse enumeration and envelope conformance for the same 5 pairs
+        lives in the sibling `test_client_fleet_envelope_census.py`."""
+        offenders = _queue_file_registration_offenders(CLIENT_FILES)
+        self.assertEqual(
+            offenders, {},
+            f"each client must wire `queue-file` to its own delegator "
+            f"(5 clients x 1 verb): {offenders!r}")
+
+    def test_dropping_queue_file_from_one_client_fails_and_names_that_client(self):
+        """AC3's own falsifiability clause -- \"Removing `queue-file` from any
+        ONE client fails this\" -- proven by INJECTION on a scratch copy, not
+        by construction: the assertion above is only worth its line if it
+        actually fires, and a failure that does not NAME the client sends the
+        next reader to all five."""
+        with tempfile.TemporaryDirectory(prefix="cr075-scratch-") as tmp:
+            _axi_copy, clients = _scratch_fleet(tmp)
+            self.assertTrue(
+                _drop_registrar_call(clients["mvn"], "add_queue_file_verb"),
+                "the injection found no registrar call to drop -- the proof "
+                "below would then pass for the wrong reason")
+            offenders = _queue_file_registration_offenders(clients)
+        self.assertEqual(
+            offenders,
+            {"mvn": "unwired: no add_queue_file_verb(...) call"},
+            f"the check must fire for the ONE client whose registration was "
+            f"removed, name it, and clear the other four: {offenders!r}")
+
+    def test_no_client_hand_rolls_the_queue_file_subparser(self):
+        """The defect SS1 fixed, stated as a rejection: python owned its own
+        `add_parser(\"queue-file\")` for the whole of CR-CRU-014's life, which
+        is how one verb ended up with one client's flag surface and four
+        clients' `invalid choice`."""
+        offenders = {}
+        for client, registered in _ALL_CLIENT_VERB_NAMES.items():
+            forked = [v for v in CR075_QUEUE_FILE_VERBS if v in registered]
+            if forked:
+                offenders[client] = forked
+        self.assertEqual(
+            offenders, {},
+            f"the `queue-file` subparser is built ONCE, by "
+            f"`_crucible_axi.add_queue_file_verb`: {offenders!r}")
+
+    def test_no_client_smuggles_queue_file_into_the_frozen_five(self):
+        """Same rule the cr-depends section states: the roadmap registrar's
+        contract is CR-CRU-091's frozen five, so a sixth entry is either
+        silently unwired or a fork of the count that section freezes."""
+        offenders = {
+            client: sorted(set(mapping) & set(CR075_QUEUE_FILE_VERBS))
+            for client, mapping in _ALL_CLIENT_ROADMAP_REGISTRATIONS.items()
+            if set(mapping) & set(CR075_QUEUE_FILE_VERBS)
+        }
+        self.assertEqual(
+            offenders, {},
+            f"`queue-file` has its OWN registrar; the roadmap dict stays the "
+            f"frozen five: {offenders!r}")
+
+    def test_the_shared_module_holds_the_implementation_the_clients_delegate_to(self):
+        shared = _defined_function_names(AXI_MODULE_PATH)
+        missing = sorted(n for n in CR075_QUEUE_FILE_VERB_FUNCTIONS
+                         if n not in shared)
+        self.assertEqual(
+            missing, [],
+            f"the shared module must define the verb the clients delegate "
+            f"to; missing: {missing!r}")
+
+
+class Cr075FrozenSetIntegrityTest(unittest.TestCase):
+    """AC3's second half, and the CR's own Non-goal: THE_42's count and its
+    four measured categories are UNCHANGED by this CR, and no post-CR-054 set
+    is collapsed into another.
+
+    The partition arithmetic itself is asserted by `FleetInventoryPartitionTest`
+    at the top of this file and is NOT restated here -- restating it would add
+    a second place for one rule to drift. What this class adds is the fact
+    that class cannot see: that the four sets which grew AFTER CR-CRU-054's
+    measurement have stayed outside it, and outside each other."""
+
+    def test_no_post_054_delegator_has_been_classified_into_a_measured_category(self):
+        """A new delegator dropped into SHARED/PARAMETERISED/GENUINELY_PER_
+        CLIENT/DRIFTED would claim one of CR-CRU-054's per-name drift
+        verdicts for a name nobody measured -- and would do it while the
+        partition tests above still passed, because those assert shape, not
+        provenance."""
+        strays = {}
+        for label, verb_functions in POST_CR054_VERB_FUNCTION_SETS:
+            for category, category_label in zip(ALL_CATEGORIES, CATEGORY_NAMES):
+                overlap = verb_functions & category
+                if overlap:
+                    strays[f"{label} in {category_label}"] = sorted(overlap)
+        self.assertEqual(
+            strays, {},
+            f"the four measured categories hold the original 42 measured "
+            f"names and nothing else -- a verb that shipped later has no "
+            f"measured drift verdict to be classified under: {strays!r}")
+
+    def test_the_four_post_054_sets_never_collapse_into_one_another(self):
+        """The renumbering that each of the three earlier sections deferred is
+        not what this CR does: it adds a fourth set and a derived check. Two
+        sets sharing a name would mean one had absorbed the other."""
+        for sets in (POST_CR054_VERB_FUNCTION_SETS, POST_CR054_VERB_NAME_SETS):
+            for i, (label_a, set_a) in enumerate(sets):
+                for label_b, set_b in sets[i + 1:]:
+                    with self.subTest(pair=f"{label_a} vs {label_b}"):
+                        overlap = set_a & set_b
+                        self.assertEqual(
+                            overlap, frozenset(),
+                            f"{label_a} and {label_b} must stay distinct "
+                            f"frozen sets; overlap: {overlap!r}")
+
+
+# ---------------------------------------------------------------------------
+# CR-CRU-075 SS2/AC4 -- THE DERIVED GUARDRAIL: a shared registrar's verbs
+# reach every client, with no frozen set to update.
+#
+# The four sections above are per-verb EVIDENCE, and each one exists because
+# somebody wrote it. That is the hole: the verb nobody freezes is the verb
+# nobody checks, and it stays uneven for as long as it takes the next reader
+# to notice. So the rule below holds NO list of verbs and no count in any
+# identifier. It reads `clients/_crucible_axi.py`, takes every top-level
+# function that BUILDS subparsers as a shared registrar, takes the verb names
+# each one registers, and requires all five clients to wire every one of them.
+# A registrar added tomorrow is enforced the day it lands.
+#
+# Read from the AST, following `_add_parser_verb_names`' precedent: a
+# registrar or a verb named in a docstring, a comment or a help string is
+# prose, and prose registers nothing.
+# ---------------------------------------------------------------------------
+
+# TODAY's registrars, as the NON-VACUITY floor for the derived check -- never
+# as its input. The check discovers its own registrars; this mapping only
+# proves the discovery is not returning an empty dict, which would make the
+# rule pass by finding nothing. Each entry reuses the frozen set its own
+# section already asserts, so this is a cross-check between two derivations of
+# the same fact rather than a fifth hand-written list.
+CR075_REGISTRARS_TODAY = {
+    "add_roadmap_verbs": frozenset(CR091_ROADMAP_VERBS),
+    "add_next_verb": frozenset(CR092_NEXT_VERBS),
+    "add_cr_depends_verb": frozenset(CR106_DEPENDS_VERBS),
+    "add_queue_file_verb": frozenset(CR075_QUEUE_FILE_VERBS),
+}
+
+
+def _shared_registrar_verb_sets(axi_path):
+    """`{registrar name: frozenset(verb names it registers)}` for every
+    top-level function in the shared module that BUILDS subparsers.
+
+    A shared registrar is defined by what it does, not by what it is called:
+    any top-level function spelling `<something>.add_parser(\"<verb>\")` is
+    one. Read from the AST for the same reason `_add_parser_verb_names` is --
+    a name inside a docstring or a help string is prose, and this rule must
+    not be satisfiable, or breakable, by wording."""
+    registrars = {}
+    for node in ast.parse(axi_path.read_text(), filename=str(axi_path)).body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        verbs = set()
+        for inner in ast.walk(node):
+            if not (isinstance(inner, ast.Call)
+                    and isinstance(inner.func, ast.Attribute)
+                    and inner.func.attr == "add_parser"):
+                continue
+            if inner.args and isinstance(inner.args[0], ast.Constant) \
+                    and isinstance(inner.args[0].value, str):
+                verbs.add(inner.args[0].value)
+        if verbs:
+            registrars[node.name] = frozenset(verbs)
+    return registrars
+
+
+def _client_registrar_calls(client_path):
+    """`{registrar name: set(verb names this client hands it)}` for every
+    shared registrar a client calls. An empty set means the client called the
+    registrar WITHOUT a verb-name dict -- the one-verb seam
+    (`add_next_verb(sub, cmd_next)`), which wires that registrar's whole verb
+    set. A dict-taking registrar (`add_roadmap_verbs`) is the case where a
+    client can keep the call and still drop a verb, so its own keys are what
+    it wired.
+
+    Only a registration that can RUN counts, which is the whole difference
+    between wiring a verb and writing one down. The scan reads registrar calls
+    that are a STATEMENT at module level, or a statement of the module-level
+    `main()`'s own body -- the shape every registrar call on the fleet has
+    today: twenty of them, four registrars x five clients, each a bare call
+    statement directly in that client's `main()`. A registration parked in a
+    function nothing calls, or under a test that is never true, parses exactly
+    like a real one and registers nothing; a reader that walked every
+    `ast.Call` in the file would count it and report full parity for a client
+    whose verb argparse has never heard of."""
+    tree = ast.parse(client_path.read_text())
+    reachable = list(tree.body)
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                and node.name == "main":
+            reachable.extend(node.body)
+    calls = {}
+    for statement in reachable:
+        if not (isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Call)):
+            continue
+        node = statement.value
+        name = _called_registrar_name(node)
+        if name is None or not name.startswith("add_"):
+            continue
+        keys = calls.setdefault(name, set())
+        for arg in list(node.args) + [kw.value for kw in node.keywords]:
+            if not isinstance(arg, ast.Dict):
+                continue
+            keys |= {k.value for k in arg.keys
+                     if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+    return calls
+
+
+def _registrar_parity_offenders(axi_path, client_paths):
+    """AC4's rule, as a pure function of (shared module, clients):
+    `{client: {registrar: [verb names it does not wire]}}`, empty when every
+    verb every shared registrar registers reaches every client.
+
+    The constraint that follows, stated because it is otherwise only implied:
+    PLACING A REGISTRAR IN THE SHARED MODULE IS WHAT MAKES A VERB FLEET-WIDE.
+    `clients/_crucible_axi.py` is the fleet locus, so anything registered from
+    there is owed by all five clients, and a registrar added there for a verb
+    only one stack wants would be reported against the four that legitimately
+    do not want it. That is the rule working, not failing: a client-specific
+    verb keeps its own `add_parser` in its own client, and never acquires a
+    shared registrar."""
+    registrars = _shared_registrar_verb_sets(axi_path)
+    offenders = {}
+    for client, path in client_paths.items():
+        calls = _client_registrar_calls(path)
+        unwired = {}
+        for registrar, verbs in registrars.items():
+            if registrar not in calls:
+                unwired[registrar] = sorted(verbs)
+                continue
+            handed = calls[registrar]
+            missing = sorted(verbs - handed) if handed else []
+            if missing:
+                unwired[registrar] = missing
+        if unwired:
+            offenders[client] = unwired
+    return offenders
+
+
+# A registrar and a verb this CR never names, appended ONLY to a scratch
+# tmpdir copy of the shared module. It is the whole point of AC4: the check
+# must catch TOMORROW's verb, and the only way to show that is to introduce
+# one the rule has never been told about.
+_SCRATCH_REGISTRAR_SOURCE = '''
+
+def add_widget_sync_verb(sub, func, *, parents=(), add_args=()):
+    """A registrar that exists only inside a scratch tmpdir copy of this
+    module, for the derived check's unnamed-verb proof."""
+    wp = sub.add_parser("widget-sync", parents=list(parents),
+                        help="scratch-only verb; never on the real fleet.")
+    for adder in add_args:
+        adder(wp)
+    wp.set_defaults(func=func)
+'''
+
+# The wiring four of the five scratch clients get. The delegator name resolves
+# to nothing in the copy, which does not matter and is worth saying: these
+# copies are PARSED, never imported, so the check sees exactly what it would
+# see in a real client that had wired the verb.
+_SCRATCH_REGISTRAR_CALL = "_axi().add_widget_sync_verb(sub, cmd_widget_sync)"
+
+# A registrar name and a verb name that appear in the scratch module as PROSE
+# only -- a docstring naming a registrar, and a help string that quotes an
+# `add_parser` call. Neither registers anything, and a grep-based reader would
+# report both.
+_SCRATCH_PROSE_SOURCE = '''
+
+def add_prose_only_verb(sub, func):
+    """Named like a registrar, registers nothing. A reader that counted this
+    would be counting `add_parser("prose-only-verb")` inside a docstring."""
+    return 'sub.add_parser("prose-only-verb")', func
+'''
+
+
+class Cr075SharedRegistrarParityTest(unittest.TestCase):
+    """AC4 -- every verb name a shared registrar registers is wired in all
+    five clients, with the registrar set READ from the shared module."""
+
+    def test_the_registrar_set_is_discovered_from_the_module_and_is_not_empty(self):
+        """NON-VACUITY, and it is the load-bearing test of this class: a
+        discovery that found zero registrars would make the parity rule below
+        pass while checking nothing at all. So the discovery is pinned against
+        the four registrars that exist and the eight verbs they register --
+        each verb set taken from the frozen set its own section asserts, so
+        the two derivations must agree."""
+        discovered = _shared_registrar_verb_sets(AXI_MODULE_PATH)
+        self.assertNotEqual(
+            discovered, {},
+            "the derived check found NO shared registrar in the shared "
+            "module -- the parity rule below would then be vacuously true")
+        for registrar, verbs in CR075_REGISTRARS_TODAY.items():
+            with self.subTest(registrar=registrar):
+                self.assertEqual(
+                    discovered.get(registrar), verbs,
+                    f"{registrar} must be discovered registering exactly its "
+                    f"own verbs; discovery says "
+                    f"{discovered.get(registrar)!r}")
+        known = set().union(*CR075_REGISTRARS_TODAY.values())
+        found = set().union(*discovered.values())
+        self.assertEqual(
+            known - found, set(),
+            f"every verb the four registrars register must be discovered; "
+            f"discovery missed: {sorted(known - found)!r}")
+        self.assertGreaterEqual(
+            len(found), 8,
+            f"the four registrars register eight verbs between them; "
+            f"discovery found {len(found)}: {sorted(found)!r}")
+
+    def test_a_registrar_and_a_verb_named_only_in_prose_are_not_discovered(self):
+        """The AST half of the rule, proven rather than asserted about
+        itself: a function whose only `add_parser` is inside a docstring and a
+        returned string registers nothing, and must not enter the registrar
+        set -- otherwise every client would owe a wiring for a verb that does
+        not exist."""
+        with tempfile.TemporaryDirectory(prefix="cr075-scratch-") as tmp:
+            axi_copy, _clients = _scratch_fleet(tmp)
+            axi_copy.write_text(axi_copy.read_text() + _SCRATCH_PROSE_SOURCE)
+            discovered = _shared_registrar_verb_sets(axi_copy)
+        self.assertNotIn(
+            "add_prose_only_verb", discovered,
+            "a function that only NAMES add_parser in prose is not a "
+            "registrar; discovery must read the call, not the text")
+        self.assertNotIn(
+            "prose-only-verb", set().union(*discovered.values()),
+            "a verb name quoted inside a docstring or a returned string is "
+            "not a registered verb")
+
+    def test_every_verb_a_shared_registrar_registers_is_wired_in_all_five_clients(self):
+        """THE RULE. No list, no count: whatever the shared module registers
+        today is what all five clients owe today."""
+        offenders = _registrar_parity_offenders(AXI_MODULE_PATH, CLIENT_FILES)
+        self.assertEqual(
+            offenders, {},
+            f"every verb a shared registrar in `clients/_crucible_axi.py` "
+            f"registers must be wired in ALL FIVE clients -- one verb wired "
+            f"on one stack and absent on four is the defect this rule "
+            f"exists to make impossible: {offenders!r}")
+
+    def test_the_rule_names_the_client_and_the_verb_when_a_registration_is_dropped(self):
+        """AC4 is explicit that this is \"proven by injection, not by
+        construction\": the rule above is worth nothing unless it FIRES, and a
+        failure that does not name both the client and the verb leaves the
+        reader to diff five files."""
+        with tempfile.TemporaryDirectory(prefix="cr075-scratch-") as tmp:
+            axi_copy, clients = _scratch_fleet(tmp)
+            self.assertTrue(
+                _drop_registrar_call(clients["rust"], "add_queue_file_verb"),
+                "the injection found no registrar call to drop")
+            offenders = _registrar_parity_offenders(axi_copy, clients)
+        self.assertEqual(
+            offenders, {"rust": {"add_queue_file_verb": ["queue-file"]}},
+            f"dropping ONE client's registration must fail the rule, name "
+            f"that client, name that verb, and leave the other four clean: "
+            f"{offenders!r}")
+
+    def test_the_rule_fires_when_a_client_keeps_the_call_but_drops_one_verb(self):
+        """The subtler shape, and the reason the reader looks at the dict keys
+        rather than at the presence of the call: a client that still calls the
+        multi-verb registrar, with one verb missing from the mapping it hands
+        over, has an unregistered verb and an untouched call site."""
+        with tempfile.TemporaryDirectory(prefix="cr075-scratch-") as tmp:
+            axi_copy, clients = _scratch_fleet(tmp)
+            self.assertTrue(
+                _drop_registrar_dict_entry(clients["bun"], "cr-void"),
+                "the injection found no registrar dict entry to drop")
+            offenders = _registrar_parity_offenders(axi_copy, clients)
+        self.assertEqual(
+            offenders, {"bun": {"add_roadmap_verbs": ["cr-void"]}},
+            f"a client that keeps the registrar call and drops one verb from "
+            f"the mapping must still be named, with the verb it dropped: "
+            f"{offenders!r}")
+
+    def test_a_registration_in_a_function_nothing_calls_is_reported_unwired(self):
+        """REACHABILITY, half one. A registrar call moved out of `main()` into
+        a module-level function nothing calls still reads, greps and parses
+        like a wiring, and registers nothing: that client's verb is argparse's
+        `invalid choice`. The rule must count what can run, not what is
+        written, so this client is named exactly as a client that never wired
+        the verb at all."""
+        with tempfile.TemporaryDirectory(prefix="cr075-scratch-") as tmp:
+            axi_copy, clients = _scratch_fleet(tmp)
+            self.assertTrue(
+                _bury_registrar_call_in_dead_code(
+                    clients["mvn"], "add_queue_file_verb",
+                    shape="dead function"),
+                "the injection found no registrar call to bury")
+            buried = clients["mvn"].read_text()
+            offenders = _registrar_parity_offenders(axi_copy, clients)
+        self.assertIn(
+            "add_queue_file_verb", buried,
+            "the injection must leave the CALL in the file -- only its "
+            "reachability may change, or this proves nothing")
+        self.assertEqual(
+            offenders, {"mvn": {"add_queue_file_verb": ["queue-file"]}},
+            f"a registration parked in a function nothing calls registers "
+            f"nothing, and must be reported as unwired against that client "
+            f"and that verb: {offenders!r}")
+
+    def test_a_registration_under_a_test_that_is_never_true_is_reported_unwired(self):
+        """REACHABILITY, half two, and the cheaper way to fool a text-shaped
+        reader: the call stays exactly where it belongs, inside `main()`,
+        under `if False:`. Nothing about the call changed; it simply cannot
+        execute, so the verb is not registered and the client owes it."""
+        with tempfile.TemporaryDirectory(prefix="cr075-scratch-") as tmp:
+            axi_copy, clients = _scratch_fleet(tmp)
+            self.assertTrue(
+                _bury_registrar_call_in_dead_code(
+                    clients["python"], "add_queue_file_verb",
+                    shape="if False"),
+                "the injection found no registrar call to guard")
+            guarded = clients["python"].read_text()
+            offenders = _registrar_parity_offenders(axi_copy, clients)
+        self.assertIn(
+            "if False:", guarded,
+            "the injection must actually have guarded the call")
+        self.assertIn(
+            "add_queue_file_verb", guarded,
+            "the injection must leave the CALL in the file -- only its "
+            "reachability may change, or this proves nothing")
+        self.assertEqual(
+            offenders, {"python": {"add_queue_file_verb": ["queue-file"]}},
+            f"a registration under a test that is never true registers "
+            f"nothing, and must be reported as unwired against that client "
+            f"and that verb: {offenders!r}")
+
+    def test_a_registration_at_module_level_is_wiring_and_is_not_reported(self):
+        """The other side of the same rule, pinned so it cannot quietly
+        narrow to `main()`-only: a module body RUNS. A client that registers
+        the verb from a module-level statement has wired it, and reporting it
+        would be a false positive -- the two tests above must be catching
+        unreachability, not the absence of `main()`."""
+        with tempfile.TemporaryDirectory(prefix="cr075-scratch-") as tmp:
+            axi_copy, clients = _scratch_fleet(tmp)
+            self.assertTrue(
+                _hoist_registrar_call_to_module_level(
+                    clients["arduino"], "add_queue_file_verb"),
+                "the injection found no registrar call to hoist")
+            offenders = _registrar_parity_offenders(axi_copy, clients)
+        self.assertEqual(
+            offenders, {},
+            f"a registrar call at module level can run, so it wires the "
+            f"verb and no client may be reported: {offenders!r}")
+
+    def test_a_registrar_this_cr_never_names_is_enforced_the_day_it_lands(self):
+        """The whole point of deriving the rule instead of freezing a fifth
+        set. A registrar and a verb that appear NOWHERE in this file, in any
+        CR, or in the fleet are injected into a scratch shared module and
+        wired into four of the five scratch clients; the rule must discover
+        the verb by itself and name the fifth client."""
+        with tempfile.TemporaryDirectory(prefix="cr075-scratch-") as tmp:
+            axi_copy, clients = _scratch_fleet(tmp)
+            axi_copy.write_text(axi_copy.read_text() + _SCRATCH_REGISTRAR_SOURCE)
+            discovered = _shared_registrar_verb_sets(axi_copy)
+            self.assertEqual(
+                discovered.get("add_widget_sync_verb"),
+                frozenset({"widget-sync"}),
+                "the injected registrar must be discovered from the module, "
+                "which is what makes the rule need no list of verbs")
+            for client in ("bun", "rust", "mvn", "python"):
+                self.assertTrue(
+                    _wire_call_after(clients[client], "add_queue_file_verb",
+                                     _SCRATCH_REGISTRAR_CALL),
+                    f"the injection failed to wire {client}")
+            offenders = _registrar_parity_offenders(axi_copy, clients)
+        self.assertEqual(
+            offenders, {"arduino": {"add_widget_sync_verb": ["widget-sync"]}},
+            f"a verb no frozen set has ever heard of must be enforced on all "
+            f"five clients the day its registrar lands, and the one client "
+            f"that missed it must be named: {offenders!r}")
 
 
 if __name__ == "__main__":
