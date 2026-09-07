@@ -3,7 +3,7 @@
 - **Type**: patch
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 014, 091, 092, 095
-- **Status**: PENDING (0.2.0)
+- **Status**: COMPLETED (0.2.0) — shipped 2026-09-07. AC7 outstanding: `Mainline - ModelB` is inactive in the Sandesh addressbook, so the note could not be delivered; the obligation stands until that address is active.
 - **Design reference**: `docs/changes/CR-CRU-091-roadmap-registration-is-declared.md` §S10 — the P1–P10 table mapping each AXI principle to the fleet mechanism that satisfies it. Structured errors on stdout (principle 6) are defined in `CR-CRU-030` §S13.
 
 ## Problem
