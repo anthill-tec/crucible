@@ -3,7 +3,7 @@
 - **Type**: bug
 - **Wave**: 5 (0.2.0)
 - **Depends on**: none
-- **Status**: PENDING (0.2.0)
+- **Status**: COMPLETED (0.2.0) — shipped 2026-09-07
 - **Design reference**: `docs/changes/CR-CRU-030-fleet-toon-axi-compliance.md` §S13 (structured errors on stdout, AXI principle 6) and §S15 (`help[]` next-step templates, principle 9).
 
 ## Problem
