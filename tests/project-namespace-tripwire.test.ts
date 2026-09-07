@@ -1131,10 +1131,39 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // for `public/`, and CR-CRU-094 `src/` 550 -> 556 and 556 -> 560 and
 // `clients/` 639 -> 642. The `develop` baselines are UNCHANGED at
 // 512/378/601 and stay the floors — a floor never moves for a re-pin.
+// UPDATED 2026-09-07 by CR-CRU-107 §S1/§S2. `clients/` HEAD moves 687 -> 691
+// (+4). §S1 put the ONE rule that resolves a plan's cycle labels in the shared
+// module and §S2 gave `plan-file` its second hard stop, and each added
+// citation line records which clause a seam belongs to. 4 lines added, NONE
+// removed, so the net delta and the added-line count are again the same
+// number. The whole +4 lands in ONE file: `clients/_crucible_axi.py` +4
+// (125 -> 129) — the `§S2` section header for the cycle-selection hard stop,
+// the line in its converter docstring naming the unresolvable cycle list, the
+// `plan_file_cycle_labels` docstring's own opening line, and the call-site
+// comment in `cmd_plan_file` recording that the list comes from exactly one
+// flag and that the refusal stays BEFORE the POST. Every one is a `#` comment
+// or a docstring line, none in a string. The other six `clients/` files
+// re-measure UNCHANGED (`arduino` 95, `bun` 130, `mvn` 119, `python` 106,
+// `rust` 111, `toon` 1): §S1's per-client work is the argparse DECLARATION,
+// which carries no citation, and this cycle's own §S2 close-out (the empty
+// `--cycle` refusal and the `<c1>`/`<c2>` template) cites its clauses without
+// naming the CR, so it moves no count either — measured, not assumed.
+// Measured with THIS file's own `extractCitableText` over the working tree
+// against `git show 474db5d:<path>` — this CR's branch point, not `develop`,
+// because the 687 being replaced is CR-CRU-075 §S1's figure — file by file;
+// the +4 is exactly the four `CR-CRU-107` prose lines the branch added to
+// `_crucible_axi.py`, and 474db5d itself re-measures at the recorded 687.
+// `src/` and `public/` are untouched by this CR and re-measure at 560 and 435.
+// GROWTH IS THE DIRECTION THE RULE PERMITS — only the equality pin is
+// re-recorded, as CR-CRU-093 re-recorded 405 -> 431 and CR-CRU-109 431 -> 435
+// for `public/`, CR-CRU-094 `src/` 550 -> 556 and 556 -> 560 and `clients/`
+// 639 -> 642, and CR-CRU-075 `clients/` 672 -> 687. The `develop` baselines
+// are UNCHANGED at 512/378/601 and stay the floors — a floor never moves for
+// a re-pin.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 560 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 435 },
-  clients: { exts: [".py"], develop: 601, head: 687 },
+  clients: { exts: [".py"], develop: 601, head: 691 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
