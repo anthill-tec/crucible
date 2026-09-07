@@ -125,11 +125,22 @@ display-only) all stay as they are.
   `+5` and a row with 5 states `+3`, so the two are distinguishable from the row alone.
 - **AC4** — the `next` marker composes unchanged: a marked row with four dependencies reads
   `next · deps 014, 091 +2` — marker first, one ` · ` between the parts.
-- **AC5** — **the live board's wave box is inside the design's budget again.** CR-CRU-096 AC20/AC4's
-  existing live-board probe passes with the board in the state that broke it: `CR-CRU-075` drawn,
-  marked `next`, declaring four dependencies. Asserted by that probe, not by a new one. The
-  measurement that sets the cap (§S1) puts that box at **292.5px** against the ~300px budget, so
-  the AC has ~7.5px of headroom and a THIRD id would fail it at 321px.
+- **AC5** — **the live board's wave box is inside the design's budget again.** The existing live
+  corroboration test — `tests/roadmap-visual-grammar.test.ts:3144`, `"AC4 — the LIVE board
+  corroborates the wave box and REPORTS its spine, or says why it cannot"` — passes with the board
+  in the state that broke it: `CR-CRU-075` drawn, marked `next`, declaring four dependencies.
+  Asserted by that test's own width assertion (`:3203-3206`, against `BUDGET.wave`), not by a new
+  one. The measurement that sets the cap (§S1) puts that box at **292.5px** against the ~300px
+  budget, so the AC has ~7.5px of headroom and a THIRD id would fail it at 321px.
+  *Citation corrected 2026-09-07, by the RED agent:* this was written as "CR-CRU-096 AC20/AC4's
+  live-board probe". It is not — the CR-CRU-096 AC20 describe (`:2684`) measures the SYNTHETIC
+  spine and never reads the live board; the failing assertion is the CR-CRU-102 AC4 live
+  corroboration at `:3144`.
+  **Why AC5 was unreachable without AC9's third edit:** that same test asserts the annotation's
+  four-id SHAPE at `:3195-3200` BEFORE it measures the width at `:3203`. Once the cap ships the
+  shape guard throws first and the measurement is never evaluated, so the box could be any width
+  and AC5 would still fail. This CR therefore re-pins that one guard to the capped shape and
+  touches nothing else in the test — it may not edit the measurement it cites as its own proof.
 - **AC6** — the cap is a DISPLAY rule only: `entry.dependsOn` still carries every full id, and every
   consumer that resolves one still reads them — `roadmapSelectOn` / `roadmapDrillIn`,
   `roadmapLateDeps`'s inversion check, and the order warning that names the offending pair. A test
@@ -144,15 +155,28 @@ display-only) all stay as they are.
 - **AC9** — every shipped assertion the cap supersedes is UPDATED to the capped rule, never deleted
   and never weakened, and each retains its purpose and its non-vacuity block:
   - `tests/roadmap-bare-dependency-annotation.test.ts` — CR-CRU-102 AC1's four-id string reads the
-    capped rendering; the test still proves zone 2 renders the BARE form.
+    capped rendering; the test still proves zone 2 renders the BARE form. Its zone2/zone3 agreement
+    composition (`:442-443`) composes through the cap, zone 3 still stating all four.
   - `tests/roadmap-wave-rollup.test.ts` — CR-CRU-096 §S4/AC13's completeness test asserts the NEW
     rule: the slot names the first two declared ids and STATES THE COUNT of the rest. Its
-    anti-truncation clause is re-aimed, not dropped: an ellipsis (`…`, `...`) or a bare `more`
-    remains forbidden, because a remainder must be a countable number. Its "no deps, no
-    annotation" half is untouched.
-  - The remaining annotation-reading suites (`roadmap-flow-axis`, `roadmap-wave-rows`,
-    `roadmap-visual-grammar`) are swept for BOTH shapes — a pinned string with three or more ids,
-    and a completeness claim expressed as a loop over a fixture's dependency list.
+    anti-truncation clause is re-aimed, not dropped: an ellipsis (`…`, `...`) or a `+N`-less
+    `more` remains forbidden, because a remainder must be a countable number. The per-dependency
+    loop becomes named-vs-counted, so a renderer that names the WRONG two still fails. Its "no
+    deps, no annotation" half and its non-vacuity block are untouched, and the describe/test NAMES
+    stop claiming completeness — a test named "names every one of them" while asserting a cap is
+    the next reader's trap.
+  - `tests/roadmap-visual-grammar.test.ts` — three pinned four-id patterns, all CR-CRU-102 example
+    shapes: two synthetic (`:2973`, `:3044-3046`) and **one inside the live corroboration test
+    itself** (`:3195-3200`). That third one is re-pinned to the capped shape and nothing else in
+    that test moves — see AC5. Stale narration comments (`:457`, `:467`, `:511`) are corrected so
+    the file stops describing a rendering it no longer asserts.
+  - `tests/roadmap-release-focus.test.ts` (`:1131-1143`) — `expectedAnnotation()` encodes AC13
+    completeness in its body and doc-comment and is green today ONLY because its fixtures top out
+    at two dependencies. It composes through the cap so it is correct by construction rather than
+    accidentally green; its fixtures are unchanged.
+  - `tests/roadmap-flow-axis.test.ts` — swept, nothing: it reads the annotation only to find the
+    `next` marker and asserts no `deps` string. `tests/roadmap-wave-rows.test.ts` (`:828-831`)
+    states two declared ids and is unaffected by the cap.
   A suite left asserting `deps 014, 091, 092, 095`, or left asserting that every declared
   dependency is named in zone 2, fails this CR.
 
