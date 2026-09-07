@@ -1529,7 +1529,11 @@ class NextBlockCitationsTest(unittest.TestCase):
         # attribution check into this client's `test`/`regression`/
         # `auto-ingest`/`check` verbs added lines above this block, drifting
         # it 1370-1384 -> 1422-1436. Same rule, same guard.
-        ("_next_start_help", "clients/python-crucible.py", 1422, 1436,
+        # Re-pinned 2026-09-07 (CR-CRU-107 §S1): the repeatable `--cycle` flag
+        # was declared INSIDE this very block, moving its tail two lines down,
+        # 1422-1436 -> 1422-1438. The narrowest possible drift — the CR that
+        # shifted the construct is the CR that re-pins it.
+        ("_next_start_help", "clients/python-crucible.py", 1422, 1438,
          'sub.add_parser("plan-file"', "set_defaults(func=cmd_plan_file)"),
     )
 

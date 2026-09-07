@@ -1045,25 +1045,86 @@ def emit_agent_identity_hard_stop(verb, context=None):
     return 2
 
 
-def run_verb(func, args, project_key_fn=None):
-    """Fleet-uniform subcommand dispatch: run the resolved verb and convert an
-    undeclared agent identity (§S5) into the `ok:false` hard-stop envelope and a
-    non-zero exit code instead of an unhandled traceback.
+# ── CR-CRU-107 §S2 — the second hard stop: `plan-file` cannot resolve WHICH ──
+#
+# cycles to file. Same route as the identity stop above (a typed exception from
+# the shared verb, converted by `run_verb`, an `ok:false` envelope on stdout,
+# exit 2, nothing posted), so all five clients inherit it without a line of
+# per-client code. The three refusals share that shape and NOTHING else: a
+# caller who passed both flags, one who passed neither, and one whose `--cycles`
+# split to nothing each need a different next move, and one canned `help[]`
+# reused across them would name none of them (AXI principle 6).
+
+CYCLE_FLAGS_CONFLICT_CODE = "cycle-flags-conflict"
+CYCLE_SELECTION_REQUIRED_CODE = "cycle-selection-required"
+CYCLE_LIST_EMPTY_CODE = "cycle-list-empty"
+
+# The corrected call every refusal hands back: one label per flag, so there is
+# no delimiter left to collide with the label's own punctuation (§S1).
+CYCLE_FLAG_TEMPLATE = ('plan-file --cr <CR-id> --title "<brief>" '
+                       '--cycle "<label>" --cycle "<label>" --agent <agentId>')
+
+
+class CycleSelectionRefused(Exception):
+    """§S2 — raised by `plan_file_cycle_labels` when the cycle list a
+    `plan-file` call asks for cannot be resolved unambiguously.
+
+    Like `AgentIdentityRequired` it carries no fallback, because every fallback
+    here files a plan the caller did not ask for — which is the defect this CR
+    exists to end. Carries the AXI `code`, the `error` detail and the `help[]`
+    steps for THIS refusal; the caller MUST convert it into an `ok:false`
+    envelope + non-zero exit (see `run_verb` /
+    `emit_cycle_selection_hard_stop`) and issue NO POST."""
+
+    def __init__(self, code, detail, help_steps):
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+        self.help = list(help_steps)
+
+
+def emit_cycle_selection_hard_stop(verb, refusal, context=None):
+    """§S2 — emit the `ok:false` refusal envelope (stdout) plus the human error
+    line (stderr) for an unresolvable cycle list, and return the NON-ZERO exit
+    code the client's `main` must exit with (the same 2 the identity hard stop
+    returns). Nothing is posted from this path."""
+    emit_axi(verb or "unknown", False,
+             {"error": refusal.detail, "help": refusal.help},
+             context or {}, [],
+             legacy_line=f"error: {refusal.code} — {refusal.detail}")
+    return 2
+
+
+def _hard_stop_context(args, project_key_fn):
+    """The best-effort `context` a hard-stopped verb's envelope carries.
 
     `project_key_fn(args)` is the client's own `.env` key resolver (project-dir
     resolution stays client-specific per this module's scope boundary); it is
     best-effort only — a project whose key cannot be resolved still hard-stops,
-    just with a bare context."""
+    just with a bare context, because the refusal matters more than the
+    decoration."""
+    if project_key_fn is None:
+        return {}
+    try:
+        return axi_context(project_key_fn(args))
+    except Exception:
+        return {}
+
+
+def run_verb(func, args, project_key_fn=None):
+    """Fleet-uniform subcommand dispatch: run the resolved verb and convert a
+    typed hard stop — an undeclared agent identity (§S5) or an unresolvable
+    cycle list (CR-CRU-107 §S2) — into the `ok:false` envelope and a non-zero
+    exit code instead of an unhandled traceback."""
     try:
         return func(args)
     except AgentIdentityRequired:
-        context = {}
-        if project_key_fn is not None:
-            try:
-                context = axi_context(project_key_fn(args))
-            except Exception:
-                context = {}
-        return emit_agent_identity_hard_stop(getattr(args, "cmd", None), context)
+        return emit_agent_identity_hard_stop(
+            getattr(args, "cmd", None), _hard_stop_context(args, project_key_fn))
+    except CycleSelectionRefused as refusal:
+        return emit_cycle_selection_hard_stop(
+            getattr(args, "cmd", None), refusal,
+            _hard_stop_context(args, project_key_fn))
 
 
 def fleet_context(cr=None):
@@ -1419,7 +1480,7 @@ def _dead_phrase(cr, lifecycle):
 
 def _next_start_help(entry):
     """§S6/AC2 — `NEXT`'s state-derived `help[]`: the concrete call that STARTS
-    this cr, carrying its own wave (flags per `clients/python-crucible.py:1422-1436`).
+    this cr, carrying its own wave (flags per `clients/python-crucible.py:1422-1438`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
             f'--cycles "<c1,c2>" --agent <agentId>')
@@ -2077,6 +2138,55 @@ def cmd_unregister(args, project_dir, ops, *, unregister_fn=None,
     return 0 if ok else 1
 
 
+def plan_file_cycle_labels(args):
+    """CR-CRU-107 §S1 — the ONE rule that resolves a plan's cycle labels, so
+    five clients cannot drift apart on it.
+
+    `--cycle` is repeatable: one occurrence per cycle, in the order given, and
+    the value is NEVER split — a label may carry commas, semicolons or any other
+    character, because there is no delimiter left to get wrong. `--cycles` keeps
+    the legacy comma split, deliberately UNPOLICED (measured over this board's
+    416 cycles, no character rule separates the four mis-filed labels from the
+    ten that use a semicolon as ordinary punctuation).
+
+    Exactly one source. Both flags, neither flag, or a `--cycles` that splits to
+    nothing raises `CycleSelectionRefused` — the caller posts NOTHING."""
+    repeated = list(getattr(args, "cycle", None) or ())
+    legacy = getattr(args, "cycles", None)
+    if repeated and legacy is not None:
+        raise CycleSelectionRefused(
+            CYCLE_FLAGS_CONFLICT_CODE,
+            "--cycle and --cycles were both given, so the cycle list this plan "
+            "asks for is ambiguous — pass one form or the other. Nothing was "
+            "posted.",
+            [f"{CYCLE_FLAG_TEMPLATE} — one label per flag, filed in the order "
+             f"given",
+             'or keep the legacy form alone: plan-file --cr <CR-id> --cycles '
+             '"<c1,c2>" --agent <agentId>'])
+    if repeated:
+        return repeated
+    if legacy is None:
+        raise CycleSelectionRefused(
+            CYCLE_SELECTION_REQUIRED_CODE,
+            "no cycle list was declared — a plan needs at least one cycle, "
+            "supplied per-label with --cycle or as the legacy comma-separated "
+            "--cycles. Nothing was posted.",
+            [f"{CYCLE_FLAG_TEMPLATE} — repeat --cycle once per cycle",
+             'the legacy comma-split form --cycles "<c1,c2>" also still files '
+             'a plan, but splits its value on every comma'])
+    labels = [label.strip() for label in legacy.split(",") if label.strip()]
+    if not labels:
+        raise CycleSelectionRefused(
+            CYCLE_LIST_EMPTY_CODE,
+            f"--cycles was given as {legacy!r}, which names no cycle once split "
+            f"on commas. Nothing was posted.",
+            [f"{CYCLE_FLAG_TEMPLATE} — one label per flag, so a label carrying "
+             f"commas or semicolons files as ONE cycle",
+             'or give --cycles a comma-separated list with at least one '
+             'non-empty label, e.g. --cycles "c1,c2"'])
+    return labels
+
+
 def cmd_plan_file(args, project_dir, ops):
     """§S4 — file a workflow plan (CR + its cycles) for this project.
 
@@ -2086,9 +2196,11 @@ def cmd_plan_file(args, project_dir, ops):
     --orchestrator label and its $WORKFLOW_ORCHESTRATOR fallback are retired).
     Resolve it FIRST: the hard stop must happen before any POST."""
     agent_id = ops.agent_id(args)
-    labels = [label.strip() for label in args.cycles.split(",") if label.strip()]
-    if not labels:
-        sys.exit("[crucible] ERROR: --cycles must name at least one cycle")
+    # CR-CRU-107 §S1/§S2 — the cycle list comes from exactly one flag, and an
+    # unresolvable one raises rather than exiting on a bare string: `run_verb`
+    # converts it into the ok:false envelope, on the same seam as the identity
+    # hard stop above, and this stays BEFORE the POST for the same reason.
+    labels = plan_file_cycle_labels(args)
     payload = {"cr": args.cr, "agentId": agent_id,
                "cycles": [{"label": label} for label in labels]}
     if args.title:

@@ -1133,7 +1133,9 @@ def main():
     pf.add_argument("--cr", required=True,
                     help="CR id — caller-owned free text, e.g. CR-<PROJECT>-<n>.")
     pf.add_argument("--title", help="Optional plan title.")
-    pf.add_argument("--cycles", required=True, help='Comma-separated cycle labels, e.g. "a,b,c".')
+    pf.add_argument("--cycles", help='Comma-separated cycle labels, e.g. "a,b,c".')
+    pf.add_argument("--cycle", action="append",
+                    help="One cycle label, never split; repeat --cycle per cycle.")
     pf.add_argument("--wave", help="Wave number (§S3). Resolution: --wave > $WORKFLOW_WAVE.")
     pf.set_defaults(func=cmd_plan_file)
 
