@@ -3,7 +3,7 @@
 - **Type**: patch
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 096, 102
-- **Status**: PENDING (0.2.0) — filed 2026-09-06 on user direction, found by CR-CRU-093's RED phase when CR-CRU-096's live-board probe measured a real overflow
+- **Status**: PENDING (0.2.0) — filed 2026-09-06 on user direction, found by CR-CRU-093's RED phase when CR-CRU-096's live-board probe measured a real overflow — gap-analysed 2026-09-07: the cap is TWO ids, not three (three measures 321px against the 300px budget), and §S1 records the supersession of CR-CRU-102 AC1's four-id example
 - **Design reference**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §14 (the wave box's ~300px budget, measured at 1600px) and §5 (the shape/colour grammar the row obeys)
 
 > **This CR edits neither CR-CRU-096 nor CR-CRU-102.** Both are COMPLETED — 096 shipped
@@ -40,7 +40,7 @@ new figure, so it postpones the defect instead of fixing it.
 
 ## Scope
 
-### §S1 The annotation states at most three ids, then a remainder
+### §S1 The annotation states at most two ids, then a remainder
 
 **Surfaces (verified 2026-09-06):** the annotation is assembled in `RoadmapFlowNode`
 (`public/app.js`) — `deps` filters `entry.dependsOn` for a `PENDING` row, the `next` marker is
@@ -48,10 +48,33 @@ pushed first when `marked === true`, each id is written by `L.bareDependencyId(e
 (CR-CRU-102 §S1), and the parts are joined with ` · ` into one
 `[data-testid="roadmap-node-annotation"]` span.
 
-The row states the first three declared ids in the authored order, then how many it did not state.
-The remainder is a COUNT, never an ellipsis: a reader must be able to tell four dependencies from
-seven without opening the table. Zone 3's `deps` column is unchanged and remains the surface that
-states the whole set (CR-CRU-078 §S5).
+The row states the first **two** declared ids in the authored order, then how many it did not
+state. The remainder is a COUNT, never an ellipsis: a reader must be able to tell four dependencies
+from seven without opening the table. Zone 3's `deps` column is unchanged and remains the surface
+that states the whole set (CR-CRU-078 §S5).
+
+**Two, not three — measured on the live board 2026-09-07 (user ruling).** The first draft of this
+CR capped at three. Injecting each candidate into the running board's own DOM and reading the wave
+box's width settles it: dropping one id saves ~11px while the `+N` token costs ~2, so
+
+| annotation on the CR-CRU-075 row | wave box | vs the ~300px budget |
+|---|---|---|
+| `next · deps 014, 091, 092, 095` (today) | 332.4px | over |
+| `next · deps 014, 091, 092 +1` (cap 3) | 321.0px | **still over** |
+| `next · deps 014, 091 +2` (cap 2) | **292.5px** | inside, ~7.5px headroom |
+| `next · deps 014 +3` | 264.1px | inside (the floor other rows set) |
+
+A three-id cap would have shipped this CR without fixing the failure it exists to fix. Two is also
+what the approved artifact draws (`deps 091, 092`), so the cap agrees with the design rather than
+merely fitting the budget.
+
+**This supersedes CR-CRU-102 AC1's four-id EXAMPLE — user-confirmed 2026-09-07.** That AC states
+"a multi-dependency row renders `deps 014, 091, 092, 095`", and
+`tests/roadmap-bare-dependency-annotation.test.ts` asserts the string byte-exact. CR-CRU-102 is
+SHIPPED, so its spec is not edited (the standing rule from CR-CRU-099 cycle 322); this CR records
+the supersession here, in its own scope section, and its RED updates that assertion to the capped
+form. What CR-102 actually owns is UNCHANGED: how a single id is abbreviated
+(`bareDependencyId`), and that the abbreviation is display-only.
 
 ### §S2 The budget is the reason, so the budget is what proves it
 
@@ -66,19 +89,21 @@ display-only) all stay as they are.
 
 ## Acceptance criteria
 
-- **AC1** — a `PENDING` row declaring **four or more** dependencies renders the first **three** bare
+- **AC1** — a `PENDING` row declaring **three or more** dependencies renders the first **two** bare
   ids in authored order followed by a remainder stating the count of the rest, in the form
-  `deps 014, 091, 092 +1` — one span, still `[data-testid="roadmap-node-annotation"]`, still visible
+  `deps 014, 091 +2` — one span, still `[data-testid="roadmap-node-annotation"]`, still visible
   text with no `title` and no tooltip (CR-CRU-102 AC14).
-- **AC2** — a row declaring **three or fewer** dependencies is UNCHANGED: `deps 014, 091, 092` with
-  no remainder token. A `+0` is the defect this AC forbids.
+- **AC2** — a row declaring **two or fewer** dependencies is UNCHANGED: `deps 096, 102` with no
+  remainder token. A `+0` is the defect this AC forbids.
 - **AC3** — the remainder is a COUNT, not an ellipsis: a row with 7 declared dependencies states
-  `+4` and a row with 5 states `+2`, so the two are distinguishable from the row alone.
+  `+5` and a row with 5 states `+3`, so the two are distinguishable from the row alone.
 - **AC4** — the `next` marker composes unchanged: a marked row with four dependencies reads
-  `next · deps 014, 091, 092 +1` — marker first, one ` · ` between the parts.
+  `next · deps 014, 091 +2` — marker first, one ` · ` between the parts.
 - **AC5** — **the live board's wave box is inside the design's budget again.** CR-CRU-096 AC20/AC4's
   existing live-board probe passes with the board in the state that broke it: `CR-CRU-075` drawn,
-  marked `next`, declaring four dependencies. Asserted by that probe, not by a new one.
+  marked `next`, declaring four dependencies. Asserted by that probe, not by a new one. The
+  measurement that sets the cap (§S1) puts that box at **292.5px** against the ~300px budget, so
+  the AC has ~7.5px of headroom and a THIRD id would fail it at 321px.
 - **AC6** — the cap is a DISPLAY rule only: `entry.dependsOn` still carries every full id, and every
   consumer that resolves one still reads them — `roadmapSelectOn` / `roadmapDrillIn`,
   `roadmapLateDeps`'s inversion check, and the order warning that names the offending pair. A test
@@ -87,8 +112,14 @@ display-only) all stay as they are.
 - **AC7** — zone 3's `deps` column is UNCHANGED and still states the WHOLE set for the same row, so
   a capped row has a place to be read in full. Asserted on the same fixture, both zones in one
   render.
-- **AC8** — the three-id cap is a named constant, not a literal at the call site, and no test
-  asserts the number by re-deriving it from a magic literal.
+- **AC8** — the two-id cap is a named constant, not a literal at the call site, and no test asserts
+  the number by re-deriving it from a magic literal. The number has already moved once before
+  implementation (three → two, on measurement), which is exactly why it lives in one place.
+- **AC9** — the tests CR-CRU-102 left pinning the uncapped string are updated to the capped form,
+  not deleted: `tests/roadmap-bare-dependency-annotation.test.ts`'s four-dependency assertion reads
+  the capped rendering, and every other suite that pins an annotation string
+  (`roadmap-flow-axis`, `roadmap-wave-rows`, `roadmap-wave-rollup`, `roadmap-visual-grammar`) is
+  swept for the same pattern. A suite left asserting `deps 014, 091, 092, 095` fails this CR.
 
 ## Estimated size
 
@@ -101,9 +132,10 @@ comparison measures. The failure mode to avoid is a cap that reads as data loss 
 `deps 014, 091, 092 …` states less than it knows without saying how much, which is why AC3 makes the
 count load-bearing.
 
-Second risk: three is a judgement, not a measurement. It is chosen because four ids plus the marker
-overflowed (333px against 300px) and three ids plus the marker measures inside; if a later design
-change re-measures the box, AC8's named constant is the single place that moves.
+Second risk retired by measurement, and worth keeping as the reason: the first draft's three-id cap
+was a JUDGEMENT, and it was wrong — the box still measured 321px against 300. Two is a measurement
+(292.5px, ~7.5px headroom, §S1's table). If a later design change re-measures the box, AC8's named
+constant is the single place that moves, and §S1's table is the method to re-run.
 
 ## Non-goals
 
