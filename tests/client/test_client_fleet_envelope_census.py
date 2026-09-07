@@ -1822,18 +1822,22 @@ CR092_FIXTURES = {
     "in-flight": _next_queue(
         _next_entry("CR-CRU-540", 10, status="IN_PROGRESS"),
         _next_entry("CR-CRU-541", 20)),
+    # The two fixtures below are THIS CR's, and their ids read `CR-Q108-*`
+    # rather than `CR-CRU-*` because CR-CRU-097 AC7 forbids a test asserting
+    # on the project's own namespace; the rows above predate that rule and
+    # are pinned by its dated residue table, so they are left as they are.
     # CR-CRU-108 AC5b -- THE behaviour change, per client. A whitespace-only
     # value is a track to the pre-cutover client rule (which filters on
     # truthiness) and is NOT one to the published rule, so this queue refuses
     # `next` today and answers after. Published: ["2"].
     "blank-second-track": _next_queue(
-        _next_entry("CR-CRU-550", 10, track="   "),
-        _next_entry("CR-CRU-551", 20, track="2")),
+        _next_entry("CR-Q108-550", 10, track="   "),
+        _next_entry("CR-Q108-551", 20, track="2")),
     # CR-CRU-108 AC5b's second half -- a padded value and the value it pads
     # are ONE lane (identity is the TRIMMED value). Published: ["track-2"].
     "padded-track": _next_queue(
-        _next_entry("CR-CRU-560", 10, track=" track-2 "),
-        _next_entry("CR-CRU-561", 20, track="track-2")),
+        _next_entry("CR-Q108-560", 10, track=" track-2 "),
+        _next_entry("CR-Q108-561", 20, track="track-2")),
 }
 
 
@@ -2611,7 +2615,7 @@ class Cr108PublishedTrackFactTest(unittest.TestCase):
                     "AC5b -- one published lane, so `next` answers; exit 2 is "
                     "the pre-cutover refusal this AC retires")
                 self.assertEqual(axi.get("decision"), "NEXT")
-                self.assertEqual(axi.get("cr"), "CR-CRU-550")
+                self.assertEqual(axi.get("cr"), "CR-Q108-550")
                 self.assertNotIn("needs", axi)
                 self.assertNotIn("tracks", axi)
 
@@ -2632,7 +2636,7 @@ class Cr108PublishedTrackFactTest(unittest.TestCase):
                     "AC5b -- a padded value and the value it pads are ONE "
                     "lane, so this queue is single-track")
                 self.assertEqual(axi.get("decision"), "NEXT")
-                self.assertEqual(axi.get("cr"), "CR-CRU-560")
+                self.assertEqual(axi.get("cr"), "CR-Q108-560")
                 self.assertNotIn("needs", axi)
                 self.assertNotIn("tracks", axi)
 

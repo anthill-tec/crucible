@@ -2076,7 +2076,7 @@ class Cr108TrackRuleIsNotRederivedByTheFleetTest(unittest.TestCase):
             f"AC4 -- the distinct-set computation over the entries' `track` "
             f"values must survive NOWHERE under clients/: the queue read "
             f"publishes that list and the fleet reads it. A second copy is "
-            f"the divergence CR-CRU-108 removes -- measured 2026-09-07, the "
+            f"the divergence this CR removes -- measured 2026-09-07, the "
             f"client rule answered FOUR tracks where the server's answered "
             f"TWO. Still derived in: {offenders!r}")
 

@@ -1635,14 +1635,20 @@ def _published_queue(entries, tracks):
 # The fixture AC6 names, in the shape the read publishes it. The `null` row is
 # spelled literally (the server OMITS a null `track`, so `_entry` cannot carry
 # one) beside the absent-key row, because AC6 names both cases.
+#
+# Every id this section authors reads `CR-Q108-*`, never `CR-CRU-*`:
+# CR-CRU-097 AC7 forbids a test asserting on the project's own namespace, and
+# these ids ARE asserted on (the answer `next` returns is the id it picked).
+# The `CR-CRU-*` ids elsewhere in this file predate that rule and are pinned
+# by its dated residue table.
 CR108_DIVERGENT_ENTRIES = (
-    {**_entry("CR-CRU-600", 10), "track": None},
-    _entry("CR-CRU-601", 20),
-    _entry("CR-CRU-602", 30, track=""),
-    _entry("CR-CRU-603", 40, track="   "),
-    _entry("CR-CRU-604", 50, track="2"),
-    _entry("CR-CRU-605", 60, track="track-2"),
-    _entry("CR-CRU-606", 70, track=" track-2 "),
+    {**_entry("CR-Q108-600", 10), "track": None},
+    _entry("CR-Q108-601", 20),
+    _entry("CR-Q108-602", 30, track=""),
+    _entry("CR-Q108-603", 40, track="   "),
+    _entry("CR-Q108-604", 50, track="2"),
+    _entry("CR-Q108-605", 60, track="track-2"),
+    _entry("CR-Q108-606", 70, track=" track-2 "),
 )
 
 # What §S1 publishes over it: blank-dropped, TRIMMED, distinct, sorted — TWO
@@ -1691,8 +1697,8 @@ class PublishedTrackFactTest(_NextTestBase):
 
     # Two lanes by BOTH rules — the disagreement is supplied by the published
     # list, so the entries can never be the reason a test here passes.
-    TWO_LANE_ENTRIES = (_entry("CR-CRU-610", 10, track="track-1"),
-                        _entry("CR-CRU-611", 20, track="track-2"))
+    TWO_LANE_ENTRIES = (_entry("CR-Q108-610", 10, track="track-1"),
+                        _entry("CR-Q108-611", 20, track="track-2"))
 
     def test_the_fixture_genuinely_divides_the_two_rules(self):
         """Non-vacuity for everything below (the CR's own measurement,
@@ -1738,7 +1744,7 @@ class PublishedTrackFactTest(_NextTestBase):
             "answer; exit 2 is the client re-deriving the fact it was given")
         self.assertIs(axi.get("ok"), True)
         self.assertEqual(axi.get("decision"), "NEXT")
-        self.assertEqual(axi.get("cr"), "CR-CRU-610")
+        self.assertEqual(axi.get("cr"), "CR-Q108-610")
         self.assertNotIn("needs", axi)
         self.assertNotIn("tracks", axi)
 
@@ -1747,8 +1753,8 @@ class PublishedTrackFactTest(_NextTestBase):
         `tracks` says two lanes must never be quietly narrowed to one by a
         client re-deriving from the entries, because that lets the scheduling
         oracle pick a lane design §11 forbids it to pick."""
-        entries = (_entry("CR-CRU-620", 10, track="track-1"),
-                   _entry("CR-CRU-621", 20, track="track-1"))
+        entries = (_entry("CR-Q108-620", 10, track="track-1"),
+                   _entry("CR-Q108-621", 20, track="track-1"))
         published = ["track-1", "track-2"]
         code, _out, _err, axi, _ops = self.drive(
             _published_queue(entries, published))
@@ -1767,8 +1773,8 @@ class PublishedTrackFactTest(_NextTestBase):
         queue declaring `"   "` beside `"2"` is multi-track to `next` TODAY (it
         refuses without `--track`) and is SINGLE-track after: the server's rule
         is the one that survives, and whitespace is not a lane."""
-        entries = (_entry("CR-CRU-630", 10, track="   "),
-                   _entry("CR-CRU-631", 20, track="2"))
+        entries = (_entry("CR-Q108-630", 10, track="   "),
+                   _entry("CR-Q108-631", 20, track="2"))
         code, _out, _err, axi, _ops = self.drive(
             _published_queue(entries, ["2"]))
         self.assertEqual(
@@ -1776,7 +1782,7 @@ class PublishedTrackFactTest(_NextTestBase):
             "AC5b — `\"   \"` is not a declared lane, so this queue is "
             "single-track and `next` answers rather than refusing")
         self.assertEqual(axi.get("decision"), "NEXT")
-        self.assertEqual(axi.get("cr"), "CR-CRU-630")
+        self.assertEqual(axi.get("cr"), "CR-Q108-630")
         self.assertNotIn(
             "needs", axi,
             "AC5b — a single-track queue never prompts for `--track`")
@@ -1786,8 +1792,8 @@ class PublishedTrackFactTest(_NextTestBase):
         """AC5b's second half — `" track-2 "` beside `"track-2"` is ONE track,
         not two. Identity is the TRIMMED value (§S1), so preserving the padding
         would draw the second lane `normalizeTrack` exists to prevent."""
-        entries = (_entry("CR-CRU-640", 10, track=" track-2 "),
-                   _entry("CR-CRU-641", 20, track="track-2"))
+        entries = (_entry("CR-Q108-640", 10, track=" track-2 "),
+                   _entry("CR-Q108-641", 20, track="track-2"))
         code, _out, _err, axi, _ops = self.drive(
             _published_queue(entries, ["track-2"]))
         self.assertEqual(
@@ -1795,7 +1801,7 @@ class PublishedTrackFactTest(_NextTestBase):
             "AC5b — a padded value and the value it pads are ONE lane, so "
             "this queue is single-track")
         self.assertEqual(axi.get("decision"), "NEXT")
-        self.assertEqual(axi.get("cr"), "CR-CRU-640")
+        self.assertEqual(axi.get("cr"), "CR-Q108-640")
         self.assertNotIn("needs", axi)
         self.assertNotIn("tracks", axi)
 
