@@ -3,7 +3,7 @@
 - **Type**: patch
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 096, 102
-- **Status**: PENDING (0.2.0) — filed 2026-09-06 on user direction, found by CR-CRU-093's RED phase when CR-CRU-096's live-board probe measured a real overflow — gap-analysed 2026-09-07: the cap is TWO ids, not three (three measures 321px against the 300px budget), and §S1 records the supersession of CR-CRU-102 AC1's four-id example
+- **Status**: COMPLETED (0.2.0) — shipped 2026-09-07, filed 2026-09-06 on user direction, found by CR-CRU-093's RED phase when CR-CRU-096's live-board probe measured a real overflow — gap-analysed 2026-09-07: the cap is TWO ids, not three (three measures 321px against the 300px budget); §S1 records the supersession of CR-CRU-102 AC1's four-id example AND — user ruling 2026-09-07, "cap wins" — of CR-CRU-096 §S4/AC13's completeness claim for zone 2, whose two ACs (AC13 completeness, AC20/AC4 budget) were in latent conflict from the day both shipped. Shipped constant `DEPENDENCY_ANNOTATION_CAP = 2` (`public/app-logic.mjs`); the live board's wave box now measures **293.1px** against `BUDGET.wave = 300`, re-measured by VERIFY and again by FIX. Cycle 357's FIX also re-measured the suite's three narration boards post-cap (240.0 / 279.9 / 520.0px — each exactly 39.9px narrower, §S1's own delta arriving independently) and replaced two tautologous assertion groups with a `SHUFFLED_QUEUE` board that discriminates authored order from sorted.
 - **Design reference**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §14 (the wave box's ~300px budget, measured at 1600px) and §5 (the shape/colour grammar the row obeys)
 
 > **This CR edits neither CR-CRU-096 nor CR-CRU-102.** Both are COMPLETED — 096 shipped
@@ -76,6 +76,32 @@ the supersession here, in its own scope section, and its RED updates that assert
 form. What CR-102 actually owns is UNCHANGED: how a single id is abbreviated
 (`bareDependencyId`), and that the abbreviation is display-only.
 
+**It also supersedes CR-CRU-096 §S4/AC13's COMPLETENESS claim for zone 2 — user ruling 2026-09-07,
+"cap wins".** AC13 reads "a pending row with dependencies names every one of them", and
+`tests/roadmap-wave-rollup.test.ts` enforces it with a per-dependency loop over a four-dep fixture
+plus an explicit anti-truncation clause (`not.toMatch(/\bmore\b/)`, `not.toContain("…")`, comment:
+"ALL of them means all: the slot does not truncate to three, nor to an 'and 1 more'"). Unlike
+CR-CRU-102 AC1 this is the requirement itself, not an illustrative string.
+
+**Two of CR-CRU-096's own ACs were in latent conflict from the moment the budget was set**, and
+nothing surfaced it until real data carried four dependencies plus the `next` marker:
+
+- **AC13** — zone 2 names EVERY declared dependency (unbounded content).
+- **AC20/AC4** — the wave box fits the design's ~300px (bounded surface).
+
+Both cannot hold: the measured row is 333px. The user's ruling is that the BUDGET wins and zone 2
+stops being a complete record. That is affordable only because the completeness moves rather than
+disappearing — zone 3's `deps` column states the whole set for the same row, which AC7 asserts in
+the SAME render so the two cannot drift. The row still says how much it is not showing (AC3's
+count), so a reader is never misled about the size of what is hidden.
+
+CR-CRU-096 is SHIPPED, so its spec is not edited (the standing rule from CR-CRU-099 cycle 322);
+the supersession is recorded here and its rollup assertions are rewritten to the capped rule —
+"names the first two and states the count of the rest" — keeping the test's purpose and its
+non-vacuity block. This is also the case that put the bounded-surface check into the gap-analysis
+skill: a design that fixes a SIZE and a data rule that states no LIMIT contradict each other from
+the day both ship, and the contradiction is legible from the two specs with no test run.
+
 ### §S2 The budget is the reason, so the budget is what proves it
 
 The cap exists to keep the wave box inside the design's ~300px at 1600×900 with the marker present.
@@ -86,6 +112,39 @@ worst case the wire allows.
 Nothing else about the row moves: the `next` marker, the status mark, the lifecycle badge, the
 click/drill behaviour, and `entry.dependsOn`'s full ids (CR-CRU-102 AC3 — the abbreviation is
 display-only) all stay as they are.
+
+### §S3 A diagnostic stays a diagnostic when it moves inside `expect()`
+
+*Added 2026-09-07 by user ruling, at this CR's merge gate.* Carried in cycle 357 rather than a
+cycle appended after VERIFY, for the reason recorded on plan 112's cycle 354: `cycle-add` appends
+at the tail, so a new cycle would be unactivatable in the right place, and aborting a plan to fix
+its shape destroys real run records.
+
+CR-CRU-097's tripwire refuses to let a test assert on a real project CR literal, and exempts a
+test's own **thrown diagnostic** — "a provenance comment wearing a string's clothes because
+`throw` needs one" (`tests/project-namespace-tripwire.test.ts:153-173`). That exemption is
+deliberately uncoded: a `throw` sits outside every assertion span *by construction*, so the scope
+rule already spares it. The same comment refuses to key an exemption on `new Error(` because
+inside an assertion `expect(fn).toThrow(new Error("CR-X-1"))` is a **product contract** and must
+stay reportable.
+
+Bun's `expect(actual, message)` breaks that construction: the message parameter is the identical
+diagnostic, in the identical role, but it sits INSIDE the assertion span. This CR's own AC8 guard
+is exactly that shape in four suites —
+`expect(typeof value, "public/app-logic.mjs exports no numeric DEPENDENCY_ANNOTATION_CAP — …")` —
+and the tripwire reported all six of this CR's diagnostics as literals asserted on a real project.
+
+The ruling is that the exemption follows the ROLE, not the syntax that carries it: bun's API
+defines that second argument as the failure message, so it is never compared against a product
+value and never rendered to any project's user. It is therefore exempt, **in code this time**,
+because unlike `throw` it cannot be spared by construction. The boundary is narrow and stated:
+only the second argument of an `expect(` call, only when a callback does not begin inside it, and
+**nothing about `toThrow`/`toThrowError` arguments changes** — a product's expected error message
+stays fully reportable.
+
+This edits a guard CR-CRU-097 shipped, not the CR-CRU-097 document. It is recorded here, with the
+ruling's date, because §S5 of that CR refused to churn unrelated files from inside a tripwire CR
+and the inverse courtesy is owed: a later CR that widens its guard says so in its own scope.
 
 ## Acceptance criteria
 
@@ -99,11 +158,27 @@ display-only) all stay as they are.
   `+5` and a row with 5 states `+3`, so the two are distinguishable from the row alone.
 - **AC4** — the `next` marker composes unchanged: a marked row with four dependencies reads
   `next · deps 014, 091 +2` — marker first, one ` · ` between the parts.
-- **AC5** — **the live board's wave box is inside the design's budget again.** CR-CRU-096 AC20/AC4's
-  existing live-board probe passes with the board in the state that broke it: `CR-CRU-075` drawn,
-  marked `next`, declaring four dependencies. Asserted by that probe, not by a new one. The
-  measurement that sets the cap (§S1) puts that box at **292.5px** against the ~300px budget, so
-  the AC has ~7.5px of headroom and a THIRD id would fail it at 321px.
+- **AC5** — **the live board's wave box is inside the design's budget again.** The existing live
+  corroboration test passes with the board in the state that broke it — `CR-CRU-075` drawn, marked
+  `next`, declaring four dependencies. That test is
+  `"AC4 — the LIVE board corroborates the wave box and REPORTS its spine, or says why it cannot"`,
+  **inside the `"CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and fits the
+  surface"` describe** in `tests/roadmap-visual-grammar.test.ts`; its assertions are CR-CRU-102
+  AC4's, and it is the ONLY live wave-box measurement in the tree. AC5 is decided by that test's
+  own width assertion against `BUDGET.wave`, never by a new one. The measurement that sets the cap
+  (§S1) puts that box at **292.5px** against the ~300px budget, so the AC has ~7.5px of headroom
+  and a THIRD id would fail it at 321px.
+  *Cited by NAME, not by line — corrected twice on 2026-09-07.* The orchestrator first wrote
+  "CR-CRU-096 AC20/AC4's live-board probe"; the RED agent read that as wrong and reported the AC20
+  describe never touches the live board; the run output then proved the test IS nested in that
+  describe after all, and the orchestrator verified the nesting directly. The line numbers moved
+  twice during the same cycle, which is why this AC now names the describe and the test instead of
+  citing either by number.
+  **Why AC5 was unreachable without AC9's third edit:** that same test asserts the annotation's
+  four-id SHAPE *before* it measures the width. Once the cap ships, the shape guard throws first
+  and the measurement is never evaluated — the box could be any width and AC5 would still fail.
+  This CR therefore re-pins that one guard to the capped shape and touches nothing else in the
+  test: it may not edit the measurement it cites as its own proof.
 - **AC6** — the cap is a DISPLAY rule only: `entry.dependsOn` still carries every full id, and every
   consumer that resolves one still reads them — `roadmapSelectOn` / `roadmapDrillIn`,
   `roadmapLateDeps`'s inversion check, and the order warning that names the offending pair. A test
@@ -115,11 +190,54 @@ display-only) all stay as they are.
 - **AC8** — the two-id cap is a named constant, not a literal at the call site, and no test asserts
   the number by re-deriving it from a magic literal. The number has already moved once before
   implementation (three → two, on measurement), which is exactly why it lives in one place.
-- **AC9** — the tests CR-CRU-102 left pinning the uncapped string are updated to the capped form,
-  not deleted: `tests/roadmap-bare-dependency-annotation.test.ts`'s four-dependency assertion reads
-  the capped rendering, and every other suite that pins an annotation string
-  (`roadmap-flow-axis`, `roadmap-wave-rows`, `roadmap-wave-rollup`, `roadmap-visual-grammar`) is
-  swept for the same pattern. A suite left asserting `deps 014, 091, 092, 095` fails this CR.
+- **AC9** — every shipped assertion the cap supersedes is UPDATED to the capped rule, never deleted
+  and never weakened, and each retains its purpose and its non-vacuity block:
+  - `tests/roadmap-bare-dependency-annotation.test.ts` — CR-CRU-102 AC1's four-id string reads the
+    capped rendering; the test still proves zone 2 renders the BARE form. Its zone2/zone3 agreement
+    composition (`:442-443`) composes through the cap, zone 3 still stating all four.
+  - `tests/roadmap-wave-rollup.test.ts` — CR-CRU-096 §S4/AC13's completeness test asserts the NEW
+    rule: the slot names the first two declared ids and STATES THE COUNT of the rest. Its
+    anti-truncation clause is re-aimed, not dropped: an ellipsis (`…`, `...`) or a `+N`-less
+    `more` remains forbidden, because a remainder must be a countable number. The per-dependency
+    loop becomes named-vs-counted, so a renderer that names the WRONG two still fails. Its "no
+    deps, no annotation" half and its non-vacuity block are untouched, and the describe/test NAMES
+    stop claiming completeness — a test named "names every one of them" while asserting a cap is
+    the next reader's trap.
+  - `tests/roadmap-visual-grammar.test.ts` — three pinned four-id patterns, all CR-CRU-102 example
+    shapes: two synthetic (`:2973`, `:3044-3046`) and **one inside the live corroboration test
+    itself** (`:3195-3200`). That third one is re-pinned to the capped shape and nothing else in
+    that test moves — see AC5. Stale narration comments (`:457`, `:467`, `:511`) are corrected so
+    the file stops describing a rendering it no longer asserts.
+  - `tests/roadmap-release-focus.test.ts` (`:1131-1143`) — `expectedAnnotation()` encodes AC13
+    completeness in its body and doc-comment and is green today ONLY because its fixtures top out
+    at two dependencies. It composes through the cap so it is correct by construction rather than
+    accidentally green; its fixtures are unchanged.
+  - `tests/roadmap-flow-axis.test.ts` — swept, nothing: it reads the annotation only to find the
+    `next` marker and asserts no `deps` string. `tests/roadmap-wave-rows.test.ts` (`:828-831`)
+    states two declared ids and is unaffected by the cap.
+  A suite left asserting `deps 014, 091, 092, 095`, or left asserting that every declared
+  dependency is named in zone 2, fails this CR.
+- **AC10** (§S3, added 2026-09-07 by user ruling) — CR-CRU-097's tripwire treats the **message
+  argument of an `expect()` call** as a diagnostic, exactly as it already treats a thrown one, and
+  this CR's six diagnostics stop being reported. The exemption is proven, not asserted, on the
+  tripwire's OWN planted fixture (`SYNTHETIC_TRIPWIRE_FIXTURE`, its non-vacuity mechanism) with
+  four cases:
+  - a real-namespace id in `expect(actual, "…")`'s message is NOT reported;
+  - the same id in the same file's ordinary assertion position IS still reported — the exemption
+    is narrow, not a file-level pass;
+  - `expect(fn).toThrow(new Error("CR-…"))` IS still reported, because a product's expected error
+    message is a product contract. This is the case the shipped comment named as the reason it
+    refused to key an exemption on `new Error(`, so it is the case that must keep failing;
+  - the message argument of a `describe`/`test` call is untouched — title handling is AC7's own
+    exemption and does not change.
+  No pin in `PRE_CR_ASSERTION_RESIDUE` is raised for any of the four suites: the table is a
+  ceiling, an absent file must read ZERO, and re-admitting real ids to those files would trade a
+  guard for a green run. `tests/roadmap-release-focus.test.ts` stays pinned at **11**, and the
+  three others stay absent.
+  AC8's recorded `public` prose-citation figure moves **431 → 435**, the four citations this CR's
+  production diff adds. That is growth in the direction its own rule permits ("never below its
+  develop baseline"); only the equality pin is re-recorded, by measurement, per the precedent set
+  when CR-CRU-093 re-recorded 405 → 431.
 
 ## Estimated size
 

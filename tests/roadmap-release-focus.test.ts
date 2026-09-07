@@ -150,6 +150,24 @@ interface LifecycleBadge {
   text: string;
 }
 
+// ── CR-CRU-109 §S1/AC8 — the DISPLAY CAP, read from its ONE definition ─────
+//
+// The number is spelled in exactly one test in this repo (CR-CRU-109's AC8
+// test, tests/roadmap-bare-dependency-annotation.test.ts); every other
+// expectation, this file's included, is composed from what the product
+// publishes. Absent until the cap exists, and this assertion NAMES the
+// absence rather than letting an `undefined` leak into arithmetic.
+const capOf = (): number => {
+  const value = (AppLogic as unknown as { DEPENDENCY_ANNOTATION_CAP?: unknown })
+    .DEPENDENCY_ANNOTATION_CAP;
+  expect(
+    typeof value,
+    "public/app-logic.mjs exports no numeric DEPENDENCY_ANNOTATION_CAP — CR-CRU-109 §S1/AC8's " +
+      "display cap has no single definition for this suite to read",
+  ).toBe("number");
+  return value as number;
+};
+
 const Logic = AppLogic as unknown as {
   formatReleaseDate: (epochSeconds: unknown) => string;
   releaseStripGates: (releases: unknown, proposals: unknown) => StripGate[];
@@ -1132,14 +1150,29 @@ const firstActionableCr = (entries: readonly QueueFixture[]): string | undefined
  *  the FIXTURE's own facts (its declared `dependsOn`, and whether the published
  *  order names it `next`) and never read back out of the render: an expectation
  *  taken from the DOM would assert nothing, and a spurious or misplaced
- *  annotation must still fail. `next` first, then `deps` naming every declared
- *  id in FULL (AC13a), joined by the design's `·`. A row that earns neither
- *  renders no slot at all, so its contribution is `""`. */
+ *  annotation must still fail. `next` first, then `deps`, joined by the
+ *  design's `·`. A row that earns neither renders no slot at all, so its
+ *  contribution is `""`.
+ *
+ *  CR-CRU-109 §S1 — the `deps` part is CAPPED: the row states the first
+ *  `DEPENDENCY_ANNOTATION_CAP` declared ids in authored order and then the
+ *  COUNT of the rest, because an unbounded list overflowed the wave box the
+ *  design budgets at ~300px. This helper composes through the published cap
+ *  rather than naming every id, so it is correct BY CONSTRUCTION: every
+ *  fixture in this file declares at most two dependencies today and would go
+ *  on passing either way, which is exactly how an AC13 completeness claim
+ *  survives here unnoticed until a third dependency is added. The ids stay
+ *  FULL (AC13a) — these fixtures' remainders are not numeric, so CR-CRU-102's
+ *  rule renders each published id whole. */
 const expectedAnnotation = (entry: QueueFixture, nextCr: string | undefined): string => {
   const parts: string[] = [];
   if (entry.cr === nextCr) parts.push("next");
   const deps = entry.status === "PENDING" ? entry.dependsOn : [];
-  if (deps.length > 0) parts.push(`deps ${deps.join(", ")}`);
+  if (deps.length > 0) {
+    const cap = capOf();
+    const rest = deps.length - cap;
+    parts.push(`deps ${deps.slice(0, cap).join(", ")}${rest > 0 ? ` +${rest}` : ""}`);
+  }
   return parts.join(" · ");
 };
 
@@ -1224,7 +1257,7 @@ describe("CR-CRU-078 AC11 — a node is its id plus a terse status mark, and eac
 // CR-CRU-078 built it for (scale, identity, the no-title rule) and so
 // CORROBORATES this contract rather than stating it.
 
-describe("CR-CRU-096 §S4/AC12b/AC13/AC13a — ONE `next` across the whole zone, and a `deps` slot naming every declared id", () => {
+describe("CR-CRU-096 §S4/AC12b/AC13/AC13a, capped by CR-CRU-109 §S1 — ONE `next` across the whole zone, and a `deps` slot stating what each row earns", () => {
   /** Two wave boxes, arranged so the PER-BOX reading AC12b rules out would
    *  mark TWO rows: the second box opens with an actionable row of its own.
    *  Both boxes stay under `ROADMAP_WAVE_ROWS`, so the §S5 trim hides nothing

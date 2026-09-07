@@ -115,7 +115,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-075](CR-CRU-075-queue-file-fleet-parity.md) | queue-file fleet parity + AXI verb-surface census enforcement | patch | PENDING (0.2.0) | 014, 091, 092, 095 | 5 (0.2.0) |
 | [CR-CRU-094](CR-CRU-094-agent-participation-is-recorded.md) | agent participation is recorded, not inferred | feature | PENDING (0.2.0) | 056 | 5 (0.2.0) |
 | [CR-CRU-108](CR-CRU-108-one-published-track-fact-and-an-unstarvable-help-test.md) | one published multi-track fact, and a printed-help test that cannot be starved | patch | PENDING (0.2.0) | 085, 092, 097 | 5 (0.2.0) |
-| [CR-CRU-109](CR-CRU-109-a-wave-row-annotation-fits-its-box.md) | a wave row's dependency annotation fits the box it is drawn in | patch | PENDING (0.2.0) | 096, 102 | 5 (0.2.0) |
+| [CR-CRU-109](CR-CRU-109-a-wave-row-annotation-fits-its-box.md) | a wave row's dependency annotation fits the box it is drawn in | patch | COMPLETED (0.2.0) | 096, 102 | 5 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
@@ -288,10 +288,19 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   pre-CR-085 tree fails identically at 333px with the same board, so no shipped code caused it; the
   trigger was execution state (activating CR-093's plan moved `next` onto the four-dep row).
   **Approved remedy — cap the COUNT, do not widen the budget** (widening postpones it: one more
-  declared dependency overflows any new figure). The row states the first three bare ids then a
-  remainder count (`deps 014, 091, 092 +1`), the remainder being a count and never an ellipsis;
+  declared dependency overflows any new figure). The row states the first **TWO** bare ids then a
+  remainder count (`deps 014, 091 +2`), the remainder being a count and never an ellipsis;
   `entry.dependsOn` keeps every full id (CR-CRU-102 AC3 — display-only), and zone 3's `deps` column
   still states the whole set.
+  **Corrected 2026-09-07 — the cap is TWO, not three.** This entry first recorded the approved
+  remedy as three ids, which the gap analysis then refuted by measurement: injecting each candidate
+  into the running board's own DOM read the wave box at **332.4px** uncapped, **321.0px** at a
+  three-id cap (STILL over the ~300px budget) and **292.5px** at two — so three would have shipped
+  the CR without fixing the failure it exists to fix. Two is also what the approved artifact draws
+  (`deps 091, 092`). The shipped constant is `DEPENDENCY_ANNOTATION_CAP = 2`
+  (`public/app-logic.mjs`), and the live box now measures **293.1px**. The ruling, the table and the
+  supersessions live in CR-CRU-109 §S1; this log carries the number so a reader who stops here is
+  not told the rejected one. *Found by CR-CRU-109's VERIFY, which read this log against the spec.*
   **It is a NEW CR, not a change to 096 — correcting an orchestrator suggestion made 2026-09-06.**
   The orchestrator proposed "folding it into CR-CRU-096's lineage"; that was wrong and the user
   caught it. `CR-CRU-096` is **COMPLETED (0.2.0), shipped 2026-09-03**, and the standing rule

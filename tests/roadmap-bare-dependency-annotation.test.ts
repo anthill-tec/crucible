@@ -28,8 +28,11 @@
 //
 // AC8/AC29 — every id below is INVENTED. `CR-B-*` is this board's own
 // namespace, and the numeric tails are chosen so the rendered strings AC1
-// states (`deps 078`, `deps 014, 091, 092, 095`) are reproduced byte-for-byte
-// without naming one real CR of the project running Crucible. The live board
+// states (`deps 078`, and the four bare ids `014, 091, 092, 095`) are
+// reproduced byte-for-byte without naming one real CR of the project running
+// Crucible. CR-CRU-109 §S1 later capped what ZONE 2 states from those four to
+// `deps 014, 091 +2`; zone 3's chips still read all four, so both halves of
+// AC1's example are still rendered by this board, one per zone. The live board
 // was the ONLY thing exercising the abbreviating path when this CR opened,
 // which is the gap AC8 closes.
 //
@@ -62,6 +65,38 @@ const APP_LOGIC_PATH = join(REPO_ROOT, "public/app-logic.mjs");
 // intended missing-export RED signal.
 const Logic = AppLogic as unknown as {
   bareDependencyId: (cr: unknown, dependency: unknown) => string;
+};
+
+// ── CR-CRU-109 §S1/AC8 — the DISPLAY CAP, read from its ONE definition ─────
+//
+// The number has already moved once BEFORE implementation (three ids, then
+// two, on §S1's measurement of the live board), which is exactly why nothing
+// in this repo spells it except the AC8 test at the foot of this file. Every
+// other expectation is composed from what the product publishes, so a cap
+// that moves again moves the suites with it.
+
+/** The cap the product publishes. Absent until it exists, and this assertion
+ *  NAMES that absence rather than letting an `undefined` leak into a template
+ *  and fail as arithmetic on `NaN` — the RED signal must read as "no cap",
+ *  not as a broken expectation. */
+const capOf = (): number => {
+  const value = (AppLogic as unknown as { DEPENDENCY_ANNOTATION_CAP?: unknown })
+    .DEPENDENCY_ANNOTATION_CAP;
+  expect(
+    typeof value,
+    "public/app-logic.mjs exports no numeric DEPENDENCY_ANNOTATION_CAP — CR-CRU-109 §S1/AC8's " +
+      "display cap has no single definition for this suite to read",
+  ).toBe("number");
+  return value as number;
+};
+
+/** What zone 2's `deps` part reads for ids ALREADY in their rendered bare
+ *  form: the first `cap` of them in AUTHORED order, then the COUNT of the
+ *  rest — and never a `+0` (AC2). */
+const cappedDeps = (ids: readonly string[]): string => {
+  const cap = capOf();
+  const rest = ids.length - cap;
+  return `deps ${ids.slice(0, cap).join(", ")}${rest > 0 ? ` +${rest}` : ""}`;
 };
 
 type QueueStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED" | "COMPLETED_UNTRACKED";
@@ -143,6 +178,104 @@ const CONSUMER_QUEUE: QueueFixture[] = [
     status: "IN_PROGRESS",
     planId: 41,
     seq: 20,
+    release: RELEASE,
+    track: "1",
+  },
+];
+
+// ── CR-CRU-109 §S1's boards — the CAP, one row per declared COUNT ──────────
+
+/** `count` declared dependencies in AUTHORED order. Every one of them
+ *  abbreviates: `CR-B-011` beside a `CR-B-0NN` row shares `CR-B-0`, which
+ *  trims back to `CR-B-` because `0` is a digit, leaving a three-digit tail
+ *  (`011`, `022`, …). So the bare form is settled for every board below and
+ *  the only thing the asserted strings vary is HOW MANY ids are stated. */
+const declared = (count: number): string[] =>
+  Array.from({ length: count }, (_slot, at) => `CR-B-${String(11 * (at + 1)).padStart(3, "0")}`);
+
+/** The bare form `declared(count)` renders as — the tail after `CR-B-`, which
+ *  is what CR-CRU-102's rule leaves and what this file already pins
+ *  byte-exact for this namespace. */
+const declaredBare = (count: number): string[] =>
+  declared(count).map((dep) => dep.slice("CR-B-".length));
+
+/** AC1/AC3/AC8's board — three, five and seven declared dependencies, so the
+ *  remainder is a different number on every row and no assertion can pass on
+ *  another row's string.
+ *
+ *  `CR-B-000` leads and declares nothing, so it takes AC12's ONE `next` marker
+ *  and every row below states a `deps` part and NOTHING else: the strings
+ *  asserted are then the whole annotation rather than a substring of one that
+ *  also says `next` (AC4 asserts that composition on its own board). Four rows
+ *  is what §S5's trim draws, so no `+N more` pointer stands between this board
+ *  and its own rows. */
+const CAP_QUEUE: QueueFixture[] = [
+  pending("CR-B-000", 10, []),
+  pending("CR-B-030", 20, declared(3)),
+  pending("CR-B-050", 30, declared(5)),
+  pending("CR-B-070", 40, declared(7)),
+];
+
+/** AC1's ORDERING board — the one board here whose AUTHORED dependency order
+ *  is NOT its sorted order, which is what makes "the FIRST ones, in AUTHORED
+ *  order" an INDEPENDENT claim. Every other board declares its ids ascending,
+ *  so a renderer that sorted before slicing would satisfy their whole-string
+ *  pins unchanged; on this row sorting states `deps 011, 044` and taking the
+ *  last two states `deps 044, 077`, and neither is what it declares first.
+ *  `CR-B-000` leads and declares nothing so it takes AC12's one `next` marker,
+ *  leaving the subject row's slot a `deps` part and nothing else. */
+const SHUFFLED_QUEUE: QueueFixture[] = [
+  pending("CR-B-000", 10, []),
+  pending("CR-B-060", 20, ["CR-B-077", "CR-B-011", "CR-B-044"]),
+];
+
+/** AC2's board — the counts AT and BELOW the cap, which it must leave exactly
+ *  as CR-CRU-102 left them: no remainder token at all, and never a `+0`. */
+const UNCAPPED_QUEUE: QueueFixture[] = [
+  pending("CR-B-000", 10, []),
+  pending("CR-B-010", 20, declared(1)),
+  pending("CR-B-020", 30, declared(2)),
+];
+
+/** AC4's board — the LIVE-SHAPED row: the zone's one `next` marker on the
+ *  SAME row that declares four dependencies. That is the arrangement that
+ *  broke the budget (§S1: `CR-CRU-075 next · deps 014, 091, 092, 095` measured
+ *  332.4px against ~300px), and it is the row §S1's measurement table records
+ *  at 292.5px once capped. The ids are `BARE_QUEUE`'s own, so the string this
+ *  board asserts is the table's own string. `CR-B-096` follows so the marker
+ *  landing on the four-dependency row is a FACT about the board and not the
+ *  only row there is. */
+const MARKED_QUEUE: QueueFixture[] = [
+  pending("CR-B-075", 10, ["CR-B-014", "CR-B-091", "CR-B-092", "CR-B-095"]),
+  pending("CR-B-096", 20, ["CR-B-078"]),
+];
+
+/** AC6/AC7's board — a FIVE-dependency row whose five dependencies are all
+ *  DRAWN below it, so every consumer that resolves an id has something real to
+ *  resolve and the cap has somewhere to leak to:
+ *    • `roadmapLateDeps` sees five inversions (CR-CRU-078/AC15 — each
+ *      dependency is authored AFTER the row declaring it), and the order
+ *      warning it renders names all five in FULL;
+ *    • `CR-B-102` is declared LAST, so it is one of the ids the cap does not
+ *      state — and it is the board's one running row, so it is also the row a
+ *      click drills through to (`roadmapSelectOn`/`roadmapDrillIn`, off the
+ *      full id). It carries `planId: 41`, the plan the harness serves.
+ *    • `CR-B-033` is also unstated, and is PENDING — an inert row, so clicking
+ *      it SELECTS without navigating and both zones can be read afterwards.
+ *
+ *  Five PENDING rows is exactly what §S5's trim draws and the running row is
+ *  drawn whatever the trim (§S5/AC11), so nothing here is hidden. */
+const CAP_CONSUMER_QUEUE: QueueFixture[] = [
+  pending("CR-B-060", 10, [...declared(4), "CR-B-102"]),
+  ...declared(4).map((cr, at) => pending(cr, 20 + at * 10, [])),
+  {
+    cr: "CR-B-102",
+    title: "CR-B-102 — the dependency the cap does not state, and still drills",
+    wave: "5",
+    dependsOn: [],
+    status: "IN_PROGRESS",
+    planId: 41,
+    seq: 60,
     release: RELEASE,
     track: "1",
   },
@@ -321,6 +454,12 @@ const tabIsOn = (name: string): boolean =>
     (tab) => norm(tab.textContent) === name && tab.classList.contains("on"),
   );
 
+/** The rows carrying CR-CRU-096 AC12's `next` marker, by id. */
+const markedCrs = (): string[] =>
+  all('[data-testid="roadmap-node"]')
+    .filter((node) => node.querySelector(".app-flow-node-next") !== null)
+    .map((node) => node.getAttribute("data-cr") ?? "");
+
 // ── AC1 — the RULE, driven with planted inputs ─────────────────────────────
 //
 // Driven pure as well as through the DOM because the boundary cases are the
@@ -392,7 +531,7 @@ describe("CR-CRU-102 §S1/AC1 — the abbreviation is computed from the two ids 
 // ── AC1 — ZONE 2, on the rendered DOM ─────────────────────────────────────
 
 describe("CR-CRU-102 §S1/AC1 — zone 2's annotation renders the bare form", () => {
-  test("a one-dependency row reads `deps 078` and the four-dependency row reads `deps 014, 091, 092, 095`", async () => {
+  test("a one-dependency row reads `deps 078` and the four-dependency row reads `deps 014, 091 +2` (capped by CR-CRU-109 §S1)", async () => {
     await mountApp(BARE_QUEUE);
 
     // NON-VACUITY: all three rows really are drawn, so an assertion below
@@ -404,8 +543,22 @@ describe("CR-CRU-102 §S1/AC1 — zone 2's annotation renders the bare form", ()
     ]);
 
     // AC1's two strings, byte-exact on the rendered slot.
+    //
+    // CR-CRU-109 §S1 supersedes the four-dependency EXAMPLE (user-confirmed
+    // 2026-09-07): the row states the first two declared ids and then how many
+    // it did not state, because the unbounded list put the live wave box at
+    // 333.0px against the design's ~300px budget. What THIS test is about is
+    // unchanged and is still asserted below — the ids it states are the BARE
+    // form (`014`, never `CR-B-014`), which is CR-CRU-102's rule and is not
+    // what this CR touches. §S1's measurement table records this exact string
+    // for this exact row at 292.5px, so it is pinned byte-exact.
     expect(annotationOf("CR-B-096")).toBe("deps 078");
-    expect(annotationOf("CR-B-075")).toBe("deps 014, 091, 092, 095");
+    expect(annotationOf("CR-B-075")).toBe("deps 014, 091 +2");
+
+    // …and it is the CAP that wrote that string, not a coincidence of this
+    // board: composed from the row's own four declared ids through the
+    // published constant (AC8).
+    expect(annotationOf("CR-B-075")).toBe(cappedDeps(["014", "091", "092", "095"]));
 
     // The full id is GONE from the slot — the abbreviation is not a prefix
     // added beside what was already there.
@@ -439,8 +592,13 @@ describe("CR-CRU-102 §S1/AC2 — zone 3's depends-on cell abbreviates under the
     // must not disagree about how they write it. Asserted as the composition
     // of the cell against the slot rather than as two independent literals,
     // which is the fact a duplicated implementation would break.
-    expect(`deps ${chipsOf("CR-B-075").join(", ")}`).toBe(annotationOf("CR-B-075"));
-    expect(`deps ${chipsOf("CR-B-096").join(", ")}`).toBe(annotationOf("CR-B-096"));
+    //
+    // CR-CRU-109 §S1 puts the CAP between them and nothing else: zone 3 states
+    // the WHOLE set (AC7, the four chips above) and zone 2 states that same
+    // cell capped, so the composition is still the fact that fails when the
+    // two zones abbreviate an id differently.
+    expect(cappedDeps(chipsOf("CR-B-075"))).toBe(annotationOf("CR-B-075"));
+    expect(cappedDeps(chipsOf("CR-B-096"))).toBe(annotationOf("CR-B-096"));
   });
 });
 
@@ -617,5 +775,341 @@ describe("CR-CRU-102 AC6 — no shipped source spells a project's id prefix outs
     // Three live occurrences: the string argument, the regex literal and the
     // template literal's prose. The comment is the fourth and is exempt.
     expect(found).toBe(3);
+  });
+});
+
+// ══ CR-CRU-109 §S1 — THE ROW STATES AT MOST TWO IDS, THEN A COUNT ══════════
+//
+// Spec: docs/changes/CR-CRU-109-a-wave-row-annotation-fits-its-box.md
+//       §S1 (the cap, its measurement table, and the two supersessions),
+//       AC1, AC2, AC3, AC4, AC6, AC7, AC8
+//
+// WHY HERE: this file already owns the annotation's RENDERED FORM — which
+// zone writes it, and how each id is written. HOW MANY of them the row states
+// is the same claim about the same span, decidable in the same harness and
+// against fixtures that already establish the bare form, so a second file
+// would have to re-establish both zones before it could say anything.
+//
+// WHAT THE CAP IS NOT: a change to `bareDependencyId`. Every string below is
+// still the bare form and the pure table above is untouched — §S1 bounds the
+// COUNT, and CR-CRU-102's rule writes each id that count admits.
+//
+// WHY THE CAP EXISTS, because a bound with no reason invites removal: the
+// unbounded list put the LIVE wave box at 333.0px against the design's ~300px
+// budget (CR-CRU-096's own live-board probe), and no per-id abbreviation is
+// left to make — `014` is already as short as `CR-CRU-014` gets. §S1 measured
+// the alternatives on the running board: three ids still overflow at 321.0px,
+// two fit at 292.5px.
+//
+// RED phase — expected to FAIL against current production, which pushes
+// `deps ${deps.map(bare).join(", ")}` with no bound at all, so the
+// four-dependency row reads `deps 014, 091, 092, 095` and
+// `public/app-logic.mjs` exports no `DEPENDENCY_ANNOTATION_CAP` for a test to
+// read.
+
+/** The remainder token a slot states, as a NUMBER, or `null` when it states
+ *  none. Read off the rendered text so an ellipsis, a `and 1 more`, or a
+ *  silent truncation all answer `null` rather than passing for a count. */
+const remainderOf = (annotation: string): number | null => {
+  const hit = / \+(\d+)$/.exec(annotation);
+  return hit === null ? null : Number(hit[1]);
+};
+
+// ── AC1 — ABOVE THE CAP: the capped prefix, then the count of the rest ────
+
+describe("CR-CRU-109 §S1/AC1 — a row declaring MORE than the cap states the capped prefix and the count of the rest", () => {
+  test("three, five and seven declared each state the cap's worth of ids in authored order and then how many are left", async () => {
+    await mountApp(CAP_QUEUE);
+
+    // NON-VACUITY: the rows really are drawn, and they really declare the
+    // counts this test turns on — an assertion below cannot pass because its
+    // row is missing or because the board declares something else.
+    expect(all('[data-testid="roadmap-node"]').map((n) => n.getAttribute("data-cr"))).toEqual([
+      "CR-B-000",
+      "CR-B-030",
+      "CR-B-050",
+      "CR-B-070",
+    ]);
+    expect(CAP_QUEUE.map((entry) => entry.dependsOn.length)).toEqual([0, 3, 5, 7]);
+
+    // Composed from each row's OWN declared list through the published cap,
+    // so what is asserted is the RULE and not three copied strings.
+    expect(annotationOf("CR-B-030")).toBe(cappedDeps(declaredBare(3)));
+    expect(annotationOf("CR-B-050")).toBe(cappedDeps(declaredBare(5)));
+    expect(annotationOf("CR-B-070")).toBe(cappedDeps(declaredBare(7)));
+
+    // THE FIRST ones, in AUTHORED order, and the withheld ids named nowhere:
+    // both are already pinned by the three whole-string expectations above,
+    // each composed from its own row's declaration. On THIS board they cannot
+    // discriminate an authored slice from a sorted one — its ids ascend — so
+    // the ordering claim is stated on its own board, in the test below.
+
+    // AC1's second half — ONE span, the same testid, and VISIBLE TEXT: the
+    // cap does not move what it removed into a `title` or a hover
+    // (CR-CRU-102 AC14, which the cap gives something new to hide behind).
+    const slots = nodeFor("CR-B-070").querySelectorAll<HTMLElement>(
+      '[data-testid="roadmap-node-annotation"]',
+    );
+    expect(slots.length).toBe(1);
+    expect(slots[0]!.getAttribute("title")).toBeNull();
+    expect(slots[0]!.getAttribute("aria-describedby")).toBeNull();
+    expect(nodeFor("CR-B-070").querySelectorAll("[title]").length).toBe(0);
+  });
+
+  test("the ids stated are the AUTHORED first ones, read on a board that does not declare them sorted", async () => {
+    await mountApp(SHUFFLED_QUEUE);
+    const authored = ["077", "011", "044"];
+
+    // NON-VACUITY: the row is drawn, it declares what this test turns on, and
+    // the board really DISCRIMINATES — a renderer that sorted the ids before
+    // slicing would state a DIFFERENT string, which is the only reason the
+    // pin below says anything the whole-string pins above did not.
+    expect(all('[data-testid="roadmap-node"]').map((n) => n.getAttribute("data-cr"))).toEqual([
+      "CR-B-000",
+      "CR-B-060",
+    ]);
+    expect(SHUFFLED_QUEUE[1]!.dependsOn).toEqual(["CR-B-077", "CR-B-011", "CR-B-044"]);
+    expect(
+      cappedDeps([...authored].sort()),
+      "the ordering board declares its ids in sorted order after all, so a renderer that " +
+        "sorted them would pass this test unchanged",
+    ).not.toBe(cappedDeps(authored));
+
+    expect(annotationOf("CR-B-060")).toBe(cappedDeps(authored));
+  });
+});
+
+// ── AC2 — AT OR BELOW THE CAP: unchanged, and never `+0` ─────────────────
+
+describe("CR-CRU-109 §S1/AC2 — a row declaring no more than the cap is UNCHANGED, and never states `+0`", () => {
+  test("one and two declared dependencies render with no remainder token at all", async () => {
+    await mountApp(UNCAPPED_QUEUE);
+
+    expect(all('[data-testid="roadmap-node"]').map((n) => n.getAttribute("data-cr"))).toEqual([
+      "CR-B-000",
+      "CR-B-010",
+      "CR-B-020",
+    ]);
+
+    // Byte-exact, because "unchanged" is a claim about the exact string
+    // CR-CRU-102 already renders for these two rows.
+    expect(annotationOf("CR-B-010")).toBe("deps 011");
+    expect(annotationOf("CR-B-020")).toBe("deps 011, 022");
+
+    // `+0` is the defect AC2 forbids — a row telling a reader that nothing is
+    // hidden, at the cost of saying it — and the two byte-exact strings above
+    // are what forbids it: neither carries a remainder token, an ellipsis or
+    // any other tail, because each IS the whole rendered slot.
+
+    // The row AT the cap states EVERY id it declares: the cap bounds, it does
+    // not truncate to fewer than it admits.
+    expect(annotationOf("CR-B-020")).toBe(cappedDeps(declaredBare(2)));
+    expect(annotationOf("CR-B-000")).toBe("next");
+  });
+});
+
+// ── AC3 — the remainder is a COUNT, never an ellipsis ─────────────────────
+
+describe("CR-CRU-109 §S1/AC3 — the remainder states HOW MANY, so five declared and seven declared read differently", () => {
+  test("a five-dependency row states `+3` and a seven-dependency row `+5`, and neither elides", async () => {
+    await mountApp(CAP_QUEUE);
+    const cap = capOf();
+    const five = annotationOf("CR-B-050");
+    const seven = annotationOf("CR-B-070");
+
+    // The COUNT of what was not stated, derived from each row's own
+    // declaration — the number a reader needs to know the size of what the
+    // table below holds.
+    expect(remainderOf(five), `the five-dependency row reads ${JSON.stringify(five)}`).toBe(
+      5 - cap,
+    );
+    expect(remainderOf(seven), `the seven-dependency row reads ${JSON.stringify(seven)}`).toBe(
+      7 - cap,
+    );
+
+    // DISTINGUISHABLE from the row alone, which is the whole reason the
+    // remainder is a number: an ellipsis renders these two identically, and a
+    // reader could not tell four dependencies from seven without opening the
+    // table.
+    expect(five).not.toBe(seven);
+    for (const text of [five, seven]) {
+      expect(text).not.toContain("…");
+      expect(text).not.toContain("...");
+      expect(text.toLowerCase()).not.toMatch(/\bmore\b/);
+    }
+  });
+});
+
+// ── AC4 — the `next` marker composes with the capped list ─────────────────
+
+describe("CR-CRU-109 §S1/AC4 — the marker composes unchanged with the capped list", () => {
+  test("the marked four-dependency row reads `next · deps 014, 091 +2` — marker first, one separator", async () => {
+    await mountApp(MARKED_QUEUE);
+
+    // NON-VACUITY: the marker really is on the FOUR-dependency row. That is
+    // the arrangement §S1 measured at 332.4px and the one this file's other
+    // boards deliberately avoid, where the marker sits on a dep-free row.
+    expect(markedCrs()).toEqual(["CR-B-075"]);
+    expect(MARKED_QUEUE[0]!.dependsOn.length).toBe(4);
+
+    // §S1's measurement table records THIS string for THIS row at 292.5px
+    // against the ~300px budget, so it is pinned byte-exact…
+    expect(annotationOf("CR-B-075")).toBe("next · deps 014, 091 +2");
+    // …and composed, so the string is the cap's output and not a literal that
+    // happens to agree with it today.
+    expect(annotationOf("CR-B-075")).toBe(
+      `next · ${cappedDeps(["014", "091", "092", "095"])}`,
+    );
+
+    // ONE separator between the two parts, and the marker FIRST.
+    expect(annotationOf("CR-B-075").split(" · ").length).toBe(2);
+    expect(annotationOf("CR-B-075").indexOf("next")).toBeLessThan(
+      annotationOf("CR-B-075").indexOf("deps"),
+    );
+
+    // The marker keeps its own element (CR-CRU-096 AC12's emphasis by WEIGHT):
+    // the cap did not flatten the slot into one undifferentiated string.
+    expect(nodeFor("CR-B-075").querySelectorAll(".app-flow-node-next").length).toBe(1);
+
+    // The unmarked row on the same board keeps its own unchanged form, so the
+    // marker is what the composition adds and not the board.
+    expect(annotationOf("CR-B-096")).toBe("deps 078");
+  });
+});
+
+// ── AC6 — the cap is a DISPLAY rule, and stops at the display ─────────────
+//
+// The failure this guards is the one that would do REAL damage: a cap applied
+// to `entry.dependsOn` instead of to the text drawn from it. The row would
+// still LOOK right while the drill-through lost a target and the inversion
+// check stopped seeing two of the five dependencies it validates.
+
+describe("CR-CRU-109 AC6 — the cap is DISPLAY only: every consumer still resolves the ids the row does not state", () => {
+  test("a five-dependency row states two, while the order warning names all five in FULL and an unstated id still selects and still drills", async () => {
+    await mountApp(CAP_CONSUMER_QUEUE);
+    const cap = capOf();
+    const ids = CAP_CONSUMER_QUEUE[0]!.dependsOn;
+    expect(ids).toEqual(["CR-B-011", "CR-B-022", "CR-B-033", "CR-B-044", "CR-B-102"]);
+
+    // NON-VACUITY: the cap really is ON for this row, and the ids the
+    // assertions below chase really are among the ones it withheld. Without
+    // this the test would pass on an uncapped board, where nothing is
+    // withheld and no consumer could disagree with the slot.
+    expect(annotationOf("CR-B-060")).toBe(
+      `next · ${cappedDeps(["011", "022", "033", "044", "102"])}`,
+    );
+    const withheld = ids.slice(cap);
+    expect(withheld).toContain("CR-B-033");
+    expect(withheld).toContain("CR-B-102");
+
+    // `roadmapLateDeps` — the inversion check reads `entry.dependsOn`, and the
+    // warning it renders NAMES every offending dependency, in full and in
+    // authored order. A cap that reached the data would shorten this title to
+    // two ids and silently stop reporting three real inversions.
+    const warning = rowFor("CR-B-060").querySelector<HTMLElement>(
+      '[data-testid="roadmap-order-warning"]',
+    );
+    expect(warning).not.toBeNull();
+    expect(warning!.getAttribute("title")).toBe(
+      `authored before its dependency ${ids.join(", ")}`,
+    );
+
+    // SELECTION targets the full id of a dependency the slot does not state:
+    // `CR-B-033` is PENDING, so the click selects without navigating and both
+    // zones can be read after it (CR-CRU-078/AC17 — one selection, two
+    // renderings).
+    expect(nodeFor("CR-B-033").getAttribute("data-selected")).toBe("false");
+    rowFor("CR-B-033").click();
+    await settle(2);
+    expect(rowFor("CR-B-033").getAttribute("data-selected")).toBe("true");
+    expect(nodeFor("CR-B-033").getAttribute("data-selected")).toBe("true");
+    expect(nodeFor("CR-B-060").getAttribute("data-selected")).toBe("false");
+
+    // DRILL-THROUGH still lands, on the id the slot withheld LAST: `CR-B-102`
+    // is running, so it advertises a target and a click routes to it.
+    const runner = rowFor("CR-B-102");
+    expect(runner.getAttribute("data-drill-source")).toBe("true");
+    expect(tabIsOn("Workflow")).toBe(false);
+    runner.click();
+    await settle(2);
+    expect(tabIsOn("Workflow")).toBe(true);
+  });
+});
+
+// ── AC7 — zone 3 still states the WHOLE set, in the SAME render ───────────
+
+describe("CR-CRU-109 AC7 — zone 3's deps column is unchanged, so a capped row has a place to be read in full", () => {
+  test("one render, both zones: the slot states two and a count, the column states all five", async () => {
+    await mountApp(CAP_CONSUMER_QUEUE);
+    const ids = CAP_CONSUMER_QUEUE[0]!.dependsOn;
+
+    // ZONE 2 — capped.
+    const slot = annotationOf("CR-B-060");
+    expect(slot).toBe(`next · ${cappedDeps(["011", "022", "033", "044", "102"])}`);
+
+    // ZONE 3 — WHOLE, chip by chip and in authored order, so the cell's own
+    // concatenation cannot hide a missing one. This is the surface the cap
+    // sends a reader to, so "unchanged" is load-bearing rather than incidental.
+    expect(chipsOf("CR-B-060")).toEqual(["011", "022", "033", "044", "102"]);
+    expect(chipsOf("CR-B-060").length).toBe(ids.length);
+
+    // ONE RULE, TWO CALLERS, one CAP between them — asserted as a composition
+    // of the cell against the slot in the SAME render, which is what fails if
+    // the two zones ever drift apart.
+    expect(`next · ${cappedDeps(chipsOf("CR-B-060"))}`).toBe(slot);
+  });
+});
+
+// ── AC8 — ONE definition of the number ────────────────────────────────────
+//
+// The cap moved once (three → two) before a line of it was written, on §S1's
+// measurement of the live board: three ids leave the box at 321.0px against a
+// ~300px budget and two bring it to 292.5px. A literal at the call site would
+// have to be found and changed again next time the design is re-measured,
+// which is what the SOURCE half below forbids.
+
+describe("CR-CRU-109 AC8 — the cap is a NAMED CONSTANT with a single definition, and the render reads it", () => {
+  test("`DEPENDENCY_ANNOTATION_CAP` is TWO by §S1's measurement, and it is what a seven-dependency row states", async () => {
+    // The ONE place in this repo that spells the number.
+    expect(
+      capOf(),
+      "§S1's table measured the alternatives on the live board: three ids leave the wave box " +
+        "at 321.0px against the design's ~300px, two bring it to 292.5px",
+    ).toBe(2);
+
+    await mountApp(CAP_QUEUE);
+    // The RENDER follows the constant: the ids stated are counted off the
+    // rendered slot and compared with what the product publishes, so a call
+    // site holding its own literal disagrees the moment the constant moves.
+    const stated = annotationOf("CR-B-070")
+      .replace(/^deps /, "")
+      .replace(/ \+\d+$/, "")
+      .split(", ");
+    expect(stated).toEqual(declaredBare(7).slice(0, capOf()));
+    expect(stated.length).toBe(capOf());
+  });
+
+  test("the constant is DEFINED once in the shipped tree, and zone 2's call site bounds the list by NAME", () => {
+    // `shippedSources`/`jsUncommented` are CR-CRU-102 AC6's own projection of
+    // the authored `public/` tree: definitions are counted in LIVE code, so a
+    // second copy narrated in a comment is not mistaken for one.
+    const definitions = shippedSources().flatMap(({ relPath, text }) =>
+      Array.from(jsUncommented(text).matchAll(/\bDEPENDENCY_ANNOTATION_CAP\s*=/g)).map(
+        () => relPath,
+      ),
+    );
+    expect(definitions).toEqual([join("public", "app-logic.mjs")]);
+
+    // …and `RoadmapFlowNode` bounds the list by that NAME rather than by a
+    // literal of its own, which is the defect AC8 exists to forbid. The NAME
+    // has to BE the bound: a call site that kept `slice(0, 2)` and mentioned
+    // the constant anywhere else — a log line, a comment's neighbour, a
+    // re-export — would satisfy a bare mention, so this reads the SHAPE.
+    expect(
+      jsUncommented(APP_JS_SRC),
+      "public/app.js bounds zone 2's dependency list with something other than " +
+        "`slice(0, L.DEPENDENCY_ANNOTATION_CAP)`, so the constant is not what the call site " +
+        "cuts the list at",
+    ).toMatch(/\.slice\(\s*0\s*,\s*L\.DEPENDENCY_ANNOTATION_CAP\s*\)/);
   });
 });
