@@ -1415,7 +1415,7 @@ def cmd_queue(args, project_dir, ops):
 # harness's files.
 
 # §S2 axis 1 — a CR has LANDED iff its SERVER-DERIVED status is one of these
-# (`deriveQueueStatus`, src/store.ts:4073). Anything else — PENDING,
+# (`deriveQueueStatus`, src/store.ts:4098). Anything else — PENDING,
 # IN_PROGRESS — is unmerged.
 LANDED_STATUSES = ("COMPLETED", "COMPLETED_UNTRACKED")
 
@@ -1448,12 +1448,52 @@ def canonical_track(value):
     return None if lane is None else f"track-{int(lane.group(0))}"
 
 
-def queue_tracks(entries):
-    """§S3 (PURE) — the sorted distinct non-null `track` values the queue read
-    published, AS STORED. `len() > 1` is the whole definition of multi-track,
-    and the values are echoed to the caller unchanged: a legacy un-normalised
-    row is a fact about the roadmap, not something the read path may rewrite."""
-    return sorted({e.get("track") for e in entries or [] if e.get("track")})
+class QueueTrackFactUnpublished(Exception):
+    """CR-CRU-108 §S2 — raised when a queue READ states no track fact.
+
+    A typed hard stop in the shape `AgentIdentityRequired` and
+    `CycleSelectionRefused` already establish: it carries the AXI `code`, the
+    `error` detail and this refusal's `help[]`, and it carries NO fallback
+    value by design. Deriving one from the entries beside it is precisely the
+    second copy of the rule CR-CRU-108 deleted, and a read that omits the fact
+    must fail LOUDLY rather than let a multi-track project read as
+    single-track — that would be `next` picking a lane design §11 forbids it
+    to pick. The caller MUST convert it into an `ok:false` envelope + non-zero
+    exit (`cmd_next`), never a raw traceback."""
+
+    def __init__(self, code, detail, help_steps):
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+        self.help = list(help_steps)
+
+
+def queue_tracks(queue):
+    """§S2/AC4 (PURE) — the lanes the queue READ PUBLISHED, read rather than
+    re-derived: `GET …/queue` answers `{ok, entries, tracks}` and `tracks` is
+    the whole track fact (`declaredTracks`, src/store.ts — sorted, distinct,
+    non-blank, trimmed, echoed as stored).
+
+    `len() > 1` is still the whole definition of multi-track and the values
+    are still echoed to the caller unchanged. What changed is WHOSE answer it
+    is: the server owns the normalisation, so it is the one surface that may
+    say how many lanes a project declares. A client that recomputed the list
+    answered FOUR lanes where the server answered TWO — a whitespace-only
+    value and a padded duplicate — and `next` refused a queue it owed an
+    answer.
+
+    A payload carrying no `tracks` list is not "no tracks": it is a read that
+    did not state the fact, and it raises rather than degrading."""
+    tracks = (queue or {}).get("tracks")
+    if not isinstance(tracks, list):
+        raise QueueTrackFactUnpublished(
+            "queue-track-fact-unpublished",
+            "the queue read published no `tracks` list, so the project's "
+            "declared lanes are unknown — next will not guess one",
+            ["upgrade the Crucible server: GET /api/v2/projects/<key>/queue "
+             "publishes `tracks` beside `entries`",
+             "then re-run next"])
+    return list(tracks)
 
 
 def _entry_seq(entry):
@@ -1638,16 +1678,29 @@ def _drained_answer(reason, lane):
             "help": _drained_help(reason, lane)}
 
 
-def resolve_next(entries, track=None):
+def resolve_next(entries, track=None, tracks=None):
     """§S2/§S3 (PURE) — the decision resolver: the lane's declared sequence
     plus live state in, exactly one decision out.
+
+    `tracks` is the list the queue read PUBLISHED (CR-CRU-108 §S2), handed in
+    rather than derived here: the refusal names the SERVER's lanes or it names
+    none. There is deliberately no default answer — `None` means no read
+    stated the fact, and that raises `QueueTrackFactUnpublished` rather than
+    resolving over a lane set nobody published.
 
     Returns `(ok, code, fields, warnings)` — a tuple, like the module's
     existing `resolve_single_plan`. `code` is the process exit code, so the
     three DECISIONS (all answers, all `0`) and §S3's usage refusal (`2`) come
     out of one function rather than being re-derived by the caller."""
+    if tracks is None:
+        raise QueueTrackFactUnpublished(
+            "queue-track-fact-unpublished",
+            "the decision was asked for without the `tracks` list the queue "
+            "read publishes, so the project's declared lanes are unknown — "
+            "next will not guess one",
+            ["pass the `tracks` the queue read published"])
     entries = list(entries or [])
-    tracks = queue_tracks(entries)
+    tracks = list(tracks)
     wanted = canonical_track(track)
 
     # §S3 — track scoping is required only when the DATA justifies it. With one
@@ -1803,7 +1856,21 @@ def cmd_next(args, project_dir, ops):
         return 1
 
     track = getattr(args, "track", None)
-    ok, code, fields, warnings = resolve_next(resp.get("entries"), track=track)
+    try:
+        tracks = queue_tracks(resp)
+    except QueueTrackFactUnpublished as refusal:
+        # The SAME shape the failed read above emits, for the same reason: a
+        # read that never stated the track fact is a read this verb cannot act
+        # on, and answering anyway would pick a lane out of a set nobody
+        # published.
+        ops.emit("next", False,
+                 {"error": refusal.detail, "help": refusal.help},
+                 ops.context(project_dir),
+                 [{"code": refusal.code, "detail": refusal.detail}],
+                 f"next: ok=False — {refusal.detail}")
+        return 1
+    ok, code, fields, warnings = resolve_next(resp.get("entries"), track=track,
+                                              tracks=tracks)
     # The legacy line reads the UNprojected decision: the human channel is not
     # narrowed by a machine-channel projection flag.
     ops.emit("next", ok, next_projection(ok, fields, args),
