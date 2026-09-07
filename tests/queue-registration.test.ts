@@ -63,6 +63,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type ServerHandle } from "../src/server.ts";
+import { SCHEMA_VERSION } from "../src/store.ts";
 import * as AppLogic from "../public/app-logic.mjs";
 
 interface OkResponse {
@@ -667,11 +668,11 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
     );
   });
 
-  // ── Design guard — the queue round-trip works at a KNOWN schema version ──
+  // ── Design guard — the queue round-trip needs no retrofit at boot ────────
   describe("design guard — queue_entries needs no per-boot retrofit", () => {
     test(
-      "a queue round-trip succeeds against a freshly booted store WHILE that store still reports " +
-        "schemaVersion === 8 (the base CREATE TABLE writes the current shape whole)",
+      "a queue round-trip succeeds against a freshly booted store that MIGRATED NOTHING and " +
+        "reports the version this build writes (the base CREATE TABLE writes the current shape whole)",
       async () => {
         handle = boot();
         const key = await createProject("queue-schema-additive");
@@ -683,7 +684,14 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
         ).toBe(true);
         expect((await getQueue(key)).entries.length).toBe(1);
 
-        expect(handle.store.schemaVersion).toBe(8);
+        // "No per-boot retrofit" said as what it MEANS, not as a literal. This
+        // once read `toBe(8)`, which fails on every later CR that appends a
+        // migration body regardless of whether that body touches the queue —
+        // the number was never the claim. The claim is: this boot ran no
+        // migration at all, and the store it opened is already at the version
+        // this build writes.
+        expect(handle.store.migration).toBeNull();
+        expect(handle.store.schemaVersion).toBe(SCHEMA_VERSION);
       },
     );
   });

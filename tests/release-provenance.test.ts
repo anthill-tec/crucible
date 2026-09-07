@@ -72,6 +72,7 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer, type ServerHandle } from "../src/server.ts";
+import { SCHEMA_VERSION } from "../src/store.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const RELEASE_SH = join(REPO_ROOT, "scripts", "release.sh");
@@ -3513,8 +3514,9 @@ describe("a release records the PACKAGES it delivered, on the wire (CR-CRU-084 �
 
   test(
     "AC6 no migration: a full packages round trip (record → read → repair → read) succeeds " +
-      "against a FRESHLY booted store while that store still reports schemaVersion === 8 — " +
-      "`packages` rides the generic payload blob, exactly as CR-CRU-080's provenance does",
+      "against a FRESHLY booted store that MIGRATED NOTHING and stays at the version this " +
+      "build writes — `packages` rides the generic payload blob, exactly as CR-CRU-080's " +
+      "provenance does",
     async () => {
       boot();
       const key = await createProject("packages-no-migration");
@@ -3541,16 +3543,18 @@ describe("a release records the PACKAGES it delivered, on the wire (CR-CRU-084 �
       // paths, so "no migration" is a claim about a store that really stores it.
       expect((await onlyRelease(key)).packages).toEqual(corrected);
 
-      // The design guard, a LITERAL on purpose (the queue-registration.test.ts
-      // precedent): a chain step must make a human look. It FIRED for
-      // CR-CRU-091 §S2, whose 7→8 step retrofits `queue_entries` with the
-      // declaration columns — a legitimate, specified step that says nothing
-      // about `packages`, which still rides the payload blob (asserted
-      // non-vacuously above). So the tripwire's premise is superseded and it is
-      // consciously RE-ARMED at 8, not disabled and not turned into a
-      // tautological read of SCHEMA_VERSION.
+      // The design guard, said as "no migration" rather than as a number. It
+      // once pinned 8 and FIRED twice for steps that say nothing about
+      // `packages` — CR-CRU-091 §S2's queue_entries retrofit and CR-CRU-094
+      // §S1's events.cycle_id column — because a literal total is a claim
+      // about every OTHER CR, not about this one. AC6's actual claim is that
+      // `packages` needed no schema of its own: this boot ran NO migration,
+      // and the round trip above (asserted non-vacuously through both write
+      // paths) happened on a store still sitting at the version this build
+      // writes — unmoved from the moment it opened.
+      expect(handle!.store.migration).toBeNull();
       expect(handle!.store.schemaVersion).toBe(atBoot);
-      expect(handle!.store.schemaVersion).toBe(8);
+      expect(handle!.store.schemaVersion).toBe(SCHEMA_VERSION);
     },
   );
 });

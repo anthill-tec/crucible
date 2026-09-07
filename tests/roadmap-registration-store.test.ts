@@ -28,7 +28,11 @@
 //     listReleaseProposals(projectKey: string): RunEvent[];  // LIVE, version-ordered
 //   }
 //   MIGRATION_BODIES gains ONE appended step (queue_entries: release, track,
-//   lifecycle_json) so SCHEMA_VERSION === MIGRATIONS.length advances 7 -> 8.
+//   lifecycle_json): the body at chain position 7, advancing 7 -> 8. Because
+//   SCHEMA_VERSION === MIGRATIONS.length, every LATER CR that appends a body
+//   moves the chain's END (CR-CRU-094 §S1 already has) — this CR's own
+//   position does not move, and the assertions below are written about that
+//   position, never about the total.
 //
 //   // src/types.ts
 //   QueueEntry     gains seq (ALWAYS), release?, track?, lifecycle?
@@ -91,6 +95,24 @@ function listReleaseProposals(store: Store, projectKey: string): RunEvent[] {
   return (s.listReleaseProposals as (key: string) => RunEvent[]).call(store, projectKey);
 }
 
+/**
+ * §S2 — THIS CR's own migration body, found by what it declares. Never by
+ * index and never by `SCHEMA_VERSION - 1`: both of those are claims about the
+ * chain's END, which every LATER appended body moves, and the position of this
+ * body is not theirs to move.
+ */
+function declarationStep(): (typeof MIGRATIONS)[number] {
+  const owned = MIGRATIONS.filter((step) => (step.description ?? "").includes("CR-091 §S2"));
+  if (owned.length !== 1) {
+    throw new Error(
+      `CR-CRU-091 §S2: expected exactly ONE declaration body in the ${MIGRATIONS.length}-step ` +
+        `migration chain, found ${owned.length} — nothing retrofits queue_entries with ` +
+        `release / track / lifecycle_json`,
+    );
+  }
+  return owned[0] as (typeof MIGRATIONS)[number];
+}
+
 // ── raw-sqlite helpers (never a Store — these must not migrate anything) ───
 
 function columnsOf(dbPath: string, table: string): string[] {
@@ -141,10 +163,12 @@ function storedRows(dbPath: string): StoredDeclaration[] {
 /**
  * A store shaped exactly like the version JUST BEFORE this CR's step: the
  * `queue_entries` table in its pre-091 eight-column shape, carrying rows, and
- * stamped at `SCHEMA_VERSION - 1`. Every OTHER chain step guards on
- * `tableExists`, so on this fixture the ONLY unsatisfied step in the chain is
- * the one this CR appends — which is how the suite identifies it BY EFFECT
- * rather than by index.
+ * stamped at THIS body's own `from` — not at `SCHEMA_VERSION - 1`, which names
+ * the step before whichever body happens to be last today and would leave the
+ * fixture stamped PAST this one, so the runner would skip it. Every OTHER
+ * chain step guards on `tableExists`, so on this fixture the ONLY unsatisfied
+ * step in the chain is the one this CR appends — which is how the suite
+ * identifies it BY EFFECT rather than by index.
  */
 function makePreDeclarationStore(dir: string): string {
   const dbPath = join(dir, "crucible.db");
@@ -171,7 +195,7 @@ function makePreDeclarationStore(dir: string): string {
     );
     insert.run(PRE_KEY, "CR-CRU-014", "queue registration", "1", "[]", "M", 1_700_000_000_000, 10);
     insert.run(PRE_KEY, "CR-CRU-078", "roadmap surface", "5", '["CR-CRU-091"]', "L", 1_700_000_000_001, 20);
-    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION - 1};`);
+    db.exec(`PRAGMA user_version = ${declarationStep().from};`);
   } finally {
     db.close();
   }
@@ -246,16 +270,26 @@ function threeUndeclared(): QueueEntryInput[] {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("CR-CRU-091 §S2 — the migration adds the three declaration columns", () => {
-  test("SCHEMA_VERSION is MIGRATIONS.length and has advanced by exactly one, to 8", () => {
-    // A LITERAL on purpose: the value is the tripwire that forces a human to
-    // notice a chain step. The MECHANISM (derived, never hand-edited) is
-    // asserted beside it — the two do different jobs.
+  test("this CR's body advanced the chain by exactly one AT ITS OWN POSITION, and SCHEMA_VERSION is still MIGRATIONS.length", () => {
+    // This once also read `toBe(8)` — a literal total as a tripwire. The total
+    // is not this CR's to assert: CR-CRU-094 §S1 appended a body and the pin
+    // fired for a step that has nothing to do with the declaration columns.
+    // What §S2 genuinely claims is that its ONE body advanced the chain by
+    // exactly one at the position it occupies, and that the derived mechanism
+    // (SCHEMA_VERSION === MIGRATIONS.length, every step contiguous) still
+    // holds — so a hand-edited version, a gap or a reordered chain fails here.
     expect(SCHEMA_VERSION).toBe(MIGRATIONS.length);
-    expect(SCHEMA_VERSION).toBe(8);
     MIGRATIONS.forEach((step, index) => {
       expect(step.from).toBe(index);
       expect(step.to).toBe(index + 1);
     });
+    // §S2's own body: present exactly once, one version wide, and sitting at
+    // the position its own `from` names.
+    const step = declarationStep();
+    expect(MIGRATIONS.indexOf(step)).toBe(step.from);
+    expect(step.to).toBe(step.from + 1);
+    // …and inside the chain this build writes, never dangling past its end.
+    expect(step.to).toBeLessThanOrEqual(SCHEMA_VERSION);
   });
 
   test(
@@ -265,8 +299,10 @@ describe("CR-CRU-091 §S2 — the migration adds the three declaration columns",
       const dir = tmpDir();
       const dbPath = makePreDeclarationStore(dir);
 
-      // Before: the three columns are absent and the store says so.
-      expect(userVersion(dbPath)).toBe(SCHEMA_VERSION - 1);
+      // Before: the store sits at THIS body's `from` (the version just before
+      // it ran) and the three columns are absent.
+      const step = declarationStep();
+      expect(userVersion(dbPath)).toBe(step.from);
       const before = columnsOf(dbPath, "queue_entries");
       expect(before).not.toContain("release");
       expect(before).not.toContain("track");
@@ -275,10 +311,13 @@ describe("CR-CRU-091 §S2 — the migration adds the three declaration columns",
       // The step is identified BY EFFECT: on this fixture it is the only one in
       // the whole chain that is not already satisfied.
       const probe = new Database(dbPath);
-      const unsatisfied = MIGRATIONS.filter((step) => step.satisfiedBy?.(probe) === false);
+      const unsatisfied = MIGRATIONS.filter((body) => body.satisfiedBy?.(probe) === false);
       probe.close();
       expect(unsatisfied.length).toBe(1);
-      expect(unsatisfied[0]!.to).toBe(SCHEMA_VERSION);
+      // …and BY EFFECT names the same body the description does: the two
+      // identifications agree, so neither can drift silently.
+      expect(unsatisfied[0]).toBe(step);
+      expect(unsatisfied[0]!.to).toBe(step.to);
 
       const store = Store.open(dbPath);
 
@@ -305,6 +344,7 @@ describe("CR-CRU-091 §S2 — the migration adds the three declaration columns",
 
       // A pre-upgrade recovery point was written before the first mutation.
       expect(store.migration).not.toBeNull();
+      expect(store.migration?.from).toBe(step.from);
       expect(store.migration?.to).toBe(SCHEMA_VERSION);
       expect(readdirSync(dir).filter((f) => /\.pre-upgrade-\d+$/.test(f)).length).toBe(1);
     },
