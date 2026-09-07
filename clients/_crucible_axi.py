@@ -445,9 +445,9 @@ def truncate_field(value, full=False, limit=TRUNCATE_LIMIT):
     return value[:limit] + f" (truncated, {len(value)} chars total — use --full)"
 
 
-def last_run_cr(plans):
+def last_closed_cr(plans):
     """§S6 — the `cr` of the plan with the LATEST `closedAt` (the last CR to
-    merge), or None when no plan has closed yet — never a fabricated guess."""
+    close), or None when no plan has closed yet — never a fabricated guess."""
     closed = [p for p in (plans or []) if p.get("closedAt") is not None]
     if not closed:
         return None
@@ -1197,7 +1197,7 @@ class ClientOps:
 def cmd_status(args, project_dir, ops):
     """§S6 — the plan/status READ verb (alias `plans`, no --agent). GET …/plans
     and return the queue as a uniform-table §S1 envelope plus a top-level
-    `lastRunCr`."""
+    `lastClosedCr` — the `cr` of the plan with the latest `closedAt`."""
     resp = ops.get(ops.plans_path(project_dir))
     if not resp.get("ok"):
         # CR-CRU-035 §S1 — hook-safe tolerant degrade: a plans-fetch failure
@@ -1211,7 +1211,7 @@ def cmd_status(args, project_dir, ops):
                   f"{resp.get('error')}")
         legacy = f"[crucible] status: board unavailable — {resp.get('error')}"
         ops.emit("status", True,
-                 {"plans": [], "lastRunCr": None, "count": 0,
+                 {"plans": [], "lastClosedCr": None, "count": 0,
                   "help": [f"check the Crucible server is running / reachable "
                            f"at {ops.base_url}"]},
                  ops.context(project_dir),
@@ -1220,7 +1220,7 @@ def cmd_status(args, project_dir, ops):
         return 0
     plans = resp.get("plans", [])
     full_rows = build_status_rows(plans)
-    last = last_run_cr(plans)
+    last = last_closed_cr(plans)
     # §S10 — the DEFAULT projection is the minimal base column set
     # (cr,wave,status,activeCycleId); `--fields a,b,c` ADDS the requested extras
     # to that base, never replaces it.
@@ -1233,13 +1233,13 @@ def cmd_status(args, project_dir, ops):
     if not rows:
         legacy = "status: ok=True — no plans filed for this project"
         ops.emit("status", True,
-                 {"plans": [], "lastRunCr": None, "count": 0,
+                 {"plans": [], "lastClosedCr": None, "count": 0,
                   "help": HELP_STEPS["status"]},
                  ops.context(project_dir), [], legacy)
         return 0
-    legacy = f"status: ok=True plans={len(rows)} lastRunCr={last}"
+    legacy = f"status: ok=True plans={len(rows)} lastClosedCr={last}"
     ops.emit("status", True,
-             {"plans": rows, "lastRunCr": last, "count": count,
+             {"plans": rows, "lastClosedCr": last, "count": count,
               "help": HELP_STEPS["status"]},
              ops.context(project_dir), [], legacy)
     return 0

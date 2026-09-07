@@ -823,7 +823,7 @@ def cmd_abort(args):
 def cmd_status(args):
     """§S6 — the plan/status READ verb (alias `plans`, no --agent): GET …/plans
     and return the queue as a uniform-table §S1 envelope plus a top-level
-    lastRunCr. CR-CRU-054 §S2 — delegates to the shared implementation."""
+    lastClosedCr. CR-CRU-054 §S2 — delegates to the shared implementation."""
     return _axi().cmd_status(args, _project_dir(args), _ops())
 
 
@@ -1137,7 +1137,8 @@ def main():
 
     for _name in ("status", "plans"):
         sv = sub.add_parser(_name, parents=[common],
-                            help="Read the plan queue (GET …/plans) as a TOON-AXI table + lastRunCr.")
+                            help="Read the plan queue (GET …/plans) as a TOON-AXI table "
+                                 "+ lastClosedCr (the last CR to close).")
         sv.add_argument("--fields",
                         help="Comma-separated EXTRA columns to add to the minimal "
                              "cr,wave,status,activeCycleId set (§S10).")
