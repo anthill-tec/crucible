@@ -1483,7 +1483,7 @@ def _next_start_help(entry):
     this cr, carrying its own wave (flags per `clients/python-crucible.py:1422-1438`).
     `next` has no `HELP_STEPS` entry precisely so this cannot be canned."""
     step = (f'plan-file --cr {entry.get("cr")} --title "<brief>" '
-            f'--cycles "<c1,c2>" --agent <agentId>')
+            f'--cycle "<c1>" --cycle "<c2>" --agent <agentId>')
     wave = entry.get("wave")
     if wave:
         step += f" --wave {wave}"

@@ -1425,10 +1425,10 @@ def main():
     pf.add_argument("--cr", required=True,
                     help="CR id — caller-owned free text, e.g. CR-<PROJECT>-<n>.")
     pf.add_argument("--title", help="Optional plan title.")
-    pf.add_argument("--cycles",
-                    help='Comma-separated cycle labels, e.g. "a,b,c".')
     pf.add_argument("--cycle", action="append",
                     help="One cycle label, never split; repeat --cycle per cycle.")
+    pf.add_argument("--cycles",
+                    help='Legacy comma-split form; prefer one --cycle per label.')
     _add_workflow_agent_arg(
         pf, extra=" The registered id is also stored as the plan's orchestrator "
                   "(the free-text --orchestrator label is retired).")
