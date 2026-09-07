@@ -114,7 +114,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-093](CR-CRU-093-project-rail-collapses.md) | the project rail collapses, giving every workspace view its width back | feature | COMPLETED (0.2.0) | 006 | 5 (0.2.0) |
 | [CR-CRU-075](CR-CRU-075-queue-file-fleet-parity.md) | queue-file fleet parity + AXI verb-surface census enforcement | patch | COMPLETED (0.2.0) | 014, 091, 092, 095 | 5 (0.2.0) |
 | [CR-CRU-094](CR-CRU-094-agent-participation-is-recorded.md) | agent participation is recorded, not inferred | feature | COMPLETED (0.2.0) | 056 | 5 (0.2.0) |
-| [CR-CRU-108](CR-CRU-108-one-published-track-fact.md) | one published multi-track fact | patch | PENDING (0.2.0) | 085, 092, 097 | 5 (0.2.0) |
+| [CR-CRU-108](CR-CRU-108-one-published-track-fact.md) | one published multi-track fact | patch | COMPLETED (0.2.0) | 085, 092, 097 | 5 (0.2.0) |
 | [CR-CRU-109](CR-CRU-109-a-wave-row-annotation-fits-its-box.md) | a wave row's dependency annotation fits the box it is drawn in | patch | COMPLETED (0.2.0) | 096, 102 | 5 (0.2.0) |
 | [CR-CRU-110](CR-CRU-110-the-printed-help-test-cannot-be-starved.md) | the printed-help test answers the same way whatever ran before it | bug | PENDING (0.2.0) | 097 | 5 (0.2.0) |
 
@@ -246,6 +246,35 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   nor warns that the README's status column disagrees with the board. Re-recorded via `cr-void`;
   no other README VOID was affected. A patch should at least WARN on a README-vs-board lifecycle
   disagreement at import.
+
+- **~41 `src/store.ts:<line>` citations were ALREADY stale before CR-CRU-108** (candidate patch CR,
+  measured 2026-09-07). CR-CRU-108's VERIFY reported "103 citations that were accurate on develop
+  now point 25 lines short" after §S1 inserted 25 lines at `src/store.ts:364-388`. That figure did
+  not survive a per-citation check: line-content equality is uninformative in the tail, because
+  `head[k] == develop[k-25]` for every k ≥ 389 BY CONSTRUCTION, so a mechanical "+25 shift" test
+  reports a false positive for the whole tail. Re-measured by locating the construct each citation
+  NAMES: exactly **one** was accurate on develop and shifted (`tests/queue-canonical-order.test.ts:59`,
+  365 → 390, re-pinned), one was already re-pinned correctly (`clients/_crucible_axi.py:1418`,
+  4073 → 4098), 14 cite lines below the insertion and are unaffected, and **41 cite a line that did
+  not hold the named construct on develop either** — most by hundreds of lines (`store.ts` has grown
+  ~1000 lines since much of that prose was written): e.g. `tests/queue-registration.test.ts:719`
+  cites `deriveQueueStatus` at `:3052` where develop holds `const id = this.nextCycleId(…)`, 1021
+  lines off; `public/app-logic.mjs:1243` cites `waveNumber` at `:411`, 14 off. Spot-checked both
+  independently against `git show develop:src/store.ts`. A blanket `+25` would have INVENTED 41 new
+  wrong numbers, which is why the ruling was per-construct verification and why the 41 were reported
+  rather than touched. The lesson generalises: a citation guard that compares line CONTENT cannot
+  distinguish "shifted by my edit" from "stale for a year", and only the named-construct check can.
+
+- 2026-09-07 — **a cycle can legitimately have no GREEN phase.** CR-CRU-108's §S3 (cycle 371, AC6
+  cross-surface predicate + AC7 scope guards) landed as declared pass-on-arrival guards, because
+  §S1 and §S2 had already removed the divergence they measure — the four-vs-two track disagreement
+  lived in the python client's copy of the rule, which §S2 deleted. Non-vacuity was proven by
+  MUTATION rather than argued: stripping the server's `.trim()` fails exactly 3 tests, stripping the
+  browser's fails 3, and mutating both in step still fails 3 (the per-case classification is spelled
+  in the fixture); swapping the table column to project scope fails exactly the new AC7 arm and no
+  pre-existing lane test. Re-verified independently by the orchestrator before acceptance. Recorded
+  on the board as a custom milestone, not manufactured into a fake red — the same disposition
+  CR-CRU-075's cycle 364 took.
 
 - 2026-09-07 — **RELEASE-TIME OBLIGATION: intimate Model B of this release's client changes.** Two
   notes are drafted and undelivered because `Mainline - ModelB` has been `inactive` in the Sandesh

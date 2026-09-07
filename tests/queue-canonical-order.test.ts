@@ -56,7 +56,7 @@
 //
 // Round 1 — `compareContainers` reads `a.release ?? ""`, and
 // `compareVersionLabels("", "0.2.0")` is NEGATIVE (a label with FEWER numeric
-// components sorts first, src/store.ts:365), so applied verbatim every
+// components sorts first, src/store.ts:390), so applied verbatim every
 // release-LESS row sorts BEFORE every declared release — 66 of the live
 // board's 94 rows, CR-CRU-015 among them — and AC7 would still fail. RED's
 // proposal "every undeclared row sorts LAST (globally)" was OVERRULED: the

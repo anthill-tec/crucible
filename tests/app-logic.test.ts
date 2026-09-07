@@ -31,6 +31,11 @@ import {
 // below fails at CALL time ("is not a function"), the missing-export RED
 // signal, WITHOUT breaking this file's already-passing tests above.
 import * as AppLogic from "../public/app-logic.mjs";
+// CR-CRU-108 §S3/AC6 — the SERVER half of the cross-surface measurement below.
+// `declaredTracks` (src/store.ts) is the ONE place the published rule is
+// spelled (§S1/AC1), so the comparison imports it rather than restating it:
+// a copy here could only prove this file agrees with itself.
+import { declaredTracks } from "../src/store";
 
 // Local minimal shapes for lambda-parameter annotations below — kept
 // independent of the (not-yet-existing) module's own ambient types so tsc
@@ -651,5 +656,192 @@ describe("CR-CRU-094 §S1/AC3 — app-logic's context.cycleId consumers, guarded
     expect(legacy.cycles[0]!.runs.map((r) => r.id)).toEqual(["e-legacy"]);
     // Nothing is DROPPED: a run that matches no cycle lands in the tail.
     expect(lens.ungrouped.map((r) => r.id).sort()).toEqual(["e-collision", "e-unlinked"]);
+  });
+});
+
+// ── CR-CRU-108 §S3/AC6 — ONE fixture, both track rules ─────────────────────
+//
+// WHY HERE: this file owns the browser's pure predicates. The SERVER's rule is
+// imported (`declaredTracks`, src/store.ts) and the BROWSER's is reached the
+// only way production reaches it — `declaredLabel`/`distinctLabels` are
+// module-private, and `focusedReleaseView(...).tracks`
+// (public/app-logic.mjs:1537) IS `distinctLabels(members, "track")`, the same
+// call the wave lanes (:1482/:1487) and `roadmapTableColumns` (:1202) make.
+// Exporting the private pair to test it would mint a surface AC6 does not ask
+// for; driving the real consumer measures the real predicate.
+//
+// STATUS — declared PASS-ON-ARRIVAL guard, measured 2026-09-07 on
+// `feature/CR-CRU-108` at 2783186. AC6 was filed when the third rule
+// (`queue_tracks`, clients/_crucible_axi.py) still re-derived the answer and
+// classified this very fixture as FOUR tracks (`['   ', ' track-2 ', '2',
+// 'track-2']`) against the browser's two; §S1 (68b5a0a) and §S2 (c555faa,
+// 2783186) deleted that copy, so both surviving surfaces now answer
+// `['2', 'track-2']` for every one of the first seven cases. The divergence
+// AC6 was written to catch is GONE, which is exactly why it must become a
+// standing measurement instead of a coincidence.
+//
+// The EIGHTH case was NOT pass-on-arrival. SQLite is dynamically typed and the
+// AC2 tests plant raw `track` columns directly, so a legacy row can hold a
+// NON-string — and the two rules split on it: the browser answered `"2"`
+// (`String(raw).trim()`) while the server THREW (`entry.track?.trim()` on a
+// number is not a function), i.e. a 500 on the queue read for a value the
+// browser draws as a lane. AC6's own sentence is that the two rules classify
+// EVERY case identically, and a throw-vs-coerce split is a case where they do
+// not, so `declaredTracks` now coerces exactly as `declaredLabel` does.
+//
+// WHAT IT CATCHES (verified by mutation, both directions):
+//   • restore `declaredTracks`' `entry.track?.trim()` and the eighth case
+//     throws where the browser answers `"2"` — this fails, and only this case
+//     fails (measured 2026-09-07 on `feature/CR-CRU-108` at 423487d);
+//   • drop the `.trim()` from `declaredTracks` and the server classifies
+//     `"   "` and `" track-2 "` as lanes the browser does not — this fails,
+//     naming the case and the value;
+//   • swap `declaredLabel`'s blank test for a truthiness test, or its trim for
+//     none, and the browser diverges the same way — this fails;
+//   • change BOTH in step and the third assertion still fails, because each
+//     case's expected classification is SPELLED in the fixture rather than
+//     read off either implementation.
+// The one difference the comparison deliberately tolerates is ORDER: the
+// server publishes SORTED (AC1) and the browser keeps first-appearance order
+// (its `distinctLabels` contract), so the whole-fixture arm compares SETS.
+describe("CR-CRU-108 §S3/AC6 — the published rule and the browser predicate classify one fixture identically", () => {
+  /** One stored `track` value and the lane it DECLARES — `null` for the
+   *  values that declare none. The third field is the spec's answer (AC1:
+   *  null, absent, empty and whitespace-only are excluded; identity is the
+   *  TRIMMED value; a legacy `2` is never re-spelled), written here so a
+   *  change made to BOTH rules at once still fails.
+   *
+   *  `stored.track` is `unknown`, not `string | null`: SQLite is dynamically
+   *  typed, the column is what a row HOLDS rather than what the TS shape
+   *  promises, and the non-string case below is only reachable at all because
+   *  the fixture refuses to assume the promise. */
+  interface TrackCase {
+    readonly name: string;
+    readonly stored: { track?: unknown };
+    readonly declares: string | null;
+  }
+
+  const TRACK_FIXTURE: readonly TrackCase[] = [
+    { name: "a null track", stored: { track: null }, declares: null },
+    { name: "an absent track key", stored: {}, declares: null },
+    { name: "an empty-string track", stored: { track: "" }, declares: null },
+    { name: "a whitespace-only track", stored: { track: "   " }, declares: null },
+    { name: "a padded ` track-2 `", stored: { track: " track-2 " }, declares: "track-2" },
+    { name: "a legacy un-normalised `2`", stored: { track: "2" }, declares: "2" },
+    { name: "a canonical `track-2`", stored: { track: "track-2" }, declares: "track-2" },
+    // The non-string a dynamically typed column can hold. Both rules must read
+    // it as the lane `"2"` — the browser already did; the server threw.
+    { name: "a non-string legacy `2`", stored: { track: 2 }, declares: "2" },
+  ];
+
+  const RELEASE = "0.4.0";
+  const GATE = { version: RELEASE, kind: "proposed" };
+
+  const Browser = AppLogic as unknown as {
+    focusedReleaseView: (
+      gate: unknown,
+      releases: unknown,
+      entries: unknown,
+    ) => { members: unknown[]; tracks: string[] };
+    roadmapTableColumns: (entries: unknown) => string[];
+  };
+
+  /** The ONE fixture, rendered as the queue rows both surfaces read: the
+   *  server over `entries` as `listQueue` published them, the browser over the
+   *  same payload. Spreading `stored` is what keeps the ABSENT-key case
+   *  absent — a `track: undefined` property would be a different case. */
+  const rowsOf = (cases: readonly TrackCase[]): Array<Record<string, unknown>> =>
+    cases.map((one, index) => ({
+      cr: `CR-AC6-${index}`,
+      title: `${one.name}`,
+      wave: "5",
+      dependsOn: [],
+      status: "PENDING",
+      seq: (index + 1) * 10,
+      release: RELEASE,
+      ...one.stored,
+    }));
+
+  const serverTracks = (cases: readonly TrackCase[]): string[] =>
+    declaredTracks(rowsOf(cases) as unknown as ReadonlyArray<{ track?: string | null }>);
+
+  const browserTracks = (cases: readonly TrackCase[]): string[] =>
+    Browser.focusedReleaseView(GATE, [], rowsOf(cases)).tracks;
+
+  const expected = (one: TrackCase): string[] => (one.declares === null ? [] : [one.declares]);
+
+  test("every case classifies the same on both surfaces, and the same as the rule AC1 states", () => {
+    const measured = TRACK_FIXTURE.map((one) => ({
+      case: one.name,
+      server: serverTracks([one]),
+      browser: browserTracks([one]),
+    }));
+
+    // The two surfaces, case by case — a unilateral change names the case it
+    // broke and the value it answered.
+    expect(measured.map((row) => ({ case: row.case, tracks: row.browser }))).toEqual(
+      measured.map((row) => ({ case: row.case, tracks: row.server })),
+    );
+    // …and both against the SPELLED classification, so a change made to both
+    // rules in step is still a failure.
+    expect(measured).toEqual(
+      TRACK_FIXTURE.map((one) => ({
+        case: one.name,
+        server: expected(one),
+        browser: expected(one),
+      })),
+    );
+  });
+
+  test("driven over the whole fixture at once, both surfaces answer the same two lanes — the four non-lanes add none and the padded value collapses", () => {
+    const lanes = [
+      ...new Set(TRACK_FIXTURE.map((one) => one.declares).filter((one) => one !== null)),
+    ].sort();
+    // Non-vacuity: the fixture really does carry two lanes across eight rows,
+    // four of which declare no lane at all.
+    expect(lanes).toEqual(["2", "track-2"]);
+
+    const server = serverTracks(TRACK_FIXTURE);
+    const browser = browserTracks(TRACK_FIXTURE);
+
+    // POSITIVE — the server publishes them SORTED (AC1); the browser keeps
+    // first-appearance order, so the shared fact is the SET.
+    expect(server).toEqual(lanes);
+    expect([...browser].sort()).toEqual(lanes);
+    // BOUND — eight rows, two lanes: no third lane may appear on either side,
+    // and the non-string row lands in the SAME lane as the string `"2"`.
+    expect(server).toHaveLength(2);
+    expect(browser).toHaveLength(2);
+    expect(server).not.toContain(" track-2 ");
+    expect(browser).not.toContain(" track-2 ");
+    expect(server).not.toContain("   ");
+    expect(browser).not.toContain("   ");
+
+    // The READING both surfaces make of that list is `> 1` — multi-track — and
+    // the table's column is where the browser states it.
+    expect(server.length > 1).toBe(true);
+    expect(Browser.roadmapTableColumns(rowsOf(TRACK_FIXTURE))).toContain("track");
+  });
+
+  test("the collapse is observable on BOTH surfaces: a padded ` track-2 ` beside `track-2` and a blank is ONE track, and the browser draws no `track` column for it", () => {
+    const collapsing = TRACK_FIXTURE.filter(
+      (one) => one.declares === "track-2" || one.stored.track === "   ",
+    );
+    // Non-vacuity: three rows go in — the padded one, the canonical one and a
+    // whitespace-only one that must not count as the second lane.
+    expect(collapsing).toHaveLength(3);
+
+    expect(serverTracks(collapsing)).toEqual(["track-2"]);
+    expect(browserTracks(collapsing)).toEqual(["track-2"]);
+    // …so it is SINGLE-track, and the column that states "more than one" is
+    // absent. A rule that kept the padding or counted the blank would publish
+    // two lanes here and light this column up.
+    expect(Browser.roadmapTableColumns(rowsOf(collapsing))).not.toContain("track");
+    expect(Browser.roadmapTableColumns(rowsOf(collapsing))).toEqual([
+      "cr",
+      "title",
+      "deps",
+      "status",
+    ]);
   });
 });

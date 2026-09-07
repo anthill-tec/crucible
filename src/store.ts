@@ -362,6 +362,31 @@ export const TRACK_LANE_RULE =
   `tracks are numbered lanes (wire format track-<n>), so declare e.g. 2, track-2 or "Track 2"`;
 
 /**
+ * CR-CRU-108 §S1/AC1 — the DECLARED tracks over a set of queue entries: the
+ * sorted distinct non-blank `track` values, and the ONE place that rule is
+ * spelled. It lives beside `normalizeTrack` because it is the same lane
+ * identity read backwards: the normaliser decides what a lane is CALLED on
+ * write, this decides which stored values COUNT as a lane on read, and a
+ * second copy of either would let two surfaces answer "how many tracks?"
+ * differently — the divergence CR-CRU-108 removes.
+ *
+ * Excluded: `null`, an absent key, `""` and whitespace-only. Identity is the
+ * TRIMMED value and the trimmed value is what is published, so a stored
+ * `" track-2 "` collapses with `"track-2"` into ONE lane (preserving the
+ * padding would draw the second lane `normalizeTrack` exists to prevent).
+ * Never RE-SPELLED beyond that: a legacy `"2"` publishes as `"2"`. Pure
+ * derivation — it reads entries and rewrites no stored row.
+ */
+export function declaredTracks(entries: ReadonlyArray<{ track?: string | null }>): string[] {
+  const lanes = new Set<string>();
+  for (const entry of entries) {
+    const lane = String(entry.track ?? "").trim();
+    if (lane !== "") lanes.add(lane);
+  }
+  return [...lanes].sort();
+}
+
+/**
  * CR-CRU-091 §S1 — order two release labels by VERSION: numeric-component
  * compare, so `0.10.0` sorts AFTER `0.3.0` (a plain string compare puts it
  * before, which is the bug this exists to avoid).

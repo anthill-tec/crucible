@@ -1982,5 +1982,248 @@ class Cr075SharedRegistrarParityTest(unittest.TestCase):
             f"that missed it must be named: {offenders!r}")
 
 
+# ---------------------------------------------------------------------------
+# CR-CRU-108 §S2/AC4 -- the fleet's own copy of the track rule is DELETED.
+#
+# The retired construct is a distinct-SET COMPUTATION over the entries'
+# `track` values -- `sorted({e.get("track") for e in entries ...})` -- and the
+# sweep is repo-wide over `clients/`, not one file, because `queue_tracks` is
+# the shared delegator all five `*-crucible.py` clients reach: one cutover
+# covers the fleet, and a client that grew a private copy would defeat it.
+#
+# The rule is AST-shaped rather than a text grep, and it keys on what a
+# construct COLLECTS, for one reason that matters: `resolve_next`'s lane
+# FILTER (`[e for e in entries if canonical_track(e.get("track")) == wanted]`)
+# reads the same key and must SURVIVE §S2. A text grep for `e.get("track")`
+# would demand deleting it; this reads what the construct collects, so it
+# bans deriving the track LIST and leaves selecting a lane alone. Both halves
+# are proven on synthetic sources below rather than asserted.
+#
+# THE SWEEP IS OVER THE RULE, NOT OVER ONE SYNTAX. AC4's sentence is that the
+# re-derivation survives NOWHERE. A sweep that walked comprehensions only
+# would be satisfied by the same rule spelled as a `for` loop with `set.add`
+# or `list.append`, as `set(map(...))`, as a `filter` over a generator, or
+# tucked inside a private helper -- five ways to put back exactly what §S2
+# deleted with this file still green. Each of those shapes is swept, and each
+# is driven through the sweep below as its own synthetic source, beside the
+# lane-selecting shapes that must come back clean.
+#
+# WHERE THE COLLECT/TEST LINE IS DRAWN: the walk PRUNES at the positions that
+# merely TEST the key -- a comprehension's `if` clauses, a `filter`
+# predicate, a `sorted(key=...)` -- because those are the lane filter's own
+# spellings. `filter(pred, entries)` collects ENTRIES; `filter(None, tracks)`
+# collects tracks. One rule, read off the position rather than the name.
+# ---------------------------------------------------------------------------
+
+_CR108_RETIRED_TRACK_RULE = (
+    'sorted({e.get("track") for e in entries or [] if e.get("track")})')
+
+_CR108_SURVIVING_LANE_FILTER = (
+    '[e for e in entries if canonical_track(e.get("track")) == wanted]')
+
+# The retirement written every other way it could come back. Each source is a
+# WHOLE module the sweep parses, so "hidden in a private helper" is a real
+# case rather than an assertion about one: the walk is over the tree, and a
+# shape that only reads as a re-derivation at module level would be missed.
+_CR108_RETIRED_SHAPES = {
+    "set-comprehension": (
+        f"def queue_tracks(entries):\n"
+        f"    return {_CR108_RETIRED_TRACK_RULE}\n"),
+    "for-loop-with-set-add": (
+        'def queue_tracks(entries):\n'
+        '    lanes = set()\n'
+        '    for e in entries or []:\n'
+        '        if e.get("track"):\n'
+        '            lanes.add(e.get("track"))\n'
+        '    return sorted(lanes)\n'),
+    "for-loop-with-list-append": (
+        'def queue_tracks(entries):\n'
+        '    lanes = []\n'
+        '    for e in entries or []:\n'
+        '        lanes.append(e["track"])\n'
+        '    return sorted(set(lanes))\n'),
+    "set-of-map": (
+        'def queue_tracks(entries):\n'
+        '    return sorted(set(map(lambda e: e.get("track"), entries or [])))'
+        '\n'),
+    "filter-over-a-generator": (
+        'def queue_tracks(entries):\n'
+        '    return sorted(set(filter(None,\n'
+        '                             (e.get("track") for e in entries or []))'
+        '))\n'),
+    "private-helper": (
+        'def _lanes(entries):\n'
+        '    return {e["track"] for e in entries or [] if e["track"]}\n'
+        '\n'
+        'def queue_tracks(queue):\n'
+        '    return sorted(_lanes(queue.get("entries")))\n'),
+}
+
+# The shapes that read the same key and MUST come back clean. Without these
+# the widening above could be a text grep wearing an AST costume: every one of
+# them SELECTS or ORDERS entries, and none of them derives the track list.
+_CR108_SURVIVING_SHAPES = {
+    "comprehension-lane-filter": (
+        f"def resolve_next(entries, wanted):\n"
+        f"    return {_CR108_SURVIVING_LANE_FILTER}\n"),
+    "functional-lane-filter": (
+        'def resolve_next(entries, wanted):\n'
+        '    return list(filter(\n'
+        '        lambda e: canonical_track(e.get("track")) == wanted,\n'
+        '        entries))\n'),
+    "for-loop-lane-filter": (
+        'def resolve_next(entries, wanted):\n'
+        '    lane = []\n'
+        '    for e in entries or []:\n'
+        '        if canonical_track(e.get("track")) == wanted:\n'
+        '            lane.append(e)\n'
+        '    return lane\n'),
+    "sorted-keyed-on-the-track": (
+        'def ordered(entries):\n'
+        '    return sorted(entries, key=lambda e: e.get("track") or "")\n'),
+    "single-entry-field-copy": (
+        'def _next_fields(entry):\n'
+        '    fields = {}\n'
+        '    if entry.get("track"):\n'
+        '        fields["track"] = entry["track"]\n'
+        '    return fields\n'),
+}
+
+
+def _reads_track_key(node):
+    """True iff `node` reads an entry's `track` key, either spelling."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get" and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "track"):
+        return True
+    return (isinstance(node, ast.Subscript)
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value == "track")
+
+
+_COLLECTING_CALLS = ("set", "frozenset", "sorted", "map", "filter")
+
+
+def _collects_track_values(node):
+    """True iff evaluating `node` COLLECTS entries' `track` values.
+
+    A walk that PRUNES at every position where the key is merely TESTED -- a
+    comprehension's `if` clauses, a `filter` predicate, a call's keyword
+    arguments (`sorted(key=...)`) -- because those are how the lane filter
+    reads the same key, and it must survive."""
+    if _reads_track_key(node):
+        return True
+    if isinstance(node, ast.Lambda):
+        return _collects_track_values(node.body)
+    if isinstance(node, (ast.SetComp, ast.ListComp, ast.GeneratorExp)):
+        return _collects_track_values(node.elt)
+    if isinstance(node, ast.DictComp):
+        return (_collects_track_values(node.key)
+                or _collects_track_values(node.value))
+    if isinstance(node, ast.Call):
+        if isinstance(node.func, ast.Name) and node.func.id == "filter":
+            # `filter(pred, xs)` yields whatever `xs` yields; the predicate is
+            # a test, and testing the key is the lane filter's own shape.
+            return (len(node.args) > 1
+                    and _collects_track_values(node.args[1]))
+        return any(_collects_track_values(arg) for arg in node.args)
+    return any(_collects_track_values(child)
+               for child in ast.iter_child_nodes(node))
+
+
+def _accumulated_track_values(node):
+    """The expressions a `for` loop ACCUMULATES -- every argument of an
+    `.add(...)`/`.append(...)` call in its body. The imperative spelling of a
+    comprehension, and the one a comprehension-only sweep would miss."""
+    if not isinstance(node, (ast.For, ast.AsyncFor)):
+        return []
+    accumulated = []
+    for sub in ast.walk(node):
+        if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
+                and sub.func.attr in ("add", "append")):
+            accumulated.extend(sub.args)
+    return accumulated
+
+
+def _track_set_computations(source, filename="<scratch>"):
+    """Every construct in `source` that COLLECTS `track` values -- the
+    distinct-set computation AC4 retires, in any of its spellings -- as its
+    unparsed text. A construct that merely TESTS the key (the lane filter)
+    collects the entry itself and is not matched.
+
+    A match nested inside another match is dropped: `sorted({...})` is ONE
+    re-derivation reported once, not the wrapper and its argument twice."""
+    matched = []
+    for node in ast.walk(ast.parse(source, filename=filename)):
+        if isinstance(node, (ast.SetComp, ast.ListComp, ast.GeneratorExp,
+                             ast.DictComp)):
+            hit = _collects_track_values(node)
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+              and node.func.id in _COLLECTING_CALLS):
+            hit = _collects_track_values(node)
+        else:
+            hit = any(_collects_track_values(part)
+                      for part in _accumulated_track_values(node))
+        if hit:
+            matched.append(node)
+    nested = {id(sub) for node in matched for sub in ast.walk(node)
+              if sub is not node}
+    return [ast.unparse(node) for node in matched if id(node) not in nested]
+
+
+class Cr108TrackRuleIsNotRederivedByTheFleetTest(unittest.TestCase):
+    """AC4 -- `queue_tracks` contains no distinct-set computation: it reads the
+    published `tracks`. The BEHAVIOURAL half (a payload whose entries and whose
+    published list disagree) lives in
+    `tests/client/test_cr092_next_decision_resolver.py`; this is the sweep that
+    proves the deletion reached the whole fleet rather than one function."""
+
+    def test_the_sweep_finds_the_retired_computation_in_every_shape(self):
+        """Non-vacuity, half one, over the RULE rather than one syntax: after
+        §S2 lands, a detector blind to any of these shapes would make the fleet
+        verdict below pass for the wrong reason, and the shape it was blind to
+        is the shape the re-derivation comes back as."""
+        for shape, source in sorted(_CR108_RETIRED_SHAPES.items()):
+            with self.subTest(shape=shape):
+                found = _track_set_computations(source)
+                self.assertEqual(
+                    len(found), 1,
+                    f"the sweep must report this re-derivation exactly ONCE "
+                    f"-- a wrapper and its argument are one construct, not "
+                    f"two; got {found!r}")
+
+    def test_the_sweep_leaves_lane_selection_alone_in_every_shape(self):
+        """Non-vacuity, half two -- and the reason this is AST-shaped. Every
+        source here reads the `track` key and MUST survive §S2: three spell the
+        lane filter `--track` needs, one orders entries BY the key, and one is
+        the single-entry field copy `_next_fields` still makes. A sweep that
+        flagged any of them would demand deleting working code, which is how a
+        widened guard turns into a text grep."""
+        for shape, source in sorted(_CR108_SURVIVING_SHAPES.items()):
+            with self.subTest(shape=shape):
+                found = _track_set_computations(source)
+                self.assertEqual(
+                    found, [],
+                    f"reading the key is not deriving the track list: "
+                    f"{found!r}")
+
+    def test_no_file_in_clients_derives_the_track_list_itself(self):
+        offenders = {}
+        for path in sorted(CLIENTS_DIR.glob("*.py")):
+            found = _track_set_computations(
+                path.read_text(encoding="utf-8"), filename=str(path))
+            if found:
+                offenders[path.name] = found
+        self.assertEqual(
+            offenders, {},
+            f"AC4 -- the distinct-set computation over the entries' `track` "
+            f"values must survive NOWHERE under clients/: the queue read "
+            f"publishes that list and the fleet reads it. A second copy is "
+            f"the divergence this CR removes -- measured 2026-09-07, the "
+            f"client rule answered FOUR tracks where the server's answered "
+            f"TWO. Still derived in: {offenders!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

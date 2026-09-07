@@ -133,7 +133,14 @@ class _NextTestBase(unittest.TestCase):
             os.environ.pop(key, None)
 
     def resolve(self, entries, track=None):
-        return AXI.resolve_next(entries, track=track)
+        # CR-CRU-108 §S2 — the resolver is GIVEN the published track list
+        # (`declaredTracks`, src/store.ts:380) instead of deriving one. Every
+        # fixture in this file declares no track at all, so the published list
+        # is empty and no assertion here changes meaning.
+        return AXI.resolve_next(
+            entries, track=track,
+            tracks=sorted({(e.get("track") or "").strip() for e in entries
+                           if (e.get("track") or "").strip()}))
 
     def fields(self, entries, track=None):
         _ok, _code, fields, _warnings = self.resolve(entries, track=track)
