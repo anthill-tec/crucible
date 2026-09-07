@@ -1065,10 +1065,42 @@ describe("CR-CRU-097 AC3a — no runtime string a client EMITS names a CR", () =
 // re-recorded, as CR-CRU-093 re-recorded 405 -> 431, CR-CRU-109 431 -> 435
 // and CR-CRU-094 §S1 550 -> 556. The `develop` baselines are UNCHANGED at
 // 512/378/601 and stay the floors.
+// UPDATED 2026-09-07 by CR-CRU-094 §S3's fleet roll-out. `clients/` HEAD moves
+// 642 -> 672 (+30). §S3 landed as a pin on ONE client and one pair of call
+// sites; the roll-out gave the pre-flight to all five clients and to every
+// ingesting verb, and the +30 is one CR literal per added prose line — 30
+// lines added, NONE removed, so the net delta and the added-line count are the
+// same number, which is the cheapest form this table's arithmetic ever takes.
+// Per client: `clients/bun-crucible.py` +4 (124 -> 128), `python-crucible.py`
+// +7 (96 -> 103), `mvn-crucible.py` +7 (110 -> 117), `rust-crucible.py` +6
+// (103 -> 109) and `arduino-crucible.py` +6 (87 -> 93). Every one is a `#`
+// seam comment stating why the pre-flight sits at THAT call site (before the
+// runner spawns, while `--cycle` can still be supplied, and in the
+// envelope-owning caller rather than the shared helper) or a docstring line
+// documenting the new `warnings` / `preflight_warnings` parameter that carries
+// the finding into the envelope; none is in a string. 27 of the 30 name
+// CR-CRU-094 §S3 and the other 3 name CR-CRU-058 §S1 from INSIDE those same
+// §S3 blocks — the emit-free step-form rule is what fixes where the seam may
+// go, so the comment that explains the placement has to cite it.
+// `clients/_crucible_axi.py` re-measures UNCHANGED at 121 even though the
+// commit touches it: its whole diff is a line-number re-pin inside an existing
+// docstring, which moves no citation. `clients/toon.py` stays at 1.
+// Measured with THIS file's own `extractCitableText` over the working tree
+// against `git show 663a1c5:<path>` — the commit before the roll-out, not
+// `develop`, because the 642 being replaced is this CR's own §S2/§S3 figure —
+// file by file; the +30 decomposes exactly into the five per-client deltas
+// above (4 + 7 + 7 + 6 + 6) and 663a1c5 itself re-measures at the recorded
+// 642. `src/` and `public/` are untouched by the roll-out and re-measure at
+// 560 and 435.
+// GROWTH IS THE DIRECTION THE RULE PERMITS — only the equality pin is
+// re-recorded, as CR-CRU-093 re-recorded 405 -> 431 and CR-CRU-109 431 -> 435
+// for `public/`, and as this CR itself re-recorded `src/` 550 -> 556 and
+// 556 -> 560 and `clients/` 639 -> 642. The `develop` baselines are UNCHANGED
+// at 512/378/601 and stay the floors — a floor never moves for a re-pin.
 const PROSE_CITATIONS: Record<string, { exts: string[]; develop: number; head: number }> = {
   src: { exts: [".ts", ".mts", ".js", ".mjs"], develop: 512, head: 560 },
   public: { exts: [".js", ".mjs", ".mts", ".css", ".html"], develop: 378, head: 435 },
-  clients: { exts: [".py"], develop: 601, head: 642 },
+  clients: { exts: [".py"], develop: 601, head: 672 },
 };
 
 describe("CR-CRU-097 AC8 — provenance is intact, measured with the classifier that defines it", () => {
