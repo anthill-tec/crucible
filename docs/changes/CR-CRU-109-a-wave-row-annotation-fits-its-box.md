@@ -113,6 +113,39 @@ Nothing else about the row moves: the `next` marker, the status mark, the lifecy
 click/drill behaviour, and `entry.dependsOn`'s full ids (CR-CRU-102 AC3 — the abbreviation is
 display-only) all stay as they are.
 
+### §S3 A diagnostic stays a diagnostic when it moves inside `expect()`
+
+*Added 2026-09-07 by user ruling, at this CR's merge gate.* Carried in cycle 357 rather than a
+cycle appended after VERIFY, for the reason recorded on plan 112's cycle 354: `cycle-add` appends
+at the tail, so a new cycle would be unactivatable in the right place, and aborting a plan to fix
+its shape destroys real run records.
+
+CR-CRU-097's tripwire refuses to let a test assert on a real project CR literal, and exempts a
+test's own **thrown diagnostic** — "a provenance comment wearing a string's clothes because
+`throw` needs one" (`tests/project-namespace-tripwire.test.ts:153-173`). That exemption is
+deliberately uncoded: a `throw` sits outside every assertion span *by construction*, so the scope
+rule already spares it. The same comment refuses to key an exemption on `new Error(` because
+inside an assertion `expect(fn).toThrow(new Error("CR-X-1"))` is a **product contract** and must
+stay reportable.
+
+Bun's `expect(actual, message)` breaks that construction: the message parameter is the identical
+diagnostic, in the identical role, but it sits INSIDE the assertion span. This CR's own AC8 guard
+is exactly that shape in four suites —
+`expect(typeof value, "public/app-logic.mjs exports no numeric DEPENDENCY_ANNOTATION_CAP — …")` —
+and the tripwire reported all six of this CR's diagnostics as literals asserted on a real project.
+
+The ruling is that the exemption follows the ROLE, not the syntax that carries it: bun's API
+defines that second argument as the failure message, so it is never compared against a product
+value and never rendered to any project's user. It is therefore exempt, **in code this time**,
+because unlike `throw` it cannot be spared by construction. The boundary is narrow and stated:
+only the second argument of an `expect(` call, only when a callback does not begin inside it, and
+**nothing about `toThrow`/`toThrowError` arguments changes** — a product's expected error message
+stays fully reportable.
+
+This edits a guard CR-CRU-097 shipped, not the CR-CRU-097 document. It is recorded here, with the
+ruling's date, because §S5 of that CR refused to churn unrelated files from inside a tripwire CR
+and the inverse courtesy is owed: a later CR that widens its guard says so in its own scope.
+
 ## Acceptance criteria
 
 - **AC1** — a `PENDING` row declaring **three or more** dependencies renders the first **two** bare
@@ -184,6 +217,27 @@ display-only) all stay as they are.
     states two declared ids and is unaffected by the cap.
   A suite left asserting `deps 014, 091, 092, 095`, or left asserting that every declared
   dependency is named in zone 2, fails this CR.
+- **AC10** (§S3, added 2026-09-07 by user ruling) — CR-CRU-097's tripwire treats the **message
+  argument of an `expect()` call** as a diagnostic, exactly as it already treats a thrown one, and
+  this CR's six diagnostics stop being reported. The exemption is proven, not asserted, on the
+  tripwire's OWN planted fixture (`SYNTHETIC_TRIPWIRE_FIXTURE`, its non-vacuity mechanism) with
+  four cases:
+  - a real-namespace id in `expect(actual, "…")`'s message is NOT reported;
+  - the same id in the same file's ordinary assertion position IS still reported — the exemption
+    is narrow, not a file-level pass;
+  - `expect(fn).toThrow(new Error("CR-…"))` IS still reported, because a product's expected error
+    message is a product contract. This is the case the shipped comment named as the reason it
+    refused to key an exemption on `new Error(`, so it is the case that must keep failing;
+  - the message argument of a `describe`/`test` call is untouched — title handling is AC7's own
+    exemption and does not change.
+  No pin in `PRE_CR_ASSERTION_RESIDUE` is raised for any of the four suites: the table is a
+  ceiling, an absent file must read ZERO, and re-admitting real ids to those files would trade a
+  guard for a green run. `tests/roadmap-release-focus.test.ts` stays pinned at **11**, and the
+  three others stay absent.
+  AC8's recorded `public` prose-citation figure moves **431 → 435**, the four citations this CR's
+  production diff adds. That is growth in the direction its own rule permits ("never below its
+  develop baseline"); only the equality pin is re-recorded, by measurement, per the precedent set
+  when CR-CRU-093 re-recorded 405 → 431.
 
 ## Estimated size
 
