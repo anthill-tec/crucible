@@ -146,10 +146,21 @@ there for all five clients, on success and on both failure paths. Presence and
 conformance are distinct assertions, because a wired subparser that emits prose
 is still a conformance failure.
 
-**AC6 — behaviour unchanged.** The shared `cmd_queue_file` / `parse_queue_table`
-and the `/queue` endpoint are untouched; CR-014's `queue-file` tests
-(`tests/client/test_queue_file_verb.py`, 7 tests) still pass byte-unchanged.
-This is wiring plus a registrar, not a re-implementation.
+**AC6 — no re-implementation.** `parse_queue_table` is unchanged; so is the
+`/queue` endpoint and the POST body `cmd_queue_file` sends; so is its exit-code
+behaviour. CR-014's `queue-file` tests (`tests/client/test_queue_file_verb.py`,
+7 tests) pass byte-unchanged with that file untouched. This is wiring plus a
+registrar, not a rewrite.
+
+The ONE exception, and its reason: `cmd_queue_file`'s two failure paths emit
+`{"error": msg}` with no `help[]`, so AC2 is unsatisfiable without adding one —
+`ops.emit`'s fifth positional is `warnings`, and the success path already carries
+its help inside `result_fields`. AC2 governs: structured errors with an
+actionable `help[]` are what this CR exists to enforce. Each of the two gets the
+help for ITS failure — the unreadable-source path names the path it tried and
+that `--from-file` overrides it; the malformed-row path points at the row it
+names. A generic array shared by both, or an echo of the success path's, fails
+AC2.
 
 **AC7 — Model B intimated.** A Sandesh message records the new fleet verb.
 NOT TEST-VERIFIABLE, and said so deliberately: it is a standing cross-project
