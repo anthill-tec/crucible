@@ -113,7 +113,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-085](CR-CRU-085-roadmap-multi-track-lanes.md) | multi-track swimlanes inside a wave | feature | COMPLETED (0.2.0) | 078 | 5 (0.2.0) |
 | [CR-CRU-093](CR-CRU-093-project-rail-collapses.md) | the project rail collapses, giving every workspace view its width back | feature | COMPLETED (0.2.0) | 006 | 5 (0.2.0) |
 | [CR-CRU-075](CR-CRU-075-queue-file-fleet-parity.md) | queue-file fleet parity + AXI verb-surface census enforcement | patch | PENDING (0.2.0) | 014, 091, 092, 095 | 5 (0.2.0) |
-| [CR-CRU-094](CR-CRU-094-agent-participation-is-recorded.md) | agent participation is recorded, not inferred | feature | PENDING (0.2.0) | 056 | 5 (0.2.0) |
+| [CR-CRU-094](CR-CRU-094-agent-participation-is-recorded.md) | agent participation is recorded, not inferred | feature | COMPLETED (0.2.0) | 056 | 5 (0.2.0) |
 | [CR-CRU-108](CR-CRU-108-one-published-track-fact-and-an-unstarvable-help-test.md) | one published multi-track fact, and a printed-help test that cannot be starved | patch | PENDING (0.2.0) | 085, 092, 097 | 5 (0.2.0) |
 | [CR-CRU-109](CR-CRU-109-a-wave-row-annotation-fits-its-box.md) | a wave row's dependency annotation fits the box it is drawn in | patch | COMPLETED (0.2.0) | 096, 102 | 5 (0.2.0) |
 
@@ -245,6 +245,24 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   nor warns that the README's status column disagrees with the board. Re-recorded via `cr-void`;
   no other README VOID was affected. A patch should at least WARN on a README-vs-board lifecycle
   disagreement at import.
+
+- 2026-09-07 — **the pre-merge gate does not run the python client suites at all** (candidate patch
+  CR, found executing CR-CRU-094). `pre-merge-gate` is `check` (tsc) → `regression --coverage`, and
+  `regression` is `bun test` — which collects `tests/**/*.test.ts`. The **65 files in
+  `tests/client/*.py`** (1,300+ tests: the whole five-client fleet surface, every AXI envelope
+  assertion, the citation guards) are collected by NOTHING the gate runs. Consequences measured
+  today, both on `develop`: (1) `tests/client/test_cr092_next_decision_resolver.py` was **already
+  failing on `develop`** — verified in a throwaway `develop` worktree — with a drifted
+  `LANDED_STATUSES` citation into `src/store.ts:3961`, and three green gates have passed over it
+  since, because the gate never collected the file; (2) CR-CRU-094 is a client-heavy CR whose entire
+  §S3/§S4 surface is python, so every one of its counts had to be measured by hand, per suite, by
+  the orchestrator and its agents — the gate would have reported 2156/0 with the client fleet
+  untouched. The bun-side equivalent (`bun test` finding a broken TS suite) is guarded; the python
+  side is not, on the stack that ships to PyPI. Fix is a gate step, not a new harness: the python
+  fleet already has a runner (`python-crucible.py regression`, which ingests) — the gate should
+  chain it, or `pre-merge-gate` should refuse to claim a verdict it did not measure. Note the
+  asymmetry is invisible from the envelope: the gate prints `files: 152` and says nothing about the
+  65 it never looked at.
 
 - **CHECKED AND FOUND CORRECT — the unregistered-caller 409 is not misleading. Do not re-file it.**
   2026-08-28: the orchestrator was refused three times in one session

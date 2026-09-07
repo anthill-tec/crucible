@@ -7,12 +7,7 @@
   membership is the user's call and this records theirs.
 - **Depends on**: 056 — **COMPLETED** (wave 4, plan closed, merged at `5844a91`), so this CR is
   dependency-clear and schedulable immediately.
-- **Status**: PENDING (0.2.0) — filed 2026-08-28 on user direction, moved into 0.2.0 the same day —
-  **gap-analysed 2026-09-07** against `develop`@`35cf967`, baseline measured (131 bun / 0 fail across
-  nine suites, 190 python + 9 subtests / 0 fail across five): all three of §S1–§S3's premises
-  re-verified TRUE, five of seven code citations re-pinned to SYMBOLS after drift, the
-  `context.cycleId` consumer set corrected from one to FOUR, §S4's rename surface measured NUL-safe
-  as smaller than the Risk feared, and §S3 re-timed to PRE-FLIGHT by user ruling.
+- **Status**: COMPLETED (0.2.0) — shipped 2026-09-07
 
 > **Lineage: this completes CR-056, it does not correct it.** CR-CRU-056 is
 > *"Agent registration binds its cycle EXPLICITLY; server-side auto-attach guessing is DELETED"* —
