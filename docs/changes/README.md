@@ -115,7 +115,7 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-075](CR-CRU-075-queue-file-fleet-parity.md) | queue-file fleet parity + AXI verb-surface census enforcement | patch | PENDING (0.2.0) | 014, 091, 092, 095 | 5 (0.2.0) |
 | [CR-CRU-094](CR-CRU-094-agent-participation-is-recorded.md) | agent participation is recorded, not inferred | feature | PENDING (0.2.0) | 056 | 5 (0.2.0) |
 | [CR-CRU-108](CR-CRU-108-one-published-track-fact-and-an-unstarvable-help-test.md) | one published multi-track fact, and a printed-help test that cannot be starved | patch | PENDING (0.2.0) | 085, 092, 097 | 5 (0.2.0) |
-| [CR-CRU-109](CR-CRU-109-a-wave-row-annotation-fits-its-box.md) | a wave row's dependency annotation fits the box it is drawn in | patch | PENDING (0.2.0) | 096, 102 | 5 (0.2.0) |
+| [CR-CRU-109](CR-CRU-109-a-wave-row-annotation-fits-its-box.md) | a wave row's dependency annotation fits the box it is drawn in | patch | COMPLETED (0.2.0) | 096, 102 | 5 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
