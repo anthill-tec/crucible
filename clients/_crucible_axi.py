@@ -1060,9 +1060,24 @@ CYCLE_SELECTION_REQUIRED_CODE = "cycle-selection-required"
 CYCLE_LIST_EMPTY_CODE = "cycle-list-empty"
 
 # The corrected call every refusal hands back: one label per flag, so there is
-# no delimiter left to collide with the label's own punctuation (§S1).
+# no delimiter left to collide with the label's own punctuation (§S1). The two
+# occurrences carry DISTINCT placeholders (`<c1>`/`<c2>`, the form AC8 pins on
+# `_next_start_help`): one identical token repeated reads as a duplicated
+# argument to anyone copying it out of a refusal envelope, which is the
+# opposite of the repetition the template exists to teach.
 CYCLE_FLAG_TEMPLATE = ('plan-file --cr <CR-id> --title "<brief>" '
-                       '--cycle "<label>" --cycle "<label>" --agent <agentId>')
+                       '--cycle "<c1>" --cycle "<c2>" --agent <agentId>')
+
+
+def cycle_list_empty_help():
+    """§S2 — the `cycle-list-empty` remedy, shared by BOTH halves of the same
+    defect: a `--cycle` occurrence that names no cycle and a `--cycles` value
+    that splits to nothing. One list, so the two cannot drift into telling the
+    caller different things about the same refusal."""
+    return [f"{CYCLE_FLAG_TEMPLATE} — one label per flag, so a label carrying "
+            f"commas or semicolons files as ONE cycle",
+            'or give --cycles a comma-separated list with at least one '
+            'non-empty label, e.g. --cycles "c1,c2"']
 
 
 class CycleSelectionRefused(Exception):
@@ -2149,8 +2164,9 @@ def plan_file_cycle_labels(args):
     416 cycles, no character rule separates the four mis-filed labels from the
     ten that use a semicolon as ordinary punctuation).
 
-    Exactly one source. Both flags, neither flag, or a `--cycles` that splits to
-    nothing raises `CycleSelectionRefused` — the caller posts NOTHING."""
+    Exactly one source. Both flags, neither flag, a `--cycle` occurrence that
+    is empty or whitespace-only, or a `--cycles` that splits to nothing raises
+    `CycleSelectionRefused` — the caller posts NOTHING."""
     repeated = list(getattr(args, "cycle", None) or ())
     legacy = getattr(args, "cycles", None)
     if repeated and legacy is not None:
@@ -2164,6 +2180,22 @@ def plan_file_cycle_labels(args):
              'or keep the legacy form alone: plan-file --cr <CR-id> --cycles '
              '"<c1,c2>" --agent <agentId>'])
     if repeated:
+        # §S2 — an occurrence that names no cycle is the same defect as an
+        # empty `--cycles`, and gets the same `cycle-list-empty` refusal rather
+        # than the server's bare `label is required` (which carries no help[]).
+        # The realistic trigger is an unset shell variable: --cycle "$LABEL".
+        # The emptiness TEST strips; the values that are KEPT never do — the
+        # strip below decides only whether a value is blank, and `repeated` is
+        # returned untouched, so AC2's byte-for-byte pass-through still files
+        # `--cycle " a "` as the label ' a '.
+        blank = [label for label in repeated if not label.strip()]
+        if blank:
+            raise CycleSelectionRefused(
+                CYCLE_LIST_EMPTY_CODE,
+                f"--cycle was given as {blank[0]!r}, which names no cycle — "
+                f"usually an unset shell variable in --cycle \"$LABEL\". "
+                f"Nothing was posted.",
+                cycle_list_empty_help())
         return repeated
     if legacy is None:
         raise CycleSelectionRefused(
@@ -2180,10 +2212,7 @@ def plan_file_cycle_labels(args):
             CYCLE_LIST_EMPTY_CODE,
             f"--cycles was given as {legacy!r}, which names no cycle once split "
             f"on commas. Nothing was posted.",
-            [f"{CYCLE_FLAG_TEMPLATE} — one label per flag, so a label carrying "
-             f"commas or semicolons files as ONE cycle",
-             'or give --cycles a comma-separated list with at least one '
-             'non-empty label, e.g. --cycles "c1,c2"'])
+            cycle_list_empty_help())
     return labels
 
 

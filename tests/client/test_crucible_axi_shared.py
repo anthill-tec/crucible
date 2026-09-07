@@ -1577,6 +1577,71 @@ class SharedAxiPlanFileCycleFlagTest(unittest.TestCase):
             f"replaced by the envelope, not printed beside it; got "
             f"stderr={err!r}")
 
+    def _legacy_empty_help(self):
+        """The `help[]` an empty `--cycles` hands back, read off a REAL run of
+        the refusal rather than the module constant — it is the caller-visible
+        remedy the empty-`--cycle` half has to match."""
+        code, out, err, posts = self._run(cycles=",,")
+        self.assertEqual(code, 2, f"stdout={out!r} stderr={err!r}")
+        return [str(h) for h in (self._decode(out).get("help") or [])]
+
+    def test_an_empty_cycle_occurrence_is_refused_at_the_door_not_by_the_server(self):
+        """§S2 — `--cycle ""` composed `cycles: [{"label": ""}]` and POSTed it;
+        the server rejects the whole request with a bare `label is required`
+        and no `help[]`, so the caller learned nothing and nothing landed. The
+        realistic trigger is an unset shell variable, `--cycle "$LABEL"`. It is
+        the same defect as the empty `--cycles`, so it is the same refusal:
+        posted nothing, `cycle-list-empty`, and the SAME actionable help[]."""
+        code, out, err, posts = self._run(cycle=[""])
+        axi = self._assert_structured_refusal(code, out, err, posts,
+                                              ac="empty --cycle")
+        self.assertRegex(
+            str(axi.get("error") or ""), r"--cycle\b",
+            f"the error must name the flag whose value named no cycle; got "
+            f"{axi!r}")
+        self.assertIn(
+            "cycle-list-empty", err,
+            f"the empty `--cycle` is the SAME refusal code as the empty "
+            f"`--cycles`, so a caller matching on the code catches both; got "
+            f"stderr={err!r}")
+        self.assertEqual(
+            [str(h) for h in (axi.get("help") or [])], self._legacy_empty_help(),
+            f"both halves of the empty-cycle-list defect must hand back the "
+            f"same remedy, or the caller's fix depends on which flag they "
+            f"happened to use; got {axi!r}")
+
+    def test_a_whitespace_only_cycle_names_no_cycle_but_a_kept_value_is_never_stripped(self):
+        """The ruling, pinned in one place because the two halves are easy to
+        confuse: `--cycle " "` names no cycle and is REFUSED (a filed label of
+        one space is a mis-filed plan nobody asked for, and `" "` arrives the
+        same way `""` does — from an unset variable). The strip that decides
+        that is a TEST only: a value that is kept still files byte-for-byte, so
+        `--cycle " a "` posts `' a '` with its spaces intact (AC2)."""
+        for blank in (" ", "\t", "   \n"):
+            with self.subTest(refused=blank):
+                code, out, err, posts = self._run(cycle=[blank])
+                self._assert_structured_refusal(code, out, err, posts,
+                                                ac=f"whitespace-only {blank!r}")
+        code, out, err, posts = self._run(cycle=[" a "])
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        self.assertEqual(
+            posts[0][1].get("cycles"), [{"label": " a "}],
+            f"AC2: refusing whitespace-ONLY values must not put a strip on the "
+            f"values that are kept — ' a ' files with its spaces; got "
+            f"payload={posts[0][1]!r}")
+
+    def test_one_empty_occurrence_among_valid_ones_refuses_the_whole_call(self):
+        """An empty occurrence beside good labels is refused, not dropped: the
+        caller asked for three cycles, and silently filing two is exactly the
+        mis-filed plan this CR exists to end. Nothing is posted, so no partial
+        plan lands for the caller to notice later."""
+        code, out, err, posts = self._run(cycle=["", "a"])
+        self._assert_structured_refusal(code, out, err, posts,
+                                        ac="empty among valid")
+        code, out, err, posts = self._run(cycle=["a", "", "b"])
+        self._assert_structured_refusal(code, out, err, posts,
+                                        ac="empty between valid")
+
 
 if __name__ == "__main__":
     unittest.main()
