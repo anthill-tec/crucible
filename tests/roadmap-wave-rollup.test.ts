@@ -63,6 +63,25 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import * as AppLogic from "../public/app-logic.mjs";
+
+// ── CR-CRU-109 §S1/AC8 — the DISPLAY CAP, read from its ONE definition ─────
+//
+// The number is spelled in exactly one test in this repo (CR-CRU-109's AC8
+// test, tests/roadmap-bare-dependency-annotation.test.ts); everywhere else,
+// here included, the expectation is composed from what the product publishes.
+// Absent until the cap exists, and this assertion NAMES the absence rather
+// than letting an `undefined` leak into arithmetic.
+const capOf = (): number => {
+  const value = (AppLogic as unknown as { DEPENDENCY_ANNOTATION_CAP?: unknown })
+    .DEPENDENCY_ANNOTATION_CAP;
+  expect(
+    typeof value,
+    "public/app-logic.mjs exports no numeric DEPENDENCY_ANNOTATION_CAP — CR-CRU-109 §S1/AC8's " +
+      "display cap has no single definition for this suite to read",
+  ).toBe("number");
+  return value as number;
+};
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const VAN_SRC = readFileSync(
@@ -316,7 +335,11 @@ const HOLD_SKIP_ANSWER = "CR-H-3";
  *  whether the slot names the full id or (as the artifact's own
  *  `deps 091, 092` does) its tail. `CR-K-1` is also the first actionable row,
  *  so this fixture pins the artifact's COMBINED slot — `next · deps …` — and
- *  `CR-K-3` declares nothing, which is AC13's "no deps → no annotation". */
+ *  `CR-K-3` declares nothing, which is AC13's "no deps → no annotation".
+ *
+ *  CR-CRU-109 §S1 — four declared is now more than the row STATES: the slot
+ *  names the first two and counts the other two. The fixture is unchanged;
+ *  what changed is what the assertions read out of it. */
 const FOUR_DEPS = ["CR-D-11", "CR-D-22", "CR-D-33", "CR-D-44"];
 const ONE_DEP = ["CR-D-55"];
 const DEPS_WAVE: QueueFixture[] = [
@@ -1085,29 +1108,64 @@ describe("CR-CRU-096 §S4/AC12a — the marker states position in the published 
   });
 });
 
-// ── §S4/AC13 — `deps <ids>` names ALL of them ──────────────────────────────
+// ── §S4/AC13 — `deps <ids>` ACCOUNTS for all of them ───────────────────────
+//
+// CR-CRU-109 §S1 SUPERSEDES AC13's completeness claim for zone 2 — user
+// ruling 2026-09-07, "cap wins". Two of CR-CRU-096's own ACs were in latent
+// conflict from the day both shipped: AC13 says zone 2 names EVERY declared
+// dependency (unbounded content) and AC20/AC4 says the wave box fits the
+// design's ~300px (bounded surface). Real data carrying four dependencies AND
+// the `next` marker measured 333.0px, so both could not hold. The budget wins
+// and the row states the first `DEPENDENCY_ANNOTATION_CAP` declared ids and
+// then the COUNT of the rest.
+//
+// The completeness did not disappear, it MOVED: zone 3's `deps` column states
+// the whole set for the same row (CR-CRU-109 AC7, asserted in one render in
+// tests/roadmap-bare-dependency-annotation.test.ts). What AC13 still owns and
+// what this test still asserts is that the slot ACCOUNTS for every declared
+// dependency — by naming it or by counting it — that WHICH ones it names is
+// decidable, and that a row declaring none renders no slot at all.
 
-describe("CR-CRU-096 §S4/AC13 — a pending row with dependencies names every one of them; no deps, no annotation", () => {
-  test("a row declaring FOUR deps names four, the combined slot carries `next` beside them, and a row declaring none renders no annotation", async () => {
+describe("CR-CRU-096 §S4/AC13, as superseded by CR-CRU-109 §S1 — a pending row accounts for every dependency it declares: the first two named, the rest counted; no deps, no annotation", () => {
+  test("a row declaring FOUR deps names the first two and states `+2`, the combined slot carries `next` beside them, and a row declaring none renders no annotation", async () => {
     await mountApp({ queue: board(DEPS_WAVE) });
     expectFocused040();
 
     expect(rowCrs("1")).toEqual(["CR-K-1", "CR-K-2", "CR-K-3"]);
     expect(FOUR_DEPS.length).toBe(4);
 
-    // FOUR, all of them. Each dep is accepted either as its full id or as its
-    // distinguishing tail: the approved artifact abbreviates
-    // (`deps 091, 092`), and no AC rules on the form — only on completeness.
-    // The synthetic ids carry distinct tails so both readings are decidable.
+    // FOUR declared, and every one of them ACCOUNTED FOR. The first `cap` are
+    // NAMED — each accepted either as its full id or as its distinguishing
+    // tail, because the approved artifact abbreviates (`deps 091, 092`) and no
+    // AC rules on the form; the synthetic ids carry distinct tails so both
+    // readings are decidable. The rest are COUNTED, and asserting BOTH halves
+    // is what makes a renderer that named the WRONG two fail here.
+    const cap = capOf();
     const four = annotationOf("1", "CR-K-1");
     expect(four.toLowerCase()).toContain("deps");
-    for (const dep of FOUR_DEPS) {
+    for (const dep of FOUR_DEPS.slice(0, cap)) {
       const tail = dep.split("-").at(-1)!;
       const named = four.includes(dep) || new RegExp(`\\b${tail}\\b`).test(four);
-      expect(named, `the four-dep slot does not name ${dep} — it reads "${four}"`).toBe(true);
+      expect(named, `the capped slot does not name ${dep} — it reads "${four}"`).toBe(true);
     }
-    // ALL of them means all: the slot does not truncate to three, nor to an
-    // "and 1 more".
+    for (const dep of FOUR_DEPS.slice(cap)) {
+      const tail = dep.split("-").at(-1)!;
+      const named = four.includes(dep) || new RegExp(`\\b${tail}\\b`).test(four);
+      expect(named, `the capped slot names ${dep} beyond the cap — it reads "${four}"`).toBe(
+        false,
+      );
+    }
+    // The ones it did not name are COUNTED, so the row still says how much it
+    // is not showing: `+2` for the two it withheld.
+    expect(
+      four.endsWith(` +${FOUR_DEPS.length - cap}`),
+      `the slot states no remainder count for the ${FOUR_DEPS.length - cap} deps it withheld ` +
+        `— it reads "${four}"`,
+    ).toBe(true);
+    // AC13's anti-truncation clause, RE-AIMED rather than dropped: a remainder
+    // must be a countable NUMBER. "Some were hidden" with no figure is still
+    // the defect — an ellipsis, or a bare `more` carrying no count, tells a
+    // reader that something is missing without telling them how much.
     expect(four.toLowerCase()).not.toMatch(/\bmore\b/);
     expect(four).not.toContain("…");
     expect(four).not.toContain("...");
@@ -1131,8 +1189,10 @@ describe("CR-CRU-096 §S4/AC13 — a pending row with dependencies names every o
 
     // §S6's width budget is measured against four deps in cycle 313's Chromium
     // suite (AC27) — the annotation's rendered width needs a layout engine,
-    // and happy-dom has none. What is pinned here is that all four are IN the
-    // slot, which is the fact the budget is measured against.
+    // and happy-dom has none. What is pinned here is that all four are
+    // ACCOUNTED FOR in the slot — two named, two counted — which is the shape
+    // the budget is now measured against (CR-CRU-109 §S1: 292.5px against the
+    // design's ~300px, where the uncapped row measured 333.0px).
   });
 });
 

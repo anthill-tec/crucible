@@ -59,6 +59,44 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Server } from "bun";
 import type { Browser, Page } from "playwright";
+import * as AppLogic from "../public/app-logic.mjs";
+
+// ── CR-CRU-109 §S1/AC8 — the DISPLAY CAP, read from its ONE definition ─────
+//
+// A PENDING row states the first `DEPENDENCY_ANNOTATION_CAP` declared ids and
+// then the COUNT of the rest, because the unbounded list put the live wave
+// box at 333.0px against the design's ~300px budget. The number is spelled in
+// exactly one test in this repo (CR-CRU-109's AC8 test,
+// tests/roadmap-bare-dependency-annotation.test.ts); the shapes below are
+// composed from what the product publishes, so a cap that moves again moves
+// this suite's guards with it. Absent until the cap exists, and the assertion
+// NAMES the absence rather than compiling a regex out of `undefined`.
+const capOf = (): number => {
+  const value = (AppLogic as unknown as { DEPENDENCY_ANNOTATION_CAP?: unknown })
+    .DEPENDENCY_ANNOTATION_CAP;
+  expect(
+    typeof value,
+    "public/app-logic.mjs exports no numeric DEPENDENCY_ANNOTATION_CAP — CR-CRU-109 §S1/AC8's " +
+      "display cap has no single definition for this suite to read",
+  ).toBe("number");
+  return value as number;
+};
+
+/** The annotation a row declaring `declaredCount` dependencies renders, as a
+ *  SHAPE, for a board whose ids abbreviate to numeric tails: the cap's worth
+ *  of bare ids and then the remainder as a COUNT.
+ *
+ *  It stays a real guard, which is the whole reason it is anchored at both
+ *  ends: a slot that fell back to full published ids fails `\d+`, one that
+ *  elided (`…`, `and 1 more`) fails the `\+\d+` tail, one that truncated with
+ *  no remainder fails it too, and one that stated the wrong NUMBER of ids
+ *  fails the repetition count. */
+const cappedBareShape = (declaredCount: number, marked = false): RegExp => {
+  const cap = capOf();
+  return new RegExp(
+    `^${marked ? "next · " : ""}deps \\d+(?:, \\d+){${cap - 1}} \\+${declaredCount - cap}$`,
+  );
+};
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const PUBLIC_DIR = path.join(REPO_ROOT, "public");
@@ -454,9 +492,11 @@ const REAL_SURFACE_W = 991;
  *
  *  THE TAILS ARE THE POINT. `CR-B-101` beside `CR-B-014` shares `CR-B-` (the
  *  two part at the first digit and the trim takes that digit back), leaving
- *  `014` — entirely digits, so the row renders `deps 014, 091, 092, 095`.
- *  That is byte-for-byte the annotation the live board renders for its own
- *  four-dependency row, and the string AC1 names. A fixture whose remainder
+ *  `014` — entirely digits, so the row renders `deps 014, 091 +2`: CR-CRU-109
+ *  §S1 caps what the row STATES at the first two declared ids plus the count
+ *  of the rest, and it still DECLARES four, which is the case the design's
+ *  figure is stated against. That is byte-for-byte the annotation the live
+ *  board renders for its own four-dependency row. A fixture whose remainder
  *  were NOT numeric would fall back to the published ids (AC7) and measure
  *  the very width CR-CRU-102 removes.
  *
@@ -509,8 +549,9 @@ const BARE_DEPS_QUEUE: QueueFixture[] = [
  *  — the spine budget is read PER WAVE BOX, and the boxes therefore share one
  *  line — is what the reading is stated against. The first scheduled row of
  *  wave `5` declares all four dependencies, so the zone's single `next`
- *  marker prefixes the widest annotation there is; wave `6` carries the same
- *  rows without the marker. Served at `REAL_SURFACE_W`, the width the app
+ *  marker prefixes the widest annotation there is — `next · deps 014, 091 +2`
+ *  once CR-CRU-109 §S1 caps what is stated; wave `6` carries the same rows
+ *  without the marker. Served at `REAL_SURFACE_W`, the width the app
  *  itself reports, because "do two boxes fit one line" is only a question at
  *  the surface a user actually browses. */
 const STACKED_DEPS_PROPOSALS: ProposalFixture[] = [
@@ -843,6 +884,10 @@ let liveDepsFixtureUrl = "";
  *  than named here: which row it is decays as the backlog moves, and AC29 is
  *  why nothing in this file may depend on today's answer. */
 let liveDepsCr = "";
+/** How many dependencies THAT row declares, captured beside it: CR-CRU-109
+ *  §S1's remainder is a COUNT, so the shape the annotation must take is a
+ *  function of the live row's own declaration and cannot be pinned here. */
+let liveDepsDeclared = 0;
 /** WHY the live corroboration did not run, in words. Exactly one of this and
  *  `liveDepsZones` is set: the third state — neither captured nor explained —
  *  is what the corroboration test refuses, so a `beforeAll` that silently
@@ -995,6 +1040,7 @@ async function captureLiveDeps(): Promise<string> {
     );
   }
   liveDepsCr = widest.cr;
+  liveDepsDeclared = declared;
   liveDepsZones = await captureZones({ releases, proposals, queue });
   return "";
 }
@@ -2964,16 +3010,23 @@ describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and
     // against, and a board that abbreviated nothing would measure the width
     // CR-CRU-102 exists to remove. The bare form is what the pattern below
     // can only match: a published id fails `\d+`.
+    //
+    // CR-CRU-109 §S1 — the row still DECLARES four, which is the case the
+    // design's figure is stated against; what it STATES is the first two and
+    // then `+2`, so the shape is composed from the fixture's own declared
+    // count through the published cap (`cappedBareShape`). The guard did not
+    // weaken: an uncapped `deps 014, 091, 092, 095` fails it just as a
+    // full-id fallback does.
     const slots = await boxesOf('[data-testid="roadmap-node-annotation"]');
     const declared = slots
       .filter((slot) => slot.text.includes("deps "))
       .map((slot) => slot.text.slice(slot.text.indexOf("deps ")));
-    const four = declared.filter((text) => /^deps \d+(?:, \d+){3}$/.test(text));
+    const four = declared.filter((text) => cappedBareShape(BARE_DEPS.length).test(text));
     expect(
       four.length,
-      `no DRAWN row renders four dependencies in the bare form — this board's annotations ` +
-        `read ${JSON.stringify(declared)}, so its wave box is not the case the design's ` +
-        `~${BUDGET.wave}px figure is stated against`,
+      `no DRAWN row renders ${BARE_DEPS.length} declared dependencies in the capped bare form ` +
+        `(CR-CRU-109 §S1) — this board's annotations read ${JSON.stringify(declared)}, so its ` +
+        `wave box is not the case the design's ~${BUDGET.wave}px figure is stated against`,
     ).toBeGreaterThan(0);
 
     // The two readings AC4 asks for. Both messages carry the MEASURED number,
@@ -3042,7 +3095,7 @@ describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and
     // the test could measure the live-shaped board a second time.
     const slots = await boxesOf('[data-testid="roadmap-node-annotation"]');
     const stacked = slots.filter((slot) =>
-      /^next · deps \d+(?:, \d+){3}$/.test(slot.text),
+      cappedBareShape(BARE_DEPS.length, true).test(slot.text),
     );
     expect(
       stacked.length,
@@ -3191,9 +3244,10 @@ describe("CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and
     expect(
       declared,
       `the live board draws ${liveDepsCr} annotated ${JSON.stringify(live.annotation)}, which ` +
-        `is not four dependencies in the bare form — the box measured below would be the ` +
-        `full-id width this CR removes`,
-    ).toMatch(/^deps \d+(?:, \d+){3}$/);
+        `is not its ${liveDepsDeclared} declared dependencies in the CAPPED bare form ` +
+        `(CR-CRU-109 §S1 — the first ${capOf()} bare ids and then the count of the rest) — the ` +
+        `box measured below would be the full-id width this CR removes`,
+    ).toMatch(cappedBareShape(liveDepsDeclared));
 
     const pieces = await boxesOf('[data-zone="2"] > *');
     const spine =
