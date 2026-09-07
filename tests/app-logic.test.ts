@@ -676,11 +676,23 @@ describe("CR-CRU-094 §S1/AC3 — app-logic's context.cycleId consumers, guarded
 // classified this very fixture as FOUR tracks (`['   ', ' track-2 ', '2',
 // 'track-2']`) against the browser's two; §S1 (68b5a0a) and §S2 (c555faa,
 // 2783186) deleted that copy, so both surviving surfaces now answer
-// `['2', 'track-2']` for every one of the seven cases. The divergence AC6 was
-// written to catch is GONE, which is exactly why it must become a standing
-// measurement instead of a coincidence.
+// `['2', 'track-2']` for every one of the first seven cases. The divergence
+// AC6 was written to catch is GONE, which is exactly why it must become a
+// standing measurement instead of a coincidence.
+//
+// The EIGHTH case was NOT pass-on-arrival. SQLite is dynamically typed and the
+// AC2 tests plant raw `track` columns directly, so a legacy row can hold a
+// NON-string — and the two rules split on it: the browser answered `"2"`
+// (`String(raw).trim()`) while the server THREW (`entry.track?.trim()` on a
+// number is not a function), i.e. a 500 on the queue read for a value the
+// browser draws as a lane. AC6's own sentence is that the two rules classify
+// EVERY case identically, and a throw-vs-coerce split is a case where they do
+// not, so `declaredTracks` now coerces exactly as `declaredLabel` does.
 //
 // WHAT IT CATCHES (verified by mutation, both directions):
+//   • restore `declaredTracks`' `entry.track?.trim()` and the eighth case
+//     throws where the browser answers `"2"` — this fails, and only this case
+//     fails (measured 2026-09-07 on `feature/CR-CRU-108` at 423487d);
 //   • drop the `.trim()` from `declaredTracks` and the server classifies
 //     `"   "` and `" track-2 "` as lanes the browser does not — this fails,
 //     naming the case and the value;
@@ -697,10 +709,15 @@ describe("CR-CRU-108 §S3/AC6 — the published rule and the browser predicate c
    *  values that declare none. The third field is the spec's answer (AC1:
    *  null, absent, empty and whitespace-only are excluded; identity is the
    *  TRIMMED value; a legacy `2` is never re-spelled), written here so a
-   *  change made to BOTH rules at once still fails. */
+   *  change made to BOTH rules at once still fails.
+   *
+   *  `stored.track` is `unknown`, not `string | null`: SQLite is dynamically
+   *  typed, the column is what a row HOLDS rather than what the TS shape
+   *  promises, and the non-string case below is only reachable at all because
+   *  the fixture refuses to assume the promise. */
   interface TrackCase {
     readonly name: string;
-    readonly stored: { track?: string | null };
+    readonly stored: { track?: unknown };
     readonly declares: string | null;
   }
 
@@ -712,6 +729,9 @@ describe("CR-CRU-108 §S3/AC6 — the published rule and the browser predicate c
     { name: "a padded ` track-2 `", stored: { track: " track-2 " }, declares: "track-2" },
     { name: "a legacy un-normalised `2`", stored: { track: "2" }, declares: "2" },
     { name: "a canonical `track-2`", stored: { track: "track-2" }, declares: "track-2" },
+    // The non-string a dynamically typed column can hold. Both rules must read
+    // it as the lane `"2"` — the browser already did; the server threw.
+    { name: "a non-string legacy `2`", stored: { track: 2 }, declares: "2" },
   ];
 
   const RELEASE = "0.4.0";
@@ -777,8 +797,8 @@ describe("CR-CRU-108 §S3/AC6 — the published rule and the browser predicate c
     const lanes = [
       ...new Set(TRACK_FIXTURE.map((one) => one.declares).filter((one) => one !== null)),
     ].sort();
-    // Non-vacuity: the fixture really does carry two lanes and five rows that
-    // declare none of them.
+    // Non-vacuity: the fixture really does carry two lanes across eight rows,
+    // four of which declare no lane at all.
     expect(lanes).toEqual(["2", "track-2"]);
 
     const server = serverTracks(TRACK_FIXTURE);
@@ -788,7 +808,8 @@ describe("CR-CRU-108 §S3/AC6 — the published rule and the browser predicate c
     // first-appearance order, so the shared fact is the SET.
     expect(server).toEqual(lanes);
     expect([...browser].sort()).toEqual(lanes);
-    // BOUND — seven rows, two lanes: no third lane may appear on either side.
+    // BOUND — eight rows, two lanes: no third lane may appear on either side,
+    // and the non-string row lands in the SAME lane as the string `"2"`.
     expect(server).toHaveLength(2);
     expect(browser).toHaveLength(2);
     expect(server).not.toContain(" track-2 ");

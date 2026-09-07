@@ -380,8 +380,8 @@ export const TRACK_LANE_RULE =
 export function declaredTracks(entries: ReadonlyArray<{ track?: string | null }>): string[] {
   const lanes = new Set<string>();
   for (const entry of entries) {
-    const lane = entry.track?.trim();
-    if (lane !== undefined && lane !== "") lanes.add(lane);
+    const lane = String(entry.track ?? "").trim();
+    if (lane !== "") lanes.add(lane);
   }
   return [...lanes].sort();
 }
