@@ -126,21 +126,26 @@ display-only) all stay as they are.
 - **AC4** — the `next` marker composes unchanged: a marked row with four dependencies reads
   `next · deps 014, 091 +2` — marker first, one ` · ` between the parts.
 - **AC5** — **the live board's wave box is inside the design's budget again.** The existing live
-  corroboration test — `tests/roadmap-visual-grammar.test.ts:3144`, `"AC4 — the LIVE board
-  corroborates the wave box and REPORTS its spine, or says why it cannot"` — passes with the board
-  in the state that broke it: `CR-CRU-075` drawn, marked `next`, declaring four dependencies.
-  Asserted by that test's own width assertion (`:3203-3206`, against `BUDGET.wave`), not by a new
-  one. The measurement that sets the cap (§S1) puts that box at **292.5px** against the ~300px
-  budget, so the AC has ~7.5px of headroom and a THIRD id would fail it at 321px.
-  *Citation corrected 2026-09-07, by the RED agent:* this was written as "CR-CRU-096 AC20/AC4's
-  live-board probe". It is not — the CR-CRU-096 AC20 describe (`:2684`) measures the SYNTHETIC
-  spine and never reads the live board; the failing assertion is the CR-CRU-102 AC4 live
-  corroboration at `:3144`.
+  corroboration test passes with the board in the state that broke it — `CR-CRU-075` drawn, marked
+  `next`, declaring four dependencies. That test is
+  `"AC4 — the LIVE board corroborates the wave box and REPORTS its spine, or says why it cannot"`,
+  **inside the `"CR-CRU-096 AC20 — zone 2's spine is horizontal in a real engine, and fits the
+  surface"` describe** in `tests/roadmap-visual-grammar.test.ts`; its assertions are CR-CRU-102
+  AC4's, and it is the ONLY live wave-box measurement in the tree. AC5 is decided by that test's
+  own width assertion against `BUDGET.wave`, never by a new one. The measurement that sets the cap
+  (§S1) puts that box at **292.5px** against the ~300px budget, so the AC has ~7.5px of headroom
+  and a THIRD id would fail it at 321px.
+  *Cited by NAME, not by line — corrected twice on 2026-09-07.* The orchestrator first wrote
+  "CR-CRU-096 AC20/AC4's live-board probe"; the RED agent read that as wrong and reported the AC20
+  describe never touches the live board; the run output then proved the test IS nested in that
+  describe after all, and the orchestrator verified the nesting directly. The line numbers moved
+  twice during the same cycle, which is why this AC now names the describe and the test instead of
+  citing either by number.
   **Why AC5 was unreachable without AC9's third edit:** that same test asserts the annotation's
-  four-id SHAPE at `:3195-3200` BEFORE it measures the width at `:3203`. Once the cap ships the
-  shape guard throws first and the measurement is never evaluated, so the box could be any width
-  and AC5 would still fail. This CR therefore re-pins that one guard to the capped shape and
-  touches nothing else in the test — it may not edit the measurement it cites as its own proof.
+  four-id SHAPE *before* it measures the width. Once the cap ships, the shape guard throws first
+  and the measurement is never evaluated — the box could be any width and AC5 would still fail.
+  This CR therefore re-pins that one guard to the capped shape and touches nothing else in the
+  test: it may not edit the measurement it cites as its own proof.
 - **AC6** — the cap is a DISPLAY rule only: `entry.dependsOn` still carries every full id, and every
   consumer that resolves one still reads them — `roadmapSelectOn` / `roadmapDrillIn`,
   `roadmapLateDeps`'s inversion check, and the order warning that names the offending pair. A test
