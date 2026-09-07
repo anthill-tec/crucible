@@ -43,6 +43,7 @@
 //
 // Every server here is booted on an OS-assigned port against an mkdtempSync
 // scratch db. The live data/crucible.db and port 3849 are never touched.
+import { decode } from "@toon-format/toon";
 import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -92,6 +93,11 @@ interface AnyBody {
   totalCount?: number;
   entry?: QueueEntryWire;
   entries?: QueueEntryWire[];
+  /** CR-CRU-108 §S1/AC1 — the sorted distinct non-blank `track` values over
+   *  the entries this read returned. ALWAYS present on a queue read (a
+   *  trackless queue states `[]`); optional in this shared shape because the
+   *  other four routes do not publish it. */
+  tracks?: string[];
   warnings?: WarningWire[];
   unknownDependencies?: string[];
   resolvedDependants?: string[];
@@ -104,6 +110,17 @@ interface AnyBody {
 const ORCH = "orchestrator-1";
 const RED_AGENT = "red-1";
 const ROLELESS = "legacy-pre-cr044";
+
+/** The store's private `Database`, reached the way tests/agent-lifecycle.test.ts
+ *  and tests/v2-projects-activity.test.ts already reach it, to plant a column
+ *  value NO write path can produce. See the CR-CRU-108 block at the foot of
+ *  this file for why a legacy / padded `track` has to be planted. */
+interface RawStatement {
+  run(...args: unknown[]): void;
+}
+interface RawDb {
+  query(sql: string): RawStatement;
+}
 
 describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the role gate", () => {
   let handle: ServerHandle | undefined;
@@ -1678,5 +1695,194 @@ describe("CR-CRU-091 §S3/§S4/§S5/§S7/§S8 — the wire: five routes + the ro
       expect(wave5.map((e) => e.cr)).toEqual(["CR-1", "CR-3"]);
       expect(wave5[1]!.seq - wave5[0]!.seq).toBe(1);
     });
+  });
+
+  // ── CR-CRU-108 §S1 — the queue read publishes the tracks it stores ───────
+  //
+  // WHY HERE: this file owns the queue GET route's behaviour. Measured
+  // 2026-09-07, `handleQueueGet` (src/v2.ts:1833) answers
+  // `{ok: true, entries: store.listQueue(key)}` and states NO track fact — so
+  // every assertion below fails on a missing field, never on a 404 or a
+  // crash. The rule is CR-CRU-092 §S3's, restated by AC1: the sorted distinct
+  // `track` values over the entries the read RETURNED, excluding null, absent
+  // and blank/whitespace-only values, each echoed exactly as stored.
+  //
+  // PLANTED FIXTURES — and why they must be planted. `normalizeTrack`
+  // (src/store.ts:349) rewrites `track` on every validating write path
+  // (`replaceQueue`, `declareMembership`), so a blank, a padded or a legacy
+  // un-normalised value CANNOT be created through the API: that is precisely
+  // what makes them LEGACY data, and AC2 is about legacy data. This suite had
+  // no raw-`track` seeding idiom, so `plantTrack` below writes the column
+  // through the store's private `Database` — the idiom
+  // tests/agent-lifecycle.test.ts (`setAgentTimestamps`) and
+  // tests/v2-projects-activity.test.ts already use for exactly this reason.
+  // `normalizeTrack` is NOT weakened and no test-only production hook exists.
+  describe("CR-CRU-108 §S1 — GET …/queue publishes the tracks it stores", () => {
+    const RELEASE = "0.2.0";
+
+    /** Writes `track` verbatim, bypassing the normaliser no API caller can
+     *  bypass, then PROVES it landed — a fixture that silently missed its row
+     *  would make an exclusion assertion vacuous. */
+    function plantTrack(key: string, cr: string, track: string | null): void {
+      (handle!.store as unknown as { db: RawDb }).db
+        .query(`UPDATE queue_entries SET track = ? WHERE project_key = ? AND cr = ?`)
+        .run(track, key, cr);
+      expect(rowsByCr(key).get(cr)!.track).toBe(track);
+    }
+
+    /** One proposed release, one wave, every named cr planned into it. */
+    async function seedWave(key: string, crs: string[]): Promise<void> {
+      expect((await propose(key, RELEASE)).status).toBe(200);
+      for (const cr of crs) {
+        expect([200, 201]).toContain((await plan(key, cr, RELEASE, 5, `title ${cr}`)).status);
+      }
+    }
+
+    async function toonReply(key: string): Promise<{ res: Response; text: string }> {
+      const res = await send("GET", `${queuePath(key)}?fmt=toon`);
+      return { res, text: await res.text() };
+    }
+
+    function publishedTracks(body: AnyBody): unknown {
+      return body.tracks;
+    }
+
+    test(
+      "AC1 — a null, an absent, an empty-string and a whitespace-only `track` are EXCLUDED, " +
+        "and the two real lanes publish sorted and distinct",
+      async () => {
+        boot();
+        const key = await seed("cru108-ac1-exclusions");
+        await seedWave(key, [
+          "CR-T3",
+          "CR-T3B",
+          "CR-T1",
+          "CR-ABSENT",
+          "CR-NULL",
+          "CR-EMPTY",
+          "CR-BLANK",
+        ]);
+        // Declared through the API, so the store normalises them: `3` and `1`
+        // land as `track-3` / `track-1`, and `3` lands TWICE.
+        expect((await sequence(key, RELEASE, 5, ["CR-T3", "CR-T3B"], "3")).status).toBe(200);
+        expect((await sequence(key, RELEASE, 5, ["CR-T1"], "1")).status).toBe(200);
+        plantTrack(key, "CR-NULL", null);
+        plantTrack(key, "CR-EMPTY", "");
+        plantTrack(key, "CR-BLANK", "   ");
+
+        const body = (await get(queuePath(key))).body;
+
+        // POSITIVE — sorted (`3` declared first) and distinct (`3` twice).
+        expect(publishedTracks(body)).toEqual(["track-1", "track-3"]);
+        // BOUND — four non-lanes sit in this queue; not one of them may add a
+        // member.
+        expect(publishedTracks(body)).toHaveLength(2);
+        expect(publishedTracks(body)).not.toContain("");
+        expect(publishedTracks(body)).not.toContain("   ");
+        // GUARD — the excluded shapes really ARE stored, so the exclusion is
+        // measured rather than assumed.
+        const rows = rowsByCr(key);
+        expect(rows.get("CR-NULL")!.track).toBeNull();
+        expect(rows.get("CR-EMPTY")!.track).toBe("");
+        expect(rows.get("CR-BLANK")!.track).toBe("   ");
+        // The never-sequenced cr carries no `track` KEY at all (`listQueue`
+        // omits a NULL column) — the ABSENT case, distinct from the planted
+        // null.
+        expect("track" in (await entryOf(key, "CR-ABSENT"))!).toBe(false);
+      },
+    );
+
+    test(
+      "AC2 — a legacy `2` beside a normalised `track-2` publishes BOTH values, sorted, and the " +
+        "read path re-spells neither the published value nor the stored row",
+      async () => {
+        boot();
+        const key = await seed("cru108-ac2-legacy");
+        await seedWave(key, ["CR-LEGACY", "CR-NORM"]);
+        expect((await sequence(key, RELEASE, 5, ["CR-NORM"], "2")).status).toBe(200);
+        // What a pre-normalisation client wrote, and what no write path can
+        // write today.
+        plantTrack(key, "CR-LEGACY", "2");
+
+        const body = (await get(queuePath(key))).body;
+
+        expect(publishedTracks(body)).toEqual(["2", "track-2"]);
+        expect(publishedTracks(body)).toHaveLength(2);
+        // NOT RE-SPELLED — the legacy lane publishes `2`, never folded into
+        // `track-2`, and the entry beside it carries the same string.
+        expect(body.entries!.find((e) => e.cr === "CR-LEGACY")!.track).toBe("2");
+        // …and the READ wrote nothing back: a read that normalises is a read
+        // that edits the roadmap.
+        expect(rowsByCr(key).get("CR-LEGACY")!.track).toBe("2");
+      },
+    );
+
+    test(
+      "AC2 — a stored ` track-2 ` publishes TRIMMED as `track-2` and COLLAPSES with a stored " +
+        "`track-2` into ONE track, while the padded row itself is left exactly as stored",
+      async () => {
+        boot();
+        const key = await seed("cru108-ac2-padded");
+        await seedWave(key, ["CR-PAD", "CR-NORM"]);
+        expect((await sequence(key, RELEASE, 5, ["CR-PAD", "CR-NORM"], "2")).status).toBe(200);
+        plantTrack(key, "CR-PAD", " track-2 ");
+
+        const body = (await get(queuePath(key))).body;
+
+        // ONE lane, not two: identity is the TRIMMED value, and preserving the
+        // padding would draw the second lane `normalizeTrack` exists to make
+        // impossible.
+        expect(publishedTracks(body)).toEqual(["track-2"]);
+        expect(publishedTracks(body)).toHaveLength(1);
+        expect(publishedTracks(body)).not.toContain(" track-2 ");
+        // Trimming the LIST is not rewriting the ROW: the entry and the row
+        // both still carry the padding they were handed.
+        expect(body.entries!.find((e) => e.cr === "CR-PAD")!.track).toBe(" track-2 ");
+        expect(rowsByCr(key).get("CR-PAD")!.track).toBe(" track-2 ");
+      },
+    );
+
+    test(
+      "AC3 — the ?fmt=toon reply carries `tracks` under the SAME name, asserted by READING the " +
+        "TOON text: a top-level two-member array line that decodes to the JSON reply's own list",
+      async () => {
+        boot();
+        const key = await seed("cru108-ac3-toon");
+        await seedWave(key, ["CR-LEGACY", "CR-NORM"]);
+        expect((await sequence(key, RELEASE, 5, ["CR-NORM"], "2")).status).toBe(200);
+        plantTrack(key, "CR-LEGACY", "2");
+
+        const { res, text } = await toonReply(key);
+
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toBe("text/toon; charset=utf-8");
+        // IN THE TEXT — not read back off `reply()`'s JSON twin.
+        expect(text).toMatch(/^tracks\[2\]: /m);
+        const decoded = decode(text) as { tracks?: unknown };
+        expect(decoded.tracks).toEqual(["2", "track-2"]);
+        // The SAME field under the SAME name — one fact, two encodings.
+        expect(decoded.tracks).toEqual(publishedTracks((await get(queuePath(key))).body));
+      },
+    );
+
+    test(
+      "AC3 — a trackless queue's ?fmt=toon reply STATES `tracks: []`, so the empty fact survives " +
+        "the TOON encoding instead of vanishing from it",
+      async () => {
+        boot();
+        const key = await seed("cru108-ac3-toon-empty");
+        await seedWave(key, ["CR-NOLANE"]);
+
+        const { res, text } = await toonReply(key);
+
+        expect(res.status).toBe(200);
+        expect(text).toMatch(/^tracks: \[\]$/m);
+        const decoded = decode(text) as { tracks?: unknown; entries?: unknown[] };
+        expect(decoded.tracks).toEqual([]);
+        // The read really returned an entry — an empty queue would make
+        // `tracks: []` true for the wrong reason.
+        expect(decoded.entries).toHaveLength(1);
+      },
+    );
   });
 });

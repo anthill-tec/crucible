@@ -91,6 +91,11 @@ interface QueuePostResponse extends OkResponse {
 
 interface QueueGetResponse extends OkResponse {
   entries: QueueEntry[];
+  /** CR-CRU-108 §S1/AC1 — the tracks the read publishes beside its entries:
+   *  the sorted distinct non-blank `track` values over `entries`, ALWAYS
+   *  present (a trackless queue states `[]`). Declared OPTIONAL so the RED
+   *  run measures the WIRE — an undefined field, not a compile error. */
+  tracks?: string[];
 }
 
 interface ErrResponse {
@@ -1896,6 +1901,86 @@ describe("CR-CRU-014 §S1 — queue registration (server, additive)", () => {
           expect("track" in findEntry(entries, cr)).toBe(false);
           expect("lifecycle" in findEntry(entries, cr)).toBe(false);
         }
+      },
+    );
+  });
+
+  // ── CR-CRU-108 §S1/AC1 — the queue read publishes the tracks it STORES ───
+  //
+  // WHY HERE: this suite owns the queue WRITE → READ round trip, and the
+  // published list is a fact about what the write path stored. Measured
+  // 2026-09-07: `handleQueueGet` (src/v2.ts:1833) answers
+  // `{ok: true, entries: store.listQueue(key)}` and states no track fact at
+  // all — so both tests below fail on a MISSING FIELD (`tracks` is
+  // undefined), never on a wrong value, a crash or a 404.
+  //
+  // THE RULE (CR-CRU-092 §S3, restated by AC1): the sorted distinct `track`
+  // values over the entries the read RETURNED, excluding null, absent and
+  // blank values, each echoed exactly as stored. `normalizeTrack`
+  // (src/store.ts:349) runs on the WRITE, so a value posted as `3` is STORED
+  // `track-3` and the read echoes THAT: normalising on write and echoing on
+  // read are one sentence, not two rules.
+  describe("CR-CRU-108 §S1/AC1 — GET /queue publishes the tracks the write stored", () => {
+    const RELEASE = "0.2.0";
+
+    test(
+      "a queue declaring 3 once and 1 twice publishes tracks [track-1, track-3] — sorted, " +
+        "distinct, and each value byte-identical to the entry that carries it",
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-108-published-tracks");
+        await propose(key, RELEASE);
+
+        expect([200, 202]).toContain(
+          (
+            await postQueue(key, [
+              { cr: "CR-Q108-C", wave: "5", dependsOn: [], release: RELEASE, track: "3" },
+              { cr: "CR-Q108-A", wave: "5", dependsOn: [], release: RELEASE, track: "1" },
+              { cr: "CR-Q108-B", wave: "5", dependsOn: [], release: RELEASE, track: "1" },
+              { cr: "CR-Q108-NONE", wave: "5", dependsOn: [], release: RELEASE },
+            ])
+          ).status,
+        );
+
+        const body = await getQueue(key);
+        // SORTED (`3` was declared before `1`) and DISTINCT (`1` twice).
+        expect(body.tracks).toEqual(["track-1", "track-3"]);
+        // BOUND — the trackless entry declares nothing, so a third member
+        // could only come from a fabricated lane.
+        expect(body.tracks).toHaveLength(2);
+        expect("track" in findEntry(body.entries, "CR-Q108-NONE")).toBe(false);
+        // ECHOED AS STORED — the published values ARE the entries' own values
+        // (what `normalizeTrack` wrote), not a second re-spelling of the
+        // posted `1` / `3` invented by the read.
+        expect(findEntry(body.entries, "CR-Q108-A").track).toBe("track-1");
+        expect(findEntry(body.entries, "CR-Q108-B").track).toBe("track-1");
+        expect(findEntry(body.entries, "CR-Q108-C").track).toBe("track-3");
+      },
+    );
+
+    test(
+      'a queue whose entries declare NO track publishes `tracks: []` — the KEY is present and ' +
+        'the array empty, so "no tracks" is a stated fact and an absent key cannot pass as one',
+      async () => {
+        handle = boot();
+        const key = await createProject("queue-108-trackless");
+
+        expect([200, 202]).toContain(
+          (
+            await postQueue(key, [
+              { cr: "CR-Q108-T1", title: "no lane", wave: "5", dependsOn: [] },
+              { cr: "CR-Q108-T2", title: "no lane either", wave: "6", dependsOn: [] },
+            ])
+          ).status,
+        );
+
+        const body = await getQueue(key);
+        // The read really did return entries — an empty list would make
+        // `tracks: []` true for the wrong reason.
+        expect(body.entries.map((entry) => entry.cr)).toEqual(["CR-Q108-T1", "CR-Q108-T2"]);
+        // The key FIRST, the value second: an omitted `tracks` fails here.
+        expect(body).toHaveProperty("tracks");
+        expect(body.tracks).toEqual([]);
       },
     );
   });
