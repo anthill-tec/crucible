@@ -1537,7 +1537,8 @@ class NextBlockCitationsTest(unittest.TestCase):
         # this suite; that gap is recorded separately as a candidate CR.
         # Re-pinned 2026-09-07 (CR-CRU-108 §S1), 4073 -> 4098. This drift IS
         # ours and it is the ordinary case: §S1 inserted `declaredTracks` (25
-        # lines, src/store.ts:365-388) ABOVE `deriveQueueStatus`, moving it
+        # lines, src/store.ts:364-388 — 364 is the opening `/**` and 388 the
+        # blank that separates the block) ABOVE `deriveQueueStatus`, moving it
         # down by exactly that much. The CR that shifted the file re-pins it.
         # NOTE (RED commit): the production comment this row mirrors —
         # `clients/_crucible_axi.py:1418` — still spells 4073, so
