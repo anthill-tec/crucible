@@ -246,6 +246,16 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   no other README VOID was affected. A patch should at least WARN on a README-vs-board lifecycle
   disagreement at import.
 
+- 2026-09-07 — **`plan-backfill` is not fleet-wide** (candidate patch CR, measured while updating the
+  `crucible` skill after CR-CRU-107 shipped). The verb exists on `bun`, `python` and `rust` only;
+  `mvn` and `arduino` do not expose it, so on those two stacks a plan filed with no wave must be
+  re-filed rather than backfilled. Same defect class `queue-file` had before CR-CRU-075 — and
+  **CR-075's derived registrar-parity check does NOT catch it**, because `plan-backfill` is
+  hand-rolled in each client's own `main()` rather than registered through a shared registrar in
+  `clients/_crucible_axi.py`. The derived rule only sees registrar-registered verbs, which is the
+  honest limit of what it guards; closing this one means either adding `add_plan_backfill_verb` and
+  wiring five clients (CR-075's shape) or accepting the two-stack gap deliberately.
+
 - 2026-09-07 — **the pre-merge gate does not run the python client suites at all** (candidate patch
   CR, found executing CR-CRU-094). `pre-merge-gate` is `check` (tsc) → `regression --coverage`, and
   `regression` is `bun test` — which collects `tests/**/*.test.ts`. The **65 files in
