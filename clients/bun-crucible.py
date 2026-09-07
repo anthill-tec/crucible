@@ -1555,6 +1555,16 @@ def cmd_next(args):
     return _axi().cmd_next(args, _resolve_project_dir(args.project_dir), _ops())
 
 
+# ── CR-CRU-075 §S1 — `queue-file`: one thin delegator ──────────────────────
+
+
+def cmd_queue_file(args):
+    """§S2 — parse docs/changes/README.md (or --from-file) into queue entries
+    and POST the full set to /api/v2/projects/<key>/queue. Delegates to the
+    shared implementation."""
+    return _axi().cmd_queue_file(args, _resolve_project_dir(args.project_dir), _ops())
+
+
 # ── CR-CRU-013 §S5 — fleet gate / milestone verbs ──────────────────────────
 #
 # `gate-run`    axi PROXY: launch `no-mistakes axi run`, poll `axi status`
@@ -2168,6 +2178,12 @@ def main():
     # SHARED registrar for the same reason; only `--project-dir` is this
     # client's own. No --agent: `next` is read-only (§S4).
     _axi().add_next_verb(sub, cmd_next, add_args=(_add_project_dir_arg,))
+
+    # ── CR-CRU-075 §S1 — the queue REGISTRATION verb through the shared
+    # registrar, so five clients cannot fork one verb's flag surface. No
+    # --agent: it registers a PROJECT's queue, not an agent's work.
+    _axi().add_queue_file_verb(sub, cmd_queue_file,
+                               add_args=(_add_project_dir_arg,))
 
     # ── CR-CRU-013 §S5 — fleet gate / milestone verbs ──
     gr = sub.add_parser("gate-run",

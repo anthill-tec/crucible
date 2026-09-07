@@ -1626,14 +1626,15 @@ def main():
     _add_project_dir_arg(ms)
     ms.set_defaults(func=cmd_milestone)
 
-    qf = sub.add_parser(
-        "queue-file",
-        help="Parse docs/changes/README.md (or --from-file) queue table and "
-             "POST the full CR set → /api/v2/projects/<key>/queue (§S2).")
-    qf.add_argument("--from-file", dest="from_file",
-                    help="Source Markdown file (default: <project>/docs/changes/README.md).")
-    _add_project_dir_arg(qf)
-    qf.set_defaults(func=cmd_queue_file)
+    # ── CR-CRU-075 §S1 — the queue REGISTRATION verb. This client hand-rolled
+    # the subparser CR-CRU-014 §S2 shipped, which is what let one verb have a
+    # flag surface here and none at all on the other four. It now registers
+    # through the shared registrar like every verb since CR-CRU-091, wired in
+    # place so the verb order this client's --help has always printed is
+    # unchanged (§S1 is a mechanism change, not a surface one). No --agent: it
+    # registers a PROJECT's queue, not an agent's work.
+    _axi().add_queue_file_verb(sub, cmd_queue_file,
+                               add_args=(_add_project_dir_arg,))
 
     args = p.parse_args()
     # §S14 — no subcommand: run the no-arg live dashboard, not argparse usage.
