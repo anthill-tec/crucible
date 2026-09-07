@@ -261,6 +261,35 @@ const TRACKS_IN_ONE_WAVE: QueueFixture[] = [
   { ...member("CR-W2-02", "PENDING", undefined, 60), wave: SECOND_WAVE },
 ];
 
+/** CR-CRU-108 §S3/AC7 — declared tracks that are in the QUEUE but in NO
+ *  focused-release wave: the two shipped `0.1.0` members, each given a lane id
+ *  of its own. §S1 (68b5a0a) made the queue read publish the PROJECT's
+ *  declared tracks over every entry it returns, so these rows are what makes
+ *  the three scopes give three different answers over one mount —
+ *  project: `track-1`, `track-7`, `track-9`; focused release: `track-1`;
+ *  wave 1: `track-1`. Without them the project-level list and the release's
+ *  coincide and no assertion can tell which one a renderer read. */
+const FOREIGN_TRACK_MEMBERS: QueueFixture[] = SHIPPED_MEMBERS.map((entry, index) => ({
+  ...entry,
+  track: `track-${7 + index * 2}`,
+}));
+
+/** The focused two-wave proposal on ONE declared track: wave 1's members all
+ *  report `track-1` and wave 2's report none. SINGLE-track to both of zone 2's
+ *  scopes, MULTI-track to the project — which is the whole point. */
+const ONE_TRACK_IN_ONE_WAVE: QueueFixture[] = [
+  member("CR-T-01", "PENDING", "track-1", 10),
+  member("CR-T-03", "PENDING", "track-1", 30),
+  { ...member("CR-W2-01", "PENDING", undefined, 50), wave: SECOND_WAVE },
+  { ...member("CR-W2-02", "PENDING", undefined, 60), wave: SECOND_WAVE },
+];
+
+/** `queueOf` with the shipped leg carrying tracks of its own. */
+const queueWithForeignTracks = (members: QueueFixture[]): QueueFixture[] => [
+  ...FOREIGN_TRACK_MEMBERS,
+  ...members,
+];
+
 /** CR-CRU-096 §S5.2's shipped row cap — the container's rule, referenced here
  *  so the expectations below are derived from the fixture rather than copied
  *  off a render. */
@@ -906,6 +935,89 @@ describe("CR-CRU-085 AC7 — the lanes and the table's `track` column appear and
 
     // And wave 2 still DREW its members — the absence above is the track
     // scope's answer, not an empty box.
+    expect(nodeCrs(SECOND_WAVE)).toEqual(["CR-W2-01", "CR-W2-02"]);
+  });
+});
+
+// ── CR-CRU-108 §S3/AC7 — the two scopes survive the published-list cutover ──
+//
+// STATUS — declared PASS-ON-ARRIVAL guard. CR-CRU-085 shipped both scopes and
+// the test above pins the multi-wave/one-wave shape; what NOTHING pinned is
+// which SET each scope reads. §S1 (68b5a0a) published a PROJECT-level `tracks`
+// list on the queue read and §S2 (c555faa) made the fleet consume it, so there
+// is now a third, WIDER answer sitting in the very payload zone 2 renders
+// from — and the CR's own non-goals forbid either of zone 2's derivations from
+// being replaced by it ("the scopes are deliberate").
+//
+// WHY IT IS NOT A TAUTOLOGY: in every fixture above, the project's declared
+// tracks and the focused release's are the SAME list, so a renderer swapped
+// onto the project-level list would keep them all green. This mount breaks
+// that tie — the shipped `0.1.0` leg declares `track-7` and `track-9`, which
+// are in the queue read and in no wave of the focused proposal. It therefore
+// FAILS the moment the table's column stops being `roadmapTableColumns` over
+// the focused RELEASE's membership (CR-CRU-078 AC12), or a wave's lanes stop
+// being `distinctLabels` over THAT WAVE's membership (CR-CRU-085 §S2), and
+// starts being the published project list instead.
+describe("CR-CRU-108 §S3/AC7 — the table's column and the wave's lanes keep their scopes against the project-level published list", () => {
+  test("a release whose members declare ONE track shows NO column and NO lanes, even though the QUEUE it was read from declares three", async () => {
+    const queue = queueWithForeignTracks(ONE_TRACK_IN_ONE_WAVE);
+
+    // Non-vacuity, stated as data: the project-level rule (§S1/AC1, over the
+    // whole read) sees three lanes; the focused release sees exactly one.
+    expect(declaredTracks(queue)).toEqual(["track-7", "track-9", "track-1"]);
+    expect(declaredTracks(ONE_TRACK_IN_ONE_WAVE)).toEqual(["track-1"]);
+
+    await mountApp({ proposals: [TWO_WAVE_PROPOSAL], queue });
+
+    // The focused release is the two-wave proposal and BOTH waves drew.
+    expect(flow().getAttribute("data-version")).toBe("0.4.0");
+    expect(waveNames()).toEqual([WAVE, SECOND_WAVE]);
+
+    // The table's column is the RELEASE's answer (one track → no column), not
+    // the project's (three → column).
+    expect(tableHasTrackColumn()).toBe(false);
+
+    // …and each wave's lanes are that WAVE's answer: neither is laned, and
+    // `track-7`/`track-9` appear nowhere in zone 2's chrome.
+    expect(laneEls(WAVE).length).toBe(expectedLaneCount(ONE_TRACK_IN_ONE_WAVE));
+    expect(lanesEl(WAVE)).toBeNull();
+    expect(lanesEl(SECOND_WAVE)).toBeNull();
+    expect(laneLabelTexts(WAVE)).toEqual([]);
+    expect(headerTrackCount(WAVE)).toBeNull();
+    expect(headerTrackCount(SECOND_WAVE)).toBeNull();
+    expect(boxText(WAVE)).not.toContain("track-7");
+    expect(boxText(SECOND_WAVE)).not.toContain("track-9");
+
+    // The absence is the scope's answer, not an empty zone: every member still
+    // drew, in its own wave.
+    expect(nodeCrs(WAVE)).toEqual(["CR-T-01", "CR-T-03"]);
+    expect(nodeCrs(SECOND_WAVE)).toEqual(["CR-W2-01", "CR-W2-02"]);
+  });
+
+  test("the SAME foreign-track queue with TWO release tracks in wave 1 draws the column and exactly wave 1's two lanes — never the queue's other two", async () => {
+    const queue = queueWithForeignTracks(TRACKS_IN_ONE_WAVE);
+
+    // Four declared lanes in the read; two of them belong to the release.
+    expect(declaredTracks(queue)).toHaveLength(4);
+    expect(declaredTracks(TRACKS_IN_ONE_WAVE)).toEqual(declaredTracks(TWO_TRACKS));
+
+    await mountApp({ proposals: [TWO_WAVE_PROPOSAL], queue });
+
+    // The release reports two tracks, so the column is stated — the same
+    // fixture as the arm above differing ONLY in the members' track data,
+    // which is what makes that arm's `false` a measurement.
+    expect(tableHasTrackColumn()).toBe(true);
+
+    // Wave 1 draws exactly ITS two lanes: not one per project track, and not
+    // one per release track spread across the waves.
+    expect(laneTracks(WAVE)).toEqual(declaredTracks(TWO_TRACKS));
+    expect(laneTracks(WAVE)).not.toContain("track-7");
+    expect(laneTracks(WAVE)).not.toContain("track-9");
+    expect(headerTrackCount(WAVE)).toBe(declaredTracks(TWO_TRACKS).length);
+
+    // Wave 2 declares none and stays unlaned, whatever the project publishes.
+    expect(laneEls(SECOND_WAVE)).toEqual([]);
+    expect(headerTrackCount(SECOND_WAVE)).toBeNull();
     expect(nodeCrs(SECOND_WAVE)).toEqual(["CR-W2-01", "CR-W2-02"]);
   });
 });
