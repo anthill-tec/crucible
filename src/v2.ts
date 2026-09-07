@@ -8,6 +8,7 @@ import type { CompileReport } from "./codecs/compile.ts";
 import { authHints, hints, cycleHints, identityHints, projectDeleteHints, roadmapHints } from "./hints.ts";
 import {
   compareContainers,
+  declaredTracks,
   normalizeTrack,
   QueueWaveOverflowError,
   Store,
@@ -1829,6 +1830,12 @@ function handleProjectReleases(store: Store, key: string, req: Request, url: URL
  * handleProjectReleases way (UUID shape, then the row); an archived project
  * still answers 200 but the store's NOT_ARCHIVED exclusion yields an empty
  * list. Each entry carries its DERIVED status + plan link.
+ *
+ * CR-CRU-108 §S1/AC1 — the reply also STATES the project's declared tracks
+ * beside its entries, by `declaredTracks` (`src/store.ts`) — the store's own
+ * lane rule, never a second copy of it here. Derived from the entries this
+ * read returned, so it is always present (a trackless queue states `[]`) and
+ * always consistent with them, and no row is rewritten to produce it.
  */
 function handleQueueGet(store: Store, key: string, req: Request, url: URL): Response {
   if (!UUID_RE.test(key)) {
@@ -1837,7 +1844,8 @@ function handleQueueGet(store: Store, key: string, req: Request, url: URL): Resp
   if (store.getProject(key) === null) {
     return fail(404, `unknown project: ${key}`, { help: hints.unknownProject });
   }
-  return reply(req, url, { ok: true, entries: store.listQueue(key) });
+  const entries = store.listQueue(key);
+  return reply(req, url, { ok: true, entries, tracks: declaredTracks(entries) });
 }
 
 /**
