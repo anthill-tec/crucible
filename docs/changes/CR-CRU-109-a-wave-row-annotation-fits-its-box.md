@@ -3,7 +3,7 @@
 - **Type**: patch
 - **Wave**: 5 (0.2.0)
 - **Depends on**: 096, 102
-- **Status**: PENDING (0.2.0) — filed 2026-09-06 on user direction, found by CR-CRU-093's RED phase when CR-CRU-096's live-board probe measured a real overflow — gap-analysed 2026-09-07: the cap is TWO ids, not three (three measures 321px against the 300px budget), and §S1 records the supersession of CR-CRU-102 AC1's four-id example
+- **Status**: PENDING (0.2.0) — filed 2026-09-06 on user direction, found by CR-CRU-093's RED phase when CR-CRU-096's live-board probe measured a real overflow — gap-analysed 2026-09-07: the cap is TWO ids, not three (three measures 321px against the 300px budget); §S1 records the supersession of CR-CRU-102 AC1's four-id example AND — user ruling 2026-09-07, "cap wins" — of CR-CRU-096 §S4/AC13's completeness claim for zone 2, whose two ACs (AC13 completeness, AC20/AC4 budget) were in latent conflict from the day both shipped
 - **Design reference**: `/home/antonyj/Documents/data_projects/crucible/.lavish/crucible-workflow-flowchart.html` §14 (the wave box's ~300px budget, measured at 1600px) and §5 (the shape/colour grammar the row obeys)
 
 > **This CR edits neither CR-CRU-096 nor CR-CRU-102.** Both are COMPLETED — 096 shipped
@@ -76,6 +76,32 @@ the supersession here, in its own scope section, and its RED updates that assert
 form. What CR-102 actually owns is UNCHANGED: how a single id is abbreviated
 (`bareDependencyId`), and that the abbreviation is display-only.
 
+**It also supersedes CR-CRU-096 §S4/AC13's COMPLETENESS claim for zone 2 — user ruling 2026-09-07,
+"cap wins".** AC13 reads "a pending row with dependencies names every one of them", and
+`tests/roadmap-wave-rollup.test.ts` enforces it with a per-dependency loop over a four-dep fixture
+plus an explicit anti-truncation clause (`not.toMatch(/\bmore\b/)`, `not.toContain("…")`, comment:
+"ALL of them means all: the slot does not truncate to three, nor to an 'and 1 more'"). Unlike
+CR-CRU-102 AC1 this is the requirement itself, not an illustrative string.
+
+**Two of CR-CRU-096's own ACs were in latent conflict from the moment the budget was set**, and
+nothing surfaced it until real data carried four dependencies plus the `next` marker:
+
+- **AC13** — zone 2 names EVERY declared dependency (unbounded content).
+- **AC20/AC4** — the wave box fits the design's ~300px (bounded surface).
+
+Both cannot hold: the measured row is 333px. The user's ruling is that the BUDGET wins and zone 2
+stops being a complete record. That is affordable only because the completeness moves rather than
+disappearing — zone 3's `deps` column states the whole set for the same row, which AC7 asserts in
+the SAME render so the two cannot drift. The row still says how much it is not showing (AC3's
+count), so a reader is never misled about the size of what is hidden.
+
+CR-CRU-096 is SHIPPED, so its spec is not edited (the standing rule from CR-CRU-099 cycle 322);
+the supersession is recorded here and its rollup assertions are rewritten to the capped rule —
+"names the first two and states the count of the rest" — keeping the test's purpose and its
+non-vacuity block. This is also the case that put the bounded-surface check into the gap-analysis
+skill: a design that fixes a SIZE and a data rule that states no LIMIT contradict each other from
+the day both ship, and the contradiction is legible from the two specs with no test run.
+
 ### §S2 The budget is the reason, so the budget is what proves it
 
 The cap exists to keep the wave box inside the design's ~300px at 1600×900 with the marker present.
@@ -115,11 +141,20 @@ display-only) all stay as they are.
 - **AC8** — the two-id cap is a named constant, not a literal at the call site, and no test asserts
   the number by re-deriving it from a magic literal. The number has already moved once before
   implementation (three → two, on measurement), which is exactly why it lives in one place.
-- **AC9** — the tests CR-CRU-102 left pinning the uncapped string are updated to the capped form,
-  not deleted: `tests/roadmap-bare-dependency-annotation.test.ts`'s four-dependency assertion reads
-  the capped rendering, and every other suite that pins an annotation string
-  (`roadmap-flow-axis`, `roadmap-wave-rows`, `roadmap-wave-rollup`, `roadmap-visual-grammar`) is
-  swept for the same pattern. A suite left asserting `deps 014, 091, 092, 095` fails this CR.
+- **AC9** — every shipped assertion the cap supersedes is UPDATED to the capped rule, never deleted
+  and never weakened, and each retains its purpose and its non-vacuity block:
+  - `tests/roadmap-bare-dependency-annotation.test.ts` — CR-CRU-102 AC1's four-id string reads the
+    capped rendering; the test still proves zone 2 renders the BARE form.
+  - `tests/roadmap-wave-rollup.test.ts` — CR-CRU-096 §S4/AC13's completeness test asserts the NEW
+    rule: the slot names the first two declared ids and STATES THE COUNT of the rest. Its
+    anti-truncation clause is re-aimed, not dropped: an ellipsis (`…`, `...`) or a bare `more`
+    remains forbidden, because a remainder must be a countable number. Its "no deps, no
+    annotation" half is untouched.
+  - The remaining annotation-reading suites (`roadmap-flow-axis`, `roadmap-wave-rows`,
+    `roadmap-visual-grammar`) are swept for BOTH shapes — a pinned string with three or more ids,
+    and a completeness claim expressed as a loop over a fixture's dependency list.
+  A suite left asserting `deps 014, 091, 092, 095`, or left asserting that every declared
+  dependency is named in zone 2, fails this CR.
 
 ## Estimated size
 
