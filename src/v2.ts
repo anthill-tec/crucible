@@ -2956,6 +2956,12 @@ function eventBrief(event: RunEvent) {
     ...(event.action !== undefined ? { action: event.action } : {}),
     ...(event.firstSeen !== undefined ? { firstSeen: event.firstSeen } : {}),
     ...(event.context !== undefined ? { context: event.context } : {}),
+    // CR-CRU-094 §S1 (additive) — the run's cycle binding, top-level, so a
+    // reader tells a bound run from an unbound one without unpacking the
+    // blob. Key ABSENT (never null, never 0) when the run carries no cycle;
+    // `context` is untouched beside it — §S1 keeps it authoritative for the
+    // frontend consumers that already read `context.cycleId`.
+    ...(event.cycleId !== undefined ? { cycleId: event.cycleId } : {}),
     // CR-CRU-057 §S1 (additive) — the stamped declared role and its
     // provenance; both keys ABSENT on events that carry no stored role, so
     // history renders unclassified rather than guessed.

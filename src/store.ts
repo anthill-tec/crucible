@@ -156,6 +156,10 @@ interface EventRow {
   // CR-CRU-073 §S1 — the release-retirement marker (epoch ms). NULL = a live
   // gate (and NULL on every non-gate row); non-NULL once its release ships.
   retired_at: number | null;
+  // CR-CRU-094 §S1 — the plan cycle this run was bound to at ingest, DERIVED
+  // at insert from `context.cycleId`. NULL on an unbound run and on every
+  // pre-094 row (the retrofit reconstructs nothing).
+  cycle_id: number | null;
 }
 
 /** CR-CRU-017 §S1 — one issued run: `runs` is the OPEN-run store, on disk. */
@@ -1086,6 +1090,27 @@ const MIGRATION_BODIES: readonly MigrationBody[] = [
       return cols.has("release") && cols.has("track") && cols.has("lifecycle_json");
     },
   },
+  {
+    description: "events: CR-094 §S1 cycle_id — the run's cycle binding, as a column",
+    apply(db) {
+      if (!tableExists(db, "events")) return;
+      // CR-CRU-094 §S1 — ONE additive NULLABLE column, same PRAGMA-checked
+      // retrofit pattern as every step above, so a re-run is a no-op. An
+      // ALTER on purpose: it rewrites no row, so every table's count is
+      // identical before and after (AC2). History is left NULL — a pre-094
+      // row has no binding to recover and inventing one fabricates a record
+      // (spec Non-goals), and `context.cycleId` stays exactly as written for
+      // the four consumers that read it (AC3).
+      const eventCols = columnsOf(db, "events");
+      if (!eventCols.has("cycle_id")) {
+        db.exec(`ALTER TABLE events ADD COLUMN cycle_id INTEGER`);
+      }
+    },
+    satisfiedBy(db) {
+      if (!tableExists(db, "events")) return true;
+      return columnsOf(db, "events").has("cycle_id");
+    },
+  },
 ];
 
 /** CR-CRU-071 §S1 — the ordered chain; positions ARE the version numbers. */
@@ -1363,7 +1388,11 @@ export class Store {
         status TEXT,
         -- CR-CRU-073 §S1 — the release-retirement marker, in the base schema
         -- so a brand-new store and the end of the chain agree.
-        retired_at INTEGER
+        retired_at INTEGER,
+        -- CR-CRU-094 §S1 — the run's cycle binding, in the base schema so a
+        -- brand-new store and the end of the chain agree (the retrofit never
+        -- runs on a store this build created).
+        cycle_id INTEGER
       );
 
       CREATE INDEX IF NOT EXISTS idx_events_project_timestamp
@@ -2692,8 +2721,9 @@ export class Store {
         `INSERT INTO events (id, project_key, agent_id, kind, tier, stack, codec,
            timestamp, name, total, passed, failed, pending, duration_ms,
            tree, coverage, compile, context, action, first_seen, payload,
-           role, role_inferred, started_at, runtime_ms, status, retired_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           role, role_inferred, started_at, runtime_ms, status, retired_at,
+           cycle_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         event.id,
@@ -2730,6 +2760,13 @@ export class Store {
         // CR-CRU-073 §S1 — the release-retirement marker; NULL for a live gate
         // and for every non-gate row.
         event.retiredAt ?? null,
+        // CR-CRU-094 §S1 — the column is DERIVED here, at the ONE row-insert
+        // seam, from the context the ONE ingest seam (`resolveIngestAttach`)
+        // stamped. Every surface that stores an event — the run routes and
+        // the gates route alike — gets it for free, and no caller can set one
+        // representation without the other, so the column can never disagree
+        // with `context.cycleId`. NULL (never 0) when the run carries none.
+        event.context?.cycleId ?? null,
       );
     this.enforceRetention(event.projectKey);
     this.emit("events", event.projectKey);
@@ -2810,6 +2847,10 @@ export class Store {
       // (column); each ABSENT when its stored value is (never fabricated).
       ...(typeof payload.version === "string" ? { version: payload.version } : {}),
       ...((row.retired_at ?? null) !== null ? { retiredAt: row.retired_at! } : {}),
+      // CR-CRU-094 §S1 — the cycle binding, served from its own COLUMN (not
+      // re-derived from the blob, so the projection proves the stored fact).
+      // ABSENT on an unbound run and on every pre-094 row.
+      ...((row.cycle_id ?? null) !== null ? { cycleId: row.cycle_id! } : {}),
     };
   }
 
