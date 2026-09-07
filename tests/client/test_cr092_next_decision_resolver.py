@@ -1769,6 +1769,63 @@ class PublishedTrackFactTest(_NextTestBase):
         self.assertEqual(axi.get("totalCount"), 2)
         self.assertNotIn("decision", axi)
 
+    def test_a_read_that_states_no_track_fact_stops_instead_of_degrading(self):
+        """THE CR's RISK, driven end to end through the real `cmd_next`: "a
+        queue read that fails or omits `tracks` must not silently make a
+        multi-track project look single-track". A project that LOOKS
+        single-track gets an ANSWER, and that answer is `next` picking a lane
+        design §11 forbids it to pick.
+
+        Three ways a read can fail to state the fact -- the key absent, the
+        key present and null, the key present and not a list -- and ONE
+        required outcome for all three, because the client cannot tell them
+        apart and must not try. The degrade this forbids is one character
+        wide: `resp.get("tracks") or []` sees zero declared lanes, skips the
+        refusal and names a CR, with every other test in this file green."""
+        self.assertEqual(
+            _truthy_untrimmed_tracks(self.TWO_LANE_ENTRIES),
+            ["track-1", "track-2"],
+            "non-vacuity: these entries must read as TWO lanes under any "
+            "derivation, or the narrowing this test forbids could not happen")
+        for shape, published in (("key-absent", {}),
+                                 ("explicit-null", {"tracks": None}),
+                                 ("not-a-list", {"tracks": "track-1"})):
+            with self.subTest(shape=shape):
+                code, _out, _err, axi, ops = self.drive(
+                    {"ok": True, "entries": list(self.TWO_LANE_ENTRIES),
+                     **published})
+                # The assertion that matters: the two-lane queue is never
+                # narrowed to one. A decision here -- ANY decision -- is the
+                # Risk realised, whatever the exit code says.
+                self.assertNotIn(
+                    "decision", axi,
+                    "Risk -- a two-lane queue whose read published no track "
+                    "fact was answered anyway; that is `next` picking a lane "
+                    "out of a set nobody published")
+                self.assertNotIn(
+                    "cr", axi,
+                    "Risk -- no CR is named either: naming one IS the lane "
+                    "choice, whether or not a `decision` key rides beside it")
+                self.assertEqual(
+                    code, 1,
+                    "an unusable read exits 1, like the failed read it sits "
+                    "beside -- never 0 (an answer) and never 2 (a lane "
+                    "prompt, which tells the caller a flag would fix it)")
+                self.assertIs(axi.get("ok"), False)
+                self.assertIn(
+                    "queue-track-fact-unpublished",
+                    [w.get("code") for w in (axi.get("warnings") or [])],
+                    f"the refusal must be NAMED in a structured warning, not "
+                    f"left to prose; got {axi.get('warnings')!r}")
+                self.assertTrue(
+                    axi.get("help"),
+                    "the refusal owes the caller the way out (upgrade the "
+                    "server, then re-run)")
+                self.assertEqual(
+                    ops.writes, [],
+                    "`next` is read-only, and a refusal is not an exception "
+                    "to that")
+
     def test_a_whitespace_only_second_value_is_not_a_second_track(self):
         """AC5b — THE behaviour change this CR makes, asserted as a change. A
         queue declaring `"   "` beside `"2"` is multi-track to `next` TODAY (it
