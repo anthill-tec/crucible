@@ -28,8 +28,11 @@
 //
 // AC8/AC29 — every id below is INVENTED. `CR-B-*` is this board's own
 // namespace, and the numeric tails are chosen so the rendered strings AC1
-// states (`deps 078`, `deps 014, 091, 092, 095`) are reproduced byte-for-byte
-// without naming one real CR of the project running Crucible. The live board
+// states (`deps 078`, and the four bare ids `014, 091, 092, 095`) are
+// reproduced byte-for-byte without naming one real CR of the project running
+// Crucible. CR-CRU-109 §S1 later capped what ZONE 2 states from those four to
+// `deps 014, 091 +2`; zone 3's chips still read all four, so both halves of
+// AC1's example are still rendered by this board, one per zone. The live board
 // was the ONLY thing exercising the abbreviating path when this CR opened,
 // which is the gap AC8 closes.
 //
