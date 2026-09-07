@@ -247,6 +247,19 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   no other README VOID was affected. A patch should at least WARN on a README-vs-board lifecycle
   disagreement at import.
 
+- **`GET …/queue` takes ~1.4 s for 108 entries** (candidate patch CR, measured 2026-09-07).
+  Measured post-CR-108 as a smoke test, then A/B'd against `5c73302` (pre-CR-108 `develop`) on the
+  SAME `crucible.db` with a second server on :3851: **1.53 / 1.40 / 1.44 s before, 1.53 / 1.40 /
+  1.43 s after** — byte-identical timing, and the payload grows by exactly the 10 bytes of the new
+  `tracks` field, so CR-CRU-108 is NOT the cause and `declaredTracks` (one O(n) pass over an
+  in-memory array) cannot be. The slowness is pre-existing and unattributed: 21 KB for 108 rows
+  should not cost 1.4 s, so the suspicion is per-row derivation inside `listQueue`/`deriveQueueStatus`
+  rather than the read itself. Also recorded because it produced a false alarm worth not repeating:
+  the first readings after a board restart were **7.6 / 12.8 / 11.1 s** under machine contention,
+  which reads exactly like a regression until it is A/B'd against the parent commit. A latency
+  claim needs the same discipline as a count: measure both sides, on the same data, when the
+  machine is quiet.
+
 - **~41 `src/store.ts:<line>` citations were ALREADY stale before CR-CRU-108** (candidate patch CR,
   measured 2026-09-07). CR-CRU-108's VERIFY reported "103 citations that were accurate on develop
   now point 25 lines short" after §S1 inserted 25 lines at `src/store.ts:364-388`. That figure did
