@@ -304,8 +304,13 @@ const queueOf = (members: QueueFixture[]): QueueFixture[] => [...SHIPPED_MEMBERS
  *  column (`distinctLabels`, public/app-logic.mjs:1152-1159), which §S2 names
  *  as the lanes' one derivation. Duplicated here on the FIXTURE side on
  *  purpose: a test that imported production's derivation could not catch
- *  production deriving it wrongly. */
-const declaredTracks = (members: QueueFixture[]): string[] => {
+ *  production deriving it wrongly.
+ *
+ *  Named `fixtureTracks`, NOT `declaredTracks`: the server exports a
+ *  `declaredTracks` (src/store.ts) that answers the PROJECT-level published
+ *  list SORTED, and this is the browser-side, first-appearance-order copy over
+ *  ONE membership. Sharing the name would read as the same fact twice. */
+const fixtureTracks = (members: QueueFixture[]): string[] => {
   const seen = new Set<string>();
   for (const entry of members) {
     const raw = entry.track;
@@ -320,7 +325,7 @@ const declaredTracks = (members: QueueFixture[]): string[] => {
  *  One rule, applied to the fixture, so every lane-count expectation below is
  *  the same expression over different data. */
 const expectedLaneCount = (members: QueueFixture[]): number => {
-  const tracks = declaredTracks(members);
+  const tracks = fixtureTracks(members);
   return tracks.length > 1 ? tracks.length : 0;
 };
 
@@ -635,7 +640,7 @@ describe("CR-CRU-085 AC1 — a wave draws one lane per REPORTED track, and each 
     expect(flow().getAttribute("data-version")).toBe("0.4.0");
     expect(waveNames()).toEqual([WAVE]);
 
-    const tracks = declaredTracks(TWO_TRACKS);
+    const tracks = fixtureTracks(TWO_TRACKS);
     expect(laneTracks(WAVE)).toEqual(tracks);
     expect(laneEls(WAVE).length).toBe(expectedLaneCount(TWO_TRACKS));
 
@@ -659,7 +664,7 @@ describe("CR-CRU-085 AC1 — a wave draws one lane per REPORTED track, and each 
   test("three reported tracks draw three lanes, labelled with the declared track ids in the order they are first reported", async () => {
     await mountApp({ queue: queueOf(THREE_TRACKS) });
 
-    const tracks = declaredTracks(THREE_TRACKS);
+    const tracks = fixtureTracks(THREE_TRACKS);
     expect(laneEls(WAVE).length).toBe(expectedLaneCount(THREE_TRACKS));
     expect(laneTracks(WAVE)).toEqual(tracks);
 
@@ -685,7 +690,7 @@ describe("CR-CRU-085 AC2/§S3 — a single track and no track data are not error
     // Non-vacuity: the members ARE reporting a track, and the wave IS drawn
     // with all of them — so the absence below is the CONDITION's answer, not
     // an empty render.
-    expect(declaredTracks(ONE_TRACK)).toEqual(["track-1"]);
+    expect(fixtureTracks(ONE_TRACK)).toEqual(["track-1"]);
     expect(nodeCrs(WAVE)).toEqual(ONE_TRACK.map((entry) => entry.cr));
 
     expect(lanesEl(WAVE)).toBeNull();
@@ -704,7 +709,7 @@ describe("CR-CRU-085 AC2/§S3 — a single track and no track data are not error
   test("a wave whose members declare NO track draws no lanes and states no error, warning or empty state anywhere in the box", async () => {
     await mountApp({ queue: queueOf(NO_TRACKS) });
 
-    expect(declaredTracks(NO_TRACKS)).toEqual([]);
+    expect(fixtureTracks(NO_TRACKS)).toEqual([]);
     expect(laneEls(WAVE).length).toBe(expectedLaneCount(NO_TRACKS));
     expect(lanesEl(WAVE)).toBeNull();
 
@@ -739,7 +744,7 @@ describe("CR-CRU-085 AC3 — the lane count is derived from the fixture, so the 
 
     // The fixtures really do span the four cases — otherwise the loop below
     // could assert the same thing four times.
-    expect(fixtures.map((f) => declaredTracks(f.members).length)).toEqual([0, 1, 2, 3]);
+    expect(fixtures.map((f) => fixtureTracks(f.members).length)).toEqual([0, 1, 2, 3]);
 
     for (const { what, members } of fixtures) {
       await mountApp({ queue: queueOf(members) });
@@ -804,7 +809,7 @@ describe("CR-CRU-085 AC5 — every node in a laned wave belongs to exactly one l
   test("each rendered node is a descendant of exactly ONE lane, and the container's children are one label cell followed by one row cell per track", async () => {
     await mountApp({ queue: queueOf(CAPPED) });
 
-    const tracks = declaredTracks(CAPPED);
+    const tracks = fixtureTracks(CAPPED);
     expect(laneEls(WAVE).length).toBe(expectedLaneCount(CAPPED));
 
     // The partition: exactly one, never zero (a node drawn outside the lanes)
@@ -846,7 +851,7 @@ describe("CR-CRU-085 AC5 — every node in a laned wave belongs to exactly one l
     // Every drawn row appears in exactly one lane, and the lanes' contents
     // union back to the whole drawn set in the queue's published order.
     const drawn = new Set(unlanedNodes);
-    for (const track of declaredTracks(CAPPED)) {
+    for (const track of fixtureTracks(CAPPED)) {
       expect(laneNodeCrs(WAVE, track)).toEqual(
         CAPPED.filter((entry) => entry.track === track && drawn.has(entry.cr)).map(
           (entry) => entry.cr,
@@ -962,10 +967,12 @@ describe("CR-CRU-108 §S3/AC7 — the table's column and the wave's lanes keep t
   test("a release whose members declare ONE track shows NO column and NO lanes, even though the QUEUE it was read from declares three", async () => {
     const queue = queueWithForeignTracks(ONE_TRACK_IN_ONE_WAVE);
 
-    // Non-vacuity, stated as data: the project-level rule (§S1/AC1, over the
-    // whole read) sees three lanes; the focused release sees exactly one.
-    expect(declaredTracks(queue)).toEqual(["track-7", "track-9", "track-1"]);
-    expect(declaredTracks(ONE_TRACK_IN_ONE_WAVE)).toEqual(["track-1"]);
+    // Non-vacuity, stated as data: over the WHOLE read the fixture declares
+    // three lanes; the focused release declares exactly one. Unsorted because
+    // `fixtureTracks` is the FIRST-APPEARANCE-order copy above — not the
+    // server's sorted published list.
+    expect(fixtureTracks(queue)).toEqual(["track-7", "track-9", "track-1"]);
+    expect(fixtureTracks(ONE_TRACK_IN_ONE_WAVE)).toEqual(["track-1"]);
 
     await mountApp({ proposals: [TWO_WAVE_PROPOSAL], queue });
 
@@ -998,8 +1005,8 @@ describe("CR-CRU-108 §S3/AC7 — the table's column and the wave's lanes keep t
     const queue = queueWithForeignTracks(TRACKS_IN_ONE_WAVE);
 
     // Four declared lanes in the read; two of them belong to the release.
-    expect(declaredTracks(queue)).toHaveLength(4);
-    expect(declaredTracks(TRACKS_IN_ONE_WAVE)).toEqual(declaredTracks(TWO_TRACKS));
+    expect(fixtureTracks(queue)).toHaveLength(4);
+    expect(fixtureTracks(TRACKS_IN_ONE_WAVE)).toEqual(fixtureTracks(TWO_TRACKS));
 
     await mountApp({ proposals: [TWO_WAVE_PROPOSAL], queue });
 
@@ -1010,10 +1017,10 @@ describe("CR-CRU-108 §S3/AC7 — the table's column and the wave's lanes keep t
 
     // Wave 1 draws exactly ITS two lanes: not one per project track, and not
     // one per release track spread across the waves.
-    expect(laneTracks(WAVE)).toEqual(declaredTracks(TWO_TRACKS));
+    expect(laneTracks(WAVE)).toEqual(fixtureTracks(TWO_TRACKS));
     expect(laneTracks(WAVE)).not.toContain("track-7");
     expect(laneTracks(WAVE)).not.toContain("track-9");
-    expect(headerTrackCount(WAVE)).toBe(declaredTracks(TWO_TRACKS).length);
+    expect(headerTrackCount(WAVE)).toBe(fixtureTracks(TWO_TRACKS).length);
 
     // Wave 2 declares none and stays unlaned, whatever the project publishes.
     expect(laneEls(SECOND_WAVE)).toEqual([]);
@@ -1027,14 +1034,14 @@ describe("CR-CRU-108 §S3/AC7 — the table's column and the wave's lanes keep t
 describe("CR-CRU-085 AC8 — a laned wave's header states its track count in WORDS, as the design's third segment", () => {
   test("the header reads `Wave <n> · active · <k> tracks`, and the k it states is the number of lanes drawn for that same fixture", async () => {
     await mountApp({ queue: queueOf(TWO_TRACKS) });
-    expect(headerText(WAVE)).toContain(`wave ${WAVE} · active · ${declaredTracks(TWO_TRACKS).length} tracks`);
+    expect(headerText(WAVE)).toContain(`wave ${WAVE} · active · ${fixtureTracks(TWO_TRACKS).length} tracks`);
     expect(headerTrackCount(WAVE)).toBe(laneEls(WAVE).length);
 
     // The same header on a three-track fixture states three — one derivation,
     // read off the data, never a second one that could disagree with the
     // lanes it labels.
     await mountApp({ queue: queueOf(THREE_TRACKS) });
-    expect(headerText(WAVE)).toContain(`wave ${WAVE} · active · ${declaredTracks(THREE_TRACKS).length} tracks`);
+    expect(headerText(WAVE)).toContain(`wave ${WAVE} · active · ${fixtureTracks(THREE_TRACKS).length} tracks`);
     expect(headerTrackCount(WAVE)).toBe(laneEls(WAVE).length);
     expect(headerTrackCount(WAVE)).toBe(expectedLaneCount(THREE_TRACKS));
 
@@ -1059,7 +1066,7 @@ describe("CR-CRU-085 AC8 — a laned wave's header states its track count in WOR
     // absence above is the condition's answer and not a header that never
     // states tracks at all.
     await mountApp({ queue: queueOf(TWO_TRACKS) });
-    expect(headerTrackCount(WAVE)).toBe(declaredTracks(TWO_TRACKS).length);
+    expect(headerTrackCount(WAVE)).toBe(fixtureTracks(TWO_TRACKS).length);
   });
 });
 
@@ -1069,7 +1076,7 @@ describe("CR-CRU-085 §S2 — the lane count comes from the wave's WHOLE members
   test("a track whose every member is merged or beyond the row cap still draws its lane, with its label and no rows", async () => {
     await mountApp({ queue: queueOf(CAPPED) });
 
-    const tracks = declaredTracks(CAPPED);
+    const tracks = fixtureTracks(CAPPED);
     expect(laneTracks(WAVE)).toEqual(tracks);
 
     // The fixture's premise: `track-2` has members, and NOT ONE of them is
@@ -1204,7 +1211,7 @@ describe("CR-CRU-085 AC9/§S3 — in a laned wave, a member declaring NO track i
     // The fixture really is the mixed case: more than one DECLARED track (so
     // the wave is laned at all) and members declaring none (so the implicit
     // lane has something in it).
-    expect(declaredTracks(MIXED).length).toBeGreaterThan(1);
+    expect(fixtureTracks(MIXED).length).toBeGreaterThan(1);
     expect(laneEls(WAVE).length).toBe(expectedLaneCount(MIXED));
     expect(drawnUntracked(MIXED).map((entry) => entry.cr)).toEqual(["CR-X-02", "CR-X-04"]);
 
@@ -1221,7 +1228,7 @@ describe("CR-CRU-085 AC9/§S3 — in a laned wave, a member declaring NO track i
   test("the untracked member's node carries NO lane chrome: it is inside no lane, no label names it, and no extra lane pair is minted for it", async () => {
     await mountApp({ queue: queueOf(MIXED) });
 
-    const tracks = declaredTracks(MIXED);
+    const tracks = fixtureTracks(MIXED);
     const grid = lanesElOrThrow(WAVE);
 
     for (const entry of drawnUntracked(MIXED)) {
@@ -1268,7 +1275,7 @@ describe("CR-CRU-085 AC9/§S3 — in a laned wave, a member declaring NO track i
     // Each lane still holds exactly its own track's drawn rows, in the
     // published order — no untracked member leaked into one.
     const drawn = new Set(drawnMembers(MIXED).map((entry) => entry.cr));
-    for (const track of declaredTracks(MIXED)) {
+    for (const track of fixtureTracks(MIXED)) {
       expect(laneNodeCrs(WAVE, track)).toEqual(
         MIXED.filter((entry) => entry.track === track && drawn.has(entry.cr)).map(
           (entry) => entry.cr,
@@ -1351,7 +1358,7 @@ describe("CR-CRU-085 AC9/§S3 — in a laned wave, a member declaring NO track i
       tracks: laneTracks(WAVE),
       column: tableHasTrackColumn(),
     };
-    expect(declaredOnly.k).toBe(declaredTracks(MIXED_DECLARED_ONLY).length);
+    expect(declaredOnly.k).toBe(fixtureTracks(MIXED_DECLARED_ONLY).length);
     expect(declaredOnly.column).toBe(true);
 
     await mountApp({ queue: queueOf(MIXED) });
@@ -1371,7 +1378,7 @@ describe("CR-CRU-085 AC9/§S3 — in a laned wave, a member declaring NO track i
     expect(laneEls(WAVE).length).toBe(declaredOnly.lanes);
     expect(laneTracks(WAVE)).toEqual(declaredOnly.tracks);
     expect(tableHasTrackColumn()).toBe(declaredOnly.column);
-    expect(headerText(WAVE)).toContain(`· ${declaredTracks(MIXED).length} tracks`);
+    expect(headerText(WAVE)).toContain(`· ${fixtureTracks(MIXED).length} tracks`);
   });
 
   test("a `nextCr` naming an untracked member still marks that node, and marks only it", async () => {
