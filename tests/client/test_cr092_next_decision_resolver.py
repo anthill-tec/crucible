@@ -25,12 +25,14 @@ THE API THIS RED PINS, and why each piece exists:
         (`wave-sequence`), which is the exact inconsistency the fleet standard
         exists to prevent. Mirrors `normalizeTrack` (src/store.ts:349-352).
 
-    queue_tracks(entries) -> [str]
-        §S3. The sorted distinct non-null STORED `track` values. `len > 1` is
-        the whole definition of "multi-track"; the list is echoed as stored,
-        never re-spelled to the caller's spelling.
+    queue_tracks(queue) -> [str]
+        §S3, as CR-CRU-108 §S2 leaves it: the tracks the queue READ published
+        (`declaredTracks`, src/store.ts:380), NOT a set the client derives.
+        `len > 1` is still the whole definition of "multi-track", and the
+        values are still echoed as stored rather than re-spelled — the rule
+        simply has one home now, on the server that owns the normalisation.
 
-    resolve_next(entries, track=None) -> (ok, code, fields, warnings)
+    resolve_next(entries, track=None, tracks=[str]) -> (ok, code, fields, warnings)
         The pure resolver: one queue read in, one decision out. A tuple, like
         the module's existing `resolve_single_plan`. `code` is the process exit
         code so the three DECISIONS (all answers) can share `0` while the §S3
@@ -274,8 +276,22 @@ def _args(**overrides):
     return Namespace(**values)
 
 
+def _published_tracks(entries):
+    """CR-CRU-108 §S1/AC1 — what `GET …/queue` publishes BESIDE its entries:
+    the sorted distinct non-blank TRIMMED `track` values (`declaredTracks`,
+    src/store.ts:380, called from `handleQueueGet`).
+
+    One spelling of the server's rule, copied verbatim from the sibling
+    `tests/client/test_client_fleet_envelope_census.py` rather than re-worded,
+    so the two harnesses cannot drift into two ideas of what the read
+    publishes."""
+    return sorted({(e.get("track") or "").strip() for e in entries
+                   if (e.get("track") or "").strip()})
+
+
 def _queue(*entries):
-    return {"ok": True, "entries": list(entries)}
+    return {"ok": True, "entries": list(entries),
+            "tracks": _published_tracks(entries)}
 
 
 class _NextTestBase(unittest.TestCase):
@@ -291,7 +307,13 @@ class _NextTestBase(unittest.TestCase):
 
     # ── the pure resolver ────────────────────────────────────────────────
     def resolve(self, entries, track=None):
-        return AXI.resolve_next(entries, track=track)
+        # CR-CRU-108 §S2 — the published list is the track fact, so the pure
+        # resolver is GIVEN it rather than deriving one. Every fixture in this
+        # file classifies identically under both rules (AC5), so no assertion
+        # below changes meaning; the whitespace/padding cases that DO change
+        # are AC5b's and live in `PublishedTrackFactTest`.
+        return AXI.resolve_next(entries, track=track,
+                                tracks=_published_tracks(entries))
 
     def fields(self, entries, track=None):
         _ok, _code, fields, _warnings = self.resolve(entries, track=track)
@@ -477,11 +499,11 @@ class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
             f"the five spellings stored {sorted(set(self.stored.values()))!r}")
         self.assertEqual(set(self.stored.values()), {"track-2"})
 
-    def test_the_live_track_list_is_what_the_server_holds(self):
-        """`queue_tracks` reads the SERVER's canonical values, so the refusal
-        list §S3 emits is the roadmap's own vocabulary."""
-        self.assertEqual(self.other_stored, AXI.canonical_track(self.OTHER_TRACK))
-        self.assertEqual(AXI.queue_tracks(self.entries), ["track-2", "track-3"])
+    # CR-CRU-108 §S2/AC4 — `test_the_live_track_list_is_what_the_server_holds`
+    # was deleted here: it called `queue_tracks(<entries>)` and pinned the
+    # distinct-set computation this CR RETIRES. Its live-data claim survives
+    # behaviourally in `test_the_other_lane_is_reachable_by_its_own_spelling`
+    # below, which resolves the second stored lane by its own spelling.
 
     def test_the_server_refuses_exactly_what_the_helper_refuses(self):
         """The other half of one rule: a value naming no lane is refused by
@@ -509,7 +531,8 @@ class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
         answers = []
         for spelling in self.SPELLINGS:
             ok, code, fields, _warnings = AXI.resolve_next(
-                self.entries, track=spelling)
+                self.entries, track=spelling,
+                tracks=_published_tracks(self.entries))
             with self.subTest(spelling=spelling):
                 self.assertIs(ok, True)
                 self.assertEqual(code, 0)
@@ -524,7 +547,8 @@ class TrackCanonicalisationAgreesWithTheServerTest(unittest.TestCase):
     def test_the_other_lane_is_reachable_by_its_own_spelling(self):
         """Multi-track, against real stored values: `--track 3` answers about
         track-3, never track-2."""
-        fields = AXI.resolve_next(self.entries, track="Track 3")[2]
+        fields = AXI.resolve_next(self.entries, track="Track 3",
+                                  tracks=_published_tracks(self.entries))[2]
         self.assertEqual(fields.get("decision"), "NEXT")
         self.assertEqual(fields.get("cr"), "CR-TRK-OTHER")
         self.assertEqual(fields.get("track"), "track-3")
@@ -543,12 +567,12 @@ TWO_TRACK_LANE = (
 
 class TrackScopingTest(_NextTestBase):
 
-    def test_tracks_are_the_sorted_distinct_non_null_stored_values(self):
-        entries = [_entry("CR-A", 10, track="track-2"),
-                   _entry("CR-B", 20, track="track-1"),
-                   _entry("CR-C", 30),
-                   _entry("CR-D", 40, track="track-2")]
-        self.assertEqual(AXI.queue_tracks(entries), ["track-1", "track-2"])
+    # CR-CRU-108 §S2/AC4 — `test_tracks_are_the_sorted_distinct_non_null_
+    # stored_values` was deleted here: it asserted the client's OWN
+    # distinct-set computation, which is the mechanism this CR deletes. The
+    # published-list behaviour it used to stand for is covered by
+    # `PublishedTrackFactTest`, over a payload whose entries and whose
+    # published `tracks` disagree.
 
     def test_multi_track_without_the_flag_refuses_and_never_picks_a_lane(self):
         """AC7 — `ok=false`, `needs=["track"]`, the live list, exit 2, and NO
@@ -1511,7 +1535,17 @@ class NextBlockCitationsTest(unittest.TestCase):
         # cheaper than a second visit — NOT because CR-CRU-094 caused it. The
         # reason it survived on `develop` at all is that no merge gate runs
         # this suite; that gap is recorded separately as a candidate CR.
-        ("LANDED_STATUSES", "src/store.ts", 4073, 4073,
+        # Re-pinned 2026-09-07 (CR-CRU-108 §S1), 4073 -> 4098. This drift IS
+        # ours and it is the ordinary case: §S1 inserted `declaredTracks` (25
+        # lines, src/store.ts:365-388) ABOVE `deriveQueueStatus`, moving it
+        # down by exactly that much. The CR that shifted the file re-pins it.
+        # NOTE (RED commit): the production comment this row mirrors —
+        # `clients/_crucible_axi.py:1418` — still spells 4073, so
+        # `test_the_table_covers_every_citation_the_block_carries` is RED
+        # between this commit and §S2's cutover, which moves the block's
+        # citation to match. Split across two commits because the client file
+        # is held by the cutover; the split is deliberate, not a defect.
+        ("LANDED_STATUSES", "src/store.ts", 4098, 4098,
          "private deriveQueueStatus(", "private deriveQueueStatus("),
         # Re-pinned 2026-09-07 (CR-CRU-094 C4), 345-348 -> 349-352. This drift
         # IS ours, and it is the ordinary case the rule above describes:
