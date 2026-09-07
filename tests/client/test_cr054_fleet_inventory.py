@@ -1387,6 +1387,54 @@ def _wire_call_after(path, registrar, call_source):
     return False
 
 
+def _bury_registrar_call_in_dead_code(path, registrar, *, shape):
+    """Rewrite one client's `registrar(...)` statement, in place on a SCRATCH
+    copy, into a registration that is still WRITTEN but can never RUN --
+    `shape="dead function"` moves it into a module-level function nothing
+    calls, `shape="if False"` leaves it where it is under a test that is never
+    true. Both keep the file parseable and keep every character of the call,
+    which is the point: only reachability changed."""
+    text = path.read_text()
+    for node in ast.walk(ast.parse(text)):
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+            continue
+        if _called_registrar_name(node.value) != registrar:
+            continue
+        indent = " " * node.col_offset
+        call = ast.unparse(node)
+        start, end = _node_span(text, node)
+        if shape == "if False":
+            path.write_text(text[:start] + "if False:\n" + indent + "    "
+                            + call + text[end:])
+        elif shape == "dead function":
+            path.write_text(text[:start] + "pass" + text[end:]
+                            + "\n\ndef _wiring_nothing_calls(sub, *funcs):\n"
+                            + "    " + call + "\n")
+        else:
+            raise ValueError(f"unknown dead-code shape: {shape!r}")
+        return True
+    return False
+
+
+def _hoist_registrar_call_to_module_level(path, registrar):
+    """Move one client's `registrar(...)` statement out of `main()` and to the
+    END of the module, in place on a SCRATCH copy -- the OTHER shape the rule
+    accepts. A module body runs, so a registration written there is wired, and
+    a rule that only ever looked inside `main()` would report this client as an
+    offender."""
+    text = path.read_text()
+    for node in ast.walk(ast.parse(text)):
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)):
+            continue
+        if _called_registrar_name(node.value) != registrar:
+            continue
+        call = ast.unparse(node)
+        start, end = _node_span(text, node)
+        path.write_text(text[:start] + "pass" + text[end:] + "\n" + call + "\n")
+        return True
+    return False
+
+
 class Cr075QueueFileVerbInventoryTest(unittest.TestCase):
     """CR-CRU-075 SS2/AC3 -- one verb, in all five clients, registered exactly
     once each, by its OWN shared registrar.
@@ -1601,7 +1649,7 @@ CR075_REGISTRARS_TODAY = {
 }
 
 
-def _shared_registrar_verbs(axi_path):
+def _shared_registrar_verb_sets(axi_path):
     """`{registrar name: frozenset(verb names it registers)}` for every
     top-level function in the shared module that BUILDS subparsers.
 
@@ -1635,11 +1683,30 @@ def _client_registrar_calls(client_path):
     (`add_next_verb(sub, cmd_next)`), which wires that registrar's whole verb
     set. A dict-taking registrar (`add_roadmap_verbs`) is the case where a
     client can keep the call and still drop a verb, so its own keys are what
-    it wired."""
+    it wired.
+
+    Only a registration that can RUN counts, which is the whole difference
+    between wiring a verb and writing one down. The scan reads registrar calls
+    that are a STATEMENT at module level, or a statement of the module-level
+    `main()`'s own body -- the shape every registrar call on the fleet has
+    today: twenty of them, four registrars x five clients, each a bare call
+    statement directly in that client's `main()`. A registration parked in a
+    function nothing calls, or under a test that is never true, parses exactly
+    like a real one and registers nothing; a reader that walked every
+    `ast.Call` in the file would count it and report full parity for a client
+    whose verb argparse has never heard of."""
+    tree = ast.parse(client_path.read_text())
+    reachable = list(tree.body)
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                and node.name == "main":
+            reachable.extend(node.body)
     calls = {}
-    for node in ast.walk(ast.parse(client_path.read_text())):
-        if not isinstance(node, ast.Call):
+    for statement in reachable:
+        if not (isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Call)):
             continue
+        node = statement.value
         name = _called_registrar_name(node)
         if name is None or not name.startswith("add_"):
             continue
@@ -1655,8 +1722,17 @@ def _client_registrar_calls(client_path):
 def _registrar_parity_offenders(axi_path, client_paths):
     """AC4's rule, as a pure function of (shared module, clients):
     `{client: {registrar: [verb names it does not wire]}}`, empty when every
-    verb every shared registrar registers reaches every client."""
-    registrars = _shared_registrar_verbs(axi_path)
+    verb every shared registrar registers reaches every client.
+
+    The constraint that follows, stated because it is otherwise only implied:
+    PLACING A REGISTRAR IN THE SHARED MODULE IS WHAT MAKES A VERB FLEET-WIDE.
+    `clients/_crucible_axi.py` is the fleet locus, so anything registered from
+    there is owed by all five clients, and a registrar added there for a verb
+    only one stack wants would be reported against the four that legitimately
+    do not want it. That is the rule working, not failing: a client-specific
+    verb keeps its own `add_parser` in its own client, and never acquires a
+    shared registrar."""
+    registrars = _shared_registrar_verb_sets(axi_path)
     offenders = {}
     for client, path in client_paths.items():
         calls = _client_registrar_calls(path)
@@ -1720,7 +1796,7 @@ class Cr075SharedRegistrarParityTest(unittest.TestCase):
         the four registrars that exist and the eight verbs they register --
         each verb set taken from the frozen set its own section asserts, so
         the two derivations must agree."""
-        discovered = _shared_registrar_verbs(AXI_MODULE_PATH)
+        discovered = _shared_registrar_verb_sets(AXI_MODULE_PATH)
         self.assertNotEqual(
             discovered, {},
             "the derived check found NO shared registrar in the shared "
@@ -1752,7 +1828,7 @@ class Cr075SharedRegistrarParityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="cr075-scratch-") as tmp:
             axi_copy, _clients = _scratch_fleet(tmp)
             axi_copy.write_text(axi_copy.read_text() + _SCRATCH_PROSE_SOURCE)
-            discovered = _shared_registrar_verbs(axi_copy)
+            discovered = _shared_registrar_verb_sets(axi_copy)
         self.assertNotIn(
             "add_prose_only_verb", discovered,
             "a function that only NAMES add_parser in prose is not a "
@@ -1807,6 +1883,77 @@ class Cr075SharedRegistrarParityTest(unittest.TestCase):
             f"the mapping must still be named, with the verb it dropped: "
             f"{offenders!r}")
 
+    def test_a_registration_in_a_function_nothing_calls_is_reported_unwired(self):
+        """REACHABILITY, half one. A registrar call moved out of `main()` into
+        a module-level function nothing calls still reads, greps and parses
+        like a wiring, and registers nothing: that client's verb is argparse's
+        `invalid choice`. The rule must count what can run, not what is
+        written, so this client is named exactly as a client that never wired
+        the verb at all."""
+        with tempfile.TemporaryDirectory(prefix="cr075-scratch-") as tmp:
+            axi_copy, clients = _scratch_fleet(tmp)
+            self.assertTrue(
+                _bury_registrar_call_in_dead_code(
+                    clients["mvn"], "add_queue_file_verb",
+                    shape="dead function"),
+                "the injection found no registrar call to bury")
+            buried = clients["mvn"].read_text()
+            offenders = _registrar_parity_offenders(axi_copy, clients)
+        self.assertIn(
+            "add_queue_file_verb", buried,
+            "the injection must leave the CALL in the file -- only its "
+            "reachability may change, or this proves nothing")
+        self.assertEqual(
+            offenders, {"mvn": {"add_queue_file_verb": ["queue-file"]}},
+            f"a registration parked in a function nothing calls registers "
+            f"nothing, and must be reported as unwired against that client "
+            f"and that verb: {offenders!r}")
+
+    def test_a_registration_under_a_test_that_is_never_true_is_reported_unwired(self):
+        """REACHABILITY, half two, and the cheaper way to fool a text-shaped
+        reader: the call stays exactly where it belongs, inside `main()`,
+        under `if False:`. Nothing about the call changed; it simply cannot
+        execute, so the verb is not registered and the client owes it."""
+        with tempfile.TemporaryDirectory(prefix="cr075-scratch-") as tmp:
+            axi_copy, clients = _scratch_fleet(tmp)
+            self.assertTrue(
+                _bury_registrar_call_in_dead_code(
+                    clients["python"], "add_queue_file_verb",
+                    shape="if False"),
+                "the injection found no registrar call to guard")
+            guarded = clients["python"].read_text()
+            offenders = _registrar_parity_offenders(axi_copy, clients)
+        self.assertIn(
+            "if False:", guarded,
+            "the injection must actually have guarded the call")
+        self.assertIn(
+            "add_queue_file_verb", guarded,
+            "the injection must leave the CALL in the file -- only its "
+            "reachability may change, or this proves nothing")
+        self.assertEqual(
+            offenders, {"python": {"add_queue_file_verb": ["queue-file"]}},
+            f"a registration under a test that is never true registers "
+            f"nothing, and must be reported as unwired against that client "
+            f"and that verb: {offenders!r}")
+
+    def test_a_registration_at_module_level_is_wiring_and_is_not_reported(self):
+        """The other side of the same rule, pinned so it cannot quietly
+        narrow to `main()`-only: a module body RUNS. A client that registers
+        the verb from a module-level statement has wired it, and reporting it
+        would be a false positive -- the two tests above must be catching
+        unreachability, not the absence of `main()`."""
+        with tempfile.TemporaryDirectory(prefix="cr075-scratch-") as tmp:
+            axi_copy, clients = _scratch_fleet(tmp)
+            self.assertTrue(
+                _hoist_registrar_call_to_module_level(
+                    clients["arduino"], "add_queue_file_verb"),
+                "the injection found no registrar call to hoist")
+            offenders = _registrar_parity_offenders(axi_copy, clients)
+        self.assertEqual(
+            offenders, {},
+            f"a registrar call at module level can run, so it wires the "
+            f"verb and no client may be reported: {offenders!r}")
+
     def test_a_registrar_this_cr_never_names_is_enforced_the_day_it_lands(self):
         """The whole point of deriving the rule instead of freezing a fifth
         set. A registrar and a verb that appear NOWHERE in this file, in any
@@ -1816,7 +1963,7 @@ class Cr075SharedRegistrarParityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="cr075-scratch-") as tmp:
             axi_copy, clients = _scratch_fleet(tmp)
             axi_copy.write_text(axi_copy.read_text() + _SCRATCH_REGISTRAR_SOURCE)
-            discovered = _shared_registrar_verbs(axi_copy)
+            discovered = _shared_registrar_verb_sets(axi_copy)
             self.assertEqual(
                 discovered.get("add_widget_sync_verb"),
                 frozenset({"widget-sync"}),
