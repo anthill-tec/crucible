@@ -1,66 +1,134 @@
-# CR-CRU-107 — a cycle label list refuses the wrong delimiter
+# CR-CRU-107 — a cycle plan is filed one label per flag
 
 - **Type**: bug
 - **Wave**: 5 (0.2.0)
 - **Depends on**: none
-- **Status**: PENDING (0.2.0) — filed 2026-09-04
+- **Status**: PENDING (0.2.0)
+- **Design reference**: `docs/changes/CR-CRU-030-fleet-toon-axi-compliance.md` §S13 (structured errors on stdout, AXI principle 6) and §S15 (`help[]` next-step templates, principle 9).
 
 ## Problem
 
-`plan-file --cycles` is documented comma-separated. Handed a SEMICOLON-separated value it files
-**one** cycle whose label is the entire string — three labels wide — and reports `ok=True`.
+`plan-file` takes its cycle labels as ONE delimited string, `--cycles "a,b,c"`. A label is free
+text, so the delimiter collides with the content, in both directions, and both have fired on this
+project's own board:
 
-The damage is **unrepairable**. No verb relabels a cycle: `PATCH …/plans/<planId>` is the CR close,
-`PATCH …/plans/<planId>/cycles/<id>` moves state only, and `abort` destroys the record. So a
-mis-delimited plan is a permanent board artifact.
+- **Wrong delimiter → too few cycles.** A semicolon-separated value files ONE cycle whose label is
+  the entire string and reports `ok=True`. Four occurrences: cycles **281** (six labels in one),
+  **324**, **328**, **340**.
+- **Right delimiter inside a label → too many cycles.** Filing CR-CRU-078, the label
+  `"C1 data + authored order - proposals read, formatter wiring, seq verbatim"` became cycles
+  296/297/298 — three cycles nobody planned, `ok=True`, no warning.
 
-Three occurrences on this project's own board — cycles 324, 328 and 340. Cycle 340's stored label is:
+Neither is repairable once the cycle leaves `pending`. A relabel route exists —
+`PATCH …/plans/<planId>/cycles/<id>` accepts `{label}` and `Store.editCycleLabel` performs it — but
+it refuses an `active` cycle (`locked`) and anything terminal (`immutable history`), and no client
+verb exposes it. All four garbled rows are `done` or `skipped`. Cycle 281's plan was recovered the
+only way left: `abort` plus a re-file, which costs a `--user-approved` gate and destroys the record.
 
-```
-C1 the verb and its writer - route/gate/prospective-cycle/registered-subject/replace-semantics;C2 the reporting envelope and the remedy hint - warnings/unknownDependencies/hint retarget/CR-104 comment;C3 VERIFY
-```
+The operator's own workarounds are the evidence that the delimiter is the defect: labels on this
+board use `·` and ` + ` where a comma belongs (cycles 281–286), and one cycle plan filed this
+release deliberately reads `(§S2 + §S3)` to avoid a comma.
 
-(The `C1`/`C2`/`C3` prefixes in that stored value are a SECOND operator error, corrected by the
-user's ruling of 2026-09-04: `plan_cycles` holds `cycle_id` and `seq`, so the ordinal is the board's
-data and a label that restates it can contradict it — as this one does, sitting at position 1 while
-claiming to be three cycles. A label is a bare description. That is a convention, not a defect, and
-this CR does not legislate it.)
-
-Every occurrence was the same operator making the same substitution from memory. That is the point:
-a value this obviously wrong — a "label" containing two semicolons and the substring `C2` — should
-not be storable, and after three identical incidents the tooling is the thing that needs fixing.
+Policing the delimiter cannot fix this. Measured over all 416 cycles on the board: **14 labels
+contain a semicolon and only 4 are the defect** — the other ten use it as ordinary punctuation
+(`S1 inventory + classification (deliverable; no code moves)`;
+`C3 labels carry the CR id + status and no title; track rides the node`). A refusal on the character
+would have rejected ten legitimate filings; the narrowest rule that still catches all four
+(`≥2 semicolons and no comma`) rejects three.
 
 ## Scope
 
-### §S1 — a label that is plainly a list is refused
+### §S1 One label per flag
 
-A `--cycles` value carrying a semicolon is refused before anything is posted, naming the delimiter
-the verb wants and echoing the split the caller probably meant. Per AXI principle 9 the refusal
-carries the corrected call, not just a complaint.
+`plan-file` gains a repeatable `--cycle`: one occurrence per cycle, in order. A label passed this
+way is never split, so it may contain commas, semicolons, or any other character, and there is no
+delimiter to get wrong.
 
-The refusal is CLIENT-side, where the flag is parsed and where the caller can still be told what to
-type. The server takes labels, not a delimited string, so it has no delimiter to police.
+`--cycle` is the canonical form. It is what `plan-file --help` shows first, and what the `next`
+verb's start template emits (`_next_start_help`, which today prints `--cycles "<c1,c2>"`).
+
+`--cycles` keeps working, unchanged: comma-split, same order, same payload. It is documented as the
+legacy form. Its splitting is deliberately NOT policed — the measurement above shows every available
+character rule refuses labels this project legitimately files, and with `--cycle` available the
+mistake no longer needs making.
+
+The two are mutually exclusive: a call passing both is refused before anything is posted, because
+the intended cycle list would be ambiguous.
+
+### §S2 The refusals are structured
+
+Both new refusals — both flags together, and neither flag given — emit an `ok:false` TOON-AXI
+envelope on stdout with a `help[]` carrying the corrected call, and exit non-zero, via the fleet's
+existing hard-stop route (a typed exception from the shared verb, converted by `run_verb`, which all
+five clients already dispatch every verb through).
+
+The existing `--cycles`-is-empty refusal (`sys.exit("[crucible] ERROR: --cycles must name at least
+one cycle")`) is converted to the same shape. It is in the function this CR edits, it is the same
+defect class, and a bare `sys.exit` string violates principle 6.
 
 ## Acceptance criteria
 
-- **AC1** — `--cycles` carrying a semicolon is refused, nothing is posted, and the exit code is the
-  client's existing refusal code — not a traceback and not `ok=True`.
-- **AC2** — The refusal ECHOES the semicolon-split as the probable intent, so the caller can see the
-  labels the verb would have filed and re-send them comma-separated. Principle 9: the corrected call
-  is in the message.
-- **AC3** — A legitimate comma-separated value is unaffected, including labels that contain hyphens,
-  slashes and parentheses, which this project's real labels do.
-- **AC4** — A label legitimately containing a semicolon has no other way to be expressed, and the
-  refusal says so rather than pretending the character is forbidden everywhere. State the escape or
-  state that there is none.
-- **AC5** — The three existing garbled rows (324, 328, 340) are NOT rewritten. They are the evidence
-  this CR exists; a data migration is a separate decision and the board's history is not edited to
-  flatter it.
+- **AC1** — `plan-file --cycle "a" --cycle "b" --cycle "c"` files three cycles with labels `a`, `b`,
+  `c` in that order, and posts `cycles: [{label:"a"},{label:"b"},{label:"c"}]`. Asserted per client,
+  five for five (`arduino-`, `bun-`, `mvn-`, `python-`, `rust-crucible.py`).
+- **AC2** — a single `--cycle` value containing commas AND semicolons files exactly ONE cycle whose
+  label is that value byte-for-byte. Use the four historical labels as the fixture, including cycle
+  281's six-segment string and the CR-CRU-078 comma label; each files one cycle.
+- **AC3** — `--cycles "a,b"` still files two cycles, labels `a` and `b`, byte-identical payload to
+  today. Existing `--cycles` tests pass unchanged; a diff that edits their expectations fails this
+  AC.
+- **AC4** — `--cycle` and `--cycles` together are refused: nothing is posted, stdout carries an
+  `ok:false` envelope whose `error` names both flags, `help[]` shows the corrected `--cycle` call,
+  and the exit code is **2** (the fleet's hard-stop code, as `emit_agent_identity_hard_stop`
+  returns). Asserted per client, five for five.
+- **AC5** — neither flag given is refused the same way, with the same envelope shape and exit 2.
+  `--cycles` is no longer `required=True` in any client, since `--cycle` may carry the plan; the
+  requirement moves into the shared verb so one rule covers both flags. Asserted per client.
+- **AC6** — the empty-`--cycles` refusal emits an `ok:false` envelope on stdout and exits 2, not a
+  bare `sys.exit` string on stderr. Asserted per client.
+- **AC7** — `plan-file --help` on each of the five clients shows `--cycle` as repeatable and names
+  it before `--cycles`, and `--cycles`' own help says it is the legacy comma-split form. The five
+  help strings are byte-identical to each other, as they are today.
+- **AC8** — `_next_start_help`'s emitted template uses `--cycle`, so the `next` verb's `help[]`
+  hands back a call that cannot be mis-delimited. Asserted on the shared function and on the `next`
+  envelope of at least one client.
+- **AC9** — the four garbled rows (281, 324, 328, 340) are unchanged. They are `done`/`skipped`,
+  which `Store.editCycleLabel` refuses as immutable history, so this is a statement of fact rather
+  than a choice — asserted by leaving them out of every fixture, not by a test that pins live board
+  data.
+
+## Risk
+
+`--cycles` appears in ~40 test call sites across nine suites, including
+`tests/clients-bun-crucible.test.ts`, which the merge gate DOES run (the python client suites are
+not in the gate — see the queue notes). AC3 keeps those green by keeping `--cycles` behaviour
+identical; a change that breaks them is a scope error, not a test problem.
+
+`clients/python-crucible.py`'s `plan-file` block is a GUARDED citation:
+`tests/client/test_cr092_next_decision_resolver.py`'s `NextBlockCitationsTest` pins it at
+`:1422-1436`, bracketed by `sub.add_parser("plan-file"` and `set_defaults(func=cmd_plan_file)`.
+Adding a flag inside that block moves the tail. Re-pin it in this CR.
+
+Adding a flag and help text to five clients plus the shared module moves
+`PROSE_CITATIONS.clients` (687 at this CR's baseline). Re-record it ONCE, by measurement, as a
+close-out step. `src` and `public` must not move.
+
+`.lavish/crucible-workflow-flowchart.html:697` shows a `--cycles` call and is served as a fixture by
+`tests/roadmap-visual-grammar.test.ts`. If it is updated, that suite re-runs.
+
+Two user-authored skills teach `--cycles` — `~/.agents/skills/crucible/SKILL.md` and
+`~/.agents/skills/model-b/SKILL.md`. This CR does not edit them; until they are updated, a dispatched
+agent will keep typing the legacy form, which still works. Recommend the update at close-out.
 
 ## Non-goals
 
-- **A relabel verb.** Refusing the bad value at the door is what makes one unnecessary. Adding a
-  mutation path for labels is a larger surface than the defect justifies.
-- **Policing other delimited flags.** `--crs` and `--packages` take comma-separated lists too, and if
-  the same defect is there it is the same fix — but this CR is scoped to the one that has actually
-  fired three times. Widening on suspicion is how specs inflate.
+- **Retiring `--cycles`.** It has ~40 call sites, the `next` template, five client declarations and
+  two out-of-repo skill files behind it. Making `--cycle` canonical removes the need for the
+  delimiter without a fleet-wide break.
+- **Policing the `--cycles` delimiter.** Measured: no character rule separates the four bad rows
+  from the ten legitimate semicolon labels without refusing correct input.
+- **A relabel client verb.** The route exists and is pending-only; exposing it is a separate CR with
+  its own decision about the window.
+- **Rewriting the four garbled rows.** They are immutable history and they are this CR's evidence.
+- **Other delimited flags.** `--crs` and `--packages` take comma lists too; if the same defect
+  matters there it is the same fix, filed separately.
