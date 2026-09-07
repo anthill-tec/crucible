@@ -52,6 +52,7 @@ Fallback:
     python3 tests/client/test_rust_crucible_axi.py
 """
 
+import ast
 import contextlib
 import importlib.util
 import io
@@ -65,6 +66,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+
+# CR-CRU-075 §S1 — the fleet's established AST readers for "which verbs does
+# this client register, and through what?", reused rather than re-derived.
+from tests.client.test_cr054_fleet_inventory import (
+    _add_parser_verb_names,
+    _defined_function_names,
+    _single_verb_registrar_delegator,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "clients" / "rust-crucible.py"
@@ -1200,6 +1209,228 @@ class RustCrucibleToolchainTest(_BaseRustAxiTest):
             "WORKFLOW_CYCLE_ID=51 must have NO EFFECT -- the env var is no "
             "longer read anywhere in the client",
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CR-CRU-075 §S1 (AC1/AC2/AC6) — `queue-file` reaches THIS client too
+#
+# CR-CRU-014 §S2 shipped `queue-file` on python-crucible.py alone. The shared
+# `_crucible_axi.cmd_queue_file` / `parse_queue_table` were fleet-available
+# from the start; only the verb SURFACE was not, so an orchestrator on any
+# other stack gets argparse's `invalid choice: 'queue-file'` — a bare
+# SystemExit(2) — where every other workflow verb answers with an envelope
+# (AXI principle 6, CR-CRU-030 §S13).
+#
+# Asserted HERE, in this client's own suite, rather than as one fleet-wide set
+# comparison: a five-for-five that fails must NAME the client that lost the
+# verb, not report "expected 5, got 4". The shared registrar's own contract
+# lives in `test_crucible_axi_shared.py`; the frozen inventory set and the
+# derived registrar-parity sweep are §S2's, in
+# `test_cr054_fleet_inventory.py`.
+#
+# The fixture's CR ids live in module constants and are never spelled inside
+# an assertion (CR-CRU-097 §S1's residue rule), in a namespace this section
+# invents so no board id can decay here.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_QUEUE_FILE_ALPHA = "CR-QF-1"
+_QUEUE_FILE_BETA = "CR-QF-2"
+
+# Two rows exercising the parse's real conventions: an em-dash "depends on
+# nothing" cell, a Wave cell with a parenthetical (`5 (0.2.0)` → `5`), and a
+# bare dependency number normalised to a full id from its own row's namespace.
+_QUEUE_FILE_TABLE = (
+    "# Queue\n\n"
+    "| CR | Title | Type | Status | Depends on | Wave |\n"
+    "|---|---|---|---|---|---|\n"
+    f"| [{_QUEUE_FILE_ALPHA}](alpha.md) | Alpha | patch | PENDING | — | 5 (0.2.0) |\n"
+    f"| [{_QUEUE_FILE_BETA}](beta.md) | Beta | patch | PENDING | 1 | 6 |\n"
+)
+
+# The second row is missing its Wave cell (5 columns against the header's 6)
+# — §S2's malformed row, which must fail LOUDLY and POST nothing.
+_QUEUE_FILE_MALFORMED_TABLE = (
+    "# Queue\n\n"
+    "| CR | Title | Type | Status | Depends on | Wave |\n"
+    "|---|---|---|---|---|---|\n"
+    f"| [{_QUEUE_FILE_ALPHA}](alpha.md) | Alpha | patch | PENDING | — | 5 |\n"
+    f"| [{_QUEUE_FILE_BETA}](beta.md) | Beta | patch | PENDING | 1 |\n"
+)
+
+# What the shared parser must make of `_QUEUE_FILE_TABLE`.
+_QUEUE_FILE_ENTRIES = [
+    {"cr": _QUEUE_FILE_ALPHA, "title": "Alpha", "wave": "5", "dependsOn": []},
+    {"cr": _QUEUE_FILE_BETA, "title": "Beta", "wave": "6",
+     "dependsOn": [_QUEUE_FILE_ALPHA]},
+]
+
+
+class RustCrucibleQueueFileVerbTest(_BaseRustAxiTest):
+    """AC1/AC2 — what a caller on THIS client observes: the table is parsed,
+    the whole set is POSTed once to §S1's full-replace endpoint, and BOTH
+    failure paths answer with a structured `ok:false` envelope on stdout."""
+
+    def _source(self, name, text):
+        path = os.path.join(self.tmpdir, name)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return path
+
+    def _queue_path(self):
+        return f"/api/v2/projects/{self.PROJECT_KEY}/queue"
+
+    def _run_queue_file(self, source, post_return=None):
+        post_return = post_return if post_return is not None else {
+            "ok": True, "unknownDependencies": []}
+        argv = ["queue-file", "--project-dir", self.tmpdir,
+                "--from-file", source]
+        with mock.patch.object(self.module, "_post", return_value=post_return,
+                               create=True) as post_mock, \
+             mock.patch.object(self.module, "_get", return_value=None,
+                               create=True), \
+             mock.patch.object(self.module, "_patch", return_value=None,
+                               create=True) as patch_mock:
+            code, out, err = _run_main(self.module, argv)
+        return code, out, err, post_mock, patch_mock
+
+    def _assert_structured_failure(self, code, out, err, post_mock, cause):
+        """AC2, per client — AXI principle 6 (CR-CRU-030 §S13): a failure is a
+        STRUCTURED envelope on STDOUT carrying a non-empty `help[]`, never a
+        raw argparse usage error and never a traceback."""
+        combined = out + err
+        self.assertNotIn(
+            "invalid choice", combined,
+            f"{SCRIPT_PATH.name} must EXPOSE `queue-file` (§S1 fleet parity) — "
+            f"argparse rejecting the subcommand is the bare SystemExit(2) AXI "
+            f"principle 6 forbids; stdout={out!r} stderr={err!r}")
+        self.assertNotIn(
+            "Traceback (most recent call last)", combined,
+            f"a failing `queue-file` must never surface a traceback; "
+            f"stdout={out!r} stderr={err!r}")
+        self.assertNotEqual(
+            code, 0,
+            f"a failed `queue-file` must exit non-zero (§S13); stdout={out!r}")
+        self.assertEqual(
+            post_mock.call_args_list, [],
+            f"nothing may be POSTed when the source cannot be parsed or read "
+            f"— a partial registration is a silent mis-registration; "
+            f"calls={post_mock.call_args_list!r}")
+        axi = self._decode_axi(out)
+        self.assertEqual(axi.get("verb"), "queue-file")
+        self.assertIs(
+            axi.get("ok"), False,
+            f"the failure envelope must carry ok:false; got {axi!r}")
+        self.assertIn(
+            cause, str(axi.get("error", "")),
+            f"the envelope's `error` must NAME the cause so the failure is "
+            f"actionable; got {axi!r}")
+        help_steps = axi.get("help")
+        self.assertIsInstance(
+            help_steps, list,
+            f"AXI principle 6 (§S13): an ok:false envelope carries "
+            f"a `help[]` array of concrete next steps, on STDOUT; got {axi!r}")
+        self.assertGreater(
+            len(help_steps), 0,
+            f"the `help[]` array must be NON-EMPTY — an empty one tells the "
+            f"caller nothing; got {axi!r}")
+        return axi
+
+    def test_queue_file_parses_the_table_and_posts_the_whole_set_once_with_a_toon_envelope(self):
+        source = self._source("queue.md", _QUEUE_FILE_TABLE)
+        code, out, err, post_mock, patch_mock = self._run_queue_file(source)
+        self.assertEqual(code, 0, f"stdout={out!r} stderr={err!r}")
+        queue_posts = [call for call in post_mock.call_args_list
+                       if (call[0][0] if call[0] else None) == self._queue_path()]
+        self.assertEqual(
+            len(queue_posts), 1,
+            f"§S1's `/queue` is a FULL REPLACE — `queue-file` POSTs the whole "
+            f"set exactly ONCE to {self._queue_path()}; "
+            f"calls={post_mock.call_args_list!r}")
+        patch_mock.assert_not_called()
+        self.assertEqual(
+            queue_posts[0][0][1].get("entries"), _QUEUE_FILE_ENTRIES,
+            f"the POST body must carry every parsed row verbatim — wave from "
+            f"the Wave cell's leading integer, dependsOn normalised to full "
+            f"ids; got {queue_posts[0][0][1]!r}")
+        axi = self._decode_axi(out)
+        self.assertEqual(axi.get("verb"), "queue-file")
+        self.assertIs(axi.get("ok"), True, f"got {axi!r}")
+        self.assertEqual(
+            axi.get("context", {}).get("projectKey"), self.PROJECT_KEY,
+            f"the envelope's context must name the project the set was "
+            f"registered against; got {axi!r}")
+
+    def test_queue_file_malformed_row_fails_loudly_with_a_structured_envelope(self):
+        source = self._source("broken.md", _QUEUE_FILE_MALFORMED_TABLE)
+        code, out, err, post_mock, _patch = self._run_queue_file(source)
+        self._assert_structured_failure(
+            code, out, err, post_mock, _QUEUE_FILE_BETA)
+
+    def test_queue_file_unreadable_source_fails_with_a_structured_envelope(self):
+        absent = os.path.join(self.tmpdir, "absent-queue.md")
+        code, out, err, post_mock, _patch = self._run_queue_file(absent)
+        self._assert_structured_failure(code, out, err, post_mock, absent)
+
+
+class RustCrucibleQueueFileRegistrationTest(unittest.TestCase):
+    """AC1 — HOW this client wires the verb, read from its AST so a name in a
+    docstring or a help string can never be mistaken for a registration. The
+    readers are `test_cr054_fleet_inventory.py`'s, reused."""
+
+    def test_the_client_defines_one_cmd_queue_file_delegating_to_the_shared_implementation(self):
+        """AC1's delegator and AC6's DRY half in one: a body longer than the
+        single `return _axi().cmd_queue_file(...)` means the parse or the POST
+        leaked back into a client."""
+        counts = _defined_function_names(SCRIPT_PATH)
+        self.assertEqual(
+            counts.get("cmd_queue_file", 0), 1,
+            f"{SCRIPT_PATH.name} must define `cmd_queue_file` exactly once "
+            f"(§S1 fleet parity; a duplicate def would silently make the "
+            f"SECOND one win at import time); defined "
+            f"{counts.get('cmd_queue_file', 0)}x")
+        node = next(n for n in ast.walk(ast.parse(SCRIPT_PATH.read_text()))
+                    if isinstance(n, ast.FunctionDef)
+                    and n.name == "cmd_queue_file")
+        body = [stmt for stmt in node.body
+                if not (isinstance(stmt, ast.Expr)
+                        and isinstance(stmt.value, ast.Constant))]
+        self.assertEqual(
+            len(body), 1,
+            f"the delegator is THIN — exactly one `return` (§S1 is wiring, not "
+            f"a re-implementation); got {len(body)} statement(s)")
+        self.assertIsInstance(
+            body[0], ast.Return,
+            f"the delegator's one statement must RETURN the shared verb's "
+            f"exit code; got {ast.dump(body[0])!r}")
+        self.assertIsInstance(
+            body[0].value, ast.Call,
+            f"the delegator must return a CALL into the shared module; "
+            f"got {ast.dump(body[0])!r}")
+        self.assertEqual(
+            getattr(body[0].value.func, "attr", None), "cmd_queue_file",
+            f"the delegator must call the SHARED "
+            f"`_crucible_axi.cmd_queue_file`, never a local copy; "
+            f"got {ast.dump(body[0].value.func)!r}")
+
+    def test_the_client_registers_queue_file_through_the_shared_registrar(self):
+        delegator = _single_verb_registrar_delegator(
+            SCRIPT_PATH, "add_queue_file_verb")
+        self.assertEqual(
+            delegator, "cmd_queue_file",
+            f"{SCRIPT_PATH.name} must register the verb by handing its OWN "
+            f"delegator to the shared `_crucible_axi.add_queue_file_verb` — "
+            f"the `add_next_verb` / `add_cr_depends_verb` shape; "
+            f"got {delegator!r}")
+
+    def test_the_client_hand_rolls_no_queue_file_subparser(self):
+        """§S1's correction: one client built its own `add_parser` for this
+        verb, which forks the flag surface the shared registrar exists to keep
+        identical. After §S1 no client spells it — that one included."""
+        self.assertNotIn(
+            "queue-file", _add_parser_verb_names(SCRIPT_PATH),
+            f"the `queue-file` subparser is built ONCE, by "
+            f"`_crucible_axi.add_queue_file_verb`; {SCRIPT_PATH.name} spells "
+            f"its own")
 
 
 if __name__ == "__main__":

@@ -55,6 +55,8 @@ Fallback:
     python3 tests/client/test_crucible_axi_shared.py
 """
 
+import argparse
+import ast
 import contextlib
 import importlib.util
 import io
@@ -1173,6 +1175,132 @@ class SharedAxiNoReportWarningCauseOverrideTest(unittest.TestCase):
                 artifact, detail,
                 f"the prefix's artifact must survive a HEAD-bound override; "
                 f"got {detail!r}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CR-CRU-075 §S1 (AC1/AC6) — `queue-file` is built ONCE, here
+#
+# CR-CRU-014 §S2 put the `queue-file` implementation in this module from the
+# start: `parse_queue_table` + `cmd_queue_file` have always been reachable by
+# all five clients. What was python-only is the SUBPARSER — python hand-rolls
+# its own, and the other four register nothing at all, so an orchestrator on
+# any other stack gets argparse's `invalid choice` instead of an envelope.
+#
+# §S1 closes that with a shared registrar, the shape every verb added since
+# CR-CRU-091 uses (`add_roadmap_verbs`, `add_next_verb`, `add_cr_depends_verb`
+# — same `(sub, func, *, parents=(), add_args=())` signature). This section
+# owns the SHARED half: the registrar exists and registers a working verb, and
+# the implementation behind it stays this module's alone. The per-client half
+# — which client wires the registrar, which hand-rolls, and what each one
+# emits — is asserted in each client's own suite, so a failure names the
+# client. The frozen inventory set and the derived registrar-parity sweep are
+# §S2's, in `test_cr054_fleet_inventory.py`.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class SharedQueueFileRegistrarTest(unittest.TestCase):
+    """AC1 — the `queue-file` subparser is built ONCE, by this module, so five
+    clients cannot drift into five flag surfaces for one verb."""
+
+    def test_the_shared_module_exports_a_queue_file_registrar(self):
+        axi = _load_axi_module()
+        registrar = getattr(axi, "add_queue_file_verb", None)
+        self.assertTrue(
+            callable(registrar),
+            f"clients/_crucible_axi.py must export `add_queue_file_verb(sub, "
+            f"func, *, parents=(), add_args=())` — the one-verb registrar "
+            f"shape `add_next_verb` and `add_cr_depends_verb` already use — so "
+            f"every client registers `queue-file` identically instead of "
+            f"hand-rolling it; got {registrar!r}")
+
+    def test_the_registrar_wires_the_verb_name_the_source_flag_and_the_callers_delegator(self):
+        """Driven against a REAL argparse tree, not read from the source: a
+        registrar that registered the name but wired no `func`, or dropped
+        `--from-file`, would satisfy a spelling check and still leave the verb
+        broken on four clients."""
+        axi = _load_axi_module()
+        registrar = getattr(axi, "add_queue_file_verb", None)
+        self.assertTrue(
+            callable(registrar),
+            f"`add_queue_file_verb` must be callable to register anything; "
+            f"got {registrar!r}")
+
+        def delegator(args):
+            return 0
+
+        parser = argparse.ArgumentParser()
+        sub = parser.add_subparsers(dest="cmd")
+        registrar(sub, delegator)
+
+        args = parser.parse_args(["queue-file", "--from-file", "custom-queue.md"])
+        self.assertIs(
+            args.func, delegator,
+            f"the registrar must dispatch `queue-file` to the delegator its "
+            f"CALLER handed it (each client keeps its own), got "
+            f"{getattr(args, 'func', None)!r}")
+        self.assertEqual(
+            args.from_file, "custom-queue.md",
+            f"§S2's `--from-file` override must land on `args.from_file` — the "
+            f"attribute the shared `cmd_queue_file` reads; got {args!r}")
+
+        default_args = parser.parse_args(["queue-file"])
+        self.assertIsNone(
+            default_args.from_file,
+            f"the source is OPTIONAL — with no `--from-file` the shared verb "
+            f"falls back to `<project>/docs/changes/README.md` (§S2), so the "
+            f"registrar must leave it unset rather than default it to a path; "
+            f"got {default_args!r}")
+
+
+class SharedQueueFileImplementationLandsOnceTest(unittest.TestCase):
+    """AC6 — behaviour unchanged: §S1 is wiring plus a registrar, never a
+    re-implementation. The parse, its loud-failure error type and the
+    full-replace POST every client reaches are THIS module's, and no client
+    holds a copy.
+
+    Precedent: `test_cr054_fleet_inventory.py`'s
+    `test_the_shared_module_holds_the_implementation_the_clients_delegate_to`.
+    Both tests below PASS ON ARRIVAL — they are the guard that keeps GREEN's
+    four new delegators from becoming four new parsers.
+    """
+
+    CLIENTS = ("bun-crucible.py", "python-crucible.py", "rust-crucible.py",
+               "mvn-crucible.py", "arduino-crucible.py")
+
+    # The parse, the error it raises, and the verb that POSTs the parsed set.
+    IMPLEMENTATION = ("parse_queue_table", "QueueParseError", "cmd_queue_file")
+
+    def test_the_shared_module_holds_the_implementation_the_clients_delegate_to(self):
+        axi = _load_axi_module()
+        missing = [name for name in self.IMPLEMENTATION
+                   if getattr(axi, name, None) is None]
+        self.assertEqual(
+            missing, [],
+            f"the shared module must define the queue-file implementation "
+            f"every client delegates to (§S1: the bodies are untouched); "
+            f"missing: {missing!r}")
+
+    def test_no_client_holds_its_own_copy_of_the_queue_table_parse(self):
+        """A client that grew its own `parse_queue_table`/`QueueParseError`
+        would have re-implemented §S2's parser behind an identically-named
+        verb — the CR-CRU-054 duplication defect, arriving through the very
+        cycle that exists to remove an exception."""
+        offenders = {}
+        for name in self.CLIENTS:
+            tree = ast.parse((REPO_ROOT / "clients" / name).read_text())
+            copies = sorted({
+                node.name for node in ast.walk(tree)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                     ast.ClassDef))
+                and node.name in ("parse_queue_table", "QueueParseError")
+            })
+            if copies:
+                offenders[name] = copies
+        self.assertEqual(
+            offenders, {},
+            f"the queue-table parse lands ONCE, in clients/_crucible_axi.py; "
+            f"a client defining its own copy has forked the parser the whole "
+            f"fleet must agree on: {offenders!r}")
 
 
 if __name__ == "__main__":
