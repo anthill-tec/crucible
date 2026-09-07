@@ -19,3 +19,8 @@ blob-report/
 .features-gen/
 __pycache__/
 .venv/
+# A lean-ctx tool cache, written into the repo root by the MCP server when an
+# agent reads or searches this tree. Regenerable and machine-local, so it is
+# ignored rather than deleted — the point is that no `git add -A` can ever
+# commit it.
+.lean-ctx/
