@@ -216,6 +216,19 @@ const CAP_QUEUE: QueueFixture[] = [
   pending("CR-B-070", 40, declared(7)),
 ];
 
+/** AC1's ORDERING board — the one board here whose AUTHORED dependency order
+ *  is NOT its sorted order, which is what makes "the FIRST ones, in AUTHORED
+ *  order" an INDEPENDENT claim. Every other board declares its ids ascending,
+ *  so a renderer that sorted before slicing would satisfy their whole-string
+ *  pins unchanged; on this row sorting states `deps 011, 044` and taking the
+ *  last two states `deps 044, 077`, and neither is what it declares first.
+ *  `CR-B-000` leads and declares nothing so it takes AC12's one `next` marker,
+ *  leaving the subject row's slot a `deps` part and nothing else. */
+const SHUFFLED_QUEUE: QueueFixture[] = [
+  pending("CR-B-000", 10, []),
+  pending("CR-B-060", 20, ["CR-B-077", "CR-B-011", "CR-B-044"]),
+];
+
 /** AC2's board — the counts AT and BELOW the cap, which it must leave exactly
  *  as CR-CRU-102 left them: no remainder token at all, and never a `+0`. */
 const UNCAPPED_QUEUE: QueueFixture[] = [
@@ -802,12 +815,11 @@ const remainderOf = (annotation: string): number | null => {
   return hit === null ? null : Number(hit[1]);
 };
 
-// ── AC1 — THREE OR MORE: the first two, then the count of the rest ─────────
+// ── AC1 — ABOVE THE CAP: the capped prefix, then the count of the rest ────
 
-describe("CR-CRU-109 §S1/AC1 — a row declaring three or more dependencies states the first two and a remainder count", () => {
+describe("CR-CRU-109 §S1/AC1 — a row declaring MORE than the cap states the capped prefix and the count of the rest", () => {
   test("three, five and seven declared each state the cap's worth of ids in authored order and then how many are left", async () => {
     await mountApp(CAP_QUEUE);
-    const cap = capOf();
 
     // NON-VACUITY: the rows really are drawn, and they really declare the
     // counts this test turns on — an assertion below cannot pass because its
@@ -826,19 +838,11 @@ describe("CR-CRU-109 §S1/AC1 — a row declaring three or more dependencies sta
     expect(annotationOf("CR-B-050")).toBe(cappedDeps(declaredBare(5)));
     expect(annotationOf("CR-B-070")).toBe(cappedDeps(declaredBare(7)));
 
-    // THE FIRST ones, in AUTHORED order — a row that stated the last two, or
-    // sorted them, would satisfy a count-only assertion.
-    expect(annotationOf("CR-B-070").startsWith(`deps ${declaredBare(7).slice(0, cap).join(", ")}`))
-      .toBe(true);
-
-    // …and the ids BEYOND the cap are not stated anywhere in the slot: the row
-    // says how many it withheld instead of naming them shorter.
-    for (const withheld of declaredBare(7).slice(cap)) {
-      expect(
-        annotationOf("CR-B-070"),
-        `the seven-dependency slot still names ${withheld}`,
-      ).not.toContain(withheld);
-    }
+    // THE FIRST ones, in AUTHORED order, and the withheld ids named nowhere:
+    // both are already pinned by the three whole-string expectations above,
+    // each composed from its own row's declaration. On THIS board they cannot
+    // discriminate an authored slice from a sorted one — its ids ascend — so
+    // the ordering claim is stated on its own board, in the test below.
 
     // AC1's second half — ONE span, the same testid, and VISIBLE TEXT: the
     // cap does not move what it removed into a `title` or a hover
@@ -851,11 +855,33 @@ describe("CR-CRU-109 §S1/AC1 — a row declaring three or more dependencies sta
     expect(slots[0]!.getAttribute("aria-describedby")).toBeNull();
     expect(nodeFor("CR-B-070").querySelectorAll("[title]").length).toBe(0);
   });
+
+  test("the ids stated are the AUTHORED first ones, read on a board that does not declare them sorted", async () => {
+    await mountApp(SHUFFLED_QUEUE);
+    const authored = ["077", "011", "044"];
+
+    // NON-VACUITY: the row is drawn, it declares what this test turns on, and
+    // the board really DISCRIMINATES — a renderer that sorted the ids before
+    // slicing would state a DIFFERENT string, which is the only reason the
+    // pin below says anything the whole-string pins above did not.
+    expect(all('[data-testid="roadmap-node"]').map((n) => n.getAttribute("data-cr"))).toEqual([
+      "CR-B-000",
+      "CR-B-060",
+    ]);
+    expect(SHUFFLED_QUEUE[1]!.dependsOn).toEqual(["CR-B-077", "CR-B-011", "CR-B-044"]);
+    expect(
+      cappedDeps([...authored].sort()),
+      "the ordering board declares its ids in sorted order after all, so a renderer that " +
+        "sorted them would pass this test unchanged",
+    ).not.toBe(cappedDeps(authored));
+
+    expect(annotationOf("CR-B-060")).toBe(cappedDeps(authored));
+  });
 });
 
-// ── AC2 — TWO OR FEWER: unchanged, and never `+0` ─────────────────────────
+// ── AC2 — AT OR BELOW THE CAP: unchanged, and never `+0` ─────────────────
 
-describe("CR-CRU-109 §S1/AC2 — a row declaring two or fewer is UNCHANGED, and never states `+0`", () => {
+describe("CR-CRU-109 §S1/AC2 — a row declaring no more than the cap is UNCHANGED, and never states `+0`", () => {
   test("one and two declared dependencies render with no remainder token at all", async () => {
     await mountApp(UNCAPPED_QUEUE);
 
@@ -870,12 +896,10 @@ describe("CR-CRU-109 §S1/AC2 — a row declaring two or fewer is UNCHANGED, and
     expect(annotationOf("CR-B-010")).toBe("deps 011");
     expect(annotationOf("CR-B-020")).toBe("deps 011, 022");
 
-    // `+0` is the defect AC2 forbids, asserted as the ABSENCE of the token
-    // rather than only through the strings above: a `deps 011, 022 +0` is a
-    // row telling a reader that nothing is hidden, at the cost of saying it.
-    expect(remainderOf(annotationOf("CR-B-010"))).toBeNull();
-    expect(remainderOf(annotationOf("CR-B-020"))).toBeNull();
-    expect(annotationOf("CR-B-020")).not.toContain("+");
+    // `+0` is the defect AC2 forbids — a row telling a reader that nothing is
+    // hidden, at the cost of saying it — and the two byte-exact strings above
+    // are what forbids it: neither carries a remainder token, an ellipsis or
+    // any other tail, because each IS the whole rendered slot.
 
     // The row AT the cap states EVERY id it declares: the cap bounds, it does
     // not truncate to fewer than it admits.
@@ -1077,7 +1101,15 @@ describe("CR-CRU-109 AC8 — the cap is a NAMED CONSTANT with a single definitio
     expect(definitions).toEqual([join("public", "app-logic.mjs")]);
 
     // …and `RoadmapFlowNode` bounds the list by that NAME rather than by a
-    // literal of its own, which is the defect AC8 exists to forbid.
-    expect(jsUncommented(APP_JS_SRC)).toContain("DEPENDENCY_ANNOTATION_CAP");
+    // literal of its own, which is the defect AC8 exists to forbid. The NAME
+    // has to BE the bound: a call site that kept `slice(0, 2)` and mentioned
+    // the constant anywhere else — a log line, a comment's neighbour, a
+    // re-export — would satisfy a bare mention, so this reads the SHAPE.
+    expect(
+      jsUncommented(APP_JS_SRC),
+      "public/app.js bounds zone 2's dependency list with something other than " +
+        "`slice(0, L.DEPENDENCY_ANNOTATION_CAP)`, so the constant is not what the call site " +
+        "cuts the list at",
+    ).toMatch(/\.slice\(\s*0\s*,\s*L\.DEPENDENCY_ANNOTATION_CAP\s*\)/);
   });
 });

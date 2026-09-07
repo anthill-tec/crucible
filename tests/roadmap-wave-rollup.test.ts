@@ -1126,8 +1126,8 @@ describe("CR-CRU-096 §S4/AC12a — the marker states position in the published 
 // dependency — by naming it or by counting it — that WHICH ones it names is
 // decidable, and that a row declaring none renders no slot at all.
 
-describe("CR-CRU-096 §S4/AC13, as superseded by CR-CRU-109 §S1 — a pending row accounts for every dependency it declares: the first two named, the rest counted; no deps, no annotation", () => {
-  test("a row declaring FOUR deps names the first two and states `+2`, the combined slot carries `next` beside them, and a row declaring none renders no annotation", async () => {
+describe("CR-CRU-096 §S4/AC13, as superseded by CR-CRU-109 §S1 — a pending row accounts for every dependency it declares: the capped prefix named, the rest counted; no deps, no annotation", () => {
+  test("a row declaring MORE deps than the cap names the capped prefix and states the count of the rest, the combined slot carries `next` beside them, and a row declaring none renders no annotation", async () => {
     await mountApp({ queue: board(DEPS_WAVE) });
     expectFocused040();
 

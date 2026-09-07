@@ -83,18 +83,24 @@ const capOf = (): number => {
 };
 
 /** The annotation a row declaring `declaredCount` dependencies renders, as a
- *  SHAPE, for a board whose ids abbreviate to numeric tails: the cap's worth
- *  of bare ids and then the remainder as a COUNT.
+ *  SHAPE, for a board whose ids abbreviate to numeric tails: at most the
+ *  cap's worth of bare ids, and the remainder as a COUNT only when there IS a
+ *  remainder. A row at or below the cap states its ids and NOTHING else — so
+ *  a caller passing `declaredCount === cap` gets the un-tailed shape rather
+ *  than a ` +0` no correct render could ever produce, and one passing fewer
+ *  gets that many ids rather than a ` +-1`.
  *
  *  It stays a real guard, which is the whole reason it is anchored at both
  *  ends: a slot that fell back to full published ids fails `\d+`, one that
- *  elided (`…`, `and 1 more`) fails the `\+\d+` tail, one that truncated with
- *  no remainder fails it too, and one that stated the wrong NUMBER of ids
- *  fails the repetition count. */
+ *  elided (`…`, `and 1 more`) fails the tail, one that truncated with no
+ *  remainder while a remainder is owed fails it too, and one that stated the
+ *  wrong NUMBER of ids fails the repetition count. */
 const cappedBareShape = (declaredCount: number, marked = false): RegExp => {
   const cap = capOf();
+  const stated = Math.min(declaredCount, cap);
+  const remainder = declaredCount > cap ? ` \\+${declaredCount - cap}` : "";
   return new RegExp(
-    `^${marked ? "next · " : ""}deps \\d+(?:, \\d+){${cap - 1}} \\+${declaredCount - cap}$`,
+    `^${marked ? "next · " : ""}deps \\d+(?:, \\d+){${stated - 1}}${remainder}$`,
   );
 };
 
@@ -502,18 +508,25 @@ const REAL_SURFACE_W = 991;
  *
  *  TWO BOARDS, because the zone's one `next` marker can land ON the
  *  four-dependency row and that changes the reading. Every figure below was
- *  measured in this suite's own Chromium on 2026-09-04, and each says which
- *  board produced it so a reader can reproduce it rather than take it:
- *    • `BARE_DEPS_QUEUE` at 1130px — marker on a dep-free row: box 279.9px,
- *      spine 575.9px. Both asserted, against the design's own figures.
+ *  RE-MEASURED in this suite's own Chromium on 2026-09-07 with the cap
+ *  RENDERING — each row states `deps 014, 091 +2` — and each says which board
+ *  produced it so a reader can reproduce it rather than take it:
+ *    • `BARE_DEPS_QUEUE` at 1130px — marker on a dep-free row: box 240.0px,
+ *      spine 540.0px. Both asserted, against the design's own figures.
  *    • the SAME board with the four dependencies moved onto its first
- *      scheduled row, so the marker prefixes them: box 319.8px, spine
- *      615.8px. The 39.9px is the `next · ` prefix, not the dependencies.
+ *      scheduled row, so the marker prefixes them: box 279.9px, spine
+ *      579.9px. The 39.9px is the `next · ` prefix, not the dependencies.
  *      That variant is not kept, because a single wave cannot say anything
  *      about a per-wave-box budget; `STACKED_DEPS_QUEUE` below is the case
  *      that can, and it is asserted there.
- *    • `STACKED_DEPS_QUEUE` at 991px — the 319.8px stacked box beside a
- *      279.9px sibling: they sum to 599.8px inside a 605.8px stage.
+ *    • `STACKED_DEPS_QUEUE` at 991px — the 279.9px stacked box beside a
+ *      240.0px sibling: they sum to 520.0px inside a 526.0px stage.
+ *
+ *  Every one of those boxes is EXACTLY 39.9px narrower than the same board
+ *  measured before CR-CRU-109 (279.9 / 319.8 / 319.8 + 279.9 in a 605.8px
+ *  stage), which is §S1's own delta: the two withheld ids cost `, 092, 095`
+ *  and the cap pays ` +2` back. The assertions are `<=` bounds, so the move
+ *  changes no verdict — it changes what a reader reproduces.
  *
  *  Wave `5` and the four-dependency row are the live board's own shape,
  *  deliberately, so the synthetic readings and the live corroboration are
