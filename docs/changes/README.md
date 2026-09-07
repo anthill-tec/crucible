@@ -114,8 +114,9 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
 | [CR-CRU-093](CR-CRU-093-project-rail-collapses.md) | the project rail collapses, giving every workspace view its width back | feature | COMPLETED (0.2.0) | 006 | 5 (0.2.0) |
 | [CR-CRU-075](CR-CRU-075-queue-file-fleet-parity.md) | queue-file fleet parity + AXI verb-surface census enforcement | patch | COMPLETED (0.2.0) | 014, 091, 092, 095 | 5 (0.2.0) |
 | [CR-CRU-094](CR-CRU-094-agent-participation-is-recorded.md) | agent participation is recorded, not inferred | feature | COMPLETED (0.2.0) | 056 | 5 (0.2.0) |
-| [CR-CRU-108](CR-CRU-108-one-published-track-fact-and-an-unstarvable-help-test.md) | one published multi-track fact, and a printed-help test that cannot be starved | patch | PENDING (0.2.0) | 085, 092, 097 | 5 (0.2.0) |
+| [CR-CRU-108](CR-CRU-108-one-published-track-fact.md) | one published multi-track fact | patch | PENDING (0.2.0) | 085, 092, 097 | 5 (0.2.0) |
 | [CR-CRU-109](CR-CRU-109-a-wave-row-annotation-fits-its-box.md) | a wave row's dependency annotation fits the box it is drawn in | patch | COMPLETED (0.2.0) | 096, 102 | 5 (0.2.0) |
+| [CR-CRU-110](CR-CRU-110-the-printed-help-test-cannot-be-starved.md) | the printed-help test answers the same way whatever ran before it | bug | PENDING (0.2.0) | 097 | 5 (0.2.0) |
 
 ## Deferred — post-0.2.0
 
@@ -246,6 +247,17 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   no other README VOID was affected. A patch should at least WARN on a README-vs-board lifecycle
   disagreement at import.
 
+- 2026-09-07 — **RELEASE-TIME OBLIGATION: intimate Model B of this release's client changes.** Two
+  notes are drafted and undelivered because `Mainline - ModelB` has been `inactive` in the Sandesh
+  addressbook since 2026-08-27 (`sandesh send` refuses an inactive recipient). User direction: send
+  them at RELEASE, not per CR. (1) CR-CRU-075's AC7 — `queue-file` is now a fleet-wide client verb
+  through a shared registrar. (2) CR-CRU-107 — `plan-file` takes a repeatable `--cycle`, plus the
+  drift in the Model-B-owned bundled skills measured 2026-09-07: all five `crucible-report-<stack>`
+  bundles still say `--phase` (renamed `--role` fleet-wide by CR-CRU-059, clean break, so their
+  register line fails as written) and `crucible-report-vscode` still teaches the server-side
+  auto-attach that CR-CRU-056 §S3 deleted. Also worth carrying: `lastClosedCr` (was `lastRunCr`),
+  and the `no-cycle` pre-flight warning. The release CR owns delivery.
+
 - 2026-09-07 — **`plan-backfill` is not fleet-wide** (candidate patch CR, measured while updating the
   `crucible` skill after CR-CRU-107 shipped). The verb exists on `bun`, `python` and `rust` only;
   `mvn` and `arduino` do not expose it, so on those two stacks a plan filed with no wave must be
@@ -340,7 +352,8 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   Recorded in the `gap-analysis` skill as Dimension 3's bounded-surface check so the next one is
   caught at design time rather than by a RED agent mid-implementation.
 
-- 2026-09-06 — **FILED as [CR-CRU-108](CR-CRU-108-one-published-track-fact-and-an-unstarvable-help-test.md) §S4
+- 2026-09-06 — **FILED as CR-CRU-108 §S4, SPLIT OUT 2026-09-07 to
+  [CR-CRU-110](CR-CRU-110-the-printed-help-test-cannot-be-starved.md)
   (user-directed at the SCRUM after CR-CRU-085 merged) — `CR-CRU-097 §S2/AC2`'s printed-help test
   HANGS when the Chromium suite runs before it in the same bun process.**
   `tests/project-namespace-tripwire.test.ts:512` drives every client verb's `--help` for real —
@@ -348,14 +361,23 @@ phase + dependency order. Conventions: `~/.claude/memory/cr-prd-dn-conventions.m
   `bun test tests/roadmap-visual-grammar.test.ts tests/project-namespace-tripwire.test.ts` it hits
   the cap exactly (180002 ms) and nothing else in either file changes timing. **Pre-existing, not
   CR-085's**: the same two-file pairing reproduces on `1f5498c`, develop's head at that branch cut
-  (96 pass / 1 fail, 180001 ms), so a browser suite earlier in the process leaves subprocess
-  spawning unusable for the rest of the run. It is ORDER-DEPENDENT, which is why one gate run of
+  (96 pass / 1 fail, 180001 ms). **The cause stated at filing — "a browser suite leaves subprocess
+  spawning unusable for the rest of the run" — was DISPROVED by measurement on 2026-09-07**:
+  `Bun.spawn` latency is 10.8 / 10.7 / 10.9 ms before, during and after a real `chromium.launch()`;
+  32 spawns inside `bun test` right after the Chromium suite take 344 ms, identical to alone; and a
+  faithful replica of the collection loop (5 clients, 163 verbs) runs in that same post-Chromium
+  process in 2.28 s with 0 fail. The failing pairing is `real 3m22s` against `user 14s / sys 4s` —
+  the process WAITS, it does not work. Trigger is Chromium-specific (a non-Chromium pairing is
+  63 pass / 0 fail in 3.4 s); mechanism unidentified, which is why the split CR diagnoses before it
+  remedies. It is ORDER-DEPENDENT, which is why one gate run of
   the identical tree passed it at 2.5 s and two others timed out — the same tree answered 2122/1,
   2122/1 and 2123/0, with every other slow test's duration identical to the millisecond
   (26113/22062/15006 ms). **A gate that answers differently on re-run cannot gate**, which is why
-  this became a CR rather than staying a note (CR-108 AC10 measures three consecutive gate runs).
+  this became a CR rather than staying a note (CR-110 AC5 measures three consecutive gate runs).
+  Also reproduced live on 2026-09-07 at `5c73302`: 110 pass / 1 fail, so CR-CRU-093's Chromium
+  hardening did not fix it.
 
-- 2026-09-06 — **FILED as [CR-CRU-108](CR-CRU-108-one-published-track-fact-and-an-unstarvable-help-test.md)
+- 2026-09-06 — **FILED as [CR-CRU-108](CR-CRU-108-one-published-track-fact.md)
   §S1–§S3 (user-directed, same SCRUM) — the multi-track rule is computed twice and reconciled by
   nobody.** CR-CRU-092 §S3 defines it once (sorted distinct non-null `entry.track`; multi-track iff
   `len(tracks) > 1`) and implements it in `clients/_crucible_axi.py` (`queue_tracks` → `resolve_next`);
